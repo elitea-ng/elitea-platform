@@ -40,6 +40,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { SuggestedResource } from "./suggestedResource.zod";
 
 export const ApplicationDraft = zod
   .object({
@@ -56,9 +57,14 @@ export const ApplicationDraft = zod
       .describe(
         "At most four, each at most 768 characters. Blank entries are dropped rather than returned as empty chips.\n",
       ),
+    suggested_toolkits: zod.array(SuggestedResource),
+    suggested_mcp: zod.array(SuggestedResource),
+    suggested_pipelines: zod.array(SuggestedResource),
+    suggested_agents: zod.array(SuggestedResource),
+    suggested_skills: zod.array(SuggestedResource),
   })
   .describe(
-    "The content half of legacy's draft. It deliberately does NOT carry suggested_toolkits \/ suggested_mcp \/ suggested_agents \/ suggested_pipelines \/ suggested_skills: legacy builds those by first reading the project's toolkit instances, agents, pipelines and skills and offering them to the model as candidates, and elitea-main composes no reader for toolkit instances. A model asked for suggestions with no candidate list invents ids that resolve to nothing, so the fields are absent rather than present and always empty.\n",
+    "The content half of legacy's draft, plus the five suggested_\* lists (issue #881) — always present, `[]` rather than absent\/null when nothing scored above zero or when a deployment composed no reader for that category.\n",
   );
 
 export type ApplicationDraft = zod.input<typeof ApplicationDraft>;

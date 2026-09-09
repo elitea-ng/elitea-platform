@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
@@ -123,8 +125,11 @@ func validRuntimeFailureOutput(t *testing.T, capabilityID string) (RuntimeFailur
 	t.Helper()
 	source, _ := validValidationOutput()
 	logicalOutputID := source.LogicalOutputID
-	if capabilityID == executiondomain.IndexIngestCapability {
+	switch capabilityID {
+	case executiondomain.IndexIngestCapability:
 		logicalOutputID = "index-ingest:" + source.Fence.ExecutionID
+	case executiondomain.AgentApplicationCapability, executiondomain.AgentAdhocCapability:
+		logicalOutputID = "agent-execution:" + source.Fence.ExecutionID
 	}
 	payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(&runtimev1.RuntimeErrorV1{
 		Code:        runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INTERNAL,
@@ -175,4 +180,103 @@ func validRuntimeFailureOutput(t *testing.T, capabilityID string) (RuntimeFailur
 		Generation:          frame.Fence.Generation,
 		LogicalOutputID:     frame.LogicalOutputID,
 	}
+}
+
+/* ── FailureObserver (pipeline.run.failed's error-text half) ────────────── */
+
+// observerCall records one FailureObserver invocation for the tests below.
+type observerCall struct {
+	executionID string
+	safeMessage string
+}
+
+func TestFailureObserverFiresOnlyForAgentCapabilitiesWithANonEmptyMessage(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		capability string
+		wantCall   bool
+	}{
+		{name: "agent application", capability: executiondomain.AgentApplicationCapability, wantCall: true},
+		{name: "agent adhoc", capability: executiondomain.AgentAdhocCapability, wantCall: true},
+		{name: "config validation is not observed", capability: executiondomain.ConfigurationValidationCapability, wantCall: false},
+		{name: "index ingest is not observed", capability: executiondomain.IndexIngestCapability, wantCall: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			frame, expected := validRuntimeFailureOutput(t, tc.capability)
+			var mu sync.Mutex
+			var calls []observerCall
+			observer := func(_ context.Context, executionID, safeMessage string) {
+				mu.Lock()
+				defer mu.Unlock()
+				calls = append(calls, observerCall{executionID: executionID, safeMessage: safeMessage})
+			}
+			service, err := NewRuntimeFailureService(
+				&runtimeFailureBindingStub{expected: expected},
+				fenceVerifierStub{expected: &frame.Fence},
+				&runtimeFailureProjectorStub{},
+				WithFailureObserver(observer),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := service.IngestFailure(context.Background(), frame); err != nil {
+				t.Fatalf("IngestFailure: %v", err)
+			}
+
+			deadline := time.Now().Add(2 * time.Second)
+			for {
+				mu.Lock()
+				got := len(calls) > 0
+				mu.Unlock()
+				if got == tc.wantCall || time.Now().After(deadline) {
+					break
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			if tc.wantCall {
+				if len(calls) != 1 {
+					t.Fatalf("observer calls = %d, want 1", len(calls))
+				}
+				if calls[0].executionID != frame.Fence.ExecutionID {
+					t.Errorf("executionID = %q, want %q", calls[0].executionID, frame.Fence.ExecutionID)
+				}
+				if calls[0].safeMessage != frame.Failure.SafeMessage {
+					t.Errorf("safeMessage = %q, want %q", calls[0].safeMessage, frame.Failure.SafeMessage)
+				}
+			} else if len(calls) != 0 {
+				t.Fatalf("observer called %d times for capability %q, want 0", len(calls), tc.capability)
+			}
+		})
+	}
+}
+
+// TestFailureObserverPanicCannotAffectIngestFailure proves the isolation
+// this hook depends on: a panicking observer must not crash the process, and
+// must not change IngestFailure's own successful return.
+func TestFailureObserverPanicCannotAffectIngestFailure(t *testing.T) {
+	frame, expected := validRuntimeFailureOutput(t, executiondomain.AgentApplicationCapability)
+	panicObserver := func(context.Context, string, string) {
+		panic("observer exploded")
+	}
+	service, err := NewRuntimeFailureService(
+		&runtimeFailureBindingStub{expected: expected},
+		fenceVerifierStub{expected: &frame.Fence},
+		&runtimeFailureProjectorStub{},
+		WithFailureObserver(panicObserver),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome, err := service.IngestFailure(context.Background(), frame)
+	if err != nil || !outcome.Inserted || outcome.CommittedSequence != frame.Sequence {
+		t.Fatalf("a panicking observer changed IngestFailure's own outcome: outcome=%+v err=%v", outcome, err)
+	}
+	// Give the detached goroutine a moment to actually panic-and-recover
+	// before the test process exits, so a regression that removed the
+	// recover() would be observed as a crashed test binary, not a silent
+	// pass.
+	time.Sleep(50 * time.Millisecond)
 }

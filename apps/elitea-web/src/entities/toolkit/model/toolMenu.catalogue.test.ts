@@ -47,8 +47,10 @@ describe('toolkitTypeMenuEntries over the served catalogue', () => {
       expect(keys).not.toContain(key);
     }
     // Hidden by the worker capability projection: the admitted Python image
-    // cannot import these, so a tile would fail at the first tool call.
-    for (const key of ['slack', 'rally', 'service_now', 'google_places', 'kubernetes']) {
+    // cannot import this, so a tile would fail at the first tool call.
+    // slack, rally, service_now and google_places used to be on this list too;
+    // #869 added their measured SDK dependencies to the worker image.
+    for (const key of ['kubernetes']) {
       expect(keys).not.toContain(key);
     }
     // Hidden because it carries no label: mcp_config is the container the

@@ -22,6 +22,8 @@ import (
 
 	v2drafts "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/drafts"
 	v2predict "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/predict"
+	v2skills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
 )
 
 // stubCompleter stands in for the gateway hop. It records the request so a test
@@ -348,6 +350,24 @@ func TestApplicationDraftReturnsTheReviewFormsFields(t *testing.T) {
 		t.Errorf("ConversationStarters = %v, want the blank entry dropped rather than kept as an empty chip",
 			draft.ConversationStarters)
 	}
+	// No AppsRepo/SkillsRepo/ToolkitsRepo option was supplied to this route's
+	// handler (serve() below builds one bare), so every suggested_* list
+	// degrades to [] rather than the request failing or the field going
+	// missing/null — apps/elitea-web's AgentDraft expects `[]` on every draft.
+	for name, list := range map[string][]v2drafts.SuggestedResource{
+		"suggested_toolkits":  draft.SuggestedToolkits,
+		"suggested_mcp":       draft.SuggestedMCP,
+		"suggested_pipelines": draft.SuggestedPipelines,
+		"suggested_agents":    draft.SuggestedAgents,
+		"suggested_skills":    draft.SuggestedSkills,
+	} {
+		if list == nil {
+			t.Errorf("%s = nil, want [] (no repository composed for this route in this test)", name)
+		}
+		if len(list) != 0 {
+			t.Errorf("%s = %+v, want empty (no repository composed for this route in this test)", name, list)
+		}
+	}
 }
 
 func TestApplicationDraftRefusesAnAnswerMissingARequiredField(t *testing.T) {
@@ -451,5 +471,99 @@ func TestAnExplicitNullEditIdIsNotEditIntent(t *testing.T) {
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Resource suggestions (#881) — end-to-end through GenerateApplicationDraft
+// with fake readers standing in for AppsRepo/SkillsRepo/ToolkitsRepo. The
+// scorer itself (tokenize/overlapScore/scoreCandidates) has its own
+// exhaustive table-driven coverage in suggestions_test.go; this proves the
+// HANDLER actually calls it with real candidates and puts the result on the
+// wire, the same way the rest of this file proves the status contract rather
+// than an internal helper.
+// ---------------------------------------------------------------------------
+
+type fakeAppsReader struct{ rows []applications.Application }
+
+func (f fakeAppsReader) List(_ context.Context, req applications.ListRequest) (applications.ListResponse, error) {
+	var rows []applications.Application
+	for _, a := range f.rows {
+		isPipeline := a.AgentType == "pipeline"
+		if (req.AgentsType == "pipeline") != isPipeline {
+			continue
+		}
+		rows = append(rows, a)
+	}
+	return applications.ListResponse{Rows: rows, Total: len(rows)}, nil
+}
+
+type fakeSkillsReader struct{ items []v2skills.Skill }
+
+func (f fakeSkillsReader) List(_ context.Context, _ string, _ v2skills.ListParams) (v2skills.ListResponse, error) {
+	return v2skills.ListResponse{Items: f.items, Total: len(f.items)}, nil
+}
+
+type fakeToolkitsReader struct{ rows []map[string]any }
+
+func (f fakeToolkitsReader) ListToolkits(_ context.Context, _ string, _, _ int) ([]map[string]any, int, error) {
+	return f.rows, len(f.rows), nil
+}
+
+func TestApplicationDraftSuggestsMatchingProjectResources(t *testing.T) {
+	completer := &stubCompleter{content: `{
+		"name":"Jira Triager",
+		"description":"Triages incidents by filing Jira issues",
+		"instructions":"Look at severity and file a Jira ticket"
+	}`}
+
+	appsRepo := fakeAppsReader{rows: []applications.Application{
+		{ID: "10", Name: "Jira Helper", Description: "Helps triage Jira issues"},
+		{ID: "11", Name: "Weather Bot", Description: "Forecasts the weather"},
+		{ID: "12", Name: "Jira Pipeline", Description: "Automates Jira ticket filing", AgentType: "pipeline"},
+	}}
+	skillsRepo := fakeSkillsReader{items: []v2skills.Skill{
+		{ID: "20", Name: "jira-notes", Description: "Summarize Jira tickets"},
+		{ID: "21", Name: "unrelated-skill", Description: "Does something else entirely"},
+	}}
+	toolkitsRepo := fakeToolkitsReader{rows: []map[string]any{
+		{"id": "30", "type": "jira", "name": "Jira", "description": "Jira toolkit"},
+		{"id": "31", "type": "mcp", "name": "Jira MCP", "description": "Jira via MCP"},
+		{"id": "32", "type": "github", "name": "GitHub", "description": "GitHub toolkit"},
+	}}
+
+	handler := v2drafts.NewHandler(completer,
+		v2drafts.WithAppsRepo(appsRepo),
+		v2drafts.WithSkillsRepo(skillsRepo),
+		v2drafts.WithToolkitsRepo(toolkitsRepo),
+	)
+	mux := chi.NewRouter()
+	mux.Post("/generate_application_draft/prompt_lib/{projectID}", handler.GenerateApplicationDraft)
+
+	request := httptest.NewRequest(http.MethodPost, "/generate_application_draft/prompt_lib/7",
+		strings.NewReader(`{"user_description":"an agent that triages incidents by filing Jira issues"}`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", recorder.Code, recorder.Body.String())
+	}
+	draft := decode[v2drafts.ApplicationDraft](t, recorder)
+
+	if len(draft.SuggestedToolkits) != 1 || draft.SuggestedToolkits[0].ID != "30" {
+		t.Errorf("SuggestedToolkits = %+v, want exactly the Jira toolkit (id 30), not the unrelated GitHub one", draft.SuggestedToolkits)
+	}
+	if len(draft.SuggestedMCP) != 1 || draft.SuggestedMCP[0].ID != "31" {
+		t.Errorf("SuggestedMCP = %+v, want exactly the Jira MCP row (id 31), split out of the toolkits list by type=mcp", draft.SuggestedMCP)
+	}
+	if len(draft.SuggestedAgents) != 1 || draft.SuggestedAgents[0].ID != "10" {
+		t.Errorf("SuggestedAgents = %+v, want exactly the Jira Helper agent (id 10), not the pipeline or the weather bot", draft.SuggestedAgents)
+	}
+	if len(draft.SuggestedPipelines) != 1 || draft.SuggestedPipelines[0].ID != "12" || draft.SuggestedPipelines[0].AgentType != "pipeline" {
+		t.Errorf("SuggestedPipelines = %+v, want exactly the Jira Pipeline (id 12) tagged agent_type=pipeline", draft.SuggestedPipelines)
+	}
+	if len(draft.SuggestedSkills) != 1 || draft.SuggestedSkills[0].ID != "20" {
+		t.Errorf("SuggestedSkills = %+v, want exactly jira-notes (id 20), not the unrelated skill", draft.SuggestedSkills)
 	}
 }

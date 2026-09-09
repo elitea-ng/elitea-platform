@@ -133,6 +133,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/pipelineruns"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 )
@@ -190,10 +191,65 @@ type Handler struct {
 	permissions auth.PermissionResolver
 	recorder    audit.Recorder
 	logger      *slog.Logger
+	events      EventEmitter
+	runTracker  RunTracker
+}
+
+// EventEmitter is the seam to internal/events.Publisher, declared locally so
+// this package does not import internal/events and close a cycle.
+// *events.Publisher satisfies this structurally.
+type EventEmitter interface {
+	Emit(ctx context.Context, projectID, eventType string, payload any)
+}
+
+// RunTracker is the WRITE half of pipelineruns.Tracker — this package
+// already imports internal/application/agentexecution and other
+// application-layer packages directly (see run.go), so there is no cycle
+// concern importing internal/application/pipelineruns too.
+//
+// admit() calls RecordRunStart, best-effort, in the SAME request that
+// admits the run, so a LATER execution.AfterSettleHook
+// (pipelineruns.NewSettlementHook) can look this execution id up once its
+// outcome settles — see that package's doc comment for the full sequencing
+// story.
+type RunTracker interface {
+	RecordRunStart(ctx context.Context, run pipelineruns.Run) error
 }
 
 // Option configures a Handler.
 type Option func(*Handler)
+
+// WithEvents wires the pipeline.run.started and schedule.fired producers
+// (#876's second half) — both emitted from admit() in run.go, the ONE
+// admission path both the inbound trigger and the schedule tick call. Left
+// nil, admit() runs exactly as before.
+//
+// Guarded by present(), the same "typed nil boxed as a non-nil interface"
+// check job.go's WithAgentStart uses: the composition root passes a
+// *events.Publisher THROUGH this interface-typed parameter, and a nil
+// *events.Publisher would otherwise become a non-nil EventEmitter that
+// panics the first time admit() calls Emit on it.
+func WithEvents(emitter EventEmitter) Option {
+	return func(h *Handler) {
+		if present(emitter) {
+			h.events = emitter
+		}
+	}
+}
+
+// WithRunTracker wires admit()'s best-effort write to public.pipeline_runs
+// (RunTracker's own doc comment). Left nil, admit() runs exactly as before —
+// pipeline.run.started and schedule.fired still fire, but no LATER
+// pipeline.run.succeeded/failed can ever be emitted for that run, since
+// nothing recorded it as one. Same present() guard WithEvents and
+// WithAgentStart use, for the same #86 typed-nil reason.
+func WithRunTracker(tracker RunTracker) Option {
+	return func(h *Handler) {
+		if present(tracker) {
+			h.runTracker = tracker
+		}
+	}
+}
 
 // WithAgentStart supplies the execution use case.
 //

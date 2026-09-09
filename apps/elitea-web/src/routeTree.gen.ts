@@ -63,6 +63,7 @@ import { Route as ShellSettingsSecretsRouteImport } from './routes/_shell/settin
 import { Route as ShellSettingsTokensRouteImport } from './routes/_shell/settings/tokens'
 import { Route as ShellSettingsUsageRouteImport } from './routes/_shell/settings/usage'
 import { Route as ShellSettingsUsersRouteImport } from './routes/_shell/settings/users'
+import { Route as ShellSettingsWebhooksRouteImport } from './routes/_shell/settings/webhooks'
 import { Route as ShellSkillsIndexRouteImport } from './routes/_shell/skills/index'
 import { Route as ShellSkillsTabRouteImport } from './routes/_shell/skills/$tab'
 import { Route as ShellSkillsCreateRouteImport } from './routes/_shell/skills/create'
@@ -376,6 +377,11 @@ const ShellSettingsUsersRoute = ShellSettingsUsersRouteImport.update({
   path: '/users',
   getParentRoute: () => ShellSettingsRouteRoute,
 } as any)
+const ShellSettingsWebhooksRoute = ShellSettingsWebhooksRouteImport.update({
+  id: '/webhooks',
+  path: '/webhooks',
+  getParentRoute: () => ShellSettingsRouteRoute,
+} as any)
 const ShellSkillsIndexRoute = ShellSkillsIndexRouteImport.update({
   id: '/skills/',
   path: '/skills/',
@@ -594,6 +600,7 @@ export interface FileRoutesByFullPath {
   '/settings/tokens': typeof ShellSettingsTokensRoute
   '/settings/usage': typeof ShellSettingsUsageRoute
   '/settings/users': typeof ShellSettingsUsersRoute
+  '/settings/webhooks': typeof ShellSettingsWebhooksRoute
   '/skills/$tab': typeof ShellSkillsTabRouteWithChildren
   '/skills/create': typeof ShellSkillsCreateRoute
   '/toolkits/$tab': typeof ShellToolkitsTabRouteWithChildren
@@ -679,6 +686,7 @@ export interface FileRoutesByTo {
   '/settings/tokens': typeof ShellSettingsTokensRoute
   '/settings/usage': typeof ShellSettingsUsageRoute
   '/settings/users': typeof ShellSettingsUsersRoute
+  '/settings/webhooks': typeof ShellSettingsWebhooksRoute
   '/skills/$tab': typeof ShellSkillsTabRouteWithChildren
   '/skills/create': typeof ShellSkillsCreateRoute
   '/toolkits/$tab': typeof ShellToolkitsTabRouteWithChildren
@@ -767,6 +775,7 @@ export interface FileRoutesById {
   '/_shell/settings/tokens': typeof ShellSettingsTokensRoute
   '/_shell/settings/usage': typeof ShellSettingsUsageRoute
   '/_shell/settings/users': typeof ShellSettingsUsersRoute
+  '/_shell/settings/webhooks': typeof ShellSettingsWebhooksRoute
   '/_shell/skills/$tab': typeof ShellSkillsTabRouteWithChildren
   '/_shell/skills/create': typeof ShellSkillsCreateRoute
   '/_shell/toolkits/$tab': typeof ShellToolkitsTabRouteWithChildren
@@ -855,6 +864,7 @@ export interface FileRouteTypes {
     | '/settings/tokens'
     | '/settings/usage'
     | '/settings/users'
+    | '/settings/webhooks'
     | '/skills/$tab'
     | '/skills/create'
     | '/toolkits/$tab'
@@ -940,6 +950,7 @@ export interface FileRouteTypes {
     | '/settings/tokens'
     | '/settings/usage'
     | '/settings/users'
+    | '/settings/webhooks'
     | '/skills/$tab'
     | '/skills/create'
     | '/toolkits/$tab'
@@ -1027,6 +1038,7 @@ export interface FileRouteTypes {
     | '/_shell/settings/tokens'
     | '/_shell/settings/usage'
     | '/_shell/settings/users'
+    | '/_shell/settings/webhooks'
     | '/_shell/skills/$tab'
     | '/_shell/skills/create'
     | '/_shell/toolkits/$tab'
@@ -1456,6 +1468,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ShellSettingsUsersRouteImport
       parentRoute: typeof ShellSettingsRouteRoute
     }
+    '/_shell/settings/webhooks': {
+      id: '/_shell/settings/webhooks'
+      path: '/webhooks'
+      fullPath: '/settings/webhooks'
+      preLoaderRoute: typeof ShellSettingsWebhooksRouteImport
+      parentRoute: typeof ShellSettingsRouteRoute
+    }
     '/_shell/skills/': {
       id: '/_shell/skills/'
       path: '/skills'
@@ -1711,6 +1730,7 @@ interface ShellSettingsRouteRouteChildren {
   ShellSettingsTokensRoute: typeof ShellSettingsTokensRoute
   ShellSettingsUsageRoute: typeof ShellSettingsUsageRoute
   ShellSettingsUsersRoute: typeof ShellSettingsUsersRoute
+  ShellSettingsWebhooksRoute: typeof ShellSettingsWebhooksRoute
   ShellSettingsIndexRoute: typeof ShellSettingsIndexRoute
   ShellSettingsEditConfigurationCredential_uidRoute: typeof ShellSettingsEditConfigurationCredential_uidRoute
 }
@@ -1736,6 +1756,7 @@ const ShellSettingsRouteRouteChildren: ShellSettingsRouteRouteChildren = {
   ShellSettingsTokensRoute: ShellSettingsTokensRoute,
   ShellSettingsUsageRoute: ShellSettingsUsageRoute,
   ShellSettingsUsersRoute: ShellSettingsUsersRoute,
+  ShellSettingsWebhooksRoute: ShellSettingsWebhooksRoute,
   ShellSettingsIndexRoute: ShellSettingsIndexRoute,
   ShellSettingsEditConfigurationCredential_uidRoute:
     ShellSettingsEditConfigurationCredential_uidRoute,

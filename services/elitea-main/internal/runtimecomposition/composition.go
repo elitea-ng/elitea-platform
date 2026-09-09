@@ -17,6 +17,7 @@ import (
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
 	indexscheduleapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexschedule"
 	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/pipelineruns"
 	schedulingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/scheduling"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
@@ -98,6 +99,29 @@ type Dependencies struct {
 	// type is runnable, as it was before the projection existed.
 	ToolkitCatalogue        *CurrentToolkitCatalogueSnapshot
 	WorkerToolkitCapability *WorkerToolkitCapability
+
+	// PipelineRuns and DomainEvents together wire pipeline.run.succeeded/
+	// failed — the two catalogue events #876 declared but left unwired
+	// because the claim-fence/settlement engine below carries no notion of
+	// "this execution is a pipeline run". Both nil (the default) leaves
+	// SettlementService and RuntimeFailureService composed exactly as they
+	// were before this pair of fields existed — no hook, no observer.
+	//
+	// PipelineRuns is public.pipeline_runs' repository
+	// (migrations/shared/0124) — main.go builds ONE instance, shared with
+	// internal/api/v2/pipelinetriggers' WithRunTracker, the same "two halves
+	// must agree" reason WebhookDispatcher/DomainEvents in
+	// internal/api.RouterConfig are each built once. See
+	// internal/application/pipelineruns' package doc for the full sequencing
+	// story.
+	PipelineRuns pipelineruns.Tracker
+	// DomainEvents is the SAME *events.Publisher instance
+	// cmd/elitea-main/main.go passes to internal/api.RouterConfig — declared
+	// here as the narrow EventEmitter seam (structurally satisfied, no
+	// internal/events import needed in this package) rather than the
+	// concrete type, the same "declared locally" shape
+	// pipelinetriggers.EventEmitter uses.
+	DomainEvents pipelineruns.EventEmitter
 }
 
 func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtime, error) {
@@ -600,6 +624,14 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if targetErr != nil {
 			return nil, fmt.Errorf("construct current agent start service: %w", targetErr)
 		}
+		// Persistent, cross-conversation personal memory (#870). WithMemories
+		// is a post-construction setter — see its own comment — precisely so
+		// this one line is the whole diff needed here, with none of the six
+		// *_test.go constructors under agentexecution touched. Built against
+		// the SAME admission pool every other resolver in this block uses
+		// (agentGuardrails, agentVersions above), not RouterConfig's
+		// MemoriesRepo (main.go) — see that field's own comment.
+		agentStart = agentStart.WithMemories(repos.NewMemoriesRepo(dependencies.AdmissionPool))
 		agentDispatcher, err := agentexecutionapp.NewDispatcher(agentJobs, agentProducer)
 		if err != nil {
 			return nil, err
@@ -807,7 +839,16 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if err != nil {
 		return nil, fmt.Errorf("construct runtime settlements: %w", err)
 	}
-	settlements, err := executionapp.NewSettlementService(settlementsRepository)
+	var settlementOptions []executionapp.SettlementOption
+	if dependencies.PipelineRuns != nil && dependencies.DomainEvents != nil {
+		// pipeline.run.succeeded/failed — see Dependencies.PipelineRuns' own
+		// doc comment for the full story. Both must be present: a hook with
+		// no emitter to call, or an emitter with no tracker to look the
+		// execution up in, could do nothing useful anyway.
+		settlementOptions = append(settlementOptions,
+			executionapp.WithAfterSettleHooks(pipelineruns.NewSettlementHook(dependencies.PipelineRuns, dependencies.DomainEvents)))
+	}
+	settlements, err := executionapp.NewSettlementService(settlementsRepository, settlementOptions...)
 	if err != nil {
 		return nil, err
 	}
@@ -853,10 +894,19 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if err != nil {
 		return nil, err
 	}
+	var runtimeFailureOptions []outputapp.RuntimeFailureOption
+	if dependencies.PipelineRuns != nil {
+		// The error-text half of pipeline.run.failed — see
+		// output.FailureObserver's own doc comment for why this is captured
+		// here, before settlement, rather than at the AfterSettle hook above.
+		runtimeFailureOptions = append(runtimeFailureOptions,
+			outputapp.WithFailureObserver(pipelineruns.NewFailureObserver(dependencies.PipelineRuns)))
+	}
 	runtimeFailures, err := outputapp.NewRuntimeFailureService(
 		outputInbox,
 		outputClaims,
 		runtimeFailureResults,
+		runtimeFailureOptions...,
 	)
 	if err != nil {
 		return nil, err

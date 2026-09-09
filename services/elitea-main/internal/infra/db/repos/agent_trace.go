@@ -228,6 +228,7 @@ func (p *postgresCurrentAgentTraceProjector) projectAgentTraceDelta(
 		tx,
 		projectID,
 		messageGroupID,
+		frame.Fence.ExecutionID,
 		desired,
 		frame.OccurredAt,
 	); err != nil {
@@ -1050,11 +1051,23 @@ func validateCurrentAgentAttrs(attrs map[string]any) error {
 // above matches rows by — so a streaming turn, which re-projects the same tool
 // call on every partial message as its output and finish time arrive, updates
 // one record rather than counting one call many times.
+//
+// executionID is frame.Fence.ExecutionID — the same value
+// lockCurrentAgentMessageGroup above already matched against
+// message_group.task_id, and the value the gateway writes onto
+// gateway.llm_request_logs.execution_id (shared 0100). Stamping it here (#875)
+// is what lets a cost read correlate this tool call back to the LLM spend of
+// the execution it ran inside, the way GetAgentAnalytics already correlates an
+// execution to an agent — see internal/api/v2/analytics/estimate.go. Before
+// this it was left NULL for every agent-turn row, so the only tool calls a
+// cost read could ever reach were explicit runs (toolkit.call_tool.v1), which
+// make no LLM call at all.
 func (p *postgresCurrentAgentTraceProjector) recordAgentToolCalls(
 	ctx context.Context,
 	tx sqlExecutor,
 	projectID int64,
 	messageGroupID int64,
+	executionID string,
 	desired []currentAgentTraceRow,
 	occurredAt time.Time,
 ) error {
@@ -1095,6 +1108,7 @@ func (p *postgresCurrentAgentTraceProjector) recordAgentToolCalls(
 			ToolName:    row.toolName,
 			StartedAt:   started,
 			IsError:     row.isError,
+			ExecutionID: executionID,
 		}
 		if row.finishedAt != nil && !row.finishedAt.Before(started) {
 			record.FinishedAt = *row.finishedAt

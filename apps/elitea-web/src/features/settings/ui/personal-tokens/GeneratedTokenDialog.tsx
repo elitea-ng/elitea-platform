@@ -130,6 +130,11 @@ export const GeneratedTokenDialog = memo(function GeneratedTokenDialog({
             <Typography
               variant="bodyMedium"
               sx={styles.tokenValue}
+              // Docs screenshot mask target only (embedded-docs programme,
+              // unit W4a) — the generated-token-generate shot blanks this
+              // element before capture so a real bearer value is never
+              // committed to a documentation image.
+              data-testid="generated-token-value"
             >
               {token}
             </Typography>

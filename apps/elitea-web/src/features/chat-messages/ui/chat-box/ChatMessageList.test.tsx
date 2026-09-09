@@ -225,3 +225,129 @@ describe('ChatMessageList question-edit eligibility', () => {
     expect(screen.queryByLabelText('Delete')).not.toBeInTheDocument();
   });
 });
+
+/**
+ * The "create canvas from a text selection" affordance on the conversation's
+ * LAST message — a finding from the embedded-docs screenshot unit: the
+ * control never rendered there, though it worked fine on any earlier message.
+ *
+ * ── ROOT CAUSE ──────────────────────────────────────────────────────────
+ * `ChatMessageList`'s per-message `messageIsStreaming` used to OR the page-
+ * level `isStreaming` flag into the LAST message's own state unconditionally
+ * (`isLastMessage && isStreaming`). That page-level flag is itself an OR of
+ * three sources (`ChatBox.tsx`'s own comment on it: composer Stop, persisted-
+ * history catch-up, the live transport), and none of them is guaranteed to
+ * flip back to `false` the instant the LAST message's own turn ends — the
+ * persisted-history source in particular is read off a conversation-messages
+ * fetch a finished turn does not itself invalidate. So a page that had
+ * genuinely finished answering could still read `isStreaming: true` at the
+ * page level, and the formula piped that straight onto the one message a
+ * reader was looking at, permanently hiding "Create canvas" (and disabling
+ * regenerate) there — while every earlier, non-last message read its own
+ * (correctly settled) `isStreaming` and worked fine.
+ *
+ * The fixture below reproduces exactly that split: the LAST message states
+ * its own `isStreaming` as settled (here, simply absent — the normal shape
+ * for a historically-loaded row, see `entities/message`'s
+ * `assistantStreamingFields`) and already carries a real answer, while the
+ * PAGE-LEVEL `isStreaming` prop is `true`, standing in for the stuck flag.
+ */
+function selectInAnswer(text: string): void {
+  const item = screen.getByTestId('answer-text-item');
+  const walker = document.createTreeWalker(item, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode();
+  while (node !== null) {
+    const offset = (node.textContent ?? '').indexOf(text);
+    if (offset >= 0) {
+      const range = document.createRange();
+      range.setStart(node, offset);
+      range.setEnd(node, offset + text.length);
+      const selection = document.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      fireEvent.mouseUp(document);
+      return;
+    }
+    node = walker.nextNode();
+  }
+  throw new Error(`the rendered answer holds no text node containing ${text}`);
+}
+
+describe('ChatMessageList: canvas-from-selection on the LAST message', () => {
+  it('offers "Create canvas" on the last message even while the page-level isStreaming flag is stuck true', () => {
+    const answerText = 'AUTOTEST select this settled answer please';
+    const chatHistory: readonly ChatMessage[] = [
+      {
+        id: 'q1',
+        role: 'user',
+        name: 'Reader',
+        content: 'make me an answer',
+        createdAt: '2026-09-09T10:00:00Z',
+      },
+      {
+        id: 'a1',
+        role: 'assistant',
+        name: 'agent',
+        content: answerText,
+        createdAt: '2026-09-09T10:00:01Z',
+        // Deliberately NOT `isStreaming: false` — a historically-loaded
+        // message states no `isStreaming` at all (see module doc), which is
+        // exactly the shape that used to fall through to the page-level flag.
+      },
+    ] as unknown as readonly ChatMessage[];
+
+    Element.prototype.scrollIntoView = vi.fn();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const onCreateFromSelection = vi.fn();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+          <ChatMessageList
+            chatHistory={chatHistory}
+            projectId="90106"
+            userId="6"
+            // The stuck/stale page-level flag this bug is about.
+            isStreaming
+            canvas={{ onCreateFromSelection }}
+          />
+        </ThemeProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByTestId('application-answer')).toHaveTextContent(answerText);
+    selectInAnswer('settled answer');
+
+    expect(
+      screen.getByTestId('canvas-create-from-selection'),
+      'a last message that already carries an answer must not stay blocked by a page-level isStreaming flag',
+    ).toBeVisible();
+  });
+
+  it('still withholds it while THIS message is genuinely mid-stream (no content yet)', () => {
+    const chatHistory: readonly ChatMessage[] = [
+      { id: 'q1', role: 'user', name: 'Reader', content: 'make me an answer', createdAt: '2026-09-09T10:00:00Z' },
+      { id: 'a1', role: 'assistant', name: 'agent', content: '', createdAt: '2026-09-09T10:00:01Z', isStreaming: true },
+    ] as unknown as readonly ChatMessage[];
+
+    Element.prototype.scrollIntoView = vi.fn();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+          <ChatMessageList
+            chatHistory={chatHistory}
+            projectId="90106"
+            userId="6"
+            isStreaming
+            canvas={{ onCreateFromSelection: vi.fn() }}
+          />
+        </ThemeProvider>
+      </QueryClientProvider>,
+    );
+
+    // No answer text exists yet to select, and the loading affordance shows
+    // instead — this pins that the fix narrows the fallback rather than
+    // deleting it.
+    expect(screen.queryByTestId('answer-text-item')).not.toBeInTheDocument();
+  });
+});

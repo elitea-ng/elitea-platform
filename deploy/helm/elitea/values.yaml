@@ -2900,7 +2900,7 @@ worker:
   # in a terminal failure: Go admits and projects executions but has no
   # agent-token producer of its own.
 
-  # Which worker this release runs: `rust` (default) or `python`.
+  # Which worker this release runs: `python` (default) or `rust`.
   #
   # NOT named `runtime` — that key is taken, by the deployment configuration
   # block further down that becomes the worker's runtime.json.
@@ -2922,7 +2922,56 @@ worker:
   # runtime.json itself is identical for both: its 21 fields and 21 `limits`
   # entries are the same set on either side, and the Rust struct is
   # deny_unknown_fields, so any drift fails at startup rather than silently.
-  implementation: rust
+  #
+  # `python` is the default HERE, matching `deploy/scripts/standalone-stack.sh`'s
+  # own `${STANDALONE_WORKER:-python}` default (#865, #866) — until this
+  # release, this chart's default silently diverged from compose's and hid
+  # capability from every install that never set `implementation` explicitly.
+  # elitea-main serves a toolkit type or an internal-tool toggle as
+  # `metadata.hidden`/unavailable whenever the CONFIGURED worker cannot run it
+  # (`internal/runtimecomposition/worker_toolkit_capability.go`,
+  # `ELITEA_WORKER_IMPLEMENTATION`, set from this field just below), so the
+  # choice here is not cosmetic — it decides what a user can turn on.
+  #
+  # Choosing `rust`:
+  #   GAINS a memory-safe, lower-footprint worker process with the platform's
+  #   newer native agent runtime (checkpointing, step-limit enforcement) and no
+  #   Python interpreter/dependency surface to patch.
+  #   LOSES, as of this release:
+  #     - the 17 toolkit types #865 named, PLUS one more found verifying this
+  #       comment directly against the pinned catalogue and Rust snapshot
+  #       (`current_toolkit_catalogue_snapshot.json`,
+  #       `current_rust_worker_toolkit_capability_snapshot.json`) rather than
+  #       trusting the issue's own count — `zephyr_essential` is catalogued
+  #       and absent from the Rust worker's 22 materialized families the same
+  #       way the other 17 are. All 18: ado_boards, ado_plans, ado_repos,
+  #       ado_wiki, aha, bitbucket, confluence, figma, gitlab (plain —
+  #       distinct from the supported `gitlab_org`), jira, powerpoint
+  #       (catalogued as `pptx`), qtest, testIO (catalogued as `testio`),
+  #       testrail, xray (catalogued as `xray_cloud`), zephyr_enterprise,
+  #       zephyr_essential, zephyr_scale. Every tile is still shown, greyed,
+  #       with a reason (#865).
+  #     - six internal chat-agent tools that
+  #       `services/elitea-worker-rust/src/agents/internal_tools.rs` recognizes
+  #       and then skips rather than runs (#866): image_generation (Image
+  #       creation), data_analysis (Data Analysis), internal_mcp (Elitea MCP
+  #       Tools), planner (Planner), swarm (Swarm Mode), lazy_tools_mode (Smart
+  #       Tools Selection). A run that hits one of these now gets a visible
+  #       assistant-facing notice instead of the tool silently doing nothing.
+  #   The Rust worker's own 22 supported toolkit families (azure, azure_search,
+  #   elastic, gcp, github, gitlab_org, google_places, k8s, keycloak, openapi,
+  #   postman, rally, report_portal, salesforce, service_now, sharepoint,
+  #   slack, sonar, sql, yagmail, zephyr, zephyr_squad) and its one internal
+  #   tool (ask_user) work exactly as on Python.
+  #
+  # Choosing `python` (the default): every toolkit type and internal tool
+  # above is available, at the cost of the larger interpreter/dependency
+  # image and process footprint the Rust worker was written to avoid.
+  #
+  # Porting the missing 17 adapters and six tools to Rust is tracked as a
+  # multi-sprint programme (umbrella #247); this default is the honest
+  # near-term answer, not a statement that the port is done.
+  implementation: python
 
   image:
     # Built, signed and published by this repository's own release workflow

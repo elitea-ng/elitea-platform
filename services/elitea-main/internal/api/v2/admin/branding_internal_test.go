@@ -37,7 +37,13 @@ func TestValidateBrandingValues(t *testing.T) {
 		{name: "hue short form", values: map[string]any{platformconfig.KeyBrandingHue: "#fff"}, want: "six-digit hex"},
 		{name: "on-brand colour is checked too", values: map[string]any{platformconfig.KeyBrandingOnBrand: "white"}, want: "six-digit hex"},
 
-		{name: "docs url relative", values: map[string]any{platformconfig.KeyBrandingDocsURL: "/docs"}, want: "absolute http"},
+		// [W1b] docs_url uniquely also accepts a root-relative path: the
+		// embedded docs SPA is same-origin, and ProductDefault() states it
+		// this way, so a branding package export/import round trip must not
+		// reject its own default value. supportUrl keeps the absolute-only
+		// rule below.
+		{name: "docs url relative is accepted (the embedded docs SPA)", values: map[string]any{platformconfig.KeyBrandingDocsURL: "/docs"}},
+		{name: "docs url protocol-relative is still refused", values: map[string]any{platformconfig.KeyBrandingDocsURL: "//evil.example/docs"}, want: "absolute http"},
 		{name: "support url javascript", values: map[string]any{platformconfig.KeyBrandingSupportURL: "javascript:alert(1)"}, want: "absolute http"},
 
 		{name: "logo with a scheme", values: map[string]any{platformconfig.KeyBrandingLogoFull: "https://cdn.example/logo.svg"}, want: "path on this origin"},

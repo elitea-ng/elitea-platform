@@ -75,7 +75,7 @@ export const SkillCreateRequest = zod
       ),
   })
   .describe(
-    'Decoded into the `createRequest` struct (internal\/api\/v2\/skills\/handler.go:57-63), not the Skill struct; name\/description persist onto the skills row; instructions\/tags (from either the flat fields or versions[0]) upsert the base skill_versions row and its tag associations in the same transaction (repos\/skills.go Create\/Update). type\/config\/is_default remain silently discarded, and the response Type is hardcoded \"skill\".\n',
+    'Decoded into the `createRequest` struct (internal\/api\/v2\/skills\/handler.go:57-63), not the Skill struct; name\/description persist onto the skills row; instructions\/tags (from either the flat fields or versions[0]) upsert the base skill_versions row and its tag associations in the same transaction (repos\/skills.go Create\/Update). type\/config\/is_default remain silently discarded, and the response Type is hardcoded \"skill\".\nThe SAME shape serves updateSkillVersion\'s body — see SkillVersionCreateRequest for the create-a-NAMED-version shape, which additionally requires `name` and accepts `source_version_id`.\n',
   );
 
 export type SkillCreateRequest = zod.input<typeof SkillCreateRequest>;

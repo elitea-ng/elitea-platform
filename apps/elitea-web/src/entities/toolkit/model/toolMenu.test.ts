@@ -31,9 +31,38 @@ describe('nonMcpToolkitTypeSchemas', () => {
 });
 
 describe('toolkitTypeMenuEntries', () => {
-  it('excludes hidden entries', () => {
+  it('excludes hidden entries by default', () => {
     const schemas = { github: { metadata: { label: 'GitHub', hidden: true } } };
     expect(toolkitTypeMenuEntries(schemas)).toEqual([]);
+  });
+
+  // #865: the toolkit type picker opts into keeping hidden entries so it can
+  // grey them with a reason instead of making a catalogued type look like it
+  // was never offered — every other caller keeps the pre-#865 exclusion.
+  it('keeps hidden entries with their reason when includeHidden is true', () => {
+    const schemas = {
+      jira: { metadata: { label: 'Jira', hidden: true, unavailable_reason: 'the configured worker cannot build this type' } },
+      github: { metadata: { label: 'GitHub' } },
+    };
+    expect(toolkitTypeMenuEntries(schemas, { includeHidden: true })).toEqual([
+      { key: 'github', label: 'GitHub', hasKnownLabel: true },
+      { key: 'jira', label: 'Jira', hasKnownLabel: true, hidden: true, unavailableReason: 'the configured worker cannot build this type' },
+    ]);
+  });
+
+  it('keeps a hidden entry with no reason as hidden:true and no unavailableReason key', () => {
+    const schemas = { jira: { metadata: { label: 'Jira', hidden: true } } };
+    expect(toolkitTypeMenuEntries(schemas, { includeHidden: true })).toEqual([
+      { key: 'jira', label: 'Jira', hasKnownLabel: true, hidden: true },
+    ]);
+  });
+
+  it('still excludes agent/application/internal-tool entries even with includeHidden', () => {
+    const schemas = {
+      application: { metadata: { label: 'Agent', hidden: true } },
+      internal_mcp: { metadata: { label: 'Internal', categories: ['internal_tool'], hidden: true } },
+    };
+    expect(toolkitTypeMenuEntries(schemas, { includeHidden: true })).toEqual([]);
   });
 
   it('excludes agent/application-keyed or labelled entries', () => {

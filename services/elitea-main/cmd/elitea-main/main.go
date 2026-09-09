@@ -39,6 +39,7 @@ import (
 	indextypesapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
 	v2inventory "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/inventory"
 	v2mcp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/mcp"
+	v2memories "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/memories"
 	notificationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/notifications"
 	v2pipelinetriggers "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
 	predictapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/predict"
@@ -65,6 +66,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/wikichat"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/events"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
 	infradb "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
@@ -270,6 +272,61 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			logger.Warn("could not flush the audit trail on shutdown", "err", flushErr)
 		}
 	}()
+
+	// The domain-events Publisher — #876's second half. Every producer that
+	// wires it (pipeline run admission, agent version publish/unpublish,
+	// conversation create, artifact upload, moderation decision) reaches it
+	// through the SAME instance, built once here, exactly like auditRecorder
+	// above and for the same reason: two Publishers over one webhook registry
+	// would mean two independent dispatch paths that could disagree about
+	// what already fired.
+	//
+	// Its Bus is events.NoopBus{}: the project SSE stream's own bus
+	// (eventStreamRedis, built later in this function once RedisConfig is
+	// read) is not yet open at this point in composition, and re-ordering
+	// that construction earlier is a change this fix does not also make. The
+	// PRACTICAL effect is scoped to these five NEW event types only — they do
+	// not additionally appear on the project SSE stream in this change — and
+	// does not touch the SSE stream's existing traffic (budget.soft_alert and
+	// the rest), which is unaffected. Webhook delivery itself does not need
+	// the Bus at all: it reaches the Dispatcher Sink below regardless.
+	//
+	// Its one Sink is the webhook Dispatcher, wired only when the webhooks
+	// table's repository composes (webhooksRepository never returns nil, but
+	// the guard mirrors the one WebhookRepo's own composition documents: a
+	// pool-less deployment gets a Dispatcher with a nil Repository, and
+	// HandleDomainEvent's own nil guard turns that into a no-op rather than a
+	// panic).
+	// The SSRF guard every webhook destination is checked against — at
+	// create/update time (Handler.validateDestination, fail-closed on a nil
+	// guard) and again at every dial (Dispatcher's guarded Transport,
+	// defence in depth against a row admitted some other way or a hostname
+	// that resolves differently later). ELITEA_WEBHOOK_EGRESS_ALLOWLIST is
+	// unset by default, which is a valid, safe "refuse all private-network
+	// destinations" allowlist — see webhook.DestinationAllowlistEnv's own
+	// doc comment. A malformed entry fails startup, the same posture
+	// egresslib.Parse already enforces for GATEWAY_EGRESS_ALLOWLIST: a typo
+	// that silently dropped a rule would either open the guard wider than
+	// intended or wedge a legitimate private destination an operator meant
+	// to permit.
+	webhookAllowlist, err := webhook.ParseDestinationAllowlist(splitEnvList(os.Getenv(webhook.DestinationAllowlistEnv)))
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", webhook.DestinationAllowlistEnv, err)
+	}
+	webhookDestinationGuard := webhook.NewDestinationGuard(webhookAllowlist)
+
+	webhookDeliveries := webhookDeliveriesRepository(pool)
+	webhookDispatcher := webhook.NewDispatcher(webhooksRepository(pool), webhookDeliveries, webhook.WithGuard(webhookDestinationGuard))
+	domainEvents := events.NewPublisher(events.NoopBus{}, webhookDispatcher)
+
+	// public.pipeline_runs' repository (migrations/shared/0124) — the write
+	// half (pipelinetriggers.WithRunTracker, below) and the read half
+	// (execution.WithAfterSettleHooks / output.WithFailureObserver, in
+	// runtimeRoot's own composition further down) of
+	// pipeline.run.succeeded/failed. One instance, for the same "two halves
+	// must agree" reason webhookDispatcher and domainEvents are each built
+	// once here rather than per call site.
+	pipelineRunsRepo := pipelineRunsRepository(pool)
 
 	// Object store. Production remains fail-closed: when the capability is
 	// enabled, startup requires a working S3/Azure/GCS backend. The mixed
@@ -1511,6 +1568,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			ObjectStore:                      objectStore,
 			ToolkitCatalogue:                 toolkitCatalogue,
 			WorkerToolkitCapability:          workerToolkitCapability,
+			// pipeline.run.succeeded/failed — see
+			// runtimecomposition.Dependencies.PipelineRuns' own doc comment.
+			PipelineRuns: pipelineRunsRepo,
+			DomainEvents: domainEvents,
 		})
 		if err != nil {
 			return fmt.Errorf("compose optional runtime: %w", err)
@@ -1620,6 +1681,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 				legacyrbac.NewPostgresResolver(pool),
 				auditRecorder,
 				logger,
+				domainEvents,
+				pipelineRunsRepo,
 			)
 			// The schedule TICK. It rides elitea-main's platform scheduler —
 			// the same framework `index.schedule.scan.v1` uses — so the clock,
@@ -2013,6 +2076,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		ToolkitArgumentSchemas:     toolkitArgumentSchemas,
 		ToolkitCatalogue:           toolkitCatalogue,
 		ToolkitWorkerCapability:    workerToolkitCapability,
+		WorkerImplementation:       workerImplementation,
 		ToolkitSettingsDefinitions: toolkitSettingsDefinitions,
 		ToolkitSettingsValidator:   toolkitSettingsValidator,
 		ToolkitRegistry:            toolkitArgumentSchemas,
@@ -2100,6 +2164,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		SharedChatTranscript: sharedChatTranscriptRepository(pool),
 		SkillsRepo:           skillsRepository(pool),
 		FoldersRepo:          foldersRepository(pool),
+		MemoriesRepo:         memoriesRepository(pool),
 		TagsRepo:             tagsRepository(pool),
 		AnalyticsRepo:        analyticsRepository(pool),
 		// The Agent Evaluation dimension library. Wired here, at the
@@ -2126,6 +2191,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// two-arm fallback (EventSource → RedisClient) whose members were BOTH
 		// unassigned, so the endpoint 404'd everywhere (#152).
 		RedisClient: eventStreamRedis,
+		// #876's second half — see this variable's own composition comment,
+		// above, for why its Bus is a no-op and its one Sink is the webhook
+		// Dispatcher.
+		DomainEvents:            domainEvents,
+		WebhookDeliveries:       webhookDeliveries,
+		WebhookDispatcher:       webhookDispatcher,
+		WebhookDestinationGuard: webhookDestinationGuard,
 	})
 
 	// NOTE(#126): the Socket.IO prototype server (internal/api/socketio) is
@@ -2222,11 +2294,69 @@ func foldersRepository(pool *pgxpool.Pool) v2folders.Repository {
 	return dbrepos.NewFoldersRepo(pool)
 }
 
+// memoriesRepository backs the CRUD router config field (MemoriesRepo),
+// over the general-purpose pool. Turn-start RECALL is a SEPARATE
+// *dbrepos.MemoriesRepo instance, built against the admission pool inside
+// internal/runtimecomposition/composition.go — same table, same query
+// logic, different connection pool, matching how that file already builds
+// its own agentGuardrails/agentVersions repositories rather than reusing
+// this file's RouterConfig ones.
+func memoriesRepository(pool *pgxpool.Pool) v2memories.Repository {
+	if pool == nil {
+		return nil
+	}
+	return dbrepos.NewMemoriesRepo(pool)
+}
+
+// splitEnvList splits a comma-separated environment variable into trimmed,
+// non-empty entries — the same shape the LLM gateway's `csvOr` produces for
+// GATEWAY_EGRESS_ALLOWLIST (internal/config/config.go), so an operator moving
+// an allowlist value between the two variables does not also have to change
+// its punctuation.
+func splitEnvList(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	fields := strings.Split(raw, ",")
+	entries := make([]string, 0, len(fields))
+	for _, f := range fields {
+		if trimmed := strings.TrimSpace(f); trimmed != "" {
+			entries = append(entries, trimmed)
+		}
+	}
+	return entries
+}
+
+// pipelineRunsRepository backs pipeline.run.succeeded/failed's tracking
+// table (migrations/shared/0124). Returns a typed nil, not the untyped
+// literal, on a nil pool: every consumer wires it through present()
+// (pipelinetriggers.WithRunTracker) or a plain interface field a nil pointer
+// satisfies harmlessly (pipelineruns.NewSettlementHook/NewFailureObserver,
+// both of which nil-check their tracker before every call), so a pool-less
+// deployment gets three no-ops rather than three panics.
+func pipelineRunsRepository(pool *pgxpool.Pool) *dbrepos.PipelineRunsRepo {
+	if pool == nil {
+		return nil
+	}
+	return dbrepos.NewPipelineRunsRepo(pool)
+}
+
 func webhooksRepository(pool *pgxpool.Pool) webhook.Repository {
 	if pool == nil {
 		return nil
 	}
 	return dbrepos.NewWebhooksRepo(pool)
+}
+
+// webhookDeliveriesRepository backs the delivery log (#876's second half) —
+// same nil-pool guard as webhooksRepository above, and the same reason: a
+// typed-nil *WebhooksRepo boxed into the interface would make every method
+// on it panic instead of the caller's own nil check catching it first.
+func webhookDeliveriesRepository(pool *pgxpool.Pool) webhook.DeliveryRepository {
+	if pool == nil {
+		return nil
+	}
+	return dbrepos.NewWebhookDeliveriesRepo(pool)
 }
 
 func evalDimensionsRepository(pool *pgxpool.Pool) v2evaluation.Repository {

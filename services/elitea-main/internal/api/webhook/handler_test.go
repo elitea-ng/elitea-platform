@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -13,6 +14,34 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 )
+
+// fakeIPResolver is a deterministic, network-free stand-in for
+// net.DefaultResolver (see ssrf.go's ipResolver seam). Every test in this
+// package that needs a DestinationGuard to actually PASS a host uses this
+// rather than a real DNS lookup, so the test suite never depends on the
+// runner's network access or on a fixture hostname's real-world DNS answer.
+type fakeIPResolver struct {
+	ips map[string][]net.IPAddr
+}
+
+func (f fakeIPResolver) LookupIPAddr(_ context.Context, host string) ([]net.IPAddr, error) {
+	if addrs, ok := f.ips[host]; ok {
+		return addrs, nil
+	}
+	return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+}
+
+// permissiveTestGuard resolves every hostname this file's fixtures use
+// (example.com, example.org, ...) to an ordinary PUBLIC address, so
+// Handler.Create/Update pass validation without reaching real DNS.
+func permissiveTestGuard() *DestinationGuard {
+	public := net.IPAddr{IP: net.ParseIP("93.184.216.34")}
+	resolver := fakeIPResolver{ips: map[string][]net.IPAddr{
+		"example.com": {public},
+		"example.org": {public},
+	}}
+	return NewDestinationGuardWithResolver(nil, resolver)
+}
 
 type mockWebhookRepo struct {
 	webhooks []Webhook
@@ -84,6 +113,8 @@ var webhookPermissions = []struct {
 	{http.MethodGet, "/api/v2/projects/proj-1/webhooks/wh-1", detailsPermission},
 	{http.MethodPut, "/api/v2/projects/proj-1/webhooks/wh-1", updatePermission},
 	{http.MethodDelete, "/api/v2/projects/proj-1/webhooks/wh-1", deletePermission},
+	{http.MethodGet, "/api/v2/projects/proj-1/webhooks/wh-1/deliveries", detailsPermission},
+	{http.MethodPost, "/api/v2/projects/proj-1/webhooks/wh-1/deliveries/del-1/redeliver", updatePermission},
 }
 
 // allWebhookPermissions is the distinct set the five routes draw from.
@@ -117,7 +148,7 @@ func withTestUser(next http.Handler) http.Handler {
 // webhookRouter reproduces router.go's shape: an authenticated caller, the
 // {projectID} in the MOUNT pattern, and the subrouter under it.
 func webhookRouter(repo Repository, resolver auth.PermissionResolver) *chi.Mux {
-	h := NewHandler(repo, WithPermissionResolver(resolver))
+	h := NewHandler(repo, WithPermissionResolver(resolver), WithDestinationGuard(permissiveTestGuard()))
 	r := chi.NewRouter()
 	r.Use(withTestUser)
 	r.Route("/api/v2/projects/{projectID}/webhooks", func(r chi.Router) {

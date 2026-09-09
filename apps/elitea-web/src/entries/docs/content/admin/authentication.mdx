@@ -1,0 +1,58 @@
+---
+title: "Authentication"
+description: "Configure OIDC or SAML sign-in, and bind SCIM-provisioned groups to a project role."
+---
+
+Authentication lives under **Configuration › Authentication** in the admin console. It covers how people sign in (OIDC or SAML) and how an identity provider's groups map onto project membership (SCIM).
+
+## Configure an identity provider
+
+<Steps>
+  <Step title="Open Configuration › Authentication">
+    The list shows any providers already configured, one live per protocol.
+  </Step>
+  <Step title="Add a provider">
+    Choose **OpenID Connect** or **SAML 2.0**.
+
+    <Tabs>
+      <Tab title="OpenID Connect">
+        Issuer URL (a `.well-known/openid-configuration` URL is accepted and reduced to its issuer), Client ID, client secret, redirect URI, scopes, and whether e-mail verification is required.
+      </Tab>
+      <Tab title="SAML 2.0">
+        Identity-provider entity ID, SSO URL, single-logout URL, and certificate(s); this service's own entity ID and ACS URL; name-ID format; the e-mail and name attribute mappings; whether to sign AuthnRequests; the service provider certificate; and clock-skew tolerance.
+      </Tab>
+    </Tabs>
+  </Step>
+  <Step title="Enable it for logins">
+    Turning a provider on retires any other provider of the same protocol — only one live OIDC and one live SAML definition can exist at a time, because each protocol is served on one route.
+  </Step>
+</Steps>
+
+<Screenshot id="admin-auth-provider" alt="Authentication section listing configured identity providers" mask={["client-secret-field", "certificate-field"]} />
+
+<Note>
+A stored secret is never shown in the clear — the field renders a mask, and there is no "reveal" control. To change it, enter a new value; leaving it blank keeps the existing one.
+</Note>
+
+<Warning>
+Deleting a provider also deletes its stored secret, which cannot be recovered. To stop using a provider for new logins without losing its configuration, turn off "use this provider for logins" instead of deleting it.
+</Warning>
+
+## Bind SCIM groups to a project role
+
+SCIM lets an identity provider push its directory — creating and deactivating accounts as people join and leave — rather than only federating logins. The SCIM endpoint is `/api/v2/scim/v2`, authenticated with a personal access token; configuring it in your identity provider is outside Elitea's UI.
+
+What the admin console does provide is the group-to-role mapping, beneath the identity provider list:
+
+<Steps>
+  <Step title="Create a binding">
+    Name the SCIM group exactly as your identity provider sends it, and choose the project and role it grants.
+  </Step>
+  <Step title="Understand membership">
+    A member the group granted the role to loses it when they leave the group. A member who already held that role independently keeps it — the identity provider is authoritative only over what it granted, not over everything it happens to find.
+  </Step>
+</Steps>
+
+<Note>
+A SCIM group with no binding is refused by name; it never creates a project on its own, and it never guesses a role.
+</Note>

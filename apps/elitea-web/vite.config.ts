@@ -1,9 +1,21 @@
 import { URL, fileURLToPath } from 'node:url';
 
+import mdx from '@mdx-js/rollup';
 import babel from '@rolldown/plugin-babel';
 import { tanstackRouter } from '@tanstack/router-plugin/vite';
 import react, { reactCompilerPreset } from '@vitejs/plugin-react';
+import rehypeAutolinkHeadings from 'rehype-autolink-headings';
+import rehypeSlug from 'rehype-slug';
+import remarkFrontmatter from 'remark-frontmatter';
+import remarkGfm from 'remark-gfm';
+import remarkMdxFrontmatter from 'remark-mdx-frontmatter';
 import { defineConfig, type PluginOption, type UserConfig } from 'vite';
+
+// No `.ts` extension: tsconfig.json does not set `allowImportingTsExtensions`
+// (TS5097), so adding one here to silence Vite's own `configLoader: 'native'`
+// forward-compat notice would break `tsc --noEmit`. Vite resolves the
+// extensionless form today regardless of that loader setting.
+import { remarkMermaid } from './src/entries/docs/mdx/remark-mermaid';
 import { viteSingleFile } from 'vite-plugin-singlefile';
 import svgr from 'vite-plugin-svgr';
 import tsconfigPaths from 'vite-tsconfig-paths';
@@ -11,7 +23,7 @@ import tsconfigPaths from 'vite-tsconfig-paths';
 const resolvePath = (p: string): string => fileURLToPath(new URL(p, import.meta.url));
 
 /**
- * Three build targets (spec §7.4), selected via `vite build --mode <target>`:
+ * Five build targets (spec §7.4), selected via `vite build --mode <target>`:
  *
  *  - (default)      main SPA        base './' (contract C4), outDir dist/app
  *  - admin          admin module    base '/admin/app/' so the Go adminui handler's
@@ -21,6 +33,13 @@ const resolvePath = (p: string): string => fileURLToPath(new URL(p, import.meta.
  *                                   one maintenance.html, dist/maintenance
  *  - brand-preview  self-contained  the offline brand previewer (ADR-0024 WP9),
  *                                   one index.html, dist/brand-preview
+ *  - docs           docs SPA        embedded documentation (product docs, not the
+ *                                   admin/app entries above): MDX content compiled
+ *                                   to a plain-CSS React SPA, dist/docs. `base`
+ *                                   comes from `DOCS_BASE` (nginx serves it at
+ *                                   `/docs/`; the GitHub Pages workflow overrides
+ *                                   it to `/elitea-platform/` since Pages publishes
+ *                                   the docs site at the repo's Pages subpath).
  *
  * Vite keeps NODE_ENV=production for `vite build` regardless of a custom --mode
  * (mode and NODE_ENV are distinct), so all three outputs are production builds.
@@ -107,6 +126,62 @@ export default defineConfig(({ mode }): UserConfig => {
         sourcemap: false,
         rollupOptions: {
           input: resolvePath('./src/entries/brand-preview/index.html'),
+        },
+      },
+    };
+  }
+
+  if (mode === 'docs') {
+    // MDX-authored documentation SPA (PREAMBLE decisions 1/6). `mdx()` must
+    // run BEFORE `react()`: it turns `.mdx` files into JSX, which `react()`
+    // then compiles like any other component source (the official
+    // `@mdx-js/rollup` Vite recipe orders its plugins the same way). Every
+    // `.mdx` file gets the same remark/rehype pipeline: `remark-frontmatter`
+    // parses the `---` block, `remark-mdx-frontmatter` re-exports it as
+    // `export const frontmatter = {...}` so `content/*.mdx` pages can declare
+    // `title`/`description`/`updated` (contract, PREAMBLE decision 2);
+    // `remark-gfm` adds tables/strikethrough/task lists; `remarkMermaid`
+    // turns a ```mermaid fence into a `<Mermaid chart>` element (see that
+    // module's own header for why it runs at the mdast stage rather than the
+    // hast stage the PREAMBLE's wording describes); `rehype-slug` gives every
+    // heading a stable `id`; `rehype-autolink-headings` adds a `#` anchor
+    // `<a>` wrapping each heading so the right-rail "On this page" TOC and
+    // cross-page anchor links (`/slug#heading`) resolve to real DOM ids.
+    return {
+      plugins: [
+        mdx({
+          remarkPlugins: [remarkFrontmatter, remarkMdxFrontmatter, remarkGfm, remarkMermaid],
+          rehypePlugins: [rehypeSlug, [rehypeAutolinkHeadings, { behavior: 'wrap' }]],
+        }),
+        ...basePlugins,
+      ],
+      root: resolvePath('./src/entries/docs'),
+      // Nginx serves the built SPA at /docs/ (decision 5); the GitHub Pages
+      // workflow builds with DOCS_BASE=/elitea-platform/ so asset URLs match
+      // the Pages subpath (decision 6).
+      base: process.env['DOCS_BASE'] ?? '/docs/',
+      // No favicon/static-asset directory yet — the entry's favicon is an
+      // inline data URI in index.html, same trick the maintenance entry's
+      // scheme-init script uses for its own no-second-request constraint.
+      publicDir: false,
+      build: {
+        outDir: resolvePath('./dist/docs'),
+        emptyOutDir: true,
+        sourcemap: false,
+        rollupOptions: {
+          // Two HTML inputs sharing one app chunk: `index.html` is the real
+          // entry, and `404.html` is the SAME shell, output verbatim, that
+          // GitHub Pages serves for any path it does not itself have a file
+          // for (PREAMBLE decision 1/6). The docs router then reads the
+          // ORIGINAL requested path from `window.location` on boot and
+          // renders that page (or a real "page not found" view) client-side
+          // — Pages' 404 fallback is what makes a deep link like
+          // `/elitea-platform/quick-start` work at all on a static host with
+          // no server-side rewrite rule.
+          input: {
+            index: resolvePath('./src/entries/docs/index.html'),
+            404: resolvePath('./src/entries/docs/404.html'),
+          },
         },
       },
     };

@@ -1,0 +1,45 @@
+---
+title: "PowerPoint"
+description: "Connect PowerPoint to Elitea: prerequisites, credential setup and the tools it exposes."
+---
+
+Create and edit PowerPoint presentations, saved as artifact files. It's listed under the **office** category in the toolkit type picker.
+
+## Prerequisites
+
+- No credential is required to add PowerPoint — its settings only configure behaviour, not authentication.
+
+## Connect the toolkit
+
+<Steps>
+<Step title="Open the toolkit type picker">
+In the left navigation, open **Toolkits**, then select **New**. Filter the type picker by the **office** category, or search for "PowerPoint".
+</Step>
+
+<Step title="Save">
+Name the toolkit and select **Create**. It's now available to attach to agents, pipelines and conversations in this project.
+</Step>
+</Steps>
+
+<Screenshot id="toolkit-new-generic" alt="New toolkit dialog with the PowerPoint type selected" />
+
+## Available tools
+
+<Accordion title="Available tools (2)">
+
+| Tool |
+|---|
+| Fill template |
+| Translate presentation |
+
+</Accordion>
+
+## Common issues
+
+<Note>
+On the Rust worker, this tile shows greyed out with a reason — the Rust worker does not materialise `PowerPoint` (tracked in #865). Helm now defaults to the Python worker, matching compose (#865, #866); a deployment that opts into the Rust worker still needs the Python worker to connect PowerPoint.
+</Note>
+
+<Note>
+There's no connection check on this form. Save the toolkit, then run one read-only tool from the editor's Test tools pane to confirm the credential works before attaching PowerPoint to an agent.
+</Note>

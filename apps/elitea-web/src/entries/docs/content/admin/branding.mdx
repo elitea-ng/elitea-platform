@@ -1,0 +1,51 @@
+---
+title: "Branding"
+description: "Re-theme the platform in your organization's colors, typography, and assets, with a live preview before saving."
+---
+
+Branding is a runtime setting, not a build step: changes reach every user on their next page load, with no rebuild or restart required. The brand pack you edit here is what the platform serves to every client on the deployment — there is no per-project or per-user brand.
+
+## Edit the brand pack
+
+<Steps>
+  <Step title="Open Admin › Branding">
+    The form is grouped into identity, color/type/shape, assets, and font faces.
+  </Step>
+  <Step title="Set identity and colors">
+    Every field can inherit from the platform default instead of being set explicitly, and the form says what it would inherit and from where.
+  </Step>
+  <Step title="Upload assets and declare font faces">
+    Logos and other assets are uploaded directly; self-hosted font faces are declared here rather than linked externally.
+  </Step>
+  <Step title="Check the preview">
+    A sample surface renders in both light and dark under a theme built from your current draft, including the derived color swatches and a text-on-primary contrast check. The check is a warning only — it does not block saving.
+  </Step>
+  <Step title="Save">
+    The merged pack becomes what every user's next page load receives.
+  </Step>
+</Steps>
+
+<Screenshot id="admin-branding-preview" alt="Branding page with the live preview panel" />
+
+## Import, export, and restore a package
+
+<Steps>
+  <Step title="Export">
+    Download the current brand as a package.
+  </Step>
+  <Step title="Import">
+    Uploading a package runs a dry run first, so you see what would change before committing it.
+  </Step>
+  <Step title="Restore a previous version">
+    Kept versions can be restored from the package panel.
+  </Step>
+</Steps>
+
+<Note>
+An unsaved draft is respected by the import and restore controls — neither silently discards edits you have not saved yet.
+</Note>
+
+## What is inherited by default
+
+Every branding field defaults to the platform's own look unless you override it. This means a fresh deployment already looks complete without any editing here — Branding is where you replace that default with your organization's identity, one field at a time, not something you must fully populate before it is usable.
+

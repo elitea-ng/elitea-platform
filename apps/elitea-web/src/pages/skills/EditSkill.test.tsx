@@ -215,4 +215,72 @@ describe('EditSkill', () => {
     await user.click(screen.getByRole('button', { name: 'Save' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Failed to save');
   });
+
+  // ---- #874: compare, restore, delete-version -----------------------------
+
+  it('hides restore/delete-version on base, but offers compare once a second version exists', async () => {
+    renderSkillsRoute(<EditSkill />, '/skills/all/skill-1');
+    await screen.findByTestId('skill-name-input');
+    expect(screen.getByRole('button', { name: 'Compare versions' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Restore' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete version' })).not.toBeInTheDocument();
+  });
+
+  it('offers restore and delete-version on a NAMED (non-base) version', async () => {
+    renderSkillsRoute(<EditSkill />, '/skills/all/skill-1/v2');
+    await screen.findByTestId('skill-name-input');
+    expect(screen.getByRole('button', { name: 'Restore' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Delete version' })).toBeInTheDocument();
+  });
+
+  it('compares the open version against another and shows the instructions diff', async () => {
+    const user = userEvent.setup();
+    renderSkillsRoute(<EditSkill />, '/skills/all/skill-1/v2');
+    await user.click(await screen.findByRole('button', { name: 'Compare versions' }));
+    const modal = await screen.findByTestId('skill-compare-versions-modal');
+    expect(modal).toHaveTextContent('second');
+    // The picker defaults to the only other version, "base".
+    expect(screen.getByTestId('skill-compare-versions-select')).toHaveValue('v1');
+    // The two versions' instructions differ ("Be careful" vs "Be very careful"),
+    // so the instructions field renders an actual diff, not "No differences.".
+    expect(screen.getByTestId('skill-compare-diff-Instructions')).toBeInTheDocument();
+  });
+
+  it('restores a named version onto base and navigates there', async () => {
+    const user = userEvent.setup();
+    let restoredVersionId: string | undefined;
+    server.use(
+      http.post(
+        `${BASE}/elitea_core/skill_version_restore/prompt_lib/:projectId/:skillId/:versionId`,
+        ({ params }) => {
+          restoredVersionId = params['versionId'] as string;
+          return HttpResponse.json(detail);
+        },
+      ),
+    );
+    const { router } = renderSkillsRoute(<EditSkill />, '/skills/all/skill-1/v2');
+    await user.click(await screen.findByRole('button', { name: 'Restore' }));
+    await user.click(screen.getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => expect(restoredVersionId).toBe('v2'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/skills/all/skill-1/v1'));
+  });
+
+  it('deletes a named version and navigates back to base', async () => {
+    const user = userEvent.setup();
+    let deletedVersionId: string | undefined;
+    server.use(
+      http.delete(
+        `${BASE}/elitea_core/skill/prompt_lib/:projectId/:skillId/:versionId`,
+        ({ params }) => {
+          deletedVersionId = params['versionId'] as string;
+          return new HttpResponse(null, { status: 204 });
+        },
+      ),
+    );
+    const { router } = renderSkillsRoute(<EditSkill />, '/skills/all/skill-1/v2');
+    await user.click(await screen.findByRole('button', { name: 'Delete version' }));
+    await user.click(await screen.findByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(deletedVersionId).toBe('v2'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/skills/all/skill-1/v1'));
+  });
 });

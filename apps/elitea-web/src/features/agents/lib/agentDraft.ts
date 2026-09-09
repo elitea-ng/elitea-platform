@@ -18,26 +18,32 @@ import type { ApplicationDraft } from '@/shared/api/generated/model';
  * carries the real fields across instead of dropping a chat completion into
  * `instructions` and blanking the rest.
  *
- * WHAT IS STILL EMPTY, and why it is the contract's answer rather than this
- * mapper's guess: the endpoint returns NO `suggested_toolkits` /
- * `suggested_mcp` / `suggested_pipelines` / `suggested_agents` /
- * `suggested_skills`. Legacy builds those by reading the project's toolkit
- * instances, agents, pipelines and skills and offering them to the model as
- * candidates; elitea-main composes no reader for toolkit instances, and a
- * model asked for suggestions without candidates invents ids that resolve to
- * nothing. `ResourceSuggestions` renders `null` for an empty list, so the
- * review form degrades to "no suggestions" rather than to wrong ones.
+ * **THE `suggested_*` GAP IS ALSO CLOSED (#881).** The endpoint now scores
+ * the project's toolkit instances, agents, pipelines and skills against the
+ * generated draft (Go-side lexical matching, not an LLM candidate pick —
+ * see `internal/api/v2/drafts/suggestions.go`'s own doc comment for why) and
+ * returns up to 5 matches per category. `mapApplicationDraft` copies all
+ * five straight through — every id on the wire already resolves to a real
+ * project entity, so no client-side re-derivation is needed, same as the
+ * text fields above.
  */
 
-/** One AI-suggested resource the review form can offer to attach post-create. */
+/**
+ * One AI-suggested resource the review form can offer to attach post-create.
+ *
+ * The optional fields carry an explicit `| undefined` (not just `?:`) to
+ * stay assignable, under `exactOptionalPropertyTypes`, from the generated
+ * `SuggestedResource` (`shared/api/generated/model`) — a zod `.optional()`
+ * field's inferred type is `T | undefined`, not merely an optional key.
+ */
 export interface SuggestedResource {
   readonly id: number | string;
   readonly name: string;
   /** Toolkit-only: the toolkit type string (`item.type` in the baseline's `SuggestionItem.jsx`). */
-  readonly type?: string;
-  readonly description?: string;
+  readonly type?: string | undefined;
+  readonly description?: string | undefined;
   /** Agent/pipeline-only: `'pipeline'` marks a suggested application as a pipeline (baseline `a.agent_type === 'pipeline'`). */
-  readonly agent_type?: string;
+  readonly agent_type?: string | undefined;
 }
 
 export interface AgentDraft {
@@ -86,7 +92,10 @@ export function filterEmptyStrings(values: readonly string[]): string[] {
  * repair. `filterEmptyStrings` still runs over the starters because the form
  * lets the user empty one before submitting.
  *
- * The five `suggested_*` lists stay empty — see the module doc comment.
+ * The five `suggested_*` lists are copied straight through too (#881) —
+ * `?? []` guards a response from an older cached client/mock that predates
+ * the fields, not a documented "sometimes absent" case (the OpenAPI schema
+ * requires all five).
  */
 export function mapApplicationDraft(draft: ApplicationDraft): AgentDraft {
   return {
@@ -96,5 +105,10 @@ export function mapApplicationDraft(draft: ApplicationDraft): AgentDraft {
     instructions: draft.instructions,
     welcome_message: draft.welcome_message,
     conversation_starters: filterEmptyStrings(draft.conversation_starters),
+    suggested_toolkits: draft.suggested_toolkits ?? [],
+    suggested_mcp: draft.suggested_mcp ?? [],
+    suggested_pipelines: draft.suggested_pipelines ?? [],
+    suggested_agents: draft.suggested_agents ?? [],
+    suggested_skills: draft.suggested_skills ?? [],
   };
 }

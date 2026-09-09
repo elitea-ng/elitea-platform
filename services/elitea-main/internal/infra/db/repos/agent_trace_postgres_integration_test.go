@@ -373,6 +373,7 @@ func TestPostgresCurrentAgentTraceRecordsToolCallsForAnalytics(t *testing.T) {
 		toolkitType string
 		toolkitID   *int64
 		durationMS  float64
+		executionID string
 	)
 	if err := pool.QueryRow(t.Context(), `
 SELECT count(*),
@@ -382,11 +383,12 @@ SELECT count(*),
        max(toolkit_name),
        max(toolkit_type),
        max(toolkit_id),
-       max(EXTRACT(EPOCH FROM (finished_at - started_at)) * 1000)
+       max(EXTRACT(EPOCH FROM (finished_at - started_at)) * 1000),
+       max(execution_id)
 FROM elitea_runtime.tool_call_records
 WHERE source = 'agent_turn' AND tool_name = 'list_issues'`).Scan(
 		&rows, &projectID, &source, &toolName, &toolkitName, &toolkitType,
-		&toolkitID, &durationMS,
+		&toolkitID, &durationMS, &executionID,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -406,6 +408,12 @@ WHERE source = 'agent_turn' AND tool_name = 'list_issues'`).Scan(
 	}
 	if durationMS < 700 || durationMS > 800 {
 		t.Fatalf("the second projection must settle the duration, got %.1fms", durationMS)
+	}
+	// #875: an agent-turn tool call must carry the execution id, so a cost read
+	// can correlate it back to the LLM spend of the execution it ran inside —
+	// the same value gateway.llm_request_logs.execution_id is written under.
+	if executionID != admitted.ExecutionID {
+		t.Fatalf("execution_id: got %q, want %q", executionID, admitted.ExecutionID)
 	}
 }
 

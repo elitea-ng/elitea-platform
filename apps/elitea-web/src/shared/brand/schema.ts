@@ -1,6 +1,21 @@
 import { z } from 'zod';
 
 /**
+ * `product.docsUrl` (issue W1b): the embedded docs SPA is same-origin, so
+ * the compiled default pack states it as a root-relative path
+ * (`/docs/`) rather than an absolute URL — `z.url()` alone rejects that
+ * (it requires a scheme; verified against zod@4.4.3). A served pack may
+ * still override it with a full absolute URL (a tenant's externally
+ * hosted docs), so this accepts either shape while still rejecting a
+ * protocol-relative `//host/...` (which `new URL()` would resolve against
+ * an attacker-chosen scheme) and any non-`/`-rooted relative path.
+ */
+const relativeOrAbsoluteUrl = z.union([
+  z.url(),
+  z.string().regex(/^\/(?!\/)/, 'must be an absolute URL or a root-relative path (starting with a single /)'),
+]);
+
+/**
  * Tier 0 — the brand pack (spec §4.2). Reproduced from the spec; the only
  * additions are `shape.radiusPill` (S1 Part B) and the two optional
  * `product.supportEmail` / `product.senderName` contact fields (ADR-0024
@@ -40,7 +55,10 @@ export const BrandPack = z
       // same schema (output `string`, same URL check), and the deprecated
       // spelling fails the D2 lint gate. Semantics are unchanged, so unit W3's
       // Go mirror (`optionalURL`) stays valid. Recorded as a §4.2 erratum.
-      docsUrl: z.url().optional(),
+      // `docsUrl` widens this to `relativeOrAbsoluteUrl` (above) rather than
+      // the bare `z.url()` supportUrl below keeps — see that schema's doc
+      // comment.
+      docsUrl: relativeOrAbsoluteUrl.optional(),
       supportUrl: z.url().optional(),
       // ADR-0024 WP8: the two tenant-facing contact fields. Both optional and
       // both ABSENT-not-null, like every other optional here. `z.email()` is

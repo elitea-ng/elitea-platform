@@ -243,6 +243,9 @@ interface ToolkitTypeMenuItem {
   readonly category: string;
   readonly icon: ReactNode;
   readonly onClick: () => void;
+  /** #865/#866: the configured worker cannot build this type. Carried straight through to `CategorySection`'s `CategoryItem`, whose prop of the same name it matches. */
+  readonly disabled?: boolean;
+  readonly disabledReason?: string;
 }
 
 function categoryOfToolkit(item: ToolkitTypeMenuItem): string {

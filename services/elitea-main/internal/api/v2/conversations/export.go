@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -68,6 +69,13 @@ type exportMessage struct {
 	ContentType string         `json:"content_type,omitempty"`
 	CreatedAt   time.Time      `json:"created_at"`
 	Metadata    map[string]any `json:"metadata,omitempty"`
+	// Feedback carries this message's like/dislike aggregate (#880), absent
+	// when nobody has rated it — same "absence means unrated" contract
+	// GetMessageFeedback's response carries. `Mine` is whichever user holds
+	// the API key or session that requested the export, not a fixed identity:
+	// two different members exporting the same conversation see their OWN
+	// vote highlighted, same as the transcript does live.
+	Feedback *MessageFeedbackSummary `json:"feedback,omitempty"`
 }
 
 // exportDocument is the `format=json` body, and the model the Markdown
@@ -207,6 +215,9 @@ func renderExportMarkdown(doc exportDocument) string {
 		}
 		b.WriteString(content)
 		b.WriteString("\n\n")
+		if message.Feedback != nil && (message.Feedback.Likes > 0 || message.Feedback.Dislikes > 0) {
+			fmt.Fprintf(&b, "_Feedback: %d 👍 · %d 👎_\n\n", message.Feedback.Likes, message.Feedback.Dislikes)
+		}
 	}
 	return b.String()
 }
@@ -272,6 +283,24 @@ func (h *Handler) buildExportDocument(r *http.Request, projectID, conversationID
 	// `sort_by` cannot produce a document whose messages are out of order.
 	sort.SliceStable(messages, func(i, j int) bool { return messages[i].CreatedAt.Before(messages[j].CreatedAt) })
 
+	// #880: one batched read for every message's feedback rather than one
+	// read per message — see ListMessageFeedbackBatch's own doc comment.
+	// Feedback is a nice-to-have on an export, not the transcript itself, so
+	// a caller with no resolved identity (defensive: this route sits behind
+	// authentication) still gets the aggregate counts, just no highlighted
+	// "mine".
+	messageUUIDs := make([]string, 0, len(messages))
+	for _, message := range messages {
+		if message.UUID != "" {
+			messageUUIDs = append(messageUUIDs, message.UUID)
+		}
+	}
+	user, _ := auth.UserFromContext(r.Context())
+	feedbackByMessage, err := h.repo.ListMessageFeedbackBatch(r.Context(), projectID, messageUUIDs, user.ID)
+	if err != nil {
+		return exportDocument{}, err
+	}
+
 	rows := make([]exportMessage, 0, len(messages))
 	for _, message := range messages {
 		row := exportMessage{
@@ -285,6 +314,9 @@ func (h *Handler) buildExportDocument(r *http.Request, projectID, conversationID
 		}
 		if message.AuthorParticipantID != nil {
 			row.Author = names[*message.AuthorParticipantID]
+		}
+		if summary, ok := feedbackByMessage[message.UUID]; ok {
+			row.Feedback = &summary
 		}
 		rows = append(rows, row)
 	}

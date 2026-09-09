@@ -65,7 +65,7 @@ describe('useChatWithEditors', () => {
   });
 
   it('starts with every editor closed', () => {
-    const { result } = renderHook(() => useChatWithEditors(), { wrapper });
+    const { result } = renderHook(() => useChatWithEditors({ projectId: 'proj-1', conversationId: 'convo-1' }), { wrapper });
     expect(result.current.isEditingAgent).toBe(false);
     expect(result.current.isEditingPipeline).toBe(false);
     expect(result.current.isEditingToolkit).toBe(false);
@@ -73,7 +73,7 @@ describe('useChatWithEditors', () => {
   });
 
   it('handleShowAgentEditor flips isEditingAgent (via editorState) and populates agentForEditor with the real participant fields', () => {
-    const { result } = renderHook(() => useChatWithEditors(), { wrapper });
+    const { result } = renderHook(() => useChatWithEditors({ projectId: 'proj-1', conversationId: 'convo-1' }), { wrapper });
 
     act(() => {
       result.current.handleShowAgentEditor(AGENT);
@@ -90,7 +90,7 @@ describe('useChatWithEditors', () => {
   });
 
   it('editAgent.onCloseAgentEditor clears isEditingAgent back to false', () => {
-    const { result } = renderHook(() => useChatWithEditors(), { wrapper });
+    const { result } = renderHook(() => useChatWithEditors({ projectId: 'proj-1', conversationId: 'convo-1' }), { wrapper });
 
     act(() => {
       result.current.handleShowAgentEditor(AGENT);
@@ -106,7 +106,7 @@ describe('useChatWithEditors', () => {
   });
 
   it('handleShowToolkitEditor opens the near-chat toolkit editor with the toolkit identity', () => {
-    const { result } = renderHook(() => useChatWithEditors(), { wrapper });
+    const { result } = renderHook(() => useChatWithEditors({ projectId: 'proj-1', conversationId: 'convo-1' }), { wrapper });
 
     act(() => {
       result.current.handleShowToolkitEditor(TOOLKIT);
@@ -122,7 +122,7 @@ describe('useChatWithEditors', () => {
   });
 
   it('queues a second open while an editor is already open, then opens the queued one on confirm and closes the first', async () => {
-    const { result } = renderHook(() => useChatWithEditors(), { wrapper });
+    const { result } = renderHook(() => useChatWithEditors({ projectId: 'proj-1', conversationId: 'convo-1' }), { wrapper });
 
     act(() => {
       result.current.handleShowAgentEditor(AGENT);
@@ -173,7 +173,7 @@ describe('useChatWithEditors', () => {
           return HttpResponse.json({ id: '77', type: 'github', name: 'GitHub' });
         }),
       );
-      const { result } = renderHook(() => useChatWithEditors(), { wrapper });
+      const { result } = renderHook(() => useChatWithEditors({ projectId: 'proj-1', conversationId: 'convo-1' }), { wrapper });
 
       const created = await result.current.toolkitWriteDeps.createToolkit({ projectId: 'proj-1', type: 'github', settings: { key: 'v' } });
 
@@ -190,7 +190,7 @@ describe('useChatWithEditors', () => {
           return HttpResponse.json({ id: '77', type: 'github', name: 'GitHub renamed' });
         }),
       );
-      const { result } = renderHook(() => useChatWithEditors(), { wrapper });
+      const { result } = renderHook(() => useChatWithEditors({ projectId: 'proj-1', conversationId: 'convo-1' }), { wrapper });
 
       const saved = await result.current.toolkitWriteDeps.saveToolkit({ projectId: 'proj-1', toolId: '77', type: 'github', name: 'GitHub renamed' });
 
@@ -205,7 +205,7 @@ describe('useChatWithEditors', () => {
    * so the assertion for it moved from "does nothing" to "raises the flag".
    */
   it('the artifact editor stub is inert (no-op, no throw)', () => {
-    const { result } = renderHook(() => useChatWithEditors(), { wrapper });
+    const { result } = renderHook(() => useChatWithEditors({ projectId: 'proj-1', conversationId: 'convo-1' }), { wrapper });
 
     expect(() => {
       act(() => {
@@ -220,7 +220,7 @@ describe('useChatWithEditors', () => {
    * the artifact stub above would assert the queue rather than the canvas.
    */
   it('opens the canvas editor for real', () => {
-    const { result } = renderHook(() => useChatWithEditors(), { wrapper });
+    const { result } = renderHook(() => useChatWithEditors({ projectId: 'proj-1', conversationId: 'convo-1' }), { wrapper });
 
     act(() => {
       // `(message, payload)` — the block is the SECOND argument.
@@ -228,5 +228,103 @@ describe('useChatWithEditors', () => {
     });
     expect(useEditorStateStore.getState().isEditingCanvas).toBe(true);
     expect(result.current.canvas.selectedCodeBlockInfo?.canvasId).toBe('cv-1');
+  });
+
+  /*
+   * Issue #867: a freshly-created agent/pipeline/toolkit must reach the
+   * conversation's participant list, not just its own editor. These assert
+   * the SERVER call, not just that `onXCreated` resolves without throwing —
+   * the same discriminator `M2b` (the "+" menu's existing-entity picker
+   * journey) uses for the identical class of "the click could have done
+   * nothing" defect.
+   */
+  describe('attaching a freshly-created entity as a participant', () => {
+    beforeEach(() => {
+      configureGeneratedClient({ baseUrl: '/api/v2' });
+    });
+    afterEach(() => {
+      resetGeneratedClient();
+    });
+
+    it('agentCreation.onAgentCreated POSTs the new agent as an "application" participant', async () => {
+      const seen: { url?: string; body?: unknown } = {};
+      server.use(
+        http.post('/api/v2/elitea_core/participants/prompt_lib/:projectId/:conversationId', async ({ request, params }) => {
+          seen.url = `${String(params['projectId'])}/${String(params['conversationId'])}`;
+          seen.body = await request.json();
+          return HttpResponse.json([{ id: 'p1', entity_name: 'application', entity_meta: { id: '99' } }]);
+        }),
+      );
+      const { result } = renderHook(() => useChatWithEditors({ projectId: 'proj-1', conversationId: 'convo-1' }), { wrapper });
+
+      await act(async () => {
+        await result.current.agentCreation.onAgentCreated({ id: '99', name: 'New Agent', version_details: { id: 'v9' } });
+      });
+
+      expect(seen.url).toBe('proj-1/convo-1');
+      expect(seen.body).toEqual([
+        { entity_name: 'application', entity_meta: { id: '99' }, entity_settings: { version_id: 'v9' } },
+      ]);
+    });
+
+    it('toolkitCreation.onToolkitCreated POSTs the new toolkit as a "toolkit" participant', async () => {
+      const seen: { body?: unknown } = {};
+      server.use(
+        http.post('/api/v2/elitea_core/participants/prompt_lib/:projectId/:conversationId', async ({ request }) => {
+          seen.body = await request.json();
+          return HttpResponse.json([{ id: 'p2', entity_name: 'toolkit', entity_meta: { id: '55' } }]);
+        }),
+      );
+      const { result } = renderHook(() => useChatWithEditors({ projectId: 'proj-1', conversationId: 'convo-1' }), { wrapper });
+
+      await act(async () => {
+        await result.current.toolkitCreation.onToolkitCreated({ id: '55', name: 'New Toolkit', version_details: { id: 'v5' } });
+      });
+
+      expect(seen.body).toEqual([
+        { entity_name: 'toolkit', entity_meta: { id: '55' }, entity_settings: { version_id: 'v5' } },
+      ]);
+    });
+
+    it('pipelineCreation.onPipelineCreated POSTs the new pipeline as an "application" participant', async () => {
+      const seen: { body?: unknown } = {};
+      server.use(
+        http.post('/api/v2/elitea_core/participants/prompt_lib/:projectId/:conversationId', async ({ request }) => {
+          seen.body = await request.json();
+          return HttpResponse.json([{ id: 'p3', entity_name: 'application', entity_meta: { id: '33' } }]);
+        }),
+      );
+      const { result } = renderHook(() => useChatWithEditors({ projectId: 'proj-1', conversationId: 'convo-1' }), { wrapper });
+
+      act(() => {
+        result.current.pipelineCreation.onPipelineCreated({ id: '33', name: 'New Pipeline', version_details: { id: 'v3' } });
+      });
+
+      await waitFor(() => expect(seen.body).toBeDefined());
+      expect(seen.body).toEqual([
+        {
+          entity_name: 'application',
+          entity_meta: { id: '33' },
+          entity_settings: { agent_type: 'pipeline', version_id: 'v3' },
+        },
+      ]);
+    });
+
+    it('skips the attach (does not throw) when there is no conversation yet', async () => {
+      let called = false;
+      server.use(
+        http.post('/api/v2/elitea_core/participants/prompt_lib/:projectId/:conversationId', () => {
+          called = true;
+          return HttpResponse.json([]);
+        }),
+      );
+      const { result } = renderHook(() => useChatWithEditors({ projectId: 'proj-1', conversationId: undefined }), { wrapper });
+
+      await act(async () => {
+        await result.current.agentCreation.onAgentCreated({ id: '1', name: 'A', version_details: { id: 'v1' } });
+      });
+
+      expect(called).toBe(false);
+    });
   });
 });

@@ -34,32 +34,32 @@ export const DeprecatedTips: Readonly<Partial<Record<string, DeprecatedTip>>> = 
   [PipelineNodeTypes.Condition]: {
     text: DEPRECATED_TIP,
     linkText: VIEW_MIGRATION_GUIDE_TEXT,
-    linkUrl: 'https://elitea.ai/docs/migration/v2.0.1/condition-node-migration',
+    linkUrl: '/docs/how-tos/pipelines/condition-node-migration',
   },
   [PipelineNodeTypes.Tool]: {
     text: DEPRECATED_TIP,
     linkText: VIEW_MIGRATION_GUIDE_TEXT,
-    linkUrl: 'https://elitea.ai/docs/migration/v2.0.1/tool-node-migration',
+    linkUrl: '/docs/how-tos/pipelines/tool-node-migration',
   },
   [PipelineNodeTypes.Function]: {
     text: DEPRECATED_TIP,
     linkText: VIEW_MIGRATION_GUIDE_TEXT,
-    linkUrl: 'https://elitea.ai/docs/migration/v2.0.1/function-node-migration',
+    linkUrl: '/docs/how-tos/pipelines/function-node-migration',
   },
   [PipelineNodeTypes.Pipeline]: {
     text: DEPRECATED_TIP,
     linkText: VIEW_MIGRATION_GUIDE_TEXT,
-    linkUrl: 'https://elitea.ai/docs/migration/v2.0.1/pipeline-node-migration',
+    linkUrl: '/docs/how-tos/pipelines/pipeline-node-migration',
   },
   [PipelineNodeTypes.Loop]: {
     text: DEPRECATED_TIP,
     linkText: VIEW_MIGRATION_GUIDE_TEXT,
-    linkUrl: 'https://elitea.ai/docs/migration/v2.0.1/loop-node-migration',
+    linkUrl: '/docs/how-tos/pipelines/loop-node-migration',
   },
   [PipelineNodeTypes.LoopFromTool]: {
     text: DEPRECATED_TIP,
     linkText: VIEW_MIGRATION_GUIDE_TEXT,
-    linkUrl: 'https://elitea.ai/docs/migration/v2.0.1/loop-node-migration',
+    linkUrl: '/docs/how-tos/pipelines/loop-node-migration',
   },
 };
 

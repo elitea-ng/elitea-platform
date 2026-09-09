@@ -522,7 +522,31 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// parity rather than a new policy, and the route would answer 403 on a
 	// clean database without them. A new file for 0120's reason: 0082 is
 	// checksum-immutable and 0060 returns early on any configured deployment.
-	require.EqualValues(t, 121, Head(shared))
+	//
+	// 122: shared/0122_webhooks_and_deliveries.sql, the `webhooks` table
+	// #876's first half shipped a repository and five routes against but no
+	// migration ever created (router.go said so explicitly), plus
+	// `webhook_deliveries`, the delivery log #876's second half adds when it
+	// wires the Dispatcher to real producers. No new permission grant: every
+	// route reuses the `configurations.configuration*` strings 0072 already
+	// grants, so this file has no shared-permission sibling of its own kind
+	// — it IS the shared file, for a table rather than a grant.
+	//
+	// 123: shared/0123_webhook_delivery_blocked_status.sql, the SSRF-hardening
+	// follow-up's third delivery outcome — a destination the new
+	// DestinationGuard refuses to dial (loopback, private, link-local or
+	// metadata) is logged 'blocked', distinct from 'failed' because it is
+	// never retried. DROP + ADD CONSTRAINT on 0122's CHECK, since 0122 is
+	// checksum-immutable.
+	//
+	// 124: shared/0124_pipeline_runs.sql, the tracking table that lets
+	// execution.SettlementService's new AfterSettle hook report
+	// pipeline.run.succeeded/failed once a pipeline run's claim-fence
+	// settlement commits — the two catalogue events #876 declared but left
+	// unwired because the settlement engine itself carries no notion of
+	// "this execution is a pipeline run". See the file's own header for why
+	// this lives outside elitea_runtime's claim-fence tables entirely.
+	require.EqualValues(t, 124, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -617,7 +641,40 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// every agent every client ever listed carried "0001-01-01T00:00:00Z" as
 	// its last-modified date. It introduces NO permission and no table, so it
 	// has no shared sibling.
-	require.EqualValues(t, 134, Head(tenant))
+	//
+	// 135: tenant/0135_chat_message_feedback.sql, the like/dislike +
+	// optional-comment control on a chat message (#880). A new table rather
+	// than a bent-shape reuse of `social_feedbacks`: that table has no
+	// unique constraint on (entity_name, entity_id, user_id) — a second
+	// CreateFeedback call inserts a duplicate row instead of replacing the
+	// first — a 1-5 `rating` shape rather than binary like/dislike, and an
+	// `entity_id INTEGER` that cannot hold chat_message_group's real
+	// identifier (its uuid). `chat_message_feedback` is one row per
+	// (message, user), UNIQUE-constrained so the route can upsert instead of
+	// de-duplicating on read, and CASCADE-deleted with its message. It
+	// introduces NO permission (the route reuses
+	// `models.chat.messages.details`, the same string GetMessage already
+	// declares — reading a message's feedback is not a wider claim than
+	// reading the message), so it has no shared sibling.
+	//
+	// 136: tenant/0136_skill_version_lineage.sql, which gives skill_versions a
+	// nullable `parent_version_id` (ON DELETE SET NULL). #874 gives a skill
+	// multiple named skill_versions rows the way application_versions already
+	// gives an agent — CreateVersion clones a version's content into a new
+	// named row and RestoreVersion copies a named version's content back onto
+	// `base` — and this column is where each write records which version it
+	// came from. No new table and no permission, so no shared sibling.
+	// 137: tenant/0137_personal_memory_entries.sql, persistent
+	// cross-conversation personal memory (#870). One row per remembered
+	// fact, scoped to (project, user_id) the same way chat_message_feedback
+	// (135) is. `user_id` is not a foreign key (same reason as 135).
+	// `source_conversation_uuid` deliberately carries no foreign key and no
+	// ON DELETE action, so a memory outlives the conversation it was
+	// captured from. It introduces NO permission (the CRUD routes reuse
+	// `models.chat.conversation.details` for reads and
+	// `models.chat.conversation.update` for writes), so it has no shared
+	// sibling.
+	require.EqualValues(t, 137, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import CloseIcon from '@mui/icons-material/Close';
 import CloudDownloadOutlinedIcon from '@mui/icons-material/CloudDownloadOutlined';
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
+import OpenInNewOutlinedIcon from '@mui/icons-material/OpenInNewOutlined';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import CircularProgress from '@mui/material/CircularProgress';
@@ -35,6 +36,14 @@ interface FilePreviewCanvasProps {
   readonly onDelete: (key: string) => Promise<unknown>;
   readonly onSaved: () => unknown;
   readonly onUnsavedChangesUpdate?: (hasChanges: boolean) => void;
+  /**
+   * Opens this file in the richer canvas editor (issue #878) — syntax
+   * highlighting, the mermaid split-view, the table grid — instead of the
+   * plain text area below. Omitted, no such control renders (the CALLER
+   * decides eligibility by filename, since this component's own `kind`
+   * mapping is narrower than canvas's and the two must not silently drift).
+   */
+  readonly onOpenInCanvas?: () => void;
 }
 
 // oxlint-disable-next-line complexity -- this is the preview state machine across text, image, unavailable, save, and delete modes.
@@ -109,7 +118,23 @@ export function FilePreviewCanvas(props: FilePreviewCanvasProps): ReactNode {
       active = false;
       controller.abort();
     };
-  }, [kind, needsContent, props.bucket, props.file.key, props.projectId, supportsRendered]);
+    // `props.file.size`/`.lastModified`, not just `.key`/`.bucket`: a save
+    // that overwrites this SAME object — the canvas editor's own "Save to
+    // artifacts" (issue #878) route, or this component's own inline Save —
+    // changes neither the key nor the bucket, so without one of these the
+    // effect never re-ran and the preview (and a canvas reopened from it)
+    // kept showing the bytes fetched when the file was first opened, not
+    // what was just saved (#882 CI).
+  }, [
+    kind,
+    needsContent,
+    props.bucket,
+    props.file.key,
+    props.file.size,
+    props.file.lastModified,
+    props.projectId,
+    supportsRendered,
+  ]);
 
   useEffect(() => () => {
     if (imageUrl !== undefined) URL.revokeObjectURL(imageUrl);
@@ -199,6 +224,17 @@ export function FilePreviewCanvas(props: FilePreviewCanvasProps): ReactNode {
                 {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
               </Button>
             </>
+          )}
+          {props.onOpenInCanvas && (
+            <Tooltip title={t('artifacts.preview.openInCanvas', 'Open in canvas')}>
+              <IconButton
+                aria-label={t('artifacts.preview.openInCanvasAria', 'Open in canvas')}
+                onClick={props.onOpenInCanvas}
+                data-testid="artifacts-open-in-canvas"
+              >
+                <OpenInNewOutlinedIcon />
+              </IconButton>
+            </Tooltip>
           )}
           <Tooltip title={t('common.download', 'Download')}>
             <IconButton

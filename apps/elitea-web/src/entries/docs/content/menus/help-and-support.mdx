@@ -1,0 +1,51 @@
+---
+title: "Help and support"
+description: "Reach documentation, release notes, and tutorials from the Help Center, or ask the in-context Support Assistant."
+---
+
+Elitea offers two places to get help without leaving your work: the **Help Center**, a static hub of links your administrator configures, and the **Support Assistant**, a context-aware AI chat widget.
+
+## Help Center
+
+Select the **?** button near the bottom of the sidebar to open the Help Center.
+
+<Screenshot id="help-center" alt="The Help Center panel with configured resource links" />
+
+Its default sections are **Documentation**, **Release notes**, **Video library**, **Tutorials**, and **Interactive tours** — each one links to whatever your administrator has configured under admin Configuration › Resources. Titles, descriptions, and links are fully customizable per deployment; a section with nothing configured shows "No links configured." When enabled, the header also shows the running platform version.
+
+<Note>
+If the Help Center looks empty, no links have been configured yet for this deployment — ask your administrator to add them.
+</Note>
+
+## Support Assistant
+
+The Support Assistant is an optional, floating chat widget available from the sidebar when your administrator has turned it on. It tracks your current project, page, and any open entity (an agent, pipeline, toolkit, MCP, application, credential, or conversation), so its answers can be specific to what you're doing.
+
+<Screenshot id="support-assistant" alt="The Support Assistant chat panel open alongside the main app" />
+
+**What it can do:**
+
+- Answer questions in context, with full Markdown rendering — tables, code blocks, and Mermaid diagrams render as diagrams rather than raw text.
+- Keep a history of your past conversations with it, reachable from the history icon in its header.
+- Attach up to 10 files per message (images or documents, same limits as the main chat composer) by clicking the paperclip icon, dragging them onto the input, or pasting an image from the clipboard. Each attached file shows its own status chip — queued, uploading, or failed — and can be removed before you send.
+- Expand to a fullscreen view, and follow your light/dark theme automatically.
+
+<Warning title="Requires a personal access token">
+The Support Assistant authenticates using your [personal access token](/menus/settings/personal-tokens). If your token is missing or expired, the widget fails to load or send messages — create or renew a token to fix it.
+</Warning>
+
+## Contact support
+
+Elitea does not ship a built-in support-ticket system. If something isn't covered by the Support Assistant or the documentation, reach out to your platform administrator directly, or use the Support Assistant itself for a first pass at a solution.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Support Assistant is not in the sidebar">The feature is off for this deployment — ask your administrator to enable it in admin Features.</Accordion>
+  <Accordion title="Widget opens but never responds">Its backing agent may be misconfigured or missing valid credentials — this needs an administrator to check.</Accordion>
+  <Accordion title="File attachment fails">Confirm the file is under the size limit and that you are attaching only one file per message.</Accordion>
+</AccordionGroup>
+
+<Info title="Related">
+[Settings › AI Providers](/menus/settings/ai-providers) · [Personal tokens](/menus/settings/personal-tokens) · [Troubleshooting](/support/troubleshooting) · [FAQs](/support/faqs)
+</Info>

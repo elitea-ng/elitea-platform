@@ -47,13 +47,32 @@ export const SkillVersion = zod
     name: zod
       .string()
       .describe(
-        'The platform ships a single implicit \"base\" version today (issue #37); real multi-version support is a tracked fast-follow.',
+        '\"base\" is the always-present working copy every skill has had since creation, and is reserved — it cannot be deleted or reused as a NAMED version\'s name. Since issue 874 a skill may carry additional named versions alongside it, created by createSkillVersion.',
       ),
     instructions: zod.string(),
     tags: zod.array(zod.string()),
+    status: zod
+      .string()
+      .optional()
+      .describe(
+        '\"draft\" or \"published\" (#249). A published version is frozen: updateSkillVersion and deleteSkillVersion both refuse it with 409, mirroring application_versions\' own guard.',
+      ),
+    created_at: zod.iso.datetime({ offset: true }).optional(),
+    parent_version_id: zod
+      .string()
+      .optional()
+      .describe(
+        "The version this one was cloned from (createSkillVersion) or restored from (restoreSkillVersion). Absent when the row has no recorded ancestor.",
+      ),
+    is_default: zod
+      .boolean()
+      .optional()
+      .describe(
+        "Whether this is the version named by Skill.default_version_id — the version a NEW attachment proposes. Does not affect which version an EXISTING agent attachment resolves at chat time; see Skill.default_version_id.",
+      ),
   })
   .describe(
-    "A skill's content: the instructions an agent follows plus its topical tags. Persisted in skill_versions\/skill_version_tag_association (repos\/skills.go upsertBaseSkillVersion).\n",
+    "A skill's content: the instructions an agent follows plus its topical tags. Persisted in skill_versions\/skill_version_tag_association (repos\/skills.go). Since issue 874 one skill_versions row is no longer the whole story — see Skill.versions.\n",
   );
 
 export type SkillVersion = zod.input<typeof SkillVersion>;

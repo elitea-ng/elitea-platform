@@ -30,12 +30,14 @@ import {
   useZipDownload,
   ZipDownloadProgressDialog,
 } from '@/features/artifacts';
+import { detectCanvasFileOpenKind } from '@/features/chat-messages';
 import { formatArtifactSize } from '@/entities/artifact';
 import { fetchArtifactBlob } from '@/shared/api/artifacts';
 import { getConfig } from '@/shared/config';
 import { t } from '@/shared/i18n';
 import { triggerBlobDownload } from '@/shared/lib/download';
 
+import { useArtifactCanvas } from './lib/useArtifactCanvas';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 
 interface ArtifactsRouteSearch {
@@ -171,6 +173,7 @@ export function Artifacts(): ReactNode {
     });
   }, [currentPrefix, downloadFile, files.data, projectId, selectedBucket, zip]);
 
+  const canvas = useArtifactCanvas(projectId, selectedBucket?.name, mutations.refreshFiles);
   const confirmDelete = (): void => {
     if (selectedBucket === undefined) return;
     const keys = expandFoldersToArtifactKeys(pendingDelete, files.data ?? []);
@@ -187,6 +190,7 @@ export function Artifacts(): ReactNode {
   const missingBucket = search.bucket !== undefined && search.bucket !== '' && !buckets.isFetching && selectedBucket === undefined;
   const queryError = buckets.isError ? 'Failed to load buckets.'
     : files.isError ? 'Failed to load artifacts.' : undefined;
+  const pageError = actionError ?? queryError ?? upload.error ?? zip.progress.error ?? canvas.error;
 
   return (
     <Box sx={rootSx}>
@@ -239,14 +243,7 @@ export function Artifacts(): ReactNode {
       />
       </Box>
       <Box sx={contentSx}>
-        {(actionError ?? queryError ?? upload.error ?? zip.progress.error) !== undefined && (
-          <Typography
-            role="alert"
-            sx={{ p: 2 }}
-          >
-            {actionError ?? queryError ?? upload.error ?? zip.progress.error}
-          </Typography>
-        )}
+        {pageError !== undefined && <Typography role="alert" sx={{ p: 2 }}>{pageError}</Typography>}
         {missingBucket ? (
           <Box sx={emptySx}>
             <Typography variant="headingSmall">{t('artifacts.page.bucketNotFound', 'Bucket not found')}</Typography>
@@ -270,6 +267,7 @@ export function Artifacts(): ReactNode {
             onDelete={(key) => mutations.deleteFile.mutateAsync({ bucket: selectedBucket.name, key })}
             onSaved={() => mutations.refreshFiles(selectedBucket.name)}
             onUnsavedChangesUpdate={setHasUnsavedChanges}
+            {...(detectCanvasFileOpenKind(previewFile.name) !== undefined ? { onOpenInCanvas: () => canvas.openInCanvas(previewFile) } : {})}
           />
         ) : selectedBucket !== undefined ? (
           <ArtifactTable
@@ -323,6 +321,7 @@ export function Artifacts(): ReactNode {
         progress={zip.progress}
         onCancel={zip.cancel}
       />
+      {canvas.node /* "Open in canvas" (issue #878) — see lib/useArtifactCanvas.tsx */}
       <Dialog
         open={pendingDelete.length > 0}
         onClose={() => setPendingDelete([])}

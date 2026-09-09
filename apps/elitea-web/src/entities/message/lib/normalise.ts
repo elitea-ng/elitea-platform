@@ -395,5 +395,6 @@ export function normaliseAssistantMessage(
     ...(messageGroup.likes !== undefined ? { likes: messageGroup.likes } : {}),
     ...assistantHitlFields(meta),
     ...assistantContinuationFields(meta),
+    ...(meta?.memories_used ? { memoriesUsed: meta.memories_used } : {}),
   };
 }

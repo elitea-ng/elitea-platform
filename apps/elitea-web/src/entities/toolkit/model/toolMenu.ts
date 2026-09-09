@@ -67,6 +67,17 @@ export interface ToolkitTypeMenuEntry {
    * label, so the two behaviours stay independent.
    */
   readonly hasKnownLabel: boolean;
+  /**
+   * True when the backend served `metadata.hidden` for this type — the
+   * worker this deployment runs cannot build it (#865;
+   * `internal/api/v2/toolkits/type_catalogue.go`'s capability verdict).
+   * Only ever populated when the caller opts in with `includeHidden: true`
+   * (see the function doc comment) — every other caller keeps getting NO
+   * hidden entries at all, exactly as before #865.
+   */
+  readonly hidden?: boolean;
+  /** Set alongside `hidden: true` when the backend named a reason (`metadata.unavailable_reason`). */
+  readonly unavailableReason?: string;
 }
 
 /**
@@ -85,17 +96,30 @@ function humanizeToolkitTypeKey(key: string): string {
 
 /**
  * The baseline's `toolkitsItems` filter + `toolMenuItems` label mapping,
- * minus icon/`onClick` (features-layer, see module doc): drops hidden,
- * internal-tool-categorised, and agent/application-labelled entries, keeps
+ * minus icon/`onClick` (features-layer, see module doc): drops
+ * internal-tool-categorised and agent/application-labelled entries, keeps
  * only application-type OR non-application-type entries per `isApplication`,
  * and overrides the backend's `metadata.label` with this app's own
  * `ToolTypes[key].label` when one exists.
+ *
+ * `includeHidden` (default `false`, #865): the baseline dropped
+ * `metadata.hidden` entries unconditionally, which is what every caller got
+ * before #865/#866 and what every caller EXCEPT the toolkit type picker
+ * still gets — that default is preserved deliberately so the agent/pipeline
+ * "add tool" dropdown (`features/agents/api/useToolMenuItems.ts`) keeps
+ * offering only types that actually work with no UI change of its own to
+ * make. Passed `true`, a hidden entry is kept (with `hidden: true` and
+ * `unavailableReason` set from `metadata.unavailable_reason`) instead of
+ * dropped, so the picker (`features/toolkits/lib/hooks/useToolMenuItems.ts`)
+ * can render it as a greyed tile with a reason rather than making a type the
+ * catalogue actually has look like it was never offered at all.
  */
 export function toolkitTypeMenuEntries(
   schemas: ToolkitTypeSchemaMap,
-  options: { readonly isApplication?: boolean } = {},
+  options: { readonly isApplication?: boolean; readonly includeHidden?: boolean } = {},
 ): readonly ToolkitTypeMenuEntry[] {
   const isApplication = options.isApplication ?? false;
+  const includeHidden = options.includeHidden ?? false;
   const overrides: Readonly<Record<string, { readonly label: string; readonly value: string }>> = ToolTypes;
 
   return Object.entries(schemas)
@@ -108,9 +132,10 @@ export function toolkitTypeMenuEntries(
       const isInternalTool = categories.includes('internal_tool');
       const isAppType = metadata['application'] === true;
       const shouldInclude = isApplication ? isAppType : !isAppType;
+      const isHidden = metadata['hidden'] === true;
 
       return (
-        metadata['hidden'] !== true &&
+        (includeHidden || !isHidden) &&
         !['agent', 'application'].includes(keyLower) &&
         !['agent', 'application'].includes(labelLower) &&
         !isInternalTool &&
@@ -140,7 +165,14 @@ export function toolkitTypeMenuEntries(
        */
       const knownLabel = overrides[key]?.label ?? backendLabel;
       const label = knownLabel || humanizeToolkitTypeKey(key);
-      return { key, label, hasKnownLabel: knownLabel !== '' };
+      const hidden = metadata['hidden'] === true;
+      const unavailableReason = typeof metadata['unavailable_reason'] === 'string' ? metadata['unavailable_reason'] : undefined;
+      return {
+        key,
+        label,
+        hasKnownLabel: knownLabel !== '',
+        ...(hidden ? { hidden: true, ...(unavailableReason ? { unavailableReason } : {}) } : {}),
+      };
     })
     .sort((a, b) => a.label.toLowerCase().localeCompare(b.label.toLowerCase()));
 }

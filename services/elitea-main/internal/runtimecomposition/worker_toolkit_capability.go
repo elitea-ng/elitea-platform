@@ -75,8 +75,8 @@ type rustWorkerToolkitCapabilityDocument struct {
 // toolkit type, and says why when it cannot.
 //
 // The question has to be asked because the catalogue and the runtime disagree.
-// The pinned SDK snapshot holds 52 types. The Python worker image imports 39 of
-// them; the other 13 raise at import and fail at the first tool call. The Rust
+// The pinned SDK snapshot holds 52 types. The Python worker image imports 43 of
+// them; the other 9 raise at import and fail at the first tool call. The Rust
 // worker materializes 22 families and SKIPS anything else with a warning
 // (agent_toolkit_skipped), so an unsupported toolkit attaches to an agent and
 // then quietly does nothing.
@@ -106,9 +106,12 @@ type WorkerToolkitCapability struct {
 // The toolkit catalogue is served whether or not that plane is enabled.
 //
 // The default is python, because that is the worker
-// deploy/scripts/standalone-stack.sh starts when STANDALONE_WORKER is unset.
-// A Helm release defaults to the Rust worker instead, so the chart states the
-// value explicitly rather than relying on this default.
+// deploy/scripts/standalone-stack.sh starts when STANDALONE_WORKER is unset,
+// and — as of #865/#866 — deploy/helm/elitea/values.yaml's
+// worker.implementation default agrees. The chart still states the value
+// explicitly rather than relying on this default, so an operator who
+// overrides worker.implementation to run the lighter, narrower-coverage
+// Rust worker gets elitea-main agreeing with the image actually deployed.
 //
 // An unrecognised value is refused at startup. Falling back to a default would
 // mean a typo silently produces the wrong catalogue for the running worker,

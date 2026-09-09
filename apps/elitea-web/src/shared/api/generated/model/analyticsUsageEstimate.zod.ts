@@ -40,8 +40,10 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { AnalyticsEstimateAgent } from "./analyticsEstimateAgent.zod";
 import { AnalyticsEstimateDay } from "./analyticsEstimateDay.zod";
 import { AnalyticsEstimateModel } from "./analyticsEstimateModel.zod";
+import { AnalyticsEstimateTool } from "./analyticsEstimateTool.zod";
 import { AnalyticsEstimateTotals } from "./analyticsEstimateTotals.zod";
 import { AnalyticsEstimateUser } from "./analyticsEstimateUser.zod";
 
@@ -83,6 +85,44 @@ export const AnalyticsUsageEstimate = zod
       ),
     by_model_truncated: zod.boolean(),
     by_user_truncated: zod.boolean(),
+    agent_dimension_available: zod
+      .boolean()
+      .describe(
+        "True when this deployment can correlate a request to an agent at all — the SAME capability GetAgentAnalytics reports as AgentBreakdown.Available (issue #875). False for a database that has not run shared migration 0100, or for a window with no execution-tagged request. Money, not the volume that endpoint already answers.\n",
+      ),
+    attributed_agent_calls: zod
+      .int()
+      .describe("Priceable requests correlated to an agent in the window.\n"),
+    unattributed_agent_calls: zod
+      .int()
+      .describe(
+        "Priceable requests NOT made from a runtime execution — most \/llm traffic. by_agent is never expected to sum to totals.calls.\n",
+      ),
+    by_agent: zod
+      .array(AnalyticsEstimateAgent)
+      .optional()
+      .describe(
+        "One entry per agent, capped at 100 rows, ABSENT when agent_dimension_available is false. Present and empty when the window has attributable traffic but the tenant chat projection cannot name any of it — a real and different state from absence.\n",
+      ),
+    by_agent_truncated: zod.boolean(),
+    tool_dimension_available: zod
+      .boolean()
+      .describe(
+        "True when this deployment records tool calls (elitea_runtime.tool_call_records, shared migration 0119) AND can correlate the request log's execution id (0100). It says nothing about whether any row in the window actually correlates — see attributed_tool_calls.\n",
+      ),
+    attributed_tool_calls: zod
+      .int()
+      .describe(
+        "tool_call_records rows in the window that carry an execution id, and so can be priced. An explicit run (toolkit.call_tool.v1) makes no LLM call itself, so it is counted here but contributes no money.\n",
+      ),
+    unattributed_tool_calls: zod.int(),
+    by_tool: zod
+      .array(AnalyticsEstimateTool)
+      .optional()
+      .describe(
+        "One entry per (toolkit, tool), capped at 100 rows, ABSENT when\ntool_dimension_available is false.\n\nThere is no producer that ties one LLM request to one tool: a\ncompletion decides whether to call a tool, but the token cost\nbelongs to the completion, not to any one tool it invoked. So each\nrow is an EXECUTION's total LLM cost attributed to every tool that\nexecution called — an execution that calls two tools counts its\ncost under both, deliberately, and by_tool is never expected to\nsum to totals.total_cost the way by_model already is not expected\nto (one call has one model but can touch several tools). A tool\ncalled more than once inside one execution is folded into ONE\nattribution (see AnalyticsEstimateTool.attributed_runs), so a\nrepeated call cannot multiply the same execution's cost.\n",
+      ),
+    by_tool_truncated: zod.boolean(),
   })
   .describe(
     "The dimensional half of the cost view, over gateway.llm_request_logs\n(shared migration 0099): one row per call, carrying the project, the\nuser, the provider, the model, the clock and the token counts.\n\nTokens here are RECORDED. Money here is DERIVED, by multiplying those\ntokens by the price catalogue in gateway.gateway_models, and it is\ntherefore an estimate. It is published under its own key so it cannot\nbe confused with kpis.total_cost, which is what the billing path\naccounted.\n",

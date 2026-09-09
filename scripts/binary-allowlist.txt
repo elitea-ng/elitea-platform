@@ -58,6 +58,11 @@ apps/elitea-web/e2e/snapshots/visual/*-snapshots/*.png
 # and holds only these six files.
 apps/elitea-web/src/assets/empty-states/*.webp
 
+# Embedded docs SPA screenshots (embedded-docs programme decision 4). No
+# files match yet — shots.manifest.ts ships with entries but no captures have
+# run — this just admits them ahead of that later unit landing.
+apps/elitea-web/src/entries/docs/content/img/*.webp
+
 # oapi-codegen output for the v2 spec. It is source text, not a blob: CI
 # regenerates it from services/elitea-main/internal/api/spec/v2.yaml and the
 # generated-drift gate fails when the checked-in copy differs, so it cannot

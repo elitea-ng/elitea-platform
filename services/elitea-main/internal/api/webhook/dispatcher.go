@@ -1,5 +1,28 @@
 package webhook
 
+// Dispatcher turns a domain event into signed HTTP POSTs to every active,
+// subscribed webhook in the event's project, and records what happened.
+//
+// # HOW A PRODUCER REACHES HERE
+//
+// Dispatcher implements internal/events.Sink (structurally — this package
+// does not import internal/events, which would be a cycle: events would then
+// need webhook's types to describe its own Sink parameter). The composition
+// root (cmd/elitea-main/main.go) passes a *Dispatcher as one of the sinks an
+// events.Publisher fans every Emit out to, so every producer that already
+// calls Emit for the project SSE stream reaches this dispatcher for free — no
+// producer imports this package or knows webhooks exist.
+//
+// events.Publisher.Emit calls a Sink's HandleDomainEvent on its OWN
+// goroutine, so nothing below blocks the request that produced the event.
+//
+// # WHAT #876's FIRST HALF LEFT UNFINISHED
+//
+// The registry UI and the five CRUD routes shipped in #876 with this comment
+// in dispatcher.go: NewDispatcher had no caller anywhere in the repository.
+// A registered webhook could not fire on anything. This file is the fix:
+// every method below now has a caller, traced in the doc comment above.
+
 import (
 	"bytes"
 	"context"
@@ -7,86 +30,403 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/redis"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
-type Dispatcher struct {
-	repo   Repository
-	client *http.Client
+// deliveryOutcome is the exit case one delivery attempt sequence lands on. It
+// exists so attempt() has one return value instead of four.
+type deliveryOutcome struct {
+	Attempts     int
+	Status       DeliveryStatus
+	ResponseCode *int
+	LastError    string
 }
 
-func NewDispatcher(repo Repository) *Dispatcher {
-	return &Dispatcher{
-		repo: repo,
+// SignatureHeader is the header a receiver reads to verify a delivery came
+// from this platform and was not altered in transit. Its value is
+// "sha256=<hex HMAC-SHA256 of the exact request body, keyed by the webhook's
+// secret>" — see verifySignature in dispatcher_test.go for the reference
+// verification a receiver implements.
+const SignatureHeader = "X-Webhook-Signature"
+
+// EventTypeHeader carries the event type outside the signed body too, so a
+// receiver that fans out to multiple handlers can route without parsing JSON
+// first. It is NOT part of what the signature covers — only the body is
+// signed, matching every mainstream webhook provider's contract (Stripe,
+// GitHub) and keeping verification a single documented byte range.
+const EventTypeHeader = "X-Webhook-Event"
+
+// deliveryTimeout bounds ONE HTTP attempt. maxDeliveryAttempts bounds how many
+// attempts one event-webhook pair gets before the delivery is logged FAILED.
+// deliveryBackoff is the pause between attempts, one entry shorter than
+// maxDeliveryAttempts (no pause after the last attempt). Three attempts over
+// at most ~6s keeps one goroutine's worst case bounded and small enough that
+// Redeliver — which runs this same sequence SYNCHRONOUSLY, on the caller's
+// request goroutine, so the settings page can show the outcome immediately —
+// does not read as a hung request.
+const (
+	deliveryTimeout     = 10 * time.Second
+	maxDeliveryAttempts = 3
+)
+
+var deliveryBackoff = []time.Duration{500 * time.Millisecond, 2 * time.Second}
+
+// DeliveryStatus is the closed vocabulary webhook_deliveries.status holds —
+// see migrations/shared/0122_webhooks_and_deliveries.sql's CHECK constraint,
+// which this type's three values must stay in sync with.
+type DeliveryStatus string
+
+const (
+	DeliveryStatusPending DeliveryStatus = "pending"
+	DeliveryStatusSuccess DeliveryStatus = "success"
+	DeliveryStatusFailed  DeliveryStatus = "failed"
+	// DeliveryStatusBlocked is a delivery this Dispatcher refused to even
+	// attempt, because the destination's DNS answer at send time resolved to
+	// a loopback, private, link-local or multicast address the configured
+	// DestinationGuard does not permit (ssrf.go). It is distinct from
+	// DeliveryStatusFailed on purpose: a "failed" delivery is one the
+	// destination itself rejected or timed out on, which redelivering might
+	// fix; a "blocked" delivery would refuse identically on every retry, so
+	// attempt() does not retry it, and the deliveries panel should not offer
+	// Redeliver the same false hope it offers a transient failure.
+	DeliveryStatusBlocked DeliveryStatus = "blocked"
+)
+
+// Delivery is one logged attempt sequence against one webhook for one event.
+// It is the row webhook_deliveries stores and the shape the "Recent
+// deliveries" panel and GET .../deliveries render.
+// Field tags matter here, not just style: every other handler in this
+// service marshals snake_case (this package's own `Webhook` type included —
+// see handler.go), and the OpenAPI spec / generated web client
+// (webhookDelivery.zod.ts) were authored against that same convention. An
+// UNTAGGED struct still compiles and still "works" against `curl`, so this
+// shipped with no tags at all — Go's default PascalCase field names — and
+// every JSON consumer (the settings page's own "Recent deliveries" panel,
+// AND api.webhook-deliveries.spec.ts's `item.event === 'conversation
+// .created'` filter) read `undefined` off every field forever, which for
+// the E2E journey read as a delivery that simply never got logged (#882 CI).
+type Delivery struct {
+	ID        string         `json:"id"`
+	WebhookID string         `json:"webhook_id"`
+	ProjectID string         `json:"project_id"`
+	Event     string         `json:"event"`
+	Status    DeliveryStatus `json:"status"`
+	// Attempts is how many HTTP attempts this sequence made — 1 to
+	// maxDeliveryAttempts. It is never 0: a Delivery is only logged after at
+	// least one attempt has run.
+	Attempts     int    `json:"attempts"`
+	ResponseCode *int   `json:"response_code"`
+	LastError    string `json:"last_error"`
+	// Payload is the EXACT bytes POSTed to the destination (the signed
+	// body), kept so Redeliver resends byte-identical content rather than
+	// re-deriving a payload that may have drifted since (a project rename
+	// between the original event and a redelivery days later, say).
+	Payload json.RawMessage `json:"payload"`
+	// RedeliveryOf is the id of the Delivery this one resent, or "" for an
+	// original delivery. A redelivery is always a NEW row — see Redeliver's
+	// doc comment for why an update-in-place was rejected.
+	RedeliveryOf string    `json:"redelivery_of"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// DeliveryRepository is webhook_deliveries' persistence seam.
+type DeliveryRepository interface {
+	// Create inserts one COMPLETED attempt sequence (Status is never
+	// DeliveryStatusPending on the way in — see deliverAndLog).
+	Create(ctx context.Context, d Delivery) (Delivery, error)
+	// ListRecent returns a webhook's deliveries, newest first, capped at
+	// limit.
+	ListRecent(ctx context.Context, projectID, webhookID string, limit int) ([]Delivery, error)
+	// Get reads one delivery, scoped to the project AND the webhook it
+	// belongs to — the same "the path segment only says where to look"
+	// discipline handler.go's five routes already apply, so a caller cannot
+	// redeliver another project's webhook by guessing a delivery id.
+	Get(ctx context.Context, projectID, webhookID, deliveryID string) (Delivery, error)
+}
+
+type Dispatcher struct {
+	repo       Repository
+	deliveries DeliveryRepository
+	client     *http.Client
+	// guard is the SSRF check every send() goes through. nil means NO check
+	// is performed at dial time — see WithGuard's doc comment for why an
+	// absent guard degrades rather than fails closed here, unlike
+	// Handler.validateDestination's write-path gate.
+	guard *DestinationGuard
+}
+
+// DispatcherOption configures a Dispatcher built by NewDispatcher.
+type DispatcherOption func(*Dispatcher)
+
+// WithGuard wires the dial-time SSRF check (ssrf.go) into every delivery
+// attempt: the Dispatcher's http.Client dials through guard.Transport()
+// instead of http.DefaultTransport, so a destination that resolves to a
+// disallowed address at SEND time — whether it was smuggled directly into
+// the table, or a previously-valid hostname now resolves somewhere it should
+// not (DNS rebinding, a repointed record) — is refused before any TCP
+// connection opens, and attempt() logs the outcome as DeliveryStatusBlocked.
+//
+// A Dispatcher built WITHOUT this option (guard nil) performs NO destination
+// check at dial time and dials whatever `wh.URL` says, using
+// http.DefaultTransport. That is a deliberate degrade, the same "absent
+// optional dependency" shape `deliveries == nil` already documents on this
+// type: the composition root (cmd/elitea-main/main.go) always supplies a
+// guard in production, and every unit test in this package that does not
+// need to exercise the SSRF path (retry/backoff, signing, redeliver) is
+// unaffected by it, the same way those tests are unaffected by an absent
+// delivery log. The WRITE path this dispatch reads from (Handler.Create/
+// Update, via validateDestination) does fail closed on a nil guard — a
+// row cannot enter the table unchecked even on a deployment that also failed
+// to wire dial-time enforcement, so the two nils are not "either gate is
+// optional", they are "the write gate is mandatory and this one is
+// defence in depth for data already admitted".
+func WithGuard(guard *DestinationGuard) DispatcherOption {
+	return func(d *Dispatcher) {
+		d.guard = guard
+	}
+}
+
+// NewDispatcher builds a Dispatcher. deliveries may be nil — a Dispatcher
+// with no delivery log still SENDS every webhook (best effort), it just does
+// not persist the outcome, which is the same "degraded, not wrong" shape
+// WithUserContextDefaults documents elsewhere in this service for an absent
+// optional dependency.
+func NewDispatcher(repo Repository, deliveries DeliveryRepository, opts ...DispatcherOption) *Dispatcher {
+	d := &Dispatcher{
+		repo:       repo,
+		deliveries: deliveries,
 		client: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout: deliveryTimeout,
 		},
 	}
+	for _, opt := range opts {
+		opt(d)
+	}
+	if d.guard != nil {
+		d.client.Transport = d.guard.Transport()
+	}
+	return d
 }
 
-func (d *Dispatcher) HandleEvent(ctx context.Context, event redis.Event) error {
-	var meta struct {
-		ProjectID string `json:"project_id"`
-	}
-	if err := json.Unmarshal(event.Payload, &meta); err != nil {
-		return nil
-	}
-	if meta.ProjectID == "" {
-		return nil
+// HandleDomainEvent is internal/events.Sink's method. See the package doc
+// comment above for how a producer's Emit call reaches here.
+func (d *Dispatcher) HandleDomainEvent(ctx context.Context, projectID, eventType string, payload any) {
+	if d == nil || d.repo == nil || projectID == "" || eventType == "" {
+		return
 	}
 
-	webhooks, err := d.repo.ListByEvent(ctx, meta.ProjectID, event.Type)
+	webhooks, err := d.repo.ListByEvent(ctx, projectID, eventType)
 	if err != nil {
-		return err
+		slog.Error("webhook: list subscribers", "err", err, "project", projectID, "type", eventType)
+		return
+	}
+	if len(webhooks) == 0 {
+		return
 	}
 
-	body, _ := json.Marshal(map[string]any{
-		"type":      event.Type,
-		"source":    event.Source,
-		"payload":   json.RawMessage(event.Payload),
-		"timestamp": event.Timestamp,
-	})
+	body, err := deliveryBody(eventType, projectID, payload)
+	if err != nil {
+		slog.Error("webhook: marshal delivery body", "err", err, "type", eventType)
+		return
+	}
 
 	for _, wh := range webhooks {
 		if !wh.Active {
 			continue
 		}
-		go d.deliver(wh, body)
+		wh := wh
+		// One goroutine per subscriber: a slow or unreachable destination
+		// must not delay delivery to every other webhook on the same event,
+		// the same reason the original (unwired) HandleEvent already used
+		// `go d.deliver` per webhook.
+		go d.deliverAndLog(ctx, wh, eventType, body)
 	}
-	return nil
 }
 
-func (d *Dispatcher) deliver(wh Webhook, body []byte) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+// deliveryBody is the exact byte sequence signed and POSTed. `payload` is
+// whatever the producer passed to events.Publisher.Emit — a small struct or
+// map describing the entity, never a full row (see each producer's own
+// comment for what it sends and why).
+func deliveryBody(eventType, projectID string, payload any) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"type":       eventType,
+		"project_id": projectID,
+		"payload":    payload,
+		"timestamp":  time.Now().UTC(),
+	})
+}
+
+// deliverAndLog runs the attempt sequence and writes exactly one Delivery row
+// for it. It is the async path's terminal function (always called via `go`)
+// and Redeliver's building block (called directly, on the caller's
+// goroutine, for the synchronous UX Redeliver's own comment explains).
+func (d *Dispatcher) deliverAndLog(ctx context.Context, wh Webhook, eventType string, body []byte) {
+	outcome := d.attempt(ctx, wh, eventType, body)
+	if d.deliveries == nil {
+		return
+	}
+	if _, err := d.deliveries.Create(ctx, Delivery{
+		WebhookID:    wh.ID,
+		ProjectID:    wh.ProjectID,
+		Event:        eventType,
+		Status:       outcome.Status,
+		Attempts:     outcome.Attempts,
+		ResponseCode: outcome.ResponseCode,
+		LastError:    outcome.LastError,
+		Payload:      body,
+	}); err != nil {
+		slog.Error("webhook: log delivery", "err", err, "webhook", wh.ID)
+	}
+}
+
+// attempt sends body to wh.URL, retrying up to maxDeliveryAttempts times with
+// deliveryBackoff between attempts, and reports the outcome. A 2xx or 3xx
+// response is success; any other status, or a transport error (DNS, refused
+// connection, timeout), counts as a failed attempt and is retried.
+//
+// A destination the configured DestinationGuard refuses is the ONE exception
+// to "retried": refusing 127.0.0.1 (or 169.254.169.254, or a name that now
+// resolves into a private range) does not change between one attempt and the
+// next the way a destination's own 500 or a transient timeout might, so
+// retrying it would only spend three attempts' worth of backoff to reach the
+// same refusal three times. attempt() checks this UP FRONT, before making any
+// network call at all — cheaper than discovering it through the HTTP client
+// — and also recognises the same refusal if it instead surfaces from
+// dialContext during send() (the destination passed the up-front check but
+// failed the dial-time re-resolution: rebinding, or a record that changed in
+// the few milliseconds between the two checks). Either way the outcome is
+// DeliveryStatusBlocked, not DeliveryStatusFailed, and the loop stops.
+func (d *Dispatcher) attempt(ctx context.Context, wh Webhook, eventType string, body []byte) deliveryOutcome {
+	if d.guard != nil {
+		if err := d.guard.Validate(ctx, wh.URL); err != nil {
+			return deliveryOutcome{Attempts: 1, Status: DeliveryStatusBlocked, LastError: err.Error()}
+		}
+	}
+	var outcome deliveryOutcome
+	for i := 0; i < maxDeliveryAttempts; i++ {
+		outcome.Attempts++
+		code, err := d.send(ctx, wh, eventType, body)
+		if err != nil {
+			if errors.Is(err, ErrDestinationRefused) {
+				outcome.Status = DeliveryStatusBlocked
+				outcome.LastError = err.Error()
+				outcome.ResponseCode = nil
+				return outcome
+			}
+			outcome.LastError = err.Error()
+			outcome.ResponseCode = nil
+		} else if code >= 200 && code < 400 {
+			outcome.Status = DeliveryStatusSuccess
+			outcome.ResponseCode = &code
+			outcome.LastError = ""
+			return outcome
+		} else {
+			outcome.ResponseCode = &code
+			outcome.LastError = fmt.Sprintf("destination responded %d", code)
+		}
+		if i < maxDeliveryAttempts-1 {
+			select {
+			case <-ctx.Done():
+				outcome.Status = DeliveryStatusFailed
+				return outcome
+			case <-time.After(deliveryBackoff[i]):
+			}
+		}
+	}
+	outcome.Status = DeliveryStatusFailed
+	return outcome
+}
+
+// send makes exactly one HTTP attempt and returns the response status code
+// (0 on a transport-level failure, alongside the error).
+func (d *Dispatcher) send(ctx context.Context, wh Webhook, eventType string, body []byte) (int, error) {
+	attemptCtx, cancel := context.WithTimeout(ctx, deliveryTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, wh.URL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(attemptCtx, http.MethodPost, wh.URL, bytes.NewReader(body))
 	if err != nil {
-		slog.Error("webhook: build request", "err", err, "url", wh.URL)
-		return
+		return 0, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "EliteA-Webhook/1.0")
-
+	req.Header.Set(EventTypeHeader, eventType)
 	if wh.Secret != "" {
-		mac := hmac.New(sha256.New, []byte(wh.Secret))
-		mac.Write(body)
-		sig := hex.EncodeToString(mac.Sum(nil))
-		req.Header.Set("X-Webhook-Signature", "sha256="+sig)
+		req.Header.Set(SignatureHeader, "sha256="+signBody(wh.Secret, body))
 	}
 
 	resp, err := d.client.Do(req)
 	if err != nil {
-		slog.Warn("webhook: delivery failed", "err", err, "url", wh.URL)
-		return
+		return 0, err
 	}
-	_ = resp.Body.Close()
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		_ = resp.Body.Close()
+	}()
+	return resp.StatusCode, nil
+}
 
-	if resp.StatusCode >= 400 {
-		slog.Warn("webhook: non-success response", "status", resp.StatusCode, "url", wh.URL)
+// signBody is the ONE place the signature is computed, so Redeliver and the
+// original delivery can never disagree with each other or with a test's
+// reference implementation.
+func signBody(secret string, body []byte) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// ErrDeliveryNotFound is Redeliver's answer when this Dispatcher has no
+// delivery log or dispatcher wired at all — see Redeliver's nil guard.
+// apierr.NotFound rather than a plain error so apierr.Write answers 404
+// rather than a bare 500.
+var ErrDeliveryNotFound = apierr.NotFound("webhook: delivery not found")
+
+// Redeliver resends a previously logged delivery's EXACT payload to the
+// webhook's CURRENT url and secret, and logs a NEW Delivery row rather than
+// mutating the original.
+//
+// A new row, not an update, for the same reason pipeline_triggers keeps a
+// revoked row instead of deleting it (migrations/tenant/0133's header): "was
+// this webhook still failing last Tuesday" has an answer from a row that is
+// still there, and "the operator clicked redeliver and it worked" deserves
+// its own row rather than overwriting the evidence of the failure that made
+// them click it.
+//
+// It runs SYNCHRONOUSLY — unlike the async path every producer's Emit call
+// reaches — because Redeliver is a person clicking a button in the deliveries
+// panel who is waiting to see whether it worked; a 202 that reports nothing
+// would make "Redeliver" indistinguishable from "maybe redeliver, check back
+// later".
+func (d *Dispatcher) Redeliver(ctx context.Context, projectID, webhookID, deliveryID string) (Delivery, error) {
+	if d == nil || d.repo == nil || d.deliveries == nil {
+		return Delivery{}, ErrDeliveryNotFound
 	}
+	original, err := d.deliveries.Get(ctx, projectID, webhookID, deliveryID)
+	if err != nil {
+		return Delivery{}, err
+	}
+	wh, err := d.repo.Get(ctx, projectID, webhookID)
+	if err != nil {
+		return Delivery{}, err
+	}
+
+	outcome := d.attempt(ctx, wh, original.Event, original.Payload)
+	return d.deliveries.Create(ctx, Delivery{
+		WebhookID:    wh.ID,
+		ProjectID:    wh.ProjectID,
+		Event:        original.Event,
+		Status:       outcome.Status,
+		Attempts:     outcome.Attempts,
+		ResponseCode: outcome.ResponseCode,
+		LastError:    outcome.LastError,
+		Payload:      original.Payload,
+		RedeliveryOf: original.ID,
+	})
 }

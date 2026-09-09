@@ -1,0 +1,55 @@
+---
+title: "Analytics and usage"
+description: "Review project-wide adoption, cost, and health metrics, and track budget consumption for the project or yourself."
+---
+
+Analytics and Usage give you two views of the same underlying activity: Analytics is about understanding how the project is used; Usage is about tracking spend against a budget.
+
+## Analytics
+
+Settings › Analytics is available to any project member and requires the `analytics_enabled` admin flag. Data is scoped to the currently selected project and refreshed from the API, cached for a few minutes.
+
+<Screenshot id="settings-analytics" alt="Analytics overview tab with KPI cards and a daily activity chart" />
+
+Choose a date range with the quick presets (Last 24h/7d/30d/90d) or custom From/To pickers, then switch between tabs:
+
+<CardGroup cols={3}>
+  <Card title="Overview" icon="chart-line">Team size, AI adoption, LLM calls, tool runs, and the top adopters.</Card>
+  <Card title="Costs" icon="coins">Estimated LLM spend by day, by user, by model, by agent, and by tool.</Card>
+  <Card title="Tokens" icon="coins">Input, output, and cache token usage by day, user, and model.</Card>
+  <Card title="Agents & Pipelines" icon="diagram-project">Run counts, latency, and errors per agent or pipeline.</Card>
+  <Card title="Tools" icon="toolbox">Call counts, latency, and errors per tool.</Card>
+  <Card title="Users" icon="users">Per-user activity, adoption, and the tools and agents they used.</Card>
+  <Card title="Health" icon="heart-pulse">Request volume, error rates, and latency by event type.</Card>
+</CardGroup>
+
+Select **Export to Excel** to download all tabs for the selected range as a single workbook.
+
+<Note title="Cost by agent and by tool is an estimate, not the accounted spend">
+The Costs tab's **Cost by Agent** and **Cost by Tool** tables answer which agent or tool a call is attributable to (#875), the same estimate the by-model and by-user tables already give — derived from the request log and the price catalogue, not the figure the Usage tab's budget meter accounts. Cost by agent covers calls made from a runtime execution, which most direct `/llm` traffic is not; cost by tool attributes an execution's whole LLM spend to every tool that execution called, so a tool used inside a longer turn is not "what that one tool call cost" in isolation. Both tables are absent — not a zero row — for a deployment or a window that cannot correlate either dimension yet. Setting a spend LIMIT per agent or per tool is not available; see [Budgets and LLM Governance](/admin/budgets-and-governance).
+</Note>
+
+## Usage
+
+Settings › Usage requires the `cost_budgets_enabled` admin flag and shows spend against the current monthly billing period for platform-shared models only — models configured with your own provider credentials are billed by that provider and are not included.
+
+<Screenshot id="settings-usage" alt="Project usage summary with a spend meter and daily usage chart" />
+
+In a personal project the project budget *is* your own budget, so there is no tab switcher. In a team project, switch between:
+
+- **Whole project** — total spend, a usage meter against the effective limit, daily usage, usage by model, and a **Members** table showing each member's own spend against their own limit.
+- **My usage** — the same panels scoped to you alone.
+
+A warning banner appears as usage approaches its limit; once the limit is reached, requests to platform-shared models are refused until the limit increases or the period resets. Select the export button to download usage data as an Excel file.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Analytics or Usage section is missing">The relevant admin flag (`analytics_enabled` or `cost_budgets_enabled`) is off for this deployment — ask your administrator.</Accordion>
+  <Accordion title="Numbers look stale">API results are cached briefly; wait a moment or select Refresh.</Accordion>
+  <Accordion title="Requests are refused with a budget error">Your project or personal budget for shared models has been reached for the current period — wait for the reset or ask an administrator to raise the limit.</Accordion>
+</AccordionGroup>
+
+<Info title="Related">
+[Admin: Budgets and governance](/admin/budgets-and-governance) · [Project settings](/menus/settings/project-settings)
+</Info>

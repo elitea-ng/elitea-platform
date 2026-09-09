@@ -9,9 +9,9 @@
 # .Values.worker.enabled }}` body it never enters is a body it never checks.
 #
 # That was survivable while the worker had one image and one argument list. It
-# stopped being survivable when `worker.implementation` arrived and the DEFAULT
-# became the Rust worker, because the two implementations do not accept each
-# other's command lines:
+# stopped being survivable when `worker.implementation` arrived (the default is
+# python since #865/#866; rust is one values override away), because the two
+# implementations do not accept each other's command lines:
 #
 #   * services/elitea-worker-rust/src/lib.rs matches an EXACT five-token slice.
 #     `serve --config <path>` — the Python shape — is not a degraded mode. It is

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
@@ -197,5 +197,56 @@ describe('ApplicationAnswer TTS highlight gating', () => {
     renderWithTheme(<ApplicationAnswer answer={answer} messageId={answer.id} />);
 
     expect(screen.queryByTestId('spoken-highlight')).not.toBeInTheDocument();
+  });
+});
+
+// "Open as document" (issue #879) — carves the WHOLE answer into a
+// `document` canvas, forcing the kind rather than guessing it (the answer
+// action always means "this is prose", unlike the selection-drag affordance
+// which has to infer it from the highlighted text's shape).
+describe('ApplicationAnswer "Open as document" action (issue #879)', () => {
+  const answer = {
+    id: 'answer-doc-1',
+    role: 'assistant',
+    content: 'A whole prose answer, not yet split into any canvas.',
+  } as ChatMessage;
+
+  it('carves the whole answer out as a document canvas when clicked', async () => {
+    const user = userEvent.setup();
+    const onCreateCanvasFromSelection = vi.fn();
+    renderWithTheme(
+      <ApplicationAnswer
+        answer={answer}
+        messageId={answer.id}
+        actions={{ onCreateCanvasFromSelection }}
+      />,
+    );
+
+    const button = screen.getByTestId('answer-open-as-document');
+    await user.click(button);
+
+    expect(onCreateCanvasFromSelection).toHaveBeenCalledWith({
+      messageGroupUuid: answer.id,
+      selectedText: answer.content,
+      messageItemId: undefined,
+      kind: 'document',
+    });
+  });
+
+  it('renders no such control without a canvas-creation handler', () => {
+    renderWithTheme(<ApplicationAnswer answer={answer} messageId={answer.id} />);
+    expect(screen.queryByTestId('answer-open-as-document')).not.toBeInTheDocument();
+  });
+
+  it('renders no such control for an answer with no words to carve', () => {
+    const empty = { id: 'answer-doc-2', role: 'assistant', content: '' } as ChatMessage;
+    renderWithTheme(
+      <ApplicationAnswer
+        answer={empty}
+        messageId={empty.id}
+        actions={{ onCreateCanvasFromSelection: vi.fn() }}
+      />,
+    );
+    expect(screen.queryByTestId('answer-open-as-document')).not.toBeInTheDocument();
   });
 });

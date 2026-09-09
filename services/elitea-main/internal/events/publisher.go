@@ -30,24 +30,168 @@ const (
 	// EventBus (internal/infra/natsbus) is wired; the gateway emits it and
 	// elitea-main subscribers (and the project SSE stream) receive it.
 	EventBudgetSoftAlert = "budget.soft_alert"
+
+	// The five events below were added for #876's second half: wiring the
+	// outbound webhook Dispatcher (internal/api/webhook) to real producers
+	// instead of leaving it composed against nothing. Each constant is
+	// wired at exactly one call site — see that site's own comment for the
+	// producer and for why its sibling ("pipeline run FINISHED") is a
+	// declared, not a wired, event (below).
+
+	// EventPipelineRunStarted fires the moment an unattended pipeline run is
+	// admitted — internal/api/v2/pipelinetriggers/run.go's admit(), the one
+	// path both the inbound trigger and the schedule tick use. "Admitted"
+	// and "finished" are different facts here: admit() returns as soon as
+	// StartCurrentApplication accepts the turn, well before the pipeline's
+	// graph has run. See EventPipelineRunSucceeded's comment for why this
+	// package does not also emit that fact yet.
+	EventPipelineRunStarted = "pipeline.run.started"
+	// EventPipelineRunSucceeded and EventPipelineRunFailed are now wired,
+	// without editing the claim-fence/settlement engine's own fencing logic
+	// — the isolated hook this constant's earlier comment said did not
+	// exist. execution.SettlementService gained an AfterSettleHook
+	// (WithAfterSettleHooks) that fires strictly AFTER
+	// PrepareSettlement's repository call has committed, on its own
+	// goroutine, with a recovered panic — see that type's own doc comment.
+	// internal/application/pipelineruns.NewSettlementHook is the hook: it
+	// looks the settled execution id up in public.pipeline_runs
+	// (migrations/shared/0124, written by pipelinetriggers.admit() the
+	// moment it emits EventPipelineRunStarted) and emits one of these two
+	// only when a row is found — an ordinary chat turn's settlement finds
+	// none and stays silent. EventPipelineRunFailed also covers a
+	// CANCELLED run (`status: "cancelled"` in the payload) — the catalogue
+	// has no third event for that outcome. See
+	// internal/application/pipelineruns' package doc for the full
+	// sequencing story, including how a FAILED run's error text
+	// (output.RuntimeFailureService's FailureObserver) reaches the payload
+	// before settlement completes.
+	EventPipelineRunSucceeded = "pipeline.run.succeeded"
+	EventPipelineRunFailed    = "pipeline.run.failed"
+	// EventScheduleFired fires from the SAME admit() call as
+	// EventPipelineRunStarted, additionally, when the run's origin is a
+	// pipeline_schedules row rather than an inbound trigger. It is elitea-
+	// main's OWN scheduling job framework (internal/application/scheduling,
+	// registered as pipelinetriggers.ScheduleJob) firing the tick — not a
+	// callback FROM the separate elitea-scheduler service INTO elitea-main.
+	// elitea-scheduler has no HTTP hook into elitea-main for pipeline
+	// schedules to answer through, so that direction is not wired.
+	EventScheduleFired = "schedule.fired"
+	// EventAgentVersionPublished and EventAgentVersionUnpublished fire from
+	// internal/api/v2/eliteacore/handler.go's Publish and Unpublish, once the
+	// publish/unpublish transaction has committed.
+	EventAgentVersionPublished   = "agent.version.published"
+	EventAgentVersionUnpublished = "agent.version.unpublished"
+	// EventArtifactUploaded fires from internal/api/v2/artifacts/objects.go's
+	// UploadObject, once the object is durably stored.
+	EventArtifactUploaded = "artifact.uploaded"
+	// EventModerationRequestDecided fires from internal/api/v2/moderation
+	// /requests.go's AdministrationRequestUpdate, for every issue_type this
+	// resource carries — an ordinary app request AND a Project Request
+	// (issue #871) alike, since both flow through the same decision path and
+	// a webhook watching this event has no reason to care which table-shape
+	// underlies the row.
+	EventModerationRequestDecided = "moderation.request.decided"
 )
+
+// EventCatalogueEntry names one event type this platform can emit and says
+// whether a real producer is wired to it yet. It is the source
+// webhook.EventCatalogue (internal/api/webhook) re-exports for the create/
+// update handlers' documentation and for tests that assert the picker the
+// web client renders (apps/elitea-web/src/features/settings/lib/webhooks
+// /webhookEventCatalogue.ts) has not drifted from this list.
+type EventCatalogueEntry struct {
+	Type        string
+	Description string
+	// Wired is false for an event this package has named but no producer in
+	// this repository emits. As of the SSRF-hardening wave, every declared
+	// event is wired — see EventPipelineRunSucceeded/EventPipelineRunFailed's
+	// own doc comment for the most recently closed gap. The field stays
+	// (rather than being deleted) because it is exactly what would need to
+	// flip back to false if a future event is declared ahead of its
+	// producer, the same way these two once were.
+	Wired bool
+}
+
+// Catalogue is every event type this package declares, in the stable order
+// the picker renders them. It is deliberately NOT every string a webhook's
+// `events` array may legally hold — the API is free text — but every value
+// here is one this repository's own producers actually emit.
+var Catalogue = []EventCatalogueEntry{
+	{Type: EventPipelineRunStarted, Description: "An unattended pipeline run was admitted (inbound trigger or schedule).", Wired: true},
+	{Type: EventPipelineRunSucceeded, Description: "An unattended pipeline run finished successfully.", Wired: true},
+	{Type: EventPipelineRunFailed, Description: "An unattended pipeline run finished with an error, or was cancelled.", Wired: true},
+	{Type: EventScheduleFired, Description: "A pipeline's cron schedule fired and admitted a run.", Wired: true},
+	{Type: EventAgentVersionPublished, Description: "An agent (or pipeline) version was published to the catalog.", Wired: true},
+	{Type: EventAgentVersionUnpublished, Description: "A published agent version was withdrawn.", Wired: true},
+	{Type: EventConversationCreated, Description: "A new chat conversation was created.", Wired: true},
+	{Type: EventArtifactUploaded, Description: "A file was uploaded to a project artifact bucket.", Wired: true},
+	{Type: EventModerationRequestDecided, Description: "A moderation or project-creation request was approved or rejected.", Wired: true},
+}
+
+// AllEventTypes is Catalogue's Type column, for a caller that only needs the
+// vocabulary (e.g. a picker's option list).
+func AllEventTypes() []string {
+	types := make([]string, len(Catalogue))
+	for i, entry := range Catalogue {
+		types[i] = entry.Type
+	}
+	return types
+}
 
 type Bus interface {
 	Publish(ctx context.Context, channel string, eventType string, payload interface{}) error
 }
 
-type Publisher struct {
-	bus Bus
+// NoopBus discards every publish. It is the composition root's fallback Bus
+// when no Redis (and no NATS) EventBus is configured, so a deployment with
+// neither still gets a working domain-events Publisher: the project SSE
+// stream simply has nothing to read (it is nil-gated separately in
+// router.go), but webhook delivery — which reaches this Publisher's Sinks,
+// not its Bus — still works, because Emit calls both regardless of whether
+// the Bus publish succeeds.
+type NoopBus struct{}
+
+func (NoopBus) Publish(context.Context, string, string, interface{}) error { return nil }
+
+// Sink receives every event a Publisher Emits, in addition to the Bus
+// publish. webhook.Dispatcher implements this (structurally — this package
+// does not import internal/api/webhook, which would be a cycle) to turn a
+// domain event into signed HTTP deliveries. A Sink's own work must not block
+// the producer that called Emit: Publisher dispatches to each Sink on its own
+// goroutine, so a slow or panicking Sink cannot stall a conversation create,
+// an artifact upload, or any other request-path Emit call.
+type Sink interface {
+	HandleDomainEvent(ctx context.Context, projectID, eventType string, payload any)
 }
 
-func NewPublisher(bus Bus) *Publisher {
-	return &Publisher{bus: bus}
+type Publisher struct {
+	bus   Bus
+	sinks []Sink
+}
+
+// NewPublisher builds a Publisher over bus, additionally fanning out every
+// Emit to sinks (typically the webhook Dispatcher). sinks is variadic and may
+// be empty — every existing caller that built a presence-only Publisher over
+// its own EventBus keeps working unchanged.
+func NewPublisher(bus Bus, sinks ...Sink) *Publisher {
+	return &Publisher{bus: bus, sinks: sinks}
 }
 
 func (p *Publisher) Emit(ctx context.Context, projectID, eventType string, payload any) {
 	channel := ProjectChannel(projectID)
 	if err := p.bus.Publish(ctx, channel, eventType, payload); err != nil {
 		slog.Error("events: publish failed", "type", eventType, "project", projectID, "err", err)
+	}
+	for _, sink := range p.sinks {
+		if sink == nil {
+			continue
+		}
+		// Detached from ctx's cancellation: an HTTP handler's request
+		// context is cancelled the moment the handler returns, and a
+		// webhook delivery that has only just been admitted to a queue must
+		// outlive that. WithoutCancel keeps ctx's values (trace ids, if any
+		// are ever attached) while dropping its deadline.
+		go sink.HandleDomainEvent(context.WithoutCancel(ctx), projectID, eventType, payload)
 	}
 }
 

@@ -1,0 +1,65 @@
+---
+title: "Artifact"
+description: "Attach a bucket of files to an agent, pipeline or conversation so it can read, write and index them."
+---
+
+The Artifact toolkit gives an agent, pipeline or conversation direct read/write access to a bucket of files stored in Elitea's own artifact storage — the same buckets you can browse under Artifacts. It's listed under the **storage** category in the toolkit type picker.
+
+## Prerequisites
+
+- A bucket to point the toolkit at, or permission to create one from the toolkit form itself.
+- If you want the toolkit to index file contents for retrieval: a `pgvector` credential and an embedding model, configured under AI providers.
+
+## Connect the toolkit
+
+<Steps>
+<Step title="Open the toolkit type picker">
+In the left navigation, open **Toolkits**, then select **New**. Filter the type picker by the **storage** category, or search for "Artifact".
+</Step>
+<Step title="Pick a bucket">
+Choose an existing bucket, or use the toolkit's own **Create new bucket** tool the first time an agent needs one — no separate credential is required to reach your own project's storage.
+</Step>
+<Step title="Add indexing settings (optional)">
+If you plan to index the bucket's contents, set an **embedding model** and a **pgvector** credential. Leave both empty to use the toolkit for plain file read/write.
+</Step>
+<Step title="Save">
+Name the toolkit and select **Create**. It's now available to attach to agents, pipelines and conversations in this project.
+</Step>
+</Steps>
+
+<Screenshot id="toolkit-new-artifact" alt="New toolkit dialog for the Artifact type" />
+
+## Available tools
+
+<Accordion title="Available tools (16)">
+
+| Tool |
+|---|
+| Append data |
+| Create file |
+| Create new bucket |
+| Delete file |
+| Edit file |
+| Get file metadata |
+| Grep file |
+| Index data |
+| List files |
+| List indexes |
+| Read file |
+| Read multiple files |
+| Remove index |
+| Search index |
+| Stepback search index |
+| Stepback summary index |
+
+</Accordion>
+
+## Common issues
+
+<Note>
+The Indexes tab only appears when the configured worker can run `index_data`; if it can't, the tab is hidden and shows the worker's refusal message instead. `index_data` can't be run from the Test tools pane — use the Indexes tab.
+</Note>
+
+<Note>
+Files an agent creates through this toolkit's `create_file` tool are visible in the bucket the same way a manual upload is — there's no separate "agent files" area.
+</Note>

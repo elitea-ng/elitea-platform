@@ -1,0 +1,61 @@
+---
+title: "Index data from a source"
+description: "The credential and scope fields each supported source needs before you index it, with the shared setup steps done once."
+---
+
+The overall indexing procedure is the same for every source: configure a credential, pick the embedding model and vector store, set the source's scope fields, then start the run. This page covers the setup each source needs; for the shared procedure and the index lifecycle itself, see [Index external data](/how-tos/indexing/indexing-overview) and [Use the Indexes tab](/how-tos/indexing/using-indexes-tab-interface).
+
+## Shared setup (do this once per project)
+
+<Steps>
+1. In **Settings › AI Providers**, configure an embedding model and a pgvector vector-store connection.
+2. Create a toolkit of the source's type (see the tabs below for which credential it needs).
+3. Turn on the **Index Data** tool in the toolkit's configuration.
+4. Open the toolkit's **Indexes** tab and create an index using the source's scope fields.
+</Steps>
+
+## Source-specific setup
+
+<Tabs>
+<Tab title="Confluence">
+Toolkit type: `confluence`. Needs a Confluence credential (API token). Scope fields include the space key and optional label/CQL filters.
+</Tab>
+<Tab title="SharePoint">
+Toolkit type: `sharepoint`. Needs a SharePoint credential (Azure AD app registration). Scope fields include the site, drive, and folder to index.
+</Tab>
+<Tab title="ADO wiki">
+Toolkit type: `ado_wiki`. Needs an Azure DevOps credential (personal access token). Scope fields include the wiki identifier.
+</Tab>
+<Tab title="Figma">
+Toolkit type: `figma`. Needs a Figma credential (personal access token). Scope fields include the file or project to index.
+</Tab>
+<Tab title="Artifacts">
+Built in — no import key or external credential. Indexes files already uploaded to one of your project's [artifact buckets](/menus/artifacts).
+</Tab>
+<Tab title="GitHub">
+Toolkit type: `github`. Needs a GitHub credential (personal access token or GitHub App). Scope fields include the repository and branch.
+</Tab>
+<Tab title="Jira">
+Toolkit type: `jira`. Needs a Jira credential (API token). Scope fields include a JQL query or project filter.
+</Tab>
+<Tab title="TestRail">
+Toolkit type: `testrail`. Needs a TestRail credential (API key). Scope fields include the project or suite.
+</Tab>
+<Tab title="Xray">
+Toolkit type: `xray_cloud` (renamed from the earlier "Xray"). Needs Xray Cloud API credentials (client ID and secret).
+</Tab>
+<Tab title="Zephyr">
+Toolkit type: `zephyr_scale`, `zephyr_enterprise`, or `zephyr_essential` depending on which Zephyr product you use — each has its own credential shape and its own index-capable type.
+</Tab>
+</Tabs>
+
+<Screenshot id="index-source-create-form" alt="Create-toolkit form for a Confluence toolkit, as a representative example" />
+
+<Note>
+ADO Boards, ADO Plans, ADO Repos, Bitbucket, GitLab, and QTest also carry an indexing tool but had no dedicated legacy page — they follow the same shared procedure using their own credential type.
+</Note>
+
+## Next steps
+
+- [Use the Indexes tab](/how-tos/indexing/using-indexes-tab-interface) for the create/reindex/schedule/history workflow.
+- [Use credentials in a toolkit](/how-tos/credentials-toolkits/how-to-use-credentials) for how credentials attach to a toolkit.

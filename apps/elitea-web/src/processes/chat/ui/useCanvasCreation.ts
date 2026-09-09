@@ -46,7 +46,7 @@ import { useParams } from '@tanstack/react-router';
 import { conversationApi } from '@/entities/conversation';
 import { useCreateCanvasMutation } from '@/entities/canvas';
 import type { AnswerCanvasSelection } from '@/features/chat-messages';
-import { canvasByteRange } from '@/features/chat-messages';
+import { canvasByteRange, canvasKindForSelection } from '@/features/chat-messages';
 import { useSelectedProject } from '@/widgets/app-shell';
 
 /** One stored item, read defensively off the details payload. */
@@ -125,6 +125,15 @@ export function useCanvasCreation(): UseCanvasCreationResult {
       const range = canvasByteRange(itemText(item), selection.selectedText);
       if (range === undefined) return;
 
+      // Issue #879: a carved-out range that reads as PROSE becomes a
+      // `document` canvas (rich-text, Markdown round-trip) rather than a
+      // `code` one — `selection.kind` overrides the guess for a caller that
+      // already knows (the "Open as document" answer action always forces
+      // it); the selection-drag affordance leaves it unset and gets
+      // `canvasKindForSelection`'s guess from the text shape.
+      const kind = selection.kind ?? canvasKindForSelection(selection.selectedText);
+      const isDocument = kind === 'document';
+
       await createCanvas({
         projectId,
         message_group_id: Number(group.id),
@@ -133,9 +142,9 @@ export function useCanvasCreation(): UseCanvasCreationResult {
         // header derives from the language — the reference's own string for a
         // canvas whose document is prose or code rather than a table or a
         // diagram.
-        name: 'Edit code',
-        canvas_type: 'code',
-        code_language: 'markdown',
+        name: isDocument ? 'Edit document' : 'Edit code',
+        canvas_type: isDocument ? 'document' : 'code',
+        code_language: isDocument ? 'document' : 'markdown',
         canvas_content_starts_at: range.startsAt,
         canvas_content_ends_at: range.endsAt,
       });

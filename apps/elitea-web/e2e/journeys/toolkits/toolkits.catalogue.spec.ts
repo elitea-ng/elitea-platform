@@ -123,7 +123,16 @@ function isOffered(type: string, metadata: ServedTypeMetadata | undefined): bool
 
 function isCredentialProperty(property: Record<string, unknown> | undefined): boolean {
   if (property === undefined) return false;
-  return Object.hasOwn(property, '$ref') || Object.hasOwn(property, 'configuration_types');
+  // `configuration_model` (#864, imagegen's required `image_generation_model`)
+  // is the same shape of problem as `$ref`/`configuration_types`: the form
+  // renders it as `ModelSelectField` (`useCredentialLikeFieldSlot.tsx`), a
+  // picker over the PROJECT's configured models, not a plain textbox — an
+  // empty project has nothing to pick, so it cannot be filled here either.
+  return (
+    Object.hasOwn(property, '$ref')
+    || Object.hasOwn(property, 'configuration_types')
+    || Object.hasOwn(property, 'configuration_model')
+  );
 }
 
 /** A required property this journey can type a value into. */

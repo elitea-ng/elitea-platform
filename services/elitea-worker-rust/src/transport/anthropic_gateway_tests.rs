@@ -136,6 +136,46 @@ async fn drain(
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn distinct_execution_ids_produce_distinct_execution_id_headers() {
+    let response =
+        test_model_gateway_response(Body::new(Full::new(Bytes::from(native_sse(MODEL)))));
+    let (client, captured) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(response)],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway client");
+    let bound = client
+        .bind_anthropic_ordinary(
+            &ClaimScopedEliteaContext::fixture_with_execution_id(
+                17,
+                TOKEN,
+                "execution/distinct-42",
+            ),
+            23,
+            invocation(MODEL, Some(ModelReasoningEffort::Medium)),
+        )
+        .expect("native Anthropic model with a distinct execution id");
+
+    drain(
+        bound
+            .generate_for_test(request(MODEL, None))
+            .await
+            .expect("native response stream"),
+    )
+    .await
+    .expect("valid native stream");
+
+    let captured = captured.lock().expect("captured native request");
+    let [request] = captured.as_slice() else {
+        panic!("exactly one native request expected")
+    };
+    assert_eq!(
+        request.headers["x-elitea-execution-id"],
+        "execution/distinct-42"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn native_messages_request_preserves_cache_thinking_identity_and_completion() {
     let response =
         test_model_gateway_response(Body::new(Full::new(Bytes::from(native_sse(MODEL)))));
@@ -198,6 +238,10 @@ async fn native_messages_request_preserves_cache_thinking_identity_and_completio
         Some(&HeaderValue::from_static("application/json"))
     );
     assert_eq!(request.headers["x-project-id"], "17");
+    assert_eq!(
+        request.headers["x-elitea-execution-id"],
+        "execution/fixture-one"
+    );
     assert_eq!(request.headers["anthropic-version"], "2023-06-01");
     assert_eq!(
         request.headers["anthropic-beta"],

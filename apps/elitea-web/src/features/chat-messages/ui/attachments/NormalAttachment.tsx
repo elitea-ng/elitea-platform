@@ -8,7 +8,7 @@
  * opens a confirmation modal before the caller-supplied `onRemoveAttachment`
  * fires.
  */
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 
 import { Box, IconButton, Typography } from '@mui/material';
 
@@ -19,7 +19,9 @@ import type { Attachment } from '@/entities/attachment/model/types';
 import { getAttachmentName } from '@/entities/attachment/model/selectors';
 import { getConfig } from '@/shared/config';
 
-import { planAttachmentDownload } from './attachmentDownload.helpers';
+import { detectCanvasFileOpenKind } from '../../lib/canvasFileSource';
+
+import { parseAttachmentFilepath, planAttachmentDownload } from './attachmentDownload.helpers';
 import type { NormalAttachmentArtifactData } from './types';
 
 const IconButtonAny = IconButton as React.ComponentType<
@@ -41,6 +43,8 @@ export interface NormalAttachmentProps {
   readonly projectId?: string;
   /** Called with a human-readable message on download failure. */
   readonly onError?: (message: string) => void;
+  /** Opens this attachment in the canvas editor (issue #878) — offered only for a text-like, artifact-storage-backed attachment; omitted or ineligible, no such control renders. */
+  readonly onOpenFileInCanvas?: (source: { readonly bucket: string; readonly name: string }) => void;
 }
 
 /**
@@ -58,6 +62,7 @@ export function NormalAttachment({
   onOpenArtifactPreview,
   projectId,
   onError,
+  onOpenFileInCanvas,
 }: NormalAttachmentProps): React.ReactElement | null {
   const attachmentName = getAttachmentName(attachment ?? {});
   // For old custom bucket attachments, use filepath (/{bucket}/{filename});
@@ -109,6 +114,31 @@ export function NormalAttachment({
       );
     },
     [attachment, projectId, onError],
+  );
+
+  /**
+   * Where this attachment lives in the artifact store, when it does, and
+   * when canvas can meaningfully open it. Reuses the SAME download-routing
+   * decision `onClickDownload` makes (`planAttachmentDownload`): a
+   * `legacy-base64` attachment (an inline File, or a bucket the server marks
+   * `__undefined__`) has no bucket/key pair for canvas to fetch, so it gets
+   * no control at all rather than one that always fails.
+   */
+  const canvasSource = useMemo(() => {
+    const plan = planAttachmentDownload(attachment ?? {});
+    if (plan.kind !== 'artifact-storage') return undefined;
+    const parsed = parseAttachmentFilepath(plan.filepath);
+    if (parsed === null) return undefined;
+    if (detectCanvasFileOpenKind(parsed.filename) === undefined) return undefined;
+    return { bucket: parsed.bucket, name: parsed.filename };
+  }, [attachment]);
+
+  const onClickOpenInCanvas = useCallback(
+    (event: React.MouseEvent<HTMLElement>) => {
+      event.stopPropagation();
+      if (canvasSource) onOpenFileInCanvas?.(canvasSource);
+    },
+    [canvasSource, onOpenFileInCanvas],
   );
 
   const onPreviewFile = useCallback(() => {
@@ -189,6 +219,21 @@ export function NormalAttachment({
             <Tooltip title="View/Edit file" placement="top">
               <IconButtonAny variant="elitea" color="tertiary" size="small" onClick={onPreviewFile} aria-label="Preview attachment">
                 👁
+              </IconButtonAny>
+            </Tooltip>
+          )}
+          {canvasSource && onOpenFileInCanvas && (
+            /* eslint-disable-next-line i18next/no-literal-string */
+            <Tooltip title="Open in canvas" placement="top">
+              <IconButtonAny
+                variant="elitea"
+                color="tertiary"
+                size="small"
+                onClick={onClickOpenInCanvas}
+                data-testid="attachment-open-in-canvas"
+                aria-label="Open in canvas"
+              >
+                🖊
               </IconButtonAny>
             </Tooltip>
           )}

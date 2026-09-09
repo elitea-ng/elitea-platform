@@ -36,6 +36,8 @@ export interface CanvasEditHeaderActions {
   readonly onToggleFullScreen?: (() => void) | undefined;
   /** Which way the toggle above currently points — it is a two-state control, not a one-way expand. */
   readonly isFullScreen?: boolean | undefined;
+  /** Opens the "Save to artifacts" dialog (issue #878). Omitted, no such control renders. */
+  readonly onSaveToArtifacts?: (() => void) | undefined;
 }
 
 /** Table-editing actions grouped to stay within §3.5 prop budget. */
@@ -96,6 +98,7 @@ export function CanvasEditHeader({
     onDelete,
     onToggleFullScreen,
     isFullScreen = false,
+    onSaveToArtifacts,
   } = actions ?? {};
 
   const onClose = topLevelOnClose ?? actionsOnClose;
@@ -270,6 +273,25 @@ export function CanvasEditHeader({
                 aria-label="Copy"
               >
                 📋
+              </IconButtonAny>
+            </span>
+          </Tooltip>
+        )}
+
+        {/* Save to artifacts (issue #878) — available whenever the composition root wired a save target, independent of whole-message/table state; `disabledAll` still applies (a read-only or not-yet-created canvas has nothing to save). */}
+        {onSaveToArtifacts && (
+          <Tooltip title={t('features.chatMessages.canvas.editor.saveToArtifacts', 'Save to artifacts')} placement="top">
+            <span>
+              <IconButtonAny
+                variant="elitea"
+                color="tertiary"
+                size="small"
+                onClick={onSaveToArtifacts}
+                disabled={disabledAll}
+                data-testid="canvas-edit-save-to-artifacts"
+                aria-label={t('features.chatMessages.canvas.editor.saveToArtifacts', 'Save to artifacts')}
+              >
+                💾
               </IconButtonAny>
             </span>
           </Tooltip>

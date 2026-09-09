@@ -29,9 +29,22 @@ SDK_SOURCE_ARCHIVE_SHA256 = (
 SDK_SOURCE_PATCH_REVISIONS = (
     "5c9409779ac0a55f8bf74f6ef438977089187a14",
     "07ddc5cd67a0c747f83ca0e26421cde71bd97d9d",
+    # #864: vendors elitea_sdk/runtime/utils/tool_groups.py (introduced
+    # upstream in elitea-sdk#536/e1944e7, after this admitted revision),
+    # byte-identical to that version, so the imagegen patch below can import
+    # it without backporting the whole tool-groups rollout onto 0.9.8.
+    # Superseded with no source difference once the admitted revision moves
+    # past e1944e7.
+    "4e631ed9e9523b33410a31bd2242c93fa9ec0b4b",
+    # #864: imagegen toolkit (generate_image/edit_image), cherry-picked onto
+    # the admitted revision the same way the two MCP patches above are.
+    # Interim: EliteaAI/elitea-sdk#607 carries this same commit for review
+    # against the SDK's own main line. Drop this patch once that PR merges
+    # and the pin moves to a released SDK version that includes it.
+    "afff234904b6d5de551436b53c078722f13ff4de",
 )
 SDK_PACKAGE_TREE_SHA256 = (
-    "969b129405a279a95721ad7116c9c5cc82e1c7dd13df24207fbd5d9980488f72"
+    "28133c910d92f2710b70b2973765f4367da2f31ace80168c586c2cd7322c9c0d"
 )
 # The configuration catalog has its own compatibility revision. SDK 0.9.8
 # preserves the exact admitted catalog digest, so upgrading the runtime must

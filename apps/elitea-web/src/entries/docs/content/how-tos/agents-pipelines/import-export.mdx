@@ -1,0 +1,52 @@
+---
+title: "Import and export entities"
+description: "Back up, migrate or share an agent, pipeline, toolkit, skill or conversation as a downloadable file."
+---
+
+Export lets you back up or move an agent, pipeline, toolkit, skill or conversation as a file; import brings an exported agent or pipeline back into a project.
+
+## Export an agent or pipeline
+
+Open the agent or pipeline, then use **Export** in the toolbar's three-dot menu. The download is a JSON document containing the entity's currently selected version, its associated toolkits, and any skills attached to it. Authentication credentials are never included — you reconfigure them after import.
+
+<Screenshot id="entity-export-menu" alt="Export option in an agent's three-dot menu" />
+
+## Import an agent or pipeline
+
+<Steps>
+<Step title="Open the import dialog">
+On the **Agents** or **Pipelines** list, click **Import** and choose a `.json` export file.
+</Step>
+<Step title="Review the summary">
+Elitea reads the file and shows the agent or pipeline names, and how many toolkits and skills it carries, before anything is created.
+</Step>
+<Step title="Confirm">
+Confirm the import. The entity is created in your current project using the file's exported configuration; model settings fall back to the project's own configured LLM, embedding and vector-store defaults where the export didn't carry a credential.
+</Step>
+<Step title="Reconfigure credentials">
+Any toolkit that needs a credential (API key, token) must be reconfigured manually — exports never carry secrets.
+</Step>
+</Steps>
+
+<Screenshot id="entity-import-dialog" alt="Import dialog with an entity summary" />
+
+Importing requires import permission in the destination project; the **Import** button is disabled without it. A file that isn't valid JSON, or has no exported agents in it, is rejected with an explanation rather than silently failing.
+
+## Export and import a skill
+
+Skills export as a Markdown file (`Export` on a skill's page) and import the same way, from the **Skills** list's **Import** button. See [Create and share a skill](/menus/skills) for the full skill lifecycle.
+
+## Export a toolkit
+
+A toolkit's three-dot menu offers **Export**, producing a file with its type, name, settings and enabled tools — again with credentials excluded.
+
+## Export a conversation
+
+A conversation can be exported from its options menu, producing a copy of the conversation for backup or sharing outside the app.
+
+## Guides and references
+
+- [Agents overview](/menus/agents)
+- [Pipelines overview](/menus/pipelines)
+- [Version agents and pipelines](/how-tos/agents-pipelines/entity-versioning)
+- [Fork an agent or toolkit](/how-tos/agents-pipelines/forking)

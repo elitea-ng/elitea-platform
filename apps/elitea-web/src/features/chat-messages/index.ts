@@ -88,15 +88,15 @@ export { resolveParticipantEntityType } from './lib/participantIcon';
 export { ActionView } from './ui/ActionView';
 export type { ActionViewProps } from './ui/ActionView';
 export { ApplicationAnswer } from './ui/chat-box/ApplicationAnswer';
-export type { ApplicationAnswerProps } from './ui/chat-box/ApplicationAnswer';
+export type { ApplicationAnswerProps } from './ui/chat-box/ApplicationAnswer.types';
 export type { AnswerCanvasSelection } from './ui/chat-box/AnswerContent';
-export { canvasByteRange } from './lib/canvasSelection';
+export { canvasByteRange, canvasKindForSelection } from './lib/canvasSelection';
 export { ChatContinue } from './ui/chat-continue/ChatContinue';
 export type { ChatContinueProps } from './ui/chat-continue/ChatContinue';
 export { ChatHitlActions } from './ui/chat-hitl-actions/ChatHitlActions';
 export type { ChatHitlActionsProps } from './ui/chat-hitl-actions/ChatHitlActions';
 export { ChatMessageList } from './ui/chat-box/ChatMessageList';
-export type { ChatMessageListCanvas, ChatMessageListProps } from './ui/chat-box/ChatMessageList';
+export type { ChatMessageListCanvas, ChatMessageListProps } from './ui/chat-box/ChatMessageList.types';
 export { CreatedTimeInfo } from './ui/CreatedTimeInfo';
 export type { CreatedTimeInfoProps } from './ui/CreatedTimeInfo';
 export { EditingPlaceholder } from './ui/EditingPlaceholder';
@@ -157,3 +157,33 @@ export type {
   MermaidQuickFixUnavailableReason,
   UseMermaidQuickFixResult,
 } from './model/useMermaidQuickFix';
+
+// ---------------------------------------------------------------------------
+// Canvas <-> artifact store (issue #878) — kind detection, the fetch/upload
+// wrappers behind "Open in canvas" and "Save to artifacts", and the `source`
+// reference a file-backed canvas carries. Consumed by `pages/artifacts` (the
+// bucket browser's own "Open in canvas") and `processes/chat` (a message
+// attachment's own opener) — both sit above this feature, so both must reach
+// it through this barrel (`no-deep-slice-import`/`no-deep-slice-import-cross-
+// slice`, `.dependency-cruiser.cjs`).
+// ---------------------------------------------------------------------------
+export type { CanvasFileOpenKind, CanvasFileOpenPlan, CanvasFileSource } from './lib/canvasFileSource';
+export {
+  CANVAS_FILE_OPEN_SIZE_LIMIT_BYTES,
+  detectCanvasFileOpenKind,
+  isCanvasFileOpenSizeOk,
+  isUnsupportedCanvasDocumentFormat,
+} from './lib/canvasFileSource';
+export type {
+  OpenArtifactFileParams,
+  OpenArtifactFileResult,
+  OpenedCanvasFile,
+  SaveCanvasToArtifactParams,
+  SaveCanvasToArtifactResult,
+} from './model/canvasFileTransfer';
+export {
+  artifactObjectExists,
+  listArtifactBucketNames,
+  openArtifactFileInCanvas,
+  saveCanvasToArtifact,
+} from './model/canvasFileTransfer';

@@ -746,6 +746,10 @@ export const getModerationStatusResponseMock = (
     ]),
     created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
     updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    created_project_id: faker.helpers.arrayElement([
+      faker.number.int(),
+      undefined,
+    ]),
   })),
   ...overrideResponse,
 });
@@ -771,6 +775,72 @@ export const getCreateModerationRequestResponseMock = (
   ]),
   created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  created_project_id: faker.helpers.arrayElement([
+    faker.number.int(),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getCreateProjectRequestResponseMock = (
+  overrideResponse: Partial<Extract<ModerationRequestRow, object>> = {},
+): ModerationRequestRow => ({
+  id: faker.number.int(),
+  user_id: faker.number.int(),
+  user_email: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  project_id: faker.number.int(),
+  issue_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  entity_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  description: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  status: faker.helpers.arrayElement([
+    "pending",
+    "approved",
+    "rejected",
+  ] as const),
+  rejection_comment: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  created_project_id: faker.helpers.arrayElement([
+    faker.number.int(),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getListMyProjectRequestsResponseMock = (
+  overrideResponse: Partial<Extract<ModerationRequestList, object>> = {},
+): ModerationRequestList => ({
+  total: faker.number.int(),
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.number.int(),
+    user_id: faker.number.int(),
+    user_email: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    project_id: faker.number.int(),
+    issue_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    entity_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    description: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    status: faker.helpers.arrayElement([
+      "pending",
+      "approved",
+      "rejected",
+    ] as const),
+    rejection_comment: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    created_project_id: faker.helpers.arrayElement([
+      faker.number.int(),
+      undefined,
+    ]),
+  })),
   ...overrideResponse,
 });
 
@@ -1514,6 +1584,58 @@ export const getCreateModerationRequestMockHandler = (
   );
 };
 
+export const getCreateProjectRequestMockHandler = (
+  overrideResponse?:
+    | ModerationRequestRow
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ModerationRequestRow> | ModerationRequestRow),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/moderation_status/project_request",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCreateProjectRequestResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getListMyProjectRequestsMockHandler = (
+  overrideResponse?:
+    | ModerationRequestList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ModerationRequestList> | ModerationRequestList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/moderation_status/project_requests/mine",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListMyProjectRequestsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGetPlatformSettingsMockHandler = (
   overrideResponse?:
     | PlatformSettings
@@ -1640,6 +1762,8 @@ export const getAdminMock = () => [
   getRoleListMockHandler(),
   getModerationStatusMockHandler(),
   getCreateModerationRequestMockHandler(),
+  getCreateProjectRequestMockHandler(),
+  getListMyProjectRequestsMockHandler(),
   getGetPlatformSettingsMockHandler(),
   getGetBrandingAssetMockHandler(),
   getListAdminPublishedAgentsMockHandler(),

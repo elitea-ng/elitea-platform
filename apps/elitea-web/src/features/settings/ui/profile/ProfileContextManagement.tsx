@@ -27,11 +27,14 @@ export interface ProfileContextManagementProps {
     display_name?: string;
   }>;
   onAutoSaveRequested?: () => void;
+  /** Threaded down to `ProfileLongTermMemory` (#870) — its own query needs a project scope. */
+  projectId?: string | undefined;
 }
 
 export function ProfileContextManagement({
   modelList,
   onAutoSaveRequested,
+  projectId,
 }: ProfileContextManagementProps) {
   const { values, errors, setFieldValue } = useFormikContext<ProfileFormValues>();
 
@@ -139,7 +142,7 @@ export function ProfileContextManagement({
 
               <Box sx={styles.subSections}>
                 <ProfileSummarization modelList={modelList} />
-                <ProfileLongTermMemory />
+                <ProfileLongTermMemory projectId={projectId} />
               </Box>
             </Box>
           ),

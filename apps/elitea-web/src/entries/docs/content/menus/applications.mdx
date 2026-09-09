@@ -1,0 +1,36 @@
+---
+title: "Applications"
+description: "Configure purpose-built application integrations such as DeepWiki and Inventory, and request access to ones your project doesn't have yet."
+---
+
+Applications are complete, focused solutions — not general-purpose toolkits — that open their own interface inside Elitea once configured. Today's catalogue has two: DeepWiki (wikis) and Inventory. See [DeepWiki and Inventory](/menus/deepwiki-and-inventory) for what each one does.
+
+<Screenshot id="apps-catalog" alt="The App Catalog tab with available applications" />
+
+## Applications and App Catalog tabs
+
+The **Applications** tab lists instances already configured in the current project, in card or table view, filterable by type and pinnable for quick access. The **App Catalog** tab shows every application type available on the platform, each tagged **Available**, **Configured**, or **By request**.
+
+## Configure an application
+
+<Steps>
+  <Step title="Find it">Open **App Catalog** and find the application you want.</Step>
+  <Step title="Configure">Select **Configure** — shown only when your project already has access.</Step>
+  <Step title="Fill in the form">For DeepWiki: a code toolkit, an LLM model, a max-token budget, and an embedding model. For Inventory: one or more repository toolkits and the AI model settings.</Step>
+  <Step title="Save">Select **Save**. The new instance appears on the **Applications** tab; open it to reach its interface.</Step>
+</Steps>
+
+## Request access
+
+If a catalog card shows **By request**, select **Request Access**, describe your use case, and submit. The card then shows **Pending approval** until an administrator reviews the request through [App requests](/admin/overview).
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Configure button is missing, only Request Access shows">Your project has not been granted access to that application type yet — submit a request first.</Accordion>
+  <Accordion title="Application instance does not open">Confirm its underlying toolkit (the repository toolkit for DeepWiki or Inventory) still has valid credentials.</Accordion>
+</AccordionGroup>
+
+<Info title="Related">
+[DeepWiki and Inventory](/menus/deepwiki-and-inventory) · [Toolkits](/menus/toolkits)
+</Info>

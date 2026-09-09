@@ -123,6 +123,16 @@ EMBEDDING_MODEL = os.environ.get("MOCK_LLM_EMBEDDING_MODEL", "E2E-MOCK-EMBEDDING
 EMBEDDING_DIMENSIONS = int(os.environ.get("MOCK_LLM_EMBEDDING_DIMENSIONS", "1536"))
 MAX_EMBEDDING_DIMENSIONS = 4096
 MAX_EMBEDDING_INPUTS = 2048
+IMAGE_MODEL = os.environ.get("MOCK_LLM_IMAGE_MODEL", "E2E-MOCK-IMAGE-MODEL")
+MAX_IMAGE_COUNT = 4
+# A byte-minimal, valid 1x1 transparent PNG. The imagegen toolkit (#864) only
+# needs SOMETHING it can decode and write to the artifact bucket — this route
+# is not testing image codecs, it is testing that generate_image/edit_image
+# reach the gateway's images API and land a real object in the bucket.
+TINY_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
+    "+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
 PREFIX = os.environ.get("MOCK_LLM_PREFIX", "MOCK:")
 # Per-chunk delay, default 0 (fast). The chat streaming journey sets it so that
 # "a token rendered before the turn finished" is a DETERMINISTIC observation
@@ -847,6 +857,7 @@ class Handler(BaseHTTPRequestHandler):
                 "data": [
                     {"id": MODEL, "object": "model", "owned_by": "elitea-mock"},
                     {"id": EMBEDDING_MODEL, "object": "model", "owned_by": "elitea-mock"},
+                    {"id": IMAGE_MODEL, "object": "model", "owned_by": "elitea-mock"},
                 ],
             })
             return
@@ -856,6 +867,22 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path == f"{TOOL_PATH_PREFIX}/items":
             self._tool_create_item(path)
+            return
+        # `/openai/v1/images/generations` is Bifrost's AZURE image-generation
+        # shape (core/providers/azure/azure.go's `ImageGeneration`, which
+        # hardcodes `{endpoint}/openai/v1/images/generations` — no api-version
+        # query param, since that alias lives on the key, not the URL). It is
+        # the SAME stub as the plain OpenAI path: a chat.imagegen-toolkit.
+        # spec.ts credential has to be `azure_open_ai` to reach this mock at
+        # all (`account.ProviderForCredential` in services/elitea-llm-gateway
+        # silently reroutes an `open_ai` credential naming a non-OpenAI
+        # `api_base` to Bifrost's vLLM provider, which — like Ollama — hand-
+        # refuses `ImageGeneration`; OpenAI's own provider refuses any
+        # `api_base` that is not `api.openai.com`. Azure is the only
+        # supported provider left that both implements a real image call and
+        # accepts a per-credential endpoint).
+        if path in ("/v1/images/generations", "/openai/v1/images/generations"):
+            self._images_generations()
             return
         if path not in ("/v1/chat/completions", "/v1/completions", "/v1/embeddings"):
             self._send(404, {"error": {"message": "not found", "type": "invalid_request_error"}})
@@ -947,6 +974,61 @@ class Handler(BaseHTTPRequestHandler):
             "at": time.time(),
         })
         self._send(201, TOOL_CREATE_BODY)
+
+    def _images_generations(self) -> None:
+        """`POST /v1/images/generations` (or its Azure alias) — what the
+        imagegen toolkit calls (#864).
+
+        The gateway's `POST /llm/v1/images/generations` route
+        (services/elitea-llm-gateway) forwards here through Bifrost exactly the
+        way `/v1/chat/completions` does for text. Without this route the
+        toolkit's `generate_image` tool reaches the gateway, the gateway
+        reaches this upstream, and the upstream answers 404 — the same class of
+        gap `_embeddings` exists to close for the index plane. Journaled
+        unconditionally, like every other route here, so a request that never
+        arrives leaves no entry rather than a silently missing one.
+        """
+        length = int(self.headers.get("Content-Length") or 0)
+        if length < 0 or length > MAX_BODY_BYTES:
+            self._send(413, {"error": {"message": "body too large", "type": "invalid_request_error"}})
+            return
+        try:
+            request = json.loads(self.rfile.read(length) or b"{}")
+        except json.JSONDecodeError:
+            self._send(400, {"error": {"message": "invalid JSON", "type": "invalid_request_error"}})
+            return
+
+        prompt = request.get("prompt")
+        if not isinstance(prompt, str) or not prompt:
+            self._send(400, {"error": {"message": "prompt is required", "type": "invalid_request_error"}})
+            return
+        raw_model = request.get("model")
+        model = str(raw_model).split("/")[-1] if isinstance(raw_model, str) and raw_model else IMAGE_MODEL
+        requested_n = request.get("n")
+        n = requested_n if isinstance(requested_n, int) and not isinstance(requested_n, bool) else 1
+        if n < 1 or n > MAX_IMAGE_COUNT:
+            self._send(400, {"error": {"message": "invalid n", "type": "invalid_request_error"}})
+            return
+        response_format = request.get("response_format") or "b64_json"
+        if response_format not in ("b64_json", "url"):
+            self._send(400, {"error": {"message": "invalid response_format", "type": "invalid_request_error"}})
+            return
+
+        _record({
+            "path": "/v1/images/generations",
+            "model": model,
+            "credential": _credential_label(self.headers.get("Authorization") or ""),
+            "prompt": prompt,
+            "n": n,
+            "response_format": response_format,
+            "at": time.time(),
+        })
+
+        if response_format == "url":
+            data = [{"url": f"http://mock-llm.invalid/images/{i}.png"} for i in range(n)]
+        else:
+            data = [{"b64_json": TINY_PNG_B64} for _ in range(n)]
+        self._send(200, {"created": int(time.time()), "data": data})
 
     def _embeddings(self, request: dict) -> None:
         """`POST /v1/embeddings` — what the index plane's embedding hop calls.

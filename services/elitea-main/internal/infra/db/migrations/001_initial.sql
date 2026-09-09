@@ -256,6 +256,84 @@ CREATE INDEX IF NOT EXISTS ix_moderation_state_issue_type ON centry.moderation_s
 CREATE INDEX IF NOT EXISTS ix_moderation_state_entity_id ON centry.moderation_state (entity_id);
 
 -- =============================================================================
+-- OUTBOUND WEBHOOKS (issue #876)
+-- =============================================================================
+--
+-- The outbound webhook registry and its delivery log. See
+-- migrations/shared/0122_webhooks_and_deliveries.sql for the full account of
+-- why `project_id` is `text` (the repository's five queries take it straight
+-- from chi.URLParam with no int64 parse in between) and why there is no
+-- foreign key to a projects table (project membership lives in pylon-owned
+-- tables this corpus does not always have; the #496 permission gate is what
+-- stops a caller naming a project it cannot see).
+--
+-- `status` folds in migrations/shared/0123_webhook_delivery_blocked_status.sql
+-- directly, the same way skill_versions.parent_version_id above folds in
+-- 0136: a fresh install and the shared history converge on the same shape
+-- either way. 'blocked' is a destination the SSRF DestinationGuard
+-- refused at send time (loopback, private, link-local or multicast) — a
+-- third outcome distinct from 'failed', which is retried, and 'blocked',
+-- which is not.
+CREATE TABLE IF NOT EXISTS public.webhooks (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id TEXT NOT NULL,
+    url        TEXT NOT NULL,
+    events     TEXT[] NOT NULL DEFAULT '{}',
+    secret     TEXT NOT NULL DEFAULT '',
+    active     BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS webhooks_project_id_idx ON public.webhooks (project_id);
+
+CREATE TABLE IF NOT EXISTS public.webhook_deliveries (
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    webhook_id     UUID NOT NULL REFERENCES public.webhooks (id) ON DELETE CASCADE,
+    project_id     TEXT NOT NULL,
+    event          TEXT NOT NULL,
+    status         TEXT NOT NULL,
+    attempts       INTEGER NOT NULL DEFAULT 0,
+    response_code  INTEGER,
+    last_error     TEXT,
+    payload        JSONB NOT NULL,
+    redelivery_of  UUID REFERENCES public.webhook_deliveries (id) ON DELETE SET NULL,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT webhook_deliveries_status_check
+        CHECK (status IN ('pending', 'success', 'failed', 'blocked')),
+    CONSTRAINT webhook_deliveries_attempts_check CHECK (attempts >= 1)
+);
+
+CREATE INDEX IF NOT EXISTS webhook_deliveries_webhook_created_idx
+    ON public.webhook_deliveries (webhook_id, created_at DESC);
+
+-- =============================================================================
+-- PIPELINE RUN TRACKING (issue #876)
+-- =============================================================================
+--
+-- One row per unattended pipeline run, so its eventual outcome can be
+-- reported as pipeline.run.succeeded/failed once the claim-fence settlement
+-- machinery finishes it. See migrations/shared/0124_pipeline_runs.sql for the
+-- full account of why this table exists (the claim-fence machinery is
+-- capability-generic and carries no notion of "this execution is a pipeline
+-- run") and why it is SHARED rather than tenant-scoped (elitea_runtime's
+-- execution_settlements tables have no tenant-schema concept either, only an
+-- opaque execution_id).
+CREATE TABLE IF NOT EXISTS public.pipeline_runs (
+    execution_id      TEXT PRIMARY KEY,
+    project_id        TEXT NOT NULL,
+    application_id    BIGINT NOT NULL,
+    version_id        BIGINT NOT NULL,
+    conversation_uuid TEXT NOT NULL,
+    origin            TEXT NOT NULL,
+    started_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    error_summary     TEXT,
+    event_emitted_at  TIMESTAMPTZ
+);
+
+-- =============================================================================
 -- PLATFORM CONFIGURATION (unit A14, admin Configuration page)
 -- =============================================================================
 --
@@ -399,6 +477,15 @@ BEGIN
             WHERE shared_owner_id IS NOT NULL', schema_name);
 
     -- Skill versions
+    --
+    -- parent_version_id (#874) converges a fresh install with
+    -- migrations/tenant/0136_skill_version_lineage.sql, which adds the same
+    -- column to a database that already ran this function before #874 —
+    -- the pattern 0134's header documents (ADD COLUMN IF NOT EXISTS there is
+    -- a no-op once this file already declares the column). Nullable and ON
+    -- DELETE SET NULL: it is provenance, not a lifecycle constraint — see
+    -- 0136's header for why a deleted ancestor must not take its clone or a
+    -- restored `base` down with it.
     EXECUTE format('
         CREATE TABLE IF NOT EXISTS %I.skill_versions (
             id SERIAL PRIMARY KEY,
@@ -410,8 +497,9 @@ BEGIN
             uuid UUID UNIQUE DEFAULT gen_random_uuid(),
             meta JSONB DEFAULT ''{}''::jsonb,
             status VARCHAR NOT NULL DEFAULT ''draft'',
+            parent_version_id INTEGER REFERENCES %I.skill_versions(id) ON DELETE SET NULL,
             CONSTRAINT _skill_version_name_uc UNIQUE (skill_id, name)
-        )', schema_name, schema_name);
+        )', schema_name, schema_name, schema_name);
 
     EXECUTE format('
         CREATE INDEX IF NOT EXISTS ix_skill_versions_status
@@ -781,6 +869,32 @@ BEGIN
             created_at TIMESTAMP NOT NULL DEFAULT now()
         )', schema_name);
 
+    -- Per-message like/dislike feedback with an optional comment (#880).
+    -- Not `social_feedbacks` above: that table has no unique constraint on
+    -- (entity_name, entity_id, user_id), a 1-5 `rating` shape rather than a
+    -- like/dislike one, and an `entity_id INTEGER` that cannot hold a
+    -- message's real identifier (chat_message_group.uuid). See
+    -- tenant/0135_chat_message_feedback.sql for the full account — this
+    -- block is the SAME shape, kept here because the journeys E2E stack
+    -- applies this file with psql and then runs `/elitea-migrate` with no
+    -- flags (Bootstrap plus ApplyShared, never the tenant history), the same
+    -- reason 0129''s chat_canvas_* tables are declared twice.
+    EXECUTE format('
+        CREATE TABLE IF NOT EXISTS %I.chat_message_feedback (
+            id BIGSERIAL PRIMARY KEY,
+            message_group_uuid UUID NOT NULL REFERENCES %I.chat_message_group(uuid) ON DELETE CASCADE,
+            user_id INTEGER NOT NULL,
+            rating SMALLINT NOT NULL,
+            comment TEXT,
+            created_at TIMESTAMP NOT NULL DEFAULT now(),
+            updated_at TIMESTAMP NOT NULL DEFAULT now(),
+            CONSTRAINT chat_message_feedback_message_user_uc UNIQUE (message_group_uuid, user_id),
+            CONSTRAINT chat_message_feedback_rating_check CHECK (rating IN (-1, 1))
+        )', schema_name, schema_name);
+    EXECUTE format('
+        CREATE INDEX IF NOT EXISTS ix_tenant_chat_message_feedback_message_group_uuid
+            ON %I.chat_message_feedback (message_group_uuid)', schema_name);
+
     -- Toolkit index metadata (the "Indexes" tab, issue #149).
     -- Columns match exactly what `internal/api/v2/toolkits/handler.go`'s
     -- `IndexMeta`/`IndexMetaGet` SELECT: id, name, status, progress,
@@ -797,6 +911,40 @@ BEGIN
             meta JSONB DEFAULT ''{}''::jsonb,
             created_at TIMESTAMP NOT NULL DEFAULT now()
         )', schema_name, schema_name);
+
+    -- Persistent, cross-conversation personal memory (#870). One row per
+    -- remembered fact, scoped to (project, user_id) the same way
+    -- chat_message_feedback above is. See tenant/0137_personal_memory_entries.sql
+    -- for the full account — this block is the SAME shape, kept here because
+    -- the journeys E2E stack applies this file with psql and then runs
+    -- `/elitea-migrate` with no flags (Bootstrap plus ApplyShared, never the
+    -- tenant history), the same reason chat_message_feedback and
+    -- skill_versions.parent_version_id are declared here as well.
+    --
+    -- `user_id` is NOT a foreign key: user identity in this schema is
+    -- authenticated centrally (auth.User.ID) and never stored as a
+    -- tenant-schema foreign key. `source_conversation_uuid` carries no foreign
+    -- key and no ON DELETE action either — a memory is meant to outlive the
+    -- conversation it was captured from.
+    EXECUTE format('
+        CREATE TABLE IF NOT EXISTS %I.personal_memory_entries (
+            id BIGSERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            content TEXT NOT NULL,
+            tags TEXT[] NOT NULL DEFAULT ''{}'',
+            source_conversation_uuid UUID,
+            enabled BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            CONSTRAINT personal_memory_entries_content_nonempty_check
+                CHECK (btrim(content) <> '''')
+        )', schema_name);
+
+    -- The recall path's own access shape: this user's enabled memories, most
+    -- recent first.
+    EXECUTE format('
+        CREATE INDEX IF NOT EXISTS ix_tenant_personal_memory_entries_user_enabled
+            ON %I.personal_memory_entries (user_id, enabled, created_at DESC)', schema_name);
 
 END;
 $$ LANGUAGE plpgsql;

@@ -23,6 +23,19 @@ export const PERMISSIONS = {
       update: 'models.chat.folders.update',
       delete: 'models.chat.folders.delete',
     },
+    /**
+     * Persistent, cross-conversation personal memory (#870,
+     * internal/api/v2/memories). Reuses the two strings the current
+     * chat-config/project-context reads and the conversation update route
+     * already declare (`models.chat.conversation.details` /
+     * `.update`, router.go's own comment) rather than a new memories-scoped
+     * permission — memory read/write is not a wider claim than reading or
+     * editing the conversation itself.
+     */
+    memories: {
+      list: 'models.chat.conversation.details',
+      write: 'models.chat.conversation.update',
+    },
   },
   applications: {
     list: 'models.applications.public_applications.list',
@@ -141,6 +154,24 @@ export const PERMISSIONS = {
     datasetDelete: 'models.applications.evaluation.dataset.delete',
     runRead: 'models.applications.evaluation.run.read',
     runCreate: 'models.applications.evaluation.run.create',
+  },
+  /**
+   * The outbound project webhook registry (issue #876).
+   *
+   * These four strings are IDENTICAL to `configuration.{update,delete}` above
+   * plus two more from the same family — not a coincidence. Gated in
+   * `services/elitea-main/internal/api/webhook/handler.go`, which reuses the
+   * `configurations.configuration*` permissions rather than inventing new
+   * ones: see that file's header for why (the strings are already GRANTED by
+   * migrations/shared/0072, so a webhook route never answers 403-for-everyone
+   * on a clean database the way a brand-new permission name would).
+   */
+  webhooks: {
+    list: 'configurations.configurations.list',
+    details: 'configurations.configuration.details',
+    create: 'configurations.configuration.create',
+    update: 'configurations.configuration.update',
+    delete: 'configurations.configuration.delete',
   },
 } as const;
 

@@ -31,10 +31,7 @@ interface PendingHitlEntry {
 }
 
 /** Derives `continueHitl`'s Track-2 `childThreadId` from the matching pending interrupt entry, by `toolCallId`. */
-export function deriveHitlChildThreadId(
-  pendingHitlMessage: { readonly hitlInterrupts?: readonly unknown[] | undefined } | undefined,
-  toolCallId: string | undefined,
-): string | undefined {
+export function deriveHitlChildThreadId(pendingHitlMessage: { readonly hitlInterrupts?: readonly unknown[] | undefined } | undefined, toolCallId: string | undefined): string | undefined {
   if (!toolCallId) return undefined;
   const interrupts = pendingHitlMessage?.hitlInterrupts as readonly PendingHitlEntry[] | undefined;
   const matched = interrupts?.find((entry) => entry.tool_call_id === toolCallId);
@@ -238,19 +235,22 @@ export interface ChatBoxEditorCallbacks {
   readonly onShowPipelineEditor?: (participant: Participant) => void;
   readonly onCloseAgentEditor?: () => void;
   readonly onClosePipelineEditor?: () => void;
+  /** "Create new" in the "+" menu (issue #867), read directly by `ChatBox.tsx` (not `resolveEditorCallbacks` — that feeds the EDIT-existing-participant slot). */ readonly onCreateAgent?: () => void; readonly onCreatePipeline?: () => void; readonly onCreateToolkit?: (isMcp?: boolean) => void;
   /** The transcript's canvas opener (issue 853), the block already open in the editor, and the CREATE gesture that carves a highlighted range out of an answer. Deliberately NOT resolved by `resolveEditorCallbacks` below — that result is spread into `NewChatInput`'s `agentEditor` props, and the composer knows nothing about a canvas. `buildCanvasProps` reads them instead. */
   readonly onShowCanvasEditor?: (payload: CanvasEditPayload) => void;
   readonly selectedCanvasBlock?: CodeBlockInfo | undefined;
   readonly onCreateCanvasFromSelection?: (payload: AnswerCanvasSelection) => void;
+  readonly onOpenFileInCanvas?: (source: { readonly bucket: string; readonly name: string }) => void; // issue #878, same "not resolved below" reasoning
 }
 
 function noop(): void {}
-
 /** `ChatMessageList`'s `canvas` group. Built here rather than inline: `ChatBox` is at its §3.5 complexity ceiling, and two more optional reads there breach it. */
-export const buildCanvasProps = (editorCallbacks: ChatBoxEditorCallbacks | undefined): ChatMessageListCanvas => ({ onEdit: editorCallbacks?.onShowCanvasEditor, selected: editorCallbacks?.selectedCanvasBlock, onCreateFromSelection: editorCallbacks?.onCreateCanvasFromSelection });
+export const buildCanvasProps = (editorCallbacks: ChatBoxEditorCallbacks | undefined): ChatMessageListCanvas => ({ onEdit: editorCallbacks?.onShowCanvasEditor, selected: editorCallbacks?.selectedCanvasBlock, onCreateFromSelection: editorCallbacks?.onCreateCanvasFromSelection, onOpenFile: editorCallbacks?.onOpenFileInCanvas });
+
+/** The "+" menu's 3 CREATE callbacks (issue #867) — same reason `buildCanvasProps` is its own function: 3 more `?.` reads inline in `ChatBox` breach its complexity budget. */ export const buildCreateHandlerProps = (editorCallbacks: ChatBoxEditorCallbacks | undefined) => ({ onCreateAgent: editorCallbacks?.onCreateAgent, onCreatePipeline: editorCallbacks?.onCreatePipeline, onCreateToolkit: editorCallbacks?.onCreateToolkit });
 
 /** Resolves `editorCallbacks`' 4 optional fields down to real-or-noop, extracted purely to keep `buildAgentEditorProps`'s own cyclomatic complexity under the oxlint budget (12) — 4 more `??` branches inline would have pushed it to 13. */
-function resolveEditorCallbacks(editorCallbacks: ChatBoxEditorCallbacks | undefined): Required<Omit<ChatBoxEditorCallbacks, 'onShowCanvasEditor' | 'selectedCanvasBlock' | 'onCreateCanvasFromSelection'>> {
+function resolveEditorCallbacks(editorCallbacks: ChatBoxEditorCallbacks | undefined): Required<Omit<ChatBoxEditorCallbacks, 'onShowCanvasEditor' | 'selectedCanvasBlock' | 'onCreateCanvasFromSelection' | 'onCreateAgent' | 'onCreatePipeline' | 'onCreateToolkit' | 'onOpenFileInCanvas'>> {
   return {
     onShowAgentEditor: editorCallbacks?.onShowAgentEditor ?? noop,
     onShowPipelineEditor: editorCallbacks?.onShowPipelineEditor ?? noop,

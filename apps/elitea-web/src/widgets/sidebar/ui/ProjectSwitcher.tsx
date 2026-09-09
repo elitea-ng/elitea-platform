@@ -11,6 +11,7 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
 import type { Project } from '@/entities/project';
+import { RequestProjectDialog } from '@/features/project-requests';
 import { t } from '@/shared/i18n';
 
 import { CheckedIcon } from '@/shared/ui/icons/checked-icon';
@@ -69,6 +70,7 @@ export interface ProjectSwitcherProps {
  */
 export function ProjectSwitcher({ projects, selectedProjectId, onSelect, collapsed = false }: ProjectSwitcherProps): ReactNode {
   const [open, setOpen] = useState(false);
+  const [requestProjectOpen, setRequestProjectOpen] = useState(false);
   const anchorRef = useRef<HTMLElement | null>(null);
   const generatedId = useId();
   const triggerId = `project-switcher-trigger-${generatedId}`;
@@ -101,6 +103,7 @@ export function ProjectSwitcher({ projects, selectedProjectId, onSelect, collaps
   );
 
   return (
+    <>
     <ClickAwayListener onClickAway={close}>
       <Box sx={{ position: 'relative' }}>
         <Tooltip
@@ -302,9 +305,67 @@ export function ProjectSwitcher({ projects, selectedProjectId, onSelect, collaps
                 )}
               </Box>
             ))}
+            {/*
+              Self-service "request a project" (#871). A footer row rather
+              than a fourth top-level sidebar entry: every existing project
+              in this list was admin-created, and this is the one place a
+              member who cannot create one themselves is already looking at
+              "which project" — the natural spot to ask for a new one.
+            */}
+            <Box
+              component="hr"
+              sx={(theme: Theme) => ({
+                border: 'none',
+                borderTop: `0.0625rem solid ${theme.vars.palette.border.lines}`,
+                margin: '0.25rem 0',
+              })}
+            />
+            <Box
+              component="button"
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                setRequestProjectOpen(true);
+              }}
+              data-testid="project-switcher-request-project"
+              sx={(theme: Theme) => ({
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                width: '100%',
+                padding: theme.spacing(1, 2),
+                cursor: 'pointer',
+                border: 'none',
+                background: 'transparent',
+                textAlign: 'left',
+                color: theme.vars.palette.text.link,
+                '&:hover': { backgroundColor: theme.vars.palette.action.hover },
+              })}
+            >
+              <Typography variant="labelMedium" color="inherit">
+                {t('widgets.sidebar.projectSwitcher.requestProject', '+ Request a project')}
+              </Typography>
+            </Box>
           </Paper>
         </Popper>
       </Box>
     </ClickAwayListener>
+    {/*
+      Mounted only once opened, not `open={requestProjectOpen}` on an
+      always-rendered element: `RequestProjectDialog` calls `useQuery`/
+      `useMutation`, which — unlike the `Dialog` it renders through, which
+      skips its OWN children when closed — run on every render regardless of
+      an `open` prop, so a caller with no `QueryClientProvider` above it
+      (every existing `ProjectSwitcher` unit test) would throw the moment
+      this component rendered at all, never mind whether the dialog was
+      visible.
+    */}
+    {requestProjectOpen && (
+      <RequestProjectDialog
+        open={requestProjectOpen}
+        onClose={() => setRequestProjectOpen(false)}
+      />
+    )}
+    </>
   );
 }

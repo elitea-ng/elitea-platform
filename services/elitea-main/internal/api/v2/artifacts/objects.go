@@ -551,6 +551,15 @@ func (h *Handler) UploadObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.events != nil {
+		h.events.Emit(r.Context(), projectIDStr, "artifact.uploaded", map[string]any{
+			"bucket":     bucket,
+			"key":        info.Key,
+			"size_bytes": info.Size,
+			"media_type": contentType,
+		})
+	}
+
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"key":        info.Key,
 		"size_bytes": info.Size,

@@ -359,3 +359,85 @@ func TestEstimateMoneyIsNotAFloat(t *testing.T) {
 		t.Fatalf("input_cost = %s, want the exact NUMERIC", number)
 	}
 }
+
+/* ── the agent and tool dimensions, issue 875 ────────────────────────────── */
+
+// This harness's pool carries only GatewayMigrationSQL() (0067/0084/0086/0099)
+// — no shared 0100 (execution_id), no elitea_runtime schema at all. That is a
+// real deployment shape (a Go-bootstrapped database whose ledgered corpus has
+// not reached 0100/0119 yet), and it is exactly what estimateByAgent and
+// estimateByTool must degrade against without erroring: both dimensions are
+// reported unavailable and their arrays are absent, the same contract
+// GetAgentAnalytics and GetToolAnalytics already hold
+// (internal/infra/db/repos/analytics.go).
+func TestEstimateReportsAgentAndToolDimensionsUnavailableWithoutTheRuntimeSchema(t *testing.T) {
+	pool, router := newCostsEnvironment(t)
+	from, to := estimateWindow()
+	plantCall(t, pool, costProjectID, 7, estimateNow.Add(-time.Hour), "vllm", "qwen3", 10, 5)
+
+	estimate := estimateBlock(t, decodeCosts(t, costsDo(t, router, costsTarget(from, to))))
+	wantBool(t, estimate, "agent_dimension_available", false)
+	wantBool(t, estimate, "tool_dimension_available", false)
+	if _, present := estimate["by_agent"]; present {
+		t.Errorf("by_agent = %v, want absent without shared migration 0100", estimate["by_agent"])
+	}
+	if _, present := estimate["by_tool"]; present {
+		t.Errorf("by_tool = %v, want absent without elitea_runtime.tool_call_records", estimate["by_tool"])
+	}
+}
+
+// addExecutionIDColumn plants shared migration 0100's own column, without the
+// rest of the ledgered history — enough for estimateByAgent's column probe to
+// see it, the way TestGetAgentAnalytics_RefusesWhenTheColumnIsAbsent's sibling
+// case does in the repos package.
+func addExecutionIDColumn(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(),
+		"ALTER TABLE gateway.llm_request_logs ADD COLUMN IF NOT EXISTS execution_id VARCHAR(128)"); err != nil {
+		t.Fatalf("add execution_id column: %v", err)
+	}
+}
+
+// The column exists (0100 ran) but elitea_runtime itself never has — a real
+// shape for a Go-bootstrapped database whose ledgered corpus stops short of
+// the runtime baseline. The read must not answer 500: it has nothing to
+// attribute against and reports exactly that, the same "not available" the
+// pre-0100 window already answers.
+func TestEstimateByAgentSurvivesTheColumnWithNoExecutionJobsTable(t *testing.T) {
+	pool, router := newCostsEnvironment(t)
+	from, to := estimateWindow()
+	addExecutionIDColumn(t, pool)
+	plantCall(t, pool, costProjectID, 7, estimateNow.Add(-time.Hour), "vllm", "qwen3", 10, 5)
+
+	estimate := estimateBlock(t, decodeCosts(t, costsDo(t, router, costsTarget(from, to))))
+	wantBool(t, estimate, "agent_dimension_available", false)
+	if _, present := estimate["by_agent"]; present {
+		t.Errorf("by_agent = %v, want absent without elitea_runtime.execution_jobs", estimate["by_agent"])
+	}
+}
+
+// A request with no execution id at all — the common case, most /llm traffic
+// is not made from a runtime execution — must count as UNATTRIBUTED rather
+// than silently vanish from both totals, once elitea_runtime.execution_jobs
+// actually exists to attribute one against.
+func TestEstimateByAgentReportsUnattributedTrafficWithAnEmptyExecutionJobsTable(t *testing.T) {
+	pool, router := newCostsEnvironment(t)
+	from, to := estimateWindow()
+	addExecutionIDColumn(t, pool)
+	if _, err := pool.Exec(context.Background(), `
+CREATE SCHEMA IF NOT EXISTS elitea_runtime;
+CREATE TABLE IF NOT EXISTS elitea_runtime.execution_jobs (
+    execution_id VARCHAR(128) NOT NULL,
+    capability_id VARCHAR(128) NOT NULL,
+    resource_project_id INTEGER,
+    projection_project_id INTEGER
+)`); err != nil {
+		t.Fatalf("plant an empty execution_jobs table: %v", err)
+	}
+	plantCall(t, pool, costProjectID, 7, estimateNow.Add(-time.Hour), "vllm", "qwen3", 10, 5)
+
+	estimate := estimateBlock(t, decodeCosts(t, costsDo(t, router, costsTarget(from, to))))
+	wantBool(t, estimate, "agent_dimension_available", false)
+	wantCostNumber(t, estimate, "attributed_agent_calls", "0")
+	wantCostNumber(t, estimate, "unattributed_agent_calls", "1")
+}

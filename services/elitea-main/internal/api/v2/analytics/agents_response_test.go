@@ -95,6 +95,54 @@ func TestAgents_AvailableCarriesTheItems(t *testing.T) {
 	}
 }
 
+// TestAgents_PricedRowCarriesMoney_UnpricedRowOmitsIt is the money-shape
+// contract at the wire (issue #875), the same "the flag decides the shape"
+// rule token_dimension_available's neighbours already follow: a row the
+// catalogue cannot price must OMIT its money keys rather than publish a
+// fabricated zero next to a priced row's real figure.
+func TestAgents_PricedRowCarriesMoney_UnpricedRowOmitsIt(t *testing.T) {
+	priced := json.Number("0.001000000000")
+	body := agentsBody(t, agentBreakdownRepo{breakdown: domain.AgentBreakdown{
+		Available: true,
+		Agents: []domain.AgentAnalytics{
+			{
+				ApplicationID: "4001", Name: "Research Agent", RunCount: 4,
+				Priced: true, InputCost: &priced, OutputCost: &priced, TotalCost: &priced,
+			},
+			{ApplicationID: "4002", Name: "Unpriced Agent", RunCount: 2, Priced: false},
+		},
+	}}, "/analytics/agents?project_id=1")
+
+	items, ok := body["items"].([]any)
+	if !ok || len(items) != 2 {
+		t.Fatalf("items = %#v, want two rows", body["items"])
+	}
+
+	// The generic map decode below reads JSON numbers as float64, which is
+	// exactly the round trip json.Number exists to avoid — so this test checks
+	// the SHAPE (present, and roughly the right figure), never an exact decimal
+	// string. The exactness guarantee itself — the NUMERIC computation never
+	// touching a Go float — is pinned at the SQL layer by
+	// TestGetAgentAnalytics_PricesEachAgentsCallsAtTheCatalogueRate.
+	pricedRow, _ := items[0].(map[string]any)
+	if pricedRow["priced"] != true {
+		t.Fatalf("priced row: priced = %v, want true", pricedRow["priced"])
+	}
+	if got, ok := pricedRow["total_cost"].(float64); !ok || got < 0.00099 || got > 0.00101 {
+		t.Fatalf("priced row: total_cost = %#v, want ~0.001", pricedRow["total_cost"])
+	}
+
+	unpricedRow, _ := items[1].(map[string]any)
+	if unpricedRow["priced"] != false {
+		t.Fatalf("unpriced row: priced = %v, want false", unpricedRow["priced"])
+	}
+	for _, key := range []string{"input_cost", "output_cost", "total_cost"} {
+		if _, present := unpricedRow[key]; present {
+			t.Fatalf("unpriced row must OMIT %q, got %#v", key, unpricedRow[key])
+		}
+	}
+}
+
 // TestAgents_AvailableWithNoRowsStillCarriesAnEmptyList pins the third state
 // explicitly, because it is the one that looks like the first.
 func TestAgents_AvailableWithNoRowsStillCarriesAnEmptyList(t *testing.T) {

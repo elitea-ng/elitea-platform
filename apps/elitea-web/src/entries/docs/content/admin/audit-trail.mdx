@@ -1,0 +1,38 @@
+---
+title: "Audit trail"
+description: "The deployment-wide record of who did what, with a heatmap view, spans and traces, and per-user activity."
+---
+
+Audit Trail is a read-only view over what happened on the deployment — there is nothing to edit or configure here. Use it to answer "who did this, and when," whether you are investigating an incident, confirming a change actually landed, or checking whether a scheduled job ran.
+
+## Review activity
+
+<Steps>
+  <Step title="Choose User or System events">
+    User events are actions a person took; System events are platform-generated (for example a scheduled job firing). Each has its own tab.
+  </Step>
+  <Step title="Filter">
+    Narrow by date range (with quick presets like 30 minutes, today, yesterday, 7 days, or 30 days, plus an explicit From/To), event type, project, user, or errors-only.
+  </Step>
+  <Step title="Use the heatmap">
+    A calendar-style heatmap shows activity density over time, so a spike is visible before you drill into individual events.
+  </Step>
+</Steps>
+
+<Screenshot id="admin-audit-heatmap" alt="Audit Trail page with heatmap and filtered table" />
+
+## Traces and spans
+
+A second view mode, alongside events, shows execution traces and their individual spans — each row names the action and, when there is one, the tool or model that ran it. Spans can be filtered by duration band (under 10 ms, up to over 10 seconds), which is the fastest way to find what is running slowly across the deployment rather than one conversation at a time.
+
+## Investigate one person
+
+From the Users page's row menu, the activity drawer filters this same audit data to one account — useful when investigating a specific person's actions rather than browsing the whole trail. See [Users and roles](/admin/users-and-roles).
+
+<Note>
+This page has no write path of any kind. An audit trail the product could edit would not be one.
+</Note>
+
+<Note>
+Audit Trail records what happened; it does not enforce anything. If you are looking for the controls that decide who can do what in the first place, see [Users and roles](/admin/users-and-roles).
+</Note>

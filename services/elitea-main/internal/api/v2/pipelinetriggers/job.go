@@ -117,6 +117,8 @@ func NewPlatformHandler(
 	permissions auth.PermissionResolver,
 	recorder audit.Recorder,
 	logger *slog.Logger,
+	events EventEmitter,
+	runTracker RunTracker,
 ) *Handler {
 	options := []Option{
 		WithPermissions(permissions),
@@ -135,6 +137,20 @@ func NewPlatformHandler(
 	}
 	if present(vault) {
 		options = append(options, WithVault(vault))
+	}
+	// pipeline.run.started and schedule.fired (#876's second half). WithEvents
+	// itself repeats this present() check — it is repeated here only because
+	// every other optional dependency in this constructor filters before
+	// appending, and a reader diffing this function against WithAgentStart's
+	// and WithVault's neighbouring lines should see the same shape for the
+	// same reason.
+	if present(events) {
+		options = append(options, WithEvents(events))
+	}
+	// pipeline.run.succeeded/failed's write half (the SSRF-hardening-wave
+	// follow-up to #876's second half) — see RunTracker's own doc comment.
+	if present(runTracker) {
+		options = append(options, WithRunTracker(runTracker))
 	}
 	return NewHandler(pool, options...)
 }

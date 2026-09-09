@@ -1856,11 +1856,8 @@
         "geolocation"
       ],
       "has_function_validators": false,
-      "hidden": true,
       "icon_url": "gplaces-icon.svg",
-      "label": "Google Places",
-      "unavailable": true,
-      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the google_places toolkit"
+      "label": "Google Places"
     },
     "name_required": true,
     "properties": {
@@ -1905,6 +1902,49 @@
       "google_places_configuration"
     ],
     "title": "google_places",
+    "type": "object"
+  },
+  "imagegen": {
+    "metadata": {
+      "categories": [
+        "media"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "image",
+        "generation",
+        "dall-e",
+        "art"
+      ],
+      "has_function_validators": false,
+      "hidden": false,
+      "icon_url": null,
+      "label": "ImageGen"
+    },
+    "properties": {
+      "bucket": {
+        "type": "string"
+      },
+      "image_generation_model": {
+        "configuration_model": "image_generation",
+        "type": "string"
+      },
+      "name_prefix": {
+        "type": "string"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "edit_image": {
+            "type": "object"
+          },
+          "generate_image": {
+            "type": "object"
+          }
+        },
+        "type": "array"
+      }
+    },
+    "title": "imagegen",
     "type": "object"
   },
   "jira": {
@@ -2646,11 +2686,8 @@
         "kanban"
       ],
       "has_function_validators": false,
-      "hidden": true,
       "icon_url": "rally.svg",
-      "label": "Rally",
-      "unavailable": true,
-      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the rally toolkit"
+      "label": "Rally"
     },
     "name_required": true,
     "properties": {
@@ -2923,7 +2960,7 @@
         "service catalog"
       ],
       "has_function_validators": false,
-      "hidden": true,
+      "hidden": false,
       "icon_url": "service-now.svg",
       "label": "ServiceNow",
       "sections": {
@@ -2939,9 +2976,7 @@
             }
           ]
         }
-      },
-      "unavailable": true,
-      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the service_now toolkit"
+      }
     },
     "name_required": true,
     "properties": {
@@ -3100,11 +3135,8 @@
         "collaboration"
       ],
       "has_function_validators": false,
-      "hidden": true,
       "icon_url": "slack-icon.svg",
-      "label": "Slack",
-      "unavailable": true,
-      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the slack toolkit"
+      "label": "Slack"
     },
     "name_required": true,
     "properties": {

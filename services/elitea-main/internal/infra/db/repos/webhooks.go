@@ -28,7 +28,13 @@ func (r *WebhooksRepo) List(ctx context.Context, projectID string) ([]webhook.We
 	}
 	defer rows.Close()
 
-	var items []webhook.Webhook
+	// A nil slice marshals to JSON `null`, not `[]` — and the settings page
+	// (and this route's own E2E journey, `settings.webhooks.spec.ts`) reads
+	// `body.items` and calls array methods (`.find`) on it directly. A
+	// project with zero or just-deleted webhooks used to answer
+	// `{"items":null}`, which crashed the very "list came back empty" checks
+	// create/rotate/disable/delete each end on (#882 CI).
+	items := []webhook.Webhook{}
 	for rows.Next() {
 		var wh webhook.Webhook
 		if err := rows.Scan(&wh.ID, &wh.ProjectID, &wh.URL, &wh.Events, &wh.Secret, &wh.Active, &wh.CreatedAt, &wh.UpdatedAt); err != nil {

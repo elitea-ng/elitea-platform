@@ -96,11 +96,28 @@ and non-empty. Optional variables have a working default.
 | `E2E_LIVE_CONFLUENCE_SPACE` | yes | — the evidence string |
 | `E2E_LIVE_CONFLUENCE_LABEL` | no | `test` |
 
-### Image generation — `image.creation.spec.ts`
+### Image generation — `image.creation.spec.ts`, `image.imagegen-toolkit.spec.ts`
 
 | Variable | Required | Default |
 |---|---|---|
 | `E2E_LIVE_IMAGE_MODEL` | yes | — the model name **as the picker spells it** |
+
+Both files share this ONE variable — `image-live`'s prerequisite is
+deliberately singular, per the table above. `image.creation.spec.ts` selects
+the model through the ordinary chat picker (the `llm` configuration section).
+`image.imagegen-toolkit.spec.ts` (the `imagegen` TOOLKIT, #864, distinct from
+the built-in "image_generation" module the first file drives) resolves the
+SAME name against the project's `image_generation` configuration SECTION
+instead — a different lookup the gateway makes
+(`internal/application/configurations/models.go`'s
+`CurrentModelSectionImageGeneration`). A deployment that runs `image-live`
+must therefore file the credential `E2E_LIVE_IMAGE_MODEL` names under BOTH
+sections for both files to pass; one filed under only `llm` fails the second
+file on the gateway's own "model is not configured for this project" — which
+names exactly what is missing. See that file's own header for the full
+account of why no mock-backed credential can stand in for this at all
+(`streaming/chat.imagegen-toolkit.spec.ts`'s header has the SSRF-guard/
+provider-capability audit).
 
 ## The "evidence string"
 

@@ -29,7 +29,12 @@ import { ResizableDrawer } from '@/shared/ui/ResizableDrawer';
 import { isThinkingBlock, useWikiChat } from '@/features/wiki-chat';
 
 import { pollWikiChat, startWikiChat, type WikiChatTarget } from '../api/wikiChatApi';
-import { listWikiConversations, loadWikiTranscript } from '../api/wikiHistoryApi';
+import {
+  deleteWikiConversation,
+  listWikiConversations,
+  loadWikiTranscript,
+  type WikiConversationSummary,
+} from '../api/wikiHistoryApi';
 import {
   createWikiChatStorage,
   createWikiConversationKey,
@@ -39,6 +44,8 @@ import {
 import { ResearchTodosPanel } from './ResearchTodosPanel';
 import { WikiChatComposer } from './WikiChatComposer';
 import { WikiChatMessages } from './WikiChatMessages';
+import { WikiChatSessions } from './WikiChatSessions';
+import type { WikiFileAttachment } from './WikiFileAttach';
 
 /**
  * Resize bounds in CSS pixels: ResizableDrawer measures the pointer, so its
@@ -81,6 +88,11 @@ export const WikiChatDrawer = memo(function WikiChatDrawer({
    * the control on screen says it will do.
    */
   const [contextPaths, setContextPaths] = useState<readonly string[]>([]);
+  // Same reasoning and the same lifecycle as `contextPaths` above: a
+  // property of the next question rather than of the controller, so it
+  // survives on screen exactly as the wiki-page picker's selection does
+  // until the reader changes it themselves (#873).
+  const [attachments, setAttachments] = useState<readonly WikiFileAttachment[]>([]);
   // Stable for the life of the drawer, so the conversation key is minted once
   // and the controller's id generator does not change identity per render.
   const mintId = useMemo(() => newId ?? (() => crypto.randomUUID()), [newId]);
@@ -110,12 +122,16 @@ export const WikiChatDrawer = memo(function WikiChatDrawer({
   // The selection is folded into the target rather than into the controller's
   // input, so `features/wiki-chat` needs no knowledge of attachments at all.
   const attaching = useMemo(
-    () => ({ ...target, contextPaths }),
-    [target, contextPaths],
+    () => ({ ...target, contextPaths, attachments }),
+    [target, contextPaths, attachments],
   );
 
   const onContextPathsChange = useCallback((selected: readonly string[]) => {
     setContextPaths(selected);
+  }, []);
+
+  const onAttachmentsChange = useCallback((next: readonly WikiFileAttachment[]) => {
+    setAttachments(next);
   }, []);
 
   const chat = useWikiChat({
@@ -188,6 +204,12 @@ export const WikiChatDrawer = memo(function WikiChatDrawer({
         // decides the fate of the local one below.
         stored: conversations.length > 0,
         messages: current ? await loadWikiTranscript(target.projectId, current.id) : [],
+        // The FULL list and the resolved current id, both added for #873's
+        // session picker (`WikiChatSessions`) — the query already asked the
+        // listing for the reasons above; a second fetch just to render it
+        // would be the request this whole comment block exists to avoid.
+        conversations,
+        currentId: current?.id,
       };
     },
   });
@@ -219,6 +241,26 @@ export const WikiChatDrawer = memo(function WikiChatDrawer({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- see above
   }, [history.data, target.projectId, target.toolkitId]);
 
+  // Refresh the session list once a turn just finished IN A SESSION THE
+  // SERVER DOESN'T KNOW ABOUT YET. `currentId` stays undefined for a
+  // fresh/renewed key until its first question is answered, and the
+  // listing only refetches on `historyEpoch` bumps — without this, a
+  // SECOND question right after Clear left the sessions dropdown showing
+  // only the first session (DWIKI-019, #882 CI).
+  //
+  // Keyed on the isLoading FALLING EDGE, not on "messages exist": a browser
+  // showing a pre-existing LOCAL conversation (never sent through this
+  // session, `isLoading` never even turns true) has messages too, and
+  // bumping for those wastes a request the "keeps a local conversation on
+  // screen while the server has none" case does not expect.
+  const wasLoading = useRef(chat.state.isLoading);
+  useEffect(() => {
+    const finished = wasLoading.current && !chat.state.isLoading;
+    wasLoading.current = chat.state.isLoading;
+    if (!finished || history.data?.currentId !== undefined) return;
+    setHistoryEpoch((epoch) => epoch + 1);
+  }, [chat.state.isLoading, history.data?.currentId]);
+
   /*
    * "Clear" starts a NEW conversation; it does not erase the old one.
    *
@@ -236,6 +278,47 @@ export const WikiChatDrawer = memo(function WikiChatDrawer({
     // listing (the conversation just left behind is now one of its rows) and
     // must do it exactly once.
     setHistoryEpoch((epoch) => epoch + 1);
+  };
+
+  /**
+   * Switch to a PAST session (#873).
+   *
+   * Adopting the session's own key is the whole mechanism — it is exactly
+   * how a second browser resumes the user's latest conversation above, aimed
+   * instead at a session the reader picked. Refused with no key: a
+   * conversation this listing returned without one cannot be filed into,
+   * because there is nothing to send as `X-Elitea-Wiki-Chat`.
+   */
+  // Not `useCallback`: `startNewConversation` above it is the same plain
+  // function every render already, and closing over it here rather than
+  // memoizing against a stale copy is what keeps this handler from adopting
+  // yesterday's `conversationKey`/`chat` the way a memoized closure would
+  // (the zustand-blocker-closure-staleness shape this codebase has shipped
+  // before).
+  const resumeConversation = (conversation: WikiConversationSummary) => {
+    if (conversation.chatKey === undefined) return;
+    conversationKey.adopt(conversation.chatKey);
+    hydrated.current = null;
+    chat.clear();
+    setHistoryEpoch((epoch) => epoch + 1);
+  };
+
+  /**
+   * Delete a stored session (#873).
+   *
+   * When the deleted row is the one on screen, this also starts a fresh
+   * conversation — the alternative is a drawer left showing a transcript for
+   * a conversation that no longer exists, which the next question would then
+   * try to resume into a 404.
+   */
+  const deleteConversation = (conversation: WikiConversationSummary) => {
+    void deleteWikiConversation(target.projectId, conversation.id).then(() => {
+      if (conversation.id === history.data?.currentId) {
+        startNewConversation();
+      } else {
+        setHistoryEpoch((epoch) => epoch + 1);
+      }
+    });
   };
 
   const canRegenerate = useMemo(
@@ -259,6 +342,13 @@ export const WikiChatDrawer = memo(function WikiChatDrawer({
         <Typography variant="headingSmall" sx={{ flex: 1 }}>
           {t('widgets.deepwiki.chat.title', 'Wiki chat')}
         </Typography>
+        <WikiChatSessions
+          conversations={history.data?.conversations ?? []}
+          currentConversationId={history.data?.currentId}
+          onResume={resumeConversation}
+          onDelete={deleteConversation}
+          disabled={chat.state.isLoading}
+        />
         <IconButton size="small" onClick={onClose} aria-label={t('widgets.deepwiki.chat.close', 'Close')}>
           <CloseIcon fontSize="small" />
         </IconButton>
@@ -302,6 +392,8 @@ export const WikiChatDrawer = memo(function WikiChatDrawer({
         contextPages={contextPages ?? []}
         contextPaths={contextPaths}
         onContextPathsChange={onContextPathsChange}
+        attachments={attachments}
+        onAttachmentsChange={onAttachmentsChange}
       />
     </ResizableDrawer>
   );

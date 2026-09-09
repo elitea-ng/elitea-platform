@@ -1,0 +1,67 @@
+---
+title: "Features and configuration"
+description: "Feature toggles and the platform configuration sections not covered by their own dedicated admin page."
+---
+
+**Features** and **Configuration** are two admin pages that share one mechanism: a list of sections, each either editable here or pointing you to where it actually lives. A section that this deployment cannot serve says so, with a reason, instead of rendering a form that saves into nothing.
+
+## Features
+
+<CardGroup cols={2}>
+  <Card title="MCP Configuration" icon="server">Whether Elitea exposes an MCP server at all, and whether MCP servers show in the main navigation.</Card>
+  <Card title="Agent Publishing" icon="upload">Block agent publishing platform-wide, restrict it to named projects, and set the categories offered.</Card>
+  <Card title="Skill Publishing" icon="upload">The same three controls, for skills.</Card>
+  <Card title="Analytics" icon="chart-line">Turn on the project Analytics tab (Settings › Analytics).</Card>
+  <Card title="Help Center" icon="life-buoy">The links shown on the in-app Help Center page.</Card>
+  <Card title="Support Assistant" icon="message-circle">Enable the assistant, and set which project and agent answer it.</Card>
+  <Card title="Voice Features" icon="mic">Turn voice input and text-to-speech on, or keep the controls visible but disabled.</Card>
+</CardGroup>
+
+<Screenshot id="admin-features-sections" alt="Features page with a section selected" />
+
+<Steps>
+  <Step title="Select a section">
+    From the list on the left.
+  </Step>
+  <Step title="Edit and save">
+    Only changed fields are sent; **Discard** reverts unsaved edits.
+  </Step>
+</Steps>
+
+## Configuration
+
+Configuration holds the sections Features does not: some editable directly here, some pointing to a dedicated page.
+
+<Accordion title="Guardrails (editable here)">
+Blocked toolkit types (a blocked type cannot be listed or created, and is stripped from every agent before it runs — existing toolkits of that type stay visible so an administrator can review and delete them, but stop working); blocked individual tools within an otherwise-allowed toolkit; tools that require the user to authorize each call ("sensitive action" tools, matched per toolkit or with `*` for every toolkit); the company name and message template shown in that authorization dialog.
+</Accordion>
+
+<Accordion title="Banner (editable here)">
+A dismissible banner shown across the app, with its own icon, style, and message.
+</Accordion>
+
+<Accordion title="Maintenance (editable here)">
+Turns on maintenance mode: every caller without administration access gets a 503 and the splash screen, with its own title, message, and optional HTML. The admin console and authentication routes stay reachable so the window is reversible from inside itself.
+</Accordion>
+
+<Accordion title="E-mail (editable here)">
+The outbound mail relay: SMTP host, port, TLS mode, credentials, from/reply-to addresses, and the public base URL used in links the platform sends. Environment variables (`SMTP_HOST` and its siblings) provide a second layer underneath these rows; a row set here wins over the environment field by field.
+</Accordion>
+
+<Accordion title="Authentication, LLM Proxy, MCP Servers, Branding (dedicated pages)">
+These sections carry credentials or need a row-editor shape a flat form cannot express, so each is a page of its own: see [Authentication](/admin/authentication), [LLM proxy](/admin/llm-proxy), and [Branding](/admin/branding). MCP Servers configures the pre-built MCP server catalogue; see the MCP integration guides for what that catalogue offers.
+</Accordion>
+
+<Accordion title="LLM Governance (dedicated page)">
+Stays unavailable on this page specifically, because a governance corpus is a list of scoped rules rather than one value document. See [Budgets and LLM governance](/admin/budgets-and-governance).
+</Accordion>
+
+<Accordion title="Service Descriptors (mostly unavailable)">
+A registry for external provider integrations. This deployment publishes none, so the page reports that rather than showing an empty grid.
+</Accordion>
+
+<Screenshot id="admin-configuration-banner" alt="Configuration page with the Banner section open" />
+
+<Note>
+Configuration's "Advanced", "Observability", "Runtime", and "Admin Panel" sections from the legacy admin UI have no counterpart here — their fields addressed process environment variables and mounted files that no form could ever write, so they were removed rather than kept as permanently unavailable placeholders.
+</Note>

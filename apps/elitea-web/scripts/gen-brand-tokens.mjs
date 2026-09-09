@@ -277,7 +277,11 @@ const PACK_META = {
   $schema: 'https://elitea.ai/schemas/brand-pack/1.json',
   id: 'default',
   version: '1.0.0',
-  product: { name: 'Elitea', shortName: 'Elitea' },
+  // docsUrl: the same-origin embedded docs SPA (issue W1b). Relative and
+  // root-relative so every deployment resolves it against its own origin
+  // with no rebuild; an admin brand-pack override may still set an absolute
+  // external URL instead (see schema.ts's relativeOrAbsoluteUrl).
+  product: { name: 'Elitea', shortName: 'Elitea', docsUrl: '/docs/' },
   assets: {
     logoFull: './brand/logo-full.svg',
     logoMark: './brand/logo-mark.svg',

@@ -111,7 +111,14 @@
 .elitea-assistant-file-list {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+
+.elitea-assistant-attachment-error {
+  color: var(--elitea-assistant-error-color, #ef4444);
+  font-size: 0.75rem;
   padding-bottom: 0.5rem;
 }
 
@@ -226,6 +233,21 @@
 
 .elitea-assistant-file-chip-spinner-progress {
   transition: stroke-dashoffset 0.15s ease;
+}
+
+/* Indeterminate (no byte-level progress signal is available for this
+   widget's upload route — see MessageInput.tsx's module doc). */
+.elitea-assistant-file-chip-spinner-spin {
+  animation: elitea-assistant-spin 0.8s linear infinite;
+}
+
+@keyframes elitea-assistant-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* Disabled state for attach button during upload */

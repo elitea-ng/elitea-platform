@@ -99,6 +99,10 @@ export interface ChatBoxInputSlotsProps {
   readonly entitySubmenus: PlusChatButtonEntitySubmenus | undefined;
   /** Participants list the "+" menu's Agents submenu picks from. */
   readonly participants: readonly unknown[] | undefined;
+  /** "Create new" in the "+" menu's Agents/Pipelines/Toolkits submenus (issue #867) — `undefined` on the agents-page surface, which renders no "+" menu at all. */
+  readonly onCreateAgent?: (() => void) | undefined;
+  readonly onCreatePipeline?: (() => void) | undefined;
+  readonly onCreateToolkit?: ((isMcp?: boolean) => void) | undefined;
 }
 
 export interface ChatBoxInputSlotsResult {
@@ -156,7 +160,19 @@ function buildSendButtonProps(props: SendControlSlotProps) {
 }
 
 /** Builds `NewChatInput`'s `slots` prop bundle — a function (not a component) so its return type slots directly into `NewChatInput`'s `slots` prop without an extra wrapper element. Prop objects are built as local consts (not inline `{...optField(...)}` spreads) so their `optField`-derived string keys aren't parsed as JSX-nested literals by the `i18next/no-literal-string` gate. */
-export function buildChatBoxInputSlots({ attachments, internalTools, model, clearChat, refs, isAgentsPage, entitySubmenus, participants }: ChatBoxInputSlotsProps): ChatBoxInputSlotsResult {
+export function buildChatBoxInputSlots({
+  attachments,
+  internalTools,
+  model,
+  clearChat,
+  refs,
+  isAgentsPage,
+  entitySubmenus,
+  participants,
+  onCreateAgent,
+  onCreatePipeline,
+  onCreateToolkit,
+}: ChatBoxInputSlotsProps): ChatBoxInputSlotsResult {
   const attachmentButtonProps = {
     disableAttachments: false,
     ...optField('attachments', attachments.attachments),
@@ -203,6 +219,9 @@ export function buildChatBoxInputSlots({ attachments, internalTools, model, clea
     internal_tools: internalTools.tools.filter((tool) => tool.enabled).map((tool) => tool.key),
     ...optField('entitySubmenus', entitySubmenus),
     ...optField('participants', participants ? [...participants] : undefined),
+    ...optField('onCreateAgent', onCreateAgent),
+    ...optField('onCreatePipeline', onCreatePipeline),
+    ...optField('onCreateToolkit', onCreateToolkit),
   };
   return {
     sendControl: (props: SendControlSlotProps) => <SendButton {...buildSendButtonProps(props)} />,

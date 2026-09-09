@@ -86,6 +86,7 @@ import type {
   N500Response,
   OkResponse,
   PlatformSettings,
+  ProjectRequestCreate,
   PublishedAgentsListing,
   RemoveUserModeRoleParams,
   Role,
@@ -5797,6 +5798,434 @@ export function useCreateModerationRequest<
     moderationRequestCreate,
     options,
   );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type createProjectRequestResponse201 = {
+  data: ModerationRequestRow;
+  status: 201;
+};
+
+export type createProjectRequestResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type createProjectRequestResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type createProjectRequestResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type createProjectRequestResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type createProjectRequestResponseSuccess =
+  createProjectRequestResponse201 & {
+    headers: Headers;
+  };
+export type createProjectRequestResponseError = (
+  | createProjectRequestResponse400
+  | createProjectRequestResponse401
+  | createProjectRequestResponse403
+  | createProjectRequestResponse503
+) & {
+  headers: Headers;
+};
+
+export type createProjectRequestResponse =
+  createProjectRequestResponseSuccess | createProjectRequestResponseError;
+
+export const getCreateProjectRequestUrl = () => {
+  return `/admin/moderation_status/project_request`;
+};
+
+/**
+ * Any authenticated user may call this — there is no permission gate
+ * beyond being signed in. The row's `project_id` is the caller's own
+ * PERSONAL project (resolved, and provisioned if it does not exist
+ * yet, via the same ensurer login-time provisioning uses); it is
+ * bookkeeping only and never read back to decide anything.
+ * @summary Request a new project
+ */
+export const createProjectRequest = async (
+  projectRequestCreate: ProjectRequestCreate,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<createProjectRequestResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<createProjectRequestResponse>(
+    getCreateProjectRequestUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(projectRequestCreate),
+    },
+  );
+};
+
+export const getCreateProjectRequestQueryKey = (
+  projectRequestCreate?: ProjectRequestCreate,
+) => {
+  return [
+    "POST",
+    `/admin/moderation_status/project_request`,
+    projectRequestCreate,
+  ] as const;
+};
+
+export const getCreateProjectRequestQueryOptions = <
+  TData = Awaited<ReturnType<typeof createProjectRequest>>,
+  TError = N400Response | N401Response | N403Response | ErrorResponse,
+>(
+  projectRequestCreate: ProjectRequestCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createProjectRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCreateProjectRequestQueryKey(projectRequestCreate);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof createProjectRequest>>
+  > = ({ signal }) =>
+    createProjectRequest(projectRequestCreate, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof createProjectRequest>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CreateProjectRequestQueryResult = NonNullable<
+  Awaited<ReturnType<typeof createProjectRequest>>
+>;
+export type CreateProjectRequestQueryError =
+  N400Response | N401Response | N403Response | ErrorResponse;
+
+export function useCreateProjectRequest<
+  TData = Awaited<ReturnType<typeof createProjectRequest>>,
+  TError = N400Response | N401Response | N403Response | ErrorResponse,
+>(
+  projectRequestCreate: ProjectRequestCreate,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createProjectRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createProjectRequest>>,
+          TError,
+          Awaited<ReturnType<typeof createProjectRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateProjectRequest<
+  TData = Awaited<ReturnType<typeof createProjectRequest>>,
+  TError = N400Response | N401Response | N403Response | ErrorResponse,
+>(
+  projectRequestCreate: ProjectRequestCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createProjectRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createProjectRequest>>,
+          TError,
+          Awaited<ReturnType<typeof createProjectRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateProjectRequest<
+  TData = Awaited<ReturnType<typeof createProjectRequest>>,
+  TError = N400Response | N401Response | N403Response | ErrorResponse,
+>(
+  projectRequestCreate: ProjectRequestCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createProjectRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Request a new project
+ */
+
+export function useCreateProjectRequest<
+  TData = Awaited<ReturnType<typeof createProjectRequest>>,
+  TError = N400Response | N401Response | N403Response | ErrorResponse,
+>(
+  projectRequestCreate: ProjectRequestCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createProjectRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCreateProjectRequestQueryOptions(
+    projectRequestCreate,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listMyProjectRequestsResponse200 = {
+  data: ModerationRequestList;
+  status: 200;
+};
+
+export type listMyProjectRequestsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listMyProjectRequestsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listMyProjectRequestsResponseSuccess =
+  listMyProjectRequestsResponse200 & {
+    headers: Headers;
+  };
+export type listMyProjectRequestsResponseError = (
+  listMyProjectRequestsResponse401 | listMyProjectRequestsResponse403
+) & {
+  headers: Headers;
+};
+
+export type listMyProjectRequestsResponse =
+  listMyProjectRequestsResponseSuccess | listMyProjectRequestsResponseError;
+
+export const getListMyProjectRequestsUrl = () => {
+  return `/admin/moderation_status/project_requests/mine`;
+};
+
+/**
+ * Every `Project Request` row the caller has ever filed, across every
+ * `project_id` it happens to carry (unlike the per-entity read above,
+ * this is not scoped to one project — a project request has no home
+ * project to scope it to). Newest first.
+ * @summary List the caller's own project requests
+ */
+export const listMyProjectRequests = async (
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listMyProjectRequestsResponse> => {
+  return eliteaFetch<listMyProjectRequestsResponse>(
+    getListMyProjectRequestsUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListMyProjectRequestsQueryKey = () => {
+  return [`/admin/moderation_status/project_requests/mine`] as const;
+};
+
+export const getListMyProjectRequestsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listMyProjectRequests>>,
+  TError = N401Response | N403Response,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof listMyProjectRequests>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof eliteaFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListMyProjectRequestsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listMyProjectRequests>>
+  > = ({ signal }) => listMyProjectRequests({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listMyProjectRequests>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListMyProjectRequestsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listMyProjectRequests>>
+>;
+export type ListMyProjectRequestsQueryError = N401Response | N403Response;
+
+export function useListMyProjectRequests<
+  TData = Awaited<ReturnType<typeof listMyProjectRequests>>,
+  TError = N401Response | N403Response,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listMyProjectRequests>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listMyProjectRequests>>,
+          TError,
+          Awaited<ReturnType<typeof listMyProjectRequests>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListMyProjectRequests<
+  TData = Awaited<ReturnType<typeof listMyProjectRequests>>,
+  TError = N401Response | N403Response,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listMyProjectRequests>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listMyProjectRequests>>,
+          TError,
+          Awaited<ReturnType<typeof listMyProjectRequests>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListMyProjectRequests<
+  TData = Awaited<ReturnType<typeof listMyProjectRequests>>,
+  TError = N401Response | N403Response,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listMyProjectRequests>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the caller's own project requests
+ */
+
+export function useListMyProjectRequests<
+  TData = Awaited<ReturnType<typeof listMyProjectRequests>>,
+  TError = N401Response | N403Response,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listMyProjectRequests>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListMyProjectRequestsQueryOptions(options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

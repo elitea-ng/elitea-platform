@@ -1,0 +1,124 @@
+---
+title: "Webhooks and pipeline triggers"
+description: "Start a pipeline from an external system with a signed webhook URL, on a cron schedule, or from a chat message."
+---
+
+A pipeline has two unattended ways to start without a person watching a chat: an inbound webhook trigger and a cron schedule. Both live together in the pipeline editor's **Triggers & schedules** section, and both exist so you can wire a pipeline into an external process — a CI job, an issue-tracker automation, a recurring maintenance task — without anyone opening a conversation to kick it off.
+
+## Pipeline triggers
+
+<Steps>
+1. Open a pipeline's configuration and expand **Triggers & schedules**.
+2. Reveal the trigger's secret URL (hidden until you explicitly show it) or rotate it if you suspect it's been exposed.
+3. Configure the external system (GitHub, GitLab, or any custom sender) to POST to that URL when the event you want fires.
+4. Send the secret as an `Authorization: Bearer` header where the sender supports it — a token embedded in the URL itself is accepted as a fallback, but it's the less safe option since URLs get written to proxy and browser logs.
+</Steps>
+
+<Screenshot id="pipeline-trigger-schedule-panel" alt="Triggers and schedules panel on a pipeline's configuration form" mask="trigger-url" />
+
+<Note>
+The same section also configures the cron schedule, and an agent's info panel shows which trigger type (chat message, schedule, or webhook — GitHub, GitLab, or custom) is wired to it.
+</Note>
+
+## Webhooks
+
+Separately from pipeline triggers, each project also has a generic outbound webhook registry — you can register a URL, a list of events, and a secret, and Elitea calls that URL when those events occur. This is a different, newer capability than pipeline triggers, keyed on the project rather than a specific pipeline, and it has no equivalent in the legacy platform.
+
+<Steps>
+1. Open **Settings › Webhooks** for the project.
+2. Select **Register a new webhook**, give it a destination URL, and pick one or more events from the picker below — leave it empty to fire on every event. You can also type a custom event type if you're watching for something outside the built-in catalog.
+3. Save. The new webhook's secret is shown once, in a dialog with a copy button — save it now, since your receiver verifies every request's `X-Webhook-Signature` header against it.
+4. Verify the signature on your receiving end: it's an HMAC-SHA256 of the raw request body, keyed with the secret, the same scheme the pipeline trigger's bearer token protects against.
+</Steps>
+
+### Destination rules
+
+The platform checks a webhook's destination before it saves the row, and again every time it actually delivers to it — a URL is not just stored, it's resolved and checked:
+
+- **Scheme.** Only `http://` and `https://` are accepted.
+- **Loopback and private-network addresses** (`127.0.0.1`, `localhost`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, and their IPv6 equivalents) are refused by default. An operator can permit them for a specific deployment (an internal receiver, a service mesh host) through an allowlist; ask your administrator if you need this.
+- **Link-local and multicast addresses** — including `169.254.169.254`, the address every major cloud provider serves its instance-metadata endpoint from — are **always** refused, with no allowlist able to permit them. A webhook pointed there would let the platform's own network identity read out of that endpoint on your behalf, which is exactly what this rule exists to prevent.
+- The check follows DNS: a hostname that resolves to a refused address is refused the same as a literal IP, both when you save the webhook and every time it fires — a name that resolves somewhere permitted today and somewhere refused tomorrow is refused at delivery time even if it passed when you created the row.
+
+If your destination is refused, the form shows the reason inline, under the URL field. If a webhook that once resolved somewhere permitted is later refused at send time — a DNS change, most commonly — the attempt is not retried (retrying would refuse identically every time) and it's logged in Recent deliveries as **blocked**, with the reason in the delivery's error message, so you can see why nothing arrived instead of it silently doing nothing.
+
+<Screenshot id="webhooks-settings-table" alt="The project Webhooks settings page, listing registered webhooks with their events and Active toggle" mask="webhook-secret" />
+
+From the same page you can:
+
+- **Show or hide** a webhook's secret inline (it stays visible to anyone who can read the row; the toggle is a display convenience, not an access boundary).
+- **Rotate** the secret — mints a fresh value and shows it once, exactly like creation.
+- **Enable or disable** a webhook without deleting it, with the toggle in the Active column.
+- **Delete** a webhook, with a confirmation step.
+- **Expand a row** to see its **Recent deliveries** — every attempt Elitea made, newest first, with the event, outcome, how many tries it took, and the destination's response code or the transport error. A delivery's outcome is `success`, `failed` (the destination rejected it or didn't answer, retried up to three times), or `blocked` (the destination was refused by the platform's destination rules — see above — before any request was made; **Redeliver** is unavailable for a blocked delivery, since it would be refused identically). Each non-blocked delivery has a **Redeliver** action that resends the exact same signed body on demand, for example after you've fixed a receiver that was down.
+
+<Note>
+The webhook API itself still works with a personal access token, if you'd rather script registration: create an entry with a target URL, the events you want, and a secret Elitea will sign requests with.
+</Note>
+
+### The event catalog
+
+A webhook's `events` field accepts any string — there's no fixed vocabulary enforced server-side — but the picker offers this built-in catalog, since these are the events this platform's own producers actually emit:
+
+| Event | Fires when |
+| --- | --- |
+| `pipeline.run.started` | An unattended pipeline run is admitted, from an inbound trigger or a schedule. |
+| `pipeline.run.succeeded` | A pipeline run that started from an inbound trigger or a schedule finishes successfully. |
+| `pipeline.run.failed` | A pipeline run that started from an inbound trigger or a schedule finishes with an error, or is cancelled. |
+| `schedule.fired` | A pipeline's cron schedule fires and admits a run (a `pipeline.run.started` also fires for the same run). |
+| `agent.version.published` | An agent or pipeline version is published to the catalog. |
+| `agent.version.unpublished` | A published agent version is withdrawn. |
+| `conversation.created` | A new chat conversation is created. |
+| `artifact.uploaded` | A file is uploaded to a project artifact bucket. |
+| `moderation.request.decided` | A moderation or project-creation request is approved or rejected. |
+
+Every delivery's JSON body has the same envelope, regardless of event:
+
+```json
+{
+  "type": "conversation.created",
+  "project_id": "42",
+  "payload": { "conversation_id": "c1a2...", "name": "Support triage" },
+  "timestamp": "2026-09-09T02:00:00Z"
+}
+```
+
+### `pipeline.run.succeeded` and `pipeline.run.failed` payloads
+
+These two are only emitted for a run that started **unattended** — from the inbound trigger or a schedule, the same population `pipeline.run.started` fires for. An ordinary chat turn against a pipeline-type agent does not emit either, even on completion, since it never emitted `pipeline.run.started` to begin with. Both carry the same `payload` shape:
+
+| Field | Meaning |
+| --- | --- |
+| `execution_id` | The run's execution id — the same value `pipeline.run.started`'s payload carried for this run. |
+| `application_id` | The pipeline's application id. |
+| `version_id` | The pipeline version that ran. |
+| `conversation_uuid` | The transcript this run's turn appears under — the same one `pipeline.run.started` named. |
+| `status` | `succeeded`, `failed`, or `cancelled`. |
+| `duration_ms` | Milliseconds from admission (`pipeline.run.started`) to this outcome. |
+| `error_summary` | A short, safe description of what went wrong. Present only when `status` is `failed`; absent on success. |
+
+The event fires once the run's outcome is durably settled — after the platform's own claim-fence machinery has committed the result, not from inside that commit — so a webhook receiver never sees `pipeline.run.succeeded` for a run the platform itself would later decide didn't actually finish.
+
+### Verifying the signature
+
+Every delivery carries an `X-Webhook-Signature` header shaped `sha256=<hex>` — an HMAC-SHA256 of the exact request body, keyed with the webhook's secret — plus an `X-Webhook-Event` header repeating the event type outside the signed body, so you can route before parsing JSON. A minimal Node.js verifier:
+
+```js
+import { createHmac, timingSafeEqual } from 'node:crypto';
+
+function verifyWebhookSignature(secret, rawBody, header) {
+  const expected = 'sha256=' + createHmac('sha256', secret).update(rawBody).digest('hex');
+  const a = Buffer.from(header ?? '');
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+```
+
+Compute the HMAC over the **raw bytes** of the request body, before any JSON parsing — a body that's been re-serialized (re-ordered keys, different whitespace) produces a different digest and fails verification even though the content is unchanged.
+
+A failed delivery is retried automatically, up to three attempts with a short backoff, before it's logged as `failed` in the Recent deliveries panel — a receiver that's briefly unavailable usually doesn't need a manual Redeliver at all.
+
+## Next steps
+
+- [Webhooks and triggers reference](/integrations/third-party-integrations/api-usage) for the underlying API calls.
+- [Pipeline runs](/how-tos/pipelines/pipeline-runs) for what a triggered run looks like once it starts.

@@ -177,6 +177,13 @@ type requestRow struct {
 	RejectionComment *string   `json:"rejection_comment"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
+	// CreatedProjectID is set ONLY by decideProjectRequest (project_requests.go),
+	// on an APPROVED Project Request row — the id `projectprovisioning
+	// .Provision` returned, kept in memory rather than round-tripped through
+	// `meta` for the response. Every other decision path leaves it nil, which
+	// `omitempty` keeps out of the JSON body entirely rather than serialising
+	// a null every existing caller has never seen.
+	CreatedProjectID *int64 `json:"created_project_id,omitempty"`
 }
 
 // sortableRequestColumns is both the sort allow-list and what keeps the ORDER BY
@@ -198,7 +205,7 @@ var sortableRequestColumns = map[string]string{
 const requestColumns = `
 SELECT m.id, m.user_id, COALESCE(u.email, ''), m.project_id, m.issue_type,
        COALESCE(m.entity_id, ''), m.description, m.status, m.rejection_comment,
-       m.created_at, m.updated_at
+       m.created_at, m.updated_at, m.meta
 FROM centry.moderation_state m
 LEFT JOIN public.auth_core__user u ON u.id = m.user_id`
 
@@ -397,11 +404,46 @@ func (h *Handler) AdministrationRequestUpdate(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	row, err := h.applyDecision(r.Context(), *body.ID, status, comment)
+	// issue_type decides which decision path runs. It is read separately
+	// from, and BEFORE, the row lock decideProjectRequest takes: issue_type
+	// is immutable once a request is filed (see this file's header on why
+	// the requester's own fields cannot be rewritten later), so a plain read
+	// here cannot race with anything that would change the answer.
+	issueType, err := h.lookupIssueType(r.Context(), *body.ID)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		writeModerationError(w, http.StatusNotFound, "app request not found")
+		return
+	case err != nil:
+		writeModerationError(w, http.StatusInternalServerError, "failed to read the app request")
+		return
+	}
+
+	var row *requestRow
+	if issueType == ProjectRequestIssueType {
+		row, err = h.decideProjectRequest(r.Context(), *body.ID, status, comment)
+	} else {
+		row, err = h.applyDecision(r.Context(), *body.ID, status, comment)
+	}
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		// An id that matches nothing is a 404, not a 200 that changed nothing.
 		writeModerationError(w, http.StatusNotFound, "app request not found")
+		return
+	case errors.Is(err, errRequestAlreadyDecided):
+		// Not a 500: the row exists and the decision even matches the caller's
+		// intent half the time (approving twice). A 200 that ran the
+		// provisioning pipeline a second time would create a SECOND project
+		// for one request.
+		writeModerationError(w, http.StatusConflict, "this request has already been decided")
+		return
+	case errors.Is(err, errProjectProvisioningFailed):
+		// The moderation row is untouched (still pending) — see
+		// decideProjectRequest: the UPDATE only runs after Provision
+		// succeeds. A 502 names the failure without leaving a request an
+		// operator cannot retry.
+		writeModerationError(w, http.StatusBadGateway,
+			"approved, but creating the project failed: "+err.Error())
 		return
 	case err != nil:
 		writeModerationError(w, http.StatusInternalServerError, "failed to update the app request")
@@ -411,6 +453,13 @@ func (h *Handler) AdministrationRequestUpdate(w http.ResponseWriter, r *http.Req
 	// The in-app row is the delivery of record and is already committed; the
 	// e-mail is a second channel that never fails the decision (ADR-0024 WP7).
 	h.mailDecision(r.Context(), row)
+	if h.events != nil && row != nil {
+		h.events.Emit(r.Context(), strconv.FormatInt(row.ProjectID, 10), "moderation.request.decided", map[string]any{
+			"request_id": row.ID,
+			"issue_type": row.IssueType,
+			"status":     row.Status,
+		})
+	}
 	writeModerationJSON(w, http.StatusOK, row)
 }
 
@@ -436,6 +485,15 @@ func (h *Handler) mailDecision(ctx context.Context, row *requestRow) {
 
 // decisionMessage is the one sentence both channels carry.
 func decisionMessage(row requestRow) string {
+	// A Project Request reads oddly through the generic sentence below —
+	// "Your Project Request moderation request has been approved" repeats
+	// "request" twice and never says what was approved. See
+	// project_requests.go for what a Project Request row is and what its
+	// approval causes.
+	if row.IssueType == ProjectRequestIssueType {
+		return projectRequestDecisionMessage(row)
+	}
+
 	message := fmt.Sprintf("Your %s moderation request has been %s.", row.IssueType, row.Status)
 	if row.RejectionComment != nil && *row.RejectionComment != "" {
 		message += " Reason: " + *row.RejectionComment
@@ -848,7 +906,7 @@ func (h *Handler) deleteOwnRequests(
 DELETE FROM centry.moderation_state m
 WHERE m.project_id = $1 AND m.entity_id = $2 AND m.user_id = $3
 RETURNING m.id, m.user_id, ''::text, m.project_id, m.issue_type, COALESCE(m.entity_id, ''),
-          m.description, m.status, m.rejection_comment, m.created_at, m.updated_at`,
+          m.description, m.status, m.rejection_comment, m.created_at, m.updated_at, m.meta`,
 		projectID, entityID, userID)
 	if err != nil {
 		return nil, 0, err
@@ -922,16 +980,44 @@ func scanRequests(ctx context.Context, query queryFunc, statement string, args .
 	result := make([]requestRow, 0)
 	for rows.Next() {
 		var row requestRow
+		var meta []byte
 		if err := rows.Scan(&row.ID, &row.UserID, &row.UserEmail, &row.ProjectID, &row.IssueType,
 			&row.EntityID, &row.Description, &row.Status, &row.RejectionComment,
-			&row.CreatedAt, &row.UpdatedAt); err != nil {
+			&row.CreatedAt, &row.UpdatedAt, &meta); err != nil {
 			// A scan failure is a schema disagreement, not a bad row: skipping it
 			// would report a shorter queue rather than a broken one.
 			return nil, fmt.Errorf("scan app request: %w", err)
 		}
+		row.CreatedProjectID = createdProjectIDFromMeta(meta)
 		result = append(result, row)
 	}
 	return result, rows.Err()
+}
+
+// createdProjectIDFromMeta reads `created_project_id` out of a row's `meta`
+// JSONB — decideProjectRequest (project_requests.go) is the only writer,
+// storing exactly `{"created_project_id": <id>}` on an APPROVED Project
+// Request. Every other row's `meta` is NULL/empty, or holds a shape this
+// endpoint has no reader for, both of which report "no created project" the
+// same way a genuinely absent one does — this is a display convenience, not
+// a contract other code depends on, so a decode failure degrades quietly
+// rather than turning the whole listing into a 500.
+//
+// Without this, the admin queue's "Project #N created" line (AppRequestsTable
+// .tsx) never rendered for ANY listed row: `requestColumns` used to omit
+// `meta` entirely, so `CreatedProjectID` stayed nil on every read except the
+// single decide response that set it in memory (#882 CI).
+func createdProjectIDFromMeta(meta []byte) *int64 {
+	if len(meta) == 0 {
+		return nil
+	}
+	var decoded struct {
+		CreatedProjectID *int64 `json:"created_project_id"`
+	}
+	if err := json.Unmarshal(meta, &decoded); err != nil {
+		return nil
+	}
+	return decoded.CreatedProjectID
 }
 
 func writeModerationJSON(w http.ResponseWriter, code int, value any) {

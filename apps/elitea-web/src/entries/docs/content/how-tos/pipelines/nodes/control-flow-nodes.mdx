@@ -1,0 +1,50 @@
+---
+title: "Control-flow nodes: decision, router and state"
+description: "Branch a pipeline on a condition or on an LLM's judgment, and reshape its state between steps."
+---
+
+Control-flow nodes decide what happens next, or reshape the pipeline's state without calling an external service.
+
+## Router
+
+Evaluates a template condition (Jinja-style) against the pipeline's state and picks one of several named routes, with a default fallback if nothing matches.
+
+| Field | What it does |
+|---|---|
+| Condition | A template that resolves to one of your route names — for example, branching on whether a state variable contains "approved" |
+| Routes | The node IDs the condition can resolve to; route names must exactly match a node ID, case-sensitively |
+| Default output | Where to go if the condition resolves to nothing recognized |
+
+Router is fast and deterministic — no model call — best when the branching logic is an explicit rule.
+
+## Decision
+
+Uses an LLM to pick a route based on a natural-language description, instead of a template rule. Best for routing that depends on interpreting meaning rather than matching a fixed pattern.
+
+| Field | What it does |
+|---|---|
+| Description | Plain-language instructions telling the model how to choose between routes |
+| Decision outputs | The node IDs the model can choose from |
+| Default output | Fallback route if the model can't decide confidently |
+
+Decision nodes are slower than Router (they make a model call) and cannot connect directly to another Decision node — put a Router, LLM, or Toolkit node between two decisions if you need a second one in sequence.
+
+<Screenshot id="pipeline-decision-node" alt="Decision node configuration with routing description and outputs" />
+
+## State modifier
+
+Reshapes the pipeline's state without calling a model or a tool: combine values, format text, do simple arithmetic, or clear out variables you no longer need.
+
+| Field | What it does |
+|---|---|
+| Template | A Jinja-style template referencing input variables — for example, `Hello, {{ user_name }}!` |
+| Input | The state variables the template is allowed to read |
+| Output | Where the rendered result is written |
+| Variables to clean | Optional list of variables to reset afterward (strings to `""`, lists to `[]`, numbers to `0`) |
+
+## Guides and references
+
+- [Pipeline node types](/how-tos/pipelines/nodes/overview)
+- [Interaction nodes: HITL and printer](/how-tos/pipelines/nodes/interaction-nodes)
+- [Execution nodes: LLM, agent, toolkit, MCP](/how-tos/pipelines/nodes/execution-nodes)
+- [Pipeline structure: entry point, state and connections](/how-tos/pipelines/structure)

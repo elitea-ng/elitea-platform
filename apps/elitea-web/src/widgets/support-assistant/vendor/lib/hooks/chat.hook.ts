@@ -157,7 +157,11 @@ export const useChat = (props: TUseChatProps) => {
   });
 
   const handleSend = useCallback(
-    async (text: string, file?: File) => {
+    async (
+      text: string,
+      files?: readonly File[],
+      onFileStatus?: (file: File, status: 'pending' | 'uploading' | 'done' | 'error') => void,
+    ) => {
       let activeConversationId = currentConversationId;
 
       // Create conversation if needed
@@ -190,21 +194,32 @@ export const useChat = (props: TUseChatProps) => {
       if (!activeConversationId) return;
 
       /*
-       * ATTACHMENTS (issue #625 item 2): uploaded BEFORE the turn starts,
-       * over the SAME artifact path the main chat composer uses server-side
-       * (internal/api/v2/supportassistant/attachments.go). A failed upload
-       * reports failure and STOPS here — it must not start a turn the user
-       * believes carried their file. See `../../components/chat/
-       * MessageInput.tsx` for why a ported paperclip is safe here now.
+       * ATTACHMENTS (issue #625 item 2; multi-file since #877): uploaded
+       * BEFORE the turn starts, one at a time — there is no batch upload
+       * route, so each file rides the SAME single-file artifact path the
+       * main chat composer uses server-side (internal/api/v2/
+       * supportassistant/attachments.go). Sequential and abort-on-first-
+       * failure by design: a failed upload reports failure and STOPS here,
+       * before any later file uploads and before a turn the user believes
+       * carried every attached file. `onFileStatus` lets the composer
+       * (`../../components/chat/MessageInput.tsx`) show a per-file
+       * queued/uploading/done/error chip as this loop runs.
        */
       let attachments: TSupportAttachmentRef[] | undefined;
-      if (file) {
-        try {
-          const uploaded = await api.uploadAttachment(activeConversationId, file);
-          attachments = [{ filepath: uploaded.filepath, name: file.name }];
-        } catch {
-          handleError({ error: 'Failed to attach the file. Please try again.', code: 'ATTACHMENT_UPLOAD_FAILED' });
-          return;
+      if (files && files.length > 0) {
+        attachments = [];
+        for (const file of files) {
+          onFileStatus?.(file, 'uploading');
+          try {
+            // eslint-disable-next-line no-await-in-loop -- sequential by design: each upload must resolve before the next starts, there is no batched endpoint (matches entities/conversation/lib/hooks/useUploadAttachments.ts's identical loop).
+            const uploaded = await api.uploadAttachment(activeConversationId, file);
+            attachments.push({ filepath: uploaded.filepath, name: file.name });
+            onFileStatus?.(file, 'done');
+          } catch {
+            onFileStatus?.(file, 'error');
+            handleError({ error: 'Failed to attach the file. Please try again.', code: 'ATTACHMENT_UPLOAD_FAILED' });
+            return;
+          }
         }
       }
 

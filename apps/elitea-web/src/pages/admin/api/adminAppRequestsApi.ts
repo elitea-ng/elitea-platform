@@ -70,6 +70,14 @@ export interface AppRequestRow {
   readonly rejection_comment: string | null;
   readonly created_at: string;
   readonly updated_at: string;
+  /**
+   * Set ONLY on an approved `issue_type: "Project Request"` row (#871) — the
+   * id the project-creation pipeline assigned when this request was
+   * approved. Absent on every other row, and absent on a Project Request
+   * that is still pending or was rejected
+   * (internal/api/v2/moderation/project_requests.go's `decideProjectRequest`).
+   */
+  readonly created_project_id?: number;
 }
 
 export interface AppRequestsPage {

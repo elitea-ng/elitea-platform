@@ -24,6 +24,11 @@ const DEFAULT_DRAFT: ApplicationDraft = {
   instructions: 'draft',
   welcome_message: 'How can I help?',
   conversation_starters: ['Where are my orders?'],
+  suggested_toolkits: [],
+  suggested_mcp: [],
+  suggested_pipelines: [],
+  suggested_agents: [],
+  suggested_skills: [],
 };
 
 function generateAgentDraftHandler(body?: Partial<ApplicationDraft>) {

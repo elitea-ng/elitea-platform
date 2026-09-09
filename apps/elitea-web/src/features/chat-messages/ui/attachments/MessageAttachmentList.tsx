@@ -31,6 +31,8 @@ export interface MessageAttachmentListProps {
   readonly projectId?: string;
   /** Called with a human-readable message on download failure or image load failure. */
   readonly onError?: (message: string) => void;
+  /** Opens a text-like attachment in the canvas editor (issue #878) — forwarded to `NormalAttachment`. Omitted, no such control renders. */
+  readonly onOpenFileInCanvas?: (source: { readonly bucket: string; readonly name: string }) => void;
 }
 
 /**
@@ -46,6 +48,7 @@ export function MessageAttachmentList({
   onRemoveAttachment,
   projectId,
   onError,
+  onOpenFileInCanvas,
 }: MessageAttachmentListProps): React.ReactElement | null {
   const { imagesItems, otherFilesItems } = useMemo(
     () =>
@@ -115,6 +118,7 @@ export function MessageAttachmentList({
               onRemoveAttachment={onRemoveAttachment as (fileName: string, fromStorage: boolean) => void}
               {...(projectId !== undefined ? { projectId } : {})}
               {...(onError !== undefined ? { onError } : {})}
+              {...(onOpenFileInCanvas !== undefined ? { onOpenFileInCanvas } : {})}
             />
           ))}
         </Box>

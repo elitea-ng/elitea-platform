@@ -141,6 +141,10 @@ type CurrentApplicationStartService struct {
 	guardrails           CurrentAgentGuardrailResolver
 	freezer              CurrentApplicationVersionFreezer
 	admissions           admissionSubmitter
+	// memories is optional — attached after construction via WithMemories
+	// (#870, memories.go). A service nobody attaches it to injects no
+	// long-term memory, exactly its pre-#870 behavior.
+	memories CurrentMemoryRecallResolver
 }
 
 func NewCurrentApplicationStartService(
@@ -217,8 +221,17 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
 	}
+	// #870: recalled BEFORE building the input so its text can ride the same
+	// `instructions` field the worker already decodes — see memories.go's
+	// CurrentMemoryRecallResolver comment for why this is not a new wire
+	// field. Fails open: a memory-store hiccup costs this turn its recalled
+	// context, never the turn itself.
+	memoryRecall := service.resolveCurrentMemoryRecall(
+		ctx, request.ProjectID, request.ActorUserID,
+		currentMemoryRecallUserInputText(request.UserInput),
+	)
 	input, err := currentApplicationInput(
-		request, target, suggestionPolicy, toolkitGuardrails, attachments,
+		request, target, suggestionPolicy, toolkitGuardrails, attachments, memoryRecall.Text,
 	)
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
@@ -250,6 +263,9 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
 	}
+	// Best-effort, AFTER admission — see recordCurrentMemoryUsage's own
+	// comment for why this never affects the turn's outcome.
+	service.recordCurrentMemoryUsage(ctx, request.ProjectID, responseMessageID, memoryRecall)
 	return CurrentApplicationStartOutcome{
 		ExecutionID: outcome.ExecutionID, CommandID: outcome.CommandID,
 		ResponseMessageID: responseMessageID, Created: outcome.Created,
@@ -268,6 +284,7 @@ func currentApplicationInput(
 	nextInputSuggestion json.RawMessage,
 	toolkitGuardrails json.RawMessage,
 	attachments []CurrentTurnAttachment,
+	memoryText string,
 ) (*runtimev1.AgentExecutionInputV1, error) {
 	skills, err := projectCurrentApplicationSkills(request.UserInput, target.VersionDetails)
 	if err != nil {
@@ -277,11 +294,16 @@ func currentApplicationInput(
 	if err != nil {
 		return nil, ErrInvalidCurrentAgentStart
 	}
+	// #870: appended AFTER skill processing, onto version_details as it
+	// stands, so recalled memory text is never itself scanned for
+	// `[[skill:...]]` markers — see appendCurrentApplicationMemories's own
+	// comment.
+	versionDetails := appendCurrentApplicationMemories(skills.versionDetails, memoryText)
 	application, err := json.Marshal(map[string]any{
 		"id":              target.ApplicationID,
 		"version_id":      target.ApplicationVersionID,
 		"variables":       json.RawMessage(target.Variables),
-		"version_details": json.RawMessage(skills.versionDetails),
+		"version_details": json.RawMessage(versionDetails),
 	})
 	if err != nil {
 		return nil, ErrInvalidCurrentAgentStart
@@ -376,11 +398,12 @@ const maxCurrentAgentStepLimit = 1024
 // (apps/elitea-web/src/features/agents/lib/internalTools.ts) plus `ask_user`.
 // Membership here means "the product can do this", not "every worker can":
 // BOTH runtimes skip what they cannot serve, with a logged
-// `agent_internal_tool_skipped` — the native one for what it has not
-// implemented (services/elitea-worker-rust/src/agents/internal_tools.rs), and
-// the Python one for what its image cannot build, which today is `pyodide`,
-// whose sandbox needs a Deno runtime that image does not ship
-// (services/elitea-worker-python/src/elitea_worker/agents/internal_tools.py).
+// `agent_internal_tool_skipped` — the native one for six of these it has not
+// implemented, `pyodide` included (services/elitea-worker-rust/src/agents/
+// internal_tools.rs). The Python worker's image now ships everything in this
+// map (#872 gave it a pinned Deno runtime plus the SDK's own sandbox
+// entrypoint, closing the one gap it had —
+// services/elitea-worker-python/src/elitea_worker/agents/internal_tools.py).
 // This layer FORWARDS rather than judges, because refusing here turned every
 // form toggle into an agent that stopped answering on both workers at once.
 //

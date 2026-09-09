@@ -1,0 +1,54 @@
+---
+title: "Inventory"
+description: "Ingest a code repository into a browsable knowledge graph of entities and relations, then ask questions about it."
+---
+
+Inventory ingests one or more source repositories into a knowledge graph — files, functions, types and the relations between them — that you can filter, browse and ask questions of. Like Wikis, it lives at its own **Inventory** area, addressed by the Inventory toolkit that built the graph.
+
+## Prerequisites
+
+- An Inventory toolkit with at least one source added.
+- A source toolkit of an allowed type — by default **GitHub** or **ADO Repos** (a deployment can widen this with `ELITEA_INVENTORY_SOURCE_TYPES`; GitLab and Bitbucket are not supported as sources even when connected as toolkits elsewhere).
+- An `llm_model` set on the Inventory toolkit — ingestion is refused without one.
+
+## Build a knowledge graph
+
+<Steps>
+<Step title="Add an Inventory toolkit">
+If the project has none yet, add one — the Inventory area prompts you to when it finds none for the project.
+</Step>
+<Step title="Add a source">
+Under **Sources**, add a source toolkit (GitHub or ADO Repos, unless the deployment allows more) and its branch.
+</Step>
+<Step title="Run ingestion">
+Select **Run ingestion**. Progress shows per source: Pending, Ingesting…, Done, or Error. You can **Stop ingestion** on a source that's running.
+</Step>
+</Steps>
+
+<Screenshot id="inventory-browser" alt="Inventory entity browser with graph filters" />
+
+## Browse the graph
+
+Filter entities by source, type and layer, and search by name. Select an entity to see its file location and its relations — incoming and outgoing edges to other entities. A source removed from the toolkit but still represented in the graph shows as "No longer configured — its entities are still in the graph," rather than disappearing silently.
+
+## Ask about the inventory
+
+Select **Ask this inventory** to open a question panel over the graph. Answers name the entities they came from, rather than answering from general knowledge.
+
+## Statistics and maintenance
+
+The Stats view breaks the graph down by layer and entity type, and reports cache size and cached-graph count. **Maintenance** normalizes type-name variations (for example "Feature" vs. "feature") and rebuilds the name, type, file and source indices.
+
+## Common issues
+
+<Note>
+Inventory runs on the deployment's engine sidecar, not the Rust/Python agent worker — ingestion and browsing work the same regardless of which worker your deployment runs for agents and toolkits.
+</Note>
+
+<Note>
+"This toolkit configures no LLM model, so ingestion is refused" means you must set `llm_model` in the Inventory toolkit's settings before **Run ingestion** will do anything.
+</Note>
+
+<Note>
+If the ingestion status can't be read, the per-source states shown are stale, not necessarily current — re-check after a refresh rather than assuming a source is still Pending.
+</Note>

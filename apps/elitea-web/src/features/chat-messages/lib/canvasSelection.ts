@@ -88,3 +88,21 @@ export function selectionTextWithin(container: HTMLElement | null | undefined, s
   const text = selection.toString();
   return text.trim() === '' ? undefined : text;
 }
+
+/**
+ * Issue #879: the carve-a-canvas-from-selection affordance now creates a
+ * `document` canvas when the highlighted range is PROSE, and a `code` one
+ * when it is not — matching the same distinction `canvasFileSource.ts` makes
+ * for an opened file. The heuristic is narrow on purpose: only text whose
+ * TRIMMED selection is a single fenced block, start to end, counts as code.
+ * Selecting an inline `` `snippet` `` or a paragraph that happens to mention
+ * code is prose — the reader highlighted words, not carved out a fence — and
+ * a false "document" here costs nothing (the document pane is plain
+ * Markdown-editable text), while a false "code" would put prose behind a
+ * pane with no rich-text affordances at all.
+ */
+export function canvasKindForSelection(selectedText: string): 'code' | 'document' {
+  const trimmed = selectedText.trim();
+  const isWholeFence = trimmed.startsWith('```') && trimmed.endsWith('```') && trimmed.length > 6;
+  return isWholeFence ? 'code' : 'document';
+}

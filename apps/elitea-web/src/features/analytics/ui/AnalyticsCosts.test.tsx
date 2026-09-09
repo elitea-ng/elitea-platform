@@ -84,6 +84,43 @@ const PRICED: AnalyticsUsageEstimate = {
   ],
   by_model_truncated: false,
   by_user_truncated: false,
+  agent_dimension_available: true,
+  attributed_agent_calls: 2,
+  unattributed_agent_calls: 1,
+  by_agent: [
+    {
+      application_id: '4001',
+      name: 'Research Agent',
+      calls: 2,
+      prompt_tokens: 1500,
+      completion_tokens: 30,
+      total_tokens: 1530,
+      priced: true,
+      input_cost: 0.001125,
+      output_cost: 0.000135,
+      total_cost: 0.00126,
+    },
+  ],
+  by_agent_truncated: false,
+  tool_dimension_available: true,
+  attributed_tool_calls: 1,
+  unattributed_tool_calls: 0,
+  by_tool: [
+    {
+      toolkit_id: '9',
+      toolkit_name: 'Jira',
+      tool_name: 'list_issues',
+      attributed_runs: 1,
+      prompt_tokens: 800,
+      completion_tokens: 15,
+      total_tokens: 815,
+      priced: true,
+      input_cost: 0.0006,
+      output_cost: 0.0000675,
+      total_cost: 0.0006675,
+    },
+  ],
+  by_tool_truncated: false,
 };
 
 const COSTS_BODY = {
@@ -169,6 +206,38 @@ describe('AnalyticsCosts', () => {
     expect(getByText('admin@client.local')).toBeVisible();
     expect(getByText('Cost by Model')).toBeVisible();
     expect(getByText('gpt-5.4-mini')).toBeVisible();
+  });
+
+  // Issue #875: the agent and tool cost tables, using the same catalogue price
+  // the model and user tables already do.
+  it('lists the per-agent and per-tool cost breakdowns', async () => {
+    serveEstimate(PRICED);
+    const { findByText, getByText } = renderTab();
+
+    expect(await findByText('Cost by Agent')).toBeVisible();
+    expect(getByText('Research Agent')).toBeVisible();
+    expect(getByText('Cost by Tool')).toBeVisible();
+    expect(getByText('Jira / list_issues')).toBeVisible();
+  });
+
+  // A window before shared migration 0100/0119, or a runtime that tags no
+  // request, must OMIT both tables rather than render them empty — an empty
+  // table would read as "no agent or tool ran" for a window nothing could
+  // correlate at all, the same failure mode the model/user tables already
+  // refuse (see `marks an unpriced model rather than costing it at zero`).
+  it('omits the agent and tool cost tables when their dimension is unavailable', async () => {
+    serveEstimate({
+      ...PRICED,
+      agent_dimension_available: false,
+      by_agent: undefined,
+      tool_dimension_available: false,
+      by_tool: undefined,
+    });
+    const { findByText, queryByText } = renderTab();
+
+    await findByText('Cost by Model');
+    expect(queryByText('Cost by Agent')).not.toBeInTheDocument();
+    expect(queryByText('Cost by Tool')).not.toBeInTheDocument();
   });
 
   // A model with no catalogue rate keeps its tokens and shows "not priced".

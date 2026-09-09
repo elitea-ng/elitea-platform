@@ -1,0 +1,86 @@
+---
+title: "Zephyr Scale"
+description: "Connect Zephyr Scale to Elitea: prerequisites, credential setup and the tools it exposes."
+---
+
+Read and manage Zephyr Scale test cases and cycles, stored against Jira issues. It's listed under the **test management** category in the toolkit type picker.
+
+## Prerequisites
+
+- An account at Zephyr Scale with permission to issue an API token or credential, saved in Elitea as a **`zephyr`** credential (`/credentials/create-credential/<type>`).
+- If you plan to index content for retrieval: a `pgvector` credential and an embedding model, configured under AI providers.
+
+## Connect the toolkit
+
+<Steps>
+<Step title="Open the toolkit type picker">
+In the left navigation, open **Toolkits**, then select **New**. Filter the type picker by the **test management** category, or search for "Zephyr Scale".
+</Step>
+
+<Step title="Pick or create a credential">
+Under the credential field, choose an existing **zephyr** credential, or select **Create credential** to add one without leaving the form.
+</Step>
+
+<Step title="Add indexing settings (optional)">
+If you plan to index this source, set an **embedding model** and a **pgvector** credential. Leave both empty to use the toolkit without indexing.
+</Step>
+
+<Step title="Save">
+Name the toolkit and select **Create**. It's now available to attach to agents, pipelines and conversations in this project.
+</Step>
+</Steps>
+
+<Screenshot id="toolkit-new-generic" alt="New toolkit dialog with the Zephyr Scale type selected" />
+
+## Available tools
+
+<Accordion title="Available tools (26)">
+
+| Tool |
+|---|
+| Add test steps |
+| Create issue links |
+| Create test case |
+| Create test cases |
+| Create test script |
+| Create web links |
+| Get folders |
+| Get links |
+| Get test |
+| Get test script |
+| Get test steps |
+| Get tests |
+| Get tests by folder name |
+| Get tests by folder path |
+| Get tests recursive |
+| Get version |
+| Get versions |
+| Index data |
+| List indexes |
+| Remove index |
+| Search index |
+| Search test cases |
+| Stepback search index |
+| Stepback summary index |
+| Update test case |
+| Update test steps |
+
+</Accordion>
+
+## Common issues
+
+<Note>
+On the Rust worker, this tile shows greyed out with a reason — the Rust worker does not materialise `Zephyr Scale` (tracked in #865). Helm now defaults to the Python worker, matching compose (#865, #866); a deployment that opts into the Rust worker still needs the Python worker to connect Zephyr Scale.
+</Note>
+
+<Note>
+The Indexes tab only appears when the configured worker can run this type's `index_data` tool; if the worker can't, the tab is hidden and shows the worker's refusal message. `index_data` itself can't be run from the Test tools pane — use the Indexes tab.
+</Note>
+
+<Note>
+There's no connection check on this form. Save the toolkit, then run one read-only tool from the editor's Test tools pane to confirm the credential works before attaching Zephyr Scale to an agent.
+</Note>
+
+<Note>
+The saved-credential type for this toolkit is named **`zephyr`**, not `zephyr_scale` — pick `zephyr` when creating the credential.
+</Note>

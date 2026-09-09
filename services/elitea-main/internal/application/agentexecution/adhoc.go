@@ -146,8 +146,14 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
 	}
+	// #870: same recall the application start path performs — see
+	// StartCurrentApplication's own comment.
+	memoryRecall := service.resolveCurrentMemoryRecall(
+		ctx, request.ProjectID, request.ActorUserID,
+		currentMemoryRecallUserInputText(request.UserInput),
+	)
 	input, err := currentAdhocInput(
-		request, target, frozen, suggestionPolicy, toolkitGuardrails, attachments,
+		request, target, frozen, suggestionPolicy, toolkitGuardrails, attachments, memoryRecall.Text,
 	)
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, fmt.Errorf("build current ad-hoc execution input: %w", err)
@@ -179,6 +185,9 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
 	}
+	// Best-effort, AFTER admission — see recordCurrentMemoryUsage's own
+	// comment for why this never affects the turn's outcome.
+	service.recordCurrentMemoryUsage(ctx, request.ProjectID, responseMessageID, memoryRecall)
 	return CurrentApplicationStartOutcome{
 		ExecutionID: outcome.ExecutionID, CommandID: outcome.CommandID,
 		ResponseMessageID: responseMessageID, Created: outcome.Created,
@@ -276,6 +285,7 @@ func currentAdhocInput(
 	nextInputSuggestion json.RawMessage,
 	toolkitGuardrails json.RawMessage,
 	attachments []CurrentTurnAttachment,
+	memoryText string,
 ) (*runtimev1.AgentExecutionInputV1, error) {
 	var snapshot map[string]any
 	if err := decodeCurrentJSON(frozen, &snapshot); err != nil {
@@ -297,7 +307,11 @@ func currentAdhocInput(
 	if err != nil {
 		return nil, ErrUnsupportedCurrentAgentStart
 	}
-	application, err := json.Marshal(map[string]string{"instructions": target.Instructions})
+	// #870: appended in the SAME position ResolveCurrentAdhocTurn's own SQL
+	// already uses for `default_instructions` (agent_chat.sql) — see
+	// appendCurrentInstructionsMemories's own comment.
+	instructions := appendCurrentInstructionsMemories(target.Instructions, memoryText)
+	application, err := json.Marshal(map[string]string{"instructions": instructions})
 	if err != nil {
 		return nil, ErrUnsupportedCurrentAgentStart
 	}

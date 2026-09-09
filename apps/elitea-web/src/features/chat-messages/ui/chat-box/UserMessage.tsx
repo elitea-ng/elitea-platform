@@ -116,6 +116,8 @@ export interface UserMessageProps {
   readonly onSubmit?: ((messageId: string, updatedItems: readonly UserMessageUpdatedItem[]) => void) | undefined;
   /** Called when the user confirms removing an attachment from this message. */
   readonly onRemoveAttachment?: ((fileName: string, fromStorage: boolean) => void) | undefined;
+  /** Opens a text-like attachment in the canvas editor (issue #878). Omitted, attachment cards offer no such control. */
+  readonly onOpenFileInCanvas?: ((source: { readonly bucket: string; readonly name: string }) => void) | undefined;
   /**
    * Required to download an artifact-storage-backed attachment —
    * `NormalAttachment`'s storage branch refuses (via its error report) when
@@ -202,6 +204,7 @@ export function UserMessage({
   onDelete,
   onSubmit,
   onRemoveAttachment,
+  onOpenFileInCanvas,
   projectId,
 }: UserMessageProps): ReactNode {
   const authorCaption = resolveAuthorCaption(message);
@@ -329,6 +332,7 @@ export function UserMessage({
             items={attachmentItems}
             {...(onRemoveAttachment !== undefined ? { onRemoveAttachment } : {})}
             {...(projectId !== undefined ? { projectId } : {})}
+            {...(onOpenFileInCanvas !== undefined ? { onOpenFileInCanvas } : {})}
             onError={handleAttachmentError}
           />
           <UserMessageActions

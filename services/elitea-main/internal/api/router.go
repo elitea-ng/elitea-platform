@@ -38,6 +38,7 @@ import (
 	v2indextypes "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
 	v2inventory "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/inventory"
 	v2mcp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/mcp"
+	v2memories "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/memories"
 	v2messagetraces "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/messagetraces"
 	v2moderation "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/moderation"
 	v2openapidocs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/openapidocs"
@@ -65,6 +66,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	platformauth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/events"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
 	dbrepos "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
@@ -205,6 +207,13 @@ type RouterConfig struct {
 	// run. Unassigned, every catalogued type is offered — the honest answer
 	// when nothing has said which worker image is deployed.
 	ToolkitWorkerCapability v2toolkits.ToolkitCapabilitySource
+	// WorkerImplementation is the plain "python"/"rust" worker name (#865,
+	// #866) — the same value runtimecomposition.WorkerImplementationFromEnv
+	// derived to build ToolkitWorkerCapability above, restated here because
+	// this package cannot import runtimecomposition (see ToolkitArgumentSchemas'
+	// comment). It backs GET /elitea_core/runtime_capabilities. Empty leaves
+	// the endpoint reporting worker: "" rather than guessing.
+	WorkerImplementation string
 	// ToolkitSettingsDefinitions supplies the same endpoint with the "$defs"
 	// block each type's settings properties reference. It is injected for the
 	// same reason as ToolkitArgumentSchemas: the implementation joins two
@@ -236,9 +245,16 @@ type RouterConfig struct {
 	ToolkitRegistry admin.ToolkitRegistrySource
 	SkillsRepo      v2skills.Repository
 	FoldersRepo     v2folders.Repository
-	TagsRepo        v2tags.Repository
-	AnalyticsRepo   v2analytics.Repository
-	ConvsRepo       v2convs.Repository
+	// MemoriesRepo backs persistent, cross-conversation personal memory
+	// (#870) — Settings > Memory's CRUD. Its recall INTO a chat turn is a
+	// separate dependency, wired straight into
+	// agentexecutionapp.CurrentApplicationStartService.WithMemories at
+	// composition (internal/runtimecomposition/composition.go), not through
+	// this HTTP router config.
+	MemoriesRepo  v2memories.Repository
+	TagsRepo      v2tags.Repository
+	AnalyticsRepo v2analytics.Repository
+	ConvsRepo     v2convs.Repository
 	// SharedChatStore and SharedChatTranscript back "share a conversation by
 	// link" (internal/api/v2/sharedchat). Two fields for one feature because
 	// they have different tenancies — one central link table, one per-project
@@ -250,6 +266,38 @@ type RouterConfig struct {
 	WebhookRepo          webhook.Repository
 	RedisClient          *goredis.Client
 	EventSource          v2events.EventSource
+	// DomainEvents is #876's second half: the ONE domain-events Publisher
+	// every producer below (conversation create, artifact upload, agent
+	// publish/unpublish, moderation decision, pipeline run admission) emits
+	// through, which fans out to the project SSE bus AND — via the webhook
+	// Dispatcher composed as one of its Sinks in cmd/elitea-main/main.go —
+	// to every registered webhook subscribed to that event.
+	//
+	// main.go builds this UNCONDITIONALLY, never leaving it nil: even with
+	// no Redis and no webhook repository it is a Publisher over
+	// events.NoopBus with zero sinks, so every `.WithEvents(cfg.DomainEvents)`
+	// call below can pass it straight through with no nil check — passing a
+	// nil *events.Publisher through an interface-typed Option parameter
+	// would box a typed nil into a non-nil interface (the #86 trap this
+	// service's own NewPlatformHandler documents), which is what "never
+	// leave it nil" avoids needing a second guard against.
+	DomainEvents *events.Publisher
+	// WebhookDeliveries and WebhookDispatcher back the two new delivery-log
+	// routes (GET .../deliveries, POST .../deliveries/{id}/redeliver). Both
+	// nil-gated the same way WebhookRepo already is: absent, the two routes
+	// simply are not composed via webhook.WithDispatcher and the handler's
+	// own nil check answers 404 instead of dispatching.
+	WebhookDeliveries webhook.DeliveryRepository
+	WebhookDispatcher *webhook.Dispatcher
+	// WebhookDestinationGuard is the SSRF check (internal/api/webhook/ssrf.go)
+	// every Create and Update runs against `url`. main.go builds it
+	// unconditionally (parsed from ELITEA_WEBHOOK_EGRESS_ALLOWLIST, empty is
+	// a valid "refuse all private destinations" allowlist), so this is nil
+	// only in a test composing RouterConfig by hand — and Handler answers
+	// 400 on both routes when it is nil, never a pass-through. See
+	// webhook.Handler's destinationGuard field for why that direction is
+	// fail-closed unlike WebhookDispatcher's own nil-gated degrade above.
+	WebhookDestinationGuard *webhook.DestinationGuard
 	// EvalDimensionsRepo backs the Agent Evaluation DIMENSION LIBRARY — the
 	// first and, for now, only slice of that feature. Unassigned, the four
 	// routes are not registered at all, which answers 404: a stubbed 200 with
@@ -303,7 +351,7 @@ type RouterConfig struct {
 	//
 	// Leave it nil for the OIDC-only shape, where APPLICATION_SECRET_KEY both
 	// signs the token and reads it back. Never box a nil pointer into it.
-	PATSigner v2auth.TokenSigner
+	PATSigner                     v2auth.TokenSigner
 	RuntimeRoutes                 RuntimeRoutes
 	ProductionAuth                *ProductionAuthRoutes
 	ProductionRuntime             *ProductionRuntimeRoutes
@@ -488,7 +536,7 @@ func newArtifactHandler(cfg RouterConfig) (h *v2artifacts.Handler, ok bool) {
 	return v2artifacts.NewHandler(
 		artifactRepoAdapter{bucketsRepo, objectsRepo, grantsRepo, permissionsRepo},
 		cfg.ObjectStore,
-	), true
+	).WithEvents(cfg.DomainEvents), true
 }
 
 // bucketBootstrapRepoAdapter satisfies artifactbootstrap.Repository the same
@@ -1100,7 +1148,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	openapiDocsHandler := v2openapidocs.NewHandler()
 	r.Get("/api/openapi.yaml", openapiDocsHandler.Spec)
 	r.Get("/api/openapi.json", openapiDocsHandler.SpecJSON)
-	r.Get("/docs", openapiDocsHandler.UI)
+	r.Get("/api/docs", openapiDocsHandler.UI)
 
 	// Admin UI SPA — serves the admin panel with server-side config injection
 	if cfg.AdminUI != nil {
@@ -1237,7 +1285,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	r.Group(func(r chi.Router) {
 		r.Use(compressJSONResponses())
 		r.Use(apimw.Auth(apimw.AuthConfig{
-				Validator:                  cfg.AuthValidator,
+			Validator:                  cfg.AuthValidator,
 			PrincipalValidator:         cfg.PrincipalValidator,
 			ForwardedIdentityVerifier:  cfg.Auth.ForwardedIdentityVerifier,
 			SessionSecret:              cfg.SessionSecret,
@@ -1361,6 +1409,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// INTERFACE check that holds, because that field is documented
 				// never to receive a boxed nil pointer.
 				v2core.WithCostBudgets(cfg.GatewayStatus != nil),
+				v2core.WithEvents(cfg.DomainEvents),
 			)
 
 			// === Auth endpoints ===
@@ -1438,7 +1487,36 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					admin.WithToolkitTypePolicy(toolkitTypePolicyStore),
 				}, adminOptions...)...,
 			)
-			moderationHandler := v2moderation.NewHandler(cfg.Pool, v2moderation.WithMailer(decisionMailer))
+			// Project requests (#871) reuse the SAME provisioner and personal-
+			// project ensurer the projects route and login-time provisioning
+			// use, built once above (newProjectProvisioner's own doc comment:
+			// a second Provisioner is the shape #920/whatever-comes-next would
+			// be). Both Options no-op on a nil argument, so a deployment with
+			// no pool composes a Handler exactly as before — approving a
+			// Project Request then answers 502 and filing one answers 503,
+			// rather than either being silently wired to nothing.
+			moderationOptions := []v2moderation.Option{
+				v2moderation.WithMailer(decisionMailer),
+				// moderation.request.decided (#876's second half) — covers
+				// BOTH an ordinary app request and a Project Request (#871),
+				// since AdministrationRequestUpdate is the one decision path
+				// both flow through.
+				v2moderation.WithEvents(cfg.DomainEvents),
+			}
+			if projectProvisionerOK {
+				moderationOptions = append(moderationOptions, v2moderation.WithProjectProvisioner(projectProvisioner))
+			}
+			// `personalProjects` is a concrete `*personalproject.Ensurer`, not
+			// an interface, so this nil check is a real pointer comparison —
+			// wrapping a nil one straight into the Option's interface
+			// parameter would build a NON-nil interface holding a nil pointer
+			// (the typed-nil trap this codebase has shipped before), which
+			// `h.personalProjects == nil` in project_requests.go would then
+			// fail to catch.
+			if personalProjects != nil {
+				moderationOptions = append(moderationOptions, v2moderation.WithPersonalProjectEnsurer(personalProjects))
+			}
+			moderationHandler := v2moderation.NewHandler(cfg.Pool, moderationOptions...)
 			// The admin panel's surface. Every route below is gated on the same
 			// pylon permission its Python counterpart declares in
 			// legacy/plugins/admin/api/v2/, resolved from the database in
@@ -2039,6 +2117,19 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					"admin.moderation.create",
 				)).Delete("/moderation_status/{mode}/{projectID}/{entityID}", moderationHandler.RequestDelete)
 
+				// Self-service "request a project" (#871). No permission
+				// wrapper on either route — deliberately: r.Use(apimw.Auth(...))
+				// already gates everything under /api/v2 (this whole block is
+				// inside that group), and the issue's own gate is "any
+				// authenticated user may request", not a granted string. The
+				// APPROVAL half stays on the PUT above, which already answers
+				// this exact request shape (an `id` and a `status`) — see
+				// internal/api/v2/moderation/project_requests.go for the branch
+				// that runs the project-creation pipeline instead of a plain
+				// status flip when the row names this issue type.
+				r.Post("/moderation_status/project_request", moderationHandler.CreateProjectRequest)
+				r.Get("/moderation_status/project_requests/mine", moderationHandler.MyProjectRequests)
+
 				// Preserve current-main gateway administration. Server-side
 				// permission enforcement is required even when the UI hides
 				// these controls.
@@ -2394,18 +2485,65 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					requireSkillCreate := projectPermission("models.applications.skills.create")
 					requireSkillUpdate := projectPermission("models.applications.skills.update")
 					requireSkillExport := projectPermission("models.applications.skills.export")
+					requireSkillDelete := projectPermission("models.applications.skills.delete")
+					requireSkillDetails := projectPermission("models.applications.skills.details")
 					r.With(projectPermission("models.applications.skills.list")).
 						Get("/skills/{mode}/{projectID}", skillHandler.List)
 					r.With(requireSkillCreate).Post("/skills/{mode}/{projectID}", skillHandler.Create)
-					r.With(projectPermission("models.applications.skills.details")).
+					r.With(requireSkillDetails).
 						Get("/skill/{mode}/{projectID}/{skillID}", skillHandler.Get)
-					r.With(requireSkillCreate).Post("/skill/{mode}/{projectID}/{skillID}", skillHandler.Create)
+					// The {versionID} segment lets a caller read one NAMED
+					// version's content (switch-version, compare) instead of
+					// whichever version Get() answers by default (#874). Same
+					// handler as the 4-segment form above — Get reads the
+					// optional chi param itself, the pattern skill_export
+					// already uses below.
+					r.With(requireSkillDetails).
+						Get("/skill/{mode}/{projectID}/{skillID}/{versionID}", skillHandler.Get)
+					// #874: this used to be bound to Create, which ignores the
+					// {skillID} path segment entirely and creates an UNRELATED
+					// new skill — the frontend's createSkillVersion() call
+					// (features/skills/api/skillsApi.ts) has posted here since
+					// before this change, so every "New version" click quietly
+					// left the target skill's version set unchanged and leaked
+					// a stray skill into the project's list instead.
+					// CreateVersion reads {skillID} and adds a NAMED version
+					// row to the skill the URL names.
+					r.With(requireSkillCreate).Post("/skill/{mode}/{projectID}/{skillID}", skillHandler.CreateVersion)
 					r.With(requireSkillUpdate).Put("/skill/{mode}/{projectID}/{skillID}", skillHandler.Update)
 					r.With(requireSkillUpdate).Patch("/skill/{mode}/{projectID}/{skillID}", skillHandler.Update)
-					r.With(projectPermission("models.applications.skills.delete")).
-						Delete("/skill/{mode}/{projectID}/{skillID}", skillHandler.Delete)
+					// #874: edits a NAMED version's instructions/tags (the
+					// skill's own name/description still come from the body,
+					// same as the 4-segment form — those columns are shared
+					// across every version of the skill).
 					r.With(requireSkillUpdate).
-						Patch("/skill_default_version/{mode}/{projectID}/{skillID}", skillHandler.Update)
+						Put("/skill/{mode}/{projectID}/{skillID}/{versionID}", skillHandler.Update)
+					r.With(requireSkillDelete).Delete("/skill/{mode}/{projectID}/{skillID}", skillHandler.Delete)
+					// #874: deletes one NAMED version. Delete reads the
+					// optional {versionID} param itself; refuses `base` and
+					// the current default version (skills.go's DeleteVersion).
+					r.With(requireSkillDelete).
+						Delete("/skill/{mode}/{projectID}/{skillID}/{versionID}", skillHandler.Delete)
+					// #874: rollback — copies a named version's content back
+					// onto `base`, mirroring "restore" as agents' version bar
+					// terms the "Set as default" action's confirmation
+					// dialog (SetDefaultVersionDialog.tsx), except skills
+					// have no distinguished "latest" row to repoint, so the
+					// restore itself copies fields rather than moving a
+					// pointer.
+					r.With(requireSkillUpdate).
+						Post("/skill_version_restore/{mode}/{projectID}/{skillID}/{versionID}", skillHandler.RestoreVersion)
+					// #874: this used to be bound to the generic Update,
+					// which decodes the body as {name, description,
+					// instructions, tags} and therefore read no "version_id"
+					// key at all — a click on "Set default" sent
+					// {"version_id": N}, Update saw no "name" key, and wrote
+					// the skill's OWN name to "". SetDefaultVersion reads
+					// version_id and writes skills.meta.default_version_id,
+					// the same shape applications.meta.default_version_id
+					// already uses (repos/applications.go).
+					r.With(requireSkillUpdate).
+						Patch("/skill_default_version/{mode}/{projectID}/{skillID}", skillHandler.SetDefaultVersion)
 					// NOTE(#395): GET
 					// /application_skills/{mode}/{projectID}/{appVersionID}
 					// stood here, on skillHandler.ListForApplication. It was
@@ -2462,6 +2600,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					toolkitOptions = append(toolkitOptions,
 						v2toolkits.WithWorkerCapability(cfg.ToolkitWorkerCapability))
 				}
+				if cfg.WorkerImplementation != "" {
+					toolkitOptions = append(toolkitOptions,
+						v2toolkits.WithWorkerImplementation(cfg.WorkerImplementation))
+				}
 				// Guarded rather than appended unconditionally: an Option that
 				// stored a nil interface would still leave h.settingsValidator
 				// nil, but a caller that later boxes a typed nil pointer here
@@ -2480,6 +2622,15 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				toolkitOptions = append(toolkitOptions,
 					v2toolkits.WithTypePolicy(toolkitTypePolicyStore))
 				toolkitHandler := v2toolkits.NewHandler(cfg.Pool, toolkitOptions...)
+				// Runtime worker capabilities (#865, #866) — deliberately NOT
+				// project-scoped, the same reasoning agent_categories above
+				// states: which worker image this deployment runs, which
+				// toolkit types it hides and which internal chat tools it
+				// no-ops are deployment-wide facts, not project data. Ungated
+				// by permission for the same reason: the answer is "here is
+				// what this deployment can and cannot do", not project content
+				// a membership check would protect.
+				r.Get("/runtime_capabilities", toolkitHandler.RuntimeCapabilities)
 				// /tool(s)/ and /toolkits/ paths route to toolkitHandler (toolkit instances, not skills).
 				//
 				// NOTE the split, which was wrong until #129: /tools/ is the
@@ -2601,6 +2752,30 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(requireFolderUpdate).Patch("/folder/prompt_lib/{projectID}/{folderID}", folderHandler.Update)
 					r.With(projectPermission("models.chat.folders.delete")).
 						Delete("/folder/prompt_lib/{projectID}/{folderID}", folderHandler.Delete)
+				}
+
+				// Long-term memory (#870) — Settings > Memory's persistent,
+				// cross-conversation personal memory CRUD. Read declares
+				// `models.chat.conversation.details`, write declares
+				// `models.chat.conversation.update` — the same two strings
+				// promptcontextreads' current chat-config/project-context
+				// reads and the current conversation update route already
+				// declare, so this needs no new permission and no migration
+				// to seed one (same reasoning as message_feedback's own
+				// router comment). Recall — reading these rows INTO a chat
+				// turn — is wired separately, straight into
+				// agentexecutionapp.CurrentApplicationStartService at
+				// composition (internal/runtimecomposition/composition.go),
+				// not through this HTTP surface.
+				if cfg.MemoriesRepo != nil {
+					memoryHandler := v2memories.NewHandler(cfg.MemoriesRepo)
+					requireMemoryRead := projectPermission("models.chat.conversation.details")
+					requireMemoryWrite := projectPermission("models.chat.conversation.update")
+					r.With(requireMemoryRead).Get("/memories/prompt_lib/{projectID}", memoryHandler.List)
+					r.With(requireMemoryWrite).Post("/memories/prompt_lib/{projectID}", memoryHandler.Create)
+					r.With(requireMemoryWrite).Delete("/memories/prompt_lib/{projectID}", memoryHandler.ClearAll)
+					r.With(requireMemoryWrite).Put("/memory/prompt_lib/{projectID}/{memoryID}", memoryHandler.Update)
+					r.With(requireMemoryWrite).Delete("/memory/prompt_lib/{projectID}/{memoryID}", memoryHandler.Delete)
 				}
 
 				// Tags
@@ -2773,7 +2948,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						WithPool(cfg.Pool).
 						WithObjectStore(cfg.ObjectStore).
 						WithAttachmentStore(newAttachmentStore(cfg.Pool)).
-						WithUserContextDefaults(newUserContextDefaults(cfg.Pool))
+						WithUserContextDefaults(newUserContextDefaults(cfg.Pool)).
+						WithEvents(cfg.DomainEvents)
 					requireConversationRead := projectPermission("models.chat.conversation.details")
 					requireMessageDelete := projectPermission("models.chat.messages.delete")
 					requireEntitySettings := projectPermission("models.chat.entity_settings.update")
@@ -2817,6 +2993,18 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Get("/message/prompt_lib/{projectID}/{messageID}", convHandler.GetMessage)
 					r.With(requireMessageDelete).
 						Delete("/message/prompt_lib/{projectID}/{messageID}", convHandler.DeleteMessage)
+					// Message feedback — like/dislike + optional comment (#880).
+					// All three verbs declare `models.chat.messages.details`, the
+					// SAME string GetMessage above declares: reading or casting a
+					// vote on a message's feedback is not a wider claim than
+					// reading the message itself, so this needs no new permission
+					// and no migration to seed one (see tenant/0135's own header).
+					r.With(projectPermission("models.chat.messages.details")).
+						Get("/message_feedback/prompt_lib/{projectID}/{messageID}", convHandler.GetMessageFeedback)
+					r.With(projectPermission("models.chat.messages.details")).
+						Post("/message_feedback/prompt_lib/{projectID}/{messageID}", convHandler.SetMessageFeedback)
+					r.With(projectPermission("models.chat.messages.details")).
+						Delete("/message_feedback/prompt_lib/{projectID}/{messageID}", convHandler.DeleteMessageFeedback)
 					r.With(projectPermission("models.chat.participants.create")).
 						Post("/participants/prompt_lib/{projectID}/{conversationID}", convHandler.AddParticipant)
 					r.With(projectPermission("models.chat.participant.delete")).
@@ -3008,7 +3196,17 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// {version_id}, and creates no conversation. #254 carries the
 				// full finding and a bounded design for a real public chat
 				// surface, which is a NEW feature and not a restoration.
-				draftHandler := v2drafts.NewHandler(cfg.PredictCompleter)
+				// AppsRepo/SkillsRepo/the toolkit-instance reader back
+				// GenerateApplicationDraft's five suggested_* lists (#881).
+				// All three options are nil-safe (v2drafts.Handler degrades
+				// a missing one to an empty suggestion list, never a broken
+				// response), so this composes whichever of cfg.AppsRepo/
+				// cfg.SkillsRepo happen to be set in THIS deployment exactly
+				// as every other optional RouterConfig dependency does.
+				draftHandler := v2drafts.NewHandler(cfg.PredictCompleter,
+					v2drafts.WithAppsRepo(cfg.AppsRepo),
+					v2drafts.WithSkillsRepo(cfg.SkillsRepo),
+					v2drafts.WithToolkitsRepo(v2toolkits.NewPostgresRepository(cfg.Pool)))
 				r.With(projectPermission("models.applications.applications.create")).
 					Post("/generate_application_draft/prompt_lib/{projectID}", draftHandler.GenerateApplicationDraft)
 				r.With(projectPermission("models.applications.skills.create")).
@@ -3829,9 +4027,25 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// still the fix: the disclosure is one CREATE TABLE away, and the
 			// route must not be the thing that decides.
 			if cfg.WebhookRepo != nil {
+				webhookOptions := []webhook.Option{webhook.WithPermissionResolver(coreResolver)}
+				// SSRF hardening: without this, Create and Update fail closed
+				// with 400 on every request — see the field's own doc comment.
+				if cfg.WebhookDestinationGuard != nil {
+					webhookOptions = append(webhookOptions, webhook.WithDestinationGuard(cfg.WebhookDestinationGuard))
+				}
+				// The delivery log routes (#876's second half). Both
+				// WebhookDispatcher and WebhookDeliveries are set together by
+				// main.go's composition (one Dispatcher, one repository) —
+				// nil-checking the pair here rather than trusting
+				// WithDispatcher's own internal nil-safety keeps the SAME
+				// "gate what you mount" discipline this file applies to every
+				// other optional route group.
+				if cfg.WebhookDispatcher != nil && cfg.WebhookDeliveries != nil {
+					webhookOptions = append(webhookOptions, webhook.WithDispatcher(cfg.WebhookDispatcher, cfg.WebhookDeliveries))
+				}
 				r.Mount("/webhooks/prompt_lib/{projectID}", webhook.NewHandler(
 					cfg.WebhookRepo,
-					webhook.WithPermissionResolver(coreResolver),
+					webhookOptions...,
 				).Routes())
 			}
 
@@ -3890,7 +4104,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	mountLLM := func(proxy http.Handler, resolver apimw.PersonalProjectResolver) {
 		r.Group(func(r chi.Router) {
 			r.Use(apimw.Auth(apimw.AuthConfig{
-						Validator:                  cfg.AuthValidator,
+				Validator:                  cfg.AuthValidator,
 				PrincipalValidator:         cfg.PrincipalValidator,
 				ForwardedIdentityVerifier:  cfg.Auth.ForwardedIdentityVerifier,
 				SessionSecret:              cfg.SessionSecret,

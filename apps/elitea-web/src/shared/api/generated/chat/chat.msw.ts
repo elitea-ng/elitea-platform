@@ -46,7 +46,12 @@ import type { RequestHandlerOptions } from "msw";
 
 import type {
   CanvasPresence,
+  ClearMemories200,
   ConversationExport,
+  ConversationListing,
+  MemoryEntry,
+  MemoryEntryList,
+  MessageFeedbackSummary,
   MessageTraceListing,
   MessageTraceStepDetail,
   SupportAssistantConfig,
@@ -292,6 +297,28 @@ export const getExportConversationResponseMock = (
     },
   ]);
 
+export const getListConversationsResponseMock = (
+  overrideResponse: Partial<Extract<ConversationListing, object>> = {},
+): ConversationListing => ({
+  total: faker.number.int(),
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.number.int(),
+    name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    created_at: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    updated_at: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    duration: faker.number.int(),
+    message_groups_count: faker.number.int(),
+    meta: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([null]),
+      undefined,
+    ]),
+  })),
+  ...overrideResponse,
+});
+
 export const getListMessageTracesResponseMock = (
   overrideResponse: Partial<Extract<MessageTraceListing, object>> = {},
 ): MessageTraceListing => ({
@@ -462,6 +489,148 @@ export const getGetMessageTraceResponseMock = (): MessageTraceStepDetail => ({
       undefined,
     ]),
   },
+});
+
+export const getListMemoriesResponseMock = (
+  overrideResponse: Partial<Extract<MemoryEntryList, object>> = {},
+): MemoryEntryList => ({
+  items: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    project_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    content: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    tags: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    source_conversation_id: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        null,
+      ]),
+      undefined,
+    ]),
+    enabled: faker.datatype.boolean(),
+    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  })),
+  total: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getCreateMemoryResponseMock = (
+  overrideResponse: Partial<Extract<MemoryEntry, object>> = {},
+): MemoryEntry => ({
+  id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  project_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  content: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  tags: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  source_conversation_id: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    undefined,
+  ]),
+  enabled: faker.datatype.boolean(),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getClearMemoriesResponseMock = (
+  overrideResponse: Partial<Extract<ClearMemories200, object>> = {},
+): ClearMemories200 => ({ removed: faker.number.int(), ...overrideResponse });
+
+export const getUpdateMemoryResponseMock = (
+  overrideResponse: Partial<Extract<MemoryEntry, object>> = {},
+): MemoryEntry => ({
+  id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  project_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  content: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  tags: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  source_conversation_id: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    undefined,
+  ]),
+  enabled: faker.datatype.boolean(),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getGetMessageFeedbackResponseMock = (
+  overrideResponse: Partial<Extract<MessageFeedbackSummary, object>> = {},
+): MessageFeedbackSummary => ({
+  likes: faker.number.int(),
+  dislikes: faker.number.int(),
+  mine: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      {
+        rating: faker.helpers.arrayElement([-1, 1] as const),
+        comment: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+      },
+      null,
+    ]),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getSetMessageFeedbackResponseMock = (
+  overrideResponse: Partial<Extract<MessageFeedbackSummary, object>> = {},
+): MessageFeedbackSummary => ({
+  likes: faker.number.int(),
+  dislikes: faker.number.int(),
+  mine: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      {
+        rating: faker.helpers.arrayElement([-1, 1] as const),
+        comment: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+      },
+      null,
+    ]),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getDeleteMessageFeedbackResponseMock = (
+  overrideResponse: Partial<Extract<MessageFeedbackSummary, object>> = {},
+): MessageFeedbackSummary => ({
+  likes: faker.number.int(),
+  dislikes: faker.number.int(),
+  mine: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      {
+        rating: faker.helpers.arrayElement([-1, 1] as const),
+        comment: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+      },
+      null,
+    ]),
+    undefined,
+  ]),
+  ...overrideResponse,
 });
 
 export const getGetSupportAssistantConfigMockHandler = (
@@ -651,6 +820,32 @@ export const getExportConversationMockHandler = (
   );
 };
 
+export const getListConversationsMockHandler = (
+  overrideResponse?:
+    | ConversationListing
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ConversationListing> | ConversationListing),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/conversations/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListConversationsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListMessageTracesMockHandler = (
   overrideResponse?:
     | MessageTraceListing
@@ -702,6 +897,210 @@ export const getGetMessageTraceMockHandler = (
     options,
   );
 };
+
+export const getListMemoriesMockHandler = (
+  overrideResponse?:
+    | MemoryEntryList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<MemoryEntryList> | MemoryEntryList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/memories/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListMemoriesResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCreateMemoryMockHandler = (
+  overrideResponse?:
+    | MemoryEntry
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<MemoryEntry> | MemoryEntry),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/memories/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCreateMemoryResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getClearMemoriesMockHandler = (
+  overrideResponse?:
+    | ClearMemories200
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<ClearMemories200> | ClearMemories200),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/elitea_core/memories/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getClearMemoriesResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getUpdateMemoryMockHandler = (
+  overrideResponse?:
+    | MemoryEntry
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<MemoryEntry> | MemoryEntry),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/memory/prompt_lib/:projectId/:memoryId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getUpdateMemoryResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDeleteMemoryMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/elitea_core/memory/prompt_lib/:projectId/:memoryId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
+
+export const getGetMessageFeedbackMockHandler = (
+  overrideResponse?:
+    | MessageFeedbackSummary
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<MessageFeedbackSummary> | MessageFeedbackSummary),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/message_feedback/prompt_lib/:projectId/:messageId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetMessageFeedbackResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSetMessageFeedbackMockHandler = (
+  overrideResponse?:
+    | MessageFeedbackSummary
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<MessageFeedbackSummary> | MessageFeedbackSummary),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/message_feedback/prompt_lib/:projectId/:messageId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSetMessageFeedbackResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDeleteMessageFeedbackMockHandler = (
+  overrideResponse?:
+    | MessageFeedbackSummary
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<MessageFeedbackSummary> | MessageFeedbackSummary),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/elitea_core/message_feedback/prompt_lib/:projectId/:messageId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getDeleteMessageFeedbackResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
 export const getChatMock = () => [
   getGetSupportAssistantConfigMockHandler(),
   getListSupportConversationsMockHandler(),
@@ -710,6 +1109,15 @@ export const getChatMock = () => [
   getStartSupportTurnMockHandler(),
   getHeartbeatCanvasPresenceMockHandler(),
   getExportConversationMockHandler(),
+  getListConversationsMockHandler(),
   getListMessageTracesMockHandler(),
   getGetMessageTraceMockHandler(),
+  getListMemoriesMockHandler(),
+  getCreateMemoryMockHandler(),
+  getClearMemoriesMockHandler(),
+  getUpdateMemoryMockHandler(),
+  getDeleteMemoryMockHandler(),
+  getGetMessageFeedbackMockHandler(),
+  getSetMessageFeedbackMockHandler(),
+  getDeleteMessageFeedbackMockHandler(),
 ];

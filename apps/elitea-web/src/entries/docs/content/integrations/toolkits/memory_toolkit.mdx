@@ -1,0 +1,54 @@
+---
+title: "Memory"
+description: "Give an agent a scoped key-value store it can write to and search across turns, independent of chat history."
+---
+
+The Memory toolkit gives an agent, pipeline or conversation a small key-value store it can write to and search across turns — separate from the conversation's own chat history. It's listed under the **other** category in the toolkit type picker.
+
+<Note>
+This is a different feature from [Settings › Memory](/menus/settings/memory)'s **Long-term Memory** section, which recalls facts about you automatically, before a turn starts, across every conversation — with no tool call involved. The Memory toolkit here is a real, attachable tool the model calls itself, mid-turn, against its own key-value store.
+</Note>
+
+## Prerequisites
+
+- A `pgvector` credential, since the store is backed by the same vector infrastructure as indexing.
+- No vendor account is needed — the store lives inside your project.
+
+## Connect the toolkit
+
+<Steps>
+<Step title="Open the toolkit type picker">
+In the left navigation, open **Toolkits**, then select **New**. Filter the type picker by the **other** category, or search for "Memory".
+</Step>
+<Step title="Set the store credential">
+Choose a **pgvector** credential to back the store.
+</Step>
+<Step title="Save">
+Name the toolkit and select **Create**. Attach it to an agent, pipeline or conversation the same way as any other toolkit.
+</Step>
+</Steps>
+
+<Screenshot id="toolkit-new-memory" alt="New toolkit dialog for the Memory type" />
+
+## Available tools
+
+<Accordion title="Available tools (4)">
+
+| Tool |
+|---|
+| Delete memory |
+| Get memory |
+| Manage memory |
+| Search memory |
+
+</Accordion>
+
+## Common issues
+
+<Note>
+Memory is a built-in Elitea type, not part of the SDK worker-capability catalogue — it works the same regardless of which worker (Rust or Python) your deployment runs.
+</Note>
+
+<Note>
+The store is scoped to whatever key you give it — an agent must be instructed (or coded, in a pipeline) to use consistent keys, or writes and reads won't line up. There is no automatic per-user or per-conversation partitioning.
+</Note>

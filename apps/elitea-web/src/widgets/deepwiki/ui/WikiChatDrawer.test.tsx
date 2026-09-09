@@ -11,7 +11,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ComponentProps } from 'react';
 import { ThemeProvider } from '@mui/material/styles';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -562,4 +562,160 @@ describe('the drawer restores a conversation from the server', () => {
     expect(headers[0]!.get('X-Elitea-Wiki-Toolkit')).toBe('42');
   });
 
+});
+
+// #873: a continuable session in the sense the issue describes is not just
+// "the browser that started a chat sees it again" — it is "the reader can
+// see every past chat for this wiki, switch to one, and remove one".
+describe('the drawer’s session list (#873)', () => {
+  it('lists every stored session and resumes the one the reader picks', async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem('el.deepwiki.chat.conversation.7.42', 'chat-key-1');
+    serveHistory(
+      [
+        { id: '11', name: 'current session', chatKey: 'chat-key-1' },
+        { id: '12', name: 'an older session', chatKey: 'chat-key-2' },
+      ],
+      {
+        11: [group('the open question')],
+        12: [group('a question from the older session')],
+      },
+    );
+
+    open();
+    expect(await screen.findByText('the open question')).toBeVisible();
+
+    await user.click(screen.getByTestId('wiki-chat-sessions-button'));
+    const options = screen.getAllByTestId('wiki-chat-session-option');
+    expect(options).toHaveLength(2);
+    await user.click(screen.getByText('an older session'));
+
+    expect(await screen.findByText('a question from the older session')).toBeVisible();
+    expect(screen.queryByText('the open question')).toBeNull();
+    // The browser now files the NEXT question into the resumed session, not
+    // the one it had open before switching.
+    await waitFor(() =>
+      expect(window.localStorage.getItem('el.deepwiki.chat.conversation.7.42')).toBe('chat-key-2'),
+    );
+  });
+
+  it('deletes a session through the ordinary conversation route', async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem('el.deepwiki.chat.conversation.7.42', 'chat-key-1');
+    const deletes: string[] = [];
+    serveHistory(
+      [
+        { id: '11', name: 'current session', chatKey: 'chat-key-1' },
+        { id: '12', name: 'to be removed', chatKey: 'chat-key-2' },
+      ],
+      { 11: [group('the open question')] },
+    );
+    server.use(
+      http.delete(
+        `${BASE}/elitea_core/conversation/prompt_lib/:projectId/:conversationId`,
+        ({ params }) => {
+          deletes.push(String(params['conversationId']));
+          return new HttpResponse(null, { status: 204 });
+        },
+      ),
+    );
+
+    open();
+    expect(await screen.findByText('the open question')).toBeVisible();
+
+    await user.click(screen.getByTestId('wiki-chat-sessions-button'));
+    await user.click(screen.getAllByTestId('wiki-chat-session-delete')[1]!);
+    const modal = screen.getByTestId('wiki-chat-session-delete-modal');
+    await user.click(within(modal).getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => expect(deletes).toEqual(['12']));
+    // The still-open session is untouched by deleting a DIFFERENT one.
+    expect(screen.getByText('the open question')).toBeVisible();
+  });
+
+  it('starts a fresh conversation when the deleted session is the one open', async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem('el.deepwiki.chat.conversation.7.42', 'chat-key-1');
+    serveHistory([{ id: '11', name: 'current session', chatKey: 'chat-key-1' }], {
+      11: [group('the open question')],
+    });
+    server.use(
+      http.delete(
+        `${BASE}/elitea_core/conversation/prompt_lib/:projectId/:conversationId`,
+        () => new HttpResponse(null, { status: 204 }),
+      ),
+    );
+
+    open();
+    expect(await screen.findByText('the open question')).toBeVisible();
+
+    await user.click(screen.getByTestId('wiki-chat-sessions-button'));
+    await user.click(screen.getByTestId('wiki-chat-session-delete'));
+    const modal = screen.getByTestId('wiki-chat-session-delete-modal');
+    await user.click(within(modal).getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => expect(screen.queryByText('the open question')).toBeNull());
+    expect(await screen.findByText(/Ask a question about this repository/)).toBeVisible();
+  });
+});
+
+// #873: files the reader attaches from their own machine.
+describe('the drawer’s file attachments (#873)', () => {
+  it('reads a picked file and sends it as extra_context with the question', async () => {
+    const user = userEvent.setup();
+    let body: unknown;
+    server.use(
+      http.post(`${BASE}/deepwiki/tools/:projectId/:toolkit/:tool/invoke`, async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ invocation_id: 'inv-1' });
+      }),
+      http.get(`${BASE}/deepwiki/invocations/:projectId/:toolkit/:tool/:invocation`, () =>
+        HttpResponse.json({ status: 'InProgress' }),
+      ),
+    );
+
+    open();
+    await user.upload(
+      screen.getByTestId('wiki-chat-attach-input'),
+      new File(['the important bit'], 'notes.md', { type: 'text/plain' }),
+    );
+    expect(await screen.findByText('notes.md')).toBeVisible();
+
+    await user.type(screen.getByPlaceholderText('Ask about this repository'), 'a question');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(body).not.toBeUndefined());
+    expect((body as { parameters: { extra_context: unknown } }).parameters.extra_context).toEqual([
+      { name: 'notes.md', content: 'the important bit' },
+    ]);
+  });
+
+  it('removes an attachment and stops sending it', async () => {
+    const user = userEvent.setup();
+    let body: unknown;
+    server.use(
+      http.post(`${BASE}/deepwiki/tools/:projectId/:toolkit/:tool/invoke`, async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ invocation_id: 'inv-1' });
+      }),
+      http.get(`${BASE}/deepwiki/invocations/:projectId/:toolkit/:tool/:invocation`, () =>
+        HttpResponse.json({ status: 'InProgress' }),
+      ),
+    );
+
+    open();
+    await user.upload(
+      screen.getByTestId('wiki-chat-attach-input'),
+      new File(['x'], 'notes.md', { type: 'text/plain' }),
+    );
+    await screen.findByText('notes.md');
+    await user.click(within(screen.getByTestId('wiki-chat-attach-chip')).getByTestId('wiki-chat-attach-chip-remove'));
+    expect(screen.queryByText('notes.md')).toBeNull();
+
+    await user.type(screen.getByPlaceholderText('Ask about this repository'), 'a question');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(body).not.toBeUndefined());
+    expect((body as { parameters: Record<string, unknown> }).parameters).not.toHaveProperty('extra_context');
+  });
 });

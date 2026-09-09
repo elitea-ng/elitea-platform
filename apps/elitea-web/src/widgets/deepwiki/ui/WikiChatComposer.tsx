@@ -22,6 +22,7 @@ import { t } from '@/shared/i18n';
 import type { ChatCapability } from '@/features/wiki-chat';
 
 import { WikiContextPicker } from './WikiContextPicker';
+import { WikiFileAttach, type WikiFileAttachment } from './WikiFileAttach';
 
 export interface WikiChatComposerProps {
   readonly mode: ChatCapability;
@@ -40,6 +41,9 @@ export interface WikiChatComposerProps {
   /** The ids attached to the NEXT question, in selection order. */
   readonly contextPaths: readonly string[];
   readonly onContextPathsChange: (selected: readonly string[]) => void;
+  /** The files attached to the NEXT question (#873). */
+  readonly attachments: readonly WikiFileAttachment[];
+  readonly onAttachmentsChange: (attachments: readonly WikiFileAttachment[]) => void;
 }
 
 export const WikiChatComposer = memo(function WikiChatComposer({
@@ -53,6 +57,8 @@ export const WikiChatComposer = memo(function WikiChatComposer({
   contextPages,
   contextPaths,
   onContextPathsChange,
+  attachments,
+  onAttachmentsChange,
 }: WikiChatComposerProps) {
   const [question, setQuestion] = useState('');
 
@@ -102,6 +108,8 @@ export const WikiChatComposer = memo(function WikiChatComposer({
           onChange={onContextPathsChange}
           disabled={isLoading}
         />
+
+        <WikiFileAttach attachments={attachments} onChange={onAttachmentsChange} disabled={isLoading} />
 
         <Stack sx={{ flexDirection: 'row', gap: 0.5, marginLeft: 'auto' }}>
           <Tooltip title={t('widgets.deepwiki.chat.regenerate', 'Ask again')}>

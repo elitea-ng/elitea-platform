@@ -4,7 +4,8 @@
   "version": "1.0.0",
   "product": {
     "name": "Elitea",
-    "shortName": "Elitea"
+    "shortName": "Elitea",
+    "docsUrl": "/docs/"
   },
   "assets": {
     "logoFull": "./brand/logo-full.svg",

@@ -1,0 +1,637 @@
+[
+  {
+    "slug": "admin/app-requests-and-toolkit-types",
+    "title": "App requests and toolkit types",
+    "description": "Decide access requests from the application catalog, and control which toolkit types this deployment offers."
+  },
+  {
+    "slug": "admin/audit-trail",
+    "title": "Audit trail",
+    "description": "The deployment-wide record of who did what, with a heatmap view, spans and traces, and per-user activity."
+  },
+  {
+    "slug": "admin/authentication",
+    "title": "Authentication",
+    "description": "Configure OIDC or SAML sign-in, and bind SCIM-provisioned groups to a project role."
+  },
+  {
+    "slug": "admin/branding",
+    "title": "Branding",
+    "description": "Re-theme the platform in your organization's colors, typography, and assets, with a live preview before saving."
+  },
+  {
+    "slug": "admin/budgets-and-governance",
+    "title": "Budgets and LLM governance",
+    "description": "Set per-project and per-member spend limits, and author the rules the LLM gateway enforces on every call."
+  },
+  {
+    "slug": "admin/features-and-configuration",
+    "title": "Features and configuration",
+    "description": "Feature toggles and the platform configuration sections not covered by their own dedicated admin page."
+  },
+  {
+    "slug": "admin/llm-proxy",
+    "title": "LLM proxy",
+    "description": "Publish platform-wide model providers, grant models to specific projects, and read gateway status, usage, and logs."
+  },
+  {
+    "slug": "admin/overview",
+    "title": "Admin console overview",
+    "description": "What the admin console is, who can open it, and how its two navigation groups are organized."
+  },
+  {
+    "slug": "admin/projects",
+    "title": "Projects",
+    "description": "Create, suspend, delete, and manage membership for every project on the deployment."
+  },
+  {
+    "slug": "admin/schedules-and-tasks",
+    "title": "Schedules and tasks",
+    "description": "Manage cron schedules and see what background work is currently running."
+  },
+  {
+    "slug": "admin/secrets",
+    "title": "Secrets",
+    "description": "The global secret vault, merged into every project's {{secret.…}} placeholders."
+  },
+  {
+    "slug": "admin/users-and-roles",
+    "title": "Users and roles",
+    "description": "Manage every account on the deployment and edit the permission matrix that defines each role."
+  },
+  {
+    "slug": "getting-started/chat-quick-start",
+    "title": "Chat quick start",
+    "description": "Send your first message, attach a toolkit, and try a public agent — the fastest path through Elitea's chat."
+  },
+  {
+    "slug": "getting-started/configure-ai-provider",
+    "title": "Configure an AI provider",
+    "description": "Add an LLM, embedding or voice provider to your project so chat, agents and pipelines have a model to call."
+  },
+  {
+    "slug": "getting-started/connect-toolkits-quick-start",
+    "title": "Connect a toolkit quick start",
+    "description": "Create a toolkit, attach a credential, and enable tools so agents and chat can reach an external service."
+  },
+  {
+    "slug": "getting-started/create-artifact",
+    "title": "Create an artifact bucket",
+    "description": "Create a storage bucket to hold files that chat, agents and pipelines can read, write and share."
+  },
+  {
+    "slug": "getting-started/create-credential",
+    "title": "Create a credential",
+    "description": "Store authentication details for an external service once, then attach the credential to any toolkit that needs it."
+  },
+  {
+    "slug": "getting-started/create-personal-access-token",
+    "title": "Create a personal access token",
+    "description": "Generate a personal access token to authenticate API calls and IDE integrations against Elitea."
+  },
+  {
+    "slug": "getting-started/create-secret",
+    "title": "Create a secret",
+    "description": "Store a password, token or API key in the project vault, then reference it from credentials instead of pasting it in directly."
+  },
+  {
+    "slug": "getting-started/install",
+    "title": "Install Elitea",
+    "description": "Deploy Elitea with Docker Compose or Kubernetes, sign in as the first administrator, and configure your first AI provider."
+  },
+  {
+    "slug": "home/glossary",
+    "title": "Glossary",
+    "description": "Definitions of the terms used across Elitea's chat, agents, pipelines, toolkits, and settings."
+  },
+  {
+    "slug": "home/introduction",
+    "title": "Overview of the Elitea platform",
+    "description": "Elitea brings agents, pipelines, chat, toolkits, and credentials together in one platform for building and running AI-driven work."
+  },
+  {
+    "slug": "home/key-concepts",
+    "title": "Key concepts",
+    "description": "Short definitions of the building blocks you will use most: agents, skills, pipelines, credentials, toolkits, conversations, and artifacts."
+  },
+  {
+    "slug": "home/onboarding-tips",
+    "title": "Onboarding tips",
+    "description": "A short first-run tour of Elitea: where things live, and the fastest path to your first working agent."
+  },
+  {
+    "slug": "how-tos/agents-pipelines/build-agent-with-ai",
+    "title": "Build an agent with AI",
+    "description": "Describe an agent in plain language and let Elitea generate a starting draft you review before it is created."
+  },
+  {
+    "slug": "how-tos/agents-pipelines/entity-versioning",
+    "title": "Version agents and pipelines",
+    "description": "Save named versions of an agent or pipeline, set a default, compare versions, and share or export a specific one."
+  },
+  {
+    "slug": "how-tos/agents-pipelines/forking",
+    "title": "Fork an agent or toolkit",
+    "description": "Copy an agent, pipeline or toolkit into another project you have access to, without downloading a file."
+  },
+  {
+    "slug": "how-tos/agents-pipelines/import-export",
+    "title": "Import and export entities",
+    "description": "Back up, migrate or share an agent, pipeline, toolkit, skill or conversation as a downloadable file."
+  },
+  {
+    "slug": "how-tos/agents-pipelines/publishing",
+    "title": "Publish agents and skills",
+    "description": "Submit an agent version or a skill to the shared catalog for review, and manage what's already published."
+  },
+  {
+    "slug": "how-tos/chat-conversations/add-teammates-to-conversation",
+    "title": "Add teammates to a conversation",
+    "description": "Invite other project members into a conversation, mention them, and manage who's participating."
+  },
+  {
+    "slug": "how-tos/chat-conversations/attach-files",
+    "title": "Attach files to a conversation",
+    "description": "Upload images and documents for a model to analyze, by clicking, dragging, or pasting."
+  },
+  {
+    "slug": "how-tos/chat-conversations/context-management",
+    "title": "Manage conversation context",
+    "description": "Read the context budget widget and configure how a conversation prunes, summarizes, and preserves its history."
+  },
+  {
+    "slug": "how-tos/chat-conversations/create-entities-from-chat",
+    "title": "Create and edit agents, pipelines, toolkits and MCPs from chat",
+    "description": "Open the inline editor for an agent, pipeline, toolkit, or MCP connection — to create a new one from the composer's + menu, or edit one that's already a participant in your conversation."
+  },
+  {
+    "slug": "how-tos/chat-conversations/elitea-mcp-tools",
+    "title": "Elitea MCP Tools (internal tool)",
+    "description": "Let an agent call other tagged agents and MCP-enabled toolkit tools at runtime through Elitea's own MCP server."
+  },
+  {
+    "slug": "how-tos/chat-conversations/how-to-canvas",
+    "title": "Use canvas",
+    "description": "Edit a code block, table, diagram, or prose document from an assistant's reply in a dedicated collaborative editor."
+  },
+  {
+    "slug": "how-tos/chat-conversations/how-to-use-chat-functionality",
+    "title": "Use chat",
+    "description": "Send messages, organize conversations into folders, attach agents and toolkits as participants, and manage message output in Elitea chat."
+  },
+  {
+    "slug": "how-tos/chat-conversations/sensitive-action-authorization-guardrail",
+    "title": "Authorize sensitive actions",
+    "description": "Review and approve or block a tool call an agent or pipeline pauses on because it was marked sensitive by an administrator."
+  },
+  {
+    "slug": "how-tos/chat-conversations/use-public-items-from-chat",
+    "title": "Use public items from chat",
+    "description": "Find and attach agents that other users have published to the community, and understand what you can and can't change about them."
+  },
+  {
+    "slug": "how-tos/credentials-toolkits/how-to-use-credentials",
+    "title": "Use credentials in a toolkit",
+    "description": "Create a credential once and reuse it across any toolkit that connects to the same external service."
+  },
+  {
+    "slug": "how-tos/credentials-toolkits/jira-automation-with-elitea",
+    "title": "Automate Jira with Elitea",
+    "description": "Trigger an Elitea agent from a Jira Automation rule to review an issue and post the result back as a comment."
+  },
+  {
+    "slug": "how-tos/credentials-toolkits/test-toolkit-tools",
+    "title": "Test toolkit tools",
+    "description": "Run a single tool against a configured toolkit to verify credentials and behavior before you attach it to an agent."
+  },
+  {
+    "slug": "how-tos/credentials-toolkits/user-specific-credentials",
+    "title": "Project vs. private credentials",
+    "description": "Choose between a credential the whole project team shares and one only you can see, for the same toolkit."
+  },
+  {
+    "slug": "how-tos/credentials-toolkits/webhooks-and-triggers",
+    "title": "Webhooks and pipeline triggers",
+    "description": "Start a pipeline from an external system with a signed webhook URL, on a cron schedule, or from a chat message."
+  },
+  {
+    "slug": "how-tos/entity-management/organizing-entities",
+    "title": "Organize agents, pipelines and toolkits",
+    "description": "Find, pin, tag, and group your agents, pipelines, toolkits, credentials, and MCPs as your project grows."
+  },
+  {
+    "slug": "how-tos/indexing/index-sources",
+    "title": "Index data from a source",
+    "description": "The credential and scope fields each supported source needs before you index it, with the shared setup steps done once."
+  },
+  {
+    "slug": "how-tos/indexing/indexing-overview",
+    "title": "Index external data",
+    "description": "Understand what indexing does, which toolkit types support it, and what you need before you create your first index."
+  },
+  {
+    "slug": "how-tos/indexing/indexing-tools",
+    "title": "Index and search data with tools",
+    "description": "Run search against a completed index from chat, an agent, or a pipeline, and understand which indexing tools run where."
+  },
+  {
+    "slug": "how-tos/indexing/schedule-indexing",
+    "title": "Schedule re-indexing",
+    "description": "Configure an automated, recurring reindex for an index using a cron expression, so it stays current without manual reindexing."
+  },
+  {
+    "slug": "how-tos/indexing/using-indexes-tab-interface",
+    "title": "Use the Indexes tab",
+    "description": "Create an index, watch it run, reindex it, schedule it, and review its history from a toolkit's Indexes tab."
+  },
+  {
+    "slug": "how-tos/pipelines/flow-editor",
+    "title": "Use the flow editor",
+    "description": "Build a pipeline visually: add nodes, connect them, and switch between the Flow and YAML views."
+  },
+  {
+    "slug": "how-tos/pipelines/nodes/control-flow-nodes",
+    "title": "Control-flow nodes: decision, router and state",
+    "description": "Branch a pipeline on a condition or on an LLM's judgment, and reshape its state between steps."
+  },
+  {
+    "slug": "how-tos/pipelines/nodes/execution-nodes",
+    "title": "Execution nodes: LLM, agent, toolkit and MCP",
+    "description": "The four node types that call a model, an agent, a toolkit tool, or an MCP server tool."
+  },
+  {
+    "slug": "how-tos/pipelines/nodes/interaction-nodes",
+    "title": "Interaction nodes: human-in-the-loop and printer",
+    "description": "Pause a pipeline for a person to approve, edit or reject a step, or format a final message back to the conversation."
+  },
+  {
+    "slug": "how-tos/pipelines/nodes/overview",
+    "title": "Pipeline node types",
+    "description": "The nine node types the pipeline runtime executes, grouped by what they do, and which older node types are display-only now."
+  },
+  {
+    "slug": "how-tos/pipelines/overview",
+    "title": "Pipelines overview",
+    "description": "Pipelines are visual, node-based workflows that combine agents, toolkits and control flow into a repeatable automation."
+  },
+  {
+    "slug": "how-tos/pipelines/pipeline-runs",
+    "title": "View pipeline runs",
+    "description": "Watch a pipeline execute on the canvas and inspect the state before and after each step."
+  },
+  {
+    "slug": "how-tos/pipelines/structure",
+    "title": "Pipeline structure: state, entry point and connections",
+    "description": "How data flows through a pipeline: the state object, the single entry point, node ports, and the END target."
+  },
+  {
+    "slug": "how-tos/pipelines/yaml",
+    "title": "Edit a pipeline as YAML",
+    "description": "Edit a pipeline's underlying YAML definition directly, in sync with the visual flow editor."
+  },
+  {
+    "slug": "",
+    "title": "Elitea Docs",
+    "description": "Elitea is a platform for building, running, and sharing AI agents, pipelines, and toolkits inside your projects."
+  },
+  {
+    "slug": "integrations/apps/inventory",
+    "title": "Inventory",
+    "description": "Ingest a code repository into a browsable knowledge graph of entities and relations, then ask questions about it."
+  },
+  {
+    "slug": "integrations/apps/wikis",
+    "title": "Wikis (DeepWiki)",
+    "description": "Generate browsable, AI-written documentation from a code repository or a bucket of files, and ask questions about it."
+  },
+  {
+    "slug": "integrations/mcp/make-tools-available-by-mcp",
+    "title": "Make toolkit tools available by MCP",
+    "description": "Expose specific tools from a connected toolkit to MCP clients, alongside your mcp-tagged agents and pipelines."
+  },
+  {
+    "slug": "integrations/mcp/mcp-server",
+    "title": "Elitea MCP server",
+    "description": "Connect an external MCP client (VS Code, Claude Code) to Elitea's own MCP server over streamable HTTP."
+  },
+  {
+    "slug": "integrations/mcp/prebuilt-mcp-servers",
+    "title": "Pre-built MCP servers",
+    "description": "Admin-curated MCP servers offered to every project as ready-made toolkits, with their secrets sealed in the vault."
+  },
+  {
+    "slug": "integrations/mcp/remote-mcp",
+    "title": "Remote MCP",
+    "description": "Connect Elitea to someone else's MCP server as a client, with OAuth authorization when the server requires it."
+  },
+  {
+    "slug": "integrations/third-party-integrations/api-usage",
+    "title": "API usage",
+    "description": "Call Elitea's REST API with a personal access token: endpoint layout, the OpenAPI UI, MCP, and SCIM."
+  },
+  {
+    "slug": "integrations/toolkits/ado_boards_toolkit",
+    "title": "ADO boards",
+    "description": "Connect ADO boards to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/ado_plans_toolkit",
+    "title": "ADO plans",
+    "description": "Connect ADO plans to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/ado_repos_toolkit",
+    "title": "ADO repos",
+    "description": "Connect ADO repos to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/ado_wiki_toolkit",
+    "title": "ADO wiki",
+    "description": "Connect ADO wiki to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/aha_toolkit",
+    "title": "Aha!",
+    "description": "Connect Aha! to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/artifact_toolkit",
+    "title": "Artifact",
+    "description": "Attach a bucket of files to an agent, pipeline or conversation so it can read, write and index them."
+  },
+  {
+    "slug": "integrations/toolkits/bitbucket_toolkit",
+    "title": "Bitbucket",
+    "description": "Connect Bitbucket to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/confluence_toolkit",
+    "title": "Confluence",
+    "description": "Connect Confluence to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/custom_toolkit",
+    "title": "Custom",
+    "description": "Configure any toolkit type by hand as raw JSON when the dedicated form doesn't cover a field you need."
+  },
+  {
+    "slug": "integrations/toolkits/figma_toolkit",
+    "title": "Figma",
+    "description": "Connect Figma to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/github_toolkit",
+    "title": "GitHub",
+    "description": "Connect GitHub to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/gitlab_org_toolkit",
+    "title": "GitLab Org",
+    "description": "Connect GitLab Org to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/gitlab_toolkit",
+    "title": "GitLab",
+    "description": "Connect GitLab to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/google_places_toolkit",
+    "title": "Google Places",
+    "description": "Connect Google Places to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/imagegen_toolkit",
+    "title": "ImageGen",
+    "description": "Generate and edit images from an agent or pipeline, saved straight to a project bucket."
+  },
+  {
+    "slug": "integrations/toolkits/jira_toolkit",
+    "title": "Jira",
+    "description": "Connect Jira to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/memory_toolkit",
+    "title": "Memory",
+    "description": "Give an agent a scoped key-value store it can write to and search across turns, independent of chat history."
+  },
+  {
+    "slug": "integrations/toolkits/openapi_toolkit",
+    "title": "OpenAPI",
+    "description": "Connect OpenAPI to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/other-toolkits",
+    "title": "Other toolkit types",
+    "description": "The 15 toolkit types in the catalogue that have no dedicated page: cloud, testing and Zephyr variants."
+  },
+  {
+    "slug": "integrations/toolkits/postman_toolkit",
+    "title": "Postman",
+    "description": "Connect Postman to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/powerpoint_toolkit",
+    "title": "PowerPoint",
+    "description": "Connect PowerPoint to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/qtest_toolkit",
+    "title": "QTest",
+    "description": "Connect QTest to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/rally_toolkit",
+    "title": "Rally",
+    "description": "Connect Rally to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/reportportal_toolkit",
+    "title": "Report Portal",
+    "description": "Connect Report Portal to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/salesforce_toolkit",
+    "title": "Salesforce",
+    "description": "Connect Salesforce to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/servicenow_toolkit",
+    "title": "ServiceNow",
+    "description": "Connect ServiceNow to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/sharepoint_toolkit",
+    "title": "SharePoint",
+    "description": "Connect SharePoint to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/slack_toolkit",
+    "title": "Slack",
+    "description": "Connect Slack to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/sonar_toolkit",
+    "title": "Sonar",
+    "description": "Connect Sonar to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/sql_toolkit",
+    "title": "SQL",
+    "description": "Connect SQL to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/testIO_toolkit",
+    "title": "TestIO",
+    "description": "Connect TestIO to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/testrail_toolkit",
+    "title": "TestRail",
+    "description": "Connect TestRail to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/xray_toolkit",
+    "title": "XRAY Cloud",
+    "description": "Connect XRAY Cloud to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/zephyr_enterprise_toolkit",
+    "title": "Zephyr Enterprise",
+    "description": "Connect Zephyr Enterprise to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/zephyr_scale_toolkit",
+    "title": "Zephyr Scale",
+    "description": "Connect Zephyr Scale to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "menus/agents",
+    "title": "Agents",
+    "description": "Create, configure, test, version, and publish agents — Elitea's configurable AI assistants."
+  },
+  {
+    "slug": "menus/applications",
+    "title": "Applications",
+    "description": "Configure purpose-built application integrations such as DeepWiki and Inventory, and request access to ones your project doesn't have yet."
+  },
+  {
+    "slug": "menus/artifacts",
+    "title": "Artifacts",
+    "description": "Create buckets, upload and manage files, control per-user access, and set retention policies for shared project storage."
+  },
+  {
+    "slug": "menus/catalog",
+    "title": "Catalog",
+    "description": "Browse, search, and use community-published agents and skills from Elitea's shared library."
+  },
+  {
+    "slug": "menus/chat",
+    "title": "Chat",
+    "description": "Elitea Chat brings models, agents, pipelines, toolkits, MCP servers, and teammates together in one conversational interface."
+  },
+  {
+    "slug": "menus/credentials",
+    "title": "Credentials",
+    "description": "Securely store and manage the authentication details toolkits and AI providers use to connect to external services."
+  },
+  {
+    "slug": "menus/deepwiki-and-inventory",
+    "title": "DeepWiki and Inventory",
+    "description": "Two application integrations that turn a code repository into browsable documentation or a queryable component graph."
+  },
+  {
+    "slug": "menus/help-and-support",
+    "title": "Help and support",
+    "description": "Reach documentation, release notes, and tutorials from the Help Center, or ask the in-context Support Assistant."
+  },
+  {
+    "slug": "menus/internal-tools",
+    "title": "Internal tools",
+    "description": "Built-in chat and agent capabilities — image creation, data analysis, planner, Python sandbox, swarm mode, and smart tools selection."
+  },
+  {
+    "slug": "menus/overview",
+    "title": "Platform overview",
+    "description": "How Elitea's sidebar, project selector, and common list views work across every menu."
+  },
+  {
+    "slug": "menus/pipelines",
+    "title": "Pipelines",
+    "description": "Design multi-step, node-based workflows that chain agents, toolkits, and control-flow logic together."
+  },
+  {
+    "slug": "menus/settings/ai-providers",
+    "title": "AI Providers",
+    "description": "Configure LLM, embedding, vector storage, image generation, speech recognition, and text-to-speech models for the project."
+  },
+  {
+    "slug": "menus/settings/analytics-and-usage",
+    "title": "Analytics and usage",
+    "description": "Review project-wide adoption, cost, and health metrics, and track budget consumption for the project or yourself."
+  },
+  {
+    "slug": "menus/settings/memory",
+    "title": "Memory",
+    "description": "Configure context-window management for your conversations, and manage the facts Elitea remembers about you across every conversation."
+  },
+  {
+    "slug": "menus/settings/notifications",
+    "title": "Notifications",
+    "description": "Review recent alerts from the quick popover, or browse your full history in Notifications Center."
+  },
+  {
+    "slug": "menus/settings/personal-settings",
+    "title": "Personal settings",
+    "description": "Your profile, application preferences, and the default AI personality applied to new conversations."
+  },
+  {
+    "slug": "menus/settings/personal-tokens",
+    "title": "Personal tokens",
+    "description": "Create and manage personal access tokens for API access and IDE integration."
+  },
+  {
+    "slug": "menus/settings/project-settings",
+    "title": "Project settings",
+    "description": "General project info, project context, the project secret vault, and member management."
+  },
+  {
+    "slug": "menus/settings/settings-overview",
+    "title": "Settings overview",
+    "description": "Where project and personal configuration live in Elitea, and who can see each section."
+  },
+  {
+    "slug": "menus/skills",
+    "title": "Skills",
+    "description": "Create reusable, Markdown-based instruction sets you attach to agents and invoke on demand during a conversation."
+  },
+  {
+    "slug": "menus/toolkits",
+    "title": "Toolkits",
+    "description": "Configure toolkit integrations and MCP servers, organize them with folders, and turn on indexing where a type supports it."
+  },
+  {
+    "slug": "reference/pipeline-node-reference",
+    "title": "Pipeline node reference",
+    "description": "Every pipeline node type, which ones the runtime actually executes, node id rules, and reserved state keys."
+  },
+  {
+    "slug": "reference/toolkit-catalogue",
+    "title": "Toolkit catalogue",
+    "description": "Every toolkit type Elitea serves, its category, and whether the Python or Rust worker can run it."
+  },
+  {
+    "slug": "support/faqs",
+    "title": "Frequently asked questions",
+    "description": "Short answers to common questions about projects, models, credentials, and sharing in Elitea."
+  },
+  {
+    "slug": "support/troubleshooting",
+    "title": "Troubleshooting",
+    "description": "A quick health checklist plus fixes for common agent, pipeline, toolkit, and LLM provider errors."
+  },
+  {
+    "slug": "what-is-new",
+    "title": "What's new",
+    "description": "Recent user-visible changes to Elitea, summarized from the platform's release history."
+  }
+]

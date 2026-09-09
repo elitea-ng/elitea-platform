@@ -1,0 +1,56 @@
+---
+title: "Report Portal"
+description: "Connect Report Portal to Elitea: prerequisites, credential setup and the tools it exposes."
+---
+
+Read Report Portal test launches and their results. It's listed under the **testing** category in the toolkit type picker.
+
+## Prerequisites
+
+- An account at Report Portal with permission to issue an API token or credential, saved in Elitea as a **`report_portal`** credential (`/credentials/create-credential/<type>`).
+
+## Connect the toolkit
+
+<Steps>
+<Step title="Open the toolkit type picker">
+In the left navigation, open **Toolkits**, then select **New**. Filter the type picker by the **testing** category, or search for "Report Portal".
+</Step>
+
+<Step title="Pick or create a credential">
+Under the credential field, choose an existing **report_portal** credential, or select **Create credential** to add one without leaving the form.
+</Step>
+
+<Step title="Save">
+Name the toolkit and select **Create**. It's now available to attach to agents, pipelines and conversations in this project.
+</Step>
+</Steps>
+
+<Screenshot id="toolkit-new-generic" alt="New toolkit dialog with the Report Portal type selected" />
+
+## Available tools
+
+<Accordion title="Available tools (9)">
+
+| Tool |
+|---|
+| Find test item by id |
+| Get all launches |
+| Get dashboard data |
+| Get extended launch data |
+| Get extended launch data as raw |
+| Get launch details |
+| Get logs for test items |
+| Get test items for launch |
+| Get user information |
+
+</Accordion>
+
+## Common issues
+
+<Note>
+Both the Rust and Python workers materialise `report_portal`; this toolkit works the same regardless of which worker your deployment runs.
+</Note>
+
+<Note>
+There's no connection check on this form. Save the toolkit, then run one read-only tool from the editor's Test tools pane to confirm the credential works before attaching Report Portal to an agent.
+</Note>

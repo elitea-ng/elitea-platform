@@ -20,6 +20,11 @@ const DEFAULT_DRAFT: ApplicationDraft = {
   instructions: 'draft',
   welcome_message: '',
   conversation_starters: [],
+  suggested_toolkits: [],
+  suggested_mcp: [],
+  suggested_pipelines: [],
+  suggested_agents: [],
+  suggested_skills: [],
 };
 
 function generateAgentDraftHandler(body?: Partial<ApplicationDraft>) {

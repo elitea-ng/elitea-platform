@@ -26,7 +26,7 @@ interface MemoryProps {
 const Memory = memo(({ projectId }: MemoryProps) => (
   <Box sx={styles.content}>
     <SettingsFormProvider {...(projectId === undefined ? {} : { projectId })}>
-      <MemoryFormContent />
+      <MemoryFormContent projectId={projectId} />
     </SettingsFormProvider>
   </Box>
 ));
