@@ -659,3 +659,63 @@ describe('the drawer’s session list (#873)', () => {
   });
 });
 
+// #873: files the reader attaches from their own machine.
+describe('the drawer’s file attachments (#873)', () => {
+  it('reads a picked file and sends it as extra_context with the question', async () => {
+    const user = userEvent.setup();
+    let body: unknown;
+    server.use(
+      http.post(`${BASE}/deepwiki/tools/:projectId/:toolkit/:tool/invoke`, async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ invocation_id: 'inv-1' });
+      }),
+      http.get(`${BASE}/deepwiki/invocations/:projectId/:toolkit/:tool/:invocation`, () =>
+        HttpResponse.json({ status: 'InProgress' }),
+      ),
+    );
+
+    open();
+    await user.upload(
+      screen.getByTestId('wiki-chat-attach-input'),
+      new File(['the important bit'], 'notes.md', { type: 'text/plain' }),
+    );
+    expect(await screen.findByText('notes.md')).toBeVisible();
+
+    await user.type(screen.getByPlaceholderText('Ask about this repository'), 'a question');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(body).not.toBeUndefined());
+    expect((body as { parameters: { extra_context: unknown } }).parameters.extra_context).toEqual([
+      { name: 'notes.md', content: 'the important bit' },
+    ]);
+  });
+
+  it('removes an attachment and stops sending it', async () => {
+    const user = userEvent.setup();
+    let body: unknown;
+    server.use(
+      http.post(`${BASE}/deepwiki/tools/:projectId/:toolkit/:tool/invoke`, async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ invocation_id: 'inv-1' });
+      }),
+      http.get(`${BASE}/deepwiki/invocations/:projectId/:toolkit/:tool/:invocation`, () =>
+        HttpResponse.json({ status: 'InProgress' }),
+      ),
+    );
+
+    open();
+    await user.upload(
+      screen.getByTestId('wiki-chat-attach-input'),
+      new File(['x'], 'notes.md', { type: 'text/plain' }),
+    );
+    await screen.findByText('notes.md');
+    await user.click(within(screen.getByTestId('wiki-chat-attach-chip')).getByTestId('CancelIcon'));
+    expect(screen.queryByText('notes.md')).toBeNull();
+
+    await user.type(screen.getByPlaceholderText('Ask about this repository'), 'a question');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(body).not.toBeUndefined());
+    expect((body as { parameters: Record<string, unknown> }).parameters).not.toHaveProperty('extra_context');
+  });
+});

@@ -362,6 +362,66 @@ test.describe('DeepWiki chat history', () => {
 });
 
 /**
+ * DWIKI-018 — a reader-uploaded file reaches the invocation, prepended in
+ * front of the question (#873).
+ *
+ * The fixture `ask` echoes `arguments["question"]` verbatim
+ * (`run/fixture.go::fixtureAsk`), and that argument is derived AFTER
+ * `ApplyExtraContext` has already folded the attachment's content into it —
+ * so the answer below is a direct window onto what the engine received, the
+ * same technique DWIKI-016 uses for a wiki-page attachment.
+ */
+test.describe('DeepWiki chat file attachments', () => {
+  test.setTimeout(120_000);
+
+  test.use({ storageState: STORAGE_STATE.member });
+
+  test('DWIKI-018: an attached file’s content is prepended before the question', async ({ page }) => {
+    const drawer = await openChatDrawer(page);
+
+    await drawer.getByTestId('wiki-chat-attach-input').setInputFiles({
+      name: 'notes.md',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('The onboarding checklist lives in a file nobody indexed.'),
+    });
+    await expect(drawer.getByTestId('wiki-chat-attach-chips')).toContainText('notes.md');
+
+    const question = 'What does the attached note say?';
+    await drawer.getByPlaceholder('Ask about this repository').fill(question);
+    await drawer.getByRole('button', { name: 'Send' }).click();
+
+    const answer = drawer.getByTestId('wiki-chat-answer').last();
+    await expect(answer).toContainText('Given these attached files:', { timeout: 60_000 });
+    await expect(answer).toContainText('--- file: notes.md ---');
+    await expect(answer).toContainText('The onboarding checklist lives in a file nobody indexed.');
+    // Prepended, not substituted: the reader's own question is still there.
+    await expect(answer).toContainText(question);
+    await expect(drawer.getByTestId('wiki-chat-error')).toHaveCount(0);
+  });
+
+  test('removing an attachment before sending leaves no trace of it in the invocation', async ({ page }) => {
+    const drawer = await openChatDrawer(page);
+
+    await drawer.getByTestId('wiki-chat-attach-input').setInputFiles({
+      name: 'scratch.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('this must never reach the provider'),
+    });
+    await expect(drawer.getByTestId('wiki-chat-attach-chips')).toContainText('scratch.txt');
+    await drawer.getByTestId('wiki-chat-attach-chips').getByTestId('CancelIcon').click();
+    await expect(drawer.getByTestId('wiki-chat-attach-chips')).toHaveCount(0);
+
+    const question = 'A question with nothing attached';
+    await drawer.getByPlaceholder('Ask about this repository').fill(question);
+    await drawer.getByRole('button', { name: 'Send' }).click();
+
+    const answer = drawer.getByTestId('wiki-chat-answer').last();
+    await expect(answer).toContainText(`Fixture answer to: ${question}`, { timeout: 60_000 });
+    await expect(answer).not.toContainText('this must never reach the provider');
+  });
+});
+
+/**
  * DWIKI-019 — the session list: every stored wiki chat for this toolkit is
  * listable, resumable, and deletable, not just the one the browser last
  * held a key to (#873).

@@ -38,7 +38,12 @@ Once generated, browse the page tree, open **Edit page** to hand-correct a page 
 
 Select **Ask about this repository** to open the chat drawer. Every question and answer is saved server-side as you go, so closing the drawer or reloading the page does not lose the conversation — reopening it picks the same session back up, and your next question still carries the earlier turns as context. Use the history icon in the drawer's header to see this toolkit's past conversations, resume one, or delete one you no longer need. **Clear the conversation** starts a fresh session rather than erasing the old one — the previous conversation stays in the history list.
 
-You can attach specific wiki pages as context for your question — this attaches page content, not an uploaded file.
+You can attach two kinds of context to a question:
+
+- **Wiki pages** — pick pages already published in the wiki you're reading; the server resolves the content, so what you attach is always what the wiki actually says.
+- **Files from your own machine** — the paperclip-with-a-badge control next to it lets you attach small text files (Markdown, plain text, CSV, most source code) up to a few hundred KB each and five files per question. Their content is read in your browser and sent along with the question; nothing is uploaded to the wiki's own pages.
+
+Both stay attached across questions in the same session until you remove them.
 
 ## Common issues
 

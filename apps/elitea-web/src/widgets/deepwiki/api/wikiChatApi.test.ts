@@ -225,3 +225,50 @@ describe('attached wiki pages', () => {
     expect(request.parameters).not.toHaveProperty('context_wiki_version_id');
   });
 });
+
+// #873: files the reader attached from their own machine, distinct from the
+// wiki-page selection above.
+describe('attached files', () => {
+  it('sends each attachment as a {name, content} pair', () => {
+    const request = buildInvokeRequest(
+      { ...TARGET, attachments: [{ name: 'notes.md', content: 'the important bit' }] },
+      INPUT,
+    );
+    expect(request.parameters).toMatchObject({
+      extra_context: [{ name: 'notes.md', content: 'the important bit' }],
+    });
+  });
+
+  it('sends every attached file, in order', () => {
+    const request = buildInvokeRequest(
+      {
+        ...TARGET,
+        attachments: [
+          { name: 'a.txt', content: '1' },
+          { name: 'b.txt', content: '2' },
+        ],
+      },
+      INPUT,
+    );
+    expect(request.parameters).toMatchObject({
+      extra_context: [
+        { name: 'a.txt', content: '1' },
+        { name: 'b.txt', content: '2' },
+      ],
+    });
+  });
+
+  it('omits the key rather than sending it empty', () => {
+    const request = buildInvokeRequest({ ...TARGET, attachments: [] }, INPUT);
+    expect(request.parameters).not.toHaveProperty('extra_context');
+  });
+
+  it('does not need a wiki version pin — attachments are the reader’s own files, not wiki pages', () => {
+    const request = buildInvokeRequest(
+      { ...TARGET, attachments: [{ name: 'notes.md', content: 'x' }] },
+      INPUT,
+    );
+    expect(request.parameters).toHaveProperty('extra_context');
+    expect(request.parameters).not.toHaveProperty('context_wiki_version_id');
+  });
+});

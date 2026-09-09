@@ -390,6 +390,37 @@ class LegacyToolRunner:
         resolved["question"] = prepend_context(arguments.get("question") or "", block)
         return resolved
 
+    def _apply_extra_context(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Resolve reader-UPLOADED files into ``question`` (#873).
+
+        Same "normally a no-op" shape as ``_apply_context_paths`` above, and
+        the same reason: the Go sub-application host resolves
+        ``extra_context`` in front of its own tool table
+        (``internal/apps/deepwiki/run/extracontext.go``) and removes the key,
+        so a request that came through the host arrives here with nothing
+        left to do. What this covers is a sidecar called directly.
+        """
+        from .wiki_context import (  # noqa: PLC0415
+            EXTRA_CONTEXT_PARAM,
+            consume_extra_context,
+            prepend_extra_context,
+            resolve_extra_context,
+        )
+
+        if not arguments.get(EXTRA_CONTEXT_PARAM):
+            return arguments
+        if tool_name not in ("ask", "deep_research"):
+            from .wiki_context import ContextRefused  # noqa: PLC0415
+
+            raise ContextRefused(
+                f"{EXTRA_CONTEXT_PARAM} is not supported by {tool_name}; attach "
+                f"files to ask or deep_research"
+            )
+        block = resolve_extra_context(arguments)
+        resolved = consume_extra_context(arguments)
+        resolved["question"] = prepend_extra_context(arguments.get("question") or "", block)
+        return resolved
+
     async def _paced(self, tool_name: str, context: Any) -> None:
         """Progress emitted before the engine answers; the fixture paces here."""
 
@@ -418,6 +449,7 @@ class LegacyToolRunner:
         import functools  # noqa: PLC0415
 
         arguments = self._apply_context_paths(tool_name, arguments)
+        arguments = self._apply_extra_context(tool_name, arguments)
         await self._paced(tool_name, context)
         tool = self._bound_tool(tool_name, context)
         result = await asyncio.to_thread(functools.partial(tool, **arguments))

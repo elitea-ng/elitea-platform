@@ -45,6 +45,7 @@ import { ResearchTodosPanel } from './ResearchTodosPanel';
 import { WikiChatComposer } from './WikiChatComposer';
 import { WikiChatMessages } from './WikiChatMessages';
 import { WikiChatSessions } from './WikiChatSessions';
+import type { WikiFileAttachment } from './WikiFileAttach';
 
 /**
  * Resize bounds in CSS pixels: ResizableDrawer measures the pointer, so its
@@ -87,6 +88,11 @@ export const WikiChatDrawer = memo(function WikiChatDrawer({
    * the control on screen says it will do.
    */
   const [contextPaths, setContextPaths] = useState<readonly string[]>([]);
+  // Same reasoning and the same lifecycle as `contextPaths` above: a
+  // property of the next question rather than of the controller, so it
+  // survives on screen exactly as the wiki-page picker's selection does
+  // until the reader changes it themselves (#873).
+  const [attachments, setAttachments] = useState<readonly WikiFileAttachment[]>([]);
   // Stable for the life of the drawer, so the conversation key is minted once
   // and the controller's id generator does not change identity per render.
   const mintId = useMemo(() => newId ?? (() => crypto.randomUUID()), [newId]);
@@ -116,12 +122,16 @@ export const WikiChatDrawer = memo(function WikiChatDrawer({
   // The selection is folded into the target rather than into the controller's
   // input, so `features/wiki-chat` needs no knowledge of attachments at all.
   const attaching = useMemo(
-    () => ({ ...target, contextPaths }),
-    [target, contextPaths],
+    () => ({ ...target, contextPaths, attachments }),
+    [target, contextPaths, attachments],
   );
 
   const onContextPathsChange = useCallback((selected: readonly string[]) => {
     setContextPaths(selected);
+  }, []);
+
+  const onAttachmentsChange = useCallback((next: readonly WikiFileAttachment[]) => {
+    setAttachments(next);
   }, []);
 
   const chat = useWikiChat({
@@ -362,6 +372,8 @@ export const WikiChatDrawer = memo(function WikiChatDrawer({
         contextPages={contextPages ?? []}
         contextPaths={contextPaths}
         onContextPathsChange={onContextPathsChange}
+        attachments={attachments}
+        onAttachmentsChange={onAttachmentsChange}
       />
     </ResizableDrawer>
   );
