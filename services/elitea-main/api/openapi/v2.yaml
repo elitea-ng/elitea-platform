@@ -107,6 +107,7 @@ tags:
   - name: toolkits
     description: Toolkit (integration) management
   - name: tracing
+  - name: webhooks
     description: OpenTelemetry trace ingest (collect/otlp proxy) and status
 
 # ---------------------------------------------------------------------------
@@ -8227,6 +8228,54 @@ components:
         response always includes all of them.
 
     # ---- Secrets (v2/secrets) ---------------------------------------------
+    Webhook:
+      type: object
+      description: >
+        NOTE(issue 876): internal/api/webhook/handler.go's `Webhook` — one row
+        of the outbound webhook registry. `secret` carries the live value on
+        every read; there is no separate reveal endpoint (see the /webhooks
+        path block's own note on why).
+      properties:
+        id: { type: string }
+        project_id: { type: string }
+        url:
+          type: string
+          description: The destination Elitea POSTs signed events to.
+        events:
+          type: array
+          items: { type: string }
+          description: >
+            The event types this webhook fires on. Free-text — the server
+            enforces no fixed vocabulary — matched against `ListByEvent`'s
+            `$2 = ANY(events)`.
+        secret:
+          type: string
+          description: >
+            HMAC-SHA256 signs the delivered body into the
+            `X-Webhook-Signature` header. Always present on a read (omitted
+            only when stored empty).
+        active:
+          type: boolean
+          description: An inactive webhook is registered but never dispatched to.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, project_id, url, events, active, created_at, updated_at]
+
+    WebhookWriteRequest:
+      type: object
+      description: >
+        The create/update body (handler.go's Create/Update decode `Webhook`
+        directly; `id`/`project_id`/timestamps are server-assigned and
+        ignored if sent).
+      properties:
+        url: { type: string }
+        events:
+          type: array
+          items: { type: string }
+        secret: { type: string }
+        active: { type: boolean }
+      required: [url, events, active]
+
     SecretListItem:
       type: object
       description: >
@@ -17788,6 +17837,144 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SecretDetail' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+
+  # ==========================================================================
+  # WEBHOOKS — the outbound project webhook registry (issue #876)
+  # ==========================================================================
+  #
+  # internal/api/webhook/handler.go's five routes, mounted at
+  # /webhooks/prompt_lib/{projectID}. This is NOT the pipeline's own inbound
+  # trigger (`/pipeline_triggers/…`, applications.getPipelineTrigger /
+  # updatePipelineTrigger above) — that resource lets an external system START
+  # one pipeline by POSTing to a per-pipeline secret URL. This one is the
+  # reverse direction: a project registers a destination URL, a list of event
+  # types, and a secret, and Elitea POSTs signed events TO it when they occur.
+  # The two share no schema, no table and no code.
+  #
+  # Every route gates on a `configurations.configuration*` permission string,
+  # reused rather than invented — see handler.go's file header for why. The
+  # response body always includes the live `secret` (redaction is tracked
+  # separately, issue #496): there is no server-side "reveal" endpoint, so the
+  # UI's reveal/hide control is purely a client-side toggle over data the read
+  # already carries.
+  /webhooks/prompt_lib/{projectID}:
+    parameters:
+      - name: projectID
+        in: path
+        required: true
+        schema: { type: string }
+
+    get:
+      operationId: listWebhooks
+      summary: List a project's outbound webhooks
+      description: >
+        handler.go's List. Returns `{"items": [...]}`, newest first
+        (repos/webhooks.go's `ORDER BY created_at DESC`). An empty registry is
+        `{"items": []}` with 200, not a 404.
+      tags: [webhooks]
+      responses:
+        '200':
+          description: The project's webhooks
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Webhook' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+    post:
+      operationId: createWebhook
+      summary: Register a new outbound webhook
+      description: >
+        handler.go's Create. The secret is whatever the caller sends —
+        there is no server-side generation — so the UI generates one
+        client-side (the same `crypto.getRandomValues` shape
+        `PipelineWebhookModal.tsx`'s `generateSecretToken` uses) before
+        calling this.
+      tags: [webhooks]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebhookWriteRequest' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Webhook' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /webhooks/prompt_lib/{projectID}/{webhookID}:
+    parameters:
+      - name: projectID
+        in: path
+        required: true
+        schema: { type: string }
+      - name: webhookID
+        in: path
+        required: true
+        schema: { type: string }
+
+    get:
+      operationId: getWebhook
+      summary: Read one webhook, including its live secret
+      description: handler.go's Get.
+      tags: [webhooks]
+      responses:
+        '200':
+          description: The webhook
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Webhook' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+
+    put:
+      operationId: updateWebhook
+      summary: Replace a webhook's URL, events, secret or active flag
+      description: >
+        handler.go's Update. Every field is replaced with what the body
+        sends — this is how the UI both "rotates" the secret (new random
+        value, same url/events/active) and toggles enable/disable (same
+        url/events/secret, flipped active).
+      tags: [webhooks]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebhookWriteRequest' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Webhook' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+
+    delete:
+      operationId: deleteWebhook
+      summary: Delete a webhook
+      description: handler.go's Delete.
+      tags: [webhooks]
+      responses:
+        '204':
+          description: Deleted
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '404': { $ref: '#/components/responses/404' }

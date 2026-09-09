@@ -20,14 +20,26 @@ A pipeline has two unattended ways to start without a person watching a chat: an
 The same section also configures the cron schedule, and an agent's info panel shows which trigger type (chat message, schedule, or webhook — GitHub, GitLab, or custom) is wired to it.
 </Note>
 
-## Webhook API
+## Webhooks
 
 Separately from pipeline triggers, each project also has a generic outbound webhook registry — you can register a URL, a list of events, and a secret, and Elitea calls that URL when those events occur. This is a different, newer capability than pipeline triggers, keyed on the project rather than a specific pipeline, and it has no equivalent in the legacy platform.
 
-Registering one today means calling the webhook API directly with your personal access token: create an entry with a target URL, the events you want, and a secret Elitea will sign requests with, then verify that signature on your receiving end the same way you would for the pipeline trigger's bearer token.
+<Steps>
+1. Open **Settings › Webhooks** for the project.
+2. Select **Register a new webhook**, give it a destination URL, and (optionally) a comma-separated list of event types to fire on — leave the events field blank to fire on every event.
+3. Save. The new webhook's secret is shown once, in a dialog with a copy button — save it now, since your receiver verifies every request's `X-Webhook-Signature` header against it.
+4. Verify the signature on your receiving end: it's an HMAC-SHA256 of the raw request body, keyed with the secret, the same scheme the pipeline trigger's bearer token protects against.
+</Steps>
+
+From the same page you can:
+
+- **Show or hide** a webhook's secret inline (it stays visible to anyone who can read the row; the toggle is a display convenience, not an access boundary).
+- **Rotate** the secret — mints a fresh value and shows it once, exactly like creation.
+- **Enable or disable** a webhook without deleting it, with the toggle in the Active column.
+- **Delete** a webhook, with a confirmation step.
 
 <Note>
-Not available yet: a page to create, list, rotate, or delete these webhooks — use the API directly. (tracked in [#876](https://github.com/elitea-ng/elitea-platform/issues/876))
+The webhook API itself still works with a personal access token, if you'd rather script registration: create an entry with a target URL, the events you want, and a secret Elitea will sign requests with.
 </Note>
 
 ## Next steps

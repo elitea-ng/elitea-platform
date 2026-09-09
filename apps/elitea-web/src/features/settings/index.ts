@@ -20,6 +20,14 @@ import { SecretsTable } from './ui/secrets/SecretsTable';
 import { SecretValueCell } from './ui/secrets/SecretValueCell';
 import { useSecretPermissions } from './lib/secrets/useSecretPermissions';
 
+import { useWebhookPermissions } from './lib/webhooks/useWebhookPermissions';
+import { generateWebhookSecret } from './lib/webhooks/webhookHelpers';
+import { WebhookFormDialog } from './ui/webhooks/WebhookFormDialog';
+export type { WebhookFormValues } from './ui/webhooks/WebhookFormDialog';
+import { WebhookSecretDialog } from './ui/webhooks/WebhookSecretDialog';
+import { WebhooksTable } from './ui/webhooks/WebhooksTable';
+export type { WebhookViewRow } from './ui/webhooks/WebhooksTable';
+
 
 import { ProjectContextBody, ProjectContextToasts } from './ui/project-context/ProjectContextBody';
 import { AgentPipelineBuilder } from './ui/project-general/AgentPipelineBuilder';
@@ -74,6 +82,15 @@ export const servicePromptsFeature = { ServicePromptsBody };
  * plaintext instead of reading the rendered text — is the same component.
  */
 export const secretsFeature = { SecretsTable, SecretValueCell, useSecretPermissions };
+
+/** Webhooks tab (`pages/settings/Webhooks.tsx`, #876). */
+export const webhooksFeature = {
+  useWebhookPermissions,
+  generateWebhookSecret,
+  WebhookFormDialog,
+  WebhookSecretDialog,
+  WebhooksTable,
+};
 
 /** Project-context tab (`pages/settings/ProjectContext.tsx`). */
 export const projectContextFeature = { ProjectContextBody, ProjectContextEmptyState, ProjectContextToasts, ProjectParamsHeader, hasSavedProjectContext, projectContextStyles };
