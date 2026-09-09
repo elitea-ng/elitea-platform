@@ -448,8 +448,8 @@ func (r *ApplicationsRepo) Create(ctx context.Context, req applications.CreateRe
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	query := fmt.Sprintf(`
-		INSERT INTO %s.applications (name, description, icon, owner_id)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO %s.applications (name, description, icon, owner_id, meta)
+		VALUES ($1, $2, $3, $4, '{}'::jsonb)
 		RETURNING `+applicationColumns, s)
 	app, err := scanApplication(
 		tx.QueryRow(ctx, query, req.Name, req.Description, req.Icon, ownerID.Int64()),

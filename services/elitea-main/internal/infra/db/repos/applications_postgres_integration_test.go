@@ -185,6 +185,11 @@ func TestApplicationsRepoPostgres_CreateReturnsTheSerialIDAndTheUUIDSeparately(t
 func TestApplicationsRepoPostgres_CreateCommitsApplicationAndVersionTogether(t *testing.T) {
 	repo, pool := newApplicationsTestRepo(t)
 	ctx := testContext(t)
+	// The restored platform schema requires metadata without a server default.
+	// This pool belongs to a disposable integration database.
+	if _, err := pool.Exec(ctx, `ALTER TABLE p_1.applications ALTER COLUMN meta DROP DEFAULT, ALTER COLUMN meta SET NOT NULL`); err != nil {
+		t.Fatalf("require explicit application metadata: %v", err)
+	}
 	seedUser(t, pool, 1, "one@elitea.ai")
 
 	app := createTestApplication(t, repo, "with-version", 1, &applications.Version{
