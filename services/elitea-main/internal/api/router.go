@@ -303,7 +303,7 @@ type RouterConfig struct {
 	//
 	// Leave it nil for the OIDC-only shape, where APPLICATION_SECRET_KEY both
 	// signs the token and reads it back. Never box a nil pointer into it.
-	PATSigner v2auth.TokenSigner
+	PATSigner                     v2auth.TokenSigner
 	RuntimeRoutes                 RuntimeRoutes
 	ProductionAuth                *ProductionAuthRoutes
 	ProductionRuntime             *ProductionRuntimeRoutes
@@ -1237,7 +1237,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	r.Group(func(r chi.Router) {
 		r.Use(compressJSONResponses())
 		r.Use(apimw.Auth(apimw.AuthConfig{
-				Validator:                  cfg.AuthValidator,
+			Validator:                  cfg.AuthValidator,
 			PrincipalValidator:         cfg.PrincipalValidator,
 			ForwardedIdentityVerifier:  cfg.Auth.ForwardedIdentityVerifier,
 			SessionSecret:              cfg.SessionSecret,
@@ -3890,7 +3890,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	mountLLM := func(proxy http.Handler, resolver apimw.PersonalProjectResolver) {
 		r.Group(func(r chi.Router) {
 			r.Use(apimw.Auth(apimw.AuthConfig{
-						Validator:                  cfg.AuthValidator,
+				Validator:                  cfg.AuthValidator,
 				PrincipalValidator:         cfg.PrincipalValidator,
 				ForwardedIdentityVerifier:  cfg.Auth.ForwardedIdentityVerifier,
 				SessionSecret:              cfg.SessionSecret,
