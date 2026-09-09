@@ -3,6 +3,7 @@ import { useCallback, useMemo } from 'react';
 import { agentEditorHooks } from '@/features/agents';
 import { useEditPipeline, usePipelineCreation } from '@/features/pipelines';
 import { toolkitEditorHooks, useToolkitCreate, useToolkitEdit } from '@/features/toolkits';
+import type { CanvasEditPayload } from '@/features/chat-messages';
 import type { Participant } from '@/entities/participant';
 import { useEditorStateStore } from '@/shared/lib/editorState';
 import { t } from '@/shared/i18n';
@@ -212,6 +213,8 @@ export interface ChatWithEditorsWiring {
   readonly handleShowAgentEditor: (participant: Participant) => void;
   readonly handleShowPipelineEditor: (participant: Participant) => void;
   readonly handleShowToolkitEditor: (participant: Participant) => void;
+  /** Opens the canvas editor for a stored canvas block in the transcript (issue 853), through the mutex. */
+  readonly handleShowCanvasEditor: (payload: CanvasEditPayload) => void;
 }
 
 /**
@@ -311,6 +314,22 @@ export function useChatWithEditors(): ChatWithEditorsWiring {
     [mutex],
   );
 
+  /*
+   * The transcript's canvas opener (issue 853). It goes through the MUTEX,
+   * not straight to `useCanvasEditing`: a reader who has the agent editor
+   * open and then clicks a canvas must get the same "another editor is open"
+   * confirm every other pair already gets, and `onEditCanvas` is the branch
+   * that raises it. The first argument is the message the canvas belongs to,
+   * which nothing on this path reads (`toSelectedCodeBlockInfo` drops it) —
+   * it is passed as `undefined` rather than invented.
+   */
+  const handleShowCanvasEditor = useCallback(
+    (payload: CanvasEditPayload) => {
+      mutex.onEditCanvas(undefined, payload);
+    },
+    [mutex],
+  );
+
   // See `ChatWithEditorsWiring.agentForEditor`'s own doc comment for why
   // this re-decode (rather than passing `editAgent.editingAgent` straight
   // through) is necessary. `{ ...editAgent.editingAgent }` first, because a
@@ -338,5 +357,6 @@ export function useChatWithEditors(): ChatWithEditorsWiring {
     handleShowAgentEditor,
     handleShowPipelineEditor,
     handleShowToolkitEditor,
+    handleShowCanvasEditor,
   };
 }

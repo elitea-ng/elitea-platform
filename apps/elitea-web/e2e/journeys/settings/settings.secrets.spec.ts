@@ -80,6 +80,10 @@ const SERVED_ITEM = (name: string): string =>
  * `toContain(name)` server check, non-deterministically. The tag partitions
  * the namespace so each engine's sweep can only reach its own secrets.
  *
+ * IT IS NOT THE WHOLE PARTITION, which cost a second round of the same flake:
+ * every WORKER of one engine shares one tag, and the sweep runs once per
+ * worker. `createdHere` below is the rest of it.
+ *
  * `_sec` stays the LAST segment. It is this file's marker. The sibling
  * settings specs write `-tok`/`-usr`, but a secret name accepts only letters,
  * digits and underscores. The server refuses a hyphen with HTTP 400
@@ -89,8 +93,58 @@ const SERVED_ITEM = (name: string): string =>
 const engineSuffix = (projectName: string): string =>
   `_${projectName.replace(/[^a-z0-9]+/gi, '').toLowerCase()}_sec`;
 
-const secretName = (projectName: string): string =>
-  `${AUTOTEST_PREFIX}j21_${Date.now()}${engineSuffix(projectName)}`;
+const secretName = (projectName: string): string => {
+  const name = `${AUTOTEST_PREFIX}j21_${Date.now()}${engineSuffix(projectName)}`;
+  createdHere.add(name);
+  return name;
+};
+
+/**
+ * The names THIS worker created. The sweep deletes these unconditionally; a
+ * name it does not recognise it deletes only once the name says it is old.
+ *
+ * WHY A WORKER NEEDS THIS SET. `fullyParallel: true` and 4 CI workers mean the
+ * five tests in this file are handed to DIFFERENT workers, and Playwright runs
+ * a file's `afterAll` once per worker — so this sweep runs up to four times
+ * per engine, at four different moments, while other workers are still inside
+ * their own tests. A retry compounds it: the failed attempt's worker tears
+ * down (and sweeps) while the fresh worker running the retry is mid-test.
+ *
+ * The engine tag partitions chromium from webkit, and until now that was taken
+ * to be the whole partition. It is not: every worker of ONE engine shares the
+ * same tag, so a sweep was free to delete a secret another worker of the same
+ * engine had created seconds earlier and was about to assert on. That is the
+ * recorded chromium failure — the created secret answered 201, appeared in the
+ * list read the page made, and was gone from the list read four hundred
+ * milliseconds later, leaving the vault holding exactly the seeded
+ * `secrets_header_value` and nothing else.
+ */
+const createdHere = new Set<string>();
+
+/**
+ * How old a secret this worker did not create must be before the sweep may
+ * delete it.
+ *
+ * It exists so the sweep can still collect what a CRASHED earlier run left
+ * behind, which is the reason the sweep matches by name pattern at all. Ten
+ * minutes is longer than a full engine shard takes in CI (~7 minutes plus its
+ * retries), so no live secret of a concurrent run can reach it, and the next
+ * run of the same engine collects whatever this one leaves.
+ */
+const STALE_AFTER_MS = 10 * 60 * 1000;
+
+/**
+ * Whether a swept name is old enough to be nobody's live secret.
+ *
+ * The name carries its own creation time (`secretName` above), which is the
+ * only handle the secrets API gives: the list answers names and placeholders,
+ * never a timestamp. A name that carries no readable stamp cannot be from this
+ * naming scheme, so it is treated as stale and collected.
+ */
+const staleByName = (name: string, now: number): boolean => {
+  const stamp = /_j21_(\d{10,})_/.exec(name)?.[1];
+  return stamp === undefined || now - Number(stamp) > STALE_AFTER_MS;
+};
 
 /* ────────────────────────────────────────────────────────────────────────
  * J21a — the page is real UI, not a stub. Asserted on form controls, not on
@@ -292,16 +346,25 @@ test('J21: settings: create secret', async ({ page }, testInfo) => {
 });
 
 /* ────────────────────────────────────────────────────────────────────────
- * Session-scoped safety net: sweep the `autotest_*_<engine>_sec` secrets
- * THIS Playwright project left behind, through whichever path is served.
+ * Worker-scoped safety net: sweep the `autotest_*_<engine>_sec` secrets THIS
+ * worker left behind, plus any old enough to belong to no live run.
  *
- * Scoped to this project's engine suffix, not to the bare `autotest_`/`_sec`
- * pair. The unscoped version deleted every matching secret in the shared
- * project 1 — including the one the other engine, running this same spec
- * concurrently, had just created and not yet asserted on. Each engine sweeps
- * only its own partition; between them they still cover everything this file
- * creates, and a crashed earlier run's leftovers are collected by the next run
- * of the same engine.
+ * TWO SCOPES, because one was not enough and the second failure looked exactly
+ * like the first.
+ *
+ *  - The ENGINE tag. The unscoped version deleted every matching secret in the
+ *    shared project 1 — including the one the other engine, running this same
+ *    spec concurrently, had just created and not yet asserted on.
+ *  - `createdHere` plus the staleness cutoff. The engine tag left four CI
+ *    workers of one engine sharing one namespace and one sweep each, so a
+ *    worker finishing this file could delete a secret another worker had just
+ *    created. It did: J21 failed twice in a row at the `toContain(name)`
+ *    server check, each time on a secret the server had answered 201 for and
+ *    listed a tenth of a second earlier.
+ *
+ * Between them the sweeps still cover everything this file creates, and a
+ * crashed earlier run's leftovers are collected by the next run of the same
+ * engine once they age past the cutoff.
  * ──────────────────────────────────────────────────────────────────────── */
 test.afterAll(async ({ browser }, testInfo) => {
   const mySuffix = engineSuffix(testInfo.project.name);
@@ -317,11 +380,14 @@ test.afterAll(async ({ browser }, testInfo) => {
     // which is exactly when that would have happened unnoticed.
     expect(resp.status(), `cleanup sweep cannot list secrets at ${SERVED_BASE}`).toBe(200);
     const items = (await resp.json()) as { name: string }[];
+    const now = Date.now();
     for (const item of items) {
-      if (item.name.startsWith(AUTOTEST_PREFIX) && item.name.endsWith(mySuffix)) {
-        const deleted = await context.request.delete(SERVED_ITEM(item.name));
-        expect(deleted.status(), `cleanup sweep failed to delete ${item.name}`).toBe(204);
-      }
+      if (!item.name.startsWith(AUTOTEST_PREFIX) || !item.name.endsWith(mySuffix)) continue;
+      // Mine, or old enough that it cannot be another worker's live secret.
+      // See `createdHere` for what the engine tag alone failed to partition.
+      if (!createdHere.has(item.name) && !staleByName(item.name, now)) continue;
+      const deleted = await context.request.delete(SERVED_ITEM(item.name));
+      expect(deleted.status(), `cleanup sweep failed to delete ${item.name}`).toBe(204);
     }
   } finally {
     await context.close();

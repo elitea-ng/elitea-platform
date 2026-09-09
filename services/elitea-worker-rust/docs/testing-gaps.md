@@ -1,6 +1,6 @@
 # Rust worker verification gaps
 
-Updated: 2026-09-08.
+Updated: 2026-09-09.
 
 ## Progression decision
 
@@ -9,7 +9,8 @@ The user accepts the verification gaps below so implementation can continue with
 This decision does not declare full parity or permit production capability registration.
 Known implementation gaps remain implementation gaps, not passing tests.
 
-The current slice connects internal MCP configuration operations to Main's existing typed services.
+The latest slice preserves skills during version creation and synchronizes the continuation branch with Main revision `f28189b5`.
+The [remaining-gates register](remaining-gates.md) defines the next implementation order.
 Internal MCP lets chat build Elitea entities through Main-owned operations.
 External MCP shares opted-in agents, pipelines, and toolkits with other systems.
 Both paths already have implementations and retained evidence. Their remaining gaps do not invalidate that evidence.

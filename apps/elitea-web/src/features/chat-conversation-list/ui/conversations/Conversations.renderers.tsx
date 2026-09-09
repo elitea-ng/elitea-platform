@@ -8,6 +8,7 @@ import type { ControlsDropdownLeafItem } from '@/shared/ui/ControlsDropdown';
 import { useLatestRef } from '../../lib/hooks/useLatestRef';
 import type { RenderConversationItem } from '../groups/DateGroup';
 import { ConversationItem } from './ConversationItem';
+import type { ConversationExportFormat } from './ConversationItem.menu';
 import { renderFoldersSectionImpl } from './Conversations.folders';
 import type { RenderFoldersSectionParams } from './Conversations.folders';
 import type { ConversationsFolder } from './Conversations.types';
@@ -49,6 +50,12 @@ export interface UseRenderConversationItemParams {
   /** `string | undefined`, not defaulted here — `Conversations.tsx` passes its own `basename` prop straight through, same as the pre-extraction code did; `ConversationItem`'s own `resolveConversationItemDefaults` applies the `?? ''` fallback. */
   readonly basename: string | undefined;
   readonly onShareLinkCopied: (() => void) | undefined;
+  /**
+   * Downloads one conversation's transcript (issue 851). Threaded through
+   * this factory rather than resolved in the row, because the exporter needs
+   * the project id and the toast that only the composition root holds.
+   */
+  readonly onExportConversation: (conversation: Conversation, format: ConversationExportFormat) => void;
 }
 
 export function useRenderConversationItem(params: UseRenderConversationItemParams): RenderConversationItem {
@@ -74,6 +81,7 @@ export function useRenderConversationItem(params: UseRenderConversationItemParam
       publicProjectId,
       basename,
       onShareLinkCopied,
+      onExportConversation,
     } = ref.current;
 
     return (
@@ -101,6 +109,7 @@ export function useRenderConversationItem(params: UseRenderConversationItemParam
         publicProjectId={publicProjectId}
         basename={basename}
         onShareLinkCopied={onShareLinkCopied}
+        onExport={(format) => onExportConversation(conversation, format)}
       />
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps -- every `ref.current.*` read above is intentionally NOT listed, per this file's own module doc (`useLatestRef`'s contract: `.current` is always this render's values by the time a render-prop like this one is invoked) — listing them would recreate this function on every one of their changes, exactly what the §3.5 `hook-deps` budget flagged as excessive.

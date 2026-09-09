@@ -50,7 +50,7 @@ export const PublishRequest = zod
       .string()
       .optional()
       .describe(
-        "Hex token from validateForPublish; when present, inline validation is skipped (handler.go:554-588).\n",
+        "The approval token validateForPublish issued for THIS version. When present and valid, inline validation is skipped. It is a signed grant, not a shape: a token nobody issued, one issued for another version, an expired one and one whose agent was edited afterwards are each refused with 400 `validation_token_invalid` and a `msg` saying which.\n",
       ),
     category: zod
       .enum([

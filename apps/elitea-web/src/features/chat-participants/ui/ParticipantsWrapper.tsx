@@ -149,6 +149,12 @@ export interface ParticipantsWrapperProps {
   /** Called to edit a participant (opens edit modal). */
   readonly onEditParticipant?: (participant: Record<string, unknown>) => void;
   /**
+   * Opens the consumer's add-participant picker. The panel's own
+   * `disabledAdd` (playback state + the `users.view` grant) still decides
+   * whether the control is offerable; this decides whether it exists.
+   */
+  readonly onAddParticipants?: (() => void) | undefined;
+  /**
    * Slot for rendering the context-budget widget beneath the participants.
    * See `ParticipantsProps.renderContextBudget` for the shape contract.
    */
@@ -222,6 +228,7 @@ export const ParticipantsWrapper = memo(
     onSelectParticipant,
     onUpdateParticipant,
     onEditParticipant,
+    onAddParticipants,
     renderContextBudget,
     resolveToolkitIcon,
     isMcpVisible,
@@ -275,6 +282,7 @@ export const ParticipantsWrapper = memo(
             onDeleteParticipant={onDeleteParticipant}
             onEditParticipant={onEditParticipant}
             onUpdateParticipant={onUpdateParticipant}
+            onAddParticipants={onAddParticipants}
             editingToolkit={editingToolkit}
             resolveToolkitIcon={resolveToolkitIcon}
             isMcpVisible={isMcpVisible}

@@ -1164,8 +1164,14 @@ ON CONFLICT (elitea_title) DO UPDATE
 -- empty one: on THIS row, "replace with empty" would silently delete the
 -- deployment's shared secrets and, here, break J20f.
 --
--- J21 (Settings > Secrets) is still unaffected: that page reads
--- `project-1`, which stays empty.
+-- J21 (Settings > Secrets) reads `project-1`, and this pair leaves it EMPTY.
+-- It does not stay empty: the restart at the end of this seed makes
+-- elitea-main write one entry into it, `secrets_header_value` — the single row
+-- of the `settings-secrets` visual baseline. That entry is the whole content
+-- of project 1's vault, and it is written by the stack rather than by a test,
+-- which is what makes the baseline reproducible. Adding the five upload limits
+-- here would put five MORE rows on that page; that is why they live in the
+-- `admin` vault, which the page does not list.
 INSERT INTO centry.secrets_key (id, data) VALUES
     ('admin', '\x6f4b47696f36536c7071656f71617172724b32757237437873724f3074626133754c6d36753779397672383d'::bytea),
     ('project-1', '\x45424553457851564668635947526f62484230654879416849694d6b4a53596e4b436b714b7977744c69383d'::bytea)
@@ -1418,6 +1424,81 @@ FROM auth_core__user u
 JOIN auth_core__project_role r ON r.project_id = 90300 AND r.name = 'editor'
 WHERE u.email = 'e2e-member@autotest.local'
 ON CONFLICT (project_id, user_id, role_id) DO NOTHING;
+
+-- ── the publish journeys' author project (project 90500) ────────────────────
+--
+-- WHY A SECOND PROJECT IS THE PREREQUISITE, and not a convenience. Publishing
+-- is a CROSS-PROJECT operation: the clone stays in the author's own schema and
+-- a TWIN is written into the public project's schema, which is the only schema
+-- ELITEA Catalog reads (internal/api/v2/eliteacore/catalog_mirror.go). On this
+-- rig the public project IS project 1 — nothing sets `ELITEA_AI_PROJECT_ID`,
+-- so `internal/publicproject` answers its default — and every persona already
+-- stands there. A publish issued from project 1 therefore takes the
+-- `isPublicProject` short circuit and writes no twin at all, so the two halves
+-- of a publish cannot be told apart from inside it: the author-side clone and
+-- the catalogue row are the same row.
+--
+-- This project supplies the missing half. It is NOT the public project, so a
+-- publish from here crosses schemas exactly as a real author's does, the twin
+-- is written, and withdrawing has something to remove. It is also what makes
+-- "the moderator publishes from inside the catalogue project" a DIFFERENT
+-- case from "the author publishes into it" rather than the same request twice.
+--
+-- ITS OWN PROJECT, and not 90200 / 90300 / 90401 / 90411, for the reason the
+-- DeepWiki block above states: each of those is asserted on by journeys that
+-- never mention this one, and a published agent is a row their listings count.
+--
+-- OWNED BY THE MEMBER PERSONA, and both personas hold the admin role in it.
+-- `owner_id` is the member so the project is a member-owned team project — the
+-- ordinary shape, not an operator's — while the API journeys run on the admin
+-- storage state (e2e/journeys/api/*.spec.ts), so the admin persona needs a
+-- membership here or every request from those journeys is refused before the
+-- publish route is reached.
+INSERT INTO centry.project (id, name, owner_id, keycloak_groups, create_success, suspended)
+SELECT 90500, 'e2e-publish-author', u.id, '{}', true, false
+FROM auth_core__user u
+WHERE u.email = 'e2e-member@autotest.local'
+ON CONFLICT (id) DO UPDATE
+    SET name = EXCLUDED.name, owner_id = EXCLUDED.owner_id, suspended = EXCLUDED.suspended;
+
+INSERT INTO auth_core__project_role (project_id, name) VALUES
+    (90500, 'admin'), (90500, 'editor'), (90500, 'viewer')
+ON CONFLICT (project_id, name) DO NOTHING;
+
+-- Copied from project 1's overrides rather than restated, for the reason
+-- 90200's block gives: a hand-written subset drifts the moment a permission is
+-- added, and the journey then fails on a permission nobody thought about. The
+-- publish path alone resolves five of them
+-- (`models.applications.publish.post`, `.unpublish.post`, `.version.*`,
+-- `.applications.*`), and the catalogue reads resolve more.
+INSERT INTO auth_core__project_role_permission (project_id, role_id, permission)
+SELECT 90500, target.id, source.permission
+FROM auth_core__project_role_permission source
+JOIN auth_core__project_role origin
+  ON origin.id = source.role_id AND origin.project_id = 1
+JOIN auth_core__project_role target
+  ON target.project_id = 90500 AND target.name = origin.name
+WHERE source.project_id = 1
+ON CONFLICT (project_id, role_id, permission) DO NOTHING;
+
+INSERT INTO auth_core__project_user_role (project_id, user_id, role_id)
+SELECT 90500, u.id, r.id
+FROM auth_core__user u
+JOIN auth_core__project_role r ON r.project_id = 90500 AND r.name = 'admin'
+WHERE u.email IN ('e2e-member@autotest.local', 'e2e-admin@autotest.local')
+ON CONFLICT (project_id, user_id, role_id) DO NOTHING;
+
+-- The empty vault pair, copied from project 1 exactly as the personal projects
+-- above copy it and for the same measured reason: `CurrentModelCatalogReader`
+-- fails the WHOLE read when the rows are ABSENT, not when they are empty, so a
+-- project without them answers 500 to `GET /configurations/models/{project}` —
+-- the read that tells a journey which model it may name.
+INSERT INTO centry.secrets_key (id, data)
+SELECT 'project-90500', data FROM centry.secrets_key WHERE id = 'project-1'
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO centry.secrets_data (id, data)
+SELECT 'project-90500', data FROM centry.secrets_data WHERE id = 'project-1'
+ON CONFLICT (id) DO NOTHING;
 
 -- Tenant schemas for every project this seed created.
 --
@@ -2240,6 +2321,180 @@ INVENTORY_SQL
     echo "  ✓ Inventory project 90300, toolkits 9101/9102 and source 9110 seeded"
     echo "    (no graph objects: the fixture runner answers every read from its canned graph)"
 
+    # ── the publish journeys' project-private model (project 90500) ─────────
+    #
+    # POSITION IS LOAD-BEARING, like the two blocks above: `p_90500` is created
+    # by the `DO $schemas$` loop inside the seed SQL, so a row written into that
+    # schema has to be written AFTER it. Placed with the project rows it would
+    # fail on `relation "p_90500.configuration" does not exist` on a first seed.
+    #
+    # WHAT THIS ROW IS FOR. Publishing refuses an agent whose model belongs to
+    # any project other than the public one — `llm_not_shared`, decided against
+    # `llm_settings.model_project_id` alone (internal/api/v2/eliteacore/
+    # handler.go) — and the pre-publish check raises the same finding as a
+    # critical issue. Until now this rig held exactly ONE model and it lived in
+    # the public project, so the refusal could only be provoked by naming a
+    # project id that exists nowhere. That is a different test: it proves the
+    # guard refuses an UNKNOWN project, not that it refuses a REAL private
+    # model, and a guard that compared against "any project the caller can see"
+    # would pass it.
+    #
+    # `shared = false` in a project that is not the public one is what makes it
+    # private in the sense the catalogue means: `internal/infra/db/repos/
+    # models.go` serves a project its OWN rows plus the public project's SHARED
+    # rows, so this model is visible in 90500 and in no other project.
+    echo "  → Seeding the project-private model in project 90500…"
+
+    $EXEC_BIN exec -i "$POSTGRES_CONTAINER" psql -U elitea -d elitea -v ON_ERROR_STOP=1 >/dev/null <<'PUBLISH_SQL'
+-- The MODEL CATALOGUE row, `section = 'llm'` — the section the picker and
+-- `GET /configurations/models/{project}` read, and a different section from
+-- the `models` credential row. The project-1 pair above states why the three
+-- sections must not be conflated.
+INSERT INTO p_90500.configuration
+    (project_id, elitea_title, label, type, section, data, meta, shared, status_ok, source, created_at, updated_at)
+VALUES
+    (90500, 'e2e-private-model-llm', 'E2E-PRIVATE-MODEL', 'llm_model', 'llm',
+     '{"name":"E2E-PRIVATE-MODEL"}',
+     '{}', false, true, 'user', NOW(), NOW())
+ON CONFLICT (elitea_title) DO UPDATE
+    SET data = EXCLUDED.data, section = EXCLUDED.section, type = EXCLUDED.type,
+        label = EXCLUDED.label, shared = false, status_ok = true, updated_at = NOW();
+
+-- ── postcondition, in SQL, because every one of these is silent on screen ──
+--
+-- A missing membership is a 403 the journey reads as "publish is broken"; a
+-- missing permission row is the same 403 one layer down; a missing model row
+-- makes the private-model refusal pass for the wrong reason — the id names
+-- nothing rather than naming something private. None of them can be told apart
+-- from the others by a journey, so they are asserted here, where the failure
+-- names itself.
+DO $publish$
+DECLARE
+    memberships INTEGER;
+    grants INTEGER;
+    private_models INTEGER;
+    vaults INTEGER;
+BEGIN
+    SELECT count(*) INTO memberships
+      FROM auth_core__project_user_role pur
+      JOIN auth_core__user u ON u.id = pur.user_id
+     WHERE pur.project_id = 90500
+       AND u.email IN ('e2e-member@autotest.local', 'e2e-admin@autotest.local');
+    SELECT count(*) INTO grants
+      FROM auth_core__project_role_permission
+     WHERE project_id = 90500
+       AND permission IN ('models.applications.publish.post',
+                          'models.applications.unpublish.post',
+                          'models.applications.applications.create');
+    SELECT count(*) INTO private_models
+      FROM p_90500.configuration
+     WHERE elitea_title = 'e2e-private-model-llm' AND section = 'llm' AND shared = false;
+    SELECT count(*) INTO vaults
+      FROM centry.secrets_key WHERE id = 'project-90500';
+
+    IF memberships <> 2 OR grants < 3 OR private_models <> 1 OR vaults <> 1 THEN
+        RAISE EXCEPTION
+            'publish tenancy seed incomplete: % memberships (want 2), % publish grants (want >=3), % private model(s) (want 1), % vault(s) (want 1)',
+            memberships, grants, private_models, vaults;
+    END IF;
+END
+$publish$;
+PUBLISH_SQL
+
+    echo "  ✓ Publish author project 90500 and its non-shared model seeded"
+
+    # ── the one thing this seed cannot write, and the restart that writes it ──
+    #
+    # WHAT IS MISSING. Every project needs a `secrets_header_value` in its own
+    # vault: it is the `X-SECRET` the expanded version-details read compares
+    # against (`PATCH /elitea_core/version/prompt_lib/...`), which is the call
+    # the SDK worker materializes a NESTED AGENT with, and it is the value the
+    # API journeys authenticate that read with. A project without one refuses
+    # every caller — 403 `This project has no secrets_header_value secret`.
+    #
+    # WHY SQL CANNOT WRITE IT. The value is sealed into the project's vault with
+    # that project's Fernet key, and the one-minter rule puts every vault write
+    # inside elitea-main (internal/api/v2/secrets). psql can write the blob only
+    # by producing Fernet ciphertext, which it cannot do. So the seed writes the
+    # EMPTY vault pair above and nothing else.
+    #
+    # WHY A RESTART IS THE WRITE. elitea-main runs
+    # `BackfillProjectSecretsHeaderValues` before its listeners bind, over every
+    # row of `centry.project`. On this stack it bound BEFORE this seed ran — at
+    # `up`, against a database that had no `centry` schema at all — so the pass
+    # it already did saw nothing. Restarting it here runs the pass over the rows
+    # this seed has just written: project 1, the admin fixtures, the DeepWiki,
+    # Inventory and publish projects, and any personal project a previous run
+    # left behind (whose vault the block above has just reset to empty).
+    #
+    # WHAT DEPENDED ON THIS BEFORE. `e2e/auth.setup.ts` pre-minted project 1's
+    # value through the API, best-effort, with the failure swallowed to a
+    # console warning. That put a WRITE on the critical path of a screenshot:
+    # a mint that failed for any reason of its own — a persona without
+    # `configuration.secrets.secret.create`, a route not in the image under
+    # test — left Settings > Secrets empty, and the run then reported a visual
+    # diff on the Secrets page instead of the failed mint. The value is a
+    # property of the stack, so the stack makes it, and the setup only asserts.
+    echo "  → Restarting elitea-main so the X-SECRET backfill reaches the seeded projects…"
+
+    # The vault's digest, not its content: the blob is Fernet ciphertext with a
+    # random IV, so "the pass wrote something" is exactly "the digest changed".
+    # Read through a function because it is read once before and once per poll.
+    project_one_vault_digest() {
+      $EXEC_BIN exec -i "$POSTGRES_CONTAINER" psql -U elitea -d elitea -tAc \
+        "SELECT md5(data) FROM centry.secrets_data WHERE id = 'project-1';" 2>/dev/null \
+        | tr -d '[:space:]'
+    }
+
+    VAULT_BEFORE=$(project_one_vault_digest || true)
+    if [ -z "$VAULT_BEFORE" ]; then
+      echo "ERROR: project 1 has no vault row in centry.secrets_data." >&2
+      echo "  The seed writes that pair itself (the 'centry secret vaults' block above)," >&2
+      echo "  so its absence means the seed SQL did not reach that statement." >&2
+      exit 1
+    fi
+
+    $COMPOSE_BIN $COMPOSE_F restart elitea-main
+
+    # The digest has to CHANGE, and waiting for the container to report healthy
+    # is not the same assertion. The backfill runs before the listeners bind, so
+    # a healthy container proves the pass finished — it does not prove the pass
+    # reached project 1, and a pass that skipped it (a vault it cannot open, an
+    # advisory lock another replica holds) logs a warning and returns success.
+    # This is the postcondition the rest of the run depends on, so it is checked
+    # rather than assumed.
+    SECRET_DEADLINE=$(( $(date +%s) + 180 ))
+    VAULT_AFTER="$VAULT_BEFORE"
+    while [ "$VAULT_AFTER" = "$VAULT_BEFORE" ]; do
+      if [ "$(date +%s)" -ge "$SECRET_DEADLINE" ]; then
+        echo "ERROR: project 1's vault still holds no secrets_header_value after the restart." >&2
+        echo "  elitea-main writes it in BackfillProjectSecretsHeaderValues" >&2
+        echo "  (services/elitea-main/internal/api/v2/secrets/secrets_header_value.go)," >&2
+        echo "  which runs before its listeners bind. Read that container's log for the" >&2
+        echo "  'skipped' count: a vault it cannot open is reported there and nowhere else." >&2
+        echo "  Without the value, every expanded version-details read for project 1 is" >&2
+        echo "  refused 403 and Settings > Secrets shows an empty table." >&2
+        exit 1
+      fi
+      sleep 2
+      VAULT_AFTER=$(project_one_vault_digest || true)
+      [ -n "$VAULT_AFTER" ] || VAULT_AFTER="$VAULT_BEFORE"
+    done
+    echo "  ✓ project 1 carries a secrets_header_value (written by the boot backfill)"
+
+    # And it has to be SERVING again before the browser arrives. The same probe
+    # the compose healthcheck runs, so "healthy" means here what it means there.
+    HEALTH_DEADLINE=$(( $(date +%s) + 120 ))
+    until $EXEC_BIN exec "$MAIN_CONTAINER" /elitea-main -healthcheck >/dev/null 2>&1; do
+      if [ "$(date +%s)" -ge "$HEALTH_DEADLINE" ]; then
+        echo "ERROR: elitea-main did not become healthy after the seed restart." >&2
+        $COMPOSE_BIN $COMPOSE_F ps --all >&2 || true
+        exit 1
+      fi
+      sleep 2
+    done
+    echo "  ✓ elitea-main is serving again"
+
     echo "→ Seed complete."
     ;;
 
@@ -2258,9 +2513,18 @@ INVENTORY_SQL
     # Playwright output under it costs more than it gives. The file is uploaded
     # beside the report.
     #
-    # NEVER FATAL. This runs on the failure path, and a diagnostic that can fail
-    # the job it is diagnosing would replace one unexplained failure with
-    # another. Every branch ends in `|| true`.
+    # THE COMPOSE CALLS ARE NEVER FATAL, THE RESULT IS. This runs on the
+    # failure path, and a compose call that fails the job it is diagnosing
+    # would replace one unexplained failure with another — so `ps` and `logs`
+    # each end in `|| true`. But the command as a whole exits non-zero when it
+    # collected NOTHING: an unwritable output file, or zero log lines. Issue
+    # #859: the output directory came back root-owned from the Playwright
+    # container, `> "$OUT"` failed, `|| true` swallowed it, and "0 line(s)
+    # collected" printed in green on every failed run for months. The caller
+    # (ci-web-e2e.yml) keeps the job's outcome unchanged with
+    # `continue-on-error`; the exit code is there so the step is VISIBLY
+    # failed rather than quietly empty.
+    #
     # APP_ROOT is set inside the `seed` branch, so it is derived here rather
     # than borrowed: a default that silently resolved to "." would write the
     # file next to wherever the caller happened to stand.
@@ -2268,17 +2532,45 @@ INVENTORY_SQL
     OUT="${2:-${LOGS_APP_ROOT}/playwright-results/stack-logs.txt}"
     mkdir -p "$(dirname "$OUT")" 2>/dev/null || true
     echo "→ Collecting stack logs into ${OUT}…"
+    # Open the file FIRST, and loudly. This is the write that failed silently
+    # in #859; the message names the likely cause so the fix is one step away.
+    # (stderr is redirected FIRST: redirections apply left to right, and the
+    # shell's own "Permission denied" for the `>` would otherwise print above
+    # the message that explains it.)
+    if ! : 2>/dev/null > "$OUT"; then
+      echo "✗ stack logs: cannot write ${OUT}" >&2
+      echo "  $(ls -ld "$(dirname "$OUT")" 2>&1)" >&2
+      echo "  The Playwright container runs as root and leaves playwright-results/ root-owned;" >&2
+      echo "  chown it back to the runner user before collecting (see ci-web-e2e.yml)." >&2
+      exit 1
+    fi
     {
       echo "=== compose ps ==="
       $COMPOSE_BIN $COMPOSE_F ps 2>&1 || true
       echo
       echo "=== compose logs (--no-color, timestamps) ==="
-      $COMPOSE_BIN $COMPOSE_F logs --no-color --timestamps 2>&1 || true
-    } > "$OUT" 2>&1 || true
+    } >> "$OUT" 2>&1
+    # Only the `compose logs` payload counts. The headers and `compose ps`
+    # always print something (a column header for an empty project), so a
+    # count over the whole file could never reach 0 and the warning below
+    # would never fire.
+    LOGS_HEADER_LINES="$(wc -l < "$OUT" | tr -d ' ')"
+    LOGS_STDERR="$(mktemp)"
+    $COMPOSE_BIN $COMPOSE_F logs --no-color --timestamps >> "$OUT" 2> "$LOGS_STDERR" || true
+    LOGS_LINES=$(( $(wc -l < "$OUT" | tr -d ' ') - LOGS_HEADER_LINES ))
+    if [ -s "$LOGS_STDERR" ]; then
+      { echo; echo "=== compose logs stderr ==="; cat "$LOGS_STDERR"; } >> "$OUT"
+    fi
+    rm -f "$LOGS_STDERR"
     # The count is printed so a caller can tell "collected nothing" from
     # "collected and there was nothing wrong" — an empty file that nobody
     # noticed is the same dead end this command exists to remove.
-    echo "  ✓ $(wc -l < "$OUT" 2>/dev/null || echo 0) line(s) collected"
+    if [ "$LOGS_LINES" -eq 0 ]; then
+      echo "⚠ stack logs: 0 lines collected — check container names / ownership" >&2
+      echo "  project: ${E2E_PROJECT}  compose: ${COMPOSE_BIN}" >&2
+      exit 1
+    fi
+    echo "  ✓ ${LOGS_LINES} line(s) collected"
     ;;
 
   *)

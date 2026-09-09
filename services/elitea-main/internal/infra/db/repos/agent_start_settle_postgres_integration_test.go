@@ -67,7 +67,7 @@ func TestPostgresCurrentStartReResolvesWhenTheResponseSettlesUnderIt(t *testing.
 		"execution-settle-race",
 	)
 
-	repository, err := NewCurrentAgentStartRepository(pool)
+	repository, err := NewCurrentAgentStartRepository(pool, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestPostgresCurrentStartStillRefusesAResponseThatNeverSettles(t *testing.T)
 		"execution-never-settles",
 	)
 
-	repository, err := NewCurrentAgentStartRepository(pool)
+	repository, err := NewCurrentAgentStartRepository(pool, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

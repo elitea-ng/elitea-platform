@@ -2480,7 +2480,9 @@ func (p *poolChecker) Ping(ctx context.Context) error {
 }
 
 // backfillProjectSecretsHeaderValues gives every existing project an `X-SECRET`
-// value, and logs how many it wrote (#408).
+// value, and logs how many it wrote (#408). A project with no vault gets one,
+// because a project row created by anything other than projectprovisioning has
+// none and would otherwise never receive a value.
 //
 // WHY IT RUNS HERE. The value is sealed with the project's Fernet key, which
 // this process wraps with SECRETS_MASTER_KEY, so no SQL migration can write it
@@ -2507,7 +2509,8 @@ func backfillProjectSecretsHeaderValues(ctx context.Context, pool *pgxpool.Pool,
 	if err != nil {
 		logger.ErrorContext(ctx, "the project X-SECRET backfill did not finish; "+
 			"the version details route refuses every caller for the projects it did not reach",
-			"vaults", report.Vaults,
+			"projects", report.Projects,
+			"vaults_created", report.VaultsCreated,
 			"written", report.Written,
 			"already_set", report.AlreadySet,
 			"skipped", report.Skipped,
@@ -2525,11 +2528,12 @@ func backfillProjectSecretsHeaderValues(ctx context.Context, pool *pgxpool.Pool,
 	}
 	if report.Written == 0 && report.Skipped == 0 {
 		logger.InfoContext(ctx, "every project vault already holds an X-SECRET value",
-			"vaults", report.Vaults)
+			"projects", report.Projects)
 		return
 	}
 	logger.InfoContext(ctx, "wrote an X-SECRET value into the project vaults that had none",
-		"vaults", report.Vaults,
+		"projects", report.Projects,
+		"vaults_created", report.VaultsCreated,
 		"written", report.Written,
 		"already_set", report.AlreadySet,
 		"skipped", report.Skipped)

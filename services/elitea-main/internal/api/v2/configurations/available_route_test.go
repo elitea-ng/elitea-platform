@@ -78,9 +78,9 @@ func TestCurrentAvailableRouteRejectsIncompleteDependencies(t *testing.T) {
 		catalog handler.CurrentAvailableCatalogReader
 		auth    apimw.AuthConfig
 	}{
-		"missing catalog":   {auth: apimw.AuthConfig{PrincipalValidator: principal, ForwardedIdentityVerifier: peer}},
-		"missing principal": {catalog: catalog, auth: apimw.AuthConfig{ForwardedIdentityVerifier: peer}},
-		"missing peer":      {catalog: catalog, auth: apimw.AuthConfig{PrincipalValidator: principal}},
+		"missing catalog":      {auth: apimw.AuthConfig{PrincipalValidator: principal, ForwardedIdentityVerifier: peer}},
+		"missing principal":    {catalog: catalog, auth: apimw.AuthConfig{ForwardedIdentityVerifier: peer}},
+		"no credential reader": {catalog: catalog, auth: apimw.AuthConfig{PrincipalValidator: principal}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := handler.NewCurrentAvailableRoute(test.catalog, test.auth); !errors.Is(err, handler.ErrInvalidCurrentAvailableRoute) {

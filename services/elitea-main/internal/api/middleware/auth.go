@@ -703,3 +703,31 @@ func validateToken(ctx context.Context, cfg AuthConfig, token string) (auth.User
 	}
 	return cfg.Validator.ValidateToken(ctx, token)
 }
+
+// CredentialPlaneComposed reports whether this AuthConfig can identify a caller
+// at all: a PrincipalValidator to check mutable account state, plus at least one
+// source that reads a credential back.
+//
+// It is the constructor-side form of the question the composition root already
+// asks (productionAuthenticationComposed in cmd/elitea-main). Route
+// constructors used to demand a non-nil ForwardedIdentityVerifier instead, and
+// that field is composed only by the Form authentication document: on an
+// OIDC-only deployment — the E2E stack and every single-sign-on-only install —
+// apiGroupAuthConfig leaves it nil and carries the session cookie and the
+// personal-access-token validator instead. Every such constructor therefore
+// refused a perfectly authenticated deployment, and the binary stopped with
+// "invalid ... route dependencies" at boot.
+//
+// A nil ForwardedIdentityVerifier is safe at request time: tryTraefikHeaders
+// refuses every X-Auth-* header when the verifier is nil, so the forwarded
+// identity plane is closed rather than open. What must never be nil is the
+// PrincipalValidator, because validatePrincipal returns the claimed user
+// unchanged when it is absent (#301/#314/#370).
+func (cfg AuthConfig) CredentialPlaneComposed() bool {
+	if cfg.PrincipalValidator == nil {
+		return false
+	}
+	return cfg.ForwardedIdentityVerifier != nil ||
+		cfg.Validator != nil ||
+		cfg.SessionSecret != ""
+}

@@ -46,6 +46,7 @@ import type { RequestHandlerOptions } from "msw";
 
 import type {
   CanvasPresence,
+  ConversationExport,
   MessageTraceListing,
   MessageTraceStepDetail,
   SupportAssistantConfig,
@@ -243,6 +244,53 @@ export const getHeartbeatCanvasPresenceResponseMock = (
   ttl_seconds: faker.number.int(),
   ...overrideResponse,
 });
+
+export const getExportConversationResponseMock = (
+  overrideResponse: Partial<Extract<string | ConversationExport, object>> = {},
+): string | ConversationExport =>
+  faker.helpers.arrayElement([
+    faker.word.sample(),
+    {
+      id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      uuid: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      project_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      description: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      exported_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      message_count: faker.number.int(),
+      messages: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => ({
+        id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        uid: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+        role: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        author: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+        content: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        content_type: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+        created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+        metadata: faker.helpers.arrayElement([{}, undefined]),
+      })),
+      ...overrideResponse,
+    },
+  ]);
 
 export const getListMessageTracesResponseMock = (
   overrideResponse: Partial<Extract<MessageTraceListing, object>> = {},
@@ -572,6 +620,37 @@ export const getHeartbeatCanvasPresenceMockHandler = (
   );
 };
 
+export const getExportConversationMockHandler = (
+  overrideResponse?:
+    | string
+    | ConversationExport
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<string | ConversationExport> | string | ConversationExport),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/conversation_export/prompt_lib/:projectId/:conversationId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      const resolvedBody =
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getExportConversationResponseMock();
+      return typeof resolvedBody === "string"
+        ? HttpResponse.text(resolvedBody, {
+            status: 200,
+            headers: { "Content-Type": "text/markdown" },
+          })
+        : HttpResponse.json(resolvedBody, { status: 200 });
+    },
+    options,
+  );
+};
+
 export const getListMessageTracesMockHandler = (
   overrideResponse?:
     | MessageTraceListing
@@ -630,6 +709,7 @@ export const getChatMock = () => [
   getGetSupportConversationMockHandler(),
   getStartSupportTurnMockHandler(),
   getHeartbeatCanvasPresenceMockHandler(),
+  getExportConversationMockHandler(),
   getListMessageTracesMockHandler(),
   getGetMessageTraceMockHandler(),
 ];

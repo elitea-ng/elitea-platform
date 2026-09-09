@@ -42,10 +42,13 @@ WITH deleted AS (
     DELETE FROM application_versions
     WHERE application_id = $1::text::integer
       AND id = $2::text::integer
-    RETURNING id
+    RETURNING id, application_id
 ), deleted_skills AS (
     DELETE FROM entity_skill_mapping
     WHERE entity_version_id IN (SELECT id FROM deleted)
+), touched AS (
+    UPDATE applications SET updated_at = now()
+    WHERE id IN (SELECT application_id FROM deleted)
 )
 SELECT count(*)::bigint FROM deleted
 `

@@ -20,6 +20,8 @@
  * `features/toolkits`, `features/agents`).
  */
 import { EliteaApiError } from '@/shared/api/generated/mutator';
+import { t } from '@/shared/i18n';
+import type { ApiDownloadFailure } from '@/shared/lib/download';
 import { buildErrorMessage, type ProjectContextForErrorMessage } from '@/shared/lib/http-error';
 
 /**
@@ -69,4 +71,31 @@ export function conversationListErrorMessage(error: unknown, projectContext?: Pr
     }
   }
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * The message a failed conversation export (issue 851) becomes.
+ *
+ * A download does NOT go through `eliteaFetch`, so it never produces an
+ * `EliteaApiError` and `conversationListErrorMessage` above cannot read it:
+ * `shared/lib/download.ts` resolves its own `ApiDownloadFailure` value
+ * instead of throwing, precisely so a menu click cannot end in an unhandled
+ * rejection. This is the adapter for that shape.
+ *
+ * A refusal's own sentence is preferred when the server sent one — the export
+ * route explains WHY it refused ("unsupported export format", "this
+ * conversation has more than N messages"), and replacing that with a status
+ * code would throw away the only actionable half of the answer.
+ */
+export function conversationExportErrorMessage(failure: ApiDownloadFailure): string {
+  switch (failure.kind) {
+    case 'http':
+      return failure.reason ?? t('features.chatConversationList.conversationItem.menu.exportFailed', 'The conversation could not be exported.');
+    case 'network':
+      return failure.message;
+    case 'aborted':
+      return t('features.chatConversationList.conversationItem.menu.exportCancelled', 'The export was cancelled.');
+    default:
+      return failure satisfies never;
+  }
 }

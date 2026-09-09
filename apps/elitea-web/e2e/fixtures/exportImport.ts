@@ -67,13 +67,62 @@ export interface StoredApplication {
   readonly version_details?: StoredVersion;
 }
 
-/** `POST /elitea_core/import_wizard/prompt_lib/{project}`. */
+/** One entry of an import/fork error channel. */
+export interface ImportChannelError {
+  readonly index: number;
+  readonly name: string;
+  readonly msg: string;
+}
+
+/** One `version_details.tools[]` entry of an import answer. */
+export interface ImportedVersionTool {
+  readonly id?: string;
+  readonly name?: string;
+  readonly type?: string;
+}
+
+/** The `version_details` an imported or forked agent answers with. */
+export interface ImportedVersionDetails {
+  readonly id?: string;
+  readonly name?: string;
+  readonly meta?: Readonly<Record<string, unknown>>;
+  readonly llm_settings?: Readonly<Record<string, unknown>>;
+  readonly instructions?: string;
+  readonly welcome_message?: string;
+  readonly is_forked?: boolean;
+  readonly variables?: readonly { readonly name?: string; readonly value?: string }[];
+  readonly tools?: readonly ImportedVersionTool[];
+}
+
+/** One imported agent. */
+export interface ImportedAgent {
+  readonly id: string;
+  readonly name?: string;
+  readonly description?: string;
+  readonly owner_id?: string;
+  readonly version_details?: ImportedVersionDetails | null;
+}
+
+/**
+ * `POST /elitea_core/import_wizard/prompt_lib/{project}` — and the fork, which
+ * answers the same envelope through the same wizard.
+ *
+ * ALL THREE CHANNELS, on both sides. A journey that decoded `result.agents`
+ * alone cannot tell a partial import from a complete one: the handler answers
+ * 207 with the entities that landed in `result` and the ones that did not in
+ * `errors`, and a toolkit that failed is reported on its OWN channel while the
+ * agent that referenced it is reported on the agents' one.
+ */
 export interface ImportWizardResult {
   readonly result?: {
-    readonly agents?: readonly { readonly id: string; readonly name?: string }[];
+    readonly agents?: readonly ImportedAgent[];
+    readonly toolkits?: readonly { readonly id: string; readonly name?: string; readonly type?: string }[];
+    readonly skills?: readonly { readonly id: string; readonly name?: string }[];
   };
   readonly errors?: {
-    readonly agents?: readonly { readonly index: number; readonly name: string; readonly msg: string }[];
+    readonly agents?: readonly ImportChannelError[];
+    readonly toolkits?: readonly ImportChannelError[];
+    readonly skills?: readonly ImportChannelError[];
   };
 }
 
@@ -432,12 +481,20 @@ export function buildImportPayloadFromExport(exported: ExportedMarkdown): unknow
   });
 }
 
+/** The decoded answer of an import or a fork, with the status it came with. */
+export interface ImportAnswer {
+  readonly status: number;
+  readonly body: ImportWizardResult;
+  readonly text: string;
+}
+
 /** POST an import-wizard body. Returns the decoded answer whatever the status, because the errors live IN it. */
 export async function importWizard(
   request: APIRequestContext,
   payload: unknown[],
-): Promise<{ readonly status: number; readonly body: ImportWizardResult; readonly text: string }> {
-  const url = `${API_BASE}/elitea_core/import_wizard/prompt_lib/${DEFAULT_PROJECT_ID}`;
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<ImportAnswer> {
+  const url = `${API_BASE}/elitea_core/import_wizard/prompt_lib/${projectId}`;
   const resp = await request.post(url, { data: payload });
   const text = await resp.text();
   let body: ImportWizardResult = {};
@@ -458,11 +515,7 @@ export async function importWizard(
  * wrote nothing. That is the failure mode the legacy suite guards on every one
  * of its round trips.
  */
-export function importedAgentId(answer: {
-  readonly status: number;
-  readonly body: ImportWizardResult;
-  readonly text: string;
-}): string {
+export function importedAgentId(answer: ImportAnswer): string {
   const errors = answer.body.errors?.agents ?? [];
   if (errors.length > 0) {
     throw new Error(`the import reported errors: ${JSON.stringify(errors)}`);
@@ -478,4 +531,239 @@ export function importedAgentId(answer: {
     throw new Error(`the import answered an agent with no id: ${answer.text.slice(0, 300)}`);
   }
   return id;
+}
+
+/* ── the JSON bundle ─────────────────────────────────────────────────────── */
+
+/**
+ * The export has TWO documents, and only one of them was covered.
+ *
+ * `?format=md` renders one markdown file per version — the file a person saves
+ * and mails. The default is the JSON BUNDLE, and it is the one that carries a
+ * toolkit: `{ok, applications[], toolkits[], skills?}`, cross-linked by
+ * `import_uuid` (`services/elitea-main/internal/api/v2/eliteacore/
+ * export_import.go`, `exportedToolkits` / `exportedVersionTools`). The markdown
+ * file has no place to put a toolkit at all, so every assertion about a
+ * toolkit surviving a round trip has to be made against this shape.
+ */
+export interface ExportedToolkit {
+  readonly id?: unknown;
+  readonly name?: string;
+  readonly type?: string;
+  readonly import_uuid?: string;
+  readonly settings?: Readonly<Record<string, unknown>>;
+}
+
+/** One `versions[]` entry of the bundle — richer than the markdown frontmatter. */
+export interface ExportedBundleVersion extends StoredVersion {
+  readonly status?: string;
+  readonly application_id?: string;
+  readonly author_id?: string;
+  readonly import_version_uuid?: string;
+  readonly is_forked?: boolean;
+  readonly tools?: readonly {
+    readonly import_uuid?: string;
+    readonly selected_tools?: unknown;
+  }[];
+  readonly tags?: readonly { readonly name?: string }[];
+}
+
+/** One `applications[]` entry of the bundle. */
+export interface ExportedApplication {
+  readonly id?: string;
+  readonly name?: string;
+  readonly description?: string;
+  readonly type?: string;
+  readonly import_uuid?: string;
+  readonly versions?: readonly ExportedBundleVersion[];
+  /** Fork-only provenance — see `exportBundle`'s `fork` option. */
+  readonly owner_id?: string;
+  readonly original_exported?: boolean;
+  readonly shared_id?: string | null;
+  readonly shared_owner_id?: string | null;
+}
+
+/** The whole document `GET /elitea_core/export_import/...` answers. */
+export interface ExportedBundle {
+  readonly ok?: boolean;
+  readonly applications?: readonly ExportedApplication[];
+  readonly toolkits?: readonly ExportedToolkit[];
+  readonly skills?: readonly Record<string, unknown>[];
+}
+
+/**
+ * The settings keys the export DELETES from every toolkit it writes.
+ *
+ * Copied from the one place that owns the list — the scrub loop in
+ * `export_import.go`'s `exportedToolkits`. A journey that re-derived it from
+ * memory would go on passing after the list shrank, which is the whole failure
+ * this constant exists to make impossible: the assertion is "the document
+ * carries none of these", and the list has to be the server's own.
+ */
+export const EXPORT_SCRUBBED_SETTING_KEYS = [
+  'api_key',
+  'access_token',
+  'token',
+  'api_key_type',
+  'client_secret',
+  'gitlab_personal_access_token',
+  'private_token',
+  'sonar_token',
+  'qtest_api_token',
+  'client_id',
+  'password',
+  'secret',
+  'app_id',
+] as const;
+
+/** How `exportBundle` should ask for the document. */
+export interface ExportBundleOptions {
+  /**
+   * `?fork=true` — the flavour the Fork button reads. It keeps only the LAST
+   * version and adds the provenance keys the fork writer needs
+   * (`owner_id`, `original_exported`, `shared_id`, `shared_owner_id`).
+   */
+  readonly fork?: boolean;
+  readonly projectId?: string;
+}
+
+/** Export one application as the JSON bundle. Returns the raw text too. */
+export async function exportBundle(
+  request: APIRequestContext,
+  id: string,
+  options: ExportBundleOptions = {},
+): Promise<{ readonly text: string; readonly bundle: ExportedBundle }> {
+  const projectId = options.projectId ?? DEFAULT_PROJECT_ID;
+  const url =
+    `${API_BASE}/elitea_core/export_import/prompt_lib/${projectId}/${id}` +
+    (options.fork === true ? '?fork=true' : '');
+  const resp = await request.get(url);
+  if (!resp.ok()) await refuse('exportBundle', 'GET', url, resp);
+  const text = await resp.text();
+  let bundle: ExportedBundle;
+  try {
+    bundle = JSON.parse(text) as ExportedBundle;
+  } catch {
+    throw new Error(`exportBundle: GET ${url} answered non-JSON: ${text.slice(0, 300)}`);
+  }
+  return { text, bundle };
+}
+
+/**
+ * The bundle flattened into the entity array the import wizard posts.
+ *
+ * The import reads ONE list and decides what each entry is by its `entity`
+ * key; a body that keeps the bundle's own `{applications, toolkits}` envelope
+ * imports the applications and silently drops every toolkit, because the
+ * envelope branch reads the `applications` key alone
+ * (`eliteacore/handler.go`, `ExportImportPost`). The web client does this
+ * flattening in the browser, so a journey that skipped it would prove a round
+ * trip the product never makes.
+ *
+ * Toolkits come FIRST only for readability: the handler separates the entries
+ * by `entity` before it imports any of them, and it resolves an
+ * `application`-typed toolkit against the agents it imported in the same
+ * request, so neither order can change the outcome.
+ */
+export function bundleToImportEntities(bundle: ExportedBundle): unknown[] {
+  const entities: unknown[] = [];
+  for (const toolkit of bundle.toolkits ?? []) entities.push({ ...toolkit, entity: 'toolkits' });
+  for (const skill of bundle.skills ?? []) entities.push({ ...skill, entity: 'skills' });
+  for (const application of bundle.applications ?? []) {
+    entities.push({ ...application, entity: 'agents' });
+  }
+  return entities;
+}
+
+/**
+ * Attach a toolkit to one agent version, through the route the tool menu
+ * itself drives (`PATCH /elitea_core/tool/prompt_lib/{project}/{toolkit}` with
+ * `has_relation`).
+ *
+ * `entity_type: 'agent'` is the literal the product sends
+ * (`src/features/agents/lib/toolRelation.ts`), and the attach and the detach
+ * must agree on it because the mapping's unique key includes it.
+ */
+export async function attachToolkitToVersion(
+  request: APIRequestContext,
+  toolkitId: string,
+  target: {
+    readonly applicationId: string;
+    readonly versionId: string;
+    readonly selectedTools?: readonly string[];
+    readonly projectId?: string;
+  },
+): Promise<void> {
+  const projectId = target.projectId ?? DEFAULT_PROJECT_ID;
+  const url = `${API_BASE}/elitea_core/tool/prompt_lib/${projectId}/${toolkitId}`;
+  const resp = await request.patch(url, {
+    data: {
+      entity_version_id: Number(target.versionId),
+      entity_id: Number(target.applicationId),
+      entity_type: 'agent',
+      has_relation: true,
+      ...(target.selectedTools === undefined ? {} : { selected_tools: target.selectedTools }),
+    },
+  });
+  if (!resp.ok()) await refuse('attachToolkitToVersion', 'PATCH', url, resp);
+}
+
+/* ── the fork ────────────────────────────────────────────────────────────── */
+
+/**
+ * POST a fork body into one project.
+ *
+ * The fork is NOT the import, even though both answer the same wizard
+ * envelope and the route was once served by the import handler. Only the fork
+ * rewrites `llm_settings.model_project_id` to the destination and writes the
+ * `meta.parent_*` provenance, so a copy made by the import kept pointing at a
+ * model in a project the new owner may not belong to and recorded nothing
+ * about where it came from (`eliteacore/handler.go`, `Fork`).
+ *
+ * The body is the ENVELOPE (`{applications, skills}`), not the flat entity
+ * array the import takes: the fork reads `body["applications"]` and refuses a
+ * body without it.
+ */
+export async function forkBundle(
+  request: APIRequestContext,
+  destinationProjectId: string,
+  bundle: ExportedBundle,
+): Promise<ImportAnswer> {
+  const url = `${API_BASE}/elitea_core/fork/prompt_lib/${destinationProjectId}`;
+  const body: Record<string, unknown> = { applications: bundle.applications ?? [] };
+  // Carried only when the document has one: the fork separates "you sent no
+  // skills array" from "the skill you sent could not be linked", and sending
+  // an empty array for an agent with no skills would ask for the second
+  // message on a document that is complete.
+  if ((bundle.skills ?? []).length > 0) body['skills'] = bundle.skills;
+  const resp = await request.post(url, { data: body });
+  const text = await resp.text();
+  let decoded: ImportWizardResult = {};
+  try {
+    decoded = JSON.parse(text) as ImportWizardResult;
+  } catch {
+    throw new Error(`forkBundle: POST ${url} -> ${resp.status()} answered non-JSON: ${text.slice(0, 300)}`);
+  }
+  return { status: resp.status(), body: decoded, text };
+}
+
+/** Read one application out of a named project — the cross-project read a fork needs. */
+export async function readApplicationIn(
+  request: APIRequestContext,
+  projectId: string,
+  id: string,
+): Promise<StoredApplication> {
+  const url = `${API_BASE}/elitea_core/application/prompt_lib/${projectId}/${id}`;
+  const resp = await request.get(url);
+  if (!resp.ok()) await refuse('readApplicationIn', 'GET', url, resp);
+  return (await resp.json()) as StoredApplication;
+}
+
+/** Delete one application out of a named project. Best effort — it runs in a `finally`. */
+export async function deleteApplicationIn(
+  request: APIRequestContext,
+  projectId: string,
+  id: string,
+): Promise<void> {
+  await request.delete(`${API_BASE}/elitea_core/application/prompt_lib/${projectId}/${id}`);
 }

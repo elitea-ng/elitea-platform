@@ -65,8 +65,16 @@ export const cardHeaderSx = (showActions: boolean, showVariables: boolean, hasVa
   backgroundColor: showActions || showVariables ? 'transparent' : theme.vars.palette.background.userInputBackground,
   '&:hover': {
     backgroundColor: showActions || showVariables ? 'transparent' : theme.vars.palette.background.toolCard.hover,
-    '& .agents-tool-card-action': { display: 'flex' },
   },
+  // The action cluster is revealed on hover OR on focus-within, and it is
+  // revealed by OPACITY (see `actionButtonSx`). The baseline toggled
+  // `display` on hover alone, which took every action — including the one
+  // control that detaches a toolkit from an agent — out of the tab order and
+  // out of the accessibility tree, so a keyboard or touch user could not
+  // remove a toolkit at all (WCAG 2.1.1, #849). A `:focus-within` rule cannot
+  // rescue a control that can never hold focus, so the hiding mechanism itself
+  // had to change.
+  '&:hover .agents-tool-card-action, &:focus-within .agents-tool-card-action': { opacity: 1 },
 });
 
 export const entityIconSx: SxProps<Theme> = { minWidth: '2.125rem', width: '2.125rem', height: '2.125rem' };
@@ -100,8 +108,37 @@ export const attachIconSx: SxProps<Theme> = { width: '0.75rem', height: '0.75rem
 
 export const buttonsContainerSx: SxProps<Theme> = { alignSelf: 'center', marginTop: '0rem', display: 'flex', gap: '0.25rem', alignItems: 'center', flexShrink: 0 };
 
-/** `agents-tool-card-action` class name is what `cardHeaderSx`'s `:hover` rule above shows on hover — same reveal-on-row-hover behaviour as the baseline's `#RefreshButton`/`#OpenInNewTabButton`/`#DeleteButton`/`#LogoutButton` id-selector rule, ported to a class (ids are not unique across a list of cards). */
-export const actionButtonSx: SxProps<Theme> = { display: 'none' };
+/**
+ * `agents-tool-card-action` class name is what `cardHeaderSx`'s
+ * `:hover, :focus-within` rule above reveals — same reveal-on-row-hover
+ * behaviour as the baseline's `#RefreshButton`/`#OpenInNewTabButton`/
+ * `#DeleteButton`/`#LogoutButton` id-selector rule, ported to a class (ids are
+ * not unique across a list of cards).
+ *
+ * Hidden by `opacity: 0`, NOT by `display: 'none'` (#849). `display: none`
+ * removes an element from the tab order and from the accessibility tree, so
+ * the detach control was operable by mouse only; the same fix
+ * `OpenAPISchemaInput` (`editorWrapperSx`), `BucketList` and `ImageAttachment`
+ * each already carry for this class of defect.
+ *
+ * Two product-visible consequences, both chosen deliberately:
+ *  - The cluster now keeps its box at rest, so the card reserves the actions'
+ *    width instead of reflowing the toolkit name when a pointer arrives. Same
+ *    trade `BucketList`'s own comment records ("no reflow when a row is
+ *    hovered").
+ *  - On a device with no hover at all (`@media (hover: none)` — a touch
+ *    screen), the actions are simply always visible: there is no pointer that
+ *    could ever trigger the reveal, and a control that is only reachable by
+ *    tabbing to an invisible button is not a usable answer for a touch user.
+ */
+export const actionButtonSx: SxProps<Theme> = {
+  display: 'flex',
+  opacity: 0,
+  // The reveal is instant on hover today; a transition would make the control
+  // look unavailable for the moment a keyboard user has already focused it.
+  '&:focus-visible': { opacity: 1 },
+  '@media (hover: none)': { opacity: 1 },
+};
 export const actionIconSx: SxProps<Theme> = { width: '1rem', height: '1rem' };
 
 export const statusIconBoxSx = (online: boolean): SxProps<Theme> => (theme: Theme) => ({

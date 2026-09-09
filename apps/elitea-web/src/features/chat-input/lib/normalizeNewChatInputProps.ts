@@ -100,6 +100,11 @@ export function resolveSlots(slots: NewChatInputSlots | undefined): NewChatInput
     attachmentList: slots?.attachmentList,
     attachmentButton: slots?.attachmentButton,
     internalToolsConfig: slots?.internalToolsConfig,
+    // Every slot must be listed here. This function rebuilds the bundle
+    // field by field, so a slot the composition root supplies and this list
+    // omits is silently dropped between the two — the component renders, the
+    // builder is called, and the control simply never appears.
+    clearChat: slots?.clearChat,
     voiceButton: slots?.voiceButton,
     modelSelector: slots?.modelSelector,
   };

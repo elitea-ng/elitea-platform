@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -39,10 +40,19 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// catalogMirrorValidationToken skips the inline validation gate, as the publish
-// wizard does after its separate validate call. 16 or more hexadecimal
-// characters.
-const catalogMirrorValidationToken = "abcdef0123456789abcdef0123456789"
+// catalogMirrorToken mints the approval token that skips the inline validation
+// gate, as the publish wizard does after its separate validate call.
+//
+// It is MINTED rather than written down. The token is a signed grant bound to
+// the version it was issued for (publish_validation_token.go, issue 855), so a
+// hard-coded hexadecimal string no longer stands in for a check that passed —
+// and a test that kept one would be asserting the defect that let any string
+// through.
+func catalogMirrorToken(t *testing.T, pool *pgxpool.Pool, fixture catalogMirrorFixture) string {
+	t.Helper()
+	return eliteacore.NewHandler(pool).PublishValidationTokenFor(
+		context.Background(), fmt.Sprintf("p_%d", fixture.projectID), strconv.Itoa(fixture.versionID))
+}
 
 // catalogMirrorFixture is one agent with one draft version, in the project
 // named by projectID.
@@ -62,7 +72,7 @@ func TestPublishFromAPrivateProjectReachesTheCatalog(t *testing.T) {
 
 	recorder := catalogMirrorPublish(t, router, fixture, map[string]any{
 		"version_name":     "v-one",
-		"validation_token": catalogMirrorValidationToken,
+		"validation_token": catalogMirrorToken(t, pool, fixture),
 		"category":         "Development",
 	})
 	if recorder.Code != http.StatusOK {
@@ -134,7 +144,7 @@ func TestUnpublishRemovesTheCatalogTwin(t *testing.T) {
 
 	publishRecorder := catalogMirrorPublish(t, router, fixture, map[string]any{
 		"version_name":     "v-one",
-		"validation_token": catalogMirrorValidationToken,
+		"validation_token": catalogMirrorToken(t, pool, fixture),
 	})
 	if publishRecorder.Code != http.StatusOK {
 		t.Fatalf("publish status = %d, body = %s", publishRecorder.Code, publishRecorder.Body.String())
@@ -200,7 +210,7 @@ func TestRepublishReusesTheSameCatalogTwin(t *testing.T) {
 	for _, versionName := range []string{"v-one", "v-two"} {
 		recorder := catalogMirrorPublish(t, router, fixture, map[string]any{
 			"version_name":     versionName,
-			"validation_token": catalogMirrorValidationToken,
+			"validation_token": catalogMirrorToken(t, pool, fixture),
 		})
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("publish %q status = %d, body = %s", versionName, recorder.Code, recorder.Body.String())
@@ -238,7 +248,7 @@ func TestPublishFromThePublicProjectWritesNoTwin(t *testing.T) {
 
 	recorder := catalogMirrorPublish(t, router, fixture, map[string]any{
 		"version_name":     "v-one",
-		"validation_token": catalogMirrorValidationToken,
+		"validation_token": catalogMirrorToken(t, pool, fixture),
 	})
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("publish status = %d, body = %s", recorder.Code, recorder.Body.String())

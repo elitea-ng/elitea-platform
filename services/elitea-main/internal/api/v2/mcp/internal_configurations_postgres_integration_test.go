@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	configurationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	secretsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -97,12 +99,21 @@ func TestInternalConfigurationTracingContainmentMatchesCurrentPlatform(t *testin
 	}
 	assignConfigurationRole(t, pool, 73, "editor")
 
-	executor := newHandlerInternalConfigurationExecutor(configurationsapi.NewHandler(pool), nil)
+	sealer, err := repos.NewCurrentSecretVaultRepository(pool, nil,
+		repos.WithProjectVaultCreator(secretsapi.NewHandler(pool)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := newHandlerInternalConfigurationExecutor(
+		configurationsapi.NewHandler(pool, configurationsapi.WithSecretSealer(sealer)), nil)
 	createArguments := map[string]any{
 		"elitea_title": "internal_tracing",
 		"label":        "Internal tracing",
 		"type":         "langfuse",
-		"data":         map[string]any{},
+		"data": map[string]any{
+			"base_url":   "https://tracing.example.test",
+			"public_key": "fixture-public-key", "secret_key": "fixture-secret-key",
+		},
 	}
 	refused, err := executor.Execute(ctx, 1, 73, internalCreateConfiguration, createArguments)
 	if err != nil || refused.status != http.StatusForbidden {

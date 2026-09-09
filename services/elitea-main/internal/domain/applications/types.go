@@ -32,7 +32,13 @@ type Application struct {
 	Status    string         `json:"status,omitempty"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
 	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at,omitempty"`
+	// UpdatedAt is `applications.updated_at`, stamped by every write that
+	// changes the agent or one of its versions (repos/applications.go). The
+	// `omitempty` is deliberate but INERT — encoding/json never omits a
+	// struct — so the key is always on the wire; it used to be on the wire
+	// as the zero sentinel "0001-01-01T00:00:00Z", because there was no
+	// column to scan and nothing scanned one (tenant/0134 adds it).
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
 	// CreatedBy stays empty for an application. The table has no creator
 	// column: `owner_id` is the project. The list path leaves it empty as
 	// well, so an empty value is what every read of this type answers with.
@@ -74,7 +80,14 @@ type Version struct {
 	WelcomeMessage       string         `json:"welcome_message,omitempty"`
 	LLMSettings          map[string]any `json:"llm_settings,omitempty"`
 	ConversationStarters []any          `json:"conversation_starters,omitempty"`
-	Meta                 map[string]any `json:"meta,omitempty"`
+	// Meta is the version's key bag: `step_limit`, `icon_meta`,
+	// `internal_tools`, `variables` (which have no column of their own) and
+	// the three fork-provenance keys. Each key belongs to a different
+	// feature and no client sends them all, so on the UPDATE path this map
+	// is a PATCH: the repository merges it into the stored object key by
+	// key rather than replacing the column. Nil is still "the caller sent
+	// nothing", and the stored object is then left alone.
+	Meta map[string]any `json:"meta,omitempty"`
 	// PipelineSettings is the pipeline flow-graph layout ({nodes, edges,
 	// orientation, layout_version}) stored verbatim in the
 	// application_versions.pipeline_settings jsonb column. Nil means "the

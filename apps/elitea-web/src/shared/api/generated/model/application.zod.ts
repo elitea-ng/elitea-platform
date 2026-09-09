@@ -62,7 +62,7 @@ export const Application = zod
     updated_at: zod.iso
       .datetime({ offset: true })
       .describe(
-        'ALWAYS present despite the omitempty tag — encoding\/json never omits struct types, and the List path never scans the column, so the wire carries the zero sentinel \"0001-01-01T00:00:00Z\" on every row (types.go:23; repos\/applications.go:66-107).\n',
+        'When the agent last changed. ALWAYS present despite the omitempty tag — encoding\/json never omits struct types. It used to be the zero sentinel \"0001-01-01T00:00:00Z\" on every row, because `applications` had no such column and nothing scanned one: migrations\/tenant\/0134 adds it and every write stamps it inside the statement that makes the change — a rename, a version save, a new version, a version delete and a default-version change (repos\/applications.go). A request that changes nothing does not move it.\n',
       ),
     created_by: zod.string().optional(),
     owner_id: zod.string(),

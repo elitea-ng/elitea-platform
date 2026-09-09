@@ -141,6 +141,60 @@ test('J8: sending the first message creates and persists a real conversation', a
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// The paired exchange, and where it is proved
+//
+// The legacy API suite pins the shape of a completed turn: one POST leaves the
+// conversation holding exactly TWO message groups, the question and the answer,
+// tied together — the reply names the group it answers, and the question names
+// the participant it was sent to. That pairing is written by the runtime plane,
+// and this stack composes none (module header, note 1), so it is proved in the
+// `chat-stream` project instead, where a turn really runs.
+//
+// What is proved HERE is the property that makes the absence honest, and it is
+// not visible anywhere else: after a send that this deployment cannot run, the
+// SERVER's transcript is still empty. J8 above asserts that the question is
+// rendered in the message list — a purely client-side bubble — so without this
+// case the suite would state "the message is there" about a conversation that
+// holds nothing, and a regression that stored the question without ever
+// answering it would look exactly the same.
+//
+// Both read paths are asserted because they are different projections and have
+// disagreed: the transcript route aggregates text items per group, while the
+// conversation read embeds `message_groups` and only when `messages_limit` is
+// supplied. A route that answered a well-formed empty page for a failing query
+// is defect #599's shape, and reading only one of the two would not notice it.
+// ─────────────────────────────────────────────────────────────────────────────
+test('J8: a send this deployment cannot run leaves the server transcript empty', async ({ page }) => {
+  await page.goto(BASE_URL + '/app/chat');
+  await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 20_000 });
+
+  const text = uniqueMessage('j8b');
+  const conversation = await sendFirstMessage(page, text);
+
+  // The client-side bubble, which is what makes the reads below necessary.
+  await expect(page.getByTestId('user-message').first()).toContainText(text);
+
+  const transcript = await page.request.get(
+    `${API_BASE}/elitea_core/messages/prompt_lib/${DEFAULT_PROJECT_ID}/${conversation.id}` +
+      '?sort_order=asc&limit=100',
+  );
+  expect(transcript.status()).toBe(200);
+  const items = ((await transcript.json()) as { items?: readonly unknown[]; total?: number }).items ?? [];
+  expect(
+    items,
+    'the question was stored with no runtime plane to answer it — the user would wait forever',
+  ).toEqual([]);
+
+  const embedded = await page.request.get(
+    `${API_BASE}${CONVERSATION_PATH}/${conversation.id}?messages_limit=50&sort_order=asc`,
+  );
+  expect(embedded.status()).toBe(200);
+  const detail = (await embedded.json()) as { message_groups?: readonly unknown[]; message_count?: number };
+  expect(detail.message_groups ?? [], 'the two read paths disagree about this conversation').toEqual([]);
+  expect(detail.message_count, 'the conversation counts a message it does not hold').toBe(0);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Journey 9: Regenerate a response
 //
 // The assistant-side "regenerate" button hangs off an assistant message, which

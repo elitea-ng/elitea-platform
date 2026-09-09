@@ -93,6 +93,23 @@ describe('ShareLinkDialog', () => {
     expect(created).toHaveTextContent('the-only-copy');
     expect(created.textContent ?? '').toMatch(/shown once|cannot be retrieved/i);
     expect(writeText).toHaveBeenCalledWith(expect.stringContaining('/shared/chat/the-only-copy'));
+
+    /*
+     * THE ADDRESS IS ITS OWN ELEMENT, and its text is the address alone.
+     *
+     * The box around it also holds the "shown once" sentence, and the two are
+     * adjacent text nodes: reading the BOX yields
+     * `…/shared/chat/the-only-copyCopied to your clipboard…`, i.e. the token
+     * with the next sentence's first word welded on. A recipient handed that
+     * string gets a token that does not exist — which is what the share
+     * journey's reader met, and the one failure this dialog cannot recover
+     * from, because the plaintext token is never served twice.
+     */
+    const url = await screen.findByTestId('share-link-created-url');
+    expect(writeText).toHaveBeenCalledWith(url.textContent);
+    expect(url.textContent).toMatch(/^https?:\/\/\S+\/shared\/chat\/the-only-copy$/);
+    expect(url.textContent).not.toMatch(/copied/i);
+    expect(created.textContent ?? '').toContain('the-only-copyCopied');
   });
 
   it('offers no Copy on a listed link — the token is not recoverable', async () => {

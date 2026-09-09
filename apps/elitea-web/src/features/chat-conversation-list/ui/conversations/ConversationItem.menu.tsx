@@ -77,7 +77,13 @@ export interface MenuItemsParams {
   readonly theme: Theme;
   readonly onDelete: () => void;
   readonly onEdit: () => void;
-  readonly onExport?: (() => void) | undefined;
+  /**
+   * Downloads the conversation in the format the menu entry names (issue
+   * 851). Still optional, and still the thing that ENABLES the entry: a
+   * caller that supplies no exporter gets a disabled "Export" row rather
+   * than one that opens onto options wired to nothing.
+   */
+  readonly onExport?: ((format: ConversationExportFormat) => void) | undefined;
   readonly onMakePublic: () => void;
   readonly onShare: () => void;
   /**
@@ -142,6 +148,43 @@ function buildDeleteEditItems(params: MenuItemsParams, deleteEditDisabled: boole
   ];
 }
 
+/**
+ * The formats the export route serves.
+ *
+ * Declared here rather than imported from `entities/conversation`, which owns
+ * the fetcher: that slice's public API is exactly at its export budget, and
+ * `no-deep-slice-import-cross-slice` forbids this feature reaching past its
+ * `index.ts` for one string union. The two definitions are structurally
+ * identical, so the exporter this feeds still type-checks against the entity's
+ * own parameter — a value outside the union cannot reach it.
+ */
+export type ConversationExportFormat = 'md' | 'json';
+
+/**
+ * The two formats the export route serves, as the two menu entries that were
+ * placeholders until issue 851.
+ *
+ * The labels name a FORMAT and its file extension, because that is the only
+ * thing that distinguishes the two choices for the person clicking: one saves
+ * a document to read, the other saves data to keep.
+ *
+ * `ControlsDropdownLeafItem.onClick` is optional but NOT `| undefined`-widened
+ * (external type), so the key is spread in conditionally rather than assigned
+ * a possibly-`undefined` value — required by this codebase's
+ * `exactOptionalPropertyTypes: true`.
+ */
+function buildExportFormatItems(onExport: ((format: ConversationExportFormat) => void) | undefined): ControlsDropdownLeafItem[] {
+  const formats: readonly { readonly key: string; readonly format: ConversationExportFormat; readonly label: string }[] = [
+    { key: 'export-markdown', format: 'md', label: t('features.chatConversationList.conversationItem.menu.exportMarkdown', 'Markdown (.md)') },
+    { key: 'export-json', format: 'json', label: t('features.chatConversationList.conversationItem.menu.exportJson', 'JSON (.json)') },
+  ];
+  return formats.map(({ key, format, label }) => ({
+    key,
+    label,
+    ...(onExport !== undefined ? { onClick: () => onExport(format) } : {}),
+  }));
+}
+
 function buildMoveAndExportItems(params: MenuItemsParams, isEditingActive: boolean): ControlsDropdownItem[] {
   return [
     {
@@ -155,15 +198,15 @@ function buildMoveAndExportItems(params: MenuItemsParams, isEditingActive: boole
       key: 'export',
       label: t('features.chatConversationList.conversationItem.menu.export', 'Export'),
       icon: <FileDownloadOutlinedIcon fontSize="small" />,
-      disabled: true,
-      // `ControlsDropdownLeafItem.onClick` is optional but NOT `| undefined`-
-      // widened (external type) — spread it in conditionally rather than
-      // assigning `params.onExport` (itself possibly `undefined`) directly,
-      // required by this codebase's `exactOptionalPropertyTypes: true`.
-      items: [
-        { key: 'export-option-1', label: t('features.chatConversationList.conversationItem.menu.exportOption1', 'Option1'), ...(params.onExport !== undefined ? { onClick: params.onExport } : {}) },
-        { key: 'export-option-2', label: t('features.chatConversationList.conversationItem.menu.exportOption2', 'Option2'), ...(params.onExport !== undefined ? { onClick: params.onExport } : {}) },
-      ],
+      // ISSUE 851. This used to be `disabled: true` with two children
+      // labelled `Option1`/`Option2` that wired an `onClick` only if an
+      // `onExport` happened to be supplied — and no caller supplied one, so
+      // the entry was a named control that did nothing in every build. It is
+      // now driven by whether an exporter really is wired: the row is live
+      // exactly when there is something behind it, which is the only state a
+      // reader can act on.
+      disabled: params.onExport === undefined,
+      items: buildExportFormatItems(params.onExport),
     },
   ];
 }

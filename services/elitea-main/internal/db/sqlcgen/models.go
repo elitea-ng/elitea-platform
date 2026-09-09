@@ -9,10 +9,11 @@ import (
 )
 
 type Application struct {
-	ID          int32   `db:"id" json:"id"`
-	Name        string  `db:"name" json:"name"`
-	Description *string `db:"description" json:"description"`
-	OwnerID     int32   `db:"owner_id" json:"owner_id"`
+	ID          int32            `db:"id" json:"id"`
+	Name        string           `db:"name" json:"name"`
+	Description *string          `db:"description" json:"description"`
+	OwnerID     int32            `db:"owner_id" json:"owner_id"`
+	UpdatedAt   pgtype.Timestamp `db:"updated_at" json:"updated_at"`
 }
 
 type ApplicationVariable struct {

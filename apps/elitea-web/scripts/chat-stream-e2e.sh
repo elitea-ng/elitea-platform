@@ -53,9 +53,29 @@ KEEP=0
 [ "${1:-}" = "--keep" ] && KEEP=1
 
 cleanup() {
+  # The exit status of whatever is unwinding, read FIRST: every command below
+  # overwrites it.
+  status=$?
   # `${CHECK_LOG:-}` because this function is installed before that variable
   # exists, and `set -u` would abort the trap itself on an early failure.
   rm -f "${CHECK_LOG:-}" 2>/dev/null || true
+  # THE STACK'S OWN ACCOUNT OF A FAILURE, BEFORE THE TEARDOWN TAKES IT AWAY.
+  #
+  # This script owns the whole lifecycle, so a workflow step that runs after it
+  # has no stack left to ask — and the browser artefacts cannot answer the
+  # questions these journeys fail on. A turn that offered the model no tool
+  # looks, in the report, exactly like a turn whose tool was never called: only
+  # the worker says which, and only elitea-main says why it refused the call the
+  # worker made. Measured cost of not having it: a whole investigation for one
+  # refused sub-agent read (#850).
+  #
+  # `|| true` because a diagnostic that fails the run it is diagnosing replaces
+  # one unexplained failure with another.
+  if [ "$status" -ne 0 ]; then
+    echo "→ Stack logs (${PROJECT}) — the run exited ${status}:"
+    STANDALONE_PROJECT="$PROJECT" MOCK_LLM_CHUNK_DELAY_MS="$DELAY_MS" \
+      "${REPO_ROOT}/deploy/scripts/standalone-stack.sh" logs 2>&1 || true
+  fi
   if [ "$KEEP" -eq 0 ]; then
     echo "→ Tearing down ${PROJECT}…"
     STANDALONE_PROJECT="$PROJECT" MOCK_LLM_CHUNK_DELAY_MS="$DELAY_MS" \

@@ -5,16 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
-	"regexp"
 	"strings"
 
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/toolkitnaming"
 )
 
 const maxToolkitIdentityBytes = 1024
-
-var toolkitNameSanitizer = regexp.MustCompile(`[^a-zA-Z0-9_.-]`)
 
 var ErrToolkitSettingsResolutionUnavailable = errors.New(
 	"toolkit settings resolution is unavailable",
@@ -139,12 +137,11 @@ func resolverDatabaseIDs(request RunRequest) (projectID, actorUserID, toolkitID 
 	return projectID, actorUserID, toolkitID, true
 }
 
+// toolkitName is the shared runtime rule — see internal/toolkitnaming. The
+// tool-run path and index admission must answer the same identifier, and both
+// now read it from one place instead of each holding a copy of the regexp.
 func toolkitName(storedName, toolkitType string) string {
-	if storedName == "" {
-		storedName = toolkitType
-	}
-	cleaned := toolkitNameSanitizer.ReplaceAllString(storedName, "")
-	return strings.ReplaceAll(cleaned, ".", "_")
+	return toolkitnaming.RuntimeName(storedName, toolkitType)
 }
 
 func cloneObject(source map[string]any) map[string]any {

@@ -53,10 +53,22 @@ export interface Folder {
   readonly isNew?: boolean;
 }
 
-/** One `date_groups[]` bucket from the grouped folders-list envelope. */
+/**
+ * One `date_groups[]` bucket from the grouped folders-list envelope.
+ *
+ * `total`/`offset` are the SAME pair `Folder` above already models, and they
+ * are optional for the same reason: a bucket that is served whole (a filtered
+ * listing) omits them. They were missing here while the wire carried them,
+ * which made the rail's load-more sentinel unreachable — the sentinel mounts
+ * only while `total` exceeds the rows a bucket holds, so a bucket that never
+ * learns its own total can never report a remainder. `total` is the size of
+ * the WHOLE bucket, `offset` is where its next page starts.
+ */
 export interface DateGroup {
   readonly name: string;
   readonly conversations: readonly FolderConversationRef[];
+  readonly total?: number;
+  readonly offset?: number;
 }
 
 /** The full `?grouped=true` response envelope — see the module doc citation. */

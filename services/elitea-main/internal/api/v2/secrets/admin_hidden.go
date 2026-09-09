@@ -56,22 +56,17 @@ func (h *Handler) StoreAdminHiddenSecret(ctx context.Context, name, value string
 	if !validSecretName.MatchString(name) {
 		return fmt.Errorf("secrets: %q is not a valid secret name", name)
 	}
-	vault, err := h.adminVaultForWrite(ctx)
-	if err != nil {
-		return err
-	}
-	if vault.HiddenSecrets == nil {
-		vault.HiddenSecrets = map[string]string{}
-	}
-	// A name already used by a REGULAR global secret is refused rather than
-	// shadowed. The two buckets are read by different lookups, so a name in
-	// both would resolve to one value for project interpolation and another for
-	// this feature — a divergence nothing would report.
-	if _, taken := vault.Secrets[name]; taken {
-		return fmt.Errorf("secrets: %q is already a global secret", name)
-	}
-	vault.HiddenSecrets[name] = value
-	return h.writeAdminVault(ctx, vault)
+	return h.mutateAdminVault(ctx, true, func(vault *vaultData) (bool, error) {
+		// A name already used by a REGULAR global secret is refused rather
+		// than shadowed. The two buckets are read by different lookups, so a
+		// name in both would resolve to one value for project interpolation
+		// and another for this feature — a divergence nothing would report.
+		if _, taken := vault.Secrets[name]; taken {
+			return false, fmt.Errorf("secrets: %q is already a global secret", name)
+		}
+		vault.HiddenSecrets[name] = value
+		return true, nil
+	})
 }
 
 // LookupAdminHiddenSecret reads one hidden entry.
@@ -99,15 +94,13 @@ func (h *Handler) LookupAdminHiddenSecret(ctx context.Context, name string) (str
 // is already done; reporting that as an error would make a delete fail for
 // having nothing left to do.
 func (h *Handler) DeleteAdminHiddenSecret(ctx context.Context, name string) error {
-	vault, err := h.adminVault(ctx)
-	if err != nil {
-		return err
-	}
-	if _, present := vault.HiddenSecrets[name]; !present {
-		return nil
-	}
-	delete(vault.HiddenSecrets, name)
-	return h.writeAdminVault(ctx, vault)
+	return h.mutateAdminVault(ctx, false, func(vault *vaultData) (bool, error) {
+		if _, present := vault.HiddenSecrets[name]; !present {
+			return false, nil
+		}
+		delete(vault.HiddenSecrets, name)
+		return true, nil
+	})
 }
 
 // AdminHiddenSecretName derives the vault name a feature stores a credential

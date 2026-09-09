@@ -393,9 +393,11 @@ The current platform opts two operations into `elitea_core/discovery`.
 | `elitea_core/api/v2/tags.py::PromptLibAPI.get` | `models.promptlib_shared.tags.list` | `get_elitea_core_tags` |
 | `elitea_core/api/v2/search_options.py::PromptLibAPI.get` | `models.promptlib_shared.search` | `get_elitea_core_search_options` |
 
-This category remains closed. Main's tag handler returns every stored tag row.
-The current operation returns only tags used by applications, pipelines, or
-skills. It also adds relation counts and applies entity visibility rules.
+This category remains closed. Main revision `f28189b5` adds entity-filtered tag lists for applications, pipelines, and skills.
+The shared `tags.Handler` and `TagsRepo.coverageFilter` implement this selection.
+An absent filter still returns all stored tags.
+Relation counts, actor visibility, and failure handling still require review before internal MCP publication.
+The current repository converts query failures into empty results; that behavior must not hide a discovery failure.
 
 Main's Search Options handler returns only tag names and an empty collection
 list. The current operation accepts selected application, pipeline, toolkit,
@@ -410,12 +412,12 @@ conversation list and creation, participant read and removal, folder list,
 folder creation and update, conversation read and update, participant
 configuration, participant addition, message send, and durable continuation.
 
-This category remains closed as one security boundary. Main's present REST
-handlers do not yet preserve the current actor-visibility contract. The list
-and folder queries can read all project conversations. Folder creation stores
-owner `1` instead of the authenticated actor. Conversation creation drops
-participants, privacy, source, metadata, instructions, and the required user
-and dummy participants. Conversation update preserves only name and folder.
+This category remains closed as one security boundary. Main's REST handlers still require an operation-level actor-visibility review.
+Project-wide conversation queries and fixed folder owner `1` remain in the shared repositories.
+Conversation creation now preserves metadata, including the step limit.
+Conversation update now supports privacy and metadata changes alongside name and folder changes.
+The earlier metadata-loss claim is stale at revision `f28189b5`.
+Creation still requires parity checks for participants, privacy, source, instructions, and required user and dummy participants.
 
 Message send and continuation also cross the durable runtime boundary. The
 current MCP operations can wait for bounded results and return message groups.
@@ -577,8 +579,8 @@ existing Rust configured-MCP tests remain the worker-side protocol proof.
 Other internal categories must be mapped operation by operation. No generic
 OpenAPI self-dispatch is allowed.
 
-The discovery category remains closed until Main implements relation-aware tag
-listing and entity-specific Search Options. Protocol tests pin that refusal.
+The discovery category remains closed until Main completes tag relation metadata, actor visibility, and entity-specific Search Options.
+Entity-filtered tag listing exists after the main sync. Protocol tests still pin the unpublished category.
 
 The chat category remains closed until shared Main REST handlers enforce actor
 visibility and preserve conversation, folder, participant, and runtime

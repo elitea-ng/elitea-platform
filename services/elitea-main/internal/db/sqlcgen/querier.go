@@ -531,6 +531,24 @@ type Querier interface {
 	// projection disagree with what the transcript renders.
 	ResolveCurrentAdhocTurn(ctx context.Context, arg ResolveCurrentAdhocTurnParams) (ResolveCurrentAdhocTurnRow, error)
 	ResolveCurrentApplicationNestingNode(ctx context.Context, applicationVersionID int32) (ResolveCurrentApplicationNestingNodeRow, error)
+	// A LEFT JOIN, and the WHERE below is what keeps it an inner one for every
+	// turn addressed at an agent in the conversation's OWN project.
+	//
+	// `application_versions` is a per-project table: this query runs inside the
+	// conversation's tenant schema, so it can only ever see that project's rows.
+	// A participant that names the catalogue twin of a PUBLISHED agent therefore
+	// has no row to join here at all, and an inner join answered no rows -- the
+	// 422 a conversation in project A got when it addressed an agent published in
+	// the catalogue, which legacy allowed. The version for that one case is read
+	// afterwards, from the catalogue project's own schema
+	// (CurrentAgentStartRepository.resolveCatalogueApplicationVersion), so this
+	// join is allowed to miss and the projection below is then a document of
+	// nulls that the Go side REPLACES rather than reads.
+	//
+	// Nothing else may miss it: the WHERE demands `application_version.id IS NOT
+	// NULL` for the same-project case, which restores the inner join's exact
+	// refusal, and admits the missing row ONLY for a participant whose project is
+	// the catalogue project and is not the conversation's own.
 	// Chat history for this turn: one entry per prior message group, whose
 	// `content` is the group's items flattened into ONE LangChain content array.
 	//

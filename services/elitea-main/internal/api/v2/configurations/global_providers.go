@@ -577,17 +577,18 @@ const maxGlobalProviderBodyBytes = maxConfigurationRequestBytes
 // `shared` afterwards is impossible, and refusing a type afterwards would mean
 // the row was already written. The bound above keeps that buffering finite.
 //
-// `requireType` is true for a create and false for an update, matching the two
-// handlers' own contracts: a create with no type stores an empty `section` and
-// is useless, while an update names only the fields it changes.
+// `creating` separates the two verbs, matching the two delegated handlers' own
+// contracts: a create must name a type — one with no type stores an empty
+// `section` and is useless — and must carry every field the row contract
+// requires, while an update names only the fields it changes.
 func (h *Handler) rewriteGlobalProviderBody(
-	w http.ResponseWriter, r *http.Request, requireType bool,
+	w http.ResponseWriter, r *http.Request, creating bool,
 ) (*http.Request, bool) {
 	body, ok := decodeGlobalBody(w, r)
 	if !ok {
 		return nil, false
 	}
-	if !h.admitGlobalProviderType(w, body, requireType) {
+	if !h.admitGlobalProviderType(w, body, creating) {
 		return nil, false
 	}
 	if !admitGlobalShared(w, body) {
@@ -602,7 +603,45 @@ func (h *Handler) rewriteGlobalProviderBody(
 	// the section) AND to the gateway's credential read (same predicate), so the
 	// operator got a 201, an empty list, and an orphan row holding a sealed key.
 	body["section"] = GlobalProviderSection
+	if creating {
+		completeGlobalRowLabel(body)
+	}
 	return encodeGlobalBody(w, r, body)
+}
+
+// completeGlobalRowLabel gives a CREATE the display label the row contract
+// requires, because THIS SURFACE HAS NO FIELD FOR ONE.
+//
+// The panel collects a single name, sends it as `elitea_title`, and renders
+// that same field in its listing; there is no second control for a label, on
+// either platform surface. The create contract, however, requires `label` for
+// every type the registry carries (required_fields.go reads it from the pinned
+// snapshot), so a body from these panels was refused with a 400 naming a field
+// no control on the screen can fill. `shared` and `section` are in exactly that
+// position and are forced here for the same reason: what the surface does not
+// offer, the surface supplies.
+//
+// This is not the refusal being hidden. The refusal exists to stop a row that
+// no reader can use and no screen can explain — an unlabelled row is an error
+// to the model catalogue reader, not a skipped one — and a platform row whose
+// label is the name its operator typed is explicable everywhere. The
+// project-scoped create still refuses a body that names neither, which is the
+// case the API journey pins.
+//
+// It runs on CREATE alone. The delegated update is a PARTIAL write by
+// contract, so completing an update body would rewrite the stored label on
+// every edit that changed something else.
+func completeGlobalRowLabel(body map[string]any) {
+	if strings.TrimSpace(strVal(body, "label")) != "" {
+		return
+	}
+	// The same two keys the delegated handler reads for the title, in the same
+	// order, so the label a row gets is the title it is stored under.
+	title := strings.TrimSpace(firstStrVal(body, "elitea_title", "name"))
+	if title == "" {
+		return
+	}
+	body["label"] = title
 }
 
 // decodeGlobalBody buffers and decodes the request body under the same bound

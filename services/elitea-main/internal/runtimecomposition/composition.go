@@ -498,9 +498,20 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if err != nil {
 			return nil, fmt.Errorf("construct agent execution Redis producer: %w", err)
 		}
+		// The catalogue project is the SAME id the freezer resolves shared
+		// models against, taken from the same place, so the one project a turn
+		// may borrow a published agent from and the one project it may borrow a
+		// shared model from cannot drift apart. Both the resolve and the turn
+		// INSERT read it, and both are built here.
+		if dependencies.CurrentConfigurations == nil ||
+			dependencies.CurrentConfigurations.publicProjectID <= 0 {
+			return nil, errors.New("the agent execution plane needs the public project id")
+		}
+		catalogueProjectID := dependencies.CurrentConfigurations.publicProjectID
 		agentJobs, err = repos.NewAgentExecutionJobsRepository(
 			dependencies.AdmissionPool,
 			agentDispatchPolicy,
+			catalogueProjectID,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("construct agent execution jobs: %w", err)
@@ -524,7 +535,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if admissionErr != nil {
 			return nil, fmt.Errorf("construct agent execution admission: %w", admissionErr)
 		}
-		agentTargets, targetErr := repos.NewCurrentAgentStartRepository(dependencies.AdmissionPool)
+		agentTargets, targetErr := repos.NewCurrentAgentStartRepository(
+			dependencies.AdmissionPool,
+			catalogueProjectID,
+		)
 		if targetErr != nil {
 			return nil, fmt.Errorf("construct current agent start resolver: %w", targetErr)
 		}

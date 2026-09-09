@@ -141,6 +141,12 @@ describe('AIConfiguration — the ModelConfiguration layer', () => {
     expect(await screen.findByText('Model Capabilities')).toBeInTheDocument();
     expect(await screen.findByText('Reasoning')).toBeInTheDocument();
     expect(await screen.findByText('Vision')).toBeInTheDocument();
+
+    /* The row follows the configuration accordions, which title themselves at
+       level 3. An <h6> here is a two-level jump and axe's `heading-order` rule
+       fails the whole screen for it — which is how the E2E a11y check on this
+       route went red once a model with capabilities was served. */
+    expect(await screen.findByRole('heading', { name: 'Model Capabilities', level: 4 })).toBeInTheDocument();
   });
 
   it('copies the whole card, capabilities included, as JSON', async () => {

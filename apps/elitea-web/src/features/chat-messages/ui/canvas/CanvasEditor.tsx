@@ -9,9 +9,12 @@
  *
  * **DEVIATIONS (disclosed):**
  *  1. Redux `useSelector` for the current user name → taken as an explicit
- *     `userName` parameter (baseline resolves it internally via
+ *     `viewer` parameter (baseline resolves it internally via
  *     `useSelectedProjectId`/Redux store; this port exposes it as an input
- *     so `entities/`-level code never depends on a "page-level" hook).
+ *     so `entities/`-level code never depends on a "page-level" hook). It
+ *     carries the principal ID as well as the name, because the presence
+ *     roster is keyed by id and a name alone cannot recognise this tab's own
+ *     entry — see `viewer` and the presence block below.
  *  2. RTK Query mutations (`useEditCanvasMutation`, `useListModelsQuery`,
  *     `useGenerateContentBlockingMutation`) → replaced with injected plain
  *     async fetchers (`editCanvas`, `generateQuickFix`). The `entities/canvas`
@@ -22,7 +25,10 @@
  *     dropped entirely (the new app has no GA integration yet).
  *  4. `react-split` for the mermaid split-view → replaced with a simple
  *     CSS flex layout (the split/resize UX is not worth the dependency for
- *     a prototype).
+ *     a prototype). The reference's FULL-SCREEN mode, which that pane was
+ *     bundled with, IS ported — as its own header control that re-anchors
+ *     this element to the viewport, with Escape to collapse (see
+ *     `isFullScreen` below and `../../lib/canvasEditorKeys`).
  *  5. `useLanguageLinter` → replaced with `extensions` and `onChangeLanguage`
  *     injected from the feature layer (the linter integration depends on the
  *     editor's view instance, which the feature layer owns).
@@ -39,10 +45,14 @@
  *     `MERMAID_QUICK_FIX` service prompt is reachable. The control is gated on
  *     the capability instead — `./MermaidQuickFixButton.tsx` renders nothing
  *     when it cannot run. Genuine runtime failures reach `onError`.
- *  8. `useDownloadTable` + `SplitButton` (the table's xlsx/csv export footer)
- *     are not ported — neither has a `shared/ui` counterpart yet. See
- *     `./table/MarkdownTableEditor.tsx`'s deviation 1; `tracking` carries the
- *     two uuids so that port lands without a signature change.
+ *  8. The table's csv/xlsx export IS ported, and without the reference's two
+ *     dependencies. `excellentexport` scraped a rendered `<table>` out of the
+ *     DOM; `../../lib/tableExport` writes both files from the table's own
+ *     model instead — which is also the only correct source, since a
+ *     virtualised grid does not hold every row in the DOM. The reference's
+ *     `SplitButton` becomes a button that opens a menu of the two formats
+ *     (`./table/CanvasTableControls.tsx`), because a control that both fires a
+ *     hidden default and opens a menu is the harder half to reach.
  *
  * ── TWO EDITORS, ONE HEADER ────────────────────────────────────────────────
  * A canvas is edited by ONE of two panes: `CodeMirrorEditor` (code and the
@@ -70,6 +80,10 @@ import type { MarkdownTableData } from '../../lib/markdownTable';
 import { parseMarkdownTable } from '../../lib/markdownTable';
 import { useCanvasPresence } from '../../model/useCanvasPresence';
 import type { UseMermaidQuickFixResult } from '../../model/useMermaidQuickFix';
+
+import { canvasEditorKeyAction } from '../../lib/canvasEditorKeys';
+import { exportTable } from '../../lib/tableExport';
+import type { TableExportFormat } from '../../lib/tableExport';
 
 import { getCanvasCodeExtensions } from './canvasCodeExtensions';
 
@@ -112,8 +126,17 @@ export interface CanvasEditorProps {
   readonly conversation_uuid?: string;
   /** When true, no editing actions are available. */
   readonly viewOnly?: boolean;
-  /** Current user's display name (for editor presence filtering). */
-  readonly userName?: string;
+  /**
+   * Who is looking. Both halves feed the presence read-only rule, and `id` is
+   * the one that decides it: the roster the server answers every beat with
+   * contains this very tab, and an editor that cannot recognise its own entry
+   * reads it as a stranger holding the canvas and goes read-only against the
+   * only person editing. `name` is the fallback for a roster with no id, and
+   * is what the "X is editing…" notice renders.
+   *
+   * One object rather than two props to stay inside the §3.5 12-prop budget.
+   */
+  readonly viewer?: { readonly id?: string | undefined; readonly name?: string | undefined };
   /**
    * The mermaid quick-fix capability + runner, from
    * `useMermaidQuickFix({ projectId, readOnly })`. Omit it — or pass one
@@ -156,7 +179,7 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
       interaction_uuid,
       conversation_uuid,
       viewOnly = false,
-      userName,
+      viewer,
       quickFix,
       onError,
       editCanvas,
@@ -346,7 +369,11 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
      * `isReadOnly` is the reference's rule, unchanged: an empty roster is
      * editable by anyone, and once somebody real holds the canvas everyone
      * else is read-only. With no second editor, nothing here changes — which
-     * is the acceptance criterion this must not break.
+     * is the acceptance criterion this must not break, and which is exactly
+     * what a caller passing NO `viewer` broke: the roster answered to this
+     * tab's own beat always holds this tab, so an editor with no identity
+     * counted itself as the second editor and went read-only on a canvas
+     * nobody else had open.
      *
      * Deliberately NOT a lock. The server refuses no write on this roster (see
      * internal/api/v2/canvaspresence's package doc), so the notice below still
@@ -355,7 +382,8 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
     const presence = useCanvasPresence({
       projectId,
       canvasId: selectedCodeBlockInfo?.canvasId,
-      userName,
+      userName: viewer?.name,
+      userId: viewer?.id,
       state: 'editing',
       enabled: !!selectedCodeBlockInfo?.canvasId && !viewOnly && !selectedCodeBlockInfo?.viewOnly,
     });
@@ -390,6 +418,56 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
     // (baseline `CanvasEditor.jsx:248-266` for the table half).
     const onUndo = useCallback(() => activeEditor()?.undo(), [activeEditor]);
     const onRedo = useCallback(() => activeEditor()?.redo(), [activeEditor]);
+
+    /*
+     * FULL SCREEN. State per editor SESSION, deliberately: this component
+     * unmounts when the drawer closes, so opening the next canvas starts at
+     * the normal size rather than in whatever mode the previous document was
+     * left in. There is nothing to persist — the mode belongs to the reading,
+     * not to the canvas.
+     *
+     * It is rendered by re-anchoring THIS element to the viewport rather than
+     * by widening the drawer that hosts it. The drawer is a portal with its
+     * own paper width, and asking the composition root to change it would put
+     * a mode this component owns into a component that does not know it
+     * exists.
+     */
+    const [isFullScreen, setIsFullScreen] = useState(false);
+    const onToggleFullScreen = useCallback(() => {
+      setIsFullScreen((current) => !current);
+    }, []);
+
+    /**
+     * The editor's own keyboard — the rule is `../../lib/canvasEditorKeys`,
+     * this is the dispatch. See that module for why a press inside CodeMirror
+     * is deliberately left alone and why Escape stops here in full screen.
+     */
+    const onKeyDown = useCallback(
+      (event: React.KeyboardEvent<HTMLElement>) => {
+        const fromCodePane = event.target instanceof Element && event.target.closest('.cm-editor') !== null;
+        const action = canvasEditorKeyAction(event, { isFullScreen, fromCodePane });
+        if (action === 'ignore') return;
+        event.preventDefault();
+        // The drawer this editor sits in closes on Escape, and closing it
+        // SAVES. One press must not both collapse the editor and end the
+        // session.
+        event.stopPropagation();
+        if (action === 'exit-full-screen') setIsFullScreen(false);
+        else if (action === 'undo') activeEditor()?.undo();
+        else activeEditor()?.redo();
+      },
+      [activeEditor, isFullScreen],
+    );
+
+    /** Saves the LIVE table — the same read Copy and Save make, for the same reason. */
+    const onExportTable = useCallback(
+      (format: TableExportFormat) => {
+        void exportTable(parseMarkdownTable(tableRef.current?.getCode() ?? code), format).catch((cause: unknown) =>
+          onError?.(cause),
+        );
+      },
+      [code, onError],
+    );
     const onClickAddColumn = useCallback(() => tableRef.current?.addColumn(), []);
     const onClickAddRow = useCallback(() => tableRef.current?.addRow(), []);
     const onDeleteSelectedRowsOrColumns = useCallback(() => tableRef.current?.delete(), []);
@@ -645,14 +723,35 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
     // Main editor
     return (
       <Box
-        sx={{
+        data-testid="canvas-editor-root"
+        data-fullscreen={isFullScreen ? 'true' : 'false'}
+        onKeyDown={onKeyDown}
+        sx={(theme) => ({
           display: 'flex',
           flexDirection: 'column',
           height: '100%',
           maxHeight: '100%',
           minWidth: '240px',
           gap: '8px',
-        }}
+          /*
+           * Full screen re-anchors this element to the VIEWPORT. `position:
+           * fixed` escapes the drawer's own paper without the drawer being
+           * told anything, and the ground has to be painted explicitly — the
+           * drawer's paper is behind it, not under it, once this is fixed.
+           * One step above the modal layer so the drawer does not overlap it.
+           */
+          ...(isFullScreen
+            ? {
+                position: 'fixed',
+                inset: 0,
+                zIndex: theme.zIndex.modal + 1,
+                backgroundColor: theme.vars.palette.background.paper,
+                padding: '1rem',
+                boxSizing: 'border-box',
+                maxHeight: '100vh',
+              }
+            : {}),
+        })}
       >
         <CanvasEditHeader
           title={title}
@@ -671,6 +770,8 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
             },
             onRegenerate,
             onDelete,
+            onToggleFullScreen,
+            isFullScreen,
           }}
           langSelect={{
             showLangSelect: codeLanguage !== 'markdownTable',
@@ -687,6 +788,7 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
             onDeleteSelectedRowsOrColumns,
             onImportTableData,
             onImportError: onError,
+            onExportTable,
           }}
           disabledAll={effectiveReadOnly || selectedCodeBlockInfo?.isCreatingCanvas || !!selectedCodeBlockInfo?.createCanvasError}
         />

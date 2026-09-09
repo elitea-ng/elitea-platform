@@ -68,6 +68,12 @@
  * They now share one window (`group`), and the assistant is switched off by
  * the LAST member to leave (`onLastExit`) — inside the window, so no other
  * journey ever sees the launcher.
+ *
+ * THAT WAS NOT ENOUGH ON ITS OWN, and the block below the imports says why:
+ * a shared window removed the four tests' ability to break each other's
+ * switch, and left them queueing for it. The file runs in ONE worker now, so
+ * there is no queue to wait in. Both halves are kept: the window is still what
+ * hides the launcher from every other journey.
  */
 import type { Page } from '@playwright/test';
 import { expect, test } from '@playwright/test';
@@ -83,6 +89,35 @@ import { disableSupportAssistant, enableSupportAssistant } from './helpers';
 // caller as a viewer on first use, admin included, so one persona covers both
 // jobs (the same reasoning `support.spec.ts` states).
 test.use({ storageState: STORAGE_STATE.admin });
+
+/*
+ * ─────────────────────────────────────────────────────────────────────────────
+ * ONE WORKER, IN ORDER — the documented waiver of the journey-shape rule
+ * against file-level serial mode (`scripts/e2e-journey-shape.test.mjs`, rule 1)
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * That rule exists because a serial file turns ONE failure into eight results
+ * that neither passed nor failed. It is waived here, and the waiver is named
+ * in the gate itself so it stays a decision rather than a drift.
+ *
+ * WHY. `support_assistant_enabled` is one row for the whole deployment, and
+ * `fullyParallel: true` puts these four tests on four worker processes at
+ * once. Every one of them then has to take the same platform-wide flag
+ * window, and the queue is the failure: measured on the run before this
+ * change, three of the four hooks exceeded the 120 s `afterAll` budget and
+ * SUP-W2 spent its whole 210 s test budget queueing, dying inside
+ * `page.goto`. Two harness corrections (a heartbeat on the writer, a shared
+ * group window, the teardown moved inside that window) each removed a real
+ * defect and neither removed the queue, because the queue is not a defect —
+ * it is what four processes competing for one exclusive resource DO.
+ *
+ * A serial file has no queue at all: the four tests run in one worker, one
+ * after another, and each takes the window uncontended. The cost is the one
+ * the rule names — a failure hides the tests after it — and four tests over
+ * one flag is the trade the rule was never written about. A deterministic
+ * four-test file beats a flaky one.
+ */
+test.describe.configure({ mode: 'serial' });
 
 const SUPPORT_PROJECT_ID = Number(DEFAULT_PROJECT_ID);
 const RUN_ID = Date.now();
@@ -143,9 +178,33 @@ test.afterAll(async ({ browser }) => {
    * no API left to clean them up with. They stay in the support project,
    * named by no test, and do no harm.
    */
+  // Long enough to wait out a sibling's window — see below. A hook has no
+  // test timeout of its own, so it is stated here.
+  test.setTimeout(120_000);
   const context = await browser.newContext({ storageState: STORAGE_STATE.admin });
   try {
-    await disableSupportAssistant(context.request).catch(() => {});
+    /*
+     * INSIDE THE FLAG LOCK, and NOT in this file's group.
+     *
+     * `fullyParallel` puts these four tests on four workers, and a worker runs
+     * its `afterAll` as soon as IT has no more tests in this file — not when
+     * the file is done. So three of these hooks fire while the fourth test is
+     * still inside the shared window with the assistant ON. Measured: SUP-W1
+     * ended at 14:18:48.97 and its hook turned the switch off about 300 ms
+     * later; SUP-W4 had loaded the page at 14:18:48.69 and waited 20 s for a
+     * launcher that had just been taken away from it. The failure lands in
+     * whichever test is still running, which is why it moved between SUP-W2
+     * and SUP-W4 from run to run.
+     *
+     * An EXCLUSIVE window (no `group`) is what makes the restore wait for the
+     * last member to leave. It is still worth doing after `onLastExit` has
+     * already restored the flag: this hook is the net for a test that died on
+     * its own timeout, which loses its page while the restore is still
+     * running.
+     */
+    await withPlatformFlagLock(async () => {
+      await disableSupportAssistant(context.request).catch(() => {});
+    });
     if (agentId) await deleteAgent(context.request, agentId).catch(() => {});
   } finally {
     await context.close();

@@ -9,7 +9,8 @@ CREATE TABLE applications (
     id serial PRIMARY KEY,
     name varchar(128) NOT NULL,
     description varchar(2304),
-    owner_id integer NOT NULL
+    owner_id integer NOT NULL,
+    updated_at timestamp NOT NULL DEFAULT now()
 );
 
 CREATE TABLE application_versions (

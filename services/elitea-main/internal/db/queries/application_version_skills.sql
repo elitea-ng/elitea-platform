@@ -19,9 +19,12 @@ WITH deleted AS (
     DELETE FROM application_versions
     WHERE application_id = sqlc.arg(application_id)::text::integer
       AND id = sqlc.arg(version_id)::text::integer
-    RETURNING id
+    RETURNING id, application_id
 ), deleted_skills AS (
     DELETE FROM entity_skill_mapping
     WHERE entity_version_id IN (SELECT id FROM deleted)
+), touched AS (
+    UPDATE applications SET updated_at = now()
+    WHERE id IN (SELECT application_id FROM deleted)
 )
 SELECT count(*)::bigint FROM deleted;

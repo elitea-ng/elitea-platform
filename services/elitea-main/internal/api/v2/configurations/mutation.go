@@ -54,8 +54,7 @@ func NewCurrentConfigurationMutationRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentConfigurationMutationRoute, error) {
-	if mutator == nil || authConfig.PrincipalValidator == nil ||
-		authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	if mutator == nil || !authConfig.CredentialPlaneComposed() || permissions == nil {
 		return nil, ErrInvalidCurrentConfigurationMutationRoute
 	}
 

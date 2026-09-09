@@ -201,7 +201,7 @@ func TestPostgresAttachmentWriteBackRefusesAnItemFromAnEarlierTurnOfTheSameConve
 		QuestionMeta:      json.RawMessage(`{}`), UserInput: "and now?",
 	}
 	if err := insertCurrentApplicationTurn(
-		t.Context(), queries, "execution-writeback-second", second,
+		t.Context(), queries, "execution-writeback-second", second, 1,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +285,7 @@ func writeBackApplicationTurn(
 			Content:        json.RawMessage(`[` + writeBackScaffold + `]`),
 		}},
 	}
-	if err := insertCurrentApplicationTurn(t.Context(), queries, executionID, turn); err != nil {
+	if err := insertCurrentApplicationTurn(t.Context(), queries, executionID, turn, 1); err != nil {
 		t.Fatal(err)
 	}
 	return writeBackTurn{CurrentApplicationTurn: turn, ExecutionID: executionID}

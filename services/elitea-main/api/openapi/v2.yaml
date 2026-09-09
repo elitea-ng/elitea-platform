@@ -1347,6 +1347,66 @@ components:
         total_cost:
           type: number
 
+    ConversationExportMessage:
+      type: object
+      required: [id, role, content, created_at]
+      properties:
+        id: { type: string }
+        uid:
+          type: string
+          description: The message group's UUID, when it has one.
+        role:
+          type: string
+          description: >
+            `user` or `assistant` as the transcript stored it. Passed through
+            rather than normalised, so an export records what was written.
+        author:
+          type: string
+          description: >
+            The display name of the participant that wrote the message, when
+            the participant list resolves one. Absent for a message whose
+            author cannot be named; the Markdown document then falls back to
+            the role.
+        content: { type: string }
+        content_type: { type: string }
+        created_at: { type: string, format: date-time }
+        metadata:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): DB jsonb column `chat_messages.metadata`, re-emitted
+            verbatim (internal/api/v2/conversations/export.go:1). It is the
+            same column the transcript read returns unchanged; the runtime
+            writes whatever a turn produced into it, so the key set is not
+            fixed by this route and typing it here would describe only the
+            rows one runtime version wrote.
+
+    ConversationExport:
+      type: object
+      required: [id, project_id, name, created_at, updated_at, exported_at, message_count, messages]
+      description: >
+        The `format=json` body. The Markdown document is rendered from this
+        same model, so the two formats cannot describe different conversations.
+      properties:
+        id: { type: string }
+        uuid: { type: string }
+        project_id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        exported_at:
+          type: string
+          format: date-time
+          description: When this document was produced, in UTC.
+        message_count:
+          type: integer
+          description: The number of messages in `messages`, which is the whole transcript.
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConversationExportMessage'
+
     MessageTraceListing:
       type: object
       required: [total, rows]
@@ -1571,10 +1631,21 @@ components:
                 $ref: '#/components/schemas/ValidationFieldError'
           description: >
             Either a plain message (e.g. "llm_not_shared",
-            "pipeline_not_publishable") or a pydantic-style field error list.
+            "pipeline_not_publishable", "validation_token_invalid") or a
+            pydantic-style field error list.
         msg:
           type: string
-          description: Present only alongside error="pipeline_not_publishable".
+          description: >
+            Present alongside error="pipeline_not_publishable" and
+            error="validation_token_invalid", where it says which of the four
+            token findings was made. Also present alongside
+            error="llm_not_shared" when the version names a PLATFORM model that
+            is not granted to every project: a platform model is available to
+            all projects, to none, or to a chosen set (share_scope /
+            shared_with on the catalogue row), and a published agent is read by
+            every project that opens the catalogue, so it may only name a model
+            available to all of them. The message names the model and the scope
+            that was found.
       description: >
         NOTE(W2): union of the 400 bodies written by Publish
         (internal/api/v2/eliteacore/handler.go:452, 456-461, 467-473, 486, 547,
@@ -1641,9 +1712,10 @@ components:
           type: string
           nullable: true
           description: >
-            Hex token generated for non-FAIL results; null on FAIL
-            (handler.go:1164-1169). Pass it to publishApplication to skip
-            re-validation.
+            The approval token issued for non-FAIL results; null on FAIL. Pass
+            it to publishApplication to skip re-validation. It is signed, bound
+            to the version it was issued for and to that version's content, and
+            it expires; a version edited after the check invalidates it.
         issues:
           type: array
           items: { $ref: '#/components/schemas/ValidationIssue' }
@@ -2414,10 +2486,15 @@ components:
           type: string
           format: date-time
           description: >
-            ALWAYS present despite the omitempty tag — encoding/json never
-            omits struct types, and the List path never scans the column, so
-            the wire carries the zero sentinel "0001-01-01T00:00:00Z" on
-            every row (types.go:23; repos/applications.go:66-107).
+            When the agent last changed. ALWAYS present despite the omitempty
+            tag — encoding/json never omits struct types. It used to be the
+            zero sentinel "0001-01-01T00:00:00Z" on every row, because
+            `applications` had no such column and nothing scanned one:
+            migrations/tenant/0134 adds it and every write stamps it inside
+            the statement that makes the change — a rename, a version save, a
+            new version, a version delete and a default-version change
+            (repos/applications.go). A request that changes nothing does not
+            move it.
         created_by: { type: string }
         owner_id: { type: string }
         authors:
@@ -2535,9 +2612,21 @@ components:
         `settings` in GetVersionExpanded (:1101-1114) and
         publicApplicationDetail (eliteacore/handler.go:1411-1425);
         application_tools rows carry id/name/type/settings plus author_id in
-        fetchVersionDetails (:295-301), author_id+project_id in
-        GetVersionExpanded (:1140-1147), and project_id WITHOUT author_id in
-        publicApplicationDetail (:1445-1451). Only `id` is common to all.
+        fetchVersionDetails and author_id in GetVersionExpanded, and
+        publicApplicationDetail emits the sub-agent references as their own
+        entries. `project_id` names the project the tool belongs to and is
+        emitted by GetVersionExpanded on EVERY tool and by
+        publicApplicationDetail on the sub-agent entries; it is what lets the
+        runtime say which tenant schema an `application`-type tool refers to.
+        Only `id` is common to all.
+        The IMPORT and the FORK echoes carry a third shape: the import names
+        each link it wrote with `id`, `name` and `type` taken from the toolkit
+        it imported (eliteacore/handler.go, the link phase of
+        ExportImportPost) — the two literals `"custom"` and `""` that stood
+        there named no toolkit at all — and the fork writes an empty list,
+        because it copies no toolkit. On that import path `id` is the
+        `elitea_tools` row and it is serialized as a STRING, unlike the
+        integer the read paths above emit.
 
     VersionVariable:
       type: object
@@ -2626,9 +2715,10 @@ components:
         presence varies by endpoint (hence the minimal required set):
         fetchVersionDetails always adds created_at/agent_type/instructions/
         welcome_message/llm_settings/meta/conversation_starters/
-        pipeline_settings/author_id/tools/tags/variables
+        pipeline_settings/author_id/author/tools/tags/variables
         (internal/api/v2/applications/handler.go). The application and version
         create paths return that same stored pipeline-settings and tag state.
+        The author object contains id, email, and name from auth_core__user.
         UpdateVersion emits a smaller subset without created_at, author, or
         tools. Fork adds is_forked and omits pipeline_settings. The import
         detail map has no is_forked and omits created_at, but carries meta,
@@ -2845,6 +2935,19 @@ components:
             leaves existing tags unchanged when the key is absent.
         meta:
           allOf: [{ $ref: '#/components/schemas/VersionMeta' }]
+          description: >
+            A PATCH on the PUT, not the whole object. `meta` is a bag of keys
+            owned by different features — `step_limit` (the number the runtime
+            admits an agent on), `icon_meta`, `internal_tools`, `variables`,
+            and the three fork-provenance keys — and no client sends them all.
+            Send the keys you are changing; the server merges them into the
+            stored object and leaves every key you omit alone. A key you DO
+            send replaces its own value outright, so an empty array clears the
+            array it names. Omit the property entirely to leave the whole
+            object untouched. On the two create paths there is nothing to
+            merge into: the object is stored as sent, with a default
+            `step_limit` added when it carries none and the top-level
+            `variables` folded in.
         pipeline_settings:
           allOf: [{ $ref: '#/components/schemas/PipelineSettings' }]
           description: >
@@ -3963,8 +4066,12 @@ components:
         validation_token:
           type: string
           description: >
-            Hex token from validateForPublish; when present, inline validation
-            is skipped (handler.go:554-588).
+            The approval token validateForPublish issued for THIS version. When
+            present and valid, inline validation is skipped. It is a signed
+            grant, not a shape: a token nobody issued, one issued for another
+            version, an expired one and one whose agent was edited afterwards
+            are each refused with 400 `validation_token_invalid` and a `msg`
+            saying which.
         category:
           type: string
           enum: ["Business Analyst", "Quality Assurance", "Development",
@@ -3984,10 +4091,14 @@ components:
         source_version_id:
           type: string
           description: >
-            NOTE(W2) quirk preserved bug-for-bug — set to the CLONE id, not
-            the source (handler.go:637).
+            The DRAFT this publish was made from — the same id the published
+            row's own `meta.source_version_id` carries, so the two answers to
+            "where did this come from?" agree inside one response. It used to
+            repeat `public_version_id`, the row the request had just created,
+            and a client following it back to the author's editable version
+            arrived at the published copy.
       description: >
-        NOTE(W2): internal/api/v2/eliteacore/handler.go:633-638.
+        NOTE(W2): internal/api/v2/eliteacore/handler.go, Handler.Publish.
 
     UnpublishRequest:
       type: object
@@ -5917,6 +6028,25 @@ components:
             never inspected. Channel-B fixture recommended (M1).
       description: >
         NOTE(W2): internal/api/v2/tags/handler.go:13-17.
+
+    TagWriteRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: >
+            The tag's name, which is its identity: `tags.name` is unique per
+            tenant schema. It is trimmed, and a blank one is refused with 400
+            (the column is NOT NULL).
+        data:
+          nullable: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the same free-form jsonb blob `Tag.data` carries
+            (internal/api/v2/tags/handler.go:17) — stored verbatim when the
+            row is new, never inspected. Channel-B fixture recommended (M1).
+      description: >
+        The create body. `id` is not accepted: the store keys on the name.
 
     TagsList:
       type: object
@@ -11052,6 +11182,79 @@ paths:
               schema:
                 $ref: '#/components/schemas/EvalScorecard'
         '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/conversation_export/prompt_lib/{project_id}/{conversation_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_id
+        in: path
+        required: true
+        schema: { type: string }
+        description: >
+          The conversation's numeric id or its UUID. Both resolve, the same way
+          the conversation detail read resolves them.
+    get:
+      operationId: exportConversation
+      summary: Download one conversation's transcript as a document
+      description: |
+        The rail's row menu offers this as "Export", with one entry per format.
+        Both answers carry `Content-Disposition: attachment` and a filename
+        derived from the conversation's own name, so a browser saves the
+        response rather than rendering it.
+
+        The document is the WHOLE transcript, oldest message first, never a
+        page of it. A conversation with more messages than the server will
+        assemble in one document is refused with 400 rather than exported
+        truncated: a partial file that looks complete is the failure this
+        refusal exists to prevent.
+
+        Reading an export needs the same permission as reading the messages
+        (`models.chat.messages.list`). There is no separate export right.
+      tags: [chat]
+      parameters:
+        - name: format
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [md, markdown, json]
+            default: md
+          description: >
+            `md` (the default) is the readable document — a title, a short
+            header block and one section per message. `json` is the faithful
+            one, carrying every field the transcript read returns. Any other
+            value is a 400 rather than a silent fallback, because a client that
+            asked for a format it did not get would save the wrong extension.
+      responses:
+        '200':
+          description: >
+            The transcript document. `text/markdown` for `format=md`,
+            `application/json` for `format=json`.
+          headers:
+            Content-Disposition:
+              description: >
+                `attachment` plus the derived filename. Exposed to browser
+                fetch through Access-Control-Expose-Headers, because the web
+                client names the saved file from it.
+              schema: { type: string }
+          content:
+            text/markdown:
+              schema: { type: string }
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationExport'
+        '400':
+          description: >
+            An unsupported format, or a conversation too long to export in one
+            document.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '404': { $ref: '#/components/responses/404' }
@@ -16863,8 +17066,27 @@ paths:
       summary: Get all tags for a project
       description: |
         NOTE(W2): {rows, total} envelope (NOT a bare array),
-        internal/api/v2/tags/handler.go:37-49.
+        internal/api/v2/tags/handler.go.
       tags: [tags]
+      parameters:
+        - name: entity_coverage
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [all, application, pipeline, skill]
+          description: >
+            Narrows the list to the tags one KIND of entity carries. A
+            project's `tags` table is shared by everything that can be
+            tagged, so "the tags in this project" and "the tags I can filter
+            agents by" are different sets. `application` is the tags of
+            agents (applications with no pipeline version), `pipeline` the
+            tags of pipelines, `skill` the tags of skill versions. An absent
+            value — or `all` — answers every tag row the project holds,
+            INCLUDING one that nothing carries yet, which is the only way a
+            freshly created tag is visible. A value outside the enum is
+            refused with 400; the legacy implementation answered an empty
+            list, which reads exactly like a project with no tags.
       responses:
         '200':
           description: Tags
@@ -16872,8 +17094,69 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TagsList'
+        '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+
+    post:
+      operationId: createTag
+      summary: Create a tag in the project
+      description: |
+        Answers the STORED row, with the id the database chose.
+
+        It is idempotent on the NAME: `tags.name` is unique per tenant schema
+        and one name is one row shared by every version that carries it, so a
+        second create of the same name answers the row that already exists
+        rather than a second row or a conflict. `data` is written when the row
+        is new and left alone when it is not — the blob belongs to every
+        entity using the tag.
+
+        This verb used to echo the request back with 201 and an `id` of 0,
+        touching no table: a tag created here was in no list and its id
+        addressed nothing.
+      tags: [tags]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TagWriteRequest'
+      responses:
+        '201':
+          description: The stored tag
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tag'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+  /elitea_core/tags/prompt_lib/{project_id}/{tag_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: tag_id
+        in: path
+        required: true
+        schema: { type: integer }
+
+    delete:
+      operationId: deleteTag
+      summary: Remove a tag from the project
+      description: |
+        Removes the tag row and every association pointing at it, so the tag
+        leaves the project's list and every entity that carried it.
+
+        A tag the project does not hold answers 404 rather than the 204 a real
+        delete answers: this verb used to write 204 and return, so a caller
+        could not remove a tag at all and could not tell that it had not.
+      tags: [tags]
+      responses:
+        '204':
+          description: Deleted (no content)
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
 
   # ==========================================================================
   # TOOLKITS

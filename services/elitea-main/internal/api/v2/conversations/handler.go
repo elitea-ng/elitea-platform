@@ -37,6 +37,16 @@ type Conversation struct {
 	CreatedBy    string    `json:"created_by"`
 	MessageCount int       `json:"message_count"`
 	FolderID     *string   `json:"folder_id,omitempty"`
+	// `chat_conversations.is_private` — the flag the rail's "Make public"
+	// item writes.
+	//
+	// A POINTER because absent and false are different requests: the rename
+	// path PUTs `name` alone and must not publish the conversation, while
+	// "Make public" PUTs `is_private: false` and must. Read back on GET for
+	// the same reason the menu needs it — the item is offered only while the
+	// conversation is private, and a client that cannot read the flag cannot
+	// stop offering it.
+	IsPrivate *bool `json:"is_private,omitempty"`
 	// The conversation's own settings document (`chat_conversations.meta`).
 	//
 	// Pylon's PUT accepted it and its GET returned it
@@ -495,6 +505,11 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		// switches are on, and an absent key is indistinguishable there from
 		// a conversation whose modules are all off.
 		"meta": metaOrEmpty(conv.Meta),
+		// Always present, and defaulting to PRIVATE when the row cannot say:
+		// the sidebar menu offers "Make public" while this is true, and an
+		// absent key read as "public" would withdraw the control from every
+		// conversation.
+		"is_private": conv.IsPrivate == nil || *conv.IsPrivate,
 	}
 
 	// UI passes messages_limit to embed message_groups in the conversation response
@@ -570,6 +585,18 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			fid := fmt.Sprintf("%v", folderID)
 			conv.FolderID = &fid
 		}
+	}
+	// Present-and-a-boolean only, for the reason `meta` is present-and-an-
+	// object only: every other PUT this client makes (rename, move to folder,
+	// settings) sends no `is_private`, and reading an absent key as `false`
+	// would publish a conversation on every rename.
+	//
+	// This is the whole of "Make public". The route used to discard the key:
+	// the menu item confirmed, the client patched its own list, the column
+	// kept the `true` the INSERT gave it, and a reload put the conversation
+	// back to private with nothing anywhere reporting a failure.
+	if isPrivate, ok := body["is_private"].(bool); ok {
+		conv.IsPrivate = &isPrivate
 	}
 	// Present-and-an-object only. `"meta": null` and a body with no `meta`
 	// key both leave the stored document alone, so the rename path (which
@@ -1168,7 +1195,17 @@ func (h *Handler) UpdateCanvas(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	// Answer the SAVED canvas, not `{"ok": true}`. The client normalises this
+	// response into its canvas cache (`useEditCanvasMutation` invalidates the
+	// details query with it), so an acknowledgement with no document left the
+	// editor holding the text it sent rather than the text the server stored —
+	// which is indistinguishable from a save that never happened.
+	saved, err := h.repo.GetCanvas(r.Context(), projectID, canvasID)
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, saved)
 }
 
 func (h *Handler) UpdateAttachmentStorage(w http.ResponseWriter, r *http.Request) {

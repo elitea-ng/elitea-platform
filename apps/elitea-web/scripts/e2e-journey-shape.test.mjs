@@ -16,7 +16,13 @@
  *     failed test then made Playwright report the eight tests after it as "did
  *     not run" — neither a pass nor a failure. Three runs of `E2E (webkit)`
  *     reported the same eight. `serial` is kept for the three tests that really
- *     do run in an order, inside their own describe.
+ *     do run in an order, inside their own describe. Every OTHER journey is
+ *     swept too: a file that runs serially has to be named in
+ *     `FILE_LEVEL_SERIAL` and has to still be serial, so the shape stays a
+ *     decision rather than something that spread. The newest entry —
+ *     `support.widget.spec.ts`, whose four tests compete for one
+ *     platform-wide flag and queued instead of running — must also SAY in the
+ *     spec why it is exempt.
  *  2. `admin.app-requests.spec.ts` reads the moderation queue by NAME. It used
  *     to ask for `?limit=100&offset=0` and search the answer, and the queue
  *     sorts oldest-first — so its own newest row fell off the end once the
@@ -61,6 +67,46 @@ const REDIRECT_SPEC = 'e2e/journeys/shell/shell.redirect.spec.ts';
 const FEATURES_SPEC = 'e2e/journeys/admin/admin.features.spec.ts';
 const APP_REQUESTS_SPEC = 'e2e/journeys/admin/admin.app-requests.spec.ts';
 const SEED_SCRIPT = 'scripts/e2e-stack.sh';
+const WIDGET_SPEC = 'e2e/journeys/support/support.widget.spec.ts';
+const CONTEXT_BUDGET_SPEC = 'e2e/journeys/chat/chat.contextBudget.spec.ts';
+
+/**
+ * Every journey that runs its WHOLE file in one worker, in order.
+ *
+ * Rule 1 forbids that shape by default, because one failure then reports each
+ * test after it as "did not run" — neither a pass nor a failure. The list is
+ * an allowlist, not a description: a file that turns itself serial without
+ * being named here fails this gate, so the shape stays a decision somebody
+ * made rather than one that spread.
+ *
+ * The five without a `mustSay` predate the rule and carry their reason in
+ * their own headers (an ordered generation, an ordered admin form). The sixth
+ * is the waiver this gate exists to hold open, and it has to SAY why in the
+ * spec, where the next reader of that file meets it: `support.widget.spec.ts`'s
+ * four tests all take the same platform-wide flag
+ * (`support_assistant_enabled`), and `fullyParallel` puts them on four workers
+ * that then queue for it — measured, three `afterAll` hooks over their 120 s
+ * budget and one test dead inside `page.goto` after 210 s. One worker has no
+ * queue.
+ *
+ * The seventh is the same shape one layer down. `chat.contextBudget.spec.ts`'s
+ * two tests both write `default_context_management`, which hangs off the
+ * PERSONA and not off anything either test created, and the second one opens
+ * by writing back the very value the first one has just replaced. On two
+ * workers that is a suite writing over its own assertion, and it reported
+ * itself as a product defect ("a changed profile budget must reach the
+ * panel") in both engines. It has to SAY that, because the next reader's
+ * first instinct — the one the previous fix took — is a browser cache.
+ */
+const FILE_LEVEL_SERIAL = [
+  { path: 'e2e/journeys/deepwiki/deepwiki.real-engine.spec.ts' },
+  { path: 'e2e/journeys/deepwiki/deepwiki.generation.spec.ts' },
+  { path: 'e2e/journeys/admin/admin.schedules.spec.ts' },
+  { path: 'e2e/journeys/admin/admin.configuration.spec.ts' },
+  { path: APP_REQUESTS_SPEC },
+  { path: WIDGET_SPEC, mustSay: /ONE WORKER, IN ORDER/ },
+  { path: CONTEXT_BUDGET_SPEC, mustSay: /ONE ACCOUNT, ONE WRITER/ },
+];
 
 /* ── rule 1 ─────────────────────────────────────────────────────────────── */
 
@@ -214,6 +260,26 @@ describe('#539 — one failure must not hide eight journeys', () => {
       "adminTest.describe.configure({ mode: 'serial' });",
     ].join('\n');
     expect(fileLevelSerialLines(before)).toEqual([3]);
+  });
+
+  it('no journey runs its whole file serially without being named here', () => {
+    const allowed = new Set(FILE_LEVEL_SERIAL.map((entry) => entry.path));
+    const offenders = journeySpecs()
+      .filter(([path, source]) => fileLevelSerialLines(source).length > 0 && !allowed.has(path))
+      .map(([path]) => path);
+    expect(offenders).toEqual([]);
+  });
+
+  it('every entry on that list is really serial, and the waiver says why', () => {
+    for (const { path, mustSay } of FILE_LEVEL_SERIAL) {
+      const source = read(path);
+      // A listed file that is no longer serial is a stale exemption, and the
+      // next file to take that name would inherit it in silence.
+      expect(fileLevelSerialLines(source), `${path} is listed as serial but is not`).toHaveLength(1);
+      if (mustSay === undefined) continue;
+      // …and the reason is IN the spec, where its next reader meets it.
+      expect(source, `${path} must state why it runs in one worker`).toMatch(mustSay);
+    }
   });
 
   it('does not mistake a scoped group for a file-level one', () => {
@@ -595,5 +661,227 @@ describe('the sweep must not run beside the journeys it would sweep', () => {
       '        FIXTURE_ISOLATION_JOURNEY,',
     ].join('\n');
     expect(sweepJourneyIsIsolated(after)).toBe(true);
+  });
+});
+
+/* ── rule 7 ─────────────────────────────────────────────────────────────── */
+
+/**
+ * The publish journeys' tenancy has to be SEEDED where the fixtures look for
+ * it, and the two files have to agree on the names.
+ *
+ * `e2e/fixtures/api.ts` resolves the author project and the non-shared model
+ * BY NAME — deliberately, so no journey repeats an id the seed picks out of a
+ * reserved range. That makes the name a contract between two files that are
+ * edited for different reasons and never run together: rename the project in
+ * the seed and every publish journey fails at run time on CI with "the caller
+ * is a member of no project of that name", which reads like a broken stack
+ * rather than a rename.
+ *
+ * Three properties, and the third is the one that only fails on a FIRST seed:
+ *
+ *  1. the seed creates a project of the name the fixture asks for, and grants
+ *     BOTH personas a membership in it — the API journeys run on the admin
+ *     state while the project is member-owned, so one membership is not enough;
+ *  2. the seed creates the model the fixture asks for, `shared = false`, which
+ *     is what makes the private-model refusals refuse for their own reason;
+ *  3. the model row is written AFTER the `DO $schemas$` loop that creates
+ *     `p_<id>`. Written with the project rows it would fail on a missing
+ *     relation the first time the seed ever runs, and pass on every re-run —
+ *     the shape the schema loop's own comment records.
+ */
+export function publishTenancySeeded(seedSource, fixtureSource) {
+  const projectName = /PUBLISH_AUTHOR_PROJECT_NAME = '([^']+)'/.exec(fixtureSource)?.[1] ?? '';
+  const modelName = /PRIVATE_MODEL_NAME = '([^']+)'/.exec(fixtureSource)?.[1] ?? '';
+  if (projectName === '' || modelName === '') return false;
+
+  const projectInsert = seedSource.indexOf(`'${projectName}'`);
+  if (projectInsert < 0) return false;
+
+  // The loop is found by its BODY, not by the `DO $schemas$` label: the
+  // label is quoted in a comment near the top of the seed, and an index that
+  // stopped there would put the whole file "after the loop".
+  const schemaLoop = seedSource.indexOf('PERFORM create_tenant_schema(');
+  if (schemaLoop < 0 || schemaLoop < projectInsert) return false;
+  const projectBlock = seedSource.slice(projectInsert, schemaLoop);
+  const grantsBothPersonas =
+    projectBlock.includes('e2e-member@autotest.local') &&
+    projectBlock.includes('e2e-admin@autotest.local');
+
+  const modelInsert = seedSource.indexOf(`'${modelName}'`);
+  const modelIsPrivate = /shared = false|, false,/.test(
+    seedSource.slice(modelInsert, modelInsert + 600),
+  );
+  return grantsBothPersonas && modelInsert > schemaLoop && modelIsPrivate;
+}
+
+describe('the publish journeys must find the tenancy their fixtures resolve', () => {
+  it('the seed provisions the author project and the non-shared model', () => {
+    expect(publishTenancySeeded(read(SEED_SCRIPT), read('e2e/fixtures/api.ts'))).toBe(true);
+  });
+
+  it('rejects a seed that renamed the project the fixtures ask for', () => {
+    const seed = read(SEED_SCRIPT).replaceAll("'e2e-publish-author'", "'e2e-publishing'");
+    expect(publishTenancySeeded(seed, read('e2e/fixtures/api.ts'))).toBe(false);
+  });
+
+  it('rejects a seed that grants only the owning persona a membership', () => {
+    const seed = read(SEED_SCRIPT).replace(
+      "WHERE u.email IN ('e2e-member@autotest.local', 'e2e-admin@autotest.local')\nON CONFLICT (project_id, user_id, role_id) DO NOTHING;\n\n-- The empty vault pair",
+      "WHERE u.email = 'e2e-member@autotest.local'\nON CONFLICT (project_id, user_id, role_id) DO NOTHING;\n\n-- The empty vault pair",
+    );
+    expect(publishTenancySeeded(seed, read('e2e/fixtures/api.ts'))).toBe(false);
+  });
+
+  it('rejects the model row written before the schema loop that creates its schema', () => {
+    const seed = read(SEED_SCRIPT);
+    const row = "'e2e-private-model-llm', 'E2E-PRIVATE-MODEL'";
+    const moved = seed
+      .replace(row, 'ROW MOVED')
+      .replace('PERFORM create_tenant_schema(', `${row}\nPERFORM create_tenant_schema(`);
+    expect(publishTenancySeeded(moved, read('e2e/fixtures/api.ts'))).toBe(false);
+  });
+});
+
+/* ── rule 8 ─────────────────────────────────────────────────────────────── */
+
+/**
+ * The seeded project's `secrets_header_value` is made by the STACK, and the
+ * setup only asserts it.
+ *
+ * ## What the value is
+ *
+ * `secrets_header_value` is the `X-SECRET` the expanded version-details read
+ * compares against — the call the SDK worker materializes a nested agent with,
+ * and the one three API journeys authenticate with. A project without one
+ * refuses every caller with 403 `This project has no secrets_header_value
+ * secret`. It lives in the project's Fernet vault, so only elitea-main can
+ * write it: `BackfillProjectSecretsHeaderValues` gives one to every row of
+ * `centry.project` before the listeners bind. On this stack that pass ran at
+ * `up`, against a database with no `centry` schema at all, so it saw nothing —
+ * which is why the seed has to restart elitea-main after writing its rows.
+ *
+ * ## Why it is a rule and not a comment
+ *
+ * `auth.setup.ts` used to mint the value through the API, best-effort, with
+ * the failure swallowed to a `console.warn`. That put a WRITE on the critical
+ * path of a SCREENSHOT: the single row of the `settings-secrets` visual
+ * baseline IS this secret, so a mint that failed for a reason of its own — a
+ * persona without `configuration.secrets.secret.create`, a route absent from
+ * the image under test — left the page drawing "No secrets" and the run
+ * reported a visual diff on the Secrets page. The line that named the cause
+ * sat in the setup log, which nobody reads when a picture has changed.
+ *
+ * Three properties, and each one alone restores that reading:
+ *
+ *  1. the seed restarts elitea-main AFTER it has written the project vaults —
+ *     a restart before them repeats the pass that saw nothing;
+ *  2. it PROVES the pass wrote one, by watching project 1's vault blob change,
+ *     rather than only waiting for the container to report healthy: the pass
+ *     logs a warning and returns success for a project it skipped;
+ *  3. `auth.setup.ts` READS and asserts, and does not mint or swallow. A setup
+ *     that repairs the absence cannot detect it, and the next reader of an
+ *     empty Secrets page is a baseline diff again.
+ */
+export function runtimeSecretHeaderSeeded(seedSource, setupSource) {
+  const vaultInsert = seedSource.indexOf('INSERT INTO centry.secrets_data');
+  const restart = seedSource.indexOf('$COMPOSE_F restart elitea-main');
+  if (vaultInsert < 0 || restart < 0 || restart < vaultInsert) return false;
+
+  // The digest of project 1's vault, and a bounded wait on it AFTER the
+  // restart. The reader is a function defined above the restart, so the wait is
+  // what has to sit below it — a seed that reads the digest once and never
+  // again proves the container came back, not that the pass wrote anything.
+  const readsTheDigest = seedSource.includes(
+    "md5(data) FROM centry.secrets_data WHERE id = 'project-1'",
+  );
+  const waitsForIt = seedSource.slice(restart).includes('project_one_vault_digest');
+  if (!readsTheDigest || !waitsForIt) return false;
+
+  // The IMPORT and the CALL, not the prose: the doc comment on the assertion
+  // names `resolveProjectSecretHeader` on purpose — it says where the mint went
+  // — and a rule that read prose would forbid the sentence that explains it.
+  if (/import\s*\{[^}]*resolveProjectSecretHeader[^}]*\}/.test(setupSource)) return false;
+  const helperAt = setupSource.indexOf('async function assertRuntimeSecretHeader');
+  if (helperAt < 0) return false;
+  const helper = setupSource.slice(helperAt);
+  if (helper.includes('console.warn') || helper.includes('resolveProjectSecretHeader(')) {
+    return false;
+  }
+  return helper.includes('readProjectSecretHeader') && helper.includes('expect(');
+}
+
+describe("the seeded project's X-SECRET value is a property of the stack", () => {
+  const SETUP = 'e2e/auth.setup.ts';
+
+  it('the seed mints it and the setup asserts it', () => {
+    expect(runtimeSecretHeaderSeeded(read(SEED_SCRIPT), read(SETUP))).toBe(true);
+  });
+
+  it('rejects a seed that never restarts elitea-main', () => {
+    const seed = read(SEED_SCRIPT).replace(
+      '$COMPOSE_BIN $COMPOSE_F restart elitea-main',
+      '# restart removed',
+    );
+    expect(runtimeSecretHeaderSeeded(seed, read(SETUP))).toBe(false);
+  });
+
+  it('rejects a restart that runs before the vaults it is meant to fill', () => {
+    const seed = read(SEED_SCRIPT).replace(
+      '$COMPOSE_BIN $COMPOSE_F restart elitea-main',
+      '# moved',
+    );
+    const moved = seed.replace(
+      'INSERT INTO centry.secrets_data',
+      '$COMPOSE_BIN $COMPOSE_F restart elitea-main\nINSERT INTO centry.secrets_data',
+    );
+    expect(runtimeSecretHeaderSeeded(moved, read(SETUP))).toBe(false);
+  });
+
+  it('rejects a restart that waits for health instead of for the write', () => {
+    const seed = read(SEED_SCRIPT).replaceAll('md5(data)', 'length(data)');
+    expect(runtimeSecretHeaderSeeded(seed, read(SETUP))).toBe(false);
+  });
+
+  it('rejects a seed that reads the digest once and never waits on it', () => {
+    const seed = read(SEED_SCRIPT);
+    const poll = seed.indexOf('$COMPOSE_BIN $COMPOSE_F restart elitea-main');
+    const trimmed =
+      seed.slice(0, poll) +
+      seed.slice(poll).replaceAll('project_one_vault_digest', 'true # digest wait removed');
+    expect(runtimeSecretHeaderSeeded(trimmed, read(SETUP))).toBe(false);
+  });
+
+  it('rejects the best-effort mint the visual gate used to report for', () => {
+    const before = [
+      'async function ensureRuntimeSecretHeader(page) {',
+      '  try {',
+      '    await resolveProjectSecretHeader(page.request, DEFAULT_PROJECT_ID);',
+      '  } catch (error) {',
+      '    console.warn(`[auth.setup] could not pre-mint the project secret header`);',
+      '  }',
+      '}',
+    ].join('\n');
+    expect(runtimeSecretHeaderSeeded(read(SEED_SCRIPT), before)).toBe(false);
+  });
+
+  it('rejects an assertion that swallows its own failure', () => {
+    const swallowed = read(SETUP).replace(
+      'expect(value, explain).toBeTruthy();',
+      'if (!value) console.warn(explain);',
+    );
+    expect(runtimeSecretHeaderSeeded(read(SEED_SCRIPT), swallowed)).toBe(false);
+  });
+  it('rejects a setup that mints through the resolver instead of reading', () => {
+    const setup = read(SETUP)
+      .replace(
+        "import { readProjectSecretHeader, SECRETS_HEADER_NAME } from './fixtures/api';",
+        "import { resolveProjectSecretHeader, SECRETS_HEADER_NAME } from './fixtures/api';",
+      )
+      .replace(
+        'await readProjectSecretHeader(page.request, DEFAULT_PROJECT_ID)',
+        'await resolveProjectSecretHeader(page.request, DEFAULT_PROJECT_ID)',
+      );
+    expect(runtimeSecretHeaderSeeded(read(SEED_SCRIPT), setup)).toBe(false);
   });
 });

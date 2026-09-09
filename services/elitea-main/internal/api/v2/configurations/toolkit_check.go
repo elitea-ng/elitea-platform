@@ -55,13 +55,19 @@ package configurations
 
 import (
 	"context"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/base64"
+	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
 )
@@ -100,6 +106,15 @@ const (
 	toolkitCheckAuthFailedMessage  = "Authentication failed. The provider rejected this credential."
 	toolkitCheckUnreachableMessage = "Could not reach the provider with this credential."
 	toolkitCheckEgressMessage      = "This provider endpoint is not permitted by the platform's configuration."
+	// toolkitCheckAppKeyMessage is the ONE thing this build says about a GitHub
+	// App credential it cannot sign with. It names the two fields and nothing
+	// else: a parser's error text about a PEM block can quote the material it
+	// was given, and this message is rendered on a credential card that a
+	// project member with read access can see.
+	toolkitCheckAppKeyMessage = "Authentication failed. The App ID and private key could not be used to sign a request."
+	// toolkitCheckUnsupportedAuthMessage covers a credential whose METHOD this
+	// build has no probe for. It is not a verdict on the credential.
+	toolkitCheckUnsupportedAuthMessage = "This credential uses an authentication method this platform cannot test yet."
 )
 
 // ToolkitCheckOutcome is one probe's verdict.
@@ -131,13 +146,42 @@ func WithToolkitConnectionChecker(checker ToolkitConnectionChecker) Option {
 	return func(handler *Handler) { handler.toolkitChecker = checker }
 }
 
+// authorizeOutcome is what a probe's authorize step answers.
+//
+// Three answers, not two. The original form was a bool, so every "I did not
+// build the headers" became unsupported_type — including a GitHub App
+// credential whose private key does not parse, which is not an unsupported
+// METHOD but a supported method with unusable stored material, and reads to the
+// operator as "the platform cannot check this" when the truth is "this
+// credential will not authenticate" (#857).
+type authorizeOutcome struct {
+	// authorized is true when the header now carries the credential.
+	authorized bool
+	// rejection, when non-empty, is the fixed user-facing message for a
+	// credential this probe understood and could not use. It is reported as
+	// auth_failed. It never carries key material, provider text, or a parser's
+	// error string — see the package doc's "what a check is NOT".
+	rejection string
+}
+
+// authorizedRequest says the request now carries the credential.
+func authorizedRequest() authorizeOutcome { return authorizeOutcome{authorized: true} }
+
+// unsupportedAuth says this build has no probe for the method the credential
+// carries. The credential may be perfectly good.
+func unsupportedAuth() authorizeOutcome { return authorizeOutcome{} }
+
+// rejectedAuth says the method IS supported and the stored material cannot be
+// used, which is a verdict on the credential and is reported as auth_failed.
+func rejectedAuth(message string) authorizeOutcome { return authorizeOutcome{rejection: message} }
+
 // toolkitProbe describes one family's metadata GET.
 //
 // path is joined onto the credential's own base URL. authorize turns the stored
-// data into the request headers; it returns false when the credential carries
-// an auth method this probe cannot use (a GitHub App private key, say), which
-// is reported as unsupported_type rather than as a refusal — the credential may
-// be perfectly good.
+// data into the request headers and says which of the three answers above
+// applies. path reads the same data authorize does, so a family whose endpoint
+// depends on the auth shape (GitHub: /user for a user credential, /app for an
+// App) must decide both from one helper — see githubAuthMode.
 type toolkitProbe struct {
 	// baseURLFields are read in order; the first non-empty one wins.
 	baseURLFields []string
@@ -147,7 +191,7 @@ type toolkitProbe struct {
 	defaultBaseURL string
 	// path is appended to the base URL. It reads an identity, never content.
 	path      func(data map[string]any) string
-	authorize func(header http.Header, data map[string]any) bool
+	authorize func(header http.Header, data map[string]any) authorizeOutcome
 }
 
 // toolkitCheckProbes is the set of types this build can check.
@@ -160,7 +204,7 @@ var toolkitCheckProbes = map[string]toolkitProbe{
 	"github": {
 		baseURLFields:  []string{"base_url"},
 		defaultBaseURL: "https://api.github.com",
-		path:           func(map[string]any) string { return "/user" },
+		path:           githubProbePath,
 		authorize:      authorizeGitHub,
 	},
 	"gitlab": {
@@ -208,52 +252,177 @@ func jiraMyselfPath(data map[string]any) string {
 	return "/rest/api/" + version + "/myself"
 }
 
-// authorizeGitHub accepts a token or a username/password pair. A GitHub App
-// (app_id + app_private_key) needs a signed JWT exchange, which is a different
-// call with a different failure vocabulary — reported as unsupported rather
-// than probed badly.
-func authorizeGitHub(header http.Header, data map[string]any) bool {
-	if token := firstStrVal(data, "access_token", "token", "api_key"); token != "" {
-		header.Set("Authorization", "Bearer "+token)
-		return true
+// The three authentication shapes the github type's own schema declares, as its
+// `auth` subsections name them (sdk_config_schemas.json): a token, a
+// username/password pair, and an App id with a private key.
+const (
+	githubAuthToken = "token"
+	githubAuthBasic = "basic"
+	githubAuthApp   = "app"
+)
+
+// githubAuthMode reports which shape a stored credential carries.
+//
+// ONE helper, read by both path and authorize, because the endpoint and the
+// credential have to agree: an App JWT presented to /user is answered 403 by
+// GitHub, which this file would then report as auth_failed for a credential
+// that is in fact fine. The order is the order a worker resolves them in: an
+// explicit token wins, then a user pair, then the App fields.
+//
+// An App credential missing one of its two fields still reads as githubAuthApp.
+// That is deliberate: the operator chose the App shape, so the honest answer is
+// a verdict on the credential (auth_failed, "the App ID and private key could
+// not be used") rather than "this platform cannot test this method".
+func githubAuthMode(data map[string]any) string {
+	switch {
+	case firstStrVal(data, "access_token", "token", "api_key") != "":
+		return githubAuthToken
+	case strVal(data, "username") != "" && strVal(data, "password") != "":
+		return githubAuthBasic
+	case strVal(data, "app_private_key") != "" || strVal(data, "app_id") != "":
+		return githubAuthApp
+	default:
+		return ""
 	}
-	return setBasicAuth(header, strVal(data, "username"), strVal(data, "password"))
+}
+
+// githubProbePath picks the identity endpoint for the shape.
+//
+// /app is the App's own identity read — the exact counterpart of /user, and the
+// one call GitHub documents as authenticated by the App JWT alone, with no
+// installation chosen. Reading an INSTALLATION token instead would need an
+// installation id this credential does not carry, and would turn "this App is
+// not installed anywhere yet" into a credential failure.
+func githubProbePath(data map[string]any) string {
+	if githubAuthMode(data) == githubAuthApp {
+		return "/app"
+	}
+	return "/user"
+}
+
+// githubAppJWTLifetime is how long the minted JWT is valid, measured from its
+// own iat. GitHub refuses an App JWT whose exp is more than ten minutes after
+// its iat, so ten minutes is both the documented maximum and the whole life
+// this probe needs: the token is minted, spent on one GET, and dropped.
+const githubAppJWTLifetime = 10 * time.Minute
+
+// githubAppClockSkew backdates iat. GitHub refuses a JWT issued in its own
+// future, and a host clock a second or two ahead of GitHub's is ordinary. The
+// skew is taken OUT of the ten minutes rather than added to them, so exp - iat
+// stays within the limit above.
+const githubAppClockSkew = 60 * time.Second
+
+// authorizeGitHub accepts all three shapes the type's schema declares.
+//
+// The App branch signs a short-lived RS256 JWT with the stored private key and
+// presents it as a bearer token, which is exactly what a GitHub App does before
+// it has chosen an installation. Every failure of that signing is one fixed
+// message: a credential the platform understood and cannot use is auth_failed,
+// and the reason it could not be used is never spelled out, because every
+// specific reason is a statement about the key material.
+func authorizeGitHub(header http.Header, data map[string]any) authorizeOutcome {
+	switch githubAuthMode(data) {
+	case githubAuthToken:
+		header.Set("Authorization", "Bearer "+firstStrVal(data, "access_token", "token", "api_key"))
+		return authorizedRequest()
+	case githubAuthBasic:
+		setBasicAuth(header, strVal(data, "username"), strVal(data, "password"))
+		return authorizedRequest()
+	case githubAuthApp:
+		token, err := githubAppJWT(strVal(data, "app_id"), strVal(data, "app_private_key"), time.Now())
+		if err != nil {
+			return rejectedAuth(toolkitCheckAppKeyMessage)
+		}
+		header.Set("Authorization", "Bearer "+token)
+		return authorizedRequest()
+	default:
+		return unsupportedAuth()
+	}
+}
+
+// githubAppJWT mints the App's own bearer token.
+//
+// now is a parameter so a test can pin the window rather than assert on a clock.
+// The returned error is for the caller's control flow only: it is mapped to the
+// one fixed message above and never reaches a response.
+func githubAppJWT(appID, privateKeyPEM string, now time.Time) (string, error) {
+	appID = strings.TrimSpace(appID)
+	if appID == "" {
+		return "", errors.New("the credential names no GitHub App id")
+	}
+	key, err := parseRSAPrivateKey(privateKeyPEM)
+	if err != nil {
+		return "", err
+	}
+	issued := now.Add(-githubAppClockSkew)
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.RegisteredClaims{
+		Issuer:    appID,
+		IssuedAt:  jwt.NewNumericDate(issued),
+		ExpiresAt: jwt.NewNumericDate(issued.Add(githubAppJWTLifetime)),
+	})
+	return token.SignedString(key)
+}
+
+// parseRSAPrivateKey reads the PEM GitHub hands out when an App key is created.
+//
+// GitHub issues PKCS#1 ("BEGIN RSA PRIVATE KEY"); a key round-tripped through
+// other tooling often comes back as PKCS#8 ("BEGIN PRIVATE KEY"), so both are
+// accepted. Nothing derived from the input reaches an error message: every
+// failure is one of the static errors below.
+func parseRSAPrivateKey(privateKeyPEM string) (*rsa.PrivateKey, error) {
+	block, _ := pem.Decode([]byte(strings.TrimSpace(privateKeyPEM)))
+	if block == nil {
+		return nil, errors.New("the stored GitHub App key is not a PEM block")
+	}
+	if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
+		return key, nil
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, errors.New("the stored GitHub App key is not a readable private key")
+	}
+	key, isRSA := parsed.(*rsa.PrivateKey)
+	if !isRSA {
+		// GitHub App keys are RSA. Anything else cannot sign the RS256 JWT the
+		// API requires, so it is unusable rather than merely unexpected.
+		return nil, errors.New("the stored GitHub App key is not an RSA key")
+	}
+	return key, nil
 }
 
 // authorizeGitLab uses the header GitLab documents for a personal access
 // token. A Bearer header works for an OAuth token only, and the field this
 // platform stores is the PAT.
-func authorizeGitLab(header http.Header, data map[string]any) bool {
+func authorizeGitLab(header http.Header, data map[string]any) authorizeOutcome {
 	if token := firstStrVal(data, "private_token", "token", "api_key", "access_token"); token != "" {
 		header.Set("PRIVATE-TOKEN", token)
-		return true
+		return authorizedRequest()
 	}
-	return false
+	return unsupportedAuth()
 }
 
 // authorizeBasicOrBearer builds the Atlassian/Bitbucket shape: a user name plus
 // a token is HTTP basic (Cloud), a token alone is a bearer (Server/DC PAT).
-func authorizeBasicOrBearer(userField, secretField string, bearerFields ...string) func(http.Header, map[string]any) bool {
-	return func(header http.Header, data map[string]any) bool {
+func authorizeBasicOrBearer(userField, secretField string, bearerFields ...string) func(http.Header, map[string]any) authorizeOutcome {
+	return func(header http.Header, data map[string]any) authorizeOutcome {
 		user := strVal(data, userField)
 		secret := strVal(data, secretField)
 		if user != "" && secret != "" {
-			return setBasicAuth(header, user, secret)
+			setBasicAuth(header, user, secret)
+			return authorizedRequest()
 		}
 		if token := firstStrVal(data, bearerFields...); token != "" {
 			header.Set("Authorization", "Bearer "+token)
-			return true
+			return authorizedRequest()
 		}
-		return false
+		return unsupportedAuth()
 	}
 }
 
-func setBasicAuth(header http.Header, user, secret string) bool {
-	if user == "" || secret == "" {
-		return false
-	}
+// setBasicAuth writes the header. Its callers have already established that
+// both halves are present, so it has nothing left to report.
+func setBasicAuth(header http.Header, user, secret string) {
 	header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(user+":"+secret)))
-	return true
 }
 
 // httpToolkitConnectionChecker is the production checker: an allowlist, a
@@ -325,12 +494,20 @@ func (c *httpToolkitConnectionChecker) CheckToolkit(ctx context.Context, configT
 		return ToolkitCheckOutcome{Reason: ToolkitCheckReasonUnreachable, Message: toolkitCheckUnreachableMessage}
 	}
 	request.Header.Set("Accept", "application/json")
-	if !probe.authorize(request.Header, data) {
+	switch auth := probe.authorize(request.Header, data); {
+	case auth.authorized:
+		// The header carries the credential; fall through to the round trip.
+	case auth.rejection != "":
+		// The method IS supported and the stored material cannot be used. That
+		// is a verdict on the credential, so it is auth_failed — and it is
+		// reached WITHOUT a dial, because there is nothing to ask the provider.
+		return ToolkitCheckOutcome{Reason: ToolkitCheckReasonAuthFailed, Message: auth.rejection}
+	default:
 		// The credential is not necessarily wrong — this build simply has no
 		// probe for the authentication method it carries.
 		return ToolkitCheckOutcome{
 			Reason:  ToolkitCheckReasonUnsupportedType,
-			Message: "This credential uses an authentication method this platform cannot test yet.",
+			Message: toolkitCheckUnsupportedAuthMessage,
 		}
 	}
 

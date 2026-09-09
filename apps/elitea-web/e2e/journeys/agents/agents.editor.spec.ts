@@ -68,21 +68,21 @@ function uniqueName(stem: string): string {
 }
 
 /**
- * Creates an agent that already HOLDS one chat starter.
+ * Creates an agent that already HOLDS the given chat starters.
  *
- * The shared `createAgent` seeds `conversation_starters: []`, and the journey
- * below needs a starter row on screen at load. It cannot click `+ Starter` to
- * get one — see that test's own comment for the click-swallowing defect this
- * routes around — so the row is seeded server-side instead.
+ * The shared `createAgent` seeds `conversation_starters: []`, and the journeys
+ * below need starter rows on screen at load. They cannot click `+ Starter` to
+ * get them — see the first test's own comment for the click-swallowing defect
+ * this routes around — so the rows are seeded server-side instead.
  *
  * A local helper rather than a new parameter on `e2e/fixtures/api.ts`:
  * that file is edited by every journey unit in this wave at once, and one
  * caller's convenience is not worth the merge.
  */
-async function createAgentWithStarter(
+async function createAgentWithStarters(
   request: APIRequestContext,
   name: string,
-  starter: string,
+  starters: readonly string[],
 ): Promise<{ readonly id: string; readonly versionId: string }> {
   const path = `${API_BASE}/elitea_core/applications/prompt_lib/${DEFAULT_PROJECT_ID}`;
   const response = await request.post(path, {
@@ -95,16 +95,18 @@ async function createAgentWithStarter(
           name: 'base',
           agent_type: 'openai',
           instructions: 'You are a helpful assistant.',
-          conversation_starters: [starter],
+          conversation_starters: [...starters],
         },
       ],
     },
   });
   expect(response.ok(), `seeding the agent returned ${response.status()}`).toBe(true);
   const body = await response.json();
-  // Asserted, not assumed: a server that silently dropped the starter would
+  // Asserted, not assumed: a server that silently dropped a starter would
   // otherwise surface as an unexplained missing row in the browser.
-  expect(body?.version_details?.conversation_starters, 'the server must store the seeded starter').toEqual([starter]);
+  expect(body?.version_details?.conversation_starters, 'the server must store every seeded starter').toEqual([
+    ...starters,
+  ]);
   return { id: String(body.id), versionId: String(body.version_details.id) };
 }
 
@@ -257,7 +259,7 @@ test('J14c: the welcome message and chat starters count down to 768 and refuse t
 }) => {
   const name = uniqueName('limits');
   const seededStarter = 'Seeded by the character-limit journey.';
-  const agent = await createAgentWithStarter(request, name, seededStarter);
+  const agent = await createAgentWithStarters(request, name, [seededStarter]);
   const atLimit = 'X'.repeat(MAX_TEXT_FIELD_CHARS);
   try {
     await openAgentEditor(page, agent.id);
@@ -340,6 +342,81 @@ test('J14c: the welcome message and chat starters count down to 768 and refuse t
     await expect(welcomeCounter).toHaveText(`${MAX_TEXT_FIELD_CHARS - 5} characters left`);
     const belowLimitColour = await welcomeCounter.evaluate((node) => getComputedStyle(node).color);
     expect(atLimitColour, 'the counter must change colour at the limit').not.toBe(belowLimitColour);
+  } finally {
+    await deleteAgent(request, agent.id);
+  }
+});
+
+/*
+ * Legacy: the per-FIELD half of the same character-limit family — "each
+ * conversation-starter field carries its own counter with the same limit
+ * behaviour".
+ *
+ * The journey above proves the 768-character contract on ONE starter row and
+ * on the welcome message. What it cannot say is the thing a shared counter
+ * would break: that the rows are INDEPENDENT. `ConversationStartersEditor`
+ * renders one `CharacterCounter` per row, each fed that row's own `value` and
+ * gated on that row's own focus id — so a regression that lifted either into
+ * the editor (one counter for the section, or one focus flag shared by every
+ * row) would still pass every assertion above, because they only ever look at
+ * `.first()`.
+ *
+ * The second row's counter is read while it is NOT focused. That is
+ * deliberate and it is legal: since #848 the counter is never unmounted, only
+ * hidden (`visibility: hidden`), so its text is still the truth about its own
+ * field — and reading it is what proves the value it counts is that row's and
+ * not the focused row's.
+ */
+test('J14c: each chat starter counts its own field, and filling one leaves the other alone', async ({
+  page,
+  request,
+}) => {
+  const name = uniqueName('starters');
+  const first = 'The first seeded starter.';
+  const second = 'Second.';
+  const agent = await createAgentWithStarters(request, name, [first, second]);
+  const atLimit = 'X'.repeat(MAX_TEXT_FIELD_CHARS);
+  try {
+    await openAgentEditor(page, agent.id);
+    const panel = page.getByTestId('edit-application-configuration-tab-panel');
+
+    const inputs = panel.getByTestId('agent-conversation-starter-input');
+    await expect(inputs, 'both seeded starters must render, each as its own row').toHaveCount(2, {
+      timeout: 20_000,
+    });
+    const counters = panel.getByTestId('agent-conversation-starter-counter');
+    await expect(counters, 'a row without its own counter cannot report its own limit').toHaveCount(2);
+
+    // Each row holds ITS OWN value — the ordering the server stored, not two
+    // views of one field.
+    await expect(inputs.nth(0)).toHaveValue(first);
+    await expect(inputs.nth(1)).toHaveValue(second);
+    await expect(inputs.nth(1)).toHaveAttribute('maxlength', String(MAX_TEXT_FIELD_CHARS));
+
+    // Fill the FIRST row to the limit. `fill` leaves it focused, which is what
+    // the counter's focus gate needs to make its line visible.
+    await inputs.nth(0).fill(atLimit);
+    await expect(counters.nth(0)).toHaveText(AT_LIMIT_COUNTER_TEXT);
+
+    // …and the second row is untouched, in both halves: its value, and its own
+    // count. `768 - "Second.".length`, computed from the same constants the
+    // component uses, so this line does not have to be re-derived by hand when
+    // the seed text changes.
+    await expect(inputs.nth(1)).toHaveValue(second);
+    await expect(
+      counters.nth(1),
+      'the second row must count its OWN field — a shared counter reports the focused row here',
+    ).toHaveText(`${MAX_TEXT_FIELD_CHARS - second.length} characters left`);
+
+    // The other direction, so the pass is not an artefact of which row was
+    // edited: type into the SECOND row and watch only its own counter move.
+    await inputs.nth(1).fill(`${second}!`);
+    await expect(counters.nth(1)).toHaveText(`${MAX_TEXT_FIELD_CHARS - second.length - 1} characters left`);
+    await expect(
+      counters.nth(0),
+      'the row that is already at the limit must stay at the limit while another row is edited',
+    ).toHaveText(AT_LIMIT_COUNTER_TEXT);
+    await expect(inputs.nth(0)).toHaveValue(atLimit);
   } finally {
     await deleteAgent(request, agent.id);
   }

@@ -89,10 +89,10 @@ func TestCurrentConfigurationMutationRouteBindsExactPathsPermissionsAndDependenc
 		authConfig  apimw.AuthConfig
 		permissions auth.PermissionResolver
 	}{
-		"missing mutator":     {authConfig: authConfig, permissions: permissions},
-		"missing principal":   {mutator: mutator, authConfig: apimw.AuthConfig{ForwardedIdentityVerifier: peer}, permissions: permissions},
-		"missing peer proof":  {mutator: mutator, authConfig: apimw.AuthConfig{PrincipalValidator: principal}, permissions: permissions},
-		"missing permissions": {mutator: mutator, authConfig: authConfig},
+		"missing mutator":      {authConfig: authConfig, permissions: permissions},
+		"missing principal":    {mutator: mutator, authConfig: apimw.AuthConfig{ForwardedIdentityVerifier: peer}, permissions: permissions},
+		"no credential reader": {mutator: mutator, authConfig: apimw.AuthConfig{PrincipalValidator: principal}, permissions: permissions},
+		"missing permissions":  {mutator: mutator, authConfig: authConfig},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := handler.NewCurrentConfigurationMutationRoute(

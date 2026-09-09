@@ -81,11 +81,17 @@ describe('resolveVoice', () => {
 
 describe('resolveSlots / resolveRefs', () => {
   it('resolve every field, defined or not', () => {
+    // Enumerated on purpose, and kept in step by hand: `resolveSlots`
+    // rebuilds the bundle key by key, so a slot missing from it is dropped
+    // between the composition root that supplies it and the footer that
+    // renders it, with nothing anywhere reporting a problem.
     expect(resolveSlots(undefined)).toEqual({
       sendControl: undefined,
       highlightOverlay: undefined,
+      attachmentList: undefined,
       attachmentButton: undefined,
       internalToolsConfig: undefined,
+      clearChat: undefined,
       voiceButton: undefined,
       modelSelector: undefined,
     });

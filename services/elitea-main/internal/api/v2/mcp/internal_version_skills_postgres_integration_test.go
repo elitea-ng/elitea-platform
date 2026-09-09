@@ -121,11 +121,18 @@ func TestInternalCreateVersionCopiesExactSkills(t *testing.T) {
 			}
 			// Wrong-application cleanup must not remove these bindings.
 			repo := repos.NewApplicationsRepo(pool)
+			if _, err := pool.Exec(ctx, `UPDATE p_1.applications SET updated_at = '2000-01-01' WHERE id = $1`, appID); err != nil {
+				t.Fatal(err)
+			}
 			if err := repo.DeleteVersion(ctx, "1", "99999", id); err == nil {
 				t.Fatal("foreign application deleted a version")
 			}
 			if got := versionSkillBindings(t, pool, id); !reflect.DeepEqual(got, want) {
 				t.Fatal("foreign cleanup removed bindings")
+			}
+			var untouched bool
+			if err := pool.QueryRow(ctx, `SELECT updated_at = '2000-01-01' FROM p_1.applications WHERE id = $1`, appID).Scan(&untouched); err != nil || !untouched {
+				t.Fatalf("foreign cleanup changed the application timestamp: %v", err)
 			}
 			if err := repo.DeleteVersion(ctx, "1", strconv.FormatInt(appID, 10), id); err != nil {
 				t.Fatal(err)
@@ -133,10 +140,42 @@ func TestInternalCreateVersionCopiesExactSkills(t *testing.T) {
 			if got := versionSkillBindings(t, pool, id); len(got) != 0 {
 				t.Fatal("deleted version left orphaned bindings")
 			}
+			var touched bool
+			if err := pool.QueryRow(ctx, `SELECT updated_at > '2000-01-01' FROM p_1.applications WHERE id = $1`, appID).Scan(&touched); err != nil || !touched {
+				t.Fatalf("version deletion did not update the application timestamp: %v", err)
+			}
 		})
 	}
 	if got := versionSkillBindings(t, pool, source); !reflect.DeepEqual(got, want) {
 		t.Fatal("copy or cleanup changed the source")
+	}
+}
+
+func TestInternalCreateVersionDeleteTimestampFailureRollsBack(t *testing.T) {
+	pool := newInternalApplicationsPool(t)
+	appID, versionID := seedInternalApplicationVersion(t, pool)
+	ctx := context.Background()
+	id := strconv.FormatInt(versionID, 10)
+	want := versionSkillBindings(t, pool, id)
+	if len(want) == 0 {
+		t.Fatal("fixture has no skill bindings")
+	}
+	if _, err := pool.Exec(ctx, `
+		CREATE FUNCTION p_1.reject_application_touch() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'injected timestamp failure'; END $$;
+		CREATE TRIGGER reject_application_touch BEFORE UPDATE OF updated_at ON p_1.applications
+		FOR EACH ROW EXECUTE FUNCTION p_1.reject_application_touch()`); err != nil {
+		t.Fatal(err)
+	}
+	repo := repos.NewApplicationsRepo(pool)
+	if err := repo.DeleteVersion(ctx, "1", strconv.FormatInt(appID, 10), id); err == nil {
+		t.Fatal("timestamp failure did not fail deletion")
+	}
+	if _, err := repo.GetVersion(ctx, "1", strconv.FormatInt(appID, 10), id); err != nil {
+		t.Fatalf("timestamp failure removed the version: %v", err)
+	}
+	if got := versionSkillBindings(t, pool, id); !reflect.DeepEqual(got, want) {
+		t.Fatal("timestamp failure removed skill bindings")
 	}
 }
 

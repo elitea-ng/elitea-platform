@@ -14,6 +14,7 @@ package configurations
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -168,20 +169,109 @@ func TestACredentialLinkIsReadInBothSpellings(t *testing.T) {
 	}
 }
 
-// TestAModelNamingNoCredentialResolves — a row with no link is not broken. The
-// gateway resolves its provider from a prefix in the model name, the standalone
-// seed relies on it, and reporting it as unresolved would be a permanent false
-// alarm on a working deployment.
-func TestAModelNamingNoCredentialResolves(t *testing.T) {
+// TestAModelNamingNoCredentialIsReportedUnresolved.
+//
+// It used to report as RESOLVING, on the argument that the gateway falls back
+// to reading the provider out of a prefix in the model name. That argument
+// described a row nothing here can write: `ai_credentials` is required on all
+// five model types, so provider admission refuses such a row and stores
+// `status_ok = false`, and every reader — the catalogue, the tier defaults and
+// the gateway itself — selects on `status_ok = true`. The row is listed by this
+// surface and served by nobody, which is exactly the state this flag exists to
+// show.
+//
+// The flag is reported without consulting the credential list, because the
+// absence of a link is a fact about the row and needs no list to establish.
+func TestAModelNamingNoCredentialIsReportedUnresolved(t *testing.T) {
 	item, err := scanGlobalModel(modelRowScan(`{"name":"gpt-4o"}`), []string{"platform-openai"}, true)
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
-	if !item.CredentialResolves {
-		t.Error("a model naming no credential was reported as unresolved")
+	if item.CredentialResolves {
+		t.Error("a model naming no credential at all was reported as resolving")
 	}
 	if item.ModelName != "gpt-4o" {
 		t.Errorf("model_name = %q, want the wire name", item.ModelName)
+	}
+
+	unverified, err := scanGlobalModel(modelRowScan(`{"name":"gpt-4o"}`), nil, false)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if unverified.CredentialResolves {
+		t.Error("an unread credential list turned a row with NO link into a resolving one")
+	}
+}
+
+// TestTheTierFlagsAreReportedForTheEditForm.
+//
+// `low_tier` and `high_tier` decide whether a project's AI configuration offers
+// the model as a tier default. The edit dialog rewrites `data` whole, so a form
+// that could not read them back would clear the flag of every model it saved —
+// the same shape as the credential link this file's other tests pin.
+func TestTheTierFlagsAreReportedForTheEditForm(t *testing.T) {
+	row := `{"name":"gpt-4o","ai_credentials":{"elitea_title":"platform-openai"},` +
+		`"high_tier":true,"low_tier":false}`
+	item, err := scanGlobalModel(modelRowScan(row), []string{"platform-openai"}, true)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if !item.HighTier || item.LowTier {
+		t.Errorf("high_tier = %v, low_tier = %v, want the flags the row carries", item.HighTier, item.LowTier)
+	}
+
+	// A row written before the flags existed carries neither key, and the
+	// registry defaults both to false.
+	plain, err := scanGlobalModel(
+		modelRowScan(`{"name":"gpt-4o","ai_credentials":{"elitea_title":"platform-openai"}}`),
+		[]string{"platform-openai"}, true)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if plain.HighTier || plain.LowTier {
+		t.Errorf("a row carrying no flags reported high=%v low=%v", plain.HighTier, plain.LowTier)
+	}
+}
+
+// TestTheStoredDataObjectIsReportedEntire.
+//
+// The DATA-LOSS half of the same shape. The listing reported the fields it
+// interprets — wire name, link, the two tiers — and the edit dialog rebuilt
+// `data` from exactly those. Every other field an `llm_model` declares
+// (`context_window`, `max_output_tokens`, `openai_compatible`,
+// `supports_reasoning`, `supports_vision`) was therefore erased by a rename or
+// a tier tick, and nothing on the screen said so.
+//
+// Reporting the object as stored is what lets the dialog MERGE instead of
+// rebuild, and it holds for a field the registry adds after this test is
+// written — which naming five more struct fields would not.
+func TestTheStoredDataObjectIsReportedEntire(t *testing.T) {
+	row := `{"name":"gpt-4o","ai_credentials":{"elitea_title":"platform-openai"},` +
+		`"context_window":400000,"max_output_tokens":128000,"supports_vision":true,` +
+		`"supports_reasoning":false,"openai_compatible":true,"a_field_added_later":"kept"}`
+	item, err := scanGlobalModel(modelRowScan(row), []string{"platform-openai"}, true)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	var want map[string]any
+	if err := json.Unmarshal([]byte(row), &want); err != nil {
+		t.Fatalf("decode the row under test: %v", err)
+	}
+	for key, value := range want {
+		if fmt.Sprintf("%v", item.Data[key]) != fmt.Sprintf("%v", value) {
+			t.Errorf("data[%q] = %#v, want %#v", key, item.Data[key], value)
+		}
+	}
+
+	// A corrupt column reports an EMPTY object rather than a null: the dialog
+	// merges over this, and a null would make the merge fail instead of
+	// reporting a model with no settings.
+	corrupt, err := scanGlobalModel(modelRowScan(`not json`), nil, true)
+	if err != nil {
+		t.Fatalf("scan refused a corrupt data column: %v", err)
+	}
+	if corrupt.Data == nil {
+		t.Error("a corrupt data column reported a null `data`, which the edit form cannot merge over")
 	}
 }
 

@@ -55,6 +55,7 @@ import {
   fillComposer,
   readStoredAssistantAnswer,
 } from '../fixtures/api';
+import { createConfiguration, deleteConfiguration } from '../fixtures/configurations';
 
 import type { LiveToolkitProvider } from './liveEnv';
 
@@ -121,22 +122,21 @@ export async function provisionLiveToolkit(
   const credentialName = `${AUTOTEST_PREFIX}cred_${provider.id}_${tag}`.slice(0, 32);
   const toolkitName = `${AUTOTEST_PREFIX}tk_${provider.id}_${tag}`.slice(0, 32);
 
-  const credential = await request.post(`${API_BASE}/configurations/configurations/${projectId}`, {
-    data: {
+  // Through the shared builder, so the row this lane writes is filed in the
+  // same `credentials` section — and with the same body shape — as the one
+  // every offline journey writes. Only `data` differs, and that difference is
+  // the whole point of a live lane.
+  const { id: credentialId } = await createConfiguration(
+    request,
+    'credentials',
+    {
+      title: eliteaTitle,
       type: provider.id,
-      elitea_title: eliteaTitle,
       label: credentialName,
       data: broken ? provider.brokenCredentialData() : provider.credentialData(),
-      shared: false,
     },
-  });
-  expect(
-    credential.ok(),
-    `creating the ${provider.id} credential answered ${credential.status()}: ${(await credential.text()).slice(0, 300)}`,
-  ).toBe(true);
-  const credentialBody = (await credential.json()) as { id?: string | number };
-  const credentialId = String(credentialBody.id ?? '');
-  expect(credentialId, 'the created credential must carry an id').not.toBe('');
+    projectId,
+  );
 
   const toolkit = await request.post(`${API_BASE}/elitea_core/tools/prompt_lib/${projectId}`, {
     data: {
@@ -177,9 +177,7 @@ export async function removeLiveToolkit(
   await request
     .delete(`${API_BASE}/elitea_core/tool/prompt_lib/${projectId}/${toolkitId}`)
     .catch(() => undefined);
-  await request
-    .delete(`${API_BASE}/configurations/configuration/${projectId}/${credentialId}`)
-    .catch(() => undefined);
+  await deleteConfiguration(request, credentialId, projectId);
 }
 
 /**

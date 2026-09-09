@@ -75,10 +75,10 @@ func TestCurrentModelDefaultRouteBindsCurrentPathAndUpdatePermission(t *testing.
 		authConfig  apimw.AuthConfig
 		permissions auth.PermissionResolver
 	}{
-		"missing writer":      {authConfig: authConfig, permissions: permissions},
-		"missing principal":   {writer: writer, authConfig: apimw.AuthConfig{ForwardedIdentityVerifier: peer}, permissions: permissions},
-		"missing peer proof":  {writer: writer, authConfig: apimw.AuthConfig{PrincipalValidator: principal}, permissions: permissions},
-		"missing permissions": {writer: writer, authConfig: authConfig},
+		"missing writer":       {authConfig: authConfig, permissions: permissions},
+		"missing principal":    {writer: writer, authConfig: apimw.AuthConfig{ForwardedIdentityVerifier: peer}, permissions: permissions},
+		"no credential reader": {writer: writer, authConfig: apimw.AuthConfig{PrincipalValidator: principal}, permissions: permissions},
+		"missing permissions":  {writer: writer, authConfig: authConfig},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := handler.NewCurrentModelDefaultRoute(

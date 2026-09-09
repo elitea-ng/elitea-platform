@@ -62,7 +62,11 @@ func TestACredentialSaveWorksWithAWrappedMasterKeyAndNoVault(t *testing.T) {
 			"elitea_title": "wrapped-credential",
 			"label":        "wrapped-credential",
 			"type":         "open_ai",
-			"data":         map[string]any{"api_key": "sk-wrapped"},
+			// api_base is present because the type's own schema requires it and
+			// the create refuses a body without it before it reaches the sealer
+			// (internal/api/v2/configurations/required_fields.go). The value is
+			// the one assertSealedAPIKey checks survived the seal untouched.
+			"data": map[string]any{"api_key": "sk-wrapped", "api_base": "https://api.openai.com/v1"},
 		})
 	if status != http.StatusCreated {
 		t.Fatalf("the credential save answered %d, want 201. Body: %s\n"+

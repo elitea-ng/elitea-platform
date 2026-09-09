@@ -113,12 +113,19 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 type conversationItem struct {
-	ID        int        `json:"id"`
-	Name      string     `json:"name"`
-	UUID      string     `json:"uuid,omitempty"`
-	AuthorID  int        `json:"author_id"`
-	FolderID  *int       `json:"folder_id"`
-	IsPinned  bool       `json:"is_pinned,omitempty"`
+	ID       int    `json:"id"`
+	Name     string `json:"name"`
+	UUID     string `json:"uuid,omitempty"`
+	AuthorID int    `json:"author_id"`
+	FolderID *int   `json:"folder_id"`
+	IsPinned bool   `json:"is_pinned,omitempty"`
+	// `chat_conversations.is_private`. The row menu offers "Make public" only
+	// while a conversation is private, and this listing is where the sidebar
+	// learns each row's state — the client normaliser already reads the key
+	// (`entities/folder/api/foldersApi.ts`, `is_private` → `isPrivate`) and
+	// defaults an absent one to private, so the control never withdrew after
+	// a conversation was published.
+	IsPrivate bool       `json:"is_private"`
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt *time.Time `json:"updated_at"`
 }
@@ -126,8 +133,14 @@ type conversationItem struct {
 type dateGroup struct {
 	Name          string             `json:"name"`
 	Conversations []conversationItem `json:"conversations"`
-	Total         int                `json:"total"`
-	Offset        int                `json:"offset"`
+	// Total is the size of the WHOLE bucket, not of this page. The rail's
+	// load-more sentinel mounts only while `total` exceeds the rows it
+	// already holds, so a total equal to the delivered count is the same
+	// statement as "there is no more" — see firstPage.
+	Total int `json:"total"`
+	// Offset is where the next page starts: the number of rows this response
+	// carries. The client sends it back as `?date_group=…&offset=…`.
+	Offset int `json:"offset"`
 }
 
 // groupOrder is the sidebar's date-group order, newest bucket first. Also
@@ -164,7 +177,29 @@ func (h *Handler) loadConversations(ctx context.Context, r *http.Request, projec
 		sortOrder = "desc"
 	}
 
-	orderCol := "c.updated_at"
+	// COALESCE, and a tie-break on the primary key.
+	//
+	// `updated_at` IS NULLABLE and carries no default (tenant migration 0123),
+	// so every conversation that has never been revised holds NULL there. Two
+	// consequences, both of which reached the screen:
+	//
+	//  1. `ORDER BY c.updated_at DESC` puts NULLs FIRST in PostgreSQL. A
+	//     conversation nobody has touched since it was created therefore
+	//     sorted ABOVE one that was edited a minute ago.
+	//  2. Every one of those NULLs compares equal, so the relative order of
+	//     the whole never-revised set was whatever the scan happened to
+	//     return — different on every request. The rail re-sorts what it
+	//     receives by `updated_at ?? created_at` descending
+	//     (`features/chat-conversation-list/lib/helpers/conversationList.helpers.ts`),
+	//     so the answer and the screen disagreed at random, and a reader
+	//     comparing the two saw rows "move" between two identical listings.
+	//
+	// `groupByDate` below already reads `created_at` when `updated_at` is
+	// absent; the sort now reads the same value the grouping does, which is
+	// what makes "newest first" one statement rather than two. The `c.id`
+	// tie-break, in the same direction, makes the answer total: two rows that
+	// share a timestamp to the microsecond still come back in a fixed order.
+	orderCol := "COALESCE(c.updated_at, c.created_at)"
 	switch sortBy {
 	case "created_at":
 		orderCol = "c.created_at"
@@ -176,16 +211,46 @@ func (h *Handler) loadConversations(ctx context.Context, r *http.Request, projec
 		orderDir = "ASC"
 	}
 
+	// Who is asking. The pin is PER READER — `social_pins` is keyed by
+	// (entity_name, entity_id, user_id) — so a listing that ignored the
+	// caller would show one member the rows another member pinned.
+	pinnedBy := ""
+	if user, ok := auth.UserFromContext(ctx); ok {
+		pinnedBy = user.ID
+	}
+
 	// Query conversations (indexes on conversation_id ensure fast joins elsewhere)
+	//
+	// THE PINNED SET COMES FROM `social_pins`, which is where the pin routes
+	// write it (`POST`/`DELETE /social/pin/prompt_lib/{p}/conversation/{id}`,
+	// and the `elitea_core/pin` pair beside them). It used to be read from
+	// `c.meta->>'is_pinned'`, a key NOTHING in this service or its client ever
+	// writes for a conversation — so "Pin on top" answered `{"ok": true}`, the
+	// sidebar moved the row optimistically, and the next listing put it back
+	// where it was. Legacy reads the same table (elitea_core/api/v2/
+	// folder.py:374-380 queries the social Pin model for
+	// `entity == 'conversation'`), so this restores the contract rather than
+	// inventing one. The `meta` key is kept as a fallback: a row that carries
+	// it stays pinned, which costs nothing and cannot unpin anybody.
+	//
+	// An unknown caller (`$1 = ''`) matches any owner rather than none: this
+	// route is permission-gated, so the case is a handler built without auth
+	// in a test, and answering "no conversation is pinned" there would hide a
+	// broken join behind a plausible empty set.
 	q := fmt.Sprintf(`
 		SELECT c.id, c.name, COALESCE(c.uuid::text, ''), c.author_id, c.folder_id,
-		       COALESCE((c.meta->>'is_pinned')::boolean, false) as is_pinned,
+		       (COALESCE((c.meta->>'is_pinned')::boolean, false)
+		            OR EXISTS (SELECT 1 FROM %s.social_pins p
+		                       WHERE p.entity_name = 'conversation'
+		                         AND p.entity_id = c.id
+		                         AND ($1 = '' OR p.user_id::text = $1))) AS is_pinned,
+		       c.is_private,
 		       c.created_at, c.updated_at
 		FROM %s.chat_conversations c
 		WHERE (c.meta->>'is_hidden' IS NULL OR c.meta->>'is_hidden' = 'false')
-		ORDER BY %s %s`, schema, orderCol, orderDir)
+		ORDER BY %s %s, c.id %s`, schema, schema, orderCol, orderDir, orderDir)
 
-	rows, err := h.pool.Query(ctx, q)
+	rows, err := h.pool.Query(ctx, q, pinnedBy)
 	if err != nil {
 		return nil, fmt.Errorf("folders: list conversations: %w", err)
 	}
@@ -193,7 +258,7 @@ func (h *Handler) loadConversations(ctx context.Context, r *http.Request, projec
 	for rows.Next() {
 		var c conversationItem
 		var updatedAt *time.Time
-		if err := rows.Scan(&c.ID, &c.Name, &c.UUID, &c.AuthorID, &c.FolderID, &c.IsPinned, &c.CreatedAt, &updatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.UUID, &c.AuthorID, &c.FolderID, &c.IsPinned, &c.IsPrivate, &c.CreatedAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("folders: scan conversation: %w", err)
 		}
 		c.UpdatedAt = updatedAt
@@ -305,10 +370,14 @@ func paginate(items []conversationItem, limit, offset int) []conversationItem {
 	return items[offset:end]
 }
 
+// defaultPageSize is the legacy runtime's own limit (folder.py:132-133) and
+// the size of one bucket page in the grouped listing.
+const defaultPageSize = 10
+
 // pageParams reads the `limit`/`offset` pair both lazy fetchers send,
 // defaulting to the legacy runtime's own limit=10/offset=0 (folder.py:132-133).
 func pageParams(r *http.Request) (limit, offset int) {
-	limit = 10
+	limit = defaultPageSize
 	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v > 0 {
 		limit = v
 	}
@@ -316,6 +385,39 @@ func pageParams(r *http.Request) (limit, offset int) {
 		offset = v
 	}
 	return limit, offset
+}
+
+// firstPage is one bucket's opening page of the GROUPED listing, and the pair
+// of counters the client needs to ask for the next one.
+//
+// DEFECT #852. Every bucket used to be emitted whole, with
+// `total = offset = len(conversations)`. `total` is what the rail's
+// LoadMoreSentinel compares against the rows it holds
+// (`hasMore = totalAvailableCount > listCurrentSize`), so a total that always
+// equalled the delivered count made `hasMore` false for every bucket that has
+// ever existed: the sentinel never mounted, `onLoadMoreInGroup` never fired,
+// and `?date_group=…&offset=…` — a route this handler has served since #128 —
+// had no caller. A project whose sidebar was longer than one screen was not
+// slow to load; it simply never loaded the rest.
+//
+// `total` is now the SIZE OF THE BUCKET and `offset` the number of rows this
+// response carries, which is where the next page starts. The two are equal
+// only when the bucket really did fit in one page, which is the state the old
+// code asserted unconditionally.
+//
+// SEARCH IS NOT PAGED. `query=` filters the whole project before the buckets
+// are cut, and the load-more fetchers do not carry the term
+// (`dateGroupConversations` sends `date_group`/`limit`/`offset`/`sort_*` and
+// nothing else), so a paged search would drop matches on the floor and then
+// fetch UNFILTERED rows to replace them. A filtered listing is therefore
+// served whole, and its `total` still equals its delivered count — honestly
+// this time, because it is the whole answer.
+func firstPage(all []conversationItem, pageSize int, paged bool) (page []conversationItem, total, offset int) {
+	if !paged {
+		return all, len(all), len(all)
+	}
+	page = paginate(all, pageSize, 0)
+	return page, len(all), len(page)
 }
 
 // listFolderConversations answers `?folder_id=N` — one folder's page of
@@ -420,15 +522,21 @@ func (h *Handler) listGrouped(w http.ResponseWriter, r *http.Request, projectID 
 	pinned, foldered, ungrouped := partitionConversations(conversations)
 	groups := groupByDate(ungrouped, time.Now())
 
+	// One page per bucket, and a `total` that says how much is behind it.
+	// See firstPage for why a filtered listing is served whole.
+	pageSize, _ := pageParams(r)
+	paged := r.URL.Query().Get("query") == ""
+
 	dateGroups := make([]dateGroup, 0)
 	for _, label := range groupOrder {
 		convs := groups[label]
 		if len(convs) > 0 {
+			page, total, offset := firstPage(convs, pageSize, paged)
 			dateGroups = append(dateGroups, dateGroup{
 				Name:          label,
-				Conversations: convs,
-				Total:         len(convs),
-				Offset:        len(convs),
+				Conversations: page,
+				Total:         total,
+				Offset:        offset,
 			})
 		}
 	}
@@ -447,15 +555,21 @@ func (h *Handler) listGrouped(w http.ResponseWriter, r *http.Request, projectID 
 		if convs == nil {
 			convs = []conversationItem{}
 		}
+		// A folder pages exactly like a date bucket. Its client half is the
+		// same code — `onLoadMoreInFolder` beside `onLoadMoreInGroup`, reading
+		// the same `total`/`offset` pair through the same merge helper — and
+		// `?folder_id=…&offset=…` is already served, so leaving folders whole
+		// here would keep half of #852 alive.
+		page, total, offset := firstPage(convs, pageSize, paged)
 		row := map[string]any{
 			"id":            f.ID,
 			"name":          f.Name,
 			"project_id":    f.ProjectID,
 			"created_at":    f.CreatedAt,
 			"updated_at":    f.UpdatedAt,
-			"conversations": convs,
-			"total":         len(convs),
-			"offset":        len(convs),
+			"conversations": page,
+			"total":         total,
+			"offset":        offset,
 		}
 		if f.Position != nil {
 			row["position"] = *f.Position

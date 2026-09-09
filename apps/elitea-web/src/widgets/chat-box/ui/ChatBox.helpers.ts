@@ -8,6 +8,7 @@ import type { ComponentProps } from 'react';
 
 import type { Participant } from '@/entities/participant';
 import type { NewChatInput } from '@/features/chat-input';
+import type { AnswerCanvasSelection, CanvasEditPayload, ChatMessageListCanvas, CodeBlockInfo } from '@/features/chat-messages';
 import type { MessageGroupWire } from '@/entities/message';
 
 import type { ChatBoxHandlerDeps } from './hooks/useChatBoxHandlers';
@@ -237,12 +238,19 @@ export interface ChatBoxEditorCallbacks {
   readonly onShowPipelineEditor?: (participant: Participant) => void;
   readonly onCloseAgentEditor?: () => void;
   readonly onClosePipelineEditor?: () => void;
+  /** The transcript's canvas opener (issue 853), the block already open in the editor, and the CREATE gesture that carves a highlighted range out of an answer. Deliberately NOT resolved by `resolveEditorCallbacks` below — that result is spread into `NewChatInput`'s `agentEditor` props, and the composer knows nothing about a canvas. `buildCanvasProps` reads them instead. */
+  readonly onShowCanvasEditor?: (payload: CanvasEditPayload) => void;
+  readonly selectedCanvasBlock?: CodeBlockInfo | undefined;
+  readonly onCreateCanvasFromSelection?: (payload: AnswerCanvasSelection) => void;
 }
 
 function noop(): void {}
 
+/** `ChatMessageList`'s `canvas` group. Built here rather than inline: `ChatBox` is at its §3.5 complexity ceiling, and two more optional reads there breach it. */
+export const buildCanvasProps = (editorCallbacks: ChatBoxEditorCallbacks | undefined): ChatMessageListCanvas => ({ onEdit: editorCallbacks?.onShowCanvasEditor, selected: editorCallbacks?.selectedCanvasBlock, onCreateFromSelection: editorCallbacks?.onCreateCanvasFromSelection });
+
 /** Resolves `editorCallbacks`' 4 optional fields down to real-or-noop, extracted purely to keep `buildAgentEditorProps`'s own cyclomatic complexity under the oxlint budget (12) — 4 more `??` branches inline would have pushed it to 13. */
-function resolveEditorCallbacks(editorCallbacks: ChatBoxEditorCallbacks | undefined): Required<ChatBoxEditorCallbacks> {
+function resolveEditorCallbacks(editorCallbacks: ChatBoxEditorCallbacks | undefined): Required<Omit<ChatBoxEditorCallbacks, 'onShowCanvasEditor' | 'selectedCanvasBlock' | 'onCreateCanvasFromSelection'>> {
   return {
     onShowAgentEditor: editorCallbacks?.onShowAgentEditor ?? noop,
     onShowPipelineEditor: editorCallbacks?.onShowPipelineEditor ?? noop,
@@ -375,4 +383,18 @@ export function resolveConversationStarters(
   conversationStarters: readonly string[] | undefined,
 ): readonly string[] | undefined {
   return hasStarterBeenSent || messageCount > 0 ? [] : conversationStarters;
+}
+
+/**
+ * Whether the conversation surface's clear-history control refuses.
+ *
+ * The baseline's own `shouldDisableClear` (`!chat_history.length ||
+ * isStreaming`): there is nothing to clear in an empty transcript, and
+ * clearing mid-turn would delete rows the running turn is still writing.
+ *
+ * A function rather than an expression at the call site because `ChatBox` is
+ * on its §3.5 complexity ceiling and this is one more branch there.
+ */
+export function shouldDisableClearChat(isStreaming: boolean, messageCount: number): boolean {
+  return isStreaming || messageCount === 0;
 }

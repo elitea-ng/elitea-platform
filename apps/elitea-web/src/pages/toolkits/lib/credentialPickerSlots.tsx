@@ -17,6 +17,7 @@
 import { useCallback, type ReactNode } from 'react';
 
 import { ToolkitCredentialPicker } from './credentialPicker';
+import type { SelectedCredentialRefusal } from './credentialPicker';
 
 /** The subset of `features/toolkits`' `CredentialLikeFieldContext` a credential picker reads. A SUPERTYPE of the real context, so the supplier stays assignable to the slot under `strictFunctionTypes`. */
 interface CredentialFieldContextLike {
@@ -55,25 +56,40 @@ const EMPTY_CONFIGURATION_TYPES: readonly string[] = [];
  * picker in `useCredentialLikeFieldSlot`: a toolkit shown in another project's
  * context lists that project's credentials, not the viewer's.
  */
-export function useToolkitCredentialPickerSlot(projectId: string | undefined): (context: CredentialFieldContextLike) => ReactNode {
+export function useToolkitCredentialPickerSlot(
+  projectId: string | undefined,
+  /**
+   * Optional refusal sink. One toolkit form can render SEVERAL
+   * credential-kind fields, so each report is keyed by the field it came from
+   * (`section:label`, the pair that identifies a field inside one form) —
+   * without a key the second field's `null` would erase the first field's
+   * refusal. See `./useCredentialSaveGate.ts`.
+   */
+  onRefusalChange?: (fieldKey: string, refusal: SelectedCredentialRefusal | null) => void,
+): (context: CredentialFieldContextLike) => ReactNode {
   return useCallback(
-    (context: CredentialFieldContextLike) => (
-      <ToolkitCredentialPicker
-        projectId={context.specifiedProjectId === undefined ? projectId : String(context.specifiedProjectId)}
-        section={context.schema.section ?? 'credentials'}
-        configurationTypes={context.schema.configuration_types ?? EMPTY_CONFIGURATION_TYPES}
-        value={context.value}
-        onChange={context.onChange}
-        field={{
-          label: context.label,
-          required: context.required,
-          error: context.error,
-          helperText: context.helperText,
-          disabled: context.disabled,
-        }}
-      />
-    ),
-    [projectId],
+    (context: CredentialFieldContextLike) => {
+      const section = context.schema.section ?? 'credentials';
+      const fieldKey = `${section}:${context.label}`;
+      return (
+        <ToolkitCredentialPicker
+          projectId={context.specifiedProjectId === undefined ? projectId : String(context.specifiedProjectId)}
+          section={section}
+          configurationTypes={context.schema.configuration_types ?? EMPTY_CONFIGURATION_TYPES}
+          value={context.value}
+          onChange={context.onChange}
+          field={{
+            label: context.label,
+            required: context.required,
+            error: context.error,
+            helperText: context.helperText,
+            disabled: context.disabled,
+          }}
+          {...(onRefusalChange === undefined ? {} : { onRefusalChange: (refusal: SelectedCredentialRefusal | null) => onRefusalChange(fieldKey, refusal) })}
+        />
+      );
+    },
+    [projectId, onRefusalChange],
   );
 }
 

@@ -23,13 +23,14 @@
 import type { ReactNode } from 'react';
 
 import { Outlet, RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from '@tanstack/react-router';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppProviders } from '@/app/providers/AppProviders';
 import { useChatSessionStore } from '@/entities/conversation';
+import { useSelectedProjectStore } from '@/widgets/app-shell';
 import { folderApi } from '@/entities/folder';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { installTestEventSource } from '@/shared/api/sse/testing';
@@ -84,6 +85,16 @@ function handlers() {
   ];
 }
 
+/**
+ * The router context the app supplies (`app/router-context.ts`'s
+ * `AuthContext`), narrowed to the one accessor several feature slices read
+ * the selected project through (`useSelectedProjectId`). Without it those
+ * slices resolve NO project, their queries stay disabled and the permission
+ * gates that depend on them answer "denied" — which looks exactly like a
+ * feature that was never wired.
+ */
+const ROUTER_CONTEXT = { auth: { getSelectedProjectId: () => PROJECT } };
+
 /** The two real chat routes, so `navigate({to:'/chat/$conversationId'})` resolves the same way it does in the app. */
 function renderAt(initialEntry: string, component: () => ReactNode = () => <ChatPage />) {
   const rootRoute = createRootRoute({ component: (): ReactNode => <Outlet /> });
@@ -92,6 +103,7 @@ function renderAt(initialEntry: string, component: () => ReactNode = () => <Chat
   const router = createRouter({
     routeTree: rootRoute.addChildren([chatRoute, conversationRoute]),
     history: createMemoryHistory({ initialEntries: [initialEntry] }),
+    context: ROUTER_CONTEXT,
   });
   render(
     <AppProviders>
@@ -565,5 +577,249 @@ describe('ChatPage MCP authorization continuation', () => {
       else Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
       eventSources.restore();
     }
+  });
+});
+
+/**
+ * GAP G1: the conversation surface had no way to empty itself.
+ *
+ * Every part of the mechanism existed and was individually tested. `ChatBox`
+ * exposes `onClear` on its imperative handle; `useChatBoxActions.handleClear`
+ * opens the delete-all confirmation; `useDeleteMessageAlert`'s `ALL_MESSAGES`
+ * sentinel routes the confirm to `clearChat`; `clearChat` issues
+ * `DELETE /elitea_core/messages/prompt_lib/{projectId}/{conversationId}`. The
+ * only caller of that handle was the pipeline editor's test-chat panel, so on
+ * `/chat` nothing in the chain was reachable and a user could empty a
+ * conversation only by deleting one message at a time — or by deleting the
+ * conversation itself.
+ *
+ * Mounted through the real page for the reason the attachment case above is:
+ * the defect lives in the seam, and every component on either side of it was
+ * already green.
+ */
+describe('ChatPage clear history', () => {
+  /*
+   * jsdom has no `scrollIntoView`, and `ChatMessageList` calls it on its own
+   * end-of-list ref as soon as a transcript renders. Unstubbed, the throw
+   * takes the whole subtree down and the surface falls back to its empty
+   * greeting — which reads exactly like "the messages never loaded".
+   */
+  let originalScrollIntoView: PropertyDescriptor | undefined;
+  beforeEach(() => {
+    originalScrollIntoView = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollIntoView');
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+  });
+  afterEach(() => {
+    if (originalScrollIntoView) Object.defineProperty(Element.prototype, 'scrollIntoView', originalScrollIntoView);
+    else Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
+  });
+
+  function chatHandlers(onDelete: (conversationId: string) => void, groups: readonly unknown[]) {
+    return [
+      http.get(`${BASE}/elitea_core/messages/prompt_lib/${PROJECT}/${CONVERSATION}`, () =>
+        HttpResponse.json({ items: groups, total: groups.length, page: 0, page_size: 50, total_pages: 1 }),
+      ),
+      http.delete(`${BASE}/elitea_core/messages/prompt_lib/${PROJECT}/:conversationId`, ({ params }) => {
+        onDelete(String(params.conversationId));
+        return new HttpResponse(null, { status: 204 });
+      }),
+      http.get(`${BASE}/configurations/tts_voices/${PROJECT}`, () => HttpResponse.json({ items: [] })),
+      http.get(`${BASE}/elitea_core/context_analytics/prompt_lib/${PROJECT}/${CONVERSATION}`, () =>
+        HttpResponse.json({ current_tokens: 0, max_tokens: 0, message_groups_in_context: 0 }),
+      ),
+    ];
+  }
+
+  it('clears the whole transcript from the composer, and only after the confirmation', async () => {
+    const cleared: string[] = [];
+    server.use(...chatHandlers((id) => cleared.push(id), [
+      { id: 1, uid: 'message-1', role: 'user', content: 'autotest_first question' },
+      { id: 2, uid: 'message-2', role: 'user', content: 'autotest_second question' },
+    ]));
+
+    renderAt(`/chat/${CONVERSATION}`);
+    const user = userEvent.setup();
+
+    await screen.findByText('autotest_first question');
+    await screen.findByText('autotest_second question');
+
+    const clear = await screen.findByTestId('chat-clear-history');
+    expect(clear).toBeEnabled();
+    await user.click(clear);
+
+    // The confirmation is the whole point of the control: `handleClear` opens
+    // a dialog and only `confirmDelete` reaches the mutation. A control wired
+    // straight to `clearChat` would already have deleted by this line.
+    await screen.findByText('Clear chat');
+    expect(cleared).toEqual([]);
+
+    await user.click(await screen.findByRole('button', { name: 'Delete' }));
+
+    // Addressed by the conversation's UUID, which is what the delete-all route
+    // takes — the serial id names a different row family and would 404.
+    await waitFor(() => expect(cleared).toEqual(['conversation-uuid-5']), { timeout: 5000 });
+    await waitFor(() => expect(screen.queryByText('autotest_first question')).toBeNull(), { timeout: 5000 });
+  });
+
+  it('offers the control but refuses it on an empty transcript', async () => {
+    // Not "hides it": a control that vanished on an empty chat would be
+    // indistinguishable from the unwired state this closes, and the baseline's
+    // own `shouldDisableClear` disables rather than removes.
+    const cleared: string[] = [];
+    server.use(...chatHandlers((id) => cleared.push(id), []));
+
+    renderAt(`/chat/${CONVERSATION}`);
+
+    const clear = await screen.findByTestId('chat-clear-history');
+    expect(clear).toBeDisabled();
+    fireEvent.click(clear);
+    expect(screen.queryByText('Clear chat')).toBeNull();
+    expect(cleared).toEqual([]);
+  });
+});
+
+/**
+ * GAP G2: a conversation could gain an agent, and could not gain a person.
+ *
+ * `AddNewUserModal` — the picker, its user search and its "Add Selected"
+ * action — was ported whole and had ZERO call sites anywhere in the app.
+ * `ParticipantsWrapper` has always computed a `disabledAdd` flag (playback
+ * state plus the caller's `configuration.users.users.view` grant) and threaded
+ * it down to a control that did not exist, so the flag decided the state of
+ * nothing. Meanwhile the rail rendered a Users section and the composer's "@"
+ * list offered users to address — both of which only ever showed people put
+ * there by some other route.
+ *
+ * The assertion that discriminates is the POST BODY: the picker could open,
+ * accept a selection and close while attaching nothing, and no screen
+ * assertion can tell that apart from a working one.
+ */
+describe('ChatPage add participant', () => {
+  /*
+   * A selected TEAM project, distinct from the reader's personal one.
+   *
+   * Both halves of this flow have to agree on which project they are in, and
+   * they resolve it from different places: the page reads the app-shell
+   * store, while the panel and the picker read the router context (their own
+   * `useSelectedProjectId`). The shared fixtures make the caller's personal
+   * project the same id as the route's, and `useParticipants` deliberately
+   * skips the user listing there — a personal project has nobody else in it.
+   */
+  afterEach(() => useSelectedProjectStore.setState({ project: null }));
+
+  it('attaches a person picked in the participants panel, by id alone', async () => {
+    useSelectedProjectStore.setState({ project: { id: PROJECT, name: 'Team' } });
+    const posted: unknown[] = [];
+    const removed: string[] = [];
+    let attached = false;
+    const userParticipant = {
+      id: '31',
+      entity_name: 'user',
+      entity_meta: { id: '42' },
+      meta: { user_name: 'autotest_teammate' },
+    };
+
+    server.use(
+      /*
+       * A TEAM project, not the caller's own. `useParticipants` skips the
+       * user listing outright while the selected project IS the reader's
+       * personal one (`projectId !== privateProjectId`) — correctly, since a
+       * personal project has nobody else in it — and the shared handler above
+       * makes the two the same id.
+       */
+      http.get(`${BASE}/social/author`, () =>
+        HttpResponse.json({ id: 'u1', name: 'Ada', avatar: '', personal_project_id: '99' }),
+      ),
+      http.get(`${BASE}/elitea_core/conversation/prompt_lib/${PROJECT}/${CONVERSATION}`, ({ request }) => {
+        detailRequests.push(request.url);
+        return HttpResponse.json({
+          id: CONVERSATION,
+          uuid: 'conversation-uuid-5',
+          name: 'A conversation',
+          participants: attached ? [userParticipant] : [],
+        });
+      }),
+      // The grant the panel's `disabledAdd` reads. Without it the control is
+      // rendered disabled, which is the correct product behaviour and would
+      // make this journey unable to prove anything.
+      http.get(`${BASE}/auth/permissions/prompt_lib/${PROJECT}`, () =>
+        HttpResponse.json([{ name: 'configuration.users.users.view', enabled: true }]),
+      ),
+      http.get(`${BASE}/admin/users/default/${PROJECT}`, () =>
+        HttpResponse.json({
+          rows: [
+            { id: '42', name: 'autotest_teammate', email: 'autotest_teammate@example.test' },
+            { id: '43', name: 'autotest_other', email: 'autotest_other@example.test' },
+          ],
+          total: 2,
+        }),
+      ),
+      http.post(`${BASE}/elitea_core/participants/prompt_lib/${PROJECT}/${CONVERSATION}`, async ({ request }) => {
+        posted.push(await request.json());
+        attached = true;
+        return HttpResponse.json([userParticipant]);
+      }),
+      http.delete(
+        `${BASE}/elitea_core/participant/prompt_lib/${PROJECT}/${CONVERSATION}/:participantId`,
+        ({ params }) => {
+          removed.push(String(params.participantId));
+          attached = false;
+          return new HttpResponse(null, { status: 204 });
+        },
+      ),
+      http.get(`${BASE}/configurations/tts_voices/${PROJECT}`, () => HttpResponse.json({ items: [] })),
+      http.get(`${BASE}/elitea_core/context_analytics/prompt_lib/${PROJECT}/${CONVERSATION}`, () =>
+        HttpResponse.json({ current_tokens: 0, max_tokens: 0, message_groups_in_context: 0 }),
+      ),
+    );
+
+    renderAt(`/chat/${CONVERSATION}`);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole('button', { name: 'Expand participants' }));
+    const add = await screen.findByTestId('participants-add-button');
+    expect(add).toBeEnabled();
+    await user.click(add);
+
+    await screen.findByTestId('add-participants-dialog');
+    // The search narrows the directory rather than merely accepting text: the
+    // second seeded person must leave the list.
+    await user.type(screen.getByTestId('add-participants-search'), 'teammate');
+    await waitFor(() => expect(screen.queryByTestId('add-participant-option-43')).toBeNull());
+
+    await user.click(await screen.findByTestId('add-participant-option-42'));
+    await user.click(screen.getByTestId('add-participants-confirm'));
+
+    // The id ALONE. The server resolves the display name from the directory
+    // into `meta.user_name`; a name sent from here would put this browser's
+    // idea of the person onto everyone else's screen.
+    await waitFor(
+      () => expect(posted).toEqual([[{ entity_name: 'user', entity_meta: { id: '42' }, entity_settings: {} }]]),
+      { timeout: 5000 },
+    );
+
+    // …and the attach reaches the rail the user reads it from, through the
+    // conversation re-read the mutation invalidates — not through local state
+    // this page patched.
+    const row = await waitFor(() => screen.getByTestId('participant-item-42'), { timeout: 5000 });
+    expect(row).toHaveAccessibleName('Mention autotest_teammate');
+
+    // ── and out again ───────────────────────────────────────────────────────
+    // The users row carried NO remove control before this change: every other
+    // participant type has had one on its card since the rail landed, so a
+    // person could be attached and never detached from this panel. Revealed on
+    // hover, exactly as the sibling cards' action bar is.
+    await user.hover(row);
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove user' }));
+
+    // The confirmation names the PERSON. `DeleteParticipantButton` used to
+    // read `entity_meta.name` only, which a REST-stored user row does not
+    // carry, so it asked for consent to remove "Participant".
+    const confirmDialog = await screen.findByRole('dialog');
+    expect(confirmDialog).toHaveTextContent('autotest_teammate');
+    fireEvent.click(within(confirmDialog).getByRole('button', { name: 'Remove' }));
+
+    await waitFor(() => expect(removed).toEqual(['31']), { timeout: 5000 });
+    await waitFor(() => expect(screen.queryByTestId('participant-item-42')).toBeNull(), { timeout: 5000 });
   });
 });

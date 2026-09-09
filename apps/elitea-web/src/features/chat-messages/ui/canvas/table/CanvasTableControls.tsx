@@ -9,9 +9,14 @@
  * same `isTableEditing`, and all four drive the same `MarkdownTableEditor`
  * ref. `CanvasEditHeader` keeps the controls that apply to EVERY canvas.
  */
-import { IconButton, Tooltip } from '@mui/material';
+import { useCallback, useState } from 'react';
+
+import { IconButton, Menu, MenuItem, Tooltip } from '@mui/material';
+
+import { t } from '@/shared/i18n';
 
 import type { CanvasEditHeaderTable } from './canvasTableTypes';
+import type { TableExportFormat } from '../../../lib/tableExport';
 
 import { ImportTableButton } from './ImportTableButton';
 
@@ -36,7 +41,30 @@ export function CanvasTableControls({ table, disabledAll }: CanvasTableControlsP
     onDeleteSelectedRowsOrColumns,
     onImportTableData,
     onImportError,
+    onExportTable,
   } = table ?? {};
+
+  /*
+   * The reference offered its two download formats through a split button.
+   * There is no `SplitButton` in this app's `shared/ui`, and one control that
+   * both fires and opens a menu is the harder half to reach with a keyboard
+   * anyway — so the export is one button that opens a menu of the formats,
+   * which is the same two choices with one less hidden default.
+   */
+  const [exportMenuAnchor, setExportMenuAnchor] = useState<HTMLElement | null>(null);
+  const openExportMenu = useCallback((event: React.MouseEvent<HTMLElement>) => {
+    setExportMenuAnchor(event.currentTarget);
+  }, []);
+  const closeExportMenu = useCallback(() => {
+    setExportMenuAnchor(null);
+  }, []);
+  const exportAs = useCallback(
+    (format: TableExportFormat) => () => {
+      setExportMenuAnchor(null);
+      onExportTable?.(format);
+    },
+    [onExportTable],
+  );
 
   if (isTableEditing !== true) return null;
 
@@ -109,6 +137,38 @@ export function CanvasTableControls({ table, disabledAll }: CanvasTableControlsP
             </IconButtonAny>
           </span>
         </Tooltip>
+      )}
+
+      {/*
+        Save the table as a file. NOT gated on `disabledAll`: that flag means
+        the document cannot be EDITED — a read-only canvas, or one somebody
+        else holds — and a reader who cannot type can still take a copy away.
+      */}
+      {onExportTable && (
+        <>
+          <Tooltip title={t('features.chatMessages.canvas.table.export', 'Export table')} placement="top">
+            <span>
+              <IconButtonAny
+                variant="elitea"
+                color="tertiary"
+                size="small"
+                onClick={openExportMenu}
+                data-testid="canvas-table-export"
+                aria-label={t('features.chatMessages.canvas.table.export', 'Export table')}
+              >
+                ⤓
+              </IconButtonAny>
+            </span>
+          </Tooltip>
+          <Menu anchorEl={exportMenuAnchor} open={exportMenuAnchor !== null} onClose={closeExportMenu}>
+            <MenuItem onClick={exportAs('csv')} data-testid="canvas-table-export-csv">
+              {t('features.chatMessages.canvas.table.exportCsv', 'Download as CSV')}
+            </MenuItem>
+            <MenuItem onClick={exportAs('xlsx')} data-testid="canvas-table-export-xlsx">
+              {t('features.chatMessages.canvas.table.exportXlsx', 'Download as XLSX')}
+            </MenuItem>
+          </Menu>
+        </>
       )}
 
       {/* Replace the table from a CSV/TSV file */}

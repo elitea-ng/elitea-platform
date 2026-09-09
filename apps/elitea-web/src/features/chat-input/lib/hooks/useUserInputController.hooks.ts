@@ -1,5 +1,5 @@
 import type { ChangeEvent, ClipboardEvent, CompositionEvent, KeyboardEvent, Ref, RefObject } from 'react';
-import { useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
 
 import { generateRandomAppendix, renameFile } from '../attachmentPasteNaming';
 import { useCtrlEnterKeyEventsHandler } from './useCtrlEnterKeyEventsHandler.hooks';
@@ -118,35 +118,83 @@ export function useUserInputSendQuestion(params: UseUserInputSendQuestionParams)
 
 export interface UseUserInputInsertTextAtCursorParams {
   readonly inputRef: RefObject<HTMLTextAreaElement | null>;
-  readonly inputContent: string;
+  /**
+   * No `inputContent` here on purpose: the text this splices into is read
+   * from the textarea itself. See the hook's own doc comment — the state copy
+   * is one render behind the DOM in exactly the case that matters.
+   */
   readonly setInputContent: (value: string) => void;
   readonly setQuestion: (value: string) => void;
   readonly setShowExpandIcon: (value: boolean) => void;
 }
 
+/**
+ * Inserts text at the caret — Shift+Enter's newline, and the "+" menu's
+ * mention insertions.
+ *
+ * # Why the caret is restored in a LAYOUT EFFECT and not a timer
+ *
+ * It used to be `setTimeout(… , 0)`: set the state, then put the caret back
+ * one macrotask later. Between those two points the textarea is live and the
+ * caret sits wherever the value change left it — at the END of the value —
+ * so anything typed in that window landed there, and was then STRANDED there
+ * when the timer finally moved the caret back to the insertion point.
+ *
+ * Typing `line one`, Shift+Enter, `line two` produced
+ * `line one\nne two…li`: the `l` and `i` went in at the end of the value
+ * before the timer fired, the timer moved the caret back in front of them,
+ * and the rest of the word was typed there. Nothing threw, no state was
+ * lost, and the composer simply reordered the person's own words. It is a
+ * race and it behaves like one — the faster the machine, the smaller the
+ * window, which is why it read as an intermittent test failure rather than
+ * as the input defect it is.
+ *
+ * A layout effect closes the window rather than shrinking it. React flushes
+ * a discrete event's state update and its layout effects synchronously,
+ * inside the same task as the keystroke that caused them, so the caret is
+ * back before the next key event can be dispatched. There is no interval in
+ * which the caret is wrong.
+ *
+ * The value is read from `textarea.value`, not from the `inputContent` prop:
+ * the textarea is what the person has been typing into, and the state is one
+ * render behind it whenever an insertion follows a keystroke closely enough
+ * to matter — which is precisely the case this function is used in.
+ */
 export function useUserInputInsertTextAtCursor(
   params: UseUserInputInsertTextAtCursorParams,
 ): (textToInsert: string) => void {
-  const { inputRef, inputContent, setInputContent, setQuestion, setShowExpandIcon } = params;
+  const { inputRef, setInputContent, setQuestion, setShowExpandIcon } = params;
+  // `null` means "nothing to restore" — set by the callback below, consumed
+  // and cleared by the one commit that follows it.
+  const pendingCursorRef = useRef<number | null>(null);
+
+  useLayoutEffect(() => {
+    const newCursorPosition = pendingCursorRef.current;
+    if (newCursorPosition === null) return;
+    pendingCursorRef.current = null;
+    const textarea = inputRef.current;
+    if (!textarea) return;
+    textarea.setSelectionRange(newCursorPosition, newCursorPosition);
+    textarea.focus();
+    // Read AFTER the value is committed, so the height reflects the inserted
+    // line rather than the one before it.
+    setShowExpandIcon(textarea.offsetHeight > MIN_HEIGHT);
+  });
+
   return useCallback(
     (textToInsert: string) => {
       const textarea = inputRef.current;
       if (!textarea) return;
       const start = textarea.selectionStart || 0;
       const end = textarea.selectionEnd || 0;
-      const newValue = inputContent.slice(0, start) + textToInsert + inputContent.slice(end);
+      const current = textarea.value;
+      const newValue = current.slice(0, start) + textToInsert + current.slice(end);
 
+      pendingCursorRef.current = start + textToInsert.length;
       setInputContent(newValue);
       setQuestion(newValue.trim() ? newValue : '');
-
-      const newCursorPosition = start + textToInsert.length;
-      setTimeout(() => {
-        textarea.setSelectionRange(newCursorPosition, newCursorPosition);
-        textarea.focus();
-        setShowExpandIcon(textarea.offsetHeight > MIN_HEIGHT);
-      }, 0);
     },
-    [inputContent, inputRef, setInputContent, setQuestion, setShowExpandIcon],
+    [inputRef, setInputContent, setQuestion],
   );
 }
 

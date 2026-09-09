@@ -614,7 +614,14 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 193). It introduces NO permission, so it has no shared sibling: the read
 	// is `models.applications.version.details` and every write is
 	// `models.applications.version.update`, both already seeded.
-	require.EqualValues(t, 133, Head(tenant))
+	//
+	// 134: tenant/0134_application_updated_at.sql, the `updated_at` column
+	// `applications` never had. The API has always answered the field — the
+	// domain struct declares it and `omitempty` is inert on a time.Time — so
+	// every agent every client ever listed carried "0001-01-01T00:00:00Z" as
+	// its last-modified date. It introduces NO permission and no table, so it
+	// has no shared sibling.
+	require.EqualValues(t, 134, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

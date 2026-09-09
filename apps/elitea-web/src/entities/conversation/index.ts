@@ -54,6 +54,7 @@ import {
   useStopChatTaskMutation,
   useUnselectConversationMutation,
 } from './api/conversationApi';
+import { downloadConversationExport } from './api/conversationExportApi';
 import {
   deleteAllMessagesFromConversation,
   deleteMessageFromConversation,
@@ -145,6 +146,12 @@ export const conversationApi = {
   messageList,
   deleteMessage: deleteMessageFromConversation,
   deleteAllMessages: deleteAllMessagesFromConversation,
+  /**
+   * Conversation export (issue 851). Bundled onto this namespace object
+   * rather than added as a barrel symbol of its own — the slice's 20-symbol
+   * budget is exactly met, and an export IS a conversation read.
+   */
+  downloadExport: downloadConversationExport,
 } as const;
 
 /** The 8 context-management endpoints (`../api/contextManagementApi.ts`), same hooks + fetchers bundling as `conversationApi`. */

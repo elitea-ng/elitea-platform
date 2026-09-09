@@ -18,26 +18,54 @@ describe('DraggableFolderItem', () => {
     expect(screen.getByText('child content')).toBeInTheDocument();
   });
 
-  it('is aria-disabled when isDragDisabled is set', () => {
+  /*
+   * A ROW WITH ITS DRAG OFF MUST NOT SAY IT IS DISABLED.
+   *
+   * These three cases used to assert the opposite — `aria-disabled="true"`
+   * on the container whenever the drag was off. That attribute is dnd-kit's
+   * report about the DRAG, and this container is the whole row: disabled
+   * state inherits, so every button inside it (the ⋮ menu, and through it
+   * Rename, Delete and Pin) was announced as disabled and could not be
+   * operated. The drag itself is refused by the `disabled` option passed to
+   * `useSortable`, which is what the keyboard case below measures.
+   */
+  it.each([
+    ['the caller disables dragging', mkFolder({ id: 'f1' }), true],
+    ['the folder is a not-yet-persisted draft', mkFolder({ id: 'f1', isNew: true }), false],
+    ['dragging is available', mkFolder({ id: 'f1' }), false],
+  ])('does not mark the row disabled when %s', (_case, folder, isDragDisabled) => {
     renderWithProviders(
-      <DraggableFolderItem
-        folder={mkFolder({ id: 'f1' })}
-        isDragDisabled
-      >
+      <DraggableFolderItem folder={folder} isDragDisabled={isDragDisabled}>
         child
       </DraggableFolderItem>,
     );
-    expect(screen.getByText('child').closest('[aria-disabled]')).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('group')).not.toHaveAttribute('aria-disabled');
   });
 
-  it('is aria-disabled for a not-yet-persisted (isNew) folder even without isDragDisabled', () => {
-    renderWithProviders(<DraggableFolderItem folder={mkFolder({ id: 'f1', isNew: true })}>child</DraggableFolderItem>);
-    expect(screen.getByText('child').closest('[aria-disabled]')).toHaveAttribute('aria-disabled', 'true');
-  });
+  it('still refuses a keyboard drag while the drag is disabled', async () => {
+    function Board() {
+      const sensors = useSensors(useSensor(KeyboardSensor));
+      return (
+        <DndContext sensors={sensors}>
+          <SortableContext items={['folder-f1']}>
+            <DraggableFolderItem folder={mkFolder({ id: 'f1' })} isDragDisabled>
+              child
+            </DraggableFolderItem>
+          </SortableContext>
+        </DndContext>
+      );
+    }
 
-  it('is not aria-disabled by default', () => {
-    renderWithProviders(<DraggableFolderItem folder={mkFolder({ id: 'f1' })}>child</DraggableFolderItem>);
-    expect(screen.getByText('child').closest('[aria-disabled]')).toHaveAttribute('aria-disabled', 'false');
+    const user = userEvent.setup();
+    renderWithProviders(<Board />);
+
+    const activator = screen.getByRole('group');
+    activator.focus();
+    await user.keyboard('{Enter}');
+
+    // No overlay: the refusal lives in the `disabled` option, not in the
+    // attribute this component no longer emits.
+    expect(screen.queryByTestId('draggable-folder-item-overlay')).not.toBeInTheDocument();
   });
 
   it('does not render the drag overlay while not dragging', () => {
@@ -90,12 +118,14 @@ describe('DraggableFolderItem', () => {
 
   it('does not present the drag container as a nested interactive widget', () => {
     renderWithProviders(<DraggableFolderItem folder={mkFolder({ id: 'f1' })}>child</DraggableFolderItem>);
-    const container = screen.getByText('child').closest('[aria-disabled]');
-    expect(container).toHaveAttribute('role', 'group');
+    const container = screen.getByRole('group');
     // Kept, and load-bearing: without a tab stop the KeyboardSensor above
     // cannot be reached at all.
     expect(container).toHaveAttribute('tabindex', '0');
     // `aria-pressed` is a toggle-button state; it is not allowed on a group.
     expect(container).not.toHaveAttribute('aria-pressed');
+    // …and neither is a disabled state that would inherit to the row's own
+    // controls — see the `it.each` above.
+    expect(container).not.toHaveAttribute('aria-disabled');
   });
 });

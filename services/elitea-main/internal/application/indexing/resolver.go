@@ -7,15 +7,13 @@ import (
 	"errors"
 	"io"
 	"math"
-	"regexp"
 	"strings"
 
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/toolkitnaming"
 )
 
 const maxCurrentToolkitIdentityBytes = 1024
-
-var currentToolkitNameSanitizer = regexp.MustCompile(`[^a-zA-Z0-9_.-]`)
 
 var (
 	ErrCurrentModelResolutionUnavailable           = errors.New("current model resolution is unavailable")
@@ -390,12 +388,13 @@ func validateCurrentToolkitSnapshot(toolkit CurrentToolkitSnapshot, requestedID 
 	return nil
 }
 
+// currentToolkitName is the shared runtime rule, kept as a named function so
+// the call sites below read the same as they did when this package owned the
+// regexp. internal/toolkitnaming states the rule; the toolkit DETAILS route now
+// reads it from there as well, which is what stopped it reporting an
+// identifier no runtime path uses.
 func currentToolkitName(storedName, toolkitType string) string {
-	if storedName == "" {
-		storedName = toolkitType
-	}
-	cleaned := currentToolkitNameSanitizer.ReplaceAllString(storedName, "")
-	return strings.ReplaceAll(cleaned, ".", "_")
+	return toolkitnaming.RuntimeName(storedName, toolkitType)
 }
 
 func decodeCurrentResolverObject(value []byte) (map[string]any, error) {

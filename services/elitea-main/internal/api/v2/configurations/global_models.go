@@ -24,7 +24,7 @@ package configurations
 // The gateway does not fail a model whose credential link does not resolve. It
 // logs a warning and falls back to reading the provider out of a PREFIX in the
 // model name (`applyCredentialLink`), which is the pre-#451 behaviour and is
-// kept so a seeded row with no link keeps working.
+// kept so a row written straight into the database by a seed keeps loading.
 //
 // That fallback is right for the gateway and wrong as the only check. A
 // platform model naming a credential that does not exist is advertised to every
@@ -33,6 +33,17 @@ package configurations
 // authoring it sees a success. So the link is validated at WRITE time, against
 // the public project's shared credentials, and a name that does not resolve is
 // refused with the names that would have.
+//
+// ## A model with NO link is refused as well
+//
+// It reads as the lenient case and is the worse one. The registry declares
+// `ai_credentials` REQUIRED on all five model types, so provider admission
+// refuses such a row and stores `status_ok = false` — and every reader, the
+// gateway included, selects on `status_ok = true`. The row is therefore
+// written, listed by this surface alone, and served to nobody, which is the
+// state an operator has no way to read back from the screen that wrote it.
+// This surface refuses the body instead, on the create and on the update that
+// would clear the link.
 //
 // ## Everything else is the provider surface's argument, unchanged
 //
@@ -60,6 +71,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 
 	"github.com/jackc/pgx/v5"
@@ -111,16 +123,56 @@ type GlobalModel struct {
 	// ModelName is `data.name`, the provider's own model string.
 	ModelName string `json:"model_name"`
 	// CredentialName is the platform credential this model uses, by title.
-	// Empty means the row names none — the gateway then resolves the provider
-	// from a prefix in the model name.
+	// Empty means the row names none, which this surface no longer writes.
 	CredentialName string `json:"credential_name"`
-	// CredentialResolves is false when the named credential is not among the
-	// platform's shared credentials. Such a model is still advertised by the
-	// gateway, with its provider guessed from the model name, so this is the
-	// only place the divergence is visible.
-	CredentialResolves bool   `json:"credential_resolves"`
-	CreatedAt          string `json:"created_at"`
-	UpdatedAt          string `json:"updated_at"`
+	// CredentialResolves is false when the row names no platform credential at
+	// all, and when the one it names is not among the platform's shared
+	// credentials. Neither row is dispatched, and this is the only place either
+	// state is visible to an operator.
+	CredentialResolves bool `json:"credential_resolves"`
+	// LowTier and HighTier are the two `data` flags a project's AI
+	// configuration filters its tier defaults on. They are reported because the
+	// edit dialog rewrites `data` whole: a form that could not read them back
+	// would clear the flag of every model it saved.
+	LowTier  bool `json:"low_tier"`
+	HighTier bool `json:"high_tier"`
+	// ShareScope and SharedWith are the row's GRANT: which projects this
+	// platform model is offered to. `shared = true` still marks the row as a
+	// platform row — every reader keys on it — and the scope narrows it to
+	// every project (`all`), to none (`none`), or to the ids in SharedWith
+	// (`projects`).
+	//
+	// A row written before the grant existed carries neither field and was
+	// offered to every project, so it is REPORTED as `all` rather than as an
+	// empty string: the panel renders this value, and a blank there would read
+	// as "this model is granted to nobody" for every model on the deployment.
+	ShareScope string `json:"share_scope"`
+	// SharedWith is empty for every scope but `projects`, and it is a list
+	// rather than an omitted field so the edit dialog can clear it.
+	SharedWith []int `json:"shared_with"`
+	// Data is the row's stored `data` object, ENTIRE.
+	//
+	// The fields above name what this listing interprets. They are not what the
+	// row holds. An `llm_model` also declares `context_window`,
+	// `max_output_tokens`, `openai_compatible`, `supports_reasoning` and
+	// `supports_vision`, and the update replaces the `data` column whole — so an
+	// edit dialog that could only read back the interpreted fields rebuilt
+	// `data` from them and DROPPED every other one. Renaming a model, or ticking
+	// a tier, silently reset its context window and its capabilities.
+	//
+	// Naming each new field on this struct would fix the five that exist today
+	// and lose the next one the registry adds, because the failure is the
+	// listing being a projection at all. So the object is reported as stored and
+	// the dialog merges its own fields over it.
+	//
+	// Disclosure: this query reads the five MODEL sections and cannot reach the
+	// `ai_credentials` section, so no provider row is in scope; no model type in
+	// the pinned registry snapshot declares a secret field; and a model's link
+	// to its provider is a TITLE, with the secret held in the provider row.
+	// There is nothing here the interpreted fields were protecting.
+	Data      map[string]any `json:"data"`
+	CreatedAt string         `json:"created_at"`
+	UpdatedAt string         `json:"updated_at"`
 }
 
 // listGlobalModelsSQL reads the public project's shared model rows.
@@ -271,11 +323,34 @@ func scanGlobalModel(
 
 	item.ModelName = globalProviderString(decoded, "name")
 	item.CredentialName = credentialTitleOf(decoded)
-	// A row that names NO credential resolves by prefix and is not broken, so
-	// it reports true: `credential_resolves` answers "is this link usable",
-	// and an absent link is not an unusable one.
-	item.CredentialResolves = !verified || item.CredentialName == "" ||
-		containsString(credentials, item.CredentialName)
+	item.LowTier = globalModelFlag(decoded, "low_tier")
+	item.HighTier = globalModelFlag(decoded, "high_tier")
+	grant := configurationapp.ReadModelGrant(decoded)
+	item.ShareScope = string(grant.Scope)
+	item.SharedWith = make([]int, 0, len(grant.Projects))
+	for _, projectID := range grant.Projects {
+		item.SharedWith = append(item.SharedWith, int(projectID))
+	}
+	// An EMPTY object, never a null, when the column would not decode. The
+	// dialog merges its edited fields over this one, and `null` there would make
+	// the merge itself the thing that fails — a corrupt row would stop being
+	// editable instead of being reported as a model with no settings.
+	item.Data = decoded
+	if item.Data == nil {
+		item.Data = map[string]any{}
+	}
+	// A row that names NO credential is reported as unresolved, and the absence
+	// of the link is the whole reason. `ai_credentials` is required on all five
+	// model types, so admission refuses such a row and every reader selects it
+	// out on `status_ok`. Reporting it as resolving described the gateway's
+	// prefix fallback, which no row this surface can write ever reaches.
+	//
+	// `verified` guards only the LOOKUP. When the credential list could not be
+	// read, a named link is given the benefit of the doubt — see this
+	// function's header — but an absent link is a fact about the row itself and
+	// needs no list to establish.
+	item.CredentialResolves = item.CredentialName != "" &&
+		(!verified || containsString(credentials, item.CredentialName))
 	if createdAt != nil {
 		item.CreatedAt = createdAt.Format(time.RFC3339)
 	}
@@ -303,6 +378,19 @@ func credentialTitleOf(data map[string]any) string {
 		return title
 	}
 	return globalProviderString(link, "alita_title")
+}
+
+// globalModelFlag reads one boolean `data` flag, defaulting to false.
+//
+// A row written before the flag existed carries no key, and the registry
+// declares both flags `default: false`, so an absent key and `false` are the
+// same answer.
+func globalModelFlag(data map[string]any, key string) bool {
+	if data == nil {
+		return false
+	}
+	value, _ := data[key].(bool)
+	return value
 }
 
 func containsString(values []string, want string) bool {
@@ -371,11 +459,11 @@ func globalModelSectionNames() []string {
 // rewriteGlobalModelBody forces `shared`, derives `section` and validates the
 // credential link.
 //
-// It shares the buffering, the size bound and the shared-flag rule with the
-// provider surface — see rewriteGlobalProviderBody for why each is done before
-// the delegated handler reads a byte.
+// It shares the buffering, the size bound, the shared-flag rule and the label
+// completion with the provider surface — see rewriteGlobalProviderBody for why
+// each is done before the delegated handler reads a byte.
 func (h *Handler) rewriteGlobalModelBody(
-	w http.ResponseWriter, r *http.Request, requireType bool,
+	w http.ResponseWriter, r *http.Request, creating bool,
 ) (*http.Request, bool) {
 	body, ok := decodeGlobalBody(w, r)
 	if !ok {
@@ -385,7 +473,7 @@ func (h *Handler) rewriteGlobalModelBody(
 		return nil, false
 	}
 
-	modelType, ok := admitGlobalModelType(w, body, requireType)
+	modelType, ok := admitGlobalModelType(w, body, creating)
 	if !ok {
 		return nil, false
 	}
@@ -400,6 +488,15 @@ func (h *Handler) rewriteGlobalModelBody(
 
 	if !h.admitGlobalModelCredential(w, r, body) {
 		return nil, false
+	}
+	if !admitGlobalModelGrant(w, body) {
+		return nil, false
+	}
+	// The model dialog has no label field either — see completeGlobalRowLabel
+	// in global_providers.go, which both surfaces share along with the body
+	// bound and the shared-flag rule.
+	if creating {
+		completeGlobalRowLabel(body)
 	}
 	return encodeGlobalBody(w, r, body)
 }
@@ -429,23 +526,33 @@ func admitGlobalModelType(
 	return modelType, true
 }
 
-// admitGlobalModelCredential refuses a link that names no platform credential.
+// admitGlobalModelCredential refuses a `data` object that names no published
+// platform credential — whether it names the wrong one or names none.
 //
-// The gateway would ACCEPT such a row — it logs a warning and resolves the
-// provider from a prefix in the model name — so this is the only place the
+// The gateway would ACCEPT a wrong name — it logs a warning and resolves the
+// provider from a prefix in the model name — so this is the only place that
 // mistake is caught while the operator is still looking at it. See the file
 // header for why the gateway's leniency is right there and insufficient here.
 //
-// A model naming NO credential is admitted: the prefix path is a supported way
-// to configure one, and the standalone seed relies on it.
+// A model naming NO credential is refused for a different reason: the registry
+// declares `ai_credentials` required on all five model types, so such a row
+// fails admission, stores `status_ok = false` and is served by nobody. The
+// refusal here names the providers the operator can pick instead; the
+// schema-driven check in Create would otherwise answer with the field path
+// alone, and an update that dropped the link would be caught only by the
+// generic model-data rule in required_fields.go.
+//
+// It keys on the PRESENCE of `data`, so a partial update that only renames a
+// model touches no link and is not asked about one.
 func (h *Handler) admitGlobalModelCredential(
 	w http.ResponseWriter, r *http.Request, body map[string]any,
 ) bool {
-	data, _ := body["data"].(map[string]any)
-	title := credentialTitleOf(data)
-	if title == "" {
+	raw, present := body["data"]
+	if !present {
 		return true
 	}
+	data, _ := raw.(map[string]any)
+	title := credentialTitleOf(data)
 	if h.pool == nil {
 		apierr.WriteStatus(w, http.StatusServiceUnavailable, "the configuration store is not available")
 		return false
@@ -461,6 +568,13 @@ func (h *Handler) admitGlobalModelCredential(
 			"the platform credentials could not be read, so this model's credential could not be verified")
 		return false
 	}
+	if title == "" {
+		apierr.WriteStatus(w, http.StatusBadRequest,
+			"a platform model must name the platform provider it uses. A model with no "+
+				"ai_credentials link is refused admission, so it would be listed here and served "+
+				"to nobody. Published providers: "+strings.Join(credentials, ", "))
+		return false
+	}
 	if !containsString(credentials, title) {
 		apierr.WriteStatus(w, http.StatusBadRequest,
 			"no platform provider is named "+title+". A platform model may only use a platform "+
@@ -469,4 +583,85 @@ func (h *Handler) admitGlobalModelCredential(
 		return false
 	}
 	return true
+}
+
+// admitGlobalModelGrant refuses a grant this platform cannot act on.
+//
+// The READ side is deliberately lenient — an absent or malformed scope is read
+// as "every project", because that is what every row written before the field
+// existed meant and a stricter read would withdraw them all (see
+// application/configurations/model_grant.go). That leniency is only safe while
+// the WRITE side refuses what it cannot store, which is here: a scope this
+// platform does not know, and a `projects` grant naming no project, would both
+// be stored and then read back as "all" — the opposite of what the operator
+// chose, reported to them as a success.
+//
+// Like the credential check it keys on the PRESENCE of `data`, so a partial
+// update that touches neither field is not asked about them. `data` is
+// replaced whole, though, so a body that carries the object and omits the
+// scope is a row with no scope — which is "all", and is the same answer the
+// row had before this feature. That is why an omitted scope is admitted rather
+// than required.
+func admitGlobalModelGrant(w http.ResponseWriter, body map[string]any) bool {
+	raw, present := body["data"]
+	if !present {
+		return true
+	}
+	data, _ := raw.(map[string]any)
+	if data == nil {
+		return true
+	}
+	scopeValue, hasScope := data[configurationapp.ModelShareScopeField]
+	if !hasScope {
+		return true
+	}
+	scope, isString := scopeValue.(string)
+	if !isString || !configurationapp.IsSupportedModelShareScope(
+		configurationapp.ModelShareScope(scope)) {
+		apierr.WriteStatus(w, http.StatusBadRequest,
+			"a platform model is available to one of: "+strings.Join(globalModelShareScopes(), ", ")+
+				". An unknown value is read back as \"all\", so it would grant the model to "+
+				"every project while the screen said otherwise.")
+		return false
+	}
+	if configurationapp.ModelShareScope(scope) != configurationapp.ModelShareScopeProjects {
+		// The list is CLEARED, never left behind. A row that had been granted
+		// to three projects and is now granted to none would otherwise keep
+		// naming them, and the next edit that switched back to `projects` would
+		// silently restore a grant nobody re-chose.
+		data[configurationapp.ModelSharedWithField] = []any{}
+		return true
+	}
+	granted := configurationapp.ReadModelGrant(data)
+	if len(granted.Projects) == 0 {
+		apierr.WriteStatus(w, http.StatusBadRequest,
+			"a model available to selected projects must name at least one project id in "+
+				configurationapp.ModelSharedWithField+
+				". A list that names none grants the model to nobody, which is the \"none\" choice.")
+		return false
+	}
+	// Rewritten as the ids that were READ, so what is stored is what the rule
+	// above admitted. A body that spelled an id as a string, or repeated one,
+	// is stored once and as a number — the shape every reader expects.
+	normalized := make([]any, 0, len(granted.Projects))
+	seen := make(map[int32]struct{}, len(granted.Projects))
+	for _, projectID := range granted.Projects {
+		if _, duplicate := seen[projectID]; duplicate {
+			continue
+		}
+		seen[projectID] = struct{}{}
+		normalized = append(normalized, projectID)
+	}
+	data[configurationapp.ModelSharedWithField] = normalized
+	return true
+}
+
+// globalModelShareScopes are the grant scopes a platform model may carry, in a
+// stable order for the refusal above.
+func globalModelShareScopes() []string {
+	return []string{
+		string(configurationapp.ModelShareScopeAll),
+		string(configurationapp.ModelShareScopeNone),
+		string(configurationapp.ModelShareScopeProjects),
+	}
 }
