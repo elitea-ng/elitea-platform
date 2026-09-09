@@ -17,7 +17,7 @@ A toolkit is a configured integration with an external service, or with an Elite
 </Steps>
 
 <Warning title="Worker coverage varies by deployment">
-Which toolkit types actually run depends on the worker your deployment uses. A type the current worker cannot build is served with its tile hidden rather than shown broken. Helm's default Rust worker hides 17 legacy toolkit types (tracked in #865); the compose/dev default Python worker fails to import 4 types — Google Places, Rally, ServiceNow, and Slack (tracked in #869). Check the [toolkit catalogue](/reference/toolkit-catalogue) for the exact list per worker.
+Which toolkit types actually run depends on the worker your deployment uses. A type the current worker cannot build is served with its tile hidden rather than shown broken. Helm's default Rust worker hides 17 legacy toolkit types (tracked in #865); the compose/dev default Python worker fails to import 9 types with no supported substitute on that worker (`aws`, `azure`, `azure_search`, `bigquery`, `delta_lake`, `gcp`, `k8s`, `localgit`, `yagmail`). Check the [toolkit catalogue](/reference/toolkit-catalogue) for the exact list per worker.
 </Warning>
 
 <Note>

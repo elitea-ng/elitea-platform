@@ -69,6 +69,19 @@ agent-current = [
   # The two versions must move together. langgraph 1.0.7 admits
   # langgraph-checkpoint>=2.1.0,<5.0.0, so it does not need to move.
   "langgraph-checkpoint-postgres==3.0.0",
+  # The four third-party API clients elitea_sdk.tools imports for the
+  # google_places, rally, service_now and slack toolkit types. The admitted
+  # SDK 0.9.8 pins these exact versions in its own `tools` extra
+  # (elitea_sdk/pyproject.toml); pin the same versions here rather than
+  # re-deriving a compatible range, since the SDK's toolkit code is written
+  # against them. Their absence from this image is #869: the four types are
+  # registered in the toolkit catalogue and materialize on the Rust worker,
+  # but elitea_sdk.tools.FAILED_IMPORTS records all four here because none of
+  # these four packages were part of the measured extras set (#811).
+  "googlemaps==4.10.0",
+  "pyral==1.6.0",
+  "pysnc==1.1.10",
+  "slack_sdk==3.35.0",
 ]
 indexing-current = [
   # Exact current-baseline indexing closure. This intentionally replaces

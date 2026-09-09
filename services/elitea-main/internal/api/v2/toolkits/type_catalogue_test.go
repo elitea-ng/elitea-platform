@@ -33,10 +33,14 @@ var nativeToolkitTypes = []string{"application", "custom", "database", "datasour
 // SDK registers that toolkit under `k8s` and publishes it as `kubernetes`, so a
 // capability check keyed on the type would never match it and the tile would be
 // offered by a deployment that cannot run it.
+//
+// google_places, rally, service_now and slack used to be here too. #869 added
+// their four measured third-party API clients (googlemaps, pyral, pysnc,
+// slack_sdk) to the worker's agent-current extra, so the admitted image now
+// imports all four.
 var pythonUnsupportedTypes = []string{
 	"aws", "azure", "azure_search", "bigquery", "delta_lake", "gcp",
-	"google_places", "kubernetes", "localgit", "rally", "service_now",
-	"slack", "yagmail",
+	"kubernetes", "localgit", "yagmail",
 }
 
 func pinnedCatalogue(t *testing.T) *runtimecomposition.CurrentToolkitCatalogueSnapshot {
@@ -216,9 +220,9 @@ func TestCatalogueWithoutAWorkerCapabilityOffersEveryType(t *testing.T) {
 	}
 }
 
-// The Python image installs a measured subset of elitea-sdk[all]. These
-// thirteen types are in the registry and raise at import, so they fail at the
-// first tool call rather than at create time — which is why they are withheld.
+// The Python image installs a measured subset of elitea-sdk[all]. These nine
+// types are in the registry and raise at import, so they fail at the first
+// tool call rather than at create time — which is why they are withheld.
 func TestPythonWorkerCapabilityWithholdsTheTypesItCannotImport(t *testing.T) {
 	t.Parallel()
 

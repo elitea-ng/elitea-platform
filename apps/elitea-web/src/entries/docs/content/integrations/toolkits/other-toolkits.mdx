@@ -19,7 +19,7 @@ Each of these wraps a single provider API in one or two generic call tools; none
 | `localgit` | Local GIT | Reads, diffs and commits files in a Git checkout the worker can reach on disk. | none | No | No |
 
 <Note>
-`aws`, `bigquery`, `gcp`, `k8s` and `localgit` fail to import on the Python worker (tracked in #869) and — except `azure`/`gcp`/`k8s` — are also skipped by the Rust worker (tracked in #865); check both columns before relying on one of these in a fresh install.
+`aws`, `bigquery`, `gcp`, `k8s` and `localgit` fail to import on the Python worker, with no fix tracked for these five, and — except `azure`/`gcp`/`k8s` — are also skipped by the Rust worker (tracked in #865); check both columns before relying on one of these in a fresh install.
 </Note>
 
 ## Data and search

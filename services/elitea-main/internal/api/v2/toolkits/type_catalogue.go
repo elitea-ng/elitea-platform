@@ -31,7 +31,7 @@ type ToolkitCatalogueSource interface {
 // actually build a toolkit type, and why not when it cannot.
 //
 // Serving a type the worker cannot run is not a cosmetic defect. The Python
-// worker image installs a measured subset of elitea-sdk[all], so thirteen SDK
+// worker image installs a measured subset of elitea-sdk[all], so nine SDK
 // toolkits raise at import and fail at the first tool call. The Rust worker
 // materializes twenty-two families and SKIPS the rest with a warning, so an
 // unsupported toolkit attaches to an agent and then quietly does nothing. Both
