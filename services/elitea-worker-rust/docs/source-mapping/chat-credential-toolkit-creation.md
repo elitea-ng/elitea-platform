@@ -154,3 +154,53 @@ The browser displays `text-embedding-ada-002` and the saved pgvector configurati
 This proves fresh read execution, not authenticated credential use or the complete toolkit lifecycle.
 The earlier execution `f4fe3c68e17ec2ed38c28f12b2da8719` still requires recovery.
 PostgreSQL also confirms the second execution succeeds with its projection marker and committed settlement.
+
+## Credential update, toolkit update, and saved-agent invocation
+
+On 2026-09-10, chat 545 calls `put_configurations_configuration` for configuration 13.
+Only its label changes to `Rust gate3 public GitHub updated`.
+The stable title remains `rust_gate3_public_github_20260910`.
+The configuration remains anonymous.
+
+The chat calls `put_elitea_core_tool` for toolkit 30.
+Its description becomes `Public GitHub read-only lifecycle verification`.
+PostgreSQL confirms the repository, saved credential reference, and selected tools remain unchanged.
+The chat then calls `patch_elitea_core_tool` to link toolkit 30 to agent 19, version 20.
+The persisted `entity_tool_mapping` row selects only `get_issues`.
+The instructions remain unchanged, and `entity_skill_mapping` retains skill 5.
+
+Current references separate these operations too:
+`projects/centry/pylon_main/plugins/configurations/api/v2/configuration.py` owns configuration updates.
+`projects/centry/pylon_main/plugins/elitea_core/api/v2/tool.py` separates toolkit update from agent relation patch.
+The new internal configuration and toolkit executors retain these boundaries.
+
+Playwright submits a new request through saved-agent chat 543.
+The agent invokes `get_issues` and uses returned issue 11148 in its answer.
+Trace row 7279 belongs to message group 5820.
+It records successful completion and stores 23,538 characters of tool output.
+The answer remains visible after reload.
+The tool accordion does not return after reload, despite the stored trace.
+
+The existing trace list endpoint returns rows 7279 and 7280 for message group 5820.
+The chat history loader requests only messages and conversation metadata.
+It does not request `message_traces`.
+The converter's comment claims trace support through message metadata, but this runtime stores normalized trace rows separately.
+This is a confirmed UI history-loading gap, not a missing Rust result.
+The current UI loads trace summaries separately through `buildTraceListParams` and `groupTraceStepsByGroupId`.
+These functions are in `projects/EliteaUI/src/common/convertChatConversationMessages.js`.
+Heavy step details remain separate and must load on demand.
+
+## Secret lifecycle integration check
+
+`internal_configuration_secret_lifecycle_test.go` exercises the internal configuration executor with the real PostgreSQL vault repository.
+It creates a GitHub credential with a synthetic token in a disposable database.
+It checks that responses and configuration rows contain no plaintext token.
+It opens the encrypted vault and resolves the hidden reference to the expected token.
+A label-only update preserves that reference and token.
+A credential update rotates the resolved token.
+No external GitHub request occurs in this test.
+
+This new test and the existing configuration and toolkit lifecycle tests pass: three tests, no skips.
+The existing toolkit test also covers relation selection replacement and unlinking.
+These service checks do not prove authenticated Rust invocation through a secret-bearing toolkit.
+That browser and worker gate remains open.
