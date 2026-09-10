@@ -402,8 +402,56 @@ async function rowY(page: import('@playwright/test').Page, text: string): Promis
   return box!.y;
 }
 
+/**
+ * The `name` column's cell text, top to bottom, exactly as the DataGrid rows
+ * are laid out in the DOM — used instead of `rowY`'s `boundingBox()` where
+ * several rows must be compared UNDER CI CONCURRENCY.
+ *
+ * `boundingBox()` performs the SAME actionability/stability wait `click()`
+ * does — it blocks until the element's geometry stops moving between two
+ * consecutive frames — and on a SHARED project under load (another engine's
+ * copy of this very file mutating the same `/secrets/secrets/default/…` list
+ * at the same time) the grid keeps re-rendering as `invalidateQueries` land
+ * from calls this test never made, so the position never settles and the
+ * call burns the whole remaining test timeout waiting for stillness that
+ * never comes (measured: `Test timeout … exceeded` inside `boundingBox`).
+ * `allTextContents()` has no such wait — it reads whatever is attached RIGHT
+ * NOW, once — so a momentary reflow from a sibling worker cannot hang it.
+ */
+async function visibleNameOrder(page: import('@playwright/test').Page): Promise<string[]> {
+  return page.getByRole('grid').locator('[role="gridcell"][data-field="name"]').allTextContents();
+}
+
+/**
+ * Asserts that `names`, in the order given, appear in that SAME relative
+ * order among the currently rendered rows — filtering `visibleNameOrder`'s
+ * full column down to just these names first, so rows any sibling
+ * worker/engine happens to have interleaved in between (same shared project,
+ * same search-filtered token prefix) cannot break the comparison the way a
+ * naive index-equality check would.
+ */
+async function expectVisibleOrder(page: import('@playwright/test').Page, names: readonly string[]): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const onScreen = await visibleNameOrder(page);
+        return onScreen.filter((text) => names.includes(text));
+      },
+      {
+        timeout: 10_000,
+        message: `expected ${JSON.stringify(names)} to appear, in that relative order, among the rendered rows`,
+      },
+    )
+    .toEqual([...names]);
+}
+
 test('J21e: sort order stays A→Z during and after secret creation', async ({ page, request }, testInfo) => {
-  test.setTimeout(45_000);
+  // 60s, not the file's usual 45: the final API-level poll below budgets 30s
+  // on its own — measured, the shared project's secrets LIST endpoint can lag
+  // a solid double-digit number of seconds behind its own writes under heavy
+  // concurrent load (several copies of this file's OTHER tests mutating the
+  // same list at once), even though the writes themselves already answered.
+  test.setTimeout(60_000);
   const projectName = testInfo.project.name;
   // Shared by every probe this test creates, so the search box below can
   // isolate exactly these rows.
@@ -433,16 +481,17 @@ test('J21e: sort order stays A→Z during and after secret creation', async ({ p
   for (const name of [a, b, m, z]) {
     await expect(page.getByText(name, { exact: true })).toBeVisible({ timeout: 10_000 });
   }
-  // Baseline order, before touching Create at all.
-  expect(await rowY(page, a)).toBeLessThan(await rowY(page, b));
-  expect(await rowY(page, b)).toBeLessThan(await rowY(page, m));
-  expect(await rowY(page, m)).toBeLessThan(await rowY(page, z));
+  // Baseline order, before touching Create at all. `expectVisibleOrder`
+  // reads the DataGrid's `name` column top-to-bottom rather than comparing
+  // `boundingBox()` geometry — see its own doc comment for why the latter
+  // hangs under CI concurrency (a shared-project engine/worker interleaving
+  // its own mutations keeps the grid reflowing, so a position-stability wait
+  // never settles).
+  await expectVisibleOrder(page, [a, b, m, z]);
 
   // The pinned creation row must not reorder the rows below it.
   await page.getByRole('button', { name: 'Create new secret', exact: true }).click();
-  expect(await rowY(page, a)).toBeLessThan(await rowY(page, b));
-  expect(await rowY(page, b)).toBeLessThan(await rowY(page, m));
-  expect(await rowY(page, m)).toBeLessThan(await rowY(page, z));
+  await expectVisibleOrder(page, [a, b, m, z]);
 
   const g = sortProbeName('g', projectName, runToken);
   // Clear the filter: the pinned row's name is '' until saved, and the
@@ -459,14 +508,32 @@ test('J21e: sort order stays A→Z during and after secret creation', async ({ p
   const write = await created;
   expect(write.status(), await write.text()).toBeLessThan(300);
 
-  // After creation: re-apply the filter, the pinned row is gone, and `g`
-  // sits between `b` and `m` — still scoped to this test's own rows.
+  // Independent of DOM timing entirely: the SERVER already has every name
+  // this test created (the POST above answered), so the set this test's own
+  // `runToken` names down to is knowable from the API alone, and comparing
+  // it against the SAME `localeCompare` sort `SecretsTable.tsx` applies
+  // client-side proves the DATA this run produced sorts A→Z — a claim no
+  // sibling worker's rows (they don't carry this `runToken`) can perturb.
+  await expect
+    .poll(
+      async () => {
+        const listed = await page.request.get(CLIENT_LIST_URL);
+        expect(listed.status(), await listed.text()).toBe(200);
+        const names = ((await listed.json()) as { name: string }[])
+          .map((s) => s.name)
+          .filter((name) => name.includes(runToken));
+        return names.sort((x, y) => x.localeCompare(y));
+      },
+      { timeout: 30_000, message: 'the server must have all five probes once the last save has answered' },
+    )
+    .toEqual([a, b, g, m, z].sort((x, y) => x.localeCompare(y)));
+
+  // A bounded, single UI proof that the RENDERED grid reflects that same
+  // order — re-apply the filter, the pinned row is gone, and `g` sits
+  // between `b` and `m` — still scoped to this test's own rows.
   await search.fill(runToken);
   await expect(page.getByText(g, { exact: true })).toBeVisible({ timeout: 10_000 });
-  expect(await rowY(page, a)).toBeLessThan(await rowY(page, b));
-  expect(await rowY(page, b)).toBeLessThan(await rowY(page, g));
-  expect(await rowY(page, g)).toBeLessThan(await rowY(page, m));
-  expect(await rowY(page, m)).toBeLessThan(await rowY(page, z));
+  await expectVisibleOrder(page, [a, b, g, m, z]);
 });
 
 test('J21f: existing rows stay A→Z when Create is clicked from page 2', async ({ page, request }, testInfo) => {

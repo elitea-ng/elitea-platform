@@ -53,17 +53,38 @@
  * file, and the REAL Artifacts bucket — read over its own API, never the
  * screen — holds it afterwards) and marked `test.fail`, per the porting
  * rulebook's "no `test.skip` for a product gap" rule. No `[[mock:call_tool]]`
- * marker is scripted: the model is never reached at all (see above), so
- * scripting one would prove nothing this turn does not already show without
- * it.
+ * marker is scripted on THIS leg: the model is never reached at all (see
+ * above), so scripting one would prove nothing this turn does not already
+ * show without it.
  *
- * THE python LEG'S CONTRACT IS THE OPPOSITE. The gap above is entirely a
- * `materialize.rs` (native rust worker) omission — the SDK-backed python
- * worker's artifact toolkit family is a real port, and on that leg the
- * upload really is dispatched and the bucket really does gain the file. So
- * `test.fail` below is gated on `IS_NATIVE_RUNTIME` (same `E2E_WORKER` read
- * `chat.toolkit-hitl.spec.ts` uses): rust leg keeps the product-gap marker,
- * python leg runs every assertion below for real and must pass them.
+ * THE python LEG'S CONTRACT IS THE OPPOSITE, and DOES need a scripted call —
+ * the mock never calls a tool on its own, marker or not. The gap above is
+ * entirely a `materialize.rs` (native rust worker) omission — the SDK-backed
+ * python worker's artifact toolkit family is a real port, and on that leg the
+ * upload really is dispatched and the bucket really does gain the file,
+ * PROVIDED the turn actually asks the mock to call the tool the SDK exposes.
+ * `internal/api/v2/toolkits/handler.go`'s `toolkitTypeSchemas["artifact"]` —
+ * an earlier draft of this file's `selected_tools` quoted exactly this map —
+ * says of itself that "every artifact tool except index_data...name[s] no
+ * SDK tool at all": its
+ * `upload_artifact`/`list_buckets`/`list_artifacts`/`read_artifact`/
+ * `delete_artifact` are hand-written placeholders, never implemented by
+ * `elitea_sdk.runtime.tools.artifact.ArtifactWrapper`. The real names are the
+ * pinned `current_toolkit_schema_snapshot.json`'s `artifact` entry:
+ * `list_files`, `create_file`, `read_file`, `get_file_metadata`,
+ * `delete_file`, `append_data`, `create_new_bucket`, plus the indexing family.
+ * Passing the placeholder names as `selected_tools` therefore filtered the
+ * real `create_file` tool OUT of the toolkit the SDK builds (`ArtifactToolkit
+ * .get_toolkit`'s `if tool["name"] not in selected_tools: continue`) — only
+ * `index_data` ever survived that filter, coincidentally spelled the same in
+ * both lists. So even with a marker, the model would have had no upload tool
+ * to call. `REAL_ARTIFACT_TOOL_NAMES` below selects the real names, and the
+ * turn now scripts `[[mock:call_tool create_file {...}]]` naming that real
+ * tool with its real argument shape (`filename` required, `filedata` the
+ * content). `test.fail` below is gated on `IS_NATIVE_RUNTIME` (same
+ * `E2E_WORKER` read `chat.toolkit-hitl.spec.ts` uses): rust leg keeps the
+ * product-gap marker, python leg runs every assertion below for real and must
+ * pass them.
  *
  * WHY THE BUCKET/TOOLKIT/AGENT CLEANUP IS A `finally`, UNLIKE MOST FILES HERE.
  * `expectStoredAssistantAnswer`'s "best-effort, deliberately last" convention
@@ -90,7 +111,9 @@ import { BASE_URL } from '../../playwright.config';
 import {
   AUTOTEST_PREFIX,
   EMPTY_TOOLKIT_GUARDRAILS,
+  MOCK_CALL_TOOL_SENTINEL,
   attachToolkitThroughPicker,
+  callToolWithArgumentsPrompt,
   createAgentThroughForm,
   readCallerPersonalProjectId,
   readStoredTranscript,
@@ -112,15 +135,22 @@ const MOCK_MODEL = process.env['E2E_MOCK_MODEL'] ?? 'vllm/E2E-MOCK-MODEL';
  */
 const IS_NATIVE_RUNTIME = (process.env['E2E_WORKER'] ?? 'rust') === 'rust';
 
-/** Every tool name the `artifact` toolkit type's stored schema declares (`toolkitTypeSchemas["artifact"].properties.selected_tools.args_schemas`, `internal/api/v2/toolkits/handler.go`). */
-const ARTIFACT_TOOL_NAMES = [
-  'list_buckets',
-  'list_artifacts',
-  'read_artifact',
-  'upload_artifact',
-  'delete_artifact',
-  'index_data',
-  'search_data',
+/**
+ * The REAL tool names `elitea_sdk.runtime.tools.artifact.ArtifactWrapper.
+ * get_available_tools` implements, confirmed against the pinned
+ * `services/elitea-main/internal/runtimecomposition/
+ * current_toolkit_schema_snapshot.json`'s `artifact` entry's `args_schemas`
+ * keys. `selected_tools` below must use these, not `ARTIFACT_TOOL_NAMES`
+ * above, or the toolkit the SDK builds never carries `create_file`.
+ */
+const REAL_ARTIFACT_TOOL_NAMES = [
+  'list_files',
+  'create_file',
+  'read_file',
+  'get_file_metadata',
+  'delete_file',
+  'append_data',
+  'create_new_bucket',
 ] as const;
 
 interface ObjectSummary {
@@ -180,7 +210,7 @@ test('an agent with the artifact toolkit writes a file that a real bucket listin
       data: {
         name: toolkitName,
         type: 'artifact',
-        settings: { bucket: bucketName, selected_tools: [...ARTIFACT_TOOL_NAMES] },
+        settings: { bucket: bucketName, selected_tools: [...REAL_ARTIFACT_TOOL_NAMES] },
       },
     });
     expect(
@@ -215,10 +245,14 @@ test('an agent with the artifact toolkit writes a file that a real bucket listin
     ).toBeVisible({ timeout: 30_000 });
     await attachToolkitThroughPicker(page, toolkitName);
 
-    // ── 5. Chat: an ORDINARY instruction to write the file ───────────────
-    // No `[[mock:call_tool]]` marker — see the header: the model is never
-    // reached at all once the toolkit is skipped, so there is nothing for a
-    // scripted tool call to add.
+    // ── 5. Chat: a scripted call to the REAL SDK tool ────────────────────
+    // `[[mock:call_tool create_file {...}]]` — see the header: on the
+    // rust leg the toolkit is skipped before the model is ever reached, so
+    // the marker is inert there (harmless — the turn fails the same way
+    // either way); on the python leg it is what actually makes the mock
+    // dispatch `create_file` with the real SDK argument shape (`filename`
+    // required, `filedata` the content), rather than merely echoing an
+    // ordinary instruction as text with no tool call at all.
     const conversationCreated = page.waitForResponse(
       (r) =>
         /\/elitea_core\/conversations\/prompt_lib\/\d+$/.test(new URL(r.url()).pathname) &&
@@ -236,27 +270,49 @@ test('an agent with the artifact toolkit writes a file that a real bucket listin
     });
     const input = page.getByTestId('chat-message-input');
     await expect(input).toBeEditable({ timeout: 30_000 });
-    await input.fill(`autotest: upload a file named ${fileName} with the content "hello from the artifact toolkit"`);
+    await input.fill(
+      callToolWithArgumentsPrompt(
+        'create_file',
+        { filename: fileName, filedata: 'hello from the artifact toolkit' },
+        `autotest: upload a file named ${fileName} with the content "hello from the artifact toolkit"`,
+      ),
+    );
     await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 10_000 });
     await page.getByTestId('chat-send-button').click();
 
     const startResponse = await started;
     expect(startResponse.status(), `the turn was refused: ${(await startResponse.text()).slice(0, 300)}`).toBe(200);
 
-    // ── 6. THE materialization proof — read off the STORED row, not a poll
-    // for a non-error answer that this gap never produces. Written as the
-    // onetest cases assume: the turn finishes with a real, non-error reply.
-    // Polled on the row simply EXISTING (fast — the assembly failure is
-    // near-instant, no model round trip involved) rather than on a
-    // never-arriving success, which is what made the first draft of this
-    // file spend its whole budget on one `expectStoredAssistantAnswer` timeout.
+    // ── 6. THE materialization proof — read off the STORED row, polled until
+    // it is actually TERMINAL rather than merely present.
+    //
+    // `readStoredTranscript`'s own `isError` field is `metadata.is_error ===
+    // true` — an ABSENT key (a row still streaming; see
+    // `expectStoredAssistantAnswer`'s own comment on why the key is present
+    // ONLY once a terminal projection has run) reads as `false` exactly like a
+    // CONFIRMED non-error answer does. Polling on the row merely EXISTING (an
+    // earlier draft of this file did, reasoning that the rust leg's assembly
+    // failure is near-instant so waiting for a NEVER-arriving success would
+    // waste the whole budget) caught the python leg's row the instant it was
+    // created — content `""`, no `is_error` key yet, the model's real
+    // round-trip still in flight — and then read that absence as "finished,
+    // no error", which is the exact "ABSENT reads as success" trap this
+    // suite's other files are full of (see `disclosed-gap-doc-comments`).
+    // Polling on the KEY'S PRESENCE (true OR false) rather than on the row's
+    // existence keeps both properties: still fast on the rust leg (is_error
+    // lands near-instantly there too), and it no longer settles early on the
+    // python leg's still-streaming row.
     await expect
       .poll(
         async () => {
           const rows = await readStoredTranscript(page, projectId, conversationId);
-          return rows.find((row) => row.role === 'assistant') !== undefined;
+          const row = rows.find((r) => r.role === 'assistant');
+          return row !== undefined && row.metadata['is_error'] !== undefined;
         },
-        { timeout: 30_000, message: 'the turn never stored any assistant row at all — not even a refusal' },
+        {
+          timeout: 60_000,
+          message: 'the turn never reached a TERMINAL assistant row (metadata.is_error was never set) — not even a refusal',
+        },
       )
       .toBe(true);
     const rows = await readStoredTranscript(page, projectId, conversationId);
@@ -266,6 +322,18 @@ test('an agent with the artifact toolkit writes a file that a real bucket listin
       'the turn must finish with a real, non-error reply — the artifact toolkit must materialize and ' +
         'the upload must be dispatched',
     ).toBe(false);
+    // Cheap, no extra poll: `answer` above is already the terminal row (isError
+    // checked false, which only a finalized projection ever sets — see
+    // `expectStoredAssistantAnswer`), so its content cannot grow further. The
+    // sentinel's presence tells "the model actually called `create_file` and
+    // the mock's continuation quoted the result" apart from "the model wrote
+    // ordinary text mentioning the filename without calling anything" — the
+    // ABSENT-as-success trap this file's own header warns against.
+    expect(
+      answer?.content ?? '',
+      'the finished reply must show create_file actually ran (quoting MOCK_CALL_TOOL_SENTINEL), not ' +
+        'merely a non-error text answer that never called the tool',
+    ).toContain(MOCK_CALL_TOOL_SENTINEL);
 
     // ── 7. THE bucket proof — the claim the onetest cases actually make ──
     const listed = await page.request.get(`${BASE_URL}/api/v2/artifacts/objects/${projectId}/${bucketName}`);

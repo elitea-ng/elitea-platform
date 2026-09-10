@@ -106,6 +106,21 @@ async function rowTop(page: Page, name: string): Promise<number> {
   return (box as { y: number }).y;
 }
 
+/**
+ * `rowTop`'s non-throwing twin, for use INSIDE an `expect.poll` callback only.
+ * A callback that throws (as `rowTop`'s own `expect(...).not.toBeNull()`
+ * does while a row has not yet reappeared post-mutation) does not get the
+ * poll's own retry budget here — measured: a poll built from `rowTop`
+ * directly failed in ~1s flat, nowhere near its configured timeout, because
+ * the throw propagated out of the poll on the very first tick instead of
+ * being treated as "not matching yet". Returning `null` keeps the callback
+ * itself exception-free so the poll's retries behave as documented.
+ */
+async function rowTopOrNull(page: Page, name: string): Promise<number | null> {
+  const box = await deleteControl(page, name).boundingBox();
+  return box?.y ?? null;
+}
+
 test.describe('artifacts bucket pinning', () => {
   // Serial: every test in this file shares the same three run-unique buckets
   // and resets their pin state at the top, exactly as the sibling J20/J20-ACL
@@ -203,45 +218,68 @@ test.describe('artifacts bucket pinning', () => {
     page,
     request,
   }) => {
+    // The shared project's bucket list (every onetest-port spec file's own
+    // buckets accumulate here) has been measured well over 70 rows — the
+    // sidebar's OWN "Loading buckets…" placeholder can outlast the default
+    // 30s test timeout while this test's two ordering polls are still
+    // waiting their turn, well before either poll's own budget is spent.
+    test.setTimeout(60_000);
     for (const name of [PIN_A, PIN_B, PIN_C]) await setPinned(request, projectId, name, false);
     await reenterArtifacts(page, ARTIFACTS_URL);
 
-    // Anchor each click on the LIST refetch its mutation triggers
-    // (`onSuccess: refreshBuckets` invalidates the buckets query), not only
-    // on the aria-label: the label and the row's position are read off the
-    // same query result, but this makes the wait explicit rather than
-    // incidental.
-    const bucketsRefetched = () =>
-      page.waitForResponse(
-        (response) => response.url().includes(`/api/v2/artifacts/buckets/${projectId}`) && response.request().method() === 'GET',
-        { timeout: 10_000 },
-      );
-
+    // Each click's label flip is the per-row cache write; the ROW ORDER
+    // reflects `sortBucketsPinnedFirst` over the LIST query's own refetch
+    // (`onSuccess: refreshBuckets` invalidating it), which can land a beat
+    // after the label does. This used to anchor each click on a
+    // `page.waitForResponse` for that GET — measured flaky under load: a
+    // second (or third) `invalidateQueries` call while the first GET this
+    // triggered is still in flight is served off that SAME in-flight fetch
+    // rather than issuing a new network request, so a `waitForResponse`
+    // registered per click can legitimately see no new response at all and
+    // time out even though the mutation succeeded and the order did update.
+    // Poll the actual rendered order instead of a specific network event.
     for (const name of [PIN_A, PIN_B, PIN_C]) {
-      await Promise.all([bucketsRefetched(), page.getByLabel(`Pin ${name}`).click()]);
+      await page.getByLabel(`Pin ${name}`).click();
       await expect(page.getByLabel(`Unpin ${name}`)).toBeVisible({ timeout: 10_000 });
     }
 
-    const [topA, topB, topC] = [
-      await rowTop(page, PIN_A),
-      await rowTop(page, PIN_B),
-      await rowTop(page, PIN_C),
-    ];
     // All three pinned rows are consecutive AND stable-ordered (A < B < C,
     // the order they were pinned in — `sortBucketsPinnedFirst` is a stable
     // sort on `isPinned` alone).
-    expect(topA).toBeLessThan(topB);
-    expect(topB).toBeLessThan(topC);
+    await expect
+      .poll(
+        async () => {
+          const [a, b, c] = [
+            await rowTopOrNull(page, PIN_A),
+            await rowTopOrNull(page, PIN_B),
+            await rowTopOrNull(page, PIN_C),
+          ];
+          return a !== null && b !== null && c !== null && a < b && b < c;
+        },
+        { timeout: 20_000, message: 'all three pinned rows must end up consecutive and in pin order (A < B < C)' },
+      )
+      .toBe(true);
 
-    await Promise.all([bucketsRefetched(), page.getByLabel(`Unpin ${PIN_B}`).click()]);
+    await page.getByLabel(`Unpin ${PIN_B}`).click();
     await expect(page.getByLabel(`Pin ${PIN_B}`)).toBeVisible({ timeout: 10_000 });
 
-    const [afterA, afterC] = [await rowTop(page, PIN_A), await rowTop(page, PIN_C)];
-    // A and C, both still pinned, keep their relative order.
-    expect(afterA).toBeLessThan(afterC);
-    // B is no longer above C (it left the pinned group).
-    const afterB = await rowTop(page, PIN_B);
-    expect(afterB).toBeGreaterThan(afterC);
+    // A and C, both still pinned, keep their relative order; B (no longer
+    // pinned) leaves the pinned group and drops below C.
+    await expect
+      .poll(
+        async () => {
+          const [afterA, afterB, afterC] = [
+            await rowTopOrNull(page, PIN_A),
+            await rowTopOrNull(page, PIN_B),
+            await rowTopOrNull(page, PIN_C),
+          ];
+          return (
+            afterA !== null && afterB !== null && afterC !== null && afterA < afterC && afterB > afterC
+          );
+        },
+        { timeout: 20_000, message: 'unpinning B must leave A/C order intact and move B out of the pinned group' },
+      )
+      .toBe(true);
 
     for (const name of [PIN_A, PIN_C]) await setPinned(request, projectId, name, false);
   });
