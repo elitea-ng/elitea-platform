@@ -147,7 +147,7 @@ test.describe('project-context: settings/config coverage', () => {
   test('PJC-PERSIST: a saved Project Context does not survive a reload — product gap', async ({ page }) => {
     test.fail(
       true,
-      'ELITEA-0949 (and 0942/0950/0953/0956/0957\'s persistence half): product gap — UpdateProjectContext ' +
+      'ELITEA-0949 (#888) (and 0942/0950/0953/0956/0957\'s persistence half): product gap — UpdateProjectContext ' +
         'always answers 200 but never durably writes (handler.go:623-651, migrations/001_initial.sql:823)',
     );
     await openEditor(page);
@@ -305,7 +305,7 @@ test.describe('project-context: settings/config coverage', () => {
    * persistence defect above — this is a client-side validation gap.
    * ──────────────────────────────────────────────────────────────────── */
   test('PJC03b: a .txt file with the same content is rejected — product gap', async ({ page }) => {
-    test.fail(true, 'ELITEA-0940: product gap — handleFileUpload never checks file name/type, only length');
+    test.fail(true, 'ELITEA-0940 (#889): product gap — handleFileUpload never checks file name/type, only length');
     await openEditor(page);
     await typeContent(page, `${AUTOTEST_PREFIX}baseline-before-wrong-type`);
 

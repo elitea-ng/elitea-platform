@@ -130,7 +130,7 @@ test.describe('Skills version selector', () => {
   test('the selected version shows a checkmark and highlight in the open dropdown', async ({ page, request }) => {
     test.fail(
       true,
-      'ELITEA-3290: product gap — the Skills version dropdown has no checkmark icon or highlight on the selected row (SkillEditorHeader.tsx uses a bare MenuItem, unlike AgentPipelineVersionSelector.tsx)',
+      'ELITEA-3290 (#917): product gap — the Skills version dropdown has no checkmark icon or highlight on the selected row (SkillEditorHeader.tsx uses a bare MenuItem, unlike AgentPipelineVersionSelector.tsx)',
     );
     const name = uniqueName('checkmark');
     const skillId = await createSkillViaForm(page, name, 'Base instructions.');
@@ -149,7 +149,7 @@ test.describe('Skills version selector', () => {
   test('the default version shows a pin icon with a "Default version" tooltip', async ({ page, request }) => {
     test.fail(
       true,
-      'ELITEA-3291: product gap — the default version has no pin icon or tooltip in Skills, only a " (default)" text suffix appended to the version name',
+      'ELITEA-3291 (#917): product gap — the default version has no pin icon or tooltip in Skills, only a " (default)" text suffix appended to the version name',
     );
     const name = uniqueName('pin');
     const skillId = await createSkillViaForm(page, name, 'Base instructions.');
@@ -167,7 +167,7 @@ test.describe('Skills version selector', () => {
 
   /* onetest: ELITEA-3293 — product gap: there is no search input anywhere in the Skills version dropdown. */
   test('a search field in the version dropdown filters by name and creator', async ({ page, request }) => {
-    test.fail(true, 'ELITEA-3293: product gap — the Skills version dropdown has no search input at all');
+    test.fail(true, 'ELITEA-3293 (#917): product gap — the Skills version dropdown has no search input at all');
     const name = uniqueName('search');
     const skillId = await createSkillViaForm(page, name, 'Base instructions.');
     try {
@@ -188,7 +188,7 @@ test.describe('Skills version selector', () => {
   test('version metadata shows a "MMM DD, YYYY, hh:mm AM/PM" timestamp and the creator', async ({ page, request }) => {
     test.fail(
       true,
-      'ELITEA-3294: product gap — Skills version rows show no timestamp and no creator; MenuItem renders only the version name and an optional "(default)" suffix',
+      'ELITEA-3294 (#917): product gap — Skills version rows show no timestamp and no creator; MenuItem renders only the version name and an optional "(default)" suffix',
     );
     const name = uniqueName('metadata');
     const skillId = await createSkillViaForm(page, name, 'Base instructions.');
@@ -210,7 +210,7 @@ test.describe('Skills version selector', () => {
   test('versions are sorted newest-first, and stay sorted while searching', async ({ page, request }) => {
     test.fail(
       true,
-      'ELITEA-3295: product gap — the Skills version list applies no sort at all (raw API order) and has no search to maintain a sort order during',
+      'ELITEA-3295 (#917): product gap — the Skills version list applies no sort at all (raw API order) and has no search to maintain a sort order during',
     );
     const name = uniqueName('sortorder');
     const skillId = await createSkillViaForm(page, name, 'Base instructions.');
@@ -234,7 +234,7 @@ test.describe('Skills version selector', () => {
   test('the Skills version selector uses the same trigger control as Agents and Pipelines', async ({ page, request }) => {
     test.fail(
       true,
-      'ELITEA-3296: product gap — the Skills version selector (bare MUI Select) and the Agents/Pipelines one (custom Menu with trigger/checkmark/default-marker) are different components, not shared styling with drift',
+      'ELITEA-3296 (#917): product gap — the Skills version selector (bare MUI Select) and the Agents/Pipelines one (custom Menu with trigger/checkmark/default-marker) are different components, not shared styling with drift',
     );
     const name = uniqueName('consistency');
     const skillId = await createSkillViaForm(page, name, 'Base instructions.');

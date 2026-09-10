@@ -519,7 +519,7 @@ test('J21g: the creation input is not visible when Create is clicked from page 2
 }, testInfo) => {
   test.fail(
     true,
-    'ELITEA-0990: product gap — onAdd never resets pagination to page 1, and page 2 slices past the pinned new row',
+    'ELITEA-0990 (#893): product gap — onAdd never resets pagination to page 1, and page 2 slices past the pinned new row',
   );
   test.setTimeout(30_000);
   const projectName = testInfo.project.name;

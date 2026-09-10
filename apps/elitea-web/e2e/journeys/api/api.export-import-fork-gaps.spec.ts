@@ -37,7 +37,7 @@ function autotestName(stem: string): string {
 test('the fork route answers 400 on a payload naming an entity type nothing can import', async ({ request }) => {
   test.fail(
     true,
-    "ELITEA-0673: product gap — /fork accepts an entity of an unrecognised type and creates a broken " +
+    "ELITEA-0673 (#916): product gap — /fork accepts an entity of an unrecognised type and creates a broken " +
       "empty-versions agent shell (201) instead of refusing it the way /import_wizard's IMP-05 does (400)",
   );
   const destinationProjectId = await resolvePublishAuthorProjectId(request);

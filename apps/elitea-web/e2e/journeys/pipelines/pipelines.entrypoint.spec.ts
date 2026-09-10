@@ -87,7 +87,7 @@ async function openEditor(page: Page, pipeline: CreatedPipeline) {
 test('the Trigger dropdown offers Schedule and Webhook alongside Chat Message — PRODUCT GAP', async ({ page }) => {
   test.fail(
     true,
-    'ELITEA-0889: product gap — backendCapabilities.ts pins pipelineTriggers:false (no Go route for the pipeline-trigger endpoint in any profile), so TriggerTypeSelector.chatMessageOnly is permanently true and the dropdown only ever offers "Chat Message"',
+    'ELITEA-0889 (#899): product gap — backendCapabilities.ts pins pipelineTriggers:false (no Go route for the pipeline-trigger endpoint in any profile), so TriggerTypeSelector.chatMessageOnly is permanently true and the dropdown only ever offers "Chat Message"',
   );
 
   const name = `${AUTOTEST_PREFIX}trig-opts-${Date.now() % 1e9}`;

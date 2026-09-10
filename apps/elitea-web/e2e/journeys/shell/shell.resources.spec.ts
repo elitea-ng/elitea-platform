@@ -223,7 +223,7 @@ test('RES05: each card has a distinct background, correct in Light and Dark mode
  * claim cannot hold on a stack with no configured links.
  * ──────────────────────────────────────────────────────────────────────── */
 test('RES06: a card link shows a hover highlight — no default link exists to hover', async ({ page }) => {
-  test.fail(true, 'ELITEA-0967: product gap — no resource card ships a default link, so none can be hovered');
+  test.fail(true, 'ELITEA-0967 (#891): product gap — no resource card ships a default link, so none can be hovered');
   await gotoHelpCenter(page);
   const link = card(page, 'documentation').getByRole('link').first();
   await expect(link, 'a Documentation link must be present by default').toBeVisible({ timeout: 5_000 });
@@ -241,7 +241,7 @@ test('RES06: a card link shows a hover highlight — no default link exists to h
 test('RES07: the (i) icon lists six component versions on hover — product gap', async ({ page }) => {
   test.fail(
     true,
-    'ELITEA-0971: product gap — plugins is hardcoded to [] (issue #219) and no version is configured by default',
+    'ELITEA-0971 (#892): product gap — plugins is hardcoded to [] (issue #219) and no version is configured by default',
   );
   await gotoHelpCenter(page);
   const icon = page.getByTestId('resource-version-info-icon');
@@ -266,7 +266,7 @@ test('RES07: the (i) icon lists six component versions on hover — product gap'
  * card and no "More…" affordance.
  * ──────────────────────────────────────────────────────────────────────── */
 test('RES08: the Documentation card offers Getting Started/How-To Guides/Integrations/Migration & Update — product gap', async ({ page }) => {
-  test.fail(true, 'ELITEA-0972: product gap — no default Documentation links ship; every link is admin-configured');
+  test.fail(true, 'ELITEA-0972 (#891): product gap — no default Documentation links ship; every link is admin-configured');
   await gotoHelpCenter(page);
   const doc = card(page, 'documentation');
   for (const label of ['Getting Started', 'How-To Guides', 'Integrations', 'Migration & Update']) {
@@ -277,14 +277,14 @@ test('RES08: the Documentation card offers Getting Started/How-To Guides/Integra
 });
 
 test('RES09: the Tutorials card lists 3 tutorial links and a working More… link — product gap', async ({ page }) => {
-  test.fail(true, 'ELITEA-0973: product gap — no default Tutorials links ship; every link is admin-configured');
+  test.fail(true, 'ELITEA-0973 (#891): product gap — no default Tutorials links ship; every link is admin-configured');
   await gotoHelpCenter(page);
   const tutorials = card(page, 'tutorials');
   await expect(tutorials.getByRole('link')).toHaveCount(4, { timeout: 3_000 }); // 3 entries + "More…"
 });
 
 test('RES10: the Video Library card lists 4 video links and a working More… link — product gap', async ({ page }) => {
-  test.fail(true, 'ELITEA-0974: product gap — no default Video Library links ship; every link is admin-configured');
+  test.fail(true, 'ELITEA-0974 (#891): product gap — no default Video Library links ship; every link is admin-configured');
   await gotoHelpCenter(page);
   const videos = card(page, 'videoLibrary');
   await expect(videos.getByRole('link')).toHaveCount(5, { timeout: 3_000 }); // 4 entries + "More…"
@@ -293,7 +293,7 @@ test('RES10: the Video Library card lists 4 video links and a working More… li
 test('RES11: the Release Notes card marks the latest entry "Latest" over historical releases — product gap', async ({ page }) => {
   test.fail(
     true,
-    'ELITEA-0975: product gap — no "Latest" badge concept exists in ResourceCard/HelpCenterPage, and no default releases ship',
+    'ELITEA-0975 (#891): product gap — no "Latest" badge concept exists in ResourceCard/HelpCenterPage, and no default releases ship',
   );
   await gotoHelpCenter(page);
   await expect(card(page, 'releaseNotes').getByText('Latest', { exact: true })).toBeVisible({ timeout: 3_000 });

@@ -171,7 +171,7 @@ test('ELITEA-2815: PRODUCT GAP — the Form/Raw JSON view toggle uses text label
   // / `label: 'Raw Json'` with no `icon` — `TabButtonItem` renders the label
   // as visible `Typography` text whenever one is supplied. This asserts the
   // absence of an icon glyph the case expects to be the ONLY visible content.
-  test.fail(true, 'ELITEA-2815: product gap — the view toggle renders "Form"/"Raw Json" as visible text (FormViewToggle.tsx passes label, no icon), not icon-only controls');
+  test.fail(true, 'ELITEA-2815 (#923): product gap — the view toggle renders "Form"/"Raw Json" as visible text (FormViewToggle.tsx passes label, no icon), not icon-only controls');
   await expect(formButton.locator('svg')).toBeVisible();
 });
 
@@ -190,7 +190,7 @@ test('ELITEA-2816/2817: PRODUCT GAP — the Tools section header carries no enab
   // to inject a count, and no count is computed anywhere in that file.
   const toolsHeader = page.getByRole('button', { name: /^Tools/ });
   await expect(toolsHeader).toBeVisible({ timeout: 20_000 });
-  test.fail(true, 'ELITEA-2816/2817: product gap — ToolActionsSelector.tsx titles the accordion the bare word "Tools", with no enabled/total count and nothing to update live');
+  test.fail(true, 'ELITEA-2816 (#924)/2817: product gap — ToolActionsSelector.tsx titles the accordion the bare word "Tools", with no enabled/total count and nothing to update live');
   await expect(toolsHeader).toHaveText(/Tools\s*\d+\s*\/\s*\d+/);
 });
 

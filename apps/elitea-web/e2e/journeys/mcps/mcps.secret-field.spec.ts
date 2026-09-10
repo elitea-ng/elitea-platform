@@ -182,7 +182,7 @@ test.describe('MCP config form — Client Secret "Create new secret" shortcut', 
   test('MCP03: the CREATE entry names the project type, not a generic label', async ({ page }) => {
     test.fail(
       true,
-      'ELITEA-0726: product gap — SecretField.tsx renders ONE generic "Create new secret" ' +
+      'ELITEA-0726 (#902): product gap — SecretField.tsx renders ONE generic "Create new secret" ' +
         'entry for every project type; no caller (SecretFieldInput/useSecretFieldOptions) passes ' +
         'a project-type-specific createLabel, though the prop (SecretFieldSecretsOptions.createLabel) exists.',
     );

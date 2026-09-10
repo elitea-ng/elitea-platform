@@ -142,7 +142,7 @@ test('an agent with the artifact toolkit writes a file that a real bucket listin
   if (IS_NATIVE_RUNTIME) {
     test.fail(
       true,
-      'ELITEA-1334/1337/1338: product gap — "artifact" is absent from the native rust worker\'s ' +
+      'ELITEA-1334 (#906)/1337/1338: product gap — "artifact" is absent from the native rust worker\'s ' +
         '`supported_tool_types`, so materialize.rs skips it (agent_toolkit_skipped, ' +
         'reason_code=unsupported_toolkit_family). Measured non-deterministic across runs which of two ' +
         'ways that then surfaces: sometimes assembly fails outright (native_agent.invalid_configuration, ' +

@@ -208,7 +208,7 @@ test('AHA-1b: the Api Key field should offer a Show/Hide toggle', async ({ page 
      Show/Hide toggle button. */
   test.fail(
     true,
-    'ELITEA-2502: product gap — CredentialSecretField mounts SecretManagementInput with no ' +
+    'ELITEA-2502 (#921): product gap — CredentialSecretField mounts SecretManagementInput with no ' +
       'passwordVisibilityToggle, so the Api Key field never offers a Show/Hide control',
   );
   await gotoCreateAhaCredential(page);
@@ -395,7 +395,7 @@ test('AHA-4b: a personal credential should be invisible to another project membe
      listed in another project member's Aha Configuration picker. */
   test.fail(
     true,
-    'ELITEA-2504: product gap — a private/personal credential is still listed for every other ' +
+    'ELITEA-2504 (#922): product gap — a private/personal credential is still listed for every other ' +
       'project member; private/shared only changes how a stored REFERENCE resolves, not who can see the row',
   );
   const personalName = tag('vis_personal');
@@ -699,7 +699,7 @@ test('AHA-9b: "Make tools available by MCP" should persist after Save', async ({
      across a save + page reload. */
   test.fail(
     true,
-    'ELITEA-2541: product gap — "Make tools available by MCP" reads back unchecked after Save + reload, ' +
+    'ELITEA-2541 (#928): product gap — "Make tools available by MCP" reads back unchecked after Save + reload, ' +
       'confirmed live on two separate runs',
   );
   const credentialName = tag('mcp_persist_cred');
@@ -758,7 +758,7 @@ test('AHA-10: Test connection should actually validate an Aha! connection', asyn
      reachability failure. */
   test.fail(
     true,
-    'ELITEA-2510/2511/2512/2558: product gap — POST /configurations/check_connection/{p}/aha ' +
+    'ELITEA-2510 (#920)/2511/2512/2558: product gap — POST /configurations/check_connection/{p}/aha ' +
       'answers reason="unsupported_type" unconditionally; the aha credential form\'s Test connection ' +
       'button can never report success or a reachability/auth-specific failure',
   );
@@ -799,7 +799,7 @@ test('AHA-10b: the Aha Configuration dropdown should support search/filter', asy
      un-filterable from the dropdown. */
   test.fail(
     true,
-    'ELITEA-2534: product gap — CredentialsSelect.tsx (features/credentials/ui) is a plain ' +
+    'ELITEA-2534 (#919): product gap — CredentialsSelect.tsx (features/credentials/ui) is a plain ' +
       'MUI Select with no search/filter TextField; a long SAVED AHA CREDENTIALS list cannot be narrowed by typing',
   );
   const name = tag('search_probe');

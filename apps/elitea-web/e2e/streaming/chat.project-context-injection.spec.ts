@@ -98,7 +98,7 @@ test('Project Context, once saved with content enabled, reads back what was save
   test.setTimeout(60_000);
   test.fail(
     true,
-    'ELITEA-0954 (and the whole project-context cluster: 0939/0943/0944/0945/0946/0948/0951/0952): ' +
+    'ELITEA-0954 (#888) (and the whole project-context cluster: 0939/0943/0944/0945/0946/0948/0951/0952): ' +
       'product gap — UpdateProjectContext\'s INSERT omits `project_id`, which the tenant `configuration` ' +
       'table requires NOT NULL; for a project with no pre-existing row the write fails silently ' +
       '(confirmed in this stack\'s own Postgres log: "null value in column \\"project_id\\" … violates ' +

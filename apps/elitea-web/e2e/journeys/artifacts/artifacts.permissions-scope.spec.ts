@@ -49,7 +49,7 @@ test('bucket "Manage access" is visible in the shared Team project but must be a
 }) => {
   test.fail(
     true,
-    'ELITEA-2475: product gap — BucketList.tsx (features/artifacts/ui) renders the "Manage access" icon for every bucket row with no project-type condition; it is not restricted to Team projects.',
+    'ELITEA-2475 (#901): product gap — BucketList.tsx (features/artifacts/ui) renders the "Manage access" icon for every bucket row with no project-type condition; it is not restricted to Team projects.',
   );
 
   let teamProjectId = '';

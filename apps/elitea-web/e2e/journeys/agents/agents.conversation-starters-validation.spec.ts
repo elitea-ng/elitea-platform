@@ -135,7 +135,7 @@ test('J14c-cs: the create API accepts and returns string-only conversation_start
 test('J14c-cs: [PRODUCT GAP] the create API rejects non-string conversation_starters entries', async ({
   request,
 }) => {
-  test.fail(true, 'ELITEA-0090: product gap — conversation_starters is an untyped jsonb passthrough; no create-time type validation exists');
+  test.fail(true, 'ELITEA-0090 (#896): product gap — conversation_starters is an untyped jsonb passthrough; no create-time type validation exists');
   const name = uniqueName('reject-create');
   const createdIds: string[] = [];
   try {
@@ -171,7 +171,7 @@ test('J14c-cs: [PRODUCT GAP] the create API rejects non-string conversation_star
 test('J14c-cs: [PRODUCT GAP] the version-update API rejects non-string conversation_starters entries', async ({
   request,
 }) => {
-  test.fail(true, 'ELITEA-0093: product gap — the version PUT applies the same untyped jsonb passthrough as create, so a malformed update silently overwrites valid data');
+  test.fail(true, 'ELITEA-0093 (#896): product gap — the version PUT applies the same untyped jsonb passthrough as create, so a malformed update silently overwrites valid data');
   const name = uniqueName('reject-update');
   const validStarters = ['How can you help me?', 'Summarize this document', 'What are your capabilities?'];
   const agent = await createAgent(request, name);

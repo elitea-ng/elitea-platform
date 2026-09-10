@@ -115,7 +115,7 @@ test('ELITEA-2495: copying instructions from one persona to another leaves the s
   test.setTimeout(60_000);
   test.fail(
     true,
-    'ELITEA-2495 (and 2496/2497/2498/2499/2500): product gap — PUT /social/author always 400s ' +
+    'ELITEA-2495 (#929) (and 2496/2497/2498/2499/2500): product gap — PUT /social/author always 400s ' +
       '(default_summarization.summary_model_project_id sent as a string; server wants int) on every ' +
       'autosave this form makes, so no persona/instructions change can ever be saved',
   );

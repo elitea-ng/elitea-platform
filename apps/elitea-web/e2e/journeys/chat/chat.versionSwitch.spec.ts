@@ -7,7 +7,7 @@
  * instead of showing the version just switched to — see the test's own
  * `test.fail()` call for the diagnosis, and `S/port/defects.md`.
  *
- * Ported by use case from `w1-chat-interface.md` (ELITEA-0387).
+ * Ported by use case from `w1-chat-interface.md` (ELITEA-0387 (#907) (#907)).
  *
  * ELITEA-0386 ("open the LLM settings panel for the agent in chat, edit a
  * setting after a version switch, save") is NOT here — recorded NA instead.
@@ -131,7 +131,7 @@ test('ELITEA-0387: switching a not-published agent\'s version has no spurious er
 }) => {
   test.fail(
     true,
-    "ELITEA-0387: product gap — the version switch persists correctly server-side and produces no spurious override error (both verified below), but VersionSelector's own button goes BLANK instead of showing the newly-active version's name: useChatBoxVersioning.ts's mergeParticipantVersionSettings spreads a snake_case entity_settings key onto activeParticipant (already normalised to camelCase entitySettings elsewhere), so AgentEditorPanel's resolveSelectedVersion(participantDetails?.versions, participantForEditor?.entitySettings?.versionId) can no longer resolve a selected version from the corrupted local object — confirmed recoverable by a page reload, which re-fetches and re-normalises from the server's (correct) state",
+    "ELITEA-0387 (#907): product gap — the version switch persists correctly server-side and produces no spurious override error (both verified below), but VersionSelector's own button goes BLANK instead of showing the newly-active version's name: useChatBoxVersioning.ts's mergeParticipantVersionSettings spreads a snake_case entity_settings key onto activeParticipant (already normalised to camelCase entitySettings elsewhere), so AgentEditorPanel's resolveSelectedVersion(participantDetails?.versions, participantForEditor?.entitySettings?.versionId) can no longer resolve a selected version from the corrupted local object — confirmed recoverable by a page reload, which re-fetches and re-normalises from the server's (correct) state",
   );
 
   const catalogue = await page.request.get(`${API_BASE}/configurations/models/${DEFAULT_PROJECT_ID}?include_shared=true`);

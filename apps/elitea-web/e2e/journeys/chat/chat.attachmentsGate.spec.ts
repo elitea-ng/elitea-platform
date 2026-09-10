@@ -52,7 +52,7 @@ function uniqueName(tag: string): string {
 test('the "Allow attachments" toggle gates the attach control on the main chat page too', async ({ page }) => {
   test.fail(
     true,
-    "ELITEA-0509: product gap — ChatBoxInputSlots.tsx:177 hardcodes disableAttachments:false on the main chat page, ignoring the agent's 'attachments' internal_tools gate that the Agent/Pipeline editor's own chat correctly honors",
+    "ELITEA-0509 (#905): product gap — ChatBoxInputSlots.tsx:177 hardcodes disableAttachments:false on the main chat page, ignoring the agent's 'attachments' internal_tools gate that the Agent/Pipeline editor's own chat correctly honors",
   );
 
   const agentName = uniqueName('gateag');

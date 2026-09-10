@@ -112,7 +112,7 @@ test('"Set as default" moves the dropdown\'s Default marker to the new version',
 
 /* onetest: ELITEA-3279 — product gap: the dropdown row shows neither the creator's name/email nor a "MMM DD, YYYY, hh:mm AM/PM" timestamp. */
 test('a version row names its creator and shows a full date+time — PRODUCT GAP', async ({ page }) => {
-  test.fail(true, 'ELITEA-3279: product gap — AgentPipelineVersionSelector.tsx:formatVersionDisplayText renders only "<name> – DD.MM.YYYY" (day.month.year, no time, no AM/PM) and the menu row renders no creator name or email anywhere');
+  test.fail(true, 'ELITEA-3279 (#900): product gap — AgentPipelineVersionSelector.tsx:formatVersionDisplayText renders only "<name> – DD.MM.YYYY" (day.month.year, no time, no AM/PM) and the menu row renders no creator name or email anywhere');
   const name = `${AUTOTEST_PREFIX}ver-meta-${Date.now() % 1e9}`;
   const pipeline = await createPipelineThroughApi(page.request, name);
   created.push(pipeline);

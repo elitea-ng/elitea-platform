@@ -309,7 +309,7 @@ test('CB09: expanded split button — chevron opens the full dropdown and naviga
 test('CB10: the active entity is marked with a checkmark in the dropdown', async ({ page }) => {
   test.fail(
     true,
-    'ELITEA-1044: product gap — CreateEntityDropdown highlights the active item with a background ' +
+    'ELITEA-1044 (#903): product gap — CreateEntityDropdown highlights the active item with a background ' +
       'colour only; no checkmark icon is rendered for any menu item.',
   );
 
@@ -328,7 +328,7 @@ test('CB10: the active entity is marked with a checkmark in the dropdown', async
 test('CB11: collapsed create button shows a "Create New" tooltip on hover', async ({ page }) => {
   test.fail(
     true,
-    'ELITEA-1046: product gap — CreateEntityTrigger has no Tooltip wrapper in either branch; ' +
+    'ELITEA-1046 (#904): product gap — CreateEntityTrigger has no Tooltip wrapper in either branch; ' +
       'hovering the collapsed "+" button shows nothing (also an axe button-name violation, since the ' +
       'collapsed button then has no accessible name at all — see shell.sidebar.spec.ts SB01).',
   );

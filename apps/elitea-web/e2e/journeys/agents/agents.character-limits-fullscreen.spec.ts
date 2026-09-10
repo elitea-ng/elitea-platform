@@ -135,7 +135,7 @@ test('J14c-fs: [PRODUCT GAP] the full-screen Welcome Message editor enforces the
 }) => {
   test.fail(
     true,
-    'ELITEA-0059/0062/0064: product gap — StyledInputEnhancer’s full-screen modal InputBase carries no maxLength and no CharacterCounter, so the 768-char contract and its counter/warning are dropped in full-screen mode',
+    'ELITEA-0059 (#895)/0062/0064: product gap — StyledInputEnhancer’s full-screen modal InputBase carries no maxLength and no CharacterCounter, so the 768-char contract and its counter/warning are dropped in full-screen mode',
   );
   const name = uniqueName('fs-gap');
   const agent = await createAgent(request, name);

@@ -118,7 +118,7 @@ test.describe('publish validation: code-based rules', () => {
   test('publish validation flags an agent whose LLM settings carry no model_project_id', async ({ request }) => {
     test.fail(
       true,
-      'ELITEA-0160: product gap — publish validation never flags a missing model_project_id; the check is skipped entirely when the key is absent',
+      'ELITEA-0160 (#908): product gap — publish validation never flags a missing model_project_id; the check is skipped entirely when the key is absent',
     );
     const name = uniqueName('nomodelproj');
     const agent = await createAgentWithVersion(request, name, { instructions: PASSABLE_INSTRUCTIONS });
@@ -229,7 +229,7 @@ test.describe('publish validation: code-based rules', () => {
      patterns. `runPublishValidation` reads instructions, welcome_message, conversation_starters, tag/tool counts
      and llm_settings — it never reads `application_variables` at all. */
   test('a variable value that looks like a secret is flagged as Critical', async ({ request }) => {
-    test.fail(true, 'ELITEA-0167: product gap — publish validation never inspects variable values for secrets/API keys');
+    test.fail(true, 'ELITEA-0167 (#909): product gap — publish validation never inspects variable values for secrets/API keys');
     const name = uniqueName('secretvar');
     const agent = await createAgentWithVersion(request, name, {
       instructions: PASSABLE_INSTRUCTIONS,
@@ -254,7 +254,7 @@ test.describe('publish validation: code-based rules', () => {
   test('a 2-character sub-agent name is flagged as a length Warning', async ({ request }) => {
     test.fail(
       true,
-      'ELITEA-0168: product gap — sub-agent name length and generic-blocklist rules do not exist (only duplicate-name uniqueness is enforced)',
+      'ELITEA-0168 (#910): product gap — sub-agent name length and generic-blocklist rules do not exist (only duplicate-name uniqueness is enforced)',
     );
     const parentName = uniqueName('shortnameparent');
     const parent = await createAgentWithVersion(request, parentName, { instructions: PASSABLE_INSTRUCTIONS });
@@ -280,7 +280,7 @@ test.describe('publish validation: code-based rules', () => {
   test('a placeholder agent name and a too-short description are both flagged', async ({ request }) => {
     test.fail(
       true,
-      'ELITEA-0169/ELITEA-0170: product gap — the main agent Name and Description fields are never validated (no query reads either column)',
+      'ELITEA-0169 (#911)/ELITEA-0170: product gap — the main agent Name and Description fields are never validated (no query reads either column)',
     );
     const agent = await createAgentWithVersion(
       request,
@@ -309,7 +309,7 @@ test.describe('publish validation: code-based rules', () => {
   test('a placeholder sub-agent description under 30 characters is flagged as Critical, worded per the case', async ({ request }) => {
     test.fail(
       true,
-      "ELITEA-0171: product gap — sub-agent description uses a 20-char threshold with no placeholder check and no \"Sub-agent '[name]':\" wording, not the documented 30-char + placeholder rule",
+      "ELITEA-0171 (#912): product gap — sub-agent description uses a 20-char threshold with no placeholder check and no \"Sub-agent '[name]':\" wording, not the documented 30-char + placeholder rule",
     );
     const parentName = uniqueName('descparent');
     const parent = await createAgentWithVersion(request, parentName, { instructions: PASSABLE_INSTRUCTIONS });
@@ -342,7 +342,7 @@ test.describe('publish validation: code-based rules', () => {
   test('an agent with zero tags is flagged as Critical', async ({ request }) => {
     test.fail(
       true,
-      'ELITEA-0173: product gap — no critical "agent has no tags" rule and no warning "tags are all generic" rule exist; only a suggestion fires below 3 tags',
+      'ELITEA-0173 (#913): product gap — no critical "agent has no tags" rule and no warning "tags are all generic" rule exist; only a suggestion fires below 3 tags',
     );
     const agent = await createAgent(request, uniqueName('notags'));
     try {
@@ -587,7 +587,7 @@ test.describe('publish validation: code-based rules', () => {
   test('an Editor Notes field is present on the agent editor', async ({ page, request }) => {
     test.fail(
       true,
-      'ELITEA-0147/0151/0153/0154/0158: product gap — ApplicationEditorNotes is written but never mounted ' +
+      'ELITEA-0147 (#898)/0151/0153/0154/0158: product gap — ApplicationEditorNotes is written but never mounted ' +
         'in the agent editor (src/features/agents/index.ts, disclosed gap), and the field has no backend ' +
         'column/write path even if it were shown',
     );

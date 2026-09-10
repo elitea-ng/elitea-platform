@@ -111,7 +111,7 @@ test('J-verrepl: [PRODUCT GAP] deleting an in-use version opens the replacement 
 }) => {
   test.fail(
     true,
-    'ELITEA-0043: product gap — DeleteVersionDialog never renders VersionReplacementModal; only the plain type-to-confirm delete dialog ever opens, in-use or not',
+    'ELITEA-0043 (#894): product gap — DeleteVersionDialog never renders VersionReplacementModal; only the plain type-to-confirm delete dialog ever opens, in-use or not',
   );
   const { parent, dependent } = await seedInUseVersion(request, page);
   try {
@@ -148,7 +148,7 @@ test('J-verrepl: [PRODUCT GAP] Replace & Delete migrates the dependent reference
 }) => {
   test.fail(
     true,
-    'ELITEA-0041: product gap — no UI path reaches VersionReplacementModal, so no replacement can ever be selected or applied',
+    'ELITEA-0041 (#894): product gap — no UI path reaches VersionReplacementModal, so no replacement can ever be selected or applied',
   );
   const { parent, dependent, inUseVersionName } = await seedInUseVersion(request, page);
   try {
@@ -191,7 +191,7 @@ test('J-verrepl: [PRODUCT GAP] Cancel in the replacement modal closes it without
 }) => {
   test.fail(
     true,
-    'ELITEA-0042: product gap — there is no replacement modal to cancel; the only dialog reachable is the plain delete-confirm one',
+    'ELITEA-0042 (#894): product gap — there is no replacement modal to cancel; the only dialog reachable is the plain delete-confirm one',
   );
   const { parent, dependent, inUseVersionName } = await seedInUseVersion(request, page);
   try {

@@ -116,7 +116,7 @@ test('ELITEA-1069/1074: PRODUCT GAP — the secret-create option carries a gener
   await openGithubCredentialForm(page, `${AUTOTEST_PREFIX}cred_ghlabel_${RUN_ID}`);
   await openSecretDropdown(page);
 
-  test.fail(true, 'ELITEA-1069/1074: product gap — SecretFieldInput (ToolBaseProperty.renderers.tsx) calls useSecretFieldOptions() with no createLabel override, so the option always reads the generic "Create new secret", never "New Project Secret"/"New Private Secret"');
+  test.fail(true, 'ELITEA-1069 (#925)/1074: product gap — SecretFieldInput (ToolBaseProperty.renderers.tsx) calls useSecretFieldOptions() with no createLabel override, so the option always reads the generic "Create new secret", never "New Project Secret"/"New Private Secret"');
   await expect(page.getByRole('option', { name: /^New (Project|Private) Secret$/ })).toBeVisible();
 });
 
@@ -174,7 +174,7 @@ test('ELITEA-1088/1090/1091/1093/1097: PRODUCT GAP — a toolkit whose credentia
   // The plain, pre-existing text — real, and currently the ONLY rendered outcome.
   await expect(page.getByText('Your configuration does not match any available configurations.')).toBeVisible({ timeout: 20_000 });
 
-  test.fail(true, 'ELITEA-1088/1090/1091/1093/1097: product gap — ToolkitCredentialPicker.tsx hardcodes mismatchedPrivateCredential: false, so CredentialsSelect never renders CredentialWarningBanner for a toolkit picker, whatever the mismatch really is');
+  test.fail(true, 'ELITEA-1088 (#927)/1090/1091/1093/1097: product gap — ToolkitCredentialPicker.tsx hardcodes mismatchedPrivateCredential: false, so CredentialsSelect never renders CredentialWarningBanner for a toolkit picker, whatever the mismatch really is');
   await expect(page.getByText('Credential setup required:')).toBeVisible();
 });
 

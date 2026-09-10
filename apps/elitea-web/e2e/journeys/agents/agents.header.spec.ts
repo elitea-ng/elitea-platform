@@ -42,7 +42,7 @@ test('J-header: [PRODUCT GAP] the agent name is shown in a page header next to a
 }) => {
   test.fail(
     true,
-    'ELITEA-0106: product gap — the agent editor page has no header row and no back-arrow control; only the editable Name FIELD inside the form shows the name',
+    'ELITEA-0106 (#897): product gap — the agent editor page has no header row and no back-arrow control; only the editable Name FIELD inside the form shows the name',
   );
   const name = uniqueName('agent');
   const agent = await createAgent(request, name);
@@ -74,7 +74,7 @@ test('J-header: [PRODUCT GAP] the header stays fixed at the top while the config
 }) => {
   test.fail(
     true,
-    'ELITEA-0109: product gap — the agent editor renders no sticky header at all; the whole page (tab strip included) scrolls as one block',
+    'ELITEA-0109 (#897): product gap — the agent editor renders no sticky header at all; the whole page (tab strip included) scrolls as one block',
   );
   const name = uniqueName('sticky');
   const agent = await createAgent(request, name);
