@@ -68,6 +68,7 @@ const FEATURES_SPEC = 'e2e/journeys/admin/admin.features.spec.ts';
 const APP_REQUESTS_SPEC = 'e2e/journeys/admin/admin.app-requests.spec.ts';
 const SEED_SCRIPT = 'scripts/e2e-stack.sh';
 const WIDGET_SPEC = 'e2e/journeys/support/support.widget.spec.ts';
+const ENTRYPOINTS_SPEC = 'e2e/journeys/support/support.entrypoints.spec.ts';
 const CONTEXT_BUDGET_SPEC = 'e2e/journeys/chat/chat.contextBudget.spec.ts';
 
 /**
@@ -105,6 +106,7 @@ const FILE_LEVEL_SERIAL = [
   { path: 'e2e/journeys/admin/admin.configuration.spec.ts' },
   { path: APP_REQUESTS_SPEC },
   { path: WIDGET_SPEC, mustSay: /ONE WORKER, IN ORDER/ },
+  { path: ENTRYPOINTS_SPEC, mustSay: /ONE PLATFORM FLAG, IN ORDER/ },
   { path: CONTEXT_BUDGET_SPEC, mustSay: /ONE ACCOUNT, ONE WRITER/ },
 ];
 
