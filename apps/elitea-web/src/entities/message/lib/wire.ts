@@ -178,6 +178,7 @@ export interface MessageGroupMetaWire {
  * through `isMessageRow` in lib/normalise.ts rather than `===`.
  */
 export interface MessageGroupWire {
+  readonly persisted_trace?: unknown;
   readonly id: string | number;
   readonly uuid: string;
   /**

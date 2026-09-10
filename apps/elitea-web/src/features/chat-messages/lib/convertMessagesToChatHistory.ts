@@ -20,12 +20,9 @@
  * functions (`partitionActionsIntoBlocks`, etc.) are built locally in
  * `./subAgentGrouping.ts` for the streaming accordion view.
  *
- * Trace-pin chips (`EL-5728`) landed after the port's baseline snapshot
- * (`useLazyMessageTracesQuery` / `buildTraceListParams` / `groupTraceStepsByGroupId`);
- * included here since the wire format already carries trace data in
- * `MessageGroupWire.meta` (the source's `toolCalls` union includes trace
- * step objects with a `type` discriminator — they flow through
- * `buildToolActions` in `entities/message/lib/toolActions` unchanged).
+ * Normalized trace summaries arrive separately from the message metadata.
+ * The shared message reader attaches scoped `persisted_trace` references.
+ * The answer carries these references to the lazy detail renderer.
  *
  * Parity notes:
  * - `isUserMessage` (lines 9-15): ported verbatim.
@@ -56,6 +53,7 @@ import type { ToolAction } from './chatStreamToolAction';
  * `convertMessagesToChatHistory` adds at the conversation level.
  */
 export interface ChatMessage {
+  readonly persistedTrace?: unknown;
   readonly id: string;
   readonly role: string;
   readonly name: string;
@@ -353,6 +351,8 @@ export function convertMessagesToChatHistory(
     const aiMessage = splitPersistedReasoning(
       normaliseAssistantMessage(messageGroup, sortedMessages, participants) as unknown as ChatMessage,
     );
+
+    if (messageGroup.persisted_trace) Object.assign(aiMessage, { persistedTrace: messageGroup.persisted_trace });
 
     // Attach child messages as SwarmChild toolActions.
     const childMessages = childMessagesByParent[uuid] ?? [];

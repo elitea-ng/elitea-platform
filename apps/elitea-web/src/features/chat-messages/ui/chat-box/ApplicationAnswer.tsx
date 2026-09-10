@@ -45,6 +45,8 @@ import { ChatHitlActions } from '../chat-hitl-actions/ChatHitlActions';
 import type { HitlInterrupt } from '../chat-hitl-actions/ChatHitlActions';
 import { ErrorTrace } from '../error-trace/ErrorTrace';
 
+import { PersistedMessageTrace } from './PersistedMessageTrace';
+
 import { AnswerContent } from './AnswerContent';
 import { readAnswerItems } from './AnswerMessageItems';
 
@@ -248,6 +250,8 @@ export function ApplicationAnswer({
           </Box>
         );
       })}
+
+      {!isProcessing && toolActions.length === 0 && <PersistedMessageTrace value={answer.persistedTrace} />}
 
       {nonSwarmChildActions.length > 0 && <ApplicationAnswerThinking actions={nonSwarmChildActions} isStreaming={isProcessing} />}
 

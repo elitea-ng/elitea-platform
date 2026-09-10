@@ -204,3 +204,36 @@ This new test and the existing configuration and toolkit lifecycle tests pass: t
 The existing toolkit test also covers relation selection replacement and unlinking.
 These service checks do not prove authenticated Rust invocation through a secret-bearing toolkit.
 That browser and worker gate remains open.
+
+## Reloaded trace summaries and lazy details
+
+`apps/elitea-web/src/entities/conversation/api/messageTraces.ts` now reads normalized trace summaries for each loaded message page.
+The shared message reader covers initial history, older pages, and playback consumers.
+Requests contain at most 200 message group IDs and 500 trace rows per page.
+The reader follows offsets until the final page and propagates cancellation.
+It excludes rows outside the requested message groups.
+The original message envelope and content remain unchanged.
+A trace-read failure retains the messages and supplies an explicit retry state.
+Malformed message envelopes retain their existing caller error boundary.
+
+`convertMessagesToChatHistory.ts` carries scoped trace references to the answer renderer.
+`PersistedMessageTrace.tsx` shows an execution-details control for stored steps.
+It fetches heavy input, output, text, and thinking fields only when a reader opens a step.
+The request includes the owning message group ID.
+The existing live tool view remains authoritative while live actions are present.
+The stored view does not duplicate those live actions.
+No Rust frame, output limit, or database schema changes are required.
+
+The current UI references remain `convertChatConversationMessages.js` and its trace-aware history and playback loaders.
+The existing Main `messagetraces` handler remains the read authority.
+Fifty-four focused UI tests pass across six files.
+They cover summary pagination, message scoping, failed-read preservation, lazy detail loading, conversion, and the chat composition boundary.
+
+UI image `sha256:64fc8d4862fdc75b1f03095608c9f42c870bfa7c0e09632b6311a950c670807f` contains the reload repair.
+The type check and focused lint pass before deployment.
+The guarded deployment retains the existing environment and runs during a claim-free interval.
+Playwright reloads chat 543 and observes one batched summary request for its eight loaded message groups.
+No heavy detail request occurs before a step opens.
+Opening `get_issues` requests trace 7279 with `message_group_id=5820`.
+The stored result and the answer are accessible after reload.
+This closes the observed reload gap for the saved-agent lifecycle case.
