@@ -263,3 +263,18 @@ Go and Rust node-event codecs and browser replay enforce approximately 64 KB fra
 Changing only the model output-token setting or Rust value constant cannot resolve all these limits.
 Reuse the existing claim-fenced output artifact path when implementing larger result delivery.
 Preserve complete result retrieval and separate bounded previews from the stored result.
+
+### Complete selected schema delivery
+
+The deployed Rust worker now sends large tool results through bounded UTF-8 fragments.
+Main assembles these fragments in the existing trace row before browser delivery.
+The UI assembles the live fragments and completes the tool only after the final fragment.
+The implementation adds no application table or migration.
+See [the source mapping and verification record](tool-result-chunks.md) for the complete cross-language contract.
+
+Playwright chat 545 lists toolkit types and retrieves the complete GitHub schema without a resource-limit error.
+The saved trace contains the complete 42,316-byte result.
+The final answer remains visible after reload.
+This supersedes the selected-schema transport failure above.
+Recovery after the interrupted chat 542 remains unverified.
+The repeated check on 2026-09-10 also passes, including persisted digest verification and browser reload.
