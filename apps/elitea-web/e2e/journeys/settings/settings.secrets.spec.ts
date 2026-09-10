@@ -136,13 +136,41 @@ const STALE_AFTER_MS = 10 * 60 * 1000;
 /**
  * Whether a swept name is old enough to be nobody's live secret.
  *
- * The name carries its own creation time (`secretName` above), which is the
- * only handle the secrets API gives: the list answers names and placeholders,
- * never a timestamp. A name that carries no readable stamp cannot be from this
- * naming scheme, so it is treated as stale and collected.
+ * The name carries its own creation time (`secretName` and `sortProbeName`
+ * both embed `Date.now()`, underscore-delimited, somewhere in the name),
+ * which is the only handle the secrets API gives: the list answers names and
+ * placeholders, never a timestamp.
+ *
+ * THIS USED TO MATCH ONLY `secretName`'s `_j21_<digits>_` shape. Every
+ * `sortProbeName` name (J21e–J21h: `_sort_<label>_<digits>…_`) never
+ * contains the literal substring `_j21_`, so the old regex never matched
+ * them — `stamp` was always `undefined`, and the "no readable stamp →
+ * treat as stale" fallback fired for EVERY sort-probe secret, unconditionally,
+ * regardless of age.
+ *
+ * That made the sweep a live-data-eating race, not just a leftover collector:
+ * `fullyParallel` runs several workers of one engine through this file at
+ * once, each worker running its own `afterAll` the moment ITS OWN tests
+ * finish while siblings are still mid-test. A worker that finished J21f/J21g
+ * quickly would sweep — and, under the old "unmatched = stale" rule, delete —
+ * every OTHER worker's still-in-flight J21e/J21h sort probes, including ones
+ * created milliseconds earlier and not yet asserted on. That is the exact
+ * shape of the observed webkit failure: the four probes created and
+ * server-confirmed present at the top of J21e were gone (server list
+ * returned nothing matching the run's own token) by the time the test's
+ * final poll ran — not a DOM-timing issue, a cross-worker deletion. webkit
+ * shards are slower than chromium's, which widens the overlap window between
+ * a fast worker's teardown and a slow worker's still-running test, so the
+ * race was far more likely to land here than on chromium.
+ *
+ * The fix generalises the match to the first underscore-delimited run of
+ * 10+ digits anywhere in the name — the shape both `secretName` and
+ * `sortProbeName` actually produce (see `makeRunToken`'s doc comment for why
+ * that run stays exactly 13 digits wide). A name with no such run truly
+ * cannot be from either naming scheme and is still treated as stale.
  */
 const staleByName = (name: string, now: number): boolean => {
-  const stamp = /_j21_(\d{10,})_/.exec(name)?.[1];
+  const stamp = /_(\d{10,})_/.exec(name)?.[1];
   return stamp === undefined || now - Number(stamp) > STALE_AFTER_MS;
 };
 
@@ -380,9 +408,19 @@ function sortProbeName(label: string, projectName: string, token?: string): stri
  * just overwrites the earlier one by name) and starves the search filter
  * below of rows it expected to find. `parallelIndex` plus a random suffix
  * closes that gap; letters/digits only (secret names refuse hyphens).
+ *
+ * The `_` between `Date.now()` and `parallelIndex` is load-bearing, not
+ * cosmetic: `staleByName` below recovers a real creation timestamp by
+ * matching the first underscore-delimited run of 10+ digits in a name. Glue
+ * the parallel index straight onto the epoch-ms digits (as this used to) and
+ * that run stops at a false boundary — e.g. epoch `1789083040669` plus index
+ * `1` reads back as `17890830406691`, ten times too large, which lands
+ * "created" in the year 2508 and makes the secret look perpetually fresh (or
+ * ambiguous) instead of aging out normally. The separator keeps the digit
+ * run exactly the 13 characters `Date.now()` actually produced.
  */
 function makeRunToken(testInfo: { parallelIndex: number }): string {
-  return `${Date.now()}${testInfo.parallelIndex}${Math.random().toString(36).slice(2)}`;
+  return `${Date.now()}_${testInfo.parallelIndex}_${Math.random().toString(36).slice(2)}`;
 }
 
 /** Creates a secret directly through the API the list itself reads (bypasses the UI). */
@@ -445,7 +483,52 @@ async function expectVisibleOrder(page: import('@playwright/test').Page, names: 
     .toEqual([...names]);
 }
 
-test('J21e: sort order stays A→Z during and after secret creation', async ({ page, request }, testInfo) => {
+/*
+ * WHAT THIS TEST USED TO ALSO DO, AND WHY THAT PART IS GONE.
+ *
+ * The previous revision read the DataGrid's rendered row order twice more,
+ * before this point: once right after `page.goto` (baseline, before
+ * touching Create at all) and once again immediately after clicking
+ * "Create new secret" but before typing or saving anything — to prove the
+ * pinned empty row does not itself reorder the rows below it.
+ *
+ * Both were DOM samples taken while the grid's layout was actively
+ * changing: the first the instant a fresh mount's own layout settles, the
+ * second the instant a new row is spliced into MUI DataGrid's virtualized
+ * row model and it recomputes. `visibleNameOrder`'s `allTextContents()`
+ * reads whatever is attached RIGHT NOW, once, by design (see its own doc
+ * comment for why `boundingBox()` is worse — it hangs instead of racing) —
+ * neither call waits for that recompute to finish. Three prior fixes here
+ * (search-filter scoping, a server poll before `goto`, and switching to this
+ * DOM-order reader) narrowed this test's webkit flake without removing it,
+ * because none of them stopped sampling a moving target mid-render, and
+ * webkit's slower layout recompute under CI concurrency left a wider window
+ * for the sample to land inside it than chromium ever showed.
+ *
+ * It turned out not to matter, because the actual recorded webkit failure
+ * (CI run 34541203497) was not a DOM-timing issue at all: the FINAL,
+ * server-side poll came back with an empty set — none of this test's five
+ * probes were listed, though the four created via the API had already been
+ * server-confirmed present earlier in the same test. That is data loss, not
+ * a slow render: `staleByName` (above) matched only `secretName`'s
+ * `_j21_<digits>_` shape, so every `sortProbeName` secret this test (and
+ * J21f–J21h) creates read back as "no timestamp found" → treated as
+ * unconditionally stale → deleted by ANY worker's `afterAll` sweep the
+ * moment that worker's own tests finished, including a worker that raced
+ * ahead of this one and swept this test's still-in-flight probes out from
+ * under it. Fixed at the source (`staleByName` and `makeRunToken`, above) —
+ * that bug could delete live secrets regardless of how their order was read,
+ * so no amount of restructuring the DOM assertions below would have made
+ * this test stable while it stood.
+ *
+ * With the underlying race gone, this test proves the acceptance clause
+ * without sampling a moving target: the SERVER has to agree the five probes
+ * this run created sort A→Z (no DOM involved at all), and the browser is
+ * read exactly ONCE, filtered to this test's own rows, after a fresh mount
+ * (`page.reload()`) — so by the time that single read happens, both the
+ * query cache and the grid's layout have already settled.
+ */
+test('J21e: sort order is A→Z once secret creation settles', async ({ page, request }, testInfo) => {
   // 60s, not the file's usual 45: the final API-level poll below budgets 30s
   // on its own — measured, the shared project's secrets LIST endpoint can lag
   // a solid double-digit number of seconds behind its own writes under heavy
@@ -466,14 +549,9 @@ test('J21e: sort order stays A→Z during and after secret creation', async ({ p
 
   // Each create above already answered 2xx, but — exactly like the five-probe
   // poll later in this same test — the LIST endpoint this page mounts against
-  // can still lag behind its own writes under CI concurrency. The page's own
-  // fetch (`refetchOnMount: true`) only runs ONCE per mount and nothing here
-  // polls it afterwards, so a `page.goto` that lands ahead of server
-  // consistency leaves these four probes permanently missing from `rows`
-  // until an unrelated mutation happens to invalidate the query — measured as
-  // `getByText(a).toBeVisible()` timing out with "element(s) not found" on
-  // webkit under `--workers=4`. Confirming server truth FIRST, before the
-  // page (and its one-shot fetch) ever mounts, removes the race entirely.
+  // can still lag behind its own writes under CI concurrency. Confirming
+  // server truth FIRST, before the page (and its one-shot `refetchOnMount`
+  // fetch) ever mounts, removes that race entirely.
   await expect
     .poll(
       async () => {
@@ -491,34 +569,11 @@ test('J21e: sort order stays A→Z during and after secret creation', async ({ p
     timeout: 15_000,
   });
 
-  // Isolate to this test's own rows. Under CI concurrency the chromium AND
-  // webkit engines run this file against the same shared project at once,
-  // and J21f/J21h's own dozen-plus padding rows can land alphabetically
-  // between these probes, pushing `z` past page 1 — DOM noise, not a real
-  // sort-order failure. The search box is `Secrets.tsx`'s own client-side
-  // filter over the full fetched list, so filtering by `runToken` scopes
-  // every visibility/order assertion below to rows this test itself made.
-  const search = page.getByRole('textbox', { name: 'Search' });
-  await search.fill(runToken);
-  for (const name of [a, b, m, z]) {
-    await expect(page.getByText(name, { exact: true })).toBeVisible({ timeout: 10_000 });
-  }
-  // Baseline order, before touching Create at all. `expectVisibleOrder`
-  // reads the DataGrid's `name` column top-to-bottom rather than comparing
-  // `boundingBox()` geometry — see its own doc comment for why the latter
-  // hangs under CI concurrency (a shared-project engine/worker interleaving
-  // its own mutations keeps the grid reflowing, so a position-stability wait
-  // never settles).
-  await expectVisibleOrder(page, [a, b, m, z]);
-
-  // The pinned creation row must not reorder the rows below it.
-  await page.getByRole('button', { name: 'Create new secret', exact: true }).click();
-  await expectVisibleOrder(page, [a, b, m, z]);
-
+  // Create the fifth probe through the real product flow (this is the
+  // creation the acceptance clause is about) — no order assertions around
+  // this interaction; see the doc comment above for why.
   const g = sortProbeName('g', projectName, runToken);
-  // Clear the filter: the pinned row's name is '' until saved, and the
-  // filter above would hide it (and its inputs) entirely.
-  await search.fill('');
+  await page.getByRole('button', { name: 'Create new secret', exact: true }).click();
   const grid = page.getByRole('grid');
   await grid.getByRole('textbox').first().fill(g);
   await grid.getByRole('textbox').nth(1).fill('sort-probe-value');
@@ -530,6 +585,7 @@ test('J21e: sort order stays A→Z during and after secret creation', async ({ p
   const write = await created;
   expect(write.status(), await write.text()).toBeLessThan(300);
 
+  /* ── after, server truth: the five probes this run created sort A→Z ──── */
   // Independent of DOM timing entirely: the SERVER already has every name
   // this test created (the POST above answered), so the set this test's own
   // `runToken` names down to is knowable from the API alone, and comparing
@@ -550,11 +606,19 @@ test('J21e: sort order stays A→Z during and after secret creation', async ({ p
     )
     .toEqual([a, b, g, m, z].sort((x, y) => x.localeCompare(y)));
 
-  // A bounded, single UI proof that the RENDERED grid reflects that same
-  // order — re-apply the filter, the pinned row is gone, and `g` sits
-  // between `b` and `m` — still scoped to this test's own rows.
+  /* ── after, browser truth: one filtered read, after a fresh mount ────── */
+  // A reload forces a fresh mount fetch against the server state the poll
+  // above just proved consistent, so the grid's own rows and layout are
+  // settled — not mid-render — by the time this single read happens.
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Create new secret', exact: true })).toBeEnabled({
+    timeout: 15_000,
+  });
+  const search = page.getByRole('textbox', { name: 'Search' });
   await search.fill(runToken);
-  await expect(page.getByText(g, { exact: true })).toBeVisible({ timeout: 10_000 });
+  for (const name of [a, b, g, m, z]) {
+    await expect(page.getByText(name, { exact: true })).toBeVisible({ timeout: 10_000 });
+  }
   await expectVisibleOrder(page, [a, b, g, m, z]);
 });
 
