@@ -346,6 +346,213 @@ test('J21: settings: create secret', async ({ page }, testInfo) => {
 });
 
 /* ────────────────────────────────────────────────────────────────────────
+ * onetest package w1-secrets (`S/port/pkgs/w1-secrets.md`) — the sort order
+ * the list keeps (new rows pinned, existing rows always A→Z by
+ * `SecretsTable.tsx`'s `sortedRows`) around a creation, and the one place
+ * that sort/pagination combination silently drops the creation row.
+ *
+ * All four probe names route through `secretName`-like helpers below so
+ * they carry this engine's `_sec` suffix and land in the SAME `createdHere`
+ * set the sweep above already reads — no separate cleanup needed.
+ * ──────────────────────────────────────────────────────────────────────── */
+
+/** A name that sorts by `label` first (`sort_<label>_...`), for ordering assertions. */
+function sortProbeName(label: string, projectName: string): string {
+  const name = `${AUTOTEST_PREFIX}sort_${label}_${Date.now()}${engineSuffix(projectName)}`;
+  createdHere.add(name);
+  return name;
+}
+
+/** Creates a secret directly through the API the list itself reads (bypasses the UI). */
+async function createSecretDirect(
+  request: import('@playwright/test').APIRequestContext,
+  name: string,
+  value: string,
+): Promise<void> {
+  const resp = await request.post(CLIENT_LIST_URL, { data: { name, value } });
+  expect(resp.status(), `create ${name} directly`).toBeLessThan(300);
+}
+
+/** The vertical position of the row carrying `name`'s TEXT, for order assertions across rows. */
+async function rowY(page: import('@playwright/test').Page, text: string): Promise<number> {
+  const box = await page.getByText(text, { exact: true }).first().boundingBox();
+  expect(box, `${text} must be rendered somewhere on screen to read its position`).not.toBeNull();
+  return box!.y;
+}
+
+test('J21e: sort order stays A→Z during and after secret creation', async ({ page, request }, testInfo) => {
+  test.setTimeout(45_000);
+  const projectName = testInfo.project.name;
+  const a = sortProbeName('a', projectName);
+  const b = sortProbeName('b', projectName);
+  const m = sortProbeName('m', projectName);
+  const z = sortProbeName('z', projectName);
+  for (const name of [a, b, m, z]) {
+    await createSecretDirect(request, name, 'sort-probe-value');
+  }
+
+  await page.goto(SECRETS_PAGE);
+  await expect(page.getByRole('button', { name: 'Create new secret', exact: true })).toBeEnabled({
+    timeout: 15_000,
+  });
+  for (const name of [a, b, m, z]) {
+    await expect(page.getByText(name, { exact: true })).toBeVisible({ timeout: 10_000 });
+  }
+  // Baseline order, before touching Create at all.
+  expect(await rowY(page, a)).toBeLessThan(await rowY(page, b));
+  expect(await rowY(page, b)).toBeLessThan(await rowY(page, m));
+  expect(await rowY(page, m)).toBeLessThan(await rowY(page, z));
+
+  // The pinned creation row must not reorder the rows below it.
+  await page.getByRole('button', { name: 'Create new secret', exact: true }).click();
+  expect(await rowY(page, a)).toBeLessThan(await rowY(page, b));
+  expect(await rowY(page, b)).toBeLessThan(await rowY(page, m));
+  expect(await rowY(page, m)).toBeLessThan(await rowY(page, z));
+
+  const g = sortProbeName('g', projectName);
+  const grid = page.getByRole('grid');
+  await grid.getByRole('textbox').first().fill(g);
+  await grid.getByRole('textbox').nth(1).fill('sort-probe-value');
+  const created = page.waitForResponse(
+    (res) => res.request().method() === 'POST' && res.url().includes('/secrets/secrets/default/'),
+    { timeout: 20_000 },
+  );
+  await grid.getByRole('button', { name: 'Save', exact: true }).click();
+  const write = await created;
+  expect(write.status(), await write.text()).toBeLessThan(300);
+
+  // After creation: the pinned row is gone, and `g` sits between `b` and `m`.
+  await expect(page.getByText(g, { exact: true })).toBeVisible({ timeout: 10_000 });
+  expect(await rowY(page, a)).toBeLessThan(await rowY(page, b));
+  expect(await rowY(page, b)).toBeLessThan(await rowY(page, g));
+  expect(await rowY(page, g)).toBeLessThan(await rowY(page, m));
+  expect(await rowY(page, m)).toBeLessThan(await rowY(page, z));
+});
+
+test('J21f: existing rows stay A→Z when Create is clicked from page 2', async ({ page, request }, testInfo) => {
+  test.setTimeout(45_000);
+  const projectName = testInfo.project.name;
+  // 12 padding rows — comfortably over one 10-row page — plus two probes
+  // whose relative order this test actually reads.
+  const first = sortProbeName('page2a', projectName);
+  const last = sortProbeName('page2z', projectName);
+  await createSecretDirect(request, first, 'v');
+  for (let i = 0; i < 10; i++) {
+    await createSecretDirect(request, sortProbeName(`page2mid${i}`, projectName), 'v');
+  }
+  await createSecretDirect(request, last, 'v');
+
+  await page.goto(SECRETS_PAGE);
+  await expect(page.getByRole('button', { name: 'Create new secret', exact: true })).toBeEnabled({
+    timeout: 15_000,
+  });
+  await page.getByRole('button', { name: 'Go to next page' }).click();
+  await expect(page.getByText('Page 2 of', { exact: false })).toBeVisible({ timeout: 10_000 });
+
+  await page.getByRole('button', { name: 'Create new secret', exact: true }).click();
+
+  // Whichever page is now showing, `page2-a` sorts before `page2-mid*`, which
+  // sorts before `page2-z` — clicking Create must not switch this to
+  // creation-date order.
+  const aVisible = await page.getByText(first, { exact: true }).isVisible().catch(() => false);
+  const zVisible = await page.getByText(last, { exact: true }).isVisible().catch(() => false);
+  if (aVisible && zVisible) {
+    expect(await rowY(page, first)).toBeLessThan(await rowY(page, last));
+  }
+});
+
+/*
+ * PRODUCT GAP. `Secrets.tsx`'s `onAdd` (both the header's `+` button and the
+ * `?createSecret=1` flag) only ever does `setRows((prev) => [newRow, ...prev])`
+ * — it never resets `SecretsTable.tsx`'s own `currentPage` state. That
+ * component's `sortedRows` puts every new row FIRST, so on page 2
+ * `paginatedRows = sortedRows.slice(pageSize, pageSize * 2)` skips index 0
+ * entirely: the new row is pinned at the very front of an array whose first
+ * `pageSize` entries are exactly what page 2 does NOT render. Clicking
+ * Create from page 2 therefore neither shows the input on the current page
+ * nor navigates to page 1 — the row is created in state but rendered
+ * nowhere until the reader manually pages back to page 1.
+ */
+test('J21g: the creation input is not visible when Create is clicked from page 2 — product gap', async ({
+  page,
+  request,
+}, testInfo) => {
+  test.fail(
+    true,
+    'ELITEA-0990: product gap — onAdd never resets pagination to page 1, and page 2 slices past the pinned new row',
+  );
+  test.setTimeout(30_000);
+  const projectName = testInfo.project.name;
+  for (let i = 0; i < 12; i++) {
+    await createSecretDirect(request, sortProbeName(`p2vis${i}`, projectName), 'v');
+  }
+
+  await page.goto(SECRETS_PAGE);
+  await expect(page.getByRole('button', { name: 'Create new secret', exact: true })).toBeEnabled({
+    timeout: 15_000,
+  });
+  await page.getByRole('button', { name: 'Go to next page' }).click();
+  await expect(page.getByText('Page 2 of', { exact: false })).toBeVisible({ timeout: 10_000 });
+
+  await page.getByRole('button', { name: 'Create new secret', exact: true }).click();
+  // SHOULD hold: an empty, focusable name input appears — on this page, or
+  // after an automatic hop back to page 1. Neither happens.
+  const grid = page.getByRole('grid');
+  await expect(grid.getByRole('textbox').first()).toBeVisible({ timeout: 3_000 });
+});
+
+test('J21h: a newly created secret is immediately visible at its alphabetical position, across pages', async ({
+  page,
+  request,
+}, testInfo) => {
+  test.setTimeout(45_000);
+  const projectName = testInfo.project.name;
+  // 15 padding rows sorting well before the probe, forcing pagination.
+  for (let i = 0; i < 15; i++) {
+    await createSecretDirect(request, sortProbeName(`zpad${String(i).padStart(2, '0')}`, projectName), 'v');
+  }
+
+  await page.goto(SECRETS_PAGE);
+  await expect(page.getByRole('button', { name: 'Create new secret', exact: true })).toBeEnabled({
+    timeout: 15_000,
+  });
+
+  // Created from page 1, where the pinned row is always visible.
+  const zebra = sortProbeName('zzzzlast', projectName);
+  await page.getByRole('button', { name: 'Create new secret', exact: true }).click();
+  const grid = page.getByRole('grid');
+  await grid.getByRole('textbox').first().fill(zebra);
+  await grid.getByRole('textbox').nth(1).fill('v');
+  const created = page.waitForResponse(
+    (res) => res.request().method() === 'POST' && res.url().includes('/secrets/secrets/default/'),
+    { timeout: 20_000 },
+  );
+  await grid.getByRole('button', { name: 'Save', exact: true }).click();
+  const write = await created;
+  expect(write.status(), await write.text()).toBeLessThan(300);
+
+  // The server has it the instant the POST answers; the on-screen list is a
+  // query-invalidation refetch behind it. Waiting on the SERVER's own read
+  // (not a fixed sleep) is what makes the "Go to last page" click below land
+  // on the page the settled list actually has, without a reload.
+  await expect
+    .poll(
+      async () => {
+        const resp = await page.request.get(CLIENT_LIST_URL);
+        const rows = (await resp.json()) as { name: string }[];
+        return rows.some((r) => r.name === zebra);
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(true);
+
+  // No reload — page to the LAST page and find it there, at the tail of the
+  // sort, without needing to re-search or re-sort.
+  await page.getByRole('button', { name: 'Go to last page' }).click();
+  await expect(page.getByText(zebra, { exact: true })).toBeVisible({ timeout: 10_000 });
+});
+
+/* ────────────────────────────────────────────────────────────────────────
  * Worker-scoped safety net: sweep the `autotest_*_<engine>_sec` secrets THIS
  * worker left behind, plus any old enough to belong to no live run.
  *
