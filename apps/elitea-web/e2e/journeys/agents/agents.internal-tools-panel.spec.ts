@@ -39,6 +39,7 @@ function uniqueName(stem: string): string {
  * least the three named switches (Smart Tools Selection, Python sandbox,
  * Data Analysis), each carrying its own real `role="switch"` control.
  */
+/* onetest: ELITEA-0141 — the toolkits section shows Smart Tools Selection, Python sandbox and Data Analysis switches */
 test('J14c-tools: the toolkits section shows Smart Tools Selection, Python sandbox and Data Analysis switches', async ({
   page,
   request,

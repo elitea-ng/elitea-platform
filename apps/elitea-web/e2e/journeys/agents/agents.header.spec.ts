@@ -35,6 +35,7 @@ function uniqueName(stem: string): string {
  * header, next to a back arrow, distinct from the editable Name field
  * further down the form.
  */
+/* onetest: ELITEA-0106 — the agent name is shown in a page header next to a back arrow */
 test('J-header: [PRODUCT GAP] the agent name is shown in a page header next to a back arrow', async ({
   page,
   request,
@@ -66,6 +67,7 @@ test('J-header: [PRODUCT GAP] the agent name is shown in a page header next to a
  * ELITEA-0109 — [PRODUCT GAP]. That header should stay fixed at the top
  * while the configuration content below it scrolls.
  */
+/* onetest: ELITEA-0109 — the header stays fixed at the top while the configuration scrolls */
 test('J-header: [PRODUCT GAP] the header stays fixed at the top while the configuration scrolls', async ({
   page,
   request,

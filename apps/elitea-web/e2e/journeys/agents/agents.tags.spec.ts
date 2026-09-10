@@ -119,6 +119,7 @@ async function saveAndWaitForVersionPut(page: Page): Promise<void> {
  * ELITEA-0037 — an agent that already carries ONE saved tag gets two more
  * brand-new tags added in the SAME save, and all three survive a reload.
  */
+/* onetest: ELITEA-0037 — an agent with one saved tag keeps it when two new tags are added in one save */
 test('J14c-tags: an agent with one saved tag keeps it when two new tags are added in one save', async ({
   page,
   request,
@@ -155,6 +156,7 @@ test('J14c-tags: an agent with one saved tag keeps it when two new tags are adde
  * ELITEA-0038 — an agent with NO tags gets three brand-new (system-new) tags
  * added in one save; all three persist.
  */
+/* onetest: ELITEA-0038 — an agent with no tags persists three brand-new tags added in one save */
 test('J14c-tags: an agent with no tags persists three brand-new tags added in one save', async ({ page, request }) => {
   const tag1 = uniqueStem('alpha');
   const tag2 = uniqueStem('beta');
@@ -191,6 +193,7 @@ test('J14c-tags: an agent with no tags persists three brand-new tags added in on
  * mixing SYSTEM-EXISTING tags (selected from the autocomplete's own option
  * list) and SYSTEM-NEW tags (typed freeSolo) in one save.
  */
+/* onetest: ELITEA-0039 — mixing system-existing and system-new tags in one save persists all of them */
 test('J14c-tags: mixing system-existing and system-new tags in one save persists all of them', async ({
   page,
   request,

@@ -53,6 +53,7 @@ async function openAgentEditor(page: Page, agentId: string): Promise<void> {
  * into it and into the Welcome Message and saving persists BOTH across a
  * reload.
  */
+/* onetest: ELITEA-0060 — clicking + Starter adds a real row, and both it and the welcome message persist */
 test('J14c-fs: clicking + Starter adds a real row, and both it and the welcome message persist', async ({
   page,
   request,
@@ -127,6 +128,7 @@ test('J14c-fs: clicking + Starter adds a real row, and both it and the welcome m
  * past 768 characters in the full-screen editor is silently accepted with
  * no counter and no warning at all.
  */
+/* onetest: ELITEA-0059, ELITEA-0062, ELITEA-0064 — the full-screen Welcome Message editor enforces the 768-char limit and shows a counter */
 test('J14c-fs: [PRODUCT GAP] the full-screen Welcome Message editor enforces the 768-char limit and shows a counter', async ({
   page,
   request,

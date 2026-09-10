@@ -104,6 +104,7 @@ async function openVersionDeleteFlow(page: Page, parentAgentId: string, versionI
  * click. What actually opens is the plain, single-purpose delete-confirm
  * dialog, which carries no version selector at all.
  */
+/* onetest: ELITEA-0043 — deleting an in-use version opens the replacement modal, which stays open on inner clicks */
 test('J-verrepl: [PRODUCT GAP] deleting an in-use version opens the replacement modal, which stays open on inner clicks', async ({
   page,
   request,
@@ -140,6 +141,7 @@ test('J-verrepl: [PRODUCT GAP] deleting an in-use version opens the replacement 
  * to the replacement AND remove the in-use version. Neither can happen: the
  * modal that would offer the replacement picker never opens.
  */
+/* onetest: ELITEA-0041 — Replace & Delete migrates the dependent reference and removes the version */
 test('J-verrepl: [PRODUCT GAP] Replace & Delete migrates the dependent reference and removes the version', async ({
   page,
   request,
@@ -182,6 +184,7 @@ test('J-verrepl: [PRODUCT GAP] Replace & Delete migrates the dependent reference
  * ELITEA-0042 — clicking Cancel in the replacement modal must close it
  * without deleting the version or changing the dependent's reference.
  */
+/* onetest: ELITEA-0042 — Cancel in the replacement modal closes it without deleting the in-use version */
 test('J-verrepl: [PRODUCT GAP] Cancel in the replacement modal closes it without deleting the in-use version', async ({
   page,
   request,

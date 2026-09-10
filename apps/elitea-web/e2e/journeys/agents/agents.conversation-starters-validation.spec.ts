@@ -43,6 +43,7 @@ function uniqueName(stem: string): string {
  * full-page crash or a `s.trim is not a function` console error, and the
  * valid string among the four entries must still be visible.
  */
+/* onetest: ELITEA-0092 — an agent with pre-existing non-string conversation_starters opens without crashing */
 test('J14c-cs: an agent with pre-existing non-string conversation_starters opens without crashing', async ({
   page,
   request,
@@ -101,6 +102,7 @@ test('J14c-cs: an agent with pre-existing non-string conversation_starters opens
  * already exercise the positive path on every run; this is the direct,
  * minimal proof against the CREATE route itself.
  */
+/* onetest: ELITEA-0094 — the create API accepts and returns string-only conversation_starters unchanged */
 test('J14c-cs: the create API accepts and returns string-only conversation_starters unchanged', async ({
   request,
 }) => {
@@ -129,6 +131,7 @@ test('J14c-cs: the create API accepts and returns string-only conversation_start
  * persists them, per the handler read cited in this file's module doc
  * comment.
  */
+/* onetest: ELITEA-0090 — the create API rejects non-string conversation_starters entries */
 test('J14c-cs: [PRODUCT GAP] the create API rejects non-string conversation_starters entries', async ({
   request,
 }) => {
@@ -164,6 +167,7 @@ test('J14c-cs: [PRODUCT GAP] the create API rejects non-string conversation_star
  * non-string entry should be refused, leaving the previously-stored valid
  * value untouched. It is accepted and overwrites it instead.
  */
+/* onetest: ELITEA-0093 — the version-update API rejects non-string conversation_starters entries */
 test('J14c-cs: [PRODUCT GAP] the version-update API rejects non-string conversation_starters entries', async ({
   request,
 }) => {
