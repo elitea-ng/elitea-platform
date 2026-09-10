@@ -112,3 +112,45 @@ The earlier execution still lacks a projection marker after deployment and retri
 The next UI run displays the earlier result; a fresh execution is not yet established by the evidence.
 Do not count this replay as proof that the projection-marker correction completes a new run.
 Further checks must cover fresh execution, recovery of the earlier row, and command retirement.
+
+## Fresh test actions and configured model defaults
+
+The former test identity hashes only the toolkit, arguments, actor, and runtime context.
+Two deliberate clicks therefore reuse one execution and its previous result.
+`internal/application/toolkitcalltool/service.go` now includes a caller request ID in this hash.
+An absent request ID creates a new action through the existing ID generator.
+`internal/api/v2/toolkitrun/response.go` accepts the bounded optional `request_id` field.
+The UI API in `features/toolkits/api/toolkitTestRun.ts` creates one UUID per action.
+An explicit retry can retain that UUID.
+HTTP retries retain the serialized request body.
+This changes admission identity, not the Rust execution contract or database schema.
+
+The current UI reference is `projects/EliteaUI/src/components/EmbeddingModelSelect.jsx`.
+It obtains the configured project embedding default and marks automatic selection separately from user edits.
+The new `features/toolkits/ui/form/ToolBase/ModelSelectField.tsx` uses the existing model catalogue default.
+It fills an absent selection and preserves an existing selection.
+It passes `isAutoSelect` through the existing form callback.
+The selector now has an accessible label.
+The SDK branch defaults still require form initialization and persistence checks.
+
+Twenty-seven targeted UI tests pass for the API and toolkit form.
+The Go `toolkitcalltool` and `toolkitrun` packages pass.
+The UI type check and focused lint pass.
+The type check also exposes two incorrect assertions in the earlier streaming test.
+Those assertions now use the existing `ToolAction` type.
+
+Main image `sha256:c2b2aa35cf833aa686075d74ba7e7a72044cfbf96c07ecbdb51d5994901f552e` contains the action-identity repair.
+UI image `sha256:d6eebfede3195e487e7e245c68113907e34fdfb2dd27f4667b053500ece27a0f` contains the matching caller and model selector.
+Both deployments retain the existing environment and databases.
+The strict active-claim guard remains enabled.
+
+Playwright selects `Get issues` in toolkit 30 and presses `RUN TOOL` twice.
+The first request ID is `59a60b0c-167b-4f4c-9cf0-6f4d84c47b06`.
+Its execution is `be243c6773eda27af25cb99f73567b92`.
+PostgreSQL confirms `SUCCEEDED`, a populated projection marker, and committed `SUCCEEDED` settlement.
+The second request ID is `1236982f-0acb-414e-a03a-aa3b4b590e0d`.
+It creates distinct execution `463616ca6de1a5820af031ff90bf10e1` and returns 100 public repository entries.
+The browser displays `text-embedding-ada-002` and the saved pgvector configuration.
+This proves fresh read execution, not authenticated credential use or the complete toolkit lifecycle.
+The earlier execution `f4fe3c68e17ec2ed38c28f12b2da8719` still requires recovery.
+PostgreSQL also confirms the second execution succeeds with its projection marker and committed settlement.
