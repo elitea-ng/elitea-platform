@@ -50,8 +50,18 @@ function envOr(name: string, fallback: string): string {
   return value === '' ? fallback : value;
 }
 
-/** The five toolkit types the legacy suite parametrises over. */
-export const LIVE_TOOLKIT_IDS = ['github', 'jira', 'gitlab', 'bitbucket', 'confluence'] as const;
+/**
+ * The toolkit types the legacy suite parametrises over.
+ *
+ * `aha`/`sharepoint` were added for the P8-toolkits-A wave port (83 legacy
+ * cases in `toolkits-credentials/{aha-toolkit,sharepoint}` — see
+ * `S/port/ledger-P8-toolkits-A.tsv`). Both providers' actual tool execution
+ * cases are LIVE-ONLY: this stack's `ELITEA_TOOLKIT_CHECK_ALLOWLIST` refuses
+ * every external host before the dial, so no fake credential can prove a
+ * real tool ran. Each carries only its highest-value READ probe here — the
+ * rest of each provider's case set is ledgered, not written, per that file.
+ */
+export const LIVE_TOOLKIT_IDS = ['github', 'jira', 'gitlab', 'bitbucket', 'confluence', 'aha', 'sharepoint'] as const;
 
 export type LiveToolkitId = (typeof LIVE_TOOLKIT_IDS)[number];
 
@@ -275,6 +285,83 @@ export const LIVE_TOOLKIT_PROVIDERS: Readonly<Record<LiveToolkitId, LiveToolkitP
     probeEvidence: () => env('E2E_LIVE_CONFLUENCE_SPACE'),
     chatPrompt: `Use the list_pages_with_label tool to list pages with label '${envOr('E2E_LIVE_CONFLUENCE_LABEL', 'test')}' in Confluence`,
     answerKeywords: ['page', 'label'],
+  },
+
+  aha: {
+    id: 'aha',
+    displayName: 'Aha!',
+    requiredEnv: ['E2E_LIVE_AHA_BASE_URL', 'E2E_LIVE_AHA_API_KEY', 'E2E_LIVE_AHA_PRODUCT_NAME'],
+    optionalEnv: [],
+    credentialData: () => ({
+      base_url: env('E2E_LIVE_AHA_BASE_URL'),
+      api_key: env('E2E_LIVE_AHA_API_KEY'),
+    }),
+    brokenCredentialData: () => ({
+      base_url: env('E2E_LIVE_AHA_BASE_URL'),
+      api_key: WRONG_SECRET,
+    }),
+    toolkitSettings: (eliteaTitle) => ({
+      aha_configuration: { elitea_title: eliteaTitle, private: true },
+      selected_tools: ['find_project'],
+    }),
+    // `find_project` (ELITEA-2518) takes no required arguments, which makes it
+    // the cheapest real read this provider offers — a product/company search
+    // with no filter, over `GET /elitea_core/toolkits/prompt_lib/{p}`'s own
+    // served schema for `aha` (measured against the running stack directly:
+    // the frontend's bundled `servedToolkitTypeSettings.json` fixture is
+    // stale relative to it and must not be trusted for this type).
+    probeTool: 'find_project',
+    probeToolArgs: () => ({}),
+    probePrompt: 'Use the find_project tool and report the product names it returns.',
+    probeEvidence: () => env('E2E_LIVE_AHA_PRODUCT_NAME'),
+    chatPrompt: 'List the Aha! products available to this account',
+    answerKeywords: ['product', 'aha'],
+  },
+
+  sharepoint: {
+    id: 'sharepoint',
+    displayName: 'SharePoint',
+    requiredEnv: [
+      'E2E_LIVE_SHAREPOINT_CLIENT_ID',
+      'E2E_LIVE_SHAREPOINT_CLIENT_SECRET',
+      'E2E_LIVE_SHAREPOINT_SITE_URL',
+      'E2E_LIVE_SHAREPOINT_NOTEBOOK_NAME',
+    ],
+    optionalEnv: [],
+    // App-only auth (client_id + client_secret + site_url) — the same
+    // credential shape ELITEA-1250 assumes ("REST API access"), and the one
+    // that needs no interactive OAuth consent screen. The Delegated auth
+    // subsection (oauth_discovery_endpoint/scopes/auto_refresh_token) is a
+    // real second credential shape this file does not attempt: it requires a
+    // human consent flow no scripted lane can drive.
+    credentialData: () => ({
+      client_id: env('E2E_LIVE_SHAREPOINT_CLIENT_ID'),
+      client_secret: env('E2E_LIVE_SHAREPOINT_CLIENT_SECRET'),
+      site_url: env('E2E_LIVE_SHAREPOINT_SITE_URL'),
+    }),
+    brokenCredentialData: () => ({
+      client_id: env('E2E_LIVE_SHAREPOINT_CLIENT_ID'),
+      client_secret: WRONG_SECRET,
+      site_url: env('E2E_LIVE_SHAREPOINT_SITE_URL'),
+    }),
+    toolkitSettings: (eliteaTitle) => ({
+      sharepoint_configuration: { elitea_title: eliteaTitle, private: true },
+      selected_tools: ['onenote_get_notebooks'],
+    }),
+    // The cheapest real OneNote read this provider offers: no required
+    // arguments (measured against the running stack's own
+    // `GET /elitea_core/toolkits/prompt_lib/{p}` response for `sharepoint`,
+    // which — unlike the frontend's stale bundled fixture — really does carry
+    // every `onenote_*` tool). The 8 other legacy SharePoint cases each need a
+    // different real OneNote fixture (attachments, multi-section notebooks,
+    // page CRUD, index_data's `include_onenote`/`onenote_filter`, a Pipeline
+    // Toolkit Call node) and are ledgered rather than written here.
+    probeTool: 'onenote_get_notebooks',
+    probeToolArgs: () => ({}),
+    probePrompt: 'Use the onenote_get_notebooks tool and report the display name of every notebook it returns.',
+    probeEvidence: () => env('E2E_LIVE_SHAREPOINT_NOTEBOOK_NAME'),
+    chatPrompt: 'List the OneNote notebooks on this SharePoint site',
+    answerKeywords: ['notebook', 'onenote'],
   },
 };
 

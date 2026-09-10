@@ -279,6 +279,8 @@ const LIVE_TOOLKIT_SPECS: Record<LiveToolkitId, RegExp> = {
   gitlab: /live\/toolkits\.gitlab\.spec\.ts/,
   bitbucket: /live\/toolkits\.bitbucket\.spec\.ts/,
   confluence: /live\/toolkits\.confluence\.spec\.ts/,
+  aha: /live\/toolkits\.aha\.spec\.ts/,
+  sharepoint: /live\/toolkits\.sharepoint\.spec\.ts/,
 };
 
 /** Both GitHub-gated: the two legacy agent files use a GitHub toolkit. */
