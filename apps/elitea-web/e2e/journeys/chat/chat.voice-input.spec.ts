@@ -251,7 +251,7 @@ test('the Speaking Mode control is disabled while dictation is recording', async
 
   test.fail(
     true,
-    'ELITEA-1295: product gap — VoiceButton.onRecordingChange is wired to a no-op ' +
+    'ELITEA-1295 (#932): product gap — VoiceButton.onRecordingChange is wired to a no-op ' +
       '(ChatBoxInputSlots.tsx) and voice.isRecording is never supplied (ChatBox.tsx), ' +
       'so the Speaking Mode wave icon never disables while dictation is recording',
   );
@@ -283,7 +283,7 @@ test('a denied microphone permission surfaces a readable error toast', async ({ 
   await mic.click();
   await fireError(page, 'not-allowed');
 
-  test.fail(true, 'ELITEA-1324: product gap — no toast/snackbar surfaces a mic-permission error; VoiceButton.onError has no visible caller');
+  test.fail(true, 'ELITEA-1324 (#934): product gap — no toast/snackbar surfaces a mic-permission error; VoiceButton.onError has no visible caller');
   await expect(page.getByRole('alert')).toBeVisible({ timeout: 5_000 });
 });
 
@@ -337,7 +337,7 @@ test('voice dictation inserts at the last edited position, not a bare click', as
 
   test.fail(
     true,
-    'ELITEA-1317: product gap — VoiceButton captures the cursor position at the moment ' +
+    'ELITEA-1317 (#933): product gap — VoiceButton captures the cursor position at the moment ' +
       'the mic is clicked (VoiceButton.tsx handleStartRecording), including a position ' +
       'reached by a bare mouse click with no edit, so dictation lands mid-text instead ' +
       'of at the last EDITED position',

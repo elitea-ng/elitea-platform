@@ -230,7 +230,7 @@ test('RES06: a card link shows a hover highlight — no default link exists to h
 });
 
 /* ────────────────────────────────────────────────────────────────────────
- * onetest: ELITEA-0971 — PRODUCT GAP: the version tooltip is DESIGNED to
+ * onetest: ELITEA-0971 (#892) — PRODUCT GAP: the version tooltip is DESIGNED to
  * always be empty. `useResourcesConfig.ts` hardcodes `plugins: []` (issue
  * #219 — `GET /admin/system_info/prompt_lib` has no consumer here since this
  * service has no plugin bus to report on), and `hasVersion` gates the whole

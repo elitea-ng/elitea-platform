@@ -201,7 +201,7 @@ test('Speaking Mode works in a brand new, empty chat and its first utterance aut
 
   test.fail(
     true,
-    'ELITEA-1294: product gap — the browser-fallback ASR path never calls scheduleSend ' +
+    'ELITEA-1294 (#930): product gap — the browser-fallback ASR path never calls scheduleSend ' +
       'from a transcript (useSpeakingModeLoop.ts wires it only from the server-ASR ' +
       'onTranscriptDone and from notifyManualEdit), so a spoken utterance alone never auto-sends',
   );
@@ -234,7 +234,7 @@ test('a message auto-sends after silence, with no click on Send', async ({ page 
 
     test.fail(
       true,
-      'ELITEA-1298: product gap — the browser-fallback ASR path never calls scheduleSend ' +
+      'ELITEA-1298 (#930): product gap — the browser-fallback ASR path never calls scheduleSend ' +
         'from a transcript alone; see ELITEA-1294\'s note in this file for the exact wiring',
     );
     // No Send click anywhere in this test — the auto-send timer is what must
@@ -287,7 +287,7 @@ test('a mid-sentence pause does not auto-send early; the full utterance sends as
 
     test.fail(
       true,
-      'ELITEA-1291: product gap — see ELITEA-1298\'s note in this file: nothing ' +
+      'ELITEA-1291 (#930): product gap — see ELITEA-1298\'s note in this file: nothing ' +
         'auto-sends from a transcript alone on the browser-fallback ASR path',
     );
     await expect(page.getByTestId('user-message').last()).toContainText(
@@ -339,7 +339,7 @@ test('a manual edit while Speaking Mode is pending resets the auto-send timer', 
 
     test.fail(
       true,
-      'ELITEA-1290: product gap — Speaking Mode\'s scheduled sendQuestion() after a ' +
+      'ELITEA-1290 (#931): product gap — Speaking Mode\'s scheduled sendQuestion() after a ' +
         'manual edit clears the composer but never reaches the messages endpoint; ' +
         'no user-message row is ever created',
     );

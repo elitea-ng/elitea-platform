@@ -175,7 +175,7 @@ test('ELITEA-2815: PRODUCT GAP — the Form/Raw JSON view toggle uses text label
   await expect(formButton.locator('svg')).toBeVisible();
 });
 
-test('ELITEA-2816/2817: PRODUCT GAP — the Tools section header carries no enabled/total count', async ({ page }) => {
+test('ELITEA-2816 (#924)/2817: PRODUCT GAP — the Tools section header carries no enabled/total count', async ({ page }) => {
   /* onetest: ELITEA-2816, ELITEA-2817 — header should read "Tools <enabled>/<total>" and update live; the real header is the bare word "Tools" */
   test.setTimeout(90_000);
   const id = await createConfluenceToolkit(page.request, `${AUTOTEST_PREFIX}tktools_${RUN_ID}`, {

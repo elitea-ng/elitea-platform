@@ -110,7 +110,7 @@ test.describe('publish validation: project-specific model (ELITEA-0158)', () => 
   test('a sub-agent on a project-specific model is NOT caught by publish validation', async ({ request }) => {
     test.fail(
       true,
-      'ELITEA-0158 Variant B: product gap — runPublishValidation never inspects a sub-agent\'s own ' +
+      'ELITEA-0158 (#898) Variant B: product gap — runPublishValidation never inspects a sub-agent\'s own ' +
         'llm_settings (validateSubAgents only checks instructions/description length and name ' +
         'uniqueness), so a sub-agent on a project-specific model raises no llm_settings finding at all',
     );

@@ -237,7 +237,7 @@ test('the session is shared across a page navigation, not scoped to one page', a
 
     test.fail(
       true,
-      'ELITEA-0623: product gap — the widget draft/session does not survive a client-side ' +
+      'ELITEA-0623 (#935): product gap — the widget draft/session does not survive a client-side ' +
         'navigation to a different page; it resets as if freshly mounted',
     );
     await expect(

@@ -280,7 +280,7 @@ test.describe('publish validation: code-based rules', () => {
   test('a placeholder agent name and a too-short description are both flagged', async ({ request }) => {
     test.fail(
       true,
-      'ELITEA-0169 (#911)/ELITEA-0170: product gap — the main agent Name and Description fields are never validated (no query reads either column)',
+      'ELITEA-0169 (#911)/ELITEA-0170 (#911): product gap — the main agent Name and Description fields are never validated (no query reads either column)',
     );
     const agent = await createAgentWithVersion(
       request,
