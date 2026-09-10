@@ -57,6 +57,14 @@
  * scripting one would prove nothing this turn does not already show without
  * it.
  *
+ * THE python LEG'S CONTRACT IS THE OPPOSITE. The gap above is entirely a
+ * `materialize.rs` (native rust worker) omission — the SDK-backed python
+ * worker's artifact toolkit family is a real port, and on that leg the
+ * upload really is dispatched and the bucket really does gain the file. So
+ * `test.fail` below is gated on `IS_NATIVE_RUNTIME` (same `E2E_WORKER` read
+ * `chat.toolkit-hitl.spec.ts` uses): rust leg keeps the product-gap marker,
+ * python leg runs every assertion below for real and must pass them.
+ *
  * WHY THE BUCKET/TOOLKIT/AGENT CLEANUP IS A `finally`, UNLIKE MOST FILES HERE.
  * `expectStoredAssistantAnswer`'s "best-effort, deliberately last" convention
  * assumes the created rows are inert if a failure leaves them behind. A
@@ -67,7 +75,10 @@
  * very next file in this alphabetically-sorted, `--workers=1` suite
  * (`chat.canvasDocument.spec.ts`) then failed asserting THAT bucket's name
  * where it expected its own. So the bucket this file creates is deleted in a
- * `finally`, unconditionally.
+ * `finally`, unconditionally — and on the python leg the bucket is genuinely
+ * NON-EMPTY (the file above really landed), so the files are deleted first,
+ * then the bucket, rather than trusting an empty-bucket assumption that only
+ * held on the rust leg.
  *
  * WHY IT LIVES HERE: a toolkit chat turn needs the FULL standalone stack
  * (runtime plane, worker, model) — `journeys/**` has no runtime plane at all,
@@ -91,6 +102,15 @@ const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
 
 /** The model the turn depends on — same pin `chat.hitl.spec.ts`/`chat.toolkit.spec.ts` use, and for the same reason: an empty `llm_settings` falls back to the project catalogue's default, which is not this mock on a stack that also carries a real provider. */
 const MOCK_MODEL = process.env['E2E_MOCK_MODEL'] ?? 'vllm/E2E-MOCK-MODEL';
+
+/**
+ * Which runtime is answering the turn — `scripts/chat-stream-e2e.sh` exports
+ * this; local default is the native-runtime dev stack, as elsewhere (see
+ * `chat.toolkit-hitl.spec.ts`). Read once, to gate `test.fail` below: the
+ * "artifact" toolkit family is a genuine rust-worker gap (see header), not a
+ * gap on the python/SDK leg.
+ */
+const IS_NATIVE_RUNTIME = (process.env['E2E_WORKER'] ?? 'rust') === 'rust';
 
 /** Every tool name the `artifact` toolkit type's stored schema declares (`toolkitTypeSchemas["artifact"].properties.selected_tools.args_schemas`, `internal/api/v2/toolkits/handler.go`). */
 const ARTIFACT_TOOL_NAMES = [
@@ -116,16 +136,21 @@ test('an agent with the artifact toolkit writes a file that a real bucket listin
   const agentName = `${AUTOTEST_PREFIX}arttkagent-${suffix}`;
   const fileName = `${AUTOTEST_PREFIX}upload-${suffix}.txt`;
 
-  test.fail(
-    true,
-    'ELITEA-1334/1337/1338: product gap — "artifact" is absent from the native rust worker\'s ' +
-      '`supported_tool_types`, so materialize.rs skips it (agent_toolkit_skipped, ' +
-      'reason_code=unsupported_toolkit_family). Measured non-deterministic across runs which of two ' +
-      'ways that then surfaces: sometimes assembly fails outright (native_agent.invalid_configuration, ' +
-      'an is_error row, model never called) and sometimes the turn answers normally with the toolkit ' +
-      'simply absent — but either way no upload call is ever dispatched and no file is ever written. ' +
-      'See S/port/defects.md.',
-  );
+  // Rust leg only — see header's "python LEG'S CONTRACT IS THE OPPOSITE".
+  // The SDK/python worker's artifact toolkit family is a real port, so on
+  // that leg every assertion below (steps 6-7) must pass for real.
+  if (IS_NATIVE_RUNTIME) {
+    test.fail(
+      true,
+      'ELITEA-1334/1337/1338: product gap — "artifact" is absent from the native rust worker\'s ' +
+        '`supported_tool_types`, so materialize.rs skips it (agent_toolkit_skipped, ' +
+        'reason_code=unsupported_toolkit_family). Measured non-deterministic across runs which of two ' +
+        'ways that then surfaces: sometimes assembly fails outright (native_agent.invalid_configuration, ' +
+        'an is_error row, model never called) and sometimes the turn answers normally with the toolkit ' +
+        'simply absent — but either way no upload call is ever dispatched and no file is ever written. ' +
+        'See S/port/defects.md.',
+    );
+  }
 
   // ── 0. Preconditions ─────────────────────────────────────────────────────
   await setToolkitGuardrails(EMPTY_TOOLKIT_GUARDRAILS);
@@ -253,7 +278,27 @@ test('an agent with the artifact toolkit writes a file that a real bucket listin
   } finally {
     // Unconditional, and NOT best-effort-and-last like this directory's other
     // cleanups — see the header's note on why a leftover BUCKET here is not
-    // inert.
+    // inert. FILES FIRST, then the bucket: on the python leg (see header)
+    // the upload really landed, so the bucket is genuinely non-empty here,
+    // not just on the rust leg's trivially-empty one.
+    try {
+      const objectsLeft = await page.request.get(`${BASE_URL}/api/v2/artifacts/objects/${projectId}/${bucketName}`);
+      if (objectsLeft.ok()) {
+        const keys = (((await objectsLeft.json()) as { objects?: readonly ObjectSummary[] }).objects ?? [])
+          .map((object) => object.key)
+          .filter((key): key is string => typeof key === 'string' && key !== '');
+        if (keys.length > 0) {
+          await page.request.post(`${BASE_URL}/api/v2/artifacts/objects/${projectId}/${bucketName}:batchDelete`, {
+            data: { keys },
+          });
+        }
+      }
+    } catch {
+      // Best-effort: the bucket delete right below still cascades its own
+      // object deletion server-side (`DeleteBucket` → `deleteAllObjects`) —
+      // this pass is defense-in-depth, not the only thing standing between
+      // a failed turn and a leftover file.
+    }
     await page.request.delete(`${BASE_URL}/api/v2/artifacts/buckets/${projectId}/${bucketName}`).catch(() => {});
     if (toolkitId !== '') {
       await page.request.delete(`${BASE_URL}/api/v2/elitea_core/tool/prompt_lib/${projectId}/${toolkitId}`).catch(() => {});

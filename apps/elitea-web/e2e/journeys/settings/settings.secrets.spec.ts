@@ -356,11 +356,33 @@ test('J21: settings: create secret', async ({ page }, testInfo) => {
  * set the sweep above already reads — no separate cleanup needed.
  * ──────────────────────────────────────────────────────────────────────── */
 
-/** A name that sorts by `label` first (`sort_<label>_...`), for ordering assertions. */
-function sortProbeName(label: string, projectName: string): string {
-  const name = `${AUTOTEST_PREFIX}sort_${label}_${Date.now()}${engineSuffix(projectName)}`;
+/**
+ * A name that sorts by `label` first (`sort_<label>_...`), for ordering
+ * assertions.
+ *
+ * `token`, when given, replaces the per-call `Date.now()` so every probe a
+ * test creates shares ONE substring — the handle a test uses to filter the
+ * page's own search box down to just its own rows (see J21e/J21h below).
+ * Without it, each call gets its own timestamp, exactly as before.
+ */
+function sortProbeName(label: string, projectName: string, token?: string): string {
+  const name = `${AUTOTEST_PREFIX}sort_${label}_${token ?? Date.now()}${engineSuffix(projectName)}`;
   createdHere.add(name);
   return name;
+}
+
+/**
+ * A token unique enough to survive `fullyParallel` running several copies of
+ * the SAME test at once (e.g. this file's own `--repeat-each` proof run):
+ * `Date.now()` alone collides at millisecond resolution when that many
+ * workers hit it in the same tick, which silently merges two tests' "own
+ * rows" into one set (same labels, same engine suffix — the later create
+ * just overwrites the earlier one by name) and starves the search filter
+ * below of rows it expected to find. `parallelIndex` plus a random suffix
+ * closes that gap; letters/digits only (secret names refuse hyphens).
+ */
+function makeRunToken(testInfo: { parallelIndex: number }): string {
+  return `${Date.now()}${testInfo.parallelIndex}${Math.random().toString(36).slice(2)}`;
 }
 
 /** Creates a secret directly through the API the list itself reads (bypasses the UI). */
@@ -383,10 +405,13 @@ async function rowY(page: import('@playwright/test').Page, text: string): Promis
 test('J21e: sort order stays A→Z during and after secret creation', async ({ page, request }, testInfo) => {
   test.setTimeout(45_000);
   const projectName = testInfo.project.name;
-  const a = sortProbeName('a', projectName);
-  const b = sortProbeName('b', projectName);
-  const m = sortProbeName('m', projectName);
-  const z = sortProbeName('z', projectName);
+  // Shared by every probe this test creates, so the search box below can
+  // isolate exactly these rows.
+  const runToken = makeRunToken(testInfo);
+  const a = sortProbeName('a', projectName, runToken);
+  const b = sortProbeName('b', projectName, runToken);
+  const m = sortProbeName('m', projectName, runToken);
+  const z = sortProbeName('z', projectName, runToken);
   for (const name of [a, b, m, z]) {
     await createSecretDirect(request, name, 'sort-probe-value');
   }
@@ -395,6 +420,16 @@ test('J21e: sort order stays A→Z during and after secret creation', async ({ p
   await expect(page.getByRole('button', { name: 'Create new secret', exact: true })).toBeEnabled({
     timeout: 15_000,
   });
+
+  // Isolate to this test's own rows. Under CI concurrency the chromium AND
+  // webkit engines run this file against the same shared project at once,
+  // and J21f/J21h's own dozen-plus padding rows can land alphabetically
+  // between these probes, pushing `z` past page 1 — DOM noise, not a real
+  // sort-order failure. The search box is `Secrets.tsx`'s own client-side
+  // filter over the full fetched list, so filtering by `runToken` scopes
+  // every visibility/order assertion below to rows this test itself made.
+  const search = page.getByRole('textbox', { name: 'Search' });
+  await search.fill(runToken);
   for (const name of [a, b, m, z]) {
     await expect(page.getByText(name, { exact: true })).toBeVisible({ timeout: 10_000 });
   }
@@ -409,7 +444,10 @@ test('J21e: sort order stays A→Z during and after secret creation', async ({ p
   expect(await rowY(page, b)).toBeLessThan(await rowY(page, m));
   expect(await rowY(page, m)).toBeLessThan(await rowY(page, z));
 
-  const g = sortProbeName('g', projectName);
+  const g = sortProbeName('g', projectName, runToken);
+  // Clear the filter: the pinned row's name is '' until saved, and the
+  // filter above would hide it (and its inputs) entirely.
+  await search.fill('');
   const grid = page.getByRole('grid');
   await grid.getByRole('textbox').first().fill(g);
   await grid.getByRole('textbox').nth(1).fill('sort-probe-value');
@@ -421,7 +459,9 @@ test('J21e: sort order stays A→Z during and after secret creation', async ({ p
   const write = await created;
   expect(write.status(), await write.text()).toBeLessThan(300);
 
-  // After creation: the pinned row is gone, and `g` sits between `b` and `m`.
+  // After creation: re-apply the filter, the pinned row is gone, and `g`
+  // sits between `b` and `m` — still scoped to this test's own rows.
+  await search.fill(runToken);
   await expect(page.getByText(g, { exact: true })).toBeVisible({ timeout: 10_000 });
   expect(await rowY(page, a)).toBeLessThan(await rowY(page, b));
   expect(await rowY(page, b)).toBeLessThan(await rowY(page, g));
@@ -507,9 +547,15 @@ test('J21h: a newly created secret is immediately visible at its alphabetical po
 }, testInfo) => {
   test.setTimeout(45_000);
   const projectName = testInfo.project.name;
+  // Shared by every probe this test creates, so the search box below can
+  // scope "the last page" to just this test's own 16 rows — otherwise a
+  // sibling engine/worker running this same file concurrently against the
+  // same shared project (see J21e) contributes its own `zpad*`/`zzzzlast`
+  // rows, which can leave OUR zebra short of the actual last page.
+  const runToken = makeRunToken(testInfo);
   // 15 padding rows sorting well before the probe, forcing pagination.
   for (let i = 0; i < 15; i++) {
-    await createSecretDirect(request, sortProbeName(`zpad${String(i).padStart(2, '0')}`, projectName), 'v');
+    await createSecretDirect(request, sortProbeName(`zpad${String(i).padStart(2, '0')}`, projectName, runToken), 'v');
   }
 
   await page.goto(SECRETS_PAGE);
@@ -518,7 +564,7 @@ test('J21h: a newly created secret is immediately visible at its alphabetical po
   });
 
   // Created from page 1, where the pinned row is always visible.
-  const zebra = sortProbeName('zzzzlast', projectName);
+  const zebra = sortProbeName('zzzzlast', projectName, runToken);
   await page.getByRole('button', { name: 'Create new secret', exact: true }).click();
   const grid = page.getByRole('grid');
   await grid.getByRole('textbox').first().fill(zebra);
@@ -545,6 +591,12 @@ test('J21h: a newly created secret is immediately visible at its alphabetical po
       { timeout: 15_000 },
     )
     .toBe(true);
+
+  // Scope to this test's own 16 rows (15 padding + zebra) before paging —
+  // filtered, "last page" is deterministic regardless of what any sibling
+  // engine/worker has created in the shared project meanwhile.
+  const search = page.getByRole('textbox', { name: 'Search' });
+  await search.fill(runToken);
 
   // No reload — page to the LAST page and find it there, at the tail of the
   // sort, without needing to re-search or re-sort.

@@ -32,6 +32,7 @@ import {
   createAgent,
   createAgentWithVersion,
   deleteAgent,
+  unpublishAllVersions,
   detachSubAgent,
   readProjectModels,
   readVersion,
@@ -385,6 +386,10 @@ test.describe('publish validation: code-based rules', () => {
         `expected a version-name-exists Critical issue, got: ${JSON.stringify(collision.body.critical_issues)}`,
       ).toBe(true);
     } finally {
+      // The uniqueness probe above published `agent`, so it must be
+      // withdrawn before delete — otherwise `deleteAgent` silently no-ops
+      // ("Unpublish first...") and the row is left for the fixture sweep.
+      await unpublishAllVersions(request, agent.id);
       await deleteAgent(request, agent.id);
     }
   });
@@ -456,6 +461,10 @@ test.describe('publish validation: code-based rules', () => {
       const after = await readVersion(request, parent.id, parent.versionId);
       expect(after.tools.length).toBe(before.tools.length);
     } finally {
+      // `parent` was published above; withdraw it first or `deleteAgent`
+      // silently no-ops ("Unpublish first...") and the row is left for the
+      // fixture sweep.
+      await unpublishAllVersions(request, parent.id);
       await deleteAgent(request, child.id);
       await deleteAgent(request, parent.id);
     }

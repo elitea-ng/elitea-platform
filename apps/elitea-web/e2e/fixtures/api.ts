@@ -403,6 +403,37 @@ export async function createAgent(
 }
 
 /**
+ * Withdraw every published version an agent carries (cleanup helper).
+ *
+ * A published version refuses `DELETE .../application/...` with 400
+ * "Unpublish first. Cannot delete application with published versions." — a
+ * spec that calls `POST .../publish/...` on an agent it will later delete
+ * must call this first, or `deleteAgent` silently no-ops (it does not check
+ * the response) and the row is left for `sweepAutotestEntities` to trip on
+ * (API-FX3, `e2e/journeys/api/api.fixture-isolation.spec.ts`).
+ */
+export async function unpublishAllVersions(
+  request: APIRequestContext,
+  id: string,
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<void> {
+  const detail = await request.get(
+    `${API_BASE}/elitea_core/application/prompt_lib/${projectId}/${id}`,
+  );
+  if (!detail.ok()) return;
+  const body = await detail.json();
+  const versions: readonly { readonly id?: string; readonly status?: string }[] = body?.versions ?? [];
+  for (const version of versions) {
+    if (version.status === 'published') {
+      await request.post(
+        `${API_BASE}/elitea_core/unpublish/prompt_lib/${projectId}/${String(version.id)}`,
+        { data: {} },
+      );
+    }
+  }
+}
+
+/**
  * Delete an agent (cleanup helper).
  */
 export async function deleteAgent(
