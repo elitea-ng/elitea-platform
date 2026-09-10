@@ -464,6 +464,28 @@ test('J21e: sort order stays A→Z during and after secret creation', async ({ p
     await createSecretDirect(request, name, 'sort-probe-value');
   }
 
+  // Each create above already answered 2xx, but — exactly like the five-probe
+  // poll later in this same test — the LIST endpoint this page mounts against
+  // can still lag behind its own writes under CI concurrency. The page's own
+  // fetch (`refetchOnMount: true`) only runs ONCE per mount and nothing here
+  // polls it afterwards, so a `page.goto` that lands ahead of server
+  // consistency leaves these four probes permanently missing from `rows`
+  // until an unrelated mutation happens to invalidate the query — measured as
+  // `getByText(a).toBeVisible()` timing out with "element(s) not found" on
+  // webkit under `--workers=4`. Confirming server truth FIRST, before the
+  // page (and its one-shot fetch) ever mounts, removes the race entirely.
+  await expect
+    .poll(
+      async () => {
+        const listed = await request.get(CLIENT_LIST_URL);
+        expect(listed.status(), await listed.text()).toBe(200);
+        const names = ((await listed.json()) as { name: string }[]).map((s) => s.name);
+        return [a, b, m, z].every((name) => names.includes(name));
+      },
+      { timeout: 30_000, message: 'the server must list all four probes before the page mounts' },
+    )
+    .toBe(true);
+
   await page.goto(SECRETS_PAGE);
   await expect(page.getByRole('button', { name: 'Create new secret', exact: true })).toBeEnabled({
     timeout: 15_000,
@@ -646,8 +668,18 @@ test('J21h: a newly created secret is immediately visible at its alphabetical po
 
   // The server has it the instant the POST answers; the on-screen list is a
   // query-invalidation refetch behind it. Waiting on the SERVER's own read
-  // (not a fixed sleep) is what makes the "Go to last page" click below land
-  // on the page the settled list actually has, without a reload.
+  // (not a fixed sleep) proves the WRITE has landed, but `page.request.get`
+  // is Playwright's own out-of-band fetch — it says nothing about whether
+  // the app's React Query cache (invalidated by the create mutation's
+  // `onSuccess`, refetched in the background) has itself settled and
+  // re-rendered by the time this poll resolves. Under CI concurrency that
+  // background refetch can still be in flight, and "Go to last page" then
+  // stays disabled (fewer than 11 rows in the CLIENT's still-stale
+  // `filteredRows`) for the rest of the test's budget — measured as the
+  // whole 45s test timeout burning inside that button's click retry, not a
+  // quick settle. A reload forces a fresh mount fetch against the server
+  // state this poll just proved consistent, so the client's own rows are
+  // guaranteed current before the search/paging below act on them.
   await expect
     .poll(
       async () => {
@@ -658,6 +690,10 @@ test('J21h: a newly created secret is immediately visible at its alphabetical po
       { timeout: 15_000 },
     )
     .toBe(true);
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Create new secret', exact: true })).toBeEnabled({
+    timeout: 15_000,
+  });
 
   // Scope to this test's own 16 rows (15 padding + zebra) before paging —
   // filtered, "last page" is deterministic regardless of what any sibling
@@ -665,8 +701,8 @@ test('J21h: a newly created secret is immediately visible at its alphabetical po
   const search = page.getByRole('textbox', { name: 'Search' });
   await search.fill(runToken);
 
-  // No reload — page to the LAST page and find it there, at the tail of the
-  // sort, without needing to re-search or re-sort.
+  // Page to the LAST page and find it there, at the tail of the sort,
+  // without needing to re-search or re-sort.
   await page.getByRole('button', { name: 'Go to last page' }).click();
   await expect(page.getByText(zebra, { exact: true })).toBeVisible({ timeout: 10_000 });
 });

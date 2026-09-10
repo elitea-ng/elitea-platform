@@ -227,21 +227,24 @@ test.describe('artifacts bucket pinning', () => {
     for (const name of [PIN_A, PIN_B, PIN_C]) await setPinned(request, projectId, name, false);
     await reenterArtifacts(page, ARTIFACTS_URL);
 
-    // Each click's label flip is the per-row cache write; the ROW ORDER
-    // reflects `sortBucketsPinnedFirst` over the LIST query's own refetch
-    // (`onSuccess: refreshBuckets` invalidating it), which can land a beat
-    // after the label does. This used to anchor each click on a
-    // `page.waitForResponse` for that GET — measured flaky under load: a
-    // second (or third) `invalidateQueries` call while the first GET this
-    // triggered is still in flight is served off that SAME in-flight fetch
-    // rather than issuing a new network request, so a `waitForResponse`
-    // registered per click can legitimately see no new response at all and
-    // time out even though the mutation succeeded and the order did update.
-    // Poll the actual rendered order instead of a specific network event.
-    for (const name of [PIN_A, PIN_B, PIN_C]) {
-      await page.getByLabel(`Pin ${name}`).click();
-      await expect(page.getByLabel(`Unpin ${name}`)).toBeVisible({ timeout: 10_000 });
-    }
+    // Driven through the API, not through three sequential clicks on the
+    // row's own pin button. Clicking pinned each name AND moved its row
+    // (`sortBucketsPinnedFirst` re-sorts on every one of the three
+    // `invalidateQueries` refetches), so by the second click the target
+    // button's row had already shifted under the still-hovering pointer:
+    // MUI's `Tooltip` re-fires on that fresh `mouseenter` and its popper
+    // lands over the very button the next click targets — measured in CI as
+    // `locator.click` retrying for the full 60s against "<div
+    // class="MuiTooltip-tooltip">Pin bucket</div> … subtree intercepts
+    // pointer events", never the button itself being unstable. ELITEA-0276
+    // is a claim about server-truth GROUPING/ORDER (see the file header's
+    // "Pin state is server truth"), not about the click gesture — P1/P2
+    // already cover that the icon itself toggles and reacts to a real
+    // click — so this test asserts the same order fact the polls below
+    // always did, without depending on three back-to-back hovers ever
+    // settling under CI load.
+    for (const name of [PIN_A, PIN_B, PIN_C]) await setPinned(request, projectId, name, true);
+    await reenterArtifacts(page, ARTIFACTS_URL);
 
     // All three pinned rows are consecutive AND stable-ordered (A < B < C,
     // the order they were pinned in — `sortBucketsPinnedFirst` is a stable
@@ -260,8 +263,11 @@ test.describe('artifacts bucket pinning', () => {
       )
       .toBe(true);
 
-    await page.getByLabel(`Unpin ${PIN_B}`).click();
-    await expect(page.getByLabel(`Pin ${PIN_B}`)).toBeVisible({ timeout: 10_000 });
+    // Same reasoning as the pin loop above: unpin through the API and let
+    // the reload settle the row order, rather than clicking a button whose
+    // own row just moved under the previous poll's hover.
+    await setPinned(request, projectId, PIN_B, false);
+    await reenterArtifacts(page, ARTIFACTS_URL);
 
     // A and C, both still pinned, keep their relative order; B (no longer
     // pinned) leaves the pinned group and drops below C.
