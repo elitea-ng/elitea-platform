@@ -1902,6 +1902,14 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("compose predict_llm completion client: %w", completerErr)
 	} else if completer != nil {
 		predictCompleter = completer
+		if currentConfigurationsRoot != nil {
+			predictCompleter, err = predictapi.WithDefaultModel(
+				completer, currentConfigurationsRoot.ModelCatalog(), currentConfigurationsConfig.PublicProjectID,
+			)
+			if err != nil {
+				return fmt.Errorf("compose predict default model resolver: %w", err)
+			}
+		}
 		slog.Info("predict_llm completion client enabled", "target", os.Getenv("LLM_GATEWAY_URL"))
 	} else {
 		slog.Warn("predict_llm completion client disabled: LLM_GATEWAY_URL is empty; " +

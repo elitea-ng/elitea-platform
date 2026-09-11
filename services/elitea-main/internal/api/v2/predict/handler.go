@@ -118,16 +118,7 @@ func (h *Handler) PredictLLM(w http.ResponseWriter, r *http.Request) {
 		UserID:    callerUserID(r.Context()),
 		Messages:  buildMessages(body),
 	}
-	// NOT PORTED: legacy resolved the PROJECT'S DEFAULT MODEL when llm_settings
-	// carried no model_name ("uses project default model if none specified", its
-	// own MCP description). Nothing here does — an absent model_name is forwarded
-	// to the gateway as an empty model, which the gateway refuses, so the caller
-	// gets 502 rather than a silent default. That is deliberate: guessing a model
-	// on the caller's behalf spends their provider budget on a choice they did
-	// not make. Every sender in this repo already resolves a model first and
-	// gates itself on having one (see useAiEditAvailability's condition 3), so no
-	// shipped affordance depends on the fallback. A caller that wants one must
-	// name the model.
+	// The shared completer resolves an omitted model through the project catalog.
 	if body.LLMSettings != nil {
 		completion.Model = body.LLMSettings.ModelName
 		completion.Temperature = body.LLMSettings.Temp
