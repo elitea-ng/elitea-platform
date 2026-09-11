@@ -31,8 +31,9 @@ var errInvalidCurrentFrozenConfiguration = errors.New("invalid frozen current co
 // process that requested it. Each frozen configuration is unsecreted through
 // its embedded configuration_project_id rather than the invoking project.
 type CurrentConfigurationsMaterializer struct {
-	unsecreter configurationapp.CurrentExpansionUnsecreter
-	prebuilt   CurrentAgentPrebuiltMCPResolver
+	unsecreter    configurationapp.CurrentExpansionUnsecreter
+	prebuilt      CurrentAgentPrebuiltMCPResolver
+	toolkitTokens CurrentToolkitMCPTokenLoader
 }
 
 // CurrentAgentPrebuiltMCPResolver resolves one trusted prebuilt MCP definition.
@@ -57,11 +58,21 @@ func NewCurrentConfigurationsMaterializer(
 func NewCurrentAgentConfigurationsMaterializer(
 	unsecreter configurationapp.CurrentExpansionUnsecreter,
 	prebuilt CurrentAgentPrebuiltMCPResolver,
+	options ...CurrentMaterializerOption,
 ) (*CurrentConfigurationsMaterializer, error) {
 	if prebuilt == nil {
 		return nil, errors.New("current agent prebuilt MCP resolver is required")
 	}
-	return newCurrentConfigurationsMaterializer(unsecreter, prebuilt)
+	materializer, err := newCurrentConfigurationsMaterializer(unsecreter, prebuilt)
+	if err != nil {
+		return nil, err
+	}
+	for _, option := range options {
+		if option != nil {
+			option(materializer)
+		}
+	}
+	return materializer, nil
 }
 
 func newCurrentConfigurationsMaterializer(
@@ -118,6 +129,43 @@ func (m *CurrentConfigurationsMaterializer) MaterializeContent(
 			return nil, ErrContentRejected
 		}
 		return m.materializeToolkitExecuteRead(ctx, projectID, source, maxBytes)
+	}
+	if authorization.CapabilityID == executiondomain.ToolkitAvailableToolsCapability {
+		projectID, ok := positiveCurrentMaterializationID(authorization.ResourceProjectID)
+		if !ok {
+			return nil, ErrContentRejected
+		}
+		actorID, ok := positiveCurrentMaterializationID(authorization.ActorID)
+		if !ok {
+			return nil, ErrContentRejected
+		}
+		switch authorization.SemanticRole {
+		case executiondomain.ToolkitAvailableToolsSettingsRole:
+			return m.materializeToolkitDiscovery(ctx, projectID, actorID, authorization.ToolkitType, source, maxBytes)
+		case "toolkit.available_tools.runtime_context":
+			return source, nil
+		default:
+			return nil, ErrContentRejected
+		}
+	}
+	if authorization.CapabilityID == executiondomain.ToolkitCallToolCapability {
+		projectID, ok := positiveCurrentMaterializationID(authorization.ResourceProjectID)
+		if !ok {
+			return nil, ErrContentRejected
+		}
+		if _, ok := positiveCurrentMaterializationID(authorization.ActorID); !ok {
+			return nil, ErrContentRejected
+		}
+		switch authorization.SemanticRole {
+		case executiondomain.ToolkitCallToolSettingsRole:
+			return m.materializeToolkit(ctx, projectID, source, maxBytes)
+		case executiondomain.ToolkitCallToolArgumentsRole:
+			return source, nil
+		case executiondomain.ToolkitCallToolRuntimeContextRole:
+			return m.materializeToolkitRuntimeContext(ctx, authorization, source, maxBytes)
+		default:
+			return nil, ErrContentRejected
+		}
 	}
 	if authorization.CapabilityID != executiondomain.IndexIngestCapability {
 		// The shared content listener also serves validation inputs. Those bytes

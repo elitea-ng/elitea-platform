@@ -8,6 +8,7 @@ import (
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
+	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"google.golang.org/protobuf/proto"
 )
@@ -209,6 +210,8 @@ func toolkitCallToolSummaryDomain(
 	}
 	var status outputapp.ToolkitCallToolStatus
 	switch summary.GetStatus() {
+	case runtimev1.ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_AUTHORIZATION_REQUIRED:
+		status = outputapp.ToolkitCallToolStatusAuthorizationRequired
 	case runtimev1.ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_OK:
 		status = outputapp.ToolkitCallToolStatusOK
 	case runtimev1.ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_TOOL_ERROR:
@@ -225,6 +228,12 @@ func toolkitCallToolSummaryDomain(
 		ResultJSON:   summary.GetResultJson(),
 		Truncated:    summary.GetTruncated(),
 		ErrorMessage: summary.GetErrorMessage(),
+	}
+	if challenge := summary.GetAuthorizationRequired(); challenge != nil {
+		if hasUnknown(challenge.ProtoReflect()) {
+			return outputapp.ToolkitCallToolSummary{}, outputapp.ErrInvalidToolkitCallToolOutput
+		}
+		domain.AuthorizationRequired = &executiondomain.ToolkitAuthorizationRequired{ToolkitName: challenge.GetToolkitName(), ToolkitType: challenge.GetToolkitType(), ToolkitID: challenge.GetToolkitId(), ServerURL: challenge.GetServerUrl(), ResourceMetadataURL: challenge.GetResourceMetadataUrl(), ResourceMetadata: append([]byte(nil), challenge.GetResourceMetadataJson()...)}
 	}
 	if err := domain.Validate(); err != nil {
 		return outputapp.ToolkitCallToolSummary{}, err

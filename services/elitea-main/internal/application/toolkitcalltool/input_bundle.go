@@ -15,11 +15,12 @@ import (
 
 const (
 	// SettingsEntryID and ArgumentsEntryID are FIXED, not generated. A tool run
-	// has exactly two inputs and they never vary, so a stable id lets the
+	// has exactly three inputs and they never vary, so a stable id lets the
 	// worker, the output binding and this producer name the same entry without
 	// a row to look it up in.
-	SettingsEntryID  = "toolkit-settings"
-	ArgumentsEntryID = "toolkit-arguments"
+	SettingsEntryID       = "toolkit-settings"
+	ArgumentsEntryID      = "toolkit-arguments"
+	RuntimeContextEntryID = "toolkit-runtime-context"
 
 	inputMediaType             = executiondomain.SettingsJSONMediaType
 	maxAdmissionStringBytes    = 256
@@ -42,9 +43,11 @@ type AuthoritativeInputs struct {
 	ToolName       string
 	Settings       json.RawMessage
 	Arguments      json.RawMessage
+	RuntimeContext json.RawMessage
 }
 
 func (i AuthoritativeInputs) Clone() AuthoritativeInputs {
+	i.RuntimeContext = append(json.RawMessage(nil), i.RuntimeContext...)
 	i.Settings = append(json.RawMessage(nil), i.Settings...)
 	i.Arguments = append(json.RawMessage(nil), i.Arguments...)
 	return i
@@ -57,7 +60,7 @@ func (i AuthoritativeInputs) validate() error {
 		len(i.ToolkitVersion) > executiondomain.MaxSafeCommandStringBytes {
 		return ErrInvalidAuthoritativeToolRunInput
 	}
-	if !validBoundedJSONObject(i.Settings) || !validBoundedJSONObject(i.Arguments) {
+	if !validBoundedJSONObject(i.Settings) || !validBoundedJSONObject(i.Arguments) || !validRuntimeContext(i.RuntimeContext) {
 		return ErrInvalidAuthoritativeToolRunInput
 	}
 	return nil
@@ -135,6 +138,7 @@ func (f *InputBundleFactory) Build(
 	}{
 		{id: SettingsEntryID, role: executiondomain.ToolkitCallToolSettingsRole, content: inputs.Settings},
 		{id: ArgumentsEntryID, role: executiondomain.ToolkitCallToolArgumentsRole, content: inputs.Arguments},
+		{id: RuntimeContextEntryID, role: executiondomain.ToolkitCallToolRuntimeContextRole, content: inputs.RuntimeContext},
 	}
 	entries := make([]executiondomain.InputEntry, 0, len(sources))
 	wireEntries := make([]*runtimev1.ExecutionInputEntryV1, 0, len(sources))

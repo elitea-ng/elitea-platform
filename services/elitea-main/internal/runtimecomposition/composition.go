@@ -19,6 +19,7 @@ import (
 	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/pipelineruns"
 	schedulingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/scheduling"
+	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
@@ -134,6 +135,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		return nil, errors.New("runtime composition is disabled")
 	}
 	if err := config.Validate(); err != nil {
+		return nil, err
+	}
+	toolkitRoute, err := configuredToolkitRoute(config, dependencies.WorkerToolkitCapability)
+	if err != nil {
 		return nil, err
 	}
 	if err := validateDependencies(dependencies); err != nil {
@@ -253,10 +258,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		MaxOutstanding:    config.MaxOutstanding,
 	}
 	toolkitCallToolDispatchPolicy := repos.ToolkitCallToolDispatchPolicy{
-		StreamName:        config.IndexIngestCommandStream,
+		StreamName:        toolkitRoute.stream,
 		CapabilityVersion: toolkitCallToolCapabilityVersion,
-		ResourceClass:     toolkitCallToolResourceClass,
-		IsolationClass:    toolkitCallToolIsolationClass,
+		ResourceClass:     toolkitRoute.resourceClass,
+		IsolationClass:    toolkitRoute.isolationClass,
 		Priority:          1,
 		DeadlineTTL:       toolkitCallToolDeadlineTTL,
 		LimitsRevision:    limitsRevision,
@@ -414,6 +419,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}
 	var indexPublisher publisherRunner
 	var toolkitCallToolProducer *redisdispatch.ToolkitCallToolProducer
+	var toolkitDiscoveryProducer *redisdispatch.ToolkitAvailableToolsProducer
 	if config.IndexIngestDispatchEnabled {
 		indexLimits := limits
 		indexLimits.MaxRedisEntryBytes = productionIndexRedisEntrySize
@@ -456,27 +462,34 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if err != nil {
 			return nil, err
 		}
-		// The tool-run producer, on the SAME stream and the same appender. The
-		// worker dispatches by capability_id from one Redis stream
-		// (serve.py:781-813), so a second stream would need a second worker to
-		// consume it and would deliver nothing on every deployment there is.
-		//
-		// There is NO outbox publisher beside it. A tool run is dispatched
-		// inline by the request that admitted it — see
-		// internal/application/toolkitcalltool/doc.go — so a background poller
-		// would have nothing to publish.
+	}
+	if toolkitRoute.enabled {
+		toolkitLimits := limits
+		toolkitLimits.MaxRedisEntryBytes = productionIndexRedisEntrySize
+		toolkitAppender, buildErr := redisdispatch.NewRedisStreamAppender(controlRedis, redisdispatch.RedisStreamAppenderConfig{MaxEntries: toolkitRoute.maxEntries, MaxEntryBytes: productionIndexRedisEntrySize})
+		if buildErr != nil {
+			return nil, buildErr
+		}
 		toolkitCallToolProducer, err = redisdispatch.NewToolkitCallToolProducer(
 			redisdispatch.ToolkitCallToolProducerConfig{
-				Stream:                 config.IndexIngestCommandStream,
-				ConsumerGroup:          config.IndexIngestConsumerGroup,
+				Stream:                 toolkitRoute.stream,
+				ConsumerGroup:          toolkitRoute.consumerGroup,
 				ValidationStream:       config.CommandStream,
 				ProtocolRevision:       protocolRevision,
 				EnvelopeSchemaRevision: envelopeSchemaRevision,
 				CapabilityVersion:      toolkitCallToolCapabilityVersion,
-				Limits:                 indexLimits,
-			}, signer, indexAppender)
+				Limits:                 toolkitLimits,
+			}, signer, toolkitAppender)
 		if err != nil {
 			return nil, fmt.Errorf("construct tool-run Redis producer: %w", err)
+		}
+		if config.ToolkitDiscoveryEnabled {
+			toolkitDiscoveryProducer, err = redisdispatch.NewToolkitAvailableToolsProducer(redisdispatch.ToolkitAvailableToolsProducerConfig{
+				Stream: toolkitRoute.stream, ConsumerGroup: toolkitRoute.consumerGroup, ValidationStream: config.CommandStream, ProtocolRevision: protocolRevision, EnvelopeSchemaRevision: envelopeSchemaRevision, CapabilityVersion: toolkitCallToolCapabilityVersion, Limits: toolkitLimits,
+			}, signer, toolkitAppender)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	var agentJobs *repos.AgentExecutionJobsRepository
@@ -485,6 +498,8 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	var agentTaskStatus *agentexecutionapp.CurrentAgentTaskStatusService
 	var agentPublisher publisherRunner
 	var agentMaterializer *storage.CurrentConfigurationsMaterializer
+	var standaloneToolkitReader indexingapp.CurrentToolkitReader
+	var standaloneToolkitSettings indexingapp.CurrentToolkitSettingsValidator
 	var toolkitJobs *repos.ToolkitExecuteReadJobsRepository
 	var toolkitExecute *toolkitexecutionapp.CurrentReadToolExecutionService
 	var toolkitPublisher publisherRunner
@@ -594,7 +609,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		}
 		// The SAME freezer instance the interactive start path uses. A nested
 		// child has to be frozen by the identical rules as its parent —
-		// blocked toolkits dropped, `internal_mcp` removed, `openai`
+		// blocked toolkits dropped, internal MCP references injected, `openai`
 		// normalized to `agent` — because the native runtime decodes both
 		// documents with one decoder and would refuse the child on a
 		// difference the author never made.
@@ -616,6 +631,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		agentMaterializer, targetErr = storage.NewCurrentAgentConfigurationsMaterializer(
 			dependencies.CurrentConfigurations.unsecreter,
 			agentPrebuiltMCP,
+			storage.WithCurrentToolkitMCPAuthorization(currentToolkitMCPTokenStore(dependencies.AdmissionPool)),
 		)
 		if targetErr != nil {
 			return nil, fmt.Errorf("construct current agent configuration materializer: %w", targetErr)
@@ -692,6 +708,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		toolkitReader, toolkitErr := NewCurrentToolkitReaderAdapter(toolkitRows, toolkitNames)
 		if toolkitErr != nil {
 			return nil, fmt.Errorf("construct current direct toolkit reader: %w", toolkitErr)
+		}
+		if toolkitRoute.rust {
+			standaloneToolkitReader = toolkitReader
+			standaloneToolkitSettings = toolkitSettings
 		}
 		toolkitFreezer, toolkitErr := toolkitexecutionapp.NewCurrentReadToolFreezer(
 			toolkitReader,
@@ -908,17 +928,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if err != nil {
 		return nil, err
 	}
-	capabilityVersions := map[string]string{
-		executiondomain.ConfigurationValidationCapability: capabilityVersion,
-	}
-	if config.IndexIngestDispatchEnabled {
-		capabilityVersions[executiondomain.IndexIngestCapability] = indexCapabilityVersion
-	}
-	if config.AgentExecutionDispatchEnabled {
-		capabilityVersions[executiondomain.AgentApplicationCapability] = agentCapabilityVersion
-		capabilityVersions[executiondomain.AgentAdhocCapability] = agentCapabilityVersion
-		capabilityVersions[executiondomain.ToolkitExecuteReadCapability] = agentCapabilityVersion
-	}
+	capabilityVersions := configuredWorkerCapabilityVersions(config, toolkitRoute)
 	verifier, err := control.NewProductionCommandVerifier(control.ProductionVerifierConfig{
 		EnvelopeSchemaRevision: envelopeSchemaRevision,
 		ProtocolRevision:       protocolRevision,
@@ -1081,42 +1091,52 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		}
 	}
 	// toolkitCallToolResults is built HERE rather than inside the tool-run
-	// runtime below, because the output listener is composed before the index
-	// graph the run service needs. It writes only `output_inbox`, so it depends
+	// runtime below, because the output listener is composed before the shared
+	// toolkit input services. It writes only `output_inbox`, so it depends
 	// on nothing but the output pool.
 	var toolkitCallToolResults *repos.ToolkitCallToolResultsRepository
-	if config.IndexIngestDispatchEnabled {
-		indexResults, err := repos.NewIndexIngestResultsRepository(dependencies.OutputPool, repos.IndexIngestOutputPolicy{
-			LimitsRevision:    limitsRevision,
-			ArtifactMediaType: indexArtifactMediaType,
-			MaxArtifactBytes:  maxIndexArtifactBytes,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("construct index ingest result repository: %w", err)
+	if config.IndexIngestDispatchEnabled || toolkitRoute.enabled {
+		var indexOutput output.IndexIngestIngestor
+		if config.IndexIngestDispatchEnabled {
+			indexResults, err := repos.NewIndexIngestResultsRepository(dependencies.OutputPool, repos.IndexIngestOutputPolicy{
+				LimitsRevision:    limitsRevision,
+				ArtifactMediaType: indexArtifactMediaType,
+				MaxArtifactBytes:  maxIndexArtifactBytes,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("construct index ingest result repository: %w", err)
+			}
+			indexOutput, err = outputapp.NewIndexIngestService(indexResults, outputClaims, indexResults, indexResults)
+			if err != nil {
+				return nil, err
+			}
 		}
-		indexOutput, err := outputapp.NewIndexIngestService(indexResults, outputClaims, indexResults, indexResults)
-		if err != nil {
-			return nil, err
-		}
-		// The tool-run terminal arm rides the SAME listener and the SAME worker
-		// as index ingest, which is why it is composed under this flag: a
-		// deployment whose worker runs an index is the deployment whose worker
-		// can run one of that toolkit's tools.
-		toolkitCallToolResults, err = repos.NewToolkitCallToolResultsRepository(dependencies.OutputPool)
-		if err != nil {
-			return nil, fmt.Errorf("construct tool-run result repository: %w", err)
-		}
-		toolkitCallToolOutput, err := outputapp.NewToolkitCallToolService(
-			toolkitCallToolResults, outputClaims, toolkitCallToolResults,
-		)
-		if err != nil {
-			return nil, err
-		}
-		// Assigned through a nil INTERFACE where a capability is absent, never
-		// a typed nil: ingestMessage decides on `== nil`, and a typed nil would
-		// pass that check and then call a method on a nil pointer.
 		var agents output.AgentExecutionIngestor
-		options := []output.ServerOption{output.WithToolkitCallTool(toolkitCallToolOutput)}
+		var options []output.ServerOption
+		if toolkitRoute.enabled {
+			toolkitCallToolResults, err = repos.NewToolkitCallToolResultsRepository(dependencies.OutputPool)
+			if err != nil {
+				return nil, fmt.Errorf("construct tool-run result repository: %w", err)
+			}
+			toolkitCallToolOutput, err := outputapp.NewToolkitCallToolService(
+				toolkitCallToolResults, outputClaims, toolkitCallToolResults,
+			)
+			if err != nil {
+				return nil, err
+			}
+			options = append(options, output.WithToolkitCallTool(toolkitCallToolOutput))
+		}
+		if config.ToolkitDiscoveryEnabled {
+			results, buildErr := repos.NewToolkitAvailableToolsResultsRepository(dependencies.OutputPool)
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			service, buildErr := outputapp.NewToolkitAvailableToolsService(results, outputClaims, results)
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			options = append(options, output.WithToolkitAvailableTools(service))
+		}
 		if config.AgentExecutionDispatchEnabled {
 			agents = agentOutputIngestor
 			options = append(options, output.WithToolkitExecuteRead(toolkitOutput))
@@ -1160,7 +1180,19 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	var contentServer *storage.ContentServer
 	var indexStart indexingapi.StartUseCase
 	var toolkitCallTool toolkitrun.UseCase
+	var toolkitDiscovery discovery.UseCase
+	var toolkitDiscoveryRuntime *currentToolkitDiscoveryRuntime
 	var currentIndex *currentIndexRuntime
+	var toolkitDiscoveryArtifacts *repos.ToolkitDiscoveryArtifactRepository
+	if config.ToolkitDiscoveryEnabled {
+		if dependencies.ObjectStore == nil {
+			return nil, errors.New("toolkit discovery requires durable object storage")
+		}
+		toolkitDiscoveryArtifacts, err = repos.NewToolkitDiscoveryArtifactRepository(dependencies.ContentPool, dependencies.ObjectStore)
+		if err != nil {
+			return nil, err
+		}
+	}
 	var projectSystemTokens storage.ProjectSystemTokenIssuer
 	if config.IndexSchedulingEnabled {
 		projectSystemTokens = currentProjectSystemTokenAdapter{
@@ -1259,6 +1291,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if err != nil {
 			return nil, fmt.Errorf("construct current index runtime: %w", err)
 		}
+		contentMaterializer := currentIndex.materializer
+		if toolkitRoute.rust {
+			contentMaterializer = agentMaterializer
+		}
 		// One listener serves both capabilities, so when agent execution is
 		// dispatched alongside index ingest the nested route belongs here too.
 		// Registering it is not a widening, but only because the service asks
@@ -1272,7 +1308,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			contentServer, err = storage.NewAgentAttachmentRuntimeContentServerWithLimits(
 				contentRepository,
 				contentRepository,
-				currentIndex.materializer,
+				contentMaterializer,
 				runtimeToken,
 				nestedApplicationVersions,
 				attachmentObjects,
@@ -1283,7 +1319,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			contentServer, err = storage.NewNestedAgentRuntimeContentServerWithLimits(
 				contentRepository,
 				contentRepository,
-				currentIndex.materializer,
+				contentMaterializer,
 				runtimeToken,
 				nestedApplicationVersions,
 				maxInputContentBytes,
@@ -1293,7 +1329,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			contentServer, err = storage.NewMaterializingRuntimeContentServerWithLimits(
 				contentRepository,
 				contentRepository,
-				currentIndex.materializer,
+				contentMaterializer,
 				runtimeToken,
 				maxInputContentBytes,
 				maxContentRequests,
@@ -1303,30 +1339,11 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, err
 		}
 		indexStart = currentIndex.start
-		// The tool-run producer, composed on the index graph's own toolkit
-		// reader and settings resolver.
-		// The analytics record (issue 618). It is composed here, on the
-		// admission pool, because the explicit run's record must commit on the
-		// same database its execution_jobs row does.
-		toolCallRecords, recordsErr := repos.NewToolCallRecordsRepository(dependencies.AdmissionPool)
-		if recordsErr != nil {
-			return nil, recordsErr
+		if !toolkitRoute.rust {
+			standaloneToolkitReader = currentIndex.toolkits
+			standaloneToolkitSettings = currentIndex.settings
 		}
-		toolkitCallToolRuntime, toolRunErr := newCurrentToolkitCallToolRuntime(
-			dependencies.AdmissionPool,
-			toolkitCallToolResults,
-			currentIndex,
-			dependencies.ToolkitCatalogue,
-			dependencies.WorkerToolkitCapability,
-			toolkitCallToolProducer,
-			toolkitCallToolDispatchPolicy,
-			0,
-			toolCallRecords,
-		)
-		if toolRunErr != nil {
-			return nil, toolRunErr
-		}
-		toolkitCallTool = toolkitCallToolRuntime.run
+
 		indexPublishers := []publisherRunner{
 			publisherRoot,
 			currentIndex.initializer,
@@ -1577,6 +1594,43 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, err
 		}
 	}
+	if toolkitRoute.enabled {
+		toolCallRecords, recordsErr := repos.NewToolCallRecordsRepository(dependencies.AdmissionPool)
+		if recordsErr != nil {
+			return nil, recordsErr
+		}
+		toolkitCallToolRuntime, toolRunErr := newCurrentToolkitCallToolRuntime(
+			dependencies.AdmissionPool,
+			toolkitCallToolResults,
+			standaloneToolkitReader, standaloneToolkitSettings,
+			dependencies.ToolkitCatalogue,
+			dependencies.WorkerToolkitCapability,
+			toolkitCallToolProducer,
+			toolkitCallToolDispatchPolicy,
+			0,
+			toolCallRecords,
+		)
+		if toolRunErr != nil {
+			return nil, toolRunErr
+		}
+		toolkitCallTool = toolkitCallToolRuntime.run
+		if config.ToolkitDiscoveryEnabled {
+			toolkitDiscoveryRuntime, err = newCurrentToolkitDiscoveryRuntime(dependencies.AdmissionPool, standaloneToolkitReader, standaloneToolkitSettings, dependencies.ToolkitCatalogue, dependencies.WorkerToolkitCapability, toolkitDiscoveryProducer, toolkitCallToolDispatchPolicy, toolkitDiscoveryArtifacts)
+			if err != nil {
+				return nil, err
+			}
+			toolkitDiscovery = toolkitDiscoveryRuntime.service
+		}
+		if toolkitDiscoveryRuntime != nil {
+			publisherRoot, err = newPublisherSet(publisherRoot, toolkitDiscoveryRuntime)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	if toolkitDiscoveryArtifacts != nil {
+		contentServer.WithToolkitDiscoveryArtifacts(toolkitDiscoveryArtifacts)
+	}
 	privateServers, err := runtimegrpc.NewPrivateServerSet(runtimegrpc.PrivateServerConfig{
 		ControlAddress:          config.ControlAddress,
 		OutputAddress:           config.OutputAddress,
@@ -1631,6 +1685,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if err != nil {
 		return nil, err
 	}
+	publicRoutes.ToolkitDiscovery = toolkitDiscovery
 	if currentIndex != nil {
 		publicRoutes.IndexCancel = currentIndex.cancel
 		publicRoutes.IndexMeta = currentIndex.indexMeta

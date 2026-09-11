@@ -28,7 +28,8 @@ const (
 type LookupEnv func(string) (string, bool)
 
 type Config struct {
-	Enabled bool
+	Enabled                 bool
+	ToolkitDiscoveryEnabled bool
 
 	CommandStream    string
 	MaxOutstanding   int64
@@ -161,6 +162,17 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 	default:
 		return Config{}, errors.New("ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED must be true or false")
 	}
+	discoveryEnabled, _ := lookup("ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED")
+	switch discoveryEnabled {
+	case "", "false":
+	case "true":
+		config.ToolkitDiscoveryEnabled = true
+	default:
+		return Config{}, errors.New("invalid toolkit discovery activation flag")
+	}
+	if config.ToolkitDiscoveryEnabled && !config.IndexIngestDispatchEnabled && !config.AgentExecutionDispatchEnabled {
+		return Config{}, errors.New("toolkit discovery requires an active worker dispatch")
+	}
 	indexSchedulingEnabled, _ := lookup("ELITEA_RUNTIME_INDEX_SCHEDULING_ENABLED")
 	switch indexSchedulingEnabled {
 	case "", "false":
@@ -254,6 +266,9 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 }
 
 func (c Config) Validate() error {
+	if c.ToolkitDiscoveryEnabled && (!c.Enabled || (!c.IndexIngestDispatchEnabled && !c.AgentExecutionDispatchEnabled)) {
+		return errors.New("toolkit discovery requires an active worker runtime")
+	}
 	if !c.Enabled {
 		return nil
 	}

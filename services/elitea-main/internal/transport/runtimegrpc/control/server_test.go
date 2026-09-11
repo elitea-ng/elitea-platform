@@ -1383,7 +1383,8 @@ func TestExpectedInputRolesNamesBothToolRunEntries(t *testing.T) {
 	}
 	if roles["toolkit-settings"] != executiondomain.ToolkitCallToolSettingsRole ||
 		roles["tool-arguments"] != executiondomain.ToolkitCallToolArgumentsRole ||
-		len(roles) != 2 {
+		roles["toolkit-runtime-context"] != executiondomain.ToolkitCallToolRuntimeContextRole ||
+		len(roles) != 3 {
 		t.Fatalf("unexpected tool-run input roles: %v", roles)
 	}
 }

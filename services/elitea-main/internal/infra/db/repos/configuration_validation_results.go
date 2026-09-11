@@ -771,8 +771,8 @@ RETURNING cursor`,
 func markOutputProjected(ctx context.Context, tx sqlExecutor, eventID string) error {
 	tag, err := tx.Exec(ctx, `
 UPDATE elitea_runtime.output_inbox
-SET projected_at = clock_timestamp()
-WHERE event_id = $1 AND projected_at IS NULL`, eventID)
+SET projected_at = COALESCE(projected_at, clock_timestamp())
+WHERE event_id = $1`, eventID)
 	if err != nil {
 		return fmt.Errorf("mark output inbox projected: %w", err)
 	}

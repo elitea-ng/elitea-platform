@@ -172,7 +172,7 @@ func TestToolkitExecuteReadBindingRequiresOneImmutableProtobufEntry(t *testing.T
 // settings are redeemed by this service from the saved toolkit row and hold
 // credentials; the arguments come from the caller. This binding is where that
 // distinction becomes enforceable, so every way of blurring it must fail.
-func TestToolkitCallToolBindingRequiresTwoDistinctlyRoledEntries(t *testing.T) {
+func TestToolkitCallToolBindingRequiresThreeDistinctlyRoledEntries(t *testing.T) {
 	settings := []byte(`{"url":"https://github.example"}`)
 	arguments := []byte(`{"issue":7}`)
 	entry := func(id, role string, content []byte) InputEntry {
@@ -198,6 +198,7 @@ func TestToolkitCallToolBindingRequiresTwoDistinctlyRoledEntries(t *testing.T) {
 		Entries: []InputEntry{
 			entry("toolkit-settings", ToolkitCallToolSettingsRole, settings),
 			entry("tool-arguments", ToolkitCallToolArgumentsRole, arguments),
+			entry("toolkit-runtime-context", ToolkitCallToolRuntimeContextRole, []byte(`{"toolkit_security":{}}`)),
 		},
 	}
 	binding := ToolkitCallToolBinding{

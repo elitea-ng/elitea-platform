@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	"io"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/workloadidentity"
@@ -87,7 +88,8 @@ WHERE c.claim_id = $1
       'agent.execute.application.v1',
       'agent.execute.adhoc.v1',
       'toolkit.execute.read.v1',
-      'toolkit.call_tool.v1'
+      'toolkit.call_tool.v1',
+      'toolkit.available_tools.v1'
   )
   AND e.content_reference = $6
   AND e.entry_version = $7
@@ -120,6 +122,28 @@ WHERE c.claim_id = $1
 		return ContentAuthorization{}, errors.New("authorize input content: invalid stored digest")
 	}
 	copy(authorization.ExpectedDigest[:], digest)
+	if authorization.CapabilityID == "toolkit.available_tools.v1" {
+		expected := discovery.PreparedIdentity{ExecutionID: claim.ExecutionID, Generation: claim.Generation, ResourceProjectID: authorization.ResourceProjectID, InputBundleID: authorization.InputBundleID}
+		var envelope, envelopeDigest []byte
+		err = r.store.QueryRow(ctx, `SELECT j.command_id,j.tenant_id,j.projection_project_id::text,b.manifest_digest,e.entry_id,
+          o.prepared_signed_envelope_bytes,o.prepared_signed_envelope_digest
+          FROM elitea_runtime.execution_jobs j
+          JOIN elitea_runtime.command_outbox o USING(execution_id,generation)
+          JOIN elitea_runtime.input_bundles b ON b.input_bundle_id=j.input_bundle_id
+          JOIN elitea_runtime.input_bundle_entries e ON e.input_bundle_id=j.input_bundle_id AND e.semantic_role='toolkit.available_tools.settings'
+          WHERE j.execution_id=$1 AND j.generation=$2 AND j.input_bundle_id=$3 AND j.resource_project_id::text=$4
+          AND j.capability_id='toolkit.available_tools.v1'`, claim.ExecutionID, claim.Generation, authorization.InputBundleID, authorization.ResourceProjectID).
+			Scan(&expected.CommandID, &expected.TenantID, &expected.ProjectionProjectID, &expected.InputBundleDigest, &expected.SettingsEntryID, &envelope, &envelopeDigest)
+		if err == nil {
+			authorization.ToolkitType, err = discovery.PreparedToolkitType(envelope, envelopeDigest, expected)
+		}
+		if err != nil || authorization.ToolkitType == "" {
+			if ctx.Err() != nil {
+				return ContentAuthorization{}, ctx.Err()
+			}
+			return ContentAuthorization{}, ErrContentUnauthorized
+		}
+	}
 	return authorization, nil
 }
 

@@ -72,11 +72,12 @@ func (s *stubSettlements) ReadToolkitCallToolSettlement(
 
 func testInputs() AuthoritativeInputs {
 	return AuthoritativeInputs{
-		ToolkitType: "github",
-		ToolkitID:   19,
-		ToolName:    "list_issues",
-		Settings:    json.RawMessage(`{"id":19,"type":"github","toolkit_name":"gh","settings":{}}`),
-		Arguments:   json.RawMessage(`{}`),
+		ToolkitType:    "github",
+		RuntimeContext: json.RawMessage(`{"toolkit_security":{"blocked_toolkits":[],"blocked_tools":{},"sensitive_tools":{},"sensitive_action_company_name":"Company","sensitive_action_message_template":"Approval required"}}`),
+		ToolkitID:      19,
+		ToolName:       "list_issues",
+		Settings:       json.RawMessage(`{"id":19,"type":"github","toolkit_name":"gh","settings":{}}`),
+		Arguments:      json.RawMessage(`{}`),
 	}
 }
 
@@ -172,6 +173,7 @@ func settledPayload(t *testing.T, status runtimev1.ToolkitCallToolStatusV1, body
 
 func validRequest() RunRequest {
 	return RunRequest{
+		RequestID:   "test-request",
 		ProjectID:   1,
 		ActorUserID: 7,
 		ToolkitID:   19,

@@ -184,6 +184,10 @@ FOR UPDATE OF j, o`, request.ExecutionID, int64(request.Generation), request.Cap
 			return nil
 		}
 
+		if err := completeToolkitInboxProjection(ctx, tx, request); err != nil {
+			return err
+		}
+
 		existing, observedAt, live, err := loadActiveClaimForUpdate(ctx, tx, request.ExecutionID, request.Generation, commandID, desired)
 		switch {
 		case err == nil && live:

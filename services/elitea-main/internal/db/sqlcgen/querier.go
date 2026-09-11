@@ -251,6 +251,7 @@ type Querier interface {
 	GetDurableIndexResultArtifact(ctx context.Context, arg GetDurableIndexResultArtifactParams) (GetDurableIndexResultArtifactRow, error)
 	GetExpectedAgentExecutionHeader(ctx context.Context, arg GetExpectedAgentExecutionHeaderParams) (GetExpectedAgentExecutionHeaderRow, error)
 	GetExpectedIndexIngestHeader(ctx context.Context, arg GetExpectedIndexIngestHeaderParams) (GetExpectedIndexIngestHeaderRow, error)
+	GetExpectedToolkitAvailableToolsHeader(ctx context.Context, arg GetExpectedToolkitAvailableToolsHeaderParams) (GetExpectedToolkitAvailableToolsHeaderRow, error)
 	// GetExpectedToolkitCallToolHeader is the output plane's admitted-binding read.
 	// Unlike its agent counterpart it needs no capability-owned table: everything
 	// it returns is on execution_jobs, input_bundles and input_bundle_entries.
@@ -276,6 +277,9 @@ type Querier interface {
 	GetPreparedToolkitExecuteReadEnvelope(ctx context.Context, arg GetPreparedToolkitExecuteReadEnvelopeParams) (GetPreparedToolkitExecuteReadEnvelopeRow, error)
 	GetRuntimeAdmissionByIdempotency(ctx context.Context, arg GetRuntimeAdmissionByIdempotencyParams) (GetRuntimeAdmissionByIdempotencyRow, error)
 	GetScheduledJobCursorForUpdate(ctx context.Context, jobID string) (GetScheduledJobCursorForUpdateRow, error)
+	GetToolkitAvailableToolsAdmissionByIdempotency(ctx context.Context, arg GetToolkitAvailableToolsAdmissionByIdempotencyParams) (GetToolkitAvailableToolsAdmissionByIdempotencyRow, error)
+	GetToolkitAvailableToolsArtifactForOutput(ctx context.Context, arg GetToolkitAvailableToolsArtifactForOutputParams) (GetToolkitAvailableToolsArtifactForOutputRow, error)
+	GetToolkitAvailableToolsInputEntries(ctx context.Context, arg GetToolkitAvailableToolsInputEntriesParams) ([]GetToolkitAvailableToolsInputEntriesRow, error)
 	// toolkit.call_tool.v1 — the producer's durable half.
 	//
 	// WHY THERE IS NO PER-CAPABILITY BINDING TABLE HERE. index.ingest.v1 and
@@ -367,6 +371,7 @@ type Querier interface {
 	InsertRuntimeInputBundleEntry(ctx context.Context, arg InsertRuntimeInputBundleEntryParams) error
 	InsertScheduledJobCursor(ctx context.Context, arg InsertScheduledJobCursorParams) error
 	InsertScheduledOccurrence(ctx context.Context, arg InsertScheduledOccurrenceParams) error
+	InsertToolkitAvailableToolsJob(ctx context.Context, arg InsertToolkitAvailableToolsJobParams) (string, error)
 	InsertToolkitCallToolJob(ctx context.Context, arg InsertToolkitCallToolJobParams) (string, error)
 	InsertToolkitExecuteReadBinding(ctx context.Context, arg InsertToolkitExecuteReadBindingParams) error
 	InsertToolkitExecuteReadJob(ctx context.Context, arg InsertToolkitExecuteReadJobParams) (string, error)
@@ -443,6 +448,7 @@ type Querier interface {
 	LockCurrentIndexScheduleToolkit(ctx context.Context, toolkitID int32) (LockCurrentIndexScheduleToolkitRow, error)
 	LockCurrentIndexScheduleToolkitMeta(ctx context.Context, toolkitID int32) ([]byte, error)
 	LockExpiredNoAuthorityAgentExecutions(ctx context.Context, arg LockExpiredNoAuthorityAgentExecutionsParams) ([]LockExpiredNoAuthorityAgentExecutionsRow, error)
+	LockExpiredNoAuthorityToolkitAvailableToolsExecutions(ctx context.Context, arg LockExpiredNoAuthorityToolkitAvailableToolsExecutionsParams) ([]LockExpiredNoAuthorityToolkitAvailableToolsExecutionsRow, error)
 	// LockExpiredNoAuthorityToolkitCallToolExecutions reclaims the capacity a run
 	// that never reached Redis would otherwise hold forever. It selects only work
 	// past its deadline that no worker ever claimed, which is exactly the crash
@@ -452,6 +458,8 @@ type Querier interface {
 	LockExpiredNoAuthorityToolkitExecuteReads(ctx context.Context, arg LockExpiredNoAuthorityToolkitExecuteReadsParams) ([]LockExpiredNoAuthorityToolkitExecuteReadsRow, error)
 	LockPATByUUID(ctx context.Context, uuid string) (LockPATByUUIDRow, error)
 	LockRuntimeAdmissionPolicy(ctx context.Context, capabilityID string) (int64, error)
+	LockToolkitAvailableToolsEnvelope(ctx context.Context, arg LockToolkitAvailableToolsEnvelopeParams) (LockToolkitAvailableToolsEnvelopeRow, error)
+	LockToolkitAvailableToolsPublication(ctx context.Context, arg LockToolkitAvailableToolsPublicationParams) (LockToolkitAvailableToolsPublicationRow, error)
 	LockToolkitCallToolEnvelope(ctx context.Context, arg LockToolkitCallToolEnvelopeParams) (LockToolkitCallToolEnvelopeRow, error)
 	LockToolkitCallToolPublication(ctx context.Context, arg LockToolkitCallToolPublicationParams) (LockToolkitCallToolPublicationRow, error)
 	LockToolkitExecuteReadEnvelope(ctx context.Context, arg LockToolkitExecuteReadEnvelopeParams) (LockToolkitExecuteReadEnvelopeRow, error)
@@ -472,6 +480,8 @@ type Querier interface {
 	MarkConfigurationLifecycleRetry(ctx context.Context, arg MarkConfigurationLifecycleRetryParams) (int64, error)
 	MarkCurrentNotificationSeen(ctx context.Context, arg MarkCurrentNotificationSeenParams) (MarkCurrentNotificationSeenRow, error)
 	MarkIndexMetaInitialized(ctx context.Context, arg MarkIndexMetaInitializedParams) (pgtype.Timestamptz, error)
+	MarkToolkitAvailableToolsDispatched(ctx context.Context, arg MarkToolkitAvailableToolsDispatchedParams) (int64, error)
+	MarkToolkitAvailableToolsPublished(ctx context.Context, arg MarkToolkitAvailableToolsPublishedParams) (int64, error)
 	MarkToolkitCallToolDispatched(ctx context.Context, arg MarkToolkitCallToolDispatchedParams) (int64, error)
 	MarkToolkitCallToolPublished(ctx context.Context, arg MarkToolkitCallToolPublishedParams) (int64, error)
 	MarkToolkitExecuteReadDispatched(ctx context.Context, arg MarkToolkitExecuteReadDispatchedParams) (int64, error)
@@ -654,6 +664,7 @@ type Querier interface {
 	SetCurrentConfigurationLifecycleStatus(ctx context.Context, arg SetCurrentConfigurationLifecycleStatusParams) (int64, error)
 	SoftDeleteArtifactBucket(ctx context.Context, id int64) (int64, error)
 	StorePreparedAgentExecutionEnvelope(ctx context.Context, arg StorePreparedAgentExecutionEnvelopeParams) (int64, error)
+	StorePreparedToolkitAvailableToolsEnvelope(ctx context.Context, arg StorePreparedToolkitAvailableToolsEnvelopeParams) (int64, error)
 	StorePreparedToolkitCallToolEnvelope(ctx context.Context, arg StorePreparedToolkitCallToolEnvelopeParams) (int64, error)
 	StorePreparedToolkitExecuteReadEnvelope(ctx context.Context, arg StorePreparedToolkitExecuteReadEnvelopeParams) (int64, error)
 	SumArtifactBucketBytes(ctx context.Context, bucketID int64) (int64, error)

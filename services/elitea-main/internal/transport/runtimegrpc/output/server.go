@@ -72,7 +72,8 @@ type Server struct {
 	nodeEvents NodeEventIngestor
 	// toolRuns is composed through WithToolkitCallTool rather than positionally;
 	// see toolkit_call_tool.go for why.
-	toolRuns ToolkitCallToolIngestor
+	toolRuns  ToolkitCallToolIngestor
+	discovery ToolkitAvailableToolsIngestor
 }
 
 func NewServer(config ServerConfig, authorizer WorkloadAuthorizer, ingestor ValidationIngestor, failures RuntimeFailureIngestor) (*Server, error) {
@@ -304,6 +305,15 @@ func (s *Server) ingestMessage(ctx context.Context, message *runtimev1.Execution
 			return outputapp.ProjectionOutcome{}, err
 		}
 		return s.toolkits.IngestToolkitExecuteRead(ctx, frame)
+	case runtimev1.ExecutionOutputEventTypeV1_EXECUTION_OUTPUT_EVENT_TYPE_V1_TOOLKIT_AVAILABLE_TOOLS_RESULT:
+		if s.discovery == nil {
+			return outputapp.ProjectionOutcome{}, outputapp.ErrInvalidToolkitAvailableToolsOutput
+		}
+		frame, err := s.toolkitAvailableToolsFrame(message, workloadIdentity)
+		if err != nil {
+			return outputapp.ProjectionOutcome{}, err
+		}
+		return s.discovery.IngestToolkitAvailableTools(ctx, frame)
 	case runtimev1.ExecutionOutputEventTypeV1_EXECUTION_OUTPUT_EVENT_TYPE_V1_TOOLKIT_CALL_TOOL_RESULT:
 		if s.toolRuns == nil {
 			return outputapp.ProjectionOutcome{}, outputapp.ErrInvalidToolkitCallToolOutput

@@ -57,14 +57,21 @@ var (
 // resolver reloads them from the saved row, which is what stops a caller
 // running a tool against settings it supplied itself.
 type RunRequest struct {
-	ProjectID   int64
-	ActorUserID int64
-	ToolkitID   int64
-	ToolName    string
-	Arguments   json.RawMessage
+	RequestID                 string
+	ProjectID                 int64
+	ActorUserID               int64
+	ToolkitID                 int64
+	ToolName                  string
+	Arguments                 json.RawMessage
+	LLMModel                  string
+	MCPAuthorizationReference string
+	LLMSettings               json.RawMessage
 }
 
 func (r RunRequest) Validate() error {
+	if len(r.RequestID) > 128 || !utf8.ValidString(r.RequestID) || strings.ContainsAny(r.RequestID, "\x00\r\n") || r.RequestID != strings.TrimSpace(r.RequestID) {
+		return ErrInvalidToolRun
+	}
 	if r.ProjectID <= 0 || r.ActorUserID <= 0 || r.ToolkitID <= 0 ||
 		r.ProjectID > math.MaxInt32 || r.ToolkitID > math.MaxInt32 {
 		return ErrInvalidToolRun
@@ -72,6 +79,15 @@ func (r RunRequest) Validate() error {
 	if r.ToolName == "" || len(r.ToolName) > executiondomain.MaxSafeCommandStringBytes ||
 		!utf8.ValidString(r.ToolName) || strings.ContainsAny(r.ToolName, "\x00\r\n") ||
 		r.ToolName != strings.TrimSpace(r.ToolName) {
+		return ErrInvalidToolRun
+	}
+	if len(r.LLMModel) > maxAdmissionStringBytes || !utf8.ValidString(r.LLMModel) || strings.ContainsAny(r.LLMModel, "\x00\r\n") || r.LLMModel != strings.TrimSpace(r.LLMModel) {
+		return ErrInvalidToolRun
+	}
+	if r.MCPAuthorizationReference != "" && !validMCPReference(r.MCPAuthorizationReference) {
+		return ErrInvalidToolRun
+	}
+	if !validModelSettings(r.LLMSettings) {
 		return ErrInvalidToolRun
 	}
 	if len(r.Arguments) > MaxToolArgumentsBytes {
@@ -85,6 +101,7 @@ func (r RunRequest) Validate() error {
 
 func (r RunRequest) Clone() RunRequest {
 	r.Arguments = append(json.RawMessage(nil), r.Arguments...)
+	r.LLMSettings = append(json.RawMessage(nil), r.LLMSettings...)
 	return r
 }
 
@@ -95,11 +112,12 @@ func (r RunRequest) Clone() RunRequest {
 type RunStatus string
 
 const (
-	RunStatusOK                 RunStatus = "ok"
-	RunStatusToolError          RunStatus = "tool_error"
-	RunStatusUnsupportedToolkit RunStatus = "unsupported_toolkit"
-	RunStatusUnknownTool        RunStatus = "unknown_tool"
-	RunStatusRuntimeFailure     RunStatus = "runtime_failure"
+	RunStatusOK                    RunStatus = "ok"
+	RunStatusAuthorizationRequired RunStatus = "authorization_required"
+	RunStatusToolError             RunStatus = "tool_error"
+	RunStatusUnsupportedToolkit    RunStatus = "unsupported_toolkit"
+	RunStatusUnknownTool           RunStatus = "unknown_tool"
+	RunStatusRuntimeFailure        RunStatus = "runtime_failure"
 )
 
 // RunOutcome is one settled tool run. ResultJSON is the SDK return value's
@@ -107,13 +125,14 @@ const (
 // JSON document reads as a corrupt result and this boundary must never hand a
 // caller one.
 type RunOutcome struct {
-	ExecutionID  string
-	Status       RunStatus
-	ResultJSON   string
-	Truncated    bool
-	ErrorMessage string
-	ToolkitType  string
-	ToolName     string
+	ExecutionID           string
+	Status                RunStatus
+	ResultJSON            string
+	Truncated             bool
+	ErrorMessage          string
+	AuthorizationRequired *executiondomain.ToolkitAuthorizationRequired
+	ToolkitType           string
+	ToolName              string
 }
 
 // AuthoritativeInputResolver reloads the saved toolkit and freezes its settings.
@@ -539,6 +558,17 @@ func decodeSettlement(admitted AdmittedRun, settlement Settlement) (RunOutcome, 
 		outcome.Truncated = summary.GetTruncated()
 		outcome.ErrorMessage = summary.GetErrorMessage()
 		switch summary.GetStatus() {
+		case runtimev1.ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_AUTHORIZATION_REQUIRED:
+			challenge := summary.GetAuthorizationRequired()
+			if challenge == nil {
+				return RunOutcome{}, errors.New("tool authorization challenge is absent")
+			}
+			value := &executiondomain.ToolkitAuthorizationRequired{ToolkitName: challenge.GetToolkitName(), ToolkitType: challenge.GetToolkitType(), ToolkitID: challenge.GetToolkitId(), ServerURL: challenge.GetServerUrl(), ResourceMetadataURL: challenge.GetResourceMetadataUrl(), ResourceMetadata: append([]byte(nil), challenge.GetResourceMetadataJson()...)}
+			if value.Validate() != nil || value.ToolkitID != strconv.FormatInt(admitted.Binding.ToolkitID, 10) || value.ToolkitType != admitted.Binding.ToolkitType || summary.GetResultJson() != "" || summary.GetTruncated() || summary.GetErrorMessage() != executiondomain.ToolkitAuthorizationMessage {
+				return RunOutcome{}, errors.New("tool authorization challenge does not match admitted toolkit")
+			}
+			outcome.Status = RunStatusAuthorizationRequired
+			outcome.AuthorizationRequired = value
 		case runtimev1.ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_OK:
 			outcome.Status = RunStatusOK
 		case runtimev1.ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_TOOL_ERROR:
@@ -579,14 +609,20 @@ const (
 	PayloadTypeRuntimeFailure        = "RUNTIME_FAILURE"
 )
 
-// idempotencyKey binds one run to its project, actor, toolkit, tool and exact
-// arguments. Two deliberate identical calls therefore share a key and the
-// second returns the first one's answer instead of running the tool twice,
-// which is #616's idempotency criterion; a call that changed any argument gets
-// its own run.
+// idempotencyKey binds retries to one deliberate request. Callers without a
+// request ID start a new run. Identical settings alone never identify a run.
 func (s *RunService) idempotencyKey(request RunRequest, inputs AuthoritativeInputs) (string, error) {
+	requestID := request.RequestID
+	if requestID == "" {
+		var err error
+		requestID, err = s.newID()
+		if err != nil {
+			return "", fmt.Errorf("create tool-run request identity: %w", err)
+		}
+	}
 	hash := sha256.New()
 	for _, value := range []string{
+		requestID,
 		strconv.FormatInt(request.ProjectID, 10),
 		strconv.FormatInt(request.ActorUserID, 10),
 		strconv.FormatInt(request.ToolkitID, 10),
@@ -594,6 +630,8 @@ func (s *RunService) idempotencyKey(request RunRequest, inputs AuthoritativeInpu
 		inputs.ToolkitVersion,
 		request.ToolName,
 		string(request.Arguments),
+		string(inputs.Settings),
+		string(inputs.RuntimeContext),
 	} {
 		var length [8]byte
 		for index := 0; index < 8; index++ {

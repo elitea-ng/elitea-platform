@@ -479,17 +479,24 @@ func expectedInputRoles(command *runtimev1.WorkerCommandV1) (map[string]string, 
 		return map[string]string{
 			toolkit.GetRequestEntryId(): executiondomain.ToolkitExecuteReadRequestRole,
 		}, nil
+	case executiondomain.ToolkitAvailableToolsCapability:
+		discovery := command.GetToolkitAvailableTools()
+		if discovery == nil || discovery.GetSettingsEntryId() == "" || discovery.GetSettingsEntryId() == "toolkit-runtime-context" {
+			return nil, errors.New("tool discovery input binding is required")
+		}
+		return map[string]string{discovery.GetSettingsEntryId(): executiondomain.ToolkitAvailableToolsSettingsRole, "toolkit-runtime-context": "toolkit.available_tools.runtime_context"}, nil
 	case executiondomain.ToolkitCallToolCapability:
 		call := command.GetToolkitCallTool()
 		if call == nil || call.GetSettingsEntryId() == "" || call.GetArgumentsEntryId() == "" {
 			return nil, errors.New("tool-run input bindings are required")
 		}
-		if call.GetSettingsEntryId() == call.GetArgumentsEntryId() {
+		if call.GetSettingsEntryId() == call.GetArgumentsEntryId() || call.GetSettingsEntryId() == "toolkit-runtime-context" || call.GetArgumentsEntryId() == "toolkit-runtime-context" {
 			return nil, errors.New("tool-run input binding is duplicated")
 		}
 		return map[string]string{
 			call.GetSettingsEntryId():  executiondomain.ToolkitCallToolSettingsRole,
 			call.GetArgumentsEntryId(): executiondomain.ToolkitCallToolArgumentsRole,
+			"toolkit-runtime-context":  executiondomain.ToolkitCallToolRuntimeContextRole,
 		}, nil
 	default:
 		return nil, errors.New("unsupported command capability")

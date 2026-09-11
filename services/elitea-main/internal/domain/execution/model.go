@@ -26,18 +26,19 @@ const (
 	MaxAgentExecutionInputBytes       = 1024 * 1024
 	MaxToolkitExecuteReadInputBytes   = 1024 * 1024
 
-	IndexToolkitConfigurationRole = "index.toolkit_configuration"
-	IndexToolParametersRole       = "index.tool_parameters"
-	IndexLLMModelRole             = "index.llm_model"
-	IndexLLMConfigurationRole     = "index.llm_configuration"
-	IndexMCPTokensRole            = "index.mcp_tokens"
-	IndexEmbeddingBindingRole     = "index.embedding_binding"
-	AgentExecutionRequestRole     = "agent.execution_request"
-	ToolkitExecuteReadRequestRole = "toolkit.execute_read_request"
-	ToolkitCallToolSettingsRole   = "toolkit.call_tool.settings"
-	ToolkitCallToolArgumentsRole  = "toolkit.call_tool.arguments"
-	MaxIndexMetaIDBytes           = 256
-	MaxIndexMetaCorrelationBytes  = 512
+	IndexToolkitConfigurationRole     = "index.toolkit_configuration"
+	IndexToolParametersRole           = "index.tool_parameters"
+	IndexLLMModelRole                 = "index.llm_model"
+	IndexLLMConfigurationRole         = "index.llm_configuration"
+	IndexMCPTokensRole                = "index.mcp_tokens"
+	IndexEmbeddingBindingRole         = "index.embedding_binding"
+	AgentExecutionRequestRole         = "agent.execution_request"
+	ToolkitExecuteReadRequestRole     = "toolkit.execute_read_request"
+	ToolkitCallToolRuntimeContextRole = "toolkit.call_tool.runtime_context"
+	ToolkitCallToolSettingsRole       = "toolkit.call_tool.settings"
+	ToolkitCallToolArgumentsRole      = "toolkit.call_tool.arguments"
+	MaxIndexMetaIDBytes               = 256
+	MaxIndexMetaCorrelationBytes      = 512
 	// MaxSafeCommandStringBytes is the bound every worker applies to a bounded
 	// command string. Exceeding it here would produce a command the worker
 	// refuses, so the refusal belongs on this side where the caller can see it.
@@ -189,7 +190,7 @@ func SupportedCapability(capabilityID string) bool {
 		AgentApplicationCapability,
 		AgentAdhocCapability,
 		ToolkitExecuteReadCapability,
-		ToolkitCallToolCapability:
+		ToolkitCallToolCapability, ToolkitAvailableToolsCapability:
 		return true
 	default:
 		return false
@@ -380,7 +381,7 @@ func (b ToolkitCallToolBinding) Validate(bundle InputBundle) error {
 		!validIndexMetaText(b.ToolkitType, MaxSafeCommandStringBytes) ||
 		!validIndexMetaText(b.ToolName, MaxSafeCommandStringBytes) ||
 		!validOptionalIndexMetaText(b.ToolkitVersion, MaxSafeCommandStringBytes) ||
-		len(bundle.Entries) != 2 {
+		len(bundle.Entries) != 3 {
 		return ErrInvalidInputBundle
 	}
 	for _, reference := range []struct {
@@ -389,6 +390,7 @@ func (b ToolkitCallToolBinding) Validate(bundle InputBundle) error {
 	}{
 		{id: b.SettingsEntryID, role: ToolkitCallToolSettingsRole},
 		{id: b.ArgumentsEntryID, role: ToolkitCallToolArgumentsRole},
+		{id: "toolkit-runtime-context", role: ToolkitCallToolRuntimeContextRole},
 	} {
 		entry, found := bundle.entryByID(reference.id)
 		if !found || entry.SemanticRole != reference.role {
@@ -444,3 +446,26 @@ func (a Admission) Validate() error {
 }
 
 const ToolkitAvailableToolsCapability = "toolkit.available_tools.v1"
+const ToolkitAvailableToolsSettingsRole = "toolkit.available_tools.settings"
+
+type ToolkitAvailableToolsBinding struct {
+	ToolkitType     string
+	ToolkitID       int64
+	ToolkitVersion  string
+	SettingsEntryID string
+}
+
+func (b ToolkitAvailableToolsBinding) Validate(bundle InputBundle) error {
+	if b.ToolkitID <= 0 || !validIndexMetaText(b.ToolkitType, MaxSafeCommandStringBytes) || !validOptionalIndexMetaText(b.ToolkitVersion, MaxSafeCommandStringBytes) || b.SettingsEntryID == "" || len(bundle.Entries) != 2 {
+		return ErrInvalidInputBundle
+	}
+	entry, found := bundle.entryByID(b.SettingsEntryID)
+	if !found || entry.SemanticRole != ToolkitAvailableToolsSettingsRole {
+		return ErrInvalidInputBundle
+	}
+	contextEntry, found := bundle.entryByID("toolkit-runtime-context")
+	if !found || contextEntry.SemanticRole != "toolkit.available_tools.runtime_context" {
+		return ErrInvalidInputBundle
+	}
+	return nil
+}
