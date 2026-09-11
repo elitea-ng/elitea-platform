@@ -1521,3 +1521,117 @@ fn malformed_graph_hitl_never_becomes_an_approval_card() {
         assert_eq!(error.code(), AgentEventProjectionErrorCode::InvalidState);
     }
 }
+
+#[test]
+fn large_tool_results_use_bounded_complete_utf8_chunks() {
+    check_large_tool_result(false);
+}
+
+#[test]
+fn large_tool_errors_keep_complete_output_and_error_status() {
+    check_large_tool_result(true);
+}
+
+fn check_large_tool_result(is_error: bool) {
+    let payload = if is_error {
+        json!({"error": "界\\\"".repeat(30000)})
+    } else {
+        json!({"title": "界\\\"".repeat(30000)})
+    };
+    let mut projector = AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({})))
+        .expect("projector");
+    projector.start(timestamp(0)).expect("start");
+    let tool = event(
+        "llm-tool",
+        1,
+        false,
+        true,
+        vec![Part::FunctionCall {
+            name: "lookup_issue".to_owned(),
+            args: json!({"issue_number": 42}),
+            id: Some("call-1".to_owned()),
+            thought_signature: None,
+        }],
+    );
+    let start = projector
+        .project(&tool)
+        .expect("tool start")
+        .into_iter()
+        .map(|event| current(&event))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        start.iter().map(|event| &event["type"]).collect::<Vec<_>>(),
+        [
+            "agent_llm_start",
+            "agent_llm_end",
+            "partial_message",
+            "agent_tool_start",
+            "partial_message"
+        ]
+    );
+    assert_eq!(start[3]["response_metadata"]["tool_run_id"], "call-1");
+    assert_eq!(
+        start[3]["response_metadata"]["tool_inputs"]["issue_number"],
+        42
+    );
+
+    let mut result = Event::with_id("tool-result", "invocation-1");
+    result.timestamp = timestamp(2);
+    result.author = "root-agent".to_owned();
+    result.llm_response.content = Some(Content {
+        role: "function".to_owned(),
+        parts: vec![Part::FunctionResponse {
+            function_response: adk_rust::FunctionResponseData::new("lookup_issue", payload.clone()),
+            id: Some("call-1".to_owned()),
+            annotations: None,
+        }],
+    });
+    result.actions.tool_confirmation_decision = Some(ToolConfirmationDecision::Approve);
+    let finish = projector
+        .project(&result)
+        .expect("tool result")
+        .into_iter()
+        .map(|event| current(&event))
+        .collect::<Vec<_>>();
+    let mut output = String::new();
+    for pair in finish.chunks_exact(2) {
+        assert_eq!(pair[0]["type"], "partial_message");
+        let metadata = &pair[1]["response_metadata"];
+        let final_error = is_error && metadata["tool_output_chunk_v1"]["final"] == true;
+        assert_eq!(
+            pair[1]["type"],
+            if final_error {
+                "agent_tool_error"
+            } else {
+                "agent_tool_end"
+            }
+        );
+        if final_error {
+            assert_eq!(metadata["error"], "Tool execution failed. See tool output.");
+        }
+        assert_eq!(
+            metadata["tool_output_chunk_v1"]["offset_bytes"],
+            output.len()
+        );
+        let text = metadata["tool_output"].as_str().expect("fragment");
+        assert!(text.len() <= 8192);
+        output.push_str(text);
+        assert!(
+            serde_json::to_vec(&pair[0]).expect("json").len()
+                <= crate::protocol::node_event::MAX_CURRENT_NODE_EVENT_JSON_BYTES
+        );
+    }
+    assert_eq!(
+        serde_json::from_str::<Value>(&output).expect("complete JSON"),
+        payload
+    );
+    let last = finish.last().expect("last");
+    assert_eq!(
+        last["response_metadata"]["tool_output_chunk_v1"]["final"],
+        true
+    );
+    assert_eq!(
+        last["response_metadata"]["finish_reason"],
+        if is_error { "error" } else { "stop" }
+    );
+}

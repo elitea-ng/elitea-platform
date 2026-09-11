@@ -85,3 +85,27 @@ The preceding result in row 7226 also passes the digest check.
 The browser shows no tool failure or resource-limit error for the repeated turn.
 Playwright reloads the page and verifies that the repeated report remains visible.
 The model report includes a conceptual credential example; this example does not prove the accepted credential creation contract.
+
+
+## Large error results
+
+The chunk path previously ran before error classification and marked every final result successful.
+Rust now classifies the original response before selecting the chunk path.
+A failed result retains its complete serialized JSON in `tool_output`.
+The final partial message retains `finish_reason=error` and bounded error metadata.
+The final lifecycle event uses `agent_tool_error`.
+The browser assembles that final fragment before marking the action failed.
+Main preserves the error state when reconstructing the trace and processing exact replay.
+
+Rust tests reconstruct both large successful and failed multibyte results from bounded frames.
+The browser reducer and chunk suites pass 93 tests.
+The Main trace tests verify the complete error output and error status after replay.
+These checks extend the current UI tool-end and tool-error behavior described above.
+They do not alter the model-visible result or increase the model-output limit.
+
+An isolated commit candidate excludes the pending instruction-authority changes.
+Its 29 Rust event tests and Rust Clippy checks pass.
+Its 93 browser tests and focused Oxlint checks pass.
+The Main chunk suite passes against PostgreSQL, including assembly across transactions, without skipped tests.
+The complete working UI also passes TypeScript checking.
+The new error lifecycle behavior still requires deployment verification.

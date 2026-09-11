@@ -45,7 +45,11 @@ use crate::toolkits::{
 };
 
 const MAX_TOOL_CALLS_PER_MODEL_TURN: usize = 16;
-const MAX_PROJECTED_EVENTS_PER_ADK_EVENT: usize = 3 + 2 * MAX_TOOL_CALLS_PER_MODEL_TURN;
+const MAX_TOOL_RESULT_BYTES: usize = 1024 * 1024;
+const TOOL_RESULT_CHUNK_BYTES: usize = 8 * 1024;
+const MAX_TOOL_RESULT_CHUNKS: usize = MAX_TOOL_RESULT_BYTES / TOOL_RESULT_CHUNK_BYTES + 1;
+const MAX_PROJECTED_EVENTS_PER_ADK_EVENT: usize =
+    3 + 2 * MAX_TOOL_CALLS_PER_MODEL_TURN * MAX_TOOL_RESULT_CHUNKS;
 const MAX_ADK_EVENT_ID_BYTES: usize = 512;
 const MAX_ADK_PARTS_PER_EVENT: usize = 256;
 const MAX_CONTEXT_TEXT_BYTES: usize = 2_048;
@@ -183,7 +187,7 @@ impl std::error::Error for AgentEventProjectionError {}
 /// A caller sends and durably acknowledges every event in order before polling
 /// the ADK stream again. The event slots stay heap-owned so nested projection
 /// and async delivery never copy an 11 KiB inline array through the executor
-/// stack; capacity remains fixed at the admitted per-event maximum.
+/// stack; capacity grows only up to the admitted per-event maximum.
 pub(crate) struct ProjectedAgentEventBatch {
     events: Vec<NodeEventV1>,
 }
@@ -191,7 +195,7 @@ pub(crate) struct ProjectedAgentEventBatch {
 impl ProjectedAgentEventBatch {
     fn new() -> Self {
         Self {
-            events: Vec::with_capacity(MAX_PROJECTED_EVENTS_PER_ADK_EVENT),
+            events: Vec::with_capacity(3 + 2 * MAX_TOOL_CALLS_PER_MODEL_TURN),
         }
     }
 
@@ -1962,12 +1966,25 @@ impl AgentEventProjector {
                 .get(id)
                 .filter(|active| active.name == result.name)
                 .ok_or_else(AgentEventProjectionError::invalid_state)?;
-            validate_tool_event_value(result.response)?;
+            let serialized = serde_json::to_string(result.response)
+                .map_err(|_| AgentEventProjectionError::invalid_state())?;
             let error = result
                 .response
                 .as_object()
                 .and_then(|value| value.get("error"))
                 .and_then(Value::as_str);
+            if serialized.len() > MAX_TOOL_EVENT_VALUE_BYTES {
+                self.project_tool_result_chunks(
+                    &mut batch,
+                    event,
+                    id,
+                    active,
+                    &serialized,
+                    error.is_some(),
+                )?;
+                completed.push(id.to_owned());
+                continue;
+            }
             let output = error
                 .is_none()
                 .then(|| serde_json::to_string(result.response))
@@ -2000,6 +2017,79 @@ impl AgentEventProjector {
             self.active_tools.remove(&id);
         }
         Ok(batch)
+    }
+
+    fn project_tool_result_chunks(
+        &self,
+        batch: &mut ProjectedAgentEventBatch,
+        event: &Event,
+        id: &str,
+        active: &ActiveToolCall,
+        serialized: &str,
+        is_error: bool,
+    ) -> Result<(), AgentEventProjectionError> {
+        let timestamp_finish = event
+            .timestamp
+            .to_rfc3339_opts(SecondsFormat::AutoSi, false);
+        if serialized.len() > MAX_TOOL_RESULT_BYTES {
+            return Err(AgentEventProjectionError {
+                code: AgentEventProjectionErrorCode::ResourceExhausted,
+                protocol: None,
+            });
+        }
+        let hash = ring::digest::digest(&ring::digest::SHA256, serialized.as_bytes());
+        let mut encoded_hash = String::with_capacity(64);
+        for byte in hash.as_ref() {
+            const HEX: &[u8; 16] = b"0123456789abcdef";
+            encoded_hash.push(char::from(HEX[usize::from(byte >> 4)]));
+            encoded_hash.push(char::from(HEX[usize::from(byte & 15)]));
+        }
+        let hash = encoded_hash;
+        let mut offset = 0;
+        while offset < serialized.len() {
+            let mut end = (offset + TOOL_RESULT_CHUNK_BYTES).min(serialized.len());
+            while !serialized.is_char_boundary(end) {
+                end -= 1;
+            }
+            let final_chunk = end == serialized.len();
+            let final_error = final_chunk && is_error;
+            // The complete error remains in tool_output. Keep lifecycle metadata bounded.
+            let error = final_error.then_some("Tool execution failed. See tool output.");
+            let mut entry = tool_entry(
+                id,
+                active,
+                final_chunk.then_some(timestamp_finish.as_str()),
+                final_chunk.then_some(if is_error { "error" } else { "stop" }),
+                Some(&serialized[offset..end]),
+                error,
+            );
+            let object = entry
+                .as_object_mut()
+                .ok_or_else(AgentEventProjectionError::invalid_state)?;
+            object.remove("tool_inputs");
+            object.insert(
+                "tool_output_chunk_v1".to_owned(),
+                json!({
+                    "offset_bytes": offset, "total_bytes": serialized.len(),
+                    "sha256": hash, "final": final_chunk,
+                }),
+            );
+            // Persist and validate each chunk before its browser lifecycle frame.
+            batch.push(self.tool_partial_event(id, &entry, event.timestamp)?)?;
+            batch.push(self.event(
+                if final_error {
+                    "agent_tool_error"
+                } else {
+                    "agent_tool_end"
+                },
+                &error.map_or(Value::Null, |value| Value::String(value.to_owned())),
+                None,
+                &entry,
+                event.timestamp,
+            )?)?;
+            offset = end;
+        }
+        Ok(())
     }
 
     fn tool_partial_event(

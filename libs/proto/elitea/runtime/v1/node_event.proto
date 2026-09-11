@@ -15,6 +15,21 @@ option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elite
 // are forbidden on Redis. Producers and consumers must validate the fragments
 // and the complete output frame against the selected protocol limits before
 // transport or durable projection.
+// Large agent tool results use the versioned JSON member tool_output_chunk_v1
+// beside tool_output in agent_tool_end or final agent_tool_error response_metadata
+// and in each matching
+// partial_message.response_metadata.tool_calls entry. Its exact fields are:
+// offset_bytes (unsigned integer), total_bytes (unsigned integer, <= 1048576),
+// sha256 (64 lowercase hexadecimal characters), final (boolean).
+// tool_output is one complete UTF-8 string fragment, at most 8192 bytes.
+// Offsets count UTF-8 bytes in the complete serialized JSON tool result.
+// Chunks are contiguous; total_bytes and sha256 stay constant for one call.
+// The final chunk ends at total_bytes. Consumers verify the assembled digest.
+// Exact duplicate chunks are idempotent; gaps or conflicting bytes are refused.
+// The existing execution fence, output sequence and tool_run_id scope assembly.
+// Only a final chunk marks the tool complete. A failed result uses finish_reason
+// error and bounded error metadata; its complete JSON remains in tool_output.
+// Frame byte limits stay unchanged.
 message NodeEventV1 {
   string type = 1;
   optional string stream_id = 2;

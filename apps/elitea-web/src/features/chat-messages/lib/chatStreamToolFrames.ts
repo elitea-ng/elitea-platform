@@ -9,6 +9,8 @@
  * §3.5 file-length budget; the switch arms and every comment on them are the
  * originals, moved unchanged.
  */
+import { appendToolOutputChunk } from './toolOutputChunks';
+
 import { convertJsonToString } from '@/shared/lib/json';
 import { TOOL_ACTION_TYPES, ToolActionStatus } from '@/shared/lib/chat';
 import { buildAuthorizationActions } from '@/entities/message';
@@ -151,12 +153,27 @@ export function reduceToolFrame(
     // The tool returned. Outputs ACCUMULATE — a string appends, an object
     // merges — because a tool may report progressively, and replacing would
     // discard everything but the last frame.
-    case SocketMessageType.AgentToolEnd: {
+    case SocketMessageType.AgentToolEnd:
+    case SocketMessageType.AgentToolError: {
       if (index === -1) return history;
       const current = history[index];
       const runId = frame.response_metadata?.tool_run_id;
       if (!current || !runId || !findToolAction(current, runId)) return history;
       const metadata = toolMetadata(frame);
+      const isError = type === SocketMessageType.AgentToolError;
+      if (isError && frame.response_metadata?.tool_output_chunk_v1 === undefined) {
+        return replaceAt(history, index, {
+          toolActions: replaceToolAction(current, runId, (action) => {
+            const hierarchy = normalizeExecutionHierarchy(metadata, action, action.toolMeta);
+            return {
+              ...action, ...hierarchy,
+              content: convertJsonToString(frame.content ?? ''),
+              status: ToolActionStatus.error, ended_at: frame.created_at, isError: true,
+              toolMeta: { ...action.toolMeta, ...metadata, ...hierarchy },
+            };
+          }),
+        });
+      }
 
       return replaceAt(history, index, {
         toolActions: replaceToolAction(current, runId, (action) => {
@@ -164,7 +181,12 @@ export function reduceToolFrame(
           const output = frame.response_metadata?.tool_output;
           const previous = action['toolOutputs'];
           let toolOutputs = previous;
-          if (typeof output === 'string') {
+          const chunk = frame.response_metadata?.tool_output_chunk_v1;
+          const assembled = chunk === undefined ? undefined : appendToolOutputChunk(previous, output, chunk, action['toolOutputChunk']);
+          if (chunk !== undefined && assembled === undefined) return action;
+          if (assembled) {
+            toolOutputs = assembled.output;
+          } else if (typeof output === 'string') {
             toolOutputs = (typeof previous === 'string' ? previous : '') + convertJsonToString(output, true);
           } else if (typeof output === 'object' && output !== null) {
             toolOutputs = { ...((typeof previous === 'object' && previous !== null ? previous : {}) as object), ...output };
@@ -173,36 +195,15 @@ export function reduceToolFrame(
             ...action,
             ...hierarchy,
             toolOutputs,
+            ...(assembled ? { toolOutputChunk: assembled.chunk } : {}),
             message: undefined,
             content: convertJsonToString(frame.content ?? ''),
             // An action awaiting approval stays awaiting it: the wrapper ending
             // is not the user answering.
-            status: action.status === ToolActionStatus.actionRequired ? action.status : ToolActionStatus.complete,
-            ended_at: frame.response_metadata?.timestamp_finish ?? frame.created_at,
+            status: action.status === ToolActionStatus.actionRequired || (assembled && !assembled.chunk.final) ? action.status : isError ? ToolActionStatus.error : ToolActionStatus.complete,
+            ...(isError ? { isError: true } : {}),
+            ended_at: assembled && !assembled.chunk.final ? action['ended_at'] : frame.response_metadata?.timestamp_finish ?? frame.created_at,
             created_at: frame.response_metadata?.timestamp_start ?? action['created_at'],
-            toolMeta: { ...action.toolMeta, ...metadata, ...hierarchy },
-          };
-        }),
-      });
-    }
-
-    case SocketMessageType.AgentToolError: {
-      if (index === -1) return history;
-      const current = history[index];
-      const runId = frame.response_metadata?.tool_run_id;
-      if (!current || !runId || !findToolAction(current, runId)) return history;
-      const metadata = toolMetadata(frame);
-
-      return replaceAt(history, index, {
-        toolActions: replaceToolAction(current, runId, (action) => {
-          const hierarchy = normalizeExecutionHierarchy(metadata, action, action.toolMeta);
-          return {
-            ...action,
-            ...hierarchy,
-            content: convertJsonToString(frame.content ?? ''),
-            status: ToolActionStatus.error,
-            ended_at: frame.created_at,
-            isError: true,
             toolMeta: { ...action.toolMeta, ...metadata, ...hierarchy },
           };
         }),

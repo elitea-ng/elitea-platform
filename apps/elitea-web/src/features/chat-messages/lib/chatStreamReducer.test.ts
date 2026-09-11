@@ -281,6 +281,40 @@ describe('the tool lifecycle', () => {
     expect(twice[0]?.toolActions).toHaveLength(1);
   });
 
+  it('keeps chunked output running until its final frame and ignores replay', () => {
+    let history = withStartedTool();
+    const initialStatus = (history[0]?.toolActions?.[0] as ToolAction | undefined)?.status;
+    const first = toolFrame(SocketMessageType.AgentToolEnd, { tool_output: '{"ok":', tool_output_chunk_v1: { offset_bytes: 0, total_bytes: 11, sha256: 'a'.repeat(64), final: false } });
+    history = applyChatStreamFrame(history, first, CONTEXT);
+    history = applyChatStreamFrame(history, first, CONTEXT);
+    expect((history[0]?.toolActions?.[0] as ToolAction | undefined)?.status).toBe(initialStatus);
+    history = applyChatStreamFrame(history, toolFrame(SocketMessageType.AgentToolEnd, { tool_output: 'true}', tool_output_chunk_v1: { offset_bytes: 6, total_bytes: 11, sha256: 'a'.repeat(64), final: true } }), CONTEXT);
+    const action = history[0]?.toolActions?.[0] as ToolAction;
+    expect(action['toolOutputs']).toBe('{"ok":true}');
+    expect(action.status).toBe('complete');
+  });
+
+  it('assembles the final error fragment and keeps the tool failed on replay', () => {
+    let history = withStartedTool();
+    const output = JSON.stringify({ error: 'large failure' });
+    const split = 9;
+    const metadata = { total_bytes: output.length, sha256: 'a'.repeat(64) };
+    history = applyChatStreamFrame(history, toolFrame(SocketMessageType.AgentToolEnd, {
+      tool_output: output.slice(0, split),
+      tool_output_chunk_v1: { ...metadata, offset_bytes: 0, final: false },
+    }), CONTEXT);
+    const last = toolFrame(SocketMessageType.AgentToolError, {
+      tool_output: output.slice(split), finish_reason: 'error',
+      tool_output_chunk_v1: { ...metadata, offset_bytes: split, final: true },
+    });
+    history = applyChatStreamFrame(history, last, CONTEXT);
+    history = applyChatStreamFrame(history, last, CONTEXT);
+    const action = history[0]?.toolActions?.[0] as ToolAction;
+    expect(action['toolOutputs']).toBe(output);
+    expect(action.status).toBe('error');
+    expect(action['isError']).toBe(true);
+  });
+
   it('accumulates string outputs across end frames rather than replacing them', () => {
     // A tool can report progressively; replacing would keep only the last frame.
     let history = withStartedTool();
