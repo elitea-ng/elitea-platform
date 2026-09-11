@@ -29,3 +29,15 @@ Main `internal/application/configurations/model_service.go` owns the replacement
 Main `cmd/elitea-main/main.go` composes the default resolver around the shared completion client.
 Rust continues to invoke these Main-owned operations through its existing internal MCP adapter.
 No Rust-specific model resolver or Python RPC bridge is introduced.
+
+## Failure and permission checks
+
+`TestInternalDraft*` passes through the in-process MCP endpoint.
+It covers permission denial, conflicting projects, invalid inputs, unusable output, safe gateway errors, and token-scoped edit refusal.
+`TestInternalSkillDraftReadsSelectedVersionWithoutSaving` passes against a disposable migrated PostgreSQL database, with no skipped tests.
+It covers selected-version reads, unchanged persistence, foreign versions, missing skills, and folder-hidden skills.
+This database test uses a fake model and does not prove deployed authentication.
+
+Deployed chat 545 also requests missing skill 2147483647 with version 5.
+Trace 7333 records one draft call with `is_error=true` and no successful draft output.
+Live restricted-user permission verification remains open.
