@@ -30,21 +30,22 @@ const (
 var errMCPProxyInvalidRequest = errors.New("invalid MCP proxy request")
 
 type mcpOAuthProxyRequest struct {
-	Resource        string          `json:"resource,omitempty"`
-	TokenEndpoint   string          `json:"token_endpoint"`
-	Code            string          `json:"code,omitempty"`
-	RedirectURI     string          `json:"redirect_uri,omitempty"`
-	ClientID        string          `json:"client_id,omitempty"`
-	ClientSecret    string          `json:"client_secret,omitempty"`
-	ClientReference string          `json:"client_reference,omitempty"`
-	CodeVerifier    string          `json:"code_verifier,omitempty"`
-	GrantType       string          `json:"grant_type,omitempty"`
-	RefreshToken    string          `json:"refresh_token,omitempty"`
-	Scope           string          `json:"scope,omitempty"`
-	ToolkitID       json.RawMessage `json:"toolkit_id,omitempty"`
-	ToolkitType     string          `json:"toolkit_type,omitempty"`
-	ConfigurationID string          `json:"configuration_uuid,omitempty"`
-	UsedDCR         bool            `json:"used_dcr,omitempty"`
+	AuthorizationReferenceOnly bool            `json:"authorization_reference_only,omitempty"`
+	Resource                   string          `json:"resource,omitempty"`
+	TokenEndpoint              string          `json:"token_endpoint"`
+	Code                       string          `json:"code,omitempty"`
+	RedirectURI                string          `json:"redirect_uri,omitempty"`
+	ClientID                   string          `json:"client_id,omitempty"`
+	ClientSecret               string          `json:"client_secret,omitempty"`
+	ClientReference            string          `json:"client_reference,omitempty"`
+	CodeVerifier               string          `json:"code_verifier,omitempty"`
+	GrantType                  string          `json:"grant_type,omitempty"`
+	RefreshToken               string          `json:"refresh_token,omitempty"`
+	Scope                      string          `json:"scope,omitempty"`
+	ToolkitID                  json.RawMessage `json:"toolkit_id,omitempty"`
+	ToolkitType                string          `json:"toolkit_type,omitempty"`
+	ConfigurationID            string          `json:"configuration_uuid,omitempty"`
+	UsedDCR                    bool            `json:"used_dcr,omitempty"`
 }
 
 type mcpDCRProxyRequest struct {
@@ -167,7 +168,7 @@ func (h *Handler) mcpOAuthProxy(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "invalid_token_response"})
 		return
 	}
-	writeJSON(w, http.StatusOK, oauthTokenResponse(providerBody))
+	h.writeMCPTokenResponse(w, r, body, providerBody)
 }
 
 func (h *Handler) mcpDCRProxy(w http.ResponseWriter, r *http.Request) {

@@ -58,6 +58,7 @@ type Handler struct {
 	prebuiltMCPVault PrebuiltSecretReader
 	delegatedAuth    DelegatedAuthToolkitSettingsResolver
 	dcrClients       MCPDCRClients
+	delegatedTokens  MCPDelegatedTokens
 	// Outbound e-mail for project invitations (users_write.go); nil means
 	// the invite result reports no delivery.
 	mailer InviteMailer

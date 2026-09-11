@@ -23,3 +23,16 @@ func mcpOAuthClientStore(pool *pgxpool.Pool) v2core.MCPDCRClients {
 	}
 	return store
 }
+
+func mcpOAuthTokenStore(pool *pgxpool.Pool) v2core.MCPDelegatedTokens {
+	key, err := v2secrets.MasterKeyFromEnv(os.Getenv)
+	if err != nil {
+		return nil
+	}
+	defer clear(key)
+	store, err := mcpoauth.NewTokens(pool, key)
+	if err != nil {
+		return nil
+	}
+	return store
+}

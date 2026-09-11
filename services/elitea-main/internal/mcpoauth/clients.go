@@ -1,5 +1,5 @@
-// Package mcpoauth stores confidential DCR clients independently of browser tokens.
-// It does not store access tokens, refresh tokens, or authorization decisions.
+// Package mcpoauth stores encrypted MCP OAuth credentials.
+// Clients owns registration secrets. Tokens owns delegated access grants.
 package mcpoauth
 
 import (
