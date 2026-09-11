@@ -28,12 +28,19 @@
  * the saved toolkit row server-side (`response.go`'s own `Body` doc: "a
  * caller that can supply settings can supply credentials").
  */
+import { readToolkitTestAuthorization } from './toolkitTestAuthorization';
+import type { ToolkitTestAuthorization } from './toolkitTestAuthorization';
+
 import { eliteaFetch } from '@/shared/api/generated/mutator';
 
 export interface TestToolkitToolParams {
+  readonly requestId?: string;
   readonly projectId: string | number | undefined;
   readonly toolkitId: string | number | undefined;
   readonly toolName: string;
+  readonly authorizationReference?: string;
+  readonly llmModel?: string;
+  readonly llmSettings?: { readonly temperature: number; readonly max_tokens: number; readonly reasoning_effort?: string };
   readonly toolParams: Readonly<Record<string, unknown>>;
 }
 
@@ -43,6 +50,8 @@ export interface TestToolkitToolParams {
  * other three are refusals the run never reached the tool for.
  */
 export type TestToolkitToolOutcome =
+  | { readonly kind: 'authorizationRequired'; readonly challenge: ToolkitTestAuthorization; readonly taskId: string }
+  | { readonly kind: 'skipped' }
   | { readonly kind: 'ok'; readonly result: unknown; readonly truncated: boolean }
   | { readonly kind: 'toolError'; readonly message: string }
   | { readonly kind: 'unsupportedToolkit'; readonly message: string }
@@ -57,6 +66,7 @@ interface ResponseBodyLike {
   readonly error?: unknown;
   readonly reason?: unknown;
   readonly task_id?: unknown;
+  readonly authorization_required?: unknown;
 }
 
 function isResponseBodyLike(value: unknown): value is ResponseBodyLike {
@@ -95,15 +105,29 @@ function outcomeFrom422(reason: string | undefined, bodyLike: ResponseBodyLike |
   return undefined;
 }
 
+function readReason(body: ResponseBodyLike | undefined): string | undefined {
+  return typeof body?.reason === 'string' ? body.reason : undefined;
+}
+
+function outcomeFromAuthorization(bodyLike: ResponseBodyLike | undefined, toolkitId: TestToolkitToolParams['toolkitId']): TestToolkitToolOutcome {
+    const challenge = readToolkitTestAuthorization(bodyLike?.authorization_required, toolkitId);
+    const taskId = bodyLike?.task_id;
+    if (challenge && typeof taskId === 'string' && taskId.length > 0 && taskId.length <= 128) return { kind: 'authorizationRequired', challenge, taskId };
+    return { kind: 'failure', message: 'The authorization challenge is invalid. Run the tool again.' };
+}
+
 /** The non-2xx half of the mapping — split out to keep `testToolkitTool` under the repo's complexity budget. */
-function outcomeFromRejection(error: unknown): TestToolkitToolOutcome {
+function outcomeFromRejection(error: unknown, toolkitId: TestToolkitToolParams['toolkitId']): TestToolkitToolOutcome {
   if (!isEliteaApiErrorLike(error) || error.failure?.kind !== 'http') {
     return { kind: 'failure', message: GENERIC_FAILURE_MESSAGE };
   }
   const { status, body } = error.failure;
   const bodyLike = isResponseBodyLike(body) ? body : undefined;
-  const reason = bodyLike !== undefined && typeof bodyLike.reason === 'string' ? bodyLike.reason : undefined;
+  const reason = readReason(bodyLike);
 
+  if (status === 409 && reason === 'authorization_required') {
+    return outcomeFromAuthorization(bodyLike, toolkitId);
+  }
   if (status === 422) {
     const outcome = outcomeFrom422(reason, bodyLike);
     if (outcome !== undefined) return outcome;
@@ -124,10 +148,22 @@ function outcomeFromRejection(error: unknown): TestToolkitToolOutcome {
  */
 export async function testToolkitTool(params: TestToolkitToolParams): Promise<TestToolkitToolOutcome> {
   const { projectId, toolkitId, toolName, toolParams } = params;
+  if (params.authorizationReference !== undefined && !/^[A-Za-z0-9_-]{43}$/.test(params.authorizationReference)) return { kind: 'failure', message: 'The saved authorization reference is invalid.' };
   try {
     const envelope = await eliteaFetch<{ data: ResponseBodyLike }>(`/elitea_core/test_tool/prompt_lib/${String(projectId)}/${String(toolkitId)}`, {
       method: 'POST',
-      body: JSON.stringify({ tool_name: toolName, tool_params: toolParams }),
+      body: JSON.stringify({
+        request_id: params.requestId ?? crypto.randomUUID(),
+        tool_name: toolName,
+        tool_params: toolParams,
+        ...(params.llmModel !== undefined ? { llm_model: params.llmModel } : {}),
+        ...(params.llmSettings !== undefined ? { llm_settings: {
+          temperature: params.llmSettings.temperature,
+          max_tokens: params.llmSettings.max_tokens,
+          ...(params.llmSettings.reasoning_effort !== undefined ? { reasoning_effort: params.llmSettings.reasoning_effort } : {}),
+        } } : {}),
+        ...(params.authorizationReference !== undefined ? { mcp_authorization_reference: params.authorizationReference } : {}),
+      }),
       headers: { 'Content-Type': 'application/json' },
     });
     const body = envelope.data;
@@ -136,6 +172,6 @@ export async function testToolkitTool(params: TestToolkitToolParams): Promise<Te
     }
     return { kind: 'toolError', message: readErrorMessage(body, 'The tool reported an error.') };
   } catch (error) {
-    return outcomeFromRejection(error);
+    return outcomeFromRejection(error, toolkitId);
   }
 }

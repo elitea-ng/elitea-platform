@@ -28,7 +28,7 @@ describe('testToolkitTool', () => {
 
     await testToolkitTool({ projectId: 'proj-1', toolkitId: 'tk-1', toolName: 'search_index', toolParams: { query: 'x' } });
 
-    expect(body).toEqual({ tool_name: 'search_index', tool_params: { query: 'x' } });
+    expect(body).toEqual({ request_id: expect.any(String) as unknown, tool_name: 'search_index', tool_params: { query: 'x' } });
   });
 
   it('OK (200 ok:true): resolves to the result and truncated:false', async () => {
@@ -104,4 +104,30 @@ describe('testToolkitTool', () => {
 
     expect(outcome.kind).toBe('failure');
   });
+});
+
+it('preserves selected model controls and excludes unrelated configuration fields', async () => {
+  let body: unknown;
+  server.use(http.post(PATH, async ({ request }) => { body = await request.json(); return HttpResponse.json({ ok: true, result: {} }); }));
+  const llmSettings = { temperature: 0.4, max_tokens: -1, reasoning_effort: 'medium', api_key: 'must-not-cross' };
+  await testToolkitTool({ projectId: 'proj-1', toolkitId: 'tk-1', toolName: 'search', toolParams: {}, llmModel: 'chosen-model', llmSettings });
+  expect(body).toEqual({ request_id: expect.any(String) as unknown, tool_name: 'search', tool_params: {}, llm_model: 'chosen-model', llm_settings: { temperature: 0.4, max_tokens: -1, reasoning_effort: 'medium' } });
+});
+
+
+it('gives separate actions new identities and preserves an explicit retry identity', async () => {
+  const identities: string[] = [];
+  server.use(http.post(PATH, async ({ request }) => {
+    const body = await request.json() as { request_id: string };
+    identities.push(body.request_id);
+    return HttpResponse.json({ ok: true, result: {} });
+  }));
+  const params = { projectId: 'proj-1', toolkitId: 'tk-1', toolName: 'search', toolParams: {} };
+  await testToolkitTool(params);
+  await testToolkitTool(params);
+  await testToolkitTool({ ...params, requestId: 'retry-request' });
+  await testToolkitTool({ ...params, requestId: 'retry-request' });
+  expect(identities[0]).toEqual(expect.any(String));
+  expect(identities[0]).not.toBe(identities[1]);
+  expect(identities.slice(2)).toEqual(['retry-request', 'retry-request']);
 });

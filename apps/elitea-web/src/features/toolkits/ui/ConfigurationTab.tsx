@@ -12,6 +12,7 @@ import { useToolkitSaveValidation } from '../model/useToolkitSaveValidation';
 import type { SharepointAuthModalRenderers } from '../sharepoint/ui/SharepointOAuthStatus';
 import type { ToolBaseSlots } from './form/ToolBase/ToolBase.types';
 import { ToolkitForm, type ToolkitFormEditDetail } from './form/ToolkitForm/ToolkitForm';
+import type { TestToolPaneProps } from './test-tools/TestToolPane';
 import { TestToolPane } from './test-tools/TestToolPane';
 import type { SaveToolkitPayload } from './form/ToolkitForm/ToolkitsOperationButtons';
 
@@ -127,6 +128,7 @@ export interface ConfigurationTabSlots {
    */
   readonly toolActionsExtra?: ToolBaseSlots['toolActionsExtra'];
   readonly mcpAuthStatus?: ToolBaseSlots['mcpAuthStatus'];
+  readonly renderTestAuthorization?: TestToolPaneProps['renderAuthorization'];
 }
 
 /** @public */
@@ -201,6 +203,7 @@ function toTestPaneValues(detail: ToolkitFormEditDetail | null): { readonly type
  * keys pushed it to 14.
  */
 interface TestPaneAreaProps {
+  readonly renderAuthorization: TestToolPaneProps['renderAuthorization'];
   readonly render: ConfigurationTabSlots['renderTestPane'];
   readonly projectId: string | undefined;
   readonly toolkitId: string | undefined;
@@ -224,6 +227,7 @@ function TestPaneArea(props: TestPaneAreaProps): ReactNode {
   }
   return (
     <TestToolPane
+      renderAuthorization={props.renderAuthorization}
       projectId={projectId}
       toolkitId={toolkitId}
       values={toTestPaneValues(editToolDetail)}
@@ -358,6 +362,7 @@ export function ConfigurationTab({
         )}
         <TestPaneArea
           render={renderTestPane}
+          renderAuthorization={slots.renderTestAuthorization}
           projectId={projectId}
           toolkitId={toolkitId}
           editToolDetail={editToolDetail}

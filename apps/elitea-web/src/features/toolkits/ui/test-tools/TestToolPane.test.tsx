@@ -118,7 +118,7 @@ describe('TestToolPane', () => {
       expect(screen.getByTestId('test-tool-result')).toHaveAttribute('data-status', 'ok');
     });
     expect(seen).toEqual({
-      body: { tool_name: 'list_branches_in_repo', tool_params: { repository: 'octo/repo' } },
+      body: { request_id: expect.any(String) as unknown, tool_name: 'list_branches_in_repo', tool_params: { repository: 'octo/repo' } },
       params: { projectId: '7', toolkitId: 'tk-1' },
     });
     expect(screen.getByTestId('test-tool-result-payload')).toHaveTextContent('main');

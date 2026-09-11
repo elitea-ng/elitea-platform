@@ -80,6 +80,9 @@ export function describeTestToolRefusal(toolName: string, outcome: TestToolkitTo
           });
     case 'failure':
       return t('features.toolkits.toolkitChat.testTool.failure', 'The tool could not be run: {{message}}', { message: outcome.message });
+    case 'authorizationRequired':
+      return t('features.toolkits.testToolPane.authorizationRequired', 'Authorize this toolkit to run the selected tool.');
+    case 'skipped':
     case 'ok':
     case 'toolError':
       return undefined;

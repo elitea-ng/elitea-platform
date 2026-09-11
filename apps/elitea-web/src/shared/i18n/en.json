@@ -4356,5 +4356,9 @@
   "features.chatMessages.canvas.document.openAsDocument": "Open as document",
   "features.chatMessages.canvas.document.orderedList": "Numbered list",
   "features.chatMessages.canvas.document.unlink": "Remove link",
-  "processes.chat.fileCanvas.unsupportedFormat": "This file format is not supported in canvas — download it instead."
+  "processes.chat.fileCanvas.unsupportedFormat": "This file format is not supported in canvas — download it instead.",
+  "features.toolkits.testToolPane.skip": "Skip",
+  "features.toolkits.testToolPane.skipped": "Tool run skipped.",
+  "features.toolkits.testToolPane.authorizationRequired": "Authorize this toolkit to run the selected tool.",
+  "features.toolkits.testToolPane.missingReference": "Authorization was not saved for this toolkit. Authorize again."
 }
