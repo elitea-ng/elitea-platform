@@ -29,7 +29,9 @@ pub(crate) use delegated_auth::{
     encode_delegated_authorization_requirement, hide_model_tools,
 };
 pub(crate) use direct_request::{DirectToolkitRequest, DirectToolkitRequestErrorCode};
-pub(crate) use direct_runtime::{DirectToolkitRuntime, DirectToolkitRuntimeErrorCode};
+pub(crate) use direct_runtime::{
+    DirectToolkitRuntime, DirectToolkitRuntimeError, DirectToolkitRuntimeErrorCode,
+};
 pub(crate) use materialize::{
     ToolsetMaterializationError, ToolsetMaterializationErrorCode,
     materialize_configured_toolsets_with_tokens_and_authorization,

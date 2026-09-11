@@ -24,12 +24,16 @@ use super::toolkit_output::{
     replay_toolkit_terminal_with_replacement,
 };
 use crate::protocol::ProtocolError;
-use crate::protocol::command::VerifiedToolkitExecuteReadCommand;
+use crate::protocol::command::{ToolkitCommandKind, VerifiedToolkitExecuteReadCommand};
 use crate::protocol::control::{
     AgentControlClient, AgentExecutionOutputAuthority, AgentOutputRecoveryKind,
     BeginAgentExecution, DesiredExecutionState, LeaseMonitoredAgentExecution,
 };
-use crate::protocol::elitea::runtime::v1::{DigestV1, ToolkitExecuteReadResultV1};
+use crate::protocol::elitea::runtime::v1::{
+    DigestV1, ToolkitAuthorizationRequiredV1, ToolkitAvailableToolsResultV1,
+    ToolkitCallToolResultV1, ToolkitCallToolStatusV1, ToolkitCallToolSummaryV1,
+    ToolkitExecuteReadResultV1, worker_command_v1,
+};
 use crate::protocol::output::{RuntimeFailureKind, ToolkitExecuteReadTerminalOutput};
 use crate::toolkits::{
     DirectToolkitRequest, DirectToolkitRequestErrorCode, DirectToolkitRuntime,
@@ -128,7 +132,7 @@ where
                 Box::pin(self.execute_fresh(fresh, output)).await
             }
             ToolkitOutputPreflightOutcome::Terminal(recovery) => {
-                self.recover_terminal(*recovery).await?;
+                Box::pin(self.recover_terminal(*recovery)).await?;
                 Ok(ToolkitProcessOutcome::completed(
                     "toolkit_delivery.accepted_terminal_retired",
                 ))
@@ -234,7 +238,7 @@ where
             .await;
         let output_authority = execution.into_output_authority();
         let terminal = match outcome {
-            Ok(result) => ToolkitExecuteReadTerminalOutput::Result(Box::new(result)),
+            Ok(result) => result,
             Err(failure) => ToolkitExecuteReadTerminalOutput::Failure(failure),
         };
         let published = Box::pin(self.publish_fresh_terminal(
@@ -258,7 +262,7 @@ where
         verified: &VerifiedToolkitExecuteReadCommand,
         execution: &LeaseMonitoredAgentExecution,
         lease: &mut ClaimLeaseMonitor,
-    ) -> Result<ToolkitExecuteReadResultV1, RuntimeFailureKind> {
+    ) -> Result<ToolkitExecuteReadTerminalOutput, RuntimeFailureKind> {
         if deadline_exceeded(verified, self.clock.as_ref()) {
             record_toolkit_deadline("pre_materialization_deadline");
             return Err(RuntimeFailureKind::DeadlineExceeded);
@@ -281,6 +285,11 @@ where
                 return Err(lease_failure(&error));
             }
         };
+        if verified.kind() != ToolkitCommandKind::ExecuteRead {
+            return self
+                .execute_shared(verified, execution, lease, materialized.as_bytes())
+                .await;
+        }
         let request = match DirectToolkitRequest::parse(materialized.as_bytes()) {
             Ok(request) => request,
             Err(error) => {
@@ -337,7 +346,7 @@ where
             return Err(RuntimeFailureKind::DeadlineExceeded);
         }
         match bind_result(execution, &request, &result) {
-            Ok(result) => Ok(result),
+            Ok(result) => Ok(ToolkitExecuteReadTerminalOutput::Result(Box::new(result))),
             Err(failure) => {
                 record_toolkit_execution_failure(
                     "result_binding",
@@ -347,6 +356,166 @@ where
                 Err(failure)
             }
         }
+    }
+
+    async fn execute_shared(
+        &self,
+        verified: &VerifiedToolkitExecuteReadCommand,
+        execution: &LeaseMonitoredAgentExecution,
+        lease: &mut ClaimLeaseMonitor,
+        settings: &[u8],
+    ) -> Result<ToolkitExecuteReadTerminalOutput, RuntimeFailureKind> {
+        let command = verified.command();
+        let context = lease
+            .run_pre_invocation(
+                self.input
+                    .materialize_entry(execution, "toolkit-runtime-context"),
+            )
+            .await
+            .map_err(|error| lease_failure(&error))?
+            .map_err(|error| input_failure(&error))?;
+        let (request, is_call) = match command.capability_command.as_ref() {
+            Some(worker_command_v1::CapabilityCommand::ToolkitCallTool(call)) => {
+                let arguments = lease
+                    .run_pre_invocation(
+                        self.input
+                            .materialize_entry(execution, &call.arguments_entry_id),
+                    )
+                    .await
+                    .map_err(|error| lease_failure(&error))?
+                    .map_err(|error| input_failure(&error))?;
+                (
+                    DirectToolkitRequest::parse_call(
+                        &call.toolkit_type,
+                        &call.toolkit_id,
+                        &call.tool_name,
+                        settings,
+                        arguments.as_bytes(),
+                        context.as_bytes(),
+                    ),
+                    true,
+                )
+            }
+            Some(worker_command_v1::CapabilityCommand::ToolkitAvailableTools(discovery)) => (
+                DirectToolkitRequest::parse_discovery(
+                    &discovery.toolkit_type,
+                    settings,
+                    context.as_bytes(),
+                ),
+                false,
+            ),
+            _ => return Err(RuntimeFailureKind::InvalidInput),
+        };
+        let request = request.map_err(|error| request_failure(error.code()))?;
+        let operation = async {
+            if is_call {
+                self.runtime
+                    .execute_test(&request, &command.execution_id, &command.command_id)
+                    .await
+            } else {
+                self.runtime.discover(&request).await
+            }
+        };
+        let result = lease
+            .run_pre_invocation(operation)
+            .await
+            .map_err(|error| lease_failure(&error))?;
+        lease
+            .check_now()
+            .await
+            .map_err(|error| lease_failure(&error))?;
+        if deadline_exceeded(verified, self.clock.as_ref()) {
+            return Err(RuntimeFailureKind::DeadlineExceeded);
+        }
+        let bundle = execution.input_bundle_ref();
+        let entry = execution.request_entry();
+        let settings_digest = entry_digest(entry)?;
+        if is_call {
+            let summary = match result {
+                Err(error) if error.authorization().is_some() => {
+                    self.authorization_summary(verified, &request, &error, lease)
+                        .await?
+                }
+                outcome => call_summary(outcome)?,
+            };
+            return bind_call_result(execution, &request, summary)
+                .map(|result| ToolkitExecuteReadTerminalOutput::CallTool(Box::new(result)));
+        }
+        let value = result.map_err(|error| runtime_failure(error.code()))?;
+        let artifact_bytes =
+            serde_json::to_vec(&value).map_err(|_| RuntimeFailureKind::InvalidInput)?;
+        let artifact = lease
+            .run_pre_invocation(
+                self.input
+                    .publish_toolkit_discovery(execution, &artifact_bytes),
+            )
+            .await
+            .map_err(|error| lease_failure(&error))?
+            .map_err(|error| input_failure(&error))?;
+        Ok(ToolkitExecuteReadTerminalOutput::AvailableTools(Box::new(
+            ToolkitAvailableToolsResultV1 {
+                toolkit_type: request.toolkit_type().to_owned(),
+                input_bundle_id: bundle.input_bundle_id.clone(),
+                input_bundle_digest: clone_digest(bundle.digest.as_ref())?,
+                settings_entry_id: entry.entry_id.clone(),
+                settings_entry_version: entry.immutable_version.clone(),
+                settings_content_digest: settings_digest,
+                result_artifact: Some(artifact),
+            },
+        )))
+    }
+
+    async fn authorization_summary(
+        &self,
+        verified: &VerifiedToolkitExecuteReadCommand,
+        request: &DirectToolkitRequest,
+        error: &crate::toolkits::DirectToolkitRuntimeError,
+        lease: &mut ClaimLeaseMonitor,
+    ) -> Result<ToolkitCallToolSummaryV1, RuntimeFailureKind> {
+        let requirement = error
+            .authorization()
+            .ok_or(RuntimeFailureKind::AuthorizationFailed)?;
+        if requirement.toolkit_type() != request.toolkit_type()
+            || requirement.toolkit_name() != request.toolkit_name()
+        {
+            return Err(RuntimeFailureKind::AuthorizationFailed);
+        }
+        let Some(worker_command_v1::CapabilityCommand::ToolkitCallTool(command)) =
+            verified.command().capability_command.as_ref()
+        else {
+            return Err(RuntimeFailureKind::InvalidInput);
+        };
+        let resolved = lease
+            .run_pre_invocation(requirement.resolve_public_metadata())
+            .await
+            .map_err(|error| lease_failure(&error))?;
+        let metadata = resolved
+            .resource_metadata()
+            .map(serde_json::to_vec)
+            .transpose()
+            .map_err(|_| RuntimeFailureKind::InvalidInput)?
+            .unwrap_or_default();
+        if metadata.len() > 16 * 1024 {
+            return Err(RuntimeFailureKind::ResourceExhausted);
+        }
+        Ok(ToolkitCallToolSummaryV1 {
+            status: ToolkitCallToolStatusV1::AuthorizationRequired as i32,
+            result_json: String::new(),
+            truncated: false,
+            error_message: crate::protocol::output::TOOLKIT_AUTHORIZATION_REQUIRED_MESSAGE
+                .to_owned(),
+            authorization_required: Some(ToolkitAuthorizationRequiredV1 {
+                toolkit_name: resolved.toolkit_name().to_owned(),
+                toolkit_type: resolved.toolkit_type().to_owned(),
+                server_url: resolved.server_url().to_owned(),
+                resource_metadata_url: resolved
+                    .resource_metadata_url()
+                    .unwrap_or_default()
+                    .to_owned(),
+                resource_metadata_json: metadata,
+                toolkit_id: command.toolkit_id.clone(),
+            }),
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -524,6 +693,88 @@ where
     }
 }
 
+fn bind_call_result(
+    execution: &LeaseMonitoredAgentExecution,
+    request: &DirectToolkitRequest,
+    summary: ToolkitCallToolSummaryV1,
+) -> Result<ToolkitCallToolResultV1, RuntimeFailureKind> {
+    let bundle = execution.input_bundle_ref();
+    let entry = execution.request_entry();
+    let arguments = execution
+        .arguments_entry()
+        .ok_or(RuntimeFailureKind::InvalidInput)?;
+    Ok(ToolkitCallToolResultV1 {
+        toolkit_type: request.toolkit_type().to_owned(),
+        tool_name: request.tool_name().to_owned(),
+        input_bundle_id: bundle.input_bundle_id.clone(),
+        input_bundle_digest: clone_digest(bundle.digest.as_ref())?,
+        settings_entry_id: entry.entry_id.clone(),
+        settings_entry_version: entry.immutable_version.clone(),
+        settings_content_digest: clone_digest(
+            entry
+                .content
+                .as_ref()
+                .ok_or(RuntimeFailureKind::InvalidInput)?
+                .digest
+                .as_ref(),
+        )?,
+        arguments_entry_id: arguments.entry_id.clone(),
+        arguments_content_digest: clone_digest(
+            arguments
+                .content
+                .as_ref()
+                .ok_or(RuntimeFailureKind::InvalidInput)?
+                .digest
+                .as_ref(),
+        )?,
+        result_artifact: None,
+        result_summary: Some(summary),
+    })
+}
+
+fn call_summary(
+    result: Result<serde_json::Value, crate::toolkits::DirectToolkitRuntimeError>,
+) -> Result<ToolkitCallToolSummaryV1, RuntimeFailureKind> {
+    let (status, value, error_message) = match result {
+        Ok(value) => (ToolkitCallToolStatusV1::Ok, Some(value), ""),
+        Err(error) => match error.code() {
+            DirectToolkitRuntimeErrorCode::ToolError => (
+                ToolkitCallToolStatusV1::ToolError,
+                None,
+                "The toolkit operation failed.",
+            ),
+            DirectToolkitRuntimeErrorCode::ToolNotSelected => (
+                ToolkitCallToolStatusV1::UnknownTool,
+                None,
+                "The toolkit operation is not selected.",
+            ),
+            DirectToolkitRuntimeErrorCode::UnsupportedToolkit => (
+                ToolkitCallToolStatusV1::UnsupportedToolkit,
+                None,
+                "The toolkit family is not supported.",
+            ),
+            code => return Err(runtime_failure(code)),
+        },
+    };
+    let result_json = value
+        .map(|value| serde_json::to_string(&value))
+        .transpose()
+        .map_err(|_| RuntimeFailureKind::InvalidInput)?
+        .unwrap_or_default();
+    let truncated = result_json.len() > 48 * 1024;
+    Ok(ToolkitCallToolSummaryV1 {
+        status: status as i32,
+        result_json: if truncated {
+            String::new()
+        } else {
+            result_json
+        },
+        truncated,
+        error_message: error_message.to_owned(),
+        authorization_required: None,
+    })
+}
+
 fn bind_result(
     execution: &LeaseMonitoredAgentExecution,
     request: &DirectToolkitRequest,
@@ -547,6 +798,19 @@ fn bind_result(
         toolkit_name: request.toolkit_name().to_owned(),
         tool_name: request.tool_name().to_owned(),
     })
+}
+
+fn entry_digest(
+    entry: &crate::protocol::elitea::runtime::v1::ExecutionInputEntryV1,
+) -> Result<Option<DigestV1>, RuntimeFailureKind> {
+    clone_digest(
+        entry
+            .content
+            .as_ref()
+            .ok_or(RuntimeFailureKind::InvalidInput)?
+            .digest
+            .as_ref(),
+    )
 }
 
 fn clone_digest(digest: Option<&DigestV1>) -> Result<Option<DigestV1>, RuntimeFailureKind> {
@@ -617,7 +881,8 @@ const fn runtime_failure(code: DirectToolkitRuntimeErrorCode) -> RuntimeFailureK
         | DirectToolkitRuntimeErrorCode::AuthorizationRequired => {
             RuntimeFailureKind::AuthorizationFailed
         }
-        DirectToolkitRuntimeErrorCode::DependencyUnavailable => {
+        DirectToolkitRuntimeErrorCode::ToolError
+        | DirectToolkitRuntimeErrorCode::DependencyUnavailable => {
             RuntimeFailureKind::DependencyUnavailable
         }
         DirectToolkitRuntimeErrorCode::DeadlineExceeded => RuntimeFailureKind::DeadlineExceeded,
@@ -643,7 +908,8 @@ const fn runtime_error_code(code: DirectToolkitRuntimeErrorCode) -> &'static str
         DirectToolkitRuntimeErrorCode::AuthorizationRequired => {
             "toolkit_runtime.authorization_required"
         }
-        DirectToolkitRuntimeErrorCode::DependencyUnavailable => {
+        DirectToolkitRuntimeErrorCode::ToolError
+        | DirectToolkitRuntimeErrorCode::DependencyUnavailable => {
             "toolkit_runtime.dependency_unavailable"
         }
         DirectToolkitRuntimeErrorCode::DeadlineExceeded => "toolkit_runtime.deadline_exceeded",
@@ -842,4 +1108,38 @@ pub(super) async fn process_toolkit_verified<R, RC, T, K, I>(
         .instrument(span),
     )
     .await;
+}
+
+#[cfg(test)]
+mod shared_result_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn preserves_null_and_empty_result_shapes() {
+        for value in [
+            json!(null),
+            json!(""),
+            json!(false),
+            json!(0),
+            json!([]),
+            json!({}),
+        ] {
+            let summary = call_summary(Ok(value.clone())).expect("summary");
+            assert_eq!(summary.status, ToolkitCallToolStatusV1::Ok as i32);
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&summary.result_json).expect("JSON"),
+                value
+            );
+            assert!(!summary.truncated);
+        }
+    }
+
+    #[test]
+    fn marks_large_results_without_returning_partial_json() {
+        let summary = call_summary(Ok(json!("x".repeat(48 * 1024)))).expect("summary");
+        assert!(summary.truncated);
+        assert!(summary.result_json.is_empty());
+        assert_eq!(summary.status, ToolkitCallToolStatusV1::Ok as i32);
+    }
 }

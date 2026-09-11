@@ -116,6 +116,20 @@ impl DelegatedAuthorizationCatalog {
         })
     }
 
+    /// Direct calls have one exact toolkit and no model namespace aliases.
+    pub(crate) fn requirement_for_direct(
+        &self,
+        toolkit_name: &str,
+        tool_name: &str,
+    ) -> Option<&DelegatedAuthorizationRequirement> {
+        self.requirement_for_scoped(toolkit_name, tool_name)
+            .or_else(|| {
+                self.discovery_requirements
+                    .values()
+                    .find(|requirement| requirement.toolkit_name() == toolkit_name)
+            })
+    }
+
     pub(crate) fn tool_names(&self) -> impl Iterator<Item = &str> {
         self.provider_requirements
             .keys()

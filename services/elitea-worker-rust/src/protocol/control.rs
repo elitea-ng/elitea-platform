@@ -40,6 +40,7 @@ const MAX_CONTROL_IDENTITY_BYTES: usize = 256;
 const MAX_MANIFEST_TEXT_BYTES: usize = 128;
 const MAX_AGENT_INPUT_BYTES: u64 = 1024 * 1024;
 const MAX_TOOLKIT_EXECUTE_READ_INPUT_BYTES: u64 = 1024 * 1024;
+const MAX_TOOLKIT_JSON_INPUT_BYTES: u64 = 256 * 1024;
 const AGENT_EXECUTION_REQUEST_ROLE: &str = "agent.execution_request";
 const AGENT_INPUT_MEDIA_TYPE: &str = "application/vnd.elitea.agent-execution-input.v1+protobuf";
 const TOOLKIT_EXECUTE_READ_REQUEST_ROLE: &str = "toolkit.execute_read_request";
@@ -219,6 +220,7 @@ pub struct AcceptedAgentClaim {
     input_bundle_ref: ExecutionInputBundleReferenceV1,
     input_bundle: ExecutionInputBundleV1,
     request_entry: ExecutionInputEntryV1,
+    arguments_entry: Option<ExecutionInputEntryV1>,
 }
 
 impl AcceptedAgentClaim {
@@ -314,6 +316,40 @@ impl AcceptedAgentClaim {
             && result.request_content_digest.as_ref() == content.digest.as_ref()
     }
 
+    #[must_use]
+    pub(crate) fn matches_toolkit_call_tool_result_binding(
+        &self,
+        result: &super::elitea::runtime::v1::ToolkitCallToolResultV1,
+    ) -> bool {
+        let Some(settings) = self.request_entry.content.as_ref() else {
+            return false;
+        };
+        let Some(arguments) = self.arguments_entry.as_ref() else {
+            return false;
+        };
+        let Some(content) = arguments.content.as_ref() else {
+            return false;
+        };
+        result.settings_entry_id == self.request_entry.entry_id
+            && result.settings_entry_version == self.request_entry.immutable_version
+            && result.settings_content_digest.as_ref() == settings.digest.as_ref()
+            && result.arguments_entry_id == arguments.entry_id
+            && result.arguments_content_digest.as_ref() == content.digest.as_ref()
+    }
+
+    #[must_use]
+    pub(crate) fn matches_toolkit_available_tools_result_binding(
+        &self,
+        result: &super::elitea::runtime::v1::ToolkitAvailableToolsResultV1,
+    ) -> bool {
+        let Some(content) = self.request_entry.content.as_ref() else {
+            return false;
+        };
+        result.settings_entry_id == self.request_entry.entry_id
+            && result.settings_entry_version == self.request_entry.immutable_version
+            && result.settings_content_digest.as_ref() == content.digest.as_ref()
+    }
+
     /// Bind a validated terminal to the replacement claim without invocation.
     /// Only a claim created after the signed deadline can replace its outcome.
     pub(crate) fn toolkit_terminal_replacement(
@@ -371,6 +407,7 @@ impl AcceptedAgentClaim {
             input_bundle_ref: _,
             input_bundle: _,
             request_entry: _,
+            arguments_entry: _,
         } = self;
         AcceptedTerminalClaimRecovery {
             binding: RecoveryClaimBinding {
@@ -910,8 +947,34 @@ impl LeaseMonitoredAgentExecution {
     }
 
     #[must_use]
+    pub const fn arguments_entry(&self) -> Option<&ExecutionInputEntryV1> {
+        self.claim.arguments_entry.as_ref()
+    }
+
+    #[must_use]
+    pub fn input_entry(&self, entry_id: &str) -> Option<&ExecutionInputEntryV1> {
+        if self.claim.request_entry.entry_id == entry_id {
+            Some(&self.claim.request_entry)
+        } else {
+            self.claim
+                .input_bundle
+                .entries
+                .iter()
+                .find(|entry| entry.entry_id == entry_id)
+        }
+    }
+
+    #[must_use]
     pub(crate) fn input_content_authority(&self) -> Option<ClaimBoundInputAuthority<'_>> {
-        let content = self.claim.request_entry.content.as_ref()?;
+        self.input_content_authority_for_entry(&self.claim.request_entry.entry_id)
+    }
+
+    #[must_use]
+    pub(crate) fn input_content_authority_for_entry(
+        &self,
+        entry_id: &str,
+    ) -> Option<ClaimBoundInputAuthority<'_>> {
+        let content = self.input_entry(entry_id)?.content.as_ref()?;
         let source_digest = content.digest.as_ref()?;
         Some(ClaimBoundInputAuthority {
             execution_id: &self.claim.identity.execution_id,
@@ -1009,6 +1072,23 @@ impl AgentExecutionOutputAuthority {
         if !self.claim.matches_verified_command(verified) {
             return Err(ProtocolError::AuthorizationFailed(
                 "the output authority does not match its command",
+            ));
+        }
+        let inputs_match = match &terminal {
+            ToolkitExecuteReadTerminalOutput::Result(result) => self
+                .claim
+                .matches_toolkit_execute_read_result_binding(result),
+            ToolkitExecuteReadTerminalOutput::CallTool(result) => {
+                self.claim.matches_toolkit_call_tool_result_binding(result)
+            }
+            ToolkitExecuteReadTerminalOutput::AvailableTools(result) => self
+                .claim
+                .matches_toolkit_available_tools_result_binding(result),
+            ToolkitExecuteReadTerminalOutput::Failure(_) => true,
+        };
+        if !inputs_match {
+            return Err(ProtocolError::AuthorizationFailed(
+                "the toolkit result does not match its admitted inputs",
             ));
         }
         build_toolkit_execute_read_terminal_output_frame(
@@ -1358,6 +1438,7 @@ pub(crate) fn test_lease_monitored_input_execution(
             claim_handoff_watermark: 0,
             input_bundle_ref: ExecutionInputBundleReferenceV1::default(),
             input_bundle: ExecutionInputBundleV1::default(),
+            arguments_entry: None,
             request_entry: ExecutionInputEntryV1 {
                 entry_id: "agent-request".to_owned(),
                 immutable_version: "v/1".to_owned(),
@@ -2621,7 +2702,8 @@ fn parse_accepted_agent_claim(
             "the accepted claim is missing its input manifest",
         ))?;
     validate_manifest_binding(&input_bundle_ref, &input_bundle)?;
-    let request_entry = validate_execution_request_entry(verified.command(), &input_bundle)?;
+    let (request_entry, arguments_entry) =
+        validate_execution_request_entries(verified.command(), &input_bundle)?;
 
     Ok(AcceptedAgentClaim {
         identity,
@@ -2634,6 +2716,7 @@ fn parse_accepted_agent_claim(
         input_bundle_ref,
         input_bundle,
         request_entry,
+        arguments_entry,
     })
 }
 
@@ -2872,7 +2955,8 @@ fn validate_manifest_binding(
         || manifest.immutable_version != reference.immutable_version
         || !valid_identifier(&manifest.input_bundle_id)
         || !valid_version(&manifest.immutable_version)
-        || manifest.entries.len() != 1
+        || manifest.entries.is_empty()
+        || manifest.entries.len() > 3
     {
         return Err(ControlSemanticError::InvalidInput(
             "the accepted claim input manifest is malformed",
@@ -2881,23 +2965,39 @@ fn validate_manifest_binding(
     Ok(())
 }
 
-fn validate_execution_request_entry(
+fn validate_execution_request_entries(
     command: &super::elitea::runtime::v1::WorkerCommandV1,
     manifest: &ExecutionInputBundleV1,
-) -> Result<ExecutionInputEntryV1, ControlSemanticError> {
-    let (request_entry_id, semantic_role, media_type, max_bytes) =
+) -> Result<(ExecutionInputEntryV1, Option<ExecutionInputEntryV1>), ControlSemanticError> {
+    let (request_entry_id, semantic_role, media_type, max_bytes, arguments_id) =
         match command.capability_command.as_ref() {
             Some(worker_command_v1::CapabilityCommand::AgentExecution(agent)) => (
                 agent.request_entry_id.as_str(),
                 AGENT_EXECUTION_REQUEST_ROLE,
                 AGENT_INPUT_MEDIA_TYPE,
                 MAX_AGENT_INPUT_BYTES,
+                None,
             ),
             Some(worker_command_v1::CapabilityCommand::ToolkitExecuteRead(toolkit)) => (
                 toolkit.request_entry_id.as_str(),
                 TOOLKIT_EXECUTE_READ_REQUEST_ROLE,
                 TOOLKIT_EXECUTE_READ_INPUT_MEDIA_TYPE,
                 MAX_TOOLKIT_EXECUTE_READ_INPUT_BYTES,
+                None,
+            ),
+            Some(worker_command_v1::CapabilityCommand::ToolkitCallTool(toolkit)) => (
+                toolkit.settings_entry_id.as_str(),
+                "toolkit.call_tool.settings",
+                "application/json",
+                MAX_TOOLKIT_JSON_INPUT_BYTES,
+                Some(toolkit.arguments_entry_id.as_str()),
+            ),
+            Some(worker_command_v1::CapabilityCommand::ToolkitAvailableTools(toolkit)) => (
+                toolkit.settings_entry_id.as_str(),
+                "toolkit.available_tools.settings",
+                "application/json",
+                MAX_TOOLKIT_JSON_INPUT_BYTES,
+                None,
             ),
             _ => {
                 return Err(ControlSemanticError::UnsupportedCapability(
@@ -2905,26 +3005,85 @@ fn validate_execution_request_entry(
                 ));
             }
         };
-    let entry = manifest
+    let context_role = match command.capability_command.as_ref() {
+        Some(worker_command_v1::CapabilityCommand::ToolkitCallTool(_)) => {
+            Some("toolkit.call_tool.runtime_context")
+        }
+        Some(worker_command_v1::CapabilityCommand::ToolkitAvailableTools(_)) => {
+            Some("toolkit.available_tools.runtime_context")
+        }
+        _ => None,
+    };
+    let expected_entries =
+        1 + usize::from(arguments_id.is_some()) + usize::from(context_role.is_some());
+    if manifest.entries.len() != expected_entries
+        || arguments_id == Some(request_entry_id)
+        || (context_role.is_some()
+            && (request_entry_id == "toolkit-runtime-context"
+                || arguments_id == Some("toolkit-runtime-context")))
+    {
+        return Err(ControlSemanticError::InvalidInput(
+            "the input manifest has unbound or duplicate entries",
+        ));
+    }
+    let request = validate_selected_input_entry(
+        manifest,
+        request_entry_id,
+        semantic_role,
+        media_type,
+        max_bytes,
+    )?;
+    let arguments = arguments_id
+        .map(|entry_id| {
+            validate_selected_input_entry(
+                manifest,
+                entry_id,
+                "toolkit.call_tool.arguments",
+                "application/json",
+                MAX_TOOLKIT_JSON_INPUT_BYTES,
+            )
+        })
+        .transpose()?;
+    if let Some(role) = context_role {
+        validate_selected_input_entry(
+            manifest,
+            "toolkit-runtime-context",
+            role,
+            "application/json",
+            MAX_TOOLKIT_JSON_INPUT_BYTES,
+        )?;
+    }
+    Ok((request, arguments))
+}
+
+fn validate_selected_input_entry(
+    manifest: &ExecutionInputBundleV1,
+    entry_id: &str,
+    semantic_role: &str,
+    media_type: &str,
+    max_bytes: u64,
+) -> Result<ExecutionInputEntryV1, ControlSemanticError> {
+    let mut selected = manifest
         .entries
-        .first()
-        .ok_or(ControlSemanticError::InvalidInput(
-            "the selected agent request is absent or ambiguous",
-        ))?;
-    if entry.entry_id != request_entry_id
+        .iter()
+        .filter(|entry| entry.entry_id == entry_id);
+    let entry = selected.next().ok_or(ControlSemanticError::InvalidInput(
+        "the selected input entry is absent",
+    ))?;
+    if selected.next().is_some()
         || !valid_identifier(&entry.entry_id)
         || !valid_version(&entry.immutable_version)
         || entry.semantic_role != semantic_role
     {
         return Err(ControlSemanticError::InvalidInput(
-            "the selected agent request is malformed",
+            "the selected input entry is malformed",
         ));
     }
     let content = entry
         .content
         .as_ref()
         .ok_or(ControlSemanticError::InvalidInput(
-            "the selected agent request is malformed",
+            "the selected input entry is malformed",
         ))?;
     validate_execution_content(entry, content, media_type, max_bytes)?;
     Ok(entry.clone())
@@ -2993,6 +3152,12 @@ fn terminal_logical_output_id(command: &super::elitea::runtime::v1::WorkerComman
     match command.capability_command.as_ref() {
         Some(worker_command_v1::CapabilityCommand::ToolkitExecuteRead(_)) => {
             format!("toolkit-execute-read:{}", command.execution_id)
+        }
+        Some(worker_command_v1::CapabilityCommand::ToolkitCallTool(_)) => {
+            format!("toolkit-call-tool:{}", command.execution_id)
+        }
+        Some(worker_command_v1::CapabilityCommand::ToolkitAvailableTools(_)) => {
+            format!("toolkit-available-tools:{}", command.execution_id)
         }
         _ => format!("agent-execution:{}", command.execution_id),
     }
@@ -3111,3 +3276,7 @@ fn hex_lower(value: &[u8]) -> String {
     }
     output
 }
+
+#[cfg(test)]
+#[path = "shared_toolkit_tests.rs"]
+mod shared_toolkit_tests;

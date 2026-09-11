@@ -2,6 +2,7 @@ use prost::Message;
 use ring::digest;
 
 use crate::agents::result::{BoundAgentExecutionResult, validate_agent_execution_result};
+use crate::toolkits::DelegatedAuthorizationRequirement;
 
 use super::command::{
     VerifiedAgentCommand, VerifiedExecutionCommand, VerifiedToolkitExecuteReadCommand,
@@ -12,7 +13,9 @@ use super::{
     elitea::runtime::v1::{
         AgentExecutionResultV1, DigestAlgorithmV1, DigestV1, ExecutionFenceV1, ExecutionIdentityV1,
         ExecutionOutcomeV1, ExecutionOutputEventTypeV1, ExecutionOutputFrameV1, NodeEventV1,
-        RuntimeErrorCodeV1, RuntimeErrorV1, SettlementProposalV1, ToolkitExecuteReadResultV1,
+        RuntimeErrorCodeV1, RuntimeErrorV1, SettlementProposalV1, ToolkitAuthorizationRequiredV1,
+        ToolkitAvailableToolsResultV1, ToolkitCallToolCommandV1, ToolkitCallToolResultV1,
+        ToolkitCallToolStatusV1, ToolkitCallToolSummaryV1, ToolkitExecuteReadResultV1,
         execution_output_frame_v1, worker_command_v1,
     },
 };
@@ -23,6 +26,11 @@ pub const MAX_OUTPUT_FRAME_BYTES: usize = 64 * 1024;
 const MAX_SAFE_STRING_BYTES: usize = 256;
 const MAX_TOOLKIT_IDENTITY_BYTES: usize = 1024;
 const MAX_TOOLKIT_EXECUTE_READ_RESULT_BYTES: usize = 48 * 1024;
+const MAX_TOOLKIT_DISCOVERY_RESULT_BYTES: u64 = 1024 * 1024;
+const MAX_TOOLKIT_AUTH_METADATA_BYTES: usize = 16 * 1024;
+const MAX_TOOLKIT_AUTH_URL_BYTES: usize = 4096;
+pub(crate) const TOOLKIT_AUTHORIZATION_REQUIRED_MESSAGE: &str =
+    "Authorization is required to run this tool.";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeFailureKind {
@@ -44,6 +52,8 @@ pub enum AgentTerminalOutput {
 
 pub(crate) enum ToolkitExecuteReadTerminalOutput {
     Result(Box<ToolkitExecuteReadResultV1>),
+    CallTool(Box<ToolkitCallToolResultV1>),
+    AvailableTools(Box<ToolkitAvailableToolsResultV1>),
     Failure(RuntimeFailureKind),
 }
 
@@ -87,10 +97,32 @@ pub(crate) fn validate_restored_toolkit_execute_read_output_frame(
             if !frame.terminal
                 || frame.event_type != ExecutionOutputEventTypeV1::ToolkitExecuteReadResult as i32
                 || frame.logical_output_id
-                    != format!("toolkit-execute-read:{}", verified.command().execution_id)
+                    != format!(
+                        "{}:{}",
+                        verified.kind().output_prefix(),
+                        verified.command().execution_id
+                    )
             {
                 return Err(malformed_restored_output());
             }
+            (result.encode_to_vec(), ExecutionOutcomeV1::Succeeded)
+        }
+        Some(execution_output_frame_v1::Payload::ToolkitCallTool(result)) => {
+            let outcome = validate_toolkit_call_tool_result(verified, result)?;
+            validate_toolkit_terminal_shape(
+                verified,
+                frame,
+                ExecutionOutputEventTypeV1::ToolkitCallToolResult,
+            )?;
+            (result.encode_to_vec(), outcome)
+        }
+        Some(execution_output_frame_v1::Payload::ToolkitAvailableTools(result)) => {
+            validate_toolkit_available_tools_result(verified, result)?;
+            validate_toolkit_terminal_shape(
+                verified,
+                frame,
+                ExecutionOutputEventTypeV1::ToolkitAvailableToolsResult,
+            )?;
             (result.encode_to_vec(), ExecutionOutcomeV1::Succeeded)
         }
         Some(execution_output_frame_v1::Payload::RuntimeError(error)) => {
@@ -98,7 +130,11 @@ pub(crate) fn validate_restored_toolkit_execute_read_output_frame(
             if !frame.terminal
                 || frame.event_type != ExecutionOutputEventTypeV1::RuntimeError as i32
                 || frame.logical_output_id
-                    != format!("toolkit-execute-read:{}", verified.command().execution_id)
+                    != format!(
+                        "{}:{}",
+                        verified.kind().output_prefix(),
+                        verified.command().execution_id
+                    )
             {
                 return Err(malformed_restored_output());
             }
@@ -462,6 +498,26 @@ pub(crate) fn build_toolkit_execute_read_terminal_output_frame(
                 ExecutionOutcomeV1::Succeeded,
             )
         }
+        ToolkitExecuteReadTerminalOutput::CallTool(result) => {
+            let outcome = validate_toolkit_call_tool_result(verified, &result)?;
+            let bytes = result.encode_to_vec();
+            (
+                ExecutionOutputEventTypeV1::ToolkitCallToolResult,
+                execution_output_frame_v1::Payload::ToolkitCallTool(*result),
+                bytes,
+                outcome,
+            )
+        }
+        ToolkitExecuteReadTerminalOutput::AvailableTools(result) => {
+            validate_toolkit_available_tools_result(verified, &result)?;
+            let bytes = result.encode_to_vec();
+            (
+                ExecutionOutputEventTypeV1::ToolkitAvailableToolsResult,
+                execution_output_frame_v1::Payload::ToolkitAvailableTools(*result),
+                bytes,
+                ExecutionOutcomeV1::Succeeded,
+            )
+        }
         ToolkitExecuteReadTerminalOutput::Failure(kind) => {
             let error = runtime_error(kind);
             let bytes = error.encode_to_vec();
@@ -479,7 +535,11 @@ pub(crate) fn build_toolkit_execute_read_terminal_output_frame(
     };
     let payload_digest = sha256(&payload_bytes);
     let command = verified.command();
-    let logical_output_id = format!("toolkit-execute-read:{}", command.execution_id);
+    let logical_output_id = format!(
+        "{}:{}",
+        verified.kind().output_prefix(),
+        command.execution_id
+    );
     let event_id = format!("{}:{sequence}", command.command_id);
     let frame = ExecutionOutputFrameV1 {
         output_schema_revision: OUTPUT_SCHEMA_REVISION.to_owned(),
@@ -659,6 +719,220 @@ fn validate_toolkit_execute_read_result(
     let value: serde_json::Value =
         serde_json::from_slice(&result.result_json).map_err(|_| malformed_restored_output())?;
     if serde_json::to_vec(&value).ok().as_deref() != Some(result.result_json.as_slice()) {
+        return Err(malformed_restored_output());
+    }
+    Ok(())
+}
+
+fn validate_toolkit_terminal_shape(
+    verified: &VerifiedToolkitExecuteReadCommand,
+    frame: &ExecutionOutputFrameV1,
+    event_type: ExecutionOutputEventTypeV1,
+) -> Result<(), ProtocolError> {
+    if !frame.terminal
+        || frame.event_type != event_type as i32
+        || frame.logical_output_id
+            != format!(
+                "{}:{}",
+                verified.kind().output_prefix(),
+                verified.command().execution_id
+            )
+    {
+        return Err(malformed_restored_output());
+    }
+    Ok(())
+}
+
+fn valid_toolkit_identity(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_TOOLKIT_IDENTITY_BYTES
+        && !value
+            .bytes()
+            .any(|byte| matches!(byte, b'\0' | b'\r' | b'\n'))
+}
+
+fn validate_toolkit_call_tool_result(
+    verified: &VerifiedToolkitExecuteReadCommand,
+    result: &ToolkitCallToolResultV1,
+) -> Result<ExecutionOutcomeV1, ProtocolError> {
+    let command = verified.command();
+    let input = command
+        .input_bundle_ref
+        .as_ref()
+        .ok_or_else(malformed_restored_output)?;
+    let Some(worker_command_v1::CapabilityCommand::ToolkitCallTool(toolkit)) =
+        command.capability_command.as_ref()
+    else {
+        return Err(malformed_restored_output());
+    };
+    if result.toolkit_type != toolkit.toolkit_type
+        || result.tool_name != toolkit.tool_name
+        || result.input_bundle_id != input.input_bundle_id
+        || result.input_bundle_digest != input.digest
+        || result.settings_entry_id != toolkit.settings_entry_id
+        || result.arguments_entry_id != toolkit.arguments_entry_id
+        || !valid_toolkit_identity(&result.settings_entry_version)
+        || !valid_sha256(result.settings_content_digest.as_ref())
+        || !valid_sha256(result.arguments_content_digest.as_ref())
+        || result.result_artifact.is_some()
+    {
+        return Err(malformed_restored_output());
+    }
+    let summary = result
+        .result_summary
+        .as_ref()
+        .ok_or_else(malformed_restored_output)?;
+    validate_toolkit_call_tool_summary(toolkit, summary)
+}
+
+fn validate_toolkit_call_tool_summary(
+    toolkit: &ToolkitCallToolCommandV1,
+    summary: &ToolkitCallToolSummaryV1,
+) -> Result<ExecutionOutcomeV1, ProtocolError> {
+    let status = ToolkitCallToolStatusV1::try_from(summary.status)
+        .map_err(|_| malformed_restored_output())?;
+    if summary.result_json.len() > MAX_TOOLKIT_EXECUTE_READ_RESULT_BYTES
+        || summary.error_message.len() > MAX_SAFE_STRING_BYTES
+        || summary
+            .error_message
+            .bytes()
+            .any(|byte| matches!(byte, b'\0' | b'\r' | b'\n'))
+        || (summary.truncated && !summary.result_json.is_empty())
+        || (summary.authorization_required.is_some()
+            != (status == ToolkitCallToolStatusV1::AuthorizationRequired))
+    {
+        return Err(malformed_restored_output());
+    }
+    if !summary.result_json.is_empty() {
+        let value: serde_json::Value =
+            serde_json::from_str(&summary.result_json).map_err(|_| malformed_restored_output())?;
+        if serde_json::to_string(&value).ok().as_ref() != Some(&summary.result_json) {
+            return Err(malformed_restored_output());
+        }
+    }
+    match status {
+        ToolkitCallToolStatusV1::Ok => {
+            if !summary.error_message.is_empty()
+                || (!summary.truncated && summary.result_json.is_empty())
+            {
+                return Err(malformed_restored_output());
+            }
+            Ok(ExecutionOutcomeV1::Succeeded)
+        }
+        ToolkitCallToolStatusV1::ToolError => {
+            if summary.error_message.is_empty() {
+                return Err(malformed_restored_output());
+            }
+            Ok(ExecutionOutcomeV1::Succeeded)
+        }
+        ToolkitCallToolStatusV1::UnsupportedToolkit | ToolkitCallToolStatusV1::UnknownTool => {
+            if summary.error_message.is_empty()
+                || !summary.result_json.is_empty()
+                || summary.truncated
+            {
+                return Err(malformed_restored_output());
+            }
+            Ok(ExecutionOutcomeV1::Failed)
+        }
+        ToolkitCallToolStatusV1::AuthorizationRequired => {
+            if summary.error_message != TOOLKIT_AUTHORIZATION_REQUIRED_MESSAGE
+                || !summary.result_json.is_empty()
+                || summary.truncated
+            {
+                return Err(malformed_restored_output());
+            }
+            let challenge = summary
+                .authorization_required
+                .as_ref()
+                .ok_or_else(malformed_restored_output)?;
+            validate_toolkit_authorization_required(toolkit, challenge)?;
+            Ok(ExecutionOutcomeV1::Succeeded)
+        }
+        ToolkitCallToolStatusV1::Unspecified => Err(malformed_restored_output()),
+    }
+}
+
+fn validate_toolkit_authorization_required(
+    toolkit: &ToolkitCallToolCommandV1,
+    challenge: &ToolkitAuthorizationRequiredV1,
+) -> Result<(), ProtocolError> {
+    if challenge.toolkit_type != toolkit.toolkit_type
+        || challenge.toolkit_id != toolkit.toolkit_id
+        || !valid_toolkit_identity(&challenge.toolkit_id)
+        || challenge.toolkit_id.chars().any(char::is_control)
+        || challenge.server_url.len() > MAX_TOOLKIT_AUTH_URL_BYTES
+        || challenge.resource_metadata_url.len() > MAX_TOOLKIT_AUTH_URL_BYTES
+        || challenge.server_url.chars().any(char::is_control)
+        || challenge
+            .resource_metadata_url
+            .chars()
+            .any(char::is_control)
+        || challenge.resource_metadata_json.len() > MAX_TOOLKIT_AUTH_METADATA_BYTES
+    {
+        return Err(malformed_restored_output());
+    }
+    let requirement = DelegatedAuthorizationRequirement::new(
+        challenge.toolkit_name.clone(),
+        challenge.toolkit_type.clone(),
+        challenge.server_url.clone(),
+        (!challenge.resource_metadata_url.is_empty())
+            .then(|| challenge.resource_metadata_url.clone()),
+        None,
+    )
+    .ok_or_else(malformed_restored_output)?;
+    if !challenge.resource_metadata_json.is_empty() {
+        let metadata: serde_json::Value = serde_json::from_slice(&challenge.resource_metadata_json)
+            .map_err(|_| malformed_restored_output())?;
+        if serde_json::to_vec(&metadata).ok().as_deref()
+            != Some(challenge.resource_metadata_json.as_slice())
+            || metadata
+                .get("toolkit_id")
+                .is_some_and(|id| id.as_str() != Some(toolkit.toolkit_id.as_str()))
+        {
+            return Err(malformed_restored_output());
+        }
+        requirement
+            .with_resource_metadata(metadata)
+            .ok_or_else(malformed_restored_output)?;
+    }
+    Ok(())
+}
+
+fn validate_toolkit_available_tools_result(
+    verified: &VerifiedToolkitExecuteReadCommand,
+    result: &ToolkitAvailableToolsResultV1,
+) -> Result<(), ProtocolError> {
+    let command = verified.command();
+    let input = command
+        .input_bundle_ref
+        .as_ref()
+        .ok_or_else(malformed_restored_output)?;
+    let Some(worker_command_v1::CapabilityCommand::ToolkitAvailableTools(toolkit)) =
+        command.capability_command.as_ref()
+    else {
+        return Err(malformed_restored_output());
+    };
+    if result.toolkit_type != toolkit.toolkit_type
+        || result.input_bundle_id != input.input_bundle_id
+        || result.input_bundle_digest != input.digest
+        || result.settings_entry_id != toolkit.settings_entry_id
+        || !valid_toolkit_identity(&result.settings_entry_version)
+        || !valid_sha256(result.settings_content_digest.as_ref())
+    {
+        return Err(malformed_restored_output());
+    }
+    let artifact = result
+        .result_artifact
+        .as_ref()
+        .ok_or_else(malformed_restored_output)?;
+    if !valid_toolkit_identity(&artifact.artifact_id)
+        || !valid_toolkit_identity(&artifact.immutable_version)
+        || artifact.media_type != "application/vnd.elitea.toolkit-available-tools.v1+json"
+        || artifact.classification != "tenant-confidential"
+        || artifact.byte_length == 0
+        || artifact.byte_length > MAX_TOOLKIT_DISCOVERY_RESULT_BYTES
+        || !valid_sha256(artifact.digest.as_ref())
+    {
         return Err(malformed_restored_output());
     }
     Ok(())

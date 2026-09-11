@@ -7,8 +7,8 @@ use super::{
     ProtocolError,
     elitea::runtime::v1::{
         AgentExecutionCommandV1, DigestAlgorithmV1, DigestV1, ExecutionInputBundleReferenceV1,
-        SignatureProfileV1, SignedWorkerCommandEnvelopeV1, ToolkitExecuteReadCommandV1,
-        WorkerCommandTypeV1, WorkerCommandV1, worker_command_v1,
+        SignatureProfileV1, SignedWorkerCommandEnvelopeV1, WorkerCommandTypeV1, WorkerCommandV1,
+        worker_command_v1,
     },
 };
 use crate::agents::AgentExecutionKind;
@@ -21,6 +21,26 @@ pub const AGENT_EXECUTE_APPLICATION_CAPABILITY_ID: &str = "agent.execute.applica
 pub const AGENT_EXECUTE_ADHOC_CAPABILITY_ID: &str = "agent.execute.adhoc.v1";
 pub const TOOLKIT_EXECUTE_READ_CAPABILITY_ID: &str = "toolkit.execute.read.v1";
 pub const TOOLKIT_EXECUTE_READ_CAPABILITY_VERSION: &str = "1";
+pub const TOOLKIT_CALL_TOOL_CAPABILITY_ID: &str = "toolkit.call_tool.v1";
+pub const TOOLKIT_AVAILABLE_TOOLS_CAPABILITY_ID: &str = "toolkit.available_tools.v1";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ToolkitCommandKind {
+    ExecuteRead,
+    CallTool,
+    AvailableTools,
+}
+
+impl ToolkitCommandKind {
+    #[must_use]
+    pub const fn output_prefix(self) -> &'static str {
+        match self {
+            Self::ExecuteRead => "toolkit-execute-read",
+            Self::CallTool => "toolkit-call-tool",
+            Self::AvailableTools => "toolkit-available-tools",
+        }
+    }
+}
 
 const MAX_SIGNED_ENVELOPE_BYTES: usize = 48 * 1024;
 const MAX_WORKER_COMMAND_BYTES: usize = 32 * 1024;
@@ -97,10 +117,13 @@ impl VerifiedExecutionCommand for VerifiedAgentCommand {
     }
 }
 
-/// An authenticated, strictly decoded direct read-only toolkit command.
+/// An authenticated, strictly decoded toolkit command with immutable input references.
 pub struct VerifiedToolkitExecuteReadCommand {
     common: VerifiedWorkerCommand,
+    kind: ToolkitCommandKind,
 }
+
+pub type VerifiedToolkitCommand = VerifiedToolkitExecuteReadCommand;
 
 /// Exhaustive authenticated command kind accepted by this worker binary.
 /// The envelope is authenticated once before capability-specific decoding.
@@ -126,13 +149,24 @@ impl VerifiedToolkitExecuteReadCommand {
     }
 
     #[must_use]
+    pub const fn kind(&self) -> ToolkitCommandKind {
+        self.kind
+    }
+
+    #[must_use]
     pub fn request_entry_id(&self) -> &str {
-        let Some(worker_command_v1::CapabilityCommand::ToolkitExecuteRead(command)) =
-            self.common.command.capability_command.as_ref()
-        else {
-            unreachable!("verified toolkit command lost its capability wrapper")
-        };
-        &command.request_entry_id
+        match self.common.command.capability_command.as_ref() {
+            Some(worker_command_v1::CapabilityCommand::ToolkitExecuteRead(command)) => {
+                &command.request_entry_id
+            }
+            Some(worker_command_v1::CapabilityCommand::ToolkitCallTool(command)) => {
+                &command.settings_entry_id
+            }
+            Some(worker_command_v1::CapabilityCommand::ToolkitAvailableTools(command)) => {
+                &command.settings_entry_id
+            }
+            _ => unreachable!("verified toolkit command lost its capability wrapper"),
+        }
     }
 }
 
@@ -246,8 +280,8 @@ pub fn parse_and_verify_agent_command(
     Ok(VerifiedAgentCommand { common, kind })
 }
 
-/// Verify exact signed bytes before decoding a direct read-only toolkit
-/// command. Authentication always precedes protobuf command decoding.
+/// Verify exact signed bytes before decoding a supported toolkit command.
+/// Authentication always precedes protobuf command decoding.
 ///
 /// # Errors
 ///
@@ -259,9 +293,11 @@ pub fn parse_and_verify_toolkit_execute_read_command(
 ) -> Result<VerifiedToolkitExecuteReadCommand, ProtocolError> {
     let common = parse_and_verify_worker_command(raw, authenticator)?;
     scan_toolkit_execute_read_worker_command(&common.signed.worker_command_bytes)?;
-    validate_toolkit_execute_read_command(&common.command)?;
-    Ok(VerifiedToolkitExecuteReadCommand { common })
+    let kind = validate_toolkit_execute_read_command(&common.command)?;
+    Ok(VerifiedToolkitExecuteReadCommand { common, kind })
 }
+
+pub use parse_and_verify_toolkit_execute_read_command as parse_and_verify_toolkit_command;
 
 /// Authenticate one delivery once and select its exact capability wrapper.
 ///
@@ -281,11 +317,15 @@ pub(crate) fn parse_and_verify_execution_command(
                 kind,
             }))
         }
-        Some(worker_command_v1::CapabilityCommand::ToolkitExecuteRead(_)) => {
+        Some(
+            worker_command_v1::CapabilityCommand::ToolkitExecuteRead(_)
+            | worker_command_v1::CapabilityCommand::ToolkitCallTool(_)
+            | worker_command_v1::CapabilityCommand::ToolkitAvailableTools(_),
+        ) => {
             scan_toolkit_execute_read_worker_command(&common.signed.worker_command_bytes)?;
-            validate_toolkit_execute_read_command(&common.command)?;
+            let kind = validate_toolkit_execute_read_command(&common.command)?;
             Ok(VerifiedExecutionCommandKind::ToolkitExecuteRead(
-                VerifiedToolkitExecuteReadCommand { common },
+                VerifiedToolkitExecuteReadCommand { common, kind },
             ))
         }
         _ => Err(ProtocolError::UnsupportedCapability(
@@ -380,9 +420,15 @@ fn scan_toolkit_execute_read_worker_command(raw: &[u8]) -> Result<(), ProtocolEr
     let input_fields = scan_message(input_reference, Schema::InputBundleReference)?;
     let input_digest = input_fields.length_field(3, "the input bundle digest is missing")?;
     scan_message(input_digest, Schema::Digest)?;
-    let toolkit_command =
-        fields.length_field(64, "the direct toolkit execution command is missing")?;
-    scan_message(toolkit_command, Schema::ToolkitExecuteReadCommand)?;
+    let (tag, schema) = if fields.contains(64) {
+        (64, Schema::ToolkitExecuteReadCommand)
+    } else if fields.contains(36) {
+        (36, Schema::ToolkitCallToolCommand)
+    } else {
+        (33, Schema::ToolkitAvailableToolsCommand)
+    };
+    let toolkit_command = fields.length_field(tag, "the toolkit command is missing")?;
+    scan_message(toolkit_command, schema)?;
     Ok(())
 }
 
@@ -410,14 +456,65 @@ fn validate_agent_command(command: &WorkerCommandV1) -> Result<AgentExecutionKin
     Ok(kind)
 }
 
-fn validate_toolkit_execute_read_command(command: &WorkerCommandV1) -> Result<(), ProtocolError> {
+fn validate_toolkit_execute_read_command(
+    command: &WorkerCommandV1,
+) -> Result<ToolkitCommandKind, ProtocolError> {
     if command.protocol_revision != PROTOCOL_REVISION || command.limits_revision != LIMITS_REVISION
     {
         return Err(ProtocolError::IncompatibleVersion(
             "the requested contract version is not compatible",
         ));
     }
-    let toolkit = select_toolkit_execute_read_entrypoint(command)?;
+    let (kind, required) = match &command.capability_command {
+        Some(worker_command_v1::CapabilityCommand::ToolkitExecuteRead(toolkit))
+            if command.capability_id == TOOLKIT_EXECUTE_READ_CAPABILITY_ID
+                && command.command_type == WorkerCommandTypeV1::ToolkitExecuteRead as i32 =>
+        {
+            (
+                ToolkitCommandKind::ExecuteRead,
+                vec![toolkit.request_entry_id.as_str()],
+            )
+        }
+        Some(worker_command_v1::CapabilityCommand::ToolkitCallTool(toolkit))
+            if command.capability_id == TOOLKIT_CALL_TOOL_CAPABILITY_ID
+                && command.command_type == WorkerCommandTypeV1::ToolkitCallTool as i32 =>
+        {
+            if toolkit.settings_entry_id == toolkit.arguments_entry_id {
+                return Err(ProtocolError::InvalidInput(
+                    "the toolkit input references must be distinct",
+                ));
+            }
+            let mut required = vec![
+                toolkit.toolkit_type.as_str(),
+                toolkit.settings_entry_id.as_str(),
+                toolkit.tool_name.as_str(),
+                toolkit.arguments_entry_id.as_str(),
+            ];
+            for value in [&toolkit.toolkit_id, &toolkit.toolkit_version] {
+                if !value.is_empty() {
+                    required.push(value.as_str());
+                }
+            }
+            (ToolkitCommandKind::CallTool, required)
+        }
+        Some(worker_command_v1::CapabilityCommand::ToolkitAvailableTools(toolkit))
+            if command.capability_id == TOOLKIT_AVAILABLE_TOOLS_CAPABILITY_ID
+                && command.command_type == WorkerCommandTypeV1::ToolkitAvailableTools as i32 =>
+        {
+            (
+                ToolkitCommandKind::AvailableTools,
+                vec![
+                    toolkit.toolkit_type.as_str(),
+                    toolkit.settings_entry_id.as_str(),
+                ],
+            )
+        }
+        _ => {
+            return Err(ProtocolError::UnsupportedCapability(
+                "the worker command capability is not supported",
+            ));
+        }
+    };
     if command.capability_version != TOOLKIT_EXECUTE_READ_CAPABILITY_VERSION {
         return Err(ProtocolError::UnsupportedCapability(
             "the worker command capability version is not supported",
@@ -429,28 +526,18 @@ fn validate_toolkit_execute_read_command(command: &WorkerCommandV1) -> Result<()
         .ok_or(ProtocolError::InvalidInput(
             "the worker command is missing a required reference or identity",
         ))?;
-    validate_common_command_strings(command, input, &[toolkit.request_entry_id.as_str()])?;
-    validate_common_command_invariants(
-        command,
-        input,
-        "the direct toolkit root identity is malformed",
-    )
-}
-
-fn select_toolkit_execute_read_entrypoint(
-    command: &WorkerCommandV1,
-) -> Result<&ToolkitExecuteReadCommandV1, ProtocolError> {
-    match &command.capability_command {
-        Some(worker_command_v1::CapabilityCommand::ToolkitExecuteRead(toolkit))
-            if command.capability_id == TOOLKIT_EXECUTE_READ_CAPABILITY_ID
-                && command.command_type == WorkerCommandTypeV1::ToolkitExecuteRead as i32 =>
-        {
-            Ok(toolkit)
-        }
-        _ => Err(ProtocolError::UnsupportedCapability(
-            "the worker command capability is not supported",
-        )),
+    validate_common_command_strings(command, input, &required)?;
+    if required.iter().any(|value| {
+        value
+            .bytes()
+            .any(|byte| matches!(byte, b'\0' | b'\r' | b'\n'))
+    }) {
+        return Err(ProtocolError::InvalidInput(
+            "a toolkit command identity is malformed",
+        ));
     }
+    validate_common_command_invariants(command, input, "the toolkit root identity is malformed")?;
+    Ok(kind)
 }
 
 fn select_agent_entrypoint(

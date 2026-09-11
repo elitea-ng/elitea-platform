@@ -127,6 +127,20 @@ impl FreshToolkitDelivery {
                 "the restored direct toolkit output is malformed",
             ));
         }
+        let matches = match frame.payload.as_ref() {
+            Some(execution_output_frame_v1::Payload::ToolkitCallTool(result)) => {
+                self.claim.matches_toolkit_call_tool_result_binding(result)
+            }
+            Some(execution_output_frame_v1::Payload::ToolkitAvailableTools(result)) => self
+                .claim
+                .matches_toolkit_available_tools_result_binding(result),
+            _ => true,
+        };
+        if !matches {
+            return Err(ProtocolError::InvalidInput(
+                "the restored toolkit input binding is malformed",
+            ));
+        }
         Ok(())
     }
 

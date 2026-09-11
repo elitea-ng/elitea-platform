@@ -982,3 +982,13 @@ async fn response_search_preserves_matching_keyed_objects_and_rejects_regexp_mix
     );
     assert_eq!(transport.requests.lock().expect("map requests").len(), 1);
 }
+
+#[test]
+fn recursive_server_variable_defaults_stop_at_the_materialization_bound() {
+    let mut spec = inline_spec();
+    spec["servers"] = json!([{"url":"https://{host}","variables":{"host":{"default":"{host}"}}}]);
+    let error = parse_operations(&spec, None, &[])
+        .err()
+        .expect("bounded substitution");
+    assert_eq!(error.code(), OpenApiSpecErrorCode::ResourceExhausted);
+}

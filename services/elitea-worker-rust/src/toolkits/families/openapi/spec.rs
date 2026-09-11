@@ -366,7 +366,12 @@ fn parse_base_url(
     }
     let variables = server.get("variables").and_then(Value::as_object);
     let mut expanded = template.to_owned();
+    let mut substitutions = 0_u16;
     while let Some(start) = expanded.find('{') {
+        substitutions += 1;
+        if substitutions > 128 {
+            return Err(resource_exhausted());
+        }
         let end = expanded[start + 1..]
             .find('}')
             .map(|offset| start + 1 + offset)

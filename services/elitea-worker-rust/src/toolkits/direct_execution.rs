@@ -40,6 +40,7 @@ pub(crate) enum DirectToolkitExecutionErrorCode {
     EffectfulToolUnavailable,
     AuthorizationRequired,
     DependencyUnavailable,
+    ToolError,
     DeadlineExceeded,
 }
 
@@ -50,12 +51,17 @@ pub(crate) enum DirectToolkitExecutionErrorCode {
 pub(crate) struct DirectToolkitExecutionError {
     code: DirectToolkitExecutionErrorCode,
     retryable: bool,
+    authorization: Option<Box<super::DelegatedAuthorizationRequirement>>,
 }
 
 impl DirectToolkitExecutionError {
     #[must_use]
     pub(crate) const fn code(&self) -> DirectToolkitExecutionErrorCode {
         self.code
+    }
+
+    pub(crate) fn authorization(&self) -> Option<&super::DelegatedAuthorizationRequirement> {
+        self.authorization.as_deref()
     }
 
     #[must_use]
@@ -101,6 +107,7 @@ impl fmt::Display for DirectToolkitExecutionError {
             DirectToolkitExecutionErrorCode::AuthorizationRequired => {
                 "the toolkit operation requires delegated authorization"
             }
+            DirectToolkitExecutionErrorCode::ToolError => "the toolkit operation failed",
             DirectToolkitExecutionErrorCode::DependencyUnavailable => {
                 "the toolkit operation is temporarily unavailable"
             }
@@ -178,6 +185,23 @@ pub(crate) async fn execute_read_only_toolsets(
     toolsets: Vec<Arc<dyn Toolset>>,
     invocation: DirectToolkitInvocation,
     policy: &ToolAdmissionPolicy,
+) -> Result<Value, DirectToolkitExecutionError> {
+    execute_toolsets(toolsets, invocation, policy, false).await
+}
+
+pub(crate) async fn execute_test_toolsets(
+    toolsets: Vec<Arc<dyn Toolset>>,
+    invocation: DirectToolkitInvocation,
+    policy: &ToolAdmissionPolicy,
+) -> Result<Value, DirectToolkitExecutionError> {
+    execute_toolsets(toolsets, invocation, policy, true).await
+}
+
+async fn execute_toolsets(
+    toolsets: Vec<Arc<dyn Toolset>>,
+    invocation: DirectToolkitInvocation,
+    policy: &ToolAdmissionPolicy,
+    test_outcome: bool,
 ) -> Result<Value, DirectToolkitExecutionError> {
     if toolsets.len() != 1 {
         return Err(failure(
@@ -263,21 +287,38 @@ pub(crate) async fn execute_read_only_toolsets(
     )
     .await
     .map_err(|_| failure(DirectToolkitExecutionErrorCode::DeadlineExceeded, true))?
-    .map_err(|error| {
-        if delegated_authorization_requirement(&error).is_some() {
-            failure(
-                DirectToolkitExecutionErrorCode::AuthorizationRequired,
-                false,
-            )
+    .map_err(|error| invocation_failure(&error, test_outcome))?;
+    validate_json(
+        &result,
+        if test_outcome {
+            1024 * 1024
         } else {
-            failure(
-                DirectToolkitExecutionErrorCode::DependencyUnavailable,
-                error.is_retryable(),
-            )
-        }
-    })?;
-    validate_json(&result, MAX_DIRECT_RESULT_BYTES)?;
+            MAX_DIRECT_RESULT_BYTES
+        },
+    )?;
     Ok(result)
+}
+
+fn invocation_failure(
+    error: &adk_rust::AdkError,
+    test_outcome: bool,
+) -> DirectToolkitExecutionError {
+    if let Some(requirement) = delegated_authorization_requirement(error) {
+        DirectToolkitExecutionError {
+            code: DirectToolkitExecutionErrorCode::AuthorizationRequired,
+            retryable: false,
+            authorization: Some(Box::new(requirement)),
+        }
+    } else {
+        failure(
+            if test_outcome {
+                DirectToolkitExecutionErrorCode::ToolError
+            } else {
+                DirectToolkitExecutionErrorCode::DependencyUnavailable
+            },
+            error.is_retryable(),
+        )
+    }
 }
 
 fn binding_failure(error: ToolBindingError) -> DirectToolkitExecutionError {
@@ -338,5 +379,9 @@ const fn failure(
     code: DirectToolkitExecutionErrorCode,
     retryable: bool,
 ) -> DirectToolkitExecutionError {
-    DirectToolkitExecutionError { code, retryable }
+    DirectToolkitExecutionError {
+        code,
+        retryable,
+        authorization: None,
+    }
 }

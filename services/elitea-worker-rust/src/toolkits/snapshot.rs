@@ -221,9 +221,15 @@ impl FrozenToolReference<'_> {
     #[must_use]
     pub(crate) const fn tool_id(&self) -> Option<u64> {
         match self {
-            Self::Configured(reference) | Self::Mcp(reference) => Some(reference.tool_id),
+            Self::Configured(reference) | Self::Mcp(reference) => reference.tool_id,
             Self::Application(reference) => reference.tool_id,
         }
+    }
+
+    /// Main owns automatic built-in identities; they have no toolkit row.
+    #[must_use]
+    pub(crate) fn is_internal_builder(&self) -> bool {
+        self.tool_id().is_none() && internal_builder_name(self.tool_type()).is_some()
     }
 
     #[must_use]
@@ -286,7 +292,7 @@ impl FrozenToolReference<'_> {
 }
 
 pub(crate) struct FrozenConfiguredToolReference<'a> {
-    tool_id: u64,
+    tool_id: Option<u64>,
     tool_type: &'a str,
     toolkit_name: &'a str,
     settings: &'a Map<String, Value>,
@@ -344,12 +350,18 @@ fn parse_reference(value: &Value) -> Result<FrozenToolReference<'_>, FrozenToolS
         return parse_application_reference(tool).map(FrozenToolReference::Application);
     }
 
-    let tool_id = positive_integer(tool.get("id")).ok_or_else(invalid_input)?;
     let toolkit_name = required_identifier(tool, "toolkit_name")?;
     let settings = tool
         .get("settings")
         .and_then(Value::as_object)
         .ok_or_else(invalid_input)?;
+    let tool_id = match tool.get("id") {
+        None | Some(Value::Null) => {
+            validate_internal_builder(tool, tool_type, toolkit_name, settings)?;
+            None
+        }
+        value => Some(positive_integer(value).ok_or_else(invalid_input)?),
+    };
     validate_optional_tool_names(settings, "selected_tools")?;
     validate_optional_tool_names(settings, "excluded_tools")?;
     let reference = FrozenConfiguredToolReference {
@@ -362,6 +374,44 @@ fn parse_reference(value: &Value) -> Result<FrozenToolReference<'_>, FrozenToolS
         Ok(FrozenToolReference::Mcp(reference))
     } else {
         Ok(FrozenToolReference::Configured(reference))
+    }
+}
+
+fn validate_internal_builder(
+    tool: &Map<String, Value>,
+    tool_type: &str,
+    toolkit_name: &str,
+    settings: &Map<String, Value>,
+) -> Result<(), FrozenToolSnapshotError> {
+    let name = internal_builder_name(tool_type).ok_or_else(invalid_input)?;
+    let metadata = tool
+        .get("meta")
+        .and_then(Value::as_object)
+        .ok_or_else(invalid_input)?;
+    if toolkit_name != name
+        || tool.get("name").and_then(Value::as_str) != Some(name)
+        || metadata.get("mcp") != Some(&Value::Bool(true))
+        || metadata.get("internal_builder") != Some(&Value::Bool(true))
+        || settings.get("server_name").and_then(Value::as_str) != Some(tool_type)
+    {
+        return Err(invalid_input());
+    }
+    Ok(())
+}
+
+// Keep these identities aligned with Main's mcpregistry/internal_builders.go.
+fn internal_builder_name(tool_type: &str) -> Option<&'static str> {
+    match tool_type {
+        "mcp_elitea_internal_applications" => Some("Elitea Applications"),
+        "mcp_elitea_internal_chat" => Some("Elitea Chat"),
+        "mcp_elitea_internal_toolkits" => Some("Elitea Toolkits"),
+        "mcp_elitea_internal_configurations" => Some("Elitea Configurations"),
+        "mcp_elitea_internal_secrets" => Some("Elitea Secrets"),
+        "mcp_elitea_internal_discovery" => Some("Elitea Discovery"),
+        "mcp_elitea_internal_notifications" => Some("Elitea Notifications"),
+        "mcp_elitea_internal_skills" => Some("Elitea Skills"),
+        "mcp_elitea_internal_project_context" => Some("Elitea Project Context"),
+        _ => None,
     }
 }
 

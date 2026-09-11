@@ -168,13 +168,22 @@ impl RemoteMcpConfig {
         } else {
             None
         };
-        let access_token = resolve_access_token(
-            mcp_tokens,
-            &endpoint,
-            reference.tool_type(),
-            server_name.as_deref(),
-            prebuilt,
-        )?;
+        let access_token = if reference.is_internal_builder() {
+            // The actor credential comes from Main's claim materializer. A
+            // delegated token must not replace this execution's actor identity.
+            if !static_headers.contains_key(reqwest_mcp::header::AUTHORIZATION) {
+                return Err(unsupported_authority());
+            }
+            None
+        } else {
+            resolve_access_token(
+                mcp_tokens,
+                &endpoint,
+                reference.tool_type(),
+                server_name.as_deref(),
+                prebuilt,
+            )?
+        };
         settings.get("enable_caching").map_or(Ok(true), |value| {
             value.as_bool().ok_or_else(invalid_configuration)
         })?;

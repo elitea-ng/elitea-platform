@@ -316,3 +316,51 @@ fn tool_count_and_selection_lists_are_explicitly_bounded() {
         FrozenToolSnapshotErrorCode::ResourceExhausted
     );
 }
+
+fn internal_builder() -> Value {
+    json!({
+        "id": null,
+        "type": "mcp_elitea_internal_skills",
+        "name": "Elitea Skills",
+        "toolkit_name": "Elitea Skills",
+        "settings": {"server_name": "mcp_elitea_internal_skills"},
+        "meta": {"mcp": true, "internal_builder": true}
+    })
+}
+
+#[test]
+fn internal_builder_without_saved_toolkit_survives_both_chat_snapshots() {
+    for kind in [AgentExecutionKind::Application, AgentExecutionKind::Adhoc] {
+        let request = request(kind, vec![internal_builder()]);
+        let snapshot = FrozenToolSnapshot::from_request(&request).unwrap();
+        let reference = snapshot.iter().next().unwrap();
+        assert_eq!(reference.kind(), FrozenToolKind::Mcp);
+        assert_eq!(reference.tool_id(), None);
+        assert!(reference.is_internal_builder());
+    }
+}
+
+#[test]
+fn missing_saved_id_requires_the_exact_internal_builder_contract() {
+    let cases = [
+        ("type", json!("mcp_untrusted")),
+        ("type", json!("mcp")),
+        ("name", json!("Other Skills")),
+        ("toolkit_name", json!("Other Skills")),
+        ("meta", json!({"mcp": true})),
+        (
+            "settings",
+            json!({"server_name": "mcp_elitea_internal_secrets"}),
+        ),
+        ("id", json!(0)),
+    ];
+    for (key, value) in cases {
+        let mut descriptor = internal_builder();
+        descriptor[key] = value;
+        let request = request(AgentExecutionKind::Adhoc, vec![descriptor]);
+        assert!(
+            FrozenToolSnapshot::from_request(&request).is_err(),
+            "accepted {key}"
+        );
+    }
+}

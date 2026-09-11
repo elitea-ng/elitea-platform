@@ -116,6 +116,7 @@ async fn preserves_delegated_authorization_as_a_typed_outcome() {
         DirectToolkitExecutionErrorCode::AuthorizationRequired
     );
     assert!(!error.retryable());
+    assert!(error.authorization().is_some());
     assert!(!format!("{error:?} {error}").contains("sharepoint.example"));
 }
 
@@ -345,5 +346,79 @@ impl Tool for AuthorizationTool {
         _arguments: Value,
     ) -> adk_rust::Result<Value> {
         Err(delegated_authorization_error_fixture("sharepoint"))
+    }
+}
+
+#[tokio::test]
+async fn shared_test_preserves_values_and_tool_failures_without_opening_effects() {
+    use super::direct_execution::execute_test_toolsets;
+    for value in [
+        Value::Null,
+        json!(""),
+        json!(false),
+        json!(0),
+        json!([]),
+        json!({"nested": null}),
+    ] {
+        let tool: Arc<dyn Tool> = Arc::new(OutcomeTool(Ok(value.clone())));
+        let actual = execute_test_toolsets(
+            toolset("repo", vec![tool]),
+            invocation("repo", "result", json!({})),
+            &allow_all(),
+        )
+        .await
+        .expect("test value");
+        assert_eq!(actual, value);
+    }
+    let failed = execute_test_toolsets(
+        toolset("repo", vec![Arc::new(OutcomeTool(Err(())))]),
+        invocation("repo", "result", json!({})),
+        &allow_all(),
+    )
+    .await
+    .expect_err("tool failure");
+    assert_eq!(failed.code(), DirectToolkitExecutionErrorCode::ToolError);
+    assert!(!format!("{failed:?} {failed}").contains("protected-provider-detail"));
+
+    let effect = Arc::new(FixtureTool::effectful("write"));
+    let refused = execute_test_toolsets(
+        toolset("repo", vec![effect.clone()]),
+        invocation("repo", "write", json!({})),
+        &allow_all(),
+    )
+    .await
+    .expect_err("effect refusal");
+    assert_eq!(
+        refused.code(),
+        DirectToolkitExecutionErrorCode::EffectfulToolUnavailable
+    );
+    assert_eq!(effect.calls.load(Ordering::SeqCst), 0);
+}
+
+struct OutcomeTool(Result<Value, ()>);
+
+#[async_trait]
+impl Tool for OutcomeTool {
+    fn name(&self) -> &'static str {
+        "result"
+    }
+    fn description(&self) -> &'static str {
+        "test result"
+    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
+    async fn execute(
+        &self,
+        _context: Arc<dyn ToolContext>,
+        _arguments: Value,
+    ) -> adk_rust::Result<Value> {
+        self.0.clone().map_err(|()| {
+            adk_rust::AdkError::unavailable(
+                adk_rust::error::ErrorComponent::Tool,
+                "test.failure",
+                "protected-provider-detail",
+            )
+        })
     }
 }

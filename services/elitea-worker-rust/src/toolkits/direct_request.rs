@@ -71,12 +71,82 @@ pub(crate) struct DirectToolkitRequest {
     tool_name: String,
     arguments: Value,
     policy: Arc<ToolAdmissionPolicy>,
+    tokens: Map<String, Value>,
+    model_context: Map<String, Value>,
 }
 
 impl DirectToolkitRequest {
     pub(crate) fn parse(raw: &[u8]) -> Result<Self, DirectToolkitRequestError> {
         let input = parse_toolkit_execute_read_input(raw).map_err(protocol_error)?;
         Self::from_message(input)
+    }
+
+    /// Parse the existing shared Test settings and arguments data-plane entries.
+    pub(crate) fn parse_call(
+        toolkit_type: &str,
+        toolkit_id: &str,
+        tool_name: &str,
+        settings: &[u8],
+        arguments: &[u8],
+        context: &[u8],
+    ) -> Result<Self, DirectToolkitRequestError> {
+        let toolkit = parse_json(settings, MAX_TOOLKIT_JSON_BYTES)?;
+        let id = toolkit
+            .get("id")
+            .and_then(Value::as_u64)
+            .ok_or_else(invalid_input)?;
+        if id == 0 || id.to_string() != toolkit_id {
+            return Err(invalid_input());
+        }
+        let name = toolkit
+            .get("toolkit_name")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid_input)?;
+        let mut request = Self::from_message(ToolkitExecuteReadInputV1 {
+            schema_revision: String::new(),
+            toolkit: settings.to_vec(),
+            toolkit_type: toolkit_type.to_owned(),
+            toolkit_name: name.to_owned(),
+            tool_name: tool_name.to_owned(),
+            arguments: arguments.to_vec(),
+            toolkit_guardrails: context_guardrails(context)?,
+        })?;
+        request.tokens = context_tokens(context)?;
+        request.model_context = runtime_context(context)?
+            .into_iter()
+            .filter(|(key, _)| matches!(key.as_str(), "llm_model" | "llm_configuration"))
+            .collect();
+        Ok(request)
+    }
+
+    /// Discovery has no saved-row ID in its contract and never invokes a tool.
+    pub(crate) fn parse_discovery(
+        toolkit_type: &str,
+        settings: &[u8],
+        context: &[u8],
+    ) -> Result<Self, DirectToolkitRequestError> {
+        let settings = parse_json(settings, MAX_TOOLKIT_JSON_BYTES)?;
+        if !settings.is_object() || !valid_identity(toolkit_type) {
+            return Err(invalid_input());
+        }
+        let toolkit = serde_json::json!({
+            "id": 1, "type": toolkit_type, "toolkit_name": toolkit_type, "settings": settings
+        });
+        let mut request = Self::from_message(ToolkitExecuteReadInputV1 {
+            schema_revision: String::new(),
+            toolkit: serde_json::to_vec(&toolkit).map_err(|_| invalid_input())?,
+            toolkit_type: toolkit_type.to_owned(),
+            toolkit_name: toolkit_type.to_owned(),
+            tool_name: "discovery".to_owned(),
+            arguments: b"{}".to_vec(),
+            toolkit_guardrails: context_guardrails(context)?,
+        })?;
+        request.tokens = context_tokens(context)?;
+        request.model_context = runtime_context(context)?
+            .into_iter()
+            .filter(|(key, _)| matches!(key.as_str(), "llm_model" | "llm_configuration"))
+            .collect();
+        Ok(request)
     }
 
     fn from_message(input: ToolkitExecuteReadInputV1) -> Result<Self, DirectToolkitRequestError> {
@@ -130,6 +200,8 @@ impl DirectToolkitRequest {
             tool_name: input.tool_name,
             arguments,
             policy,
+            tokens: Map::new(),
+            model_context: Map::new(),
         })
     }
 
@@ -160,10 +232,86 @@ impl DirectToolkitRequest {
         &self.arguments
     }
 
+    pub(crate) fn tokens(&self) -> &Map<String, Value> {
+        &self.tokens
+    }
+
     #[must_use]
     pub(crate) fn policy(&self) -> &Arc<ToolAdmissionPolicy> {
         &self.policy
     }
+}
+
+fn runtime_context(raw: &[u8]) -> Result<Map<String, Value>, DirectToolkitRequestError> {
+    let Value::Object(context) = parse_json(raw, MAX_TOOLKIT_JSON_BYTES)? else {
+        return Err(invalid_input());
+    };
+    if context.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "toolkit_security" | "mcp_tokens" | "llm_model" | "llm_configuration"
+        )
+    }) {
+        return Err(invalid_input());
+    }
+    if context.get("llm_model").is_some_and(|value| {
+        !value.is_null()
+            && value.as_str().is_none_or(|name| {
+                name.len() > MAX_IDENTITY_BYTES || name.chars().any(char::is_control)
+            })
+    }) || context
+        .get("llm_configuration")
+        .is_some_and(|value| !value.is_null() && !value.is_object())
+    {
+        return Err(invalid_input());
+    }
+    Ok(context)
+}
+
+fn context_guardrails(raw: &[u8]) -> Result<Vec<u8>, DirectToolkitRequestError> {
+    let context = runtime_context(raw)?;
+    let guardrails = context
+        .get("toolkit_security")
+        .filter(|value| value.is_object())
+        .ok_or_else(invalid_input)?;
+    serde_json::to_vec(guardrails).map_err(|_| invalid_input())
+}
+
+fn context_tokens(raw: &[u8]) -> Result<Map<String, Value>, DirectToolkitRequestError> {
+    match runtime_context(raw)?.remove("mcp_tokens") {
+        Some(Value::Object(tokens)) => {
+            if tokens.iter().any(|(key, value)| {
+                !super::DelegatedAuthorizationRequirement::valid_token_key(key)
+                    || !valid_materialized_token(value)
+            }) {
+                return Err(invalid_input());
+            }
+            Ok(tokens)
+        }
+        None | Some(Value::Null) => Ok(Map::new()),
+        _ => Err(invalid_input()),
+    }
+}
+
+fn valid_materialized_token(value: &Value) -> bool {
+    let token = match value {
+        Value::String(value) => Some(value.as_str()),
+        Value::Object(value)
+            if value
+                .keys()
+                .all(|key| matches!(key.as_str(), "access_token" | "session_id")) =>
+        {
+            value.get("access_token").and_then(Value::as_str)
+        }
+        _ => None,
+    };
+    token.is_some_and(|token| {
+        !token.is_empty()
+            && token.len() <= 16 * 1024
+            && !token.chars().any(char::is_control)
+            && !token.contains("{{")
+            && !token.contains("}}")
+    })
 }
 
 fn parse_json(raw: &[u8], maximum: usize) -> Result<Value, DirectToolkitRequestError> {
@@ -237,6 +385,26 @@ mod tests {
             arguments: br#"{"query":"durability"}"#.to_vec(),
             toolkit_guardrails: b"{}".to_vec(),
         }
+    }
+
+    #[test]
+    fn rejects_unredeemed_token_references_before_native_materialization() {
+        let raw = serde_json::to_vec(&toolkit()).expect("toolkit");
+        let result = DirectToolkitRequest::parse_call("mcp", "52", "search_docs", &raw, b"{}",
+            br#"{"toolkit_security":{},"mcp_tokens":{"https://mcp.example.invalid/events":{"access_token":"{{secret.TOKEN}}"}}}"#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn keeps_supplied_model_settings_for_model_independent_tools() {
+        let raw = serde_json::to_vec(&toolkit()).expect("toolkit");
+        let request = DirectToolkitRequest::parse_call("mcp", "52", "search_docs", &raw, b"{}",
+            br#"{"toolkit_security":{},"llm_model":"chosen-model","llm_configuration":{"temperature":0.25,"max_tokens":256}}"#).expect("model context");
+        assert_eq!(request.model_context["llm_model"], "chosen-model");
+        assert_eq!(
+            request.model_context["llm_configuration"],
+            json!({"temperature":0.25,"max_tokens":256})
+        );
     }
 
     #[test]

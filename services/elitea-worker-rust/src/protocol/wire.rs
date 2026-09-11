@@ -75,6 +75,8 @@ pub(crate) enum Schema {
     InputBundleReference,
     AgentExecutionCommand,
     ToolkitExecuteReadCommand,
+    ToolkitCallToolCommand,
+    ToolkitAvailableToolsCommand,
     ToolkitExecuteReadInput,
     NodeEvent,
 }
@@ -214,13 +216,7 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
         Schema::WorkerCommand => match field {
             1..=3 | 5 | 8..=14 | 16..=20 | 23..=25 => Some(length()),
             4 | 6..=7 | 21..=22 => Some(varint()),
-            // The capability_command oneof, every arm the protocol defines.
-            // Tag 36 (toolkit_call_tool) is not yet served by Rust, but this
-            // range must still admit it: a field the PROTOCOL declares is not a
-            // malformed wire tag, and reporting it as one would tell an
-            // operator the command is corrupt when the true answer is that this
-            // worker does not serve that capability. The capability refusal is
-            // made by select_agent_entrypoint, where it can say so.
+            // Preserve the complete language-neutral capability oneof.
             32..=36 | 64 => Some(FieldRule {
                 wire_type: 2,
                 oneof: Some(1),
@@ -238,6 +234,14 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
         },
         Schema::ToolkitExecuteReadCommand => match field {
             1 => Some(length()),
+            _ => None,
+        },
+        Schema::ToolkitCallToolCommand => match field {
+            1..=6 => Some(length()),
+            _ => None,
+        },
+        Schema::ToolkitAvailableToolsCommand => match field {
+            1..=2 => Some(length()),
             _ => None,
         },
         Schema::ToolkitExecuteReadInput => match field {
