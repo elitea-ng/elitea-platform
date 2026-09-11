@@ -23,13 +23,12 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"regexp"
 	"sort"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/foldervisibility"
 )
 
 // Tool is one MCP tool descriptor. The JSON tags are the protocol's, including
@@ -93,6 +92,9 @@ type Tool struct {
 	// internalProjectContextOperation is populated only for the fixed
 	// project-context builder category. It is never serialized.
 	internalProjectContextOperation internalProjectContextOperation
+	internalDraftOperation          internalDraftOperation
+	internalChatOperation           internalChatOperation
+	internalDiscoveryOperation      internalDiscoveryOperation
 	// internalSecretOperation is populated only for the fixed secrets category.
 	// It is never serialized.
 	internalSecretOperation internalSecretOperation
@@ -152,14 +154,20 @@ type postgresToolSource struct {
 
 func (p postgresToolSource) tools(ctx context.Context, schema string, s scope) ([]Tool, error) {
 	if s.kind == scopeCategory {
+		if s.category == internalChatCategory {
+			return internalChatTools(), nil
+		}
+		if s.category == internalDiscoveryCategory {
+			return internalDiscoveryTools(), nil
+		}
 		if s.category == internalApplicationsCategory {
 			return internalApplicationTools(), nil
 		}
 		if s.category == internalSkillsCategory {
-			return internalSkillTools(), nil
+			return append(internalSkillTools(), internalDraftTool(internalDraftSkill)), nil
 		}
 		if s.category == internalToolkitsCategory {
-			return internalToolkitTools(), nil
+			return internalToolkitTools(p.handler != nil && p.handler.toolkitDiscoveryAvailable()), nil
 		}
 		if s.category == internalConfigurationsCategory {
 			return internalConfigurationTools(p.handler != nil && p.handler.internalConfigurations != nil && p.handler.internalTypedConfigurations != nil), nil
@@ -168,7 +176,7 @@ func (p postgresToolSource) tools(ctx context.Context, schema string, s scope) (
 			return internalNotificationTools(), nil
 		}
 		if s.category == internalProjectContextCategory {
-			return internalProjectContextTools(), nil
+			return append(internalProjectContextTools(), internalDraftTool(internalDraftProjectContext)), nil
 		}
 		if s.category == internalSecretsCategory {
 			return internalSecretTools(), nil
@@ -211,52 +219,19 @@ type externalCatalogAccess struct {
 	folderRestrictions bool
 }
 
-var errExternalCatalogIdentity = errors.New("MCP external catalog requires an owning user")
-var errPartialFolderAccessProjection = errors.New("MCP folder access projection is incomplete")
+var errExternalCatalogIdentity = foldervisibility.ErrIdentity
+var errPartialFolderAccessProjection = foldervisibility.ErrPartialProjection
 
-// externalAccess resolves the actor and detects the optional social folder
-// projection once per tools/list or tools/call lookup. A partial projection
-// fails closed because it cannot produce a reliable authorization answer.
-func (p postgresToolSource) externalAccess(
-	ctx context.Context,
-	schema string,
-) (externalCatalogAccess, error) {
+// externalAccess uses the shared actor and folder projection authority.
+func (p postgresToolSource) externalAccess(ctx context.Context, schema string) (externalCatalogAccess, error) {
 	if p.handler == nil || p.handler.pool == nil {
 		return externalCatalogAccess{}, errNoPool
 	}
-	user, ok := auth.UserFromContext(ctx)
-	if !ok {
-		return externalCatalogAccess{}, errExternalCatalogIdentity
-	}
-	actorID, ok := user.OwningUserID()
-	if !ok {
-		return externalCatalogAccess{}, errExternalCatalogIdentity
-	}
-
-	var state int32
-	err := p.handler.pool.QueryRow(ctx, `
-		SELECT CASE
-			WHEN to_regclass($1) IS NOT NULL
-			 AND to_regclass($2) IS NOT NULL
-			 AND to_regclass($3) IS NOT NULL THEN 1
-			WHEN to_regclass($3) IS NULL THEN 0
-			ELSE -1
-		END::integer`,
-		schema+".entity_folders",
-		schema+".social_folder_items",
-		schema+".folder_access_overrides",
-	).Scan(&state)
+	access, err := foldervisibility.Resolve(ctx, p.handler.pool, schema)
 	if err != nil {
 		return externalCatalogAccess{}, err
 	}
-	switch state {
-	case 0:
-		return externalCatalogAccess{actorID: actorID}, nil
-	case 1:
-		return externalCatalogAccess{actorID: actorID, folderRestrictions: true}, nil
-	default:
-		return externalCatalogAccess{}, errPartialFolderAccessProjection
-	}
+	return externalCatalogAccess{actorID: access.ActorID, folderRestrictions: access.FolderRestrictions}, nil
 }
 
 // agentTools lists the agents this project exposes over MCP.
@@ -442,47 +417,68 @@ func (p postgresToolSource) toolkitTools(
 		        AND access.access_level = 'no_access'
 		  )`, schema, len(args))
 	}
-	query += " ORDER BY id"
-
+	query += " ORDER BY id LIMIT 513"
 	rows, err := p.handler.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-
-	var tools []Tool
+	type toolkitRow struct {
+		id                             int64
+		name, toolkitType, description string
+		selected                       []byte
+	}
+	var instances []toolkitRow
 	for rows.Next() {
-		var id int64
-		var name, toolkitType, description string
-		var selected []byte
-		if err := rows.Scan(&id, &name, &toolkitType, &description, &selected); err != nil {
+		var row toolkitRow
+		if err := rows.Scan(&row.id, &row.name, &row.toolkitType, &row.description, &row.selected); err != nil {
 			return nil, err
 		}
-		argumentSchemas, schemasKnown, err := p.toolkitSchemas(toolkitType)
-		if err != nil {
-			return nil, err
-		}
-		for _, tool := range selectedToolNames(selected) {
-			inputSchema := unknownToolkitToolSchema()
-			if schemasKnown {
-				if schema, found := argumentSchemas[tool]; found {
-					inputSchema = schema
-				}
-			}
-			tools = append(tools, Tool{
-				Name: toolIdentifier(name + "_" + tool),
-				// pylon's exact sentence. Per-argument descriptions remain in
-				// InputSchema, from the same SDK snapshot used by the editor.
-				Description: fmt.Sprintf(
-					"Tool '%s' from toolkit type '%s'. Toolkit description: %s", tool, toolkitType, description),
-				InputSchema:     inputSchema,
-				toolkitID:       id,
-				toolkitToolName: tool,
-			})
+		instances = append(instances, row)
+		if len(instances) > 512 {
+			return nil, errExternalCatalogLimit
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	// Release the database connection before a claimed worker discovers schemas.
+	rows.Close()
+	discoveryCtx, cancel := context.WithTimeout(ctx, externalSchemaDeadline)
+	defer cancel()
+	var tools []Tool
+	schemaBytes := 0
+	for _, row := range instances {
+		selected := selectedToolNames(row.selected)
+		if len(selected) == 0 {
+			continue
+		}
+		argumentSchemas, available, live, err := p.toolkitInstanceSchemas(discoveryCtx, schema, access.actorID, row.id, row.toolkitType)
+		if err != nil {
+			return nil, err
+		}
+		for _, tool := range selected {
+			if live && !available[tool] {
+				continue
+			}
+			inputSchema := unknownToolkitToolSchema()
+			if value, found := argumentSchemas[tool]; found {
+				inputSchema = value
+			}
+			encoded, err := json.Marshal(inputSchema)
+			if err != nil {
+				return nil, errExternalSchemaInvalid
+			}
+			schemaBytes += len(encoded)
+			if schemaBytes > maxExternalSchemaBytes || len(tools) >= 4096 {
+				return nil, errExternalCatalogLimit
+			}
+			tools = append(tools, Tool{
+				Name:        toolIdentifier(row.name + "_" + tool),
+				Description: fmt.Sprintf("Tool '%s' from toolkit type '%s'. Toolkit description: %s", tool, row.toolkitType, row.description),
+				InputSchema: inputSchema, toolkitID: row.id, toolkitToolName: tool,
+			})
+		}
 	}
 	return rejectAmbiguousToolkitNames(tools), nil
 }
@@ -510,8 +506,8 @@ func (p postgresToolSource) toolkitSchemas(toolkitType string) (map[string]map[s
 //
 // Dynamic MCP, MCP-config and OpenAPI tools are discovered from a remote server
 // or specification and therefore legitimately have no built-in argument
-// schema. An open object is honest for those and for stale selected-tool names:
-// it says "object, contents unconstrained", not "this tool takes no input".
+// schema. Live instance discovery replaces this fallback when the runtime is enabled.
+// Runtime-disabled deployments keep the explicit open-object contract.
 func unknownToolkitToolSchema() map[string]any {
 	return map[string]any{
 		"type":                 "object",

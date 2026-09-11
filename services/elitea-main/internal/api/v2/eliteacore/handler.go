@@ -618,32 +618,6 @@ func (h *Handler) writeProjectIcon(
 	return nil
 }
 
-func (h *Handler) SearchOptions(w http.ResponseWriter, r *http.Request) {
-	projectID := chi.URLParam(r, "projectID")
-	s, schemaOK := tenantSchema(w, projectID)
-	if !schemaOK {
-		return
-	}
-	ctx := r.Context()
-
-	q := fmt.Sprintf(`SELECT name FROM %s.tags ORDER BY name`, s)
-	rows, err := h.pool.Query(ctx, q)
-
-	tags := make([]string, 0)
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var name string
-			if rows.Scan(&name) != nil {
-				continue
-			}
-			tags = append(tags, name)
-		}
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{"tags": tags, "collections": []any{}})
-}
-
 // usersCountQuery and usersPageQuery list the members of one project, plus the
 // central platform administrators.
 //

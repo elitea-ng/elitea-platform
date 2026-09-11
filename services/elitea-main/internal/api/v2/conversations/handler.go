@@ -20,6 +20,7 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/contextsettings"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/chatauthority"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/publicproject"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
@@ -28,16 +29,17 @@ import (
 )
 
 type Conversation struct {
-	ID           string    `json:"id"`
-	UUID         string    `json:"uuid,omitempty"`
-	ProjectID    string    `json:"project_id"`
-	Name         string    `json:"name"`
-	Description  string    `json:"description,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-	CreatedBy    string    `json:"created_by"`
-	MessageCount int       `json:"message_count"`
-	FolderID     *string   `json:"folder_id,omitempty"`
+	InstructionsUpdate *string   `json:"-"`
+	ID                 string    `json:"id"`
+	UUID               string    `json:"uuid,omitempty"`
+	ProjectID          string    `json:"project_id"`
+	Name               string    `json:"name"`
+	Description        string    `json:"description,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+	CreatedBy          string    `json:"created_by"`
+	MessageCount       int       `json:"message_count"`
+	FolderID           *string   `json:"folder_id,omitempty"`
 	// `chat_conversations.is_private` — the flag the rail's "Make public"
 	// item writes.
 	//
@@ -62,7 +64,10 @@ type Conversation struct {
 	// A nil map is "the caller states no meta" — Update writes the column
 	// only when the body carried the key, so a rename cannot silently blank
 	// a conversation's settings.
-	Meta map[string]any `json:"meta,omitempty"`
+	Meta         map[string]any `json:"meta,omitempty"`
+	Source       string         `json:"source,omitempty"`
+	Instructions string         `json:"instructions,omitempty"`
+	Participants []Participant  `json:"participants,omitempty"`
 }
 
 type Message struct {
@@ -214,6 +219,7 @@ type Participant struct {
 }
 
 type Repository interface {
+	AuthorizeChatResource(ctx context.Context, projectID, resourceKind, resourceID string) error
 	List(ctx context.Context, projectID string, page, pageSize int) (ListResponse, error)
 	Get(ctx context.Context, projectID, conversationID string) (Conversation, error)
 	Create(ctx context.Context, projectID string, conv Conversation) (Conversation, error)
@@ -223,6 +229,7 @@ type Repository interface {
 	ListMessageGroups(ctx context.Context, projectID, conversationID string, limit int, sortOrder string) ([]map[string]any, error)
 	ListParticipants(ctx context.Context, projectID, conversationID string) ([]Participant, error)
 	AddParticipant(ctx context.Context, projectID, conversationID string, body map[string]any) error
+	AddParticipants(ctx context.Context, projectID, conversationID string, bodies []map[string]any) error
 	RemoveParticipant(ctx context.Context, projectID, conversationID, participantID string) error
 	UpdateEntitySettings(ctx context.Context, projectID, conversationID, participantID string, settings map[string]any) error
 	BatchUpdateEntitySettings(ctx context.Context, projectID, conversationID string, settings []map[string]any) error
@@ -268,12 +275,14 @@ type Repository interface {
 }
 
 type Handler struct {
-	repo         Repository
-	pool         any
-	store        storage.ObjectStore
-	attachments  AttachmentStore
-	userDefaults UserContextDefaults
-	events       EventEmitter
+	contextGate     ContextManagementGate
+	reasoningModels ReasoningModelReader
+	repo            Repository
+	pool            any
+	store           storage.ObjectStore
+	attachments     AttachmentStore
+	userDefaults    UserContextDefaults
+	events          EventEmitter
 }
 
 // EventEmitter is the seam to internal/events.Publisher — declared locally,
@@ -415,11 +424,16 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	access, err := chatauthority.Load(ctx, pool, projectID)
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
 
 	// Build the query with optional filtering by source & participant entity
-	baseWhere := "WHERE 1=1"
-	args := []any{}
-	argIdx := 1
+	visibility, args := access.Predicate(s, "c", 1, chatauthority.Listing)
+	baseWhere := "WHERE " + visibility
+	argIdx := len(args) + 1
 
 	if source != "" {
 		baseWhere += fmt.Sprintf(" AND c.source = $%d", argIdx)
@@ -439,20 +453,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		argIdx++
 	}
 
-	// `?mine=true` narrows the listing to the CALLER'S OWN conversations.
-	//
-	// It is not decoration on the hidden filter, it is what makes it safe to
-	// use. `chat_conversations` rows carry `is_private`, and this listing has
-	// never read it — every conversation in a project is listed to every
-	// member who may list conversations at all. That is the behaviour for
-	// ordinary chats and it is left alone here; but a wiki chat drawer that
-	// asked for "the hidden deepwiki conversations of this toolkit" without
-	// this would show one member the questions another member asked, which is
-	// a new leak rather than an inherited one.
-	//
-	// An unauthenticated caller cannot narrow to itself, so it gets an empty
-	// listing rather than everybody's: refusing the FILTER by ignoring it is
-	// how a privacy control becomes a no-op.
+	// The optional mine filter further narrows actor-visible conversations.
 	if r.URL.Query().Get("mine") == "true" {
 		user, ok := auth.UserFromContext(ctx)
 		callerID, hasCaller := int64(0), false
@@ -494,7 +495,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	countQ := fmt.Sprintf(`SELECT COUNT(*) FROM %s.chat_conversations c %s`, s, baseWhere)
 	var total int
 	if err := pool.QueryRow(ctx, countQ, args...).Scan(&total); err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"total": 0, "rows": []any{}})
+		apierr.Write(w, err)
 		return
 	}
 
@@ -505,12 +506,12 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 			(SELECT COUNT(*) FROM %s.chat_message_group mg WHERE mg.conversation_id = c.id)
 		FROM %s.chat_conversations c
 		%s
-		ORDER BY c.created_at DESC
+		ORDER BY c.created_at DESC, c.id DESC
 		LIMIT $%d OFFSET $%d`, s, s, baseWhere, argIdx, argIdx+1)
 
 	rows, err := pool.Query(ctx, q, args...)
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"total": 0, "rows": []any{}})
+		apierr.Write(w, err)
 		return
 	}
 	defer rows.Close()
@@ -523,7 +524,8 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		var metaBytes []byte
 		var msgCount int
 		if err := rows.Scan(&id, &name, &createdAt, &updatedAt, &metaBytes, &msgCount); err != nil {
-			continue
+			apierr.Write(w, err)
+			return
 		}
 
 		var meta map[string]any
@@ -546,10 +548,17 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		result = append(result, row)
 	}
 
+	if err := rows.Err(); err != nil {
+		apierr.Write(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"total": total, "rows": result})
 }
 
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeConversation(w, r) {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	conversationID := chi.URLParam(r, "conversationID")
 
@@ -562,7 +571,11 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	// Every downstream lookup keys off `conv.ID`, not the path segment: the
 	// path may carry a UUID (see the repo's idPredicate), and participants
 	// and message groups are joined on the numeric conversation id only.
-	participants, _ := h.repo.ListParticipants(r.Context(), projectID, conv.ID)
+	participants, err := h.repo.ListParticipants(r.Context(), projectID, conv.ID)
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
 	if participants == nil {
 		participants = []Participant{}
 	}
@@ -578,6 +591,8 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		"created_by":    conv.CreatedBy,
 		"message_count": conv.MessageCount,
 		"participants":  participants,
+		"source":        conv.Source,
+		"instructions":  conv.Instructions,
 		// Null when the conversation sits outside every folder. Absent
 		// entirely before #128, so a client could not tell which folder a
 		// conversation belonged to from its own details response.
@@ -598,7 +613,11 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	messagesLimit, _ := strconv.Atoi(r.URL.Query().Get("messages_limit"))
 	if messagesLimit > 0 {
 		sortOrder := r.URL.Query().Get("sort_order")
-		groups, _ := h.repo.ListMessageGroups(r.Context(), projectID, conv.ID, messagesLimit, sortOrder)
+		groups, err := h.repo.ListMessageGroups(r.Context(), projectID, conv.ID, messagesLimit, sortOrder)
+		if err != nil {
+			apierr.Write(w, err)
+			return
+		}
 		if groups == nil {
 			groups = []map[string]any{}
 		}
@@ -628,15 +647,61 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	if meta, ok := body["meta"].(map[string]any); ok {
 		conv.Meta = meta
 	}
-	if authorID, ok := body["author_id"]; ok {
-		conv.CreatedBy = fmt.Sprintf("%v", authorID)
-	} else {
-		user, ok := auth.UserFromContext(r.Context())
-		if ok {
-			conv.CreatedBy = user.ID
+	actorID, err := chatauthority.Actor(r.Context())
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	conv.CreatedBy = strconv.FormatInt(actorID, 10)
+	if raw, present := body["is_private"]; present {
+		value, ok := raw.(bool)
+		if !ok {
+			apierr.Write(w, apierr.BadRequest("is_private must be a boolean"))
+			return
+		}
+		conv.IsPrivate = &value
+	}
+	conv.Source, _ = body["source"].(string)
+	conv.Instructions, _ = body["instructions"].(string)
+	if raw, present := body["participants"]; present {
+		values, ok := raw.([]any)
+		if !ok || len(values) > 100 {
+			apierr.Write(w, apierr.BadRequest("participants must be an array with at most 100 items"))
+			return
+		}
+		for _, raw := range values {
+			value, ok := raw.(map[string]any)
+			if !ok {
+				apierr.Write(w, apierr.BadRequest("invalid participant"))
+				return
+			}
+			defaultEntityProjectID(value, projectID)
+			encoded, _ := json.Marshal(value)
+			var participant Participant
+			if err := json.Unmarshal(encoded, &participant); err != nil || participant.EntityName == "" || participant.EntityMeta == nil {
+				apierr.Write(w, apierr.BadRequest("invalid participant"))
+				return
+			}
+			if err := participant.Validate(); err != nil {
+				apierr.Write(w, apierr.BadRequest(err.Error()))
+				return
+			}
+			conv.Participants = append(conv.Participants, participant)
 		}
 	}
 
+	if defaults, ok := h.userDefaults.(interface {
+		Personalization(context.Context, int64) (map[string]any, error)
+	}); ok {
+		if personalization, err := defaults.Personalization(r.Context(), actorID); err == nil {
+			applyCreatePersonalization(&conv, personalization)
+		}
+	}
+
+	if err := h.applyCreateContextDefaults(r, projectID, &conv); err != nil {
+		apierr.Write(w, apierr.Internal("read chat creation defaults"))
+		return
+	}
 	created, err := h.repo.Create(r.Context(), projectID, conv)
 	if err != nil {
 		apierr.Write(w, err)
@@ -653,6 +718,9 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeConversation(w, r) {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	conversationID := chi.URLParam(r, "conversationID")
 
@@ -694,6 +762,14 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		conv.Meta = meta
 	}
 
+	if raw, present := body["instructions"]; present {
+		value, ok := raw.(string)
+		if !ok {
+			apierr.Write(w, apierr.BadRequest("instructions must be a string"))
+			return
+		}
+		conv.InstructionsUpdate = &value
+	}
 	updated, err := h.repo.Update(r.Context(), projectID, conversationID, conv)
 	if err != nil {
 		apierr.Write(w, err)
@@ -730,6 +806,9 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 // per-conversation attachment route) is the path that sweeps those by key
 // prefix.
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeConversation(w, r) {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	conversationID := chi.URLParam(r, "conversationID")
 
@@ -850,6 +929,9 @@ func parseMessagesQuery(values url.Values) MessagesQuery {
 }
 
 func (h *Handler) ListMessages(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeConversation(w, r) {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	conversationID := chi.URLParam(r, "conversationID")
 
@@ -862,6 +944,9 @@ func (h *Handler) ListMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) DeleteMessages(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeConversation(w, r) {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	conversationID := chi.URLParam(r, "conversationID")
 	if err := h.repo.DeleteMessages(r.Context(), projectID, conversationID); err != nil {
@@ -911,6 +996,9 @@ func (h *Handler) DeleteMessages(w http.ResponseWriter, r *http.Request) {
 // them. Deleting the bytes first and refusing afterwards, pylon's order, is
 // unrecoverable: the file is gone and the message still claims it.
 func (h *Handler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeConversation(w, r) {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	messageID := chi.URLParam(r, "messageID")
 	user, _ := auth.UserFromContext(r.Context())
@@ -1036,6 +1124,9 @@ func (h *Handler) deleteAttachmentObjects(ctx context.Context, projectIDStr stri
 // message that exists. Nothing caught it because nothing routed the method —
 // it is the never-run half of the dead wiring, not a regression.
 func (h *Handler) GetMessage(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeConversation(w, r) {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	messageUUID := chi.URLParam(r, "messageID")
 	msg, err := h.repo.GetMessageByUUID(r.Context(), projectID, messageUUID)
@@ -1057,6 +1148,9 @@ const messageFeedbackCommentMaxLen = 2000
 // behind the same permission GetMessage does: reading a message's feedback is
 // not a wider claim than reading the message itself.
 func (h *Handler) GetMessageFeedback(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeConversation(w, r) {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	messageUUID := chi.URLParam(r, "messageID")
 	user, _ := auth.UserFromContext(r.Context())
@@ -1077,6 +1171,9 @@ func (h *Handler) GetMessageFeedback(w http.ResponseWriter, r *http.Request) {
 // closed is right if it ever is not (same reasoning DeleteMessage's own empty
 // userID guard states).
 func (h *Handler) SetMessageFeedback(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeConversation(w, r) {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	messageUUID := chi.URLParam(r, "messageID")
 	user, ok := auth.UserFromContext(r.Context())
@@ -1116,6 +1213,9 @@ func (h *Handler) SetMessageFeedback(w http.ResponseWriter, r *http.Request) {
 // retraction immediately, same as SetMessageFeedback's response reflects the
 // new vote.
 func (h *Handler) DeleteMessageFeedback(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeConversation(w, r) {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	messageUUID := chi.URLParam(r, "messageID")
 	user, ok := auth.UserFromContext(r.Context())
@@ -1165,35 +1265,85 @@ func defaultEntityProjectID(body map[string]any, projectID string) {
 }
 
 func (h *Handler) AddParticipant(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeConversation(w, r) {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	conversationID := chi.URLParam(r, "conversationID")
 
-	var bodyList []map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&bodyList); err != nil {
-		// Try as single object
+	var payload json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		apierr.Write(w, apierr.BadRequest("invalid request body"))
 		return
 	}
+	var bodyList []map[string]any
+	if err := json.Unmarshal(payload, &bodyList); err != nil {
+		var body map[string]any
+		if err := json.Unmarshal(payload, &body); err != nil || body == nil {
+			apierr.Write(w, apierr.BadRequest("invalid request body"))
+			return
+		}
+		bodyList = []map[string]any{body}
+	}
 
+	if len(bodyList) > 100 {
+		apierr.Write(w, apierr.BadRequest("at most 100 participants are allowed"))
+		return
+	}
 	for _, body := range bodyList {
-		// The project id defaults to the one in the path, as legacy does
-		// (`entity_meta['project_id'] = entity_meta.get('project_id', project_id)`).
-		// The repository keys a participant's identity on id AND project_id.
-		// The same agent posted once with and once without project_id would
-		// otherwise become two participants in one conversation.
 		defaultEntityProjectID(body, projectID)
-		if err := h.repo.AddParticipant(r.Context(), projectID, conversationID, body); err != nil {
-			apierr.Write(w, err)
+		raw, err := json.Marshal(body)
+		if err != nil {
+			apierr.Write(w, apierr.BadRequest("invalid participant"))
+			return
+		}
+		var participant Participant
+		if err := json.Unmarshal(raw, &participant); err != nil {
+			apierr.Write(w, apierr.BadRequest("invalid participant"))
+			return
+		}
+		if err := participant.Validate(); err != nil {
+			apierr.Write(w, apierr.BadRequest(err.Error()))
 			return
 		}
 	}
+	if err := h.repo.AddParticipants(r.Context(), projectID, conversationID, bodyList); err != nil {
+		apierr.Write(w, err)
+		return
+	}
 
 	// Return the participants list from DB
-	participants, _ := h.repo.ListParticipants(r.Context(), projectID, conversationID)
+	participants, err := h.repo.ListParticipants(r.Context(), projectID, conversationID)
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, participants)
 }
 
+// GetParticipant reads only a participant mapped to an actor-visible conversation.
+func (h *Handler) GetParticipant(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeConversation(w, r) {
+		return
+	}
+	participants, err := h.repo.ListParticipants(r.Context(), chi.URLParam(r, "projectID"), chi.URLParam(r, "conversationID"))
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	for _, participant := range participants {
+		if strconv.Itoa(participant.ID) == chi.URLParam(r, "participantID") {
+			writeJSON(w, http.StatusOK, participant)
+			return
+		}
+	}
+	apierr.Write(w, apierr.NotFound("participant not found"))
+}
+
 func (h *Handler) RemoveParticipant(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeConversation(w, r) {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	conversationID := chi.URLParam(r, "conversationID")
 	participantID := chi.URLParam(r, "participantID")
@@ -1205,6 +1355,9 @@ func (h *Handler) RemoveParticipant(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) UpdateEntitySettings(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeConversation(w, r) {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	conversationID := chi.URLParam(r, "conversationID")
 	participantID := chi.URLParam(r, "participantID")
@@ -1214,28 +1367,68 @@ func (h *Handler) UpdateEntitySettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If llm_settings present, validate based on participant type
-	if llmSettings, hasLLM := body["llm_settings"]; hasLLM && llmSettings != nil {
-		pool, _ := h.pool.(*pgxpool.Pool)
-		if pool != nil {
-			entityName, agentProjectID := h.getParticipantEntityInfo(r.Context(), pool, projectID, conversationID, participantID)
-			if entityName == "application" {
-				// `PUBLIC_PROJECT_ID` was one of four names for one project.
-				// internal/publicproject resolves them all, and cmd refuses to
-				// start when two of them disagree.
-				publicProjectID := publicproject.IDString()
-				if agentProjectID != publicProjectID {
-					// Non-published agent: reject if llm_settings differs from version baseline
-					versionID := body["version_id"]
-					if versionID != nil && h.llmSettingsDiffer(r.Context(), pool, projectID, versionID, llmSettings) {
-						apierr.Write(w, apierr.BadRequest("LLM settings override is only allowed for published agents from agent studio"))
+	if err := normalizeParticipantSettings(body); err != nil {
+		apierr.Write(w, apierr.BadRequest(err.Error()))
+		return
+	}
+	var participant *Participant
+	if pool, _ := h.pool.(*pgxpool.Pool); pool != nil {
+		participants, err := h.repo.ListParticipants(r.Context(), projectID, conversationID)
+		if err != nil {
+			apierr.Write(w, err)
+			return
+		}
+		for i := range participants {
+			if strconv.Itoa(participants[i].ID) == participantID {
+				participant = &participants[i]
+				break
+			}
+		}
+		if participant == nil {
+			apierr.Write(w, apierr.NotFound("participant not found"))
+			return
+		}
+	}
+	emptyLLM := false
+	if settings, ok := body["llm_settings"].(map[string]any); ok && len(settings) == 0 {
+		emptyLLM = true
+	}
+	if raw, present := body["llm_settings"]; present && raw != nil && !emptyLLM {
+		settings, err := normalizeParticipantLLM(raw, false)
+		if err != nil {
+			apierr.Write(w, apierr.BadRequest(err.Error()))
+			return
+		}
+		if participant != nil && participant.EntityName == "application" && fmt.Sprint(participant.EntityMeta["project_id"]) != publicproject.IDString() {
+			versionID := body["version_id"]
+			if versionID == nil {
+				versionID = body["id"]
+			}
+			pool, _ := h.pool.(*pgxpool.Pool)
+			if h.llmSettingsDiffer(r.Context(), pool, projectID, versionID, settings) {
+				apierr.Write(w, apierr.BadRequest("LLM settings override is only allowed for published agents from agent studio"))
+				return
+			}
+			delete(body, "llm_settings")
+		} else {
+			if h.reasoningModels != nil && (settings["temperature"] != nil || settings["reasoning_effort"] == nil) {
+				name, _ := settings["model_name"].(string)
+				modelProject := projectID
+				if value := settings["model_project_id"]; value != nil {
+					modelProject = fmt.Sprint(value)
+				}
+				if modelProject != projectID && modelProject != publicproject.IDString() {
+					apierr.Write(w, apierr.BadRequest("model project must be current or public"))
+					return
+				}
+				if name != "" {
+					if reasoning, err := h.reasoningModels.SupportsReasoning(r.Context(), modelProject, name); err == nil && reasoning {
+						apierr.Write(w, apierr.BadRequest("a reasoning-capable model requires a reasoning_effort (low/medium/high) and no temperature"))
 						return
 					}
-					delete(body, "llm_settings")
 				}
-				// else: published agent from public project - keep llm_settings in body
 			}
-			// else: non-application participant - keep llm_settings in body
+			body["llm_settings"] = settings
 		}
 	}
 
@@ -1243,56 +1436,54 @@ func (h *Handler) UpdateEntitySettings(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, err)
 		return
 	}
+	if participant != nil {
+		participant.EntitySettings = body
+		writeJSON(w, http.StatusOK, participant)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"entity_settings": body})
 }
 
-func (h *Handler) getParticipantEntityInfo(ctx context.Context, pool *pgxpool.Pool, projectID, conversationID, participantID string) (string, string) {
-	// A project id that is not a project id names no participant. The empty
-	// pair is what a missing row gives too, and both callers already handle it.
-	s, err := tenantschema.Quote(projectID)
-	if err != nil {
-		return "", ""
-	}
-	q := fmt.Sprintf(`SELECT p.entity_name, COALESCE(p.entity_meta->>'project_id', '')
-		FROM %s.chat_participants p
-		JOIN %s.chat_participant_mapping pm ON pm.participant_id = p.id
-		WHERE pm.conversation_id = $1 AND p.id = $2`, s, s)
-	var entityName, agentProjectID string
-	_ = pool.QueryRow(ctx, q, conversationID, participantID).Scan(&entityName, &agentProjectID)
-	return entityName, agentProjectID
-}
-
 func (h *Handler) llmSettingsDiffer(ctx context.Context, pool *pgxpool.Pool, projectID string, versionID, llmSettings any) bool {
-	vid := fmt.Sprintf("%v", versionID)
-	// "cannot verify" is the existing answer to an unreadable row, and it is
-	// the right answer to an id that identifies no schema.
-	s, err := tenantschema.Quote(projectID)
+	incoming, err := normalizeParticipantLLM(llmSettings, false)
 	if err != nil {
 		return true
 	}
-	q := fmt.Sprintf(`SELECT llm_settings FROM %s.application_versions WHERE id = $1`, s)
-	var storedRaw []byte
-	if err := pool.QueryRow(ctx, q, vid).Scan(&storedRaw); err != nil {
-		return true // can't verify, reject
+	baseline := map[string]any{}
+	if versionID != nil {
+		vid, err := participantPositiveID(versionID)
+		if err != nil {
+			return true
+		}
+		s, err := tenantschema.Quote(projectID)
+		if err != nil || pool == nil {
+			return true
+		}
+		var raw []byte
+		if err := pool.QueryRow(ctx, fmt.Sprintf(`SELECT llm_settings FROM %s.application_versions WHERE id=$1`, s), vid).Scan(&raw); err != nil {
+			return true
+		}
+		if len(raw) > 0 && string(raw) != "null" {
+			if err := json.Unmarshal(raw, &baseline); err != nil {
+				return true
+			}
+		}
 	}
-	var stored map[string]any
-	_ = json.Unmarshal(storedRaw, &stored) // DB column; error leaves stored nil, handled in comparison
-	incoming, _ := json.Marshal(llmSettings)
-	var incomingMap map[string]any
-	_ = json.Unmarshal(incoming, &incomingMap) // re-marshal of already-decoded map; can't fail
-
-	// Compare key fields
-	for _, key := range []string{"temperature", "max_tokens", "top_p", "model_name"} {
-		sv := fmt.Sprintf("%v", stored[key])
-		iv := fmt.Sprintf("%v", incomingMap[key])
-		if sv != iv {
+	if len(baseline) > 0 {
+		baseline, err = normalizeParticipantLLM(baseline, true)
+		if err != nil {
 			return true
 		}
 	}
-	return false
+	// Both models inject chat_history_template=all. An absent baseline is
+	// deliberately empty, matching the legacy private-agent restriction.
+	return !reflect.DeepEqual(participantLLMComparable(incoming), participantLLMComparable(baseline))
 }
 
 func (h *Handler) BatchUpdateEntitySettings(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeConversation(w, r) {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	conversationID := chi.URLParam(r, "conversationID")
 	var body []map[string]any
@@ -1308,6 +1499,9 @@ func (h *Handler) BatchUpdateEntitySettings(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *Handler) SelectConversation(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeConversation(w, r) {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	conversationID := chi.URLParam(r, "conversationID")
 	user, _ := auth.UserFromContext(r.Context())
@@ -1339,6 +1533,10 @@ func (h *Handler) CreateCanvas(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, apierr.BadRequest("invalid request body"))
 		return
 	}
+	if err := h.repo.AuthorizeChatResource(r.Context(), projectID, "message", fmt.Sprint(body["message_group_id"])); err != nil {
+		apierr.Write(w, err)
+		return
+	}
 	canvas, err := h.repo.CreateCanvas(r.Context(), projectID, body)
 	if err != nil {
 		apierr.Write(w, err)
@@ -1348,6 +1546,9 @@ func (h *Handler) CreateCanvas(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetCanvas(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeConversation(w, r) {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	canvasID := chi.URLParam(r, "canvasID")
 	canvas, err := h.repo.GetCanvas(r.Context(), projectID, canvasID)
@@ -1359,6 +1560,9 @@ func (h *Handler) GetCanvas(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) UpdateCanvas(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeConversation(w, r) {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	canvasID := chi.URLParam(r, "canvasID")
 	var body map[string]any
@@ -1384,6 +1588,9 @@ func (h *Handler) UpdateCanvas(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) UpdateAttachmentStorage(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeConversation(w, r) {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	conversationID := chi.URLParam(r, "conversationID")
 	var body map[string]any
@@ -1406,6 +1613,9 @@ func (h *Handler) UpdateAttachmentStorage(w http.ResponseWriter, r *http.Request
 // unchanged below); a multipart/form-data body is S20a's byte path,
 // writeAttachmentBytes.
 func (h *Handler) AddAttachments(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeConversation(w, r) {
+		return
+	}
 	if mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err == nil && mediaType == "multipart/form-data" {
 		h.writeAttachmentBytes(w, r)
 		return
@@ -1437,6 +1647,9 @@ func (h *Handler) AddAttachments(w http.ResponseWriter, r *http.Request) {
 // attachments.py:240, `mc.remove_file(bucket_name, filename)`); this is that
 // parity baseline.
 func (h *Handler) DeleteAttachments(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeConversation(w, r) {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	conversationID := chi.URLParam(r, "conversationID")
 
@@ -1572,6 +1785,9 @@ func (h *Handler) deleteStoredAttachments(ctx context.Context, projectIDStr, con
 // What it does NOT do is invent the token count. See
 // contextsettings.AnalyticsUnavailableReason for what is refused and why.
 func (h *Handler) GetContextStatus(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeConversation(w, r) {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	conversationID := chi.URLParam(r, "conversationID")
 
@@ -1592,6 +1808,9 @@ func (h *Handler) GetContextStatus(w http.ResponseWriter, r *http.Request) {
 // displayed without writing to it first. The response is the same document the
 // PUT returns under `updated_strategy`.
 func (h *Handler) GetContextStrategy(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeConversation(w, r) {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	conversationID := chi.URLParam(r, "conversationID")
 
@@ -1613,6 +1832,9 @@ func (h *Handler) GetContextStrategy(w http.ResponseWriter, r *http.Request) {
 // into `meta.context_strategy` wholesale, so a form that sent two fields
 // erased the rest - including `summary_llm_settings`.
 func (h *Handler) UpdateContextStrategy(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeConversation(w, r) {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	conversationID := chi.URLParam(r, "conversationID")
 
@@ -1716,4 +1938,46 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v) // connection already committed; ignore write error
+}
+
+func (h *Handler) authorizeConversation(w http.ResponseWriter, r *http.Request) bool {
+	kind, id := "conversation", chi.URLParam(r, "conversationID")
+	if id == "" {
+		kind, id = "message", chi.URLParam(r, "messageID")
+	}
+	if id == "" {
+		kind, id = "canvas", chi.URLParam(r, "canvasID")
+	}
+	err := h.repo.AuthorizeChatResource(r.Context(), chi.URLParam(r, "projectID"), kind, id)
+	if err != nil {
+		apierr.Write(w, err)
+		return false
+	}
+	return true
+}
+
+func applyCreatePersonalization(conv *Conversation, personalization map[string]any) {
+	if len(personalization) == 0 {
+		return
+	}
+	if conv.Meta == nil {
+		conv.Meta = map[string]any{}
+	}
+	persona, _ := personalization["persona"].(string)
+	if persona != "" {
+		conv.Meta["persona"] = persona
+	}
+	instructions, _ := personalization["default_instructions"].(string)
+	if choices, ok := personalization["personality_instructions"].(map[string]any); ok {
+		instructions = ""
+		if persona != "" {
+			instructions, _ = choices[persona].(string)
+		}
+	}
+	if instructions != "" {
+		conv.Meta["default_instructions"] = instructions
+		if conv.Instructions == "" {
+			conv.Instructions = instructions
+		}
+	}
 }

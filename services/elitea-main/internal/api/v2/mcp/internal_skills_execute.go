@@ -10,6 +10,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	applicationskillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
@@ -63,12 +64,15 @@ func (executor *repositoryInternalSkillExecutor) Execute(
 		return internalApplicationExecution{}, err
 	}
 
+	if _, ok := auth.UserFromContext(ctx); !ok {
+		ctx = auth.ContextWithUser(ctx, auth.User{UserID: strconv.FormatInt(actorID, 10)})
+	}
 	project := strconv.FormatInt(projectID, 10)
 	switch operation {
 	case internalListSkills:
 		return executor.list(ctx, project, arguments)
 	case internalCreateSkill:
-		return executor.create(ctx, project, arguments)
+		return executor.create(ctx, project, actorID, arguments)
 	case internalGetSkill:
 		return executor.get(ctx, project, arguments)
 	case internalUpdateSkill:
@@ -104,13 +108,45 @@ func (executor *repositoryInternalSkillExecutor) list(
 		return internalSkillBadRequest("sort_order must be asc or desc")
 	}
 
-	result, err := executor.repo.List(ctx, projectID, skillsapi.ListParams{
-		Page:      page,
-		PageSize:  pageSize,
-		Query:     strings.TrimSpace(stringArgument(arguments["query"])),
-		SortBy:    sortBy,
-		SortOrder: sortOrder,
-	})
+	params := skillsapi.ListParams{Page: page, PageSize: pageSize, Query: strings.TrimSpace(stringArgument(arguments["query"])), SortBy: sortBy, SortOrder: sortOrder}
+	if _, hasLimit := arguments["limit"]; hasLimit || arguments["offset"] != nil {
+		params.Limit, err = boundedIntegerArgument(arguments, "limit", 10, 1, 1000)
+		if err != nil {
+			return internalSkillBadRequest(err.Error())
+		}
+		params.Offset, err = boundedIntegerArgument(arguments, "offset", 0, 0, 100000)
+		if err != nil {
+			return internalSkillBadRequest(err.Error())
+		}
+	}
+	params.IDs, err = internalSkillIDFilter(arguments, "ids")
+	if err != nil {
+		return internalSkillBadRequest(err.Error())
+	}
+	params.TagIDs, err = internalSkillIDFilter(arguments, "tags")
+	if err != nil {
+		return internalSkillBadRequest(err.Error())
+	}
+	if raw, present := arguments["author_id"]; present {
+		id, idErr := positiveIDValue(raw, "author_id")
+		if idErr != nil {
+			return internalSkillBadRequest(idErr.Error())
+		}
+		params.AuthorID, _ = strconv.ParseInt(id, 10, 64)
+	}
+	if raw, present := arguments["statuses"]; present {
+		text, ok := raw.(string)
+		if !ok || len(text) > 2048 {
+			return internalSkillBadRequest("statuses must be a bounded comma-separated string")
+		}
+		for _, status := range strings.Split(text, ",") {
+			switch status {
+			case "draft", "on_moderation", "published", "rejected", "user_approval", "unpublished", "embedded":
+				params.Statuses = append(params.Statuses, status)
+			}
+		}
+	}
+	result, err := executor.repo.List(ctx, projectID, params)
 	if err != nil {
 		return internalSkillRepositoryError(err)
 	}
@@ -131,6 +167,7 @@ func (executor *repositoryInternalSkillExecutor) list(
 func (executor *repositoryInternalSkillExecutor) create(
 	ctx context.Context,
 	projectID string,
+	authorID int64,
 	arguments map[string]any,
 ) (internalApplicationExecution, error) {
 	name, err := requiredInternalSkillName(arguments["name"])
@@ -147,6 +184,7 @@ func (executor *repositoryInternalSkillExecutor) create(
 	}
 
 	created, err := executor.repo.Create(ctx, projectID, skillsapi.Skill{
+		AuthorID:     authorID,
 		Name:         name,
 		Description:  description,
 		Instructions: version.instructions,
@@ -167,7 +205,16 @@ func (executor *repositoryInternalSkillExecutor) get(
 	if err != nil {
 		return internalSkillBadRequest(err.Error())
 	}
-	skill, err := executor.repo.Get(ctx, projectID, skillID)
+	var skill skillsapi.Skill
+	if raw, present := arguments["version_id"]; present {
+		versionID, idErr := positiveIDValue(raw, "version_id")
+		if idErr != nil {
+			return internalSkillBadRequest(idErr.Error())
+		}
+		skill, err = executor.repo.GetVersion(ctx, projectID, skillID, versionID)
+	} else {
+		skill, err = executor.repo.Get(ctx, projectID, skillID)
+	}
 	if err != nil {
 		return internalSkillRepositoryError(err)
 	}
@@ -183,67 +230,138 @@ func (executor *repositoryInternalSkillExecutor) update(
 	if err != nil {
 		return internalSkillBadRequest(err.Error())
 	}
-	current, err := executor.repo.Get(ctx, projectID, skillID)
+	versionID := ""
+	flat := false
+	if raw, present := arguments["version_id"]; present {
+		flat = true
+		versionID, err = positiveIDValue(raw, "version_id")
+		if err != nil {
+			return internalSkillBadRequest(err.Error())
+		}
+	}
+	version, hasVersion := arguments["version"].(map[string]any)
+	if raw, present := arguments["version"]; present && (raw == nil || !hasVersion) {
+		return internalSkillBadRequest("version must be an object")
+	}
+	if flat {
+		if hasVersion {
+			return internalSkillBadRequest("version_id requires flat version fields")
+		}
+		if _, present := arguments["description"]; present {
+			return internalSkillBadRequest("description is not a version field")
+		}
+		version = arguments
+		hasVersion = true
+	} else if hasVersion {
+		if raw, present := version["id"]; present {
+			versionID, err = positiveIDValue(raw, "version.id")
+			if err != nil {
+				return internalSkillBadRequest(err.Error())
+			}
+		}
+	} else {
+		for _, key := range []string{"instructions", "tags"} {
+			if _, present := arguments[key]; present {
+				return internalSkillBadRequest(key + " requires version or version_id")
+			}
+		}
+	}
+	var current skillsapi.Skill
+	if versionID != "" {
+		current, err = executor.repo.GetVersion(ctx, projectID, skillID, versionID)
+	} else {
+		current, err = executor.repo.Get(ctx, projectID, skillID)
+	}
 	if err != nil {
 		return internalSkillRepositoryError(err)
 	}
-
 	changed := false
-	if raw, present := arguments["name"]; present {
-		current.Name, err = requiredInternalSkillName(raw)
-		if err != nil {
-			return internalSkillBadRequest(err.Error())
-		}
-		changed = true
-	}
-	if raw, present := arguments["description"]; present {
-		current.Description, err = boundedRequiredString(
-			map[string]any{"description": raw}, "description", 2304)
-		if err != nil {
-			return internalSkillBadRequest(err.Error())
-		}
-		changed = true
-	}
-	if raw, present := arguments["version"]; present {
-		version, ok := raw.(map[string]any)
-		if !ok {
-			return internalSkillBadRequest("version must be an object")
-		}
-		if versionID, present := version["id"]; present {
-			requestedID, idErr := positiveIDValue(versionID, "version.id")
-			if idErr != nil {
-				return internalSkillBadRequest(idErr.Error())
-			}
-			if current.VersionDetails == nil || requestedID != current.VersionDetails.ID {
-				return internalSkillNotFound("skill version not found")
-			}
-		}
-		if name, present := version["name"]; present && stringArgument(name) != "base" {
-			return internalSkillBadRequest("version.name must be base")
-		}
-		if instructions, present := version["instructions"]; present {
-			current.Instructions, err = boundedRequiredString(
-				map[string]any{"instructions": instructions}, "instructions", 5000)
+	if !flat {
+		if raw, present := arguments["name"]; present {
+			current.Name, err = requiredInternalSkillName(raw)
 			if err != nil {
 				return internalSkillBadRequest(err.Error())
 			}
 			changed = true
 		}
-		if tags, present := version["tags"]; present {
-			current.Tags, err = skillTagNames(tags)
+		if raw, present := arguments["description"]; present {
+			current.Description, err = boundedRequiredString(map[string]any{"description": raw}, "description", 2304)
 			if err != nil {
 				return internalSkillBadRequest(err.Error())
 			}
 			changed = true
 		}
+		if raw, present := arguments["meta"]; present {
+			meta, ok := raw.(map[string]any)
+			if !ok {
+				return internalSkillBadRequest("meta must be an object")
+			}
+			current.Meta = meta
+			changed = true
+		}
+	}
+	current.MetadataOnly = !hasVersion
+	if hasVersion {
+		if current.VersionDetails == nil {
+			return internalSkillNotFound("skill version not found")
+		}
+		selected := *current.VersionDetails
+		current.VersionDetails = &selected
+		if raw, present := version["name"]; present {
+			selected.Name, err = boundedRequiredString(map[string]any{"name": raw}, "name", 128)
+			if err != nil {
+				return internalSkillBadRequest(err.Error())
+			}
+			changed = true
+		}
+		if raw, present := version["instructions"]; present {
+			current.Instructions, err = boundedRequiredString(map[string]any{"instructions": raw}, "instructions", 5000)
+			if err != nil {
+				return internalSkillBadRequest(err.Error())
+			}
+			changed = true
+		}
+		if raw, present := version["tags"]; present {
+			current.Tags, err = skillTagNames(raw)
+			if err != nil {
+				return internalSkillBadRequest(err.Error())
+			}
+			changed = true
+		}
+		if raw, present := version["meta"]; present {
+			meta, ok := raw.(map[string]any)
+			if !ok {
+				return internalSkillBadRequest("version.meta must be an object")
+			}
+			selected.Meta = meta
+			changed = true
+		}
+	}
+	if hasVersion {
+		current.VersionDetails.Instructions = current.Instructions
+		current.VersionDetails.Tags = current.Tags
 	}
 	if !changed {
 		return internalSkillBadRequest("the skill update has no supported changes")
 	}
-
-	updated, err := executor.repo.Update(ctx, projectID, skillID, current)
+	var updated skillsapi.Skill
+	if flat {
+		updated, err = executor.repo.UpdateVersion(ctx, projectID, skillID, versionID, current)
+	} else {
+		updated, err = executor.repo.Update(ctx, projectID, skillID, current)
+	}
 	if err != nil {
 		return internalSkillRepositoryError(err)
+	}
+	if flat {
+		if updated.VersionDetails == nil {
+			return internalSkillNotFound("skill version not found")
+		}
+		body, mapErr := internalSkillMap(updated)
+		if mapErr != nil {
+			return internalApplicationExecution{}, mapErr
+		}
+		return jsonExecution(http.StatusOK, body["version_details"])
 	}
 	return internalSkillDetail(http.StatusOK, updated)
 }
@@ -434,7 +552,9 @@ func internalSkillDetail(status int, skill skillsapi.Skill) (internalApplication
 		return internalApplicationExecution{}, err
 	}
 	if skill.VersionDetails != nil && skill.VersionDetails.ID != "" {
-		body["default_version_id"] = skill.VersionDetails.ID
+		if skill.DefaultVersionID == "" {
+			body["default_version_id"] = skill.VersionDetails.ID
+		}
 		body["version_id"] = skill.VersionDetails.ID
 	}
 	return jsonExecution(status, body)
@@ -487,4 +607,36 @@ func internalSkillBadRequest(message string) (internalApplicationExecution, erro
 
 func internalSkillNotFound(message string) (internalApplicationExecution, error) {
 	return jsonExecution(http.StatusNotFound, map[string]any{"error": message})
+}
+
+// internalSkillIDFilter bounds and deduplicates legacy comma-separated ID filters.
+func internalSkillIDFilter(arguments map[string]any, key string) ([]int64, error) {
+	raw, present := arguments[key]
+	if !present {
+		return nil, nil
+	}
+	text, ok := raw.(string)
+	if !ok || len(text) > 2200 {
+		return nil, errors.New(key + " must be a bounded comma-separated ID string")
+	}
+	if strings.TrimSpace(text) == "" {
+		return nil, nil
+	}
+	parts := strings.Split(text, ",")
+	if len(parts) > 100 {
+		return nil, errors.New(key + " accepts at most 100 IDs")
+	}
+	result := make([]int64, 0, len(parts))
+	seen := map[int64]bool{}
+	for _, part := range parts {
+		id, err := strconv.ParseInt(strings.TrimSpace(part), 10, 32)
+		if err != nil || id <= 0 {
+			return nil, errors.New(key + " must contain positive integer IDs")
+		}
+		if !seen[id] {
+			seen[id] = true
+			result = append(result, id)
+		}
+	}
+	return result, nil
 }

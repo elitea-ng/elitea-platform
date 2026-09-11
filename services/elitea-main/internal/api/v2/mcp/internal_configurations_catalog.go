@@ -30,7 +30,7 @@ type internalConfigurationToolDefinition struct {
 var internalConfigurationToolDefinitions = []internalConfigurationToolDefinition{
 	{
 		name: "get_configurations_available",
-		description: "List available configuration types and their dynamic schemas. " +
+		description: "List available configuration type names. Supply type to read its complete creation schema. " +
 			"Optionally restrict the result to one or more sections.",
 		// The current REST catalogue is authenticated but not project-authorized.
 		// Internal MCP is project-scoped and intended to construct project
@@ -41,6 +41,7 @@ var internalConfigurationToolDefinitions = []internalConfigurationToolDefinition
 		operation:  internalListConfigurationTypesAvailable,
 		schema: objectSchema(map[string]any{
 			"project_id": intProperty("Current project ID. The server verifies this value."),
+			"type":       boundedStringProperty("Exact configuration type to retrieve with its schema. Omit to list names first.", 1, 128),
 			"section": stringArrayProperty(
 				"Optional configuration sections.", 64, 128,
 			),

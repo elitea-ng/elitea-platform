@@ -234,7 +234,7 @@ func TestConversationExport_CarriesMessageFeedback(t *testing.T) {
 		t.Fatalf("seed second feedback: %v", err)
 	}
 
-	response := callExport(t, router, "/conversation_export/prompt_lib/1/"+conversationNumericID+"?format=json")
+	response := callExportAs(t, router, "/conversation_export/prompt_lib/1/"+conversationNumericID+"?format=json", "7")
 	if response.Code != http.StatusOK {
 		t.Fatalf("export answered %d: %s", response.Code, response.Body.String())
 	}

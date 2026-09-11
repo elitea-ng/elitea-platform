@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	skillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 	"net/http"
 	"reflect"
 	"testing"
@@ -43,15 +44,25 @@ func TestInternalSkillDetailPreservesEachVersionTags(t *testing.T) {
 	}
 }
 
-// These operations are outside the base-only executor fixtures.
-func (*fakeInternalSkillsRepo) GetVersion(context.Context, string, string, string) (skillsapi.Skill, error) {
-	return skillsapi.Skill{}, fmt.Errorf("unexpected GetVersion")
+// The fake selects versions without creating or deleting them.
+func (repo *fakeInternalSkillsRepo) GetVersion(_ context.Context, projectID, skillID, versionID string) (skillsapi.Skill, error) {
+	repo.projectID, repo.skillID, repo.versionID = projectID, skillID, versionID
+	if repo.getResult.VersionDetails == nil || repo.getResult.VersionDetails.ID != versionID {
+		return skillsapi.Skill{}, apierr.NotFound("skill version not found")
+	}
+	return repo.getResult, nil
 }
 func (*fakeInternalSkillsRepo) CreateVersion(context.Context, string, string, skillsapi.VersionCreateInput) (skillsapi.Skill, error) {
 	return skillsapi.Skill{}, fmt.Errorf("unexpected CreateVersion")
 }
-func (*fakeInternalSkillsRepo) UpdateVersion(context.Context, string, string, string, skillsapi.Skill) (skillsapi.Skill, error) {
-	return skillsapi.Skill{}, fmt.Errorf("unexpected UpdateVersion")
+func (repo *fakeInternalSkillsRepo) UpdateVersion(_ context.Context, projectID, skillID, versionID string, skill skillsapi.Skill) (skillsapi.Skill, error) {
+	repo.projectID, repo.skillID, repo.versionID = projectID, skillID, versionID
+	repo.updateVersionCalls++
+	repo.updated = skill
+	if repo.updateResult.VersionDetails != nil {
+		return repo.updateResult, nil
+	}
+	return skill, nil
 }
 func (*fakeInternalSkillsRepo) DeleteVersion(context.Context, string, string, string) error {
 	return fmt.Errorf("unexpected DeleteVersion")

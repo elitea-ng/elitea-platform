@@ -15,6 +15,9 @@ import (
 
 type fakeInternalSkillsRepo struct {
 	listResult         skillsapi.ListResponse
+	listErr            error
+	versionID          string
+	updateVersionCalls int
 	attachedResult     skillsapi.ListResponse
 	getResult          skillsapi.Skill
 	createResult       skillsapi.Skill
@@ -40,7 +43,7 @@ func (repo *fakeInternalSkillsRepo) List(
 ) (skillsapi.ListResponse, error) {
 	repo.projectID = projectID
 	repo.listParams = params
-	return repo.listResult, nil
+	return repo.listResult, repo.listErr
 }
 
 func (repo *fakeInternalSkillsRepo) ListCurrentApplicationSkills(
@@ -197,7 +200,7 @@ func TestInternalSkillCreateMapsCurrentNestedVersionShape(t *testing.T) {
 		t.Fatalf("result status=%d calls=%d project=%q body=%s",
 			result.status, repo.createCalls, repo.projectID, result.body)
 	}
-	if repo.created.Name != "durable-worker" || repo.created.Instructions != "Use the source." ||
+	if repo.created.AuthorID != 41 || repo.created.Name != "durable-worker" || repo.created.Instructions != "Use the source." ||
 		!reflect.DeepEqual(repo.created.Tags, []string{"rust"}) {
 		t.Fatalf("created skill = %#v", repo.created)
 	}

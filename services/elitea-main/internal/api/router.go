@@ -867,6 +867,10 @@ func mountMCPServerRoutes(
 	toolkitRun v2mcp.ToolkitRunUseCase,
 	personalProjects personalproject.AsyncEnsurer,
 	typedConfigurations *v2configs.CurrentConfigurationToolHandler,
+	draftHandler *v2drafts.Handler,
+	toolkitDiscovery discovery.UseCase,
+	conversationHandler *v2convs.Handler,
+	folderHandler *v2folders.Handler,
 ) {
 	// The resolver ASKS for the personal project it could not find, for the
 	// reason stated at `withPersonalProjects`: an MCP client authenticates
@@ -879,13 +883,16 @@ func mountMCPServerRoutes(
 	handler := v2mcp.NewHandlerWithToolkitRuns(
 		pool, resolver, agentStart, toolkitRun,
 		legacyrbac.NewPostgresResolver(pool),
+		v2mcp.WithInternalChatTools(conversationHandler, folderHandler),
 		v2mcp.WithInternalToolkitHandler(toolkitHandler),
 		v2mcp.WithInternalConfigurationHandler(configurationsHandler, typedConfigurations),
 		v2mcp.WithInternalProjectContextHandler(coreHandler),
+		v2mcp.WithInternalDraftHandler(draftHandler),
 		v2mcp.WithInternalSecretHandler(secretsHandler),
 		v2mcp.WithInternalNotificationStore(notificationStore),
 		v2mcp.WithToolkitArgumentSchemas(toolkitArgumentSchemas),
 		v2mcp.WithToolkitExecuteRead(toolkitExecute),
+		v2mcp.WithToolkitDiscovery(toolkitDiscovery),
 	)
 	r.Group(func(r chi.Router) {
 		r.Use(authenticate)
@@ -1356,6 +1363,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// prebuilt-MCP catalogue behavior identical on both transports.
 	prebuiltMCPVault := v2secrets.NewHandler(
 		cfg.Pool,
+		v2secrets.WithPlatformDefaultSecretPolicy(cfg.Pool),
 		v2secrets.WithPermissionResolver(permissionResolver),
 	)
 	coreHandler := v2core.NewHandler(
@@ -1373,11 +1381,33 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 
 	// The MCP server (issue 252). Outside the /api/v2 group for the reasons in
 	// mountMCPServerRoutes.
+	draftHandler := v2drafts.NewHandler(cfg.PredictCompleter,
+		v2drafts.WithAppsRepo(cfg.AppsRepo),
+		v2drafts.WithSkillsRepo(cfg.SkillsRepo),
+		v2drafts.WithSkillVersions(cfg.SkillsRepo),
+		v2drafts.WithPermissions(coreResolver),
+		v2drafts.WithToolkitsRepo(v2toolkits.NewPostgresRepository(cfg.Pool)))
+	var folderHandler *v2folders.Handler
+	if cfg.FoldersRepo != nil {
+		folderHandler = v2folders.NewHandler(cfg.FoldersRepo).WithPool(cfg.Pool)
+	}
+	if cfg.ConvsRepo != nil {
+		models, _ := dbrepos.NewCurrentModelsRepository(cfg.Pool)
+		defaults := chatDefaults{vault: prebuiltMCPVault, models: models}
+		convHandler = v2convs.NewHandler(cfg.ConvsRepo).
+			WithPool(cfg.Pool).
+			WithObjectStore(cfg.ObjectStore).
+			WithAttachmentStore(newAttachmentStore(cfg.Pool)).
+			WithUserContextDefaults(newUserContextDefaults(cfg.Pool)).
+			WithContextManagementGate(defaults).
+			WithReasoningModels(defaults).
+			WithEvents(cfg.DomainEvents)
+	}
 	mountMCPServerRoutes(
 		r, cfg.Pool, authenticate, cfg.MCPAgentStart, cfg.MCPToolkitExecute,
 		toolkitHandler, configurationsHandler, coreHandler, prebuiltMCPVault, cfg.CurrentNotificationStore,
 		cfg.ToolkitArgumentSchemas, cfg.MCPToolkitRun, personalProjects,
-		cfg.InternalConfigurationTools,
+		cfg.InternalConfigurationTools, draftHandler, cfg.ToolkitDiscovery, convHandler, folderHandler,
 	)
 
 	// This group holds the whole JSON API — the `/api/v2` route below is its
@@ -2764,7 +2794,6 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					// endpoint answered 200 with empty folders and empty
 					// date_groups for a project with nine conversations
 					// (#128 defects 1 and 2).
-					folderHandler := v2folders.NewHandler(cfg.FoldersRepo).WithPool(cfg.Pool)
 					requireFolderRead := projectPermission("models.chat.folders.get")
 					requireFolderUpdate := projectPermission("models.chat.folders.update")
 					r.With(requireFolderRead).Get("/folder/prompt_lib/{projectID}", folderHandler.List)
@@ -2967,12 +2996,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					// cfg.ObjectStore are unset, so AddAttachments' JSON-metadata
 					// branch keeps working exactly as before wherever storage isn't
 					// wired (matching newArtifactHandler's own degrade convention).
-					convHandler = v2convs.NewHandler(cfg.ConvsRepo).
-						WithPool(cfg.Pool).
-						WithObjectStore(cfg.ObjectStore).
-						WithAttachmentStore(newAttachmentStore(cfg.Pool)).
-						WithUserContextDefaults(newUserContextDefaults(cfg.Pool)).
-						WithEvents(cfg.DomainEvents)
+
 					requireConversationRead := projectPermission("models.chat.conversation.details")
 					requireMessageDelete := projectPermission("models.chat.messages.delete")
 					requireEntitySettings := projectPermission("models.chat.entity_settings.update")
@@ -3226,10 +3250,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// response), so this composes whichever of cfg.AppsRepo/
 				// cfg.SkillsRepo happen to be set in THIS deployment exactly
 				// as every other optional RouterConfig dependency does.
-				draftHandler := v2drafts.NewHandler(cfg.PredictCompleter,
-					v2drafts.WithAppsRepo(cfg.AppsRepo),
-					v2drafts.WithSkillsRepo(cfg.SkillsRepo),
-					v2drafts.WithToolkitsRepo(v2toolkits.NewPostgresRepository(cfg.Pool)))
+
 				r.With(projectPermission("models.applications.applications.create")).
 					Post("/generate_application_draft/prompt_lib/{projectID}", draftHandler.GenerateApplicationDraft)
 				r.With(projectPermission("models.applications.skills.create")).

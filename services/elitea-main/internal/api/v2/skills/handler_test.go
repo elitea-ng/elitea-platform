@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -306,6 +307,11 @@ func (m *mockSkillRepo) DetachSkill(
 
 func setupSkillsRouter(repo handler.Repository) *chi.Mux {
 	r := chi.NewRouter()
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(auth.ContextWithUser(r.Context(), auth.User{ID: "41", UserID: "41"})))
+		})
+	})
 	h := handler.NewHandler(repo)
 	r.Route("/api/v2/projects/{projectID}/skills", func(r chi.Router) {
 		r.Mount("/", h.Routes())
@@ -1368,5 +1374,21 @@ func TestSkillSetDefaultVersion_RequiresVersionID(t *testing.T) {
 	}
 	if len(repo.setDefaultCalls) != 0 {
 		t.Errorf("setDefaultCalls=%v, want none — repository must not be reached with no version_id", repo.setDefaultCalls)
+	}
+}
+
+func TestSkillCreateUsesAuthenticatedAuthorAndRejectsMissingPrincipal(t *testing.T) {
+	repo := &mockSkillRepo{}
+	router := setupSkillsRouter(repo)
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/projects/proj-1/skills/", strings.NewReader(`{"name":"reviewer","description":"Review rules","author_id":999}`))
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, req)
+	if response.Code != http.StatusCreated || len(repo.skills) != 1 || repo.skills[0].AuthorID != 41 {
+		t.Fatalf("create status=%d skills=%+v", response.Code, repo.skills)
+	}
+	anonymous := httptest.NewRecorder()
+	handler.NewHandler(repo).Create(anonymous, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"anonymous"}`)))
+	if anonymous.Code != http.StatusUnauthorized || len(repo.skills) != 1 {
+		t.Fatalf("anonymous status=%d skills=%+v", anonymous.Code, repo.skills)
 	}
 }

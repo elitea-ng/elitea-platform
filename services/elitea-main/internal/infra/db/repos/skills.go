@@ -2,6 +2,7 @@ package repos
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/foldervisibility"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
@@ -69,19 +71,67 @@ func scanSkillRow(row pgx.Row, projectID string) (skills.Skill, error) {
 }
 
 func (r *SkillsRepo) List(ctx context.Context, projectID string, params skills.ListParams) (skills.ListResponse, error) {
-	s := schema(projectID)
-
+	s, err := tenantSchema(projectID)
+	if err != nil {
+		return skills.ListResponse{}, err
+	}
+	limit, offset := params.Limit, params.Offset
+	if limit == 0 {
+		if params.Page < 1 || params.PageSize < 1 || params.PageSize > 100 {
+			return skills.ListResponse{}, apierr.BadRequest("invalid skill pagination")
+		}
+		limit = params.PageSize
+		offset = (params.Page - 1) * params.PageSize
+	}
+	if len(params.IDs) > limit {
+		limit = len(params.IDs)
+	}
+	if limit < 1 || limit > 1000 || offset < 0 || offset > 100000 || len(params.IDs) > 100 || len(params.TagIDs) > 100 {
+		return skills.ListResponse{}, apierr.BadRequest("invalid skill list bounds")
+	}
 	var args []any
-	where := ""
+	var predicates []string
+	bind := func(value any) string { args = append(args, value); return fmt.Sprintf("$%d", len(args)) }
 	if params.Query != "" {
-		where = ` WHERE (sk.name ILIKE $1 OR sk.description ILIKE $1)`
-		args = append(args, "%"+params.Query+"%")
+		p := bind("%" + params.Query + "%")
+		predicates = append(predicates, "(sk.name ILIKE "+p+" OR sk.description ILIKE "+p+")")
+	}
+	if len(params.IDs) > 0 {
+		predicates = append(predicates, "sk.id = ANY("+bind(params.IDs)+"::bigint[])")
+	}
+	if params.AuthorID > 0 {
+		predicates = append(predicates, fmt.Sprintf("EXISTS (SELECT 1 FROM %s.skill_versions filtered WHERE filtered.skill_id=sk.id AND filtered.author_id=%s)", s, bind(params.AuthorID)))
+	}
+	if len(params.Statuses) > 0 {
+		predicates = append(predicates, fmt.Sprintf("EXISTS (SELECT 1 FROM %s.skill_versions filtered WHERE filtered.skill_id=sk.id AND filtered.status::text=ANY(%s::text[]))", s, bind(params.Statuses)))
+	}
+	if len(params.TagIDs) > 0 {
+		unique := make([]int64, 0, len(params.TagIDs))
+		seen := map[int64]bool{}
+		for _, id := range params.TagIDs {
+			if !seen[id] {
+				seen[id] = true
+				unique = append(unique, id)
+			}
+		}
+		predicates = append(predicates, fmt.Sprintf("(SELECT COUNT(DISTINCT linked.tag_id) FROM %s.skill_versions filtered JOIN %s.skill_version_tag_association linked ON linked.version_id=filtered.id WHERE filtered.skill_id=sk.id AND linked.tag_id=ANY(%s::bigint[]))=%s", s, s, bind(unique), bind(len(unique))))
+	}
+	access, err := foldervisibility.Resolve(ctx, r.pool, s)
+	if err != nil {
+		return skills.ListResponse{}, fmt.Errorf("skills: list visibility: %w", err)
+	}
+	if access.FolderRestrictions {
+		predicates = append(predicates, foldervisibility.ExclusionSQL(s, "sk.id", bind([]string{"skill"}), bind(access.ActorID)))
+	}
+	where := ""
+	if len(predicates) > 0 {
+		where = " WHERE " + strings.Join(predicates, " AND ")
 	}
 
 	countQ := fmt.Sprintf(`SELECT COUNT(*) FROM %s.skills sk`, s) + where
 	var total int
 	if err := r.pool.QueryRow(ctx, countQ, args...).Scan(&total); err != nil {
-		return skills.ListResponse{Items: []skills.Skill{}, Total: 0, Page: params.Page, PageSize: params.PageSize}, nil
+		return skills.ListResponse{}, fmt.Errorf("skills: list: %w", err)
 	}
 
 	sortColumn := "sk.created_at"
@@ -94,17 +144,16 @@ func (r *SkillsRepo) List(ctx context.Context, projectID string, params skills.L
 		sortDir = "ASC"
 	}
 
-	offset := (params.Page - 1) * params.PageSize
 	limitIdx := len(args) + 1
 	offsetIdx := len(args) + 2
 
 	q := fmt.Sprintf(`SELECT %s %s`, skillsSelectColumns, skillsFromJoin(s)) + where +
-		fmt.Sprintf(` GROUP BY sk.id, sv.id ORDER BY %s %s LIMIT $%d OFFSET $%d`, sortColumn, sortDir, limitIdx, offsetIdx)
+		fmt.Sprintf(` GROUP BY sk.id, sv.id ORDER BY %s %s, sk.id ASC LIMIT $%d OFFSET $%d`, sortColumn, sortDir, limitIdx, offsetIdx)
 
-	queryArgs := append(append([]any{}, args...), params.PageSize, offset)
+	queryArgs := append(append([]any{}, args...), limit, offset)
 	rows, err := r.pool.Query(ctx, q, queryArgs...)
 	if err != nil {
-		return skills.ListResponse{Items: []skills.Skill{}, Total: 0, Page: params.Page, PageSize: params.PageSize}, nil
+		return skills.ListResponse{}, fmt.Errorf("skills: list: %w", err)
 	}
 	defer rows.Close()
 
@@ -112,16 +161,19 @@ func (r *SkillsRepo) List(ctx context.Context, projectID string, params skills.L
 	for rows.Next() {
 		sk, err := scanSkillRow(rows, projectID)
 		if err != nil {
-			continue
+			return skills.ListResponse{}, fmt.Errorf("skills: list row: %w", err)
 		}
 		items = append(items, sk)
+	}
+	if err := rows.Err(); err != nil {
+		return skills.ListResponse{}, fmt.Errorf("skills: list rows: %w", err)
 	}
 	if items == nil {
 		items = []skills.Skill{}
 	}
 
-	totalPages := total / params.PageSize
-	if total%params.PageSize > 0 {
+	totalPages := total / limit
+	if total%limit > 0 {
 		totalPages++
 	}
 
@@ -372,14 +424,8 @@ func atoiOrZero(value string) int {
 	return parsed
 }
 
-// Get returns the skill with EVERY skill_versions row (#874) —
-// Versions/VersionDetails are no longer just `base`. Instructions/Tags/
-// VersionDetails keep pointing at `base`, exactly as before: the
-// unversioned GET/PUT/DELETE always work on `base`, and this is the read
-// half of that contract. List's own per-row projection (skillsSelectColumns/
-// skillsFromJoin above) deliberately stays base-only — a paginated list of
-// skills has no use for every skill's full version history, only a single
-// skill's detail view does.
+// Get returns every version and selects the configured default, then base.
+// Folder visibility applies before any instruction content is read.
 func (r *SkillsRepo) Get(ctx context.Context, projectID, skillID string) (skills.Skill, error) {
 	return r.getSkillWithVersions(ctx, projectID, skillID, "")
 }
@@ -400,28 +446,28 @@ func (r *SkillsRepo) GetVersion(ctx context.Context, projectID, skillID, version
 	return sk, nil
 }
 
-// getSkillWithVersions is the shared builder behind Get, GetVersion and
-// every version-mutating method's response (#874): one skills row plus
-// EVERY skill_versions row for it — not just `base`, the way
-// scanSkillRow/skillsFromJoin/List still read. selectedVersionID, when
-// non-empty and it names a version of this skill, points
-// VersionDetails/Instructions/Tags at that version instead of `base`.
-//
-// This function does not error when selectedVersionID names no version of
-// the skill — it silently falls back to `base` instead, the shape every
-// caller except GetVersion wants (an unversioned write with a stray
-// selectedVersionID should still succeed and describe the skill it actually
-// changed). GetVersion is the one caller that must turn a miss into 404, and
-// it does that itself by comparing VersionDetails.ID against what it asked
-// for.
+// getSkillWithVersions selects an explicit version or the configured default.
+// An invalid default falls back to base. GetVersion rejects an explicit miss.
 func (r *SkillsRepo) getSkillWithVersions(ctx context.Context, projectID, skillID, selectedVersionID string) (skills.Skill, error) {
-	s := schema(projectID)
-
+	s, err := tenantSchema(projectID)
+	if err != nil {
+		return skills.Skill{}, err
+	}
+	access, err := foldervisibility.Resolve(ctx, r.pool, s)
+	if err != nil {
+		return skills.Skill{}, fmt.Errorf("skills: get visibility: %w", err)
+	}
+	predicate := ""
+	args := []any{skillID}
+	if access.FolderRestrictions {
+		predicate = " AND " + foldervisibility.ExclusionSQL(s, "sk.id", "$2", "$3")
+		args = append(args, []string{"skill"}, access.ActorID)
+	}
 	var sk skills.Skill
 	var meta map[string]any
-	err := r.pool.QueryRow(ctx, fmt.Sprintf(
-		`SELECT id, name, COALESCE(description, ''), created_at, meta FROM %s.skills WHERE id = $1`, s),
-		skillID).Scan(&sk.ID, &sk.Name, &sk.Description, &sk.CreatedAt, &meta)
+	err = r.pool.QueryRow(ctx, fmt.Sprintf(
+		`SELECT sk.id, sk.name, COALESCE(sk.description, ''), sk.created_at, sk.meta FROM %s.skills sk WHERE sk.id = $1`, s)+predicate,
+		args...).Scan(&sk.ID, &sk.Name, &sk.Description, &sk.CreatedAt, &meta)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return skills.Skill{}, apierr.NotFound("skill not found")
@@ -430,9 +476,8 @@ func (r *SkillsRepo) getSkillWithVersions(ctx context.Context, projectID, skillI
 	}
 	sk.ProjectID = projectID
 	sk.Type = "skill"
-	if defaultID, ok := meta["default_version_id"].(string); ok {
-		sk.DefaultVersionID = defaultID
-	}
+	sk.Meta = meta
+	sk.DefaultVersionID = skillDefaultVersionID(meta["default_version_id"])
 
 	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
 		SELECT sv.id, sv.name, COALESCE(sv.instructions, ''), sv.meta, sv.status, sv.created_at, sv.parent_version_id,
@@ -454,9 +499,6 @@ func (r *SkillsRepo) getSkillWithVersions(ctx context.Context, projectID, skillI
 		if err != nil {
 			return skills.Skill{}, fmt.Errorf("skills: scan version: %w", err)
 		}
-		if sk.DefaultVersionID != "" && v.ID == sk.DefaultVersionID {
-			v.IsDefault = true
-		}
 		versions = append(versions, v)
 	}
 	if err := rows.Err(); err != nil {
@@ -464,7 +506,27 @@ func (r *SkillsRepo) getSkillWithVersions(ctx context.Context, projectID, skillI
 	}
 	sk.Versions = versions
 
-	var current *skills.SkillVersion
+	var defaultVersion *skills.SkillVersion
+	for i := range versions {
+		if versions[i].ID == sk.DefaultVersionID {
+			defaultVersion = &versions[i]
+			break
+		}
+	}
+	if defaultVersion == nil {
+		for i := range versions {
+			if versions[i].Name == "base" {
+				defaultVersion = &versions[i]
+				break
+			}
+		}
+	}
+	sk.DefaultVersionID = ""
+	if defaultVersion != nil {
+		sk.DefaultVersionID = defaultVersion.ID
+		defaultVersion.IsDefault = true
+	}
+	current := defaultVersion
 	if selectedVersionID != "" {
 		for i := range versions {
 			if versions[i].ID == selectedVersionID {
@@ -472,17 +534,6 @@ func (r *SkillsRepo) getSkillWithVersions(ctx context.Context, projectID, skillI
 				break
 			}
 		}
-	}
-	if current == nil {
-		for i := range versions {
-			if versions[i].Name == "base" {
-				current = &versions[i]
-				break
-			}
-		}
-	}
-	if current == nil && len(versions) > 0 {
-		current = &versions[0]
 	}
 	if current != nil {
 		sk.Instructions = current.Instructions
@@ -539,6 +590,9 @@ func (r *SkillsRepo) Create(ctx context.Context, projectID string, skill skills.
 	if err != nil {
 		return skills.Skill{}, err
 	}
+	if skill.AuthorID <= 0 {
+		return skills.Skill{}, apierr.Unauthorized("authenticated skill author is required")
+	}
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return skills.Skill{}, fmt.Errorf("skills: create: begin: %w", err)
@@ -547,20 +601,24 @@ func (r *SkillsRepo) Create(ctx context.Context, projectID string, skill skills.
 
 	var sk skills.Skill
 	err = tx.QueryRow(ctx, createSkillSQL(s),
-		skill.Name, skill.Description, ownerID.Int64()).Scan(&sk.ID, &sk.Name, &sk.Description, &sk.CreatedAt)
+		skill.Name, skill.Description, ownerID.Int64(), skill.AuthorID).Scan(&sk.ID, &sk.Name, &sk.Description, &sk.CreatedAt)
 	if err != nil {
 		return skills.Skill{}, fmt.Errorf("skills: create: %w", err)
 	}
 
-	version, err := upsertBaseSkillVersion(ctx, tx, s, sk.ID, skill.Instructions, skill.Tags)
+	version, err := upsertBaseSkillVersion(ctx, tx, s, sk.ID, skill.Instructions, skill.Tags, skill.AuthorID)
 	if err != nil {
 		return skills.Skill{}, err
 	}
 
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %s.skills SET meta = jsonb_build_object('default_version_id', $1::bigint) WHERE id = $2`, s), version.ID, sk.ID); err != nil {
+		return skills.Skill{}, fmt.Errorf("skills: create default: %w", err)
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return skills.Skill{}, fmt.Errorf("skills: create: commit: %w", err)
 	}
 
+	sk.DefaultVersionID = version.ID
 	sk.ProjectID = projectID
 	sk.Type = "skill"
 	sk.Instructions = version.Instructions
@@ -571,42 +629,11 @@ func (r *SkillsRepo) Create(ctx context.Context, projectID string, skill skills.
 }
 
 func (r *SkillsRepo) Update(ctx context.Context, projectID, skillID string, skill skills.Skill) (skills.Skill, error) {
-	s := schema(projectID)
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return skills.Skill{}, fmt.Errorf("skills: update: begin: %w", err)
+	versionID := ""
+	if skill.VersionDetails != nil {
+		versionID = skill.VersionDetails.ID
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	var sk skills.Skill
-	err = tx.QueryRow(ctx, fmt.Sprintf(`
-		UPDATE %s.skills SET name = $1, description = $2
-		WHERE id = $3
-		RETURNING id, name, COALESCE(description, ''), created_at`, s),
-		skill.Name, skill.Description, skillID).Scan(&sk.ID, &sk.Name, &sk.Description, &sk.CreatedAt)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return skills.Skill{}, apierr.NotFound("skill not found")
-		}
-		return skills.Skill{}, fmt.Errorf("skills: update: %w", err)
-	}
-
-	version, err := upsertBaseSkillVersion(ctx, tx, s, skillID, skill.Instructions, skill.Tags)
-	if err != nil {
-		return skills.Skill{}, err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return skills.Skill{}, fmt.Errorf("skills: update: commit: %w", err)
-	}
-
-	sk.ProjectID = projectID
-	sk.Type = "skill"
-	sk.Instructions = version.Instructions
-	sk.Tags = version.Tags
-	sk.Versions = []skills.SkillVersion{version}
-	sk.VersionDetails = &version
-	return sk, nil
+	return r.updateSkill(ctx, projectID, skillID, versionID, skill)
 }
 
 // upsertBaseSkillVersion upserts the skill's single "base" skill_versions row
@@ -615,15 +642,15 @@ func (r *SkillsRepo) Update(ctx context.Context, projectID, skillID string, skil
 // delete-cascade pattern for the equivalent application_version_tag_association
 // table. Tags are upserted by name (tags.name is UNIQUE) so repeated tag
 // names across skills share one tags row.
-func upsertBaseSkillVersion(ctx context.Context, tx pgx.Tx, schema, skillID, instructions string, tags []string) (skills.SkillVersion, error) {
+func upsertBaseSkillVersion(ctx context.Context, tx pgx.Tx, schema, skillID, instructions string, tags []string, authorID int64) (skills.SkillVersion, error) {
 	v := skills.SkillVersion{Name: "base", Instructions: instructions}
 
 	var versionID int
 	err := tx.QueryRow(ctx, fmt.Sprintf(`
-		INSERT INTO %s.skill_versions (skill_id, name, instructions, author_id)
-		VALUES ($1, 'base', $2, 1)
+		INSERT INTO %s.skill_versions (skill_id, name, instructions, author_id, uuid, meta)
+		VALUES ($1, 'base', $2, $3, gen_random_uuid(), '{}'::jsonb)
 		ON CONFLICT (skill_id, name) DO UPDATE SET instructions = EXCLUDED.instructions
-		RETURNING id`, schema), skillID, instructions).Scan(&versionID)
+		RETURNING id`, schema), skillID, instructions, authorID).Scan(&versionID)
 	if err != nil {
 		return skills.SkillVersion{}, fmt.Errorf("skills: upsert version: %w", err)
 	}
@@ -707,6 +734,9 @@ func sourceVersionTags(ctx context.Context, tx pgx.Tx, schema string, versionID 
 // Version", even though the frontend's current createSkillVersion() call
 // always sends full content and never exercises this branch.
 func (r *SkillsRepo) CreateVersion(ctx context.Context, projectID, skillID string, input skills.VersionCreateInput) (skills.Skill, error) {
+	if input.AuthorID <= 0 {
+		return skills.Skill{}, apierr.Unauthorized("authenticated skill author is required")
+	}
 	s := schema(projectID)
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -763,9 +793,9 @@ func (r *SkillsRepo) CreateVersion(ctx context.Context, projectID, skillID strin
 
 	var newID int
 	insertErr := tx.QueryRow(ctx, fmt.Sprintf(`
-		INSERT INTO %s.skill_versions (skill_id, name, instructions, author_id, parent_version_id)
-		VALUES ($1, $2, $3, 1, $4)
-		RETURNING id`, s), skillID, input.Name, instructions, parentID).Scan(&newID)
+		INSERT INTO %s.skill_versions (skill_id, name, instructions, author_id, parent_version_id, uuid, meta)
+		VALUES ($1, $2, $3, $4, $5, gen_random_uuid(), '{}'::jsonb)
+		RETURNING id`, s), skillID, input.Name, instructions, input.AuthorID, parentID).Scan(&newID)
 	if insertErr != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(insertErr, &pgErr) && pgErr.Code == "23505" {
@@ -784,54 +814,120 @@ func (r *SkillsRepo) CreateVersion(ctx context.Context, projectID, skillID strin
 	return r.getSkillWithVersions(ctx, projectID, skillID, strconv.Itoa(newID))
 }
 
-// UpdateVersion edits ONE named version's instructions/tags, plus the
-// skill's own name/description (shared across every version, exactly as
-// Update writes them). Refuses a published version with Conflict, mirroring
-// application_versions' "Unpublish first" guard
-// (internal/api/v2/applications/handler.go).
+// UpdateVersion writes selected version content and supplied skill metadata atomically.
+// Published and embedded versions reject content changes.
 func (r *SkillsRepo) UpdateVersion(ctx context.Context, projectID, skillID, versionID string, skill skills.Skill) (skills.Skill, error) {
-	s := schema(projectID)
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return skills.Skill{}, fmt.Errorf("skills: update version: begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	return r.updateSkill(ctx, projectID, skillID, versionID, skill)
+}
 
-	ct, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %s.skills SET name = $1, description = $2 WHERE id = $3`, s),
-		skill.Name, skill.Description, skillID)
+// updateSkill commits metadata and the selected version together.
+func (r *SkillsRepo) updateSkill(ctx context.Context, projectID, skillID, versionID string, skill skills.Skill) (skills.Skill, error) {
+	s, err := tenantSchema(projectID)
 	if err != nil {
-		return skills.Skill{}, fmt.Errorf("skills: update version: update skill: %w", err)
-	}
-	if ct.RowsAffected() == 0 {
-		return skills.Skill{}, apierr.NotFound("skill not found")
-	}
-
-	var status string
-	err = tx.QueryRow(ctx, fmt.Sprintf(`SELECT status FROM %s.skill_versions WHERE id = $1 AND skill_id = $2`, s),
-		versionID, skillID).Scan(&status)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return skills.Skill{}, apierr.NotFound(fmt.Sprintf("skill version %s not found for skill %s", versionID, skillID))
-	}
-	if err != nil {
-		return skills.Skill{}, fmt.Errorf("skills: update version: read version: %w", err)
-	}
-	if status == "published" {
-		return skills.Skill{}, apierr.Conflict("Unpublish first. Cannot update a published version.")
-	}
-
-	if _, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %s.skill_versions SET instructions = $1 WHERE id = $2`, s),
-		skill.Instructions, versionID); err != nil {
-		return skills.Skill{}, fmt.Errorf("skills: update version: update instructions: %w", err)
-	}
-	versionIntID, _ := strconv.Atoi(versionID)
-	if _, err := replaceVersionTags(ctx, tx, s, versionIntID, skill.Tags); err != nil {
 		return skills.Skill{}, err
 	}
-
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return skills.Skill{}, fmt.Errorf("skills: update: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var storedMeta map[string]any
+	err = tx.QueryRow(ctx, fmt.Sprintf(`SELECT meta FROM %s.skills WHERE id = $1 FOR UPDATE`, s), skillID).Scan(&storedMeta)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return skills.Skill{}, apierr.NotFound("skill not found")
+	}
+	if err != nil {
+		return skills.Skill{}, fmt.Errorf("skills: update: read skill: %w", err)
+	}
+	if !skill.MetadataOnly {
+		if versionID == "" {
+			versionID = skillDefaultVersionID(storedMeta["default_version_id"])
+			var selected string
+			err = tx.QueryRow(ctx, fmt.Sprintf(`SELECT id FROM %s.skill_versions WHERE skill_id = $1 AND (id::text = $2 OR name = 'base') ORDER BY (id::text = $2) DESC LIMIT 1`, s), skillID, versionID).Scan(&selected)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return skills.Skill{}, apierr.NotFound("skill version not found")
+			}
+			if err != nil {
+				return skills.Skill{}, fmt.Errorf("skills: update: select version: %w", err)
+			}
+			versionID = selected
+		}
+		var status, name string
+		err = tx.QueryRow(ctx, fmt.Sprintf(`SELECT status, name FROM %s.skill_versions WHERE id = $1 AND skill_id = $2 FOR UPDATE`, s), versionID, skillID).Scan(&status, &name)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return skills.Skill{}, apierr.NotFound("skill version not found")
+		}
+		if err != nil {
+			return skills.Skill{}, fmt.Errorf("skills: update: read version: %w", err)
+		}
+		if status == "published" {
+			return skills.Skill{}, apierr.Conflict("Unpublish first. Cannot update a published version.")
+		}
+		if status == "embedded" {
+			return skills.Skill{}, apierr.Conflict("Cannot update an embedded version.")
+		}
+		versionMeta := map[string]any{}
+		if skill.VersionDetails != nil {
+			if requested := skill.VersionDetails.Name; requested != "" && requested != name {
+				if name == "base" {
+					return skills.Skill{}, apierr.BadRequest("Cannot rename the base version")
+				}
+				name = requested
+			}
+			if skill.VersionDetails.Meta != nil {
+				versionMeta = skill.VersionDetails.Meta
+			}
+		}
+		encodedMeta, err := json.Marshal(versionMeta)
+		if err != nil {
+			return skills.Skill{}, apierr.BadRequest("invalid version metadata")
+		}
+		_, err = tx.Exec(ctx, fmt.Sprintf(`UPDATE %s.skill_versions SET name = $1, instructions = $2, meta = COALESCE(meta, '{}') || $3::jsonb WHERE id = $4 AND skill_id = $5`, s), name, skill.Instructions, encodedMeta, versionID, skillID)
+		if err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+				return skills.Skill{}, apierr.Conflict("skill version name already exists")
+			}
+			return skills.Skill{}, fmt.Errorf("skills: update: write version: %w", err)
+		}
+		versionIntID, err := strconv.Atoi(versionID)
+		if err != nil {
+			return skills.Skill{}, apierr.BadRequest("invalid version ID")
+		}
+		if _, err := replaceVersionTags(ctx, tx, s, versionIntID, skill.Tags); err != nil {
+			return skills.Skill{}, err
+		}
+	}
+	meta := skill.Meta
+	if meta == nil {
+		meta = map[string]any{}
+	}
+	encodedMeta, err := json.Marshal(meta)
+	if err != nil {
+		return skills.Skill{}, apierr.BadRequest("invalid skill metadata")
+	}
+	_, err = tx.Exec(ctx, fmt.Sprintf(`UPDATE %s.skills SET name = $1, description = $2, meta = COALESCE(meta, '{}') || $3::jsonb WHERE id = $4`, s), skill.Name, skill.Description, encodedMeta, skillID)
+	if err != nil {
+		return skills.Skill{}, fmt.Errorf("skills: update: write skill: %w", err)
+	}
 	if err := tx.Commit(ctx); err != nil {
-		return skills.Skill{}, fmt.Errorf("skills: update version: commit: %w", err)
+		return skills.Skill{}, fmt.Errorf("skills: update: commit: %w", err)
 	}
 	return r.getSkillWithVersions(ctx, projectID, skillID, versionID)
+}
+
+func skillDefaultVersionID(value any) string {
+	switch id := value.(type) {
+	case string:
+		return id
+	case float64:
+		if id > 0 && id == float64(int64(id)) {
+			return strconv.FormatInt(int64(id), 10)
+		}
+	case json.Number:
+		return id.String()
+	}
+	return ""
 }
 
 // DeleteVersion removes one named skill_versions row. Refuses `base` and the

@@ -352,10 +352,9 @@ func (h *Handler) awaitRunResult(
 			// running: it is durable and owned by the runtime, not by this
 			// request. Naming it is the whole point — see mcpRunDeadline.
 			return errorResult(fmt.Sprintf(
-				"the agent behind '%s' did not finish within %s. It is STILL RUNNING as execution %s; "+
-					"its answer will appear in that conversation, and it can be cancelled there. "+
-					"No partial output is reported here.",
-				tool.Name, mcpRunDeadline, outcome.ExecutionID))
+				"the request ended before a final answer for '%s' was observed (execution %s). "+
+					"Open the conversation to check its current state. No partial output is reported here.",
+				tool.Name, outcome.ExecutionID))
 		}
 		select {
 		case <-deadline.Done():
@@ -409,6 +408,7 @@ type turnState struct {
 	// would burn the deadline on a run that will never move on its own.
 	hitlPause          bool
 	authorizationPause bool
+	outputLimitPause   bool
 	// text is the assistant's answer, the response group's text items
 	// concatenated in item order.
 	text string
@@ -433,6 +433,10 @@ func (s turnState) result(tool Tool, executionID string) map[string]any {
 			"the agent behind '%s' PAUSED to ask for MCP authorization and execution %s is waiting on it. "+
 				"MCP has no way to answer that from here: open the conversation to authorize, "+
 				"and the run will continue there.", tool.Name, executionID))
+	case s.outputLimitPause:
+		return errorResult(fmt.Sprintf(
+			"the agent behind '%s' paused at its output limit (execution %s). Open the conversation and continue it. No partial answer is reported here.",
+			tool.Name, executionID))
 	case strings.TrimSpace(s.text) == "":
 		// A settled run with nothing to say. Reported as an error rather than
 		// as an empty success for the reason stated in the package header: an
@@ -479,6 +483,7 @@ SELECT response.is_streaming,
        COALESCE(response.meta ->> 'error', ''),
        response.meta ? 'hitl_interrupt',
        response.meta ? 'authorization_requests',
+       COALESCE(response.meta -> 'output_limit_reached' = 'true'::jsonb, FALSE),
        COALESCE((
            SELECT string_agg(item_text.content, '' ORDER BY item.order_index, item.id)
            FROM %[1]s.chat_message_items AS item
@@ -493,7 +498,7 @@ WHERE response.uuid = $1::uuid`, schema)
 	var streaming bool
 	err := h.pool.QueryRow(ctx, statement, responseMessageID).Scan(
 		&streaming, &state.isError, &state.failure,
-		&state.hitlPause, &state.authorizationPause, &state.text,
+		&state.hitlPause, &state.authorizationPause, &state.outputLimitPause, &state.text,
 	)
 	if err != nil {
 		if isNoRows(err) {

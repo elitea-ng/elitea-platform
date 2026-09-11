@@ -30,6 +30,12 @@ var internalSkillToolDefinitions = []internalSkillToolDefinition{
 		schema: objectSchema(map[string]any{
 			"project_id": intProperty("Current project ID. The server verifies this value."),
 			"query":      stringProperty("Optional name or description search."),
+			"limit":      integerRangeProperty("Maximum results; requested IDs can increase this to their count.", 1, 1000),
+			"offset":     integerRangeProperty("Results to skip.", 0, 100000),
+			"ids":        stringProperty("Comma-separated skill IDs, at most 100."),
+			"tags":       stringProperty("Comma-separated tag IDs. Every requested tag must occur on a skill version."),
+			"author_id":  intProperty("Match an author of any skill version."),
+			"statuses":   stringProperty("Comma-separated version statuses. Unknown statuses are ignored."),
 			"page":       integerMinProperty("Page number.", 1),
 			"page_size":  integerRangeProperty("Maximum results per page.", 1, 100),
 			"sort_by":    enumProperty("Sort field.", "created_at", "name"),
@@ -53,21 +59,27 @@ var internalSkillToolDefinitions = []internalSkillToolDefinition{
 	},
 	{
 		name:        "get_elitea_core_skill",
-		description: "Read one skill and its base version from the current project.",
+		description: "Read one skill with the requested version, or its configured default version when version_id is omitted.",
 		permission:  "models.applications.skills.details",
 		operation:   internalGetSkill,
-		schema:      skillIdentitySchema(),
+		schema: mergeObjectSchema(skillIdentitySchema(), map[string]any{
+			"version_id": intProperty("Optional version ID belonging to this skill."),
+		}, "project_id", "skill_id"),
 	},
 	{
 		name:        "put_elitea_core_skill",
-		description: "Update skill metadata or base-version content. Read the skill first when changing existing content.",
+		description: "Update metadata and nested version content. version.id selects the version; omission selects its default. With version_id, use flat version fields.",
 		permission:  "models.applications.skills.update",
 		operation:   internalUpdateSkill,
 		schema: mergeObjectSchema(skillVersionWriteSchema(false), map[string]any{
-			"project_id":  intProperty("Current project ID. The server verifies this value."),
-			"skill_id":    intProperty("Skill ID."),
-			"name":        skillNameProperty("Optional skill name."),
-			"description": boundedStringProperty("Optional skill description.", 1, 2304),
+			"project_id":   intProperty("Current project ID. The server verifies this value."),
+			"skill_id":     intProperty("Skill ID."),
+			"description":  boundedStringProperty("Optional skill description.", 1, 2304),
+			"version_id":   intProperty("Update this version with flat name, instructions, tags, and meta fields."),
+			"instructions": boundedStringProperty("Version instructions; requires version_id.", 1, 5000),
+			"tags":         map[string]any{"type": "array", "items": skillTagWriteSchema()},
+			"meta":         map[string]any{"type": "object"},
+			"name":         boundedStringProperty("Skill name, or version name when version_id is provided.", 1, 128),
 		}, "project_id", "skill_id"),
 	},
 	{
@@ -124,10 +136,11 @@ func skillVersionWriteSchema(required bool) map[string]any {
 	}
 	properties := map[string]any{
 		"version": objectSchema(map[string]any{
-			"id":           intProperty("Existing base-version ID."),
-			"name":         map[string]any{"type": "string", "const": "base"},
+			"id":           intProperty("Existing version ID; omission selects the default version."),
+			"name":         boundedStringProperty("Version name. The base version cannot be renamed.", 1, 128),
 			"instructions": boundedStringProperty("Skill instructions.", 1, 5000),
 			"tags":         tags,
+			"meta":         map[string]any{"type": "object"},
 		}),
 	}
 	if required {

@@ -142,12 +142,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	configurationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	draftsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/drafts"
 	eliteacoreapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
 	notificationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/notifications"
 	secretsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	toolkitsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	notificationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/notifications"
+	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
@@ -189,9 +191,10 @@ type Handler struct {
 	toolkitExecute ToolkitExecuteReadUseCase
 	// toolkitArgumentSchemas supplies the digest-pinned SDK argument schemas
 	// used by external Elitea-as-MCP toolkit tools. Dynamic toolkit families
-	// legitimately have no pinned schema and retain the explicit open-object
-	// fallback in catalog.go.
+	// use the shared saved-instance discovery service when it is available.
+	// Runtime-disabled deployments retain the explicit open-object fallback.
 	toolkitArgumentSchemas ToolkitArgumentSchemaSource
+	toolkitDiscovery       discovery.UseCase
 	// permissions authorizes an EXECUTION, and only an execution.
 	//
 	// The endpoint as a whole is gated at the MEMBERSHIP tier
@@ -215,6 +218,8 @@ type Handler struct {
 	internalApplications internalApplicationExecutor
 	// internalSkills executes the fixed internal skill-builder category.
 	internalSkills internalSkillExecutor
+	internalDrafts *draftsapi.Handler
+	internalChat   internalChatExecutor
 	// internalToolkits executes the fixed internal toolkit-builder category.
 	internalToolkits internalToolkitExecutor
 	// internalConfigurations executes the fixed internal configurations

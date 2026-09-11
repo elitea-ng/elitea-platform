@@ -345,9 +345,7 @@ func TestPylonAPICategoriesAreRefusedRatherThanReinterpreted(t *testing.T) {
 	router := newTestRouter(newTestHandler(t, source))
 
 	for _, tag := range []string{
-		"elitea_core/chat",
 		"elitea_core/analytics",
-		"elitea_core/discovery",
 		"artifacts",
 		"api",
 	} {

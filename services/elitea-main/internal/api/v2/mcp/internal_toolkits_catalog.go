@@ -1,17 +1,11 @@
 package mcp
 
-// The internal toolkit builder is a fixed, Main-owned MCP category.
-//
-// The current Python platform marks six operations with mcp_tool=True. Five
-// are published here. The sixth, get_elitea_core_toolkit_available_tools, is
-// deliberately absent until Main has a real per-instance discovery provider:
-// its current REST repository query reads application-tool relations and is
-// not the SDK/remote discovery the Python operation performs.
 const internalToolkitsCategory = "elitea_core/toolkits"
 
 type internalToolkitOperation string
 
 const (
+	internalAvailableTools     internalToolkitOperation = "available_tools"
 	internalListToolkitTypes   internalToolkitOperation = "list_toolkit_types"
 	internalListToolkits       internalToolkitOperation = "list_toolkits"
 	internalCreateToolkit      internalToolkitOperation = "create_toolkit"
@@ -28,13 +22,15 @@ type internalToolkitToolDefinition struct {
 }
 
 var internalToolkitToolDefinitions = []internalToolkitToolDefinition{
+	{name: "get_elitea_core_toolkit_available_tools", description: "Discover available tools and argument schemas from one saved toolkit.", permission: "models.applications.tool.details", operation: internalAvailableTools, schema: objectSchema(map[string]any{"project_id": intProperty("Current project ID."), "toolkit_id": intProperty("Saved toolkit ID.")}, "project_id", "toolkit_id")},
 	{
 		name:        "get_elitea_core_toolkits",
-		description: "List the toolkit type schemas available for creating toolkit instances in this project.",
+		description: "List available toolkit type names and metadata. Supply type to retrieve its complete settings schema before creating a toolkit.",
 		permission:  "models.applications.toolkits.details",
 		operation:   internalListToolkitTypes,
 		schema: objectSchema(map[string]any{
 			"project_id": intProperty("Current project ID. The server verifies this value."),
+			"type":       boundedStringProperty("Exact toolkit type whose full schema is required. Omit to list names first.", 1, 256),
 		}, "project_id"),
 	},
 	{
@@ -51,7 +47,8 @@ var internalToolkitToolDefinitions = []internalToolkitToolDefinition{
 	{
 		name: "post_elitea_core_tools",
 		description: "Create a toolkit instance. Read get_elitea_core_toolkits first and use the selected " +
-			"type's settings schema.",
+			"type's settings schema. Reference saved credentials with {elitea_title, private}, not numeric IDs or JSON Schema $ref. " +
+			"selected_tools is an array of tool names.",
 		permission: "models.applications.tools.create",
 		operation:  internalCreateToolkit,
 		schema: objectSchema(map[string]any{
@@ -98,9 +95,12 @@ var internalToolkitToolDefinitions = []internalToolkitToolDefinition{
 	},
 }
 
-func internalToolkitTools() []Tool {
+func internalToolkitTools(discoveryEnabled ...bool) []Tool {
 	tools := make([]Tool, 0, len(internalToolkitToolDefinitions))
 	for _, definition := range internalToolkitToolDefinitions {
+		if definition.operation == internalAvailableTools && (len(discoveryEnabled) == 0 || !discoveryEnabled[0]) {
+			continue
+		}
 		tools = append(tools, Tool{
 			Name:                     definition.name,
 			Description:              definition.description,

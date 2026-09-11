@@ -188,6 +188,9 @@ func (h *Handler) listTools(r *http.Request, schema string, s scope, message rpc
 		// gets a typed message and never `err.Error()`.
 		return newError(message.ID, codeInternalError, "tool listing is temporarily unavailable")
 	}
+	for index := range tools {
+		tools[index] = withEndpointProjectSchema(tools[index])
+	}
 	sortToolsByName(tools)
 	if tools == nil {
 		tools = []Tool{}
@@ -275,6 +278,12 @@ func (h *Handler) callTool(r *http.Request, schema string, s scope, message rpcM
 		// is not a plain positive integer before this handler was reached.
 		return newError(message.ID, codeInvalidParams, "invalid project id")
 	}
+	if target.internalDiscoveryOperation != "" {
+		return newResult(message.ID, h.callInternalDiscoveryTool(r, projectID, target, params.Arguments))
+	}
+	if target.internalDraftOperation != "" {
+		return newResult(message.ID, h.callInternalDraftTool(r, projectID, target, params.Arguments))
+	}
 	if target.internalApplicationOperation != "" {
 		return newResult(message.ID, h.callInternalApplicationTool(r, projectID, target, params.Arguments))
 	}
@@ -286,6 +295,9 @@ func (h *Handler) callTool(r *http.Request, schema string, s scope, message rpcM
 	}
 	if target.internalConfigurationOperation != "" {
 		return newResult(message.ID, h.callInternalConfigurationTool(r, projectID, target, params.Arguments))
+	}
+	if target.internalChatOperation != "" {
+		return newResult(message.ID, h.callInternalChatTool(r, projectID, target, params.Arguments))
 	}
 	if target.internalNotificationOperation != "" {
 		return newResult(message.ID, h.callInternalNotificationTool(r, projectID, target, params.Arguments))

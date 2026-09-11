@@ -12,7 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/chatauthority"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
@@ -211,14 +211,11 @@ func (h *Handler) loadConversations(ctx context.Context, r *http.Request, projec
 		orderDir = "ASC"
 	}
 
-	// Who is asking. The pin is PER READER — `social_pins` is keyed by
-	// (entity_name, entity_id, user_id) — so a listing that ignored the
-	// caller would show one member the rows another member pinned.
-	pinnedBy := ""
-	if user, ok := auth.UserFromContext(ctx); ok {
-		pinnedBy = user.ID
+	access, err := chatauthority.Load(ctx, h.pool, projectID)
+	if err != nil {
+		return nil, err
 	}
-
+	visible, args := access.Predicate(schema, "c", 1, chatauthority.FolderListing)
 	// Query conversations (indexes on conversation_id ensure fast joins elsewhere)
 	//
 	// THE PINNED SET COMES FROM `social_pins`, which is where the pin routes
@@ -233,24 +230,22 @@ func (h *Handler) loadConversations(ctx context.Context, r *http.Request, projec
 	// inventing one. The `meta` key is kept as a fallback: a row that carries
 	// it stays pinned, which costs nothing and cannot unpin anybody.
 	//
-	// An unknown caller (`$1 = ''`) matches any owner rather than none: this
-	// route is permission-gated, so the case is a handler built without auth
-	// in a test, and answering "no conversation is pinned" there would hide a
-	// broken join behind a plausible empty set.
 	q := fmt.Sprintf(`
 		SELECT c.id, c.name, COALESCE(c.uuid::text, ''), c.author_id, c.folder_id,
 		       (COALESCE((c.meta->>'is_pinned')::boolean, false)
-		            OR EXISTS (SELECT 1 FROM %s.social_pins p
-		                       WHERE p.entity_name = 'conversation'
+		            OR EXISTS (SELECT 1 FROM centry.social_pins p
+		                       WHERE p.entity = 'conversation'
+		                         AND p.project_id = $2::text::integer
 		                         AND p.entity_id = c.id
-		                         AND ($1 = '' OR p.user_id::text = $1))) AS is_pinned,
+		                         AND p.user_id::text = $1)) AS is_pinned,
 		       c.is_private,
 		       c.created_at, c.updated_at
 		FROM %s.chat_conversations c
-		WHERE (c.meta->>'is_hidden' IS NULL OR c.meta->>'is_hidden' = 'false')
-		ORDER BY %s %s, c.id %s`, schema, schema, orderCol, orderDir, orderDir)
+		WHERE (c.meta->>'is_hidden' IS NULL OR c.meta->>'is_hidden' = 'false') AND %s
+		ORDER BY %s %s, c.id %s`, schema, visible, orderCol, orderDir, orderDir)
+	args = append(args, projectID)
 
-	rows, err := h.pool.Query(ctx, q, pinnedBy)
+	rows, err := h.pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("folders: list conversations: %w", err)
 	}
@@ -590,19 +585,21 @@ func (h *Handler) listGrouped(w http.ResponseWriter, r *http.Request, projectID 
 // or nil when there is none (or no pool / no authenticated user). A miss here
 // is not an error: an unselected sidebar is the normal first-visit state.
 func (h *Handler) selectedConversationID(ctx context.Context, projectID string) *int {
-	u, ok := auth.UserFromContext(ctx)
-	if !ok || u.ID == "" || h.pool == nil {
+	if h.pool == nil {
 		return nil
 	}
-	// A project id that identifies no schema selects no conversation, which is
-	// the same answer this helper already gives for "nothing selected".
+	access, err := chatauthority.Load(ctx, h.pool, projectID)
+	if err != nil {
+		return nil
+	}
 	schema, err := tenantschema.Quote(projectID)
 	if err != nil {
 		return nil
 	}
-	q := fmt.Sprintf(`SELECT conversation_id FROM %s.chat_selected_conversations WHERE user_id = $1 LIMIT 1`, schema)
+	visibility, args := access.Predicate(schema, "c", 1, chatauthority.FolderListing)
+	q := fmt.Sprintf(`SELECT selected.conversation_id FROM %s.chat_selected_conversations selected JOIN %s.chat_conversations c ON c.id=selected.conversation_id WHERE selected.user_id=$1 AND %s LIMIT 1`, schema, schema, visibility)
 	var selID int
-	if err := h.pool.QueryRow(ctx, q, u.ID).Scan(&selID); err != nil {
+	if err := h.pool.QueryRow(ctx, q, args...).Scan(&selID); err != nil {
 		return nil
 	}
 	return &selID

@@ -339,6 +339,15 @@ func (h *Handler) require(permission string) func(http.Handler) http.Handler {
 // (#131). Section filtering follows Flask request.args.getlist semantics, as
 // on the production route.
 func (h *Handler) Available(w http.ResponseWriter, r *http.Request) {
+	h.available(w, r, false)
+}
+
+// DiscoverAvailable lists type names or returns one complete schema for agent use.
+func (h *Handler) DiscoverAvailable(w http.ResponseWriter, r *http.Request) {
+	h.available(w, r, true)
+}
+
+func (h *Handler) available(w http.ResponseWriter, r *http.Request, discovery bool) {
 	entries, err := h.catalog.CompleteEntries(r.URL.Query()["section"]...)
 	if err != nil {
 		status := http.StatusInternalServerError
@@ -351,6 +360,25 @@ func (h *Handler) Available(w http.ResponseWriter, r *http.Request) {
 	entries = h.filterAvailableTracingTypes(
 		r.Context(), availableProjectID(r.URL.Query().Get("project_id")), entries,
 	)
+	if discovery {
+		selected := r.URL.Query().Get("type")
+		if selected == "" {
+			summary := make([]map[string]string, 0, len(entries))
+			for _, entry := range entries {
+				summary = append(summary, map[string]string{"type": entry.Type, "section": entry.Section})
+			}
+			writeJSON(w, http.StatusOK, summary)
+			return
+		}
+		for _, entry := range entries {
+			if entry.Type == selected {
+				writeJSON(w, http.StatusOK, []CurrentAvailableConfigurationTypeDTO{newCurrentAvailableConfigurationTypeDTO(entry)})
+				return
+			}
+		}
+		writeJSON(w, http.StatusOK, []CurrentAvailableConfigurationTypeDTO{})
+		return
+	}
 	writeJSON(w, http.StatusOK, newCurrentAvailableConfigurationTypesDTO(entries))
 }
 

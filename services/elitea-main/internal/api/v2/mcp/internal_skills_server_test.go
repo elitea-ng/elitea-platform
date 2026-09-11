@@ -84,6 +84,7 @@ func TestInternalSkillsCategoryPublishesOnlyMainOwnedCurrentOperations(t *testin
 		"put_elitea_core_skill",
 		"patch_elitea_core_skill",
 		"get_elitea_core_application_skills",
+		"post_prompt_lib_generate_skill_draft",
 	}
 	wantPermissions := []string{
 		"models.applications.skills.list",
@@ -92,6 +93,7 @@ func TestInternalSkillsCategoryPublishesOnlyMainOwnedCurrentOperations(t *testin
 		"models.applications.skills.update",
 		"models.applications.skills.update",
 		"models.applications.applications.details",
+		"models.applications.skills.create",
 	}
 	if len(tools) != len(wantNames) {
 		t.Fatalf("tool count = %d, want %d", len(tools), len(wantNames))
@@ -104,17 +106,18 @@ func TestInternalSkillsCategoryPublishesOnlyMainOwnedCurrentOperations(t *testin
 	}
 
 	listProperties := tools[0].InputSchema["properties"].(map[string]any)
-	for _, unsupported := range []string{"tags", "author_id", "statuses", "ids", "limit", "offset"} {
-		if _, advertised := listProperties[unsupported]; advertised {
-			t.Fatalf("list schema advertises unsupported filter %q", unsupported)
+	for _, supported := range []string{"tags", "author_id", "statuses", "ids", "limit", "offset"} {
+		if _, advertised := listProperties[supported]; !advertised {
+			t.Fatalf("list schema omits supported filter %q", supported)
 		}
 	}
+
 	wire, err := json.Marshal(tools)
 	if err != nil {
 		t.Fatalf("marshal tools: %v", err)
 	}
 	for _, forbidden := range []string{
-		"internalSkillOperation", "permission", "generate_skill_draft", "delete", "create_skill_version",
+		"internalSkillOperation", "permission", "delete", "create_skill_version",
 	} {
 		if strings.Contains(string(wire), forbidden) {
 			t.Fatalf("wire contains private or unsupported operation %q: %s", forbidden, wire)

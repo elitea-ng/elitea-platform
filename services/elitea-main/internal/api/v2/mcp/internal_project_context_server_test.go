@@ -81,9 +81,11 @@ func TestInternalProjectContextCategoryPublishesExactlyCurrentBuilderOperations(
 		"get_prompt_lib_project-context",
 		"put_prompt_lib_project-context",
 		"delete_prompt_lib_project-context",
+		"post_prompt_lib_generate_project_context_draft",
 	}
 	wantPermissions := []string{
 		"models.project_context.view",
+		"models.project_context.edit",
 		"models.project_context.edit",
 		"models.project_context.edit",
 	}
@@ -114,7 +116,7 @@ func TestInternalProjectContextCategoryPublishesExactlyCurrentBuilderOperations(
 		t.Fatalf("marshal tools: %v", err)
 	}
 	for _, forbidden := range []string{
-		"internalProjectContextOperation", "permission", "draft", "generate",
+		"internalProjectContextOperation", "permission",
 	} {
 		if strings.Contains(string(wire), forbidden) {
 			t.Fatalf("wire contains private or unsupported operation %q: %s", forbidden, wire)

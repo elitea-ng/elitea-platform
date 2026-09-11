@@ -17,6 +17,8 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/contextsettings"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/chatauthority"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/publicproject"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -150,7 +152,7 @@ func (r *ConversationsRepo) Get(ctx context.Context, projectID, conversationID s
 
 	q := fmt.Sprintf(`
 		SELECT c.id::text, c.name, COALESCE(c.uuid::text, ''), c.author_id, c.folder_id::text, c.created_at, COALESCE(c.updated_at, c.created_at),
-			c.meta, c.is_private,
+			c.meta, c.is_private,COALESCE(c.source,''),COALESCE(c.instructions,''),
 			(SELECT COUNT(*) FROM %s.chat_message_group mg WHERE mg.conversation_id = c.id)
 		FROM %s.chat_conversations c WHERE %s`, s, s, predicate)
 
@@ -160,7 +162,7 @@ func (r *ConversationsRepo) Get(ctx context.Context, projectID, conversationID s
 	var metaBytes []byte
 	var isPrivate bool
 	err := r.pool.QueryRow(ctx, q, conversationID).Scan(
-		&c.ID, &c.Name, &c.UUID, &authorID, &folderID, &c.CreatedAt, &c.UpdatedAt, &metaBytes, &isPrivate, &c.MessageCount,
+		&c.ID, &c.Name, &c.UUID, &authorID, &folderID, &c.CreatedAt, &c.UpdatedAt, &metaBytes, &isPrivate, &c.Source, &c.Instructions, &c.MessageCount,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -236,7 +238,7 @@ func (r *ConversationsRepo) ListParticipants(ctx context.Context, projectID, con
 
 	rows, err := r.pool.Query(ctx, q, id)
 	if err != nil {
-		return []conversations.Participant{}, nil
+		return nil, fmt.Errorf("conversations: list participants: %w", err)
 	}
 	defer rows.Close()
 
@@ -246,7 +248,7 @@ func (r *ConversationsRepo) ListParticipants(ctx context.Context, projectID, con
 		var entityMeta, meta, entitySettings []byte
 		var authorName, authorEmail string
 		if err := rows.Scan(&p.ID, &p.EntityName, &entityMeta, &meta, &entitySettings, &authorName, &authorEmail); err != nil {
-			continue
+			return nil, fmt.Errorf("conversations: scan participant: %w", err)
 		}
 		if entityMeta != nil {
 			_ = json.Unmarshal(entityMeta, &p.EntityMeta) // best-effort: DB column is trusted JSON
@@ -280,6 +282,9 @@ func (r *ConversationsRepo) ListParticipants(ctx context.Context, projectID, con
 			p.EntitySettings = map[string]any{}
 		}
 		items = append(items, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("conversations: read participants: %w", err)
 	}
 	if items == nil {
 		items = []conversations.Participant{}
@@ -430,43 +435,128 @@ func participantVersionID(settings map[string]any) (int32, bool) {
 }
 
 func (r *ConversationsRepo) Create(ctx context.Context, projectID string, conv conversations.Conversation) (conversations.Conversation, error) {
-	s := schema(projectID)
-
-	authorID := conv.CreatedBy
-	if authorID == "" {
-		authorID = "1"
+	access, err := chatauthority.Load(ctx, r.pool, projectID)
+	if err != nil {
+		return conversations.Conversation{}, err
 	}
-
-	// The settings document the caller sent, or an empty one. Marshalled
-	// rather than interpolated: it is caller data.
+	s, err := tenantSchema(projectID)
+	if err != nil {
+		return conversations.Conversation{}, err
+	}
+	private := conv.IsPrivate == nil || *conv.IsPrivate
+	if !private && access.Public {
+		return conversations.Conversation{}, apierr.BadRequest("Public conversation can not exist in public project")
+	}
+	source := strings.ToLower(strings.TrimSpace(conv.Source))
+	if source == "" {
+		source = "elitea"
+	}
+	if len(source) > 64 || len(conv.Participants) > 100 {
+		return conversations.Conversation{}, apierr.BadRequest("invalid conversation input")
+	}
 	meta := conv.Meta
 	if meta == nil {
 		meta = map[string]any{}
 	}
 	encodedMeta, err := json.Marshal(meta)
 	if err != nil {
-		return conversations.Conversation{}, fmt.Errorf("conversations: create: encode meta: %w", err)
+		return conversations.Conversation{}, fmt.Errorf("conversations: encode metadata: %w", err)
 	}
-
-	q := fmt.Sprintf(`
-		INSERT INTO %s.chat_conversations (name, author_id, is_private, meta, source)
-		VALUES ($1, $2, true, $3::jsonb, 'api')
-		RETURNING id::text, name, uuid::text, created_at, COALESCE(updated_at, created_at), meta`, s)
-
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return conversations.Conversation{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
 	var c conversations.Conversation
 	var metaBytes []byte
-	if err := r.pool.QueryRow(ctx, q, conv.Name, authorID, encodedMeta).Scan(&c.ID, &c.Name, &c.UUID, &c.CreatedAt, &c.UpdatedAt, &metaBytes); err != nil {
+	err = tx.QueryRow(ctx, fmt.Sprintf(`INSERT INTO %s.chat_conversations (name,author_id,is_private,meta,source,instructions)
+ VALUES ($1,$2,$3,$4::jsonb,$5,$6)
+ RETURNING id::text,name,uuid::text,created_at,COALESCE(updated_at,created_at),meta`, s), conv.Name, access.ActorID, private, encodedMeta, source, conv.Instructions).Scan(&c.ID, &c.Name, &c.UUID, &c.CreatedAt, &c.UpdatedAt, &metaBytes)
+	if err != nil {
 		return conversations.Conversation{}, fmt.Errorf("conversations: create: %w", err)
 	}
+	id, _ := strconv.ParseInt(c.ID, 10, 64)
+	participants := append([]conversations.Participant{}, conv.Participants...)
+	participants = append(participants,
+		conversations.Participant{EntityName: "user", EntityMeta: map[string]any{"id": access.ActorID}},
+		conversations.Participant{EntityName: "dummy", EntityMeta: map[string]any{}},
+	)
+	for _, participant := range participants {
+		switch participant.EntityName {
+		case "user", "dummy", "llm", "application", "toolkit", "prompt":
+		default:
+			return conversations.Conversation{}, apierr.BadRequest("invalid participant type")
+		}
+		if participant.EntityMeta == nil {
+			return conversations.Conversation{}, apierr.BadRequest("invalid participant metadata")
+		}
+		body := map[string]any{"entity_name": participant.EntityName, "entity_meta": participant.EntityMeta, "entity_settings": participant.EntitySettings}
+		if err := addConversationParticipant(ctx, tx, s, id, body); err != nil {
+			return conversations.Conversation{}, err
+		}
+	}
+	if err := tx.QueryRow(ctx, fmt.Sprintf(`SELECT meta FROM %s.chat_conversations WHERE id=$1`, s), id).Scan(&metaBytes); err != nil {
+		return conversations.Conversation{}, err
+	}
+	rows, err := tx.Query(ctx, fmt.Sprintf(`SELECT p.id,p.entity_name,p.entity_meta,m.entity_settings,p.meta
+ FROM %[1]s.chat_participant_mapping m JOIN %[1]s.chat_participants p ON p.id=m.participant_id
+ WHERE m.conversation_id=$1 ORDER BY p.id`, s), id)
+	if err != nil {
+		return conversations.Conversation{}, err
+	}
+	for rows.Next() {
+		var participant conversations.Participant
+		if err := rows.Scan(&participant.ID, &participant.EntityName, &participant.EntityMeta, &participant.EntitySettings, &participant.Meta); err != nil {
+			rows.Close()
+			return conversations.Conversation{}, err
+		}
+		c.Participants = append(c.Participants, participant)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return conversations.Conversation{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return conversations.Conversation{}, fmt.Errorf("conversations: create commit: %w", err)
+	}
 	c.ProjectID = projectID
-	c.CreatedBy = authorID
+	c.CreatedBy = strconv.FormatInt(access.ActorID, 10)
 	c.Meta = decodeConversationMeta(metaBytes)
+	c.IsPrivate = &private
+	c.Source = source
+	c.Instructions = conv.Instructions
 	return c, nil
 }
 
 func (r *ConversationsRepo) Update(ctx context.Context, projectID, conversationID string, conv conversations.Conversation) (conversations.Conversation, error) {
 	s := schema(projectID)
 
+	if conv.IsPrivate != nil && !*conv.IsPrivate && publicproject.IDString() == projectID {
+		return conversations.Conversation{}, apierr.BadRequest("Public conversation can not exist in public project")
+	}
+	if conv.FolderID != nil && *conv.FolderID != "" {
+		actorID, err := chatauthority.Actor(ctx)
+		if err != nil {
+			return conversations.Conversation{}, err
+		}
+		var owned bool
+		if err := r.pool.QueryRow(ctx, fmt.Sprintf(`SELECT EXISTS (SELECT 1 FROM %s.chat_conversation_folders WHERE id=$1 AND owner_id=$2)`, s), *conv.FolderID, actorID).Scan(&owned); err != nil {
+			return conversations.Conversation{}, err
+		}
+		if !owned {
+			return conversations.Conversation{}, apierr.NotFound("folder not found")
+		}
+	}
+
+	if conv.IsPrivate != nil && *conv.IsPrivate {
+		current, err := r.Get(ctx, projectID, conversationID)
+		if err != nil {
+			return conversations.Conversation{}, err
+		}
+		if current.IsPrivate != nil && !*current.IsPrivate {
+			return conversations.Conversation{}, apierr.BadRequest("Public conversation cannot be changed to private")
+		}
+	}
 	setClauses := "updated_at = now()"
 	args := []any{}
 	argIdx := 1
@@ -474,6 +564,11 @@ func (r *ConversationsRepo) Update(ctx context.Context, projectID, conversationI
 	if conv.Name != "" {
 		setClauses += fmt.Sprintf(", name = $%d", argIdx)
 		args = append(args, conv.Name)
+		argIdx++
+	}
+	if conv.InstructionsUpdate != nil {
+		setClauses += fmt.Sprintf(", instructions = $%d", argIdx)
+		args = append(args, *conv.InstructionsUpdate)
 		argIdx++
 	}
 	if conv.FolderID != nil {
@@ -518,7 +613,7 @@ func (r *ConversationsRepo) Update(ctx context.Context, projectID, conversationI
 	// 6: every update answered with `"created_by": ""`, so a client that
 	// refreshed its cache from the mutation response lost the owner.
 	q := fmt.Sprintf(`UPDATE %s.chat_conversations SET %s WHERE id = $%d
-		RETURNING id::text, name, COALESCE(uuid::text, ''), author_id, folder_id::text, created_at, COALESCE(updated_at, created_at), meta, is_private`,
+		RETURNING id::text, name, COALESCE(uuid::text, ''), author_id, folder_id::text, created_at, COALESCE(updated_at, created_at), meta, is_private, COALESCE(instructions,'')`,
 		s, setClauses, argIdx)
 
 	var c conversations.Conversation
@@ -527,7 +622,7 @@ func (r *ConversationsRepo) Update(ctx context.Context, projectID, conversationI
 	var metaBytes []byte
 	var isPrivate bool
 	if err := r.pool.QueryRow(ctx, q, args...).Scan(
-		&c.ID, &c.Name, &c.UUID, &authorID, &folderID, &c.CreatedAt, &c.UpdatedAt, &metaBytes, &isPrivate,
+		&c.ID, &c.Name, &c.UUID, &authorID, &folderID, &c.CreatedAt, &c.UpdatedAt, &metaBytes, &isPrivate, &c.Instructions,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return conversations.Conversation{}, apierr.NotFound("conversation not found")
@@ -784,14 +879,16 @@ func participantDisplayMeta(entityName string, entityMeta map[string]any) []byte
 // ON CONFLICT does not catch that, because the two transactions hold different
 // participant ids.
 func (r *ConversationsRepo) AddParticipant(ctx context.Context, projectID, conversationID string, body map[string]any) error {
-	s := schema(projectID)
-	entityName, _ := body["entity_name"].(string)
-	entityMetaMap, _ := body["entity_meta"].(map[string]any)
-	entityMeta, _ := json.Marshal(body["entity_meta"])
-	entitySettings, _ := json.Marshal(body["entity_settings"])
-	if string(entitySettings) == "null" {
-		entitySettings = []byte("{}")
+	return r.AddParticipants(ctx, projectID, conversationID, []map[string]any{body})
+}
+
+// AddParticipants preserves the current all-or-nothing batch boundary.
+func (r *ConversationsRepo) AddParticipants(ctx context.Context, projectID, conversationID string, bodies []map[string]any) error {
+	if len(bodies) > 100 {
+		return apierr.BadRequest("at most 100 participants are allowed")
 	}
+
+	s := schema(projectID)
 
 	id, err := r.resolveConversationID(ctx, projectID, conversationID)
 	if err != nil {
@@ -804,65 +901,9 @@ func (r *ConversationsRepo) AddParticipant(ctx context.Context, projectID, conve
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
 
-	var participantID int
-	err = transaction.QueryRow(ctx,
-		fmt.Sprintf(participantIdentityQuery, s), entityName, entityMeta).Scan(&participantID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		insert := fmt.Sprintf(`INSERT INTO %s.chat_participants (uuid, entity_name, entity_meta, meta)
-			VALUES (gen_random_uuid(), $1, $2::jsonb, $3::json) RETURNING id`, s)
-		if err = transaction.QueryRow(ctx, insert,
-			entityName, entityMeta, participantDisplayMeta(entityName, entityMetaMap),
-		).Scan(&participantID); err != nil {
-			return fmt.Errorf("conversations: create participant: %w", err)
-		}
-	} else if err != nil {
-		return fmt.Errorf("conversations: add participant lookup: %w", err)
-	}
-
-	// ON CONFLICT names the COLUMNS, not the constraint.
-	//
-	// DEFECT: the clause used to read
-	// `ON CONFLICT ON CONSTRAINT _participant_conversation_uc`. Only the legacy
-	// bootstrap schema (internal/infra/db/migrations/001_initial.sql:511) gives
-	// the unique key that name. The ledgered tenant history that every real
-	// deployment runs — migrations/tenant/0123_agent_chat_message_tables.sql:87
-	// — declares an anonymous `UNIQUE (participant_id, conversation_id)`, whose
-	// generated name is different. On such a database the statement failed with
-	// SQLSTATE 42704 (undefined_object), so adding a participant answered 500.
-	// Column inference matches the unique key under either name.
-	mapping := fmt.Sprintf(`INSERT INTO %s.chat_participant_mapping (conversation_id, participant_id, entity_settings)
-		VALUES ($1, $2, $3::jsonb) ON CONFLICT (participant_id, conversation_id) DO NOTHING`, s)
-	if _, err := transaction.Exec(ctx, mapping, id, participantID, entitySettings); err != nil {
-		return fmt.Errorf("conversations: add participant mapping: %w", err)
-	}
-
-	// Stamp `meta.single_participant` for the entity types run-history
-	// filters on (issue #868's own DoD: the agent/toolkit/pipeline editor's
-	// History tab reads this conversation back through
-	// `?entity_name=...&entity_meta_id=...`, and `Handler.List` (see its own
-	// comment) has ALWAYS matched only against this meta field — DeepWiki's
-	// `resolveConversation` is the one caller that ever wrote it. A
-	// conversation created the ordinary way (this method) never did, so the
-	// filter matched nothing and every run-history tab read back empty
-	// (agents.run-history.spec.ts / toolkits.run-history.spec.ts, #882 CI).
-	//
-	// `llm`/`dummy`/`user` participants are not "run history" subjects and
-	// are left out, matching participantDisplayMeta's own default-vs-special
-	// split above. Last write wins for a conversation carrying more than one
-	// trackable participant — no journey exercises that shape today.
-	if entityName == "application" || entityName == "toolkit" || entityName == "pipeline" {
-		singleParticipant, err := json.Marshal(map[string]any{
-			"entity_name": entityName,
-			"entity_meta": body["entity_meta"],
-		})
-		if err != nil {
-			return fmt.Errorf("conversations: encode single_participant: %w", err)
-		}
-		metaUpdate := fmt.Sprintf(`UPDATE %s.chat_conversations
-			SET meta = COALESCE(meta, '{}'::jsonb) || jsonb_build_object('single_participant', $1::jsonb)
-			WHERE id = $2`, s)
-		if _, err := transaction.Exec(ctx, metaUpdate, singleParticipant, id); err != nil {
-			return fmt.Errorf("conversations: stamp single_participant: %w", err)
+	for _, body := range bodies {
+		if err := addConversationParticipant(ctx, transaction, s, id, body); err != nil {
+			return err
 		}
 	}
 
@@ -878,11 +919,29 @@ func (r *ConversationsRepo) RemoveParticipant(ctx context.Context, projectID, co
 	if err != nil {
 		return err
 	}
-	q := fmt.Sprintf(`DELETE FROM %s.chat_participant_mapping WHERE conversation_id = $1 AND participant_id = $2`, s)
-	if _, err := r.pool.Exec(ctx, q, id, participantID); err != nil {
-		return fmt.Errorf("conversations: remove participant: %w", err)
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
 	}
-	return nil
+	defer tx.Rollback(ctx)
+	var isAuthor bool
+	err = tx.QueryRow(ctx, fmt.Sprintf(`SELECT p.entity_name='user' AND p.entity_meta->>'id'=c.author_id::text FROM %s.chat_participant_mapping pm JOIN %s.chat_participants p ON p.id=pm.participant_id JOIN %s.chat_conversations c ON c.id=pm.conversation_id WHERE pm.conversation_id=$1 AND pm.participant_id=$2 FOR UPDATE OF pm`, s, s, s), id, participantID).Scan(&isAuthor)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return apierr.NotFound("participant not found")
+	}
+	if err != nil {
+		return err
+	}
+	if isAuthor {
+		return apierr.BadRequest("Cannot delete author of the conversation")
+	}
+	if _, err = tx.Exec(ctx, fmt.Sprintf(`UPDATE %s.chat_conversations SET attachment_participant_id=NULL WHERE id=$1 AND attachment_participant_id=$2`, s), id, participantID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, fmt.Sprintf(`DELETE FROM %s.chat_participant_mapping WHERE conversation_id=$1 AND participant_id=$2`, s), id, participantID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (r *ConversationsRepo) UpdateEntitySettings(ctx context.Context, projectID, conversationID, participantID string, settings map[string]any) error {
@@ -891,10 +950,17 @@ func (r *ConversationsRepo) UpdateEntitySettings(ctx context.Context, projectID,
 	if err != nil {
 		return err
 	}
-	data, _ := json.Marshal(settings)
+	data, err := json.Marshal(settings)
+	if err != nil {
+		return apierr.BadRequest("invalid participant settings")
+	}
 	q := fmt.Sprintf(`UPDATE %s.chat_participant_mapping SET entity_settings = $1 WHERE conversation_id = $2 AND participant_id = $3`, s)
-	if _, err := r.pool.Exec(ctx, q, data, id, participantID); err != nil {
+	result, err := r.pool.Exec(ctx, q, data, id, participantID)
+	if err != nil {
 		return fmt.Errorf("conversations: update entity settings: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return apierr.NotFound("participant not found")
 	}
 	return nil
 }
@@ -2680,4 +2746,78 @@ func nilIfEmpty(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// addConversationParticipant writes a participant and mapping in the caller's transaction.
+func addConversationParticipant(ctx context.Context, transaction pgx.Tx, s string, id int64, body map[string]any) error {
+	entityName, _ := body["entity_name"].(string)
+	entityMetaMap, _ := body["entity_meta"].(map[string]any)
+	entityMeta, _ := json.Marshal(body["entity_meta"])
+	entitySettings, _ := json.Marshal(body["entity_settings"])
+	if string(entitySettings) == "null" {
+		entitySettings = []byte("{}")
+	}
+	var participantID int
+	err := transaction.QueryRow(ctx,
+		fmt.Sprintf(participantIdentityQuery, s), entityName, entityMeta).Scan(&participantID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		insert := fmt.Sprintf(`INSERT INTO %s.chat_participants (uuid, entity_name, entity_meta, meta)
+			VALUES (gen_random_uuid(), $1, $2::jsonb, $3::json) RETURNING id`, s)
+		if err = transaction.QueryRow(ctx, insert,
+			entityName, entityMeta, participantDisplayMeta(entityName, entityMetaMap),
+		).Scan(&participantID); err != nil {
+			return fmt.Errorf("conversations: create participant: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("conversations: add participant lookup: %w", err)
+	}
+
+	// ON CONFLICT names the COLUMNS, not the constraint.
+	//
+	// DEFECT: the clause used to read
+	// `ON CONFLICT ON CONSTRAINT _participant_conversation_uc`. Only the legacy
+	// bootstrap schema (internal/infra/db/migrations/001_initial.sql:511) gives
+	// the unique key that name. The ledgered tenant history that every real
+	// deployment runs — migrations/tenant/0123_agent_chat_message_tables.sql:87
+	// — declares an anonymous `UNIQUE (participant_id, conversation_id)`, whose
+	// generated name is different. On such a database the statement failed with
+	// SQLSTATE 42704 (undefined_object), so adding a participant answered 500.
+	// Column inference matches the unique key under either name.
+	mapping := fmt.Sprintf(`INSERT INTO %s.chat_participant_mapping (conversation_id, participant_id, entity_settings)
+		VALUES ($1, $2, $3::jsonb) ON CONFLICT (participant_id, conversation_id) DO NOTHING`, s)
+	if _, err := transaction.Exec(ctx, mapping, id, participantID, entitySettings); err != nil {
+		return fmt.Errorf("conversations: add participant mapping: %w", err)
+	}
+
+	// Stamp `meta.single_participant` for the entity types run-history
+	// filters on (issue #868's own DoD: the agent/toolkit/pipeline editor's
+	// History tab reads this conversation back through
+	// `?entity_name=...&entity_meta_id=...`, and `Handler.List` (see its own
+	// comment) has ALWAYS matched only against this meta field — DeepWiki's
+	// `resolveConversation` is the one caller that ever wrote it. A
+	// conversation created the ordinary way (this method) never did, so the
+	// filter matched nothing and every run-history tab read back empty
+	// (agents.run-history.spec.ts / toolkits.run-history.spec.ts, #882 CI).
+	//
+	// `llm`/`dummy`/`user` participants are not "run history" subjects and
+	// are left out, matching participantDisplayMeta's own default-vs-special
+	// split above. Last write wins for a conversation carrying more than one
+	// trackable participant — no journey exercises that shape today.
+	if entityName == "application" || entityName == "toolkit" || entityName == "pipeline" {
+		singleParticipant, err := json.Marshal(map[string]any{
+			"entity_name": entityName,
+			"entity_meta": body["entity_meta"],
+		})
+		if err != nil {
+			return fmt.Errorf("conversations: encode single_participant: %w", err)
+		}
+		metaUpdate := fmt.Sprintf(`UPDATE %s.chat_conversations
+			SET meta = COALESCE(meta, '{}'::jsonb) || jsonb_build_object('single_participant', $1::jsonb)
+			WHERE id = $2`, s)
+		if _, err := transaction.Exec(ctx, metaUpdate, singleParticipant, id); err != nil {
+			return fmt.Errorf("conversations: stamp single_participant: %w", err)
+		}
+	}
+
+	return nil
 }

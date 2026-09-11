@@ -66,6 +66,8 @@ var mcpEntityTypes = map[string]string{
 // available_by_mcp". The internal applications category is a separate fixed
 // builder surface and does not change those external opt-in rules.
 var mcpCategories = map[string]string{
+	"elitea_core/chat":            "fixed actor-scoped ordinary chat operations",
+	"elitea_core/discovery":       "fixed internal entity discovery operations",
 	"applications":                "agents in this project whose version carries the `mcp` tag",
 	"elitea_core/applications":    "fixed internal application-builder operations",
 	"elitea_core/project_context": "fixed internal project-context builder operations",

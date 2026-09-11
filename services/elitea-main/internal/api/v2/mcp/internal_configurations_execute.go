@@ -74,8 +74,15 @@ func (executor *handlerInternalConfigurationExecutor) Execute(
 		if result != nil {
 			return *result, nil
 		}
+		if raw, present := arguments["type"]; present {
+			selected, ok := raw.(string)
+			if !ok || len(selected) == 0 || len(selected) > 128 {
+				return internalConfigurationBadRequest("type must be a non-empty bounded string")
+			}
+			query.Set("type", selected)
+		}
 		query.Set("project_id", params["projectID"])
-		return invokeInternalHandler(ctx, http.MethodGet, query, nil, params, executor.handler.Available)
+		return invokeInternalHandler(ctx, http.MethodGet, query, nil, params, executor.handler.DiscoverAvailable)
 	case internalListConfigurations:
 		query, result := internalConfigurationListQuery(arguments)
 		if result != nil {

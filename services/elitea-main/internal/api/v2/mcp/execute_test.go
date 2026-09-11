@@ -592,6 +592,7 @@ func TestTurnStateResultReportsEachPauseAsTerminal(t *testing.T) {
 	}{
 		{"hitl", turnState{settled: true, hitlPause: true}, "human approval"},
 		{"authorization", turnState{settled: true, authorizationPause: true}, "MCP authorization"},
+		{"output limit", turnState{settled: true, outputLimitPause: true, text: "PARTIAL_CANARY"}, "output limit"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			result := testCase.state.result(agentTool("my_agent", 1, 2), "exec-9")
@@ -604,6 +605,9 @@ func TestTurnStateResultReportsEachPauseAsTerminal(t *testing.T) {
 			}
 			if !strings.Contains(text, "exec-9") {
 				t.Fatalf("text = %q, want it to name the execution id", text)
+			}
+			if strings.Contains(text, "PARTIAL_CANARY") {
+				t.Fatal("partial output escaped the pause response")
 			}
 		})
 	}
@@ -646,8 +650,8 @@ func TestAwaitRunResultIsBoundedAndNamesTheExecution(t *testing.T) {
 	if !strings.Contains(text, "exec-42") {
 		t.Fatalf("text = %q, want it to name the execution id", text)
 	}
-	if !strings.Contains(text, "STILL RUNNING") {
-		t.Fatalf("text = %q, want it to say the run continues", text)
+	if !strings.Contains(text, "check its current state") || strings.Contains(text, "STILL RUNNING") {
+		t.Fatalf("text = %q, want current-state guidance without claiming an unobserved state", text)
 	}
 }
 

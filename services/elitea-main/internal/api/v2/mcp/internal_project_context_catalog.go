@@ -1,9 +1,6 @@
 package mcp
 
-// The fixed project-context category mirrors the three current operations
-// marked mcp_tool=True. Draft generation is a separate model-backed operation
-// and stays closed until Main owns that use case rather than proxying a
-// compatibility stub.
+// The category includes stored context operations and a separate draft operation.
 const internalProjectContextCategory = "elitea_core/project_context"
 
 type internalProjectContextOperation string

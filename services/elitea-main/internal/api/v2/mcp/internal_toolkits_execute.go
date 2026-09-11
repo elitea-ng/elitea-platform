@@ -56,8 +56,23 @@ func (executor *handlerInternalToolkitExecutor) Execute(
 	params := map[string]string{"projectID": project}
 
 	switch operation {
+	case internalAvailableTools:
+		toolkitID, err := requiredPositiveID(arguments, "toolkit_id")
+		if err != nil {
+			return internalToolkitBadRequest(err.Error())
+		}
+		params["toolkitID"] = toolkitID
+		return invokeInternalHandler(ctx, http.MethodGet, nil, nil, params, executor.handler.AvailableTools)
 	case internalListToolkitTypes:
-		return invokeInternalHandler(ctx, http.MethodGet, nil, nil, params, executor.handler.ListTypeSchemas)
+		query := url.Values{}
+		if raw, present := arguments["type"]; present {
+			selected, ok := raw.(string)
+			if !ok || len(selected) == 0 || len(selected) > 256 {
+				return internalToolkitBadRequest("type must be a non-empty bounded string")
+			}
+			query.Set("type", selected)
+		}
+		return invokeInternalHandler(ctx, http.MethodGet, query, nil, params, executor.handler.DiscoverTypeSchemas)
 	case internalListToolkits:
 		query, result := internalToolkitListQuery(arguments)
 		if result != nil {
@@ -215,4 +230,12 @@ func internalToolkitRelationBody(
 
 func internalToolkitBadRequest(message string) (internalApplicationExecution, error) {
 	return jsonExecution(http.StatusBadRequest, map[string]any{"error": message})
+}
+
+func (h *Handler) toolkitDiscoveryAvailable() bool {
+	if h == nil {
+		return false
+	}
+	executor, ok := h.internalToolkits.(*handlerInternalToolkitExecutor)
+	return ok && executor.handler.DiscoveryAvailable()
 }
