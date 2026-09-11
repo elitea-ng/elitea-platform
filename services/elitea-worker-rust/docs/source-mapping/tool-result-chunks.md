@@ -109,3 +109,8 @@ Its 93 browser tests and focused Oxlint checks pass.
 The Main chunk suite passes against PostgreSQL, including assembly across transactions, without skipped tests.
 The complete working UI also passes TypeScript checking.
 The new error lifecycle behavior still requires deployment verification.
+
+
+The browser also treats an exact earlier-fragment replay as a no-op after completion.
+This preserves the final error status, output, and timestamps.
+The reducer test replays both the final error fragment and an earlier successful fragment.

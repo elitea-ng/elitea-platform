@@ -299,16 +299,20 @@ describe('the tool lifecycle', () => {
     const output = JSON.stringify({ error: 'large failure' });
     const split = 9;
     const metadata = { total_bytes: output.length, sha256: 'a'.repeat(64) };
-    history = applyChatStreamFrame(history, toolFrame(SocketMessageType.AgentToolEnd, {
+    const first = toolFrame(SocketMessageType.AgentToolEnd, {
       tool_output: output.slice(0, split),
       tool_output_chunk_v1: { ...metadata, offset_bytes: 0, final: false },
-    }), CONTEXT);
+    });
+    history = applyChatStreamFrame(history, first, CONTEXT);
     const last = toolFrame(SocketMessageType.AgentToolError, {
       tool_output: output.slice(split), finish_reason: 'error',
       tool_output_chunk_v1: { ...metadata, offset_bytes: split, final: true },
     });
     history = applyChatStreamFrame(history, last, CONTEXT);
+    const completed = history[0]?.toolActions?.[0];
     history = applyChatStreamFrame(history, last, CONTEXT);
+    history = applyChatStreamFrame(history, first, CONTEXT);
+    expect(history[0]?.toolActions?.[0]).toBe(completed);
     const action = history[0]?.toolActions?.[0] as ToolAction;
     expect(action['toolOutputs']).toBe(output);
     expect(action.status).toBe('error');

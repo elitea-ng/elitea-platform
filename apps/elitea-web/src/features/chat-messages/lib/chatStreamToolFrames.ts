@@ -184,6 +184,7 @@ export function reduceToolFrame(
           const chunk = frame.response_metadata?.tool_output_chunk_v1;
           const assembled = chunk === undefined ? undefined : appendToolOutputChunk(previous, output, chunk, action['toolOutputChunk']);
           if (chunk !== undefined && assembled === undefined) return action;
+          if (assembled && assembled.output === previous && assembled.chunk === action['toolOutputChunk']) return action;
           if (assembled) {
             toolOutputs = assembled.output;
           } else if (typeof output === 'string') {
