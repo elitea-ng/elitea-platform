@@ -67,8 +67,11 @@ async function postOAuthProxy<T>(path: string, projectId: string | number, body:
 }
 
 /** The wire shape the backend's OAuth-proxy responses share, whichever grant type was used. */
-export interface McpOAuthTokenResponse {
-  access_token: string;
+export interface McpOAuthGrantResponse {
+  authorization_resource?: string;
+  authorization_reference?: string;
+  authorization_expires_at?: string;
+  access_token?: string;
   token_type?: string;
   expires_in?: number;
   refresh_token?: string;
@@ -79,7 +82,12 @@ export interface McpOAuthTokenResponse {
   error_description?: string;
 }
 
+export interface McpOAuthTokenResponse extends McpOAuthGrantResponse {
+  access_token: string;
+}
+
 export interface ExchangeMcpOAuthTokenParams {
+  authorization_reference_only?: boolean | undefined;
   client_reference?: string | undefined;
   resource?: string | undefined;
   projectId: string | number;
@@ -105,7 +113,7 @@ export interface ExchangeMcpOAuthTokenParams {
 }
 
 /** API-164 — `POST /elitea_core/mcp_oauth_proxy/{projectId}`, `grant_type: authorization_code`. */
-export function exchangeMcpOAuthToken({ projectId, ...body }: ExchangeMcpOAuthTokenParams): Promise<McpOAuthTokenResponse> {
+export function exchangeMcpOAuthToken({ projectId, ...body }: ExchangeMcpOAuthTokenParams): Promise<McpOAuthGrantResponse> {
   return postOAuthProxy(MCP_OAUTH_PROXY_PATH, projectId, { ...body, grant_type: 'authorization_code' });
 }
 

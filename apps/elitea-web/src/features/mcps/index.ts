@@ -70,3 +70,5 @@ export { getAccessToken } from './lib/storage';
 export { getAllTokens } from './lib/tokenRefresh';
 export { getExecutionTokens } from './lib/executionTokens';
 export { startMcpAuthFlow } from './lib/oauthFlow';
+
+export { getAuthorizationReference } from './lib/authorizationReference';

@@ -248,6 +248,7 @@ export function setAccessToken(
 
   tokens[key] = {
     access_token: accessToken,
+    authorization_reference: oauthMeta.authorization_reference,
     issued_at: oauthMeta.issued_at === undefined
       ? now
       : Math.max(Number(oauthMeta.issued_at), logoutMarker + 1),

@@ -42,6 +42,7 @@ import type { McpAuthMetadata } from '../lib/types';
 import { OAuthFormFields } from './OAuthFormFields';
 
 export interface McpAuthModalProps {
+  authorizationReferenceOnly?: boolean | undefined;
   serverUrl?: string | undefined;
   /** Credential-scoped token storage key; falls back to `serverUrl` when absent. */
   tokenStorageKey?: string | undefined;
@@ -171,7 +172,7 @@ export function McpAuthModal(props: McpAuthModalProps): ReactNode {
     () => ({ clientId: client_id.trim() || clientId, clientSecret: client_secret.trim() || clientSecret }),
     [client_id, client_secret, clientId, clientSecret],
   );
-  const flowContext = useMemo(() => ({ toolkitId, toolkitType, projectId, serverUrl }), [toolkitId, toolkitType, projectId, serverUrl]);
+  const flowContext = useMemo(() => ({ toolkitId, toolkitType, projectId, serverUrl, authorizationReferenceOnly: props.authorizationReferenceOnly }), [toolkitId, toolkitType, projectId, serverUrl, props.authorizationReferenceOnly]);
 
   const isAuthorizeDisabled = useMemo(() => {
     if (isAuthLifecycleActive) return true;
