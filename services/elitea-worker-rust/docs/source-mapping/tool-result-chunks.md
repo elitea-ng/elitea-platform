@@ -114,3 +114,31 @@ The new error lifecycle behavior still requires deployment verification.
 The browser also treats an exact earlier-fragment replay as a no-op after completion.
 This preserves the final error status, output, and timestamps.
 The reducer test replays both the final error fragment and an earlier successful fragment.
+
+## Deployment on 2026-09-11
+
+Worker image `sha256:3edd3cb3a3b61c8b8ec915623d2a3e47addde32d3e9fcb0ee8c20d378a31344f` contains the large-error repair.
+UI image `sha256:497ac5ff7016cd401de79d5078671c5fa4ae3678e77d720ffef328f50adbe659` also contains the earlier-fragment replay repair.
+Both deployments retain their existing configuration and use the active-claim guard.
+A fresh Playwright GitHub Toolkit Test returns HTTP 200 and `ok=true`.
+Execution `9b1d76624bff172e3ca01958ecf149f3` reaches durable `SUCCEEDED` state.
+
+The first chat discovery request fails before tool execution.
+Execution `0450024b55004e2e3c8718d0072a4d3e` reaches a 15-second gateway response-header timeout.
+The gateway records HTTP 500 after 31,790 milliseconds, with zero tokens.
+A new tool-free chat also receives a gateway failure.
+Its execution `9b5f3f697ec3db78023f6fb53a431032` records HTTP 503 after 1,267 milliseconds.
+An authenticated direct model request subsequently returns an answer.
+The tool-free chat retry also returns an answer without another deployment or configuration change.
+These observations establish a temporary model-path failure, but do not identify its upstream cause.
+They do not establish a chunk-transport failure.
+
+The full working Rust library run passes 953 tests under the sandbox.
+Three local HTTP-listener tests fail there and pass when rerun outside the sandbox.
+The isolated commit candidate passes Clippy; pending instruction-authority test lint remains separate.
+
+The chat retry invokes `get_elitea_core_toolkits` with `type=github`.
+Trace 7283 in message group 5828 stores 3,181 bytes and `finish_reason=stop` without a tool error.
+This confirms live internal MCP discovery after deployment.
+This smaller result does not exercise the large-error fragment path.
+That path has the isolated Rust, Main, and browser regression evidence above; live large-error provider proof remains open.
