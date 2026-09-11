@@ -1635,3 +1635,44 @@ fn check_large_tool_result(is_error: bool) {
         if is_error { "error" } else { "stop" }
     );
 }
+
+#[test]
+fn checkpoint_only_pipeline_completion_keeps_result_without_new_model_step() {
+    for reused in [false, true] {
+        let mut projector =
+            AgentEventProjector::new(AgentEventProjectionContext::pipeline_fixture(json!({})))
+                .expect("projector");
+        projector.start(timestamp(0)).expect("start");
+        let mut result = pipeline_result_event("Reviewed answer");
+        result.invocation_id = "invocation-1".to_owned();
+        result.author = "root-agent".to_owned();
+        if reused {
+            result.provider_metadata.insert(
+                super::graph::PIPELINE_REUSED_RESULT_METADATA_KEY.to_owned(),
+                "v1".to_owned(),
+            );
+        }
+        let events = projector
+            .project(&result)
+            .expect("completion")
+            .into_iter()
+            .map(|event| current(&event))
+            .collect::<Vec<_>>();
+        assert_eq!(events.is_empty(), reused);
+        let finished = projector
+            .finish_after_eos(
+                CompletedAgentBrowserOutput::fixture("Pipeline completed."),
+                timestamp(2),
+            )
+            .expect("terminal response")
+            .into_iter()
+            .map(|event| current(&event))
+            .collect::<Vec<_>>();
+        assert!(
+            finished
+                .iter()
+                .all(|event| event["content"] == "Reviewed answer")
+        );
+        assert_eq!(finished.len(), 3);
+    }
+}

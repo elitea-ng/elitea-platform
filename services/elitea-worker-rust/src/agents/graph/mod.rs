@@ -40,7 +40,8 @@ mod yaml;
 
 pub(crate) use agent::{
     EliteaGraphAgent, PIPELINE_COMPLETED_CONTENT, PIPELINE_COMPLETED_METADATA_KEY,
-    PIPELINE_COMPLETED_METADATA_VALUE, pipeline_completed_event, pipeline_result_event,
+    PIPELINE_COMPLETED_METADATA_VALUE, PIPELINE_REUSED_RESULT_METADATA_KEY,
+    pipeline_completed_event, pipeline_result_event,
 };
 pub(crate) use application::{
     ApplicationExecutionError, PIPELINE_APPLICATION_HITL_SCHEMA, PipelineApplicationResolver,

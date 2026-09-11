@@ -1671,11 +1671,19 @@ impl AgentEventProjector {
             return Err(AgentEventProjectionError::invalid_state());
         };
         let terminal = text == PIPELINE_COMPLETED_CONTENT;
+        let reused_result = match event
+            .provider_metadata
+            .get(super::graph::PIPELINE_REUSED_RESULT_METADATA_KEY)
+        {
+            None => false,
+            Some(value) if value == "v1" => true,
+            Some(_) => return Err(AgentEventProjectionError::invalid_state()),
+        };
         if content.role != "assistant"
             || text.is_empty()
             || text.len() > MAX_COMPLETED_CONTENT_BYTES
             || text.contains('\0')
-            || event.provider_metadata.len() != 1
+            || event.provider_metadata.len() != 1 + usize::from(reused_result)
             || event
                 .provider_metadata
                 .get(PIPELINE_COMPLETED_METADATA_KEY)
@@ -1694,7 +1702,7 @@ impl AgentEventProjector {
             ProjectedAgentEventBatch::new()
         } else {
             self.pipeline_result = Some(text.clone());
-            if self.saw_pipeline_node_events {
+            if self.saw_pipeline_node_events || reused_result {
                 ProjectedAgentEventBatch::new()
             } else {
                 self.project_model_event(

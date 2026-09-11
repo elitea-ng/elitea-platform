@@ -18,6 +18,8 @@ use async_trait::async_trait;
 
 pub(crate) const PIPELINE_COMPLETED_METADATA_KEY: &str = "elitea.pipeline.completed";
 pub(crate) const PIPELINE_COMPLETED_METADATA_VALUE: &str = "v1";
+/// Completion reuses checkpoint output after a control-only terminal decision.
+pub(crate) const PIPELINE_REUSED_RESULT_METADATA_KEY: &str = "elitea.pipeline.result_reused";
 pub(crate) const PIPELINE_COMPLETED_CONTENT: &str = "Pipeline completed.";
 
 use super::printer::{

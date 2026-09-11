@@ -428,6 +428,19 @@ async fn stored_pipeline_pauses_and_resumes_twice_through_runner_session_and_che
             .contains_key(INTERRUPT_METADATA_KEY)
     );
 
+    assert_eq!(
+        final_events[0]
+            .provider_metadata
+            .get(super::PIPELINE_REUSED_RESULT_METADATA_KEY,)
+            .map(String::as_str),
+        Some("v1")
+    );
+    assert!(
+        !second_events[0]
+            .provider_metadata
+            .contains_key(super::PIPELINE_REUSED_RESULT_METADATA_KEY,)
+    );
+
     let completed_session = get_session(sessions.as_ref()).await;
     let replay =
         PipelineHitlDecision::from_payload(&resume_payload(&second_interrupt_id, "approve", ""))

@@ -684,6 +684,17 @@ impl PipelineDefinition {
         }
         let state_schema = self.state_schema(self.runtime_channels());
         let result_policy = self.result_policy();
+        // A root HITL decision directly to END runs no data-producing node.
+        // Preserve its terminal value without presenting it as a new generation.
+        let reuses_result = resume
+            .as_ref()
+            .and_then(PipelineResume::terminal_decision)
+            .is_some_and(|(id, action)| {
+                self.nodes.iter().any(|node| {
+                    matches!(node, PipelineNodeDefinition::Hitl(hitl)
+                    if hitl.id() == id && hitl.route(action) == Some("END"))
+                })
+            });
         let node_checkpointer = Arc::clone(&checkpointer);
         let mut builder = PipelineGraphBuilder::Agent(Box::new(
             GraphAgent::builder(agent_name)
@@ -694,7 +705,14 @@ impl PipelineDefinition {
                 .recursion_limit(PIPELINE_RECURSION_LIMIT)
                 .max_concurrency(1)
                 .output_mapper(move |state| {
-                    vec![pipeline_completion_event_from_state(state, &result_policy)]
+                    let mut event = pipeline_completion_event_from_state(state, &result_policy);
+                    if reuses_result {
+                        event.provider_metadata.insert(
+                            super::agent::PIPELINE_REUSED_RESULT_METADATA_KEY.to_owned(),
+                            "v1".to_owned(),
+                        );
+                    }
+                    vec![event]
                 }),
         ));
         for node in &self.nodes {

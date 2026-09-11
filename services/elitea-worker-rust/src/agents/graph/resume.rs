@@ -168,6 +168,7 @@ impl PipelineMcpAuthorizationContinuation {
                 )
                 .map_err(|_| PipelineResumeError::corrupt())?;
             return Ok(PipelineResume {
+                root_hitl_resume: false,
                 state: [(
                     LLM_TOOL_RESUME_STATE_KEY.to_owned(),
                     json!({binding.node_name(): resolved}),
@@ -195,6 +196,7 @@ impl PipelineMcpAuthorizationContinuation {
             PipelineMcpAuthorizationAction::Skip => "skip",
         };
         Ok(PipelineResume {
+            root_hitl_resume: false,
             state: [(
                 DIRECT_TOOL_RESUME_STATE_KEY.to_owned(),
                 json!({
@@ -333,6 +335,7 @@ impl PrinterContinuation {
             return Err(PipelineResumeError::stale());
         }
         Ok(PipelineResume {
+            root_hitl_resume: false,
             state: [
                 ("input".to_owned(), Value::String(user_input.to_owned())),
                 (
@@ -656,6 +659,7 @@ impl PipelineToolDecision {
                 .resolve_clarifying_answer(binding.tool_call_id(), binding.tool_name(), &self.value)
                 .map_err(|_| PipelineResumeError::corrupt())?;
             return Ok(PipelineResume {
+                root_hitl_resume: false,
                 state: [(
                     LLM_TOOL_RESUME_STATE_KEY.to_owned(),
                     json!({binding.node_name(): resolved}),
@@ -715,6 +719,7 @@ impl PipelineToolDecision {
                 )
                 .map_err(|_| PipelineResumeError::corrupt())?;
             return Ok(PipelineResume {
+                root_hitl_resume: false,
                 state: [(
                     LLM_TOOL_RESUME_STATE_KEY.to_owned(),
                     json!({binding.node_name(): resolved}),
@@ -738,6 +743,7 @@ impl PipelineToolDecision {
         )
         .await?;
         Ok(PipelineResume {
+            root_hitl_resume: false,
             state: [(
                 DIRECT_TOOL_RESUME_STATE_KEY.to_owned(),
                 json!({
@@ -898,6 +904,8 @@ impl PipelineHitlDecision {
             Value::String(String::new())
         };
         Ok(PipelineResume {
+            root_hitl_resume: binding.nested_checkpoints().is_empty()
+                && binding.node_name() == binding.pending_node_name(),
             state: [(
                 HITL_RESUME_STATE_KEY.to_owned(),
                 json!({
@@ -916,14 +924,29 @@ impl PipelineHitlDecision {
 
 /// One checkpoint-proven resume state consumed by a fresh graph agent.
 pub(crate) struct PipelineResume {
+    root_hitl_resume: bool,
     state: State,
 }
 
 impl PipelineResume {
     fn empty() -> Self {
         Self {
+            root_hitl_resume: false,
             state: State::new(),
         }
+    }
+
+    pub(super) fn terminal_decision(&self) -> Option<(&str, super::hitl::HitlAction)> {
+        if !self.root_hitl_resume {
+            return None;
+        }
+        let decisions = self.state.get(HITL_RESUME_STATE_KEY)?.as_object()?;
+        if decisions.len() != 1 {
+            return None;
+        }
+        let (node, decision) = decisions.iter().next()?;
+        let action = serde_json::from_value(decision.get("action")?.clone()).ok()?;
+        Some((node.as_str(), action))
     }
 
     pub(super) fn into_state(self) -> State {
