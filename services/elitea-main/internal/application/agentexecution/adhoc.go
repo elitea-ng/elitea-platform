@@ -217,7 +217,12 @@ func currentAdhocSnapshot(
 	if err := decodeCurrentJSON(target.Tools, &tools); err != nil {
 		return nil, err
 	}
+	var meta map[string]any
+	if err := decodeCurrentJSON(target.ConversationMeta, &meta); err != nil {
+		return nil, err
+	}
 	encoded, err := json.Marshal(map[string]any{
+		"meta":         meta,
 		"llm_settings": base,
 		"tools":        tools,
 	})

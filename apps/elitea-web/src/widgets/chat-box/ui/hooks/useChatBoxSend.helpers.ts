@@ -180,3 +180,16 @@ export function adhocParticipants(input: {
     { entity_name: 'dummy', entity_meta: { name: input.modelName }, entity_settings: { llm_settings: llmSettings } },
   ];
 }
+
+export function creationMeta(settings: Readonly<Record<string, unknown>> | undefined, internalTools: readonly string[] | undefined): Record<string, unknown> {
+  const stepsLimit = executionStepsLimit(settings);
+  return {
+    ...(stepsLimit !== undefined ? { steps_limit: stepsLimit } : {}),
+    ...(internalTools !== undefined ? { internal_tools: internalTools } : {}),
+  };
+}
+
+export async function internalToolsSaveFailure(getTools: (() => Promise<readonly string[]>) | undefined): Promise<{ readonly started: false; readonly reason: 'rejected'; readonly message: string } | undefined> {
+  try { await getTools?.(); return undefined; }
+  catch { return { started: false, reason: 'rejected', message: 'Internal tools configuration could not be saved. Select the tools again and retry.' }; }
+}

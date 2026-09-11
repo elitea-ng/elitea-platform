@@ -635,6 +635,7 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 			CurrentApplicationVersionFreezeRequest{
 				ProjectID: projectID, ActorUserID: actorUserID,
 				VersionDetails: resolved.VersionDetails,
+				InternalTools:  resolved.InternalTools,
 			},
 		)
 		if err != nil {

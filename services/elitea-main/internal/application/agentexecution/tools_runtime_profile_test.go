@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -195,16 +196,8 @@ func TestFreezeLeavesAbsentAgentTypeAlone(t *testing.T) {
 	}
 }
 
-// TestFreezeDropsInternalMCPFromVersionMeta covers the agents that already
-// exist. The create-agent form seeded `internal_mcp` into every new version
-// until it was changed, so a project can hold any number of saved agents
-// carrying it — and the runtime's internal-tool catalogue admits `ask_user`
-// alone, reading the version's list as well as the conversation's. Dropping the
-// name here is what lets those agents run without rewriting stored data.
-//
-// The admission gate is the other half: `agent_chat.sql` had to stop refusing
-// the version outright, or the turn never reached this freeze at all.
-func TestFreezeDropsInternalMCPFromVersionMeta(t *testing.T) {
+// Builder flags become frozen MCP references before they leave the runtime list.
+func TestFreezeConvertsInternalMCPFromVersionMeta(t *testing.T) {
 	tests := []struct {
 		name     string
 		authored string
@@ -223,6 +216,9 @@ func TestFreezeDropsInternalMCPFromVersionMeta(t *testing.T) {
 				"tools":[]
 			}`)
 
+			if strings.Contains(test.authored, "internal_mcp") && len(version["tools"].([]any)) == 0 {
+				t.Fatal("selected internal MCP produced no runtime tool references")
+			}
 			meta, ok := version["meta"].(map[string]any)
 			if !ok {
 				t.Fatalf("meta is %T, want an object", version["meta"])
@@ -283,7 +279,7 @@ func TestCurrentRuntimeInternalToolsForwardsThePlatformCatalogue(t *testing.T) {
 			raw:  `["ask_user","attachments","data_analysis","image_generation","internal_mcp","lazy_tools_mode","planner","pyodide","swarm"]`,
 			want: `["ask_user","attachments","data_analysis","image_generation","lazy_tools_mode","planner","pyodide","swarm"]`,
 		},
-		{name: "internal_mcp alone forwards nothing", raw: `["internal_mcp"]`, want: `[]`},
+		{name: "internal_mcp flag is consumed after tool projection", raw: `["internal_mcp"]`, want: `[]`},
 		{name: "duplicates collapse", raw: `["pyodide","pyodide","ask_user"]`, want: `["pyodide","ask_user"]`},
 		{name: "empty stays empty", raw: `[]`, want: `[]`},
 		{name: "off the catalogue is refused", raw: `["not_a_platform_tool"]`, wantErr: true},

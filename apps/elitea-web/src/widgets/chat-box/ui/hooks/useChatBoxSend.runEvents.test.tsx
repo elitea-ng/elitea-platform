@@ -24,14 +24,14 @@ import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, render, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { resetConfigForTests } from '@/shared/config/get-config';
 import { installTestEventSource, type TestEventSourceRegistry } from '@/shared/api/sse/testing';
 import { server } from '@/test/setup';
 
-import { useChatBoxSend, type UseChatBoxSendResult } from './useChatBoxSend';
+import { useChatBoxSend, type UseChatBoxSendResult, type UseChatBoxSendParams } from './useChatBoxSend';
 
 const BASE = '/api/v2';
 const EVENTS_URL = '/api/v2/executions/7/exec-1/events';
@@ -48,7 +48,7 @@ interface Harness {
   readonly Probe: () => null;
 }
 
-function harness(): Harness {
+function harness(overrides: Partial<UseChatBoxSendParams> = {}): Harness {
   const api: { current: UseChatBoxSendResult | undefined } = { current: undefined };
   const agentEvents: { readonly type?: string }[] = [];
 
@@ -66,6 +66,7 @@ function harness(): Harness {
       activeParticipant: PIPELINE_PARTICIPANT,
       participants: [PIPELINE_PARTICIPANT],
       onAgentEvent: (frame) => agentEvents.push(frame),
+      ...overrides,
     });
     return null;
   }
@@ -205,5 +206,44 @@ describe('useChatBoxSend — the flow editor’s run-event feed', () => {
     expect(agentEvents.map((frame) => frame.type)).toEqual(
       expect.arrayContaining(['agent_start', 'agent_llm_start', 'agent_llm_end', 'pipeline_finish']),
     );
+  });
+});
+
+
+describe('internal tools persistence before chat execution', () => {
+  it('awaits selection persistence before posting and never sends an internal-tools override', async () => {
+    let release = () => undefined as void;
+    const saved = new Promise<void>((resolve) => { release = resolve; });
+    const posted = vi.fn();
+    server.use(http.post(`${BASE}/elitea_core/messages/prompt_lib/7/${CONVERSATION_UUID}`, async ({ request }) => {
+      posted(await request.json());
+      return HttpResponse.json({ task_id: 'exec-1', events_url: EVENTS_URL });
+    }));
+    const { api, Probe } = harness({ getInternalToolsForSend: async () => { await saved; return ['elitea']; } });
+    render(withQueryClient(<Probe />));
+    const started = api.current?.startStreamedExecution({ conversationUuid: CONVERSATION_UUID, payload: { question: 'save skill', question_id: 'q-1', participant_id: 42 } });
+    await act(async () => { await Promise.resolve(); });
+    expect(posted).not.toHaveBeenCalled();
+    await act(async () => { release(); await started; });
+    expect(posted).toHaveBeenCalledOnce();
+    expect(posted.mock.calls[0]?.[0]).not.toHaveProperty('internal_tools');
+  });
+
+  it('fails explicitly without execution or socket fallback when selection persistence fails', async () => {
+    const { api, Probe } = harness({ getInternalToolsForSend: () => Promise.reject(new Error('save failed')) });
+    render(withQueryClient(<Probe />));
+    await expect(api.current?.startStreamedExecution({ conversationUuid: CONVERSATION_UUID, payload: { question: 'save skill' } })).resolves.toMatchObject({ started: false, reason: 'rejected' });
+    expect(registry.getOpen()).toHaveLength(0);
+  });
+
+  it('seeds draft tools together with step limit in the conversation creation request', async () => {
+    const createConversation = vi.fn().mockResolvedValue({ id: 17, uuid: CONVERSATION_UUID });
+    const { api, Probe } = harness({
+      getInternalToolsForSend: () => Promise.resolve(['elitea']), llmSettings: { steps_limit: 35 },
+      deps: { createConversation, uploadAttachments: () => Promise.resolve({ success: true, uploaded: [] }) },
+    });
+    render(withQueryClient(<Probe />));
+    await act(async () => { await api.current?.createConversationForSend('save a skill'); });
+    expect(createConversation).toHaveBeenCalledWith({ name: 'save a skill', isPrivate: true, meta: { steps_limit: 35, internal_tools: ['elitea'] } });
   });
 });

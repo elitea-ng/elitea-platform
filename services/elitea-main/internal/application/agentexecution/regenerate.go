@@ -235,6 +235,7 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 			CurrentApplicationVersionFreezeRequest{
 				ProjectID: projectID32, ActorUserID: actorUserID32,
 				VersionDetails: resolved.VersionDetails,
+				InternalTools:  resolved.InternalTools,
 			},
 		)
 		if err != nil {

@@ -179,6 +179,13 @@ const ChatBoxInner = memo(function ChatBox({
   const { mutateAsync: deleteAllMessagesMutateAsync } = conversationApi.useDeleteAllMessages();
   const { mutateAsync: stopChatTaskMutateAsync } = conversationApi.useStopTask();
 
+  const { internalToolsButtonTools, handleInternalToolChange, isUpdatingInternalToolsConfig, getInternalToolsForSend } = useChatBoxInternalTools({
+    conversationId,
+    conversationMeta,
+    projectId,
+    isAgentsPage,
+  });
+
   // Everything one send needs: the SSE transport (issue #93) plus the
   // create-conversation-first and upload-attachments-first adapters.
   // `startStreamedExecution` reports whether the transport took the run, so
@@ -187,7 +194,7 @@ const ChatBoxInner = memo(function ChatBox({
     deps: { createConversation: lifecycle.createConversation, uploadAttachments: data.attachments.upload.uploadAttachments },
     setChatHistory: data.setChatHistory, projectId, projectIdString, isAgentsPage, conversationUuid,
     activeParticipant, participants: conversationParticipants, userName, userAvatar,
-    llmSettings, model: data.selectedModel, userId, onAgentEvent,
+    llmSettings, model: data.selectedModel, userId, onAgentEvent, getInternalToolsForSend,
   });
   // After `useChatBoxSend`: a "+" pick on a chat with no conversation has to create one first, and it reuses the adapter the first send would have used, so an eagerly created conversation is seeded exactly like a send-created one.
   const entityParticipantActions = useAddEntityParticipant({ projectId, conversationId, participants: normalisedParticipants, onChangeParticipant, createConversation: () => createConversationForSend(''), ...(onConversationCreated ? { onConversationCreated } : {}) });
@@ -242,12 +249,6 @@ const ChatBoxInner = memo(function ChatBox({
     setSelectedModel: data.setSelectedModel,
   });
 
-  const { internalToolsButtonTools, handleInternalToolChange, isUpdatingInternalToolsConfig } = useChatBoxInternalTools({
-    conversationId,
-    conversationMeta,
-    projectId,
-    isAgentsPage,
-  });
 
   // Version selection (real fetch + persist) + auto-recovery
   const { handleSelectVersion } = useChatBoxVersioning({

@@ -146,7 +146,7 @@ func (source *currentAgentPrebuiltMCP) ResolveCurrentAgentPrebuiltMCP(
 		return nil, false, nil
 	}
 
-	entry, err := source.store.Lookup(ctx, lookup)
+	entry, err := source.lookupRuntimePrebuilt(ctx, lookup)
 	if errors.Is(err, mcpregistry.ErrPrebuiltNotFound) || (err == nil && !entry.Enabled) {
 		return nil, false, nil
 	}
@@ -301,3 +301,15 @@ func selectPrebuiltSettings(
 
 var _ CurrentActorVisibleToolkitSchemaSource = (*currentAgentPrebuiltMCP)(nil)
 var _ agentexecutionapp.CurrentAgentToolkitSettingsResolver = currentAgentToolkitSettingsResolver{}
+
+func (source *currentAgentPrebuiltMCP) lookupRuntimePrebuilt(ctx context.Context, toolkitType string) (mcpregistry.PrebuiltServer, error) {
+	if builder, ok := mcpregistry.InternalBuilderForType(toolkitType); ok {
+		if source.internalOrigin == "" || source.actorTokens == nil {
+			return mcpregistry.PrebuiltServer{}, errors.New("internal MCP runtime authority is unavailable")
+		}
+		return mcpregistry.PrebuiltServer{Key: toolkitType, DisplayName: builder.Name, Enabled: true,
+			ServerURL: source.internalOrigin + "/app/{project_id}/mcp/" + builder.Category,
+			Headers:   map[string]string{"Authorization": "Bearer {personal_token}"}, TimeoutSeconds: 300}, nil
+	}
+	return source.store.Lookup(ctx, toolkitType)
+}

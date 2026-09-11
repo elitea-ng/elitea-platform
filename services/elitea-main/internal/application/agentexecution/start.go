@@ -198,6 +198,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 			ProjectID:      int32(request.ProjectID),
 			ActorUserID:    int32(request.ActorUserID),
 			VersionDetails: target.VersionDetails,
+			InternalTools:  target.InternalTools,
 		},
 	)
 	if err != nil {
@@ -436,7 +437,7 @@ func currentRuntimeInternalTools(raw json.RawMessage) ([]byte, error) {
 	seen := make(map[string]bool, len(configured))
 	for _, name := range configured {
 		switch {
-		case name == "internal_mcp":
+		case currentBuilderFlag(name):
 			// Internal MCP is materialized through the frozen tools projection.
 		case currentPlatformInternalTools[name]:
 			if !seen[name] {
