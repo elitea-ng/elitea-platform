@@ -38,11 +38,13 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
+  type QueryClient,
   type UseMutationResult,
   type UseQueryResult,
 } from '@tanstack/react-query';
 
 import { eliteaFetch } from '@/shared/api/generated/mutator';
+import { getListToolkitsQueryKey } from '@/shared/api/generated/toolkits/toolkits';
 import { unwrapBody } from '@/shared/api/unwrap';
 
 /** The catalogue is platform-wide; there is no project-scoped view of it. */
@@ -72,6 +74,8 @@ export interface AdminMcpServer {
   readonly client_secret?: string;
   readonly timeout: number;
   readonly headers: Readonly<Record<string, string>>;
+  /** Project-owned fields rendered on each ready-made toolkit form. */
+  readonly config_schema: Readonly<Record<string, unknown>>;
   readonly enabled: boolean;
 }
 
@@ -86,6 +90,21 @@ const adminMcpServerKeys = {
   all: ['admin', 'mcpPrebuiltServers'] as const,
   list: () => ['admin', 'mcpPrebuiltServers', 'list'] as const,
 };
+
+/** All project-scoped toolkit type catalogues share this generated path prefix. */
+const TOOLKIT_TYPE_CATALOGUE_PREFIX = getListToolkitsQueryKey('')[0];
+
+function isToolkitTypeCatalogueQuery(query: { readonly queryKey: readonly unknown[] }): boolean {
+  const first = query.queryKey[0];
+  return typeof first === 'string' && first.startsWith(TOOLKIT_TYPE_CATALOGUE_PREFIX);
+}
+
+async function invalidateCatalogueQueries(queryClient: QueryClient): Promise<void> {
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: adminMcpServerKeys.all }),
+    queryClient.invalidateQueries({ predicate: isToolkitTypeCatalogueQuery }),
+  ]);
+}
 
 /** `GET /admin/mcp_prebuilt_servers/administration`. */
 export function useAdminMcpServers(): UseQueryResult<readonly AdminMcpServer[], Error> {
@@ -113,6 +132,7 @@ export interface AdminMcpServerDraft {
   readonly clientSecret: string | undefined;
   readonly timeout: number;
   readonly headers: Readonly<Record<string, string>>;
+  readonly configSchema: Readonly<Record<string, unknown>>;
   readonly enabled: boolean;
 }
 
@@ -128,6 +148,7 @@ export function useSaveAdminMcpServer(): UseMutationResult<void, Error, AdminMcp
         client_id: draft.clientId,
         timeout: draft.timeout,
         headers: draft.headers,
+        config_schema: draft.configSchema,
         enabled: draft.enabled,
         // Declared explicitly so the server's stdio refusal is a contract this
         // client is on the right side of, rather than a default it relies on.
@@ -144,7 +165,7 @@ export function useSaveAdminMcpServer(): UseMutationResult<void, Error, AdminMcp
         body: JSON.stringify(body),
       });
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: adminMcpServerKeys.all }),
+    onSuccess: () => invalidateCatalogueQueries(queryClient),
   });
 }
 
@@ -155,6 +176,6 @@ export function useDeleteAdminMcpServer(): UseMutationResult<void, Error, string
     mutationFn: async (key: string) => {
       await eliteaFetch<unknown>(serverUrl(key), { method: 'DELETE' });
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: adminMcpServerKeys.all }),
+    onSuccess: () => invalidateCatalogueQueries(queryClient),
   });
 }

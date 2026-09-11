@@ -56,6 +56,11 @@ import type {
   ErrorResponse,
   InternalMcpPatStatus,
   ListToolkitInstancesParams,
+  McpDcrProxyRequest,
+  McpDcrProxyResponse,
+  McpOAuthError,
+  McpOAuthProxyRequest,
+  McpOAuthProxyResponse,
   McpRegisteredServer,
   McpToolCallRequest,
   N400Response,
@@ -76,6 +81,48 @@ import type {
 
 import { eliteaFetch } from ".././mutator";
 
+export type HTTPStatusCode1xx = 100 | 101 | 102 | 103;
+export type HTTPStatusCode2xx = 200 | 201 | 202 | 203 | 204 | 205 | 206 | 207;
+export type HTTPStatusCode3xx = 300 | 301 | 302 | 303 | 304 | 305 | 307 | 308;
+export type HTTPStatusCode4xx =
+  | 400
+  | 401
+  | 402
+  | 403
+  | 404
+  | 405
+  | 406
+  | 407
+  | 408
+  | 409
+  | 410
+  | 411
+  | 412
+  | 413
+  | 414
+  | 415
+  | 416
+  | 417
+  | 418
+  | 419
+  | 420
+  | 421
+  | 422
+  | 423
+  | 424
+  | 426
+  | 428
+  | 429
+  | 431
+  | 451;
+export type HTTPStatusCode5xx = 500 | 501 | 502 | 503 | 504 | 505 | 507 | 511;
+export type HTTPStatusCodes =
+  | HTTPStatusCode1xx
+  | HTTPStatusCode2xx
+  | HTTPStatusCode3xx
+  | HTTPStatusCode4xx
+  | HTTPStatusCode5xx;
+
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
 const withQueryKey = <T extends object, K>(
@@ -95,6 +142,492 @@ const withQueryKey = <T extends object, K>(
   }
   return result;
 };
+
+export type exchangeMcpOAuthGrantResponse200 = {
+  data: McpOAuthProxyResponse;
+  status: 200;
+};
+
+export type exchangeMcpOAuthGrantResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type exchangeMcpOAuthGrantResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type exchangeMcpOAuthGrantResponseDefault = {
+  data: McpOAuthError;
+  status: Exclude<HTTPStatusCodes, 200 | 401 | 403>;
+};
+
+export type exchangeMcpOAuthGrantResponseSuccess =
+  exchangeMcpOAuthGrantResponse200 & {
+    headers: Headers;
+  };
+export type exchangeMcpOAuthGrantResponseError = (
+  | exchangeMcpOAuthGrantResponse401
+  | exchangeMcpOAuthGrantResponse403
+  | exchangeMcpOAuthGrantResponseDefault
+) & {
+  headers: Headers;
+};
+
+export type exchangeMcpOAuthGrantResponse =
+  exchangeMcpOAuthGrantResponseSuccess | exchangeMcpOAuthGrantResponseError;
+
+export const getExchangeMcpOAuthGrantUrl = (projectId: string) => {
+  return `/elitea_core/mcp_oauth_proxy/${projectId}`;
+};
+
+/**
+ * @summary Exchange or refresh a delegated OAuth grant
+ */
+export const exchangeMcpOAuthGrant = async (
+  projectId: string,
+  mcpOAuthProxyRequest: McpOAuthProxyRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<exchangeMcpOAuthGrantResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<exchangeMcpOAuthGrantResponse>(
+    getExchangeMcpOAuthGrantUrl(projectId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(mcpOAuthProxyRequest),
+    },
+  );
+};
+
+export const getExchangeMcpOAuthGrantQueryKey = (
+  projectId: string,
+  mcpOAuthProxyRequest?: McpOAuthProxyRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/mcp_oauth_proxy/${projectId}`,
+    mcpOAuthProxyRequest,
+  ] as const;
+};
+
+export const getExchangeMcpOAuthGrantQueryOptions = <
+  TData = Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>,
+  TError = N401Response | N403Response | McpOAuthError,
+>(
+  projectId: string,
+  mcpOAuthProxyRequest: McpOAuthProxyRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getExchangeMcpOAuthGrantQueryKey(projectId, mcpOAuthProxyRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>
+  > = ({ signal }) =>
+    exchangeMcpOAuthGrant(projectId, mcpOAuthProxyRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ExchangeMcpOAuthGrantQueryResult = NonNullable<
+  Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>
+>;
+export type ExchangeMcpOAuthGrantQueryError =
+  N401Response | N403Response | McpOAuthError;
+
+export function useExchangeMcpOAuthGrant<
+  TData = Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>,
+  TError = N401Response | N403Response | McpOAuthError,
+>(
+  projectId: string,
+  mcpOAuthProxyRequest: McpOAuthProxyRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>,
+          TError,
+          Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useExchangeMcpOAuthGrant<
+  TData = Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>,
+  TError = N401Response | N403Response | McpOAuthError,
+>(
+  projectId: string,
+  mcpOAuthProxyRequest: McpOAuthProxyRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>,
+          TError,
+          Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useExchangeMcpOAuthGrant<
+  TData = Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>,
+  TError = N401Response | N403Response | McpOAuthError,
+>(
+  projectId: string,
+  mcpOAuthProxyRequest: McpOAuthProxyRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Exchange or refresh a delegated OAuth grant
+ */
+
+export function useExchangeMcpOAuthGrant<
+  TData = Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>,
+  TError = N401Response | N403Response | McpOAuthError,
+>(
+  projectId: string,
+  mcpOAuthProxyRequest: McpOAuthProxyRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getExchangeMcpOAuthGrantQueryOptions(
+    projectId,
+    mcpOAuthProxyRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type registerMcpOAuthClientResponse200 = {
+  data: McpDcrProxyResponse;
+  status: 200;
+};
+
+export type registerMcpOAuthClientResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type registerMcpOAuthClientResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type registerMcpOAuthClientResponseDefault = {
+  data: McpOAuthError;
+  status: Exclude<HTTPStatusCodes, 200 | 401 | 403>;
+};
+
+export type registerMcpOAuthClientResponseSuccess =
+  registerMcpOAuthClientResponse200 & {
+    headers: Headers;
+  };
+export type registerMcpOAuthClientResponseError = (
+  | registerMcpOAuthClientResponse401
+  | registerMcpOAuthClientResponse403
+  | registerMcpOAuthClientResponseDefault
+) & {
+  headers: Headers;
+};
+
+export type registerMcpOAuthClientResponse =
+  registerMcpOAuthClientResponseSuccess | registerMcpOAuthClientResponseError;
+
+export const getRegisterMcpOAuthClientUrl = (projectId: string) => {
+  return `/elitea_core/mcp_dcr_proxy/${projectId}`;
+};
+
+/**
+ * @summary Register an OAuth client and retain its secret in Main
+ */
+export const registerMcpOAuthClient = async (
+  projectId: string,
+  mcpDcrProxyRequest: McpDcrProxyRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<registerMcpOAuthClientResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<registerMcpOAuthClientResponse>(
+    getRegisterMcpOAuthClientUrl(projectId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(mcpDcrProxyRequest),
+    },
+  );
+};
+
+export const getRegisterMcpOAuthClientQueryKey = (
+  projectId: string,
+  mcpDcrProxyRequest?: McpDcrProxyRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/mcp_dcr_proxy/${projectId}`,
+    mcpDcrProxyRequest,
+  ] as const;
+};
+
+export const getRegisterMcpOAuthClientQueryOptions = <
+  TData = Awaited<ReturnType<typeof registerMcpOAuthClient>>,
+  TError = N401Response | N403Response | McpOAuthError,
+>(
+  projectId: string,
+  mcpDcrProxyRequest: McpDcrProxyRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof registerMcpOAuthClient>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRegisterMcpOAuthClientQueryKey(projectId, mcpDcrProxyRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof registerMcpOAuthClient>>
+  > = ({ signal }) =>
+    registerMcpOAuthClient(projectId, mcpDcrProxyRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof registerMcpOAuthClient>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RegisterMcpOAuthClientQueryResult = NonNullable<
+  Awaited<ReturnType<typeof registerMcpOAuthClient>>
+>;
+export type RegisterMcpOAuthClientQueryError =
+  N401Response | N403Response | McpOAuthError;
+
+export function useRegisterMcpOAuthClient<
+  TData = Awaited<ReturnType<typeof registerMcpOAuthClient>>,
+  TError = N401Response | N403Response | McpOAuthError,
+>(
+  projectId: string,
+  mcpDcrProxyRequest: McpDcrProxyRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof registerMcpOAuthClient>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof registerMcpOAuthClient>>,
+          TError,
+          Awaited<ReturnType<typeof registerMcpOAuthClient>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRegisterMcpOAuthClient<
+  TData = Awaited<ReturnType<typeof registerMcpOAuthClient>>,
+  TError = N401Response | N403Response | McpOAuthError,
+>(
+  projectId: string,
+  mcpDcrProxyRequest: McpDcrProxyRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof registerMcpOAuthClient>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof registerMcpOAuthClient>>,
+          TError,
+          Awaited<ReturnType<typeof registerMcpOAuthClient>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRegisterMcpOAuthClient<
+  TData = Awaited<ReturnType<typeof registerMcpOAuthClient>>,
+  TError = N401Response | N403Response | McpOAuthError,
+>(
+  projectId: string,
+  mcpDcrProxyRequest: McpDcrProxyRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof registerMcpOAuthClient>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Register an OAuth client and retain its secret in Main
+ */
+
+export function useRegisterMcpOAuthClient<
+  TData = Awaited<ReturnType<typeof registerMcpOAuthClient>>,
+  TError = N401Response | N403Response | McpOAuthError,
+>(
+  projectId: string,
+  mcpDcrProxyRequest: McpDcrProxyRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof registerMcpOAuthClient>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRegisterMcpOAuthClientQueryOptions(
+    projectId,
+    mcpDcrProxyRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
 
 export type getToolkitResponse200 = {
   data: ToolkitInstance;

@@ -60,9 +60,11 @@ import (
 	v2tracing "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tracing"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/artifactbootstrap"
+	notificationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/notifications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcatalogue"
+	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	platformauth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
@@ -234,6 +236,11 @@ type RouterConfig struct {
 	// (ELITEA_CONFIGURATIONS_ENABLED), so a default Helm install still takes the
 	// nil path; see cmd/elitea-main/main.go.
 	ToolkitSettingsValidator v2toolkits.ToolkitSettingsValidator
+	// DelegatedAuthToolkitSettings resolves one actor-visible toolkit through
+	// the same claim-mode configuration and vault graph as worker execution.
+	// Nil keeps caller-supplied and DCR OAuth clients available, but stored
+	// credential fallback fails closed instead of reading raw tenant JSON.
+	DelegatedAuthToolkitSettings v2core.DelegatedAuthToolkitSettingsResolver
 	// ToolkitRegistry enumerates built-in toolkit types and their tools for
 	// `GET /admin/plugin_config_suggestions/administration/{key}`, which is what
 	// populates the guardrail fields' pickers on the admin Configuration page.
@@ -365,6 +372,7 @@ type RouterConfig struct {
 	CurrentConfigurationAvailable http.Handler
 	CurrentConfigurationRead      http.Handler
 	CurrentConfigurationTypes     http.Handler
+	InternalConfigurationTools    *v2configs.CurrentConfigurationToolHandler
 	CurrentConfigurationMutation  http.Handler
 	CurrentIndexStart             http.Handler
 	// DeepWiki is the facade in front of the DeepWiki provider service
@@ -390,13 +398,17 @@ type RouterConfig struct {
 	// what `runtime.enabled` off produces), `tools/call` answers the unchanged
 	// v2mcp.ToolExecutionUnavailableReason and `tools/list` is unaffected.
 	MCPAgentStart v2mcp.AgentStartUseCase
+	// MCPToolkitExecute is the durable direct read-tool seam. Nil keeps toolkit
+	// discovery available and makes calls fail closed with an honest MCP result.
+	MCPToolkitExecute v2mcp.ToolkitExecuteReadUseCase
 	// MCPToolkitRun is the toolkit half of `tools/call` (#616). Nil keeps the
 	// refusal ToolkitExecutionUnavailableReason, which is the honest answer on
 	// a deployment with no worker.
 	MCPToolkitRun v2mcp.ToolkitRunUseCase
 	// ToolkitToolRun runs one toolkit tool synchronously (#340). Nil keeps the
 	// `503 indexer service not available` both test routes have always given.
-	ToolkitToolRun toolkitrun.UseCase
+	ToolkitToolRun   toolkitrun.UseCase
+	ToolkitDiscovery discovery.UseCase
 	// PipelineTriggers serves the two UNATTENDED ways to start a pipeline —
 	// the inbound signed trigger (issue 192) and the cron schedule (issue 193).
 	//
@@ -424,11 +436,15 @@ type RouterConfig struct {
 	CurrentIndexScheduleUpdate http.Handler
 	CurrentIndexScheduleDelete http.Handler
 	CurrentNotifications       http.Handler
-	CurrentNotificationEvents  http.Handler
-	CurrentModelCatalog        http.Handler
-	CurrentModelDefault        http.Handler
-	LLMProxy                   http.Handler
-	LLMProjectResolver         apimw.PersonalProjectResolver
+	// CurrentNotificationStore is the same actor-scoped store behind
+	// CurrentNotifications. Internal MCP receives this exact instance so its
+	// three notification operations cannot drift from the REST/UI projection.
+	CurrentNotificationStore  notificationapp.Store
+	CurrentNotificationEvents http.Handler
+	CurrentModelCatalog       http.Handler
+	CurrentModelDefault       http.Handler
+	LLMProxy                  http.Handler
+	LLMProjectResolver        apimw.PersonalProjectResolver
 	// GatewayProxy is the mTLS streaming reverse proxy to elitea-llm-gateway-svc
 	// (BF0.9c). When non-nil, it is mounted at /llm with Auth+Project middleware
 	// in the production router.
@@ -841,8 +857,20 @@ func mountMCPServerRoutes(
 	pool *pgxpool.Pool,
 	authenticate func(http.Handler) http.Handler,
 	agentStart v2mcp.AgentStartUseCase,
+	toolkitExecute v2mcp.ToolkitExecuteReadUseCase,
+	toolkitHandler *v2toolkits.Handler,
+	configurationsHandler *v2configs.Handler,
+	coreHandler *v2core.Handler,
+	secretsHandler *v2secrets.Handler,
+	notificationStore notificationapp.Store,
+	toolkitArgumentSchemas v2mcp.ToolkitArgumentSchemaSource,
 	toolkitRun v2mcp.ToolkitRunUseCase,
 	personalProjects personalproject.AsyncEnsurer,
+	typedConfigurations *v2configs.CurrentConfigurationToolHandler,
+	draftHandler *v2drafts.Handler,
+	toolkitDiscovery discovery.UseCase,
+	conversationHandler *v2convs.Handler,
+	folderHandler *v2folders.Handler,
 ) {
 	// The resolver ASKS for the personal project it could not find, for the
 	// reason stated at `withPersonalProjects`: an MCP client authenticates
@@ -855,6 +883,16 @@ func mountMCPServerRoutes(
 	handler := v2mcp.NewHandlerWithToolkitRuns(
 		pool, resolver, agentStart, toolkitRun,
 		legacyrbac.NewPostgresResolver(pool),
+		v2mcp.WithInternalChatTools(conversationHandler, folderHandler),
+		v2mcp.WithInternalToolkitHandler(toolkitHandler),
+		v2mcp.WithInternalConfigurationHandler(configurationsHandler, typedConfigurations),
+		v2mcp.WithInternalProjectContextHandler(coreHandler),
+		v2mcp.WithInternalDraftHandler(draftHandler),
+		v2mcp.WithInternalSecretHandler(secretsHandler),
+		v2mcp.WithInternalNotificationStore(notificationStore),
+		v2mcp.WithToolkitArgumentSchemas(toolkitArgumentSchemas),
+		v2mcp.WithToolkitExecuteRead(toolkitExecute),
+		v2mcp.WithToolkitDiscovery(toolkitDiscovery),
 	)
 	r.Group(func(r chi.Router) {
 		r.Use(authenticate)
@@ -864,6 +902,47 @@ func mountMCPServerRoutes(
 		r.Get("/app/{projectID}/mcp/*", handler.Endpoint)
 		r.Post("/app/{projectID}/mcp/*", handler.Endpoint)
 	})
+}
+
+// newToolkitHandler builds the one toolkit handler shared by REST and the
+// fixed internal MCP category. Sharing the instance is the contract: a toolkit
+// created through MCP must cross the same dynamic-schema secret sealing,
+// credential validation and live guardrail checks as one created in the UI.
+func newToolkitHandler(
+	cfg RouterConfig,
+	prebuiltMCPStore *mcpregistry.PrebuiltStore,
+) *v2toolkits.Handler {
+	options := []v2toolkits.Option{
+		v2toolkits.WithArgumentSchemas(cfg.ToolkitArgumentSchemas),
+		v2toolkits.WithDiscovery(cfg.ToolkitDiscovery),
+		v2toolkits.WithSettingsDefinitions(cfg.ToolkitSettingsDefinitions),
+		v2toolkits.WithTypePolicy(toolkitcatalogue.NewStore(cfg.Pool)),
+	}
+	if cfg.ToolkitCatalogue != nil {
+		options = append(options, v2toolkits.WithCatalogue(cfg.ToolkitCatalogue))
+	}
+	if cfg.ToolkitToolRun != nil {
+		options = append(options, v2toolkits.WithToolRuns(cfg.ToolkitToolRun))
+	}
+	if cfg.ToolkitWorkerCapability != nil {
+		options = append(options, v2toolkits.WithWorkerCapability(cfg.ToolkitWorkerCapability))
+	}
+	if cfg.WorkerImplementation != "" {
+		options = append(options, v2toolkits.WithWorkerImplementation(cfg.WorkerImplementation))
+	}
+	if cfg.Pool != nil {
+		options = append(options,
+			v2toolkits.WithDynamicTypeSchemas(prebuiltMCPStore),
+			v2toolkits.WithSecretSealer(configurationSecretSealer(cfg.Pool)),
+		)
+	}
+	if cfg.ToolkitSettingsValidator != nil {
+		options = append(options, v2toolkits.WithSettingsValidator(cfg.ToolkitSettingsValidator))
+	}
+	if guardrailPolicies, err := platformconfig.NewGuardrailPolicyAdapter(cfg.Pool); err == nil {
+		options = append(options, v2toolkits.WithGuardrails(guardrailPolicies))
+	}
+	return v2toolkits.NewHandler(cfg.Pool, options...)
 }
 
 // compressJSONResponses gzips a JSON API response when the caller asks for it.
@@ -1273,11 +1352,63 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		Authenticate: authenticate,
 		Resolver:     artifactResolver,
 	})
+	// Construct these collaborators before either route family is mounted.
+	// The REST toolkit surface, the internal MCP toolkit builder and the MCP
+	// admin/runtime paths must all read the same durable catalogue.
+	prebuiltMCPStore := mcpregistry.NewPrebuiltStore(cfg.Pool)
+	toolkitHandler := newToolkitHandler(cfg, prebuiltMCPStore)
+	// The platform MCP vault and eliteacore handler are constructed here rather
+	// than inside /api/v2 because both REST and the root-mounted internal MCP
+	// server consume them. One instance keeps project-context validation and
+	// prebuilt-MCP catalogue behavior identical on both transports.
+	prebuiltMCPVault := v2secrets.NewHandler(
+		cfg.Pool,
+		v2secrets.WithPlatformDefaultSecretPolicy(cfg.Pool),
+		v2secrets.WithPermissionResolver(permissionResolver),
+	)
+	coreHandler := v2core.NewHandler(
+		cfg.Pool,
+		v2core.WithPermissionResolver(permissionResolver),
+		v2core.WithObjectStore(cfg.ObjectStore),
+		v2core.WithInviteMailer(inviteMailer),
+		v2core.WithPrebuiltMCPCatalogue(prebuiltMCPStore, prebuiltMCPVault),
+		v2core.WithDelegatedAuthToolkitSettingsResolver(cfg.DelegatedAuthToolkitSettings),
+		v2core.WithMCPDCRClients(mcpOAuthClientStore(cfg.Pool)),
+		v2core.WithMCPDelegatedTokens(mcpOAuthTokenStore(cfg.Pool)),
+		v2core.WithCostBudgets(cfg.GatewayStatus != nil),
+		v2core.WithEvents(cfg.DomainEvents),
+	)
 
 	// The MCP server (issue 252). Outside the /api/v2 group for the reasons in
 	// mountMCPServerRoutes.
-	mountMCPServerRoutes(r, cfg.Pool, authenticate, cfg.MCPAgentStart, cfg.MCPToolkitRun,
-		personalProjects)
+	draftHandler := v2drafts.NewHandler(cfg.PredictCompleter,
+		v2drafts.WithAppsRepo(cfg.AppsRepo),
+		v2drafts.WithSkillsRepo(cfg.SkillsRepo),
+		v2drafts.WithSkillVersions(cfg.SkillsRepo),
+		v2drafts.WithPermissions(coreResolver),
+		v2drafts.WithToolkitsRepo(v2toolkits.NewPostgresRepository(cfg.Pool)))
+	var folderHandler *v2folders.Handler
+	if cfg.FoldersRepo != nil {
+		folderHandler = v2folders.NewHandler(cfg.FoldersRepo).WithPool(cfg.Pool)
+	}
+	if cfg.ConvsRepo != nil {
+		models, _ := dbrepos.NewCurrentModelsRepository(cfg.Pool)
+		defaults := chatDefaults{vault: prebuiltMCPVault, models: models}
+		convHandler = v2convs.NewHandler(cfg.ConvsRepo).
+			WithPool(cfg.Pool).
+			WithObjectStore(cfg.ObjectStore).
+			WithAttachmentStore(newAttachmentStore(cfg.Pool)).
+			WithUserContextDefaults(newUserContextDefaults(cfg.Pool)).
+			WithContextManagementGate(defaults).
+			WithReasoningModels(defaults).
+			WithEvents(cfg.DomainEvents)
+	}
+	mountMCPServerRoutes(
+		r, cfg.Pool, authenticate, cfg.MCPAgentStart, cfg.MCPToolkitExecute,
+		toolkitHandler, configurationsHandler, coreHandler, prebuiltMCPVault, cfg.CurrentNotificationStore,
+		cfg.ToolkitArgumentSchemas, cfg.MCPToolkitRun, personalProjects,
+		cfg.InternalConfigurationTools, draftHandler, cfg.ToolkitDiscovery, convHandler, folderHandler,
+	)
 
 	// This group holds the whole JSON API — the `/api/v2` route below is its
 	// only member. Compression sits at the top of it, so every handler in the
@@ -1366,9 +1497,6 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// v2secrets.NewHandler is used as the vault here for the same reason
 			// projectprovisioning uses it: it is the one type in this service
 			// that can open and write a centry vault.
-			prebuiltMCPStore := mcpregistry.NewPrebuiltStore(cfg.Pool)
-			prebuiltMCPVault := v2secrets.NewHandler(cfg.Pool)
-
 			// The TYPED identity provider definitions (shared migration 0095) —
 			// the real surface behind the Configuration page's "Authentication"
 			// section. It shares the vault above rather than opening a second
@@ -1393,25 +1521,6 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				emailResolver = emailsettings.NewResolver(
 					emailsettings.NewStore(cfg.Pool, prebuiltMCPVault), emailsettings.Settings{}, "")
 			}
-
-			coreHandler := v2core.NewHandler(
-				cfg.Pool,
-				v2core.WithPermissionResolver(permissionResolver),
-				v2core.WithObjectStore(cfg.ObjectStore),
-				v2core.WithInviteMailer(inviteMailer),
-				v2core.WithPrebuiltMCPCatalogue(prebuiltMCPStore, prebuiltMCPVault),
-				// `cost_budgets_enabled`, from the one fact this process holds
-				// about whether LLM cost is tracked at all: a gateway address
-				// was configured. cfg.GatewayStatus is built from
-				// LLM_GATEWAY_URL and is left nil when that is empty
-				// (cmd/elitea-main/main.go), so the nil check IS the
-				// "is the gateway composed" question — and it is a nil
-				// INTERFACE check that holds, because that field is documented
-				// never to receive a boxed nil pointer.
-				v2core.WithCostBudgets(cfg.GatewayStatus != nil),
-				v2core.WithEvents(cfg.DomainEvents),
-			)
-
 			// === Auth endpoints ===
 			//
 			// Sign a personal access token with the key that THIS deployment's
@@ -2294,10 +2403,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// the package because the mode is a PATH SEGMENT: one chi route
 			// serves both modes, so route-level middleware here could not
 			// gate one and not the other.
-			r.Mount("/secrets", v2secrets.NewHandler(
-				cfg.Pool,
-				v2secrets.WithPermissionResolver(permissionResolver),
-			).Routes())
+			r.Mount("/secrets", prebuiltMCPVault.Routes())
 
 			// === Notifications ===
 			//
@@ -2573,63 +2679,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				}
 
 				// Toolkits
-				// The guardrails source is constructed here rather than injected
-				// through RouterConfig: it needs only the pool this config
-				// already carries, and internal/platformconfig is a leaf the api
-				// layer already depends on (eliteacore reads its flags). A
-				// deployment with no pool gets no source, and every toolkit
-				// surface behaves as it did before guardrails existed — which is
-				// the only honest answer when there is no store to read a policy
-				// from.
-				toolkitOptions := []v2toolkits.Option{
-					v2toolkits.WithArgumentSchemas(cfg.ToolkitArgumentSchemas),
-					v2toolkits.WithSettingsDefinitions(cfg.ToolkitSettingsDefinitions),
-				}
-				// Guarded for the reason the settings validator below is: an
-				// Option that stored a typed nil would defeat the handler's own
-				// nil check, and the nil check is the whole fallback.
-				if cfg.ToolkitCatalogue != nil {
-					toolkitOptions = append(toolkitOptions,
-						v2toolkits.WithCatalogue(cfg.ToolkitCatalogue))
-				}
-				if cfg.ToolkitToolRun != nil {
-					toolkitOptions = append(toolkitOptions,
-						v2toolkits.WithToolRuns(cfg.ToolkitToolRun))
-				}
-				if cfg.ToolkitWorkerCapability != nil {
-					toolkitOptions = append(toolkitOptions,
-						v2toolkits.WithWorkerCapability(cfg.ToolkitWorkerCapability))
-				}
-				if cfg.WorkerImplementation != "" {
-					toolkitOptions = append(toolkitOptions,
-						v2toolkits.WithWorkerImplementation(cfg.WorkerImplementation))
-				}
-				// Guarded rather than appended unconditionally: an Option that
-				// stored a nil interface would still leave h.settingsValidator
-				// nil, but a caller that later boxes a typed nil pointer here
-				// would not, and the handler's own nil check is the whole
-				// fallback. Keep the nil out of the option list.
-				if cfg.ToolkitSettingsValidator != nil {
-					toolkitOptions = append(toolkitOptions,
-						v2toolkits.WithSettingsValidator(cfg.ToolkitSettingsValidator))
-				}
-				if guardrailPolicies, err := platformconfig.NewGuardrailPolicyAdapter(cfg.Pool); err == nil {
-					toolkitOptions = append(toolkitOptions, v2toolkits.WithGuardrails(guardrailPolicies))
-				}
-				// The SAME store the admin page writes (shared migration 0114).
-				// One store for the decision and for the served catalogue, so
-				// the two cannot disagree about which types a project gets.
-				toolkitOptions = append(toolkitOptions,
-					v2toolkits.WithTypePolicy(toolkitTypePolicyStore))
-				toolkitHandler := v2toolkits.NewHandler(cfg.Pool, toolkitOptions...)
-				// Runtime worker capabilities (#865, #866) — deliberately NOT
-				// project-scoped, the same reasoning agent_categories above
-				// states: which worker image this deployment runs, which
-				// toolkit types it hides and which internal chat tools it
-				// no-ops are deployment-wide facts, not project data. Ungated
-				// by permission for the same reason: the answer is "here is
-				// what this deployment can and cannot do", not project content
-				// a membership check would protect.
+				// toolkitHandler is shared with the fixed internal MCP toolkit
+				// category. It was composed once above the route groups so both
+				// entry points enforce the same schemas, credentials and
+				// guardrails.
 				r.Get("/runtime_capabilities", toolkitHandler.RuntimeCapabilities)
 				// /tool(s)/ and /toolkits/ paths route to toolkitHandler (toolkit instances, not skills).
 				//
@@ -2741,7 +2794,6 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					// endpoint answered 200 with empty folders and empty
 					// date_groups for a project with nine conversations
 					// (#128 defects 1 and 2).
-					folderHandler := v2folders.NewHandler(cfg.FoldersRepo).WithPool(cfg.Pool)
 					requireFolderRead := projectPermission("models.chat.folders.get")
 					requireFolderUpdate := projectPermission("models.chat.folders.update")
 					r.With(requireFolderRead).Get("/folder/prompt_lib/{projectID}", folderHandler.List)
@@ -2944,12 +2996,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					// cfg.ObjectStore are unset, so AddAttachments' JSON-metadata
 					// branch keeps working exactly as before wherever storage isn't
 					// wired (matching newArtifactHandler's own degrade convention).
-					convHandler = v2convs.NewHandler(cfg.ConvsRepo).
-						WithPool(cfg.Pool).
-						WithObjectStore(cfg.ObjectStore).
-						WithAttachmentStore(newAttachmentStore(cfg.Pool)).
-						WithUserContextDefaults(newUserContextDefaults(cfg.Pool)).
-						WithEvents(cfg.DomainEvents)
+
 					requireConversationRead := projectPermission("models.chat.conversation.details")
 					requireMessageDelete := projectPermission("models.chat.messages.delete")
 					requireEntitySettings := projectPermission("models.chat.entity_settings.update")
@@ -3203,10 +3250,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// response), so this composes whichever of cfg.AppsRepo/
 				// cfg.SkillsRepo happen to be set in THIS deployment exactly
 				// as every other optional RouterConfig dependency does.
-				draftHandler := v2drafts.NewHandler(cfg.PredictCompleter,
-					v2drafts.WithAppsRepo(cfg.AppsRepo),
-					v2drafts.WithSkillsRepo(cfg.SkillsRepo),
-					v2drafts.WithToolkitsRepo(v2toolkits.NewPostgresRepository(cfg.Pool)))
+
 				r.With(projectPermission("models.applications.applications.create")).
 					Post("/generate_application_draft/prompt_lib/{projectID}", draftHandler.GenerateApplicationDraft)
 				r.With(projectPermission("models.applications.skills.create")).
@@ -3496,7 +3540,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(requireProjectContextEdit).
 					Delete("/project_icon/prompt_lib/{projectID}/{name}", coreHandler.DeleteProjectIcon)
 				// Registered unconditionally: this is the ONLY registration
-				// source for project-context GET/PUT in the router every real
+				// source for project-context GET/PUT/DELETE in the router every real
 				// deployment reaches (CURRENT_PARITY_EVIDENCE.md,
 				// internal/api/v2/promptcontextreads — "the compatibility
 				// router mounts the chat-config path only... the production
@@ -3517,6 +3561,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Get(strings.TrimPrefix(v2promptcontextreads.CurrentProjectContextPath, "/api/v2/elitea_core"), coreHandler.ProjectContext)
 				r.With(requireProjectContextEdit).
 					Put(strings.TrimPrefix(v2promptcontextreads.CurrentProjectContextPath, "/api/v2/elitea_core"), coreHandler.UpdateProjectContext)
+				r.With(requireProjectContextEdit).
+					Delete(strings.TrimPrefix(v2promptcontextreads.CurrentProjectContextPath, "/api/v2/elitea_core"), coreHandler.DeleteProjectContext)
 
 				// Platform settings — left ungated on purpose, and the reason is
 				// recorded here because a project in the path makes the route
@@ -4178,7 +4224,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// repositories are also composed; otherwise merely adding an unrelated
 	// compatibility repository can silently remove agent execution or SSE.
 	// The broad prototype compatibility handler above already owns the current
-	// project-context GET. Keep that single live registration while adding the
+	// project-context GET/PUT/DELETE. Keep that single live registration while adding the
 	// reviewed routes it does not provide, including chat config and agent SSE.
 	mountReviewedProductionRoutes(r, cfg)
 

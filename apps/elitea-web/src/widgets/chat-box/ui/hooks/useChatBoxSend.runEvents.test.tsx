@@ -24,14 +24,14 @@ import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, render, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { resetConfigForTests } from '@/shared/config/get-config';
 import { installTestEventSource, type TestEventSourceRegistry } from '@/shared/api/sse/testing';
 import { server } from '@/test/setup';
 
-import { useChatBoxSend, type UseChatBoxSendResult } from './useChatBoxSend';
+import { useChatBoxSend, type UseChatBoxSendResult, type UseChatBoxSendParams } from './useChatBoxSend';
 
 const BASE = '/api/v2';
 const EVENTS_URL = '/api/v2/executions/7/exec-1/events';
@@ -48,7 +48,7 @@ interface Harness {
   readonly Probe: () => null;
 }
 
-function harness(): Harness {
+function harness(overrides: Partial<UseChatBoxSendParams> = {}): Harness {
   const api: { current: UseChatBoxSendResult | undefined } = { current: undefined };
   const agentEvents: { readonly type?: string }[] = [];
 
@@ -66,6 +66,7 @@ function harness(): Harness {
       activeParticipant: PIPELINE_PARTICIPANT,
       participants: [PIPELINE_PARTICIPANT],
       onAgentEvent: (frame) => agentEvents.push(frame),
+      ...overrides,
     });
     return null;
   }
@@ -97,6 +98,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  window.sessionStorage.clear();
   registry.restore();
   delete globals['elitea_ui_config'];
   resetConfigForTests();
@@ -104,6 +106,52 @@ afterEach(() => {
 });
 
 describe('useChatBoxSend — the flow editor’s run-event feed', () => {
+  it('awaits session refresh and carries access tokens on start and regeneration', async () => {
+    const tokenKey = 'credential:https://issuer.example';
+    window.sessionStorage.setItem('el.mcp.tokens', JSON.stringify({
+      [tokenKey]: {
+        access_token: 'old-token', refresh_token: 'refresh-token', issued_at: Date.now() - 10000,
+        expires_at: Date.now() - 1, project_id: '7', toolkit_id: '27', client_id: 'client',
+        token_endpoint: 'https://issuer.example/token', session_id: 'session',
+      },
+    }));
+    const order: string[] = [];
+    const bodies: Record<string, unknown>[] = [];
+    server.use(
+      http.post(`${BASE}/elitea_core/mcp_oauth_proxy/7`, () => {
+        order.push('refresh');
+        return HttpResponse.json({ access_token: 'fresh-token', refresh_token: 'rotated-token', expires_in: 3600 });
+      }),
+      http.post(`${BASE}/elitea_core/messages/prompt_lib/7/${CONVERSATION_UUID}`, async ({ request }) => {
+        order.push('start');
+        bodies.push(await request.json() as Record<string, unknown>);
+        return HttpResponse.json({ task_id: 'exec-1', events_url: EVENTS_URL, response_message_id: 'resp-1' });
+      }),
+      http.post(`${BASE}/elitea_core/regenerate/prompt_lib/7/resp-1`, async ({ request }) => {
+        order.push('regenerate');
+        bodies.push(await request.json() as Record<string, unknown>);
+        return HttpResponse.json({ task_id: 'exec-2', events_url: '/api/v2/executions/7/exec-2/events', response_message_id: 'resp-1' });
+      }),
+    );
+    const { api, Probe } = harness();
+    render(withQueryClient(<Probe />));
+    await act(async () => {
+      await api.current?.startStreamedExecution({
+        conversationUuid: CONVERSATION_UUID, payload: { question: 'echo marker', question_id: 'q-1', participant_id: 42 },
+      });
+    });
+    await act(async () => {
+      await api.current?.regenerateStreamedExecution({ messageId: 'resp-1', questionId: 'q-1', question: 'echo marker' });
+    });
+    expect(order).toEqual(['refresh', 'start', 'regenerate']);
+    const expected = { [tokenKey]: { access_token: 'fresh-token', session_id: 'session' } };
+    expect(bodies[0]?.['mcp_tokens']).toEqual(expected);
+    const regenerationPayload = bodies[1]?.['payload'] as Record<string, unknown> | undefined;
+    expect(regenerationPayload?.['mcp_tokens']).toEqual(expected);
+    expect(JSON.stringify(bodies)).not.toContain('refresh-token');
+    expect(JSON.stringify(bodies)).not.toContain('rotated-token');
+  });
+
   it('forwards a graph frame to onAgentEvent and withholds a per-token chunk', async () => {
     const { api, agentEvents, Probe } = harness();
     render(withQueryClient(<Probe />));
@@ -158,5 +206,44 @@ describe('useChatBoxSend — the flow editor’s run-event feed', () => {
     expect(agentEvents.map((frame) => frame.type)).toEqual(
       expect.arrayContaining(['agent_start', 'agent_llm_start', 'agent_llm_end', 'pipeline_finish']),
     );
+  });
+});
+
+
+describe('internal tools persistence before chat execution', () => {
+  it('awaits selection persistence before posting and never sends an internal-tools override', async () => {
+    let release = () => undefined as void;
+    const saved = new Promise<void>((resolve) => { release = resolve; });
+    const posted = vi.fn();
+    server.use(http.post(`${BASE}/elitea_core/messages/prompt_lib/7/${CONVERSATION_UUID}`, async ({ request }) => {
+      posted(await request.json());
+      return HttpResponse.json({ task_id: 'exec-1', events_url: EVENTS_URL });
+    }));
+    const { api, Probe } = harness({ getInternalToolsForSend: async () => { await saved; return ['elitea']; } });
+    render(withQueryClient(<Probe />));
+    const started = api.current?.startStreamedExecution({ conversationUuid: CONVERSATION_UUID, payload: { question: 'save skill', question_id: 'q-1', participant_id: 42 } });
+    await act(async () => { await Promise.resolve(); });
+    expect(posted).not.toHaveBeenCalled();
+    await act(async () => { release(); await started; });
+    expect(posted).toHaveBeenCalledOnce();
+    expect(posted.mock.calls[0]?.[0]).not.toHaveProperty('internal_tools');
+  });
+
+  it('fails explicitly without execution or socket fallback when selection persistence fails', async () => {
+    const { api, Probe } = harness({ getInternalToolsForSend: () => Promise.reject(new Error('save failed')) });
+    render(withQueryClient(<Probe />));
+    await expect(api.current?.startStreamedExecution({ conversationUuid: CONVERSATION_UUID, payload: { question: 'save skill' } })).resolves.toMatchObject({ started: false, reason: 'rejected' });
+    expect(registry.getOpen()).toHaveLength(0);
+  });
+
+  it('seeds draft tools together with step limit in the conversation creation request', async () => {
+    const createConversation = vi.fn().mockResolvedValue({ id: 17, uuid: CONVERSATION_UUID });
+    const { api, Probe } = harness({
+      getInternalToolsForSend: () => Promise.resolve(['elitea']), llmSettings: { steps_limit: 35 },
+      deps: { createConversation, uploadAttachments: () => Promise.resolve({ success: true, uploaded: [] }) },
+    });
+    render(withQueryClient(<Probe />));
+    await act(async () => { await api.current?.createConversationForSend('save a skill'); });
+    expect(createConversation).toHaveBeenCalledWith({ name: 'save a skill', isPrivate: true, meta: { steps_limit: 35, internal_tools: ['elitea'] } });
   });
 });

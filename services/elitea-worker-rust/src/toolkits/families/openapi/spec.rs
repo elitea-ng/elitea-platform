@@ -55,7 +55,7 @@ impl fmt::Display for OpenApiSpecError {
                 "the inline OpenAPI specification exceeds its approved limit"
             }
             OpenApiSpecErrorCode::UnsupportedSource => {
-                "remote OpenAPI specification loading requires a sealed egress grant"
+                "resolve the OpenAPI specification URL before parsing"
             }
         })
     }
@@ -287,7 +287,7 @@ pub(crate) fn parse_operations(
     })
 }
 
-fn parse_source(source: &Value) -> Result<Value, OpenApiSpecError> {
+pub(super) fn parse_source(source: &Value) -> Result<Value, OpenApiSpecError> {
     match source {
         Value::Object(_) => Ok(source.clone()),
         Value::String(raw) => {
@@ -366,7 +366,12 @@ fn parse_base_url(
     }
     let variables = server.get("variables").and_then(Value::as_object);
     let mut expanded = template.to_owned();
+    let mut substitutions = 0_u16;
     while let Some(start) = expanded.find('{') {
+        substitutions += 1;
+        if substitutions > 128 {
+            return Err(resource_exhausted());
+        }
         let end = expanded[start + 1..]
             .find('}')
             .map(|offset| start + 1 + offset)

@@ -107,11 +107,16 @@ export function useMcpAuthModal(options: UseMcpAuthModalOptions = {}): UseMcpAut
     const oauthEndpoint = metadata.authServers?.[0];
     if (configUuid && oauthEndpoint) {
       setRuntimeTokenStorageKey(`${configUuid}:${oauthEndpoint}`);
+    } else if (derived.toolkitType === 'mcp' || derived.isPrebuildMcp) {
+      // MCP grants belong to the resource, not to every resource at an issuer.
+      setRuntimeTokenStorageKey('');
     } else if (oauthEndpoint && oauthEndpoint !== serverUrl) {
       setRuntimeTokenStorageKey(oauthEndpoint);
+    } else {
+      setRuntimeTokenStorageKey('');
     }
     setShowModal(true);
-  }, []);
+  }, [derived]);
 
   const handleCloseModal = useCallback(
     (success?: boolean) => {
@@ -149,7 +154,7 @@ export function useMcpAuthModal(options: UseMcpAuthModalOptions = {}): UseMcpAut
       formScopes: derived.scopes,
       projectId,
       toolkitId: derived.toolkitId,
-      toolkitType: derived.isPrebuildMcp ? derived.toolkitType : undefined,
+      toolkitType: derived.isPrebuildMcp || derived.toolkitType === 'mcp' ? derived.toolkitType : undefined,
       onClose: handleCloseModal,
       onCancel: handleCancelModal,
     }),

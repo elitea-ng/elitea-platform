@@ -232,6 +232,13 @@ function adaptRow(row: (typeof RELOADED_TRANSCRIPT_ITEMS)[number]): MessageGroup
 describe('convertMessagesToChatHistory over a reloaded transcript', () => {
   const history = convertMessagesToChatHistory(RELOADED_TRANSCRIPT_ITEMS.map(adaptRow), []);
 
+  it('retains scoped persisted trace references for lazy detail loading', () => {
+    const reference = { projectId: '2', conversationId: '543', messageGroupId: 5820, steps: [{ id: 7279 }], failed: false };
+    const rows = RELOADED_TRANSCRIPT_ITEMS.map(adaptRow).map(row => ({ ...row, persisted_trace: reference }));
+    const answer = convertMessagesToChatHistory(rows, []).find(message => message.role === 'assistant');
+    expect(answer?.persistedTrace).toEqual(reference);
+  });
+
   it('does not caption the reader\'s own question as a departed user', () => {
     const question = history.find((message) => message.role === 'user');
     expect(question?.content).toBe('Reply with exactly: ELITEA_OK');

@@ -38,10 +38,27 @@ func TestPostgresNestedApplicationVersionProjectsTheSameDocumentAsTheTurn(t *tes
 	// `tools` array would match between the two projections no matter how far
 	// their tool clauses had drifted.
 	if _, err := tx.Exec(t.Context(), `
+INSERT INTO applications (id, name, description, owner_id) VALUES
+    (32, 'Full Name Resolver', 'Resolve a full name', 11);
+INSERT INTO application_versions (
+    id, application_id, name, status, author_id, uuid, llm_settings, instructions,
+    conversation_starters, welcome_message, agent_type, meta, pipeline_settings
+) VALUES (
+    42, 32, 'without_nesting', 'draft', 11,
+    '80000000-0000-4000-8000-000000000032', '{}'::jsonb, 'Resolve names',
+    '[]'::json, '', 'agent', '{}'::jsonb, '{}'::jsonb
+);
+INSERT INTO elitea_tools (
+    id, type, name, description, settings, author_id, meta
+) VALUES (
+    52, 'application', 'without_nesting', NULL,
+    '{"application_id":32,"application_version_id":42}'::jsonb, 11, '{}'::jsonb
+);
 INSERT INTO entity_tool_mapping (
     id, tool_id, entity_id, entity_version_id, entity_type, selected_tools
 ) VALUES
-    (91, 51, 31, 41, 'agent', '["list_products"]'::jsonb);`); err != nil {
+    (91, 51, 31, 41, 'agent', '["list_products"]'::jsonb),
+    (92, 52, 31, 41, 'agent', NULL);`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -80,6 +97,8 @@ INSERT INTO entity_tool_mapping (
 	// have to be present for the equality below to be evidence of anything.
 	for _, marker := range []string{
 		`"toolkit_name": "product"`,
+		`"toolkit_name": "Full Name Resolver"`,
+		`"name": "Full Name Resolver"`,
 		`"selected_tools": ["list_products"]`,
 		`"available_tools": ["list_products"]`,
 		`"name": "release-proof"`,
@@ -91,6 +110,12 @@ INSERT INTO entity_tool_mapping (
 				nested.ApplicationVersionDetailsJson,
 			)
 		}
+	}
+	if strings.Contains(nested.ApplicationVersionDetailsJson, `"toolkit_name": "without_nesting"`) {
+		t.Fatalf(
+			"nested projection exposed the stored version label as the application alias: %s",
+			nested.ApplicationVersionDetailsJson,
+		)
 	}
 	if nested.ApplicationVersionDetailsJson != turn.ApplicationVersionDetailsJson {
 		t.Fatalf(

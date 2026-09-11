@@ -14,11 +14,13 @@ class ToolkitCallToolStatusV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapper)
     TOOLKIT_CALL_TOOL_STATUS_V1_TOOL_ERROR: _ClassVar[ToolkitCallToolStatusV1]
     TOOLKIT_CALL_TOOL_STATUS_V1_UNSUPPORTED_TOOLKIT: _ClassVar[ToolkitCallToolStatusV1]
     TOOLKIT_CALL_TOOL_STATUS_V1_UNKNOWN_TOOL: _ClassVar[ToolkitCallToolStatusV1]
+    TOOLKIT_CALL_TOOL_STATUS_V1_AUTHORIZATION_REQUIRED: _ClassVar[ToolkitCallToolStatusV1]
 TOOLKIT_CALL_TOOL_STATUS_V1_UNSPECIFIED: ToolkitCallToolStatusV1
 TOOLKIT_CALL_TOOL_STATUS_V1_OK: ToolkitCallToolStatusV1
 TOOLKIT_CALL_TOOL_STATUS_V1_TOOL_ERROR: ToolkitCallToolStatusV1
 TOOLKIT_CALL_TOOL_STATUS_V1_UNSUPPORTED_TOOLKIT: ToolkitCallToolStatusV1
 TOOLKIT_CALL_TOOL_STATUS_V1_UNKNOWN_TOOL: ToolkitCallToolStatusV1
+TOOLKIT_CALL_TOOL_STATUS_V1_AUTHORIZATION_REQUIRED: ToolkitCallToolStatusV1
 
 class ToolkitAvailableToolsCommandV1(_message.Message):
     __slots__ = ("toolkit_type", "settings_entry_id")
@@ -62,6 +64,52 @@ class ToolkitAvailableToolsResultV1(_message.Message):
     result_artifact: ToolkitAvailableToolsArtifactReferenceV1
     def __init__(self, toolkit_type: _Optional[str] = ..., input_bundle_id: _Optional[str] = ..., input_bundle_digest: _Optional[_Union[_common_pb2.DigestV1, _Mapping]] = ..., settings_entry_id: _Optional[str] = ..., settings_entry_version: _Optional[str] = ..., settings_content_digest: _Optional[_Union[_common_pb2.DigestV1, _Mapping]] = ..., result_artifact: _Optional[_Union[ToolkitAvailableToolsArtifactReferenceV1, _Mapping]] = ...) -> None: ...
 
+class ToolkitExecuteReadCommandV1(_message.Message):
+    __slots__ = ("request_entry_id",)
+    REQUEST_ENTRY_ID_FIELD_NUMBER: _ClassVar[int]
+    request_entry_id: str
+    def __init__(self, request_entry_id: _Optional[str] = ...) -> None: ...
+
+class ToolkitExecuteReadInputV1(_message.Message):
+    __slots__ = ("schema_revision", "toolkit", "toolkit_type", "toolkit_name", "tool_name", "arguments", "toolkit_guardrails")
+    SCHEMA_REVISION_FIELD_NUMBER: _ClassVar[int]
+    TOOLKIT_FIELD_NUMBER: _ClassVar[int]
+    TOOLKIT_TYPE_FIELD_NUMBER: _ClassVar[int]
+    TOOLKIT_NAME_FIELD_NUMBER: _ClassVar[int]
+    TOOL_NAME_FIELD_NUMBER: _ClassVar[int]
+    ARGUMENTS_FIELD_NUMBER: _ClassVar[int]
+    TOOLKIT_GUARDRAILS_FIELD_NUMBER: _ClassVar[int]
+    schema_revision: str
+    toolkit: bytes
+    toolkit_type: str
+    toolkit_name: str
+    tool_name: str
+    arguments: bytes
+    toolkit_guardrails: bytes
+    def __init__(self, schema_revision: _Optional[str] = ..., toolkit: _Optional[bytes] = ..., toolkit_type: _Optional[str] = ..., toolkit_name: _Optional[str] = ..., tool_name: _Optional[str] = ..., arguments: _Optional[bytes] = ..., toolkit_guardrails: _Optional[bytes] = ...) -> None: ...
+
+class ToolkitExecuteReadResultV1(_message.Message):
+    __slots__ = ("input_bundle_id", "input_bundle_digest", "request_entry_id", "request_entry_version", "request_content_digest", "result_json", "toolkit_type", "toolkit_name", "tool_name")
+    INPUT_BUNDLE_ID_FIELD_NUMBER: _ClassVar[int]
+    INPUT_BUNDLE_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_ENTRY_ID_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_ENTRY_VERSION_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_CONTENT_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    RESULT_JSON_FIELD_NUMBER: _ClassVar[int]
+    TOOLKIT_TYPE_FIELD_NUMBER: _ClassVar[int]
+    TOOLKIT_NAME_FIELD_NUMBER: _ClassVar[int]
+    TOOL_NAME_FIELD_NUMBER: _ClassVar[int]
+    input_bundle_id: str
+    input_bundle_digest: _common_pb2.DigestV1
+    request_entry_id: str
+    request_entry_version: str
+    request_content_digest: _common_pb2.DigestV1
+    result_json: bytes
+    toolkit_type: str
+    toolkit_name: str
+    tool_name: str
+    def __init__(self, input_bundle_id: _Optional[str] = ..., input_bundle_digest: _Optional[_Union[_common_pb2.DigestV1, _Mapping]] = ..., request_entry_id: _Optional[str] = ..., request_entry_version: _Optional[str] = ..., request_content_digest: _Optional[_Union[_common_pb2.DigestV1, _Mapping]] = ..., result_json: _Optional[bytes] = ..., toolkit_type: _Optional[str] = ..., toolkit_name: _Optional[str] = ..., tool_name: _Optional[str] = ...) -> None: ...
+
 class ToolkitCallToolCommandV1(_message.Message):
     __slots__ = ("toolkit_type", "settings_entry_id", "tool_name", "arguments_entry_id", "toolkit_id", "toolkit_version")
     TOOLKIT_TYPE_FIELD_NUMBER: _ClassVar[int]
@@ -95,16 +143,18 @@ class ToolkitCallToolArtifactReferenceV1(_message.Message):
     def __init__(self, artifact_id: _Optional[str] = ..., immutable_version: _Optional[str] = ..., media_type: _Optional[str] = ..., byte_length: _Optional[int] = ..., digest: _Optional[_Union[_common_pb2.DigestV1, _Mapping]] = ..., classification: _Optional[str] = ...) -> None: ...
 
 class ToolkitCallToolSummaryV1(_message.Message):
-    __slots__ = ("status", "result_json", "truncated", "error_message")
+    __slots__ = ("status", "result_json", "truncated", "error_message", "authorization_required")
     STATUS_FIELD_NUMBER: _ClassVar[int]
     RESULT_JSON_FIELD_NUMBER: _ClassVar[int]
     TRUNCATED_FIELD_NUMBER: _ClassVar[int]
     ERROR_MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    AUTHORIZATION_REQUIRED_FIELD_NUMBER: _ClassVar[int]
     status: ToolkitCallToolStatusV1
     result_json: str
     truncated: bool
     error_message: str
-    def __init__(self, status: _Optional[_Union[ToolkitCallToolStatusV1, str]] = ..., result_json: _Optional[str] = ..., truncated: bool = ..., error_message: _Optional[str] = ...) -> None: ...
+    authorization_required: ToolkitAuthorizationRequiredV1
+    def __init__(self, status: _Optional[_Union[ToolkitCallToolStatusV1, str]] = ..., result_json: _Optional[str] = ..., truncated: bool = ..., error_message: _Optional[str] = ..., authorization_required: _Optional[_Union[ToolkitAuthorizationRequiredV1, _Mapping]] = ...) -> None: ...
 
 class ToolkitCallToolResultV1(_message.Message):
     __slots__ = ("toolkit_type", "tool_name", "input_bundle_id", "input_bundle_digest", "settings_entry_id", "settings_entry_version", "settings_content_digest", "arguments_entry_id", "arguments_content_digest", "result_artifact", "result_summary")
@@ -131,3 +181,19 @@ class ToolkitCallToolResultV1(_message.Message):
     result_artifact: ToolkitCallToolArtifactReferenceV1
     result_summary: ToolkitCallToolSummaryV1
     def __init__(self, toolkit_type: _Optional[str] = ..., tool_name: _Optional[str] = ..., input_bundle_id: _Optional[str] = ..., input_bundle_digest: _Optional[_Union[_common_pb2.DigestV1, _Mapping]] = ..., settings_entry_id: _Optional[str] = ..., settings_entry_version: _Optional[str] = ..., settings_content_digest: _Optional[_Union[_common_pb2.DigestV1, _Mapping]] = ..., arguments_entry_id: _Optional[str] = ..., arguments_content_digest: _Optional[_Union[_common_pb2.DigestV1, _Mapping]] = ..., result_artifact: _Optional[_Union[ToolkitCallToolArtifactReferenceV1, _Mapping]] = ..., result_summary: _Optional[_Union[ToolkitCallToolSummaryV1, _Mapping]] = ...) -> None: ...
+
+class ToolkitAuthorizationRequiredV1(_message.Message):
+    __slots__ = ("toolkit_name", "toolkit_type", "server_url", "resource_metadata_url", "resource_metadata_json", "toolkit_id")
+    TOOLKIT_NAME_FIELD_NUMBER: _ClassVar[int]
+    TOOLKIT_TYPE_FIELD_NUMBER: _ClassVar[int]
+    SERVER_URL_FIELD_NUMBER: _ClassVar[int]
+    RESOURCE_METADATA_URL_FIELD_NUMBER: _ClassVar[int]
+    RESOURCE_METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
+    TOOLKIT_ID_FIELD_NUMBER: _ClassVar[int]
+    toolkit_name: str
+    toolkit_type: str
+    server_url: str
+    resource_metadata_url: str
+    resource_metadata_json: bytes
+    toolkit_id: str
+    def __init__(self, toolkit_name: _Optional[str] = ..., toolkit_type: _Optional[str] = ..., server_url: _Optional[str] = ..., resource_metadata_url: _Optional[str] = ..., resource_metadata_json: _Optional[bytes] = ..., toolkit_id: _Optional[str] = ...) -> None: ...

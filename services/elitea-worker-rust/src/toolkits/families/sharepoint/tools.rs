@@ -119,9 +119,10 @@ pub(crate) struct MaterializedSharePointToolset {
 
 /// Build the explicitly selected, artifact-free `SharePoint` Graph read core.
 ///
-/// Empty selection and every content/effect operation fail closed while this
-/// family is partial. This prevents the SDK's empty-means-all convention from
-/// silently losing tools that need artifact parsing or effect receipts.
+/// Empty selection and selections without a supported read fail closed while
+/// this family is partial. A mixed saved selection exposes only its explicitly
+/// selected supported reads. Content, indexing, and effect operations remain
+/// unavailable until their separate authorities exist.
 pub(crate) fn build_sharepoint_toolset(
     toolkit_name: &str,
     config: SharePointToolkitConfig,
@@ -204,16 +205,29 @@ fn validate_selection(
     if selected.is_empty() {
         return Err(unsupported_selection());
     }
-    selected
+    let supported = selected
         .iter()
-        .map(|name| {
+        .filter_map(|name| {
             SharePointToolKind::ALL
                 .iter()
                 .copied()
                 .find(|kind| kind.name() == name.as_ref())
-                .ok_or_else(unsupported_selection)
         })
-        .collect()
+        .collect::<Vec<_>>();
+    if supported.is_empty() {
+        return Err(unsupported_selection());
+    }
+    let omitted = selected.len().saturating_sub(supported.len());
+    if omitted > 0 {
+        tracing::warn!(
+            event = "sharepoint_tool_selection_partially_materialized",
+            selected_tool_count = selected.len(),
+            materialized_tool_count = supported.len(),
+            omitted_tool_count = omitted,
+            "deferred SharePoint operations were omitted from the native toolset"
+        );
+    }
+    Ok(supported)
 }
 
 #[derive(Clone, Copy)]

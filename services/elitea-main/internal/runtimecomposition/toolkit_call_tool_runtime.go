@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
 	"time"
 
 	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/redisdispatch"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -61,8 +63,8 @@ func (a toolkitTypeVerdictAdapter) SupportsToolkitType(toolkitType string) (bool
 
 var _ toolkitcalltoolapp.ToolkitTypeVerdict = toolkitTypeVerdictAdapter{}
 
-// newCurrentToolkitCallToolRuntime composes the tool-run producer on top of the
-// index runtime's own toolkit reader and settings resolver.
+// newCurrentToolkitCallToolRuntime composes the tool-run producer using the
+// configured worker's shared toolkit reader and settings resolver.
 //
 // It REUSES them rather than building a second graph, deliberately: the reader
 // is where cross-project visibility is decided and the resolver is where a
@@ -71,7 +73,7 @@ var _ toolkitcalltoolapp.ToolkitTypeVerdict = toolkitTypeVerdictAdapter{}
 func newCurrentToolkitCallToolRuntime(
 	admissionPool *pgxpool.Pool,
 	results *repos.ToolkitCallToolResultsRepository,
-	index *currentIndexRuntime,
+	toolkits indexingapp.CurrentToolkitReader, settings indexingapp.CurrentToolkitSettingsValidator,
 	catalogue *CurrentToolkitCatalogueSnapshot,
 	capability *WorkerToolkitCapability,
 	producer *redisdispatch.ToolkitCallToolProducer,
@@ -79,12 +81,23 @@ func newCurrentToolkitCallToolRuntime(
 	deadline time.Duration,
 	records *repos.ToolCallRecordsRepository,
 ) (*currentToolkitCallToolRuntime, error) {
-	if admissionPool == nil || results == nil || index == nil ||
-		index.toolkits == nil || index.settings == nil || producer == nil {
+	if admissionPool == nil || results == nil || toolkits == nil || settings == nil || producer == nil {
 		return nil, errors.New("tool-run runtime dependencies are required")
 	}
+	guardrails, err := platformconfig.NewGuardrailPolicyAdapter(admissionPool)
+	if err != nil {
+		return nil, fmt.Errorf("construct tool-run guardrails: %w", err)
+	}
+	actorReader, err := newCurrentActorToolkitReader(toolkits)
+	if err != nil {
+		return nil, err
+	}
+	var resolverOptions []toolkitcalltoolapp.ResolverOption
+	if tokens := currentToolkitMCPTokenStore(admissionPool); tokens != nil {
+		resolverOptions = append(resolverOptions, toolkitcalltoolapp.WithMCPAuthorization(tokens))
+	}
 	resolver, err := toolkitcalltoolapp.NewCurrentAuthoritativeInputResolver(
-		index.toolkits, index.settings,
+		actorReader, settings, guardrails, resolverOptions...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("construct tool-run input resolver: %w", err)

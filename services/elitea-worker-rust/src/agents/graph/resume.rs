@@ -22,9 +22,9 @@ use crate::agents::direct_hitl::{
     ResolvedDirectHitlStart,
 };
 use crate::agents::events::{
-    pipeline_application_event_binding, pipeline_clarifying_event_binding,
-    pipeline_hitl_event_binding, pipeline_mcp_auth_event_binding, pipeline_printer_event_binding,
-    pipeline_tool_event_binding,
+    PipelineMcpAuthEventBinding, pipeline_application_event_binding,
+    pipeline_clarifying_event_binding, pipeline_hitl_event_binding,
+    pipeline_mcp_auth_event_binding, pipeline_printer_event_binding, pipeline_tool_event_binding,
 };
 use crate::agents::request::AgentExecutionPayload;
 use crate::toolkits::DelegatedAuthorizationRequirement;
@@ -93,7 +93,11 @@ impl PipelineMcpAuthorizationContinuation {
         } else {
             return Err(PipelineResumeError::invalid());
         };
-        if server_urls.is_empty() || server_urls.iter().any(|value| !valid_server_url(value)) {
+        if server_urls.is_empty()
+            || server_urls
+                .iter()
+                .any(|value| !DelegatedAuthorizationRequirement::valid_token_key(value))
+        {
             return Err(PipelineResumeError::invalid());
         }
         Ok(Self {
@@ -120,7 +124,12 @@ impl PipelineMcpAuthorizationContinuation {
         let binding =
             pipeline_mcp_auth_event_binding(&events[interrupt_index], root_agent_name, thread_id)
                 .map_err(|_| PipelineResumeError::corrupt())?;
-        if !self.server_urls.contains(binding.server_url()) {
+        let requirement = delegated_requirement(&binding)?;
+        if self
+            .server_urls
+            .iter()
+            .any(|key| !requirement.matches_token_key(key))
+        {
             return Err(PipelineResumeError::stale());
         }
         let checkpoint = checkpointer
@@ -149,14 +158,7 @@ impl PipelineMcpAuthorizationContinuation {
             {
                 return Err(PipelineResumeError::stale());
             }
-            let requirement = DelegatedAuthorizationRequirement::new(
-                binding.toolkit_name().to_owned(),
-                binding.toolkit_type().to_owned(),
-                binding.server_url().to_owned(),
-                binding.resource_metadata_url().map(ToOwned::to_owned),
-                binding.www_authenticate().map(ToOwned::to_owned),
-            )
-            .ok_or_else(PipelineResumeError::corrupt)?;
+            let requirement = delegated_requirement(&binding)?;
             let resolved = replay
                 .resolve_authorization_decision(
                     binding.tool_call_id(),
@@ -166,6 +168,7 @@ impl PipelineMcpAuthorizationContinuation {
                 )
                 .map_err(|_| PipelineResumeError::corrupt())?;
             return Ok(PipelineResume {
+                root_hitl_resume: false,
                 state: [(
                     LLM_TOOL_RESUME_STATE_KEY.to_owned(),
                     json!({binding.node_name(): resolved}),
@@ -193,6 +196,7 @@ impl PipelineMcpAuthorizationContinuation {
             PipelineMcpAuthorizationAction::Skip => "skip",
         };
         Ok(PipelineResume {
+            root_hitl_resume: false,
             state: [(
                 DIRECT_TOOL_RESUME_STATE_KEY.to_owned(),
                 json!({
@@ -210,23 +214,30 @@ impl PipelineMcpAuthorizationContinuation {
     }
 }
 
+fn delegated_requirement(
+    binding: &PipelineMcpAuthEventBinding,
+) -> Result<DelegatedAuthorizationRequirement, PipelineResumeError> {
+    let requirement = DelegatedAuthorizationRequirement::new(
+        binding.toolkit_name().to_owned(),
+        binding.toolkit_type().to_owned(),
+        binding.server_url().to_owned(),
+        binding.resource_metadata_url().map(ToOwned::to_owned),
+        binding.www_authenticate().map(ToOwned::to_owned),
+    )
+    .ok_or_else(PipelineResumeError::corrupt)?;
+    match binding.resource_metadata() {
+        Some(metadata) => requirement.with_resource_metadata(metadata.clone()),
+        None => Some(requirement),
+    }
+    .ok_or_else(PipelineResumeError::corrupt)
+}
+
 fn declined_server_url(value: &Value) -> Option<&str> {
     match value {
         Value::String(value) => Some(value),
         Value::Object(value) => value.get("server_url").and_then(Value::as_str),
         _ => None,
     }
-}
-
-fn valid_server_url(value: &str) -> bool {
-    reqwest::Url::parse(value).is_ok_and(|url| {
-        url.scheme() == "https"
-            && url.host_str().is_some()
-            && url.username().is_empty()
-            && url.password().is_none()
-            && url.query().is_none()
-            && url.fragment().is_none()
-    })
 }
 
 pub(crate) struct PrinterResumeContext<'a> {
@@ -324,6 +335,7 @@ impl PrinterContinuation {
             return Err(PipelineResumeError::stale());
         }
         Ok(PipelineResume {
+            root_hitl_resume: false,
             state: [
                 ("input".to_owned(), Value::String(user_input.to_owned())),
                 (
@@ -422,9 +434,12 @@ impl PipelineContinuationDecision {
         } else {
             let application = DirectHitlDecisionSet::from_payload(payload)
                 .map_err(|error| direct_hitl_resume_error(&error))?;
-            let tool = (payload.hitl_decisions.len() == 1)
-                .then(|| PipelineToolDecision::from_payload(payload))
-                .transpose()?;
+            // An authorization action belongs to the nested application replay.
+            // The direct sensitive-tool parser does not accept authorize/skip.
+            let tool = (payload.hitl_decisions.len() == 1
+                && !application.has_delegated_authorization_actions())
+            .then(|| PipelineToolDecision::from_payload(payload))
+            .transpose()?;
             Ok(Self::Sensitive { application, tool })
         }
     }
@@ -644,6 +659,7 @@ impl PipelineToolDecision {
                 .resolve_clarifying_answer(binding.tool_call_id(), binding.tool_name(), &self.value)
                 .map_err(|_| PipelineResumeError::corrupt())?;
             return Ok(PipelineResume {
+                root_hitl_resume: false,
                 state: [(
                     LLM_TOOL_RESUME_STATE_KEY.to_owned(),
                     json!({binding.node_name(): resolved}),
@@ -703,6 +719,7 @@ impl PipelineToolDecision {
                 )
                 .map_err(|_| PipelineResumeError::corrupt())?;
             return Ok(PipelineResume {
+                root_hitl_resume: false,
                 state: [(
                     LLM_TOOL_RESUME_STATE_KEY.to_owned(),
                     json!({binding.node_name(): resolved}),
@@ -726,6 +743,7 @@ impl PipelineToolDecision {
         )
         .await?;
         Ok(PipelineResume {
+            root_hitl_resume: false,
             state: [(
                 DIRECT_TOOL_RESUME_STATE_KEY.to_owned(),
                 json!({
@@ -886,6 +904,8 @@ impl PipelineHitlDecision {
             Value::String(String::new())
         };
         Ok(PipelineResume {
+            root_hitl_resume: binding.nested_checkpoints().is_empty()
+                && binding.node_name() == binding.pending_node_name(),
             state: [(
                 HITL_RESUME_STATE_KEY.to_owned(),
                 json!({
@@ -904,14 +924,29 @@ impl PipelineHitlDecision {
 
 /// One checkpoint-proven resume state consumed by a fresh graph agent.
 pub(crate) struct PipelineResume {
+    root_hitl_resume: bool,
     state: State,
 }
 
 impl PipelineResume {
     fn empty() -> Self {
         Self {
+            root_hitl_resume: false,
             state: State::new(),
         }
+    }
+
+    pub(super) fn terminal_decision(&self) -> Option<(&str, super::hitl::HitlAction)> {
+        if !self.root_hitl_resume {
+            return None;
+        }
+        let decisions = self.state.get(HITL_RESUME_STATE_KEY)?.as_object()?;
+        if decisions.len() != 1 {
+            return None;
+        }
+        let (node, decision) = decisions.iter().next()?;
+        let action = serde_json::from_value(decision.get("action")?.clone()).ok()?;
+        Some((node.as_str(), action))
     }
 
     pub(super) fn into_state(self) -> State {

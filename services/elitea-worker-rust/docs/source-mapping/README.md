@@ -46,6 +46,14 @@ authorization, failure behavior, and recovery boundary.
 
 Detailed ledgers:
 
+- `../testing-gaps.md` records accepted progression decisions, verification debt, observed warnings, and separate implementation gaps.
+- `../remaining-gates.md` records the continuation order after the latest main sync.
+- `main-sync-20260909.md` records conflict resolutions, regenerated contracts, and merge verification.
+- `pr-883-ci-repair.md` records post-merge CI failures, focused repairs, and local verification limits.
+- `main-sync-20260908.md` records the main integration and rehearsal cutover gate.
+- `toolkit-test.md` records required toolkit Test parity under `TKTEST-RUST-01`.
+- `toolkit-discovery.md` separates standalone discovery command parity from existing Rust runtime tool binding.
+- `toolkit-terminal-recovery.md` records direct-read terminal takeover and the open horizontal-recovery gates.
 - `agent-runtime.md` maps language-neutral worker delivery and agent execution.
 - `pipeline-nodes.md` maps every current Python pipeline node/edge branch and
   the capability-closed future explicit pipeline `parallel` node core.
@@ -54,6 +62,18 @@ Detailed ledgers:
 - `../map-reduce-pipeline-node-design.md` defines the separate data-driven map
   node, LangGraph `Send` semantics, reducers, durability, and test gates.
 - `configuration-toolsets.md` maps saved configuration and toolkit families.
+- `prebuilt-mcp.md` maps fixed catalogue-backed HTTP MCP execution.
+- `internal-elitea-mcp.md` separates internal builder categories from external
+  Elitea-as-MCP publishing. It maps the Main-owned applications, skills,
+  toolkit, configuration, notification, project-context, and project-secret
+  operations plus their deliberately closed live discovery and plaintext-secret gates.
+- `external-elitea-mcp.md` maps opt-in project capabilities for external MCP
+  clients and the durable direct execution path.
+- `delegated-oauth-dcr.md` maps the shared UI, Main, and Rust ownership for
+  delegated OAuth, DCR, token refresh, and durable authorization resume.
+- `delegated-auth-expiry.md` maps active-run token rejection and direct-node recovery.
+- `runtime-limits.md` separates event, request, loop, nesting, and session limits.
+  It records the fragment-count fix and the remaining long-running execution gates.
 - `indexing.md` maps indexing behavior and its later Rust capability.
 
 Maintained Rust runtime ownership registry:
@@ -196,8 +216,8 @@ Maintained Rust runtime ownership registry:
   invocation-local channel, strips provider request payloads, stamps the owning
   pipeline node for the UI and leaves graph state/checkpoints business-only.
   `src/agents/graph/routing_tests.rs` owns their current/legacy YAML, exact
-  fallback, normalized-label and common-Runner proof. Prebuilt/static MCP,
-  remote effects, child variables, nested static Printer
+  fallback, normalized-label and common-Runner proof. Remote effects, child
+  variables, nested static Printer
   interrupts, incremental pipeline tool-progress chunks, approved-effect
   receipts, arbitrary static interrupts and production activation remain
   separate gates. Saved-pipeline child events and configured/sensitive HITL
@@ -224,19 +244,22 @@ Maintained Rust runtime ownership registry:
   HTTP URI; API-key, invocation-scoped expiring client-credentials and
   delegated OAuth modes produce schema-complete guarded tools for native
   same-call pause/resume. Remote specifications, legacy auth
-  objects, rich OAuth discovery/DCR, runtime 401 re-authorization, non-JSON
-  bodies and artifact/binary routing remain closed;
+  objects, rich OAuth discovery/DCR, model-loop 401 re-authorization, non-JSON
+  bodies and artifact/binary routing remain closed. Direct Toolkit nodes now
+  preserve delegated 401 guards and exact-node resume; `delegated-auth-expiry.md`
+  records the component proof and remaining deployed gates;
 - `src/toolkits/families/sharepoint/{config,client,tools}.rs`: delegated Azure
   token resolution and eight explicitly selected Microsoft Graph reads for
   lists, columns, metadata-only recursive file discovery and raw bounded
   OneNote XHTML. The client keeps all requests and provider pagination on the
   exact Graph v1.0 origin, preserves SharePoint site/library path resolution,
   and exposes schema-complete guarded tools for native same-call authorization.
-  Empty selection, ACS/app-only auth, file parsing/download, OneNote attachment
-  interpretation, writes, rich discovery/DCR/refresh metadata and production
-  egress remain closed;
+  Empty selection, ACS/app-only auth, file parsing/download, indexing, OneNote
+  attachment interpretation, writes, rich discovery/DCR/refresh metadata and
+  production egress remain closed. A mixed saved selection exposes only its
+  selected supported reads;
 - `src/transport/model_facade.rs`: provider-neutral model ownership over
-  `model_gateway.rs` and `anthropic_gateway.rs`, including frozen
+  `openai_compatible_facade.rs` and `anthropic_facade.rs`, including frozen
   `model_project_id` authority;
 - `src/transport/platform_client.rs`: claim-bound application/version lookup
   today and future artifact grants; `runtime_context.rs` owns the concrete
@@ -361,3 +384,5 @@ repository-relative to `services/elitea-worker-rust/`.
 
 The repository-level `.github/workflows/ci-rust.yml` gate covers this registry.
 It runs locked quality, release, and PostgreSQL-backed test commands.
+
+- [Main sync follow-up](main-sync-20260909-followup.md) records the second sync and shared migration boundary.

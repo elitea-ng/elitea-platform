@@ -30,7 +30,7 @@ use crate::toolkits::{
     mcp_authorization_required_fixture,
 };
 use crate::transport::model_facade::ModelFacade;
-use crate::transport::model_gateway::{
+use crate::transport::openai_compatible_facade::{
     CapturedModelRequest, TestModelGatewayOutcome, test_model_gateway_client,
     test_model_gateway_config, test_model_gateway_response,
 };
@@ -327,6 +327,51 @@ fn mcp_tool_call_response() -> Response<Body> {
     test_model_gateway_response(Body::new(Full::<Bytes>::from(raw)))
 }
 
+pub(super) fn mcp_tool_batch_response(count: usize) -> Response<Body> {
+    named_mcp_batch_response("lookup_release", count, "call_operation")
+}
+
+pub(super) fn mcp_authorization_tool_name() -> String {
+    crate::toolkits::DelegatedAuthorizationRequirement::new(
+        "release intelligence".to_owned(),
+        "mcp".to_owned(),
+        "https://mcp.example.invalid/v1/mcp".to_owned(),
+        None,
+        None,
+    )
+    .expect("fixture authorization identity")
+    .authorization_tool_name()
+}
+
+pub(super) fn mcp_authorization_response() -> Response<Body> {
+    named_mcp_batch_response(&mcp_authorization_tool_name(), 1, "call_mcp")
+}
+
+fn named_mcp_batch_response(name: &str, count: usize, prefix: &str) -> Response<Body> {
+    let calls: Vec<_> = (0..count).map(|index| serde_json::json!({
+        "index": index,
+        "id": if index == 0 { prefix.to_owned() } else { format!("{prefix}_{index}") },
+        "type": "function",
+        "function": {"name": if name == "lookup_release" && index % 2 == 1 { "inspect_release" } else { name }, "arguments": if name.starts_with("mcp_authorize_") { "{}".to_owned() } else { format!("{{\"release\":\"1.{index}\"}}") }}
+    })).collect();
+    let frame =
+        serde_json::json!({"choices":[{"delta":{"tool_calls":calls},"finish_reason":null}]});
+    let raw = format!(
+        "data: {frame}\n\ndata: {{\"choices\":[{{\"delta\":{{}},\"finish_reason\":\"tool_calls\"}}]}}\n\ndata: [DONE]\n\n"
+    );
+    test_model_gateway_response(Body::new(Full::<Bytes>::from(raw)))
+}
+
+fn colliding_mcp_tool_call_response() -> Response<Body> {
+    let raw = concat!(
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_release\",\"type\":\"function\",\"function\":{\"name\":\"release_intelligence__lookup_release\",\"arguments\":\"{\\\"release\\\":\\\"1.2\\\"}\"}},{\"index\":1,\"id\":\"call_audit\",\"type\":\"function\",\"function\":{\"name\":\"audit_intelligence__lookup_release\",\"arguments\":\"{\\\"release\\\":\\\"1.2\\\"}\"}}]},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\n",
+        "data: [DONE]\n\n",
+    );
+    test_model_gateway_response(Body::new(Full::<Bytes>::from(raw)))
+}
+
 fn ask_user_tool_call_response() -> Response<Body> {
     let arguments = serde_json::json!({
         "questions": [{
@@ -411,9 +456,18 @@ fn parallel_resolver_call_response() -> Response<Body> {
 }
 
 fn text_response(text: &str) -> Response<Body> {
-    let raw = format!(
-        "data: {{\"choices\":[{{\"delta\":{{\"role\":\"assistant\",\"content\":{text:?}}},\"finish_reason\":null}}]}}\n\ndata: {{\"choices\":[{{\"delta\":{{}},\"finish_reason\":\"stop\"}}]}}\n\ndata: {{\"choices\":[],\"usage\":{{\"prompt_tokens\":3,\"completion_tokens\":2}}}}\n\ndata: [DONE]\n\n"
-    );
+    // Exercise real delta collection, not a single chunk that masks truncation.
+    use std::fmt::Write as _;
+    let mut raw = String::new();
+    for chunk in text.chars() {
+        write!(
+            &mut raw,
+            "data: {{\"choices\":[{{\"delta\":{{\"content\":{:?}}},\"finish_reason\":null}}]}}\n\n",
+            chunk.to_string()
+        )
+        .expect("SSE fixture");
+    }
+    raw.push_str("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n");
     test_model_gateway_response(Body::new(Full::<Bytes>::from(raw)))
 }
 
@@ -507,9 +561,122 @@ fn attach_remote_mcp_tool(request: &mut super::request::AgentExecutionRequest) {
     };
 }
 
+fn attach_colliding_remote_mcp_tools(request: &mut super::request::AgentExecutionRequest) {
+    let tools = serde_json::json!([
+        {
+            "id": 92,
+            "type": "mcp",
+            "toolkit_name": "release intelligence",
+            "settings": {
+                "url": "https://release-mcp.example.invalid/v1/mcp",
+                "timeout": 30,
+                "selected_tools": ["lookup_release"],
+                "enable_caching": true,
+                "cache_ttl": 300,
+                "ssl_verify": true
+            }
+        },
+        {
+            "id": 93,
+            "type": "mcp",
+            "toolkit_name": "audit intelligence",
+            "settings": {
+                "url": "https://audit-mcp.example.invalid/v1/mcp",
+                "timeout": 30,
+                "selected_tools": ["lookup_release"],
+                "enable_caching": true,
+                "cache_ttl": 300,
+                "ssl_verify": true
+            }
+        }
+    ]);
+    match request.kind {
+        AgentExecutionKind::Application => {
+            request
+                .payload
+                .application
+                .get_mut("version_details")
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("application version")
+                .insert("tools".to_owned(), tools);
+        }
+        AgentExecutionKind::Adhoc => {
+            request.payload.tools = tools.as_array().expect("MCP tool array").clone();
+        }
+    }
+}
+
 struct AgentMcpConnector {
     calls: AtomicUsize,
     tool_calls: Arc<AtomicUsize>,
+}
+
+struct CollidingMcpConnector {
+    connections: AtomicUsize,
+    tool_calls: Arc<Mutex<Vec<String>>>,
+}
+
+#[async_trait]
+impl McpConnector for CollidingMcpConnector {
+    async fn connect(
+        &self,
+        config: &RemoteMcpConfig,
+    ) -> Result<Arc<dyn Toolset>, McpMaterializationError> {
+        self.connections.fetch_add(1, Ordering::AcqRel);
+        let source = if config.endpoint().contains("release-mcp") {
+            "release intelligence"
+        } else if config.endpoint().contains("audit-mcp") {
+            "audit intelligence"
+        } else {
+            panic!("unexpected MCP fixture endpoint")
+        };
+        Ok(Arc::new(BasicToolset::new(
+            "discovered_fixture",
+            vec![Arc::new(SourcedMcpTool {
+                source,
+                calls: Arc::clone(&self.tool_calls),
+            })],
+        )))
+    }
+}
+
+struct SourcedMcpTool {
+    source: &'static str,
+    calls: Arc<Mutex<Vec<String>>>,
+}
+
+#[async_trait]
+impl Tool for SourcedMcpTool {
+    fn name(&self) -> &'static str {
+        "lookup_release"
+    }
+
+    fn description(&self) -> &'static str {
+        "Read release evidence from one exact MCP toolkit."
+    }
+
+    fn is_read_only(&self) -> bool {
+        true
+    }
+
+    fn is_concurrency_safe(&self) -> bool {
+        true
+    }
+
+    async fn execute(
+        &self,
+        _context: Arc<dyn ToolContext>,
+        arguments: serde_json::Value,
+    ) -> adk_rust::Result<serde_json::Value> {
+        self.calls
+            .lock()
+            .expect("tool call fixture lock")
+            .push(self.source.to_owned());
+        Ok(serde_json::json!({
+            "release": arguments["release"],
+            "source": self.source
+        }))
+    }
 }
 
 struct AgentDelegatedAuthorizationMcpConnector {
@@ -532,9 +699,16 @@ impl McpConnector for AgentDelegatedAuthorizationMcpConnector {
         }
         Ok(Arc::new(BasicToolset::new(
             "authorized_fixture_mcp",
-            vec![Arc::new(AgentMcpTool {
-                calls: Arc::clone(&self.tool_calls),
-            })],
+            vec![
+                Arc::new(AgentMcpTool {
+                    name: "lookup_release",
+                    calls: Arc::clone(&self.tool_calls),
+                }),
+                Arc::new(AgentMcpTool {
+                    name: "inspect_release",
+                    calls: Arc::clone(&self.tool_calls),
+                }),
+            ],
         )))
     }
 }
@@ -550,6 +724,7 @@ impl McpConnector for AgentMcpConnector {
         Ok(Arc::new(BasicToolset::new(
             "fixture_mcp",
             vec![Arc::new(AgentMcpTool {
+                name: "lookup_release",
                 calls: self.tool_calls.clone(),
             })],
         )))
@@ -557,13 +732,14 @@ impl McpConnector for AgentMcpConnector {
 }
 
 struct AgentMcpTool {
+    name: &'static str,
     calls: Arc<AtomicUsize>,
 }
 
 #[async_trait]
 impl Tool for AgentMcpTool {
     fn name(&self) -> &'static str {
-        "lookup_release"
+        self.name
     }
 
     fn description(&self) -> &'static str {
@@ -1161,24 +1337,151 @@ async fn application_and_adhoc_execute_adk_mcp_tools_in_the_direct_llm_loop() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn application_and_adhoc_bind_same_named_tools_to_exact_toolkit_implementations() {
+    for kind in [AgentExecutionKind::Application, AgentExecutionKind::Adhoc] {
+        let mut request = ordinary_request(kind);
+        attach_colliding_remote_mcp_tools(&mut request);
+        let (runtime_context, context_calls) = runtime_context_client();
+        let (model_gateway, captured) = test_model_gateway_client(
+            vec![
+                TestModelGatewayOutcome::Response(colliding_mcp_tool_call_response()),
+                TestModelGatewayOutcome::Response(model_response()),
+            ],
+            test_model_gateway_config(),
+        )
+        .expect("model gateway fixture client");
+        let tool_calls = Arc::new(Mutex::new(Vec::new()));
+        let connector = Arc::new(CollidingMcpConnector {
+            connections: AtomicUsize::new(0),
+            tool_calls: Arc::clone(&tool_calls),
+        });
+        let assembler = OrdinaryNativeAgentAssembler::new(
+            platform_client(runtime_context),
+            Arc::new(ModelFacade::from_gateway(model_gateway)),
+            empty_tool_policy(),
+        )
+        .with_mcp_connector(connector.clone());
+        let assembly = AuthorizedNativeAssembly::new(
+            &request,
+            test_runtime_context_authority(),
+            AuthorizedNativeCommandBinding::fixture(),
+        );
+        let invocation = assembler
+            .assemble(assembly)
+            .await
+            .expect("colliding-tool agent assembly");
+        let (mut native, _projector, completion) = invocation.start().expect("native start");
+        while native
+            .next_event()
+            .await
+            .expect("colliding-tool event")
+            .is_some()
+        {}
+        let _ = completion.select().await.expect("selected completion");
+
+        assert_eq!(context_calls.load(Ordering::Acquire), 1);
+        assert_eq!(connector.connections.load(Ordering::Acquire), 2);
+        let mut invoked = tool_calls.lock().expect("tool call fixture lock").clone();
+        invoked.sort();
+        assert_eq!(invoked, ["audit intelligence", "release intelligence"]);
+
+        let captured = captured.lock().expect("captured model requests");
+        assert_eq!(captured.len(), 2);
+        let first: serde_json::Value =
+            serde_json::from_slice(&captured[0].body).expect("first model request");
+        let visible_names = first["tools"]
+            .as_array()
+            .expect("provider tools")
+            .iter()
+            .map(|tool| {
+                tool["function"]["name"]
+                    .as_str()
+                    .expect("provider tool name")
+                    .to_owned()
+            })
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            visible_names,
+            HashSet::from([
+                "audit_intelligence__lookup_release".to_owned(),
+                "release_intelligence__lookup_release".to_owned(),
+            ])
+        );
+        let second: serde_json::Value =
+            serde_json::from_slice(&captured[1].body).expect("second model request");
+        let tool_results = second["messages"]
+            .as_array()
+            .expect("continuation messages")
+            .iter()
+            .filter(|message| message["role"] == "tool")
+            .map(|message| {
+                (
+                    message["tool_call_id"]
+                        .as_str()
+                        .expect("tool call ID")
+                        .to_owned(),
+                    message["content"].as_str().expect("tool result").to_owned(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert!(tool_results["call_release"].contains("release intelligence"));
+        assert!(tool_results["call_audit"].contains("audit intelligence"));
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn application_and_adhoc_resume_model_owned_delegated_authorization() {
     for kind in [AgentExecutionKind::Application, AgentExecutionKind::Adhoc] {
-        run_delegated_authorization_resume(kind, true).await;
-        run_delegated_authorization_resume(kind, false).await;
+        for count in [1, 3] {
+            run_delegated_authorization_resume(kind, true, count).await;
+            run_delegated_authorization_resume(kind, false, count).await;
+        }
     }
 }
 
 #[allow(clippy::too_many_lines)] // One initial pause and exact resume form one behavioral proof.
-async fn run_delegated_authorization_resume(kind: AgentExecutionKind, authorize: bool) {
-    let (runtime_context, context_calls) = runtime_context_client_for_redemptions(2);
-    let (model_gateway, captured) = test_model_gateway_client(
-        vec![
-            TestModelGatewayOutcome::Response(mcp_tool_call_response()),
-            TestModelGatewayOutcome::Response(model_response()),
-        ],
-        test_model_gateway_config(),
-    )
-    .expect("delegated authorization model gateway");
+async fn run_delegated_authorization_resume(
+    kind: AgentExecutionKind,
+    authorize: bool,
+    count: usize,
+) {
+    // One toolkit authorization decision covers the whole pending tool batch.
+    let attempts = 1;
+    let (runtime_context, context_calls) = runtime_context_client_for_redemptions(attempts + 2);
+    let mut outcomes = vec![TestModelGatewayOutcome::Response(
+        mcp_authorization_response(),
+    )];
+    if authorize {
+        outcomes.push(TestModelGatewayOutcome::Response(mcp_tool_batch_response(
+            count,
+        )));
+    } else if count > 1 {
+        for prefix in ["call_retry_first", "call_retry_second"] {
+            outcomes.push(TestModelGatewayOutcome::Response(named_mcp_batch_response(
+                &mcp_authorization_tool_name(),
+                count,
+                prefix,
+            )));
+        }
+    }
+    outcomes.push(TestModelGatewayOutcome::Response(model_response()));
+    if authorize {
+        outcomes.push(TestModelGatewayOutcome::Response(named_mcp_batch_response(
+            "lookup_release",
+            count,
+            "call_next_turn",
+        )));
+        outcomes.push(TestModelGatewayOutcome::Response(model_response()));
+    } else {
+        outcomes.push(TestModelGatewayOutcome::Response(named_mcp_batch_response(
+            &mcp_authorization_tool_name(),
+            1,
+            "call_later_turn",
+        )));
+    }
+    let (model_gateway, captured) =
+        test_model_gateway_client(outcomes, test_model_gateway_config())
+            .expect("delegated authorization model gateway");
     let tool_calls = Arc::new(AtomicUsize::new(0));
     let connector = Arc::new(AgentDelegatedAuthorizationMcpConnector {
         calls: AtomicUsize::new(0),
@@ -1196,6 +1499,7 @@ async fn run_delegated_authorization_resume(kind: AgentExecutionKind, authorize:
 
     let mut initial_request = ordinary_request(kind);
     attach_remote_mcp_tool(&mut initial_request);
+    select_both_mcp_operations(&mut initial_request);
     let initial = AuthorizedNativeAssembly::new(
         &initial_request,
         test_runtime_context_authority(),
@@ -1236,6 +1540,7 @@ async fn run_delegated_authorization_resume(kind: AgentExecutionKind, authorize:
     let mut resume_request = ordinary_request(kind);
     resume_request.binding.request_content_digest = if authorize { [13; 32] } else { [14; 32] };
     attach_remote_mcp_tool(&mut resume_request);
+    select_both_mcp_operations(&mut resume_request);
     resume_request.payload.should_continue = true;
     if authorize {
         resume_request.payload.mcp_tokens.insert(
@@ -1250,31 +1555,124 @@ async fn run_delegated_authorization_resume(kind: AgentExecutionKind, authorize:
                 "server_url": "https://mcp.example.invalid/v1/mcp"
             }));
     }
-    let resume = AuthorizedNativeAssembly::new(
-        &resume_request,
-        test_runtime_context_authority(),
-        AuthorizedNativeCommandBinding::fixture(),
+    for attempt in 0..attempts {
+        let resume = AuthorizedNativeAssembly::new(
+            &resume_request,
+            test_runtime_context_authority(),
+            AuthorizedNativeCommandBinding::fixture(),
+        );
+        let mut resumed = assembler
+            .assemble(resume)
+            .await
+            .expect("delegated authorization continuation");
+        resumed
+            .project_start(chrono::Utc::now())
+            .expect("resume start projection");
+        let (mut run, mut projector, completion) = resumed.start().expect("resumed native start");
+        while let Some(event) = run.next_event().await.unwrap_or_else(|error| {
+            panic!("resumed authorization event {error:?}; authorize={authorize}, count={count}")
+        }) {
+            projector
+                .project(&event)
+                .expect("resumed authorization projection");
+        }
+        if attempt + 1 == attempts {
+            let _completed = completion.select().await.unwrap_or_else(|error| {
+                panic!("resumed completion: {error:?}; authorize={authorize}, count={count}, attempt={attempt}")
+            });
+            assert!(!projector.is_paused());
+        } else {
+            assert!(
+                projector.is_paused(),
+                "a distinct pending call retains its guard"
+            );
+        }
+    }
+    assert_eq!(context_calls.load(Ordering::Acquire), attempts + 1);
+    assert_eq!(connector.calls.load(Ordering::Acquire), attempts + 1);
+    assert_eq!(
+        tool_calls.load(Ordering::Acquire),
+        if authorize { count } else { 0 }
     );
-    let resumed = assembler
-        .assemble(resume)
-        .await
-        .expect("delegated authorization continuation");
-    let (mut run, _projector, completion) = resumed.start().expect("resumed native start");
-    while run
-        .next_event()
-        .await
-        .expect("resumed authorization event")
-        .is_some()
-    {}
-    let _completed = completion.select().await.expect("resumed completion");
-    assert_eq!(context_calls.load(Ordering::Acquire), 2);
-    assert_eq!(connector.calls.load(Ordering::Acquire), 2);
-    assert_eq!(tool_calls.load(Ordering::Acquire), usize::from(authorize));
+
+    if authorize {
+        let mut next = ordinary_request(kind);
+        next.binding.request_content_digest = [15; 32];
+        next.payload.user_input = super::request::UserInput::Text("next authorized turn".into());
+        attach_remote_mcp_tool(&mut next);
+        select_both_mcp_operations(&mut next);
+        next.payload.mcp_tokens = resume_request.payload.mcp_tokens.clone();
+        let mut invocation = assembler
+            .assemble(AuthorizedNativeAssembly::new(
+                &next,
+                test_runtime_context_authority(),
+                AuthorizedNativeCommandBinding::fixture(),
+            ))
+            .await
+            .expect("fresh authorized assembly");
+        invocation
+            .project_start(chrono::Utc::now())
+            .expect("fresh authorized projection start");
+        let (mut run, mut projector, completion) =
+            invocation.start().expect("fresh authorized start");
+        while let Some(event) = run.next_event().await.expect("fresh authorized event") {
+            projector
+                .project(&event)
+                .expect("fresh authorized projection");
+        }
+        completion
+            .select()
+            .await
+            .expect("fresh authorized completion");
+        assert!(!projector.is_paused());
+        assert_eq!(tool_calls.load(Ordering::Acquire), count * 2);
+    } else {
+        let mut next = ordinary_request(kind);
+        next.binding.request_content_digest = [15; 32];
+        next.payload.user_input =
+            super::request::UserInput::Text("Use the attached toolkit".into());
+        attach_remote_mcp_tool(&mut next);
+        select_both_mcp_operations(&mut next);
+        let mut invocation = assembler
+            .assemble(AuthorizedNativeAssembly::new(
+                &next,
+                test_runtime_context_authority(),
+                AuthorizedNativeCommandBinding::fixture(),
+            ))
+            .await
+            .expect("fresh turn after Skip");
+        invocation
+            .project_start(chrono::Utc::now())
+            .expect("fresh projection start after Skip");
+        let (mut run, mut projector, _completion) =
+            invocation.start().expect("fresh start after Skip");
+        while let Some(event) = run.next_event().await.expect("fresh event after Skip") {
+            projector
+                .project(&event)
+                .expect("fresh projection after Skip");
+        }
+        assert!(
+            projector.is_paused(),
+            "a later turn can request authorization again"
+        );
+        assert_eq!(tool_calls.load(Ordering::Acquire), 0);
+    }
 
     let captured = captured.lock().expect("captured model requests");
-    assert_eq!(captured.len(), 2, "resume must not replan the pending call");
+    assert_eq!(captured.len(), if authorize || count > 1 { 5 } else { 3 });
+    for request in captured.iter() {
+        let body = serde_json::from_slice(&request.body).expect("provider request JSON");
+        assert_complete_tool_history(&body);
+    }
+    let initial: serde_json::Value = serde_json::from_slice(&captured[0].body).unwrap();
+    assert_eq!(initial["tools"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        initial["tools"][0]["function"]["name"],
+        mcp_authorization_tool_name()
+    );
     let resumed: serde_json::Value =
         serde_json::from_slice(&captured[1].body).expect("resumed model request");
+    assert_complete_tool_history(&resumed);
     let tool_message = resumed["messages"]
         .as_array()
         .expect("resumed messages")
@@ -1282,10 +1680,22 @@ async fn run_delegated_authorization_resume(kind: AgentExecutionKind, authorize:
         .find(|message| message["role"] == "tool" && message["tool_call_id"] == "call_mcp")
         .expect("same original call result");
     if authorize {
+        let result: serde_json::Value =
+            serde_json::from_str(tool_message["content"].as_str().unwrap()).unwrap();
+        assert_eq!(result["status"], "authorized");
         assert!(
-            tool_message["content"]
-                .as_str()
-                .is_some_and(|content| content.contains("risk"))
+            resumed["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|tool| tool["function"]["name"] != mcp_authorization_tool_name())
+        );
+        assert!(
+            resumed["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tool| tool["function"]["name"] == "lookup_release")
         );
     } else {
         let declined: serde_json::Value = serde_json::from_str(
@@ -1296,14 +1706,58 @@ async fn run_delegated_authorization_resume(kind: AgentExecutionKind, authorize:
         .expect("declined result JSON");
         assert_eq!(declined["type"], "mcp_auth_decision");
         assert_eq!(declined["status"], "declined");
+        assert_eq!(declined["scope"], "current_run");
+        assert!(declined.get("auth_context").is_none());
     }
+}
+
+fn select_both_mcp_operations(request: &mut super::request::AgentExecutionRequest) {
+    let tool = match request.kind {
+        AgentExecutionKind::Application => &mut request
+            .payload
+            .application
+            .get_mut("version_details")
+            .unwrap()["tools"][0],
+        AgentExecutionKind::Adhoc => &mut request.payload.tools[0],
+    };
+    tool["settings"]["selected_tools"] = serde_json::json!(["lookup_release", "inspect_release"]);
+}
+
+pub(super) fn assert_complete_tool_history(request: &serde_json::Value) {
+    let mut pending = HashSet::new();
+    for message in request["messages"].as_array().expect("messages") {
+        if message["role"] == "tool" {
+            let id = message["tool_call_id"].as_str().expect("result call ID");
+            assert!(
+                pending.remove(id),
+                "result must match one pending call: {id}"
+            );
+        } else {
+            assert!(
+                pending.is_empty(),
+                "unanswered calls before next model message: {pending:?}"
+            );
+            if let Some(calls) = message["tool_calls"].as_array() {
+                for call in calls {
+                    assert!(pending.insert(call["id"].as_str().expect("call ID").to_owned()));
+                }
+            }
+        }
+    }
+    assert!(
+        pending.is_empty(),
+        "provider request has unanswered calls: {pending:?}"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn delegated_authorization_does_not_approve_a_distinct_sensitive_action() {
     let (runtime_context, _) = runtime_context_client_for_redemptions(2);
     let (model_gateway, captured) = test_model_gateway_client(
-        vec![TestModelGatewayOutcome::Response(mcp_tool_call_response())],
+        vec![
+            TestModelGatewayOutcome::Response(mcp_authorization_response()),
+            TestModelGatewayOutcome::Response(mcp_tool_batch_response(1)),
+        ],
         test_model_gateway_config(),
     )
     .expect("authorization plus sensitive model gateway");
@@ -1376,8 +1830,8 @@ async fn delegated_authorization_does_not_approve_a_distinct_sensitive_action() 
     assert_eq!(connector.calls.load(Ordering::Acquire), 2);
     assert_eq!(
         captured.lock().expect("captured model requests").len(),
-        1,
-        "the exact replay must pause before another provider request"
+        2,
+        "authorization exposes the operation, which retains its sensitive guard"
     );
 }
 
@@ -1865,18 +2319,27 @@ async fn run_parallel_nested_authorization_resume(authorize: bool) {
     let mut request = ordinary_request(AgentExecutionKind::Application);
     attach_nested_agent(&mut request);
     let (runtime_context, context_calls) = runtime_context_with_sensitive_child();
-    let (model_gateway, captured) = test_model_gateway_client(
-        vec![
-            TestModelGatewayOutcome::Response(parallel_nested_agent_call_response()),
-            TestModelGatewayOutcome::Response(mcp_tool_call_response()),
-            TestModelGatewayOutcome::Response(mcp_tool_call_response()),
-            TestModelGatewayOutcome::Response(text_response("resolved child")),
-            TestModelGatewayOutcome::Response(text_response("resolved child")),
-            TestModelGatewayOutcome::Response(text_response("root resumed answer")),
-        ],
-        test_model_gateway_config(),
-    )
-    .expect("parallel nested authorization model gateway");
+    let mut outcomes = vec![
+        TestModelGatewayOutcome::Response(parallel_nested_agent_call_response()),
+        TestModelGatewayOutcome::Response(mcp_authorization_response()),
+        TestModelGatewayOutcome::Response(mcp_authorization_response()),
+    ];
+    for _ in 0..2 {
+        if authorize {
+            outcomes.push(TestModelGatewayOutcome::Response(mcp_tool_batch_response(
+                1,
+            )));
+        }
+        outcomes.push(TestModelGatewayOutcome::Response(text_response(
+            "resolved child",
+        )));
+    }
+    outcomes.push(TestModelGatewayOutcome::Response(text_response(
+        "root resumed answer",
+    )));
+    let (model_gateway, captured) =
+        test_model_gateway_client(outcomes, test_model_gateway_config())
+            .expect("parallel nested authorization model gateway");
     let tool_calls = Arc::new(AtomicUsize::new(0));
     let connector = Arc::new(AgentDelegatedAuthorizationMcpConnector {
         calls: AtomicUsize::new(0),
@@ -2044,7 +2507,45 @@ async fn run_parallel_nested_authorization_resume(authorize: bool) {
     assert_eq!(connector.calls.load(Ordering::Acquire), 3);
     assert_eq!(context_calls.load(Ordering::Acquire), 6);
     let captured = captured.lock().expect("captured model requests");
-    assert_eq!(captured.len(), 6, "resume must not replan child calls");
+    assert_eq!(captured.len(), if authorize { 8 } else { 6 });
+    let parent: serde_json::Value = serde_json::from_slice(&captured.last().unwrap().body).unwrap();
+    let child_results = parent["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|message| message["role"] == "tool")
+        .map(|message| {
+            serde_json::from_str::<serde_json::Value>(message["content"].as_str().unwrap()).unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        child_results,
+        vec![serde_json::json!({"response": "resolved child"}); 2]
+    );
+    let mut resumed_tasks = captured[3..captured.len() - 1]
+        .iter()
+        .map(|request| {
+            let body: serde_json::Value =
+                serde_json::from_slice(&request.body).expect("resumed child request");
+            body["messages"]
+                .as_array()
+                .expect("model messages")
+                .iter()
+                .filter(|message| message["role"] == "user")
+                .map(|message| message["content"].clone())
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    resumed_tasks.sort_by_cached_key(|task| serde_json::to_string(task).expect("user contents"));
+    resumed_tasks.dedup();
+    assert_eq!(
+        resumed_tasks,
+        vec![
+            vec![serde_json::json!([{"type": "text", "text": "Resolve Olivia Lovelace"}])],
+            vec![serde_json::json!([{"type": "text", "text": "Resolve Sasha Grey"}])],
+        ],
+        "resume must retain each child's original task and hide control markers"
+    );
     if !authorize {
         assert_eq!(
             captured

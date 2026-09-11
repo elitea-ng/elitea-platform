@@ -507,6 +507,7 @@ impl DirectToolNode {
                     return Ok(self
                         .mcp_authorization_stopped(remaining.unwrap_or_else(|| json!({})), true));
                 }
+                let requirement = requirement.resolve_public_metadata().await;
                 return Ok(self.mcp_authorization_interrupt(
                     &requirement,
                     &call_id,
@@ -604,6 +605,7 @@ impl DirectToolNode {
                 "server_url": requirement.server_url(),
                 "resource_metadata_url": requirement.resource_metadata_url(),
                 "www_authenticate": requirement.www_authenticate(),
+                "resource_metadata": requirement.resource_metadata(),
             }),
         )
     }

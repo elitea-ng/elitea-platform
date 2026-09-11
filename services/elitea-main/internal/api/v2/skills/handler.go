@@ -14,25 +14,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"gopkg.in/yaml.v3"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
-// SkillVersion is one row of skill_versions.
-//
-// #874 GAVE THIS MORE THAN ONE ROW PER SKILL. Before this change the
-// platform shipped exactly one implicit version per skill, named "base" —
-// this doc comment said so plainly, and the read side hardcoded the join to
-// `sv.name = 'base'` (internal/infra/db/repos/skills.go). Every skill still
-// gets a `base` version on create and it stays the version the unversioned
-// GET/PUT/DELETE (`/skill/{mode}/{projectID}/{skillID}`, no {versionID}
-// segment) read and write — `base` is reserved and cannot be deleted or
-// reused as a NAMED version's name, matching application_versions' own
-// "base" convention (repos/applications.go's defaultVersionName). What's new
-// is that a skill can now carry additional NAMED versions alongside it,
-// created from CreateVersion ("Save As Version"), edited independently
-// through the {versionID}-scoped PUT, diffed client-side the way
-// CompareVersionsModal diffs application_versions, and copied back onto
-// `base` through RestoreVersion (rollback).
+// SkillVersion holds one independently selected skill version.
 type SkillVersion struct {
 	ID           string   `json:"id,omitempty"`
 	Name         string   `json:"name"`
@@ -74,14 +60,19 @@ type SkillVersion struct {
 }
 
 type Skill struct {
-	ID          string         `json:"id"`
-	ProjectID   string         `json:"project_id"`
-	Name        string         `json:"name"`
-	Description string         `json:"description,omitempty"`
-	Type        string         `json:"type"`
-	Config      map[string]any `json:"config,omitempty"`
-	IsDefault   bool           `json:"is_default"`
-	// Instructions/Tags mirror the base version's content at the top level
+	// AuthorID comes from the authenticated principal, never the request body.
+	AuthorID int64 `json:"-"`
+	// MetadataOnly leaves version content unchanged during a metadata update.
+	MetadataOnly bool           `json:"-"`
+	Meta         map[string]any `json:"meta,omitempty"`
+	ID           string         `json:"id"`
+	ProjectID    string         `json:"project_id"`
+	Name         string         `json:"name"`
+	Description  string         `json:"description,omitempty"`
+	Type         string         `json:"type"`
+	Config       map[string]any `json:"config,omitempty"`
+	IsDefault    bool           `json:"is_default"`
+	// Instructions/Tags mirror the selected version's content at the top level
 	// for convenience; Versions/VersionDetails carry the same data in the
 	// shape the frontend actually reads (skill.version_details ?? skill.versions[0]).
 	Instructions   string         `json:"instructions,omitempty"`
@@ -128,6 +119,12 @@ func (r createRequest) toSkill() Skill {
 }
 
 type ListParams struct {
+	Limit     int
+	Offset    int
+	IDs       []int64
+	TagIDs    []int64
+	AuthorID  int64
+	Statuses  []string
 	Page      int
 	PageSize  int
 	Query     string
@@ -270,6 +267,7 @@ type Repository interface {
 
 // VersionCreateInput is CreateVersion's request shape.
 type VersionCreateInput struct {
+	AuthorID     int64
 	Name         string
 	Instructions string
 	Tags         []string
@@ -344,13 +342,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 // carries the published SkillsList keys beside the Pylon ones, so both shipped
 // clients accept one body.
 
-// Get serves both GET /skill/{mode}/{projectID}/{skillID} and the
-// {versionID}-scoped form (#874). With no {versionID}, VersionDetails stays
-// `base` exactly as it always has; with one, it names the requested version
-// — the round trip the version selector and CompareVersionsModal-style
-// client-side diff both need (fetchSkill(projectId, skillId, versionId) in
-// features/skills/api/skillsApi.ts already sends the 5-segment form; before
-// this change the route only matched 4 segments and answered 404).
+// Get selects the requested version or the configured default.
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
 	skillID := chi.URLParam(r, "skillID")
@@ -379,7 +371,14 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	created, err := h.repo.Create(r.Context(), projectID, req.toSkill())
+	authorID, ok := skillAuthor(r)
+	if !ok {
+		apierr.Write(w, apierr.Unauthorized("authenticated skill author is required"))
+		return
+	}
+	skill := req.toSkill()
+	skill.AuthorID = authorID
+	created, err := h.repo.Create(r.Context(), projectID, skill)
 	if err != nil {
 		apierr.Write(w, err)
 		return
@@ -421,7 +420,13 @@ func (h *Handler) CreateVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	authorID, ok := skillAuthor(r)
+	if !ok {
+		apierr.Write(w, apierr.Unauthorized("authenticated skill author is required"))
+		return
+	}
 	created, err := h.repo.CreateVersion(r.Context(), projectID, skillID, VersionCreateInput{
+		AuthorID:        authorID,
 		Name:            name,
 		Instructions:    req.Instructions,
 		Tags:            req.Tags,
@@ -835,7 +840,13 @@ func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	authorID, ok := skillAuthor(r)
+	if !ok {
+		apierr.Write(w, apierr.Unauthorized("authenticated skill author is required"))
+		return
+	}
 	created, err := h.repo.Create(r.Context(), projectID, Skill{
+		AuthorID:     authorID,
 		Name:         name,
 		Description:  description,
 		Instructions: instructions,
@@ -880,7 +891,7 @@ func readImportPayload(r *http.Request) (content, filename string, err error) {
 	return body.Content, body.Filename, nil
 }
 
-// Export renders the skill's base version as a markdown blob (YAML
+// Export renders the selected skill version as a markdown blob (YAML
 // frontmatter + instructions body) matching skillExportMd's contract: a
 // text/markdown body with a Content-Disposition filename header the
 // frontend parses to name the downloaded file.
@@ -923,4 +934,12 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func skillAuthor(r *http.Request) (int64, bool) {
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		return 0, false
+	}
+	return user.OwningUserID()
 }

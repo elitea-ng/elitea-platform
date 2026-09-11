@@ -41,6 +41,26 @@ function renderControls(overrides: Partial<ComponentProps<typeof AgentVersionCon
 }
 
 describe('AgentVersionControls', () => {
+  beforeEach(() => configureGeneratedClient({ baseUrl: '/api/v2' }));
+  afterEach(() => resetGeneratedClient());
+
+  it('saves the selected skill source, not the first or default version', async () => {
+    let body: unknown;
+    server.use(
+      http.post('*/elitea_core/versions/prompt_lib/:projectId/:applicationId', async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ id: '3', application_id: '42', name: 'copied', status: 'draft' }, { status: 201 });
+      }),
+    );
+    const { getByRole } = renderControls({ activeVersionId: 2 });
+    await userEvent.click(getByRole('button', { name: /save as version/i }));
+    await userEvent.type(getByRole('textbox'), 'copied');
+    await userEvent.click(getByRole('button', { name: /^save$/i }));
+    await waitFor(() =>
+      expect(body).toEqual({ name: 'copied', instructions: 'do the thing', copy_skills_from_version_id: 2 }),
+    );
+  });
+
   it('renders the version selector trigger — the affordance issue 134 found missing from the agent edit page', () => {
     const { getByTestId } = renderControls();
     expect(getByTestId('version-selector-trigger')).toBeInTheDocument();
@@ -55,7 +75,9 @@ describe('AgentVersionControls', () => {
     // unscoped text query cannot tell a populated menu from an empty one.
     // #147 added one COMMAND item ("Set as default") to the same menu; it is
     // excluded by test id so this stays an assertion about the version rows.
-    const versionRows = getAllByRole('menuitem').filter((item) => item.dataset['testid'] !== 'agent-version-set-default');
+    const versionRows = getAllByRole('menuitem').filter(
+      (item) => item.dataset['testid'] !== 'agent-version-set-default',
+    );
     expect(versionRows.map((item) => item.textContent)).toEqual([
       expect.stringContaining('base'),
       expect.stringContaining('v1'),
@@ -270,11 +292,7 @@ describe('AgentVersionControls — delete version', () => {
   });
 
   function renderDeletable(overrides: Partial<ComponentProps<typeof AgentVersionControls>> = {}) {
-    return renderControls({
-      activeVersionId: 2,
-      versionDelete: { onVersionDeleted: vi.fn() },
-      ...overrides,
-    });
+    return renderControls({ activeVersionId: 2, versionDelete: { onVersionDeleted: vi.fn() }, ...overrides });
   }
 
   it('offers a delete item inside the version menu, enabled for an ordinary version', async () => {
@@ -315,9 +333,7 @@ describe('AgentVersionControls — delete version', () => {
         return new HttpResponse(null, { status: 204 });
       }),
     );
-    const { getByTestId, getByRole, getAllByRole } = renderDeletable({
-      versionDelete: { onVersionDeleted },
-    });
+    const { getByTestId, getByRole, getAllByRole } = renderDeletable({ versionDelete: { onVersionDeleted } });
 
     await user.click(getByTestId('version-selector-trigger'));
     await user.click(getByTestId('agent-version-delete'));
@@ -359,9 +375,7 @@ describe('AgentVersionControls — delete version', () => {
         HttpResponse.json({ error: 'Unpublish first. Cannot delete a published version.' }, { status: 400 }),
       ),
     );
-    const { getByTestId, getByRole } = renderDeletable({
-      versionDelete: { onVersionDeleted, onVersionDeleteError },
-    });
+    const { getByTestId, getByRole } = renderDeletable({ versionDelete: { onVersionDeleted, onVersionDeleteError } });
 
     await user.click(getByTestId('version-selector-trigger'));
     await user.click(getByTestId('agent-version-delete'));

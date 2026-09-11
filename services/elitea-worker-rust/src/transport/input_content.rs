@@ -26,6 +26,9 @@ use zeroize::Zeroizing;
 
 use crate::protocol::control::{ClaimBoundInputAuthority, LeaseMonitoredAgentExecution};
 
+#[path = "toolkit_discovery_artifact.rs"]
+mod toolkit_discovery_artifact;
+
 const MAX_SAFE_TEXT_BYTES: usize = 256;
 const MAX_ORIGIN_BYTES: usize = 2048;
 const MAX_MATERIALIZED_INPUT_BYTES: usize = 1024 * 1024;
@@ -320,6 +323,23 @@ impl InputContentClient {
                 .ok_or(InputContentError::InvalidInput(
                     "the sealed input authority is malformed",
                 ))?;
+        self.fetch_authority(reference).await
+    }
+
+    /// Fetch one entry selected from the validated claim manifest.
+    ///
+    /// # Errors
+    /// Returns a typed error if the entry is unbound or its content cannot be verified.
+    pub async fn fetch_materialized_entry(
+        &self,
+        execution: &LeaseMonitoredAgentExecution,
+        entry_id: &str,
+    ) -> Result<MaterializedInput, InputContentError> {
+        let reference = execution
+            .input_content_authority_for_entry(entry_id)
+            .ok_or(InputContentError::InvalidInput(
+                "the selected input authority is absent",
+            ))?;
         self.fetch_authority(reference).await
     }
 
@@ -705,5 +725,6 @@ fn supported_media_type(value: &str) -> bool {
         "application/json"
             | "application/json; charset=utf-8"
             | "application/vnd.elitea.agent-execution-input.v1+protobuf"
+            | "application/vnd.elitea.toolkit-execute-read-input.v1+protobuf"
     )
 }

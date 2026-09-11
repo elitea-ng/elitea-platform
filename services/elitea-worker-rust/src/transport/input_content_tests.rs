@@ -19,6 +19,7 @@ use tonic::body::Body;
 use crate::protocol::control::{ClaimBoundInputAuthority, test_lease_monitored_input_execution};
 
 const MEDIA_TYPE: &str = "application/vnd.elitea.agent-execution-input.v1+protobuf";
+const TOOLKIT_MEDIA_TYPE: &str = "application/vnd.elitea.toolkit-execute-read-input.v1+protobuf";
 const SOURCE: &[u8] = b"source {{secret}}";
 static SOURCE_SHA256: LazyLock<[u8; 32]> = LazyLock::new(|| sha256(SOURCE));
 
@@ -443,6 +444,39 @@ async fn exact_body_limit_is_accepted_and_transport_failures_are_typed() {
             InputContentTransportError::Unavailable
         ))
     ));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn direct_toolkit_input_media_type_is_exactly_admitted() {
+    let body = materialized();
+    let mut toolkit_response = response(&body, StatusCode::OK, Version::HTTP_2, "v/1");
+    toolkit_response
+        .headers_mut()
+        .insert("content-type", HeaderValue::from_static(TOOLKIT_MEDIA_TYPE));
+    let (client, captured) = fake_client(Ok(toolkit_response), Duration::from_secs(1), 1024);
+    let mut toolkit_reference = reference();
+    toolkit_reference.media_type = TOOLKIT_MEDIA_TYPE;
+
+    let materialized = client
+        .fetch_materialized(toolkit_reference)
+        .await
+        .expect("direct toolkit materialized input");
+
+    assert_eq!(materialized.as_bytes(), body);
+    assert_eq!(captured.lock().expect("captured requests").len(), 1);
+
+    let (client, captured) = fake_client(
+        Ok(response(&body, StatusCode::OK, Version::HTTP_2, "v/1")),
+        Duration::from_secs(1),
+        1024,
+    );
+    let mut lookalike = reference();
+    lookalike.media_type = "application/vnd.elitea.toolkit-execute-read-input.v2+protobuf";
+    assert!(matches!(
+        client.fetch_materialized(lookalike).await,
+        Err(InputContentError::InvalidInput(_))
+    ));
+    assert!(captured.lock().expect("captured requests").is_empty());
 }
 
 #[tokio::test(flavor = "current_thread")]

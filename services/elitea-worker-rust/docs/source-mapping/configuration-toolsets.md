@@ -167,7 +167,7 @@ Indexing tools are recorded as a later overlay in `indexing.md`.
 | `carrier` | `CarrierConfiguration` | `EliteACarrierToolkit` | 18 | No | corresponding family paths | Planned; source has no focused family tests |
 | `report_portal` | `configurations/report_portal.py::ReportPortalConfiguration` | `tools/report_portal::ReportPortalToolkit` | 9 | Yes | `toolkits/families/report_portal/{config,client,tools}.rs` | Capability-disabled complete read family: nine bounded project/report reads, including explicit UTF-8 HTML and base64 PDF export projections; authorized materialization, egress policy and live provider proof remain gates |
 | `testio` | `TestIOConfiguration` | `TestIOToolkit` | 15 | Yes | corresponding family paths | Deferred as an incoherent source contract: the check and official API require `Authorization: Token`, while runtime tools send `Bearer`; exploratory-test retrieval cannot receive its implementation-required product ID; and the two SDK write payloads do not map to the current provider create/confirmation operations without inventing product behavior |
-| `openapi` | `configurations/openapi.py::OpenApiConfiguration` | `tools/openapi::{EliteAOpenAPIToolkit,OpenApiAction}`, `tools/openapi/{api_wrapper,response_selection}.py` | Dynamic | Yes | `toolkits/families/openapi/{config,spec,client,response_selection,tools}.rs` | Partial capability-disabled family: bounded inline OpenAPI 3.x JSON/YAML parsing, selected dynamic operations, exact request schemas, fixed-origin JSON calls, static secret headers, anonymous/API-key/client-credentials/delegated OAuth and bounded schema-aware response search are implemented. A Private-project UI rehearsal proved selected `echo_marker` materialization, provider dispatch, same-call result, second model turn, persistence and retirement. Remote specifications, legacy auth objects, rich OAuth discovery/DCR, runtime 401 re-authorization, non-JSON request bodies, binary/artifact routing and production egress remain gates |
+| `openapi` | `configurations/openapi.py::OpenApiConfiguration` | `tools/openapi::{EliteAOpenAPIToolkit,OpenApiAction}`, `tools/openapi/{api_wrapper,response_selection}.py` | Dynamic | Yes | `toolkits/families/openapi/{config,spec,client,response_selection,tools}.rs` | Partial capability-disabled family: bounded inline OpenAPI 3.x JSON/YAML parsing, selected dynamic operations, exact request schemas, fixed-origin JSON calls, static secret headers, anonymous/API-key/client-credentials/delegated OAuth and bounded schema-aware response search are implemented. A Private-project UI rehearsal proved selected `echo_marker` materialization, provider dispatch, same-call result, second model turn, persistence and retirement. Direct-node delegated 401 recovery has component proof in `delegated-auth-expiry.md`. Remote specifications, legacy auth objects, rich OAuth discovery/DCR, model-loop 401 re-authorization, non-JSON request bodies, binary/artifact routing and production egress remain gates |
 | `langfuse` | `LangfuseConfiguration` | No standard toolkit | 0 | Yes | `configurations/families/langfuse.rs` | Planned; observability support configuration |
 | `aha` | `configurations/aha.py::AhaConfiguration` | `tools/aha::AhaToolkit` | 33 | Yes | `toolkits/families/aha/` | Capability-disabled complete family; all 25 reads, 6 writes, 1 delete and the effectful combined execute surface are retained, with artifact-backed attachment upload behind a claim-scoped verified temp-spool resolver |
 | `pgvector` | `PgVectorConfiguration` | No standalone toolkit | 0 | No | `configurations/families/pgvector.rs` | Planned; shared indexing/runtime dependency |
@@ -225,12 +225,16 @@ This is intentionally `partial`, not `ported`. Specifications must already be
 sealed inline and are capped at 1 MiB; URL-based loading is rejected until a
 claim-scoped egress grant exists. The initial client accepts JSON request bodies
 and bounded UTF-8 output only. The SDK's discovery/resource-metadata and DCR
-program, legacy nested auth shapes, post-materialization 401 token refresh,
+program, legacy nested auth shapes, model-loop 401 token recovery,
 multipart/form/binary bodies, binary or artifact results and production network
 admission remain explicit gaps. `src/toolkits/openapi_tests.rs` owns parser,
 selection, dynamic schema, RFC query construction, auth precedence, guarded-tool,
 exact-token rematerialization, secret-header precedence, array/map response
 selection, block-policy and redacted-failure proof.
+
+Direct-node OpenAPI 401 recovery now uses the shared delegated authorization signal.
+The [active-run ledger](delegated-auth-expiry.md) records exact-node resume, Skip, and bounded repeated-rejection tests.
+The worker does not exchange refresh tokens itself. Deployed active-run verification remains open.
 
 The SharePoint slice is intentionally smaller than the current 28-tool SDK
 catalog. `elitea_sdk/configurations/sharepoint.py` and the token/site-path logic
@@ -246,15 +250,18 @@ site-prefix, document-library, recursive traversal, extension-filter and
 provider-next-link behavior without downloading content.
 
 This subset rejects an empty selection because the SDK interprets empty as the
-complete catalog; silently returning only eight tools would change saved-agent
-behavior. `rest_wrapper.py` and `authorization_helper.py` remain the separate
-ACS/app-only authority gap. `read_document`, sharing-link parsing, OneNote
-image/attachment interpretation, artifact upload and all effects remain closed
-until the artifact boundary and effect receipts exist. A real Graph 401 is
-converted to the common delegated-auth signal and direct Toolkit nodes can
-checkpoint it; a model-owned loop still requires a runtime-discovered
-confirmation adapter when a previously accepted token expires. Proactive
-missing-token model calls already use the native original-call confirmation.
+complete catalog. A mixed saved selection exposes only supported reads that the
+user selected. It reports the count of omitted operations without exposing
+their arguments or configuration. A selection with no supported read still
+fails closed. `rest_wrapper.py` and `authorization_helper.py` remain the
+separate ACS/app-only authority gap. `read_document`, sharing-link parsing,
+OneNote image or attachment interpretation, artifact upload, indexing, and all
+effects remain closed until the artifact boundary and effect receipts exist. A
+real Graph 401 is converted to the common delegated-auth signal and direct
+Toolkit nodes can checkpoint it. A model-owned loop still requires a
+runtime-discovered confirmation adapter when a previously accepted token
+expires. Proactive missing-token model calls already use the native
+original-call confirmation.
 `src/toolkits/sharepoint_tests.rs` owns configuration/token precedence,
 guarded schema, fixed-origin/sensitive-header, pagination, library-path,
 metadata-only traversal, reactive-401 and materializer-catalog proof. This
@@ -2003,8 +2010,8 @@ cluster topology.
 | Python source | Behavior | Rust target | Status / deviation |
 | --- | --- | --- | --- |
 | SDK `runtime/tools/ask_user.py` plus `runtime/toolkits/tools.py` internal-tool selection | Runtime-built clarification tool with 1-4 normalized questions and a structured UI answer | `src/agents/internal_tools.rs`, direct/nested agent session replay and pipeline LLM graph replay | Implemented capability-disabled through native ADK confirmation. Object/string answers replace the original call result; they are not new user turns. Main application/ad-hoc projection and `answer` admission are included. Nested-parallel saved-child calls have distinct hierarchical cards, atomic complete-set admission, frozen child-scope validation, and exact-answer replay coverage |
-| SDK `runtime/toolkits/mcp.py` | Remote MCP discovery and invocation | `src/toolkits/mcp.rs`, `src/agents/{ordinary,pipeline}.rs` | Partial capability-disabled HTTP implementation with exact selected-tool discovery/invocation, delegated authorization and native direct/pipeline composition; prebuilt/static/stdio variants, catalog sync and Elitea-as-MCP-server remain gated |
-| SDK `runtime/toolkits/mcp_config.py` | Saved HTTP/stdio MCP definitions | MCP module plus external MCP runner client | Planned; stdio intentionally externalized |
+| SDK `runtime/toolkits/mcp.py` | Remote MCP discovery and invocation | `src/toolkits/mcp.rs`, `src/agents/{ordinary,pipeline}.rs` | Partial capability-disabled HTTP implementation with exact selected-tool discovery/invocation, bounded RMCP protected-resource and authorization-server discovery, exact delegated authorization resume, and native direct/pipeline composition. Fixed and declared-parameter catalogue-backed HTTP definitions are supported through Main claim-time resolution. External Elitea-as-MCP can execute opted-in selected read-only toolkit operations through the separately gated durable direct-tool path. Stdio, descriptor sync, remaining OAuth transport variants, effectful external calls and external agent/pipeline controls remain gated |
+| SDK `runtime/toolkits/mcp_config.py` | Saved HTTP/stdio MCP definitions | Main prebuilt catalogue, dynamic toolkit schema and claim materializer; Rust MCP module; external MCP runner client | Partial capability-disabled for fixed and declared-parameter HTTP definitions with project-vault secret sealing. Main also injects runtime-only project identity and a current-user PAT for trusted same-origin internal MCP endpoints. The Main-owned application, skill, toolkit, configuration, notification, project-context, and secret operations are mapped in `internal-elitea-mcp.md`. Discovery, chat, analytics, artifacts, and live per-instance toolkit discovery remain closed there. Stdio is intentionally externalized |
 | SDK `runtime/toolkits/application.py` | Nested applications | `src/agents/application_tools.rs`, `src/agents/graph/application.rs` | Partial capability-disabled direct-agent and saved-pipeline nesting with exact version, hierarchy, cycle/tier bounds and durable nested HITL; private immutable Main child resolution, child variables and further recursive pipeline nodes remain gated |
 | SDK `runtime/toolkits/artifact.py` | 16 artifact tools and indexing coupling | `src/toolkits/artifact.rs` | Planned; artifact service boundary required |
 | SDK `tools/memory` and `runtime/toolkits/vectorstore.py` | Four memory and four vectorstore tools | `src/toolkits/{memory,vectorstore}.rs` | Planned |

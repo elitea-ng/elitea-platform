@@ -2,7 +2,7 @@ package mcp
 
 // Per-project tool assembly — the half of issue 252 that serves REAL data.
 //
-// Two sources, both rows in the project's own schema, both matching what pylon
+// The external project listing has two row-backed sources, matching what pylon
 // `utils/mcp_service.py:__get_all_tools` reads:
 //
 //	AGENTS   — `applications` whose version carries the tag named `mcp`. One
@@ -13,11 +13,12 @@ package mcp
 //	           One tool per entry of `settings.selected_tools`, named
 //	           `<toolkit>_<tool>`.
 //
-// Nothing here is hardcoded and nothing is invented: a project with no tagged
-// agents and no flagged toolkits gets an empty list, which for THIS endpoint is
-// a true statement about the project's rows (unlike the empty list registry.go
-// refuses to fabricate, which would be a statement about sockets attached to a
-// different process).
+// A separate fixed source serves internal builder categories. It is selected
+// only by an exact category path and never enters the external project listing.
+// A project with no tagged agents and no flagged toolkits therefore still gets
+// an empty external list, which is a true statement about the project's rows.
+// When the optional social folder projection exists, both sources also exclude
+// entities in a no_access folder for the authenticated actor.
 
 import (
 	"context"
@@ -26,6 +27,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/foldervisibility"
 )
 
 // Tool is one MCP tool descriptor. The JSON tags are the protocol's, including
@@ -65,17 +68,42 @@ type Tool struct {
 	// ResolveCurrentApplicationTurn), so a target with no version cannot be
 	// admitted at all.
 	applicationVersionID int64
-	// toolkitID and toolkitToolName are the toolkit half's discriminator, and
-	// they are BOTH required to run one (#616): the producer needs the saved
-	// `elitea_tools` row to redeem settings from, and the SDK tool name, which
-	// is NOT the published MCP name — that one is `<toolkit>_<tool>` with
-	// pylon's sanitiser applied, and no toolkit has a tool called that.
+	// toolkitID and toolkitToolName pin an external toolkit call to the exact
+	// opted-in row and selected SDK operation that produced this descriptor.
+	// The durable executor consumes both fields and re-reads the row before
+	// admission, so it never reverses a lossy MCP name into an arbitrary row.
 	toolkitID       int64
 	toolkitToolName string
+	// internalApplicationOperation is populated only for the fixed
+	// elitea_core/applications category. It is never serialized.
+	internalApplicationOperation internalApplicationOperation
+	// internalSkillOperation is populated only for the fixed skills category.
+	// It is never serialized.
+	internalSkillOperation internalSkillOperation
+	// internalToolkitOperation is populated only for the fixed toolkit-builder
+	// category. It is never serialized.
+	internalToolkitOperation internalToolkitOperation
+	// internalConfigurationOperation is populated only for the fixed
+	// configurations category. It is never serialized.
+	internalConfigurationOperation internalConfigurationOperation
+	// internalNotificationOperation is populated only for the fixed
+	// notifications category. It is never serialized.
+	internalNotificationOperation internalNotificationOperation
+	// internalProjectContextOperation is populated only for the fixed
+	// project-context builder category. It is never serialized.
+	internalProjectContextOperation internalProjectContextOperation
+	internalDraftOperation          internalDraftOperation
+	internalChatOperation           internalChatOperation
+	internalDiscoveryOperation      internalDiscoveryOperation
+	// internalSecretOperation is populated only for the fixed secrets category.
+	// It is never serialized.
+	internalSecretOperation internalSecretOperation
+	// permission is re-checked for each internal API invocation.
+	permission string
 }
 
 // runnableAgent reports whether this descriptor names an agent this service can
-// execute. A toolkit tool answers false — see runnableToolkitTool.
+// execute. Toolkit descriptors have their own exact-target predicate below.
 func (t Tool) runnableAgent() bool {
 	return t.applicationID > 0 && t.applicationVersionID > 0
 }
@@ -125,31 +153,85 @@ type postgresToolSource struct {
 }
 
 func (p postgresToolSource) tools(ctx context.Context, schema string, s scope) ([]Tool, error) {
+	if s.kind == scopeCategory {
+		if s.category == internalChatCategory {
+			return internalChatTools(), nil
+		}
+		if s.category == internalDiscoveryCategory {
+			return internalDiscoveryTools(), nil
+		}
+		if s.category == internalApplicationsCategory {
+			return internalApplicationTools(), nil
+		}
+		if s.category == internalSkillsCategory {
+			return append(internalSkillTools(), internalDraftTool(internalDraftSkill)), nil
+		}
+		if s.category == internalToolkitsCategory {
+			return internalToolkitTools(p.handler != nil && p.handler.toolkitDiscoveryAvailable()), nil
+		}
+		if s.category == internalConfigurationsCategory {
+			return internalConfigurationTools(p.handler != nil && p.handler.internalConfigurations != nil && p.handler.internalTypedConfigurations != nil), nil
+		}
+		if s.category == internalNotificationsCategory {
+			return internalNotificationTools(), nil
+		}
+		if s.category == internalProjectContextCategory {
+			return append(internalProjectContextTools(), internalDraftTool(internalDraftProjectContext)), nil
+		}
+		if s.category == internalSecretsCategory {
+			return internalSecretTools(), nil
+		}
+	}
+
+	access, err := p.externalAccess(ctx, schema)
+	if err != nil {
+		return nil, err
+	}
 	switch s.kind {
 	case scopeResource:
 		if s.resourceType == "toolkit" {
-			return p.toolkitTools(ctx, schema, &s.resourceID)
+			return p.toolkitTools(ctx, schema, access, &s.resourceID)
 		}
-		return p.agentToolForVersion(ctx, schema, s.resourceID)
+		return p.agentToolForVersion(ctx, schema, access, s.resourceID)
 	case scopeCategory:
 		if s.category == "applications" {
-			return p.agentTools(ctx, schema)
+			return p.agentTools(ctx, schema, access)
 		}
-		return p.toolkitTools(ctx, schema, nil)
+		return p.toolkitTools(ctx, schema, access, nil)
 	default:
 		// pylon lists toolkits first, then agents. Order is not protocol-
 		// significant, but a stable one makes the listing diffable between the
 		// two stacks during parity checks.
-		toolkitTools, err := p.toolkitTools(ctx, schema, nil)
+		toolkitTools, err := p.toolkitTools(ctx, schema, access, nil)
 		if err != nil {
 			return nil, err
 		}
-		agentTools, err := p.agentTools(ctx, schema)
+		agentTools, err := p.agentTools(ctx, schema, access)
 		if err != nil {
 			return nil, err
 		}
 		return dedupeByName(append(toolkitTools, agentTools...)), nil
 	}
+}
+
+type externalCatalogAccess struct {
+	actorID            int64
+	folderRestrictions bool
+}
+
+var errExternalCatalogIdentity = foldervisibility.ErrIdentity
+var errPartialFolderAccessProjection = foldervisibility.ErrPartialProjection
+
+// externalAccess uses the shared actor and folder projection authority.
+func (p postgresToolSource) externalAccess(ctx context.Context, schema string) (externalCatalogAccess, error) {
+	if p.handler == nil || p.handler.pool == nil {
+		return externalCatalogAccess{}, errNoPool
+	}
+	access, err := foldervisibility.Resolve(ctx, p.handler.pool, schema)
+	if err != nil {
+		return externalCatalogAccess{}, err
+	}
+	return externalCatalogAccess{actorID: access.ActorID, folderRestrictions: access.FolderRestrictions}, nil
 }
 
 // agentTools lists the agents this project exposes over MCP.
@@ -162,7 +244,11 @@ func (p postgresToolSource) tools(ctx context.Context, schema string, s scope) (
 // DISTINCT ON the application: an agent with several tagged versions is one
 // tool, not one per version. pylon reaches the same place by listing
 // applications rather than versions.
-func (p postgresToolSource) agentTools(ctx context.Context, schema string) ([]Tool, error) {
+func (p postgresToolSource) agentTools(
+	ctx context.Context,
+	schema string,
+	access externalCatalogAccess,
+) ([]Tool, error) {
 	if p.handler.pool == nil {
 		return nil, errNoPool
 	}
@@ -171,15 +257,31 @@ func (p postgresToolSource) agentTools(ctx context.Context, schema string) ([]To
 	// tagged version — rather than whichever one the plan happened to emit
 	// first. Neither changes the listing: `Name` and `Description` come from
 	// `application`, which DISTINCT ON already collapsed to one row per id.
-	rows, err := p.handler.pool.Query(ctx, fmt.Sprintf(`
+	query := fmt.Sprintf(`
 		SELECT DISTINCT ON (application.id)
 		       application.id, version.id, application.name, COALESCE(application.description, '')
 		FROM %[1]s.applications AS application
 		JOIN %[1]s.application_versions AS version ON version.application_id = application.id
 		JOIN %[1]s.application_version_tag_association AS association ON association.version_id = version.id
 		JOIN %[1]s.tags AS tag ON tag.id = association.tag_id
-		WHERE tag.name = 'mcp'
-		ORDER BY application.id, version.id DESC`, schema))
+		WHERE tag.name = 'mcp'`, schema)
+	args := []any{}
+	if access.folderRestrictions {
+		args = append(args, access.actorID)
+		query += fmt.Sprintf(`
+		  AND NOT EXISTS (
+		      SELECT 1
+		      FROM %[1]s.social_folder_items AS item
+		      JOIN %[1]s.folder_access_overrides AS access
+		        ON access.folder_id = item.folder_id
+		      WHERE item.entity IN ('agent', 'pipeline')
+		        AND item.entity_id = application.id
+		        AND access.user_id = $1
+		        AND access.access_level = 'no_access'
+		  )`, schema)
+	}
+	query += " ORDER BY application.id, version.id DESC"
+	rows, err := p.handler.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -216,17 +318,38 @@ func (p postgresToolSource) agentTools(ctx context.Context, schema string) ([]To
 // selecting it. The tenant boundary still holds — the version is looked up in
 // this project's schema only, so a version id from another project is not
 // found.
-func (p postgresToolSource) agentToolForVersion(ctx context.Context, schema string, versionID int64) ([]Tool, error) {
+func (p postgresToolSource) agentToolForVersion(
+	ctx context.Context,
+	schema string,
+	access externalCatalogAccess,
+	versionID int64,
+) ([]Tool, error) {
 	if p.handler.pool == nil {
 		return nil, errNoPool
 	}
 	var applicationID int64
 	var name, description string
-	err := p.handler.pool.QueryRow(ctx, fmt.Sprintf(`
+	query := fmt.Sprintf(`
 		SELECT application.id, application.name, COALESCE(application.description, '')
 		FROM %[1]s.application_versions AS version
 		JOIN %[1]s.applications AS application ON application.id = version.application_id
-		WHERE version.id = $1`, schema), versionID).Scan(&applicationID, &name, &description)
+		WHERE version.id = $1`, schema)
+	args := []any{versionID}
+	if access.folderRestrictions {
+		args = append(args, access.actorID)
+		query += fmt.Sprintf(`
+		  AND NOT EXISTS (
+		      SELECT 1
+		      FROM %[1]s.social_folder_items AS item
+		      JOIN %[1]s.folder_access_overrides AS access
+		        ON access.folder_id = item.folder_id
+		      WHERE item.entity IN ('agent', 'pipeline')
+		        AND item.entity_id = application.id
+		        AND access.user_id = $2
+		        AND access.access_level = 'no_access'
+		  )`, schema)
+	}
+	err := p.handler.pool.QueryRow(ctx, query, args...).Scan(&applicationID, &name, &description)
 	if err != nil {
 		if isNoRows(err) {
 			// An id that names nothing in this project is an empty listing, not
@@ -262,7 +385,12 @@ func (p postgresToolSource) agentToolForVersion(ctx context.Context, schema stri
 // the intermediate object is missing is NULL rather than false — fine — but on
 // a row where someone stored the string "yes" it raises, which would fail the
 // whole listing because of one malformed toolkit.
-func (p postgresToolSource) toolkitTools(ctx context.Context, schema string, toolkitID *int64) ([]Tool, error) {
+func (p postgresToolSource) toolkitTools(
+	ctx context.Context,
+	schema string,
+	access externalCatalogAccess,
+	toolkitID *int64,
+) ([]Tool, error) {
 	if p.handler.pool == nil {
 		return nil, errNoPool
 	}
@@ -275,64 +403,118 @@ func (p postgresToolSource) toolkitTools(ctx context.Context, schema string, too
 		query += " AND id = $1"
 		args = append(args, *toolkitID)
 	}
-	query += " ORDER BY id"
-
+	if access.folderRestrictions {
+		args = append(args, access.actorID)
+		query += fmt.Sprintf(`
+		  AND NOT EXISTS (
+		      SELECT 1
+		      FROM %[1]s.social_folder_items AS item
+		      JOIN %[1]s.folder_access_overrides AS access
+		        ON access.folder_id = item.folder_id
+		      WHERE item.entity IN ('toolkit', 'mcp')
+		        AND item.entity_id = elitea_tools.id
+		        AND access.user_id = $%[2]d
+		        AND access.access_level = 'no_access'
+		  )`, schema, len(args))
+	}
+	query += " ORDER BY id LIMIT 513"
 	rows, err := p.handler.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-
-	var tools []Tool
+	type toolkitRow struct {
+		id                             int64
+		name, toolkitType, description string
+		selected                       []byte
+	}
+	var instances []toolkitRow
 	for rows.Next() {
-		var id int64
-		var name, toolkitType, description string
-		var selected []byte
-		if err := rows.Scan(&id, &name, &toolkitType, &description, &selected); err != nil {
+		var row toolkitRow
+		if err := rows.Scan(&row.id, &row.name, &row.toolkitType, &row.description, &row.selected); err != nil {
 			return nil, err
 		}
-		for _, tool := range selectedToolNames(selected) {
-			tools = append(tools, Tool{
-				toolkitID:       id,
-				toolkitToolName: tool,
-				Name:            toolIdentifier(name + "_" + tool),
-				// pylon's exact sentence. It is the only description a toolkit
-				// tool has: the per-tool text lives in the SDK's argument
-				// schemas, which this service does not hold (see below).
-				Description: fmt.Sprintf(
-					"Tool '%s' from toolkit type '%s'. Toolkit description: %s", tool, toolkitType, description),
-				InputSchema: toolkitToolSchema(),
-			})
+		instances = append(instances, row)
+		if len(instances) > 512 {
+			return nil, errExternalCatalogLimit
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return dedupeByName(tools), nil
+	// Release the database connection before a claimed worker discovers schemas.
+	rows.Close()
+	discoveryCtx, cancel := context.WithTimeout(ctx, externalSchemaDeadline)
+	defer cancel()
+	var tools []Tool
+	schemaBytes := 0
+	for _, row := range instances {
+		selected := selectedToolNames(row.selected)
+		if len(selected) == 0 {
+			continue
+		}
+		argumentSchemas, available, live, err := p.toolkitInstanceSchemas(discoveryCtx, schema, access.actorID, row.id, row.toolkitType)
+		if err != nil {
+			return nil, err
+		}
+		for _, tool := range selected {
+			if live && !available[tool] {
+				continue
+			}
+			inputSchema := unknownToolkitToolSchema()
+			if value, found := argumentSchemas[tool]; found {
+				inputSchema = value
+			}
+			encoded, err := json.Marshal(inputSchema)
+			if err != nil {
+				return nil, errExternalSchemaInvalid
+			}
+			schemaBytes += len(encoded)
+			if schemaBytes > maxExternalSchemaBytes || len(tools) >= 4096 {
+				return nil, errExternalCatalogLimit
+			}
+			tools = append(tools, Tool{
+				Name:        toolIdentifier(row.name + "_" + tool),
+				Description: fmt.Sprintf("Tool '%s' from toolkit type '%s'. Toolkit description: %s", tool, row.toolkitType, row.description),
+				InputSchema: inputSchema, toolkitID: row.id, toolkitToolName: tool,
+			})
+		}
+	}
+	return rejectAmbiguousToolkitNames(tools), nil
 }
 
-// toolkitToolSchema is the input schema a toolkit tool advertises.
+// toolkitSchemas obtains one detached per-type schema map. It is deliberately
+// called once per toolkit row rather than once per selected operation: the
+// digest-pinned source performs a bounded deep clone, and repeating that work
+// for every selected tool would turn a 44-tool GitHub toolkit into 44 clones of
+// the same catalogue entry.
+func (p postgresToolSource) toolkitSchemas(toolkitType string) (map[string]map[string]any, bool, error) {
+	if p.handler == nil || p.handler.toolkitArgumentSchemas == nil {
+		return nil, false, nil
+	}
+	return p.handler.toolkitArgumentSchemas.ToolkitArgumentSchemas(toolkitType)
+}
+
+// unknownToolkitToolSchema is the fallback for an argument schema the pinned
+// catalogue genuinely cannot know.
 //
 // pylon fills this from `get_toolkit_schemas(...)[type].properties.selected_tools
 // .args_schemas[tool]` — a registry the Python worker builds by importing the
-// SDK and calling `schema()` on every toolkit class. This service holds a
-// projection of that registry
-// (`internal/runtimecomposition/current_toolkit_schema_snapshot.json`), but the
-// projection carries only the settings-expansion and naming annotations, not
-// per-tool argument schemas, so there is nothing here to read.
+// SDK and calling `schema()` on every toolkit class. Main's composition root
+// injects the equivalent digest-pinned projection from
+// `internal/runtimecomposition/current_toolkit_schema_snapshot.json`.
 //
-// An open object is what pylon itself emits whenever the lookup misses
-// (`.get(tool, {})`), and it is the honest schema for a tool whose arguments
-// this service genuinely does not know: it says "an object, contents
-// unconstrained" rather than "no arguments", which `{"type":"object",
-// "properties":{}}` with no additionalProperties would imply to a strict client.
-func toolkitToolSchema() map[string]any {
+// Dynamic MCP, MCP-config and OpenAPI tools are discovered from a remote server
+// or specification and therefore legitimately have no built-in argument
+// schema. Live instance discovery replaces this fallback when the runtime is enabled.
+// Runtime-disabled deployments keep the explicit open-object contract.
+func unknownToolkitToolSchema() map[string]any {
 	return map[string]any{
 		"type":                 "object",
 		"properties":           map[string]any{},
 		"additionalProperties": true,
-		"description": "Argument schema unavailable: toolkit tool argument schemas live in the Python SDK " +
-			"registry, which this service does not hold. Arguments are passed through unchanged.",
+		"description": "Argument schema unavailable in the pinned built-in toolkit catalogue; " +
+			"the operation may be dynamically discovered or no longer present. Arguments are passed through unchanged.",
 	}
 }
 
@@ -385,6 +567,52 @@ func dedupeByName(tools []Tool) []Tool {
 	seen := make(map[string]struct{}, len(tools))
 	unique := make([]Tool, 0, len(tools))
 	for _, tool := range tools {
+		if _, duplicate := seen[tool.Name]; duplicate {
+			continue
+		}
+		seen[tool.Name] = struct{}{}
+		unique = append(unique, tool)
+	}
+	return unique
+}
+
+// rejectAmbiguousToolkitNames makes the project-wide toolkit catalogue agree
+// with the current platform's dispatch guard: a sanitised name produced by two
+// different toolkit targets resolves to neither target. Advertising whichever
+// row happened to be read first would be misleading because a later
+// tools/call cannot safely choose between them.
+//
+// Repeated copies of the same selected operation are harmless legacy data and
+// collapse to one descriptor. A resource-scoped catalogue still exposes its
+// exact toolkit row because there is no second target in that scope.
+func rejectAmbiguousToolkitNames(tools []Tool) []Tool {
+	if len(tools) == 0 {
+		return nil
+	}
+	type target struct {
+		toolkitID int64
+		toolName  string
+	}
+	firstTargets := make(map[string]target, len(tools))
+	ambiguous := make(map[string]struct{})
+	for _, tool := range tools {
+		current := target{toolkitID: tool.toolkitID, toolName: tool.toolkitToolName}
+		first, found := firstTargets[tool.Name]
+		if !found {
+			firstTargets[tool.Name] = current
+			continue
+		}
+		if first != current {
+			ambiguous[tool.Name] = struct{}{}
+		}
+	}
+
+	unique := make([]Tool, 0, len(tools))
+	seen := make(map[string]struct{}, len(tools))
+	for _, tool := range tools {
+		if _, rejected := ambiguous[tool.Name]; rejected {
+			continue
+		}
 		if _, duplicate := seen[tool.Name]; duplicate {
 			continue
 		}

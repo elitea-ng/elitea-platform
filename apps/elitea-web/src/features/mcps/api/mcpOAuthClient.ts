@@ -2,9 +2,8 @@
  * MCP OAuth proxy endpoints — hand-written port of
  * apps/elitea-ui/src/api/mcpOAuth.js (unit A5, manifest API-164/165/166).
  *
- * Not orval-generated: `mcp_oauth_proxy`/`mcp_dcr_proxy` are not in the W2
- * spec-enrichment manifest scope (chat/agent-authoring-domain endpoints,
- * same "no OpenAPI schema" situation `entities/mcp`'s header documents).
+ * These proxies now have Main OpenAPI schemas. This compatibility adapter
+ * remains hand-written and retains the existing flat response shape.
  * Hand-written against the SAME `eliteaFetch` mutator every generated hook
  * uses (spec §5.3: "a hand-written endpoint is indistinguishable from a
  * generated one at the call site") — this file imports it the same way
@@ -68,8 +67,11 @@ async function postOAuthProxy<T>(path: string, projectId: string | number, body:
 }
 
 /** The wire shape the backend's OAuth-proxy responses share, whichever grant type was used. */
-export interface McpOAuthTokenResponse {
-  access_token: string;
+export interface McpOAuthGrantResponse {
+  authorization_resource?: string;
+  authorization_reference?: string;
+  authorization_expires_at?: string;
+  access_token?: string;
   token_type?: string;
   expires_in?: number;
   refresh_token?: string;
@@ -80,7 +82,14 @@ export interface McpOAuthTokenResponse {
   error_description?: string;
 }
 
+export interface McpOAuthTokenResponse extends McpOAuthGrantResponse {
+  access_token: string;
+}
+
 export interface ExchangeMcpOAuthTokenParams {
+  authorization_reference_only?: boolean | undefined;
+  client_reference?: string | undefined;
+  resource?: string | undefined;
   projectId: string | number;
   token_endpoint?: string | undefined;
   code: string;
@@ -104,11 +113,13 @@ export interface ExchangeMcpOAuthTokenParams {
 }
 
 /** API-164 — `POST /elitea_core/mcp_oauth_proxy/{projectId}`, `grant_type: authorization_code`. */
-export function exchangeMcpOAuthToken({ projectId, ...body }: ExchangeMcpOAuthTokenParams): Promise<McpOAuthTokenResponse> {
+export function exchangeMcpOAuthToken({ projectId, ...body }: ExchangeMcpOAuthTokenParams): Promise<McpOAuthGrantResponse> {
   return postOAuthProxy(MCP_OAUTH_PROXY_PATH, projectId, { ...body, grant_type: 'authorization_code' });
 }
 
 export interface RefreshMcpOAuthTokenParams {
+  client_reference?: string | undefined;
+  resource?: string | undefined;
   projectId: string | number;
   token_endpoint?: string | undefined;
   refresh_token: string;
@@ -138,6 +149,8 @@ export function refreshMcpOAuthToken({ projectId, ...body }: RefreshMcpOAuthToke
 }
 
 export interface RegisterMcpDynamicClientParams {
+  token_endpoint?: string | undefined;
+  resource?: string | undefined;
   projectId: string | number;
   registration_endpoint: string;
   redirect_uris: readonly string[];
@@ -149,6 +162,7 @@ export interface RegisterMcpDynamicClientParams {
 }
 
 export interface McpDynamicClientRegistration {
+  client_reference?: string;
   client_id: string;
   client_secret?: string;
   error?: string;

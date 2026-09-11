@@ -1669,7 +1669,10 @@ SELECT conversation.id AS conversation_id,
                    jsonb_build_object(
                        'id', tool.id,
                        'type', tool.type,
-                       'name', tool.name,
+                       'name', CASE
+                           WHEN tool.type = 'application' THEN child_application.name
+                           ELSE tool.name
+                       END,
                        'description', tool.description,
                        'author_id', tool.author_id,
                        'settings', CASE
@@ -1700,7 +1703,10 @@ SELECT conversation.id AS conversation_id,
                        END,
                        'meta', tool.meta,
                        'created_at', tool.created_at,
-                       'toolkit_name', tool.name,
+                       'toolkit_name', CASE
+                           WHEN tool.type = 'application' THEN child_application.name
+                           ELSE tool.name
+                       END,
                        'author', NULL,
                        'agent_type', CASE
                            WHEN tool.type = 'application'
@@ -1731,6 +1737,13 @@ SELECT conversation.id AS conversation_id,
                FROM entity_tool_mapping AS application_tool_mapping
                JOIN elitea_tools AS tool
                  ON tool.id = application_tool_mapping.tool_id
+               LEFT JOIN applications AS child_application
+                 ON tool.type = 'application'
+                AND child_application.id = CASE
+                    WHEN tool.settings ->> 'application_id' ~ '^[1-9][0-9]*$'
+                    THEN (tool.settings ->> 'application_id')::integer
+                    ELSE NULL
+                END
                LEFT JOIN LATERAL (
                    SELECT COALESCE(
                        jsonb_agg(selected.value ORDER BY selected.ordinality),
@@ -2334,7 +2347,10 @@ SELECT application_version.id AS application_version_id,
                    jsonb_build_object(
                        'id', tool.id,
                        'type', tool.type,
-                       'name', tool.name,
+                       'name', CASE
+                           WHEN tool.type = 'application' THEN child_application.name
+                           ELSE tool.name
+                       END,
                        'description', tool.description,
                        'author_id', tool.author_id,
                        'settings', CASE
@@ -2365,7 +2381,10 @@ SELECT application_version.id AS application_version_id,
                        END,
                        'meta', tool.meta,
                        'created_at', tool.created_at,
-                       'toolkit_name', tool.name,
+                       'toolkit_name', CASE
+                           WHEN tool.type = 'application' THEN child_application.name
+                           ELSE tool.name
+                       END,
                        'author', NULL,
                        'agent_type', CASE
                            WHEN tool.type = 'application'
@@ -2396,6 +2415,13 @@ SELECT application_version.id AS application_version_id,
                FROM entity_tool_mapping AS application_tool_mapping
                JOIN elitea_tools AS tool
                  ON tool.id = application_tool_mapping.tool_id
+               LEFT JOIN applications AS child_application
+                 ON tool.type = 'application'
+                AND child_application.id = CASE
+                    WHEN tool.settings ->> 'application_id' ~ '^[1-9][0-9]*$'
+                    THEN (tool.settings ->> 'application_id')::integer
+                    ELSE NULL
+                END
                LEFT JOIN LATERAL (
                    SELECT COALESCE(
                        jsonb_agg(selected.value ORDER BY selected.ordinality),

@@ -565,6 +565,7 @@ CREATE TABLE p_1.skill_versions (
     id INTEGER PRIMARY KEY,
     skill_id INTEGER NOT NULL REFERENCES p_1.skills(id) ON DELETE CASCADE,
     name VARCHAR(128) NOT NULL,
+    instructions TEXT NOT NULL DEFAULT '',
     meta JSONB DEFAULT '{}'::jsonb
 );
 CREATE TABLE p_1.entity_skill_mapping (
@@ -601,6 +602,7 @@ CREATE TABLE p_2.skill_versions (
     id INTEGER PRIMARY KEY,
     skill_id INTEGER NOT NULL REFERENCES p_2.skills(id) ON DELETE CASCADE,
     name VARCHAR(128) NOT NULL,
+    instructions TEXT NOT NULL DEFAULT '',
     meta JSONB DEFAULT '{}'::jsonb
 );
 CREATE TABLE p_2.entity_skill_mapping (

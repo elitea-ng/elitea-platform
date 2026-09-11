@@ -26,15 +26,15 @@ func newTestFactory(t *testing.T) *InputBundleFactory {
 	return factory
 }
 
-// The settings and the arguments are TWO entries with DISTINCT roles. One entry
+// Settings, arguments, and runtime context have distinct roles. One entry
 // serving as both would put caller content where the platform's own redeemed
 // settings belong, which is the single thing this bundle's shape prevents.
-func TestBuildProducesTwoDistinctlyRoledEntries(t *testing.T) {
+func TestBuildProducesThreeDistinctlyRoledEntries(t *testing.T) {
 	bundle, binding, err := newTestFactory(t).Build(context.Background(), testInputs())
 	if err != nil {
 		t.Fatalf("build bundle: %v", err)
 	}
-	if len(bundle.Entries) != 2 {
+	if len(bundle.Entries) != 3 {
 		t.Fatalf("bundle carries %d entries", len(bundle.Entries))
 	}
 	roles := map[string]string{}
@@ -63,7 +63,7 @@ func TestBuildProducesTwoDistinctlyRoledEntries(t *testing.T) {
 }
 
 // The manifest is what the worker resolves entries through, so it must describe
-// the same two entries the bundle carries, byte for byte.
+// the same three entries the bundle carries, byte for byte.
 func TestBuildManifestMatchesTheBundleEntries(t *testing.T) {
 	bundle, _, err := newTestFactory(t).Build(context.Background(), testInputs())
 	if err != nil {

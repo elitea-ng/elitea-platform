@@ -241,6 +241,7 @@ export function useToolkitChat(params: UseToolkitChatParams): UseToolkitChatResu
     setExecutionId,
     onError,
     onTestToolOutcome,
+    onMcpAuthRequired,
   });
 
   useToolkitChatSocket({

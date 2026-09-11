@@ -160,6 +160,47 @@ describe('ChatPage deep links', () => {
   });
 });
 
+describe('ChatPage MCP participant visibility', () => {
+  it.each([
+    { mcp_enabled: true, mcp_in_menu_enabled: true, visible: true },
+    { mcp_enabled: false, mcp_in_menu_enabled: true, visible: false },
+    { mcp_enabled: true, mcp_in_menu_enabled: false, visible: false },
+  ])('respects platform settings $mcp_enabled / $mcp_in_menu_enabled', async ({ visible, ...settings }) => {
+    server.use(
+      http.get(`${BASE}/elitea_core/platform_settings/prompt_lib`, () => HttpResponse.json(settings)),
+      http.get(`${BASE}/configurations/tts_voices/${PROJECT}`, () => HttpResponse.json({ items: [] })),
+      http.get(`${BASE}/elitea_core/context_analytics/prompt_lib/${PROJECT}/${CONVERSATION}`, () =>
+        HttpResponse.json({ current_tokens: 0, max_tokens: 0, message_groups_in_context: 0 }),
+      ),
+      http.get(`${BASE}/elitea_core/conversation/prompt_lib/${PROJECT}/${CONVERSATION}`, () =>
+        HttpResponse.json({
+          id: CONVERSATION,
+          uuid: 'conversation-uuid-5',
+          name: 'MCP conversation',
+          participants: [{
+            id: '28', entity_name: 'toolkit',
+            entity_meta: { id: '28', name: 'Test MCP', project_id: PROJECT },
+            entity_settings: { toolkit_type: 'mcp', mcp_server_url: 'https://mcp.example.test' },
+          }, {
+            id: '29', entity_name: 'toolkit',
+            entity_meta: { id: '29', name: 'Baseline toolkit', project_id: PROJECT },
+            entity_settings: { toolkit_type: 'github' },
+          }],
+        }),
+      ),
+    );
+    renderAt(`/chat/${CONVERSATION}`);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Expand participants' }));
+    expect(await screen.findByText('Baseline toolkit')).toBeVisible();
+    if (visible) {
+      expect(await screen.findByText('Test MCP')).toBeVisible();
+    } else {
+      await waitFor(() => expect(screen.queryByText('Test MCP')).toBeNull());
+    }
+  });
+});
+
 /**
  * DEFECT: the composer took a file and showed nothing.
  *
@@ -502,7 +543,17 @@ describe('ChatPage MCP authorization continuation', () => {
               toolkit_type: 'mcp',
               server_url: 'https://mcp.example.com',
               authorization_servers: ['https://auth.example.com'],
-              authorization_requests: [{ interrupt_id: 'mcp_auth_sharepoint-1' }],
+              authorization_requests: [{
+                interrupt_id: 'mcp_auth_sharepoint-1',
+                tool_call_id: 'call-9',
+                tool_run_id: 'run-1',
+                tool_name: 'sharepoint___search',
+                guardrail_type: 'mcp_auth',
+                available_actions: ['authorize', 'skip'],
+                toolkit_type: 'mcp',
+                server_url: 'https://mcp.example.com',
+                authorization_servers: ['https://auth.example.com'],
+              }],
             },
           }),
         );

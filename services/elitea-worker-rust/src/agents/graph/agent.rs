@@ -18,6 +18,8 @@ use async_trait::async_trait;
 
 pub(crate) const PIPELINE_COMPLETED_METADATA_KEY: &str = "elitea.pipeline.completed";
 pub(crate) const PIPELINE_COMPLETED_METADATA_VALUE: &str = "v1";
+/// Completion reuses checkpoint output after a control-only terminal decision.
+pub(crate) const PIPELINE_REUSED_RESULT_METADATA_KEY: &str = "elitea.pipeline.result_reused";
 pub(crate) const PIPELINE_COMPLETED_CONTENT: &str = "Pipeline completed.";
 
 use super::printer::{
@@ -47,7 +49,6 @@ pub(crate) struct EliteaGraphAgent {
     graph: GraphAgent,
     sub_agents: Vec<Arc<dyn Agent>>,
     printer_interrupts: Option<PrinterInterruptAdapter>,
-    fresh_run_checkpointer: Option<Arc<dyn Checkpointer>>,
 }
 
 impl EliteaGraphAgent {
@@ -59,47 +60,7 @@ impl EliteaGraphAgent {
             graph,
             sub_agents: Vec::new(),
             printer_interrupts: None,
-            fresh_run_checkpointer: None,
         }
-    }
-
-    /// Declare that this invocation STARTS a run rather than continuing one,
-    /// so the thread's previous checkpoints are discarded before it begins.
-    ///
-    /// **WHY A RUN THAT IS NOT TOLD THIS ANSWERS THE PREVIOUS QUESTION.** The
-    /// graph's checkpoint thread is the CONVERSATION — ADK's `GraphAgent::run`
-    /// builds `ExecutionConfig::new(ctx.session_id())`, and Elitea activates
-    /// one checkpoint adapter per conversation thread — and ADK's executor
-    /// opens EVERY run with `try_resume_from_checkpoint`: whatever checkpoint
-    /// the thread already holds is restored (state, `step` AND
-    /// `pending_nodes`) and the new input is merged on top. A run that
-    /// finished leaves a checkpoint whose `pending_nodes` is EMPTY, so the
-    /// executor's `while !self.pending_nodes.is_empty()` loop executes no node
-    /// at all and the graph "completes" instantly, carrying the FIRST turn's
-    /// terminal state into this turn's answer.
-    ///
-    /// Measured, not reasoned about: on the native runtime the second turn of
-    /// a pipeline's test chat was admitted, streamed, and finalised an
-    /// assistant row holding the FIRST turn's answer verbatim (CI run
-    /// 34191944006, `chat.pipeline-execution.spec.ts`), and the state-modifier
-    /// graph in this module's own tests reduced to the bare "Pipeline
-    /// completed." marker with no node executed.
-    ///
-    /// It is NOT unconditional, and that is the whole reason it is a caller's
-    /// declaration rather than a default: a HITL, printer or MCP-authorization
-    /// resume must find the checkpoint its pause left behind, and clearing it
-    /// there would turn every pause into a lost turn. Only the fresh-start arm
-    /// passes this.
-    ///
-    /// Clearing an outstanding pause is the RIGHT outcome for the one case it
-    /// happens in: a user who types a new question instead of answering the
-    /// prompt has abandoned it, and the resume paths already refuse a decision
-    /// whose checkpoint has gone (`PipelineResumeErrorCode::StaleDecision`)
-    /// rather than answering the wrong turn.
-    #[must_use]
-    pub(crate) fn starting_a_fresh_run(mut self, checkpointer: Arc<dyn Checkpointer>) -> Self {
-        self.fresh_run_checkpointer = Some(checkpointer);
-        self
     }
 
     #[must_use]
@@ -198,17 +159,6 @@ impl Agent for EliteaGraphAgent {
         let invocation_id = context.invocation_id().to_owned();
         let author = self.name.clone();
         let printer_interrupts = self.printer_interrupts.clone();
-        // BEFORE the graph reads it. A failure here fails the turn rather than
-        // running anyway: running anyway is exactly how the previous turn's
-        // answer is served as this one's.
-        if let Some(checkpointer) = self.fresh_run_checkpointer.as_ref() {
-            checkpointer
-                .delete(context.session_id())
-                .await
-                .map_err(|_| {
-                    adk_rust::AdkError::agent("the previous graph run could not be discarded")
-                })?;
-        }
         let events = self.graph.run(context).await?;
         Ok(Box::pin(async_stream::stream! {
             let mut events = events;

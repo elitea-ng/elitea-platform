@@ -144,27 +144,36 @@ describe('useGetSelectedToolSchema', () => {
     );
   });
 
-  /**
-   * #440 corrected the reason, not the outcome. The
-   * `toolkit_available_tools` route exists and `TestToolSettings.tsx` reads
-   * it, but its rows carry `id`/`name`/`type`/`description` only — no
-   * argument schema — so this hook still has nothing to resolve a dynamic
-   * tool's argument form from. The assertion below therefore stands; the
-   * title no longer claims a missing endpoint.
-   */
-  it('returns null for a dynamic (non-static, non-MCP) tool — the tool catalogue carries no argument schema', async () => {
-    let requestCount = 0;
+  it('loads the saved instance argument schema for an OpenAPI operation', async () => {
     server.use(
-      http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => {
-        requestCount += 1;
-        return HttpResponse.json({ openapi_tool: { properties: { selected_tools: { items: { enum: ['dynamic_op'] } } } } });
+      http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({ openapi: {} })),
+      http.get('/api/v2/elitea_core/toolkit_available_tools/prompt_lib/proj-1/31', () => HttpResponse.json({
+        tools: [{ name: 'echo_marker' }],
+        args_schemas: { echo_marker: { type: 'object', properties: { marker: { type: 'string' } }, required: ['marker'] } },
+      })),
+    );
+    const { box } = renderSelectedToolSchema({ toolkitType: 'openapi', toolkitId: '31', toolOptionType: 'echo_marker', availableMcpTools: undefined });
+    await waitFor(() => expect(box.current?.toolSchema?.required).toEqual(['marker']));
+    expect(box.current?.toolSchema?.properties).toEqual({ marker: { type: 'string' } });
+    expect(box.current?.isError).toBe(false);
+  });
+
+  it('reports a failed instance discovery and retries that read', async () => {
+    let reads = 0;
+    server.use(
+      http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({ openapi: {} })),
+      http.get('/api/v2/elitea_core/toolkit_available_tools/prompt_lib/proj-1/31', () => {
+        reads += 1;
+        return reads === 1 ? HttpResponse.json({}, { status: 503 }) : HttpResponse.json({
+          tools: [{ name: 'ping' }], args_schemas: { ping: { type: 'object', properties: {} } },
+        });
       }),
     );
-
-    const { box } = renderSelectedToolSchema({ toolkitType: 'openapi_tool', toolOptionType: 'dynamic_op', availableMcpTools: undefined });
-    await waitFor(() => expect(requestCount).toBe(1));
+    const { box } = renderSelectedToolSchema({ toolkitType: 'openapi', toolkitId: '31', toolOptionType: 'ping', availableMcpTools: undefined });
+    await waitFor(() => expect(box.current?.isError).toBe(true));
     expect(box.current?.toolSchema).toBeNull();
-    // The read SUCCEEDED and carried no schema. That is not a failure.
+    box.current?.refetch();
+    await waitFor(() => expect(box.current?.toolSchema?.properties).toEqual({}));
     expect(box.current?.isError).toBe(false);
   });
 

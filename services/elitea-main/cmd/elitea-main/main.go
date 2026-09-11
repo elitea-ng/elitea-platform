@@ -57,9 +57,12 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	identityapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/identity"
+	notificationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/notifications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
 	schedulingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/scheduling"
 	socialapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/social"
+	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
+	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/authcomposition"
@@ -369,6 +372,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	var currentSocialAuthors *socialapi.CurrentAuthorsRoute
 	var currentSocialAvatar *socialapi.CurrentAvatarRoute
 	var currentNotifications *notificationsapi.CurrentNotificationAPIRoute
+	var currentNotificationStore notificationapp.Store
 	var currentNotificationEvents *notificationsapi.CurrentNotificationEventsRoute
 	var formGraph *authcomposition.FormGraph
 	var authReadiness health.Checker
@@ -700,6 +704,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if err != nil {
 			return fmt.Errorf("compose current notification API route: %w", err)
 		}
+		currentNotificationStore = notificationRepository
 		notificationEventsRepository, repositoryErr :=
 			dbrepos.NewCurrentNotificationEventRepository(pool)
 		if repositoryErr != nil {
@@ -935,12 +940,14 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// catalogue the resolver reads, which is a worse failure than the one it
 	// would fix.
 	var toolkitSettingsValidator v2toolkits.ToolkitSettingsValidator
+	var delegatedAuthToolkitSettings *toolkitexecutionapp.CurrentDelegatedAuthToolkitSettings
 	var currentConfigurationRead http.Handler
 	var currentConfigurationAvailable http.Handler
 	var currentConfigurationTypes http.Handler
 	var currentConfigurationMutation http.Handler
 	var currentModelCatalog http.Handler
 	var currentModelDefault http.Handler
+	var internalConfigurationTools *configurationapi.CurrentConfigurationToolHandler
 	var configProviderAdmission configurationapi.ProviderAdmission
 	// The resolve+unseal capability the STORED connection checks need
 	// (internal/api/v2/configurations/stored_check.go). It composes here, with
@@ -988,6 +995,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// Assigned through the concrete value, never a typed nil: the handler's
 		// only fallback is a nil-interface check.
 		toolkitSettingsValidator = toolkitSettingsResolver
+		delegatedAuthToolkitSettings, err = runtimecomposition.NewCurrentDelegatedAuthToolkitSettings(
+			pool,
+			toolkitSettingsResolver,
+		)
+		if err != nil {
+			return fmt.Errorf("compose delegated authorization toolkit settings: %w", err)
+		}
 		// The SAME graph the Inventory facade claims a source toolkit's
 		// credentials with. One composition, so what a source's own index runs
 		// read is what the provider receives; a second would be a second answer
@@ -1023,6 +1037,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// permissions through currentPermissions below.
 		currentAuth := apiGroupAuth
 		currentPermissions := legacyrbac.NewPostgresResolver(pool)
+		internalConfigurationTools = configurationapi.NewCurrentConfigurationToolHandler(
+			currentConfigurationsRoot.Types(),
+			currentConfigurationsRoot.ModelCatalog(),
+			currentConfigurationsRoot.VaultWriter(),
+			currentConfigurationsConfig.PublicProjectID,
+		)
 		currentConfigurationAvailable, err = configurationapi.NewCurrentAvailableRoute(
 			currentConfigurationsRoot.AvailableCatalog(),
 			currentAuth,
@@ -1506,10 +1526,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// and for the same typed-nil reason. `tools/call` runs an agent through the
 	// SAME use case; left nil it keeps answering the refusal it always has.
 	var mcpAgentStart v2mcp.AgentStartUseCase
+	var mcpToolkitExecute v2mcp.ToolkitExecuteReadUseCase
 	// The tool-run halves, assigned ONLY inside the guard below and for the
 	// same typed-nil reason: a nil concrete value in a non-nil interface reads
 	// as "configured" downstream, and both consumers decide on `!= nil`.
 	var toolkitToolRun toolkitrun.UseCase
+	var toolkitDiscovery discovery.UseCase
 	var mcpToolkitRun v2mcp.ToolkitRunUseCase
 	// The unattended pipeline entry points (issues 192, 193).
 	//
@@ -1641,6 +1663,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// where `!= nil` downstream reads as "configured". apiGroupAuth cannot
 		// carry that: apiGroupAuthConfig picks the branch by testing the
 		// pointer.
+		// Standalone toolkit operations also run on the Rust agent stream.
+		// Index ingestion can remain disabled for that deployment.
+		toolkitDiscovery = publicRoutes.ToolkitDiscovery
+		toolkitToolRun = publicRoutes.ToolkitCallTool
+		mcpToolkitRun = publicRoutes.ToolkitCallTool
 		if publicRoutes.IndexStart != nil {
 			if publicRoutes.ToolkitCallTool != nil {
 				// The SAME path, the same credentials, the same permission —
@@ -1648,8 +1675,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 				// to occupy (#340). This route is what a tool run actually
 				// reaches wherever the runtime is composed; see
 				// internal/application/toolkitcalltool/doc.go.
-				toolkitToolRun = publicRoutes.ToolkitCallTool
-				mcpToolkitRun = publicRoutes.ToolkitCallTool
 				currentIndexStart, err = indexingapi.NewCurrentIndexStartRouteWithToolRuns(
 					publicRoutes.IndexStart,
 					publicRoutes.ToolkitCallTool,
@@ -1723,6 +1748,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			if err != nil {
 				return fmt.Errorf("compose current agent-start route: %w", err)
 			}
+		}
+		if workerImplementation == "rust" && publicRoutes.ToolkitExecuteRead != nil {
+			mcpToolkitExecute = publicRoutes.ToolkitExecuteRead
 		}
 		if publicRoutes.AgentCancel != nil {
 			currentAgentCancel, err = agentexecutionapi.NewCurrentAgentCancelRoute(
@@ -1879,6 +1907,14 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("compose predict_llm completion client: %w", completerErr)
 	} else if completer != nil {
 		predictCompleter = completer
+		if currentConfigurationsRoot != nil {
+			predictCompleter, err = predictapi.WithDefaultModel(
+				completer, currentConfigurationsRoot.ModelCatalog(), currentConfigurationsConfig.PublicProjectID,
+			)
+			if err != nil {
+				return fmt.Errorf("compose predict default model resolver: %w", err)
+			}
+		}
 		slog.Info("predict_llm completion client enabled", "target", os.Getenv("LLM_GATEWAY_URL"))
 	} else {
 		slog.Warn("predict_llm completion client disabled: LLM_GATEWAY_URL is empty; " +
@@ -2067,19 +2103,20 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	}
 
 	r := api.NewRouter(api.RouterConfig{
-		AdminUI:                    adminUICfg,
-		Pool:                       pool,
-		Branding:                   brandingResolver,
-		Mailer:                     mailComposer,
-		EmailSettings:              emailResolver,
-		BrandingPackages:           brandingPackages,
-		ToolkitArgumentSchemas:     toolkitArgumentSchemas,
-		ToolkitCatalogue:           toolkitCatalogue,
-		ToolkitWorkerCapability:    workerToolkitCapability,
-		WorkerImplementation:       workerImplementation,
-		ToolkitSettingsDefinitions: toolkitSettingsDefinitions,
-		ToolkitSettingsValidator:   toolkitSettingsValidator,
-		ToolkitRegistry:            toolkitArgumentSchemas,
+		AdminUI:                      adminUICfg,
+		Pool:                         pool,
+		Branding:                     brandingResolver,
+		Mailer:                       mailComposer,
+		EmailSettings:                emailResolver,
+		BrandingPackages:             brandingPackages,
+		ToolkitArgumentSchemas:       toolkitArgumentSchemas,
+		ToolkitCatalogue:             toolkitCatalogue,
+		ToolkitWorkerCapability:      workerToolkitCapability,
+		ToolkitSettingsDefinitions:   toolkitSettingsDefinitions,
+		ToolkitSettingsValidator:     toolkitSettingsValidator,
+		ToolkitRegistry:              toolkitArgumentSchemas,
+		DelegatedAuthToolkitSettings: delegatedAuthToolkitSettings,
+		WorkerImplementation:         workerImplementation,
 		HealthDeps: health.Deps{
 			DB:    &poolChecker{pool: pool},
 			Redis: authReadiness,
@@ -2108,6 +2145,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CurrentConfigurationAvailable: currentConfigurationAvailable,
 		CurrentConfigurationRead:      currentConfigurationRead,
 		CurrentConfigurationTypes:     currentConfigurationTypes,
+		InternalConfigurationTools:    internalConfigurationTools,
 		CurrentConfigurationMutation:  currentConfigurationMutation,
 		CurrentIndexStart:             currentIndexStart,
 		DeepWiki:                      deepwikiRoute,
@@ -2120,8 +2158,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// apart on tracing, budgets and cancellation.
 		SupportAssistantStart:      supportAssistantStart,
 		MCPAgentStart:              mcpAgentStart,
+		MCPToolkitExecute:          mcpToolkitExecute,
 		MCPToolkitRun:              mcpToolkitRun,
 		ToolkitToolRun:             toolkitToolRun,
+		ToolkitDiscovery:           toolkitDiscovery,
 		PipelineTriggers:           pipelineTriggers,
 		AuditRecorder:              auditRecorder,
 		CurrentAgentCancel:         currentAgentCancel,
@@ -2132,6 +2172,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CurrentIndexScheduleUpdate: currentIndexScheduleUpdate,
 		CurrentIndexScheduleDelete: currentIndexScheduleDelete,
 		CurrentNotifications:       currentNotifications,
+		CurrentNotificationStore:   currentNotificationStore,
 		CurrentNotificationEvents:  currentNotificationEvents,
 		CurrentModelCatalog:        currentModelCatalog,
 		CurrentModelDefault:        currentModelDefault,

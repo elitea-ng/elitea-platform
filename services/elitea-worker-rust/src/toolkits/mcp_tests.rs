@@ -6,13 +6,15 @@ use std::time::Duration;
 use adk_rust::tool::{BasicToolset, SimpleToolContext};
 use adk_rust::{ErrorCategory, ErrorComponent, ReadonlyContext, Tool, ToolContext, Toolset};
 use async_trait::async_trait;
+use rmcp::transport::auth::AuthorizationMetadata;
 use serde_json::{Map, Value, json};
 
 use super::delegated_auth::delegated_authorization_requirement;
 use super::mcp::{
     McpConnector, McpMaterializationError, McpMaterializationErrorCode, RemoteMcpConfig,
-    materialize_mcp_toolsets, materialize_mcp_toolsets_with_tokens,
-    materialize_mcp_toolsets_with_tokens_and_authorization, mcp_authorization_required_fixture,
+    authorization_resource_metadata, materialize_mcp_toolsets,
+    materialize_mcp_toolsets_with_tokens, materialize_mcp_toolsets_with_tokens_and_authorization,
+    mcp_authorization_required_fixture,
 };
 use super::policy::ToolAdmissionPolicy;
 use super::snapshot::FrozenToolSnapshot;
@@ -58,6 +60,77 @@ impl McpConnector for TokenConnector {
     }
 }
 
+#[tokio::test]
+async fn undiscovered_mcp_requires_toolkit_authorization_before_exposing_operations() {
+    let version = frozen("mcp", &settings(&[]));
+    let policy = policy(&[]);
+    let snapshot = FrozenToolSnapshot::from_version_details(&version)
+        .unwrap()
+        .apply_policy(&policy);
+    let (tools, authorization) = materialize_mcp_toolsets_with_tokens_and_authorization(
+        &snapshot,
+        &AuthorizationConnector,
+        &policy,
+        &Map::new(),
+    )
+    .await
+    .expect("undiscovered toolkit authorization");
+    assert!(tools.is_empty(), "no invented remote operation");
+    assert!(!authorization.is_empty());
+
+    let tokens = Map::from_iter([(
+        "https://mcp.example.invalid/v1/mcp".to_owned(),
+        json!({"access_token": "runtime-secret"}),
+    )]);
+    let (tools, authorization) = materialize_mcp_toolsets_with_tokens_and_authorization(
+        &snapshot,
+        &TokenConnector,
+        &policy,
+        &tokens,
+    )
+    .await
+    .unwrap();
+    assert!(authorization.is_empty());
+    let tools = tools[0].tools(context()).await.unwrap();
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].name(), "lookup_release");
+}
+
+struct PrebuiltConnector {
+    expected_type: &'static str,
+    expected_authorization: &'static str,
+    tools: Vec<Arc<dyn Tool>>,
+}
+
+#[async_trait]
+impl McpConnector for PrebuiltConnector {
+    async fn connect(
+        &self,
+        config: &RemoteMcpConfig,
+    ) -> Result<Arc<dyn Toolset>, McpMaterializationError> {
+        assert_eq!(config.toolkit_type(), self.expected_type);
+        assert_eq!(config.excluded_tools(), ["publish_release"]);
+        let headers = config
+            .request_headers_for_test()
+            .expect("prebuilt request headers");
+        let authorization = headers
+            .get("authorization")
+            .expect("prebuilt authorization header");
+        assert_eq!(
+            authorization.to_str().expect("authorization text"),
+            self.expected_authorization
+        );
+        assert!(authorization.is_sensitive());
+        let platform = headers.get("x-platform").expect("fixed platform header");
+        assert_eq!(platform, "fixed-value");
+        assert!(platform.is_sensitive());
+        Ok(Arc::new(BasicToolset::new(
+            "prebuilt_mcp",
+            self.tools.clone(),
+        )))
+    }
+}
+
 fn frozen(tool_type: &str, settings: &Value) -> serde_json::Map<String, Value> {
     json!({
         "tools": [{
@@ -87,12 +160,115 @@ fn settings(selected_tools: &[&str]) -> Value {
     })
 }
 
+fn prebuilt_settings() -> Value {
+    json!({
+        "server_name": "release_intelligence",
+        "url": "https://mcp.example.invalid/v1/mcp",
+        "headers": {
+            "Authorization": "Static fixed-secret",
+            "X-Platform": "fixed-value"
+        },
+        "timeout": 12,
+        "selected_tools": ["lookup_release", "publish_release"],
+        "excluded_tools": ["publish_release"],
+        "enable_caching": true,
+        "cache_ttl": 300,
+        "ssl_verify": true
+    })
+}
+
 fn context() -> Arc<SimpleToolContext> {
     Arc::new(
         SimpleToolContext::new("mcp-test")
             .with_session_id("session-1")
             .with_function_call_id("call-1"),
     )
+}
+
+#[test]
+fn discovered_oauth_metadata_is_bounded_to_the_browser_contract() {
+    let metadata = serde_json::from_value::<AuthorizationMetadata>(json!({
+        "authorization_endpoint": "https://login.example.invalid/oauth/authorize",
+        "token_endpoint": "https://login.example.invalid/oauth/token",
+        "registration_endpoint": "https://login.example.invalid/oauth/register",
+        "issuer": "https://login.example.invalid",
+        "jwks_uri": "https://login.example.invalid/oauth/keys",
+        "scopes_supported": ["mcp:read", "offline_access"],
+        "response_types_supported": ["code"],
+        "code_challenge_methods_supported": ["S256"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "revocation_endpoint": "https://login.example.invalid/oauth/revoke",
+        "client_secret": "must-not-project",
+        "unowned_provider_extension": {"value": true}
+    }))
+    .expect("authorization metadata fixture");
+
+    let projected =
+        authorization_resource_metadata(&metadata, "https://mcp.example.invalid/v1/mcp", &[])
+            .expect("sanitized OAuth metadata");
+    assert_eq!(
+        projected["authorization_servers"],
+        json!(["https://login.example.invalid/"])
+    );
+    assert_eq!(
+        projected["oauth_authorization_server"]["authorization_endpoint"],
+        "https://login.example.invalid/oauth/authorize"
+    );
+    assert_eq!(
+        projected["oauth_authorization_server"]["registration_endpoint"],
+        "https://login.example.invalid/oauth/register"
+    );
+    assert_eq!(
+        projected["oauth_authorization_server"]["grant_types_supported"],
+        json!(["authorization_code", "refresh_token"])
+    );
+    assert_eq!(
+        projected["scopes_supported"],
+        json!(["mcp:read", "offline_access"])
+    );
+    assert!(
+        projected["oauth_authorization_server"]
+            .get("client_secret")
+            .is_none()
+    );
+    assert!(
+        projected["oauth_authorization_server"]
+            .get("unowned_provider_extension")
+            .is_none()
+    );
+    let scoped = authorization_resource_metadata(
+        &metadata,
+        "https://mcp.example.invalid/v1/mcp",
+        &["mcp:read".to_owned()],
+    )
+    .expect("configured consent scopes");
+    assert_eq!(scoped["scopes_supported"], json!(["mcp:read"]));
+    assert_eq!(
+        scoped["oauth_authorization_server"],
+        projected["oauth_authorization_server"]
+    );
+}
+
+#[test]
+fn legacy_oauth_metadata_uses_only_the_mcp_server_origin() {
+    let metadata = serde_json::from_value::<AuthorizationMetadata>(json!({
+        "authorization_endpoint": "https://mcp.example.invalid/authorize",
+        "token_endpoint": "https://mcp.example.invalid/token",
+        "registration_endpoint": "https://mcp.example.invalid/register"
+    }))
+    .expect("legacy authorization metadata fixture");
+
+    let projected = authorization_resource_metadata(
+        &metadata,
+        "https://mcp.example.invalid/v1/mcp?tenant=hidden",
+        &[],
+    )
+    .expect("legacy OAuth metadata");
+    assert_eq!(
+        projected["authorization_servers"],
+        json!(["https://mcp.example.invalid"])
+    );
+    assert!(!projected.to_string().contains("tenant"));
 }
 
 struct FixtureConnector {
@@ -238,8 +414,87 @@ async fn direct_https_mcp_discovers_filters_describes_and_executes_native_adk_to
 }
 
 #[tokio::test]
+async fn claim_materialized_prebuilt_http_uses_fixed_headers_and_exclusions() {
+    let (lookup, _) = FixtureTool::new("lookup_release", true, json!({"risk": "low"}));
+    let (publish, publish_calls) = FixtureTool::new("publish_release", false, json!({"ok": true}));
+    let connector = PrebuiltConnector {
+        expected_type: "mcp_config",
+        expected_authorization: "Static fixed-secret",
+        tools: vec![lookup, publish],
+    };
+    let version = frozen("mcp_config", &prebuilt_settings());
+    let snapshot = FrozenToolSnapshot::from_version_details(&version)
+        .expect("prebuilt MCP snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let toolsets = materialize_mcp_toolsets(&snapshot, &connector, &policy(&[]))
+        .await
+        .expect("prebuilt MCP toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolsets[0]
+        .tools(readonly)
+        .await
+        .expect("prebuilt MCP tools");
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].name(), "lookup_release");
+    assert_eq!(publish_calls.load(Ordering::Acquire), 0);
+}
+
+#[tokio::test]
+async fn prebuilt_exact_alias_token_overrides_static_authorization() {
+    let (lookup, _) = FixtureTool::new("lookup_release", true, json!({"risk": "low"}));
+    let connector = PrebuiltConnector {
+        expected_type: "mcp_release_intelligence",
+        expected_authorization: "Bearer runtime-secret",
+        tools: vec![lookup],
+    };
+    let mut settings = prebuilt_settings();
+    settings["selected_tools"] = json!(["lookup_release"]);
+    let version = frozen("mcp_release_intelligence", &settings);
+    let snapshot = FrozenToolSnapshot::from_version_details(&version)
+        .expect("prebuilt MCP snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let tokens = Map::from_iter([(
+        "release_intelligence".to_owned(),
+        json!({"access_token": "runtime-secret"}),
+    )]);
+    let toolsets =
+        materialize_mcp_toolsets_with_tokens(&snapshot, &connector, &policy(&[]), &tokens)
+            .await
+            .expect("token-authorized prebuilt MCP toolset");
+    assert_eq!(toolsets.len(), 1);
+}
+
+#[tokio::test]
+async fn prebuilt_authorization_preserves_dynamic_toolkit_type() {
+    let version = frozen("mcp_release_intelligence", &prebuilt_settings());
+    let snapshot = FrozenToolSnapshot::from_version_details(&version)
+        .expect("prebuilt MCP snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let guarded = materialize_mcp_toolsets(&snapshot, &AuthorizationConnector, &policy(&[]))
+        .await
+        .expect("prebuilt authorization placeholder");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tool = guarded[0]
+        .tools(readonly)
+        .await
+        .expect("guarded prebuilt tools")
+        .pop()
+        .expect("selected prebuilt placeholder");
+    let error = tool
+        .execute(context(), json!({}))
+        .await
+        .expect_err("prebuilt authorization required");
+    let requirement =
+        delegated_authorization_requirement(&error).expect("typed prebuilt authorization metadata");
+    assert_eq!(requirement.toolkit_type(), "mcp_release_intelligence");
+    assert_eq!(requirement.toolkit_name(), "release intelligence");
+}
+
+#[tokio::test]
 async fn mcp_auth_challenge_materializes_selected_placeholder_and_exact_token_rebuild() {
-    let version = frozen("mcp", &settings(&["lookup_release"]));
+    let mut configured = settings(&["lookup_release"]);
+    configured["scopes"] = json!(["mcp:read", "offline_access"]);
+    let version = frozen("mcp", &configured);
     let snapshot = FrozenToolSnapshot::from_version_details(&version)
         .expect("MCP snapshot")
         .apply_policy(policy(&[]).as_ref());
@@ -327,9 +582,49 @@ async fn mcp_auth_challenge_materializes_selected_placeholder_and_exact_token_re
 }
 
 #[tokio::test]
+async fn malformed_scope_hints_and_inline_clients_fail_before_connecting() {
+    let mut cases = Vec::new();
+    for scopes in [
+        json!("read"),
+        json!({"read": true}),
+        json!([false]),
+        json!([""]),
+        json!(["read write"]),
+        json!(["read\nwrite"]),
+        json!(["read\"write"]),
+        json!(["read\\write"]),
+        json!(vec!["read"; 65]),
+        json!(["x".repeat(4097)]),
+    ] {
+        let mut value = settings(&[]);
+        value["scopes"] = scopes;
+        cases.push(value);
+    }
+    for field in ["client_id", "client_secret"] {
+        let mut value = settings(&[]);
+        value[field] = json!("unowned-client-value");
+        cases.push(value);
+    }
+    for configured in cases {
+        let version = frozen("mcp", &configured);
+        let snapshot = FrozenToolSnapshot::from_version_details(&version)
+            .expect("MCP snapshot")
+            .apply_policy(policy(&[]).as_ref());
+        let connector = FixtureConnector::new(Vec::new());
+        assert!(
+            materialize_mcp_toolsets(&snapshot, &connector, &policy(&[]))
+                .await
+                .is_err()
+        );
+        assert_eq!(connector.calls.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[tokio::test]
 async fn invalid_or_unowned_mcp_authority_fails_before_connecting() {
     let cases = [
         ("mcp_config", settings(&[])),
+        ("mcp_release_intelligence", settings(&[])),
         (
             "mcp",
             json!({
@@ -350,6 +645,32 @@ async fn invalid_or_unowned_mcp_authority_fails_before_connecting() {
             json!({
                 "url": "https://mcp.example.invalid/mcp",
                 "ssl_verify": false,
+                "selected_tools": []
+            }),
+        ),
+        (
+            "mcp_config",
+            json!({
+                "server_name": "release_intelligence",
+                "url": "https://mcp.example.invalid/mcp",
+                "headers": {"Content-Type": "text/plain"},
+                "selected_tools": []
+            }),
+        ),
+        (
+            "mcp_release_intelligence",
+            json!({
+                "server_name": "release_intelligence",
+                "url": "https://mcp.example.invalid/{org_name}/mcp",
+                "selected_tools": []
+            }),
+        ),
+        (
+            "mcp_release_intelligence",
+            json!({
+                "server_name": "release_intelligence",
+                "url": "https://mcp.example.invalid/mcp",
+                "headers": {"Authorization": "Bearer {api_token}"},
                 "selected_tools": []
             }),
         ),

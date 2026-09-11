@@ -115,6 +115,63 @@ func TestCurrentToolkitsRepositoryReturnsStableNotFoundAndDatabaseErrors(t *test
 	}
 }
 
+func TestCurrentToolkitsRepositoryAppliesOptionalMCPFolderAccess(t *testing.T) {
+	t.Run("absent social projection preserves project RBAC", func(t *testing.T) {
+		queries := &currentToolkitQueriesStub{
+			row:         currentToolkitRow(19, `{}`, `{}`),
+			accessState: 0,
+		}
+		repository := newCurrentToolkitsRepositoryForTest(t, &currentToolkitProjectStore{}, queries)
+
+		toolkit, err := repository.GetMCPVisible(context.Background(), 7, 11, 19)
+		if err != nil || toolkit.ID != 19 {
+			t.Fatalf("toolkit=%#v error=%v", toolkit, err)
+		}
+		if queries.stateCalls != 1 || queries.calls != 1 || queries.visibleCalls != 0 {
+			t.Fatalf("state=%d ordinary=%d visible=%d",
+				queries.stateCalls, queries.calls, queries.visibleCalls)
+		}
+	})
+
+	t.Run("complete social projection applies actor filter", func(t *testing.T) {
+		queries := &currentToolkitQueriesStub{
+			accessState: 1,
+			visibleRow:  currentToolkitRow(19, `{}`, `{}`),
+		}
+		repository := newCurrentToolkitsRepositoryForTest(t, &currentToolkitProjectStore{}, queries)
+
+		toolkit, err := repository.GetMCPVisible(context.Background(), 7, 11, 19)
+		if err != nil || toolkit.ID != 19 {
+			t.Fatalf("toolkit=%#v error=%v", toolkit, err)
+		}
+		if queries.calls != 0 || queries.visibleCalls != 1 ||
+			queries.visibleParams.ToolkitID != 19 || queries.visibleParams.ActorID != 11 {
+			t.Fatalf("ordinary=%d visible=%d params=%+v",
+				queries.calls, queries.visibleCalls, queries.visibleParams)
+		}
+
+		queries.visibleErr = pgx.ErrNoRows
+		_, err = repository.GetMCPVisible(context.Background(), 7, 11, 19)
+		if !errors.Is(err, ErrCurrentToolkitNotFound) {
+			t.Fatalf("restricted toolkit error=%v", err)
+		}
+	})
+
+	t.Run("partial social projection fails closed", func(t *testing.T) {
+		queries := &currentToolkitQueriesStub{accessState: -1}
+		repository := newCurrentToolkitsRepositoryForTest(t, &currentToolkitProjectStore{}, queries)
+
+		_, err := repository.GetMCPVisible(context.Background(), 7, 11, 19)
+		if !errors.Is(err, ErrCurrentFolderAccessPartial) {
+			t.Fatalf("partial projection error=%v", err)
+		}
+		if queries.calls != 0 || queries.visibleCalls != 0 {
+			t.Fatalf("partial projection read toolkit: ordinary=%d visible=%d",
+				queries.calls, queries.visibleCalls)
+		}
+	})
+}
+
 func TestCurrentToolkitsRepositoryRejectsInvalidRequestsBeforeDatabase(t *testing.T) {
 	projects := &currentToolkitProjectStore{}
 	queries := &currentToolkitQueriesStub{row: currentToolkitRow(1, `{}`, `{}`)}
@@ -132,6 +189,9 @@ func TestCurrentToolkitsRepositoryRejectsInvalidRequestsBeforeDatabase(t *testin
 		{ctx: context.Background(), projectID: 0, toolkitID: 1, want: ErrInvalidCurrentToolkitRequest},
 		{ctx: context.Background(), projectID: 1, toolkitID: 0, want: ErrInvalidCurrentToolkitRequest},
 		{ctx: canceled, projectID: 1, toolkitID: 1, want: context.Canceled},
+	}
+	if _, err := repository.GetMCPVisible(context.Background(), 1, 0, 1); !errors.Is(err, ErrInvalidCurrentToolkitRequest) {
+		t.Fatalf("zero actor error=%v", err)
 	}
 	for _, request := range requests {
 		_, err := repository.Get(request.ctx, request.projectID, request.toolkitID)
@@ -243,10 +303,31 @@ func (s *currentToolkitProjectStore) WithinProjectTx(
 }
 
 type currentToolkitQueriesStub struct {
-	row       sqlcgen.EliteaTool
-	err       error
-	toolkitID int32
-	calls     int
+	row           sqlcgen.EliteaTool
+	err           error
+	toolkitID     int32
+	calls         int
+	accessState   int32
+	accessErr     error
+	stateCalls    int
+	visibleRow    sqlcgen.EliteaTool
+	visibleErr    error
+	visibleParams sqlcgen.GetCurrentMCPToolkitVisibleToActorParams
+	visibleCalls  int
+}
+
+func (s *currentToolkitQueriesStub) CurrentFolderAccessState(context.Context) (int32, error) {
+	s.stateCalls++
+	return s.accessState, s.accessErr
+}
+
+func (s *currentToolkitQueriesStub) GetCurrentMCPToolkitVisibleToActor(
+	_ context.Context,
+	params sqlcgen.GetCurrentMCPToolkitVisibleToActorParams,
+) (sqlcgen.EliteaTool, error) {
+	s.visibleCalls++
+	s.visibleParams = params
+	return s.visibleRow, s.visibleErr
 }
 
 func (s *currentToolkitQueriesStub) GetCurrentToolkit(_ context.Context, toolkitID int32) (sqlcgen.EliteaTool, error) {

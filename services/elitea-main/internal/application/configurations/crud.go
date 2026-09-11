@@ -80,6 +80,7 @@ type CurrentConfigurationReplace struct {
 }
 
 type CurrentConfigurationListRequest struct {
+	IDs             []int32
 	ProjectID       int32
 	PublicProjectID int32
 	Types           []string
@@ -99,6 +100,7 @@ type CurrentConfigurationListRequest struct {
 // shared=false: the current project page includes every row owned by that
 // project, matching the current Python implementation.
 type CurrentConfigurationListFilter struct {
+	IDs        []int32
 	ProjectID  int32
 	Types      []string
 	Sections   []string
@@ -161,6 +163,7 @@ func (s *CurrentCRUDService) List(ctx context.Context, request CurrentConfigurat
 	current, err := s.listPage(ctx, CurrentConfigurationListFilter{
 		ProjectID:  request.ProjectID,
 		Types:      request.Types,
+		IDs:        request.IDs,
 		Sections:   request.Sections,
 		Offset:     request.Offset,
 		Limit:      request.Limit,
@@ -180,6 +183,7 @@ func (s *CurrentCRUDService) List(ctx context.Context, request CurrentConfigurat
 	shared, err := s.listPage(ctx, CurrentConfigurationListFilter{
 		ProjectID:  request.PublicProjectID,
 		Types:      request.Types,
+		IDs:        request.IDs,
 		Sections:   request.Sections,
 		Offset:     request.SharedOffset,
 		Limit:      request.SharedLimit,
@@ -283,6 +287,11 @@ func normalizeCurrentConfigurationListRequest(request CurrentConfigurationListRe
 		return CurrentConfigurationListRequest{}, ErrInvalidCurrentConfigurationRequest
 	}
 
+	ids, err := NormalizeCurrentConfigurationIDs(request.IDs)
+	if err != nil {
+		return CurrentConfigurationListRequest{}, err
+	}
+	request.IDs = ids
 	request.Types = append([]string(nil), request.Types...)
 	request.Sections = append([]string(nil), request.Sections...)
 	request.Offset = normalizeCurrentConfigurationOffset(request.Offset)

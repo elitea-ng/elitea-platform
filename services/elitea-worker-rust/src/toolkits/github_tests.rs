@@ -2058,6 +2058,7 @@ async fn configured_materializer_keeps_supported_reads_from_mixed_sdk_selection(
         &policy(&[]),
         &Map::new(),
     )
+    .await
     .expect("GitHub materialization");
 
     assert_eq!(toolsets.len(), 1);

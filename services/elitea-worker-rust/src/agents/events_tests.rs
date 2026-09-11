@@ -427,6 +427,67 @@ fn ordinary_stream_matches_current_text_lifecycle_without_a_heap_event_queue() {
 }
 
 #[test]
+fn completed_text_projection_is_independent_of_provider_chunk_count() {
+    for fragments in [1, 255, 256, 257, 285, 2048] {
+        let mut projector =
+            AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({})))
+                .expect("projector");
+        projector.start(timestamp(0)).unwrap();
+        let text = "é".repeat(fragments);
+        let parts = text
+            .chars()
+            .map(|c| Part::Text {
+                text: c.to_string(),
+            })
+            .collect();
+        let projected = projector
+            .project(&event("fragmented", 1, false, true, parts))
+            .expect("bounded text must not fail due to provider fragmentation");
+        assert!(
+            projected
+                .into_iter()
+                .map(|e| current(&e))
+                .any(|e| e["response_metadata"]["thinking_steps"][0]["text"] == text)
+        );
+    }
+}
+
+#[test]
+fn fragmented_projection_retains_byte_logical_part_and_work_bounds() {
+    let oversized = vec![Part::Text {
+        text: "x".repeat(60 * 1024 + 1),
+    }];
+    let empty_flood = vec![
+        Part::Text {
+            text: String::new()
+        };
+        60 * 1024 + 1
+    ];
+    let distinct_blocks = (0..257)
+        .map(|i| {
+            if i % 2 == 0 {
+                Part::Text { text: "x".into() }
+            } else {
+                Part::Thinking {
+                    thinking: "y".into(),
+                    signature: None,
+                }
+            }
+        })
+        .collect();
+    for parts in [oversized, empty_flood, distinct_blocks] {
+        let mut projector =
+            AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({})))
+                .expect("projector");
+        projector.start(timestamp(0)).unwrap();
+        assert_eq!(
+            projection_error(projector.project(&event("bounded", 1, false, true, parts))).code(),
+            AgentEventProjectionErrorCode::ResourceExhausted
+        );
+    }
+}
+
+#[test]
 fn delta_streaming_content_is_accumulated_without_assuming_cumulative_chunks() {
     let mut projector = AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({})))
         .expect("projector");
@@ -1278,6 +1339,18 @@ fn graph_mcp_authorization_projects_current_durable_card_without_tool_arguments(
             "server_url": "https://mcp.example.invalid/v1/mcp",
             "resource_metadata_url": "https://mcp.example.invalid/.well-known/oauth-protected-resource",
             "www_authenticate": "Bearer resource_metadata=\"https://mcp.example.invalid/.well-known/oauth-protected-resource\"",
+            "resource_metadata": {
+                "authorization_servers": ["https://login.example.invalid"],
+                "oauth_authorization_server": {
+                    "issuer": "https://login.example.invalid",
+                    "authorization_endpoint": "https://login.example.invalid/authorize",
+                    "token_endpoint": "https://login.example.invalid/token",
+                    "registration_endpoint": "https://login.example.invalid/register",
+                    "grant_types_supported": ["authorization_code", "refresh_token"],
+                    "code_challenge_methods_supported": ["S256"]
+                },
+                "scopes_supported": ["mcp:read"]
+            },
         })))
         .expect("MCP authorization projection")
         .into_iter()
@@ -1291,6 +1364,14 @@ fn graph_mcp_authorization_projects_current_durable_card_without_tool_arguments(
     assert_eq!(metadata["tool_call_id"], "pipeline:lookup:4");
     assert_eq!(metadata["tool_args"], json!({}));
     assert_eq!(metadata["resume_strategy"], "root");
+    assert_eq!(
+        metadata["authorization_servers"],
+        json!(["https://login.example.invalid"])
+    );
+    assert_eq!(
+        metadata["resource_metadata"]["oauth_authorization_server"]["registration_endpoint"],
+        "https://login.example.invalid/register"
+    );
     assert!(
         metadata["interrupt_id"]
             .as_str()
@@ -1299,7 +1380,10 @@ fn graph_mcp_authorization_projects_current_durable_card_without_tool_arguments(
     assert!(metadata.get("checkpoint_id").is_none());
     assert!(metadata.get("definition_digest").is_none());
     assert!(projector.is_paused());
+}
 
+#[test]
+fn graph_delegated_toolkit_authorization_projects_current_card() {
     let sharepoint_message = "Authorization is required to use the Team Documents toolkit. Choose Authorize to sign in, or Skip to stop this pipeline safely.";
     let mut sharepoint =
         AgentEventProjector::new(AgentEventProjectionContext::pipeline_fixture(json!({})))
@@ -1435,5 +1519,160 @@ fn malformed_graph_hitl_never_becomes_an_approval_card() {
         projector.start(timestamp(0)).expect("start");
         let error = projection_error(projector.project(&pipeline_hitl_event(invalid)));
         assert_eq!(error.code(), AgentEventProjectionErrorCode::InvalidState);
+    }
+}
+
+#[test]
+fn large_tool_results_use_bounded_complete_utf8_chunks() {
+    check_large_tool_result(false);
+}
+
+#[test]
+fn large_tool_errors_keep_complete_output_and_error_status() {
+    check_large_tool_result(true);
+}
+
+fn check_large_tool_result(is_error: bool) {
+    let payload = if is_error {
+        json!({"error": "界\\\"".repeat(30000)})
+    } else {
+        json!({"title": "界\\\"".repeat(30000)})
+    };
+    let mut projector = AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({})))
+        .expect("projector");
+    projector.start(timestamp(0)).expect("start");
+    let tool = event(
+        "llm-tool",
+        1,
+        false,
+        true,
+        vec![Part::FunctionCall {
+            name: "lookup_issue".to_owned(),
+            args: json!({"issue_number": 42}),
+            id: Some("call-1".to_owned()),
+            thought_signature: None,
+        }],
+    );
+    let start = projector
+        .project(&tool)
+        .expect("tool start")
+        .into_iter()
+        .map(|event| current(&event))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        start.iter().map(|event| &event["type"]).collect::<Vec<_>>(),
+        [
+            "agent_llm_start",
+            "agent_llm_end",
+            "partial_message",
+            "agent_tool_start",
+            "partial_message"
+        ]
+    );
+    assert_eq!(start[3]["response_metadata"]["tool_run_id"], "call-1");
+    assert_eq!(
+        start[3]["response_metadata"]["tool_inputs"]["issue_number"],
+        42
+    );
+
+    let mut result = Event::with_id("tool-result", "invocation-1");
+    result.timestamp = timestamp(2);
+    result.author = "root-agent".to_owned();
+    result.llm_response.content = Some(Content {
+        role: "function".to_owned(),
+        parts: vec![Part::FunctionResponse {
+            function_response: adk_rust::FunctionResponseData::new("lookup_issue", payload.clone()),
+            id: Some("call-1".to_owned()),
+            annotations: None,
+        }],
+    });
+    result.actions.tool_confirmation_decision = Some(ToolConfirmationDecision::Approve);
+    let finish = projector
+        .project(&result)
+        .expect("tool result")
+        .into_iter()
+        .map(|event| current(&event))
+        .collect::<Vec<_>>();
+    let mut output = String::new();
+    for pair in finish.chunks_exact(2) {
+        assert_eq!(pair[0]["type"], "partial_message");
+        let metadata = &pair[1]["response_metadata"];
+        let final_error = is_error && metadata["tool_output_chunk_v1"]["final"] == true;
+        assert_eq!(
+            pair[1]["type"],
+            if final_error {
+                "agent_tool_error"
+            } else {
+                "agent_tool_end"
+            }
+        );
+        if final_error {
+            assert_eq!(metadata["error"], "Tool execution failed. See tool output.");
+        }
+        assert_eq!(
+            metadata["tool_output_chunk_v1"]["offset_bytes"],
+            output.len()
+        );
+        let text = metadata["tool_output"].as_str().expect("fragment");
+        assert!(text.len() <= 8192);
+        output.push_str(text);
+        assert!(
+            serde_json::to_vec(&pair[0]).expect("json").len()
+                <= crate::protocol::node_event::MAX_CURRENT_NODE_EVENT_JSON_BYTES
+        );
+    }
+    assert_eq!(
+        serde_json::from_str::<Value>(&output).expect("complete JSON"),
+        payload
+    );
+    let last = finish.last().expect("last");
+    assert_eq!(
+        last["response_metadata"]["tool_output_chunk_v1"]["final"],
+        true
+    );
+    assert_eq!(
+        last["response_metadata"]["finish_reason"],
+        if is_error { "error" } else { "stop" }
+    );
+}
+
+#[test]
+fn checkpoint_only_pipeline_completion_keeps_result_without_new_model_step() {
+    for reused in [false, true] {
+        let mut projector =
+            AgentEventProjector::new(AgentEventProjectionContext::pipeline_fixture(json!({})))
+                .expect("projector");
+        projector.start(timestamp(0)).expect("start");
+        let mut result = pipeline_result_event("Reviewed answer");
+        result.invocation_id = "invocation-1".to_owned();
+        result.author = "root-agent".to_owned();
+        if reused {
+            result.provider_metadata.insert(
+                super::graph::PIPELINE_REUSED_RESULT_METADATA_KEY.to_owned(),
+                "v1".to_owned(),
+            );
+        }
+        let events = projector
+            .project(&result)
+            .expect("completion")
+            .into_iter()
+            .map(|event| current(&event))
+            .collect::<Vec<_>>();
+        assert_eq!(events.is_empty(), reused);
+        let finished = projector
+            .finish_after_eos(
+                CompletedAgentBrowserOutput::fixture("Pipeline completed."),
+                timestamp(2),
+            )
+            .expect("terminal response")
+            .into_iter()
+            .map(|event| current(&event))
+            .collect::<Vec<_>>();
+        assert!(
+            finished
+                .iter()
+                .all(|event| event["content"] == "Reviewed answer")
+        );
+        assert_eq!(finished.len(), 3);
     }
 }

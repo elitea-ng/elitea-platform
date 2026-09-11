@@ -27,6 +27,7 @@ import { useCallback, useMemo, useState } from 'react';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import Button from '@mui/material/Button';
 import Stack from '@mui/material/Stack';
+import Typography from '@mui/material/Typography';
 
 /**
  * Loosely-typed source an MCP-auth-required tool action carries its OAuth
@@ -36,6 +37,8 @@ import Stack from '@mui/material/Stack';
  * posture as that source.
  */
 export interface McpAuthRequiredAction {
+  readonly id?: string;
+  readonly authorizationRequestId?: string;
   readonly response_metadata?: {
     readonly resource_metadata?: RawMcpResourceMetadata;
     readonly provided_settings?: McpProvidedSettingsLocal;
@@ -43,6 +46,7 @@ export interface McpAuthRequiredAction {
     readonly toolkit_id?: string;
   };
   readonly toolMeta?: {
+    readonly authorization_servers?: readonly string[];
     readonly resource_metadata?: RawMcpResourceMetadata;
     readonly provided_settings?: McpProvidedSettingsLocal;
     readonly toolkit_id?: string;
@@ -93,7 +97,8 @@ function extractLocalMcpAuthMetadata(source: McpAuthRequiredAction | null | unde
 
   return {
     authServers:
-      resourceMetadata.authorization_servers ?? responseMetadata.authorization_servers ?? toolOutputs.authorization_servers,
+      resourceMetadata.authorization_servers ?? responseMetadata.authorization_servers
+        ?? toolMeta.authorization_servers ?? toolOutputs.authorization_servers,
     oauthAuthorizationServer: resourceMetadata.oauth_authorization_server,
     providedSettings: responseMetadata.provided_settings ?? toolMeta.provided_settings ?? resourceMetadata.provided_settings,
     resourceScopes: resourceMetadata.scopes_supported,
@@ -155,6 +160,13 @@ export function ChatContinue({
     () => (authRequiredAction ? extractLocalMcpAuthMetadata(authRequiredAction) : null),
     [authRequiredAction],
   );
+  const hasAuthServers = (mcpAuthMetadata?.authServers?.length ?? 0) > 0;
+  // Configured OAuth requires discovered endpoints. Do not guess endpoints
+  // when discovery fails; remote MCP retains its existing discovery flow.
+  const hasAuthDetails = hasAuthServers && (!mcpAuthMetadata?.providedSettings || (
+    typeof mcpAuthMetadata.oauthAuthorizationServer?.['authorization_endpoint'] === 'string'
+    && typeof mcpAuthMetadata.oauthAuthorizationServer?.['token_endpoint'] === 'string'
+  ));
 
   const handleAuthorize = useCallback(() => {
     setShowAuthModal(true);
@@ -180,6 +192,11 @@ export function ChatContinue({
 
   return (
     <>
+      {authRequired && !hasAuthDetails && (
+        <Typography component="output" variant="body2">
+          Authorization details are unavailable. You can skip this tool.
+        </Typography>
+      )}
       <Stack
         direction="row"
         spacing={1}
@@ -192,9 +209,9 @@ export function ChatContinue({
               variant="contained"
               startIcon={<PlayArrowIcon />}
               onClick={handleAuthorize}
-              disabled={disabled}
+              disabled={disabled || !hasAuthDetails || !renderAuthModal}
             >
-              Continue (Auth)
+              Authorize
             </Button>
             <Button
               size="small"

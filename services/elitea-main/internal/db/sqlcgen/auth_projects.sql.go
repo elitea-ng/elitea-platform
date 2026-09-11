@@ -9,6 +9,44 @@ import (
 	"context"
 )
 
+const canManageCurrentTracingConfiguration = `-- name: CanManageCurrentTracingConfiguration :one
+SELECT CASE WHEN
+    EXISTS (
+        SELECT 1
+        FROM public.auth_core__project_user_role AS assignment
+        JOIN public.auth_core__project_role AS project_role
+          ON project_role.id = assignment.role_id
+         AND project_role.project_id = assignment.project_id
+        WHERE assignment.project_id = $1::bigint
+          AND assignment.user_id = $2::bigint
+          AND project_role.name = ANY(ARRAY['admin', 'super_admin', 'system']::text[])
+    )
+    OR EXISTS (
+        SELECT 1
+        FROM centry.project AS project
+        WHERE project.id = $1::bigint
+          AND project.name = 'project_user_' || $2::bigint::text
+    )
+THEN TRUE ELSE FALSE END AS can_manage
+`
+
+type CanManageCurrentTracingConfigurationParams struct {
+	ProjectID int64 `db:"project_id" json:"project_id"`
+	UserID    int64 `db:"user_id" json:"user_id"`
+}
+
+// Exact current-platform containment for tracing credentials. Project role
+// identifiers are compared exactly: billing-admin does
+// not carry administrator authority. The personal-project signal is
+// independent of role assignment so a missing role row cannot revoke an
+// owner's access to project_user_<userID>.
+func (q *Queries) CanManageCurrentTracingConfiguration(ctx context.Context, arg CanManageCurrentTracingConfigurationParams) (bool, error) {
+	row := q.db.QueryRow(ctx, canManageCurrentTracingConfiguration, arg.ProjectID, arg.UserID)
+	var can_manage bool
+	err := row.Scan(&can_manage)
+	return can_manage, err
+}
+
 const isCurrentUserProjectMember = `-- name: IsCurrentUserProjectMember :one
 SELECT EXISTS (
     SELECT 1

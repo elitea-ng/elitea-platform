@@ -1,4 +1,5 @@
 import { createStorage } from '@/shared/lib/storage';
+import { loadLogoutMarker, publishLogout } from '@/shared/lib/oauthLogoutSync';
 
 /**
  * `mcpTokenStorage.helpers.ts` — a DISCLOSED, INTENTIONALLY PARTIAL local
@@ -123,7 +124,13 @@ function loadTokens(): TokenStore {
   try {
     // `getJSON` already treats absent AND malformed JSON as absent, which is
     // what the baseline's own try/catch did.
-    return createStorage('session').getJSON<TokenStore>(MC_TOKENS_STORAGE_KEY) ?? {};
+    const stored = createStorage('session').getJSON<TokenStore>(MC_TOKENS_STORAGE_KEY) ?? {};
+    const tokens = Object.fromEntries(Object.entries(stored).filter(([key, token]) => {
+      const marker = loadLogoutMarker(key);
+      return !marker || Number(token.issued_at) > marker;
+    }));
+    if (Object.keys(tokens).length !== Object.keys(stored).length) saveTokens(tokens);
+    return tokens;
   } catch {
     return {};
   }
@@ -206,8 +213,9 @@ export function logout(serverUrl: string | undefined, toolkitType?: string): voi
     const next = { ...tokens };
     delete next[key];
     saveTokens(next);
-    dispatchTokenChangeEvent(key, 'logout');
   }
+  publishLogout(key);
+  dispatchTokenChangeEvent(key, 'logout');
 }
 
 /**

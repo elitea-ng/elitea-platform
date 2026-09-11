@@ -35,6 +35,7 @@ func TestSupportedCapabilityIncludesLanguageNeutralAgentSemantics(t *testing.T) 
 		IndexIngestCapability,
 		AgentApplicationCapability,
 		AgentAdhocCapability,
+		ToolkitExecuteReadCapability,
 	} {
 		if !SupportedCapability(capabilityID) {
 			t.Fatalf("capability %q is not supported", capabilityID)
@@ -136,8 +137,34 @@ func TestInputBundleUsesMediaSpecificContentBounds(t *testing.T) {
 	if maxInputEntryContentBytes(AgentExecutionInputMediaType) != MaxAgentExecutionInputBytes {
 		t.Fatal("agent input bound does not match the public worker contract")
 	}
+	if maxInputEntryContentBytes(ToolkitExecuteReadInputMediaType) != MaxToolkitExecuteReadInputBytes {
+		t.Fatal("direct toolkit input bound does not match the public worker contract")
+	}
 	if maxInputEntryContentBytes("application/octet-stream") != 0 {
 		t.Fatal("unknown input media type was accepted")
+	}
+}
+
+func TestToolkitExecuteReadBindingRequiresOneImmutableProtobufEntry(t *testing.T) {
+	content := []byte("toolkit-read-input")
+	bundle := InputBundle{
+		ID: "bundle", Version: "version", MediaType: InputBundleManifestMediaType,
+		Digest: runtimedomain.SHA256([]byte("manifest")), Manifest: []byte("manifest"),
+		Entries: []InputEntry{{
+			ID: "read-request", Version: "entry-version", SemanticRole: ToolkitExecuteReadRequestRole,
+			ContentID: "content", MediaType: ToolkitExecuteReadInputMediaType,
+			Classification: "tenant-confidential", RequiredGrantAudience: "elitea.runtime.input.read.v1",
+			ContentDigest: runtimedomain.SHA256(content), ContentLength: int64(len(content)), Content: content,
+		}},
+	}
+	binding := ToolkitExecuteReadBinding{RequestEntryID: "read-request"}
+	if err := binding.Validate(bundle); err != nil {
+		t.Fatalf("binding.Validate() error = %v", err)
+	}
+	invalid := binding
+	invalid.RequestEntryID = "another-entry"
+	if err := invalid.Validate(bundle); err == nil {
+		t.Fatal("direct toolkit binding accepted a mismatched entry")
 	}
 }
 
@@ -145,7 +172,7 @@ func TestInputBundleUsesMediaSpecificContentBounds(t *testing.T) {
 // settings are redeemed by this service from the saved toolkit row and hold
 // credentials; the arguments come from the caller. This binding is where that
 // distinction becomes enforceable, so every way of blurring it must fail.
-func TestToolkitCallToolBindingRequiresTwoDistinctlyRoledEntries(t *testing.T) {
+func TestToolkitCallToolBindingRequiresThreeDistinctlyRoledEntries(t *testing.T) {
 	settings := []byte(`{"url":"https://github.example"}`)
 	arguments := []byte(`{"issue":7}`)
 	entry := func(id, role string, content []byte) InputEntry {
@@ -171,6 +198,7 @@ func TestToolkitCallToolBindingRequiresTwoDistinctlyRoledEntries(t *testing.T) {
 		Entries: []InputEntry{
 			entry("toolkit-settings", ToolkitCallToolSettingsRole, settings),
 			entry("tool-arguments", ToolkitCallToolArgumentsRole, arguments),
+			entry("toolkit-runtime-context", ToolkitCallToolRuntimeContextRole, []byte(`{"toolkit_security":{}}`)),
 		},
 	}
 	binding := ToolkitCallToolBinding{

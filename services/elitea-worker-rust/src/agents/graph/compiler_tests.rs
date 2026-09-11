@@ -119,6 +119,45 @@ fn whole_pipeline_yaml_is_bounded_strict_and_digest_stable() {
     );
 }
 
+#[test]
+fn legacy_ui_graph_identifiers_are_normalized_without_rewriting_storage() {
+    let legacy = r"
+entry_point: Agent 1
+nodes:
+  - id: Agent 1
+    type: agent
+    input: [input]
+    input_mapping:
+      task:
+        type: variable
+        value: input
+    output: [messages]
+    tool: Full Name Resolver
+    transition: END
+";
+    let canonical = legacy.replace("Agent 1", "Agent1");
+    let legacy = PipelineDefinition::from_yaml(legacy).expect("legacy UI pipeline");
+    let canonical = PipelineDefinition::from_yaml(&canonical).expect("canonical pipeline");
+
+    assert_eq!(legacy.entry_point(), "Agent1");
+    assert_eq!(legacy.definition_digest(), canonical.definition_digest());
+
+    let collision = r"
+entry_point: Agent 1
+nodes:
+  - id: Agent 1
+    type: state_modifier
+    transition: END
+  - id: Agent1
+    type: state_modifier
+    transition: END
+";
+    let Err(error) = PipelineDefinition::from_yaml(collision) else {
+        panic!("normalized node identifier collision must be rejected");
+    };
+    assert_eq!(error.code(), "graph.pipeline.invalid_configuration");
+}
+
 #[tokio::test]
 async fn active_state_modifier_yaml_runs_natively_and_surfaces_terminal_output() {
     let definition = PipelineDefinition::from_yaml(
@@ -389,6 +428,19 @@ async fn stored_pipeline_pauses_and_resumes_twice_through_runner_session_and_che
             .contains_key(INTERRUPT_METADATA_KEY)
     );
 
+    assert_eq!(
+        final_events[0]
+            .provider_metadata
+            .get(super::PIPELINE_REUSED_RESULT_METADATA_KEY,)
+            .map(String::as_str),
+        Some("v1")
+    );
+    assert!(
+        !second_events[0]
+            .provider_metadata
+            .contains_key(super::PIPELINE_REUSED_RESULT_METADATA_KEY,)
+    );
+
     let completed_session = get_session(sessions.as_ref()).await;
     let replay =
         PipelineHitlDecision::from_payload(&resume_payload(&second_interrupt_id, "approve", ""))
@@ -558,20 +610,8 @@ fn resume_payload(interrupt_id: &str, action: &str, value: &str) -> AgentExecuti
     }
 }
 
-/// A SECOND question on a conversation that already answered one.
-///
-/// The graph's checkpoint thread is the conversation, and ADK's executor opens
-/// every run by restoring whatever checkpoint that thread holds — including
-/// the terminal one a finished run leaves, whose `pending_nodes` is empty. A
-/// second turn assembled without `starting_a_fresh_run` therefore executes NO
-/// node and completes instantly on the FIRST turn's state: measured here as
-/// the bare "Pipeline completed." marker, and measured in CI run 34191944006
-/// as a pipeline test chat whose second answer was the first answer verbatim
-/// (`chat.pipeline-execution.spec.ts`).
-///
-/// The two runs deliberately share ONE checkpointer and ONE session, because
-/// that sharing is the defect's whole mechanism — a test that gave the second
-/// turn its own checkpointer would pass against the broken code.
+/// Each new turn runs its own input and retains the previous recovery frontier.
+/// Both turns share the underlying checkpointer and conversation session.
 #[tokio::test]
 async fn a_second_question_runs_the_graph_again_on_its_own_input() {
     let definition = PipelineDefinition::from_yaml(
@@ -608,20 +648,50 @@ nodes:
         .expect("pipeline session");
 
     let first = definition
-        .compile(ROOT, Arc::clone(&checkpointer), None)
+        .compile(
+            ROOT,
+            Arc::new(super::turn_checkpointer::TurnCheckpointer::new(
+                Arc::clone(&checkpointer),
+                "first",
+                1,
+                false,
+            )),
+            None,
+        )
         .expect("first graph");
     assert_eq!(
-        fresh_run_text(first, Arc::clone(&checkpointer), sessions.clone(), "alpha").await,
+        fresh_run_text(first, sessions.clone(), "alpha").await,
         "echo alpha"
     );
+    let first_checkpoint = checkpointer
+        .load(THREAD)
+        .await
+        .expect("load first")
+        .expect("first checkpoint");
 
     let second = definition
-        .compile(ROOT, Arc::clone(&checkpointer), None)
+        .compile(
+            ROOT,
+            Arc::new(super::turn_checkpointer::TurnCheckpointer::new(
+                Arc::clone(&checkpointer),
+                "second",
+                1,
+                false,
+            )),
+            None,
+        )
         .expect("second graph");
     assert_eq!(
-        fresh_run_text(second, Arc::clone(&checkpointer), sessions.clone(), "beta").await,
+        fresh_run_text(second, sessions.clone(), "beta").await,
         "echo beta",
         "the second question was answered from the first turn's checkpoint instead of being run"
+    );
+    assert!(
+        checkpointer
+            .load_by_id(&first_checkpoint.checkpoint_id)
+            .await
+            .expect("retained history")
+            .is_some()
     );
 }
 
@@ -629,16 +699,13 @@ nodes:
 /// question that is not continuing a pause — and return its terminal text.
 async fn fresh_run_text(
     graph: adk_rust::graph::GraphAgent,
-    checkpointer: Arc<dyn Checkpointer>,
     sessions: Arc<InMemorySessionService>,
     input: &str,
 ) -> String {
     let session_service: Arc<dyn SessionService> = sessions;
     let runner = Runner::builder()
         .app_name(APP)
-        .agent(Arc::new(
-            EliteaGraphAgent::new(graph).starting_a_fresh_run(checkpointer),
-        ))
+        .agent(Arc::new(EliteaGraphAgent::new(graph)))
         .session_service(session_service)
         .build()
         .expect("pipeline runner");

@@ -194,6 +194,116 @@ components:
       description: End of date range (inclusive)
 
   schemas:
+    McpOAuthProxyRequest:
+      type: object
+      required: [token_endpoint]
+      description: Exchange a code or refresh a delegated grant. Main resolves stored client credentials.
+      properties:
+        token_endpoint: { type: string, format: uri }
+        resource: { type: string, format: uri }
+        grant_type:
+          type: string
+          enum: [authorization_code, refresh_token]
+          default: authorization_code
+        code: { type: string }
+        redirect_uri: { type: string, format: uri }
+        code_verifier: { type: string }
+        refresh_token: { type: string }
+        scope:
+          type: string
+          description: Omitted refresh scope retains the existing grant. It never expands to toolkit defaults.
+        client_id: { type: string }
+        client_secret:
+          type: string
+          writeOnly: true
+          description: Legacy or manually supplied client credential. Do not combine with client_reference.
+        client_reference:
+          type: string
+          description: Opaque Main-owned DCR client reference. Requires used_dcr and the original client, endpoint, and resource.
+        used_dcr: { type: boolean, default: false }
+        toolkit_id:
+          oneOf:
+            - { type: string }
+            - { type: integer, minimum: 1, maximum: 2147483647 }
+        toolkit_type: { type: string }
+        configuration_uuid: { type: string }
+
+    McpOAuthProxyResponse:
+      type: object
+      required: [access_token]
+      properties:
+        access_token: { type: string }
+        token_type: { type: string }
+        refresh_token: { type: string }
+        id_token: { type: string }
+        session_id: { type: string }
+        scope: { type: string }
+        expires_in:
+          oneOf:
+            - { type: number }
+            - { type: string }
+
+    McpDcrProxyRequest:
+      type: object
+      required: [registration_endpoint, redirect_uris]
+      description: Register an OAuth client. DCR does not replace user consent.
+      properties:
+        registration_endpoint: { type: string, format: uri }
+        token_endpoint:
+          type: string
+          format: uri
+          description: Required when registration issues a secret. Main binds the stored client to this endpoint.
+        resource: { type: string, format: uri }
+        redirect_uris:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items: { type: string, format: uri }
+        client_name: { type: string }
+        grant_types:
+          type: array
+          maxItems: 32
+          items: { type: string }
+        response_types:
+          type: array
+          maxItems: 32
+          items: { type: string }
+        token_endpoint_auth_method: { type: string }
+        application_type: { type: string }
+        scope: { type: string }
+        software_id: { type: string }
+        software_version: { type: string }
+
+    McpDcrProxyResponse:
+      type: object
+      required: [client_id]
+      description: Main never returns the registered client secret or registration access token.
+      properties:
+        client_id: { type: string }
+        client_reference:
+          type: string
+          description: Actor- and project-bound reference to the encrypted confidential client.
+        client_id_issued_at: { type: integer, format: int64 }
+        client_secret_expires_at: { type: integer, format: int64 }
+        token_endpoint_auth_method: { type: string }
+        redirect_uris:
+          type: array
+          items: { type: string }
+        grant_types:
+          type: array
+          items: { type: string }
+        response_types:
+          type: array
+          items: { type: string }
+        scope: { type: string }
+
+    McpOAuthError:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        error_description: { type: string }
+
     DeepWikiSlots:
       type: object
       description: |
@@ -2945,23 +3055,17 @@ components:
         fetchVersionDetails always adds created_at/agent_type/instructions/
         welcome_message/llm_settings/meta/conversation_starters/
         pipeline_settings/author_id/author/tools/tags/variables
-        (internal/api/v2/applications/handler.go) — `author` is the same
-        {id, email, name} object the write echo carries, joined from
-        auth_core__user; the read used to answer author_id alone, so a
-        version's author had a name until the editor reloaded it;
-        CreateVersion adds
-        author + is_forked but no pipeline_settings (:783-801); UpdateVersion
-        emits the 10-key subset without created_at/author/tools (:913-919);
-        Fork adds is_forked and omits pipeline_settings
-        (eliteacore/handler.go:2440-2456, is_forked at :2452); the import
-        detail map has NO is_forked and omits created_at, but DOES carry
-        meta, variables and tags — it reports what the import actually
-        persisted, since the import began writing the canonical variable
-        and tag stores; publicApplicationDetail omits
-        variables, created_at, author and is_forked (:1460-1475).
+        (internal/api/v2/applications/handler.go). The application and version
+        create paths return that same stored pipeline-settings and tag state.
+        The author object contains id, email, and name from auth_core__user.
+        UpdateVersion emits a smaller subset without created_at, author, or
+        tools. Fork adds is_forked and omits pipeline_settings. The import
+        detail map has no is_forked and omits created_at, but carries meta,
+        variables, and tags from the canonical stores. Public application
+        details omit variables, created_at, author, and is_forked.
         Empty-vs-missing: instructions and welcome_message are always
         present as "" when the DB column is NULL (COALESCE / pointer deref
-        to "" — applications/handler.go:222-229).
+        to "" in applications/handler.go).
 
     AttachedSkill:
       type: object
@@ -3165,8 +3269,9 @@ components:
             the stored set; an empty array removes every association row.
             Omit the key to leave the stored set alone. Each entry is matched
             by `name`: an existing `tags` row is reused, a new name creates
-            one. Only the PUT (UpdateVersion) writes them — the two create
-            paths still ignore the key, unlike `meta`, which they store.
+            one. The application and version create paths persist supplied
+            tags and return the stored set. PUT persists the supplied set and
+            leaves existing tags unchanged when the key is absent.
         meta:
           allOf: [{ $ref: '#/components/schemas/VersionMeta' }]
           description: >
@@ -3187,8 +3292,9 @@ components:
           description: >
             Pipeline flow-graph layout ({nodes, edges, orientation,
             layout_version}). Written verbatim to the
-            application_versions.pipeline_settings jsonb column; omit the key
-            to leave the stored value untouched.
+            application_versions.pipeline_settings jsonb column by create and
+            update operations. On update, omit the key to leave the stored
+            value untouched.
       additionalProperties: true
       x-elitea-passthrough: >-
         NOTE(W2): decoded into map[string]any; the handlers read
@@ -5058,31 +5164,48 @@ components:
 
     ProjectContext:
       type: object
-      required: [content, enabled]
+      required: [id, content, enabled, activation_description, updated_at]
       properties:
+        id:
+          type: integer
+          format: int32
+          nullable: true
         content:
           type: string
-          nullable: true
+          maxLength: 2500
         enabled:
           type: boolean
+        activation_description:
+          type: string
+          maxLength: 300
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
           nullable: true
       description: >
-        NOTE(W2): internal/api/v2/eliteacore/handler.go:110-134 — keys always
-        present; "" / false when no configuration row exists, null possible
-        when the stored jsonb lacks the key (:130-133). Update echoes the
-        typed request back (:164), so nulls never appear after a write —
-        EXCEPT the test-only nil-pool branch of updateProjectContext
-        (:143-146), which returns {"ok": true} instead; unreachable in
-        production (main.go exits when the pool cannot be built, and
-        router.go:236 always passes cfg.Pool).
+        The current project-context builder response. An absent configuration
+        returns id/activation_description/updated_at as null, empty content,
+        and enabled=true.
 
     ProjectContextUpdateRequest:
       type: object
       properties:
-        content: { type: string }
-        enabled: { type: boolean }
+        content:
+          type: string
+          maxLength: 2500
+          default: ''
+        enabled:
+          type: boolean
+          default: true
+        activation_description:
+          type: string
+          maxLength: 300
+          nullable: true
       description: >
-        NOTE(W2): typed decode, internal/api/v2/eliteacore/handler.go:137-141.
+        Content and enabled use replacement defaults on every PUT. Omitting
+        activation_description preserves its current non-empty value; null or
+        a blank string removes it.
 
     ProjectIconMeta:
       type: object
@@ -9529,6 +9652,64 @@ components:
 # Paths
 # ---------------------------------------------------------------------------
 paths:
+  /elitea_core/mcp_oauth_proxy/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: exchangeMcpOAuthGrant
+      summary: Exchange or refresh a delegated OAuth grant
+      tags: [toolkits]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/McpOAuthProxyRequest'
+      responses:
+        '200':
+          description: Successful response. Cache-Control is no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpOAuthProxyResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        default:
+          description: Safe OAuth error. No credential values or raw provider response appear.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpOAuthError'
+
+  /elitea_core/mcp_dcr_proxy/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: registerMcpOAuthClient
+      summary: Register an OAuth client and retain its secret in Main
+      tags: [toolkits]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/McpDcrProxyRequest'
+      responses:
+        '200':
+          description: Successful response. Cache-Control is no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpDcrProxyResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        default:
+          description: Safe OAuth error. No credential values or raw provider response appear.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpOAuthError'
+
 
   # ==========================================================================
   # ADMIN — users
@@ -13139,15 +13320,12 @@ paths:
       operationId: saveApplicationNewVersion
       summary: Create a new version for an existing application
       description: |
-        NOTE(W2): internal/api/v2/applications/handler.go:696-806 — responds
-        201 with the full new-version detail (author/is_forked variant).
-        `name` is REQUIRED on this operation only: CreateVersion hard-rejects
-        an empty/missing name with 400 "version name is required" (:706-710),
-        whereas the shared VersionWriteRequest is also used by the PUT (which
-        only applies name when non-empty, :841) and by
-        ApplicationCreateRequest.versions[0] (which defaults it to "latest",
-        :388-391) — hence the allOf+required override rather than a required
-        list on the shared schema.
+        CreateVersion in internal/api/v2/applications/handler.go returns 201
+        with the new version detail. The name is required on this operation.
+        The optional copy_skills_from_version_id copies exact skill bindings
+        from a version in the same application and project. A missing, invalid,
+        or foreign source is ignored. A database copy failure rolls back the
+        new version. The source option is not stored in version metadata.
       tags: [applications]
       requestBody:
         required: true
@@ -13158,6 +13336,12 @@ paths:
                 - $ref: '#/components/schemas/VersionWriteRequest'
                 - type: object
                   required: [name]
+                  properties:
+                    copy_skills_from_version_id:
+                      type: integer
+                      minimum: 1
+                      maximum: 2147483647
+                      description: Optional source version in the same application and project.
       responses:
         '201':
           description: Created version
@@ -14635,9 +14819,10 @@ paths:
 
     get:
       operationId: getProjectContext
-      summary: Retrieve the shared context blob for a project
+      summary: Retrieve project context builder state
       description: |
-        NOTE(W2): internal/api/v2/eliteacore/handler.go:110-134.
+        Returns the current project-context configuration, or the exact enabled
+        default when the project has not created one.
       tags: [applications]
       responses:
         '200':
@@ -14648,13 +14833,15 @@ paths:
                 $ref: '#/components/schemas/ProjectContext'
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
 
     put:
       operationId: updateProjectContext
-      summary: Replace the shared context blob for a project
+      summary: Create or replace project context builder state
       description: |
-        NOTE(W2): internal/api/v2/eliteacore/handler.go:136-165 — typed
-        decode {content, enabled}; the same pair is echoed back.
+        Creates the project-context configuration if missing. Content and
+        enabled are replacement values; activation_description remains
+        backward-compatible with clients that omit it.
       tags: [applications]
       requestBody:
         required: true
@@ -14672,6 +14859,20 @@ paths:
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+
+    delete:
+      operationId: deleteProjectContext
+      summary: Delete project context builder state
+      description: Deletes the project's stored project-context configuration.
+      tags: [applications]
+      responses:
+        '204':
+          description: Project context deleted
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
 
   # APPLICATIONS — project info (issue 621)
   #

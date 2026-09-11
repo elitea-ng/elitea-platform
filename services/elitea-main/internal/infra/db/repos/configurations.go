@@ -246,12 +246,14 @@ func (r *CurrentConfigurationsRepository) Count(ctx context.Context, filter conf
 		}
 		if filter.SharedOnly {
 			total, err = queries.CountCurrentSharedConfigurations(ctx, sqlcgen.CountCurrentSharedConfigurationsParams{
+				Ids:       append([]int32(nil), filter.IDs...),
 				ProjectID: filter.ProjectID,
 				Types:     append([]string(nil), filter.Types...),
 				Sections:  append([]string(nil), filter.Sections...),
 			})
 		} else {
 			total, err = queries.CountCurrentConfigurations(ctx, sqlcgen.CountCurrentConfigurationsParams{
+				Ids:        append([]int32(nil), filter.IDs...),
 				ProjectID:  filter.ProjectID,
 				Types:      append([]string(nil), filter.Types...),
 				Sections:   append([]string(nil), filter.Sections...),
@@ -287,6 +289,7 @@ func (r *CurrentConfigurationsRepository) List(ctx context.Context, filter confi
 
 		if filter.SharedOnly {
 			rows, err := queries.ListCurrentSharedConfigurations(ctx, sqlcgen.ListCurrentSharedConfigurationsParams{
+				Ids:        append([]int32(nil), filter.IDs...),
 				ProjectID:  filter.ProjectID,
 				Types:      append([]string(nil), filter.Types...),
 				Sections:   append([]string(nil), filter.Sections...),
@@ -310,6 +313,7 @@ func (r *CurrentConfigurationsRepository) List(ctx context.Context, filter confi
 		}
 
 		rows, err := queries.ListCurrentConfigurations(ctx, sqlcgen.ListCurrentConfigurationsParams{
+			Ids:        append([]int32(nil), filter.IDs...),
 			ProjectID:  filter.ProjectID,
 			Types:      append([]string(nil), filter.Types...),
 			Sections:   append([]string(nil), filter.Sections...),

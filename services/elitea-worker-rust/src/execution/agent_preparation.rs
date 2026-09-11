@@ -83,6 +83,32 @@ pub(crate) trait AgentInputMaterializer: Send + Sync {
         &self,
         execution: &LeaseMonitoredAgentExecution,
     ) -> Result<MaterializedInput, InputContentError>;
+
+    async fn materialize_entry(
+        &self,
+        execution: &LeaseMonitoredAgentExecution,
+        entry_id: &str,
+    ) -> Result<MaterializedInput, InputContentError> {
+        if entry_id != execution.request_entry().entry_id {
+            return Err(InputContentError::InvalidInput(
+                "the input entry is not available",
+            ));
+        }
+        self.materialize(execution).await
+    }
+
+    async fn publish_toolkit_discovery(
+        &self,
+        _execution: &LeaseMonitoredAgentExecution,
+        _content: &[u8],
+    ) -> Result<
+        crate::protocol::elitea::runtime::v1::ToolkitAvailableToolsArtifactReferenceV1,
+        InputContentError,
+    > {
+        Err(InputContentError::InvalidInput(
+            "the toolkit result writer is not available",
+        ))
+    }
 }
 
 #[async_trait]
@@ -92,6 +118,25 @@ impl AgentInputMaterializer for InputContentClient {
         execution: &LeaseMonitoredAgentExecution,
     ) -> Result<MaterializedInput, InputContentError> {
         self.fetch_materialized(execution).await
+    }
+
+    async fn materialize_entry(
+        &self,
+        execution: &LeaseMonitoredAgentExecution,
+        entry_id: &str,
+    ) -> Result<MaterializedInput, InputContentError> {
+        self.fetch_materialized_entry(execution, entry_id).await
+    }
+
+    async fn publish_toolkit_discovery(
+        &self,
+        execution: &LeaseMonitoredAgentExecution,
+        content: &[u8],
+    ) -> Result<
+        crate::protocol::elitea::runtime::v1::ToolkitAvailableToolsArtifactReferenceV1,
+        InputContentError,
+    > {
+        InputContentClient::publish_toolkit_discovery(self, execution, content).await
     }
 }
 

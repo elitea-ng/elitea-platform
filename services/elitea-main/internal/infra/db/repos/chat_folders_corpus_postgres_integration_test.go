@@ -61,6 +61,7 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // chatFoldersCorpusProject is the tenant the shared template migrates
@@ -74,7 +75,7 @@ func TestCorpusOnlySchemaSupportsFoldersAndSelectedConversations(t *testing.T) {
 	conversationsRepo := NewConversationsRepo(pool)
 
 	t.Run("the corpus alone creates the folder objects", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		ctx, cancel := context.WithTimeout(auth.ContextWithUser(context.Background(), auth.User{ID: "1"}), 20*time.Second)
 		defer cancel()
 
 		// FoldersRepo.List swallows its query error and answers an empty slice
@@ -114,7 +115,7 @@ func TestCorpusOnlySchemaSupportsFoldersAndSelectedConversations(t *testing.T) {
 	})
 
 	t.Run("a conversation carries folder_id through Update and Get", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		ctx, cancel := context.WithTimeout(auth.ContextWithUser(context.Background(), auth.User{ID: "1"}), 20*time.Second)
 		defer cancel()
 
 		folder, err := foldersRepo.Create(ctx, chatFoldersCorpusProject, folders.Folder{Name: "assignment-target"})
@@ -180,7 +181,7 @@ func TestCorpusOnlySchemaSupportsFoldersAndSelectedConversations(t *testing.T) {
 	})
 
 	t.Run("selecting a conversation round-trips and reselecting replaces", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		ctx, cancel := context.WithTimeout(auth.ContextWithUser(context.Background(), auth.User{ID: "1"}), 20*time.Second)
 		defer cancel()
 
 		first, err := conversationsRepo.Create(ctx, chatFoldersCorpusProject, conversations.Conversation{Name: "selected-one"})
@@ -246,7 +247,7 @@ SELECT count(*) FROM p_1.chat_selected_conversations WHERE user_id = $1`, userID
 	})
 
 	t.Run("attachment_participant_id exists and references chat_participants", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		ctx, cancel := context.WithTimeout(auth.ContextWithUser(context.Background(), auth.User{ID: "1"}), 20*time.Second)
 		defer cancel()
 
 		conv, err := conversationsRepo.Create(ctx, chatFoldersCorpusProject, conversations.Conversation{Name: "attachment-owner"})

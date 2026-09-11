@@ -7,11 +7,15 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/foldervisibility"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenant"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
@@ -159,23 +163,59 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 	if err != nil {
 		return applications.ListResponse{}, err
 	}
+	if err := req.ValidateList(); err != nil {
+		return applications.ListResponse{}, err
+	}
 	page, pageSize := req.Page, req.PageSize
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 {
-		pageSize = defaultListPageSize
-	}
 	empty := applications.ListResponse{Rows: []applications.Application{}, Page: page, PageSize: pageSize}
-
-	// "pipeline" lists pipeline versions, anything else lists classic agents.
-	// Both are INNER JOINs: an application with no version row is not a
-	// listable agent (and cannot be opened in the editor either).
-	join := fmt.Sprintf(` JOIN %s.application_versions av ON av.application_id = a.id AND av.agent_type %s 'pipeline'`,
-		s, map[bool]string{true: "=", false: "!="}[req.AgentsType == "pipeline"])
-
+	access, err := foldervisibility.Resolve(ctx, r.pool, s)
+	if err != nil {
+		return empty, fmt.Errorf("applications: folder access: %w", err)
+	}
+	// Select one stable version for list metadata. Filters match the whole application.
+	join := fmt.Sprintf(` JOIN LATERAL (SELECT v.* FROM %s.application_versions v
+ WHERE v.application_id=a.id ORDER BY v.id ASC LIMIT 1) av ON TRUE`, s)
 	args := []any{}
 	conditions := []string{}
+	bind := func(value any) string { args = append(args, value); return fmt.Sprintf("$%d", len(args)) }
+	if req.AgentsType == "pipeline" || req.AgentsType == "classic" {
+		operator := "EXISTS"
+		if req.AgentsType == "classic" {
+			operator = "NOT EXISTS"
+		}
+		conditions = append(conditions, fmt.Sprintf("%s (SELECT 1 FROM %s.application_versions pv WHERE pv.application_id=a.id AND pv.agent_type='pipeline')", operator, s))
+	}
+	if len(req.IDs) > 0 {
+		conditions = append(conditions, "a.id=ANY("+bind(req.IDs)+"::integer[])")
+	}
+	if req.AuthorID > 0 {
+		conditions = append(conditions, fmt.Sprintf("EXISTS (SELECT 1 FROM %s.application_versions fv WHERE fv.application_id=a.id AND fv.author_id=%s)", s, bind(req.AuthorID)))
+	}
+	if len(req.Statuses) > 0 {
+		conditions = append(conditions, fmt.Sprintf("EXISTS (SELECT 1 FROM %s.application_versions fv WHERE fv.application_id=a.id AND fv.status=ANY(%s::text[]))", s, bind(req.Statuses)))
+	}
+	if req.WithoutTags {
+		conditions = append(conditions, fmt.Sprintf("NOT EXISTS (SELECT 1 FROM %s.application_versions fv JOIN %s.application_version_tag_association ft ON ft.version_id=fv.id WHERE fv.application_id=a.id)", s, s))
+	}
+	kinds := []string{"agent", "pipeline"}
+	if req.AgentsType == "classic" {
+		kinds = []string{"agent"}
+	} else if req.AgentsType == "pipeline" {
+		kinds = []string{"pipeline"}
+	}
+	if access.FolderRestrictions {
+		conditions = append(conditions, foldervisibility.ExclusionSQL(s, "a.id", bind(kinds), bind(access.ActorID)))
+	}
+	if req.MyLiked {
+		conditions = append(conditions, fmt.Sprintf("EXISTS (SELECT 1 FROM %s.social_likes l WHERE l.entity_name='application' AND l.entity_id=a.id AND l.user_id=%s)", s, bind(access.ActorID)))
+	}
+	if req.TrendStart != nil {
+		end := time.Now().UTC()
+		if req.TrendEnd != nil {
+			end = *req.TrendEnd
+		}
+		conditions = append(conditions, fmt.Sprintf("EXISTS (SELECT 1 FROM %s.social_likes l WHERE l.entity_name='application' AND l.entity_id=a.id AND l.created_at BETWEEN %s AND %s)", s, bind(*req.TrendStart), bind(end)))
+	}
 	if req.Search != "" {
 		args = append(args, "%"+req.Search+"%")
 		conditions = append(conditions, fmt.Sprintf(`(a.name ILIKE $%d OR a.description ILIKE $%d)`, len(args), len(args)))
@@ -203,9 +243,15 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 		where = " WHERE " + strings.Join(conditions, " AND ")
 	}
 
+	// Count and page share one snapshot and the same predicates.
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return empty, fmt.Errorf("applications: list snapshot: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
 	var total int
 	countQuery := fmt.Sprintf(`SELECT COUNT(DISTINCT a.id) FROM %s.applications a`, s) + join + where
-	if err := r.pool.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := tx.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
 		return empty, fmt.Errorf("applications: list count: %w", err)
 	}
 
@@ -251,7 +297,7 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 			JOIN %[1]s.tags t ON t.id = ta.tag_id
 			WHERE tv.application_id = a.id), '{}')`, s)
 	query := fmt.Sprintf(`
-		SELECT DISTINCT ON (a.id) a.id, a.name, COALESCE(a.description, ''), COALESCE(a.icon, ''),
+		SELECT a.id, a.name, COALESCE(a.description, ''), COALESCE(a.icon, ''),
 			a.owner_id, a.created_at, a.updated_at, COALESCE(a.shared_id, 0),
 			COALESCE(a.meta, '{}'::jsonb)::text,
 			COALESCE(av.agent_type, '`+defaultAgentType+`'),
@@ -264,14 +310,14 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 		// The old join gave the list the account whose user id happened to
 		// equal the project id — user 1 in nearly every deployment.
 		` LEFT JOIN public.auth_core__user u ON u.id = av.author_id` + where +
-		// `av.id ASC` picks the FIRST version of each application, whose author
-		// is the account that created the agent. DISTINCT ON keeps one row per
-		// application, and without this key the row it keeps — and so the
-		// author the list shows — is whichever version the plan reaches first.
-		fmt.Sprintf(` ORDER BY a.id DESC, av.id ASC LIMIT $%d OFFSET $%d`, limitIdx, limitIdx+1)
-	selectArgs = append(selectArgs, pageSize, (page-1)*pageSize)
+		fmt.Sprintf(` ORDER BY %s %s, a.id ASC LIMIT $%d OFFSET $%d`, applicationListSort(s, req.SortBy), strings.ToUpper(req.SortOrder), limitIdx, limitIdx+1)
+	offset := (page - 1) * pageSize
+	if req.Offset != nil {
+		offset = *req.Offset
+	}
+	selectArgs = append(selectArgs, pageSize, offset)
 
-	rows, err := r.pool.Query(ctx, query, selectArgs...)
+	rows, err := tx.Query(ctx, query, selectArgs...)
 	if err != nil {
 		return empty, fmt.Errorf("applications: list: %w", err)
 	}
@@ -312,6 +358,11 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 	}
 	if err := rows.Err(); err != nil {
 		return empty, fmt.Errorf("applications: list rows: %w", err)
+	}
+
+	rows.Close()
+	if err := tx.Commit(ctx); err != nil {
+		return empty, fmt.Errorf("applications: list snapshot commit: %w", err)
 	}
 
 	totalPages := total / pageSize
@@ -397,8 +448,8 @@ func (r *ApplicationsRepo) Create(ctx context.Context, req applications.CreateRe
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	query := fmt.Sprintf(`
-		INSERT INTO %s.applications (name, description, icon, owner_id)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO %s.applications (name, description, icon, owner_id, meta)
+		VALUES ($1, $2, $3, $4, '{}'::jsonb)
 		RETURNING `+applicationColumns, s)
 	app, err := scanApplication(
 		tx.QueryRow(ctx, query, req.Name, req.Description, req.Icon, ownerID.Int64()),
@@ -583,7 +634,30 @@ func (r *ApplicationsRepo) CreateVersion(ctx context.Context, projectID, applica
 	if v.AuthorID <= 0 {
 		return applications.Version{}, apierr.Unauthorized("an authenticated author is required to create a version")
 	}
-	return insertVersion(ctx, r.pool, s, applicationID, v)
+	if v.CopySkillsFromVersionID <= 0 {
+		return insertVersion(ctx, r.pool, s, applicationID, v)
+	}
+	project, err := parseProjectID(projectID)
+	if err != nil {
+		return applications.Version{}, err
+	}
+	var created applications.Version
+	err = tenant.NewExecutor(r.pool).WithinTx(ctx, tenant.Project{ID: project}, pgx.TxOptions{}, func(ctx context.Context, tx pgx.Tx) error {
+		var err error
+		created, err = insertVersion(ctx, tx, s, applicationID, v)
+		if err != nil {
+			return err
+		}
+		_, err = sqlcgen.New(tx).CopyApplicationVersionSkills(ctx, sqlcgen.CopyApplicationVersionSkillsParams{
+			SourceVersionID: v.CopySkillsFromVersionID,
+			TargetVersionID: created.ID,
+		})
+		return err
+	})
+	if err != nil {
+		return applications.Version{}, fmt.Errorf("applications: create version with skills: %w", err)
+	}
+	return created, nil
 }
 
 // querier is the subset of pgxpool.Pool / pgx.Tx insertVersion needs, so the
@@ -617,6 +691,10 @@ func insertVersion(ctx context.Context, q querier, s, applicationID string, v ap
 	if err != nil {
 		return applications.Version{}, err
 	}
+	pipelineSettingsJSON, err := encodeJSONObject(v.PipelineSettings)
+	if err != nil {
+		return applications.Version{}, err
+	}
 
 	// The INSERT ... RETURNING is wrapped in a CTE so the read projection —
 	// which needs the owning applications row for is_default — is the same
@@ -632,8 +710,8 @@ func insertVersion(ctx context.Context, q querier, s, applicationID string, v ap
 		WITH v AS (
 			INSERT INTO %s.application_versions
 				(application_id, name, status, author_id, agent_type, instructions,
-				 welcome_message, llm_settings, conversation_starters, meta)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb)
+				 welcome_message, llm_settings, conversation_starters, meta, pipeline_settings)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb)
 			RETURNING *
 		), touched AS (
 			UPDATE %s.applications SET updated_at = now()
@@ -643,7 +721,7 @@ func insertVersion(ctx context.Context, q querier, s, applicationID string, v ap
 
 	ver, err := scanVersion(q.QueryRow(ctx, query,
 		applicationID, name, status, v.AuthorID, agentType, v.Instructions,
-		v.WelcomeMessage, llmJSON, startersJSON, metaJSON,
+		v.WelcomeMessage, llmJSON, startersJSON, metaJSON, pipelineSettingsJSON,
 	))
 	if err != nil {
 		return applications.Version{}, fmt.Errorf("applications: create version: %w", err)
@@ -778,29 +856,30 @@ func (r *ApplicationsRepo) UpdateVersion(ctx context.Context, projectID, applica
 }
 
 func (r *ApplicationsRepo) DeleteVersion(ctx context.Context, projectID, applicationID, versionID string) error {
-	s, err := tenantSchema(projectID)
+	_, err := tenantSchema(projectID)
 	if err != nil {
 		return err
 	}
 	if !isNumericRowID(applicationID) || !isNumericRowID(versionID) {
 		return apierr.NotFound("version not found")
 	}
-	// The count read below is the count of the STAMP, not of the delete, and
-	// they are the same number: the UPDATE touches one agent row for each
-	// version row the CTE removed, so zero still means "no such version".
-	ct, err := r.pool.Exec(ctx, fmt.Sprintf(`
-		WITH d AS (
-			DELETE FROM %s.application_versions
-			WHERE application_id = $1 AND id = $2
-			RETURNING application_id
-		)
-		UPDATE %s.applications SET updated_at = now()
-		WHERE id IN (SELECT application_id FROM d)`, s, s),
-		applicationID, versionID)
+	project, err := parseProjectID(projectID)
+	if err != nil {
+		return err
+	}
+	var count int64
+	err = tenant.NewExecutor(r.pool).WithinTx(ctx, tenant.Project{ID: project}, pgx.TxOptions{}, func(ctx context.Context, tx pgx.Tx) error {
+		var err error
+		count, err = sqlcgen.New(tx).DeleteApplicationVersionWithSkills(ctx, sqlcgen.DeleteApplicationVersionWithSkillsParams{
+			ApplicationID: applicationID,
+			VersionID:     versionID,
+		})
+		return err
+	})
 	if err != nil {
 		return fmt.Errorf("applications: delete version: %w", err)
 	}
-	if ct.RowsAffected() == 0 {
+	if count == 0 {
 		return apierr.NotFound("version not found")
 	}
 	return nil
@@ -892,4 +971,21 @@ func (r *ApplicationsRepo) BatchReplaceVersion(ctx context.Context, projectID, o
 		return fmt.Errorf("applications: batch replace version: commit: %w", err)
 	}
 	return nil
+}
+
+func applicationListSort(schema, sortBy string) string {
+	switch sortBy {
+	case "name":
+		return "LOWER(a.name)"
+	case "id":
+		return "a.id"
+	case "updated_at":
+		return "a.updated_at"
+	case "author", "authors":
+		return "LOWER(COALESCE(NULLIF(u.name,''),NULLIF(u.email,''),u.id::text,''))"
+	case "likes":
+		return fmt.Sprintf("(SELECT COUNT(*) FROM %s.social_likes l WHERE l.entity_name='application' AND l.entity_id=a.id)", schema)
+	default:
+		return "a.created_at"
+	}
 }

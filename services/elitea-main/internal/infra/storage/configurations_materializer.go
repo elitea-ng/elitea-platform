@@ -31,16 +31,58 @@ var errInvalidCurrentFrozenConfiguration = errors.New("invalid frozen current co
 // process that requested it. Each frozen configuration is unsecreted through
 // its embedded configuration_project_id rather than the invoking project.
 type CurrentConfigurationsMaterializer struct {
-	unsecreter configurationapp.CurrentExpansionUnsecreter
+	unsecreter    configurationapp.CurrentExpansionUnsecreter
+	prebuilt      CurrentAgentPrebuiltMCPResolver
+	toolkitTokens CurrentToolkitMCPTokenLoader
+}
+
+// CurrentAgentPrebuiltMCPResolver resolves one trusted prebuilt MCP definition.
+type CurrentAgentPrebuiltMCPResolver interface {
+	ResolveCurrentAgentPrebuiltMCP(
+		context.Context,
+		int32,
+		int32,
+		string,
+		map[string]any,
+		func(map[string]any) (map[string]any, error),
+	) (map[string]any, bool, error)
 }
 
 func NewCurrentConfigurationsMaterializer(
 	unsecreter configurationapp.CurrentExpansionUnsecreter,
 ) (*CurrentConfigurationsMaterializer, error) {
+	return newCurrentConfigurationsMaterializer(unsecreter, nil)
+}
+
+// NewCurrentAgentConfigurationsMaterializer enables claim-time prebuilt MCP resolution.
+func NewCurrentAgentConfigurationsMaterializer(
+	unsecreter configurationapp.CurrentExpansionUnsecreter,
+	prebuilt CurrentAgentPrebuiltMCPResolver,
+	options ...CurrentMaterializerOption,
+) (*CurrentConfigurationsMaterializer, error) {
+	if prebuilt == nil {
+		return nil, errors.New("current agent prebuilt MCP resolver is required")
+	}
+	materializer, err := newCurrentConfigurationsMaterializer(unsecreter, prebuilt)
+	if err != nil {
+		return nil, err
+	}
+	for _, option := range options {
+		if option != nil {
+			option(materializer)
+		}
+	}
+	return materializer, nil
+}
+
+func newCurrentConfigurationsMaterializer(
+	unsecreter configurationapp.CurrentExpansionUnsecreter,
+	prebuilt CurrentAgentPrebuiltMCPResolver,
+) (*CurrentConfigurationsMaterializer, error) {
 	if unsecreter == nil {
 		return nil, errors.New("current configuration unsecreter is required")
 	}
-	return &CurrentConfigurationsMaterializer{unsecreter: unsecreter}, nil
+	return &CurrentConfigurationsMaterializer{unsecreter: unsecreter, prebuilt: prebuilt}, nil
 }
 
 func (m *CurrentConfigurationsMaterializer) MaterializeContent(
@@ -61,7 +103,8 @@ func (m *CurrentConfigurationsMaterializer) MaterializeContent(
 		if !ok {
 			return nil, ErrContentRejected
 		}
-		if _, ok := positiveCurrentMaterializationID(authorization.ActorID); !ok {
+		actorID, ok := positiveCurrentMaterializationID(authorization.ActorID)
+		if !ok {
 			return nil, ErrContentRejected
 		}
 		if authorization.SemanticRole != executiondomain.AgentExecutionRequestRole {
@@ -70,10 +113,59 @@ func (m *CurrentConfigurationsMaterializer) MaterializeContent(
 		return m.materializeAgentExecution(
 			ctx,
 			projectID,
+			actorID,
 			authorization.CapabilityID,
 			source,
 			maxBytes,
 		)
+	}
+	if authorization.CapabilityID == executiondomain.ToolkitExecuteReadCapability {
+		projectID, ok := positiveCurrentMaterializationID(authorization.ResourceProjectID)
+		if !ok {
+			return nil, ErrContentRejected
+		}
+		if _, ok := positiveCurrentMaterializationID(authorization.ActorID); !ok ||
+			authorization.SemanticRole != executiondomain.ToolkitExecuteReadRequestRole {
+			return nil, ErrContentRejected
+		}
+		return m.materializeToolkitExecuteRead(ctx, projectID, source, maxBytes)
+	}
+	if authorization.CapabilityID == executiondomain.ToolkitAvailableToolsCapability {
+		projectID, ok := positiveCurrentMaterializationID(authorization.ResourceProjectID)
+		if !ok {
+			return nil, ErrContentRejected
+		}
+		actorID, ok := positiveCurrentMaterializationID(authorization.ActorID)
+		if !ok {
+			return nil, ErrContentRejected
+		}
+		switch authorization.SemanticRole {
+		case executiondomain.ToolkitAvailableToolsSettingsRole:
+			return m.materializeToolkitDiscovery(ctx, projectID, actorID, authorization.ToolkitType, source, maxBytes)
+		case "toolkit.available_tools.runtime_context":
+			return source, nil
+		default:
+			return nil, ErrContentRejected
+		}
+	}
+	if authorization.CapabilityID == executiondomain.ToolkitCallToolCapability {
+		projectID, ok := positiveCurrentMaterializationID(authorization.ResourceProjectID)
+		if !ok {
+			return nil, ErrContentRejected
+		}
+		if _, ok := positiveCurrentMaterializationID(authorization.ActorID); !ok {
+			return nil, ErrContentRejected
+		}
+		switch authorization.SemanticRole {
+		case executiondomain.ToolkitCallToolSettingsRole:
+			return m.materializeToolkit(ctx, projectID, source, maxBytes)
+		case executiondomain.ToolkitCallToolArgumentsRole:
+			return source, nil
+		case executiondomain.ToolkitCallToolRuntimeContextRole:
+			return m.materializeToolkitRuntimeContext(ctx, authorization, source, maxBytes)
+		default:
+			return nil, ErrContentRejected
+		}
 	}
 	if authorization.CapabilityID != executiondomain.IndexIngestCapability {
 		// The shared content listener also serves validation inputs. Those bytes
@@ -112,9 +204,40 @@ func (m *CurrentConfigurationsMaterializer) MaterializeContent(
 	}
 }
 
+func (m *CurrentConfigurationsMaterializer) materializeToolkitExecuteRead(
+	ctx context.Context,
+	projectID int32,
+	source []byte,
+	maxBytes int64,
+) ([]byte, error) {
+	var request runtimev1.ToolkitExecuteReadInputV1
+	if err := proto.Unmarshal(source, &request); err != nil {
+		return nil, ErrContentRejected
+	}
+	canonical, err := proto.MarshalOptions{Deterministic: true}.Marshal(&request)
+	if err != nil || !bytes.Equal(canonical, source) {
+		clearContentBytes(canonical)
+		return nil, ErrContentRejected
+	}
+	clearContentBytes(canonical)
+
+	toolkit, err := m.materializeToolkit(ctx, projectID, request.GetToolkit(), maxBytes)
+	if err != nil {
+		return nil, err
+	}
+	request.Toolkit = toolkit
+	result, err := proto.MarshalOptions{Deterministic: true}.Marshal(&request)
+	if err != nil || len(result) == 0 || int64(len(result)) > maxBytes {
+		clearContentBytes(result)
+		return nil, ErrContentRejected
+	}
+	return result, nil
+}
+
 func (m *CurrentConfigurationsMaterializer) materializeAgentExecution(
 	ctx context.Context,
 	projectID int32,
+	actorID int32,
 	capabilityID string,
 	source []byte,
 	maxBytes int64,
@@ -145,7 +268,7 @@ func (m *CurrentConfigurationsMaterializer) materializeAgentExecution(
 		if !ok {
 			return nil, ErrContentRejected
 		}
-		if err := materializeCurrentAgentTools(ctx, projectID, tools, &walker); err != nil {
+		if err := m.materializeCurrentAgentTools(ctx, projectID, actorID, tools, &walker); err != nil {
 			return nil, currentMaterializationError(ctx, err)
 		}
 		version["tools"] = tools
@@ -159,7 +282,7 @@ func (m *CurrentConfigurationsMaterializer) materializeAgentExecution(
 		if decodeErr != nil {
 			return nil, ErrContentRejected
 		}
-		if err := materializeCurrentAgentTools(ctx, projectID, tools, &walker); err != nil {
+		if err := m.materializeCurrentAgentTools(ctx, projectID, actorID, tools, &walker); err != nil {
 			return nil, currentMaterializationError(ctx, err)
 		}
 		request.Tools, err = encodeCurrentMaterializationArray(tools, maxBytes)
@@ -178,9 +301,10 @@ func (m *CurrentConfigurationsMaterializer) materializeAgentExecution(
 	return result, nil
 }
 
-func materializeCurrentAgentTools(
+func (m *CurrentConfigurationsMaterializer) materializeCurrentAgentTools(
 	ctx context.Context,
 	projectID int32,
+	actorID int32,
 	tools []any,
 	walker *currentFrozenConfigurationWalker,
 ) error {
@@ -196,9 +320,38 @@ func materializeCurrentAgentTools(
 		if !ok || settings == nil {
 			return errInvalidCurrentFrozenConfiguration
 		}
-		materialized, err := walker.materializeOwnedMap(ctx, projectID, settings, 0, true)
-		if err != nil {
-			return err
+		toolkitType, ok := tool["type"].(string)
+		if !ok || toolkitType == "" || len(toolkitType) > configurationapp.MaxCurrentToolkitSettingsIdentifier ||
+			strings.ContainsAny(toolkitType, "\x00\r\n") {
+			return errInvalidCurrentFrozenConfiguration
+		}
+		var materialized map[string]any
+		var err error
+		if toolkitType == "mcp_config" || strings.HasPrefix(toolkitType, "mcp_") {
+			if m.prebuilt == nil {
+				return errInvalidCurrentFrozenConfiguration
+			}
+			materialized, ok, err = m.prebuilt.ResolveCurrentAgentPrebuiltMCP(
+				ctx,
+				projectID,
+				actorID,
+				toolkitType,
+				settings,
+				func(admitted map[string]any) (map[string]any, error) {
+					return walker.materializeOwnedMap(ctx, projectID, admitted, 0, true)
+				},
+			)
+			if err != nil {
+				return err
+			}
+			if !ok || materialized == nil {
+				return errInvalidCurrentFrozenConfiguration
+			}
+		} else {
+			materialized, err = walker.materializeOwnedMap(ctx, projectID, settings, 0, true)
+			if err != nil {
+				return err
+			}
 		}
 		tool["settings"] = materialized
 		tools[index] = tool

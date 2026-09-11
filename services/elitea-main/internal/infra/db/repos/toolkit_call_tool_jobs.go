@@ -64,7 +64,7 @@ func (r *ToolkitCallToolJobsRepository) AdmitToolkitCallTool(
 		return executionapp.AdmissionOutcome{}, err
 	}
 	if len(admission.Record.InputBundle.Manifest) > maxStoredInputManifestBytes ||
-		len(admission.Record.InputBundle.Entries) != 2 ||
+		len(admission.Record.InputBundle.Entries) != 3 ||
 		!boundedToolRunAdmissionStrings(admission) ||
 		admission.Record.Job.Generation > math.MaxInt64 ||
 		admission.Record.Outbox.Generation > math.MaxInt64 {

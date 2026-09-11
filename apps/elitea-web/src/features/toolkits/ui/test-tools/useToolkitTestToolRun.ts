@@ -36,6 +36,8 @@ export interface UseToolkitTestToolRunResult {
   readonly run: (toolName: string, toolParams: Readonly<Record<string, unknown>>) => Promise<void>;
   /** Drops the outcome on screen. Call it when the thing the outcome was about changes. */
   readonly reset: () => void;
+  readonly authorize: (reference: string) => Promise<void>;
+  readonly skip: () => void;
 }
 
 export function useToolkitTestToolRun({ projectId, toolkitId }: UseToolkitTestToolRunParams): UseToolkitTestToolRunResult {
@@ -44,6 +46,7 @@ export function useToolkitTestToolRun({ projectId, toolkitId }: UseToolkitTestTo
 
   /** The press whose answer this component still wants. */
   const currentPressRef = useRef(0);
+  const pendingRef = useRef<{ toolName: string; toolParams: Readonly<Record<string, unknown>>; press: number } | undefined>(undefined);
   /** False after unmount, so a late answer never sets state on a dead component. */
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -57,6 +60,7 @@ export function useToolkitTestToolRun({ projectId, toolkitId }: UseToolkitTestTo
     // The press counter moves too: a run in flight when the tool changes must
     // not land on the new tool's empty result panel.
     currentPressRef.current += 1;
+    pendingRef.current = undefined;
     setOutcome(undefined);
     setIsRunning(false);
   }, []);
@@ -68,14 +72,30 @@ export function useToolkitTestToolRun({ projectId, toolkitId }: UseToolkitTestTo
       setOutcome(undefined);
       setIsRunning(true);
 
-      const settled = await testToolkitTool({ projectId, toolkitId, toolName, toolParams });
+      const savedParams = structuredClone(toolParams);
+      pendingRef.current = undefined;
+      const settled = await testToolkitTool({ projectId, toolkitId, toolName, toolParams: savedParams });
 
       if (!mountedRef.current || press !== currentPressRef.current) return;
+      if (settled.kind === 'authorizationRequired') pendingRef.current = { toolName, toolParams: savedParams, press };
       setOutcome(settled);
       setIsRunning(false);
     },
     [projectId, toolkitId],
   );
 
-  return { outcome, isRunning, run, reset };
+  useEffect(() => { reset(); }, [projectId, toolkitId, reset]);
+  const authorize = useCallback(async (reference: string) => {
+    const pending = pendingRef.current;
+    if (!pending || !mountedRef.current || pending.press !== currentPressRef.current || !/^[A-Za-z0-9_-]{43}$/.test(reference)) return;
+    pendingRef.current = undefined;
+    setIsRunning(true);
+    const settled = await testToolkitTool({ projectId, toolkitId, toolName: pending.toolName, toolParams: pending.toolParams, authorizationReference: reference });
+    if (!mountedRef.current || pending.press !== currentPressRef.current) return;
+    setOutcome(settled);
+    setIsRunning(false);
+    if (settled.kind === 'authorizationRequired') pendingRef.current = pending;
+  }, [projectId, toolkitId]);
+  const skip = useCallback(() => { reset(); setOutcome({ kind: 'skipped' }); }, [reset]);
+  return { outcome, isRunning, run, reset, authorize, skip };
 }

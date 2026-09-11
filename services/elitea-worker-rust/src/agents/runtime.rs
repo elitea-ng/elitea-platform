@@ -311,6 +311,7 @@ impl<'a> AuthorizedNativeAssembly<'a> {
         self,
         policy: &ToolAdmissionPolicy,
     ) -> Result<AdmittedPipelineNativeAssembly<'a>, NativeAgentAssemblyError> {
+        tracing::Span::current().record("stage", "start_admission");
         let has_continuation = has_continuation(self.request);
         let start = if has_continuation {
             if self.request.payload.should_continue && !self.request.payload.hitl_resume {
@@ -331,9 +332,12 @@ impl<'a> AuthorizedNativeAssembly<'a> {
                     .map(PipelineNativeStart::Hitl)
                     .map_err(|error| pipeline_hitl_admission_error(&error))?
             }
+        } else if self.request.payload.is_regenerate {
+            PipelineNativeStart::Regenerate
         } else {
             PipelineNativeStart::Fresh
         };
+        tracing::Span::current().record("stage", "profile_validation");
         let mut profile = match &start {
             PipelineNativeStart::McpAuthorization(_) => {
                 PipelineExecutionProfile::validate_mcp_authorization_resume(self.request)?
@@ -345,10 +349,13 @@ impl<'a> AuthorizedNativeAssembly<'a> {
             }
             _ => PipelineExecutionProfile::validate(self.request, start.is_resume())?,
         };
+        tracing::Span::current().record("stage", "tool_snapshot");
         let frozen_toolsets =
             FrozenToolSnapshot::from_request(self.request).map_err(tool_snapshot_error)?;
+        tracing::Span::current().record("stage", "tool_scope");
         profile.validate_tool_snapshot(&frozen_toolsets, policy)?;
         let toolsets = frozen_toolsets.apply_policy(policy);
+        tracing::Span::current().record("stage", "execution_plan");
         let plan = OrdinaryNativeAgentPlan::from_authorized_pipeline(
             self.request,
             profile.shell(),
@@ -386,6 +393,7 @@ impl<'a> AuthorizedNativeAssembly<'a> {
 
 pub(crate) enum PipelineNativeStart {
     Fresh,
+    Regenerate,
     Hitl(PipelineContinuationDecision),
     McpAuthorization(PipelineMcpAuthorizationContinuation),
     Printer(PrinterContinuation),
@@ -394,7 +402,7 @@ pub(crate) enum PipelineNativeStart {
 impl PipelineNativeStart {
     #[must_use]
     pub(crate) const fn is_resume(&self) -> bool {
-        !matches!(self, Self::Fresh)
+        !matches!(self, Self::Fresh | Self::Regenerate)
     }
 
     #[must_use]
@@ -589,7 +597,6 @@ fn has_continuation(request: &AgentExecutionRequest) -> bool {
         || payload.hitl_action.is_some()
         || payload.hitl_value.is_some()
         || !payload.hitl_decisions.is_empty()
-        || !payload.mcp_tokens.is_empty()
         || !payload.ignored_mcp_servers.is_empty()
         || !payload.user_declined_mcp_servers.is_empty()
 }
@@ -738,19 +745,20 @@ impl NativeAgentRuntimeErrorCode {
 
 /// Redacted ADK execution failure.
 ///
-/// The upstream value is retained for future typed classification but is not
+/// The upstream value is retained for typed classification but is not
 /// exposed through `Debug`, `Display`, or `Error::source`: provider, tool, and
-/// request data can occur inside an ADK error chain.
+/// request data can occur inside an ADK error chain. Only its static code is
+/// available to the lifecycle's operator log.
 pub(crate) struct NativeAgentRuntimeError {
     code: NativeAgentRuntimeErrorCode,
-    _upstream: Option<Box<AdkError>>,
+    upstream: Option<Box<AdkError>>,
 }
 
 impl NativeAgentRuntimeError {
     fn invalid_state() -> Self {
         Self {
             code: NativeAgentRuntimeErrorCode::InvalidState,
-            _upstream: None,
+            upstream: None,
         }
     }
 
@@ -761,27 +769,31 @@ impl NativeAgentRuntimeError {
     fn start_failed(error: AdkError) -> Self {
         Self {
             code: NativeAgentRuntimeErrorCode::StartFailed,
-            _upstream: Some(Box::new(error)),
+            upstream: Some(Box::new(error)),
         }
     }
 
     fn start_deferred() -> Self {
         Self {
             code: NativeAgentRuntimeErrorCode::StartFailed,
-            _upstream: None,
+            upstream: None,
         }
     }
 
     fn event_failed(error: AdkError) -> Self {
         Self {
             code: NativeAgentRuntimeErrorCode::EventFailed,
-            _upstream: Some(Box::new(error)),
+            upstream: Some(Box::new(error)),
         }
     }
 
     #[must_use]
     pub(crate) const fn code(&self) -> NativeAgentRuntimeErrorCode {
         self.code
+    }
+
+    pub(crate) fn upstream_code(&self) -> Option<&'static str> {
+        self.upstream.as_ref().map(|error| error.code)
     }
 }
 
@@ -982,5 +994,37 @@ impl Drop for NativeAgentRun {
                 self.runner
                     .interrupt_identity(&self.app_name, &self.user_id, &self.session_id);
         }
+    }
+}
+
+#[cfg(test)]
+mod error_redaction_tests {
+    use super::*;
+
+    #[test]
+    fn runtime_failure_exposes_only_static_upstream_code() {
+        for wrap in [
+            NativeAgentRuntimeError::start_failed,
+            NativeAgentRuntimeError::event_failed,
+        ] {
+            let upstream = AdkError::new(
+                adk_rust::ErrorComponent::Model,
+                adk_rust::ErrorCategory::Unavailable,
+                "model_gateway.provider_error",
+                "private provider body with credentials",
+            );
+            let error = wrap(upstream);
+            assert_eq!(error.upstream_code(), Some("model_gateway.provider_error"));
+            assert!(!format!("{error} {error:?}").contains("private provider"));
+            assert!(std::error::Error::source(&error).is_none());
+        }
+        assert_eq!(
+            NativeAgentRuntimeError::invalid_state().upstream_code(),
+            None
+        );
+        assert_eq!(
+            NativeAgentRuntimeError::start_deferred().upstream_code(),
+            None
+        );
     }
 }

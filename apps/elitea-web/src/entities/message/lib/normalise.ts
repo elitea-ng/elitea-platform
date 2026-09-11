@@ -2,6 +2,7 @@ import { ChatParticipantType } from '@/shared/lib/chat';
 import { ROLES } from '@/shared/lib/enums';
 
 import type { AssistantMessage, UserMessage } from '../model/types';
+import { buildAuthorizationActions } from './authorizationActions';
 import { buildToolActions } from './toolActions';
 import type {
   HitlInterruptRawWire,
@@ -370,13 +371,11 @@ export function normaliseAssistantMessage(
     isParticipant(participant.id, messageGroup.author_participant_id),
   );
 
-  const toolActions = buildToolActions(
-    thinkingSteps,
-    toolCalls,
-    convertTime(messageGroup.created_at),
-    firstToolTimestampStart,
-    foundParticipant,
-  );
+  const createdAt = convertTime(messageGroup.created_at);
+  const toolActions = [
+    ...buildToolActions(thinkingSteps, toolCalls, createdAt, firstToolTimestampStart, foundParticipant),
+    ...buildAuthorizationActions((meta ?? {}) as Record<string, unknown>, messageGroup.content, createdAt),
+  ];
   const exception = resolveException(messageGroup, meta, isError, messageItems);
 
   return {
@@ -384,7 +383,7 @@ export function normaliseAssistantMessage(
     role: ROLES.Assistant,
     content: messageGroup.is_streaming ? '...' : messageGroup.content,
     messageItems: [...messageItems].sort((a, b) => a.id - b.id),
-    createdAt: convertTime(messageGroup.created_at),
+    createdAt,
     isSummarized,
     references,
     toolActions,

@@ -12,7 +12,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use adk_rust::agent::LlmAgentBuilder;
-use adk_rust::tool::SimpleToolContext;
 use adk_rust::{Agent, GenerateContentConfig, ReadonlyContext, Tool, Toolset};
 use async_trait::async_trait;
 use serde_json::{Map, Value};
@@ -28,9 +27,10 @@ use super::graph::compiler::{PipelineConfigurationError, PipelineDefinition};
 use super::graph::{
     ApplicationExecutionError, DirectToolExecutionError, DirectToolNodeKind, DirectToolSelection,
     LlmExecutionError, LlmExecutionInput, LlmNodeDefinition, PipelineApplicationResolver,
-    PipelineApplicationSelection, PipelineDirectToolResolver, PipelineLlmAgentFactory,
-    PipelineLlmReplayEnvelope, PipelineNodeEventSender, ResolvedApplicationParticipant,
-    ResolvedDirectTool, pipeline_node_event_channel, prepare_pipeline_llm_replay,
+    PipelineApplicationSelection, PipelineDirectToolResolver, PipelineLlmAgentBinding,
+    PipelineLlmAgentFactory, PipelineLlmReplayEnvelope, PipelineNodeEventSender, PipelineToolGuard,
+    ResolvedApplicationParticipant, ResolvedDirectTool, pipeline_node_event_channel,
+    prepare_pipeline_llm_replay,
 };
 use super::internal_tools::{ASK_USER_TOOL_NAME, ASK_USER_TOOLSET_NAME};
 use super::request::AgentExecutionRequest;
@@ -46,9 +46,9 @@ use super::session::{
 use crate::protocol::control::ClaimBoundRuntimeContextAuthority;
 use crate::state::{CheckpointLimits, SessionLimits};
 use crate::toolkits::{
-    AdkHttpMcpConnector, AdmittedToolSnapshot, DelegatedAuthorizationCatalog,
-    DelegatedAuthorizationRequirement, FrozenToolKind, FrozenToolSnapshot, McpConnector,
-    SensitiveToolPolicy, ToolAdmissionDecision, ToolAdmissionPolicy,
+    AdkHttpMcpConnector, AdmittedToolSnapshot, DelegatedAuthorizationCatalog, FrozenToolKind,
+    FrozenToolSnapshot, FrozenToolset, McpConnector, SensitiveToolPolicy, ToolAdmissionDecision,
+    ToolAdmissionPolicy, ToolBindingError, ToolBindingPlan, bind_frozen_toolsets, freeze_toolsets,
     materialize_configured_toolsets_with_tokens_and_authorization,
     materialize_mcp_toolsets_with_tokens_and_authorization,
 };
@@ -58,7 +58,6 @@ use crate::transport::model_facade::{
 use crate::transport::platform_client::PlatformClient;
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 
-const PIPELINE_TOOL_ENUMERATION_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PIPELINE_MATERIALIZED_TOOLS: usize = 1_024;
 const MAX_NESTED_PIPELINE_PARTICIPANTS: usize = 25;
 
@@ -87,7 +86,7 @@ pub(crate) struct PipelineExecutionProfile {
     shell: OrdinaryNoToolProfile,
     definition: PipelineDefinition,
     sensitive_direct_tools: BTreeMap<(String, String), SensitiveToolPolicy>,
-    sensitive_llm_tools: BTreeMap<String, SensitiveToolPolicy>,
+    sensitive_llm_tools: BTreeMap<(String, String), SensitiveToolPolicy>,
 }
 
 impl PipelineExecutionProfile {
@@ -208,8 +207,10 @@ impl PipelineExecutionProfile {
                     reference.toolkit_name(),
                     tool_name,
                 ) {
-                    self.sensitive_llm_tools
-                        .insert(tool_name.to_owned(), sensitive);
+                    self.sensitive_llm_tools.insert(
+                        (selection.alias().to_owned(), tool_name.to_owned()),
+                        sensitive,
+                    );
                 }
                 let configured = reference
                     .settings()
@@ -292,7 +293,7 @@ impl PipelineExecutionProfile {
             .cloned()
     }
 
-    fn sensitive_llm_tools(&self) -> BTreeMap<String, SensitiveToolPolicy> {
+    fn sensitive_llm_tools(&self) -> BTreeMap<(String, String), SensitiveToolPolicy> {
         self.sensitive_llm_tools.clone()
     }
 }
@@ -419,6 +420,7 @@ impl PipelineNativeAgentAssembler {
                 tool_policy,
                 mcp_tokens,
             )
+            .await
             .map_err(|_| unsupported_pipeline_runtime())?;
         let (mut mcp, mcp_delegated_authorization) =
             materialize_mcp_toolsets_with_tokens_and_authorization(
@@ -442,7 +444,8 @@ impl PipelineNativeAgentAssembler {
                 return Err(invalid_pipeline_tool_scope());
             }
         }
-        let direct_tool_resolver = build_direct_tool_resolver(profile, &toolsets).await?;
+        let toolsets = freeze_toolsets_by_alias(toolsets).await?;
+        let direct_tool_resolver = build_direct_tool_resolver(profile, &toolsets)?;
         let application_runtime =
             context
                 .clone()
@@ -643,6 +646,7 @@ impl PipelineNativeAgentAssembler {
                 &runtime.tool_policy,
                 runtime.mcp_tokens,
             )
+            .await
             .map_err(|_| unsupported_pipeline_runtime())?;
         let (mut mcp, mcp_delegated_authorization) =
             materialize_mcp_toolsets_with_tokens_and_authorization(
@@ -666,7 +670,8 @@ impl PipelineNativeAgentAssembler {
                 return Err(invalid_pipeline_tool_scope());
             }
         }
-        let direct_tool_resolver = build_direct_tool_resolver(profile, &toolsets).await?;
+        let toolsets = freeze_toolsets_by_alias(toolsets).await?;
+        let direct_tool_resolver = build_direct_tool_resolver(profile, &toolsets)?;
         let llm_factory = profile.definition().has_llm_nodes().then(|| {
             Arc::new(NativePipelineLlmAgentFactory {
                 profile: profile.shell().clone(),
@@ -765,8 +770,8 @@ struct NativePipelineLlmAgentFactory {
     profile: OrdinaryNoToolProfile,
     context: Arc<ClaimScopedEliteaContext>,
     model_facade: Arc<ModelFacade>,
-    toolsets: std::collections::BTreeMap<String, Arc<dyn Toolset>>,
-    sensitive_tools: BTreeMap<String, SensitiveToolPolicy>,
+    toolsets: BTreeMap<String, FrozenToolset>,
+    sensitive_tools: BTreeMap<(String, String), SensitiveToolPolicy>,
     delegated_authorization: DelegatedAuthorizationCatalog,
     ask_user_enabled: bool,
     node_events: PipelineNodeEventSender,
@@ -778,6 +783,65 @@ struct NativePipelineDirectToolResolver {
 
 struct NativePipelineApplicationResolver {
     participants: BTreeMap<String, NativePipelineApplicationParticipant>,
+}
+
+impl NativePipelineLlmAgentFactory {
+    fn bind_selected_tools(
+        &self,
+        definition: &LlmNodeDefinition,
+    ) -> Result<ToolBindingPlan, LlmExecutionError> {
+        let mut selected = Vec::new();
+        for selection in definition.tool_selections() {
+            if selection.tools().is_empty() {
+                continue;
+            }
+            selected.push(
+                self.toolsets
+                    .get(selection.alias())
+                    .ok_or(LlmExecutionError::Unavailable)?
+                    .select(selection.tools())
+                    .map_err(|_| LlmExecutionError::Unavailable)?,
+            );
+        }
+        bind_frozen_toolsets(
+            &selected,
+            &BTreeSet::from([ASK_USER_TOOLSET_NAME.to_owned()]),
+        )
+        .map_err(|_| LlmExecutionError::Unavailable)
+    }
+
+    fn guards_for_binding(
+        &self,
+        binding: &ToolBindingPlan,
+    ) -> Result<BTreeMap<String, PipelineToolGuard>, LlmExecutionError> {
+        let mut guards = BTreeMap::new();
+        for (toolkit_name, logical_name, provider_name) in binding.bindings() {
+            let guard = if let Some(requirement) = self
+                .delegated_authorization
+                .requirement_for_scoped(toolkit_name, logical_name)
+            {
+                Some(PipelineToolGuard::DelegatedAuthorization(
+                    requirement.clone(),
+                ))
+            } else if self.ask_user_enabled
+                && toolkit_name == ASK_USER_TOOLSET_NAME
+                && logical_name == ASK_USER_TOOL_NAME
+            {
+                Some(PipelineToolGuard::AskUser)
+            } else {
+                self.sensitive_tools
+                    .get(&(toolkit_name.to_owned(), logical_name.to_owned()))
+                    .cloned()
+                    .map(PipelineToolGuard::Sensitive)
+            };
+            if let Some(guard) = guard
+                && guards.insert(provider_name.to_owned(), guard).is_some()
+            {
+                return Err(LlmExecutionError::Unavailable);
+            }
+        }
+        Ok(guards)
+    }
 }
 
 #[derive(Clone)]
@@ -875,7 +939,7 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
         input: &LlmExecutionInput,
         output_schema: Option<serde_json::Value>,
         replay: Option<&PipelineLlmReplayEnvelope>,
-    ) -> Result<Arc<dyn Agent>, LlmExecutionError> {
+    ) -> Result<PipelineLlmAgentBinding, LlmExecutionError> {
         let system_instruction = if input.system().trim().is_empty() {
             "You are an AI assistant executing one bounded Elitea pipeline node.".to_owned()
         } else {
@@ -902,28 +966,42 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
                 invocation,
             )
             .map_err(|_| LlmExecutionError::Unavailable)?;
-        let mut selected_toolsets = Vec::new();
-        for selection in definition.tool_selections() {
-            if selection.tools().is_empty() {
-                continue;
+        let binding = self.bind_selected_tools(definition)?;
+        let mut guards = self.guards_for_binding(&binding)?;
+        let mut authorization = DelegatedAuthorizationCatalog::default();
+        for (name, guard) in &guards {
+            if let PipelineToolGuard::DelegatedAuthorization(requirement) = guard {
+                authorization
+                    .insert(name, requirement.clone())
+                    .map_err(|()| LlmExecutionError::Unavailable)?;
             }
-            let inner = self
-                .toolsets
-                .get(selection.alias())
-                .cloned()
-                .ok_or(LlmExecutionError::Unavailable)?;
-            selected_toolsets.push(Arc::new(StrictNodeToolset::new(
-                selection.alias(),
-                inner,
-                selection.tools(),
-            )) as Arc<dyn Toolset>);
         }
+        if let Some(replay) = replay {
+            replay.apply_authorization_scope(&mut authorization)?;
+        }
+        let selected_toolsets = binding.into_toolsets();
         let (model, selected_toolsets) =
-            prepare_pipeline_llm_replay(model.adk_model(), selected_toolsets, replay);
+            prepare_pipeline_llm_replay(model.provider_model(), selected_toolsets, replay);
+        let (model, selected_toolsets) = crate::toolkits::bind_authorization_model_tools(
+            model,
+            selected_toolsets,
+            &mut authorization,
+        )
+        .map_err(|_| LlmExecutionError::Unavailable)?;
+        guards.retain(|name, _| !authorization.is_declined(name));
+        for name in authorization.tool_names() {
+            if let Some(requirement) = authorization.requirement_for(name) {
+                guards.insert(
+                    name.to_owned(),
+                    PipelineToolGuard::DelegatedAuthorization(requirement.clone()),
+                );
+            }
+        }
         if replay.is_some_and(|replay| {
-            self.delegated_authorization
-                .tool_names()
-                .any(|tool_name| replay.has_deferred_authorization_for(tool_name))
+            guards.iter().any(|(tool_name, guard)| {
+                matches!(guard, PipelineToolGuard::DelegatedAuthorization(_))
+                    && replay.has_deferred_authorization_for(tool_name)
+            })
         }) {
             // An authorize continuation must rematerialize the real tool. If
             // the protected server still yields a placeholder, do not turn
@@ -951,41 +1029,14 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
         for toolset in selected_toolsets {
             builder = builder.toolset(toolset);
         }
-        for tool_name in self.sensitive_tools.keys() {
+        for tool_name in guards.keys() {
             builder = builder.require_tool_confirmation(tool_name);
         }
-        for tool_name in self.delegated_authorization.tool_names() {
-            builder = builder.require_tool_confirmation(tool_name);
-        }
-        if self.ask_user_enabled
-            && definition.tool_selections().iter().any(|selection| {
-                selection.alias() == ASK_USER_TOOLSET_NAME
-                    && selection.tools() == [ASK_USER_TOOL_NAME]
-            })
-        {
-            builder = builder.require_tool_confirmation(ASK_USER_TOOL_NAME);
-        }
-        builder
+        let agent = builder
             .build()
             .map(|agent| Arc::new(agent) as Arc<dyn Agent>)
-            .map_err(|_| LlmExecutionError::Unavailable)
-    }
-
-    fn sensitive_policy(&self, tool_name: &str) -> Option<SensitiveToolPolicy> {
-        self.sensitive_tools.get(tool_name).cloned()
-    }
-
-    fn delegated_authorization(
-        &self,
-        tool_name: &str,
-    ) -> Option<DelegatedAuthorizationRequirement> {
-        self.delegated_authorization
-            .requirement_for(tool_name)
-            .cloned()
-    }
-
-    fn ask_user_enabled(&self, tool_name: &str) -> bool {
-        self.ask_user_enabled && tool_name == ASK_USER_TOOL_NAME
+            .map_err(|_| LlmExecutionError::Unavailable)?;
+        Ok(PipelineLlmAgentBinding::new(agent, guards))
     }
 
     fn event_sender(&self) -> Option<PipelineNodeEventSender> {
@@ -1054,9 +1105,30 @@ fn toolsets_by_alias(
     Ok(by_alias)
 }
 
-async fn build_direct_tool_resolver(
+async fn freeze_toolsets_by_alias(
+    toolsets: BTreeMap<String, Arc<dyn Toolset>>,
+) -> Result<BTreeMap<String, FrozenToolset>, NativeAgentAssemblyError> {
+    let frozen = freeze_toolsets(
+        toolsets.into_values().collect(),
+        "elitea_pipeline_tool_binding",
+    )
+    .await
+    .map_err(tool_binding_error)?;
+    let mut by_alias = BTreeMap::new();
+    for toolset in frozen {
+        if by_alias
+            .insert(toolset.name().to_owned(), toolset)
+            .is_some()
+        {
+            return Err(invalid_pipeline_tool_scope());
+        }
+    }
+    Ok(by_alias)
+}
+
+fn build_direct_tool_resolver(
     profile: &PipelineExecutionProfile,
-    toolsets: &BTreeMap<String, Arc<dyn Toolset>>,
+    toolsets: &BTreeMap<String, FrozenToolset>,
 ) -> Result<Option<Arc<dyn PipelineDirectToolResolver>>, NativeAgentAssemblyError> {
     let selections = profile
         .definition()
@@ -1069,26 +1141,21 @@ async fn build_direct_tool_resolver(
         .iter()
         .map(|selection| selection.alias())
         .collect::<BTreeSet<_>>();
-    let context: Arc<dyn ReadonlyContext> =
-        Arc::new(SimpleToolContext::new("pipeline_toolkit_catalog"));
     let mut tools = BTreeMap::new();
     for alias in aliases {
         let toolset = toolsets
             .get(alias)
             .ok_or_else(invalid_pipeline_tool_scope)?;
-        let available = tokio::time::timeout(
-            PIPELINE_TOOL_ENUMERATION_TIMEOUT,
-            toolset.tools(Arc::clone(&context)),
-        )
-        .await
-        .map_err(|_| unsupported_pipeline_runtime())?
-        .map_err(|_| unsupported_pipeline_runtime())?;
+        let available = toolset.tools();
         if available.len() > MAX_PIPELINE_MATERIALIZED_TOOLS {
             return Err(invalid_pipeline_tool_scope());
         }
         let mut by_name = BTreeMap::new();
         for tool in available {
-            if by_name.insert(tool.name().to_owned(), tool).is_some() {
+            if by_name
+                .insert(tool.name().to_owned(), Arc::clone(tool))
+                .is_some()
+            {
                 return Err(invalid_pipeline_tool_scope());
             }
         }
@@ -1149,6 +1216,22 @@ const fn model_reasoning_effort(effort: ReasoningEffort) -> ModelReasoningEffort
         ReasoningEffort::High => ModelReasoningEffort::High,
         ReasoningEffort::None => ModelReasoningEffort::None,
     }
+}
+
+fn tool_binding_error(error: ToolBindingError) -> NativeAgentAssemblyError {
+    let code = match error {
+        ToolBindingError::InvalidConfiguration => {
+            NativeAgentAssemblyErrorCode::InvalidConfiguration
+        }
+        ToolBindingError::ResourceExhausted => NativeAgentAssemblyErrorCode::ResourceExhausted,
+        ToolBindingError::DependencyUnavailable => {
+            NativeAgentAssemblyErrorCode::DependencyUnavailable
+        }
+    };
+    NativeAgentAssemblyError::new(
+        code,
+        "the pipeline model-callable toolkit namespace is invalid",
+    )
 }
 
 fn pipeline_configuration_error(error: &PipelineConfigurationError) -> NativeAgentAssemblyError {

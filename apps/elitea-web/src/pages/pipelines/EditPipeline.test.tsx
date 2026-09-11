@@ -52,7 +52,15 @@ function setPublicProjectId(publicProjectId: string): void {
 }
 
 function detail(
-  overrides: { versions?: { id: string; name: string; status: string; agent_type: string; created_at: string }[] } = {},
+  overrides: {
+    versions?: {
+      id: string;
+      name: string;
+      status: string;
+      agent_type: string;
+      created_at: string;
+    }[];
+  } = {},
 ) {
   return {
     id: '42',
@@ -62,7 +70,13 @@ function detail(
     owner_id: 'user-1',
     created_at: '2026-01-01T00:00:00Z',
     versions: overrides.versions ?? [
-      { id: '1', name: 'base', status: 'draft', agent_type: 'pipeline', created_at: '2026-01-01T00:00:00Z' },
+      {
+        id: '1',
+        name: 'base',
+        status: 'draft',
+        agent_type: 'pipeline',
+        created_at: '2026-01-01T00:00:00Z',
+      },
     ],
     version_details: {
       id: '1',
@@ -128,7 +142,11 @@ beforeEach(() => {
    * reset it by hand for exactly this reason; doing it once here makes the
    * isolation unconditional rather than remembered.
    */
-  usePipelineYamlStore.setState({ yamlCode: '', yamlJsonObject: {}, layoutVersion: undefined });
+  usePipelineYamlStore.setState({
+    yamlCode: '',
+    yamlJsonObject: {},
+    layoutVersion: undefined,
+  });
   configureGeneratedClient({ baseUrl: '/api/v2' });
   server.use(
     http.get('*/configurations/models/:projectId', () => HttpResponse.json(CATALOGUE)),
@@ -160,7 +178,11 @@ describe('EditPipeline', () => {
   // stores, so a stored pipeline's graph was never shown — the canvas always
   // started from an empty document regardless of what the version held.
   it('seeds the flow-editor YAML store from the loaded version instructions', async () => {
-    usePipelineYamlStore.setState({ yamlCode: '', yamlJsonObject: {}, layoutVersion: undefined });
+    usePipelineYamlStore.setState({
+      yamlCode: '',
+      yamlJsonObject: {},
+      layoutVersion: undefined,
+    });
     const graphYaml = 'entry_point: Agent 1\nnodes:\n  - id: Agent 1\n    type: llm\n';
     const base = detail();
     const withGraph = {
@@ -173,7 +195,9 @@ describe('EditPipeline', () => {
     };
     server.use(getGetApplicationMockHandler(withGraph));
 
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+      projectId: '9',
+    });
 
     await waitFor(() => expect(usePipelineYamlStore.getState().yamlCode).toBe(graphYaml));
     expect(usePipelineYamlStore.getState().layoutVersion).toBe('1.0');
@@ -202,14 +226,18 @@ describe('EditPipeline', () => {
 
   it('renders the pipeline name once it loads', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+      projectId: '9',
+    });
 
     expect(await screen.findByText('My Pipeline')).toBeInTheDocument();
   });
 
   it('mounts the real ConfigurationTab (GeneralFormPanel + a live EditorPanel/flow editor), not an empty placeholder', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+      projectId: '9',
+    });
 
     // `GeneralFormPanel`'s own `data-testid` (`features/pipelines/ui/GeneralFormPanel.tsx`) —
     // proves `ConfigurationTab` itself mounted, not just its disclosed-gap fallback.
@@ -247,7 +275,9 @@ describe('EditPipeline', () => {
      * on its first render.
      */
     server.use(getGetApplicationMockHandler(detail()));
-    renderPipelinesRouteWithoutSocket(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    renderPipelinesRouteWithoutSocket(<EditPipeline />, '/pipelines/all/42', {
+      projectId: '9',
+    });
 
     expect(await screen.findByTestId('edit-pipeline-configuration-tab-error')).toBeInTheDocument();
     // The rest of the page — name, Save/Cancel bar — survives the contained error
@@ -258,7 +288,9 @@ describe('EditPipeline', () => {
 
   it('shows the not-found state when the URL version is not in the versions list', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42/999', { projectId: '9' });
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42/999', {
+      projectId: '9',
+    });
 
     expect(await screen.findByText('Version not found')).toBeInTheDocument();
   });
@@ -281,7 +313,9 @@ describe('EditPipeline', () => {
 
   it('renders the Save/Cancel bar once loaded', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+      projectId: '9',
+    });
 
     expect(await screen.findByTestId('pipeline-save-button')).toBeInTheDocument();
     expect(screen.getByText('Cancel')).toBeInTheDocument();
@@ -290,7 +324,9 @@ describe('EditPipeline', () => {
   it('clicking Cancel does not throw and keeps the page mounted', async () => {
     server.use(getGetApplicationMockHandler(detail()));
     const user = userEvent.setup();
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+      projectId: '9',
+    });
 
     await screen.findByText('Cancel');
     await user.click(screen.getByText('Cancel'));
@@ -301,7 +337,9 @@ describe('EditPipeline', () => {
   it('hides the Save/Cancel bar for a read-only viewer of a public pipeline (viewing under the public project)', async () => {
     setPublicProjectId('42');
     server.use(getGetApplicationMockHandler(detail()));
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/latest/42', { projectId: '42' });
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/latest/42', {
+      projectId: '42',
+    });
 
     await screen.findByText('My Pipeline');
     expect(screen.queryByTestId('pipeline-save-button')).not.toBeInTheDocument();
@@ -311,7 +349,9 @@ describe('EditPipeline', () => {
   it('still renders the Save/Cancel bar for the same pipeline when the selected project is NOT the public project', async () => {
     setPublicProjectId('42');
     server.use(getGetApplicationMockHandler(detail()));
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+      projectId: '9',
+    });
 
     expect(await screen.findByTestId('pipeline-save-button')).toBeInTheDocument();
     expect(screen.getByText('Cancel')).toBeInTheDocument();
@@ -323,7 +363,9 @@ describe('EditPipeline', () => {
         HttpResponse.json({ error: 'not found' }, { status: 404 }),
       ),
     );
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/999', { projectId: '9' });
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/999', {
+      projectId: '9',
+    });
 
     expect(await screen.findByText('Pipeline not found')).toBeInTheDocument();
     expect(screen.queryByTestId('pipeline-save-button')).not.toBeInTheDocument();
@@ -332,7 +374,9 @@ describe('EditPipeline', () => {
 
   it('shows a save-error banner (instead of nothing) when a save attempt fails', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+      projectId: '9',
+    });
     const user = userEvent.setup();
 
     const saveButton = await screen.findByTestId('pipeline-save-button');
@@ -353,7 +397,9 @@ describe('EditPipeline', () => {
    */
   it('mounts the model picker inside the configuration panel, showing the project default', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+      projectId: '9',
+    });
 
     await screen.findByTestId('edit-pipeline-configuration-panel');
     const picker = await configPanel().findByText('GPT-4o');
@@ -363,6 +409,33 @@ describe('EditPipeline', () => {
     expect(screen.getByTestId('edit-pipeline-configuration-panel')).toContainElement(picker);
   });
 
+  it('exposes the pipeline through MCP by saving the existing exact tag contract', async () => {
+    server.use(getGetApplicationMockHandler(detail()));
+    const bodies: Record<string, unknown>[] = [];
+    server.use(
+      http.put('*/elitea_core/version/prompt_lib/:projectId/:applicationId/:versionId', async ({ request }) => {
+        bodies.push((await request.json()) as Record<string, unknown>);
+        return HttpResponse.json({ id: '1', application_id: '42', name: 'base', status: 'draft' }, { status: 201 });
+      }),
+    );
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+      projectId: '9',
+    });
+    const user = userEvent.setup();
+
+    await screen.findByTestId('edit-pipeline-configuration-panel');
+    const toggle = await configPanel().findByRole('switch', {
+      name: 'Enable MCP access',
+    });
+    expect(toggle).not.toBeChecked();
+
+    await user.click(toggle);
+    await user.click(await screen.findByTestId('pipeline-save-button'));
+
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies[0]?.['tags']).toEqual([{ name: 'mcp' }]);
+  }, 20_000);
+
   it('reads a stored model back onto the picker instead of the project default', async () => {
     const base = detail();
     server.use(
@@ -370,11 +443,18 @@ describe('EditPipeline', () => {
         ...base,
         version_details: {
           ...base.version_details,
-          llm_settings: { model_name: 'qwen3.5', model_project_id: 9, max_tokens: -1, temperature: 0.6 },
+          llm_settings: {
+            model_name: 'qwen3.5',
+            model_project_id: 9,
+            max_tokens: -1,
+            temperature: 0.6,
+          },
         },
       }),
     );
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+      projectId: '9',
+    });
 
     await screen.findByTestId('edit-pipeline-configuration-panel');
     expect(await configPanel().findByText('Qwen 3.5')).toBeVisible();
@@ -389,7 +469,9 @@ describe('EditPipeline', () => {
         return HttpResponse.json({ id: '1', application_id: '42', name: 'base', status: 'draft' }, { status: 201 });
       }),
     );
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+      projectId: '9',
+    });
     const user = userEvent.setup();
 
     await screen.findByTestId('edit-pipeline-configuration-panel');
@@ -413,7 +495,9 @@ describe('EditPipeline', () => {
         return HttpResponse.json({ id: '1', application_id: '42', name: 'base', status: 'draft' }, { status: 201 });
       }),
     );
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+      projectId: '9',
+    });
     const user = userEvent.setup();
 
     await screen.findByTestId('edit-pipeline-configuration-panel');
@@ -428,7 +512,9 @@ describe('EditPipeline', () => {
 
   it('arms the unsaved-changes guard when only the model is changed (#133)', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+      projectId: '9',
+    });
     const user = userEvent.setup();
 
     await screen.findByTestId('edit-pipeline-configuration-panel');
@@ -535,7 +621,10 @@ describe('talking to the pipeline', () => {
         HttpResponse.json({ id: '7', name: 'My Pipeline' }, { status: 201 }),
       ),
       http.post('*/elitea_core/participants/prompt_lib/:projectId/:conversationId', async ({ request, params }) => {
-        participantBodies.push({ conversationId: String(params['conversationId']), body: await request.json() });
+        participantBodies.push({
+          conversationId: String(params['conversationId']),
+          body: await request.json(),
+        });
         return HttpResponse.json([], { status: 200 });
       }),
     );
@@ -550,14 +639,20 @@ describe('talking to the pipeline', () => {
     await waitFor(() => {
       expect(router.state.location.pathname).toBe('/chat/7');
     });
-    const captured = participantBodies[0] as { conversationId: string; body: readonly Record<string, unknown>[] };
+    const captured = participantBodies[0] as {
+      conversationId: string;
+      body: readonly Record<string, unknown>[];
+    };
     expect(captured.conversationId).toBe('7');
     // TWO entries, user first: nothing server-side creates the user mapping
     // on the REST path, and the resolver's author join refuses a conversation
     // without it — the same pair the adhoc send posts. The id rides as a
     // NUMBER, which is what the join's `entity_meta->>'id'` comparison needs.
     expect(captured.body).toHaveLength(2);
-    expect(captured.body[0]).toMatchObject({ entity_name: 'user', entity_meta: { id: 6 } });
+    expect(captured.body[0]).toMatchObject({
+      entity_name: 'user',
+      entity_meta: { id: 6 },
+    });
     expect(captured.body[1]).toMatchObject({
       entity_name: 'application',
       entity_meta: { id: '42', project_id: '9' },
@@ -603,9 +698,7 @@ describe('talking to the pipeline', () => {
       http.post('*/elitea_core/conversations/prompt_lib/:projectId', () =>
         HttpResponse.json({ id: '7', name: 'My Pipeline' }, { status: 201 }),
       ),
-      http.post('*/elitea_core/participants/prompt_lib/:projectId/:conversationId', () =>
-        HttpResponse.json([], { status: 200 }),
-      ),
+      http.post('*/elitea_core/participants/prompt_lib/:projectId/:conversationId', () => HttpResponse.json([], { status: 200 })),
     );
     const user = userEvent.setup();
     // `NavBlockerDialog` isn't part of this fixture's route tree (the real
@@ -661,8 +754,20 @@ describe('talking to the pipeline', () => {
  */
 describe('pipeline versioning', () => {
   const twoVersions = [
-    { id: '1', name: 'base', status: 'draft', agent_type: 'pipeline', created_at: '2026-01-01T00:00:00Z' },
-    { id: '2', name: 'v1', status: 'draft', agent_type: 'pipeline', created_at: '2026-02-01T00:00:00Z' },
+    {
+      id: '1',
+      name: 'base',
+      status: 'draft',
+      agent_type: 'pipeline',
+      created_at: '2026-01-01T00:00:00Z',
+    },
+    {
+      id: '2',
+      name: 'v1',
+      status: 'draft',
+      agent_type: 'pipeline',
+      created_at: '2026-02-01T00:00:00Z',
+    },
   ];
 
   /** Open the version dropdown and pick a row by its displayed label. */
@@ -673,7 +778,9 @@ describe('pipeline versioning', () => {
 
   it('mounts the version bar on the editor page', async () => {
     server.use(getGetApplicationMockHandler(detail({ versions: twoVersions })));
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+      projectId: '9',
+    });
 
     // The dropdown shows the open version, and the write affordance is there.
     expect(await screen.findByTestId('version-selector-trigger')).toHaveTextContent('base');
@@ -701,10 +808,17 @@ describe('pipeline versioning', () => {
      */
     const baseYaml = 'entry_point: Printer_1\nnodes:\n  - id: Printer_1\n    type: printer\n    transition: END\n';
     const v2Yaml = 'entry_point: Printer_2\nnodes:\n  - id: Printer_2\n    type: printer\n    transition: END\n';
-    usePipelineYamlStore.setState({ yamlCode: '', yamlJsonObject: {}, layoutVersion: undefined });
+    usePipelineYamlStore.setState({
+      yamlCode: '',
+      yamlJsonObject: {},
+      layoutVersion: undefined,
+    });
     const base = detail({ versions: twoVersions });
     server.use(
-      getGetApplicationMockHandler({ ...base, version_details: { ...base.version_details, instructions: baseYaml } }),
+      getGetApplicationMockHandler({
+        ...base,
+        version_details: { ...base.version_details, instructions: baseYaml },
+      }),
       http.get('*/elitea_core/version/prompt_lib/:projectId/:applicationId/2', () =>
         HttpResponse.json({
           id: '2',
@@ -738,7 +852,7 @@ describe('pipeline versioning', () => {
    * `lib/editPipelineMappers.ts`). And the follow-up PUT must carry a
    * `pipeline_settings.nodes` array derived from the LIVE editor stores by
    * the REAL `usePipelineGraphDraft`, aimed at the id the POST minted —
-   * because `CreateVersion` cannot store the graph geometry at all.
+   * because this caller does not yet pass the live graph to `CreateVersion`.
    */
   it('saves a new version, then carries the live graph onto it', async () => {
     const graphYaml = 'entry_point: Printer_1\nnodes:\n  - id: Printer_1\n    type: printer\n    transition: END\n';
@@ -755,14 +869,31 @@ describe('pipeline versioning', () => {
         return HttpResponse.json({ id: '3', application_id: '42', name: 'v2', status: 'draft' }, { status: 201 });
       }),
       http.put('*/elitea_core/version/prompt_lib/:projectId/:applicationId/:versionId', async ({ request }) => {
-        puts.push({ url: request.url, body: (await request.json()) as Record<string, unknown> });
-        return HttpResponse.json({ id: '3', application_id: '42', name: 'v2', status: 'draft' });
+        puts.push({
+          url: request.url,
+          body: (await request.json()) as Record<string, unknown>,
+        });
+        return HttpResponse.json({
+          id: '3',
+          application_id: '42',
+          name: 'v2',
+          status: 'draft',
+        });
       }),
       http.get('*/elitea_core/version/prompt_lib/:projectId/:applicationId/3', () =>
-        HttpResponse.json({ id: '3', application_id: '42', name: 'v2', status: 'draft', agent_type: 'pipeline', instructions: graphYaml }),
+        HttpResponse.json({
+          id: '3',
+          application_id: '42',
+          name: 'v2',
+          status: 'draft',
+          agent_type: 'pipeline',
+          instructions: graphYaml,
+        }),
       ),
     );
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+      projectId: '9',
+    });
     const user = userEvent.setup();
 
     // Wait for the real editor stores to hold this version's graph — the
@@ -811,13 +942,22 @@ describe('pipeline versioning', () => {
         return HttpResponse.json({ ok: true });
       }),
       http.get('*/elitea_core/version/prompt_lib/:projectId/:applicationId/2', () =>
-        HttpResponse.json({ id: '2', application_id: '42', name: 'v1', status: 'draft', agent_type: 'pipeline', instructions: 'nodes: []\n' }),
+        HttpResponse.json({
+          id: '2',
+          application_id: '42',
+          name: 'v1',
+          status: 'draft',
+          agent_type: 'pipeline',
+          instructions: 'nodes: []\n',
+        }),
       ),
     );
     // Opened on `v1`, not on `base`: `isSetDefaultDisabled` deliberately
     // refuses to pin `base` while no default is recorded, because `base` IS
     // the fallback in that state (`entities/version/model/selectors.ts:60`).
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42/2', { projectId: '9' });
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42/2', {
+      projectId: '9',
+    });
     const user = userEvent.setup();
 
     await user.click(await screen.findByTestId('version-selector-trigger'));
@@ -882,10 +1022,17 @@ describe('pipeline versioning', () => {
       http.put('*/elitea_core/version/prompt_lib/:projectId/:applicationId/:versionId', async ({ request }) => {
         puts.push((await request.json()) as Record<string, unknown>);
         await delay(30);
-        return HttpResponse.json({ id: '2', application_id: '42', name: 'v1', status: 'draft' });
+        return HttpResponse.json({
+          id: '2',
+          application_id: '42',
+          name: 'v1',
+          status: 'draft',
+        });
       }),
     );
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42/2', { projectId: '9' });
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42/2', {
+      projectId: '9',
+    });
     const user = userEvent.setup();
 
     await waitFor(() => expect(versionGets.length).toBeGreaterThan(0));
@@ -908,7 +1055,9 @@ describe('pipeline versioning', () => {
   it('keeps the selector but withholds Save As Version from a public-project viewer', async () => {
     setPublicProjectId('9');
     server.use(getGetApplicationMockHandler(detail({ versions: twoVersions })));
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+      projectId: '9',
+    });
 
     expect(await screen.findByTestId('version-selector-trigger')).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Save As Version' })).toBeNull();
@@ -1087,6 +1236,22 @@ describe('the pipeline configuration form', () => {
    * this key, and the placeholder id `AgentTagEditor` gives a just-typed tag
    * must not reach the wire — the server matches by name.
    */
+  it('saves MCP exposure from the new configuration panel and preserves other tags', async () => {
+    const pipeline = detail();
+    (pipeline.version_details as Record<string, unknown>)['tags'] = [{ name: 'operations' }];
+    server.use(getGetApplicationMockHandler(pipeline));
+    const bodies = captureSaveBodies();
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    const user = userEvent.setup();
+
+    const panel = within(await screen.findByTestId('edit-pipeline-configuration-panel'));
+    await configPanel().findByText('GPT-4o');
+    await user.click(panel.getByRole('switch', { name: /Enable MCP access/iu }));
+    await user.click(await screen.findByTestId('pipeline-save-button'));
+    await waitFor(() => expect(bodies.version).toHaveLength(1), { timeout: 15_000 });
+    expect(bodies.version[0]?.['tags']).toEqual([{ name: 'operations' }, { name: 'mcp' }]);
+  }, 30_000);
+
   it('sends a newly typed tag by name, with no placeholder id', async () => {
     server.use(getGetApplicationMockHandler(detail()));
     const bodies = captureSaveBodies();

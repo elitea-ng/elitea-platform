@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { createStorage } from '@/shared/lib/storage';
+
+import { getLogoutMarkerStorageKey } from './logoutSync';
+
 import {
   addIgnoredServer,
   canonicalizeServerUrl,
@@ -29,6 +33,7 @@ import {
 
 afterEach(() => {
   window.sessionStorage.clear();
+  window.localStorage.clear();
   vi.restoreAllMocks();
 });
 
@@ -143,6 +148,28 @@ describe('token CRUD round-trip', () => {
 
   it('logout on an already-absent key is a safe no-op', () => {
     expect(() => logout('https://never-logged-in.example.com')).not.toThrow();
+  });
+
+  it('rejects a session token issued before another tab logged out', () => {
+    const server = 'https://cross-tab.example.com';
+    const key = getStorageKey({ serverUrl: server })!;
+    createStorage('local').set(getLogoutMarkerStorageKey(key)!, '200');
+    createStorage('session').setJSON('mcp.tokens', {
+      [key]: { access_token: 'stale-token', issued_at: 100, expires_at: null },
+    });
+
+    expect(getAccessToken(server)).toBeNull();
+    expect(createStorage('session').getJSON('mcp.tokens')).toEqual({});
+  });
+
+  it('places same-millisecond reauthorization after the logout marker', () => {
+    const server = 'https://reauthorize.example.com';
+    vi.spyOn(Date, 'now').mockReturnValue(200);
+    logout(server);
+    setAccessToken(server, 'new-token', null, undefined, undefined, undefined);
+
+    expect(getAccessToken(server)).toBe('new-token');
+    expect(getTokenInfo(server)?.issued_at).toBe(201);
   });
 
   it('setSessionId updates only an EXISTING token record; no-op when absent', () => {

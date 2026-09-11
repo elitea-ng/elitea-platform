@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { getLogoutMarkerEventKey } from '@/shared/lib/oauthLogoutSync';
 
 import { MCP_TOKEN_CHANGE_EVENT, getAccessToken, getStorageKey } from '../helpers/mcpTokenStorage.helpers';
 
@@ -28,7 +29,7 @@ export function useSharepointTokenStatus(serverUrl: string | undefined): UseShar
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => (storageKey !== null ? getAccessToken(serverUrl) !== null : false));
 
   const refreshLoginStatus = useCallback(() => {
-    if (storageKey !== null) setIsLoggedIn(getAccessToken(serverUrl) !== null);
+    setIsLoggedIn(storageKey !== null && getAccessToken(serverUrl) !== null);
   }, [storageKey, serverUrl]);
 
   useEffect(() => {
@@ -42,10 +43,15 @@ export function useSharepointTokenStatus(serverUrl: string | undefined): UseShar
       const detail = (event as CustomEvent<{ readonly serverUrl?: string }>).detail;
       if (detail?.serverUrl === storageKey) refreshLoginStatus();
     }
+    function handleCrossTabLogout(event: StorageEvent): void {
+      if (event.key === getLogoutMarkerEventKey(storageKey) && event.newValue !== null) refreshLoginStatus();
+    }
 
     window.addEventListener(MCP_TOKEN_CHANGE_EVENT, handleTokenChange);
+    window.addEventListener('storage', handleCrossTabLogout);
     return () => {
       window.removeEventListener(MCP_TOKEN_CHANGE_EVENT, handleTokenChange);
+      window.removeEventListener('storage', handleCrossTabLogout);
     };
   }, [storageKey, refreshLoginStatus]);
 

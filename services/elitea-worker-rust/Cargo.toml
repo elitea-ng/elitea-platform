@@ -6,9 +6,9 @@ rust-version = "1.95"
 publish = false
 
 [dependencies]
-adk-anthropic = "=2.1.0"
-adk-runner = { version = "=2.1.0", default-features = false, features = ["context-compaction"] }
-adk-rust = { version = "=2.1.0", default-features = false, features = ["agents", "runner", "sessions", "models", "anthropic", "graph", "tools", "mcp-http"] }
+adk-anthropic = "=2.2.0"
+adk-runner = { version = "=2.2.0", default-features = false, features = ["context-compaction"] }
+adk-rust = { version = "=2.2.0", default-features = false, features = ["agents", "runner", "sessions", "models", "anthropic", "graph", "tools", "mcp-http"] }
 async-stream = "=0.3.6"
 async-trait = "=0.1.92"
 base64 = "=0.23.1"
@@ -32,6 +32,7 @@ regex = "=1.13.1"
 reqwest = { version = "=0.12.28", default-features = false, features = ["http2", "json", "multipart", "rustls-tls-native-roots", "stream"] }
 reqwest-mcp = { package = "reqwest", version = "=0.13.4", default-features = false, features = ["json", "rustls", "stream"] }
 ring = "=0.17.14"
+rmcp = { version = "=3.1.2", default-features = false, features = ["auth"] }
 rustls = { version = "=0.23.43", default-features = false, features = ["ring", "std"] }
 rustls-native-certs = "=0.8.4"
 rustix = { version = "=1.1.4", features = ["fs", "process"] }

@@ -75,15 +75,24 @@ impl OpenApiToolkitConfig {
         settings: &Map<String, Value>,
         delegated_tokens: &Map<String, Value>,
     ) -> Result<Self, OpenApiConfigError> {
-        validate_text(toolkit_name, MAX_IDENTITY_BYTES)?;
-        let selected_tools = selected_tools(settings)?;
-        let base_override =
-            optional_text(settings, &["base_url", "base_url_override"], MAX_URL_BYTES)?;
         let spec = settings
             .get("spec")
             .or_else(|| settings.get("schema_settings"))
             .or_else(|| settings.get("openapi_spec"))
             .ok_or_else(invalid_configuration)?;
+        Self::parse_with_spec(toolkit_name, settings, delegated_tokens, spec)
+    }
+
+    pub(crate) fn parse_with_spec(
+        toolkit_name: &str,
+        settings: &Map<String, Value>,
+        delegated_tokens: &Map<String, Value>,
+        spec: &Value,
+    ) -> Result<Self, OpenApiConfigError> {
+        validate_text(toolkit_name, MAX_IDENTITY_BYTES)?;
+        let selected_tools = selected_tools(settings)?;
+        let base_override =
+            optional_text(settings, &["base_url", "base_url_override"], MAX_URL_BYTES)?;
         let parsed = parse_operations(spec, base_override, &selected_tools)
             .map_err(|error| Self::map_spec_error(error.code()))?;
         let auth_settings = merged_auth_settings(settings)?;
@@ -131,6 +140,13 @@ impl OpenApiToolkitConfig {
             auth: self.auth,
             additional_headers: self.additional_headers,
         }
+    }
+
+    pub(crate) fn with_toolkit_id(mut self, id: Option<u64>) -> Self {
+        if let OpenApiAuth::Delegated { requirement, .. } = &mut self.auth {
+            *requirement = requirement.clone().with_toolkit_id(id);
+        }
+        self
     }
 }
 
@@ -239,7 +255,7 @@ fn parse_auth(
             &mut resource_metadata_url,
             "/.well-known/openid-configuration",
         )?;
-        let mut authorization_url = discovery;
+        let mut authorization_url = discovery.clone();
         append_path(&mut authorization_url, "/oauth2/v2.0/authorize")?;
         let server_url = canonical_url(base_url);
         let requirement = DelegatedAuthorizationRequirement::new(
@@ -251,8 +267,9 @@ fn parse_auth(
                 "Bearer error=\"unauthorized_client\", resource_metadata=\"{resource_metadata_url}\", authorization_uri=\"{authorization_url}\""
             )),
         )
+        .and_then(|requirement| requirement.with_configured_oauth(discovery.as_str(), settings))
         .ok_or_else(invalid_configuration)?;
-        let access_token = resolve_access_token(delegated_tokens, &server_url)?;
+        let access_token = resolve_access_token(delegated_tokens, &requirement)?;
         return Ok(OpenApiAuth::Delegated {
             access_token,
             requirement,
@@ -308,9 +325,17 @@ fn parse_auth(
 
 fn resolve_access_token(
     tokens: &Map<String, Value>,
-    server_url: &str,
+    requirement: &DelegatedAuthorizationRequirement,
 ) -> Result<Option<Zeroizing<String>>, OpenApiConfigError> {
-    let Some(value) = tokens.get(server_url) else {
+    // Prefer the exact configuration identity over the legacy resource URL.
+    let value = tokens
+        .iter()
+        .find(|(key, _)| {
+            key.as_str() != requirement.server_url() && requirement.matches_token_key(key)
+        })
+        .map(|(_, value)| value)
+        .or_else(|| tokens.get(requirement.server_url()));
+    let Some(value) = value else {
         return Ok(None);
     };
     let token = match value {

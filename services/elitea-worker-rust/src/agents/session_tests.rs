@@ -1057,7 +1057,7 @@ async fn ask_user_pauses_and_resumes_as_the_original_correlated_tool_result() {
     let requests = captured.lock().expect("ask_user provider requests");
     assert_eq!(requests.len(), 1);
     let (calls, results) = count_call_parts(&requests[0], "ask-call-1");
-    assert_eq!((calls, results), (2, 1));
+    assert_eq!((calls, results), (1, 1));
     assert!(
         requests[0]
             .contents
@@ -1276,6 +1276,8 @@ async fn persisted_read_only_sensitive_call_replays_through_native_adk_without_m
     }
     completion.select().await.expect("resumed completion");
 
+    assert_next_turn_after_resume(&fixture, &captured, &provider_calls).await;
+
     let advanced = fixture
         .sessions
         .get(GetRequest {
@@ -1298,6 +1300,57 @@ async fn persisted_read_only_sensitive_call_replays_through_native_adk_without_m
         replayed.code(),
         super::direct_hitl::DirectHitlErrorCode::StaleDecision
     );
+}
+
+async fn assert_next_turn_after_resume(
+    fixture: &PendingDirectReplay,
+    captured: &Arc<Mutex<Vec<LlmRequest>>>,
+    provider_calls: &Arc<AtomicUsize>,
+) {
+    // A later user turn restores the raw session, not the replay model.
+    let mut next_request = ordinary_request(fixture.request.kind);
+    next_request.payload.user_input = UserInput::Text("next question".to_owned());
+    let next_profile = OrdinaryNoToolProfile::validate(&next_request).expect("next profile");
+    let next_plan = OrdinaryNativeAgentPlan::from_authorized(
+        &next_request,
+        &next_profile,
+        &AuthorizedNativeCommandBinding::fixture(),
+        &next_request.payload.input_attachments,
+    )
+    .expect("next plan");
+    let next = assemble_ordinary_native_with_sessions(
+        FixtureBoundModel {
+            model: Arc::new(CapturingFinalLlm {
+                requests: Arc::clone(captured),
+                calls: Arc::clone(provider_calls),
+            }),
+            completed: "next answer".into(),
+        },
+        next_plan,
+        Vec::new(),
+        SensitiveToolCatalog::default(),
+        fixture.sessions.clone(),
+    )
+    .await
+    .expect("next assembly");
+    let (mut next_run, _, next_completion) = next.start().expect("next start");
+    while next_run.next_event().await.expect("next event").is_some() {}
+    next_completion.select().await.expect("next completion");
+    {
+        let requests = captured.lock().expect("next request capture");
+        assert_eq!(requests.len(), 2);
+        assert_eq!(count_call_parts(&requests[1], "call-1"), (1, 1));
+        assert!(!requests[1].contents.iter().flat_map(|content| &content.parts).any(|part| {
+            matches!(part, Part::Text { text } if text.starts_with("Tool confirmation required for"))
+        }), "runtime confirmation instructions must not enter provider history");
+        let last = requests[1].contents.last().unwrap();
+        assert_eq!(last.role, "user");
+        assert_eq!(
+            last.parts,
+            Content::new("user").with_text("next question").parts
+        );
+    }
+    assert_eq!(fixture.tool_calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -1527,7 +1580,7 @@ async fn persisted_read_only_result_continues_after_restart_without_tool_reexecu
     assert_eq!(second_provider_calls.load(Ordering::SeqCst), 1);
     let requests = captured.lock().expect("captured resumed request");
     assert_eq!(requests.len(), 1);
-    assert_eq!(count_call_parts(&requests[0], "call-1"), (3, 1));
+    assert_eq!(count_call_parts(&requests[0], "call-1"), (1, 1));
 }
 
 async fn interrupt_replay_before_tool_result(
@@ -1791,7 +1844,7 @@ fn assert_replay_provider_transcript(request: &LlmRequest) {
         })
         .count();
     assert_eq!(approval_messages, 0);
-    assert_eq!(replayed_calls, 2);
+    assert_eq!(replayed_calls, 1);
     assert_eq!(results, 1);
 }
 

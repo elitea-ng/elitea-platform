@@ -29,10 +29,22 @@ function edits(overrides: Partial<EditPipelineVersionFields>): EditPipelineVersi
 describe('toVersionSummaries', () => {
   it('maps snake_case fields to the camelCase VersionSummary shape', () => {
     const wire: readonly ApplicationVersionSummary[] = [
-      { id: '1', name: 'base', status: 'draft', agent_type: 'pipeline', created_at: '2026-01-01T00:00:00Z' },
+      {
+        id: '1',
+        name: 'base',
+        status: 'draft',
+        agent_type: 'pipeline',
+        created_at: '2026-01-01T00:00:00Z',
+      },
     ];
     expect(toVersionSummaries(wire)).toEqual([
-      { id: '1', name: 'base', status: 'draft', agentType: 'pipeline', createdAt: '2026-01-01T00:00:00Z' },
+      {
+        id: '1',
+        name: 'base',
+        status: 'draft',
+        agentType: 'pipeline',
+        createdAt: '2026-01-01T00:00:00Z',
+      },
     ]);
   });
 
@@ -55,21 +67,30 @@ describe('pipelineDetailDisplayName', () => {
 
 describe('toFormValues', () => {
   it('seeds name/description from the detail and conversation_starters from the version', () => {
-    const detail = { name: 'My Pipeline', description: 'A helpful pipeline' } as ApplicationDetail;
-    const version = { conversation_starters: ['Hi', null, undefined, 'Bye'] } as unknown as ApplicationVersionDetail;
+    const detail = {
+      name: 'My Pipeline',
+      description: 'A helpful pipeline',
+    } as ApplicationDetail;
+    const version = {
+      conversation_starters: ['Hi', null, undefined, 'Bye'],
+      tags: [{ name: 'mcp' }, { name: null }],
+    } as unknown as ApplicationVersionDetail;
     expect(toFormValues(detail, version)).toEqual({
       name: 'My Pipeline',
       description: 'A helpful pipeline',
-      version_details: { conversation_starters: ['Hi', 'Bye'] },
+      version_details: { conversation_starters: ['Hi', 'Bye'], tags: ['mcp'] },
     });
   });
 
   it('defaults conversation_starters to [] when there is no version yet', () => {
-    const detail = { name: 'My Pipeline', description: 'A helpful pipeline' } as ApplicationDetail;
+    const detail = {
+      name: 'My Pipeline',
+      description: 'A helpful pipeline',
+    } as ApplicationDetail;
     expect(toFormValues(detail, undefined)).toEqual({
       name: 'My Pipeline',
       description: 'A helpful pipeline',
-      version_details: { conversation_starters: [] },
+      version_details: { conversation_starters: [], tags: [] },
     });
   });
 });
@@ -204,7 +225,11 @@ describe('toPipelineVersionSaveBody', () => {
   it('prefers the picked llm_settings over the stored one and forwards the stored blob verbatim with no pick', () => {
     const version = {
       name: 'base',
-      llm_settings: { model_name: 'gpt-4o', model_project_id: 3, max_tokens: 4096 },
+      llm_settings: {
+        model_name: 'gpt-4o',
+        model_project_id: 3,
+        max_tokens: 4096,
+      },
     } as unknown as ApplicationVersionDetail;
 
     expect(
@@ -231,7 +256,13 @@ describe('toVersionOptions', () => {
   // to the first option's label.
   it('narrows the wire id to a number', () => {
     const wire: readonly ApplicationVersionSummary[] = [
-      { id: '7', name: 'v1', status: 'draft', agent_type: 'pipeline', created_at: '2026-02-01T00:00:00Z' },
+      {
+        id: '7',
+        name: 'v1',
+        status: 'draft',
+        agent_type: 'pipeline',
+        created_at: '2026-02-01T00:00:00Z',
+      },
     ];
     const [option] = toVersionOptions(wire);
     expect(option?.id).toBe(7);
@@ -243,7 +274,14 @@ describe('toVersionOptions', () => {
 
   it("carries the server's default-version flag through", () => {
     const wire = [
-      { id: '7', name: 'v1', status: 'draft', agent_type: 'pipeline', created_at: '2026-02-01T00:00:00Z', is_default: true },
+      {
+        id: '7',
+        name: 'v1',
+        status: 'draft',
+        agent_type: 'pipeline',
+        created_at: '2026-02-01T00:00:00Z',
+        is_default: true,
+      },
     ] as unknown as readonly ApplicationVersionSummary[];
     expect(toVersionOptions(wire)[0]?.is_default).toBe(true);
   });
@@ -363,7 +401,11 @@ describe('toNewPipelineVersionBody', () => {
     const withMetaVariables = {
       ...storedVersion,
       variables: [],
-      meta: { step_limit: 40, internal_tools: [], variables: [{ name: 'deleted_secret', value: 'hunter2' }] },
+      meta: {
+        step_limit: 40,
+        internal_tools: [],
+        variables: [{ name: 'deleted_secret', value: 'hunter2' }],
+      },
     } as unknown as ApplicationVersionDetail;
 
     const body = toNewPipelineVersionBody(withMetaVariables, [], NO_EDITS);

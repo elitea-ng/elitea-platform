@@ -11,6 +11,7 @@ package mcp
 // inline (`auth.current_user()` then `list_user_projects`).
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -187,6 +188,9 @@ func (h *Handler) listTools(r *http.Request, schema string, s scope, message rpc
 		// gets a typed message and never `err.Error()`.
 		return newError(message.ID, codeInternalError, "tool listing is temporarily unavailable")
 	}
+	for index := range tools {
+		tools[index] = withEndpointProjectSchema(tools[index])
+	}
 	sortToolsByName(tools)
 	if tools == nil {
 		tools = []Tool{}
@@ -197,65 +201,48 @@ func (h *Handler) listTools(r *http.Request, schema string, s scope, message rpc
 }
 
 // ToolExecutionUnavailableReason is what a `tools/call` gets back on a
-// deployment with NO AGENT RUNTIME — `runtime.enabled` off, so the composition
-// root has no `AgentStart` use case to hand this package and `h.start` is nil.
+// deployment with NO EXECUTION RUNTIME — `runtime.enabled` off, so the
+// composition root has neither execution use case to hand this package.
 //
 // Exported so the acceptance tests pin the stated reason, not just the shape.
 //
-// IT IS UNCHANGED, byte for byte, from before agent execution was wired, and
-// that is deliberate rather than incidental: on a runtime-less deployment
-// nothing about what this server can do has changed, so the sentence its
-// clients already have must not change either. Both execution paths pylon has
-// are still out of reach there:
+// On a runtime-less deployment both execution paths pylon has are out of
+// reach:
 //
 //   - an AGENT tool runs `do_predict`, the pylon prediction entry point. The
 //     transport that reached it from Go was removed in issue 126 and its
-//     replacement — the Redis command stream and the Python worker — is not
+//     replacement — the Redis command stream and a worker — is not
 //     running at all on such a deployment.
 //   - a TOOLKIT tool runs `do_runtool`, which dispatches into the SDK toolkit
-//     the worker holds. Same transport, same state.
+//     the worker holds. The native replacement uses the same durable transport
+//     with a separately gated direct-read capability.
 //
-// With the runtime ENABLED the two halves separate: an agent tool runs (see
-// execute.go), and a toolkit tool gets ToolkitExecutionUnavailableReason, which
-// refuses only the half that is genuinely still missing.
+// With the runtime enabled, either seam may be composed independently. A
+// missing toolkit seam gets ToolkitExecutionUnavailableReason; a missing agent
+// seam gets this result.
 //
 // It is returned as a CallToolResult with `isError: true` rather than a
 // JSON-RPC error because that is what the specification reserves for a tool
 // that ran and failed, and it is what puts the sentence in front of the model
 // driving the client instead of only in the client's console.
-const ToolExecutionUnavailableReason = "this MCP server can list this project's tools but cannot run them yet: " +
-	"executing an agent tool requires the agent runtime and executing a toolkit tool requires the Python worker's " +
-	"toolkit dispatch, and neither is reachable from this service. Nothing was executed and nothing was changed."
+const ToolExecutionUnavailableReason = "this MCP server can list this project's tools but cannot run them on this " +
+	"deployment because neither the durable agent runtime nor the durable direct-tool runtime is enabled. " +
+	"Nothing was executed and nothing was changed."
 
 func (h *Handler) callTool(r *http.Request, schema string, s scope, message rpcMessage) rpcResponse {
 	var params struct {
-		Name      string `json:"name"`
-		Arguments struct {
-			// The agent tool schema every listing advertises has exactly one
-			// property, `task`, and it is required (agentTaskSchema). Decoding
-			// only that is not a shortcut: an unknown argument is IGNORED by
-			// the specification's own reading of a tool's input schema, and
-			// silently forwarding one into the agent's prompt would make the
-			// tool's advertised contract a lie.
-			Task string `json:"task"`
-		} `json:"arguments"`
+		Name      string         `json:"name"`
+		Arguments map[string]any `json:"arguments"`
 	}
-	if err := json.Unmarshal(message.Params, &params); err != nil || strings.TrimSpace(params.Name) == "" {
+	decoder := json.NewDecoder(bytes.NewReader(message.Params))
+	decoder.UseNumber()
+	if err := decoder.Decode(&params); err != nil || strings.TrimSpace(params.Name) == "" {
 		return newError(message.ID, codeInvalidParams, "tools/call requires a 'name' parameter")
 	}
-	// The SAME `arguments` member, undecoded, read in a SECOND pass.
-	//
-	// It cannot be a second field of the struct above: two fields carrying the
-	// same JSON tag at the same level are BOTH dropped by encoding/json, which
-	// silently emptied `task` and turned every agent call into "requires a
-	// non-empty 'task' argument".
-	//
-	// A TOOLKIT tool's schema is an open object (toolkitToolSchema) because this
-	// service does not hold the SDK's per-tool argument schemas, so there is no
-	// field set to decode into: the arguments pass through unchanged to the
-	// worker, which is exactly the contract the listing publishes. The typed
-	// `Arguments` above stays for the agent half, whose schema really does have
-	// exactly one property.
+	if params.Arguments == nil {
+		params.Arguments = map[string]any{}
+	}
+	// Preserve the original JSON bytes for the Python toolkit command.
 	var rawParams struct {
 		Arguments json.RawMessage `json:"arguments"`
 	}
@@ -285,42 +272,73 @@ func (h *Handler) callTool(r *http.Request, schema string, s scope, message rpcM
 		return newError(message.ID, codeInvalidParams, "unknown tool: "+params.Name)
 	}
 
-	// A TOOLKIT tool (#616). Decided BEFORE the agent guard below: the two
-	// halves are composed independently, so a deployment that can run toolkits
-	// and not agents must not be told the agent's sentence.
+	projectID, ok := runProjectID(r)
+	if !ok {
+		// Unreachable in practice: Endpoint already refused a project id that
+		// is not a plain positive integer before this handler was reached.
+		return newError(message.ID, codeInvalidParams, "invalid project id")
+	}
+	if target.internalDiscoveryOperation != "" {
+		return newResult(message.ID, h.callInternalDiscoveryTool(r, projectID, target, params.Arguments))
+	}
+	if target.internalDraftOperation != "" {
+		return newResult(message.ID, h.callInternalDraftTool(r, projectID, target, params.Arguments))
+	}
+	if target.internalApplicationOperation != "" {
+		return newResult(message.ID, h.callInternalApplicationTool(r, projectID, target, params.Arguments))
+	}
+	if target.internalSkillOperation != "" {
+		return newResult(message.ID, h.callInternalSkillTool(r, projectID, target, params.Arguments))
+	}
+	if target.internalToolkitOperation != "" {
+		return newResult(message.ID, h.callInternalToolkitTool(r, projectID, target, params.Arguments))
+	}
+	if target.internalConfigurationOperation != "" {
+		return newResult(message.ID, h.callInternalConfigurationTool(r, projectID, target, params.Arguments))
+	}
+	if target.internalChatOperation != "" {
+		return newResult(message.ID, h.callInternalChatTool(r, projectID, target, params.Arguments))
+	}
+	if target.internalNotificationOperation != "" {
+		return newResult(message.ID, h.callInternalNotificationTool(r, projectID, target, params.Arguments))
+	}
+	if target.internalProjectContextOperation != "" {
+		return newResult(message.ID, h.callInternalProjectContextTool(r, projectID, target, params.Arguments))
+	}
+	if target.internalSecretOperation != "" {
+		return newResult(message.ID, h.callInternalSecretTool(r, projectID, target, params.Arguments))
+	}
+
+	if h.start == nil && h.toolkitExecute == nil && h.toolRuns == nil {
+		return newResult(message.ID, errorResult(ToolExecutionUnavailableReason))
+	}
 	if target.runnableToolkitTool() {
-		if h.toolRuns == nil {
-			// NO RUNTIME for this half. The sentence is unchanged from what
-			// this endpoint has always given — see
-			// ToolkitExecutionUnavailableReason.
+		if h.toolkitExecute == nil && h.toolRuns == nil {
 			return newResult(message.ID, errorResult(ToolkitExecutionUnavailableReason))
 		}
-		projectID, ok := runProjectID(r)
-		if !ok {
-			return newError(message.ID, codeInvalidParams, "invalid project id")
-		}
-		actorUserID, refusal := h.authorizeRun(r, projectID)
+		actorUserID, refusal := h.authorizePermission(r, projectID, runPermission, "running a toolkit operation")
 		if refusal != nil {
 			return newResult(message.ID, refusal)
+		}
+		// A read-only refusal must never fall through to an effectful worker.
+		if h.toolkitExecute != nil {
+			return newResult(message.ID, h.runReadToolkitTool(
+				r.Context(), projectID, actorUserID, target, params.Arguments,
+			))
 		}
 		return newResult(message.ID, h.runToolkitTool(
 			r.Context(), projectID, actorUserID, target, rawParams.Arguments,
 		))
 	}
-	// NO RUNTIME. The composition root had no AgentStart use case to give this
-	// handler, which is what `runtime.enabled` being off looks like from here.
-	// The answer is the sentence this endpoint has always given, unchanged —
-	// see ToolExecutionUnavailableReason.
-	if h.start == nil {
-		return newResult(message.ID, errorResult(ToolExecutionUnavailableReason))
-	}
-	// Neither an agent this service can run nor a toolkit tool it can run. The
-	// only remaining shape is a descriptor with no target at all.
 	if !target.runnableAgent() {
 		return newResult(message.ID, errorResult(ToolkitExecutionUnavailableReason))
 	}
+	if h.start == nil {
+		return newResult(message.ID, errorResult(ToolExecutionUnavailableReason))
+	}
 
-	task := strings.TrimSpace(params.Arguments.Task)
+	task, _ := params.Arguments["task"].(string)
+	task = strings.TrimSpace(task)
 	if task == "" {
 		// `task` is `required` in the schema this very server published, so an
 		// empty one is the request being wrong rather than the tool failing.
@@ -328,18 +346,178 @@ func (h *Handler) callTool(r *http.Request, schema string, s scope, message rpcM
 			"tools/call on an agent requires a non-empty 'task' argument")
 	}
 
-	projectID, ok := runProjectID(r)
-	if !ok {
-		// Unreachable in practice: Endpoint already refused a project id that
-		// is not a plain positive integer before this handler was reached.
-		return newError(message.ID, codeInvalidParams, "invalid project id")
-	}
 	actorUserID, refusal := h.authorizeRun(r, projectID)
 	if refusal != nil {
 		return newResult(message.ID, refusal)
 	}
 
 	return newResult(message.ID, h.runAgentTool(r.Context(), schema, projectID, actorUserID, target, task))
+}
+
+func (h *Handler) callInternalApplicationTool(
+	r *http.Request,
+	projectID int64,
+	target Tool,
+	arguments map[string]any,
+) map[string]any {
+	if h.internalApplications == nil {
+		return errorResult("this deployment cannot execute internal application tools; nothing was executed")
+	}
+	return h.callInternalTool(r, projectID, target, arguments, "application", func(actorID int64) (internalApplicationExecution, error) {
+		return h.internalApplications.Execute(
+			r.Context(), projectID, actorID, target.internalApplicationOperation, arguments,
+		)
+	})
+}
+
+func (h *Handler) callInternalSkillTool(
+	r *http.Request,
+	projectID int64,
+	target Tool,
+	arguments map[string]any,
+) map[string]any {
+	if h.internalSkills == nil {
+		return errorResult("this deployment cannot execute internal skill tools; nothing was executed")
+	}
+	return h.callInternalTool(r, projectID, target, arguments, "skill", func(actorID int64) (internalApplicationExecution, error) {
+		return h.internalSkills.Execute(
+			r.Context(), projectID, actorID, target.internalSkillOperation, arguments,
+		)
+	})
+}
+
+func (h *Handler) callInternalToolkitTool(
+	r *http.Request,
+	projectID int64,
+	target Tool,
+	arguments map[string]any,
+) map[string]any {
+	if h.internalToolkits == nil {
+		return errorResult("this deployment cannot execute internal toolkit tools; nothing was executed")
+	}
+	return h.callInternalTool(r, projectID, target, arguments, "toolkit", func(actorID int64) (internalApplicationExecution, error) {
+		return h.internalToolkits.Execute(
+			r.Context(), projectID, actorID, target.internalToolkitOperation, arguments,
+		)
+	})
+}
+
+func (h *Handler) callInternalConfigurationTool(
+	r *http.Request,
+	projectID int64,
+	target Tool,
+	arguments map[string]any,
+) map[string]any {
+	if h.internalConfigurations == nil {
+		return errorResult("this deployment cannot execute internal configuration tools; nothing was executed")
+	}
+	return h.callInternalTool(r, projectID, target, arguments, "configuration", func(actorID int64) (internalApplicationExecution, error) {
+		return h.internalConfigurations.Execute(
+			r.Context(), projectID, actorID, target.internalConfigurationOperation, arguments,
+		)
+	})
+}
+
+func (h *Handler) callInternalNotificationTool(
+	r *http.Request,
+	projectID int64,
+	target Tool,
+	arguments map[string]any,
+) map[string]any {
+	if h.internalNotifications == nil {
+		return errorResult("this deployment cannot execute internal notification tools; nothing was executed")
+	}
+	return h.callInternalTool(r, projectID, target, arguments, "notification", func(actorID int64) (internalApplicationExecution, error) {
+		return h.internalNotifications.Execute(
+			r.Context(), projectID, actorID, target.internalNotificationOperation, arguments,
+		)
+	})
+}
+
+func (h *Handler) callInternalProjectContextTool(
+	r *http.Request,
+	projectID int64,
+	target Tool,
+	arguments map[string]any,
+) map[string]any {
+	if h.internalProjectContext == nil {
+		return errorResult("this deployment cannot execute internal project context tools; nothing was executed")
+	}
+	return h.callInternalTool(r, projectID, target, arguments, "project context", func(actorID int64) (internalApplicationExecution, error) {
+		return h.internalProjectContext.Execute(
+			r.Context(), projectID, actorID, target.internalProjectContextOperation, arguments,
+		)
+	})
+}
+
+func (h *Handler) callInternalSecretTool(
+	r *http.Request,
+	projectID int64,
+	target Tool,
+	arguments map[string]any,
+) map[string]any {
+	if h.internalSecrets == nil {
+		return errorResult("this deployment cannot execute internal secret tools; nothing was executed")
+	}
+	return h.callInternalTool(r, projectID, target, arguments, "secret", func(actorID int64) (internalApplicationExecution, error) {
+		return h.internalSecrets.Execute(
+			r.Context(), projectID, actorID, target.internalSecretOperation, arguments,
+		)
+	})
+}
+
+func (h *Handler) callInternalTool(
+	r *http.Request,
+	projectID int64,
+	target Tool,
+	arguments map[string]any,
+	category string,
+	execute func(int64) (internalApplicationExecution, error),
+) map[string]any {
+	if arguments == nil {
+		arguments = make(map[string]any)
+	}
+	if supplied, present := arguments["project_id"]; present {
+		text := scalarArgument(supplied)
+		parsed, err := strconv.ParseInt(text, 10, 64)
+		if err != nil || parsed <= 0 {
+			return errorResult("project_id must be a positive integer; nothing was executed")
+		}
+		if parsed != projectID {
+			return errorResult("project_id must match the project in this MCP endpoint; nothing was executed")
+		}
+	}
+	// The path is the authority. Injection also lets an MCP client omit the
+	// otherwise repetitive project field without creating a second defaulting
+	// rule in each operation.
+	arguments["project_id"] = json.Number(strconv.FormatInt(projectID, 10))
+
+	if target.permission == "" {
+		return errorResult("this internal MCP tool has no permission contract, so nothing was executed")
+	}
+	actorID, refusal := h.authorizePermission(
+		r, projectID, target.permission, "using internal MCP tool '"+target.Name+"'",
+	)
+	if refusal != nil {
+		return refusal
+	}
+	execution, err := execute(actorID)
+	if err != nil {
+		return errorResult("the internal " + category + " operation failed; nothing else was disclosed")
+	}
+	if execution.status >= http.StatusInternalServerError || !json.Valid(execution.body) {
+		return errorResult("the internal " + category + " operation failed; nothing else was disclosed")
+	}
+	text := strings.TrimSpace(string(execution.body))
+	if text == "" {
+		text = "{}"
+	}
+	if execution.status < http.StatusOK || execution.status >= http.StatusMultipleChoices {
+		return errorResult(text)
+	}
+	return map[string]any{
+		"content": []map[string]any{{"type": "text", "text": text}},
+	}
 }
 
 // authorizeRun decides whether this caller may EXECUTE in this project, and
@@ -358,15 +536,24 @@ func (h *Handler) callTool(r *http.Request, schema string, s scope, message rpcM
 // wrong way. If those constants ever change, TestMCPRunUsesTheChatStartPermission
 // fails.
 func (h *Handler) authorizeRun(r *http.Request, projectID int64) (int64, map[string]any) {
+	return h.authorizePermission(r, projectID, runPermission, "running an agent")
+}
+
+func (h *Handler) authorizePermission(
+	r *http.Request,
+	projectID int64,
+	permission string,
+	action string,
+) (int64, map[string]any) {
 	user, ok := auth.UserFromContext(r.Context())
 	if !ok {
-		return 0, errorResult("running an agent requires an authenticated caller; nothing was executed")
+		return 0, errorResult(action + " requires an authenticated caller; nothing was executed")
 	}
 	if h.permissions == nil {
 		// FAIL CLOSED. A handler with no resolver cannot decide, and "cannot
 		// decide" must not mean "allowed" for the one capability on this
 		// endpoint that spends money and drives tools.
-		return 0, errorResult("this deployment cannot authorize an MCP agent run, so nothing was executed")
+		return 0, errorResult("this deployment cannot authorize " + action + ", so nothing was executed")
 	}
 	resolution, err := h.permissions.ResolvePermissions(
 		r.Context(), user, runPermissionMode, strconv.FormatInt(projectID, 10),
@@ -375,14 +562,14 @@ func (h *Handler) authorizeRun(r *http.Request, projectID int64) (int64, map[str
 		return 0, errorResult("your permissions for this project could not be resolved, so nothing was executed")
 	}
 	allowed := false
-	for _, permission := range resolution.Permissions {
-		if permission == runPermission {
+	for _, heldPermission := range resolution.Permissions {
+		if heldPermission == permission {
 			allowed = true
 			break
 		}
 	}
 	if !allowed {
-		return 0, errorResult("running an agent in this project requires the '" + runPermission +
+		return 0, errorResult(action + " in this project requires the '" + permission +
 			"' permission, which this caller does not hold. Nothing was executed.")
 	}
 	if resolution.UserID <= 0 {

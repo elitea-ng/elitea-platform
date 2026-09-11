@@ -153,6 +153,33 @@ const START = {
 };
 
 describe("useChatStreamTransport", () => {
+  it.each([null, "", undefined])("preserves the original question after a resume with an absent frame link: %s", async (questionId) => {
+    server.use(http.post(`${BASE}/elitea_core/continue_predict/prompt_lib/7/uuid-1`, () =>
+      HttpResponse.json({ task_id: "exec-1", events_url: EVENTS_URL, response_message_id: MESSAGE_ID }),
+    ));
+    const { api, history, Probe } = harness([
+      userQuestion(), { ...pendingAssistant(), questionId: QUESTION_ID },
+    ]);
+    render(<Probe />);
+    await act(async () => {
+      await expect(api.current?.resume({
+        projectId: 7, conversationUuid: "uuid-1",
+        contract: "agent.continue.authorization.v1",
+        body: { message_id: MESSAGE_ID, authorization_request_id: "auth-1", authorization_action: "skip" },
+      })).resolves.toBe(true);
+    });
+    await waitFor(() => expect(registry.getOpen()).toHaveLength(1));
+    act(() => {
+      for (const type of ["agent_start", "chat_predict_summary_started", "agent_llm_chunk", "pipeline_finish"]) {
+        registry.emit("execution.node_event", nodeEvent({ type, question_id: questionId, content: "Completed after Skip" }));
+      }
+    });
+    expect(history.current).toHaveLength(2);
+    expect(history.current[1]?.questionId).toBe(QUESTION_ID);
+    expect(history.current[1]?.isStreaming).toBe(false);
+    expect(history.current[0]?.content).toBe("hi");
+  });
+
   it("renders a real recorded turn end to end, from POST through SSE to chat history", async () => {
     okStart();
     const { api, history, Probe } = harness();
@@ -603,6 +630,7 @@ describe("useChatStreamTransport", () => {
     // Captured before `detach` clears it, so regenerate can still find the
     // question this refused turn answered.
     expect(failure?.questionId).toBe(QUESTION_ID);
+    expect(failure?.id).toBe(RESPONSE_MESSAGE_ID);
   });
 
   it("keeps the user's question when the turn is refused", async () => {

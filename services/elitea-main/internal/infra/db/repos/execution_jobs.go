@@ -43,6 +43,7 @@ type ExecutionDispatchPolicy struct {
 type ValidationDispatchPolicy = ExecutionDispatchPolicy
 type IndexIngestDispatchPolicy = ExecutionDispatchPolicy
 type AgentExecutionDispatchPolicy = ExecutionDispatchPolicy
+type ToolkitExecuteReadDispatchPolicy = ExecutionDispatchPolicy
 
 func (p ExecutionDispatchPolicy) validate() error {
 	if p.StreamName == "" || p.CapabilityVersion == "" || p.ResourceClass == "" || p.IsolationClass == "" || p.Priority == 0 || p.Priority > math.MaxInt32 || p.DeadlineTTL < minValidationDeadlineTTL || p.DeadlineTTL > maxValidationDeadlineTTL || p.DeadlineTTL%time.Millisecond != 0 || p.LimitsRevision == "" || p.MaxOutstanding <= 0 || p.MaxOutstanding > maxSupportedOutstandingJobs {

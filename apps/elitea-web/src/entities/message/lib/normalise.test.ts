@@ -510,4 +510,28 @@ describe('normaliseAssistantMessage', () => {
     expect('hitlInterrupt' in result).toBe(false);
     expect('hitlInterrupts' in result).toBe(false);
   });
+
+  it('rebuilds every delegated-authorization card after a transcript reload', () => {
+    const authorization = (interruptId: string, toolCallId: string) => ({
+      interrupt_id: interruptId,
+      tool_call_id: toolCallId,
+      guardrail_type: 'mcp_auth',
+      tool_name: 'SharePoint search',
+      toolkit_type: 'sharepoint',
+      server_url: 'https://sharepoint.example.test',
+      resource_metadata: {
+        resource_name: 'SharePoint',
+        authorization_servers: ['https://login.example.test'],
+      },
+    });
+    const group: MessageGroupWire = {
+      ...baseGroup,
+      meta: { authorization_requests: [authorization('auth-1', 'call-1'), authorization('auth-2', 'call-2')] },
+    };
+
+    const result = normaliseAssistantMessage(group, [], undefined);
+
+    expect(result.toolActions?.map((action) => action.authorizationRequestId)).toEqual(['auth-1', 'auth-2']);
+    expect(result.toolActions?.every((action) => action.status === 'action_required')).toBe(true);
+  });
 });

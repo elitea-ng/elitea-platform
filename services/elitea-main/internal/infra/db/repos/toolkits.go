@@ -18,6 +18,7 @@ var (
 	ErrInvalidCurrentToolkitRequest = errors.New("current toolkit request is invalid")
 	ErrCurrentToolkitNotFound       = errors.New("current toolkit was not found")
 	ErrInvalidCurrentToolkitRow     = errors.New("current toolkit row is invalid")
+	ErrCurrentFolderAccessPartial   = errors.New("current folder access projection is incomplete")
 )
 
 // CurrentToolkit is the provider-neutral row stored in p_<project_id>.elitea_tools.
@@ -38,6 +39,11 @@ type CurrentToolkit struct {
 }
 
 type currentToolkitQueries interface {
+	CurrentFolderAccessState(context.Context) (int32, error)
+	GetCurrentMCPToolkitVisibleToActor(
+		context.Context,
+		sqlcgen.GetCurrentMCPToolkitVisibleToActorParams,
+	) (sqlcgen.EliteaTool, error)
 	GetCurrentToolkit(context.Context, int32) (sqlcgen.EliteaTool, error)
 }
 
@@ -82,6 +88,30 @@ func (r *CurrentToolkitsRepository) Get(
 	projectID int32,
 	toolkitID int32,
 ) (CurrentToolkit, error) {
+	return r.get(ctx, projectID, toolkitID, nil)
+}
+
+// GetMCPVisible reads one toolkit with the current folder restriction for the
+// authenticated actor. The social plugin is optional. An absent projection
+// preserves project RBAC, while a partial projection fails closed.
+func (r *CurrentToolkitsRepository) GetMCPVisible(
+	ctx context.Context,
+	projectID int32,
+	actorID int32,
+	toolkitID int32,
+) (CurrentToolkit, error) {
+	if actorID <= 0 {
+		return CurrentToolkit{}, ErrInvalidCurrentToolkitRequest
+	}
+	return r.get(ctx, projectID, toolkitID, &actorID)
+}
+
+func (r *CurrentToolkitsRepository) get(
+	ctx context.Context,
+	projectID int32,
+	toolkitID int32,
+	actorID *int32,
+) (CurrentToolkit, error) {
 	if ctx == nil || projectID <= 0 || toolkitID <= 0 {
 		return CurrentToolkit{}, ErrInvalidCurrentToolkitRequest
 	}
@@ -98,7 +128,29 @@ func (r *CurrentToolkitsRepository) Get(
 		if err != nil {
 			return err
 		}
-		row, err := queries.GetCurrentToolkit(ctx, toolkitID)
+		var row sqlcgen.EliteaTool
+		if actorID == nil {
+			row, err = queries.GetCurrentToolkit(ctx, toolkitID)
+		} else {
+			var state int32
+			state, err = queries.CurrentFolderAccessState(ctx)
+			if err == nil {
+				switch state {
+				case 0:
+					row, err = queries.GetCurrentToolkit(ctx, toolkitID)
+				case 1:
+					row, err = queries.GetCurrentMCPToolkitVisibleToActor(
+						ctx,
+						sqlcgen.GetCurrentMCPToolkitVisibleToActorParams{
+							ToolkitID: toolkitID,
+							ActorID:   *actorID,
+						},
+					)
+				default:
+					return ErrCurrentFolderAccessPartial
+				}
+			}
+		}
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrCurrentToolkitNotFound
 		}

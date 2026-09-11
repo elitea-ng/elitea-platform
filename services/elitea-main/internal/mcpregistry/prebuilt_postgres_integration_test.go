@@ -1,7 +1,7 @@
 package mcpregistry_test
 
 // Acceptance for the pre-built MCP catalogue store against a real PostgreSQL
-// (shared migration 0094).
+// (shared migrations 0094 and 0111).
 //
 // The unit tests around this package assert the RESOLUTION rules on values that
 // a test constructed. They cannot report that the table is wrong, that a
@@ -38,7 +38,10 @@ func TestPrebuiltStoreRoundTrip(t *testing.T) {
 		ClientSecretRef: "mcp_prebuilt__github_copilot_1a2b3c4d__client_secret",
 		TimeoutSeconds:  30,
 		Headers:         map[string]string{"X-Catalogue": "yes"},
-		Enabled:         true,
+		ConfigSchema: map[string]any{"properties": map[string]any{
+			"tenant": map[string]any{"type": "string", "required": true},
+		}},
+		Enabled: true,
 	})
 	require.NoError(t, err)
 
@@ -55,6 +58,7 @@ func TestPrebuiltStoreRoundTrip(t *testing.T) {
 	require.Equal(t, "https://api.githubcopilot.com/mcp/", found.ServerURL)
 	require.Equal(t, "mcp_prebuilt__github_copilot_1a2b3c4d__client_secret", found.ClientSecretRef)
 	require.Equal(t, map[string]string{"X-Catalogue": "yes"}, found.Headers)
+	require.Contains(t, found.ConfigSchema["properties"], "tenant")
 	require.Equal(t, 30, found.TimeoutSeconds)
 }
 
@@ -112,6 +116,58 @@ func TestPrebuiltStoreUpsertReplacesRatherThanMerges(t *testing.T) {
 	all, err := store.List(ctx)
 	require.NoError(t, err)
 	require.Len(t, all, 1)
+}
+
+// Admin writes and runtime reads can use different service instances.
+// PostgreSQL is the shared live catalogue, so no process cache needs a reload.
+func TestPrebuiltStoreChangesAreVisibleAcrossLiveServiceInstances(t *testing.T) {
+	pool := newCataloguePool(t)
+	adminStore := mcpregistry.NewPrebuiltStore(pool)
+	catalogueStore := mcpregistry.NewPrebuiltStore(pool)
+	runtimeStore := mcpregistry.NewPrebuiltStore(pool)
+	ctx := context.Background()
+
+	_, err := adminStore.Upsert(ctx, mcpregistry.PrebuiltServer{
+		Key: "live_server", DisplayName: "Live Server", Enabled: true,
+		ServerURL: "https://first.example.com/{tenant}/mcp",
+		ConfigSchema: map[string]any{"properties": map[string]any{
+			"tenant": map[string]any{"type": "string", "required": true},
+		}},
+	})
+	require.NoError(t, err)
+
+	initialSchemas, err := catalogueStore.ListToolkitTypeSchemas(ctx)
+	require.NoError(t, err)
+	require.Contains(t, initialSchemas, "mcp_live_server")
+	initialRuntime, err := runtimeStore.Lookup(ctx, "mcp_live_server")
+	require.NoError(t, err)
+	require.Equal(t, "https://first.example.com/{tenant}/mcp", initialRuntime.ServerURL)
+
+	_, err = adminStore.Upsert(ctx, mcpregistry.PrebuiltServer{
+		Key: "live_server", DisplayName: "Live Server", Enabled: true,
+		ServerURL: "https://second.example.com/{workspace}/mcp",
+		ConfigSchema: map[string]any{"properties": map[string]any{
+			"workspace": map[string]any{"type": "string", "required": true},
+		}},
+	})
+	require.NoError(t, err)
+
+	updatedSchemas, err := catalogueStore.ListToolkitTypeSchemas(ctx)
+	require.NoError(t, err)
+	properties := updatedSchemas["mcp_live_server"]["properties"].(map[string]any)
+	require.Contains(t, properties, "workspace")
+	require.NotContains(t, properties, "tenant")
+	updatedRuntime, err := runtimeStore.Lookup(ctx, "live_server")
+	require.NoError(t, err)
+	require.Equal(t, "https://second.example.com/{workspace}/mcp", updatedRuntime.ServerURL)
+
+	_, err = adminStore.Delete(ctx, "live_server")
+	require.NoError(t, err)
+	deletedSchemas, err := catalogueStore.ListToolkitTypeSchemas(ctx)
+	require.NoError(t, err)
+	require.NotContains(t, deletedSchemas, "mcp_live_server")
+	_, err = runtimeStore.Lookup(ctx, "live_server")
+	require.ErrorIs(t, err, mcpregistry.ErrPrebuiltNotFound)
 }
 
 // A disabled entry is STORED, not hidden, so an operator can withdraw a server
@@ -177,8 +233,8 @@ func TestPrebuiltStoreListsAnEmptyCatalogueAsEmpty(t *testing.T) {
 	require.Empty(t, entries)
 }
 
-// The constraints in 0094 are load-bearing: they are what stops a row that no
-// code path can honour from being stored by a future caller that forgets to
+// The constraints in 0094 and 0111 are load-bearing. They stop a row that no
+// code path can honor from being stored by a future caller that forgets to
 // check.
 func TestPrebuiltStoreRejectsUnusableDefinitions(t *testing.T) {
 	store := mcpregistry.NewPrebuiltStore(newCataloguePool(t))
@@ -214,9 +270,9 @@ func TestPrebuiltStoreWithoutAPoolReportsIt(t *testing.T) {
 
 /* ── database bootstrap ────────────────────────────────────────────────── */
 
-// newCataloguePool builds an isolated database and applies migration 0094 to
-// it. The DDL is executed from the migration FILE rather than restated here, so
-// this test cannot pass against a schema the migration does not create.
+// newCataloguePool builds an isolated database and applies the catalogue
+// migrations. The DDL is executed from the migration files, so this test cannot
+// pass against a schema the migrations do not create.
 func newCataloguePool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 
@@ -257,16 +313,20 @@ func newCataloguePool(t *testing.T) *pgxpool.Pool {
 		adminPool.Close()
 	})
 
-	migration, err := os.ReadFile("../../migrations/shared/0094_mcp_prebuilt_catalogue.sql")
-	require.NoError(t, err, "the migration file must be readable: this test proves IT, not a copy of it")
-	_, err = pool.Exec(ctx, string(migration))
-	require.NoError(t, err)
+	for _, name := range []string{
+		"0094_mcp_prebuilt_catalogue.sql",
+		"0126_mcp_prebuilt_parameter_schema.sql",
+	} {
+		migration, err := os.ReadFile("../../migrations/shared/" + name)
+		require.NoError(t, err, "the migration file must be readable: this test proves it, not a copy")
+		_, err = pool.Exec(ctx, string(migration))
+		require.NoError(t, err, "apply migration %s", name)
 
-	// Applying it twice must be a no-op. Every file in this corpus is expected
-	// to be idempotent, and a re-run is what a partially-applied deployment
-	// does.
-	_, err = pool.Exec(ctx, string(migration))
-	require.NoError(t, err, "migration 0094 must be idempotent")
+		// Reapplying the file models a deployment that resumes after a partial
+		// migration run.
+		_, err = pool.Exec(ctx, string(migration))
+		require.NoError(t, err, "migration %s must be idempotent", name)
+	}
 
 	return pool
 }

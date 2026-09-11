@@ -21,6 +21,8 @@ export interface Credential {
   readonly id: string;
   /** Present on most endpoints; `id` is the fallback when absent. */
   readonly uid?: string;
+  /** Stable authorization identity; distinct from the row's numeric id. */
+  readonly uuid?: string;
   readonly type: string;
   /** Opaque provider-settings blob (model tiers, base_url/url, oauth_discovery_endpoint, ...). */
   readonly data?: Readonly<Record<string, unknown>>;

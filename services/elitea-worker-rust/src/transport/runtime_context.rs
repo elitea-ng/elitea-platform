@@ -223,7 +223,7 @@ impl std::error::Error for RuntimeContextTransportError {
 /// One ephemeral SDK/model credential scoped to the accepted actor.
 ///
 /// The PAT is erased on drop. The value deliberately exposes no formatting,
-/// serialization or cloning surface; the future model-gateway adapter will
+/// serialization or cloning surface; the model facade will
 /// consume it directly when building bounded request headers.
 pub(crate) struct ClaimScopedEliteaContext {
     project_id: u64,

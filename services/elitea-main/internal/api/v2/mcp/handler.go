@@ -1,8 +1,11 @@
-// Package mcp is the MCP SERVER surface — issue 252. It is the half of Elitea's
-// Model Context Protocol story that had no Go counterpart at all: the platform
-// speaking MCP *to* external clients, so an agent host (Claude Desktop, Cursor,
-// the MCP Inspector, any SDK client) can list and drive a project's agents and
-// toolkits as MCP tools.
+// Package mcp is Main's streamable-HTTP MCP server surface — issue 252. It
+// serves two deliberately separate products:
+//
+//   - external project capabilities that a client such as Claude Desktop,
+//     Cursor, the MCP Inspector, or an SDK client can discover; and
+//   - fixed internal builder categories that an Elitea chat can use to manage
+//     project entities. Each internal operation has an explicit schema,
+//     permission, project clamp, and in-process executor.
 //
 // What already existed here is the CLIENT side and its plumbing —
 // `mcp_oauth_proxy`, `mcp_dcr_proxy`, `mcp_sync_tools` in
@@ -29,7 +32,7 @@
 //
 // # What serves real data and what refuses
 //
-// The three answers this package can give are kept strictly apart, because the
+// The answers this package can give are kept strictly apart, because the
 // failure this repo keeps rediscovering (issue 128) is a route that answers 200
 // while nothing behind it is wired:
 //
@@ -40,29 +43,43 @@
 //     `meta.mcp_options.available_by_mcp` — by catalog.go. The REST `tools_list`
 //     reads the durable MCP server store (registry.go, issue 335). Nothing
 //     about either is hardcoded or invented.
+//   - REAL. `tools/list` and `tools/call` for the fixed applications, skills,
+//     toolkits, configurations, notifications, project-context, and secrets
+//     internal categories. Every
+//     operation matches a current-platform `mcp_tool=True` opt-in and has an
+//     explicit permission and schema. Main reuses its current handlers where
+//     their contracts match and owns the transactional application safe-update
+//     path where a full backup and an optimistic instruction patch must be
+//     atomic.
 //   - REAL, ON A DEPLOYMENT WITH THE RUNTIME. `tools/call` on an AGENT tool.
 //     It admits an ordinary agent turn through the same use case the chat
 //     start route drives, waits for it, bounded, and answers with the text the
 //     projection settled on (execute.go). It is authorized per call on
 //     `models.chat.messages.create`, the permission chat itself requires, so
 //     this endpoint is not a way around it.
-//   - HONEST PROTOCOL ERROR, in two shapes now that the halves have separated.
-//     A TOOLKIT tool still cannot run — that needs the Python worker's toolkit
-//     dispatch, which this service does not have — and answers
-//     ToolkitExecutionUnavailableReason. A deployment with no agent runtime at
-//     all (`runtime.enabled` off) answers the original
-//     ToolExecutionUnavailableReason, unchanged, for both kinds. Either way it
-//     is a CallToolResult with `isError: true` naming exactly what is missing,
+//   - REAL, ON A DEPLOYMENT WITH THE DIRECT-TOOL RUNTIME. `tools/call` on an
+//     opted-in, selected, read-only TOOLKIT operation. Main re-reads and freezes
+//     the exact current tenant row through the generated repository, rechecks
+//     its opt-in, selection and guardrail policy, admits one
+//     signed `toolkit.execute.read.v1` command, and returns only its fenced
+//     terminal result. Rust independently requires the materialized operation
+//     to declare itself read-only before invocation. A list/call race therefore
+//     fails closed rather than running an operation that is no longer exposed.
+//   - HONEST PROTOCOL ERROR when the required execution seam is not composed.
+//     A toolkit-only deployment can still run toolkit tools; an agent-only
+//     deployment can still run agents. A deployment with neither runtime seam
+//     (`runtime.enabled` off) answers ToolExecutionUnavailableReason. Every
+//     refusal is a CallToolResult with `isError: true` naming what is missing,
 //     and NEVER an empty successful result — which is what an agent host would
-//     read as "the tool ran and produced nothing". That rule also governs a
-//     run that finishes with no text, fails, or pauses: see execute.go.
+//     read as "the tool ran and produced nothing". That rule also governs a run
+//     that finishes with no text, fails, or pauses: see execute.go.
 //   - HONEST 501. `tools_call`, the one remaining REST refusal. It dispatches a
 //     tool invocation to the server that publishes the tool. This service does
 //     not store that server's credentials, and it runs no socket.io server to
 //     reach a client-hosted one. See registry.go for why a remote MCP toolkit
 //     loses nothing by this.
 //
-// # The `api` tool category is deliberately not ported
+// # Internal API categories are explicit, not inferred
 //
 // pylon's listing has a third source besides agents and toolkits:
 // `openapi_registry.get_mcp_api_tools()`, which republishes pylon's own REST
@@ -70,7 +87,8 @@
 // `mcp_tool=True`, and `McpApiToolExecutor` runs them by re-entering the Flask
 // WSGI app with the caller's cookies and headers.
 //
-// That source is not reproduced here, for two reasons that are not "no time":
+// That source is not reproduced generically here, for two reasons that are not
+// "no time":
 //
 //  1. The opt-in list does not exist in this stack. Which REST operations an
 //     external MCP client may drive is a security decision made one endpoint at
@@ -83,8 +101,10 @@
 //     recursion, auth-forwarding and middleware-re-entry design. That is a
 //     surface to specify, not to improvise inside a parity port.
 //
-// So the category vocabulary this server accepts is the two categories it can
-// actually serve, `applications` and `toolkits`; anything else is a 400 that
+// Instead, each internal category is added only after its operations have
+// explicit schemas, permissions, project clamping, and an in-process executor.
+// Applications, skills, toolkits, configurations, notifications, project
+// context, and secrets currently meet that bar. Anything else is a 400 that
 // names the valid set, which is how pylon answers an unknown tag too. See
 // scope.go.
 //
@@ -121,7 +141,16 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	configurationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	draftsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/drafts"
+	eliteacoreapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
+	notificationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/notifications"
+	secretsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	toolkitsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	notificationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/notifications"
+	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
+	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
@@ -156,6 +185,16 @@ type Handler struct {
 	// off (`runtime.enabled`), which is why every use of it is guarded — see
 	// callTool, which then answers the untouched ToolExecutionUnavailableReason.
 	start AgentStartUseCase
+	// toolkitExecute admits one exact selected, MCP-exposed read operation to
+	// the durable Rust worker. It is optional for the same deployment reason as
+	// start: runtime-disabled Main must keep listing tools while refusing calls.
+	toolkitExecute ToolkitExecuteReadUseCase
+	// toolkitArgumentSchemas supplies the digest-pinned SDK argument schemas
+	// used by external Elitea-as-MCP toolkit tools. Dynamic toolkit families
+	// use the shared saved-instance discovery service when it is available.
+	// Runtime-disabled deployments retain the explicit open-object fallback.
+	toolkitArgumentSchemas ToolkitArgumentSchemaSource
+	toolkitDiscovery       discovery.UseCase
 	// permissions authorizes an EXECUTION, and only an execution.
 	//
 	// The endpoint as a whole is gated at the MEMBERSHIP tier
@@ -173,6 +212,117 @@ type Handler struct {
 	// plane is off, exactly like `start`, and guarded the same way — callTool
 	// then answers the untouched ToolkitExecutionUnavailableReason.
 	toolRuns ToolkitRunUseCase
+	// internalApplications executes the fixed internal application-builder
+	// category in process. It is nil only in protocol unit tests or when Main
+	// has no database composition.
+	internalApplications internalApplicationExecutor
+	// internalSkills executes the fixed internal skill-builder category.
+	internalSkills internalSkillExecutor
+	internalDrafts *draftsapi.Handler
+	internalChat   internalChatExecutor
+	// internalToolkits executes the fixed internal toolkit-builder category.
+	internalToolkits internalToolkitExecutor
+	// internalConfigurations executes the fixed internal configurations
+	// category through the same policy-complete handler as REST.
+	internalConfigurations      internalConfigurationExecutor
+	internalTypedConfigurations *configurationsapi.CurrentConfigurationToolHandler
+	// internalNotifications executes the actor-scoped fixed notifications
+	// category through Main's current notification store.
+	internalNotifications internalNotificationExecutor
+	// internalProjectContext executes the fixed project-context builder through
+	// the same handler instance as the current REST surface.
+	internalProjectContext internalProjectContextExecutor
+	// internalSecrets executes the fixed project-secret builder through the
+	// same encrypted-vault handler instance as the current REST surface.
+	internalSecrets internalSecretExecutor
+}
+
+// Option configures an MCP handler without weakening the required constructor
+// arguments. Internal builder executors are optional because protocol-only unit
+// tests and runtime-disabled deployments may deliberately omit them.
+type Option func(*Handler)
+
+// ToolkitExecuteReadUseCase is the narrow durable direct-tool seam used by
+// external Elitea-as-MCP tools. Main owns admission and result settlement; the
+// MCP handler owns only authorization and protocol projection.
+type ToolkitExecuteReadUseCase interface {
+	Execute(
+		context.Context,
+		toolkitexecutionapp.ExecuteCurrentReadToolRequest,
+	) (toolkitexecutionapp.CurrentReadToolExecutionOutcome, error)
+}
+
+func WithToolkitExecuteRead(executor ToolkitExecuteReadUseCase) Option {
+	return func(handler *Handler) {
+		handler.toolkitExecute = executor
+	}
+}
+
+// ToolkitArgumentSchemaSource supplies one built-in toolkit type's per-tool
+// argument JSON Schemas, keyed by the SDK operation name. found=false means
+// the type is not in the pinned built-in catalogue; an empty map is a valid
+// answer for a dynamic family such as MCP or OpenAPI.
+//
+// The narrow interface lives here because the implementation is owned by
+// internal/runtimecomposition, which imports the API layer to compose routes.
+type ToolkitArgumentSchemaSource interface {
+	ToolkitArgumentSchemas(toolkitType string) (map[string]map[string]any, bool, error)
+}
+
+// WithToolkitArgumentSchemas gives external Elitea-as-MCP the same immutable
+// SDK schema snapshot used by the toolkit editor. The source is actor-neutral;
+// project and selected-tool admission remain row-backed in catalog.go.
+func WithToolkitArgumentSchemas(source ToolkitArgumentSchemaSource) Option {
+	return func(handler *Handler) {
+		handler.toolkitArgumentSchemas = source
+	}
+}
+
+// WithInternalToolkitHandler reuses the fully composed Main toolkit handler for
+// internal MCP calls. The caller must pass the same instance used by the REST
+// routes so guardrails, dynamic schemas, secret sealing and credential
+// validation cannot diverge between the two surfaces.
+func WithInternalToolkitHandler(handler *toolkitsapi.Handler) Option {
+	return func(mcpHandler *Handler) {
+		mcpHandler.internalToolkits = newHandlerInternalToolkitExecutor(handler)
+	}
+}
+
+// WithInternalConfigurationHandler reuses the fully composed Main
+// configuration handler for internal MCP calls. Sharing it with REST keeps
+// registry lookup, provider admission, vault sealing and shared-project
+// behavior on one implementation path.
+func WithInternalConfigurationHandler(handler *configurationsapi.Handler, typed *configurationsapi.CurrentConfigurationToolHandler) Option {
+	return func(mcpHandler *Handler) {
+		mcpHandler.internalConfigurations = newHandlerInternalConfigurationExecutor(handler, typed)
+		mcpHandler.internalTypedConfigurations = typed
+	}
+}
+
+// WithInternalNotificationStore composes the fixed notification tools over
+// the same user-scoped store used by the current REST route.
+func WithInternalNotificationStore(store notificationapp.Store) Option {
+	return func(mcpHandler *Handler) {
+		toolHandler := notificationsapi.NewCurrentNotificationToolHandler(store)
+		mcpHandler.internalNotifications = newHandlerInternalNotificationExecutor(toolHandler)
+	}
+}
+
+// WithInternalProjectContextHandler reuses Main's project-context handler so
+// REST and internal MCP share validation, storage, and response semantics.
+func WithInternalProjectContextHandler(handler *eliteacoreapi.Handler) Option {
+	return func(mcpHandler *Handler) {
+		mcpHandler.internalProjectContext = newHandlerInternalProjectContextExecutor(handler)
+	}
+}
+
+// WithInternalSecretHandler reuses Main's encrypted project-vault handler.
+// The fixed MCP catalogue excludes plaintext reads, deletes, hidden-secret
+// operations, and the global administration vault.
+func WithInternalSecretHandler(handler *secretsapi.Handler) Option {
+	return func(mcpHandler *Handler) {
+		mcpHandler.internalSecrets = newHandlerInternalSecretExecutor(handler)
+	}
 }
 
 // AgentStartUseCase is the narrow slice of
@@ -224,11 +374,17 @@ func NewHandler(
 	personal PersonalProjectResolver,
 	start AgentStartUseCase,
 	permissions auth.PermissionResolver,
+	opts ...Option,
 ) *Handler {
 	handler := &Handler{pool: pool, personal: personal, start: start, permissions: permissions}
 	handler.source = postgresToolSource{handler: handler}
 	if pool != nil {
 		handler.registry = mcpregistry.NewStore(pool)
+		handler.internalApplications = newPostgresInternalApplicationExecutor(pool)
+		handler.internalSkills = newPostgresInternalSkillExecutor(pool)
+	}
+	for _, opt := range opts {
+		opt(handler)
 	}
 	return handler
 }
@@ -249,8 +405,9 @@ func NewHandlerWithToolkitRuns(
 	start AgentStartUseCase,
 	runs ToolkitRunUseCase,
 	permissions auth.PermissionResolver,
+	opts ...Option,
 ) *Handler {
-	handler := NewHandler(pool, personal, start, permissions)
+	handler := NewHandler(pool, personal, start, permissions, opts...)
 	if runs != nil {
 		handler.toolRuns = runs
 	}

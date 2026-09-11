@@ -118,3 +118,5 @@ export { useIndexesTabVisibility } from './lib/hooks/useIndexesTabVisibility';
  * modules for in-slice use, so nothing is deleted, only de-published.
  * Back to 20/20 — re-check before adding more.
  */
+
+export type { ToolkitTestAuthorizationRenderProps } from './ui/test-tools/TestToolPane';

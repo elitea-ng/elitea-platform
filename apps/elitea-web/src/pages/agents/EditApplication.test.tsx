@@ -52,7 +52,17 @@ function setPublicProjectId(publicProjectId: string): void {
   resetConfigForTests();
 }
 
-function detail(overrides: { versions?: { id: string; name: string; status: string; agent_type: string; created_at: string }[] } = {}) {
+function detail(
+  overrides: {
+    versions?: {
+      id: string;
+      name: string;
+      status: string;
+      agent_type: string;
+      created_at: string;
+    }[];
+  } = {},
+) {
   return {
     id: '42',
     name: 'My Agent',
@@ -61,7 +71,13 @@ function detail(overrides: { versions?: { id: string; name: string; status: stri
     owner_id: 'user-1',
     created_at: '2026-01-01T00:00:00Z',
     versions: overrides.versions ?? [
-      { id: '1', name: 'base', status: 'draft', agent_type: 'classic', created_at: '2026-01-01T00:00:00Z' },
+      {
+        id: '1',
+        name: 'base',
+        status: 'draft',
+        agent_type: 'classic',
+        created_at: '2026-01-01T00:00:00Z',
+      },
     ],
     version_details: {
       id: '1',
@@ -97,7 +113,16 @@ function detailWithTools() {
     ...base,
     version_details: {
       ...base.version_details,
-      tools: [{ id: 5, tool_id: 77, entity_type: 'agent', name: 'Github', type: 'github', config: {} }],
+      tools: [
+        {
+          id: 5,
+          tool_id: 77,
+          entity_type: 'agent',
+          name: 'Github',
+          type: 'github',
+          config: {},
+        },
+      ],
       meta: {},
     },
   };
@@ -155,7 +180,9 @@ afterEach(() => {
 describe('EditApplication', () => {
   it('renders the application name once it loads', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+      projectId: '9',
+    });
 
     // 5s, not the 1s default: the configuration panel now renders the real
     // `CreateAgentForm` (several MUI accordions) instead of an empty Box, so the
@@ -174,7 +201,9 @@ describe('EditApplication', () => {
 
   it('renders the configuration tab panel with the real agent fields in it', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+      projectId: '9',
+    });
 
     // Asserting the panel is `toBeInTheDocument()` is what let this page ship a
     // self-closing `<Box data-testid=… />` for so long — an empty div is in the
@@ -192,7 +221,9 @@ describe('EditApplication', () => {
 
   it('shows the not-found state when the URL version is not in the versions list', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderAgentsRoute(<EditApplication />, '/agents/all/42/999', { projectId: '9' });
+    renderAgentsRoute(<EditApplication />, '/agents/all/42/999', {
+      projectId: '9',
+    });
 
     // The not-found state renders only after the detail fetch settles and
     // the version list is resolved; under CI coverage instrumentation that
@@ -225,7 +256,9 @@ describe('EditApplication', () => {
 
   it('renders the Save/Cancel bar once loaded', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+      projectId: '9',
+    });
 
     expect(await screen.findByTestId('agent-save-button')).toBeInTheDocument();
     expect(screen.getByText('Cancel')).toBeInTheDocument();
@@ -238,19 +271,33 @@ describe('EditApplication', () => {
    * existing somewhere in the tree, which is precisely the distinction that
    * the dead `SaveNewVersionButton` (zero importers) slipped through.
    */
-  it('mounts the version selector and lists the agent\'s versions', async () => {
+  it("mounts the version selector and lists the agent's versions", async () => {
     server.use(
       getGetApplicationMockHandler(
         detail({
           versions: [
-            { id: '1', name: 'base', status: 'draft', agent_type: 'classic', created_at: '2026-01-01T00:00:00Z' },
-            { id: '2', name: 'v1', status: 'draft', agent_type: 'classic', created_at: '2026-01-02T00:00:00Z' },
+            {
+              id: '1',
+              name: 'base',
+              status: 'draft',
+              agent_type: 'classic',
+              created_at: '2026-01-01T00:00:00Z',
+            },
+            {
+              id: '2',
+              name: 'v1',
+              status: 'draft',
+              agent_type: 'classic',
+              created_at: '2026-01-02T00:00:00Z',
+            },
           ],
         }),
       ),
     );
     const user = userEvent.setup();
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+      projectId: '9',
+    });
 
     // Scoped 15s budget: the trigger's own 5s query timeout used to equal
     // vitest's 5s default test budget (the same class the rename test's
@@ -280,7 +327,9 @@ describe('EditApplication', () => {
 
   it('mounts "Save As Version" for an owner and withholds it from a read-only viewer', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    const owner = renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    const owner = renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+      projectId: '9',
+    });
     // Two full mounts in this one test, each carrying a 5s query timeout
     // that used to equal vitest's 5s default test budget. Scoped 15s budget
     // below gives both mounts room, same pattern the rename test fixed.
@@ -288,7 +337,9 @@ describe('EditApplication', () => {
     owner.unmount();
 
     setPublicProjectId('9');
-    const viewer = renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    const viewer = renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+      projectId: '9',
+    });
     await viewer.findByTestId('version-selector-trigger', {}, { timeout: 5_000 });
     expect(viewer.queryByRole('button', { name: /save as version/i })).not.toBeInTheDocument();
   }, 15_000);
@@ -296,7 +347,9 @@ describe('EditApplication', () => {
   it('clicking Cancel does not throw and keeps the page mounted', async () => {
     server.use(getGetApplicationMockHandler(detail()));
     const user = userEvent.setup();
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+      projectId: '9',
+    });
 
     await screen.findByText('Cancel');
     await user.click(screen.getByText('Cancel'));
@@ -307,7 +360,9 @@ describe('EditApplication', () => {
   it('hides the Save/Cancel bar for a read-only viewer of a public agent (viewing under the public project)', async () => {
     setPublicProjectId('42');
     server.use(getGetApplicationMockHandler(detail()));
-    renderAgentsRoute(<EditApplication />, '/agents/latest/42', { projectId: '42' });
+    renderAgentsRoute(<EditApplication />, '/agents/latest/42', {
+      projectId: '42',
+    });
 
     await screen.findByText('My Agent');
     expect(screen.queryByTestId('agent-save-button')).not.toBeInTheDocument();
@@ -317,7 +372,9 @@ describe('EditApplication', () => {
   it('still renders the Save/Cancel bar for the same agent when the selected project is NOT the public project', async () => {
     setPublicProjectId('42');
     server.use(getGetApplicationMockHandler(detail()));
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+      projectId: '9',
+    });
 
     expect(await screen.findByTestId('agent-save-button')).toBeInTheDocument();
     expect(screen.getByText('Cancel')).toBeInTheDocument();
@@ -329,7 +386,9 @@ describe('EditApplication', () => {
         HttpResponse.json({ error: 'not found' }, { status: 404 }),
       ),
     );
-    renderAgentsRoute(<EditApplication />, '/agents/all/999', { projectId: '9' });
+    renderAgentsRoute(<EditApplication />, '/agents/all/999', {
+      projectId: '9',
+    });
 
     expect(await screen.findByText('Agent not found')).toBeInTheDocument();
     expect(screen.queryByTestId('agent-save-button')).not.toBeInTheDocument();
@@ -338,7 +397,9 @@ describe('EditApplication', () => {
 
   it('shows a save-error banner (instead of nothing) when a save attempt fails', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+      projectId: '9',
+    });
     const user = userEvent.setup();
 
     const saveButton = await screen.findByTestId('agent-save-button');
@@ -370,11 +431,11 @@ describe('EditApplication', () => {
         versionBodies.push((await request.json()) as Record<string, unknown>);
         return HttpResponse.json({ id: '1', application_id: '42', name: 'base', status: 'draft' }, { status: 201 });
       }),
-      http.put('*/elitea_core/application/prompt_lib/:projectId/:id', () =>
-        HttpResponse.json({ id: '42' }, { status: 201 }),
-      ),
+      http.put('*/elitea_core/application/prompt_lib/:projectId/:id', () => HttpResponse.json({ id: '42' }, { status: 201 })),
     );
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+      projectId: '9',
+    });
     const user = userEvent.setup();
 
     // 5s query timeout used to equal vitest's 5s default test budget — see
@@ -410,7 +471,9 @@ describe('EditApplication', () => {
         return HttpResponse.json({ id: '42' }, { status: 201 });
       }),
     );
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+      projectId: '9',
+    });
     const user = userEvent.setup();
 
     // 3s, NOT the 5s this used to carry. A query timeout equal to the whole
@@ -456,11 +519,11 @@ describe('EditApplication', () => {
         versionBodies.push((await request.json()) as Record<string, unknown>);
         return HttpResponse.json({ id: '1', application_id: '42', name: 'base', status: 'draft' }, { status: 201 });
       }),
-      http.put('*/elitea_core/application/prompt_lib/:projectId/:id', () =>
-        HttpResponse.json({ id: '42' }, { status: 201 }),
-      ),
+      http.put('*/elitea_core/application/prompt_lib/:projectId/:id', () => HttpResponse.json({ id: '42' }, { status: 201 })),
     );
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+      projectId: '9',
+    });
     const user = userEvent.setup();
 
     // 5s query timeout used to equal vitest's 5s default test budget — see
@@ -488,11 +551,11 @@ describe('EditApplication', () => {
         versionBodies.push((await request.json()) as Record<string, unknown>);
         return HttpResponse.json({ id: '1', application_id: '42', name: 'base', status: 'draft' }, { status: 201 });
       }),
-      http.put('*/elitea_core/application/prompt_lib/:projectId/:id', () =>
-        HttpResponse.json({ id: '42' }, { status: 201 }),
-      ),
+      http.put('*/elitea_core/application/prompt_lib/:projectId/:id', () => HttpResponse.json({ id: '42' }, { status: 201 })),
     );
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+      projectId: '9',
+    });
     const user = userEvent.setup();
 
     // 5s query timeout used to equal vitest's 5s default test budget — see
@@ -516,7 +579,9 @@ describe('EditApplication', () => {
    */
   it('mounts the export, delete and version-delete controls for a writer', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+      projectId: '9',
+    });
 
     // 5s query timeout used to equal vitest's 5s default test budget — see
     // the rename test's comment for why that pairing flakes on a
@@ -534,7 +599,9 @@ describe('EditApplication', () => {
   it('hides the export, delete and version-delete controls from a read-only viewer of a public agent', async () => {
     setPublicProjectId('42');
     server.use(getGetApplicationMockHandler(detail()));
-    renderAgentsRoute(<EditApplication />, '/agents/latest/42', { projectId: '42' });
+    renderAgentsRoute(<EditApplication />, '/agents/latest/42', {
+      projectId: '42',
+    });
 
     await screen.findByText('My Agent');
     expect(screen.queryByRole('button', { name: /export agent/i })).not.toBeInTheDocument();
@@ -552,9 +619,11 @@ describe('EditApplication', () => {
    * (the two PATCH assertions), and these two assert the MOUNT and its
    * read-only gate on the real page.
    */
-  it('mounts the Tools panel inside the configuration panel, with the version\'s attached tools on screen', async () => {
+  it("mounts the Tools panel inside the configuration panel, with the version's attached tools on screen", async () => {
     server.use(getGetApplicationMockHandler(detailWithTools()));
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+      projectId: '9',
+    });
 
     // 5s query timeout used to equal vitest's 5s default test budget — see
     // the rename test's comment for why that pairing flakes on a
@@ -579,9 +648,11 @@ describe('EditApplication', () => {
    * the slot stops being supplied — a component test of `AgentTagEditor`
    * alone would keep passing, which is exactly how it shipped unmounted.
    */
-  it('mounts the tag editor in the configuration panel with the version\'s stored tags on screen', async () => {
+  it("mounts the tag editor in the configuration panel with the version's stored tags on screen", async () => {
     server.use(getGetApplicationMockHandler(detailWithTags()));
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+      projectId: '9',
+    });
 
     const panel = await screen.findByTestId('edit-application-configuration-tab-panel', {}, { timeout: 5_000 });
     // The label proves the control itself is mounted; the chip proves it is
@@ -600,11 +671,11 @@ describe('EditApplication', () => {
         versionBodies.push((await request.json()) as Record<string, unknown>);
         return HttpResponse.json({ id: '1', application_id: '42', name: 'base', status: 'draft' }, { status: 201 });
       }),
-      http.put('*/elitea_core/application/prompt_lib/:projectId/:id', () =>
-        HttpResponse.json({ id: '42' }, { status: 201 }),
-      ),
+      http.put('*/elitea_core/application/prompt_lib/:projectId/:id', () => HttpResponse.json({ id: '42' }, { status: 201 })),
     );
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+      projectId: '9',
+    });
     const user = userEvent.setup();
 
     const tagsInput = await screen.findByLabelText('Tags', {}, { timeout: 5_000 });
@@ -619,16 +690,37 @@ describe('EditApplication', () => {
     // The whole list reaches the wire, not just the edit: the handler
     // REPLACES the association rows, so a body carrying only the new name
     // would silently delete the stored one.
-    expect(versionBodies[0]?.['tags']).toEqual([
-      { id: 4, name: 'finance' },
-      { name: 'newtag' },
-    ]);
+    expect(versionBodies[0]?.['tags']).toEqual([{ id: 4, name: 'finance' }, { name: 'newtag' }]);
+  }, 15_000);
+
+  it('exposes the agent through MCP by adding the existing exact tag contract', async () => {
+    server.use(getGetApplicationMockHandler(detailWithTags()));
+    const versionBodies: Record<string, unknown>[] = [];
+    captureVersionSave(versionBodies);
+    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+      projectId: '9',
+    });
+    const user = userEvent.setup();
+
+    await waitFor(() => expect(screen.getByTestId('agent-name-input')).toHaveValue('My Agent'));
+    const toggle = await screen.findByRole('switch', {
+      name: 'Enable MCP access',
+    });
+    expect(toggle).not.toBeChecked();
+
+    await user.click(toggle);
+    await user.click(await screen.findByTestId('agent-save-button'));
+
+    await waitFor(() => expect(versionBodies).toHaveLength(1));
+    expect(versionBodies[0]?.['tags']).toEqual([{ id: 4, name: 'finance' }, { name: 'mcp' }]);
   }, 15_000);
 
   it('offers a read-only viewer neither tool control (no attach menu, remove disabled)', async () => {
     setPublicProjectId('42');
     server.use(getGetApplicationMockHandler(detailWithTools()));
-    renderAgentsRoute(<EditApplication />, '/agents/latest/42', { projectId: '42' });
+    renderAgentsRoute(<EditApplication />, '/agents/latest/42', {
+      projectId: '42',
+    });
 
     // Same scoped-budget fix as the sibling test above.
     await screen.findByTestId('agent-toolkit-card', {}, { timeout: 5_000 });
@@ -645,7 +737,9 @@ describe('EditApplication', () => {
    */
   it('mounts the model picker, showing the project default for a version that pins none', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+      projectId: '9',
+    });
 
     expect(await screen.findByText('GPT-4o', {}, { timeout: 5_000 })).toBeVisible();
   }, 15_000);
@@ -657,11 +751,18 @@ describe('EditApplication', () => {
         ...base,
         version_details: {
           ...base.version_details,
-          llm_settings: { model_name: 'qwen3.5', model_project_id: 9, max_tokens: -1, temperature: 0.6 },
+          llm_settings: {
+            model_name: 'qwen3.5',
+            model_project_id: 9,
+            max_tokens: -1,
+            temperature: 0.6,
+          },
         },
       }),
     );
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+      projectId: '9',
+    });
 
     expect(await screen.findByText('Qwen 3.5', {}, { timeout: 5_000 })).toBeVisible();
   }, 15_000);
@@ -670,7 +771,9 @@ describe('EditApplication', () => {
     server.use(getGetApplicationMockHandler(detail()));
     const bodies: Record<string, unknown>[] = [];
     captureVersionSave(bodies);
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+      projectId: '9',
+    });
     const user = userEvent.setup();
 
     await screen.findByText('GPT-4o', {}, { timeout: 5_000 });
@@ -691,7 +794,9 @@ describe('EditApplication', () => {
     server.use(getGetApplicationMockHandler(detail()));
     const bodies: Record<string, unknown>[] = [];
     captureVersionSave(bodies);
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+      projectId: '9',
+    });
     const user = userEvent.setup();
 
     await screen.findByText('GPT-4o', {}, { timeout: 5_000 });
@@ -707,7 +812,9 @@ describe('EditApplication', () => {
 
   it('arms the unsaved-changes guard when only the model is changed (#133)', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+      projectId: '9',
+    });
     const user = userEvent.setup();
 
     await screen.findByText('GPT-4o', {}, { timeout: 5_000 });
@@ -856,7 +963,10 @@ describe('talking to the agent', () => {
         HttpResponse.json({ id: '7', name: 'My Agent' }, { status: 201 }),
       ),
       http.post('*/elitea_core/participants/prompt_lib/:projectId/:conversationId', async ({ request, params }) => {
-        participantBodies.push({ conversationId: String(params['conversationId']), body: await request.json() });
+        participantBodies.push({
+          conversationId: String(params['conversationId']),
+          body: await request.json(),
+        });
         return HttpResponse.json([], { status: 200 });
       }),
     );
@@ -871,13 +981,19 @@ describe('talking to the agent', () => {
     await waitFor(() => {
       expect(router.state.location.pathname).toBe('/chat/7');
     });
-    const captured = participantBodies[0] as { conversationId: string; body: readonly Record<string, unknown>[] };
+    const captured = participantBodies[0] as {
+      conversationId: string;
+      body: readonly Record<string, unknown>[];
+    };
     expect(captured.conversationId).toBe('7');
     // TWO entries, user first: nothing server-side creates the user mapping
     // on the REST path, and the resolver's author join refuses a
     // conversation without it — the same pair the adhoc send posts.
     expect(captured.body).toHaveLength(2);
-    expect(captured.body[0]).toMatchObject({ entity_name: 'user', entity_meta: { id: 6 } });
+    expect(captured.body[0]).toMatchObject({
+      entity_name: 'user',
+      entity_meta: { id: 6 },
+    });
     expect(captured.body[1]).toMatchObject({
       entity_name: 'application',
       entity_meta: { id: '42', project_id: '9' },
@@ -915,9 +1031,7 @@ describe('talking to the agent', () => {
       http.post('*/elitea_core/conversations/prompt_lib/:projectId', () =>
         HttpResponse.json({ id: '7', name: 'My Agent' }, { status: 201 }),
       ),
-      http.post('*/elitea_core/participants/prompt_lib/:projectId/:conversationId', () =>
-        HttpResponse.json([], { status: 200 }),
-      ),
+      http.post('*/elitea_core/participants/prompt_lib/:projectId/:conversationId', () => HttpResponse.json([], { status: 200 })),
     );
     const user = userEvent.setup();
     // `NavBlockerDialog` isn't part of this fixture's route tree (the real

@@ -1,56 +1,23 @@
 import { useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
+
+import { toolkitTools } from '@/entities/toolkit';
+
+import { useSelectedProjectId } from '../../lib/hooks/useSelectedProjectId';
 
 import { useGetCurrentToolkitSchemas } from '../../lib/hooks/useGetCurrentToolkitSchemas.hooks';
 
 import type { JsonSchemaLike } from '../../indexes/lib/helpers/indexChat.helpers';
 
-/**
- * Ported from `apps/elitea-ui/src/hooks/toolkit/useGetSelectedToolSchema.js`
- * (44 lines, NOT under `[fsd]/`, not one of the 4 confirmed-not-promoted
- * hooks, not owned by any other A4 sub-unit — `TestTools.jsx` is its only
- * baseline call site, so this sub-unit (A4f) is its rightful owner). Kept
- * local to `ui/test-tools/` (not `lib/hooks/`) for the same reason
- * `features/toolkits/api/useIsMcpVisible.ts` gives for staying feature-local
- * rather than being promoted: single consumer.
- *
- * **CORRECTION (#440).** This comment used to say that no
- * `toolkit_available_tools` endpoint existed. That was wrong.
- * `services/elitea-main/internal/api/router.go:1912` registers
- * `GET /elitea_core/toolkit_available_tools/prompt_lib/{projectID}/{toolkitID}`,
- * and `entities/toolkit`'s `toolkitTools.useToolkitTools` now reads it. Only
- * the OpenAPI spec, and therefore the generated client, lacked it.
- *
- * The baseline's third schema-resolution tier still does not run here, for a
- * different and narrower reason: the route carries NO argument schema. Its
- * repository query selects `id, name, type, description` only
- * (`internal/api/v2/toolkits/handler.go:1086-1100`), and the `Tool` struct
- * it marshals has no schema field. So the route answers "which tools exist",
- * which is what `TestToolSettings.tsx` reads it for, and it cannot answer
- * "what arguments does this tool take". `toolSchema` therefore resolves from
- * the static and pre-loaded-MCP tiers only. The static tier is real data
- * from the server: `ListTypeSchemas` merges the SDK argument schemas into
- * `properties.selected_tools.args_schemas` of each type
- * (`internal/api/v2/toolkits/handler.go`'s `toolkitTypeCatalogue`).
- *
- * A FAILED READ IS NOT AN EMPTY FORM (#440). Because the static tier IS that
- * server read, a lost read used to resolve to `null` and draw an argument
- * form with no fields — the same screen a tool that takes no arguments
- * draws. This hook returns `isError` and `refetch` beside the schema now, so
- * the caller can show the failure and offer a retry. It returns a RESULT
- * OBJECT rather than the bare schema for that reason; every caller reads
- * `.toolSchema` where it used to read the return value.
- *
- * `toolkitId`/`projectId` stay off this hook's own signature (the baseline
- * threads both through purely to drive that dynamic query) rather than being
- * kept as accepted-but-unused parameters — an honest narrowing of the port's
- * surface, not a silent behaviour change of what remains.
- */
+/** Resolve static, saved MCP, then instance-discovered argument schemas. */
 export interface McpToolOption {
   readonly value?: string | undefined;
   readonly args_schema?: JsonSchemaLike | undefined;
 }
 
 export interface UseGetSelectedToolSchemaParams {
+  readonly projectId?: string | number | undefined;
+  readonly toolkitId?: string | number | undefined;
   readonly toolkitType: string | undefined;
   readonly toolOptionType: string | null;
   readonly availableMcpTools: readonly McpToolOption[] | undefined;
@@ -101,7 +68,7 @@ function resolveToolSchema(params: UseGetSelectedToolSchemaParams & { readonly t
 }
 
 export interface UseGetSelectedToolSchemaResult {
-  /** The resolved argument schema, or `null` when the tool takes no arguments. */
+  /** The resolved argument schema, or `null` while no schema is available. */
   readonly toolSchema: JsonSchemaLike | null;
   /** The schema read failed (#440). Show it. A `null` schema beside it means nothing. */
   readonly isError: boolean;
@@ -109,15 +76,33 @@ export interface UseGetSelectedToolSchemaResult {
   readonly refetch: () => void;
 }
 
+function canDiscoverSchema(params: UseGetSelectedToolSchemaParams, typeSchema: unknown, localSchema: JsonSchemaLike | null, projectId: string | number | undefined, isError: boolean): boolean {
+  return !!params.toolOptionType && typeSchema !== undefined && !localSchema && !!projectId && !!params.toolkitId && !isError;
+}
+
 export function useGetSelectedToolSchema(params: UseGetSelectedToolSchemaParams): UseGetSelectedToolSchemaResult {
-  const { toolkitType, toolOptionType, availableMcpTools } = params;
+  const { toolkitType, toolOptionType, availableMcpTools, toolkitId } = params;
+  const selectedProjectId = useSelectedProjectId();
+  const projectId = params.projectId ?? selectedProjectId;
   const { toolkitSchemas, isError, refetch } = useGetCurrentToolkitSchemas();
   const toolkitTypeSchema = toolkitType !== undefined ? toolkitSchemas?.[toolkitType] : undefined;
 
-  const toolSchema = useMemo(
+  const localSchema = useMemo(
     () => resolveToolSchema({ toolkitType, toolOptionType, availableMcpTools, toolkitTypeSchema }),
     [toolkitType, toolOptionType, availableMcpTools, toolkitTypeSchema],
   );
 
-  return { toolSchema, isError, refetch };
+  const dynamic = useQuery({
+    queryKey: ['toolkits', 'tools', String(projectId ?? ''), `id:${toolkitId ?? ''}`],
+    queryFn: ({ signal }) => toolkitTools.fetchAvailableTools({ projectId: String(projectId), toolkitId: String(toolkitId) }, signal),
+    enabled: canDiscoverSchema(params, toolkitTypeSchema, localSchema, projectId, isError),
+    retry: false,
+  });
+  const dynamicSchema = toolOptionType ? dynamic.data?.args_schemas?.[toolOptionType] : undefined;
+  const toolSchema = useMemo(() => localSchema ?? (dynamicSchema ? normalizeMcpInputSchema(dynamicSchema as JsonSchemaLike) : null), [localSchema, dynamicSchema]);
+  return {
+    toolSchema,
+    isError: isError || (!localSchema && dynamic.isError),
+    refetch: () => { if (isError) refetch(); else void dynamic.refetch(); },
+  };
 }

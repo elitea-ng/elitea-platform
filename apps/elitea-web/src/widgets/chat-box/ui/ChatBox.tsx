@@ -22,6 +22,7 @@ import type { AttachmentButtonHandle, PlusChatButtonEntitySubmenus, VoiceButtonH
 import { ChatConversationStarters, NewChatInput, voiceHooks } from '@/features/chat-input';
 import { useSocketClient } from '@/shared/api/socket/client';
 import { ChatMessageList, useDeleteMessageAlert } from '@/features/chat-messages';
+import { getAllTokens, McpAuthModal } from '@/features/mcps';
 import { conversationApi } from '@/entities/conversation';
 import { t } from '@/shared/i18n';
 
@@ -57,7 +58,7 @@ import { useChatBoxMentions } from './hooks/useChatBoxMentions';
 import { useChatBoxActions } from './hooks/useChatBoxActions';
 import { useAddEntityParticipant } from './hooks/useAddEntityParticipant';
 import { useActiveParticipantSelection } from './hooks/useActiveParticipantSelection';
-import { useSessionDeclinedMcpServersRef } from './hooks/useSessionDeclinedMcpServersRef';
+import { useSessionMcpAuthorizationRefs } from './hooks/useSessionMcpAuthorizationRefs';
 import { useChatBoxSend } from './hooks/useChatBoxSend';
 import { useStableRef } from './hooks/useStableRef';
 
@@ -126,7 +127,6 @@ const ChatBoxInner = memo(function ChatBox({
   const { conversationId, conversationParticipants, conversationUuid, conversationMeta, isConversationSending, projectIdString } = deriveChatBoxIds(activeConversation, projectId);
   const { activeParticipant, onChangeParticipant } = useActiveParticipantSelection(participant, conversationParticipants);
 
-  // Data layer
   const data = useChatBoxData(buildChatBoxDataParams({ activeConversation, activeParticipant, projectId, userId, userName, userAvatar, isAgentsPage }));
   const messages = data.messageList.messages;
 
@@ -151,7 +151,6 @@ const ChatBoxInner = memo(function ChatBox({
     activeParticipantVersions,
   }));
 
-  // Socket client + read-aloud (TTS)
   const socketClient = useSocketClient();
   const readAloud = voiceHooks.useReadAloud({
     projectId: projectIdString,
@@ -159,14 +158,11 @@ const ChatBoxInner = memo(function ChatBox({
   });
   const lifecycle = data.lifecycle;
 
-  // Mirror the live, socket-synced history out to the parent's own mirror,
-  // when one is supplied (no live caller exists yet — the routing gap this
-  // whole unit operates under).
+  // Mirror live history to the parent when supplied.
   useEffect(() => {
     setChatHistory?.(messages);
   }, [messages, setChatHistory]);
 
-  // Nav blocker
   const setStreamingBlockNav = useNavBlockerStore((s) => s.setStreamingBlockNav);
   useEffect(() => {
     setStreamingBlockNav(data.streaming.isStreamingNow, 'prompt');
@@ -174,13 +170,21 @@ const ChatBoxInner = memo(function ChatBox({
 
   // Session-scoped bookkeeping of MCP servers declined/authenticated this
   // conversation (never persisted) — resets whenever the conversation changes.
-  const sessionDeclinedMcpServersRef = useSessionDeclinedMcpServersRef(conversationUuid);
+  const { sessionDeclinedMcpServersRef, sessionMcpAuthorizationBatchesRef } =
+    useSessionMcpAuthorizationRefs(conversationUuid);
 
   // Real RTK/TanStack mutations the action handlers below trigger.
   const { mutateAsync: regenerateMutateAsync } = conversationApi.useRegenerate();
   const { mutateAsync: deleteMessageMutateAsync } = conversationApi.useDeleteMessage();
   const { mutateAsync: deleteAllMessagesMutateAsync } = conversationApi.useDeleteAllMessages();
   const { mutateAsync: stopChatTaskMutateAsync } = conversationApi.useStopTask();
+
+  const { internalToolsButtonTools, handleInternalToolChange, isUpdatingInternalToolsConfig, getInternalToolsForSend } = useChatBoxInternalTools({
+    conversationId,
+    conversationMeta,
+    projectId,
+    isAgentsPage,
+  });
 
   // Everything one send needs: the SSE transport (issue #93) plus the
   // create-conversation-first and upload-attachments-first adapters.
@@ -190,7 +194,7 @@ const ChatBoxInner = memo(function ChatBox({
     deps: { createConversation: lifecycle.createConversation, uploadAttachments: data.attachments.upload.uploadAttachments },
     setChatHistory: data.setChatHistory, projectId, projectIdString, isAgentsPage, conversationUuid,
     activeParticipant, participants: conversationParticipants, userName, userAvatar,
-    llmSettings, model: data.selectedModel, userId, onAgentEvent,
+    llmSettings, model: data.selectedModel, userId, onAgentEvent, getInternalToolsForSend,
   });
   // After `useChatBoxSend`: a "+" pick on a chat with no conversation has to create one first, and it reuses the adapter the first send would have used, so an eagerly created conversation is seeded exactly like a send-created one.
   const entityParticipantActions = useAddEntityParticipant({ projectId, conversationId, participants: normalisedParticipants, onChangeParticipant, createConversation: () => createConversationForSend(''), ...(onConversationCreated ? { onConversationCreated } : {}) });
@@ -220,6 +224,8 @@ const ChatBoxInner = memo(function ChatBox({
     projectId,
     socketId: socketClient.socket.id,
     sessionDeclinedMcpServersRef,
+    sessionMcpAuthorizationBatchesRef,
+    getMcpTokens: getAllTokens,
     startStreamedExecution, continueStreamedExecution, regenerateStreamedExecution,
   });
 
@@ -243,13 +249,6 @@ const ChatBoxInner = memo(function ChatBox({
     setSelectedModel: data.setSelectedModel,
   });
 
-  // Real internal-tools-config persistence
-  const { internalToolsButtonTools, handleInternalToolChange, isUpdatingInternalToolsConfig } = useChatBoxInternalTools({
-    conversationId,
-    conversationMeta,
-    projectId,
-    isAgentsPage,
-  });
 
   // Version selection (real fetch + persist) + auto-recovery
   const { handleSelectVersion } = useChatBoxVersioning({
@@ -338,6 +337,7 @@ const ChatBoxInner = memo(function ChatBox({
             onHitlResume: handleHitlResume,
             onContinueMcpExecution: handleContinueMcpExecution,
             onContinueTokenLimitExecution: handleContinueTokenLimit,
+            renderAuthModal: (props) => <McpAuthModal {...props} projectId={projectIdString} />,
           }}
           tts={buildTtsProps(readAloud)} canvas={buildCanvasProps(editorCallbacks)}
         />

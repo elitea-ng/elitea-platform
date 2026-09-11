@@ -13,12 +13,14 @@ use tonic::transport::Channel;
 use super::agent_delivery_processor::{AgentDeliveryProcessor, native_agent_delivery_processor};
 use super::agent_lease::SystemUnixMillisClock;
 use super::agent_preparation::AgentPreparationConfig;
+use super::execution_delivery_processor::ExecutionDeliveryProcessor;
 use super::invocation_admission::{InvocationAdmission, InvocationAdmissionConfig};
 use super::native_agent_lifecycle::NativeAuthorizedAgentLifecycle;
 use super::output_delivery::{AgentOutputPreflight, AgentTerminalRecoveryConfig};
 use super::redis_delivery::{
     RedisDeliveryIntakeConfig, RedisDeliveryRuntime, RedisDeliveryRuntimeConfig,
 };
+use super::toolkit_delivery_processor::ToolkitDeliveryProcessor;
 use crate::agents::native_runtime::NativeRuntimeAssembler;
 use crate::agents::ordinary::OrdinaryNativeAgentAssembler;
 use crate::agents::pipeline::PipelineNativeAgentAssembler;
@@ -27,7 +29,8 @@ use crate::config::{RuntimeConfigError, load_deploy_config, read_regular_file};
 use crate::spool::SpoolLimits;
 use crate::state::{CheckpointLimits, SessionLimits};
 use crate::toolkits::{
-    ToolAdmissionPolicy, ToolAdmissionPolicyError, ToolAdmissionPolicyErrorCode,
+    DirectToolkitRuntime, ToolAdmissionPolicy, ToolAdmissionPolicyError,
+    ToolAdmissionPolicyErrorCode,
 };
 use crate::transport::redis_commands::{RedisCommandRetirer, RedisRetirementConfig};
 use crate::transport::redis_connector::ProductionRedisConnector;
@@ -44,7 +47,15 @@ type ProductionLifecycle = NativeAuthorizedAgentLifecycle<
     ProductionRedis,
     SystemUnixMillisClock,
 >;
-type ProductionProcessor = AgentDeliveryProcessor<
+type ProductionAgentProcessor = AgentDeliveryProcessor<
+    TonicControlRpc,
+    ProductionRedis,
+    Channel,
+    SystemUnixMillisClock,
+    ProductionLifecycle,
+    crate::transport::InputContentClient,
+>;
+type ProductionProcessor = ExecutionDeliveryProcessor<
     TonicControlRpc,
     ProductionRedis,
     Channel,
@@ -280,19 +291,36 @@ impl ProductionAgentRuntime {
             CheckpointLimits::default(),
         ));
         let clock = Arc::new(SystemUnixMillisClock);
-        let processor = Arc::new(native_agent_delivery_processor(
-            command_authenticator,
+        let agent: ProductionAgentProcessor = native_agent_delivery_processor(
+            Arc::clone(&command_authenticator),
+            output_preflight.clone(),
+            Arc::clone(&control),
+            Arc::clone(&retirer),
+            Arc::clone(&input),
+            Arc::clone(&clock),
+            admission.clone(),
+            preparation,
+            assembler,
+            output.clone(),
+            limits.output_max_sessions,
+            terminal_recovery,
+        );
+        let toolkit = ToolkitDeliveryProcessor::new(
             output_preflight,
             control,
             retirer,
+            Arc::new(output),
             input,
             clock,
             admission,
             preparation,
-            assembler,
-            output,
-            limits.output_max_sessions,
             terminal_recovery,
+            DirectToolkitRuntime::default(),
+        );
+        let processor = Arc::new(ExecutionDeliveryProcessor::new(
+            command_authenticator,
+            agent,
+            toolkit,
         ));
         let intake = RedisDeliveryIntakeConfig::new(
             limits.delivery_max_concurrency,

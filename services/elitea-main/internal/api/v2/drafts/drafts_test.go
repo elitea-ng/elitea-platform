@@ -428,10 +428,10 @@ func TestProjectContextDraftIsCappedAtTheColumnLength(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Edit-by-id is refused, not ignored.
+// Unconfigured edit requests fail before model generation.
 // ---------------------------------------------------------------------------
 
-func TestEditByIdIsRefusedRatherThanSilentlyDroppedToACreate(t *testing.T) {
+func TestUnavailableEditIsRefusedBeforeGeneration(t *testing.T) {
 	// A caller sending skill_id/application_id means "rewrite THIS one". A
 	// handler that ignored the field would answer 200 with a from-scratch
 	// draft the caller then applies over their existing entity — a wrong
@@ -451,8 +451,12 @@ func TestEditByIdIsRefusedRatherThanSilentlyDroppedToACreate(t *testing.T) {
 			completer := &stubCompleter{content: tc.route.modelAnswer}
 			recorder := serve(t, tc.route, completer, tc.body)
 
-			if recorder.Code != http.StatusBadRequest {
-				t.Fatalf("status = %d, want 400; body=%s", recorder.Code, recorder.Body.String())
+			wantStatus := http.StatusBadRequest
+			if tc.name == "skill" {
+				wantStatus = http.StatusServiceUnavailable
+			}
+			if recorder.Code != wantStatus {
+				t.Fatalf("status=%d want=%d body=%s", recorder.Code, wantStatus, recorder.Body.String())
 			}
 			if completer.called != 0 {
 				t.Error("the model was called for a request that could not be honoured")

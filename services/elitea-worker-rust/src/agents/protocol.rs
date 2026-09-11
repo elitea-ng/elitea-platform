@@ -230,8 +230,15 @@ fn validate_binding(binding: &AgentInputBinding) -> Result<(), AgentProtocolErro
     Ok(())
 }
 
-fn parse_json_value(raw: &[u8]) -> Result<Value, AgentProtocolError> {
-    if raw.is_empty() || raw.len() > MAX_JSON_VALUE_BYTES {
+pub(crate) fn parse_json_value(raw: &[u8]) -> Result<Value, AgentProtocolError> {
+    parse_bounded_json_value(raw, MAX_JSON_VALUE_BYTES)
+}
+
+pub(crate) fn parse_bounded_json_value(
+    raw: &[u8],
+    maximum: usize,
+) -> Result<Value, AgentProtocolError> {
+    if raw.is_empty() || raw.len() > maximum {
         return Err(AgentProtocolError::ResourceExhausted(
             "the agent JSON input exceeds the approved limit",
         ));

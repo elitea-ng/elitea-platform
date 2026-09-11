@@ -38,6 +38,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { CredentialsSelect, useCredentialValidation } from '@/features/credentials';
 
 import { useCredentialRows, type CredentialPickerRow } from './useCredentialRows';
+import { DelegatedCredentialStatus, delegatedCredentialKey } from './DelegatedCredentialStatus';
 
 /** The section every credential-kind property carries; `vectorstorage` is the other value the catalogue serves. */
 const CREDENTIALS_SECTION = 'credentials';
@@ -133,6 +134,9 @@ export function ToolkitCredentialPicker(props: ToolkitCredentialPickerProps): Re
   const validation = useCredentialValidation();
 
   const credentialType = configurationTypes[0] ?? '';
+  const selected = toSelectValue(value);
+  const matches = rows.filter((row) => row.eliteaTitle === selected?.eliteaTitle && row.isPrivate === selected.isPrivate);
+  const selectedCredential = hasFetchedData && matches.length === 1 ? matches[0] : undefined;
   useBatchValidation({ rows, hasFetchedData, section, projectId, validation });
   useReportRefusal({ value, validation, onRefusalChange });
 
@@ -169,16 +173,19 @@ export function ToolkitCredentialPicker(props: ToolkitCredentialPickerProps): Re
   );
 
   return (
-    <CredentialsSelect
-      value={toSelectValue(value)}
-      state={state}
-      handlers={handlers}
-      field={toSelectField(field)}
-      type={credentialType}
-      // The baseline's own gate: a vector-storage reference is picked, never created here.
-      isCreationAllowed={section !== 'vectorstorage'}
-      mismatch={{ mismatchedPrivateCredential: false, createHref: `/credentials/create-credential/${credentialType}` }}
-    />
+    <>
+      <CredentialsSelect
+        value={toSelectValue(value)}
+        state={state}
+        handlers={handlers}
+        field={toSelectField(field)}
+        type={credentialType}
+        // The baseline's own gate: a vector-storage reference is picked, never created here.
+        isCreationAllowed={section !== 'vectorstorage'}
+        mismatch={{ mismatchedPrivateCredential: false, createHref: `/credentials/create-credential/${credentialType}` }}
+      />
+      {section === CREDENTIALS_SECTION && selectedCredential && <DelegatedCredentialStatus key={delegatedCredentialKey(selectedCredential)} credential={selectedCredential} />}
+    </>
   );
 }
 

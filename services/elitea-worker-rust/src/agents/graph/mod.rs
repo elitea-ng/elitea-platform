@@ -35,11 +35,13 @@ mod routing_tests;
 mod state_modifier;
 #[cfg(test)]
 mod state_modifier_tests;
+pub(crate) mod turn_checkpointer;
 mod yaml;
 
 pub(crate) use agent::{
     EliteaGraphAgent, PIPELINE_COMPLETED_CONTENT, PIPELINE_COMPLETED_METADATA_KEY,
-    PIPELINE_COMPLETED_METADATA_VALUE, pipeline_completed_event, pipeline_result_event,
+    PIPELINE_COMPLETED_METADATA_VALUE, PIPELINE_REUSED_RESULT_METADATA_KEY,
+    pipeline_completed_event, pipeline_result_event,
 };
 pub(crate) use application::{
     ApplicationExecutionError, PIPELINE_APPLICATION_HITL_SCHEMA, PipelineApplicationResolver,
@@ -50,8 +52,9 @@ pub(crate) use direct_tool::{
     ResolvedDirectTool,
 };
 pub(crate) use llm::{
-    LlmExecutionError, LlmExecutionInput, LlmNodeDefinition, PipelineLlmAgentFactory,
-    PipelineLlmReplayEnvelope, prepare_pipeline_llm_replay,
+    LlmExecutionError, LlmExecutionInput, LlmNodeDefinition, PipelineLlmAgentBinding,
+    PipelineLlmAgentFactory, PipelineLlmReplayEnvelope, PipelineToolGuard,
+    prepare_pipeline_llm_replay,
 };
 pub(crate) use node_events::{
     PIPELINE_NODE_EVENT_SCOPE_STATE_KEY, PIPELINE_NODE_METADATA_KEY, PipelineNodeEventReceiver,

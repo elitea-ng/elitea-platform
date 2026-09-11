@@ -88,6 +88,10 @@ function OutcomeBody({ outcome }: { readonly outcome: TestToolkitToolOutcome }):
           )}
         </>
       );
+    case 'authorizationRequired':
+      return <Typography variant="bodyMedium">{t('features.toolkits.testToolPane.authorizationRequired', 'Authorize this toolkit to run the selected tool.')}</Typography>;
+    case 'skipped':
+      return <Typography variant="bodyMedium">{t('features.toolkits.testToolPane.skipped', 'Tool run skipped.')}</Typography>;
     case 'toolError':
       return <Typography variant="bodyMedium">{outcome.message}</Typography>;
     case 'unsupportedToolkit':

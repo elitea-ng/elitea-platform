@@ -79,13 +79,13 @@ export const VersionWriteRequest = zod.object({
     .array(VersionTag)
     .optional()
     .describe(
-      "NOTE(#345): the version's topical tags. Send the key to replace the stored set; an empty array removes every association row. Omit the key to leave the stored set alone. Each entry is matched by `name`: an existing `tags` row is reused, a new name creates one. Only the PUT (UpdateVersion) writes them — the two create paths still ignore the key, unlike `meta`, which they store.\n",
+      "NOTE(#345): the version's topical tags. Send the key to replace the stored set; an empty array removes every association row. Omit the key to leave the stored set alone. Each entry is matched by `name`: an existing `tags` row is reused, a new name creates one. The application and version create paths persist supplied tags and return the stored set. PUT persists the supplied set and leaves existing tags unchanged when the key is absent.\n",
     ),
   meta: VersionMeta.optional().describe(
     "A PATCH on the PUT, not the whole object. `meta` is a bag of keys owned by different features — `step_limit` (the number the runtime admits an agent on), `icon_meta`, `internal_tools`, `variables`, and the three fork-provenance keys — and no client sends them all. Send the keys you are changing; the server merges them into the stored object and leaves every key you omit alone. A key you DO send replaces its own value outright, so an empty array clears the array it names. Omit the property entirely to leave the whole object untouched. On the two create paths there is nothing to merge into: the object is stored as sent, with a default `step_limit` added when it carries none and the top-level `variables` folded in.\n",
   ),
   pipeline_settings: PipelineSettings.optional().describe(
-    "Pipeline flow-graph layout ({nodes, edges, orientation, layout_version}). Written verbatim to the application_versions.pipeline_settings jsonb column; omit the key to leave the stored value untouched.\n",
+    "Pipeline flow-graph layout ({nodes, edges, orientation, layout_version}). Written verbatim to the application_versions.pipeline_settings jsonb column by create and update operations. On update, omit the key to leave the stored value untouched.\n",
   ),
 });
 

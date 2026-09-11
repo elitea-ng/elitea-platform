@@ -1,6 +1,7 @@
 package toolkits_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -65,22 +66,49 @@ func TestToolkitTypeCatalogueServesTheSDKArgumentSchemas(t *testing.T) {
 	}
 }
 
-// mcp/mcp_config/openapi declare no argument models in the SDK because their
-// tools are discovered at runtime. openapi is the one of the three that is in
-// this catalogue, and it must come back with an empty args_schemas object, not
-// as a missing key and not as a 500.
+// Remote MCP and OpenAPI discover their tools at runtime.
 func TestToolkitTypeCatalogueServesAnEmptyArgumentSchemaMapForRuntimeDiscoveredTools(t *testing.T) {
 	t.Parallel()
 
 	body := getToolkitTypeCatalogue(t, toolkits.WithArgumentSchemas(pinnedSnapshot(t)))
 
-	selectedTools := selectedToolsSchema(t, body, "openapi")
-	argsSchemas, ok := selectedTools["args_schemas"].(map[string]any)
-	if !ok {
-		t.Fatalf("openapi selected_tools has no args_schemas object: %#v", selectedTools)
+	for _, toolkitType := range []string{"openapi", "mcp"} {
+		selectedTools := selectedToolsSchema(t, body, toolkitType)
+		argsSchemas, ok := selectedTools["args_schemas"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s selected_tools has no args_schemas object: %#v", toolkitType, selectedTools)
+		}
+		if len(argsSchemas) != 0 {
+			t.Errorf("%s args_schemas=%v, want empty", toolkitType, keysOf(argsSchemas))
+		}
 	}
-	if len(argsSchemas) != 0 {
-		t.Errorf("openapi args_schemas=%v, want empty", keysOf(argsSchemas))
+}
+
+func TestToolkitTypeCatalogueServesRemoteMCPConnectionSettings(t *testing.T) {
+	t.Parallel()
+	body := getToolkitTypeCatalogue(t, pinnedCatalogueOptions(t)...)
+	schema, ok := body["mcp"].(map[string]any)
+	if !ok {
+		t.Fatalf("catalogue has no remote MCP type; have %v", keysOf(body))
+	}
+	if !reflect.DeepEqual(schema["required"], []any{"url"}) {
+		t.Fatalf("remote MCP required=%#v, want only url", schema["required"])
+	}
+	properties := schema["properties"].(map[string]any)
+	for _, field := range []string{"url", "headers", "client_id", "client_secret", "scopes", "timeout", "selected_tools", "enable_caching", "cache_ttl", "ssl_verify"} {
+		if _, ok := properties[field].(map[string]any); !ok {
+			t.Errorf("remote MCP settings omit %q", field)
+		}
+	}
+	secret := properties["client_secret"].(map[string]any)
+	if secret["writeOnly"] != true || secret["format"] != "password" {
+		t.Errorf("client_secret must use the password field: %#v", secret)
+	}
+	if properties["ssl_verify"].(map[string]any)["default"] != true {
+		t.Error("TLS verification must default to true")
+	}
+	if selectedToolsSchema(t, body, "mcp")["type"] != "array" {
+		t.Error("selected_tools must retain its array contract")
 	}
 }
 
@@ -272,6 +300,28 @@ func TestToolkitTypeCatalogueDoesNotLeakBetweenRequests(t *testing.T) {
 	argsSchemas := selectedToolsSchema(t, second, "artifact")["args_schemas"].(map[string]any)
 	if _, leaked := argsSchemas["only_tool"]; leaked {
 		t.Errorf("the previous request's schemas survived into this one: %v", keysOf(argsSchemas))
+	}
+}
+
+type dynamicTypeSchemaStub struct{}
+
+func (dynamicTypeSchemaStub) ListToolkitTypeSchemas(context.Context) (map[string]map[string]any, error) {
+	return map[string]map[string]any{
+		"mcp_ado": {
+			"type": "object",
+			"properties": map[string]any{
+				"api_token": map[string]any{"type": "string", "secret": true},
+			},
+		},
+	}, nil
+}
+
+func TestToolkitTypeCatalogueIncludesDynamicPrebuiltMCP(t *testing.T) {
+	body := getToolkitTypeCatalogue(t, toolkits.WithDynamicTypeSchemas(dynamicTypeSchemaStub{}))
+	typeSchema := body["mcp_ado"].(map[string]any)
+	properties := typeSchema["properties"].(map[string]any)
+	if secret, _ := properties["api_token"].(map[string]any)["secret"].(bool); !secret {
+		t.Fatal("dynamic MCP secret annotation was lost")
 	}
 }
 

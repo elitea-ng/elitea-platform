@@ -10,6 +10,9 @@ option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elite
 // toolkit.available_tools.v1. The potentially large and credential-bearing
 // settings object is an entry in WorkerCommandV1.input_bundle_ref; it is never
 // embedded in this message or published through Redis.
+// The input manifest also requires the immutable JSON entry
+// toolkit-runtime-context with role toolkit.available_tools.runtime_context.
+// It binds the project policy context used during discovery.
 message ToolkitAvailableToolsCommandV1 {
   string toolkit_type = 1;
   string settings_entry_id = 2;
@@ -43,6 +46,43 @@ message ToolkitAvailableToolsResultV1 {
   reserved 8 to 15;
 }
 
+// ToolkitExecuteReadCommandV1 binds the reference-only Redis command to one
+// immutable direct-call request in the input data plane.
+message ToolkitExecuteReadCommandV1 {
+  string request_entry_id = 1;
+  reserved 2 to 15;
+}
+
+// ToolkitExecuteReadInputV1 is assembled by Main after a fresh project-scoped
+// toolkit lookup. Toolkit settings contain only frozen references here;
+// claim-time materialization is the first boundary allowed to redeem secrets.
+message ToolkitExecuteReadInputV1 {
+  string schema_revision = 1;
+  bytes toolkit = 2;
+  string toolkit_type = 3;
+  string toolkit_name = 4;
+  string tool_name = 5;
+  bytes arguments = 6;
+  bytes toolkit_guardrails = 7;
+  reserved 8 to 15;
+}
+
+// ToolkitExecuteReadResultV1 is intentionally inline and bounded below one
+// output frame. Larger read responses use the artifact-backed result path in a
+// later capability revision rather than weakening the 64 KiB frame contract.
+message ToolkitExecuteReadResultV1 {
+  string input_bundle_id = 1;
+  DigestV1 input_bundle_digest = 2;
+  string request_entry_id = 3;
+  string request_entry_version = 4;
+  DigestV1 request_content_digest = 5;
+  bytes result_json = 6;
+  string toolkit_type = 7;
+  string toolkit_name = 8;
+  string tool_name = 9;
+  reserved 10 to 15;
+}
+
 // ToolkitCallToolCommandV1 is the bounded control-plane command for
 // toolkit.call_tool.v1: run exactly ONE tool of ONE configured toolkit.
 //
@@ -53,6 +93,9 @@ message ToolkitAvailableToolsResultV1 {
 // Redis is not where either goes. The caller principal and the project are
 // already on the enclosing WorkerCommandV1: repeating them here would make a
 // second, independently forgeable copy of the authorization subject.
+// The input manifest also requires the immutable JSON entry
+// toolkit-runtime-context with role toolkit.call_tool.runtime_context.
+// It binds the project policy context used during the tool call.
 message ToolkitCallToolCommandV1 {
   string toolkit_type = 1;
   string settings_entry_id = 2;
@@ -96,6 +139,7 @@ enum ToolkitCallToolStatusV1 {
   TOOLKIT_CALL_TOOL_STATUS_V1_TOOL_ERROR = 2;
   TOOLKIT_CALL_TOOL_STATUS_V1_UNSUPPORTED_TOOLKIT = 3;
   TOOLKIT_CALL_TOOL_STATUS_V1_UNKNOWN_TOOL = 4;
+  TOOLKIT_CALL_TOOL_STATUS_V1_AUTHORIZATION_REQUIRED = 5;
 }
 
 // ToolkitCallToolSummaryV1 is the bounded typed inline form of one tool result,
@@ -118,6 +162,8 @@ message ToolkitCallToolSummaryV1 {
   // response body, or any value redeemed from the settings entry.
   string error_message = 4;
   reserved 5 to 15;
+  // Present only for AUTHORIZATION_REQUIRED. Contains no credential values.
+  ToolkitAuthorizationRequiredV1 authorization_required = 16;
 }
 
 // ToolkitCallToolResultV1 binds one terminal tool result to the exact immutable
@@ -136,4 +182,19 @@ message ToolkitCallToolResultV1 {
   ToolkitCallToolArtifactReferenceV1 result_artifact = 10;
   ToolkitCallToolSummaryV1 result_summary = 11;
   reserved 12 to 15;
+}
+
+// Safe authorization metadata for one exact saved toolkit Test operation.
+// The enclosing result binds this challenge to the immutable input and command.
+// A retry resolves new credential references after a fresh claim.
+message ToolkitAuthorizationRequiredV1 {
+  string toolkit_name = 1;
+  string toolkit_type = 2;
+  string server_url = 3;
+  string resource_metadata_url = 4;
+  // Canonical bounded JSON uses the existing delegated authorization metadata
+  // contract. Secret values, bearer tokens, and provider bodies are forbidden.
+  bytes resource_metadata_json = 5;
+  string toolkit_id = 6;
+  reserved 7 to 15;
 }

@@ -167,31 +167,13 @@ func TestDiscoverToolsRefusesABlockedTypeRatherThanEmptyingIt(t *testing.T) {
 	}
 }
 
-func TestAvailableToolsDropsRowsOfABlockedType(t *testing.T) {
-	source := &guardrailSourceStub{policy: guardrails.NewPolicy(guardrails.PolicyInput{
-		BlockedToolkits: []string{"shell"},
-	})}
-	router := guardrailRouter(&mockRepo{tools: []toolkits.Tool{
-		{ID: "1", Name: "danger", Type: "shell"},
-		{ID: "2", Name: "docs", Type: "confluence"},
-	}}, source)
-
-	recorder := guardrailDo(t, router, http.MethodGet, "/toolkit_available_tools/prompt_lib/1/7", nil)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status=%d", recorder.Code)
-	}
-	var body struct {
-		Tools []toolkits.Tool `json:"tools"`
-		Total int             `json:"total"`
-	}
-	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
-		t.Fatal(err)
-	}
-	if len(body.Tools) != 1 || body.Tools[0].Type != "confluence" {
-		t.Fatalf("tools=%v", body.Tools)
-	}
-	if body.Total != 1 {
-		t.Fatalf("total=%d must agree with the filtered list", body.Total)
+func TestAvailableToolsDoesNotUseAttachmentsWhenDiscoveryIsUnavailable(t *testing.T) {
+	source := &guardrailSourceStub{policy: guardrails.NewPolicy(guardrails.PolicyInput{BlockedToolkits: []string{"shell"}})}
+	repo := &mockRepo{tools: []toolkits.Tool{{ID: "1", Name: "danger", Type: "shell"}, {ID: "2", Name: "docs", Type: "confluence"}}}
+	recorder := guardrailDo(t, guardrailRouter(repo, source), http.MethodGet, "/toolkit_available_tools/prompt_lib/1/7", nil)
+	assertDiscoveryUnavailable(t, recorder)
+	if repo.availableCalls != 0 {
+		t.Fatalf("runtime discovery read attachments")
 	}
 }
 

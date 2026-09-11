@@ -209,10 +209,14 @@ export function useChatStreamTransport(
       // same array, but the forward below would still fire on it.
       if (!isChatStreamFrame(frame)) return;
       const frameQuestionId = nonEmptyString(frame.question_id);
-      const identifiedFrame =
-        frameQuestionId === undefined && questionIdRef.current !== undefined
-          ? { ...frame, question_id: questionIdRef.current }
-          : frame;
+      // Authorization/output-limit resumes identify the existing answer and
+      // need not repeat its question. Normalize null/empty wire values to
+      // absence even without a request hint: they must not erase that answer's
+      // persisted question link and send the next Regenerate to the legacy API.
+      const identifiedFrame = {
+        ...frame,
+        question_id: frameQuestionId ?? questionIdRef.current,
+      };
       setChatHistory((prev) =>
         applyChatStreamFrame(prev, identifiedFrame, contextRef.current ?? {}),
       );
@@ -246,9 +250,10 @@ export function useChatStreamTransport(
     (reason: string) => {
       const streamContext = contextRef.current;
       const questionId = questionIdRef.current;
+      const responseMessageId = cancelRef.current?.messageGroupUuid;
       detach();
       setChatHistory((prev) =>
-        recordStreamFailure(prev, reason, streamContext, questionId),
+        recordStreamFailure(prev, reason, streamContext, questionId, responseMessageId),
       );
       onStreamErrorRef.current?.(reason);
     },

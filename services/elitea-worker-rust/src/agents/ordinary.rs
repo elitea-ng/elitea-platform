@@ -8,6 +8,7 @@
 
 #![allow(dead_code)] // Capability registration remains intentionally disabled.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -15,6 +16,7 @@ use tracing::Instrument as _;
 
 use super::application_tools::{ApplicationToolDependencies, materialize_application_toolset};
 use super::assembly::{OrdinaryModelProvider, OrdinaryNoToolProfile, ReasoningEffort};
+use super::internal_tools::ASK_USER_TOOLSET_NAME;
 use super::runtime::{
     AdmittedNativeStart, AssembledNativeAgentInvocation, AuthorizedNativeAssembly,
     NativeAgentAssembler, NativeAgentAssemblyError, NativeAgentAssemblyErrorCode,
@@ -34,8 +36,8 @@ use crate::protocol::control::ClaimBoundRuntimeContextAuthority;
 use crate::state::SessionLimits;
 use crate::toolkits::{
     AdkHttpMcpConnector, AdmittedToolSnapshot, FrozenToolKind, McpConnector,
-    McpMaterializationError, McpMaterializationErrorCode, ToolAdmissionPolicy,
-    ToolsetMaterializationError, ToolsetMaterializationErrorCode,
+    McpMaterializationError, McpMaterializationErrorCode, ToolAdmissionPolicy, ToolBindingError,
+    ToolsetMaterializationError, ToolsetMaterializationErrorCode, bind_toolsets,
     materialize_configured_toolsets_with_tokens_and_authorization,
     materialize_mcp_toolsets_with_tokens_and_authorization,
 };
@@ -235,6 +237,18 @@ impl OrdinaryNativeAgentAssembler {
                 materialized.resume,
             );
         }
+        let reserved_toolsets = BTreeSet::from([
+            ASK_USER_TOOLSET_NAME.to_owned(),
+            "elitea_nested_applications".to_owned(),
+        ]);
+        let binding = bind_toolsets(toolsets, &reserved_toolsets, "elitea_ordinary_tool_binding")
+            .await
+            .map_err(tool_binding_error)?;
+        let sensitive_tools = sensitive_tools.bind_provider_names(&binding)?;
+        let delegated_authorization = delegated_authorization
+            .bind_provider_names(&binding)
+            .map_err(|()| invalid_tool_authorization_catalog())?;
+        let toolsets = binding.into_toolsets();
         tracing::Span::current().record("materialized_toolset_count", toolsets.len());
         let fresh_execution_mode = if application_only
             && sensitive_tools.is_empty()
@@ -290,6 +304,19 @@ impl OrdinaryNativeAgentAssembler {
             .bind(adapter, context, profile.model_project_id(), invocation)
             .map_err(model_binding_error)
     }
+}
+
+fn tool_binding_error(error: ToolBindingError) -> NativeAgentAssemblyError {
+    let code = match error {
+        ToolBindingError::InvalidConfiguration => {
+            NativeAgentAssemblyErrorCode::InvalidConfiguration
+        }
+        ToolBindingError::ResourceExhausted => NativeAgentAssemblyErrorCode::ResourceExhausted,
+        ToolBindingError::DependencyUnavailable => {
+            NativeAgentAssemblyErrorCode::DependencyUnavailable
+        }
+    };
+    NativeAgentAssemblyError::new(code, "the model-callable toolkit namespace is invalid")
 }
 
 #[async_trait]
@@ -402,6 +429,7 @@ async fn materialize_direct_toolsets(
 > {
     let (mut toolsets, mut delegated_authorization) =
         materialize_configured_toolsets_with_tokens_and_authorization(snapshot, policy, mcp_tokens)
+            .await
             .map_err(tool_materialization_error)?;
     let mut sensitive = sensitive_tools_for_kind(
         snapshot,
@@ -469,6 +497,9 @@ fn tool_materialization_error(error: ToolsetMaterializationError) -> NativeAgent
         }
         ToolsetMaterializationErrorCode::UnsupportedToolkit => {
             NativeAgentAssemblyErrorCode::UnsupportedCapability
+        }
+        ToolsetMaterializationErrorCode::DependencyUnavailable => {
+            NativeAgentAssemblyErrorCode::DependencyUnavailable
         }
         ToolsetMaterializationErrorCode::ResourceExhausted => {
             NativeAgentAssemblyErrorCode::ResourceExhausted

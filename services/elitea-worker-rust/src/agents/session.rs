@@ -345,6 +345,9 @@ impl Agent for DelegatedAuthorizationEventAgent {
     async fn run(&self, context: Arc<dyn InvocationContext>) -> adk_rust::Result<EventStream> {
         let mut events = self.inner.run(context).await?;
         let authorization = self.authorization.clone();
+        let declined_scope = authorization
+            .encode_declined_scope()
+            .map_err(|()| AdkError::agent("delegated authorization scope exceeds its bound"))?;
         Ok(Box::pin(async_stream::stream! {
             while let Some(event) = adk_rust::futures::StreamExt::next(&mut events).await {
                 let mut event = match event {
@@ -354,10 +357,16 @@ impl Agent for DelegatedAuthorizationEventAgent {
                         return;
                     }
                 };
+                if event.actions.tool_confirmation.is_some()
+                    && let Some(scope) = &declined_scope
+                {
+                    event.provider_metadata.insert(crate::toolkits::DELEGATED_AUTHORIZATION_SCOPE_KEY.to_owned(), scope.clone());
+                }
                 if let Some(request) = event.actions.tool_confirmation.as_ref()
                     && let Some(requirement) = authorization.requirement_for(&request.tool_name)
                 {
-                    let Some(encoded) = encode_delegated_authorization_requirement(requirement) else {
+                    let requirement = requirement.resolve_public_metadata().await;
+                    let Some(encoded) = encode_delegated_authorization_requirement(&requirement) else {
                         yield Err(AdkError::agent("delegated authorization metadata could not be encoded"));
                         return;
                     };
@@ -439,6 +448,14 @@ impl AuthorizedNativeCommandBinding {
             client_stream_id: "conversation-1".to_owned(),
             client_message_id: "message-1".to_owned(),
             sio_event: "chat_predict".to_owned(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn fixture_for_execution(execution_id: &str) -> Self {
+        Self {
+            execution_id: execution_id.to_owned(),
+            ..Self::fixture()
         }
     }
 }
@@ -959,6 +976,10 @@ struct PipelineStateServices {
 pub(crate) trait BoundOrdinaryAgentModel: Send + 'static {
     fn adk_model(&self) -> Arc<dyn Llm>;
 
+    fn provider_model(&self) -> Arc<dyn Llm> {
+        super::replay_history::provider_model(self.adk_model())
+    }
+
     fn take_completed_text(self) -> Result<String, NativeAgentAssemblyError>;
 
     fn durable_completion(&self) -> Option<Arc<dyn DurableModelCompletion>> {
@@ -977,17 +998,23 @@ pub(crate) trait DurableModelCompletion: Send + Sync {
     fn snapshot(&self) -> adk_rust::Result<Option<String>>;
 }
 
-struct CompletionPersistingSessionService {
+struct RunnerSessionService {
     inner: Arc<dyn SessionService>,
-    completion: Arc<dyn DurableModelCompletion>,
+    completion: Option<Arc<dyn DurableModelCompletion>>,
 }
 
-impl CompletionPersistingSessionService {
-    fn new(inner: Arc<dyn SessionService>, completion: Arc<dyn DurableModelCompletion>) -> Self {
+impl RunnerSessionService {
+    fn new(
+        inner: Arc<dyn SessionService>,
+        completion: Option<Arc<dyn DurableModelCompletion>>,
+    ) -> Self {
         Self { inner, completion }
     }
 
     fn durable_event(&self, mut event: Event) -> adk_rust::Result<Event> {
+        let Some(completion) = &self.completion else {
+            return Ok(event);
+        };
         if event.llm_response.partial || !event.llm_response.turn_complete {
             return Ok(event);
         }
@@ -1000,7 +1027,7 @@ impl CompletionPersistingSessionService {
         if already_has_text {
             return Ok(event);
         }
-        let Some(text) = self.completion.snapshot()? else {
+        let Some(text) = completion.snapshot()? else {
             tracing::warn!(
                 event = "agent_session_terminal_completion_unavailable",
                 event_id = %event.id,
@@ -1027,13 +1054,16 @@ impl CompletionPersistingSessionService {
 }
 
 #[async_trait]
-impl SessionService for CompletionPersistingSessionService {
+impl SessionService for RunnerSessionService {
     async fn create(&self, req: CreateRequest) -> adk_rust::Result<Box<dyn Session>> {
         self.inner.create(req).await
     }
 
     async fn get(&self, req: GetRequest) -> adk_rust::Result<Box<dyn Session>> {
-        self.inner.get(req).await
+        self.inner
+            .get(req)
+            .await
+            .map(super::runner_history::project)
     }
 
     async fn list(&self, req: ListRequest) -> adk_rust::Result<Vec<Box<dyn Session>>> {
@@ -1157,13 +1187,14 @@ pub(crate) async fn assemble_pipeline_native(
     )
     .await?;
     let is_resume = resume.is_some();
+    let turn_checkpointer = Arc::new(super::graph::turn_checkpointer::TurnCheckpointer::new(
+        Arc::clone(&state.checkpointer),
+        &plan.execution_id,
+        plan.generation,
+        is_resume,
+    ));
     let graph = definition
-        .compile_with_runtime(
-            ROOT_AGENT_NAME,
-            Arc::clone(&state.checkpointer),
-            resume,
-            &node_runtimes,
-        )
+        .compile_with_runtime(ROOT_AGENT_NAME, turn_checkpointer, resume, &node_runtimes)
         .map_err(|error| pipeline_configuration_error(error.code()))?;
     let OrdinaryNativeAgentPlan {
         user_id,
@@ -1192,7 +1223,11 @@ pub(crate) async fn assemble_pipeline_native(
     {
         return Err(invalid_configuration());
     }
-    let agent = pipeline_graph_agent(graph, &state.checkpointer, printer_catalog, is_resume);
+    // TurnCheckpointer isolates fresh input without deleting recovery history.
+    let agent: Arc<dyn Agent> = Arc::new(
+        EliteaGraphAgent::new(graph)
+            .with_printer_interrupts(Arc::clone(&state.checkpointer), printer_catalog),
+    );
     let agent = node_events.map_or(agent.clone(), |events| {
         Arc::new(PipelineNodeEventStreamingAgent::new(agent, events)) as Arc<dyn Agent>
     });
@@ -1202,7 +1237,7 @@ pub(crate) async fn assemble_pipeline_native(
     let runner = adk_rust::runner::Runner::builder()
         .app_name(APP_NAME)
         .agent(agent)
-        .session_service(state.sessions)
+        .session_service(Arc::new(RunnerSessionService::new(state.sessions, None)))
         .build()
         .map_err(|_| invalid_configuration())?;
     let projector = AgentEventProjector::with_tool_catalogs(
@@ -1225,26 +1260,6 @@ pub(crate) async fn assemble_pipeline_native(
     ))
 }
 
-/// One graph agent, told whether this invocation STARTS a run or CONTINUES a
-/// paused one.
-///
-/// A turn that is not continuing a pause must not inherit the previous run's
-/// checkpoint — `EliteaGraphAgent::starting_a_fresh_run` carries what
-/// inheriting it does to the answer.
-fn pipeline_graph_agent(
-    graph: adk_rust::graph::GraphAgent,
-    checkpointer: &Arc<dyn Checkpointer>,
-    printer_catalog: super::graph::PrinterPauseCatalog,
-    is_resume: bool,
-) -> Arc<dyn Agent> {
-    let agent = EliteaGraphAgent::new(graph)
-        .with_printer_interrupts(Arc::clone(checkpointer), printer_catalog);
-    if is_resume {
-        return Arc::new(agent);
-    }
-    Arc::new(agent.starting_a_fresh_run(Arc::clone(checkpointer)))
-}
-
 async fn resolve_pipeline_start(
     start: PipelineNativeStart,
     state: &PipelineStateServices,
@@ -1253,8 +1268,20 @@ async fn resolve_pipeline_start(
     application_tools: &ApplicationToolPresentationCatalog,
     application_resume: Option<&ApplicationResumeCoordinator>,
 ) -> Result<Option<super::graph::resume::PipelineResume>, NativeAgentAssemblyError> {
+    if matches!(start, PipelineNativeStart::Regenerate) {
+        // ADK loads the latest checkpoint even without an explicit resume ID.
+        // Regeneration must remove that frontier before the graph starts again.
+        // Both services bind deletion to this exact claim, thread and definition.
+        state
+            .checkpointer
+            .delete(plan.session_id.as_ref())
+            .await
+            .map_err(|_| dependency_unavailable())?;
+        reset_session_for_regeneration(state.sessions.as_ref(), &plan.user_id, &plan.session_id)
+            .await?;
+    }
     Ok(match start {
-        PipelineNativeStart::Fresh => {
+        PipelineNativeStart::Fresh | PipelineNativeStart::Regenerate => {
             let (session, created) =
                 restore_or_create_session(state.sessions.as_ref(), &plan.user_id, &plan.session_id)
                     .await?;
@@ -1456,7 +1483,7 @@ where
         regenerate,
     } = plan;
     let context_compaction =
-        context_management.prepare_runner_composition(Some(model.adk_model()))?;
+        context_management.prepare_runner_composition(Some(model.provider_model()))?;
     let parallel = execution_mode == NativeToolExecutionMode::ParallelApplications;
     if parallel && runtime.has_confirmation_guards() {
         return Err(invalid_configuration());
@@ -1468,7 +1495,7 @@ where
     // `InternalToolCatalog::from_values` already writes.
     let internal_tools = runtime.internal_tools;
     let (agent, projector) = build_runtime_agent(
-        model.adk_model(),
+        model.provider_model(),
         generation_config,
         max_iterations,
         projection,
@@ -1506,15 +1533,10 @@ where
         session_bootstrap = if created { "seeded" } else { "restored" },
         "prepared the ADK session for the native agent runner"
     );
-    let runner_sessions: Arc<dyn SessionService> = model.durable_completion().map_or_else(
-        || Arc::clone(&sessions),
-        |completion| {
-            Arc::new(CompletionPersistingSessionService::new(
-                Arc::clone(&sessions),
-                completion,
-            ))
-        },
-    );
+    let runner_sessions = Arc::new(RunnerSessionService::new(
+        sessions,
+        model.durable_completion(),
+    ));
     let mut runner_builder = adk_rust::runner::Runner::builder()
         .app_name(APP_NAME)
         .agent(agent)
@@ -1558,6 +1580,13 @@ fn build_runtime_agent(
         internal_tools,
         application_runtime,
     } = runtime;
+    let mut delegated_authorization = delegated_authorization;
+    let (model, toolsets) = crate::toolkits::bind_authorization_model_tools(
+        model,
+        toolsets,
+        &mut delegated_authorization,
+    )
+    .map_err(|_| invalid_configuration())?;
     let mut builder = LlmAgentBuilder::new(ROOT_AGENT_NAME)
         .model(model)
         .generate_content_config(generation_config)
@@ -1570,7 +1599,10 @@ fn build_runtime_agent(
     for toolset in toolsets {
         builder = builder.toolset(toolset);
     }
-    for tool_name in sensitive_tools.tool_names() {
+    for tool_name in sensitive_tools
+        .tool_names()
+        .filter(|name| !delegated_authorization.is_declined(name))
+    {
         builder = builder.require_tool_confirmation(tool_name);
     }
     for tool_name in delegated_authorization.tool_names() {
@@ -1705,7 +1737,7 @@ async fn prepare_direct_resume(
     let OrdinaryRuntimeBindings {
         toolsets,
         sensitive_tools,
-        delegated_authorization,
+        mut delegated_authorization,
         internal_tools,
         application_runtime,
     } = runtime;
@@ -1728,9 +1760,10 @@ async fn prepare_direct_resume(
     } = application_runtime;
     let (model, run_input, toolsets, parallel_applications) = match resolved {
         ResolvedDirectHitlStart::Direct(decision) => {
+            decision.restore_authorization_scope(&mut delegated_authorization);
             let replay = if decision.is_delegated_authorization() {
                 (*decision)
-                    .into_delegated_authorization_replay(&delegated_authorization)
+                    .into_delegated_authorization_replay(&mut delegated_authorization)
                     .map_err(|error| direct_hitl_error(&error))?
             } else if decision.is_clarifying_question() {
                 (*decision)
@@ -1812,7 +1845,7 @@ where
         regenerate: _,
     } = plan;
     let context_compaction =
-        context_management.prepare_runner_composition(Some(model.adk_model()))?;
+        context_management.prepare_runner_composition(Some(model.provider_model()))?;
     let stored = sessions
         .get(GetRequest {
             app_name: APP_NAME.to_owned(),
@@ -1824,7 +1857,7 @@ where
         .await
         .map_err(|_| dependency_unavailable())?;
     let prepared =
-        prepare_direct_resume(model.adk_model(), stored.as_ref(), runtime, start).await?;
+        prepare_direct_resume(model.provider_model(), stored.as_ref(), runtime, start).await?;
     let (agent, projector) = build_runtime_agent(
         prepared.model,
         generation_config,
@@ -1836,7 +1869,10 @@ where
     let mut runner_builder = adk_rust::runner::Runner::builder()
         .app_name(APP_NAME)
         .agent(agent)
-        .session_service(sessions);
+        .session_service(Arc::new(RunnerSessionService::new(
+            sessions,
+            model.durable_completion(),
+        )));
     if let Some(compaction) = context_compaction {
         runner_builder = runner_builder.context_compaction(compaction);
     }

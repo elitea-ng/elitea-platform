@@ -116,6 +116,7 @@ interface StreamResponseMetadata {
   readonly tool_inputs?: unknown;
   readonly tool_outputs?: unknown;
   readonly tool_output?: unknown;
+  readonly tool_output_chunk_v1?: unknown;
   readonly tool_meta?:
     | {
         readonly name?: string | undefined;

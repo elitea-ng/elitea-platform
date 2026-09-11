@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 
 import type { AnswerCanvasSelection } from './AnswerContent';
 import type { UserMessageUpdatedItem } from './UserMessage';
+import type { ChatContinueProps } from '../chat-continue/ChatContinue';
 import type { HitlResumePayload } from '../chat-hitl-actions/ChatHitlActions';
 import type { CanvasEditPayload, CodeBlockInfo } from '../canvas/Canvas';
 
@@ -63,7 +64,8 @@ export interface ChatMessageListTts {
 /** MCP-auth / token-limit continue-execution and HITL props, grouped to stay under the component-props budget. */
 export interface ChatMessageListContinuation {
   /** Called when the user continues a paused MCP-auth-required execution — only offered on the last message. */
-  readonly onContinueMcpExecution?: ((messageId: string, addToIgnoreList?: boolean) => void) | undefined;
+  readonly onContinueMcpExecution?: ((messageId: string, addToIgnoreList?: boolean, authorizationRequestId?: string) => void) | undefined;
+  readonly renderAuthModal?: ChatContinueProps['renderAuthModal'];
   /** Called when the user continues a token-limit-paused execution — only offered on the last message. */
   readonly onContinueTokenLimitExecution?: ((messageId: string) => void) | undefined;
   /** Called when a HITL interrupt is resumed — only offered on the last message. */

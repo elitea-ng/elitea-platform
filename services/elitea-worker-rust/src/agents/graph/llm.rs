@@ -495,6 +495,8 @@ struct PipelineLlmReplayDecision {
     defer_confirmation: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     blocked_result: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    authorization: Option<DelegatedAuthorizationRequirement>,
 }
 
 /// Private, checkpoint-bound continuation state for one native LLM-node tool turn.
@@ -514,6 +516,8 @@ pub(crate) struct PipelineLlmReplayEnvelope {
     history_before_pending: Vec<Content>,
     pending_content: Content,
     decisions: BTreeMap<String, PipelineLlmReplayDecision>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    declined_authorizations: Vec<DelegatedAuthorizationRequirement>,
 }
 
 impl PipelineLlmReplayEnvelope {
@@ -537,6 +541,8 @@ impl PipelineLlmReplayEnvelope {
             history_before_pending,
             pending_content,
             decisions,
+            declined_authorizations: prior
+                .map_or_else(Vec::new, |prior| prior.declined_authorizations.clone()),
         };
         envelope.validate()?;
         Ok(envelope)
@@ -550,6 +556,7 @@ impl PipelineLlmReplayEnvelope {
             || !valid_sha256_label(&self.predecessor_digest)
             || self.history_before_pending.len() > MAX_LLM_REPLAY_CONTENTS
             || self.decisions.len() > MAX_LLM_REPLAY_DECISIONS
+            || self.declined_authorizations.len() > MAX_LLM_REPLAY_DECISIONS
             || self.pending_content.role != "model"
         {
             return Err(LlmExecutionError::InvalidInputMapping);
@@ -659,6 +666,7 @@ impl PipelineLlmReplayEnvelope {
                 fingerprint: tool_call_fingerprint(tool_name, call.arguments),
                 defer_confirmation: false,
                 blocked_result,
+                authorization: None,
             },
         );
         self.validate()?;
@@ -689,8 +697,17 @@ impl PipelineLlmReplayEnvelope {
                 defer_confirmation: authorize,
                 blocked_result: (!authorize)
                     .then(|| delegated_authorization_declined_result(requirement, tool_name)),
+                authorization: Some(requirement.clone()),
             },
         );
+        if !authorize
+            && !self
+                .declined_authorizations
+                .iter()
+                .any(|other| other.same_authority(requirement))
+        {
+            self.declined_authorizations.push(requirement.clone());
+        }
         self.validate()?;
         serde_json::to_value(self).map_err(|_| LlmExecutionError::InvalidInputMapping)
     }
@@ -722,6 +739,7 @@ impl PipelineLlmReplayEnvelope {
                 fingerprint: tool_call_fingerprint(tool_name, call.arguments),
                 defer_confirmation: false,
                 blocked_result: Some(result),
+                authorization: None,
             },
         );
         self.validate()?;
@@ -730,7 +748,7 @@ impl PipelineLlmReplayEnvelope {
 
     fn apply_run_config(&self, run_config: &mut RunConfig) {
         for (call_id, decision) in &self.decisions {
-            if decision.defer_confirmation {
+            if decision.defer_confirmation && !decision.is_authorization_proxy() {
                 continue;
             }
             run_config
@@ -746,20 +764,31 @@ impl PipelineLlmReplayEnvelope {
         self.decisions
             .iter()
             .filter_map(|(call_id, decision)| {
-                decision
-                    .blocked_result
-                    .as_ref()
-                    .map(|response| PipelineBlockedToolReplay {
-                        call_id: call_id.clone(),
-                        tool_name: decision.tool_name.clone(),
-                        arguments: decision.arguments.clone(),
-                        response: response.clone(),
-                        confirmation_decision: if response.is_string() {
-                            ToolConfirmationDecision::Approve
-                        } else {
-                            ToolConfirmationDecision::Deny
-                        },
-                    })
+                let response = decision.blocked_result.clone().or_else(|| {
+                    decision
+                        .authorization
+                        .as_ref()
+                        .filter(|_| decision.is_authorization_proxy())
+                        .map(|requirement| {
+                            crate::toolkits::delegated_authorization_granted_result(
+                                requirement,
+                                &decision.tool_name,
+                            )
+                        })
+                });
+                response.map(|response| PipelineBlockedToolReplay {
+                    call_id: call_id.clone(),
+                    tool_name: decision.tool_name.clone(),
+                    arguments: decision.arguments.clone(),
+                    confirmation_decision: if response.is_string()
+                        || response["status"] == "authorized"
+                    {
+                        ToolConfirmationDecision::Approve
+                    } else {
+                        ToolConfirmationDecision::Deny
+                    },
+                    response,
+                })
             })
             .collect()
     }
@@ -784,12 +813,49 @@ impl PipelineLlmReplayEnvelope {
         })
     }
 
+    pub(crate) fn apply_authorization_scope(
+        &self,
+        catalog: &mut crate::toolkits::DelegatedAuthorizationCatalog,
+    ) -> Result<(), LlmExecutionError> {
+        for decision in self.decisions.values() {
+            if decision.defer_confirmation && catalog.requirement_for(&decision.tool_name).is_some()
+            {
+                return Err(LlmExecutionError::Unavailable);
+            }
+        }
+        for requirement in &self.declined_authorizations {
+            catalog.decline(requirement);
+        }
+        // Old checkpoints contain a per-call result, without a toolkit scope.
+        // Match that result to the current frozen authority before widening Skip.
+        for decision in self.decisions.values() {
+            if let Some(requirement) = catalog.requirement_for(&decision.tool_name).cloned()
+                && decision.blocked_result.as_ref()
+                    == Some(&delegated_authorization_declined_result(
+                        &requirement,
+                        &decision.tool_name,
+                    ))
+            {
+                catalog.decline(&requirement);
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn definition_digest(&self) -> &str {
         &self.definition_digest
     }
 
     fn input_digest(&self) -> &str {
         &self.input_digest
+    }
+}
+
+impl PipelineLlmReplayDecision {
+    fn is_authorization_proxy(&self) -> bool {
+        self.authorization
+            .as_ref()
+            .is_some_and(|requirement| self.tool_name == requirement.authorization_tool_name())
     }
 }
 
@@ -854,25 +920,38 @@ pub(crate) trait PipelineLlmAgentFactory: Send + Sync {
         input: &LlmExecutionInput,
         output_schema: Option<Value>,
         replay: Option<&PipelineLlmReplayEnvelope>,
-    ) -> Result<Arc<dyn Agent>, LlmExecutionError>;
-
-    fn sensitive_policy(&self, _tool_name: &str) -> Option<SensitiveToolPolicy> {
-        None
-    }
-
-    fn delegated_authorization(
-        &self,
-        _tool_name: &str,
-    ) -> Option<DelegatedAuthorizationRequirement> {
-        None
-    }
-
-    fn ask_user_enabled(&self, _tool_name: &str) -> bool {
-        false
-    }
+    ) -> Result<PipelineLlmAgentBinding, LlmExecutionError>;
 
     fn event_sender(&self) -> Option<PipelineNodeEventSender> {
         None
+    }
+}
+
+#[derive(Clone)]
+pub(crate) enum PipelineToolGuard {
+    Sensitive(SensitiveToolPolicy),
+    DelegatedAuthorization(DelegatedAuthorizationRequirement),
+    AskUser,
+}
+
+/// One node-local agent plus guards keyed by its provider-visible tool names.
+pub(crate) struct PipelineLlmAgentBinding {
+    agent: Arc<dyn Agent>,
+    guards: BTreeMap<String, PipelineToolGuard>,
+}
+
+impl PipelineLlmAgentBinding {
+    #[must_use]
+    pub(crate) fn new(agent: Arc<dyn Agent>, guards: BTreeMap<String, PipelineToolGuard>) -> Self {
+        Self { agent, guards }
+    }
+
+    fn agent(&self) -> Arc<dyn Agent> {
+        Arc::clone(&self.agent)
+    }
+
+    fn guard(&self, tool_name: &str) -> Option<PipelineToolGuard> {
+        self.guards.get(tool_name).cloned()
     }
 }
 
@@ -1025,22 +1104,15 @@ impl LlmNode {
             .filter(|value| valid_replay_identity(value))
             .ok_or(LlmExecutionError::InvalidInputMapping)?
             .to_owned();
-        if let Some(requirement) = self
-            .factory
-            .delegated_authorization(&confirmation.request.tool_name)
-        {
-            return self.authorization_interrupt(&call_id, confirmation, &requirement);
-        }
-        if self
-            .factory
-            .ask_user_enabled(&confirmation.request.tool_name)
-        {
-            return self.clarifying_question_interrupt(&call_id, confirmation);
-        }
-        let policy = self
-            .factory
-            .sensitive_policy(&confirmation.request.tool_name)
-            .ok_or(LlmExecutionError::Unavailable)?;
+        let policy = match confirmation.guard.clone() {
+            PipelineToolGuard::DelegatedAuthorization(requirement) => {
+                return self.authorization_interrupt(&call_id, confirmation, &requirement);
+            }
+            PipelineToolGuard::AskUser => {
+                return self.clarifying_question_interrupt(&call_id, confirmation);
+            }
+            PipelineToolGuard::Sensitive(policy) => policy,
+        };
         if policy.policy_message().is_empty()
             || policy.policy_message().len() > MAX_CONFIRMATION_MESSAGE_BYTES
             || policy.policy_message().chars().any(|character| {
@@ -1119,6 +1191,7 @@ impl LlmNode {
             "server_url": requirement.server_url(),
             "resource_metadata_url": requirement.resource_metadata_url(),
             "www_authenticate": requirement.www_authenticate(),
+            "resource_metadata": requirement.resource_metadata(),
             "llm_replay": replay,
         });
         Ok(NodeOutput::interrupt_with_data(&message, data))
@@ -1170,6 +1243,7 @@ enum PipelineLlmRunOutcome {
 struct PipelineLlmConfirmation {
     request: adk_rust::ToolConfirmationRequest,
     replay: PipelineLlmReplayEnvelope,
+    guard: PipelineToolGuard,
 }
 
 pub(super) async fn run_model_agent_text(
@@ -1219,7 +1293,8 @@ async fn run_model_agent(
     if let Some(replay) = replay {
         input.history = replay.replay_history();
     }
-    let agent = factory.build(definition, &input, output_schema, replay)?;
+    let binding = factory.build(definition, &input, output_schema, replay)?;
+    let agent = binding.agent();
     let invocation = Arc::new(PipelineLlmInvocationContext::new(
         &context.config.thread_id,
         input,
@@ -1253,23 +1328,42 @@ async fn run_model_agent(
                 pending_content,
                 replay,
             )?;
+            let guard = binding
+                .guard(&request.tool_name)
+                .ok_or(LlmExecutionError::Unavailable)?;
             return Ok(PipelineLlmRunOutcome::Confirmation(Box::new(
-                PipelineLlmConfirmation { request, replay },
+                PipelineLlmConfirmation {
+                    request,
+                    replay,
+                    guard,
+                },
             )));
         }
         if !event.llm_response.partial
             && let Some(event_content) = event.llm_response.content.as_mut()
         {
-            if event_content
+            let has_calls = event_content
                 .parts
                 .iter()
-                .any(|part| matches!(part, Part::FunctionCall { .. }))
-            {
+                .any(|part| matches!(part, Part::FunctionCall { .. }));
+            if has_calls {
                 normalize_replay_call_ids(event_content, &event.invocation_id)?;
-                pending_prefix = Some(transcript.clone());
-                pending_content = Some(event_content.clone());
             }
-            transcript.push(event_content.clone());
+            // Replay needs the whole model turn, not just the terminal delta.
+            // Do not change the event forwarded to the live browser stream.
+            let mut completed_content = event_content.clone();
+            completed_content.parts = events
+                .iter()
+                .filter(|previous: &&adk_rust::Event| previous.id == event.id)
+                .filter_map(adk_rust::Event::content)
+                .flat_map(|content| content.parts.iter().cloned())
+                .chain(event_content.parts.iter().cloned())
+                .collect();
+            if has_calls {
+                pending_prefix = Some(transcript.clone());
+                pending_content = Some(completed_content.clone());
+            }
+            transcript.push(completed_content);
         }
         if event.tool_progress_stream().is_none()
             && let Some(sender) = factory.event_sender()
@@ -1294,16 +1388,27 @@ fn node_failure(node: &str) -> GraphError {
 }
 
 fn last_model_text(events: &[adk_rust::Event]) -> Option<String> {
-    events.iter().rev().find_map(|event| {
-        let content = event.content()?;
-        let text = content
-            .parts
+    let last = events.iter().rev().find(|event| {
+        event.tool_progress_stream().is_none()
+            && event.content().is_some_and(|content| {
+                matches!(content.role.as_str(), "model" | "assistant")
+                    && content
+                        .parts
+                        .iter()
+                        .any(|part| part.text().is_some_and(|text| !text.is_empty()))
+            })
+    })?;
+    // SSE events carry deltas with a stable model-turn ID. Keep streaming to
+    // the browser, but return the whole final turn as the node's state output.
+    Some(
+        events
             .iter()
+            .filter(|event| event.id == last.id)
+            .filter_map(adk_rust::Event::content)
+            .flat_map(|content| &content.parts)
             .filter_map(Part::text)
-            .collect::<Vec<_>>()
-            .join("");
-        (!text.is_empty()).then_some(text)
-    })
+            .collect(),
+    )
 }
 
 fn normalize_replay_call_ids(
@@ -1455,6 +1560,38 @@ struct PipelineBlockedToolReplay {
     confirmation_decision: ToolConfirmationDecision,
 }
 
+struct PipelineAuthorizationResult {
+    replay: PipelineBlockedToolReplay,
+}
+
+#[async_trait]
+impl Tool for PipelineAuthorizationResult {
+    fn name(&self) -> &str {
+        &self.replay.tool_name
+    }
+    fn description(&self) -> &'static str {
+        "Return the validated toolkit authorization result."
+    }
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(json!({"type": "object", "properties": {}, "additionalProperties": false}))
+    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
+    async fn execute(
+        &self,
+        context: Arc<dyn ToolContext>,
+        arguments: Value,
+    ) -> adk_rust::Result<Value> {
+        if context.function_call_id() != self.replay.call_id || arguments != self.replay.arguments {
+            return Err(AdkError::agent(
+                "authorization result does not match the checkpointed call",
+            ));
+        }
+        Ok(self.replay.response.clone())
+    }
+}
+
 struct PipelineBlockedToolset {
     name: String,
     inner: Arc<dyn Toolset>,
@@ -1573,6 +1710,13 @@ pub(crate) fn prepare_pipeline_llm_replay(
     let Some(replay) = replay else {
         return (delegate, toolsets);
     };
+    let hidden = replay
+        .decisions
+        .values()
+        .filter(|decision| decision.defer_confirmation && decision.is_authorization_proxy())
+        .map(|decision| decision.tool_name.clone())
+        .collect();
+    let delegate = crate::toolkits::hide_model_tools(delegate, hidden);
     let model: Arc<dyn Llm> = Arc::new(PipelineLlmReplayModel {
         delegate,
         state: AtomicU8::new(PIPELINE_REPLAY_PENDING),
@@ -1585,6 +1729,25 @@ pub(crate) fn prepare_pipeline_llm_replay(
         .collect::<BTreeMap<_, _>>();
     if blocked.is_empty() {
         return (model, toolsets);
+    }
+    let mut toolsets = toolsets;
+    let authorized: Vec<Arc<dyn Tool>> = blocked
+        .values()
+        .filter(|blocked| {
+            blocked.response["type"] == "mcp_auth_decision"
+                && blocked.response["status"] == "authorized"
+        })
+        .map(|replay| {
+            Arc::new(PipelineAuthorizationResult {
+                replay: replay.clone(),
+            }) as Arc<dyn Tool>
+        })
+        .collect();
+    if !authorized.is_empty() {
+        toolsets.push(Arc::new(adk_rust::tool::BasicToolset::new(
+            "elitea_authorization_result",
+            authorized,
+        )));
     }
     let blocked = Arc::new(blocked);
     let toolsets = toolsets
@@ -1748,7 +1911,7 @@ struct PipelineLlmInvocationContext {
 impl PipelineLlmInvocationContext {
     fn new(
         session_id: &str,
-        input: LlmExecutionInput,
+        mut input: LlmExecutionInput,
         agent: Arc<dyn Agent>,
         parent: Option<Arc<dyn InvocationContext>>,
         replay: Option<&PipelineLlmReplayEnvelope>,
@@ -1777,6 +1940,11 @@ impl PipelineLlmInvocationContext {
         );
         if let Some(replay) = replay {
             replay.apply_run_config(&mut run_config);
+        } else {
+            // LlmAgent replaces the last user entry with the current input.
+            // A fresh node must append it first, preserving previous user turns.
+            // A replay transcript already contains this exact original task.
+            input.history.push(input.task.clone());
         }
         Self {
             invocation_id: format!(
@@ -2013,7 +2181,6 @@ fn validate_tool_selections(
     raw: BTreeMap<String, Vec<String>>,
 ) -> Result<Vec<LlmToolkitSelection>, LlmConfigurationError> {
     let mut selections = Vec::with_capacity(raw.len());
-    let mut global_names = BTreeSet::new();
     for (alias, tools) in raw {
         if !valid_output_key(&alias) || tools.len() > MAX_TOOLS_PER_TOOLKIT {
             return Err(LlmConfigurationError::ResourceExhausted);
@@ -2026,12 +2193,9 @@ fn validate_tool_selections(
         }
         let mut local_names = BTreeSet::new();
         for tool in &tools {
-            if !valid_output_key(tool)
-                || !local_names.insert(tool.as_str())
-                || !global_names.insert(tool.clone())
-            {
+            if !valid_output_key(tool) || !local_names.insert(tool.as_str()) {
                 return Err(LlmConfigurationError::Invalid(
-                    "LLM tool names must be valid and unique across selected toolkits",
+                    "LLM tool names must be valid and unique within each selected toolkit",
                 ));
             }
         }

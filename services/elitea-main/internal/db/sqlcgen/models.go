@@ -8,6 +8,14 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Application struct {
+	ID          int32            `db:"id" json:"id"`
+	Name        string           `db:"name" json:"name"`
+	Description *string          `db:"description" json:"description"`
+	OwnerID     int32            `db:"owner_id" json:"owner_id"`
+	UpdatedAt   pgtype.Timestamp `db:"updated_at" json:"updated_at"`
+}
+
 type ApplicationVariable struct {
 	ID                   int32            `db:"id" json:"id"`
 	ApplicationVersionID int32            `db:"application_version_id" json:"application_version_id"`
@@ -329,6 +337,18 @@ type Configuration struct {
 	UpdatedAt   pgtype.Timestamp `db:"updated_at" json:"updated_at"`
 }
 
+type EliteaAuthMcpOauthClient struct {
+	ID                   string             `db:"id" json:"id"`
+	ProjectID            int32              `db:"project_id" json:"project_id"`
+	ActorID              int32              `db:"actor_id" json:"actor_id"`
+	ClientID             string             `db:"client_id" json:"client_id"`
+	TokenEndpoint        string             `db:"token_endpoint" json:"token_endpoint"`
+	Resource             string             `db:"resource" json:"resource"`
+	EncryptedCredentials []byte             `db:"encrypted_credentials" json:"encrypted_credentials"`
+	SecretExpiresAt      pgtype.Timestamptz `db:"secret_expires_at" json:"secret_expires_at"`
+	IdleExpiresAt        pgtype.Timestamptz `db:"idle_expires_at" json:"idle_expires_at"`
+}
+
 type EliteaIdentityTokenProjectBinding struct {
 	TokenID   int32              `db:"token_id" json:"token_id"`
 	ProjectID int32              `db:"project_id" json:"project_id"`
@@ -632,6 +652,25 @@ type EliteaRuntimeScheduledOccurrence struct {
 	UpdatedAt        pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
+type EliteaRuntimeToolkitExecuteReadJob struct {
+	ExecutionID    string `db:"execution_id" json:"execution_id"`
+	Generation     int64  `db:"generation" json:"generation"`
+	CapabilityID   string `db:"capability_id" json:"capability_id"`
+	InputBundleID  string `db:"input_bundle_id" json:"input_bundle_id"`
+	RequestEntryID string `db:"request_entry_id" json:"request_entry_id"`
+}
+
+type EliteaRuntimeToolkitExecuteReadResult struct {
+	ExecutionID string             `db:"execution_id" json:"execution_id"`
+	Generation  int64              `db:"generation" json:"generation"`
+	EventID     string             `db:"event_id" json:"event_id"`
+	ResultJson  []byte             `db:"result_json" json:"result_json"`
+	ToolkitType string             `db:"toolkit_type" json:"toolkit_type"`
+	ToolkitName string             `db:"toolkit_name" json:"toolkit_name"`
+	ToolName    string             `db:"tool_name" json:"tool_name"`
+	ProjectedAt pgtype.Timestamptz `db:"projected_at" json:"projected_at"`
+}
+
 type EliteaStorageAttachmentChunk struct {
 	ProjectID      int64              `db:"project_id" json:"project_id"`
 	ConversationID string             `db:"conversation_id" json:"conversation_id"`
@@ -715,6 +754,11 @@ type EliteaTool struct {
 	Meta          []byte           `db:"meta" json:"meta"`
 }
 
+type EntityFolder struct {
+	ID         int32  `db:"id" json:"id"`
+	EntityType string `db:"entity_type" json:"entity_type"`
+}
+
 type EntitySkillMapping struct {
 	ID              int32            `db:"id" json:"id"`
 	EntityVersionID int32            `db:"entity_version_id" json:"entity_version_id"`
@@ -734,6 +778,13 @@ type EntityToolMapping struct {
 	CreatedAt       pgtype.Timestamp `db:"created_at" json:"created_at"`
 	UpdatedAt       pgtype.Timestamp `db:"updated_at" json:"updated_at"`
 	SelectedTools   []byte           `db:"selected_tools" json:"selected_tools"`
+}
+
+type FolderAccessOverride struct {
+	ID          int32  `db:"id" json:"id"`
+	FolderID    int32  `db:"folder_id" json:"folder_id"`
+	UserID      int32  `db:"user_id" json:"user_id"`
+	AccessLevel string `db:"access_level" json:"access_level"`
 }
 
 type Skill struct {
@@ -756,4 +807,11 @@ type SkillVersion struct {
 	CreatedAt    pgtype.Timestamp `db:"created_at" json:"created_at"`
 	Uuid         pgtype.UUID      `db:"uuid" json:"uuid"`
 	Meta         []byte           `db:"meta" json:"meta"`
+}
+
+type SocialFolderItem struct {
+	ID       int32  `db:"id" json:"id"`
+	FolderID int32  `db:"folder_id" json:"folder_id"`
+	Entity   string `db:"entity" json:"entity"`
+	EntityID int32  `db:"entity_id" json:"entity_id"`
 }

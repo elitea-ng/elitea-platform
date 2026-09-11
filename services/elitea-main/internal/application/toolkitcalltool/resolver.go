@@ -9,6 +9,8 @@ import (
 
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/guardrails"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpoauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/toolkitnaming"
 )
 
@@ -36,19 +38,42 @@ type CurrentToolkitSettingsValidator = indexingapp.CurrentToolkitSettingsValidat
 // CurrentAuthoritativeInputResolver reloads the toolkit the caller named and
 // freezes its settings. The caller supplies a toolkit ID and tool arguments and
 // nothing else; settings and credentials come from the saved row.
+type CurrentGuardrailResolver interface {
+	ResolveCurrentAgentGuardrails(context.Context) (guardrails.Policy, error)
+}
+
+type MCPAuthorizationValidator interface {
+	Validate(context.Context, string, mcpoauth.TokenBinding) (mcpoauth.TokenReference, error)
+}
+type ResolverOption func(*CurrentAuthoritativeInputResolver)
+
+func WithMCPAuthorization(validator MCPAuthorizationValidator) ResolverOption {
+	return func(resolver *CurrentAuthoritativeInputResolver) { resolver.tokens = validator }
+}
+
 type CurrentAuthoritativeInputResolver struct {
-	toolkits CurrentToolkitReader
-	settings CurrentToolkitSettingsValidator
+	tokens     MCPAuthorizationValidator
+	guardrails CurrentGuardrailResolver
+	toolkits   CurrentToolkitReader
+	settings   CurrentToolkitSettingsValidator
 }
 
 func NewCurrentAuthoritativeInputResolver(
 	toolkits CurrentToolkitReader,
 	settings CurrentToolkitSettingsValidator,
+	guardrails CurrentGuardrailResolver,
+	options ...ResolverOption,
 ) (*CurrentAuthoritativeInputResolver, error) {
-	if toolkits == nil || settings == nil {
+	if toolkits == nil || settings == nil || guardrails == nil {
 		return nil, errors.New("tool-run input resolver dependencies are required")
 	}
-	return &CurrentAuthoritativeInputResolver{toolkits: toolkits, settings: settings}, nil
+	resolver := &CurrentAuthoritativeInputResolver{toolkits: toolkits, settings: settings, guardrails: guardrails}
+	for _, option := range options {
+		if option != nil {
+			option(resolver)
+		}
+	}
+	return resolver, nil
 }
 
 func (r *CurrentAuthoritativeInputResolver) Resolve(
@@ -111,12 +136,40 @@ func (r *CurrentAuthoritativeInputResolver) Resolve(
 	if err != nil || !validBoundedJSONObject(settings) {
 		return AuthoritativeInputs{}, ErrInvalidAuthoritativeToolRunInput
 	}
+	policy, err := r.guardrails.ResolveCurrentAgentGuardrails(ctx)
+	if err != nil {
+		return AuthoritativeInputs{}, settingsResolutionError(ctx, err)
+	}
+	runtimePolicy := policy.Runtime()
+	frozenContext := RuntimeContext{ToolkitSecurity: &runtimePolicy, LLMModel: request.LLMModel, LLMConfiguration: append(json.RawMessage(nil), request.LLMSettings...)}
+	if request.MCPAuthorizationReference != "" {
+		if r.tokens == nil {
+			return AuthoritativeInputs{}, ErrToolkitSettingsResolutionUnavailable
+		}
+		resource, err := mcpoauth.ToolkitResource(toolkit.Type, expanded)
+		if err != nil {
+			return AuthoritativeInputs{}, ErrInvalidAuthoritativeToolRunInput
+		}
+		reference, err := r.tokens.Validate(ctx, request.MCPAuthorizationReference, mcpoauth.TokenBinding{ProjectID: projectID, ActorID: actorUserID, ToolkitID: int64(toolkitID), Resource: resource})
+		if err != nil {
+			return AuthoritativeInputs{}, settingsResolutionError(ctx, err)
+		}
+		if reference.Reference != request.MCPAuthorizationReference {
+			return AuthoritativeInputs{}, ErrInvalidAuthoritativeToolRunInput
+		}
+		frozenContext.MCPTokenReference = &MCPTokenReference{Reference: reference.Reference, Revision: reference.Revision, ToolkitID: int64(toolkitID), Resource: resource}
+	}
+	runtimeContext, err := json.Marshal(frozenContext)
+	if err != nil || !validRuntimeContext(runtimeContext) {
+		return AuthoritativeInputs{}, ErrInvalidAuthoritativeToolRunInput
+	}
 	return AuthoritativeInputs{
-		ToolkitType: toolkit.Type,
-		ToolkitID:   int64(toolkit.ID),
-		ToolName:    request.ToolName,
-		Settings:    settings,
-		Arguments:   append(json.RawMessage(nil), request.Arguments...),
+		RuntimeContext: runtimeContext,
+		ToolkitType:    toolkit.Type,
+		ToolkitID:      int64(toolkit.ID),
+		ToolName:       request.ToolName,
+		Settings:       settings,
+		Arguments:      append(json.RawMessage(nil), request.Arguments...),
 	}, nil
 }
 

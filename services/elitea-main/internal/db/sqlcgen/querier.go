@@ -20,6 +20,12 @@ type Querier interface {
 	AuthorizeRuntimeValidationProject(ctx context.Context, arg AuthorizeRuntimeValidationProjectParams) (bool, error)
 	BulkDeleteCurrentNotifications(ctx context.Context, arg BulkDeleteCurrentNotificationsParams) (int64, error)
 	BulkSetCurrentNotificationsSeen(ctx context.Context, arg BulkSetCurrentNotificationsSeenParams) (int64, error)
+	// Exact current-platform containment for tracing credentials. Project role
+	// identifiers are compared exactly: billing-admin does
+	// not carry administrator authority. The personal-project signal is
+	// independent of role assignment so a missing role row cannot revoke an
+	// owner's access to project_user_<userID>.
+	CanManageCurrentTracingConfiguration(ctx context.Context, arg CanManageCurrentTracingConfigurationParams) (bool, error)
 	CancelCurrentAgentExecution(ctx context.Context, arg CancelCurrentAgentExecutionParams) (CancelCurrentAgentExecutionRow, error)
 	// Claim only the oldest unfinished revision for each configuration. A lower
 	// pending, retrying, processing, or dead revision remains an explicit ordering
@@ -58,6 +64,9 @@ type Querier interface {
 	ClaimScheduledOccurrence(ctx context.Context, arg ClaimScheduledOccurrenceParams) (int64, error)
 	CompareAndSwapCurrentConfigurationRenameToolkit(ctx context.Context, arg CompareAndSwapCurrentConfigurationRenameToolkitParams) (int64, error)
 	CompleteScheduledOccurrence(ctx context.Context, arg CompleteScheduledOccurrenceParams) (int64, error)
+	// The tenant executor installs a transaction-local search_path. These queries
+	// never accept a schema from the caller.
+	CopyApplicationVersionSkills(ctx context.Context, arg CopyApplicationVersionSkillsParams) (int64, error)
 	CountActiveRuntimeExecutionsUpTo(ctx context.Context, arg CountActiveRuntimeExecutionsUpToParams) (int64, error)
 	CountArtifactBucketObjects(ctx context.Context, bucketID int64) (int64, error)
 	CountAttachmentChunks(ctx context.Context, arg CountAttachmentChunksParams) (int64, error)
@@ -107,7 +116,15 @@ type Querier interface {
 	// to the same answer, whereas restating those sub-clauses would put a third
 	// copy of the gate in the tree for them to drift apart.
 	CurrentConversationResponseSettling(ctx context.Context, conversationUuid pgtype.UUID) (bool, error)
+	// The social access feature is optional. Return 0 when its override table is
+	// absent, including the older organization-only folder schema. Return 1 when
+	// the complete access projection exists. Return -1 when overrides exist
+	// without their dependencies, which the repository refuses.
+	CurrentFolderAccessState(ctx context.Context) (int32, error)
 	CurrentNotificationHighWater(ctx context.Context, userID int32) (int64, error)
+	// entity_skill_mapping is polymorphic and has no version FK. Remove only the
+	// bindings of the version actually deleted, including on create compensation.
+	DeleteApplicationVersionWithSkills(ctx context.Context, arg DeleteApplicationVersionWithSkillsParams) (int64, error)
 	DeleteArtifactObjectRows(ctx context.Context, ids []int64) (int64, error)
 	DeleteArtifactObjects(ctx context.Context, arg DeleteArtifactObjectsParams) (int64, error)
 	DeleteAttachmentChunks(ctx context.Context, arg DeleteAttachmentChunksParams) (int64, error)
@@ -218,6 +235,10 @@ type Querier interface {
 	GetCurrentAgentTraceBinding(ctx context.Context, arg GetCurrentAgentTraceBindingParams) (GetCurrentAgentTraceBindingRow, error)
 	GetCurrentConfiguration(ctx context.Context, arg GetCurrentConfigurationParams) (GetCurrentConfigurationRow, error)
 	GetCurrentConfigurationRenameToolkit(ctx context.Context, arg GetCurrentConfigurationRenameToolkitParams) (GetCurrentConfigurationRenameToolkitRow, error)
+	// Current-platform folder access is a restrictive overlay on project RBAC.
+	// A toolkit outside a folder, or inside a folder without an override, remains
+	// visible. A no_access override hides both toolkit and MCP folder item kinds.
+	GetCurrentMCPToolkitVisibleToActor(ctx context.Context, arg GetCurrentMCPToolkitVisibleToActorParams) (EliteaTool, error)
 	// Raw data is intentional: the Go adapter performs type-safe, redacted
 	// decoding before applying section-specific response shaping. ID order gives
 	// duplicate candidates a deterministic baseline order.
@@ -230,11 +251,13 @@ type Querier interface {
 	GetDurableIndexResultArtifact(ctx context.Context, arg GetDurableIndexResultArtifactParams) (GetDurableIndexResultArtifactRow, error)
 	GetExpectedAgentExecutionHeader(ctx context.Context, arg GetExpectedAgentExecutionHeaderParams) (GetExpectedAgentExecutionHeaderRow, error)
 	GetExpectedIndexIngestHeader(ctx context.Context, arg GetExpectedIndexIngestHeaderParams) (GetExpectedIndexIngestHeaderRow, error)
+	GetExpectedToolkitAvailableToolsHeader(ctx context.Context, arg GetExpectedToolkitAvailableToolsHeaderParams) (GetExpectedToolkitAvailableToolsHeaderRow, error)
 	// GetExpectedToolkitCallToolHeader is the output plane's admitted-binding read.
 	// Unlike its agent counterpart it needs no capability-owned table: everything
 	// it returns is on execution_jobs, input_bundles and input_bundle_entries.
 	//
 	GetExpectedToolkitCallToolHeader(ctx context.Context, arg GetExpectedToolkitCallToolHeaderParams) (GetExpectedToolkitCallToolHeaderRow, error)
+	GetExpectedToolkitExecuteReadHeader(ctx context.Context, arg GetExpectedToolkitExecuteReadHeaderParams) (GetExpectedToolkitExecuteReadHeaderRow, error)
 	// S20c: keyed only by the table's actual primary key, no execution_jobs
 	// join — used both by CommitArtifact's duplicate-PK reconciliation (decide
 	// exact-retry vs genuine conflict) and by ResolveArtifact (find the
@@ -249,9 +272,14 @@ type Querier interface {
 	GetLatestConfigurationLifecycleRevision(ctx context.Context, arg GetLatestConfigurationLifecycleRevisionParams) (int64, error)
 	GetOwnedPAT(ctx context.Context, arg GetOwnedPATParams) (GetOwnedPATRow, error)
 	GetPendingAgentExecutionDispatch(ctx context.Context, arg GetPendingAgentExecutionDispatchParams) (GetPendingAgentExecutionDispatchRow, error)
+	GetPendingToolkitExecuteReadDispatch(ctx context.Context, arg GetPendingToolkitExecuteReadDispatchParams) (GetPendingToolkitExecuteReadDispatchRow, error)
 	GetPreparedAgentExecutionEnvelope(ctx context.Context, arg GetPreparedAgentExecutionEnvelopeParams) (GetPreparedAgentExecutionEnvelopeRow, error)
+	GetPreparedToolkitExecuteReadEnvelope(ctx context.Context, arg GetPreparedToolkitExecuteReadEnvelopeParams) (GetPreparedToolkitExecuteReadEnvelopeRow, error)
 	GetRuntimeAdmissionByIdempotency(ctx context.Context, arg GetRuntimeAdmissionByIdempotencyParams) (GetRuntimeAdmissionByIdempotencyRow, error)
 	GetScheduledJobCursorForUpdate(ctx context.Context, jobID string) (GetScheduledJobCursorForUpdateRow, error)
+	GetToolkitAvailableToolsAdmissionByIdempotency(ctx context.Context, arg GetToolkitAvailableToolsAdmissionByIdempotencyParams) (GetToolkitAvailableToolsAdmissionByIdempotencyRow, error)
+	GetToolkitAvailableToolsArtifactForOutput(ctx context.Context, arg GetToolkitAvailableToolsArtifactForOutputParams) (GetToolkitAvailableToolsArtifactForOutputRow, error)
+	GetToolkitAvailableToolsInputEntries(ctx context.Context, arg GetToolkitAvailableToolsInputEntriesParams) ([]GetToolkitAvailableToolsInputEntriesRow, error)
 	// toolkit.call_tool.v1 — the producer's durable half.
 	//
 	// WHY THERE IS NO PER-CAPABILITY BINDING TABLE HERE. index.ingest.v1 and
@@ -280,6 +308,8 @@ type Querier interface {
 	// capability needs no binding table of its own.
 	//
 	GetToolkitCallToolInputEntries(ctx context.Context, arg GetToolkitCallToolInputEntriesParams) ([]GetToolkitCallToolInputEntriesRow, error)
+	GetToolkitExecuteReadAdmissionByIdempotency(ctx context.Context, arg GetToolkitExecuteReadAdmissionByIdempotencyParams) (GetToolkitExecuteReadAdmissionByIdempotencyRow, error)
+	GetToolkitExecuteReadCompletion(ctx context.Context, arg GetToolkitExecuteReadCompletionParams) (GetToolkitExecuteReadCompletionRow, error)
 	HasAuthAdministrationAdminRole(ctx context.Context, userID int32) (bool, error)
 	InsertAgentExecutionBinding(ctx context.Context, arg InsertAgentExecutionBindingParams) error
 	InsertAgentExecutionJob(ctx context.Context, arg InsertAgentExecutionJobParams) (string, error)
@@ -335,12 +365,17 @@ type Querier interface {
 	// metadata_created_at) rejects. Reusing one Go-computed timestamp for both
 	// columns guarantees equality, which satisfies >=.
 	InsertIndexResultArtifact(ctx context.Context, arg InsertIndexResultArtifactParams) (InsertIndexResultArtifactRow, error)
+	InsertMCPOAuthClient(ctx context.Context, arg InsertMCPOAuthClientParams) error
 	InsertRuntimeCommandOutbox(ctx context.Context, arg InsertRuntimeCommandOutboxParams) error
 	InsertRuntimeInputBundle(ctx context.Context, arg InsertRuntimeInputBundleParams) error
 	InsertRuntimeInputBundleEntry(ctx context.Context, arg InsertRuntimeInputBundleEntryParams) error
 	InsertScheduledJobCursor(ctx context.Context, arg InsertScheduledJobCursorParams) error
 	InsertScheduledOccurrence(ctx context.Context, arg InsertScheduledOccurrenceParams) error
+	InsertToolkitAvailableToolsJob(ctx context.Context, arg InsertToolkitAvailableToolsJobParams) (string, error)
 	InsertToolkitCallToolJob(ctx context.Context, arg InsertToolkitCallToolJobParams) (string, error)
+	InsertToolkitExecuteReadBinding(ctx context.Context, arg InsertToolkitExecuteReadBindingParams) error
+	InsertToolkitExecuteReadJob(ctx context.Context, arg InsertToolkitExecuteReadJobParams) (string, error)
+	InsertToolkitExecuteReadResult(ctx context.Context, arg InsertToolkitExecuteReadResultParams) error
 	InstallCurrentTenantSearchPath(ctx context.Context, searchPath string) (string, error)
 	IsCurrentAgentCancellationReplay(ctx context.Context, arg IsCurrentAgentCancellationReplayParams) (bool, error)
 	IsCurrentUserProjectMember(ctx context.Context, arg IsCurrentUserProjectMemberParams) (bool, error)
@@ -396,11 +431,14 @@ type Querier interface {
 	// LEFT JOIN because an unbound token is the default and must still be listed.
 	ListOwnedPATs(ctx context.Context, userID int32) ([]ListOwnedPATsRow, error)
 	ListPendingAgentExecutionIDs(ctx context.Context, arg ListPendingAgentExecutionIDsParams) ([]string, error)
+	ListPendingToolkitExecuteReadIDs(ctx context.Context, arg ListPendingToolkitExecuteReadIDsParams) ([]string, error)
 	LoadIndexMetaInitializationWork(ctx context.Context, arg LoadIndexMetaInitializationWorkParams) (LoadIndexMetaInitializationWorkRow, error)
+	LoadMCPOAuthClient(ctx context.Context, arg LoadMCPOAuthClientParams) ([]byte, error)
 	LoadRuntimeAdmissionTiming(ctx context.Context, deadlineTtlMillis int64) (LoadRuntimeAdmissionTimingRow, error)
 	LockAgentExecutionEnvelope(ctx context.Context, arg LockAgentExecutionEnvelopeParams) (LockAgentExecutionEnvelopeRow, error)
 	LockAgentExecutionPublication(ctx context.Context, arg LockAgentExecutionPublicationParams) (LockAgentExecutionPublicationRow, error)
 	LockCancelledNoAuthorityAgentExecutions(ctx context.Context, arg LockCancelledNoAuthorityAgentExecutionsParams) ([]LockCancelledNoAuthorityAgentExecutionsRow, error)
+	LockCancelledNoAuthorityToolkitExecuteReads(ctx context.Context, arg LockCancelledNoAuthorityToolkitExecuteReadsParams) ([]LockCancelledNoAuthorityToolkitExecuteReadsRow, error)
 	LockCurrentAgentConversation(ctx context.Context, conversationUuid pgtype.UUID) (int32, error)
 	LockCurrentAgentResponseForTerminal(ctx context.Context, arg LockCurrentAgentResponseForTerminalParams) (int32, error)
 	// The unqualified configuration relation is intentional. These queries run
@@ -410,16 +448,22 @@ type Querier interface {
 	LockCurrentIndexScheduleToolkit(ctx context.Context, toolkitID int32) (LockCurrentIndexScheduleToolkitRow, error)
 	LockCurrentIndexScheduleToolkitMeta(ctx context.Context, toolkitID int32) ([]byte, error)
 	LockExpiredNoAuthorityAgentExecutions(ctx context.Context, arg LockExpiredNoAuthorityAgentExecutionsParams) ([]LockExpiredNoAuthorityAgentExecutionsRow, error)
+	LockExpiredNoAuthorityToolkitAvailableToolsExecutions(ctx context.Context, arg LockExpiredNoAuthorityToolkitAvailableToolsExecutionsParams) ([]LockExpiredNoAuthorityToolkitAvailableToolsExecutionsRow, error)
 	// LockExpiredNoAuthorityToolkitCallToolExecutions reclaims the capacity a run
 	// that never reached Redis would otherwise hold forever. It selects only work
 	// past its deadline that no worker ever claimed, which is exactly the crash
 	// window this capability accepts in exchange for having no binding table.
 	//
 	LockExpiredNoAuthorityToolkitCallToolExecutions(ctx context.Context, arg LockExpiredNoAuthorityToolkitCallToolExecutionsParams) ([]LockExpiredNoAuthorityToolkitCallToolExecutionsRow, error)
+	LockExpiredNoAuthorityToolkitExecuteReads(ctx context.Context, arg LockExpiredNoAuthorityToolkitExecuteReadsParams) ([]LockExpiredNoAuthorityToolkitExecuteReadsRow, error)
 	LockPATByUUID(ctx context.Context, uuid string) (LockPATByUUIDRow, error)
 	LockRuntimeAdmissionPolicy(ctx context.Context, capabilityID string) (int64, error)
+	LockToolkitAvailableToolsEnvelope(ctx context.Context, arg LockToolkitAvailableToolsEnvelopeParams) (LockToolkitAvailableToolsEnvelopeRow, error)
+	LockToolkitAvailableToolsPublication(ctx context.Context, arg LockToolkitAvailableToolsPublicationParams) (LockToolkitAvailableToolsPublicationRow, error)
 	LockToolkitCallToolEnvelope(ctx context.Context, arg LockToolkitCallToolEnvelopeParams) (LockToolkitCallToolEnvelopeRow, error)
 	LockToolkitCallToolPublication(ctx context.Context, arg LockToolkitCallToolPublicationParams) (LockToolkitCallToolPublicationRow, error)
+	LockToolkitExecuteReadEnvelope(ctx context.Context, arg LockToolkitExecuteReadEnvelopeParams) (LockToolkitExecuteReadEnvelopeRow, error)
+	LockToolkitExecuteReadPublication(ctx context.Context, arg LockToolkitExecuteReadPublicationParams) (LockToolkitExecuteReadPublicationRow, error)
 	MarkAgentExecutionDispatched(ctx context.Context, arg MarkAgentExecutionDispatchedParams) (int64, error)
 	MarkAgentExecutionPublished(ctx context.Context, arg MarkAgentExecutionPublishedParams) (int64, error)
 	MarkArtifactBucketNotified(ctx context.Context, id int64) (int64, error)
@@ -436,12 +480,18 @@ type Querier interface {
 	MarkConfigurationLifecycleRetry(ctx context.Context, arg MarkConfigurationLifecycleRetryParams) (int64, error)
 	MarkCurrentNotificationSeen(ctx context.Context, arg MarkCurrentNotificationSeenParams) (MarkCurrentNotificationSeenRow, error)
 	MarkIndexMetaInitialized(ctx context.Context, arg MarkIndexMetaInitializedParams) (pgtype.Timestamptz, error)
+	MarkToolkitAvailableToolsDispatched(ctx context.Context, arg MarkToolkitAvailableToolsDispatchedParams) (int64, error)
+	MarkToolkitAvailableToolsPublished(ctx context.Context, arg MarkToolkitAvailableToolsPublishedParams) (int64, error)
 	MarkToolkitCallToolDispatched(ctx context.Context, arg MarkToolkitCallToolDispatchedParams) (int64, error)
 	MarkToolkitCallToolPublished(ctx context.Context, arg MarkToolkitCallToolPublishedParams) (int64, error)
+	MarkToolkitExecuteReadDispatched(ctx context.Context, arg MarkToolkitExecuteReadDispatchedParams) (int64, error)
+	MarkToolkitExecuteReadPublished(ctx context.Context, arg MarkToolkitExecuteReadPublishedParams) (int64, error)
 	ProjectCurrentAgentStop(ctx context.Context, arg ProjectCurrentAgentStopParams) (ProjectCurrentAgentStopRow, error)
+	PruneMCPOAuthClients(ctx context.Context) error
 	QuarantineExpiredTerminalIndexMetaInitializations(ctx context.Context, quarantineLimit int32) (int64, error)
 	QuarantineIndexMetaInitialization(ctx context.Context, arg QuarantineIndexMetaInitializationParams) (string, error)
 	RefreshAgentExecutionPublication(ctx context.Context, arg RefreshAgentExecutionPublicationParams) (int64, error)
+	RefreshToolkitExecuteReadPublication(ctx context.Context, arg RefreshToolkitExecuteReadPublicationParams) (int64, error)
 	ReleaseIndexMetaInitialization(ctx context.Context, arg ReleaseIndexMetaInitializationParams) (int64, error)
 	ReleaseScheduledOccurrenceForRetry(ctx context.Context, arg ReleaseScheduledOccurrenceForRetryParams) (int64, error)
 	ReplaceCurrentConfiguration(ctx context.Context, arg ReplaceCurrentConfigurationParams) (ReplaceCurrentConfigurationRow, error)
@@ -614,7 +664,9 @@ type Querier interface {
 	SetCurrentConfigurationLifecycleStatus(ctx context.Context, arg SetCurrentConfigurationLifecycleStatusParams) (int64, error)
 	SoftDeleteArtifactBucket(ctx context.Context, id int64) (int64, error)
 	StorePreparedAgentExecutionEnvelope(ctx context.Context, arg StorePreparedAgentExecutionEnvelopeParams) (int64, error)
+	StorePreparedToolkitAvailableToolsEnvelope(ctx context.Context, arg StorePreparedToolkitAvailableToolsEnvelopeParams) (int64, error)
 	StorePreparedToolkitCallToolEnvelope(ctx context.Context, arg StorePreparedToolkitCallToolEnvelopeParams) (int64, error)
+	StorePreparedToolkitExecuteReadEnvelope(ctx context.Context, arg StorePreparedToolkitExecuteReadEnvelopeParams) (int64, error)
 	SumArtifactBucketBytes(ctx context.Context, bucketID int64) (int64, error)
 	SumArtifactProjectBytes(ctx context.Context, projectID int64) (int64, error)
 	SupersedeScheduledJobRevision(ctx context.Context, arg SupersedeScheduledJobRevisionParams) error

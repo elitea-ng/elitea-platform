@@ -7,7 +7,9 @@ use tonic::transport::Channel;
 use zeroize::Zeroizing;
 
 use super::ProtocolError;
-use super::command::VerifiedAgentCommand;
+use super::command::{
+    VerifiedAgentCommand, VerifiedExecutionCommand, VerifiedToolkitExecuteReadCommand,
+};
 use super::elitea::runtime::v1::{
     AgentExecutionResultV1, AuthorizeInvocationDispositionV1, AuthorizeInvocationRequestV1,
     AuthorizeInvocationResponseV1, BeginExecutionDispositionV1, BeginExecutionRequestV1,
@@ -21,8 +23,9 @@ use super::elitea::runtime::v1::{
     worker_command_v1,
 };
 use super::output::{
-    AgentTerminalOutput, RuntimeFailureKind, build_agent_terminal_output_frame,
-    build_node_event_output_frame,
+    AgentTerminalOutput, RuntimeFailureKind, ToolkitExecuteReadTerminalOutput,
+    build_agent_terminal_output_frame, build_node_event_output_frame,
+    build_toolkit_execute_read_terminal_output_frame,
 };
 use crate::agents::result::BoundAgentExecutionResult;
 use crate::transport::output_grpc::{
@@ -36,8 +39,13 @@ use crate::transport::{
 const MAX_CONTROL_IDENTITY_BYTES: usize = 256;
 const MAX_MANIFEST_TEXT_BYTES: usize = 128;
 const MAX_AGENT_INPUT_BYTES: u64 = 1024 * 1024;
+const MAX_TOOLKIT_EXECUTE_READ_INPUT_BYTES: u64 = 1024 * 1024;
+const MAX_TOOLKIT_JSON_INPUT_BYTES: u64 = 256 * 1024;
 const AGENT_EXECUTION_REQUEST_ROLE: &str = "agent.execution_request";
 const AGENT_INPUT_MEDIA_TYPE: &str = "application/vnd.elitea.agent-execution-input.v1+protobuf";
+const TOOLKIT_EXECUTE_READ_REQUEST_ROLE: &str = "toolkit.execute_read_request";
+const TOOLKIT_EXECUTE_READ_INPUT_MEDIA_TYPE: &str =
+    "application/vnd.elitea.toolkit-execute-read-input.v1+protobuf";
 const INPUT_GRANT_AUDIENCE: &str = "elitea.runtime.input.read.v1";
 const DEADLINE_RETIREMENT_SAFE_MESSAGE: &str =
     "The execution deadline was exceeded before worker authority was granted.";
@@ -212,6 +220,7 @@ pub struct AcceptedAgentClaim {
     input_bundle_ref: ExecutionInputBundleReferenceV1,
     input_bundle: ExecutionInputBundleV1,
     request_entry: ExecutionInputEntryV1,
+    arguments_entry: Option<ExecutionInputEntryV1>,
 }
 
 impl AcceptedAgentClaim {
@@ -265,7 +274,7 @@ impl AcceptedAgentClaim {
     }
 
     #[must_use]
-    fn matches_verified_command(&self, verified: &VerifiedAgentCommand) -> bool {
+    fn matches_verified_command(&self, verified: &impl VerifiedExecutionCommand) -> bool {
         let binding = verified_command_binding(verified);
         self.identity == identity_from_command(verified)
             && bool::from(self.command_binding.ct_eq(&binding))
@@ -295,6 +304,94 @@ impl AcceptedAgentClaim {
             && result.request_content_digest.as_ref() == content.digest.as_ref()
     }
 
+    #[must_use]
+    pub(crate) fn matches_toolkit_execute_read_result_binding(
+        &self,
+        result: &super::elitea::runtime::v1::ToolkitExecuteReadResultV1,
+    ) -> bool {
+        let Some(content) = self.request_entry.content.as_ref() else {
+            return false;
+        };
+        result.request_entry_version == self.request_entry.immutable_version
+            && result.request_content_digest.as_ref() == content.digest.as_ref()
+    }
+
+    #[must_use]
+    pub(crate) fn matches_toolkit_call_tool_result_binding(
+        &self,
+        result: &super::elitea::runtime::v1::ToolkitCallToolResultV1,
+    ) -> bool {
+        let Some(settings) = self.request_entry.content.as_ref() else {
+            return false;
+        };
+        let Some(arguments) = self.arguments_entry.as_ref() else {
+            return false;
+        };
+        let Some(content) = arguments.content.as_ref() else {
+            return false;
+        };
+        result.settings_entry_id == self.request_entry.entry_id
+            && result.settings_entry_version == self.request_entry.immutable_version
+            && result.settings_content_digest.as_ref() == settings.digest.as_ref()
+            && result.arguments_entry_id == arguments.entry_id
+            && result.arguments_content_digest.as_ref() == content.digest.as_ref()
+    }
+
+    #[must_use]
+    pub(crate) fn matches_toolkit_available_tools_result_binding(
+        &self,
+        result: &super::elitea::runtime::v1::ToolkitAvailableToolsResultV1,
+    ) -> bool {
+        let Some(content) = self.request_entry.content.as_ref() else {
+            return false;
+        };
+        result.settings_entry_id == self.request_entry.entry_id
+            && result.settings_entry_version == self.request_entry.immutable_version
+            && result.settings_content_digest.as_ref() == content.digest.as_ref()
+    }
+
+    /// Bind a validated terminal to the replacement claim without invocation.
+    /// Only a claim created after the signed deadline can replace its outcome.
+    pub(crate) fn toolkit_terminal_replacement(
+        &self,
+        verified: &VerifiedToolkitExecuteReadCommand,
+        previous: &ExecutionOutputFrameV1,
+        occurred_at_unix_millis: i64,
+    ) -> Result<ExecutionOutputFrameV1, ProtocolError> {
+        let deadline = verified.command().deadline_unix_millis;
+        let Some(deadline_micros) = deadline.checked_mul(1_000) else {
+            return Err(ProtocolError::AuthorizationFailed(
+                "the direct toolkit terminal recovery is not authorized",
+            ));
+        };
+        if !self.matches_verified_command(verified)
+            || previous.sequence != next_output_sequence(self.claim_handoff_watermark)?
+        {
+            return Err(ProtocolError::AuthorizationFailed(
+                "the direct toolkit terminal recovery is not authorized",
+            ));
+        }
+        if self.claim_started_at_unix_micros < deadline_micros {
+            let mut replacement = previous.clone();
+            replacement.fence = Some(self.fence.clone());
+            replacement.claim_handoff_watermark = self.claim_handoff_watermark;
+            return Ok(replacement);
+        }
+        if occurred_at_unix_millis < deadline {
+            return Err(ProtocolError::AuthorizationFailed(
+                "the direct toolkit deadline recovery clock is inconsistent",
+            ));
+        }
+        build_toolkit_execute_read_terminal_output_frame(
+            verified,
+            &self.fence,
+            ToolkitExecuteReadTerminalOutput::Failure(RuntimeFailureKind::DeadlineExceeded),
+            previous.sequence,
+            occurred_at_unix_millis,
+            self.claim_handoff_watermark,
+        )
+    }
+
     /// Consume fresh business authority after a terminal spool has been
     /// admitted, retaining only the exact lease/output binding needed for
     /// replay. The input manifest is deliberately destroyed here.
@@ -310,6 +407,7 @@ impl AcceptedAgentClaim {
             input_bundle_ref: _,
             input_bundle: _,
             request_entry: _,
+            arguments_entry: _,
         } = self;
         AcceptedTerminalClaimRecovery {
             binding: RecoveryClaimBinding {
@@ -532,6 +630,27 @@ impl LeasedAgentOutputRecovery {
             verified,
             &self.binding.fence,
             AgentTerminalOutput::Failure(failure),
+            next_output_sequence(self.binding.claim_handoff_watermark)?,
+            occurred_at_unix_millis,
+            self.binding.claim_handoff_watermark,
+        )
+    }
+
+    pub(crate) fn bind_toolkit_execute_read_failure_terminal(
+        self,
+        verified: &VerifiedToolkitExecuteReadCommand,
+        failure: RuntimeFailureKind,
+        occurred_at_unix_millis: i64,
+    ) -> Result<ExecutionOutputFrameV1, ProtocolError> {
+        if self.binding.identity != identity_from_command(verified) {
+            return Err(ProtocolError::AuthorizationFailed(
+                "the output recovery authority does not match its command",
+            ));
+        }
+        build_toolkit_execute_read_terminal_output_frame(
+            verified,
+            &self.binding.fence,
+            ToolkitExecuteReadTerminalOutput::Failure(failure),
             next_output_sequence(self.binding.claim_handoff_watermark)?,
             occurred_at_unix_millis,
             self.binding.claim_handoff_watermark,
@@ -828,8 +947,34 @@ impl LeaseMonitoredAgentExecution {
     }
 
     #[must_use]
+    pub const fn arguments_entry(&self) -> Option<&ExecutionInputEntryV1> {
+        self.claim.arguments_entry.as_ref()
+    }
+
+    #[must_use]
+    pub fn input_entry(&self, entry_id: &str) -> Option<&ExecutionInputEntryV1> {
+        if self.claim.request_entry.entry_id == entry_id {
+            Some(&self.claim.request_entry)
+        } else {
+            self.claim
+                .input_bundle
+                .entries
+                .iter()
+                .find(|entry| entry.entry_id == entry_id)
+        }
+    }
+
+    #[must_use]
     pub(crate) fn input_content_authority(&self) -> Option<ClaimBoundInputAuthority<'_>> {
-        let content = self.claim.request_entry.content.as_ref()?;
+        self.input_content_authority_for_entry(&self.claim.request_entry.entry_id)
+    }
+
+    #[must_use]
+    pub(crate) fn input_content_authority_for_entry(
+        &self,
+        entry_id: &str,
+    ) -> Option<ClaimBoundInputAuthority<'_>> {
+        let content = self.input_entry(entry_id)?.content.as_ref()?;
         let source_digest = content.digest.as_ref()?;
         Some(ClaimBoundInputAuthority {
             execution_id: &self.claim.identity.execution_id,
@@ -916,6 +1061,44 @@ impl AgentExecutionOutputAuthority {
         self.into_output_cursor(verified)?
             .bind_failure_terminal(verified, failure, occurred_at_unix_millis)
             .map(ClaimBoundAgentTerminal::into_frame)
+    }
+
+    pub(crate) fn bind_toolkit_execute_read_terminal(
+        self,
+        verified: &VerifiedToolkitExecuteReadCommand,
+        terminal: ToolkitExecuteReadTerminalOutput,
+        occurred_at_unix_millis: i64,
+    ) -> Result<ExecutionOutputFrameV1, ProtocolError> {
+        if !self.claim.matches_verified_command(verified) {
+            return Err(ProtocolError::AuthorizationFailed(
+                "the output authority does not match its command",
+            ));
+        }
+        let inputs_match = match &terminal {
+            ToolkitExecuteReadTerminalOutput::Result(result) => self
+                .claim
+                .matches_toolkit_execute_read_result_binding(result),
+            ToolkitExecuteReadTerminalOutput::CallTool(result) => {
+                self.claim.matches_toolkit_call_tool_result_binding(result)
+            }
+            ToolkitExecuteReadTerminalOutput::AvailableTools(result) => self
+                .claim
+                .matches_toolkit_available_tools_result_binding(result),
+            ToolkitExecuteReadTerminalOutput::Failure(_) => true,
+        };
+        if !inputs_match {
+            return Err(ProtocolError::AuthorizationFailed(
+                "the toolkit result does not match its admitted inputs",
+            ));
+        }
+        build_toolkit_execute_read_terminal_output_frame(
+            verified,
+            &self.claim.fence,
+            terminal,
+            next_output_sequence(self.claim.claim_handoff_watermark)?,
+            occurred_at_unix_millis,
+            self.claim.claim_handoff_watermark,
+        )
     }
 }
 
@@ -1188,7 +1371,7 @@ impl AgentExecutionOutputCursor {
     }
 }
 
-fn verified_command_binding(verified: &VerifiedAgentCommand) -> [u8; 32] {
+fn verified_command_binding(verified: &impl VerifiedExecutionCommand) -> [u8; 32] {
     let value = digest::digest(&digest::SHA256, verified.exact_signed_envelope());
     let mut binding = [0_u8; 32];
     binding.copy_from_slice(value.as_ref());
@@ -1255,6 +1438,7 @@ pub(crate) fn test_lease_monitored_input_execution(
             claim_handoff_watermark: 0,
             input_bundle_ref: ExecutionInputBundleReferenceV1::default(),
             input_bundle: ExecutionInputBundleV1::default(),
+            arguments_entry: None,
             request_entry: ExecutionInputEntryV1 {
                 entry_id: "agent-request".to_owned(),
                 immutable_version: "v/1".to_owned(),
@@ -1730,6 +1914,30 @@ impl<R: ControlRpc> AgentControlClient<R> {
         .map_err(Into::into)
     }
 
+    /// Claim one direct read-only toolkit delivery through the same durable
+    /// claim and recovery state machine used by native agent commands.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed transport, runtime rejection, identity, fence, or
+    /// disposition-shape failure.
+    pub async fn claim_toolkit_execute_read_delivery(
+        &self,
+        verified: &VerifiedToolkitExecuteReadCommand,
+        now_unix_millis: i64,
+    ) -> Result<AgentClaimDecision, AgentControlError> {
+        let request = build_claim_request(verified, &self.workload_session_id, &self.producer_id)?;
+        let response = self.control.claim_command(request).await?;
+        parse_claim_decision(
+            verified,
+            response,
+            &self.workload_session_id,
+            &self.producer_id,
+            now_unix_millis,
+        )
+        .map_err(Into::into)
+    }
+
     /// Cross the restart-safe `BeginExecution` fence, consuming the fresh claim.
     ///
     /// # Errors
@@ -1922,7 +2130,7 @@ impl<R: ControlRpc> AgentControlClient<R> {
 
 #[cfg(test)]
 pub(crate) fn test_accepted_agent_claim(
-    verified: &VerifiedAgentCommand,
+    verified: &impl VerifiedExecutionCommand,
     response: ClaimCommandResponseV1,
     workload_session_id: &str,
     producer_id: &str,
@@ -1947,6 +2155,14 @@ pub fn build_agent_claim_request(
     workload_session_id: &str,
     producer_id: &str,
 ) -> Result<ClaimCommandRequestV1, ControlSemanticError> {
+    build_claim_request(verified, workload_session_id, producer_id)
+}
+
+fn build_claim_request(
+    verified: &impl VerifiedExecutionCommand,
+    workload_session_id: &str,
+    producer_id: &str,
+) -> Result<ClaimCommandRequestV1, ControlSemanticError> {
     if !valid_control_identity(workload_session_id) || !valid_control_identity(producer_id) {
         return Err(ControlSemanticError::InvalidInput(
             "the control workload identity is malformed",
@@ -1961,6 +2177,22 @@ pub fn build_agent_claim_request(
 
 fn parse_agent_claim_decision(
     verified: &VerifiedAgentCommand,
+    response: ClaimCommandResponseV1,
+    workload_session_id: &str,
+    producer_id: &str,
+    now_unix_millis: i64,
+) -> Result<AgentClaimDecision, ControlSemanticError> {
+    parse_claim_decision(
+        verified,
+        response,
+        workload_session_id,
+        producer_id,
+        now_unix_millis,
+    )
+}
+
+fn parse_claim_decision(
+    verified: &impl VerifiedExecutionCommand,
     response: ClaimCommandResponseV1,
     workload_session_id: &str,
     producer_id: &str,
@@ -2052,7 +2284,7 @@ fn parse_agent_claim_decision(
 }
 
 fn settled_ack_decision(
-    verified: &VerifiedAgentCommand,
+    verified: &impl VerifiedExecutionCommand,
     receipt: &ClaimReceiptV1,
     workload_session_id: &str,
     producer_id: &str,
@@ -2072,7 +2304,7 @@ fn settled_ack_decision(
 }
 
 fn obsolete_ack_decision(
-    verified: &VerifiedAgentCommand,
+    verified: &impl VerifiedExecutionCommand,
     receipt: &ClaimReceiptV1,
 ) -> Result<AgentClaimDecision, ControlSemanticError> {
     validate_no_worker_authority(receipt)?;
@@ -2088,7 +2320,7 @@ fn obsolete_ack_decision(
 }
 
 fn retired_ack_decision(
-    verified: &VerifiedAgentCommand,
+    verified: &impl VerifiedExecutionCommand,
     receipt: &ClaimReceiptV1,
 ) -> Result<AgentClaimDecision, ControlSemanticError> {
     validate_no_worker_authority_except_retirement(receipt)?;
@@ -2113,7 +2345,7 @@ fn validate_retirement_placement(
 }
 
 fn validate_claim_identity(
-    verified: &VerifiedAgentCommand,
+    verified: &impl VerifiedExecutionCommand,
     receipt: &ClaimReceiptV1,
 ) -> Result<(), ControlSemanticError> {
     if receipt.identity.as_ref() != Some(&identity_from_command(verified)) {
@@ -2242,7 +2474,7 @@ fn parse_output_recovery(
 }
 
 fn parse_terminal_ack_recovery(
-    verified: &VerifiedAgentCommand,
+    verified: &impl VerifiedExecutionCommand,
     receipt: &ClaimReceiptV1,
     workload_session_id: &str,
     producer_id: &str,
@@ -2275,7 +2507,7 @@ fn parse_terminal_ack_recovery(
 }
 
 fn validate_terminal_recovery(
-    verified: &VerifiedAgentCommand,
+    verified: &impl VerifiedExecutionCommand,
     recovery: &SettlementRecoveryV1,
 ) -> Result<(SettlementProposalV1, DigestV1, String), ControlSemanticError> {
     if !recovery.settlement_receipt_id.is_empty()
@@ -2307,8 +2539,7 @@ fn validate_terminal_recovery(
         || proposal.terminal_sequence == 0
         || proposal.terminal_sequence > i64::MAX as u64
         || proposal.proposal_id != format!("{}:settlement", command.command_id)
-        || proposal.terminal_logical_output_id
-            != format!("agent-execution:{}", command.execution_id)
+        || proposal.terminal_logical_output_id != terminal_logical_output_id(command)
         || proposal.terminal_event_id
             != format!("{}:{}", command.command_id, proposal.terminal_sequence)
         || proposal.prepare_idempotency_key != format!("{}:prepare-settlement", command.command_id)
@@ -2339,7 +2570,7 @@ fn validate_terminal_recovery(
 }
 
 fn parse_recovered_settlement(
-    verified: &VerifiedAgentCommand,
+    verified: &impl VerifiedExecutionCommand,
     receipt: &ClaimReceiptV1,
     workload_session_id: &str,
     producer_id: &str,
@@ -2387,7 +2618,7 @@ fn parse_recovered_settlement(
 /// claim dispositions belong to the recovery parser and are never coerced into
 /// fresh execution authority.
 fn parse_accepted_agent_claim(
-    verified: &VerifiedAgentCommand,
+    verified: &impl VerifiedExecutionCommand,
     response: ClaimCommandResponseV1,
     workload_session_id: &str,
     producer_id: &str,
@@ -2471,7 +2702,8 @@ fn parse_accepted_agent_claim(
             "the accepted claim is missing its input manifest",
         ))?;
     validate_manifest_binding(&input_bundle_ref, &input_bundle)?;
-    let request_entry = validate_agent_request_entry(verified, &input_bundle)?;
+    let (request_entry, arguments_entry) =
+        validate_execution_request_entries(verified.command(), &input_bundle)?;
 
     Ok(AcceptedAgentClaim {
         identity,
@@ -2484,6 +2716,7 @@ fn parse_accepted_agent_claim(
         input_bundle_ref,
         input_bundle,
         request_entry,
+        arguments_entry,
     })
 }
 
@@ -2722,7 +2955,8 @@ fn validate_manifest_binding(
         || manifest.immutable_version != reference.immutable_version
         || !valid_identifier(&manifest.input_bundle_id)
         || !valid_version(&manifest.immutable_version)
-        || manifest.entries.len() != 1
+        || manifest.entries.is_empty()
+        || manifest.entries.len() > 3
     {
         return Err(ControlSemanticError::InvalidInput(
             "the accepted claim input manifest is malformed",
@@ -2731,52 +2965,142 @@ fn validate_manifest_binding(
     Ok(())
 }
 
-fn validate_agent_request_entry(
-    verified: &VerifiedAgentCommand,
+fn validate_execution_request_entries(
+    command: &super::elitea::runtime::v1::WorkerCommandV1,
     manifest: &ExecutionInputBundleV1,
-) -> Result<ExecutionInputEntryV1, ControlSemanticError> {
-    let Some(worker_command_v1::CapabilityCommand::AgentExecution(agent)) =
-        verified.command().capability_command.as_ref()
-    else {
-        return Err(ControlSemanticError::UnsupportedCapability(
-            "the worker command capability is not supported",
-        ));
+) -> Result<(ExecutionInputEntryV1, Option<ExecutionInputEntryV1>), ControlSemanticError> {
+    let (request_entry_id, semantic_role, media_type, max_bytes, arguments_id) =
+        match command.capability_command.as_ref() {
+            Some(worker_command_v1::CapabilityCommand::AgentExecution(agent)) => (
+                agent.request_entry_id.as_str(),
+                AGENT_EXECUTION_REQUEST_ROLE,
+                AGENT_INPUT_MEDIA_TYPE,
+                MAX_AGENT_INPUT_BYTES,
+                None,
+            ),
+            Some(worker_command_v1::CapabilityCommand::ToolkitExecuteRead(toolkit)) => (
+                toolkit.request_entry_id.as_str(),
+                TOOLKIT_EXECUTE_READ_REQUEST_ROLE,
+                TOOLKIT_EXECUTE_READ_INPUT_MEDIA_TYPE,
+                MAX_TOOLKIT_EXECUTE_READ_INPUT_BYTES,
+                None,
+            ),
+            Some(worker_command_v1::CapabilityCommand::ToolkitCallTool(toolkit)) => (
+                toolkit.settings_entry_id.as_str(),
+                "toolkit.call_tool.settings",
+                "application/json",
+                MAX_TOOLKIT_JSON_INPUT_BYTES,
+                Some(toolkit.arguments_entry_id.as_str()),
+            ),
+            Some(worker_command_v1::CapabilityCommand::ToolkitAvailableTools(toolkit)) => (
+                toolkit.settings_entry_id.as_str(),
+                "toolkit.available_tools.settings",
+                "application/json",
+                MAX_TOOLKIT_JSON_INPUT_BYTES,
+                None,
+            ),
+            _ => {
+                return Err(ControlSemanticError::UnsupportedCapability(
+                    "the worker command capability is not supported",
+                ));
+            }
+        };
+    let context_role = match command.capability_command.as_ref() {
+        Some(worker_command_v1::CapabilityCommand::ToolkitCallTool(_)) => {
+            Some("toolkit.call_tool.runtime_context")
+        }
+        Some(worker_command_v1::CapabilityCommand::ToolkitAvailableTools(_)) => {
+            Some("toolkit.available_tools.runtime_context")
+        }
+        _ => None,
     };
-    let entry = manifest
-        .entries
-        .first()
-        .ok_or(ControlSemanticError::InvalidInput(
-            "the selected agent request is absent or ambiguous",
-        ))?;
-    if entry.entry_id != agent.request_entry_id
-        || !valid_identifier(&entry.entry_id)
-        || !valid_version(&entry.immutable_version)
-        || entry.semantic_role != AGENT_EXECUTION_REQUEST_ROLE
+    let expected_entries =
+        1 + usize::from(arguments_id.is_some()) + usize::from(context_role.is_some());
+    if manifest.entries.len() != expected_entries
+        || arguments_id == Some(request_entry_id)
+        || (context_role.is_some()
+            && (request_entry_id == "toolkit-runtime-context"
+                || arguments_id == Some("toolkit-runtime-context")))
     {
         return Err(ControlSemanticError::InvalidInput(
-            "the selected agent request is malformed",
+            "the input manifest has unbound or duplicate entries",
+        ));
+    }
+    let request = validate_selected_input_entry(
+        manifest,
+        request_entry_id,
+        semantic_role,
+        media_type,
+        max_bytes,
+    )?;
+    let arguments = arguments_id
+        .map(|entry_id| {
+            validate_selected_input_entry(
+                manifest,
+                entry_id,
+                "toolkit.call_tool.arguments",
+                "application/json",
+                MAX_TOOLKIT_JSON_INPUT_BYTES,
+            )
+        })
+        .transpose()?;
+    if let Some(role) = context_role {
+        validate_selected_input_entry(
+            manifest,
+            "toolkit-runtime-context",
+            role,
+            "application/json",
+            MAX_TOOLKIT_JSON_INPUT_BYTES,
+        )?;
+    }
+    Ok((request, arguments))
+}
+
+fn validate_selected_input_entry(
+    manifest: &ExecutionInputBundleV1,
+    entry_id: &str,
+    semantic_role: &str,
+    media_type: &str,
+    max_bytes: u64,
+) -> Result<ExecutionInputEntryV1, ControlSemanticError> {
+    let mut selected = manifest
+        .entries
+        .iter()
+        .filter(|entry| entry.entry_id == entry_id);
+    let entry = selected.next().ok_or(ControlSemanticError::InvalidInput(
+        "the selected input entry is absent",
+    ))?;
+    if selected.next().is_some()
+        || !valid_identifier(&entry.entry_id)
+        || !valid_version(&entry.immutable_version)
+        || entry.semantic_role != semantic_role
+    {
+        return Err(ControlSemanticError::InvalidInput(
+            "the selected input entry is malformed",
         ));
     }
     let content = entry
         .content
         .as_ref()
         .ok_or(ControlSemanticError::InvalidInput(
-            "the selected agent request is malformed",
+            "the selected input entry is malformed",
         ))?;
-    validate_agent_content(entry, content)?;
+    validate_execution_content(entry, content, media_type, max_bytes)?;
     Ok(entry.clone())
 }
 
-fn validate_agent_content(
+fn validate_execution_content(
     entry: &ExecutionInputEntryV1,
     content: &ScopedContentReferenceV1,
+    media_type: &str,
+    max_bytes: u64,
 ) -> Result<(), ControlSemanticError> {
     if !valid_identifier(&content.content_id)
         || !valid_version(&content.immutable_version)
         || entry.immutable_version != content.immutable_version
-        || content.media_type != AGENT_INPUT_MEDIA_TYPE
+        || content.media_type != media_type
         || content.byte_length == 0
-        || content.byte_length > MAX_AGENT_INPUT_BYTES
+        || content.byte_length > max_bytes
         || !valid_identifier(&content.classification)
         || content.required_grant_audience != INPUT_GRANT_AUDIENCE
         || require_sha256(content.digest.as_ref()).is_err()
@@ -2792,7 +3116,7 @@ fn validate_agent_content(
     Ok(())
 }
 
-fn identity_from_command(verified: &VerifiedAgentCommand) -> ExecutionIdentityV1 {
+fn identity_from_command(verified: &impl VerifiedExecutionCommand) -> ExecutionIdentityV1 {
     let command = verified.command();
     ExecutionIdentityV1 {
         tenant_id: command.tenant_id.clone(),
@@ -2804,7 +3128,9 @@ fn identity_from_command(verified: &VerifiedAgentCommand) -> ExecutionIdentityV1
     }
 }
 
-fn command_retirement_binding(verified: &VerifiedAgentCommand) -> CommandRetirementBinding {
+fn command_retirement_binding(
+    verified: &impl VerifiedExecutionCommand,
+) -> CommandRetirementBinding {
     CommandRetirementBinding {
         identity: identity_from_command(verified),
         stable_delivery_id: verified.command().idempotency_key.clone(),
@@ -2813,12 +3139,27 @@ fn command_retirement_binding(verified: &VerifiedAgentCommand) -> CommandRetirem
 }
 
 fn terminal_command_ack(
-    verified: &VerifiedAgentCommand,
+    verified: &impl VerifiedExecutionCommand,
     kind: TerminalRedeliveryKind,
 ) -> TerminalCommandAck {
     TerminalCommandAck {
         kind,
         retirement: command_retirement_binding(verified),
+    }
+}
+
+fn terminal_logical_output_id(command: &super::elitea::runtime::v1::WorkerCommandV1) -> String {
+    match command.capability_command.as_ref() {
+        Some(worker_command_v1::CapabilityCommand::ToolkitExecuteRead(_)) => {
+            format!("toolkit-execute-read:{}", command.execution_id)
+        }
+        Some(worker_command_v1::CapabilityCommand::ToolkitCallTool(_)) => {
+            format!("toolkit-call-tool:{}", command.execution_id)
+        }
+        Some(worker_command_v1::CapabilityCommand::ToolkitAvailableTools(_)) => {
+            format!("toolkit-available-tools:{}", command.execution_id)
+        }
+        _ => format!("agent-execution:{}", command.execution_id),
     }
 }
 
@@ -2935,3 +3276,7 @@ fn hex_lower(value: &[u8]) -> String {
     }
     output
 }
+
+#[cfg(test)]
+#[path = "shared_toolkit_tests.rs"]
+mod shared_toolkit_tests;
