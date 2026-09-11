@@ -170,6 +170,8 @@ export function TestToolPane({ projectId, toolkitId, values }: TestToolPaneProps
       data-testid="edit-toolkit-test-pane-slot"
     >
       <TestToolSettings
+        projectId={projectId}
+        toolkitId={toolkitId}
         selectedTool={selectedTool}
         onChangeTool={onChangeTool}
         toolInputVariables={toolInputVariables}

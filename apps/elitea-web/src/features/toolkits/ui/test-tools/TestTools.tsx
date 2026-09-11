@@ -295,6 +295,7 @@ export function TestTools(props: TestToolsProps): ReactNode {
         sx={settingsGridSx}
       >
         <TestToolSettings
+          toolkitId={toolkitId}
           selectedTool={selectedTool}
           onChangeTool={onChangeTool}
           toolInputVariables={toolInputVariables}
