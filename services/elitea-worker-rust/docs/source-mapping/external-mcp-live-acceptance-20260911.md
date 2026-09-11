@@ -25,6 +25,13 @@ Its `is_error` field is false.
 This proves actual provider invocation and external terminal return for this saved agent.
 It does not prove authorization resume, replacement, or all toolkit families.
 
+## External completion boundary
+
+External callers use published toolkits, agents, and pipelines as autonomous tools.
+An external caller is not required to answer Elitea interrupts or resume paused executions.
+An unexpected pause must return an explicit failure instead of partial successful output.
+The browser-resume check below tests the shared runtime, not autonomous external completion.
+
 ## Pipeline approval and resume
 
 Playwright calls the existing `Hitl_node` pipeline through `/app/2/mcp/pipeline/8`.
@@ -49,3 +56,15 @@ This proof establishes approval and settlement but does not close resume-output 
 
 Pipeline terminal completion, failure, mixed authorization, resume, and replay remain separate checks.
 A new external call creates a new conversation; it is not a replay request.
+
+## Autonomous saved pipeline terminal success
+
+The existing `Gneral Purpose` pipeline version `18` contains a saved Agent node.
+Playwright sends direct JSON-RPC `tools/list` and `tools/call` requests to `/app/2/mcp/pipeline/18`.
+The call returns `RUST_GATE3_AUTONOMOUS_PIPELINE_20260911` without `isError` or an interrupt.
+Execution `b6a261437c3be59eb1da86722ad46e14` settles as `SUCCEEDED`.
+Conversation `550` and message group `5854` retain the execution history.
+Trace `7342` invokes saved child `elitea_agent_12_v_17`.
+Trace `7343` records the child's marker response.
+This proves autonomous saved-pipeline completion through the external MCP bridge.
+It does not prove external-client retry deduplication or provider failures.

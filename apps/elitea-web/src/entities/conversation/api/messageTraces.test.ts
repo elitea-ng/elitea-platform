@@ -32,3 +32,25 @@ it('keeps messages readable and exposes a retryable trace read failure', async (
   expect(response[0]?.content).toBe('retained');
   expect(response[0]?.persisted_trace.failed).toBe(true);
 });
+
+
+it('uses the numeric message-page identity when the chat route uses a UUID', async () => {
+  let calls = 0;
+  server.use(http.get(path, () => {
+    calls += 1;
+    return HttpResponse.json({ rows: [{ id: 1, message_group_id: 5820, kind: 'thinking_step' }] });
+  }));
+  const response = await attachMessageTraces(
+    { items: [{ id: '5820', conversation_id: '543', content: 'answer' }] },
+    2, 'a0d73798-bbc4-4d68-ad22-60c5ad3c1068',
+  ) as { items: { persisted_trace: { conversationId: string; failed: boolean } }[] };
+  expect(calls).toBe(1);
+  expect(response.items[0]?.persisted_trace).toMatchObject({ conversationId: '543', failed: false });
+});
+
+it('refuses trace enrichment for inconsistent conversation identities', async () => {
+  const response = await attachMessageTraces(
+    [{ id: '5820', conversation_id: '543' }, { id: '5821', conversation_id: '544' }], 2, 543,
+  ) as { persisted_trace: { failed: boolean } }[];
+  expect(response.every(row => row.persisted_trace.failed)).toBe(true);
+});

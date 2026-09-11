@@ -2482,8 +2482,13 @@ VALUES (sqlc.arg(item_id)::bigint, sqlc.arg(content)::text);
 DELETE FROM chat_message_items
 WHERE message_group_id = sqlc.arg(message_group_id)::bigint
   AND item_type = 'text_message'
-  AND meta ->> 'runtime_stream_execution_id' = sqlc.arg(execution_id)::text
-  AND meta ->> 'runtime_stream_generation' = sqlc.arg(generation)::bigint::text
+  AND (
+      sqlc.arg(replace_pipeline_provisional)::boolean
+      OR (
+          meta ->> 'runtime_stream_execution_id' = sqlc.arg(execution_id)::text
+          AND meta ->> 'runtime_stream_generation' = sqlc.arg(generation)::bigint::text
+      )
+  )
   AND meta -> 'runtime_stream_provisional' = 'true'::jsonb;
 
 -- name: GetCurrentAgentInvokedSkills :one

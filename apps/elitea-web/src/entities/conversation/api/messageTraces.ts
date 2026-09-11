@@ -20,6 +20,14 @@ async function fetchTracePage(projectId: string | number, conversationId: string
   return response.data.rows;
 }
 
+// Message routes accept UUIDs; trace routes require the numeric database ID.
+function traceConversationIdentity(rows: readonly unknown[], requested: string | number): number | undefined {
+  const ids = [...new Set(rows.map(row => record(row)?.['conversation_id']).filter(id => id != null).map(Number))];
+  if (ids.length > 1) return undefined;
+  const id = ids.length === 1 ? Number(ids[0]) : Number(requested);
+  return Number.isSafeInteger(id) && id > 0 ? id : undefined;
+}
+
 /** Read light summaries for this message page. Heavy detail stays behind the step endpoint. */
 export async function attachMessageTraces(payload: unknown, projectId: string | number, conversationId: string | number, signal?: AbortSignal): Promise<unknown> {
   const rows = messageRows(payload);
@@ -27,12 +35,25 @@ export async function attachMessageTraces(payload: unknown, projectId: string | 
   const ids = [...new Set(rows.map(row => Number(record(row)?.['id'])).filter(id => Number.isSafeInteger(id) && id > 0))];
   if (ids.length === 0) return payload;
   const byGroup = new Map<number, MessageTraceStep[]>();
+  const traceConversationId = traceConversationIdentity(rows, conversationId);
   let failed = false;
   try {
+    if (traceConversationId === undefined) {
+      throw new Error('The message page has no unique numeric conversation identity.');
+    }
+    await collectTracePages(projectId, traceConversationId, ids, byGroup, signal);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    failed = true;
+  }
+  return enrichPayload(payload, rows, byGroup, String(projectId), String(traceConversationId ?? conversationId), failed);
+}
+
+async function collectTracePages(projectId: string | number, traceConversationId: number, ids: readonly number[], byGroup: Map<number, MessageTraceStep[]>, signal?: AbortSignal): Promise<void> {
     for (let start = 0; start < ids.length; start += 200) {
       const groupIds = ids.slice(start, start + 200);
       for (let offset = 0; ; offset += 500) {
-        const steps = await fetchTracePage(projectId, conversationId, groupIds, offset, signal);
+        const steps = await fetchTracePage(projectId, traceConversationId, groupIds, offset, signal);
         for (const step of steps) {
           if (!groupIds.includes(step.message_group_id)) continue;
           const group = byGroup.get(step.message_group_id) ?? [];
@@ -42,11 +63,6 @@ export async function attachMessageTraces(payload: unknown, projectId: string | 
         if (steps.length < 500) break;
       }
     }
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    failed = true;
-  }
-  return enrichPayload(payload, rows, byGroup, String(projectId), String(conversationId), failed);
 }
 
 function enrichPayload(payload: unknown, rows: readonly unknown[], byGroup: ReadonlyMap<number, MessageTraceStep[]>, projectId: string, conversationId: string, failed: boolean): unknown {

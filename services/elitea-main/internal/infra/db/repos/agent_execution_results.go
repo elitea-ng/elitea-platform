@@ -37,12 +37,13 @@ func newAgentExecutionResultsRepository(projects projectStore) (*AgentExecutionR
 }
 
 type currentAgentFullMessage struct {
-	Content            string
-	ThreadID           string
-	References         json.RawMessage
-	InvokedSkills      json.RawMessage
-	ResponseMetadata   json.RawMessage
-	OutputLimitReached bool
+	ReplacePipelineProvisional bool
+	Content                    string
+	ThreadID                   string
+	References                 json.RawMessage
+	InvokedSkills              json.RawMessage
+	ResponseMetadata           json.RawMessage
+	OutputLimitReached         bool
 }
 
 type currentAgentHITLPause struct {
@@ -309,6 +310,12 @@ func decodeCurrentAgentFullMessage(contentJSON, references, responseMetadata jso
 		ThreadID           string          `json:"thread_id"`
 		InvokedSkills      json.RawMessage `json:"invoked_skills"`
 		OutputLimitReached bool            `json:"output_limit_reached"`
+		ApplicationDetails struct {
+			AgentType      string `json:"agent_type"`
+			VersionDetails struct {
+				AgentType string `json:"agent_type"`
+			} `json:"version_details"`
+		} `json:"application_details"`
 	}
 	if json.Unmarshal(responseMetadata, &metadata) != nil || metadata.ThreadID == "" ||
 		len(content) > 4*1024*1024 || strings.ContainsRune(content, '\x00') {
@@ -319,12 +326,13 @@ func decodeCurrentAgentFullMessage(contentJSON, references, responseMetadata jso
 		return currentAgentFullMessage{}, outputapp.ErrAgentExecutionResultMismatch
 	}
 	return currentAgentFullMessage{
-		Content:            content,
-		ThreadID:           metadata.ThreadID,
-		References:         cloneJSONOrDefault(references, []byte("[]")),
-		InvokedSkills:      invokedSkills,
-		ResponseMetadata:   append(json.RawMessage(nil), responseMetadata...),
-		OutputLimitReached: metadata.OutputLimitReached,
+		ReplacePipelineProvisional: metadata.ApplicationDetails.AgentType == "pipeline" || metadata.ApplicationDetails.VersionDetails.AgentType == "pipeline",
+		Content:                    content,
+		ThreadID:                   metadata.ThreadID,
+		References:                 cloneJSONOrDefault(references, []byte("[]")),
+		InvokedSkills:              invokedSkills,
+		ResponseMetadata:           append(json.RawMessage(nil), responseMetadata...),
+		OutputLimitReached:         metadata.OutputLimitReached,
 	}, nil
 }
 
@@ -552,9 +560,10 @@ func persistCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, expected o
 		if err := writer.DeleteCurrentAgentProvisionalText(
 			ctx,
 			sqlcgen.DeleteCurrentAgentProvisionalTextParams{
-				MessageGroupID: int64(messageGroupID),
-				ExecutionID:    expected.ExecutionID,
-				Generation:     int64(expected.Generation),
+				ReplacePipelineProvisional: message.ReplacePipelineProvisional,
+				MessageGroupID:             int64(messageGroupID),
+				ExecutionID:                expected.ExecutionID,
+				Generation:                 int64(expected.Generation),
 			},
 		); err != nil {
 			return fmt.Errorf("delete current agent provisional text: %w", err)

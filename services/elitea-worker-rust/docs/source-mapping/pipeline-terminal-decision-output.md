@@ -40,3 +40,29 @@ The projection regression verifies both fresh output and reused terminal output.
 Both paths retain the complete terminal response.
 The reused path emits no new model start, chunk, end, or partial-message step.
 Deployment and a repeated browser approval remain required before claiming the live defect fixed.
+
+## Main persistence and trace identity follow-up
+
+The deployed Rust fix removes the extra generation step.
+Rehearsal image: `sha256:ecc01780aef83fcaae2ec6c0fee88aada44246748ef8c6519e401cb2ca40c326`.
+Conversation `549` settles after approval with one stored generation.
+Browser reload still duplicates the answer because two text items remain.
+One item is provisional text from the paused execution; the other is the terminal answer.
+Main previously deletes provisional text only for the current execution ID and generation.
+
+`internal/infra/db/repos/agent_execution_results.go` now identifies pipeline terminal snapshots from the authenticated worker's application details.
+The existing `DeleteCurrentAgentProvisionalText` query clears provisional text across paused executions within that locked response group.
+It retains committed text items and preserves execution-specific cleanup for ordinary agents.
+No table or migration changes are required.
+Current Core `rpc/chat_all.py` owns continuation history; the replatform retains its own fenced response-group persistence.
+
+Current Core `api/v2/message_traces.py::PromptLibAPI.get` requires a numeric conversation ID.
+The new UI incorrectly uses the chat route UUID for that endpoint.
+Web `entities/conversation/api/messageTraces.ts` now uses the message response's numeric conversation identity.
+It also retains that identity for trace retries and rejects inconsistent message-page identities.
+
+Isolated PostgreSQL checks pass with nine test events and no skipped tests.
+These cover pipeline cleanup, ordinary cleanup, committed-history retention, and terminal metadata decoding.
+Four UI client tests pass, including UUID routes and inconsistent response identities.
+Focused Go vet and UI lint pass.
+Main and UI deployment verification remains pending.

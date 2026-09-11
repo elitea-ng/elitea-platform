@@ -594,3 +594,29 @@ func TestLoadCurrentAgentTerminalCarriesTheFramesAttachmentContents(t *testing.T
 		t.Fatalf("attachment contents=%+v", terminal.AttachmentContents)
 	}
 }
+
+func TestPipelineTerminalReplacesProvisionalHistoryOnlyForPipelineSnapshots(t *testing.T) {
+	for _, kind := range []string{"pipeline", "openai", ""} {
+		t.Run(kind, func(t *testing.T) {
+			metadata, err := json.Marshal(map[string]any{
+				"thread_id":           "thread-1",
+				"application_details": map[string]any{"version_details": map[string]any{"agent_type": kind}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			message, err := decodeCurrentAgentFullMessage(json.RawMessage(`"final answer"`), nil, metadata)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writer := &currentAgentTerminalWriterStub{existingSkills: `[]`}
+			err = persistCurrentAgentTerminal(t.Context(), writer, outputapp.ExpectedAgentExecution{ExecutionID: "resume", Generation: 1}, currentAgentTerminal{FullMessage: &message})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if writer.deletedText.ReplacePipelineProvisional != (kind == "pipeline") {
+				t.Fatalf("cleanup scope for %q: %+v", kind, writer.deletedText)
+			}
+		})
+	}
+}

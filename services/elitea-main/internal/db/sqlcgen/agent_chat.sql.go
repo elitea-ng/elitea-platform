@@ -58,19 +58,30 @@ const deleteCurrentAgentProvisionalText = `-- name: DeleteCurrentAgentProvisiona
 DELETE FROM chat_message_items
 WHERE message_group_id = $1::bigint
   AND item_type = 'text_message'
-  AND meta ->> 'runtime_stream_execution_id' = $2::text
-  AND meta ->> 'runtime_stream_generation' = $3::bigint::text
+  AND (
+      $2::boolean
+      OR (
+          meta ->> 'runtime_stream_execution_id' = $3::text
+          AND meta ->> 'runtime_stream_generation' = $4::bigint::text
+      )
+  )
   AND meta -> 'runtime_stream_provisional' = 'true'::jsonb
 `
 
 type DeleteCurrentAgentProvisionalTextParams struct {
-	MessageGroupID int64  `db:"message_group_id" json:"message_group_id"`
-	ExecutionID    string `db:"execution_id" json:"execution_id"`
-	Generation     int64  `db:"generation" json:"generation"`
+	MessageGroupID             int64  `db:"message_group_id" json:"message_group_id"`
+	ReplacePipelineProvisional bool   `db:"replace_pipeline_provisional" json:"replace_pipeline_provisional"`
+	ExecutionID                string `db:"execution_id" json:"execution_id"`
+	Generation                 int64  `db:"generation" json:"generation"`
 }
 
 func (q *Queries) DeleteCurrentAgentProvisionalText(ctx context.Context, arg DeleteCurrentAgentProvisionalTextParams) error {
-	_, err := q.db.Exec(ctx, deleteCurrentAgentProvisionalText, arg.MessageGroupID, arg.ExecutionID, arg.Generation)
+	_, err := q.db.Exec(ctx, deleteCurrentAgentProvisionalText,
+		arg.MessageGroupID,
+		arg.ReplacePipelineProvisional,
+		arg.ExecutionID,
+		arg.Generation,
+	)
 	return err
 }
 
