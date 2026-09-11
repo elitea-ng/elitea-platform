@@ -61,6 +61,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
 	schedulingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/scheduling"
 	socialapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/social"
+	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
@@ -1530,6 +1531,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// same typed-nil reason: a nil concrete value in a non-nil interface reads
 	// as "configured" downstream, and both consumers decide on `!= nil`.
 	var toolkitToolRun toolkitrun.UseCase
+	var toolkitDiscovery discovery.UseCase
 	var mcpToolkitRun v2mcp.ToolkitRunUseCase
 	// The unattended pipeline entry points (issues 192, 193).
 	//
@@ -1661,6 +1663,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// where `!= nil` downstream reads as "configured". apiGroupAuth cannot
 		// carry that: apiGroupAuthConfig picks the branch by testing the
 		// pointer.
+		// Standalone toolkit operations also run on the Rust agent stream.
+		// Index ingestion can remain disabled for that deployment.
+		toolkitDiscovery = publicRoutes.ToolkitDiscovery
+		toolkitToolRun = publicRoutes.ToolkitCallTool
+		mcpToolkitRun = publicRoutes.ToolkitCallTool
 		if publicRoutes.IndexStart != nil {
 			if publicRoutes.ToolkitCallTool != nil {
 				// The SAME path, the same credentials, the same permission —
@@ -1668,8 +1675,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 				// to occupy (#340). This route is what a tool run actually
 				// reaches wherever the runtime is composed; see
 				// internal/application/toolkitcalltool/doc.go.
-				toolkitToolRun = publicRoutes.ToolkitCallTool
-				mcpToolkitRun = publicRoutes.ToolkitCallTool
 				currentIndexStart, err = indexingapi.NewCurrentIndexStartRouteWithToolRuns(
 					publicRoutes.IndexStart,
 					publicRoutes.ToolkitCallTool,
@@ -2156,6 +2161,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		MCPToolkitExecute:          mcpToolkitExecute,
 		MCPToolkitRun:              mcpToolkitRun,
 		ToolkitToolRun:             toolkitToolRun,
+		ToolkitDiscovery:           toolkitDiscovery,
 		PipelineTriggers:           pipelineTriggers,
 		AuditRecorder:              auditRecorder,
 		CurrentAgentCancel:         currentAgentCancel,

@@ -47,11 +47,11 @@ import (
 //   - a missing tenant schema, by TestAvailableToolsReportsAMissingTenantSchemaAsAFailure
 //     and TestDiscoverToolsReportsAMissingTenantSchemaAsAFailure
 //   - a failed read that must not look like an empty list, by
-//     TestAvailableTools_ReadFaultIsNotAnEmptyList and its Discover twin, whose
+//     TestAvailableToolsDoesNotReadFailedAttachmentRepository and its Discover twin, whose
 //     assertReadFaultResponse requires the error to EQUAL a named reason. That
 //     is stronger than the "not the raw cause" assertion below, because it
 //     excludes the leak and pins the reason.
-//   - an empty toolkit that must stay 200, by TestAvailableTools_Empty and
+//   - an empty toolkit that must stay 200, by TestAvailableToolsRejectsEmptyAttachmentFallback and
 //     TestToolListEmptyAndFailedReadDoNotShareAResponse
 //
 // #439 also covers a dropped table, a row that fails to scan, and a ListTypes
@@ -166,11 +166,13 @@ func TestPgRepoDiscoverToolsReturnsAnErrorWhenTheReadFails(t *testing.T) {
 // never call; they stay nil and panic if a route ever reaches them.
 type toolReadRepo struct {
 	Repository
-	tools []Tool
-	err   error
+	tools          []Tool
+	availableCalls int
+	err            error
 }
 
 func (f *toolReadRepo) AvailableTools(context.Context, string, string) ([]Tool, error) {
+	f.availableCalls++
 	return f.tools, f.err
 }
 
@@ -188,31 +190,19 @@ func newToolReadRouter(repo Repository) chi.Router {
 
 var errToolRead = errors.New("relation \"p_1.elitea_tools\" does not exist")
 
-func TestAvailableToolsAnswersAFailureWhenTheReadFails(t *testing.T) {
-	router := newToolReadRouter(&toolReadRepo{err: errToolRead})
-
-	request := httptest.NewRequest(http.MethodGet, "/toolkit_available_tools/prompt_lib/1/7", nil)
-	recorder := httptest.NewRecorder()
-	router.ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusInternalServerError {
-		t.Fatalf("expected 500 for a failed read, got %d: %s", recorder.Code, recorder.Body.String())
+func TestAvailableToolsUnavailableDoesNotReadFailedRepository(t *testing.T) {
+	repo := &toolReadRepo{err: errToolRead}
+	rec := httptest.NewRecorder()
+	newToolReadRouter(repo).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/toolkit_available_tools/prompt_lib/1/7", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-
 	var body map[string]any
-	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode the response: %v", err)
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
 	}
-	// The precise regression: a failed read must NOT look like an empty toolkit.
-	if _, present := body["tools"]; present {
-		t.Errorf("a failed read must not answer with a tools list, got %s", recorder.Body.String())
-	}
-	if message, _ := body["error"].(string); message == "" {
-		t.Errorf("a failed read must name the failure, got %s", recorder.Body.String())
-	}
-	// The cause carries SQL and schema names; it must not cross the boundary.
-	if message, _ := body["error"].(string); message == errToolRead.Error() {
-		t.Errorf("the response must not carry the raw cause, got %s", recorder.Body.String())
+	if body["error"] != "toolkit discovery unavailable" || len(body) != 1 || repo.availableCalls != 0 {
+		t.Fatalf("response=%v attachment reads=%d", body, repo.availableCalls)
 	}
 }
 
@@ -239,26 +229,19 @@ func TestDiscoverToolsAnswersAFailureWhenTheReadFails(t *testing.T) {
 	}
 }
 
-// A successful read keeps its shape: the fix must not turn empty into an error.
-func TestAvailableToolsKeepsAnEmptyListForAnEmptyToolkit(t *testing.T) {
-	router := newToolReadRouter(&toolReadRepo{tools: []Tool{}})
-
-	request := httptest.NewRequest(http.MethodGet, "/toolkit_available_tools/prompt_lib/1/7", nil)
-	recorder := httptest.NewRecorder()
-	router.ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected 200 for an empty toolkit, got %d: %s", recorder.Code, recorder.Body.String())
+// An empty attachment repository cannot substitute for runtime discovery.
+func TestAvailableToolsUnavailableDoesNotReportEmptyAttachments(t *testing.T) {
+	repo := &toolReadRepo{tools: []Tool{}}
+	rec := httptest.NewRecorder()
+	newToolReadRouter(repo).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/toolkit_available_tools/prompt_lib/1/7", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	var body map[string]any
-	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode the response: %v", err)
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
 	}
-	tools, ok := body["tools"].([]any)
-	if !ok || len(tools) != 0 {
-		t.Errorf("expected an empty tools list, got %s", recorder.Body.String())
-	}
-	if total, _ := body["total"].(float64); int(total) != 0 {
-		t.Errorf("expected total 0, got %s", recorder.Body.String())
+	if body["error"] != "toolkit discovery unavailable" || len(body) != 1 || repo.availableCalls != 0 {
+		t.Fatalf("response=%v attachment reads=%d", body, repo.availableCalls)
 	}
 }

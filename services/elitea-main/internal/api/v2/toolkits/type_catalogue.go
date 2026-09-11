@@ -169,12 +169,8 @@ func (h *Handler) catalogueToolkitTypes() []string {
 
 // toolkitTypeSchema assembles one served type schema from up to four sources.
 //
-// The hand-written entry WINS over the SDK settings schema where both exist.
-// The four overlapping keys (artifact, github, jira, openapi) carry client
-// contract that the SDK model does not: openapi's ui_component and its
-// "a URL is not fetched" description, github's inline access_token. Replacing
-// them would change four working create forms in a change whose subject is the
-// forty-four that do not exist yet.
+// Preserve explicit UI contracts for native overrides. GitHub uses its SDK
+// settings, including credential, embedding model, and branch fields.
 func (h *Handler) toolkitTypeSchema(toolkitType string) (map[string]any, error) {
 	settings, metadata, catalogued, err := h.toolkitCatalogueEntry(toolkitType)
 	if err != nil {
@@ -187,7 +183,7 @@ func (h *Handler) toolkitTypeSchema(toolkitType string) (map[string]any, error) 
 	}
 
 	typeSchema := settings
-	if hasHandWritten {
+	if hasHandWritten && !(toolkitType == "github" && catalogued) {
 		typeSchema = handWritten
 	} else {
 		typeSchema = withNameRequired(typeSchema)

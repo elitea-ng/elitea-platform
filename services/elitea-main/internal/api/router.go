@@ -64,6 +64,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcatalogue"
+	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	platformauth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
@@ -406,7 +407,8 @@ type RouterConfig struct {
 	MCPToolkitRun v2mcp.ToolkitRunUseCase
 	// ToolkitToolRun runs one toolkit tool synchronously (#340). Nil keeps the
 	// `503 indexer service not available` both test routes have always given.
-	ToolkitToolRun toolkitrun.UseCase
+	ToolkitToolRun   toolkitrun.UseCase
+	ToolkitDiscovery discovery.UseCase
 	// PipelineTriggers serves the two UNATTENDED ways to start a pipeline —
 	// the inbound signed trigger (issue 192) and the cron schedule (issue 193).
 	//
@@ -905,6 +907,7 @@ func newToolkitHandler(
 ) *v2toolkits.Handler {
 	options := []v2toolkits.Option{
 		v2toolkits.WithArgumentSchemas(cfg.ToolkitArgumentSchemas),
+		v2toolkits.WithDiscovery(cfg.ToolkitDiscovery),
 		v2toolkits.WithSettingsDefinitions(cfg.ToolkitSettingsDefinitions),
 		v2toolkits.WithTypePolicy(toolkitcatalogue.NewStore(cfg.Pool)),
 	}

@@ -1627,9 +1627,41 @@
       "icon_url": null,
       "label": "GitHub"
     },
+    "name_required": true,
     "properties": {
-      "access_token": {
-        "type": "string"
+      "active_branch": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Active Branch"
+      },
+      "base_branch": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Base Branch"
+      },
+      "embedding_model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "configuration_model": "embedding",
+        "title": "Embedding Model"
       },
       "github_configuration": {
         "$ref": "#/$defs/github",
@@ -1644,6 +1676,7 @@
         ]
       },
       "repository": {
+        "title": "Repository",
         "type": "string"
       },
       "selected_tools": {
@@ -1667,9 +1700,25 @@
             "type": "object"
           }
         },
+        "items": {
+          "enum": [
+            "index_data",
+            "list_indexes",
+            "search_index",
+            "stepback_search_index",
+            "stepback_summary_index",
+            "remove_index"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
         "type": "array"
       }
     },
+    "required": [
+      "github_configuration",
+      "repository"
+    ],
     "title": "github",
     "type": "object"
   },

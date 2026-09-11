@@ -15,6 +15,7 @@ import (
 
 	toolkitrun "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
+	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/toolkitnaming"
@@ -126,7 +127,8 @@ type Handler struct {
 	// `503 indexer service not available` both test routes answered before a
 	// producer existed, which is the honest answer where no runtime is
 	// composed.
-	toolRuns toolkitrun.UseCase
+	toolRuns  toolkitrun.UseCase
+	discovery discovery.UseCase
 }
 
 // WithToolRuns supplies the synchronous tool-run use case. Without it the two
@@ -648,6 +650,15 @@ func writeToolkitInternalError(w http.ResponseWriter, r *http.Request, operation
 // whole configuration-property kind off that block, so a type schema without it
 // renders no credential picker at all.
 func (h *Handler) ListTypeSchemas(w http.ResponseWriter, r *http.Request) {
+	h.listTypeSchemas(w, r, false)
+}
+
+// DiscoverTypeSchemas lists names or returns one complete, policy-filtered schema.
+func (h *Handler) DiscoverTypeSchemas(w http.ResponseWriter, r *http.Request) {
+	h.listTypeSchemas(w, r, true)
+}
+
+func (h *Handler) listTypeSchemas(w http.ResponseWriter, r *http.Request, discovery bool) {
 	catalogue, err := h.toolkitTypeCatalogue(r.Context())
 	if err != nil {
 		// A built-in snapshot that will not yield its schemas is a broken
@@ -672,6 +683,26 @@ func (h *Handler) ListTypeSchemas(w http.ResponseWriter, r *http.Request) {
 	catalogue = applyGuardrailsToCatalogue(
 		h.guardrailPolicy(r.Context(), "list_type_schemas"), catalogue,
 	)
+	if discovery {
+		selected := r.URL.Query().Get("type")
+		projected := make(map[string]map[string]any)
+		for name, schema := range catalogue {
+			if selected == name {
+				settings, err := h.agentToolkitSettingsSchema(name, schema)
+				if err != nil {
+					writeToolkitInternalError(w, r, "discover_type_schema", "failed to build toolkit settings schema", err)
+					return
+				}
+				projected[name] = settings
+				break
+			}
+			if selected == "" {
+				projected[name] = map[string]any{"metadata": schema["metadata"]}
+			}
+		}
+		writeJSON(w, http.StatusOK, projected)
+		return
+	}
 	writeJSON(w, http.StatusOK, catalogue)
 }
 
@@ -772,17 +803,44 @@ const (
 // the two outcomes apart. No tools gives 200 and an empty list. A lost read
 // gives 500 and a named reason.
 func (h *Handler) AvailableTools(w http.ResponseWriter, r *http.Request) {
-	projectID := chi.URLParam(r, "projectID")
-	toolkitID := chi.URLParam(r, "toolkitID")
-	tools, err := h.repo.AvailableTools(r.Context(), projectID, toolkitID)
-	if err != nil {
-		slog.ErrorContext(r.Context(), "toolkit_available_tools: "+availableToolsReadFailed,
-			"project_id", projectID, "toolkit_id", toolkitID, "err", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": availableToolsReadFailed})
+	if h.discovery == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "toolkit discovery unavailable"})
 		return
 	}
-	tools = filterBlockedTools(h.guardrailPolicy(r.Context(), "toolkit_available_tools"), tools)
-	writeJSON(w, http.StatusOK, map[string]any{"tools": tools, "total": len(tools)})
+	projectID, err := strconv.ParseInt(chi.URLParam(r, "projectID"), 10, 64)
+	if err != nil {
+		writeJSON(w, 400, map[string]any{"error": "invalid project id"})
+		return
+	}
+	toolkitID, err := strconv.ParseInt(chi.URLParam(r, "toolkitID"), 10, 64)
+	if err != nil {
+		writeJSON(w, 400, map[string]any{"error": "invalid toolkit id"})
+		return
+	}
+	user, found := auth.UserFromContext(r.Context())
+	if !found {
+		writeJSON(w, 401, map[string]any{"error": "authentication required"})
+		return
+	}
+	actorID, err := strconv.ParseInt(user.UserID, 10, 64)
+	if err != nil {
+		actorID, _ = strconv.ParseInt(user.ID, 10, 64)
+	}
+	if actorID <= 0 {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
+		return
+	}
+	request := discovery.Request{ProjectID: projectID, ActorUserID: actorID, ToolkitID: toolkitID}
+	if request.Validate() != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid toolkit discovery identity"})
+		return
+	}
+	result, err := h.discovery.AvailableTools(r.Context(), discovery.Request{ProjectID: projectID, ActorUserID: actorID, ToolkitID: toolkitID})
+	if err != nil {
+		toolkitrun.WriteError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 // DiscoverTools lists the tools that one toolkit type offers. It keeps the two
@@ -1992,3 +2050,6 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	// Response is already committed; encoding errors cannot be surfaced to the client.
 	_ = json.NewEncoder(w).Encode(v)
 }
+
+func WithDiscovery(source discovery.UseCase) Option { return func(h *Handler) { h.discovery = source } }
+func (h *Handler) DiscoveryAvailable() bool         { return h != nil && h.discovery != nil }
