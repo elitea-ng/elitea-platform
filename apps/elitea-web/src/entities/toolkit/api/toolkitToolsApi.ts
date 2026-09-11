@@ -55,6 +55,7 @@ interface ToolkitTool {
 
 /** The body both handlers write. `total` is `len(tools)`, carried for parity; the pickers read `tools`. */
 export interface ToolkitToolsPayload {
+  readonly args_schemas?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
   readonly tools?: readonly ToolkitTool[];
   readonly total?: number;
 }

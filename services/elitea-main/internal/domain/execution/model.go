@@ -442,3 +442,5 @@ func (a Admission) Validate() error {
 	}
 	return nil
 }
+
+const ToolkitAvailableToolsCapability = "toolkit.available_tools.v1"

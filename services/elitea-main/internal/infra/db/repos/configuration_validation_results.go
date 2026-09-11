@@ -261,7 +261,9 @@ func (r *RuntimeFailureResultsRepository) ProjectRuntimeFailure(ctx context.Cont
 		executiondomain.IndexIngestCapability,
 		executiondomain.AgentApplicationCapability,
 		executiondomain.AgentAdhocCapability,
-		executiondomain.ToolkitExecuteReadCapability:
+		executiondomain.ToolkitExecuteReadCapability,
+		executiondomain.ToolkitCallToolCapability,
+		executiondomain.ToolkitAvailableToolsCapability:
 	default:
 		return outputapp.ProjectionOutcome{}, outputapp.ErrInvalidValidationOutput
 	}

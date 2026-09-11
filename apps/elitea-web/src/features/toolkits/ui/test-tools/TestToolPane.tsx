@@ -86,6 +86,8 @@ export function TestToolPane({ projectId, toolkitId, values }: TestToolPaneProps
     isError: toolSchemaReadFailed,
     refetch: retryToolSchemaRead,
   } = useGetSelectedToolSchema({
+    projectId,
+    toolkitId,
     toolkitType: values.type,
     toolOptionType: selectedTool,
     availableMcpTools: values.settings?.['available_mcp_tools'] as readonly McpToolOption[] | undefined,

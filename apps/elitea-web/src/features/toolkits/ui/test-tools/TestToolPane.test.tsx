@@ -124,6 +124,30 @@ describe('TestToolPane', () => {
     expect(screen.getByTestId('test-tool-result-payload')).toHaveTextContent('main');
   });
 
+  it('renders dynamic OpenAPI arguments and sends them to the saved toolkit', async () => {
+    let body: unknown;
+    server.use(
+      http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({ openapi: {} })),
+      http.get('/api/v2/elitea_core/toolkit_available_tools/prompt_lib/7/31', () => HttpResponse.json({
+        tools: [{ name: 'echo_marker' }],
+        args_schemas: { echo_marker: { type: 'object', properties: { marker: { type: 'string', title: 'Marker' } }, required: ['marker'] } },
+      })),
+      http.post('/api/v2/elitea_core/test_tool/prompt_lib/7/31', async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ ok: true, result: { marker: 'dynamic-test' } });
+      }),
+    );
+    renderWithHarness(<TestToolPane projectId="7" toolkitId="31" values={{ type: 'openapi', settings: { selected_tools: ['echo_marker'] } }} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('combobox'));
+    await user.click(await screen.findByRole('option', { name: /echo marker/i }));
+    const marker = await screen.findByLabelText(/marker/i);
+    expect(screen.getByRole('button', { name: /run tool/i })).toBeDisabled();
+    await user.type(marker, 'dynamic-test');
+    await user.click(screen.getByRole('button', { name: /run tool/i }));
+    await waitFor(() => expect(body).toMatchObject({ tool_name: 'echo_marker', tool_params: { marker: 'dynamic-test' } }));
+  });
+
   it('does not offer Run until the tool’s required arguments are filled', async () => {
     const user = userEvent.setup();
     renderPane();
