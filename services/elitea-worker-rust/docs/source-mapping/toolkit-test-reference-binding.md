@@ -51,3 +51,19 @@ Web image: `sha256:11f01a5a095ec7ee8a4e213f6368c7b9863bcec7e12e8a9b1b83fbb6358a6
 Rust image remains `sha256:39875097e5f14efdaa55678bc5f09db091d0083d445124b1b4f183d6eb0ebeca`.
 
 This proves the local stored-client delegated Test flow. It does not prove cancellation, replacement, remote-spec authorization, or all MCP variants.
+
+## Browser reload and Skip check: 2026-09-11
+
+The deployed toolkit 27 Test pane returns a safe authorization challenge for execution `5f6d4a3ba638895900584ec9e0806ccd`.
+Reload clears the pending action, selected operation, and argument controls.
+The page contains no stale Authorize button after reload.
+A deliberate new Test run returns a fresh challenge for execution `61ea9554e848599186763ea4488ad1a2`.
+Skip displays `Tool run skipped.` and performs no protected invocation.
+
+The synthetic provider's protected-call counter stays at 16 across both checks.
+Consent and token counters also remain unchanged.
+Both jobs settle as `SUCCEEDED` because the authorization challenge is a valid terminal protocol result.
+That state does not mean the protected operation ran.
+
+This check proves pending-authorization invalidation on reload and local Skip behavior.
+It does not prove reload recovery of an active invocation, explicit cancellation, or worker replacement.
