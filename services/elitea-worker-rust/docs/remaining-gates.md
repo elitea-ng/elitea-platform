@@ -1,6 +1,6 @@
 # Rust worker remaining gates
 
-Updated: 2026-09-09. Main baseline: `1dee0c89`.
+Updated: 2026-09-11. Main baseline: `1dee0c89`.
 
 This register orders implementation work. The [testing register](testing-gaps.md) owns detailed proof requirements.
 Source mappings remain the behavioral evidence for each capability.
@@ -34,16 +34,59 @@ OpenAPI supports delegated OAuth and client credentials. DCR remains an MCP or o
 
 ## Immediate next slice
 
-Verify the repaired PR checks first. The [CI repair ledger](source-mapping/pr-883-ci-repair.md) records this prerequisite.
-CI repair does not close any runtime gate below.
+Gate 3 requires chat-driven creation and updates through internal tools.
+Enable Elitea MCP Tools in both new and existing conversations.
+Verify actual tool invocation and persisted agents, skills, and project context.
+Chat pipeline creation remains deferred by scope. Existing pipeline runtime verification remains open.
+Repeat the operation as an update and verify the saved revision or state.
+Generated instructions or code snippets do not prove that an entity exists.
+Endpoint tests and standalone Toolkit Test checks do not replace this chat acceptance gate.
 
-Audit skill and project-context draft generation against the current platform.
-Reuse Main's composed draft service instead of adding a second model execution path.
-Verify source prompt ownership, permissions, edit-by-ID behavior, validation, and safe failures before publishing either internal MCP operation.
+Complete integration of the shared Main adapters and native toolkit commands.
+Skill and project-context drafting reuse Main's existing model execution service.
+Component and PostgreSQL tests cover draft permissions, prompt ownership, edit visibility, and safe failures.
+Deployed browser drafting now passes for skills and project context with omitted model settings.
+Missing-skill refusal also passes. Restricted-user browser proof remains open.
+See [draft default-model evidence](source-mapping/internal-mcp-draft-default-model.md).
 Keep application drafting unpublished: its legacy operation has `mcp_tool=False`.
-Update source mappings, component tests, protocol tests, and deployed-proof requirements in the same slice.
+
+Preserve the existing application schema.
+Reuse the existing artifact ledger for discovery results.
+Require a concrete ownership or contract need before adding a migration or table.
+Reconcile historical migration receipts on isolated database copies before deploying the new Main build.
+
+Verify the active Toolkit Test pane through authorization, reference-only exchange, invocation, retry, and reload.
+Keep worker cancellation and recovery checks separate from the Test controls.
+The user confirms that Toolkit Test needs no Stop button or new cancellation API.
+The regenerated UI client passes TypeScript checking.
+The deployed OpenAPI Test flow passes consent, reference-only retry, and actual invocation.
+Local Skip also passes without a protected-resource call.
+Pending-authorization reload and Skip pass without protected-resource calls.
+Administrative cancellation of an active provider request also passes.
+Active invocation recovery and worker replacement remain open.
+See [cancellation evidence](source-mapping/toolkit-cancellation-acceptance.md).
+See [reference binding evidence](source-mapping/toolkit-test-reference-binding.md).
+Continue with one agent. Do not start or resume subagents.
+
+Context compaction must preserve a durable continuation checkpoint.
+Budget the full model input and reserved output together.
+Keep authoritative project context, skill revisions, user instructions, and execution state outside generated summaries.
+Use the installed ADK-Rust primitives where they fit these ownership requirements.
+The [context continuation design](context-continuation-design.md) defines the implementation and replacement proof.
 
 The [follow-up sync ledger](source-mapping/main-sync-20260909-followup.md) records the latest merge and migration boundary.
+
+## Delivery checkpoint
+
+Integration commits through `80677757` are pushed.
+They deliver delegated references, Main adapters, chat selection, UI Test controls, and Rust toolkit discovery and execution.
+Proof commits through `d3506a97` are pushed.
+Other pending changes remain in the worktree, including point 4 instruction and context work.
+This checkpoint does not close gate 3.
+External saved-agent invocation now returns a verified provider result and settles successfully.
+An external pipeline pauses, resumes through browser approval, and settles.
+Its persisted duplicate output remains under investigation.
+See [live external acceptance](source-mapping/external-mcp-live-acceptance-20260911.md).
 
 ## New main changes already incorporated
 
