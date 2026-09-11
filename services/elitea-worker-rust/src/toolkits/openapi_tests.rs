@@ -318,6 +318,7 @@ async fn configured_materializer_merges_openapi_authorization_and_honors_tool_po
         &policy(&["create_user"]),
         &Map::new(),
     )
+    .await
     .expect("configured OpenAPI materialization");
     assert_eq!(toolsets.len(), 1);
     assert_eq!(
@@ -383,6 +384,7 @@ async fn unsupported_configured_family_does_not_hide_runnable_openapi_toolkit() 
         &policy(&[]),
         &Map::new(),
     )
+    .await
     .expect("supported toolkit remains runnable");
 
     assert_eq!(toolsets.len(), 1);

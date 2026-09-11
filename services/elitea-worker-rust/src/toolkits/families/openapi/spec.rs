@@ -55,7 +55,7 @@ impl fmt::Display for OpenApiSpecError {
                 "the inline OpenAPI specification exceeds its approved limit"
             }
             OpenApiSpecErrorCode::UnsupportedSource => {
-                "remote OpenAPI specification loading requires a sealed egress grant"
+                "resolve the OpenAPI specification URL before parsing"
             }
         })
     }
@@ -287,7 +287,7 @@ pub(crate) fn parse_operations(
     })
 }
 
-fn parse_source(source: &Value) -> Result<Value, OpenApiSpecError> {
+pub(super) fn parse_source(source: &Value) -> Result<Value, OpenApiSpecError> {
     match source {
         Value::Object(_) => Ok(source.clone()),
         Value::String(raw) => {

@@ -1219,6 +1219,7 @@ impl ApplicationAssemblyState<'_> {
                 &self.policy,
                 self.mcp_tokens,
             )
+            .await
             .map_err(toolset_error)?;
         let mut sensitive_tools = sensitive_tools_for_kind(
             frozen,
@@ -2628,6 +2629,9 @@ fn toolset_error(error: crate::toolkits::ToolsetMaterializationError) -> NativeA
         }
         ToolsetMaterializationErrorCode::UnsupportedToolkit => {
             NativeAgentAssemblyErrorCode::UnsupportedCapability
+        }
+        ToolsetMaterializationErrorCode::DependencyUnavailable => {
+            NativeAgentAssemblyErrorCode::DependencyUnavailable
         }
         ToolsetMaterializationErrorCode::ResourceExhausted => {
             NativeAgentAssemblyErrorCode::ResourceExhausted

@@ -429,6 +429,7 @@ async fn materialize_direct_toolsets(
 > {
     let (mut toolsets, mut delegated_authorization) =
         materialize_configured_toolsets_with_tokens_and_authorization(snapshot, policy, mcp_tokens)
+            .await
             .map_err(tool_materialization_error)?;
     let mut sensitive = sensitive_tools_for_kind(
         snapshot,
@@ -496,6 +497,9 @@ fn tool_materialization_error(error: ToolsetMaterializationError) -> NativeAgent
         }
         ToolsetMaterializationErrorCode::UnsupportedToolkit => {
             NativeAgentAssemblyErrorCode::UnsupportedCapability
+        }
+        ToolsetMaterializationErrorCode::DependencyUnavailable => {
+            NativeAgentAssemblyErrorCode::DependencyUnavailable
         }
         ToolsetMaterializationErrorCode::ResourceExhausted => {
             NativeAgentAssemblyErrorCode::ResourceExhausted

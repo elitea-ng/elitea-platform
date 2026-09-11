@@ -27,6 +27,7 @@ pub(crate) enum ToolsetMaterializationErrorCode {
     InvalidConfiguration,
     UnsupportedToolkit,
     ResourceExhausted,
+    DependencyUnavailable,
 }
 
 #[derive(Clone, Copy)]
@@ -53,6 +54,9 @@ impl fmt::Debug for ToolsetMaterializationError {
 impl fmt::Display for ToolsetMaterializationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self.code {
+            ToolsetMaterializationErrorCode::DependencyUnavailable => {
+                "the toolkit specification could not be retrieved"
+            }
             ToolsetMaterializationErrorCode::InvalidConfiguration => {
                 "the frozen toolkit configuration is invalid"
             }
@@ -68,7 +72,7 @@ impl fmt::Display for ToolsetMaterializationError {
 
 impl std::error::Error for ToolsetMaterializationError {}
 
-pub(crate) fn materialize_configured_toolsets_with_tokens_and_authorization(
+pub(crate) async fn materialize_configured_toolsets_with_tokens_and_authorization(
     snapshot: &AdmittedToolSnapshot<'_>,
     policy: &Arc<ToolAdmissionPolicy>,
     delegated_tokens: &serde_json::Map<String, serde_json::Value>,
@@ -82,7 +86,8 @@ pub(crate) fn materialize_configured_toolsets_with_tokens_and_authorization(
         .iter()
         .filter(|reference| reference.kind() == FrozenToolKind::Configured)
     {
-        let (toolset, authorization) = match materialize(reference, policy, delegated_tokens) {
+        let (toolset, authorization) = match materialize(reference, policy, delegated_tokens).await
+        {
             Ok(materialized) => materialized,
             Err(error) if error.code() == ToolsetMaterializationErrorCode::UnsupportedToolkit => {
                 tracing::warn!(
@@ -104,7 +109,7 @@ pub(crate) fn materialize_configured_toolsets_with_tokens_and_authorization(
     Ok((toolsets, delegated_authorization))
 }
 
-fn materialize(
+async fn materialize(
     reference: &FrozenToolReference<'_>,
     policy: &Arc<ToolAdmissionPolicy>,
     delegated_tokens: &serde_json::Map<String, serde_json::Value>,
@@ -130,9 +135,26 @@ fn materialize(
         return Ok((toolset, DelegatedAuthorizationCatalog::default()));
     }
     if reference.tool_type() == "openapi" {
-        let config = openapi::config::OpenApiToolkitConfig::parse(name, settings, delegated_tokens)
-            .map_err(|error| openapi_materialization_error(error.code()))?
-            .with_toolkit_id(reference.tool_id());
+        let remote = openapi::source::load(settings)
+            .await
+            .map_err(|error| match error {
+                openapi::source::SourceError::Invalid => invalid_configuration(),
+                openapi::source::SourceError::TooLarge => resource_exhausted(),
+                openapi::source::SourceError::Unavailable => ToolsetMaterializationError {
+                    code: ToolsetMaterializationErrorCode::DependencyUnavailable,
+                },
+            })?;
+        let config = match remote.as_ref() {
+            Some(spec) => openapi::config::OpenApiToolkitConfig::parse_with_spec(
+                name,
+                settings,
+                delegated_tokens,
+                spec,
+            ),
+            None => openapi::config::OpenApiToolkitConfig::parse(name, settings, delegated_tokens),
+        }
+        .map_err(|error| openapi_materialization_error(error.code()))?
+        .with_toolkit_id(reference.tool_id());
         let materialized = openapi::tools::build_openapi_toolset(name, config, policy)
             .map_err(|error| openapi_toolset_materialization_error(error.code()))?;
         return Ok((

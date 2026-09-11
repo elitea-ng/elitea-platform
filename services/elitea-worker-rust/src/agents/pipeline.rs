@@ -420,6 +420,7 @@ impl PipelineNativeAgentAssembler {
                 tool_policy,
                 mcp_tokens,
             )
+            .await
             .map_err(|_| unsupported_pipeline_runtime())?;
         let (mut mcp, mcp_delegated_authorization) =
             materialize_mcp_toolsets_with_tokens_and_authorization(
@@ -645,6 +646,7 @@ impl PipelineNativeAgentAssembler {
                 &runtime.tool_policy,
                 runtime.mcp_tokens,
             )
+            .await
             .map_err(|_| unsupported_pipeline_runtime())?;
         let (mut mcp, mcp_delegated_authorization) =
             materialize_mcp_toolsets_with_tokens_and_authorization(

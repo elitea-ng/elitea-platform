@@ -151,12 +151,16 @@ impl DirectToolkitRuntime {
                     request.policy(),
                     &tokens,
                 )
+                .await
                 .map_err(|error| match error.code() {
                     ToolsetMaterializationErrorCode::InvalidConfiguration => {
                         failure(DirectToolkitRuntimeErrorCode::InvalidConfiguration, false)
                     }
                     ToolsetMaterializationErrorCode::UnsupportedToolkit => {
                         failure(DirectToolkitRuntimeErrorCode::UnsupportedToolkit, false)
+                    }
+                    ToolsetMaterializationErrorCode::DependencyUnavailable => {
+                        failure(DirectToolkitRuntimeErrorCode::DependencyUnavailable, true)
                     }
                     ToolsetMaterializationErrorCode::ResourceExhausted => {
                         failure(DirectToolkitRuntimeErrorCode::ResourceExhausted, false)

@@ -595,6 +595,7 @@ async fn configured_materializer_merges_sharepoint_with_the_common_auth_catalog(
         &policy(&[]),
         &Map::new(),
     )
+    .await
     .expect("SharePoint materializer");
     assert_eq!(toolsets.len(), 1);
     assert_eq!(

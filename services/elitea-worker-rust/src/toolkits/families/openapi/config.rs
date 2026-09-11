@@ -75,15 +75,24 @@ impl OpenApiToolkitConfig {
         settings: &Map<String, Value>,
         delegated_tokens: &Map<String, Value>,
     ) -> Result<Self, OpenApiConfigError> {
-        validate_text(toolkit_name, MAX_IDENTITY_BYTES)?;
-        let selected_tools = selected_tools(settings)?;
-        let base_override =
-            optional_text(settings, &["base_url", "base_url_override"], MAX_URL_BYTES)?;
         let spec = settings
             .get("spec")
             .or_else(|| settings.get("schema_settings"))
             .or_else(|| settings.get("openapi_spec"))
             .ok_or_else(invalid_configuration)?;
+        Self::parse_with_spec(toolkit_name, settings, delegated_tokens, spec)
+    }
+
+    pub(crate) fn parse_with_spec(
+        toolkit_name: &str,
+        settings: &Map<String, Value>,
+        delegated_tokens: &Map<String, Value>,
+        spec: &Value,
+    ) -> Result<Self, OpenApiConfigError> {
+        validate_text(toolkit_name, MAX_IDENTITY_BYTES)?;
+        let selected_tools = selected_tools(settings)?;
+        let base_override =
+            optional_text(settings, &["base_url", "base_url_override"], MAX_URL_BYTES)?;
         let parsed = parse_operations(spec, base_override, &selected_tools)
             .map_err(|error| Self::map_spec_error(error.code()))?;
         let auth_settings = merged_auth_settings(settings)?;
