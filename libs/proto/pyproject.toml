@@ -4,18 +4,18 @@ version = "0.1.0"
 description = "Generated Elitea runtime v1 Protocol Buffer bindings"
 requires-python = ">=3.12"
 dependencies = [
-  "grpcio==1.76.0",
+  "grpcio==1.83.1",
   "protobuf==6.33.6",
 ]
 
 [project.optional-dependencies]
 generate = [
-  "grpcio-tools==1.76.0",
+  "grpcio-tools==1.83.1",
   "jsonschema==4.26.0",
 ]
 
 [build-system]
-requires = ["hatchling==1.27.0"]
+requires = ["hatchling==1.32.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
