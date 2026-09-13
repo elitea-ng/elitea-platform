@@ -1006,3 +1006,82 @@ fn pre_invocation_error_messages_and_codes_are_operator_safe() {
         "the agent command deadline was exceeded before invocation"
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn toolkit_invocation_authority_preserves_all_control_outcomes() {
+    use super::agent_lease::{ClaimLeaseActivation, ClaimLeaseMonitor};
+    use crate::protocol::control::{BeginAgentExecution, ToolkitInvocationPayload};
+
+    for case in ["authorized", "already", "rejected", "unknown"] {
+        let (control, state) = control();
+        match case {
+            "already" => {
+                state.authorize.lock().expect("authorize").disposition =
+                    AuthorizeInvocationDispositionV1::AlreadyAuthorized as i32;
+            }
+            "rejected" => {
+                *state.authorize.lock().expect("authorize") = AuthorizeInvocationResponseV1 {
+                    disposition: AuthorizeInvocationDispositionV1::Unspecified as i32,
+                    rejection: Some(RuntimeErrorV1 {
+                        code: RuntimeErrorCodeV1::Cancelled as i32,
+                        safe_message: "Execution was cancelled.".to_owned(),
+                        retryable: false,
+                    }),
+                }
+            }
+            "unknown" => state.authorize_unavailable.store(true, Ordering::SeqCst),
+            _ => {}
+        }
+        // Reuse the signed claim fixture: this tests the shared control contract,
+        // not toolkit payload decoding or a provider implementation.
+        let verified = parse_and_verify_agent_command(
+            &bytes("signed_command"),
+            Some(&TestOnlyConformanceHmacAuthenticator as &dyn SignedCommandAuthenticator),
+        )
+        .expect("verified fixture");
+        let claim = control.claim_agent(&verified, NOW).await.expect("claim");
+        let BeginAgentExecution::Preparing(preparing) =
+            control.begin_agent_execution(claim).await.expect("begin")
+        else {
+            panic!("fresh claim must prepare")
+        };
+        let mut lease = ClaimLeaseMonitor::start(
+            Arc::clone(&control),
+            preparing.start_lease_monitor(),
+            Arc::new(TestClock::new(NOW)),
+            config(Duration::from_secs(10)).lease_config(),
+        );
+        let ClaimLeaseActivation::Active(execution) = lease.activate().await else {
+            panic!("fixture lease must activate")
+        };
+        let decision = control
+            .authorize_agent_invocation(execution.bind_invocation(ToolkitInvocationPayload))
+            .await;
+        match decision {
+            InvocationAuthorizationDecision::AuthorizedNow(authorized) => {
+                assert_eq!(case, "authorized");
+                assert_eq!(
+                    authorized.execution().request_entry().entry_id,
+                    "agent-request"
+                );
+                drop(authorized.into_output_authority());
+            }
+            InvocationAuthorizationDecision::AlreadyAuthorized(terminal) => {
+                assert_eq!(case, "already");
+                assert_eq!(
+                    terminal.cause.runtime_failure_kind(),
+                    RuntimeFailureKind::Internal
+                );
+            }
+            InvocationAuthorizationDecision::Rejected(terminal) => {
+                assert_eq!(case, "rejected");
+                assert_eq!(
+                    terminal.cause.runtime_failure_kind(),
+                    RuntimeFailureKind::Cancelled
+                );
+            }
+            InvocationAuthorizationDecision::Unknown(_) => assert_eq!(case, "unknown"),
+        }
+        lease.close().await.expect("lease closed");
+    }
+}

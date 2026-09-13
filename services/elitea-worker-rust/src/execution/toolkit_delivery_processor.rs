@@ -27,7 +27,8 @@ use crate::protocol::ProtocolError;
 use crate::protocol::command::{ToolkitCommandKind, VerifiedToolkitExecuteReadCommand};
 use crate::protocol::control::{
     AgentControlClient, AgentExecutionOutputAuthority, AgentOutputRecoveryKind,
-    BeginAgentExecution, DesiredExecutionState, LeaseMonitoredAgentExecution,
+    AuthorizedToolkitExecution, BeginAgentExecution, DesiredExecutionState,
+    InvocationAuthorizationDecision, LeaseMonitoredAgentExecution, ToolkitInvocationPayload,
 };
 use crate::protocol::elitea::runtime::v1::{
     DigestV1, ToolkitAuthorizationRequiredV1, ToolkitAvailableToolsResultV1,
@@ -233,8 +234,72 @@ where
             }
         };
 
+        let outcome =
+            Box::pin(self.execute_preparing(delivery, verified, execution, output, lease)).await;
+        drop(reservation);
+        outcome
+    }
+
+    async fn execute_preparing(
+        &self,
+        delivery: RedisCommandDelivery,
+        verified: VerifiedToolkitExecuteReadCommand,
+        execution: LeaseMonitoredAgentExecution,
+        output: PreparedAgentOutput,
+        mut lease: ClaimLeaseMonitor,
+    ) -> Result<ToolkitProcessOutcome, ToolkitProcessError> {
+        let request = match self
+            .materialize_request(&verified, &execution, &mut lease)
+            .await
+        {
+            Ok(request) => request,
+            Err(failure) => {
+                Box::pin(self.publish_fresh_terminal(
+                    delivery,
+                    verified,
+                    execution.into_output_authority(),
+                    output,
+                    lease,
+                    ToolkitExecuteReadTerminalOutput::Failure(failure),
+                ))
+                .await?;
+                return Ok(ToolkitProcessOutcome::completed(
+                    "toolkit_delivery.preparation_terminal_retired",
+                ));
+            }
+        };
+        // Record possible submission before entering any toolkit operation.
+        // An uncertain authorization response must not publish a terminal result
+        // or enter provider code; a replacement owns reconciliation.
+        let execution = match self
+            .control
+            .authorize_agent_invocation(execution.bind_invocation(ToolkitInvocationPayload))
+            .await
+        {
+            InvocationAuthorizationDecision::AuthorizedNow(execution) => *execution,
+            InvocationAuthorizationDecision::AlreadyAuthorized(terminal)
+            | InvocationAuthorizationDecision::Rejected(terminal) => {
+                let failure = terminal.cause.runtime_failure_kind();
+                Box::pin(self.publish_fresh_terminal(
+                    delivery,
+                    verified,
+                    terminal.output,
+                    output,
+                    lease,
+                    ToolkitExecuteReadTerminalOutput::Failure(failure),
+                ))
+                .await?;
+                return Ok(ToolkitProcessOutcome::completed(
+                    "toolkit_delivery.authorization_terminal_retired",
+                ));
+            }
+            InvocationAuthorizationDecision::Unknown(unknown) => {
+                lease.close().await.map_err(ToolkitProcessError::Lease)?;
+                return Err(ToolkitProcessError::Control(unknown.error));
+            }
+        };
         let outcome = self
-            .materialize_and_execute(&verified, &execution, &mut lease)
+            .execute_authorized(&verified, &execution, &mut lease, &request)
             .await;
         let output_authority = execution.into_output_authority();
         let terminal = match outcome {
@@ -250,19 +315,18 @@ where
             terminal,
         ))
         .await;
-        drop(reservation);
         published?;
         Ok(ToolkitProcessOutcome::completed(
             "toolkit_delivery.executed_retired",
         ))
     }
 
-    async fn materialize_and_execute(
+    async fn materialize_request(
         &self,
         verified: &VerifiedToolkitExecuteReadCommand,
         execution: &LeaseMonitoredAgentExecution,
         lease: &mut ClaimLeaseMonitor,
-    ) -> Result<ToolkitExecuteReadTerminalOutput, RuntimeFailureKind> {
+    ) -> Result<DirectToolkitRequest, RuntimeFailureKind> {
         if deadline_exceeded(verified, self.clock.as_ref()) {
             record_toolkit_deadline("pre_materialization_deadline");
             return Err(RuntimeFailureKind::DeadlineExceeded);
@@ -287,7 +351,7 @@ where
         };
         if verified.kind() != ToolkitCommandKind::ExecuteRead {
             return self
-                .execute_shared(verified, execution, lease, materialized.as_bytes())
+                .materialize_shared_request(verified, execution, lease, materialized.as_bytes())
                 .await;
         }
         let request = match DirectToolkitRequest::parse(materialized.as_bytes()) {
@@ -302,13 +366,29 @@ where
                 return Err(request_failure(code));
             }
         };
+        Ok(request)
+    }
+
+    async fn execute_authorized(
+        &self,
+        verified: &VerifiedToolkitExecuteReadCommand,
+        authorized: &AuthorizedToolkitExecution,
+        lease: &mut ClaimLeaseMonitor,
+        request: &DirectToolkitRequest,
+    ) -> Result<ToolkitExecuteReadTerminalOutput, RuntimeFailureKind> {
+        let execution = authorized.execution();
+        if verified.kind() != ToolkitCommandKind::ExecuteRead {
+            return self
+                .execute_shared(verified, authorized, lease, request)
+                .await;
+        }
         if deadline_exceeded(verified, self.clock.as_ref()) {
             record_toolkit_deadline("pre_invocation_deadline");
             return Err(RuntimeFailureKind::DeadlineExceeded);
         }
         let result = match lease
             .run_pre_invocation(self.runtime.execute(
-                &request,
+                request,
                 &verified.command().execution_id,
                 &verified.command().command_id,
             ))
@@ -345,7 +425,7 @@ where
             record_toolkit_deadline("post_invocation_deadline");
             return Err(RuntimeFailureKind::DeadlineExceeded);
         }
-        match bind_result(execution, &request, &result) {
+        match bind_result(execution, request, &result) {
             Ok(result) => Ok(ToolkitExecuteReadTerminalOutput::Result(Box::new(result))),
             Err(failure) => {
                 record_toolkit_execution_failure(
@@ -358,13 +438,13 @@ where
         }
     }
 
-    async fn execute_shared(
+    async fn materialize_shared_request(
         &self,
         verified: &VerifiedToolkitExecuteReadCommand,
         execution: &LeaseMonitoredAgentExecution,
         lease: &mut ClaimLeaseMonitor,
         settings: &[u8],
-    ) -> Result<ToolkitExecuteReadTerminalOutput, RuntimeFailureKind> {
+    ) -> Result<DirectToolkitRequest, RuntimeFailureKind> {
         let command = verified.command();
         let context = lease
             .run_pre_invocation(
@@ -374,7 +454,7 @@ where
             .await
             .map_err(|error| lease_failure(&error))?
             .map_err(|error| input_failure(&error))?;
-        let (request, is_call) = match command.capability_command.as_ref() {
+        let request = match command.capability_command.as_ref() {
             Some(worker_command_v1::CapabilityCommand::ToolkitCallTool(call)) => {
                 let arguments = lease
                     .run_pre_invocation(
@@ -384,36 +464,47 @@ where
                     .await
                     .map_err(|error| lease_failure(&error))?
                     .map_err(|error| input_failure(&error))?;
-                (
-                    DirectToolkitRequest::parse_call(
-                        &call.toolkit_type,
-                        &call.toolkit_id,
-                        &call.tool_name,
-                        settings,
-                        arguments.as_bytes(),
-                        context.as_bytes(),
-                    ),
-                    true,
+                DirectToolkitRequest::parse_call(
+                    &call.toolkit_type,
+                    &call.toolkit_id,
+                    &call.tool_name,
+                    settings,
+                    arguments.as_bytes(),
+                    context.as_bytes(),
                 )
             }
-            Some(worker_command_v1::CapabilityCommand::ToolkitAvailableTools(discovery)) => (
+            Some(worker_command_v1::CapabilityCommand::ToolkitAvailableTools(discovery)) => {
                 DirectToolkitRequest::parse_discovery(
                     &discovery.toolkit_type,
                     settings,
                     context.as_bytes(),
-                ),
-                false,
-            ),
+                )
+            }
             _ => return Err(RuntimeFailureKind::InvalidInput),
         };
-        let request = request.map_err(|error| request_failure(error.code()))?;
+        request.map_err(|error| request_failure(error.code()))
+    }
+
+    async fn execute_shared(
+        &self,
+        verified: &VerifiedToolkitExecuteReadCommand,
+        authorized: &AuthorizedToolkitExecution,
+        lease: &mut ClaimLeaseMonitor,
+        request: &DirectToolkitRequest,
+    ) -> Result<ToolkitExecuteReadTerminalOutput, RuntimeFailureKind> {
+        let execution = authorized.execution();
+        let command = verified.command();
+        let is_call = verified.kind() == ToolkitCommandKind::CallTool;
+        if deadline_exceeded(verified, self.clock.as_ref()) {
+            return Err(RuntimeFailureKind::DeadlineExceeded);
+        }
         let operation = async {
             if is_call {
                 self.runtime
-                    .execute_test(&request, &command.execution_id, &command.command_id)
+                    .execute_test(request, &command.execution_id, &command.command_id)
                     .await
             } else {
-                self.runtime.discover(&request).await
+                self.runtime.discover(request).await
             }
         };
         let result = lease
@@ -433,12 +524,12 @@ where
         if is_call {
             let summary = match result {
                 Err(error) if error.authorization().is_some() => {
-                    self.authorization_summary(verified, &request, &error, lease)
+                    self.authorization_summary(verified, request, &error, lease)
                         .await?
                 }
                 outcome => call_summary(outcome)?,
             };
-            return bind_call_result(execution, &request, summary)
+            return bind_call_result(execution, request, summary)
                 .map(|result| ToolkitExecuteReadTerminalOutput::CallTool(Box::new(result)));
         }
         let value = result.map_err(|error| runtime_failure(error.code()))?;

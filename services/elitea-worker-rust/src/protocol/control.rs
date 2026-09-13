@@ -1,3 +1,7 @@
+#[path = "toolkit_invocation.rs"]
+mod toolkit_invocation;
+pub(crate) use toolkit_invocation::{AuthorizedToolkitExecution, ToolkitInvocationPayload};
+
 use std::fmt;
 
 use prost::Message;

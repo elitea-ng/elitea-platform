@@ -90,3 +90,33 @@ missing state transition. Repeat the controlled crash test after the Rust fix.
 The retried execution eventually settles SUCCEEDED while still PREPARING.
 Temporary toolkit 33 is deleted through the normal API (204), and only the
 temporary delayed-read server process is stopped. The OAuth emulator stays running.
+
+
+## Rust invocation boundary implementation
+
+`protocol/toolkit_invocation.rs` adapts the existing owned
+`InvocationAuthorizationPayload` contract. Only the shared control client's
+`AUTHORIZED_NOW` outcome constructs
+`AuthorizedToolkitExecution`; terminal and transport-unknown outcomes do not
+expose an executable state. The borrowed execution view retains the existing
+input/result binding methods but cannot be consumed to mint another permit.
+
+`toolkit_delivery_processor.rs` materializes and validates the complete request
+before crossing this fence. Both direct reads and the shared Toolkit Test/
+discovery path require the authorized wrapper before entering runtime operations.
+Preparation failures retain their existing terminal path. Authenticated refusal
+uses existing typed terminal mapping. Transport uncertainty closes the lease,
+leaves the command unacknowledged, and does not call the provider or publish an
+invented result. No wire fields, tables, or migrations change.
+
+The control-outcome test covers authorized, already-authorized, rejected, and
+transport-unknown responses using the existing signed control fixture.
+This is component proof, not a toolkit provider/crash proof. Full recovery still
+requires the repeat deployed crash experiment and shared-state takeover gates.
+An ambiguous provider outcome is not equivalent to completed work or a successful
+continuation; retain that distinction when assessing the overall recovery goal.
+
+An isolated candidate passes all 130 execution component tests with no ignored
+tests. Strict all-target/all-feature Clippy passes. Other pending worktree changes
+are excluded from this candidate. Runtime deployment and crash re-verification
+remain pending for this Rust change.
