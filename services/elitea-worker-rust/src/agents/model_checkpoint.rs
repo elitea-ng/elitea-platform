@@ -8,6 +8,7 @@ use adk_rust::session::{AppendEventRequest, Session, SessionService};
 use adk_rust::{
     AdkError, AdkIdentity, BeforeModelResult, ErrorCategory, ErrorComponent, Event, LlmRequest,
 };
+use ring::digest;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -39,6 +40,33 @@ struct ModelSnapshot {
     tools: HashMap<String, Value>,
 }
 
+/// Opaque evidence produced only after durable checkpoint validation.
+/// It carries no model input, credential, tool result, or session contents.
+pub(crate) struct ValidatedModelCheckpoint {
+    execution_id: String,
+    generation: u64,
+    digest: [u8; 32],
+}
+
+impl ValidatedModelCheckpoint {
+    #[cfg(test)]
+    pub(crate) fn test_evidence(execution_id: String, generation: u64) -> Self {
+        Self {
+            execution_id,
+            generation,
+            digest: [42; 32],
+        }
+    }
+
+    pub(crate) fn matches_execution(&self, execution_id: &str, generation: u64) -> bool {
+        self.execution_id == execution_id && self.generation == generation
+    }
+
+    pub(crate) const fn digest(&self) -> [u8; 32] {
+        self.digest
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct ModelCheckpointWriter {
     sessions: Arc<dyn SessionService>,
@@ -46,6 +74,7 @@ pub(super) struct ModelCheckpointWriter {
     generation: u64,
     definition_digest: [u8; 32],
     replay: Option<Arc<Mutex<Option<LlmRequest>>>>,
+    validated_digest: Option<[u8; 32]>,
 }
 
 impl ModelCheckpointWriter {
@@ -61,6 +90,7 @@ impl ModelCheckpointWriter {
             generation,
             definition_digest,
             replay: None,
+            validated_digest: None,
         }
     }
 
@@ -116,9 +146,26 @@ impl ModelCheckpointWriter {
         if model.request.contents.is_empty() {
             return Err(invalid_checkpoint());
         }
+        let encoded = serde_json::to_vec(&value).map_err(|_| invalid_checkpoint())?;
+        self.validated_digest = Some(
+            digest::digest(&digest::SHA256, &encoded)
+                .as_ref()
+                .try_into()
+                .map_err(|_| invalid_checkpoint())?,
+        );
         model.request.tools = model.tools;
         self.replay = Some(Arc::new(Mutex::new(Some(model.request))));
         Ok(self)
+    }
+
+    #[allow(dead_code)] // Consumed by the recovery coordinator integration.
+    pub(super) fn validated_checkpoint(&self) -> Option<ValidatedModelCheckpoint> {
+        self.validated_digest
+            .map(|digest| ValidatedModelCheckpoint {
+                execution_id: self.execution_id.clone(),
+                generation: self.generation,
+                digest,
+            })
     }
 
     pub(super) fn is_recovery(&self) -> bool {
@@ -453,7 +500,18 @@ mod tests {
                 .restore(stored.as_ref())
                 .is_err()
         );
+        assert!(writer.validated_checkpoint().is_none());
         let replay = writer.clone().restore(stored.as_ref()).expect("restore");
+        let evidence = replay.validated_checkpoint().expect("validated evidence");
+        assert!(evidence.matches_execution("execution", 7));
+        assert!(!evidence.matches_execution("other", 7));
+        assert!(!evidence.matches_execution("execution", 8));
+        let persisted = stored.state().get(CHECKPOINT_KEY).expect("checkpoint");
+        let encoded = serde_json::to_vec(&persisted).expect("checkpoint encoding");
+        assert_eq!(
+            evidence.digest().as_slice(),
+            digest::digest(&digest::SHA256, &encoded).as_ref()
+        );
         let mut changed = request.clone();
         changed.tools.clear();
         assert!(replay.prepare_request(changed.clone()).is_err());

@@ -10,6 +10,8 @@
 
 #![allow(dead_code)] // Production capability registration remains disabled.
 
+pub(crate) use super::model_checkpoint::ValidatedModelCheckpoint;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 

@@ -177,3 +177,21 @@ The focused test rejects fresh claims, changed generations, changed workload ses
 It also checks that session access preserves the execution ID, claim attempt, lease epoch, and fence token.
 
 This boundary is not routed into production yet. Lease supervision, checkpoint evidence binding, and restored invocation dispatch remain required.
+
+## Validated checkpoint authorization
+
+`src/agents/model_checkpoint.rs` creates `ValidatedModelCheckpoint` only after validating the durable model checkpoint.
+The evidence contains the execution ID, generation, and SHA-256 digest of the validated checkpoint JSON.
+It contains no prompt, model request, tool result, or credential. Checkpoint contents stay in ADK storage.
+
+`InspectedModelCheckpointClaim::authorize` consumes the evidence and the pending inspection claim.
+It rejects a different execution or generation before calling Main.
+It sends the digest through the dedicated bounded authorization transport.
+Only `AUTHORIZED_NOW` creates a model submission permit, output authority, and runtime-context authority.
+An already-authorized response, malformed response, or transport failure creates no permit.
+The returned failure retains the consumed claim and exposes no retry method.
+
+Five focused tests pass. They cover checkpoint validation, digest binding, inspection, first authorization, duplicate authorization, and transport loss.
+The authorization tests use a component RPC double. They do not prove recovery through independently deployed services.
+Session access still precedes authorization; runtime credential access follows successful authorization.
+The coordinator must connect these values to lease supervision, restored assembly, and partial-output replacement before enabling recovery.
