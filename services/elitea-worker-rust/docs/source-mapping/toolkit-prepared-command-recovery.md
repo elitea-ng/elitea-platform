@@ -68,3 +68,11 @@ These tests use controlled envelopes. Live acceptance must still verify the real
 Atomic admission is deployed as `elitea-main:atomic-toolkit-admission-20260913`.
 Its digest is `sha256:788fe5a093445918e18608046b71011170039fd1a742cebeb2cc0a7b10dbc8d7`.
 Main reports `running healthy`. The replacement preserves the environment and six mounts without schema changes.
+
+## Live atomic-admission smoke check
+
+A fresh Playwright browser signs in and runs toolkit 31's echo operation through Toolkit Test.
+The deployed Main returns HTTP 200 for execution `940f113e3ffed4c4569780229fdd4368`.
+The result panel displays `RUST_ATOMIC_ADMISSION_UI_20260913`.
+This exercises the real signer, admission, Redis dispatch, Rust invocation, settlement, and UI result path.
+It is a normal execution smoke check, not an injected process crash.
