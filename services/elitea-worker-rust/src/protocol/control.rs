@@ -240,6 +240,38 @@ pub struct AcceptedAgentClaim {
 
 impl AcceptedAgentClaim {
     #[must_use]
+    fn input_entry(&self, entry_id: &str) -> Option<&ExecutionInputEntryV1> {
+        if self.request_entry.entry_id == entry_id {
+            Some(&self.request_entry)
+        } else {
+            self.input_bundle
+                .entries
+                .iter()
+                .find(|entry| entry.entry_id == entry_id)
+        }
+    }
+
+    #[must_use]
+    fn input_content_authority_for_entry(
+        &self,
+        entry_id: &str,
+    ) -> Option<ClaimBoundInputAuthority<'_>> {
+        let content = self.input_entry(entry_id)?.content.as_ref()?;
+        let source_digest = content.digest.as_ref()?;
+        Some(ClaimBoundInputAuthority {
+            execution_id: &self.identity.execution_id,
+            generation: self.identity.generation,
+            content_id: &content.content_id,
+            immutable_version: &content.immutable_version,
+            claim_id: &self.claim_id,
+            fence_token: &self.fence.fence_token,
+            expected_source_length: content.byte_length,
+            expected_source_sha256: &source_digest.value,
+            media_type: &content.media_type,
+        })
+    }
+
+    #[must_use]
     pub const fn lease_expires_at_unix_millis(&self) -> i64 {
         self.lease_expires_at_unix_millis
     }
@@ -968,15 +1000,7 @@ impl LeaseMonitoredAgentExecution {
 
     #[must_use]
     pub fn input_entry(&self, entry_id: &str) -> Option<&ExecutionInputEntryV1> {
-        if self.claim.request_entry.entry_id == entry_id {
-            Some(&self.claim.request_entry)
-        } else {
-            self.claim
-                .input_bundle
-                .entries
-                .iter()
-                .find(|entry| entry.entry_id == entry_id)
-        }
+        self.claim.input_entry(entry_id)
     }
 
     #[must_use]
@@ -989,19 +1013,7 @@ impl LeaseMonitoredAgentExecution {
         &self,
         entry_id: &str,
     ) -> Option<ClaimBoundInputAuthority<'_>> {
-        let content = self.input_entry(entry_id)?.content.as_ref()?;
-        let source_digest = content.digest.as_ref()?;
-        Some(ClaimBoundInputAuthority {
-            execution_id: &self.claim.identity.execution_id,
-            generation: self.claim.identity.generation,
-            content_id: &content.content_id,
-            immutable_version: &content.immutable_version,
-            claim_id: &self.claim.claim_id,
-            fence_token: &self.claim.fence.fence_token,
-            expected_source_length: content.byte_length,
-            expected_source_sha256: &source_digest.value,
-            media_type: &content.media_type,
-        })
+        self.claim.input_content_authority_for_entry(entry_id)
     }
 
     pub(crate) fn into_output_authority(self) -> AgentExecutionOutputAuthority {

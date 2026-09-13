@@ -79,6 +79,12 @@ pub(crate) struct LiveModelCheckpointInspection {
 }
 #[allow(dead_code)]
 impl LiveModelCheckpointInspection {
+    /// Borrow only the frozen request binding while the inspection lease is live.
+    pub(crate) fn input_content_authority(&self) -> Option<super::ClaimBoundInputAuthority<'_>> {
+        self.claim
+            .input_content_authority_for_entry(&self.claim.request_entry.entry_id)
+    }
+
     /// Issue session access once. No runtime credential or submission permit
     /// is created. The retained claim can authorize only the inspected model.
     pub(crate) fn into_session_inspection(

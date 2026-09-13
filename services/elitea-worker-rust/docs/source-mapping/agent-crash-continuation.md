@@ -240,3 +240,16 @@ These tests use an RPC double. They do not prove deployed recovery routing or wo
 
 The next integration must connect the delivery route, immutable input materialization, and output position to this supervised inspection value.
 Recovery opt-in remains disabled until the complete path is ready for deployment verification.
+
+## Frozen request materialization during inspection
+
+`src/protocol/control.rs::AcceptedAgentClaim` now owns the shared private manifest-entry binding helper.
+Ordinary lease-monitored execution and `LiveModelCheckpointInspection` borrow the same validated content identity, immutable version, digest, length, claim, and fence.
+`src/transport/input_content.rs::InputContentClient::fetch_checkpoint_request` uses the existing bounded HTTP/2 materializer, including source identity and response digest verification.
+It accepts only the live inspection type; raw and pending inspection claims cannot fetch through this API.
+It does not issue session access, runtime credentials, or model invocation permission.
+
+All 11 input-content component tests pass, including a recovery request test that verifies the exact route and fence headers and rejects a changed source digest. Strict library/test Clippy passes.
+The test bypasses lease activation only to construct its transport fixture; cancellation and expiry at activation are covered by the lease tests above.
+This is new crash-recovery behavior, not a port of the current platform's restart behavior. Checkpoints remain Rust/ADK-owned; Main serves the original immutable input through its existing content contract.
+No migration is added for this change. Recovery routing and output replacement remain unfinished, and no deployed recovery claim is made.

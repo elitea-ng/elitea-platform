@@ -623,3 +623,49 @@ async fn configuration_and_reference_bounds_reject_unsafe_authority() {
         );
     }
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn checkpoint_request_preserves_claim_binding_and_rejects_changed_source() {
+    for changed_source in [false, true] {
+        let inspection = crate::protocol::control::test_model_checkpoint_inspection(i64::MAX);
+        let (pending, _lease) = inspection.into_lease_supervision();
+        let live = pending.into_live();
+        let body = materialized();
+        let mut reply = response(&body, StatusCode::OK, Version::HTTP_2, "v/1");
+        reply.headers_mut().insert(
+            "x-elitea-source-content-length",
+            HeaderValue::from_static("1"),
+        );
+        let source_digest = if changed_source {
+            [0x62; 32]
+        } else {
+            [0x61; 32]
+        };
+        reply.headers_mut().insert(
+            "x-elitea-source-content-digest",
+            HeaderValue::from_str(&format!("sha-256=:{}:", STANDARD.encode(source_digest)))
+                .expect("source digest"),
+        );
+        let (client, captured) = fake_client(Ok(reply), Duration::from_secs(1), 1024);
+        let result = client.0.fetch_checkpoint_request(&live).await;
+        if changed_source {
+            assert!(matches!(
+                result,
+                Err(InputContentError::AuthorizationFailed(_))
+            ));
+        } else {
+            assert_eq!(result.expect("frozen request").as_bytes(), body);
+        }
+        assert_eq!(
+            *captured.lock().expect("captured requests"),
+            [CapturedRequest {
+                method: "GET".to_owned(),
+                path:
+                    "/executions/execution%2Fone/generations/2/inputs/settings%20id/versions/v%2F1"
+                        .to_owned(),
+                claim: "claim-1".to_owned(),
+                fence: "ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY".to_owned(),
+            }]
+        );
+    }
+}

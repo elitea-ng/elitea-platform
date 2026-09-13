@@ -24,7 +24,9 @@ use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity
 use tower::ServiceExt as _;
 use zeroize::Zeroizing;
 
-use crate::protocol::control::{ClaimBoundInputAuthority, LeaseMonitoredAgentExecution};
+use crate::protocol::control::{
+    ClaimBoundInputAuthority, LeaseMonitoredAgentExecution, LiveModelCheckpointInspection,
+};
 
 #[path = "toolkit_discovery_artifact.rs"]
 mod toolkit_discovery_artifact;
@@ -340,6 +342,22 @@ impl InputContentClient {
             .ok_or(InputContentError::InvalidInput(
                 "the selected input authority is absent",
             ))?;
+        self.fetch_authority(reference).await
+    }
+
+    /// Materialize the frozen request under a supervised checkpoint inspection.
+    /// This grants no model invocation or runtime credential authority.
+    #[allow(dead_code)] // Recovery dispatch remains disabled until output replacement is wired.
+    pub(crate) async fn fetch_checkpoint_request(
+        &self,
+        inspection: &LiveModelCheckpointInspection,
+    ) -> Result<MaterializedInput, InputContentError> {
+        let reference =
+            inspection
+                .input_content_authority()
+                .ok_or(InputContentError::InvalidInput(
+                    "the checkpoint input authority is malformed",
+                ))?;
         self.fetch_authority(reference).await
     }
 
