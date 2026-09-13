@@ -1609,11 +1609,16 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			toolkitCallToolDispatchPolicy,
 			0,
 			toolCallRecords,
+			dependencies.Logger,
 		)
 		if toolRunErr != nil {
 			return nil, toolRunErr
 		}
 		toolkitCallTool = toolkitCallToolRuntime.run
+		publisherRoot, err = newPublisherSet(publisherRoot, toolkitCallToolRuntime)
+		if err != nil {
+			return nil, err
+		}
 		if config.ToolkitDiscoveryEnabled {
 			toolkitDiscoveryRuntime, err = newCurrentToolkitDiscoveryRuntime(dependencies.AdmissionPool, standaloneToolkitReader, standaloneToolkitSettings, dependencies.ToolkitCatalogue, dependencies.WorkerToolkitCapability, toolkitDiscoveryProducer, toolkitCallToolDispatchPolicy, toolkitDiscoveryArtifacts)
 			if err != nil {

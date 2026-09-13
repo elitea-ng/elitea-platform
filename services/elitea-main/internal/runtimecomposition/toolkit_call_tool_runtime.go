@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
+	"log/slog"
 	"time"
 
 	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
@@ -31,9 +32,11 @@ const (
 // currentToolkitCallToolRuntime is the composed producer for one synchronous
 // tool run.
 type currentToolkitCallToolRuntime struct {
-	run     *toolkitcalltoolapp.RunService
-	jobs    *repos.ToolkitCallToolJobsRepository
-	results *repos.ToolkitCallToolResultsRepository
+	run        *toolkitcalltoolapp.RunService
+	jobs       *repos.ToolkitCallToolJobsRepository
+	results    *repos.ToolkitCallToolResultsRepository
+	dispatcher *toolkitcalltoolapp.Dispatcher
+	logger     *slog.Logger
 }
 
 // toolkitTypeVerdictAdapter answers the same question
@@ -80,6 +83,7 @@ func newCurrentToolkitCallToolRuntime(
 	policy repos.ToolkitCallToolDispatchPolicy,
 	deadline time.Duration,
 	records *repos.ToolCallRecordsRepository,
+	logger *slog.Logger,
 ) (*currentToolkitCallToolRuntime, error) {
 	if admissionPool == nil || results == nil || toolkits == nil || settings == nil || producer == nil {
 		return nil, errors.New("tool-run runtime dependencies are required")
@@ -144,7 +148,7 @@ func newCurrentToolkitCallToolRuntime(
 	if err != nil {
 		return nil, fmt.Errorf("construct tool-run service: %w", err)
 	}
-	return &currentToolkitCallToolRuntime{run: run, jobs: jobs, results: results}, nil
+	return &currentToolkitCallToolRuntime{run: run, jobs: jobs, results: results, dispatcher: dispatcher, logger: logger}, nil
 }
 
 // toolRunRecorderAdapter turns one settled explicit tool run into the shared
@@ -183,4 +187,33 @@ func (a toolRunRecorderAdapter) RecordToolRun(
 		ActorUserID: record.ActorUserID,
 		ExecutionID: record.ExecutionID,
 	})
+}
+
+// Run recovers prepared commands without tying execution to an HTTP connection.
+func (r *currentToolkitCallToolRuntime) Run(ctx context.Context) error {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		iteration, cancel := context.WithTimeout(ctx, 8*time.Second)
+		ids, err := r.jobs.ListPreparedToolkitCallToolRecovery(iteration, 32)
+		if err == nil {
+			for _, id := range ids {
+				if err = r.dispatcher.RecoverPrepared(iteration, id); err != nil {
+					break
+				}
+			}
+		}
+		cancel()
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err != nil && r.logger != nil {
+			r.logger.Error("recover prepared toolkit command", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }

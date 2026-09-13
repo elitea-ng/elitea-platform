@@ -55,3 +55,6 @@ The second attempt used the textarea element and injected five HTTP 503 response
 The Playwright tool connection closed during this attempt. The subsequent browser inspection also returned `Transport closed`.
 No successful browser acceptance result was obtained. Repeat this test before closing the recovery gate.
 The test installs route cleanup in a `finally` block. Verify browser state after the automation connection returns.
+
+A subsequent runtime database query shows no execution admitted by either interrupted browser attempt.
+The latest admission remains the earlier toolkit discovery at `2026-09-13 11:07:53.294 UTC`.
