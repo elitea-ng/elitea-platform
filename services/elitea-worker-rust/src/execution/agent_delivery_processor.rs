@@ -131,6 +131,13 @@ where
             .await
             .map_err(AgentDeliveryProcessError::Delivery)?;
         tracing::info!(event = "agent_delivery_routed", route = ?route.kind());
+        self.process_route(route).await
+    }
+
+    async fn process_route(
+        &self,
+        route: AgentDeliveryRoute,
+    ) -> Result<AgentDeliveryProcessOutcome, AgentDeliveryProcessError> {
         match route {
             AgentDeliveryRoute::Fresh(fresh) => Box::pin(self.process_fresh(*fresh)).await,
             AgentDeliveryRoute::OutputRecovery(recovery) => {
@@ -143,6 +150,68 @@ where
             AgentDeliveryRoute::Completed(_) => Ok(AgentDeliveryProcessOutcome::completed(
                 "agent_delivery.redelivery_retired",
             )),
+        }
+    }
+
+    /// Opt-in delivery composition. Bootstrap remains on the ordinary route
+    /// until restored browser output and deployed recovery acceptance pass.
+    pub(super) async fn process_checkpoint_verified(
+        &self,
+        delivery: RedisCommandDelivery,
+        verified: VerifiedAgentCommand,
+    ) -> Result<AgentDeliveryProcessOutcome, AgentDeliveryProcessError>
+    where
+        T: AgentProgressConnector,
+    {
+        use super::agent_delivery::CheckpointDeliveryRoute;
+        match self
+            .router
+            .route_checkpoint_verified(delivery, verified, self.clock.now_unix_millis())
+            .await
+            .map_err(AgentDeliveryProcessError::Delivery)?
+        {
+            CheckpointDeliveryRoute::Ordinary(route) => self.process_route(route).await,
+            CheckpointDeliveryRoute::Inspect(recovery) => {
+                let reservation = match self.admission.reserve().await {
+                    Ok(reservation) => reservation,
+                    Err(error) => {
+                        return Ok(AgentDeliveryProcessOutcome::retained(
+                            error.code().as_str(),
+                            error.retryable(),
+                        ));
+                    }
+                };
+                let output = self
+                    .output
+                    .prepare_checkpoint(&recovery)
+                    .await
+                    .map_err(AgentDeliveryProcessError::OutputPreflight)?;
+                let Some(output) = output else {
+                    self.output
+                        .replay_checkpoint_progress(*recovery, self.replay.as_ref())
+                        .await
+                        .map_err(AgentDeliveryProcessError::OutputPreflight)?;
+                    return Ok(AgentDeliveryProcessOutcome::retained(
+                        "agent_delivery.checkpoint_output_reclaim",
+                        true,
+                    ));
+                };
+                let waiter = self
+                    .coordinator
+                    .submit_checkpoint(
+                        *recovery,
+                        output,
+                        reservation,
+                        self.input.clone(),
+                        self.preparation.lease_config(),
+                    )
+                    .map_err(AgentDeliveryProcessError::Supervision)?;
+                let completion = waiter
+                    .wait()
+                    .await
+                    .map_err(AgentDeliveryProcessError::Supervision)?;
+                Self::finish_invocation(completion)
+            }
         }
     }
 
@@ -505,7 +574,7 @@ where
 }
 
 #[derive(Clone, Copy)]
-enum AgentDeliveryProcessOutcome {
+pub(super) enum AgentDeliveryProcessOutcome {
     Completed { code: &'static str },
     RetainedNoAck { code: &'static str, retryable: bool },
 }
@@ -541,7 +610,7 @@ impl AgentDeliveryProcessOutcome {
     }
 }
 
-enum AgentDeliveryProcessError {
+pub(super) enum AgentDeliveryProcessError {
     Delivery(AgentDeliveryError),
     OutputPreflight(AgentOutputPreflightError),
     Preparation(AgentPreparationError),

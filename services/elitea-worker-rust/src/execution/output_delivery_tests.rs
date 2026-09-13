@@ -305,9 +305,16 @@ struct RecoveryControl {
 impl ControlRpc for RecoveryControl {
     async fn claim_command(
         &self,
-        _request: Request<ClaimCommandRequestV1>,
+        request: Request<ClaimCommandRequestV1>,
     ) -> Result<Response<ClaimCommandResponseV1>, Status> {
         self.trace.lock().expect("trace").push("claim");
+        if self.claim_fixture == "checkpoint" {
+            assert!(request.get_ref().agent_model_checkpoint_recovery);
+            let mut response = claim_response();
+            response.receipt.as_mut().expect("receipt").disposition =
+                crate::protocol::elitea::runtime::v1::ClaimDispositionV1::RecoverAgentModelCheckpoint as i32;
+            return Ok(Response::new(response));
+        }
         Ok(Response::new(
             ClaimCommandResponseV1::decode(bytes(self.claim_fixture).as_slice())
                 .expect("claim fixture"),
@@ -4463,11 +4470,11 @@ async fn checkpoint_output_reconciles_only_accepted_progress() {
         }
         drop(spool);
         let result = preflight
-            .prepare_checkpoint(checkpoint_delivery())
+            .prepare_checkpoint(&checkpoint_delivery())
             .await
             .expect("checkpoint preflight");
         if case <= 1 {
-            let (_, output) = result.expect("ready checkpoint output");
+            let output = result.expect("ready checkpoint output");
             let mut spool = output.into_test_spool();
             assert_eq!(spool.pending_frame_count(), 0);
             let watermark = accepted.claim_handoff_watermark();
@@ -4486,7 +4493,7 @@ async fn checkpoint_output_reconciles_only_accepted_progress() {
             );
             assert!(
                 preflight
-                    .prepare_checkpoint(checkpoint_delivery())
+                    .prepare_checkpoint(&checkpoint_delivery())
                     .await
                     .expect("reinspect")
                     .is_none()
@@ -4500,7 +4507,7 @@ async fn checkpoint_output_rejects_transport_identity_mismatch() {
     let (_temporary, root) = root();
     let preflight = preflight(root, "another-producer");
     assert!(matches!(
-        preflight.prepare_checkpoint(checkpoint_delivery()).await,
+        preflight.prepare_checkpoint(&checkpoint_delivery()).await,
         Err(AgentOutputPreflightError::InvalidConfiguration(_))
     ));
 }
@@ -4510,8 +4517,9 @@ async fn checkpoint_supervisor_owns_authorization_after_waiter_drop_and_rejects_
     for stopped in [false, true] {
         let trace = Arc::new(Mutex::new(Vec::new()));
         let (_temporary, root) = root();
-        let (delivery, output) = preflight(root, "worker-1")
-            .prepare_checkpoint(checkpoint_delivery())
+        let delivery = checkpoint_delivery();
+        let output = preflight(root, "worker-1")
+            .prepare_checkpoint(&delivery)
             .await
             .expect("preflight")
             .expect("empty output");
@@ -4631,7 +4639,7 @@ async fn checkpoint_progress_replay_preserves_exact_bytes_and_closes_on_error() 
         assert_eq!(state.sends.load(Ordering::SeqCst), 0);
         // ACK makes the spool empty; errors preserve the uncovered frame.
         let ready = preflight
-            .prepare_checkpoint(checkpoint_delivery())
+            .prepare_checkpoint(&checkpoint_delivery())
             .await
             .expect("reinspect after replay");
         assert_eq!(ready.is_some(), authorized);
@@ -4647,5 +4655,129 @@ async fn checkpoint_progress_replay_preserves_exact_bytes_and_closes_on_error() 
                 .expect("retry exact retained frame");
             assert_eq!(state.replays.load(Ordering::SeqCst), 2);
         }
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // Keep the two whole-delivery cases and their ownership assertions together.
+async fn checkpoint_delivery_processor_joins_supervision_or_replays_before_reclaim() {
+    for pending in [false, true] {
+        let trace = Arc::new(Mutex::new(Vec::new()));
+        let (_temporary, output_root) = root();
+        let output = preflight(output_root, "worker-1");
+        if pending {
+            let AgentOutputPreflightOutcome::Empty(empty) =
+                output.prepare(fresh()).await.expect("spool")
+            else {
+                panic!("empty")
+            };
+            let (accepted, prepared) = empty.into_parts();
+            let watermark = accepted.claim_handoff_watermark();
+            let fence = claim_response()
+                .receipt
+                .expect("receipt")
+                .fence
+                .expect("fence");
+            prepared
+                .into_test_spool()
+                .persist(progress_frame(&accepted, fence, watermark + 1, watermark))
+                .expect("pending");
+        }
+        let control = Arc::new(
+            AgentControlClient::new(
+                RecoveryControl {
+                    trace: trace.clone(),
+                    claim_fixture: "checkpoint",
+                    settlement_fails: false,
+                    authorize_disposition: Some(AuthorizeInvocationDispositionV1::AuthorizedNow),
+                    authorize_unavailable: false,
+                    renew_fail_after: None,
+                    renew_attempts: AtomicUsize::new(0),
+                    observe_states: Mutex::new(VecDeque::new()),
+                },
+                ControlGrpcConfig {
+                    deadline: Duration::from_secs(1),
+                    workload_session_id: "workload-1".to_owned(),
+                    producer_id: "worker-1".to_owned(),
+                },
+            )
+            .expect("control"),
+        );
+        let admission = InvocationAdmission::new(
+            InvocationAdmissionConfig::new(1, Duration::from_secs(1)).expect("admission"),
+        );
+        let retirer = Arc::new(recovery_retirer(
+            trace.clone(),
+            Ok(RedisRetirementResponse {
+                acknowledged: 1,
+                deleted: 1,
+                unmapped: 1,
+            }),
+        ));
+        let state = FakeProgressState::new([], [ReplayProgressAction::Acknowledge]);
+        let replay = Arc::new(FakeProgressConnector {
+            state: state.clone(),
+        });
+        let lifecycle = Arc::new(GatedAuthorizedLifecycle {
+            trace: trace.clone(),
+            started: Mutex::new(None),
+            release: Arc::new(Semaphore::new(1)),
+        });
+        let clock = Arc::new(|| NOW);
+        let coordinator = super::agent_coordinator::AgentInvocationCoordinator::new(
+            admission.clone(),
+            control.clone(),
+            retirer.clone(),
+            replay.clone(),
+            clock.clone(),
+            recovery_config(1),
+            lifecycle,
+        );
+        let processor = super::agent_delivery_processor::AgentDeliveryProcessor::new(
+            Arc::new(TestOnlyConformanceHmacAuthenticator),
+            output,
+            control,
+            retirer,
+            replay,
+            Arc::new(ValidAgentInput {
+                trace: trace.clone(),
+            }),
+            clock.clone(),
+            admission.clone(),
+            AgentPreparationConfig::new(Duration::from_secs(10)).expect("preparation"),
+            recovery_config(1),
+            coordinator,
+        );
+        let raw = bytes("signed_command");
+        let verified =
+            parse_and_verify_agent_command(&raw, Some(&TestOnlyConformanceHmacAuthenticator))
+                .expect("verified");
+        assert!(
+            processor
+                .process_checkpoint_verified(redis_delivery(raw), verified)
+                .await
+                .is_ok(),
+            "checkpoint processing"
+        );
+        processor.close().await.expect("drain");
+        let events = trace.lock().expect("trace");
+        assert_eq!(
+            events
+                .iter()
+                .filter(|x| **x == "checkpoint_authorize")
+                .count(),
+            usize::from(!pending)
+        );
+        assert_eq!(
+            events.iter().filter(|x| **x == "authorized").count(),
+            usize::from(!pending)
+        );
+        assert!(
+            !events.contains(&"begin")
+                && !events.contains(&"authorize")
+                && !events.contains(&"redis")
+        );
+        assert_eq!(state.replays.load(Ordering::SeqCst), usize::from(pending));
+        assert_eq!(admission.available_capacity(), 1);
     }
 }

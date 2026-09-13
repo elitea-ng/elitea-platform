@@ -2439,14 +2439,8 @@ impl AgentOutputPreflight {
     #[allow(dead_code)]
     pub(crate) async fn prepare_checkpoint(
         &self,
-        recovery: super::agent_delivery::CheckpointAgentDelivery,
-    ) -> Result<
-        Option<(
-            super::agent_delivery::CheckpointAgentDelivery,
-            PreparedAgentOutput,
-        )>,
-        AgentOutputPreflightError,
-    > {
+        recovery: &super::agent_delivery::CheckpointAgentDelivery,
+    ) -> Result<Option<PreparedAgentOutput>, AgentOutputPreflightError> {
         if !recovery.matches_output_transport(
             &self.policy.output_config.workload_session_id,
             &self.policy.output_config.producer_id,
@@ -2487,7 +2481,7 @@ impl AgentOutputPreflight {
                 return Ok(None);
             }
         }
-        Ok(Some((recovery, PreparedAgentOutput { prepared, factory })))
+        Ok(Some(PreparedAgentOutput { prepared, factory }))
     }
 
     /// Replay retained progress exactly once, then require a fresh claim.
