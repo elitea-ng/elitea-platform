@@ -62,6 +62,16 @@ pub(crate) struct OrdinaryNativeAgentAssembler {
     sessions: NativeSessionBackend,
 }
 
+/// Shared provider/session dependencies; constructing them never starts Runner.
+struct OrdinaryRunnerInputs {
+    model: BoundModelFacade,
+    plan: super::session::OrdinaryNativeAgentPlan,
+    runtime: OrdinaryRuntimeBindings,
+    mode: NativeToolExecutionMode,
+    sessions: Arc<dyn adk_rust::session::SessionService>,
+    start: AdmittedNativeStart,
+}
+
 impl OrdinaryNativeAgentAssembler {
     #[must_use]
     pub(crate) fn new(
@@ -113,37 +123,14 @@ impl OrdinaryNativeAgentAssembler {
         AssembledNativeAgentInvocation<OrdinaryAgentCompletion<BoundModelFacade>>,
         NativeAgentAssemblyError,
     > {
-        let RedeemedOrdinaryNativeAssembly {
-            profile,
+        let OrdinaryRunnerInputs {
+            model,
             plan,
-            toolsets: tool_snapshot,
+            runtime,
+            mode: fresh_execution_mode,
+            sessions,
             start,
-            mcp_tokens,
-            context: claim_context,
-            runtime_context,
-            session: session_authority,
-            state_writer_lease,
-        } = redeemed;
-        let context = Arc::new(claim_context);
-        tracing::Span::current().record("stage", "toolsets");
-        let (runtime, fresh_execution_mode) = self
-            .materialize_runtime(
-                &tool_snapshot,
-                mcp_tokens,
-                &runtime_context,
-                context.clone(),
-                &profile,
-                &tool_policy,
-            )
-            .await?;
-        let output_continuation = matches!(&start, AdmittedNativeStart::OutputContinuation);
-        tracing::Span::current().record("output_continuation", output_continuation);
-        let model = self.bind_model(&profile, context.as_ref(), output_continuation)?;
-        tracing::Span::current().record("stage", "runner");
-        let sessions = self
-            .sessions
-            .open(session_authority, state_writer_lease, &plan)
-            .await?;
+        } = self.prepare_runner_inputs(redeemed, tool_policy).await?;
         match start {
             AdmittedNativeStart::Fresh
             | AdmittedNativeStart::Regenerate
@@ -184,6 +171,68 @@ impl OrdinaryNativeAgentAssembler {
                 .await
             }
         }
+    }
+
+    async fn prepare_runner_inputs(
+        &self,
+        redeemed: RedeemedOrdinaryNativeAssembly<'_>,
+        tool_policy: Arc<ToolAdmissionPolicy>,
+    ) -> Result<OrdinaryRunnerInputs, NativeAgentAssemblyError> {
+        let RedeemedOrdinaryNativeAssembly {
+            profile,
+            plan,
+            toolsets: tool_snapshot,
+            start,
+            mcp_tokens,
+            context: claim_context,
+            runtime_context,
+            session: session_authority,
+            state_writer_lease,
+        } = redeemed;
+        let context = Arc::new(claim_context);
+        tracing::Span::current().record("stage", "toolsets");
+        let (runtime, fresh_execution_mode) = self
+            .materialize_runtime(
+                &tool_snapshot,
+                mcp_tokens,
+                &runtime_context,
+                context.clone(),
+                &profile,
+                &tool_policy,
+            )
+            .await?;
+        let output_continuation = matches!(&start, AdmittedNativeStart::OutputContinuation);
+        tracing::Span::current().record("output_continuation", output_continuation);
+        let model = self.bind_model(&profile, context.as_ref(), output_continuation)?;
+        tracing::Span::current().record("stage", "runner");
+        let sessions = self
+            .sessions
+            .open(session_authority, state_writer_lease, &plan)
+            .await?;
+        Ok(OrdinaryRunnerInputs {
+            model,
+            plan,
+            runtime,
+            mode: fresh_execution_mode,
+            sessions,
+            start,
+        })
+    }
+
+    async fn redeem_for_runner<'a>(
+        &self,
+        assembly: AuthorizedNativeAssembly<'a>,
+        tool_policy: &ToolAdmissionPolicy,
+    ) -> Result<RedeemedOrdinaryNativeAssembly<'a>, NativeAgentAssemblyError> {
+        let admitted = assembly.admit_llm_agent(tool_policy)?;
+        if admitted.is_resume() && !self.sessions.supports_resume() {
+            return Err(unsupported_session_resume());
+        }
+        tracing::Span::current().record("stage", "runtime_context");
+        admitted
+            .redeem_runtime_context(self.platform.as_ref())
+            .await
+            .map_err(NativeAgentAssemblyError::from)
     }
 
     async fn materialize_runtime(
@@ -340,6 +389,39 @@ impl NativeAgentAssembler for OrdinaryNativeAgentAssembler {
             .await
     }
 
+    async fn assemble_checkpoint(
+        &self,
+        assembly: AuthorizedNativeAssembly<'_>,
+    ) -> Result<
+        super::runtime::PendingRecoveredAgentInvocation<Self::Completion>,
+        NativeAgentAssemblyError,
+    > {
+        if !self.sessions.supports_resume() {
+            return Err(unsupported_session_resume());
+        }
+        let tool_policy = policy_for_guardrails(
+            assembly.request().payload.toolkit_guardrails.as_ref(),
+            &self.tool_policy,
+        )?;
+        // The saved model request already contains resolved attachments. Do not
+        // reread mutable documents while reconstructing this execution.
+        let redeemed = self
+            .redeem_for_runner(assembly, tool_policy.as_ref())
+            .await?;
+        let OrdinaryRunnerInputs {
+            model,
+            plan,
+            runtime,
+            mode,
+            sessions,
+            ..
+        } = self.prepare_runner_inputs(redeemed, tool_policy).await?;
+        super::session::assemble_ordinary_native_from_checkpoint(
+            model, plan, runtime, mode, sessions,
+        )
+        .await
+    }
+
     async fn assemble(
         &self,
         assembly: AuthorizedNativeAssembly<'_>,
@@ -362,15 +444,9 @@ impl NativeAgentAssembler for OrdinaryNativeAgentAssembler {
                 .resolve_attachment_contents(self.platform.as_ref())
                 .await;
             tracing::Span::current().record("stage", "admission");
-            let admitted = assembly.admit_llm_agent(tool_policy.as_ref())?;
-            if admitted.is_resume() && !self.sessions.supports_resume() {
-                return Err(unsupported_session_resume());
-            }
-            tracing::Span::current().record("stage", "runtime_context");
-            let redeemed = admitted
-                .redeem_runtime_context(self.platform.as_ref())
-                .await
-                .map_err(NativeAgentAssemblyError::from)?;
+            let redeemed = self
+                .redeem_for_runner(assembly, tool_policy.as_ref())
+                .await?;
             self.assemble_redeemed(redeemed, tool_policy).await
         }
         .instrument(span.clone())

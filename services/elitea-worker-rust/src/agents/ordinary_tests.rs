@@ -3241,3 +3241,89 @@ async fn checkpoint_inspection_never_redeems_credentials_or_starts_a_model() {
         assert!(captured.lock().expect("model requests").is_empty());
     }
 }
+
+#[tokio::test]
+async fn ordinary_assembler_restores_the_authorized_model_request() {
+    let request = ordinary_request(AgentExecutionKind::Application);
+    let (runtime_context, context_calls) = runtime_context_client_for_redemptions(2);
+    let (model_gateway, captured) = test_model_gateway_client(
+        vec![
+            TestModelGatewayOutcome::Unavailable,
+            TestModelGatewayOutcome::Response(model_response()),
+        ],
+        test_model_gateway_config(),
+    )
+    .expect("model fixture");
+    let assembler = OrdinaryNativeAgentAssembler::new(
+        platform_client(runtime_context),
+        Arc::new(ModelFacade::from_gateway(model_gateway)),
+        empty_tool_policy(),
+    )
+    .with_sessions(Arc::new(InMemorySessionService::new()));
+    let mut initial = assembler
+        .assemble(AuthorizedNativeAssembly::new(
+            &request,
+            test_runtime_context_authority(),
+            AuthorizedNativeCommandBinding::fixture(),
+        ))
+        .await
+        .expect("initial assembly");
+    initial
+        .project_start(chrono::Utc::now())
+        .expect("initial projection start");
+    let (mut run, _, _) = initial.start().expect("initial start");
+    assert!(run.next_event().await.is_err());
+    drop(run);
+    assert_eq!(captured.lock().expect("model calls").len(), 1);
+
+    let evidence = assembler
+        .inspect_checkpoint(
+            &request,
+            &AuthorizedNativeCommandBinding::fixture(),
+            crate::protocol::control::test_session_authority(),
+            Arc::new(crate::state::TestStateWriterLease::current()),
+        )
+        .await
+        .expect("checkpoint inspection");
+    assert_eq!(context_calls.load(Ordering::Acquire), 1);
+    let (claim, control) =
+        crate::protocol::control::test_checkpoint_authorizer("execution/one", 3, evidence.digest());
+    let authorization = claim
+        .authorize(&control, evidence)
+        .await
+        .unwrap_or_else(|_| panic!("checkpoint authorization"));
+    let pending = assembler
+        .assemble_checkpoint(AuthorizedNativeAssembly::new(
+            &request,
+            test_runtime_context_authority(),
+            AuthorizedNativeCommandBinding::fixture(),
+        ))
+        .await
+        .expect("restored assembly");
+    assert_eq!(captured.lock().expect("model calls").len(), 1);
+    let (mut restored, _) = pending
+        .authorize(authorization)
+        .expect("matching checkpoint");
+    restored
+        .project_start(chrono::Utc::now())
+        .expect("restored projection start");
+    let (mut run, mut projector, completion) = restored.start().expect("restored start");
+    while let Some(event) = run.next_event().await.expect("restored event") {
+        projector.project(&event).expect("projection");
+    }
+    let completed = completion.select().await.expect("completed model");
+    assert!(
+        !projector
+            .finish_after_eos(completed, chrono::Utc::now())
+            .expect("final output")
+            .is_empty()
+    );
+    let requests = captured.lock().expect("model requests");
+    assert_eq!(requests.len(), 2);
+    let first: serde_json::Value =
+        serde_json::from_slice(&requests[0].body).expect("first request");
+    let resumed: serde_json::Value =
+        serde_json::from_slice(&requests[1].body).expect("resumed request");
+    assert_eq!(first["messages"], resumed["messages"]);
+    assert_eq!(context_calls.load(Ordering::Acquire), 2);
+}

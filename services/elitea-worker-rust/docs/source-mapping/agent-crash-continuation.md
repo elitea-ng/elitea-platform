@@ -280,3 +280,12 @@ The ordinary implementation in `src/agents/ordinary.rs` uses its configured `Nat
 All 309 agent component tests pass after sharing admission. The new ordinary assembler test rejects absent checkpoints in both invocation-local and injected session backends with zero runtime credential redemptions and zero model calls. Existing restoration tests remain the evidence for checkpoint replay; this new test establishes the assembler boundary only. Pipeline inspection uses the explicit unsupported default until pipeline checkpoint support is implemented.
 
 No product schema, proto, or current-platform behavior changes in this step. Restored assembly, output lifecycle integration, and deployed browser/external MCP restart acceptance remain required.
+
+## Restored native assembler path
+
+`NativeAgentAssembler::assemble_checkpoint` returns `PendingRecoveredAgentInvocation`, preserving the exact checkpoint authorization requirement through `NativeRuntimeAssembler` completion mapping. Unsupported assemblers reject restoration explicitly.
+`OrdinaryNativeAgentAssembler` shares runtime redemption and provider/tool/session setup between ordinary and restored assembly. Recovery uses the existing checkpoint-specific session assembler and does not reread attachments; the durable model request already contains resolved document content. It does not fall back to creating a fresh session or synthesizing another user turn.
+
+The ordinary assembler integration test runs an initial model transport failure, inspects its persisted checkpoint without another credential redemption, authorizes its digest, assembles the pending Runner, checks the exact authorization, and completes the restored model. The gateway receives identical message arrays for the initial and restored requests, and no second model call occurs during assembly. The suite of 310 agent tests passes, with strict library/test Clippy verification. Final browser-output projection is also asserted by the focused integration test.
+
+Source owners: `src/agents/ordinary.rs`, `src/agents/runtime.rs`, `src/agents/native_runtime.rs`, and `src/agents/ordinary_tests.rs`. This extends the worker-owned restart capability; no current-platform business behavior, schema, or proto changes are added here. The test uses injected session storage and gateway/control doubles. Delivery supervision, output replacement, and live UI/external MCP restart acceptance remain unfinished.

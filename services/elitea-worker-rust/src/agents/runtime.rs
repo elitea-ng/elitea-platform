@@ -678,6 +678,16 @@ pub(crate) trait NativeAgentAssembler: Send + Sync + 'static {
         ))
     }
 
+    async fn assemble_checkpoint(
+        &self,
+        _assembly: AuthorizedNativeAssembly<'_>,
+    ) -> Result<PendingRecoveredAgentInvocation<Self::Completion>, NativeAgentAssemblyError> {
+        Err(NativeAgentAssemblyError::new(
+            NativeAgentAssemblyErrorCode::UnsupportedCapability,
+            "model checkpoint restoration is not supported by this assembler",
+        ))
+    }
+
     async fn assemble(
         &self,
         assembly: AuthorizedNativeAssembly<'_>,
@@ -698,6 +708,16 @@ impl<S> PendingRecoveredAgentInvocation<S> {
         Self {
             assembled,
             checkpoint,
+        }
+    }
+
+    pub(crate) fn map_completion<T>(
+        self,
+        map: impl FnOnce(S) -> T,
+    ) -> PendingRecoveredAgentInvocation<T> {
+        PendingRecoveredAgentInvocation {
+            assembled: self.assembled.map_completion(map),
+            checkpoint: self.checkpoint,
         }
     }
 

@@ -153,6 +153,27 @@ where
         }
     }
 
+    async fn assemble_checkpoint(
+        &self,
+        assembly: AuthorizedNativeAssembly<'_>,
+    ) -> Result<
+        super::runtime::PendingRecoveredAgentInvocation<Self::Completion>,
+        NativeAgentAssemblyError,
+    > {
+        match NativeRuntimeKind::from_request(assembly.request())? {
+            NativeRuntimeKind::Direct => self
+                .direct
+                .assemble_checkpoint(assembly)
+                .await
+                .map(|pending| pending.map_completion(NativeRuntimeCompletion::Direct)),
+            NativeRuntimeKind::Pipeline => self
+                .pipeline
+                .assemble_checkpoint(assembly)
+                .await
+                .map(|pending| pending.map_completion(NativeRuntimeCompletion::Pipeline)),
+        }
+    }
+
     async fn assemble(
         &self,
         assembly: AuthorizedNativeAssembly<'_>,
