@@ -100,6 +100,19 @@ impl ModelCheckpointInspection {
         Ok(Self { claim })
     }
 
+    pub(crate) fn producer_id(&self) -> &str {
+        self.claim.producer_id()
+    }
+    pub(crate) fn matches_output_transport(&self, session: &str, producer: &str) -> bool {
+        self.claim.matches_output_transport(session, producer)
+    }
+    pub(crate) fn matches_output_identity(&self, frame: &super::ExecutionOutputFrameV1) -> bool {
+        self.claim.matches_output_identity(frame.identity.as_ref())
+    }
+    pub(crate) fn output_watermark(&self) -> u64 {
+        self.claim.claim_handoff_watermark()
+    }
+
     pub(crate) fn into_lease_supervision(
         self,
     ) -> (PendingModelCheckpointInspection, super::ClaimLeaseHandle) {

@@ -298,3 +298,13 @@ Source owners: `src/agents/ordinary.rs`, `src/agents/runtime.rs`, `src/agents/na
 The full library run passed 979 tests with loopback access enabled; seven local HTTP-fixture tests had failed in the sandbox. An additional focused lifecycle test passes, proving recovery selects the checkpoint assembler and retains the run for no-ACK cleanup after dependency failure, releasing admission capacity. The real assembler restoration test now exercises the split lifecycle proof and still completes the restored model. Strict Clippy validation accompanies this change.
 
 Source mapping: `src/protocol/model_checkpoint_inspection.rs`, `src/agents/runtime.rs`, and `src/execution/agent_preparation.rs`; verification in ordinary assembler and execution preparation tests. This is new worker recovery orchestration rather than a change to current-platform business logic. No product schema or protocol change is added in this step. Production intake, partial-output replacement, and real browser/external MCP restart verification remain pending.
+
+## Checkpoint output spool preparation
+
+`AgentOutputPreflight::prepare_checkpoint` opens the same execution/producer-scoped encrypted spool under the checkpoint claim's output transport identity. Empty output is ready for the shared lifecycle. A single pending progress frame is reconciled only after signed-command/identity validation and only when its sequence is covered by the authenticated claim handoff watermark. The reconciled spool is reopened because a reconciled spool handle intentionally cannot publish new frames.
+Uncovered progress and terminal frames remain on disk and return no ready output; they still require exact-frame replay before model recovery. Malformed frames and mismatched output transport identities fail closed. This function does not contact Main, invoke a model, or acknowledge Redis.
+
+The two focused tests pass: empty and covered-progress spools accept the next output sequence after preparation, uncovered progress and terminal output survive repeated inspection, and a mismatched producer is rejected. Strict Clippy validation accompanies the change.
+Source owners: `src/execution/output_delivery.rs`, `src/execution/agent_delivery.rs`, and `src/protocol/model_checkpoint_inspection.rs`; tests are in `src/execution/output_delivery_tests.rs`.
+
+This reuses the new platform's existing spool and output-watermark contracts; no current-platform business behavior or schema changes are introduced. Main owns the accepted output watermark, while Rust/ADK still owns model checkpoint state. Production coordinator intake, pending-frame replay integration, partial browser-output replacement, and deployed UI/external MCP restart proof remain pending.

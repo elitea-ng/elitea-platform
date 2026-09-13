@@ -356,6 +356,38 @@ pub(crate) struct CheckpointAgentDelivery {
 
 #[allow(dead_code)]
 impl CheckpointAgentDelivery {
+    pub(crate) fn matches_output_transport(&self, session: &str, producer: &str) -> bool {
+        self.inspection.matches_output_transport(session, producer)
+    }
+    pub(crate) fn spool_identity(&self) -> ExecutionSpoolIdentity {
+        let command = self.verified.command();
+        ExecutionSpoolIdentity {
+            tenant_id: command.tenant_id.clone(),
+            resource_project_id: command.resource_project_id.clone(),
+            projection_project_id: command.projection_project_id.clone(),
+            command_id: command.command_id.clone(),
+            execution_id: command.execution_id.clone(),
+            generation: command.generation,
+            producer_id: self.inspection.producer_id().to_owned(),
+        }
+    }
+    pub(crate) fn covered_progress(
+        &self,
+        frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
+    ) -> Result<bool, ProtocolError> {
+        if !self.inspection.matches_output_identity(frame) {
+            return Err(ProtocolError::AuthorizationFailed(
+                "the recovery output identity is invalid",
+            ));
+        }
+        let kind = validate_restored_agent_output_frame(&self.verified, frame)?;
+        Ok(kind == ValidatedAgentOutputFrameKind::Progress
+            && frame.sequence <= self.inspection.output_watermark())
+    }
+    pub(crate) fn output_watermark(&self) -> u64 {
+        self.inspection.output_watermark()
+    }
+
     pub(crate) fn into_parts(
         self,
     ) -> (
@@ -364,6 +396,19 @@ impl CheckpointAgentDelivery {
         crate::protocol::control::ModelCheckpointInspection,
     ) {
         (self.delivery, self.verified, self.inspection)
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_checkpoint_delivery(
+    delivery: RedisCommandDelivery,
+    verified: VerifiedAgentCommand,
+    inspection: crate::protocol::control::ModelCheckpointInspection,
+) -> CheckpointAgentDelivery {
+    CheckpointAgentDelivery {
+        delivery,
+        verified,
+        inspection,
     }
 }
 

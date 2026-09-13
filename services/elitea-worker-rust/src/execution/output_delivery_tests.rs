@@ -4336,3 +4336,95 @@ fn terminal_recovery_session_policy_matches_the_deployed_v1_bounds() {
         ));
     }
 }
+
+fn checkpoint_delivery() -> super::agent_delivery::CheckpointAgentDelivery {
+    let raw = bytes("signed_command");
+    let verified =
+        parse_and_verify_agent_command(&raw, Some(&TestOnlyConformanceHmacAuthenticator))
+            .expect("command");
+    let mut response = claim_response();
+    response.receipt.as_mut().expect("receipt").disposition =
+        crate::protocol::elitea::runtime::v1::ClaimDispositionV1::RecoverAgentModelCheckpoint
+            as i32;
+    let inspection = crate::protocol::control::ModelCheckpointInspection::parse(
+        &verified,
+        response,
+        "workload-1",
+        "worker-1",
+        NOW,
+    )
+    .expect("inspection");
+    super::agent_delivery::test_checkpoint_delivery(redis_delivery(raw), verified, inspection)
+}
+
+#[tokio::test]
+async fn checkpoint_output_reconciles_only_accepted_progress() {
+    for case in 0..4 {
+        let (_temporary, root) = root();
+        let preflight = preflight(root, "worker-1");
+        let AgentOutputPreflightOutcome::Empty(empty) =
+            preflight.prepare(fresh()).await.expect("initial spool")
+        else {
+            panic!("empty spool")
+        };
+        let (accepted, output) = empty.into_parts();
+        let mut spool = output.into_test_spool();
+        if case != 0 {
+            let mut fence = claim_response()
+                .receipt
+                .expect("receipt")
+                .fence
+                .expect("fence");
+            fence.fence_token[0] ^= 1;
+            let watermark = accepted.claim_handoff_watermark();
+            let frame = match case {
+                1 => progress_frame(&accepted, fence, watermark, watermark - 1),
+                2 => progress_frame(&accepted, fence, watermark + 1, watermark),
+                3 => terminal_frame(&accepted),
+                _ => unreachable!(),
+            };
+            spool.persist(frame).expect("persisted output");
+        }
+        drop(spool);
+        let result = preflight
+            .prepare_checkpoint(checkpoint_delivery())
+            .await
+            .expect("checkpoint preflight");
+        if case <= 1 {
+            let (_, output) = result.expect("ready checkpoint output");
+            let mut spool = output.into_test_spool();
+            assert_eq!(spool.pending_frame_count(), 0);
+            let watermark = accepted.claim_handoff_watermark();
+            let fence = claim_response()
+                .receipt
+                .expect("receipt")
+                .fence
+                .expect("fence");
+            spool
+                .persist(progress_frame(&accepted, fence, watermark + 1, watermark))
+                .expect("reopened spool accepts the next output");
+        } else {
+            assert!(
+                result.is_none(),
+                "unacknowledged output must remain for replay"
+            );
+            assert!(
+                preflight
+                    .prepare_checkpoint(checkpoint_delivery())
+                    .await
+                    .expect("reinspect")
+                    .is_none()
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn checkpoint_output_rejects_transport_identity_mismatch() {
+    let (_temporary, root) = root();
+    let preflight = preflight(root, "another-producer");
+    assert!(matches!(
+        preflight.prepare_checkpoint(checkpoint_delivery()).await,
+        Err(AgentOutputPreflightError::InvalidConfiguration(_))
+    ));
+}
