@@ -411,3 +411,26 @@ The previous sections identify the implementation paths and component tests for 
 This live result covers an ad-hoc model-generation checkpoint with no attached tools.
 It does not prove external MCP reconnect, Main restart recovery, or interruption during an external tool effect.
 These remaining cases keep point 3 open.
+
+
+## Deployed Main restart acceptance: 2026-09-13
+
+A second fresh Playwright Chrome context submits chat `567` and waits for generated assistant output.
+It restarts Main with a zero-second stop timeout while Rust remains running.
+The interrupted model stream reports `model_gateway.stream_transport`.
+Lease supervision retains the command without Redis acknowledgement.
+
+The replacement claim resumes execution `012a6df6f81faaf9fc728b4f0116e959`.
+Database evidence shows initial attempt/epoch 1 and replacement attempt/epoch 2.
+The replacement uses `AGENT_MODEL_CHECKPOINT`, stores checkpoint authorization evidence, and releases after completion.
+The browser submits one message POST.
+Its event request reconnects to the same execution with cursor `177147`.
+The final answer appears and remains after reload, with one answer marker and one prompt marker.
+
+Visible Chrome verification also opens chats `566` and `567` through computer use.
+It signs in through the identity selector and confirms both persisted answers and their final markers.
+The Main restart result tab remains open for inspection.
+
+This proves the tested ad-hoc model boundary across both worker and Main restarts.
+It does not close external MCP reconnect or interruption during external tool effects.
+No additional implementation change is necessary for this Main restart case.
