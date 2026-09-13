@@ -58,3 +58,17 @@ The test installs route cleanup in a `finally` block. Verify browser state after
 
 A subsequent runtime database query shows no execution admitted by either interrupted browser attempt.
 The latest admission remains the earlier toolkit discovery at `2026-09-13 11:07:53.294 UTC`.
+
+## Completed local Playwright acceptance
+
+Local Playwright with installed Chrome replaces the unavailable browser tool for this check.
+A fresh browser context signs in through the rehearsal identity selector. It exports no browser credentials or session state.
+The test submits one chat request and injects five HTTP 503 responses on the execution event stream.
+Observed connection attempts occur at 0.12, 1.13, 3.14, 7.15, 15.16, and 45.18 seconds.
+The sixth attempt reaches the real event endpoint. Chat 557 displays `RUST_CHAT_RECONNECT_LOCAL_20260913` in the answer.
+The marker occurs twice across the page: once in the question and once in the answer.
+There is one message-submission POST. The other POSTs create the conversation and its participant.
+The browser context closes after verification. The deployed Main includes atomic toolkit admission at this point.
+
+This passes the extended event-stream outage gate. It injects transport failures without crashing Main or Rust.
+Actual process-replacement and external MCP reconnection acceptance remain separate requirements.
