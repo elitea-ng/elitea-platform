@@ -264,3 +264,29 @@ A deployed combined-guard run remains required.
 Main deploys as `elitea-main:mixed-guard-report-20260913`.
 Its image is `sha256:c3068f0573b0b6d283fc439f75c5697f1d249c86978bef5fad94fe426b70ec9f`.
 The replacement retains all six mounts and existing runtime settings.
+
+## Live combined-guard failure
+
+A fresh headed Playwright session creates two child agents and a parent that invokes both in parallel.
+One child uses the synthetic OpenAPI echo. The other uses a new delegated MCP toolkit.
+Main's administration guardrail API temporarily marks the OpenAPI echo as sensitive.
+The worker fallback policy does not override Main's stamped policy; an earlier fallback-only attempt produces only delegated authorization.
+
+Execution `56c18ebef68895b695e53255134b317f` invokes both child agents.
+Message group 5904 records the echo call and the separate MCP authorization call.
+The worker publishes the sensitive interrupt, then returns `agent_pause.mixed_guardrails_unsupported`.
+The execution eventually reaches `FAILED`; the browser projection reports `The runtime operation failed.`
+This is not a passing combined-guard result.
+
+The blocker is `AgentPauseAccumulator::finish` in `src/execution/native_agent_lifecycle.rs`.
+It explicitly rejects a nonempty sensitive/HITL set together with a nonempty authorization set.
+The passing nested-agent component test does not cross this lifecycle boundary.
+The next implementation must preserve both sets through terminal publication and Main projection.
+It must retain exact child identities and existing browser continuation authority.
+
+Main's original guardrail values are restored through its API with HTTP 200.
+Applications 25, 26, and 27 and toolkit 38 are deleted with HTTP 204.
+The temporary PAT is revoked with HTTP 204.
+The earlier fallback-policy test also removes all fixtures and restores the worker policy file byte-for-byte.
+The live failure log is `elitea-live-mixed-authoritative.log`.
+The reusable local fixture script is `elitea-live-mixed-guards.py`.
