@@ -8,6 +8,7 @@ Recovery appends those exact bytes. It does not create an execution or reconstru
 | Responsibility | Source |
 | --- | --- |
 | Existing durable signed envelope and publication state | `services/elitea-main/internal/db/queries/runtime_toolkit_call_tool.sql` |
+| Sign and store the command within admission | `services/elitea-main/internal/infra/db/repos/toolkit_call_tool_preparation.go` |
 | Select pending prepared commands and recheck authority | `services/elitea-main/internal/infra/db/repos/toolkit_call_tool_dispatch.go` |
 | Publish the stored envelope without signing | `services/elitea-main/internal/application/toolkitcalltool/dispatch.go` |
 | Own and stop the background recovery loop | `services/elitea-main/internal/runtimecomposition/toolkit_call_tool_runtime.go` |
@@ -39,8 +40,10 @@ This test models Main replacement using new instances. It does not prove a live 
 
 ## Remaining recovery windows
 
-Admission still precedes signed-envelope storage. A crash in that earlier window leaves no complete durable command to publish.
-That window needs atomic command preparation with admission, or an equivalent durable command intent.
+Production admission now prepares and stores the signed envelope inside the existing admission transaction.
+A signing or storage failure rolls back the job, outbox, and input bundle. A committed admission always has a prepared command.
+The single production composition supplies the existing command producer as its preparer. The repository can omit preparation for legacy-row tests.
+Legacy unprepared rows from older deployments remain unrecoverable without the original command scalars. They retain the existing expiry behavior.
 The existing SQL header describes the original synchronous-only implementation. Prepared commands now have the recovery path documented here.
 
 External MCP client reconnection and successful continuation after an ambiguous provider invocation remain separate acceptance gates.
@@ -52,3 +55,16 @@ Main uses image `elitea-main:prepared-recovery-20260913`.
 Its digest is `sha256:4457c5fcf267827507e52301a573c20135e24dfadd22effec4afbb11f19e3cba`.
 The replacement preserves the six mounts, environment, networks, and resource limits. No active claim existed during replacement.
 The container reports `running healthy`. UI and Rust images remain unchanged.
+
+## Atomic admission evidence
+
+`TestPostgresToolkitAtomicPreparation` passes without skipping against a disposable PostgreSQL database.
+It verifies rollback after signing failure and recovery immediately after admission without foreground dispatch.
+It compares the prepared command identity, input references, tool binding, and deadline with the committed admission.
+An idempotent replay preserves the execution and does not sign again. Changed arguments produce an idempotency conflict.
+The existing prepared-recovery test also passes after this change.
+These tests use controlled envelopes. Live acceptance must still verify the real signer, Redis, worker, and external client together.
+
+Atomic admission is deployed as `elitea-main:atomic-toolkit-admission-20260913`.
+Its digest is `sha256:788fe5a093445918e18608046b71011170039fd1a742cebeb2cc0a7b10dbc8d7`.
+Main reports `running healthy`. The replacement preserves the environment and six mounts without schema changes.

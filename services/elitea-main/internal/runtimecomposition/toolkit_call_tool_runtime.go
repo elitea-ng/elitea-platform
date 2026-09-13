@@ -116,7 +116,7 @@ func newCurrentToolkitCallToolRuntime(
 	if err != nil {
 		return nil, fmt.Errorf("construct tool-run input bundle factory: %w", err)
 	}
-	jobs, err := repos.NewToolkitCallToolJobsRepository(admissionPool, policy)
+	jobs, err := repos.NewToolkitCallToolJobsRepository(admissionPool, policy, producer)
 	if err != nil {
 		return nil, fmt.Errorf("construct tool-run jobs repository: %w", err)
 	}
