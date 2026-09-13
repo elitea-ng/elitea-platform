@@ -253,6 +253,12 @@ type ToolkitExecuteReadUseCase interface {
 	) (toolkitexecutionapp.CurrentReadToolExecutionOutcome, error)
 }
 
+// ToolkitResumeUseCase separates durable admission from repeatable observation.
+type ToolkitResumeUseCase interface {
+	Admit(context.Context, toolkitexecutionapp.ExecuteCurrentReadToolRequest) (toolkitexecutionapp.AdmittedCurrentReadTool, error)
+	WaitForResult(context.Context, toolkitexecutionapp.ReadToolResultReference) (toolkitexecutionapp.CurrentReadToolExecutionOutcome, error)
+}
+
 func WithToolkitExecuteRead(executor ToolkitExecuteReadUseCase) Option {
 	return func(handler *Handler) {
 		handler.toolkitExecute = executor

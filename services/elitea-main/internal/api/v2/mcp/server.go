@@ -64,7 +64,7 @@ func (h *Handler) Endpoint(w http.ResponseWriter, r *http.Request) {
 	// refuses the same way, with this same sentence.
 	if r.Method == http.MethodGet {
 		if h.resumeCodec != nil && r.Header.Get("Last-Event-ID") != "" {
-			h.resumeAgentStream(w, r, schema)
+			h.resumeToolStream(w, r, schema)
 			return
 		}
 		w.Header().Set("Allow", http.MethodPost)
@@ -120,7 +120,7 @@ func (h *Handler) Endpoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if message.Method == "tools/call" && h.resumeCodec != nil && strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
-		h.streamAgentCall(w, r, schema, requestScope, message)
+		h.streamToolCall(w, r, schema, requestScope, message)
 		return
 	}
 	writeRPC(w, http.StatusOK, h.dispatch(r, schema, requestScope, message))
@@ -238,10 +238,10 @@ const ToolExecutionUnavailableReason = "this MCP server can list this project's 
 	"Nothing was executed and nothing was changed."
 
 func (h *Handler) callTool(r *http.Request, schema string, s scope, message rpcMessage) rpcResponse {
-	return h.callToolWithObserver(r, schema, s, message, nil)
+	return h.callToolWithObservers(r, schema, s, message, nil, nil)
 }
 
-func (h *Handler) callToolWithObserver(r *http.Request, schema string, s scope, message rpcMessage, observer agentResultObserver) rpcResponse {
+func (h *Handler) callToolWithObservers(r *http.Request, schema string, s scope, message rpcMessage, observer agentResultObserver, toolkitObserver toolkitResultObserver) rpcResponse {
 	var params struct {
 		Name      string         `json:"name"`
 		Arguments map[string]any `json:"arguments"`
@@ -334,8 +334,8 @@ func (h *Handler) callToolWithObserver(r *http.Request, schema string, s scope, 
 		}
 		// A read-only refusal must never fall through to an effectful worker.
 		if h.toolkitExecute != nil {
-			return newResult(message.ID, h.runReadToolkitTool(
-				r.Context(), projectID, actorUserID, target, params.Arguments,
+			return newResult(message.ID, h.runReadToolkitToolWithObserver(
+				r.Context(), projectID, actorUserID, target, params.Arguments, toolkitObserver,
 			))
 		}
 		return newResult(message.ID, h.runToolkitTool(

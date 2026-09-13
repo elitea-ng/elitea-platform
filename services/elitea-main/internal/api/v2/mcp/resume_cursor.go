@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	"time"
 )
 
@@ -42,25 +43,28 @@ func NewResumeCursorCodec(masterKey []byte) (*ResumeCursorCodec, error) {
 
 // Fields contain admission metadata only. No prompt, credential, or result is encoded.
 type resumeCursor struct {
-	StreamID             string          `json:"s"`
-	ProjectID            int64           `json:"p"`
-	ActorID              int64           `json:"a"`
-	Scope                string          `json:"sc"`
-	RequestID            json.RawMessage `json:"r"`
-	ExecutionID          string          `json:"e"`
-	ResponseMessageID    string          `json:"m"`
-	ApplicationID        int64           `json:"app"`
-	ApplicationVersionID int64           `json:"v"`
-	ToolName             string          `json:"t"`
-	ExpiresAt            int64           `json:"x"`
-	Complete             bool            `json:"done,omitempty"`
+	ToolkitID            int64                                        `json:"tk,omitempty"`
+	ToolkitResult        *toolkitexecutionapp.ReadToolResultReference `json:"tr,omitempty"`
+	StreamID             string                                       `json:"s"`
+	ProjectID            int64                                        `json:"p"`
+	ActorID              int64                                        `json:"a"`
+	Scope                string                                       `json:"sc"`
+	RequestID            json.RawMessage                              `json:"r"`
+	ExecutionID          string                                       `json:"e"`
+	ResponseMessageID    string                                       `json:"m"`
+	ApplicationID        int64                                        `json:"app"`
+	ApplicationVersionID int64                                        `json:"v"`
+	ToolName             string                                       `json:"t"`
+	ExpiresAt            int64                                        `json:"x"`
+	Complete             bool                                         `json:"done,omitempty"`
 }
 
 func (c resumeCursor) valid(now time.Time) bool {
-	return c.StreamID != "" && len(c.StreamID) <= 64 && c.ProjectID > 0 && c.ActorID > 0 &&
+	agent := c.ToolkitID == 0 && c.ToolkitResult == nil && c.ResponseMessageID != "" && len(c.ResponseMessageID) <= 256 && c.ApplicationID > 0 && c.ApplicationVersionID > 0
+	toolkit := c.ToolkitID > 0 && c.ToolkitResult != nil && c.ToolkitResult.Valid() && c.ToolkitResult.ExecutionID == c.ExecutionID && c.ResponseMessageID == "" && c.ApplicationID == 0 && c.ApplicationVersionID == 0
+	return (agent || toolkit) && c.StreamID != "" && len(c.StreamID) <= 64 && c.ProjectID > 0 && c.ActorID > 0 &&
 		len(c.Scope) <= 256 && len(c.RequestID) > 0 && len(c.RequestID) <= 1024 && json.Valid(c.RequestID) &&
-		c.ExecutionID != "" && len(c.ExecutionID) <= 256 && c.ResponseMessageID != "" && len(c.ResponseMessageID) <= 256 &&
-		c.ApplicationID > 0 && c.ApplicationVersionID > 0 && c.ToolName != "" && len(c.ToolName) <= 256 &&
+		c.ExecutionID != "" && len(c.ExecutionID) <= 256 && c.ToolName != "" && len(c.ToolName) <= 256 &&
 		c.ExpiresAt > now.Unix() && c.ExpiresAt <= now.Add(resumeCursorLifetime).Unix()
 }
 

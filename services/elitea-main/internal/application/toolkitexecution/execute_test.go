@@ -239,3 +239,31 @@ func TestToolkitObservationRejectsMissingAdmission(t *testing.T) {
 		t.Fatal("missing admission reached result storage")
 	}
 }
+
+func TestToolkitResultReferenceReplaysAfterServiceReplacement(t *testing.T) {
+	frozen := validFrozenCurrentReadTool()
+	freezer := &executionFreezerStub{frozen: frozen}
+	submitter := &executionSubmitterStub{outcome: executionapp.AdmissionOutcome{ExecutionID: "durable-reference"}}
+	waiter := &executionWaiterStub{completion: Completion{State: executiondomain.JobSucceeded, ResultJSON: []byte(`true`), ToolkitType: frozen.ToolkitType, ToolkitName: frozen.ToolkitName, ToolName: frozen.ToolName}}
+	service, err := NewCurrentReadToolExecutionService(freezer, submitter, waiter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admitted, err := service.Admit(context.Background(), validExecuteCurrentReadToolRequest(map[string]any{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := admitted.Reference()
+	replacement, err := NewCurrentReadToolExecutionService(&executionFreezerStub{err: errors.New("must not freeze")}, &executionSubmitterStub{err: errors.New("must not admit")}, waiter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome, err := replacement.WaitForResult(context.Background(), reference)
+	if err != nil || outcome.ExecutionID != reference.ExecutionID || string(outcome.Completion.ResultJSON) != "true" || submitter.calls != 1 {
+		t.Fatalf("outcome=%#v error=%v", outcome, err)
+	}
+	reference.ToolName = "different"
+	if _, err := replacement.WaitForResult(context.Background(), reference); !errors.Is(err, ErrToolkitExecuteReadResultMismatch) {
+		t.Fatalf("mismatch=%v", err)
+	}
+}

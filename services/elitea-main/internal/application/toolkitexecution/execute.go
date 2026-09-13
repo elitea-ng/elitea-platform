@@ -41,6 +41,31 @@ type AdmittedCurrentReadTool struct {
 
 func (a AdmittedCurrentReadTool) ExecutionID() string { return a.executionID }
 
+// ReadToolResultReference identifies a durable result, not permission to read it.
+// Transports must authenticate its provenance and caller before observation.
+type ReadToolResultReference struct {
+	ExecutionID string `json:"execution_id"`
+	ToolkitType string `json:"toolkit_type"`
+	ToolkitName string `json:"toolkit_name"`
+	ToolName    string `json:"tool_name"`
+}
+
+func (r ReadToolResultReference) Valid() bool {
+	return validIdentity(r.ExecutionID) && validIdentity(r.ToolkitType) && validIdentity(r.ToolkitName) && validIdentity(r.ToolName)
+}
+
+func (a AdmittedCurrentReadTool) Reference() ReadToolResultReference {
+	return ReadToolResultReference{ExecutionID: a.executionID, ToolkitType: a.toolkitType, ToolkitName: a.toolkitName, ToolName: a.toolName}
+}
+
+// WaitForResult reads an authenticated durable reference without another admission.
+func (s *CurrentReadToolExecutionService) WaitForResult(ctx context.Context, reference ReadToolResultReference) (CurrentReadToolExecutionOutcome, error) {
+	if !reference.Valid() {
+		return CurrentReadToolExecutionOutcome{}, ErrInvalidCurrentReadTool
+	}
+	return s.Wait(ctx, AdmittedCurrentReadTool{executionID: reference.ExecutionID, toolkitType: reference.ToolkitType, toolkitName: reference.ToolkitName, toolName: reference.ToolName})
+}
+
 type currentReadToolFreezer interface {
 	Freeze(context.Context, FreezeCurrentReadToolRequest) (FrozenCurrentReadTool, error)
 }

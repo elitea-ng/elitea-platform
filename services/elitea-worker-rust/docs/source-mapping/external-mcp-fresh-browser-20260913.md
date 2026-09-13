@@ -96,3 +96,55 @@ Deployment and independent-client acceptance remain pending.
 Toolkit resume still requires the matching durable observation path.
 Responses that pause for human input require separate policy and replay verification; no external resume-of-interrupt feature is introduced.
 Gate 3d remains open.
+
+
+## Toolkit replay and deployed external-client acceptance
+
+Toolkit calls now use the same SSE resume transport as agent calls.
+`ReadToolResultReference` identifies the original frozen result without carrying arguments or credentials.
+`CurrentReadToolExecutionService.WaitForResult` verifies result identity and never performs another admission.
+The reference is not permission. The MCP cursor authenticates its provenance; GET rechecks caller, project, scope, and current export.
+The cursor accepts either an agent reference or a toolkit reference, never both.
+No new schema, migration, or worker command is required.
+
+Temporary result-observation errors close the stream without a final JSON-RPC response.
+The priming cursor remains usable for GET retry.
+Terminal toolkit failures still return an error result.
+The existing JSON-only call path retains its prior behavior.
+
+Source owners:
+
+- `services/elitea-main/internal/application/toolkitexecution/execute.go`: admitted references and repeatable observation.
+- `services/elitea-main/internal/api/v2/mcp/execute.go`: admission observers and resumable agent polling.
+- `services/elitea-main/internal/api/v2/mcp/resume_cursor.go`: mutually exclusive result references.
+- `services/elitea-main/internal/api/v2/mcp/resume_stream.go`: shared agent/toolkit response replay.
+- `services/elitea-worker-rust/tests/acceptance/external_mcp_client.py`: independent SSE and GET acceptance client.
+
+Main deploys as `elitea-main:mcp-resume-20260913`, image `sha256:2a35928cf102a7850e9a0310bae897b6457f66eaf622d37d5944e3fdd27b3be5`.
+The replacement retains all six mounts and the existing environment, network, and resource settings.
+The product database and Rust worker image remain unchanged.
+
+A fresh visible Chrome session creates a temporary PAT through Personal Tokens.
+The independent Python client receives only that PAT through its environment.
+It initializes MCP, verifies unique names and argument schemas, and sends one tools/call POST per fixture.
+It closes the POST connection after the priming cursor.
+All continuation requests use GET with `Last-Event-ID`.
+
+| Export | Disconnect | Main restart | Result |
+| --- | --- | --- | --- |
+| Toolkit 31, echo operation | After priming cursor | Yes | One text block with `RUST_PAT_RESUME_TOOLKIT_20260913` |
+| Agent version 20, attached echo and linked skill | After priming cursor | Yes | One text block with `RUST_PAT_RESUME_AGENT_20260913` |
+| Autonomous pipeline version 18 | After priming cursor | No | One text block with `RUST_PAT_RESUME_PIPELINE_20260913` |
+
+Each initial cursor replays the same JSON-RPC result after completion.
+Each completed cursor returns HTTP 204 without another response.
+These calls do not resubmit tools/call after disconnection.
+The PAT is revoked with HTTP 204.
+Toolkit 31 returns to its original disabled-sharing state, verified after reload.
+The browser closes after cleanup.
+
+Focused MCP/toolkit tests, race tests, and vet pass.
+Tests verify service replacement, original result identity, zero admission on GET, and transient observation without a final response.
+The external-client result closes the normal autonomous transport-replay proof for these three fixtures.
+It does not prove interrupted provider effects, every provider failure, restricted-user access, or all mixed authorization combinations.
+Those remaining gate requirements require their own evidence before overall point 3 closure.

@@ -2,7 +2,10 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -137,5 +140,74 @@ func TestResumeStreamFramesKeepRequestIdentity(t *testing.T) {
 	final, err := codec.open(ids[1], time.Now())
 	if err != nil || !final.Complete || final.StreamID != cursor.StreamID {
 		t.Fatalf("final cursor=%#v err=%v", final, err)
+	}
+}
+
+func TestResumeObservationFailureDoesNotFinishStream(t *testing.T) {
+	codec, _ := NewResumeCursorCodec(bytes.Repeat([]byte{42}, 32))
+	handler := &Handler{resumeCodec: codec}
+	response := httptest.NewRecorder()
+	var unavailable map[string]any
+	handler.finishResumeStream(response, testResumeCursor(time.Now()), newResult(json.RawMessage(`1`), unavailable))
+	if response.Body.Len() != 0 {
+		t.Fatalf("transient observation became terminal: %s", response.Body.String())
+	}
+}
+
+type resumeToolkitStub struct {
+	observed   toolkitexecutionapp.ReadToolResultReference
+	admissions int
+	err        error
+}
+
+func (s *resumeToolkitStub) Execute(context.Context, toolkitexecutionapp.ExecuteCurrentReadToolRequest) (toolkitexecutionapp.CurrentReadToolExecutionOutcome, error) {
+	s.admissions++
+	return toolkitexecutionapp.CurrentReadToolExecutionOutcome{}, errors.New("unexpected execute")
+}
+func (s *resumeToolkitStub) Admit(context.Context, toolkitexecutionapp.ExecuteCurrentReadToolRequest) (toolkitexecutionapp.AdmittedCurrentReadTool, error) {
+	s.admissions++
+	return toolkitexecutionapp.AdmittedCurrentReadTool{}, errors.New("unexpected admit")
+}
+func (s *resumeToolkitStub) WaitForResult(_ context.Context, r toolkitexecutionapp.ReadToolResultReference) (toolkitexecutionapp.CurrentReadToolExecutionOutcome, error) {
+	s.observed = r
+	return toolkitexecutionapp.CurrentReadToolExecutionOutcome{ExecutionID: r.ExecutionID, Completion: toolkitexecutionapp.Completion{ResultJSON: json.RawMessage(`{"marker":"one-result"}`)}}, s.err
+}
+
+func TestToolkitResumeGETUsesOnlyOriginalResultReference(t *testing.T) {
+	codec, _ := NewResumeCursorCodec(bytes.Repeat([]byte{42}, 32))
+	for _, transient := range []bool{false, true} {
+		t.Run(map[bool]string{false: "completed", true: "temporary storage error"}[transient], func(t *testing.T) {
+			cursor := testResumeCursor(time.Now())
+			cursor.ApplicationID = 0
+			cursor.ApplicationVersionID = 0
+			cursor.ResponseMessageID = ""
+			cursor.ToolkitID = 31
+			cursor.ToolkitResult = &toolkitexecutionapp.ReadToolResultReference{ExecutionID: cursor.ExecutionID, ToolkitType: "mcp", ToolkitName: "echo", ToolName: "echo_marker"}
+			encoded, err := codec.seal(cursor, time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			service := &resumeToolkitStub{}
+			if transient {
+				service.err = errors.New("storage unavailable")
+			}
+			handler := NewHandler(nil, nil, nil, allowRuns(), WithResumeCursorCodec(codec), WithToolkitExecuteRead(service))
+			handler.source = &funcSource{fn: func(string, scope) ([]Tool, error) {
+				return []Tool{{Name: cursor.ToolName, toolkitID: 31, toolkitToolName: "echo_marker"}}, nil
+			}}
+			request := httptest.NewRequest(http.MethodGet, "/app/2/mcp", nil)
+			request = request.WithContext(auth.ContextWithUser(request.Context(), auth.User{ID: "7", UserID: "7"}))
+			request.Header.Set("Accept", "text/event-stream")
+			request.Header.Set("Last-Event-ID", encoded)
+			response := httptest.NewRecorder()
+			newTestRouter(handler).ServeHTTP(response, request)
+			if response.Code != 200 || service.admissions != 0 || service.observed != *cursor.ToolkitResult {
+				t.Fatalf("status=%d admissions=%d reference=%#v", response.Code, service.admissions, service.observed)
+			}
+			count := strings.Count(response.Body.String(), "event: message")
+			if transient && count != 0 || !transient && (count != 1 || !strings.Contains(response.Body.String(), "one-result")) {
+				t.Fatalf("unexpected stream: %s", response.Body.String())
+			}
+		})
 	}
 }

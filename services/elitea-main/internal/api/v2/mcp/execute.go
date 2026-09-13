@@ -151,6 +151,12 @@ func (h *Handler) runReadToolkitTool(
 	tool Tool,
 	arguments map[string]any,
 ) map[string]any {
+	return h.runReadToolkitToolWithObserver(ctx, projectID, actorUserID, tool, arguments, nil)
+}
+
+type toolkitResultObserver func(context.Context, int64, int64, Tool, toolkitexecutionapp.ReadToolResultReference, ToolkitResumeUseCase) map[string]any
+
+func (h *Handler) runReadToolkitToolWithObserver(ctx context.Context, projectID, actorUserID int64, tool Tool, arguments map[string]any, observer toolkitResultObserver) map[string]any {
 	if projectID <= 0 || projectID > math.MaxInt32 || actorUserID <= 0 || actorUserID > math.MaxInt32 ||
 		tool.toolkitID <= 0 || tool.toolkitID > math.MaxInt32 || !tool.runnableToolkitTool() {
 		return errorResult("the toolkit invocation identity is invalid, so nothing was executed")
@@ -160,7 +166,7 @@ func (h *Handler) runReadToolkitTool(
 	defer cancel()
 	project := strconv.FormatInt(projectID, 10)
 	actor := strconv.FormatInt(actorUserID, 10)
-	outcome, err := h.toolkitExecute.Execute(deadline, toolkitexecutionapp.ExecuteCurrentReadToolRequest{
+	request := toolkitexecutionapp.ExecuteCurrentReadToolRequest{
 		Identity: executionapp.AdmissionIdentity{
 			TenantID: project, ResourceProjectID: project,
 			ProjectionProjectID: project, ActorID: actor,
@@ -171,7 +177,19 @@ func (h *Handler) runReadToolkitTool(
 		ToolkitID:      int32(tool.toolkitID),
 		ToolName:       tool.toolkitToolName,
 		Arguments:      arguments,
-	})
+	}
+	var outcome toolkitexecutionapp.CurrentReadToolExecutionOutcome
+	var err error
+	if service, ok := h.toolkitExecute.(ToolkitResumeUseCase); ok && observer != nil {
+		admitted, admitErr := service.Admit(deadline, request)
+		err = admitErr
+		if err == nil {
+			return observer(deadline, projectID, actorUserID, tool, admitted.Reference(), service)
+		}
+	} else {
+		outcome, err = h.toolkitExecute.Execute(deadline, request)
+	}
+
 	if err != nil {
 		if outcome.ExecutionID != "" {
 			switch {
@@ -344,6 +362,10 @@ func (h *Handler) awaitRunResult(
 	outcome agentexecutionapp.CurrentApplicationStartOutcome,
 	tool Tool,
 ) map[string]any {
+	return h.awaitRunResultWithMode(ctx, schema, outcome, tool, false)
+}
+
+func (h *Handler) awaitRunResultWithMode(ctx context.Context, schema string, outcome agentexecutionapp.CurrentApplicationStartOutcome, tool Tool, resumable bool) map[string]any {
 	deadline, cancel := context.WithTimeout(ctx, mcpRunDeadline)
 	defer cancel()
 
@@ -357,6 +379,9 @@ func (h *Handler) awaitRunResult(
 		// expiry only about half the time — and the other half would report
 		// whatever the extra poll happened to hit.
 		if deadline.Err() != nil {
+			if resumable {
+				return nil
+			}
 			// EXPIRY, or the client hung up. Either way the execution is still
 			// running: it is durable and owned by the runtime, not by this
 			// request. Naming it is the whole point — see mcpRunDeadline.
@@ -376,6 +401,9 @@ func (h *Handler) awaitRunResult(
 		case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 			continue // ditto: the expiry check owns that report
 		case err != nil:
+			if resumable {
+				return nil
+			}
 			return errorResult(fmt.Sprintf(
 				"the answer for execution %s could not be read back, so nothing is reported here. "+
 					"The run itself was admitted and may have completed.", outcome.ExecutionID))
