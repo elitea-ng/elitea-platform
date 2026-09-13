@@ -157,3 +157,28 @@ The committed assembly still rejects attached, invoked, applied, and version ski
 Pending `instruction_authority.rs` and its assembly integration remain preserved in the worktree.
 Restore and verify that support before accepting the new deployment for saved agents.
 The temporary PAT is revoked with HTTP 204. Toolkit sharing returns to its previous disabled setting.
+
+
+## Compatible deployment restored
+
+The replacement Main image is `sha256:e26fc9aa9049f7f32b7d889a8ca0abe7382b8312cad2ac4c3a3b77bc0983763f`.
+The replacement Rust image is `sha256:b354bd321d46a0c21ad8287c5a435235b120b8ffba3d429dfa6f9ad1aa373c72`.
+Main retains the takeover repair and restores the preserved instruction snapshot producer.
+Rust retains the invocation fence and restores the preserved instruction consumer and persona support.
+The Main build excludes deferred direct-HITL history changes.
+The worker build includes preserved instruction support from the worktree, beyond committed HEAD.
+These images are not described as builds of committed HEAD alone.
+Existing Main and worker mounts, environment, networks, and limits remain unchanged.
+
+All 304 focused Rust agent tests pass without ignored tests.
+Strict Clippy passes for all targets and features after test-only lint repairs.
+Main skill and instruction tests pass in the isolated matching source snapshot.
+Runtime composition compiles there; its broad tests require repository fixtures absent from that snapshot.
+The full worktree agent execution and storage package tests also pass.
+
+An independent Python client repeats protocol initialization, discovery, and invocation with a new UI-created PAT.
+Toolkit 31, saved-agent version 20, and autonomous pipeline version 18 all pass.
+Markers are `RUST_PAT_TOOLKIT_RESTORED_20260913`, `RUST_PAT_AGENT_RESTORED_20260913`, and `RUST_PAT_PIPELINE_RESTORED_20260913`.
+The temporary PAT is revoked with HTTP 204.
+Toolkit 31 sharing returns to disabled through the UI and remains disabled after reload.
+This closes the deployment regression, not the outstanding client result recovery gate.
