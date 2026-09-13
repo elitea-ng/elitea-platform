@@ -92,15 +92,16 @@ func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimComma
 	}
 
 	decision, err := s.claims.Claim(ctx, executionapp.ClaimRequest{
-		CommandID:            command.GetCommandId(),
-		OutboxID:             command.GetIdempotencyKey(),
-		ExecutionID:          command.GetExecutionId(),
-		Generation:           command.GetGeneration(),
-		CapabilityID:         command.GetCapabilityId(),
-		SignedEnvelopeDigest: runtimedomain.SHA256(canonicalEnvelope),
-		WorkloadIdentity:     workloadIdentity,
-		WorkloadSessionID:    request.GetWorkloadSessionId(),
-		ProducerID:           request.GetProducerId(),
+		CommandID:                    command.GetCommandId(),
+		OutboxID:                     command.GetIdempotencyKey(),
+		ExecutionID:                  command.GetExecutionId(),
+		Generation:                   command.GetGeneration(),
+		CapabilityID:                 command.GetCapabilityId(),
+		SignedEnvelopeDigest:         runtimedomain.SHA256(canonicalEnvelope),
+		WorkloadIdentity:             workloadIdentity,
+		WorkloadSessionID:            request.GetWorkloadSessionId(),
+		ProducerID:                   request.GetProducerId(),
+		AgentModelCheckpointRecovery: request.GetAgentModelCheckpointRecovery(),
 	})
 	if err != nil {
 		return claimRejectionFor(err), nil
@@ -116,7 +117,7 @@ func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimComma
 	}
 	identity := identityProto(command)
 	disposition := decision.Disposition
-	if disposition == executionapp.ClaimAccepted && lease.DesiredState != runtimedomain.DesiredRunning {
+	if (disposition == executionapp.ClaimAccepted || disposition == executionapp.ClaimRecoverAgentModelCheckpoint) && lease.DesiredState != runtimedomain.DesiredRunning {
 		// OBSOLETE_ACK is reserved for an explicit durable cancellation
 		// finalizer. A non-running lease alone never makes Redis ACK safe.
 		disposition = executionapp.ClaimActiveLeaseNoACK
@@ -149,7 +150,7 @@ func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimComma
 		receipt.LeaseExpiresAtUnixMillis = lease.ExpiresAt.UTC().UnixMilli()
 		receipt.ClaimId = lease.ClaimID
 	}
-	if disposition != executionapp.ClaimAccepted {
+	if disposition != executionapp.ClaimAccepted && disposition != executionapp.ClaimRecoverAgentModelCheckpoint {
 		return &runtimev1.ClaimCommandResponseV1{Receipt: receipt}, nil
 	}
 	claimStartedAtUnixMicros := decision.LeaseObservedAt.UTC().UnixMicro()
@@ -644,6 +645,8 @@ func desiredStateProto(state runtimedomain.DesiredState) (runtimev1.DesiredExecu
 
 func claimDispositionProto(disposition executionapp.ClaimDisposition) (runtimev1.ClaimDispositionV1, error) {
 	switch disposition {
+	case executionapp.ClaimRecoverAgentModelCheckpoint:
+		return runtimev1.ClaimDispositionV1_CLAIM_DISPOSITION_V1_RECOVER_AGENT_MODEL_CHECKPOINT, nil
 	case executionapp.ClaimAccepted:
 		return runtimev1.ClaimDispositionV1_CLAIM_DISPOSITION_V1_ACCEPTED, nil
 	case executionapp.ClaimRecoverTerminalACK:

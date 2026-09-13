@@ -2173,6 +2173,7 @@ fn build_claim_request(
         ));
     }
     Ok(ClaimCommandRequestV1 {
+        agent_model_checkpoint_recovery: false,
         workload_session_id: workload_session_id.to_owned(),
         producer_id: producer_id.to_owned(),
         signed_command: Some(verified.signed().clone()),
@@ -2281,9 +2282,11 @@ fn parse_claim_decision(
             AgentOutputRecoveryKind::AmbiguousInvocation,
         )
         .map(AgentClaimDecision::RecoverAmbiguousInvocationNoAck),
-        ClaimDispositionV1::Unspecified => Err(ControlSemanticError::InvalidInput(
-            "the claim disposition is malformed",
-        )),
+        ClaimDispositionV1::Unspecified | ClaimDispositionV1::RecoverAgentModelCheckpoint => {
+            Err(ControlSemanticError::InvalidInput(
+                "the claim disposition is malformed",
+            ))
+        }
     }
 }
 

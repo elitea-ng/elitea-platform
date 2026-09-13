@@ -97,7 +97,7 @@ Preserve authoritative skills, project context, persona, and frozen model settin
 Use a new output attempt identity to replace unfinished provisional text. Do not append a regenerated answer to its partial predecessor.
 Do not confuse an execution replay cursor reset with replacement of model text.
 
-The typed authority transition and checkpoint validation must precede business input hydration on a replacement worker.
+An explicit inspection claim permits immutable input hydration. Worker checkpoint validation and one-use authorization must precede resumed model invocation.
 Cancellation, deadline expiry, foreign scope, stale writers, and unsupported checkpoints must refuse execution.
 Keep recovery attempts bounded by durable execution policy, not by an in-memory retry counter alone.
 
@@ -112,3 +112,30 @@ Keep recovery attempts bounded by durable execution policy, not by an in-memory 
 
 The external MCP transport must also reconnect to the original execution. A repeated POST is a separate invocation today.
 Browser reconnection, session persistence, and safe terminal failure remain separate evidence from successful continuation.
+
+## Model recovery authority component
+
+Main does not own checkpoints. Rust stores and validates checkpoint contents through the existing ADK state service.
+Main records only an inspection mode and a SHA-256 authorization receipt on its execution claim.
+
+| Source | Implementation |
+| --- | --- |
+| `libs/proto/elitea/runtime/v1/control.proto` | Adds opt-in checkpoint inspection and a separate authorization RPC. |
+| Main `internal/application/execution/model_checkpoint_authority.go` | Validates the fence and digest before the repository call. |
+| Main `internal/infra/db/repos/claims.go` | Selects inspection only for opted-in agent claims after ambiguous invocation. |
+| Main `internal/infra/db/repos/model_checkpoint_authority.go` | Locks the current claim and job; grants one model restoration attempt. |
+| Main `internal/transport/runtimegrpc/control/model_checkpoint_authority.go` | Authenticates the worker and rejects malformed wire evidence. |
+| Main `migrations/shared/0131_agent_model_checkpoint_claim.sql` | Adds authority metadata to existing runtime claims. Product tables remain unchanged. |
+| Rust `src/protocol/control.rs` | Keeps opt-in disabled and rejects the new disposition until dispatch integration is complete. |
+
+The runtime migration is necessary to distinguish inspection from invocation across Main restarts and concurrent requests.
+It stores no model request, prompt, tool result, or checkpoint body. It creates no new table.
+Ordinary invocation remains fenced by `MAY_HAVE_STARTED`.
+A duplicate authorization returns `ALREADY_AUTHORIZED`, which does not permit another model attempt.
+
+Real PostgreSQL tests cover application and ad-hoc recovery claims, concurrent authorization, digest changes, stale workers, expiry, and cancellation.
+They also reject checkpoint authority for legacy agent workers, toolkits, and indexing jobs.
+The test database applies the migration. The rehearsal deployment does not apply this change yet.
+
+The broader repository test run still reports an unrelated pending catalogue mismatch for `project_context_builder` and `skill_builder`.
+Focused claim tests and control tests pass. These results do not establish live crash continuation or MCP reconnection.
