@@ -375,14 +375,22 @@ impl CheckpointAgentDelivery {
         &self,
         frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
     ) -> Result<bool, ProtocolError> {
+        Ok(
+            self.validate_output(frame)? == ValidatedAgentOutputFrameKind::Progress
+                && frame.sequence <= self.inspection.output_watermark(),
+        )
+    }
+
+    pub(crate) fn validate_output(
+        &self,
+        frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
+    ) -> Result<ValidatedAgentOutputFrameKind, ProtocolError> {
         if !self.inspection.matches_output_identity(frame) {
             return Err(ProtocolError::AuthorizationFailed(
                 "the recovery output identity is invalid",
             ));
         }
-        let kind = validate_restored_agent_output_frame(&self.verified, frame)?;
-        Ok(kind == ValidatedAgentOutputFrameKind::Progress
-            && frame.sequence <= self.inspection.output_watermark())
+        validate_restored_agent_output_frame(&self.verified, frame)
     }
     pub(crate) fn output_watermark(&self) -> u64 {
         self.inspection.output_watermark()

@@ -2490,6 +2490,56 @@ impl AgentOutputPreflight {
         Ok(Some((recovery, PreparedAgentOutput { prepared, factory })))
     }
 
+    /// Replay retained progress exactly once, then require a fresh claim.
+    /// Even an ACK cannot refresh the inspection's output watermark locally.
+    /// This method never grants model execution or retires the Redis delivery.
+    #[allow(dead_code)] // Enabled with checkpoint intake after output replacement.
+    pub(crate) async fn replay_checkpoint_progress<C: AgentProgressConnector>(
+        &self,
+        recovery: super::agent_delivery::CheckpointAgentDelivery,
+        connector: &C,
+    ) -> Result<(), AgentOutputPreflightError> {
+        if !recovery.matches_output_transport(
+            &self.policy.output_config.workload_session_id,
+            &self.policy.output_config.producer_id,
+        ) {
+            return Err(AgentOutputPreflightError::InvalidConfiguration(
+                "the output transport identity does not match the checkpoint claim",
+            ));
+        }
+        let factory = AgentOutputSpoolFactory {
+            policy: self.policy.clone(),
+            binding: Arc::new(recovery.spool_identity()),
+        };
+        let prepared = factory.reopen().await?;
+        let Some(frame) = prepared.pending_replay_frame() else {
+            return Ok(());
+        };
+        if prepared.pending_frame_count() != 1 {
+            return Err(AgentOutputPreflightError::InvalidDurableState(
+                "the recovery spool contains multiple pending frames",
+            ));
+        }
+        let kind = recovery.validate_output(&frame).map_err(|_| {
+            AgentOutputPreflightError::InvalidDurableState("the recovery output frame is malformed")
+        })?;
+        if kind != ValidatedAgentOutputFrameKind::Progress {
+            // Terminal bytes require terminal replay and settlement ownership.
+            return Ok(());
+        }
+        let mut replay = connector
+            .start_progress_replay(prepared, &frame)
+            .await
+            .map_err(AgentOutputPreflightError::Output)?;
+        let decision = replay.wait().await;
+        // Close after every observed outcome, including rejection and error.
+        // On uncertainty the encrypted spool remains the replay authority.
+        let close = replay.close().await;
+        decision.map_err(AgentOutputPreflightError::Output)?;
+        close.map_err(AgentOutputPreflightError::Output)?;
+        Ok(())
+    }
+
     /// Open the exact recovery spool without granting fresh execution.
     ///
     /// `None` means durable output is already pending and needs a separate

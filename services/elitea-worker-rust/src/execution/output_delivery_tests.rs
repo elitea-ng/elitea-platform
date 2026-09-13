@@ -4588,3 +4588,64 @@ async fn checkpoint_supervisor_owns_authorization_after_waiter_drop_and_rejects_
         }
     }
 }
+
+#[tokio::test]
+async fn checkpoint_progress_replay_preserves_exact_bytes_and_closes_on_error() {
+    for authorized in [true, false] {
+        let (_temporary, root) = root();
+        let preflight = preflight(root, "worker-1");
+        let AgentOutputPreflightOutcome::Empty(empty) =
+            preflight.prepare(fresh()).await.expect("initial spool")
+        else {
+            panic!("empty spool")
+        };
+        let (accepted, output) = empty.into_parts();
+        let mut spool = output.into_test_spool();
+        let fence = claim_response()
+            .receipt
+            .expect("receipt")
+            .fence
+            .expect("fence");
+        let watermark = accepted.claim_handoff_watermark();
+        let frame = progress_frame(&accepted, fence, watermark + 1, watermark);
+        spool.persist(frame.clone()).expect("pending output");
+        drop(spool);
+        let state = FakeProgressState::new(
+            [],
+            [if authorized {
+                ReplayProgressAction::Acknowledge
+            } else {
+                ReplayProgressAction::AuthorizationFailed
+            }],
+        );
+        let connector = FakeProgressConnector {
+            state: state.clone(),
+        };
+        let result = preflight
+            .replay_checkpoint_progress(checkpoint_delivery(), &connector)
+            .await;
+        assert_eq!(result.is_ok(), authorized);
+        assert_eq!(state.replays.load(Ordering::SeqCst), 1);
+        assert_eq!(state.replay_closes.load(Ordering::SeqCst), 1);
+        assert_eq!(state.connects.load(Ordering::SeqCst), 0);
+        assert_eq!(state.sends.load(Ordering::SeqCst), 0);
+        // ACK makes the spool empty; errors preserve the uncovered frame.
+        let ready = preflight
+            .prepare_checkpoint(checkpoint_delivery())
+            .await
+            .expect("reinspect after replay");
+        assert_eq!(ready.is_some(), authorized);
+        if !authorized {
+            state
+                .replay_actions
+                .lock()
+                .expect("actions")
+                .push_back(ReplayProgressAction::Acknowledge);
+            preflight
+                .replay_checkpoint_progress(checkpoint_delivery(), &connector)
+                .await
+                .expect("retry exact retained frame");
+            assert_eq!(state.replays.load(Ordering::SeqCst), 2);
+        }
+    }
+}
