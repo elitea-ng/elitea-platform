@@ -314,6 +314,41 @@ impl ControlRpc for RecoveryControl {
         ))
     }
 
+    async fn authorize_agent_model_checkpoint(
+        &self,
+        request: Request<
+            crate::protocol::elitea::runtime::v1::AuthorizeAgentModelCheckpointRequestV1,
+        >,
+    ) -> Result<
+        Response<crate::protocol::elitea::runtime::v1::AuthorizeAgentModelCheckpointResponseV1>,
+        Status,
+    > {
+        self.trace
+            .lock()
+            .expect("trace")
+            .push("checkpoint_authorize");
+        assert_eq!(
+            request
+                .get_ref()
+                .checkpoint_digest
+                .as_ref()
+                .expect("digest")
+                .value,
+            vec![42; 32]
+        );
+        if self.authorize_unavailable {
+            return Err(Status::unavailable("lost authorization response"));
+        }
+        Ok(Response::new(
+            crate::protocol::elitea::runtime::v1::AuthorizeAgentModelCheckpointResponseV1 {
+                disposition: self
+                    .authorize_disposition
+                    .expect("authorization disposition") as i32,
+                rejection: None,
+            },
+        ))
+    }
+
     async fn begin_execution(
         &self,
         _request: Request<BeginExecutionRequestV1>,
@@ -415,6 +450,15 @@ struct KindAgentInput {
 
 #[async_trait]
 impl AgentInputMaterializer for ValidAgentInput {
+    async fn materialize_checkpoint(
+        &self,
+        _: &crate::protocol::control::LiveModelCheckpointInspection,
+    ) -> Result<MaterializedInput, InputContentError> {
+        self.trace.lock().expect("trace").push("checkpoint_input");
+        Ok(MaterializedInput::for_test(decode_hex(include_str!(
+            "../../tests/fixtures/agent_application_input.hex"
+        ))))
+    }
     async fn materialize(
         &self,
         _execution: &crate::protocol::control::LeaseMonitoredAgentExecution,
@@ -627,6 +671,38 @@ struct GatedAuthorizedLifecycle {
 }
 
 impl AuthorizedAgentLifecycle for GatedAuthorizedLifecycle {
+    fn inspect_checkpoint<'a>(
+        &'a self,
+        _: &'a crate::agents::AgentExecutionRequest,
+        _: &'a crate::agents::session::AuthorizedNativeCommandBinding,
+        _: crate::protocol::control::ClaimBoundSessionAuthority,
+        _: Arc<dyn crate::state::StateWriterLease>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        crate::agents::session::ValidatedModelCheckpoint,
+                        crate::agents::runtime::NativeAgentAssemblyError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            self.trace.lock().expect("trace").push("checkpoint_inspect");
+            let identity = claim_response()
+                .receipt
+                .expect("receipt")
+                .identity
+                .expect("identity");
+            Ok(
+                crate::agents::session::ValidatedModelCheckpoint::test_evidence(
+                    identity.execution_id,
+                    identity.generation,
+                ),
+            )
+        })
+    }
     fn run(
         &self,
         run: super::agent_preparation::AuthorizedAgentRun,
@@ -4427,4 +4503,88 @@ async fn checkpoint_output_rejects_transport_identity_mismatch() {
         preflight.prepare_checkpoint(checkpoint_delivery()).await,
         Err(AgentOutputPreflightError::InvalidConfiguration(_))
     ));
+}
+
+#[tokio::test]
+async fn checkpoint_supervisor_owns_authorization_after_waiter_drop_and_rejects_unstarted_work() {
+    for stopped in [false, true] {
+        let trace = Arc::new(Mutex::new(Vec::new()));
+        let (_temporary, root) = root();
+        let (delivery, output) = preflight(root, "worker-1")
+            .prepare_checkpoint(checkpoint_delivery())
+            .await
+            .expect("preflight")
+            .expect("empty output");
+        let admission = InvocationAdmission::new(
+            InvocationAdmissionConfig::new(1, Duration::from_secs(1)).expect("admission"),
+        );
+        let control = authorized_control(trace.clone());
+        let retirer = Arc::new(recovery_retirer(
+            trace.clone(),
+            Ok(RedisRetirementResponse {
+                acknowledged: 1,
+                deleted: 1,
+                unmapped: 1,
+            }),
+        ));
+        let replay = Arc::new(FakeReplay::new([], trace.clone()));
+        let (started_tx, started_rx) = oneshot::channel();
+        let release = Arc::new(Semaphore::new(0));
+        let lifecycle = Arc::new(GatedAuthorizedLifecycle {
+            trace: trace.clone(),
+            started: Mutex::new(Some(started_tx)),
+            release: release.clone(),
+        });
+        let coordinator = super::agent_coordinator::AgentInvocationCoordinator::new(
+            admission.clone(),
+            control,
+            retirer,
+            replay,
+            Arc::new(|| NOW),
+            recovery_config(1),
+            lifecycle,
+        );
+        let reservation = admission.reserve().await.expect("capacity");
+        if stopped {
+            coordinator.stop().expect("stop");
+        }
+        let result = coordinator.submit_checkpoint(
+            delivery,
+            output,
+            reservation,
+            Arc::new(ValidAgentInput {
+                trace: trace.clone(),
+            }),
+            super::agent_lease::ClaimLeaseMonitorConfig::new(Duration::from_secs(10))
+                .expect("lease config"),
+        );
+        if stopped {
+            assert!(result.is_err());
+            assert!(trace.lock().expect("trace").is_empty());
+        } else {
+            let waiter = result.expect("supervised recovery");
+            started_rx.await.expect("authorized lifecycle started");
+            drop(waiter);
+            assert_eq!(admission.available_capacity(), 0);
+            release.add_permits(1);
+        }
+        coordinator.close().await.expect("supervisor drain");
+        assert_eq!(admission.available_capacity(), 1);
+        assert_eq!(coordinator.active_count(), 0);
+        if !stopped {
+            let trace = trace.lock().expect("trace");
+            assert!(!trace.contains(&"begin") && !trace.contains(&"authorize"));
+            assert_eq!(
+                trace
+                    .iter()
+                    .filter(|event| **event == "checkpoint_authorize")
+                    .count(),
+                1
+            );
+            assert_eq!(
+                trace.iter().filter(|event| **event == "authorized").count(),
+                1
+            );
+        }
+    }
 }

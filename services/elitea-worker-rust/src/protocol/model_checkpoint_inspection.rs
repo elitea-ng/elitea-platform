@@ -154,6 +154,10 @@ pub(crate) struct LiveModelCheckpointInspection {
 }
 #[allow(dead_code)]
 impl LiveModelCheckpointInspection {
+    pub(crate) fn into_output_authority(self) -> super::AgentExecutionOutputAuthority {
+        super::AgentExecutionOutputAuthority { claim: self.claim }
+    }
+
     pub(crate) fn matches_command(&self, verified: &VerifiedAgentCommand) -> bool {
         self.claim.matches_verified_command(verified)
     }
@@ -249,8 +253,18 @@ pub(crate) struct ModelCheckpointAuthorizationFailure {
     error: super::AgentControlError,
 }
 
+impl ModelCheckpointAuthorizationFailure {
+    pub(crate) fn error(&self) -> &super::AgentControlError {
+        &self.error
+    }
+}
+
 #[allow(dead_code)]
 impl InspectedModelCheckpointClaim {
+    pub(crate) fn into_output_authority(self) -> super::AgentExecutionOutputAuthority {
+        super::AgentExecutionOutputAuthority { claim: self.claim }
+    }
+
     pub(crate) async fn authorize<R: crate::transport::ControlRpc>(
         self,
         control: &super::AgentControlClient<R>,

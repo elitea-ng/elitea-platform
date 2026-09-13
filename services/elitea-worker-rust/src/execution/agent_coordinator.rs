@@ -91,6 +91,42 @@ where
         }
     }
 
+    /// Transfer an unpolled recovery future and its reservation atomically.
+    pub(super) fn submit_checkpoint<
+        I: super::agent_preparation::AgentInputMaterializer + 'static,
+    >(
+        &self,
+        recovery: super::agent_delivery::CheckpointAgentDelivery,
+        output: super::output_delivery::PreparedAgentOutput,
+        reservation: super::invocation_admission::InvocationReservation,
+        input: Arc<I>,
+        lease_config: super::agent_lease::ClaimLeaseMonitorConfig,
+    ) -> Result<AgentInvocationWaiter, InvocationSupervisionError> {
+        let services = super::checkpoint_recovery::CheckpointRecoveryServices {
+            control: self.control.clone(),
+            retirer: self.retirer.clone(),
+            replay: self.replay.clone(),
+            clock: self.clock.clone(),
+            authorized: self.authorized.clone(),
+            input,
+            lease_config,
+            terminal_config: self.terminal_recovery,
+        };
+        match self
+            .supervisor
+            .submit(reservation, Box::pin(services.run(recovery, output)))
+        {
+            Ok(invocation) => Ok(AgentInvocationWaiter { invocation }),
+            Err(rejected) => {
+                let (error, reservation, unpolled) = rejected.into_parts();
+                // Rejection guarantees no poll: no actor or RPC was started.
+                drop(unpolled);
+                drop(reservation);
+                Err(error)
+            }
+        }
+    }
+
     #[must_use]
     pub(super) fn active_count(&self) -> usize {
         self.supervisor.active_count()

@@ -6,6 +6,7 @@ mod agent_delivery_processor;
 mod agent_invocation;
 pub mod agent_lease;
 pub mod agent_preparation;
+mod checkpoint_recovery;
 mod execution_delivery_processor;
 pub mod invocation_admission;
 mod invocation_supervisor;

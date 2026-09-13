@@ -83,6 +83,29 @@ where
     RC: RedisRetirementClient + 'static,
     K: UnixMillisClock,
 {
+    fn inspect_checkpoint<'a>(
+        &'a self,
+        request: &'a crate::agents::AgentExecutionRequest,
+        command: &'a crate::agents::session::AuthorizedNativeCommandBinding,
+        session: crate::protocol::control::ClaimBoundSessionAuthority,
+        lease: Arc<dyn crate::state::StateWriterLease>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        crate::agents::session::ValidatedModelCheckpoint,
+                        NativeAgentAssemblyError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(
+            self.native_factory
+                .inspect_checkpoint(request, command, session, lease),
+        )
+    }
+
     fn run(&self, run: AuthorizedAgentRun) -> OwnedFuture<AgentAuthorizedLifecycleCompletion> {
         let execution_kind = run.execution_kind();
         let native_factory = Arc::clone(&self.native_factory);
@@ -1125,7 +1148,7 @@ fn sampled_time<K: UnixMillisClock>(clock: &K) -> Result<(i64, DateTime<Utc>), &
     Ok((now, time))
 }
 
-fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailureKind {
+pub(super) fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailureKind {
     match error.code() {
         NativeAgentAssemblyErrorCode::UnsupportedCapability => {
             RuntimeFailureKind::UnsupportedCapability

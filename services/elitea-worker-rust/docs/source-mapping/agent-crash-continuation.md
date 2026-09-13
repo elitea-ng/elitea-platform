@@ -308,3 +308,13 @@ The two focused tests pass: empty and covered-progress spools accept the next ou
 Source owners: `src/execution/output_delivery.rs`, `src/execution/agent_delivery.rs`, and `src/protocol/model_checkpoint_inspection.rs`; tests are in `src/execution/output_delivery_tests.rs`.
 
 This reuses the new platform's existing spool and output-watermark contracts; no current-platform business behavior or schema changes are introduced. Main owns the accepted output watermark, while Rust/ADK still owns model checkpoint state. Production coordinator intake, pending-frame replay integration, partial browser-output replacement, and deployed UI/external MCP restart proof remain pending.
+
+## Process-owned checkpoint recovery job
+
+`src/execution/checkpoint_recovery.rs` composes lease activation, frozen request preparation, credential-free checkpoint inspection, and one-attempt checkpoint authorization under the existing invocation supervisor. `AgentInvocationCoordinator::submit_checkpoint` transfers the unpolled future and admission reservation synchronously; rejected submissions start neither a lease actor nor an RPC. An accepted job remains owned after its caller drops the completion waiter. After authorization it hands the restored run to the shared native lifecycle.
+
+`AuthorizedAgentLifecycle::inspect_checkpoint` delegates through the native assembler. Preparation/inspection failures use the existing canonical failure publisher when output authority remains valid; lease loss and uncertain authorization retain the Redis delivery for recovery. The authorization RPC is deliberately not raced against caller cancellation. Main still receives only checkpoint identity/digest evidence; Rust/ADK owns checkpoint contents.
+
+The focused supervisor test passes for both accepted work after waiter disconnection and rejected work after shutdown. It verifies one checkpoint authorization, no ordinary BeginExecution/AuthorizeInvocation calls, supervisor drain, and admission release. `cargo check --lib` and strict library/test Clippy also pass. These are component checks using control/session doubles, not deployed restart acceptance.
+
+Source mapping: `src/execution/checkpoint_recovery.rs`, `agent_coordinator.rs`, `agent_invocation.rs`, `native_agent_lifecycle.rs`, and `src/protocol/model_checkpoint_inspection.rs`; verification in `src/execution/output_delivery_tests.rs`. This adds production orchestration for the new platform's recovery contract, rather than porting current-platform restart behavior. No schema or proto changes are introduced in this step. Production intake remains on the ordinary route until pending-frame replay and partial-output replacement are integrated; browser and external MCP crash/reconnect gates remain open.
