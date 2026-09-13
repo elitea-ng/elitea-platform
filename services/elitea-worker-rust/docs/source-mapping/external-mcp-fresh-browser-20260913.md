@@ -221,3 +221,22 @@ Fresh headed Playwright verification confirms DELETE 204, subsequent GET 404, an
 The fixture is removed. The local cleanup log is `elitea-visible-fixture-cleanup.log`.
 An initial browser login attempt fails with `invalid state cookie` before deletion.
 Using the established settings login entry point succeeds; the login-path difference remains unclassified.
+
+## Saved-pipeline runtime failure
+
+A temporary pipeline copies the existing HITL fixture structure and changes its entry point to a nonexistent node.
+Its saved model reference remains unchanged.
+A fresh headed Playwright session opens the pipeline editor before the independent MCP call.
+Execution `224b13fb04098f591baa9dc385ea9905` reaches durable `FAILED` state.
+The client disconnects after priming and receives an error through GET.
+The original cursor replays the exact error. The completed cursor returns HTTP 204.
+This proves pipeline configuration-failure delivery through the runtime and external transport.
+It does not prove an interrupted provider effect or a provider outage.
+Application 21 and version 25 are removed through the normal API with HTTP 204.
+The temporary PAT is revoked with HTTP 204.
+The local evidence log is `elitea-visible-pipeline-runtime-failure.log`.
+
+The remaining mixed-guard requirement is separate from these failure cases.
+TG-02 describes independent parallel HITL, sensitive-tool, and delegated-authorization guards.
+TG-10 requires external results to remain errors while those guards prevent autonomous completion.
+Individual HITL refusal and terminal error replay do not prove this combined behavior.
