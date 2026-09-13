@@ -335,3 +335,27 @@ Temporary applications 28, 29, and 30 and toolkit 41 are deleted with HTTP 204.
 The temporary PAT is revoked with HTTP 204.
 The saved-pipeline combined-guard variant and the remaining point 3 checklist still require verification.
 Pipeline HITL history and participant UI remain outside this fix.
+
+## Saved-pipeline combined-guard acceptance
+
+A temporary saved pipeline wraps the same parallel child-agent fixture through the existing `agent` graph node.
+Its graph alias matches the attached saved application name.
+Rust `graph/application_tests.rs` defines this existing node contract; `agents/application_tools.rs` resolves the frozen alias.
+No new graph node or pipeline-history behavior is added.
+
+The independent client invokes pipeline 34, version 38, through `/app/2/mcp/pipeline/38`.
+Execution `8fb7ec321ea390427566e0f5cb94731a` persists both guards in group 5908, conversation 576.
+The MCP response reports both pending guard kinds as one error result.
+Initial-cursor replay matches the result; the completed cursor returns HTTP 204.
+No external approval or authorization decision occurs.
+
+A separate headed Playwright browser opens the saved conversation.
+Both authorization controls and both sensitive-decision controls render. The screenshot is inspected.
+This verifies nested control presentation, not direct pipeline decision history or post-decision execution.
+Evidence files are `elitea-live-mixed-pipeline.log`, `elitea-mixed-pipeline-ui.log`, and `elitea-mixed-pipeline-ui.png`.
+
+The administration guardrails are restored with HTTP 200.
+Temporary applications 31 through 34 and toolkit 44 are deleted with HTTP 204.
+The UI-created PAT is revoked with HTTP 204.
+Both saved-agent and saved-pipeline combined-guard external refusal and replay now have deployed evidence.
+Toolkit Test active-invocation replacement remains an independent point 3 verification requirement.
