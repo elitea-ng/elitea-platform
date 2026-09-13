@@ -52,3 +52,41 @@ It does not prove deployed process replacement, provider request count, browser
 termination, or cross-replica spool independence. Deployment and the live crash
 acceptance remain open. No claim of resumed provider execution is made: an
 ambiguous invocation must not be silently repeated.
+
+
+## Deployed crash experiment: 2026-09-13
+
+Main repair image `sha256:b0fdf09950766b4119ab50faa77ffb87ae952f4fe60fe3997967ba9f09d9f778`
+replaces only Main. It retains the existing image assets and helper binaries,
+live environment, six mounts, networks, and resource limits. The binary is
+verified as Linux ARM64. Source is `f73a4224` with Main files from the deferred
+`cfaf26f2` HITL change restored from its parent in an isolated build context.
+No worktree changes are reverted and no migrations run.
+
+A temporary toolkit (33) exposes a synthetic TLS read delayed by 60 seconds.
+An observer restarts the existing Rust worker immediately when the fixture
+receives the second request. The first test attempt is not crash proof because
+it settled too close to the restart.
+
+Controlled execution `73a225b7dbefed5d8c9974214adaef22` remains
+`RUNNING/PREPARING` after its provider request starts. Claim 1 expires and the
+replacement receives claim 2 through normal runtime mechanisms.
+The provider counter rises from 2 to 3: the interrupted operation is invoked again.
+The browser reports its bounded wait expired and exposes the same job ID.
+No claim, job, output, or Redis state is edited to cause this result.
+
+This contradicts complete invocation recovery. Source confirms that
+`toolkit_delivery_processor.rs` wraps both direct execution and shared Test/
+discovery execution in `run_pre_invocation` without calling the existing final
+invocation authorization. Main cannot classify an unrecorded submission as
+MAY_HAVE_STARTED. The repaired Main predicate is necessary but insufficient.
+
+Next implementation must reuse the existing owned invocation-authority contract
+in `protocol/control.rs::authorize_agent_invocation` (and its payload/permit
+machinery), preserve terminal/no-ACK handling under uncertainty, and cover the
+actual provider-submission boundary. Do not add automatic retries to hide this
+missing state transition. Repeat the controlled crash test after the Rust fix.
+
+The retried execution eventually settles SUCCEEDED while still PREPARING.
+Temporary toolkit 33 is deleted through the normal API (204), and only the
+temporary delayed-read server process is stopped. The OAuth emulator stays running.
