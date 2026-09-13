@@ -72,3 +72,34 @@ The browser context closes after verification. The deployed Main includes atomic
 
 This passes the extended event-stream outage gate. It injects transport failures without crashing Main or Rust.
 Actual process-replacement and external MCP reconnection acceptance remain separate requirements.
+
+## Main process crash acceptance
+
+A fresh local Playwright context tests a real Main restart on 2026-09-13.
+Chat 564 uses execution `56740dd1287b219bfb3d2ea32efbde52`.
+The test requests an orchard story and restarts Main after the title appears in the streamed answer.
+The final sentence is absent when Main stops. Rust remains running throughout the test.
+Main restarts at `11:58:57.847 UTC` and returns healthy.
+
+The browser reconnects to the same execution with cursor `175624`.
+It submits exactly one message request. The other two POST requests create the conversation and participant.
+The browser displays the partial answer followed by `The runtime operation failed.`
+The durable execution state is `FAILED`. This proves browser reconnection, but fails successful runtime continuation.
+
+At `11:58:57.758 UTC`, Rust reports `model_gateway.stream_transport` through `native_agent.event_failed`.
+Lease supervision then reports `claim_lease_control_failure` and retains the command without acknowledgement.
+At `11:59:59.754 UTC`, the next claim returns `output_recovery`.
+The worker completes with `agent_delivery.ambiguous_invocation_reconciled` and a failed settlement.
+
+| Boundary | Rust source | Observed behavior |
+| --- | --- | --- |
+| Model stream interruption | `src/transport/openai_compatible_facade.rs` | Classifies the interrupted stream as `model_gateway.stream_transport`. |
+| Invocation and lease supervision | `src/execution/native_agent_lifecycle.rs`, `src/execution/agent_preparation.rs` | Retains the command when control fails. |
+| Ambiguous invocation recovery | `src/execution/agent_delivery_processor.rs::process_output_recovery` | Maps a running ambiguous invocation to an internal terminal failure. |
+
+Successful continuation needs further implementation and verification. Do not weaken invocation fencing or repeat completed tool effects to pass this check.
+The legacy platform has no equivalent crash-continuation contract. Its behavior cannot establish acceptance for this new requirement.
+The external MCP reconnect contract also remains open.
+
+Earlier attempts do not restart Main. Two prompts receive model refusals; another test misses a title because of capitalization.
+The final test uses a case-insensitive title check. Its timeout occurs after the confirmed runtime failure, not before submission.
