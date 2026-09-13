@@ -175,3 +175,17 @@ A separate Computer Use check opens recovered chat 567 in a fresh Chrome tab.
 The complete persisted response includes `MAIN_CHECKPOINT_ORCHARD_FINISHED_20260913`.
 This confirms the rendered result after recovery; it does not repeat the crash experiment.
 Saved-agent and pipeline failure and mixed-guard proofs remain open.
+
+## Independent pipeline pause refusal
+
+A fresh headed Playwright session creates a temporary PAT through Personal Tokens.
+The independent client invokes `Hitl_node` through the pipeline version 8 endpoint.
+The task includes `RUST_EXTERNAL_PAUSE_20260913` and requests a joke for review.
+The client disconnects after the priming event and resumes through GET.
+The response sets `isError=true` and identifies the human-approval boundary.
+The original cursor replays the exact response. The completed cursor returns HTTP 204.
+The client does not approve, reject, or resume the pipeline interrupt.
+The PAT is revoked with HTTP 204.
+The local evidence log is `elitea-visible-pat-pause-acceptance.log`.
+This proves pause refusal through the independent transport client.
+It does not prove runtime failure, mixed guards, or result replay after a later browser decision.
