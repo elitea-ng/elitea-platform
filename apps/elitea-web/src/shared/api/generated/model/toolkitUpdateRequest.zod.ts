@@ -46,6 +46,10 @@ export const ToolkitUpdateRequest = zod
     name: zod.string().min(1).optional(),
     type: zod.string().optional(),
     description: zod.string().optional(),
+    meta: zod
+      .record(zod.string(), zod.unknown())
+      .optional()
+      .describe("Toolkit metadata, including MCP sharing options."),
     settings: zod.record(zod.string(), zod.unknown()).optional(),
   })
   .describe(

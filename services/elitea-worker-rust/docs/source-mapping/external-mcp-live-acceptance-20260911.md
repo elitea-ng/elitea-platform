@@ -68,3 +68,40 @@ Trace `7342` invokes saved child `elitea_agent_12_v_17`.
 Trace `7343` records the child's marker response.
 This proves autonomous saved-pipeline completion through the external MCP bridge.
 It does not prove external-client retry deduplication or provider failures.
+
+## External toolkit sharing and invocation: 2026-09-13
+
+The editor originally omits `meta` from create and update requests.
+Its sharing checkbox appears saved, but external discovery returns an empty catalogue.
+Main already persists toolkit metadata; the UI client contract is stale.
+Web `features/toolkits/api/toolkits.ts` now forwards optional metadata on both writes.
+The OpenAPI request schemas now expose that existing Main field.
+The database schema remains unchanged.
+
+The UI API suite passes 12 tests, including four metadata preservation checks.
+UI TypeScript checking and focused lint pass.
+Deployed UI image: `sha256:828a4f4a774ead5bf820881f6ddfbd2fac08000fb23349be59f28ce49f3dc973`.
+Main and Rust images remain unchanged.
+
+Playwright enables sharing for synthetic toolkit `31` and saves it.
+The PUT request includes `meta.mcp_options.available_by_mcp=true`.
+The checkbox remains enabled after reload.
+External `tools/list` exposes exactly `rust-gate3-oauth-read-20260911_echo_marker`.
+Its instance schema requires `marker` and retains the OpenAPI response-selection controls.
+
+External `tools/call` returns the exact marker `RUST_GATE3_EXTERNAL_TOOLKIT_20260913`.
+It returns mode `stored` and generation `1`, without `isError`.
+Execution `111b05c9d48c4595cf276c6f0bfdf5f5` settles as `SUCCEEDED`.
+An omitted required marker produces an explicit MCP error for execution `26357a101a19135dba3ddf948e89496f`.
+An unknown exported name returns JSON-RPC code `-32602`.
+These requests use browser-session authentication against the external protocol route.
+They are not independent-client authentication proof.
+
+The Python acceptance client is `tests/acceptance/external_mcp_client.py`.
+It checks initialization, unique discovery names, the exact schema, invocation, and a synthetic result marker.
+Its authenticated run remains pending. It reads only an explicitly supplied bearer token.
+Browser-session export was rejected by automatic approval review and did not occur.
+
+The test restores toolkit `31` sharing to disabled after verification.
+A final external discovery returns an empty catalogue.
+This verifies that disabling sharing also reaches persisted state.
