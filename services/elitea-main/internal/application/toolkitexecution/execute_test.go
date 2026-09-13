@@ -178,3 +178,64 @@ func validExecuteCurrentReadToolRequest(arguments map[string]any) ExecuteCurrent
 		ToolName: "get_issue", Arguments: arguments,
 	}
 }
+
+func TestAdmittedToolkitObservationResumesWithoutAnotherInvocation(t *testing.T) {
+	frozen := validFrozenCurrentReadTool()
+	freezer := &executionFreezerStub{frozen: frozen}
+	submitter := &executionSubmitterStub{outcome: executionapp.AdmissionOutcome{ExecutionID: "execution-resume"}}
+	waiter := &executionWaiterStub{completion: Completion{
+		State: executiondomain.JobSucceeded, ResultJSON: []byte(`{"ok":true}`),
+		ToolkitType: frozen.ToolkitType, ToolkitName: frozen.ToolkitName, ToolName: frozen.ToolName,
+	}}
+	service, err := NewCurrentReadToolExecutionService(freezer, submitter, waiter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admitted, err := service.Admit(context.Background(), validExecuteCurrentReadToolRequest(map[string]any{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if admitted.ExecutionID() != "execution-resume" || waiter.calls != 0 {
+		t.Fatalf("admission waited for output: id=%q waits=%d", admitted.ExecutionID(), waiter.calls)
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	outcome, err := service.Wait(cancelled, admitted)
+	if !errors.Is(err, context.Canceled) || outcome.ExecutionID != admitted.ExecutionID() || waiter.calls != 0 {
+		t.Fatalf("cancelled observer: outcome=%#v error=%v waits=%d", outcome, err, waiter.calls)
+	}
+	waiter.err = context.DeadlineExceeded
+	if _, err := service.Wait(context.Background(), admitted); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("wait error = %v", err)
+	}
+	// A changed toolkit row must not replace the admitted result binding.
+	freezer.frozen.ToolkitName = "changed-after-admission"
+	waiter.err = nil
+	for range 2 {
+		outcome, err = service.Wait(context.Background(), admitted)
+		if err != nil || string(outcome.Completion.ResultJSON) != `{"ok":true}` {
+			t.Fatalf("resumed observer: outcome=%#v error=%v", outcome, err)
+		}
+	}
+	if freezer.calls != 1 || submitter.calls != 1 || waiter.calls != 3 {
+		t.Fatalf("observation repeated admission: freeze=%d submit=%d wait=%d", freezer.calls, submitter.calls, waiter.calls)
+	}
+	waiter.completion.ToolName = "different-tool"
+	if _, err := service.Wait(context.Background(), admitted); !errors.Is(err, ErrToolkitExecuteReadResultMismatch) {
+		t.Fatalf("resumed observer accepted mismatched output: %v", err)
+	}
+}
+
+func TestToolkitObservationRejectsMissingAdmission(t *testing.T) {
+	waiter := &executionWaiterStub{}
+	service, err := NewCurrentReadToolExecutionService(&executionFreezerStub{}, &executionSubmitterStub{}, waiter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Wait(context.Background(), AdmittedCurrentReadTool{}); !errors.Is(err, ErrInvalidCurrentReadTool) {
+		t.Fatalf("missing admission error = %v", err)
+	}
+	if waiter.calls != 0 {
+		t.Fatal("missing admission reached result storage")
+	}
+}

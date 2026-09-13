@@ -29,6 +29,18 @@ type CurrentReadToolExecutionOutcome struct {
 	Completion  Completion
 }
 
+// AdmittedCurrentReadTool binds result observation to an already admitted invocation.
+// Only Admit constructs this value. It contains no arguments or credentials.
+// Copying it permits another observer, not another invocation.
+type AdmittedCurrentReadTool struct {
+	executionID string
+	toolkitType string
+	toolkitName string
+	toolName    string
+}
+
+func (a AdmittedCurrentReadTool) ExecutionID() string { return a.executionID }
+
 type currentReadToolFreezer interface {
 	Freeze(context.Context, FreezeCurrentReadToolRequest) (FrozenCurrentReadTool, error)
 }
@@ -68,13 +80,26 @@ func (s *CurrentReadToolExecutionService) Execute(
 	ctx context.Context,
 	request ExecuteCurrentReadToolRequest,
 ) (CurrentReadToolExecutionOutcome, error) {
+	admitted, err := s.Admit(ctx, request)
+	if err != nil {
+		return CurrentReadToolExecutionOutcome{}, err
+	}
+	return s.Wait(ctx, admitted)
+}
+
+// Admit freezes and durably submits the invocation without waiting for its result.
+// Transport code can publish its resume identity before starting observation.
+func (s *CurrentReadToolExecutionService) Admit(
+	ctx context.Context,
+	request ExecuteCurrentReadToolRequest,
+) (AdmittedCurrentReadTool, error) {
 	if s == nil || ctx == nil || !validExecutionRequest(request) {
-		return CurrentReadToolExecutionOutcome{}, currentReadToolAdmissionError(
+		return AdmittedCurrentReadTool{}, currentReadToolAdmissionError(
 			CurrentReadToolAdmissionInput, ErrInvalidCurrentReadTool,
 		)
 	}
 	if err := ctx.Err(); err != nil {
-		return CurrentReadToolExecutionOutcome{}, err
+		return AdmittedCurrentReadTool{}, err
 	}
 
 	frozen, err := s.freezer.Freeze(ctx, FreezeCurrentReadToolRequest{
@@ -85,7 +110,7 @@ func (s *CurrentReadToolExecutionService) Execute(
 		Arguments: cloneArguments(request.Arguments),
 	})
 	if err != nil {
-		return CurrentReadToolExecutionOutcome{}, err
+		return AdmittedCurrentReadTool{}, err
 	}
 	admitted, err := s.admissions.Submit(ctx, SubmitRequest{
 		Identity:       request.Identity,
@@ -93,18 +118,38 @@ func (s *CurrentReadToolExecutionService) Execute(
 		Frozen:         frozen,
 	})
 	if err != nil {
-		return CurrentReadToolExecutionOutcome{}, currentReadToolAdmissionError(
+		return AdmittedCurrentReadTool{}, currentReadToolAdmissionError(
 			CurrentReadToolAdmissionDurableWrite, err,
 		)
 	}
-	outcome := CurrentReadToolExecutionOutcome{ExecutionID: admitted.ExecutionID}
-	completion, err := s.results.Wait(ctx, admitted.ExecutionID, 1)
+	return AdmittedCurrentReadTool{
+		executionID: admitted.ExecutionID,
+		toolkitType: frozen.ToolkitType,
+		toolkitName: frozen.ToolkitName,
+		toolName:    frozen.ToolName,
+	}, nil
+}
+
+// Wait observes an admitted invocation. Cancellation stops this observer only.
+// Repeated calls never freeze, submit, or execute another toolkit invocation.
+func (s *CurrentReadToolExecutionService) Wait(
+	ctx context.Context,
+	admitted AdmittedCurrentReadTool,
+) (CurrentReadToolExecutionOutcome, error) {
+	outcome := CurrentReadToolExecutionOutcome{ExecutionID: admitted.executionID}
+	if s == nil || ctx == nil || admitted.executionID == "" {
+		return outcome, ErrInvalidCurrentReadTool
+	}
+	if err := ctx.Err(); err != nil {
+		return outcome, err
+	}
+	completion, err := s.results.Wait(ctx, admitted.executionID, 1)
 	if err != nil {
 		return outcome, err
 	}
-	if completion.ToolkitType != frozen.ToolkitType ||
-		completion.ToolkitName != frozen.ToolkitName ||
-		completion.ToolName != frozen.ToolName {
+	if completion.ToolkitType != admitted.toolkitType ||
+		completion.ToolkitName != admitted.toolkitName ||
+		completion.ToolName != admitted.toolName {
 		return outcome, ErrToolkitExecuteReadResultMismatch
 	}
 	outcome.Completion = completion.Clone()

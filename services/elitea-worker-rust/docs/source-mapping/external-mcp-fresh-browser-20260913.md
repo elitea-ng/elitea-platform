@@ -27,3 +27,32 @@ Repeated calls cannot be treated as continuation without a durable client reques
 A JSON-RPC request ID alone is insufficient across unrelated stateless clients.
 The remaining implementation must preserve actor and project isolation, argument conflicts, and exact execution identity during reconnect.
 Do not close gate 3d on the normal-path evidence above.
+
+
+## Toolkit admission and observation separation
+
+The current platform reference is `projects/centry/pylon_main/plugins/elitea_core/routes/mcp_sse.py::_handle_mcp_request` in the umbrella workspace.
+It checks project access and refuses GET with HTTP 405.
+Its optional SSE POST mode does not provide the required restart recovery contract.
+
+The new implementation separates toolkit admission from result observation in `services/elitea-main/internal/application/toolkitexecution/execute.go`.
+`Admit` returns after the existing frozen input and durable command admission succeed.
+`AdmittedCurrentReadTool` retains private execution and tool identity fields without arguments or credentials.
+`Wait` observes that invocation and verifies the original tool identity before returning its result.
+The existing `Execute` method composes both steps and preserves its caller contract.
+Cancellation stops observation without creating or cancelling durable work.
+
+Tests cover admission without waiting, cancelled observation, timeout, repeated observation, changed current toolkit data, and mismatched results.
+The toolkit application tests and MCP handler tests pass.
+The toolkit race tests and focused vet check also pass.
+These are component checks. They do not establish external reconnect acceptance.
+
+This change introduces no migration, proto change, or worker command change.
+The transport still needs a durable actor/project/scope/request binding and standard SSE cursor replay.
+The admitted handle is process-local and is not a durable recovery receipt.
+A resumed GET must load trusted durable invocation metadata; it must never construct authority from client-supplied identifiers.
+The transport must publish the resume cursor after admission and before waiting for the result.
+A subsequent POST remains a new call; JSON-RPC IDs are not global idempotency keys.
+
+Protocol reference: [MCP Streamable HTTP resumability](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports).
+Gate 3d remains open until an independent client resumes the same invocation across disconnection and service restart.
