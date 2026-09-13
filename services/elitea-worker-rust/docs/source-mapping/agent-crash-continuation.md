@@ -376,3 +376,38 @@ Verification: all 31 Rust event-projection tests, the restored-assembler test, 9
 Source mapping: `src/config.rs`, `src/execution/production.rs`, `src/execution/agent_delivery_processor.rs`, and `src/execution/execution_delivery_processor.rs`; fixture adjustment in `src/transport/redis_connector.rs`. The processor regression now enters through ordinary configured delivery processing rather than directly calling the recovery helper. All 29 checkpoint-filtered tests and strict library/test Clippy pass. The configuration test checks default-off behavior, explicit enablement, and rejection without durable storage.
 
 This adds no new migration. Rehearsal inspection confirms shared history is at 130; the previously reviewed shared/0131 runtime-claim migration is required before enabling recovery. Tenant schema migrations are not required for this rollout. Image builds are in progress; this section does not claim deployed enablement or browser/external-client acceptance.
+
+
+## Deployed worker restart acceptance: 2026-09-13
+
+The rehearsal now runs Main, Rust worker, and web images tagged `checkpoint-recovery-20260913`.
+The official migrator applies shared migration 131 before recovery enablement.
+This rollout does not apply tenant migrations or replace the product database.
+The deployment retains existing environment values and durable mounts.
+
+A fresh Chrome context runs the corrected Playwright test.
+The test submits one chat message and waits for generated assistant text.
+It then restarts the worker with a zero-second stop timeout.
+The browser receives the completed answer without another message submission.
+The answer remains visible after a page reload.
+
+Evidence:
+
+- Chat: `566`.
+- Execution: `22c6fe6323359dac9cad7dd768a6f35a`.
+- Initial claim: attempt 1, epoch 1, recovery mode `NONE`.
+- Replacement claim: attempt 2, epoch 2, recovery mode `AGENT_MODEL_CHECKPOINT`.
+- The replacement claim stores a checkpoint authorization digest. Both claims are released after completion.
+- Worker output reports `agent_delivery.executed_retired` at `2026-09-13T15:18:34Z`.
+- Browser evidence records one message POST and the same execution event URL.
+- The final marker occurs twice after reload: once in the prompt and once in the answer.
+
+The first test script has an invalid trigger that matches the user prompt.
+Its chat `565` is excluded from recovery acceptance.
+The corrected script requires the marker in generated assistant output before restart.
+
+Source ownership remains unchanged: Rust/ADK owns checkpoint contents; Main owns lease fencing and authorization receipts.
+The previous sections identify the implementation paths and component tests for this behavior.
+This live result covers an ad-hoc model-generation checkpoint with no attached tools.
+It does not prove external MCP reconnect, Main restart recovery, or interruption during an external tool effect.
+These remaining cases keep point 3 open.
