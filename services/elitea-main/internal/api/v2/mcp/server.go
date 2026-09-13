@@ -63,6 +63,10 @@ func (h *Handler) Endpoint(w http.ResponseWriter, r *http.Request) {
 	// stream and 405 is the specification's answer for exactly that case. pylon
 	// refuses the same way, with this same sentence.
 	if r.Method == http.MethodGet {
+		if h.resumeCodec != nil && r.Header.Get("Last-Event-ID") != "" {
+			h.resumeAgentStream(w, r, schema)
+			return
+		}
 		w.Header().Set("Allow", http.MethodPost)
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": sseUnavailableMessage})
 		return
@@ -115,6 +119,10 @@ func (h *Handler) Endpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if message.Method == "tools/call" && h.resumeCodec != nil && strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+		h.streamAgentCall(w, r, schema, requestScope, message)
+		return
+	}
 	writeRPC(w, http.StatusOK, h.dispatch(r, schema, requestScope, message))
 }
 
@@ -230,6 +238,10 @@ const ToolExecutionUnavailableReason = "this MCP server can list this project's 
 	"Nothing was executed and nothing was changed."
 
 func (h *Handler) callTool(r *http.Request, schema string, s scope, message rpcMessage) rpcResponse {
+	return h.callToolWithObserver(r, schema, s, message, nil)
+}
+
+func (h *Handler) callToolWithObserver(r *http.Request, schema string, s scope, message rpcMessage, observer agentResultObserver) rpcResponse {
 	var params struct {
 		Name      string         `json:"name"`
 		Arguments map[string]any `json:"arguments"`
@@ -351,7 +363,7 @@ func (h *Handler) callTool(r *http.Request, schema string, s scope, message rpcM
 		return newResult(message.ID, refusal)
 	}
 
-	return newResult(message.ID, h.runAgentTool(r.Context(), schema, projectID, actorUserID, target, task))
+	return newResult(message.ID, h.runAgentToolWithObserver(r.Context(), schema, projectID, actorUserID, target, task, observer))
 }
 
 func (h *Handler) callInternalApplicationTool(

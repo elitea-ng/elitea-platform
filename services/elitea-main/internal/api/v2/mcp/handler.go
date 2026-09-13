@@ -171,7 +171,8 @@ var errNoPool = errors.New("mcp: no database pool configured")
 // switch and the same tenant scoping, and a second type would only make it
 // possible for the two to disagree about them.
 type Handler struct {
-	pool *pgxpool.Pool
+	resumeCodec *ResumeCursorCodec
+	pool        *pgxpool.Pool
 	// source is the tool catalog. Swappable so the protocol handling can be
 	// tested without a database; production always gets postgresToolSource.
 	source toolSource

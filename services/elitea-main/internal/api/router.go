@@ -892,6 +892,7 @@ func mountMCPServerRoutes(
 		v2mcp.WithInternalNotificationStore(notificationStore),
 		v2mcp.WithToolkitArgumentSchemas(toolkitArgumentSchemas),
 		v2mcp.WithToolkitExecuteRead(toolkitExecute),
+		v2mcp.WithResumeCursorCodec(mcpResponseCursorCodec()),
 		v2mcp.WithToolkitDiscovery(toolkitDiscovery),
 	)
 	r.Group(func(r chi.Router) {

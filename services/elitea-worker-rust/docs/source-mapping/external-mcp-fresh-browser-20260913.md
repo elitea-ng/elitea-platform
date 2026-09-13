@@ -56,3 +56,43 @@ A subsequent POST remains a new call; JSON-RPC IDs are not global idempotency ke
 
 Protocol reference: [MCP Streamable HTTP resumability](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports).
 Gate 3d remains open until an independent client resumes the same invocation across disconnection and service restart.
+
+
+## Agent response cursors and GET replay
+
+`services/elitea-main/internal/api/v2/mcp/resume_cursor.go` encrypts bounded admission metadata with a deployment-key-derived AEAD key.
+The key derivation uses a distinct MCP response domain.
+Cursors expire after at most 24 hours and survive replacement with the same deployment key.
+They contain no prompts, credentials, arguments, or result content.
+No new database table or migration is required.
+Key changes invalidate existing cursors; there is no process-local key fallback.
+
+`resume_stream.go` emits a priming SSE cursor after agent admission, before result observation.
+A final SSE event preserves the original JSON-RPC request ID.
+A GET with `Last-Event-ID` authenticates through the existing router and checks current run permission.
+It also verifies the actor, project, exact endpoint scope, application version, and current MCP export.
+It reads the original response message without starting another invocation.
+A completed cursor returns HTTP 204 after the same access checks.
+An observer disconnect stops waiting without cancelling the durable execution.
+
+`execute.go` adds an admission observer to the existing agent start path.
+`server.go` selects SSE for compatible agent calls and handles resumable GET requests.
+`internal/api/mcp_resume.go` and `router.go` compose the codec from the existing deployment master key.
+Deployments without that key retain their existing JSON response behavior.
+Toolkit and internal-builder calls still use their existing response path.
+
+The current platform route remains the functional reference identified above.
+Its GET refusal is not copied because the new platform requires crash recovery.
+Rust continues to own execution checkpoints; this change only reconnects the external caller to Main's existing durable result projection.
+
+Verification passes for cursor tampering, expiry, replacement keys, request identity, SSE framing, and caller/scope/export isolation.
+Focused MCP tests, race tests, and vet pass.
+`TestMCPAgentResponseResumesAfterHandlerReplacementPostgres` runs against an isolated real PostgreSQL database and passes.
+It discards the original response, replaces the handler and codec, and returns the exact original answer through GET.
+The replacement has no admission service. The test records one original admission.
+This test uses an admission double and does not prove a worker or Main process restart through an external client.
+
+Deployment and independent-client acceptance remain pending.
+Toolkit resume still requires the matching durable observation path.
+Responses that pause for human input require separate policy and replay verification; no external resume-of-interrupt feature is introduced.
+Gate 3d remains open.

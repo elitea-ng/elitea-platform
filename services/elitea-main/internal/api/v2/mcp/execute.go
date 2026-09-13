@@ -265,6 +265,12 @@ func (h *Handler) runAgentTool(
 	tool Tool,
 	task string,
 ) map[string]any {
+	return h.runAgentToolWithObserver(ctx, schema, projectID, actorUserID, tool, task, nil)
+}
+
+type agentResultObserver func(context.Context, string, int64, int64, agentexecutionapp.CurrentApplicationStartOutcome, Tool) map[string]any
+
+func (h *Handler) runAgentToolWithObserver(ctx context.Context, schema string, projectID, actorUserID int64, tool Tool, task string, observer agentResultObserver) map[string]any {
 	conversationUUID, participantID, err := h.prepareRunConversation(
 		ctx, schema, projectID, actorUserID, tool,
 	)
@@ -313,6 +319,9 @@ func (h *Handler) runAgentTool(
 		return errorResult("the agent behind '" + tool.Name + "' could not be started; nothing was executed")
 	}
 
+	if observer != nil {
+		return observer(ctx, schema, projectID, actorUserID, outcome, tool)
+	}
 	return h.awaitRunResult(ctx, schema, outcome, tool)
 }
 
