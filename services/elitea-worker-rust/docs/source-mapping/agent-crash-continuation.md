@@ -161,3 +161,19 @@ The remaining coordinator change must address an ordering difference:
 The relevant boundaries are `agent_preparation.rs`, `agent_invocation.rs`, `native_agent_lifecycle.rs`, and `agents/ordinary.rs`.
 Do not route an inspection claim through ordinary `BeginExecution` or infer fresh authority from its hydrated inputs.
 Recovery opt-in remains disabled until this distinct path and partial-output replacement are implemented.
+
+## Rust inspection claim boundary
+
+`src/protocol/model_checkpoint_inspection.rs` separates checkpoint inspection from fresh invocation authority.
+Its parser requires the explicit recovery disposition and an authenticated agent command.
+It shares identity, lease, manifest, and immutable revision validation with the ordinary claim parser.
+It does not change the received disposition or expose a fresh claim to its caller.
+
+Consuming the inspection claim issues one claim-bound ADK session authority and retains a separate pending authorization claim.
+This operation creates no runtime credential grant, model submission permit, output cursor, or settlement permission.
+Rust and ADK retain checkpoint ownership. Main receives no checkpoint contents.
+
+The focused test rejects fresh claims, changed generations, changed workload sessions, expired leases, cancellation, changed input revisions, and missing manifests.
+It also checks that session access preserves the execution ID, claim attempt, lease epoch, and fence token.
+
+This boundary is not routed into production yet. Lease supervision, checkpoint evidence binding, and restored invocation dispatch remain required.

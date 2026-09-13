@@ -1,3 +1,6 @@
+#[path = "model_checkpoint_inspection.rs"]
+mod model_checkpoint_inspection;
+
 #[path = "toolkit_invocation.rs"]
 mod toolkit_invocation;
 pub(crate) use toolkit_invocation::{AuthorizedToolkitExecution, ToolkitInvocationPayload};
@@ -821,8 +824,8 @@ pub(crate) struct ClaimBoundRuntimeContextAuthority {
 
 /// Opaque authority for one claim-fenced ADK session writer.
 ///
-/// This grant is minted beside the runtime-context grant only after
-/// `AUTHORIZED_NOW`. It carries the accepted claim identity and fence needed
+/// This grant comes from invocation authorization or explicit checkpoint inspection.
+/// Inspection grants no provider or model submission authority. It carries the claim fence needed
 /// to activate durable session persistence, but no output, settlement, Redis,
 /// provider, or invocation-submission capability. The value is intentionally
 /// neither cloneable nor formattable and zeroizes its duplicated fence bytes
@@ -2282,11 +2285,9 @@ fn parse_claim_decision(
             AgentOutputRecoveryKind::AmbiguousInvocation,
         )
         .map(AgentClaimDecision::RecoverAmbiguousInvocationNoAck),
-        ClaimDispositionV1::Unspecified | ClaimDispositionV1::RecoverAgentModelCheckpoint => {
-            Err(ControlSemanticError::InvalidInput(
-                "the claim disposition is malformed",
-            ))
-        }
+        ClaimDispositionV1::Unspecified | ClaimDispositionV1::RecoverAgentModelCheckpoint => Err(
+            ControlSemanticError::InvalidInput("the claim disposition is malformed"),
+        ),
     }
 }
 
@@ -2631,13 +2632,31 @@ fn parse_accepted_agent_claim(
     producer_id: &str,
     now_unix_millis: i64,
 ) -> Result<AcceptedAgentClaim, ControlSemanticError> {
+    parse_input_claim_binding(
+        verified,
+        response,
+        workload_session_id,
+        producer_id,
+        now_unix_millis,
+        ClaimDispositionV1::Accepted,
+    )
+}
+
+fn parse_input_claim_binding(
+    verified: &impl VerifiedExecutionCommand,
+    response: ClaimCommandResponseV1,
+    workload_session_id: &str,
+    producer_id: &str,
+    now_unix_millis: i64,
+    expected: ClaimDispositionV1,
+) -> Result<AcceptedAgentClaim, ControlSemanticError> {
     if now_unix_millis <= 0 {
         return Err(ControlSemanticError::InvalidInput(
             "the runtime clock is malformed",
         ));
     }
     let receipt = exclusive_claim_receipt(response)?;
-    if receipt.disposition != ClaimDispositionV1::Accepted as i32 {
+    if receipt.disposition != expected as i32 {
         return Err(ControlSemanticError::InvalidInput(
             "the claim disposition does not grant fresh execution authority",
         ));
