@@ -99,9 +99,59 @@ They are not independent-client authentication proof.
 
 The Python acceptance client is `tests/acceptance/external_mcp_client.py`.
 It checks initialization, unique discovery names, the exact schema, invocation, and a synthetic result marker.
-Its authenticated run remains pending. It reads only an explicitly supplied bearer token.
+Its independent authenticated run passes as recorded below. It reads only an explicitly supplied bearer token.
 Browser-session export was rejected by automatic approval review and did not occur.
 
 The test restores toolkit `31` sharing to disabled after verification.
 A final external discovery returns an empty catalogue.
 This verifies that disabling sharing also reaches persisted state.
+
+
+## Independent PAT client acceptance: 2026-09-13
+
+Personal Tokens in the deployed UI created short-lived project-2 PATs for this test.
+The Python client used `Authorization: Bearer <PAT>` and no browser session.
+Initialization, unique tool discovery, object argument schemas, and actual invocation passed.
+The saved pipeline exports `Gneral_Purpose`; its display name contains a space.
+Two preliminary pipeline attempts stopped at exact-name validation before invocation.
+Using the discovered canonical name passed.
+
+| Published entity | Synthetic marker | Execution | Outcome |
+| --- | --- | --- | --- |
+| Toolkit 31 | RUST_PAT_TOOLKIT_20260913 | 5a3b761c3719de1d41e3a192151acb8c | SUCCEEDED; stored echo, generation 1 |
+| Agent version 20 | RUST_PAT_AGENT_20260913 | 422cdfa94b00b3fa285c1db23ed7867c | SUCCEEDED; actual echo and linked-skill response |
+| Autonomous pipeline version 18 | RUST_PAT_PIPELINE_20260913 | 40a7ec8e8915eb60d52f13f29e891ffd | SUCCEEDED; terminal marker |
+
+An unknown exported tool returns JSON-RPC `-32602`.
+Omitting the toolkit marker returns `isError=true`; execution
+`f88bbfd8043674658141ae67e10e04f1` settles as FAILED.
+An unauthenticated external request returns HTTP 401.
+
+A project-2 PAT received HTTP 200 for the project-1 catalogue. This is not a
+restricted-user isolation test: the caller has the administration-mode
+`super_admin` role, verified in the rehearsal database. Main
+`internal/api/router.go::mountMCPServerRoutes` applies authentication and
+`internal/api/middleware/project_authorization.go::RequireProjectAccess`,
+which permits project membership or that central administrator role.
+The negative test's unconditional expectation of 401/403 was therefore not
+supported by this route's authorization contract. Restricted-user proof stays open.
+The token's LLM project binding is a separate contract; this test does not
+establish stricter MCP token scoping.
+
+All three temporary PATs were revoked through the normal token API with HTTP 204.
+The token listing subsequently contains none of the temporary test names.
+Toolkit 31 sharing was restored to disabled and verified after browser reload.
+No token values or browser credentials are stored in this record or the client.
+
+This completes independent-client happy-path verification for these three
+published fixtures, not the remaining mixed-guard, replacement, or replay gates.
+Direct pipeline HITL history and editor Test entry points remain gate 5 work.
+
+Current-platform reference checked after the public-project clarification:
+`projects/centry/pylon_main/plugins/elitea_core/routes/mcp_sse.py::_check_project_access`
+uses `list_user_projects`; `plugins/projects/rpc/poc.py::list_user_projects`
+resolves project membership through `admin_check_user_in_projects`.
+The same module's project classification helper classifies the configured `ai_project_id`
+(default 1) as public. Public sharing must therefore remain distinct from a
+negative test against an unrelated private project. No blanket same-project PAT
+restriction was introduced on the basis of the project-1 response.
