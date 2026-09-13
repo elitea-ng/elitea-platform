@@ -44,7 +44,7 @@ use crate::protocol::control::{
     ClaimBoundRuntimeContextAuthority, ClaimBoundSessionAuthority,
     InvocationAuthorizationCandidate, InvocationAuthorizationNoAckAuthority,
     InvocationAuthorizationPayload, InvocationAuthorizationTerminalCause,
-    InvocationSubmissionPermit, LeaseMonitoredAgentExecution,
+    InvocationSubmissionPermit, LeaseMonitoredAgentExecution, LiveModelCheckpointInspection,
 };
 use crate::protocol::elitea::runtime::v1::{DigestAlgorithmV1, DigestV1};
 use crate::transport::redis_commands::{
@@ -79,6 +79,15 @@ impl AgentPreparationConfig {
 /// coordinator component tests.
 #[async_trait]
 pub(crate) trait AgentInputMaterializer: Send + Sync {
+    async fn materialize_checkpoint(
+        &self,
+        _inspection: &LiveModelCheckpointInspection,
+    ) -> Result<MaterializedInput, InputContentError> {
+        Err(InputContentError::InvalidInput(
+            "checkpoint materialization is unavailable",
+        ))
+    }
+
     async fn materialize(
         &self,
         execution: &LeaseMonitoredAgentExecution,
@@ -113,6 +122,13 @@ pub(crate) trait AgentInputMaterializer: Send + Sync {
 
 #[async_trait]
 impl AgentInputMaterializer for InputContentClient {
+    async fn materialize_checkpoint(
+        &self,
+        inspection: &LiveModelCheckpointInspection,
+    ) -> Result<MaterializedInput, InputContentError> {
+        self.fetch_checkpoint_request(inspection).await
+    }
+
     async fn materialize(
         &self,
         execution: &LeaseMonitoredAgentExecution,
@@ -1636,9 +1652,18 @@ fn deadline_exceeded<K: UnixMillisClock>(
 fn agent_input_binding(
     execution: &LeaseMonitoredAgentExecution,
 ) -> Result<AgentInputBinding, ProtocolError> {
-    let bundle = execution.input_bundle();
-    let bundle_reference = execution.input_bundle_ref();
-    let request = execution.request_entry();
+    input_binding_from_parts(
+        execution.input_bundle(),
+        execution.input_bundle_ref(),
+        execution.request_entry(),
+    )
+}
+
+fn input_binding_from_parts(
+    bundle: &crate::protocol::elitea::runtime::v1::ExecutionInputBundleV1,
+    bundle_reference: &crate::protocol::elitea::runtime::v1::ExecutionInputBundleReferenceV1,
+    request: &crate::protocol::elitea::runtime::v1::ExecutionInputEntryV1,
+) -> Result<AgentInputBinding, ProtocolError> {
     let content = request.content.as_ref().ok_or(ProtocolError::InvalidInput(
         "the agent request content binding is missing",
     ))?;
@@ -1697,4 +1722,64 @@ fn preparation_error<T>(error: AgentPreparationError) -> Result<T, AgentPreparat
     tracing::Span::current().record("outcome", "error_noack");
     tracing::Span::current().record("error_code", error.code().as_str());
     Err(error)
+}
+
+#[derive(Debug)]
+#[allow(dead_code)] // Consumed by the recovery lifecycle integration.
+pub(crate) enum CheckpointInputError {
+    Lease(ClaimLeaseError),
+    Content(InputContentError),
+    Protocol(ProtocolError),
+    DeadlineExceeded,
+}
+
+/// Load and parse recovery input without ordinary invocation authorization.
+/// The caller retains the lease and inspection for terminal/no-ACK handling.
+#[allow(dead_code)]
+pub(crate) async fn prepare_checkpoint_input<I: AgentInputMaterializer, K: UnixMillisClock>(
+    input: &I,
+    inspection: &LiveModelCheckpointInspection,
+    verified: &VerifiedAgentCommand,
+    lease: &mut ClaimLeaseMonitor,
+    clock: &K,
+) -> Result<AgentExecutionRequest, CheckpointInputError> {
+    if !inspection.matches_command(verified) {
+        return Err(CheckpointInputError::Protocol(
+            ProtocolError::AuthorizationFailed("the recovery input belongs to another command"),
+        ));
+    }
+    check_checkpoint_deadline(verified, clock)?;
+    let materialized = lease
+        .run_cancellation_safe_phase(input.materialize_checkpoint(inspection))
+        .await
+        .map_err(CheckpointInputError::Lease)?
+        .map_err(CheckpointInputError::Content)?;
+    lease
+        .check_now()
+        .await
+        .map_err(CheckpointInputError::Lease)?;
+    check_checkpoint_deadline(verified, clock)?;
+    let (bundle, reference, entry) = inspection.input_binding_parts();
+    let binding = input_binding_from_parts(bundle, reference, entry)
+        .map_err(CheckpointInputError::Protocol)?;
+    let message = parse_agent_execution_input(materialized.as_bytes())
+        .map_err(CheckpointInputError::Protocol)?;
+    crate::agents::request_from(message, verified.kind(), binding)
+        .map_err(CheckpointInputError::Protocol)
+}
+
+fn check_checkpoint_deadline<K: UnixMillisClock>(
+    verified: &VerifiedAgentCommand,
+    clock: &K,
+) -> Result<(), CheckpointInputError> {
+    let now = clock.now_unix_millis();
+    if now <= 0 {
+        return Err(CheckpointInputError::Protocol(ProtocolError::InvalidInput(
+            "the runtime clock is malformed",
+        )));
+    }
+    if verified.command().deadline_unix_millis <= now {
+        return Err(CheckpointInputError::DeadlineExceeded);
+    }
+    Ok(())
 }

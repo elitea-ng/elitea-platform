@@ -141,6 +141,24 @@ pub(crate) struct LiveModelCheckpointInspection {
 }
 #[allow(dead_code)]
 impl LiveModelCheckpointInspection {
+    pub(crate) fn matches_command(&self, verified: &VerifiedAgentCommand) -> bool {
+        self.claim.matches_verified_command(verified)
+    }
+
+    pub(crate) fn input_binding_parts(
+        &self,
+    ) -> (
+        &super::ExecutionInputBundleV1,
+        &super::ExecutionInputBundleReferenceV1,
+        &super::ExecutionInputEntryV1,
+    ) {
+        (
+            self.claim.input_bundle(),
+            self.claim.input_bundle_ref(),
+            self.claim.request_entry(),
+        )
+    }
+
     /// Borrow only the frozen request binding while the inspection lease is live.
     pub(crate) fn input_content_authority(&self) -> Option<super::ClaimBoundInputAuthority<'_>> {
         self.claim

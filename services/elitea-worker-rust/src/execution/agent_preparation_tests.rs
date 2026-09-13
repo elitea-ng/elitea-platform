@@ -329,6 +329,21 @@ struct TestInput {
 }
 
 impl TestInput {
+    async fn read_input(&self) -> Result<MaterializedInput, InputContentError> {
+        self.state.calls.lock().expect("calls").push("input");
+        if let Some(desired) = self.observed_after_call {
+            self.state.observe.lock().expect("observe").desired_state = desired as i32;
+        }
+        let _guard = InputFutureGuard(Arc::clone(&self.dropped));
+        match &self.mode {
+            InputMode::Bytes(value) => Ok(MaterializedInput::for_test(value.clone())),
+            InputMode::DependencyUnavailable => Err(InputContentError::DependencyUnavailable(
+                "the input content service is unavailable",
+            )),
+            InputMode::Pending => pending().await,
+        }
+    }
+
     fn bytes(state: Arc<TestControlState>, value: Vec<u8>) -> Self {
         Self {
             state,
@@ -349,22 +364,18 @@ impl Drop for InputFutureGuard {
 
 #[async_trait]
 impl AgentInputMaterializer for TestInput {
+    async fn materialize_checkpoint(
+        &self,
+        _inspection: &crate::protocol::control::LiveModelCheckpointInspection,
+    ) -> Result<MaterializedInput, InputContentError> {
+        self.read_input().await
+    }
+
     async fn materialize(
         &self,
         _execution: &LeaseMonitoredAgentExecution,
     ) -> Result<MaterializedInput, InputContentError> {
-        self.state.calls.lock().expect("calls").push("input");
-        if let Some(desired) = self.observed_after_call {
-            self.state.observe.lock().expect("observe").desired_state = desired as i32;
-        }
-        let _guard = InputFutureGuard(Arc::clone(&self.dropped));
-        match &self.mode {
-            InputMode::Bytes(value) => Ok(MaterializedInput::for_test(value.clone())),
-            InputMode::DependencyUnavailable => Err(InputContentError::DependencyUnavailable(
-                "the input content service is unavailable",
-            )),
-            InputMode::Pending => pending().await,
-        }
+        self.read_input().await
     }
 }
 
@@ -1083,5 +1094,79 @@ async fn toolkit_invocation_authority_preserves_all_control_outcomes() {
             InvocationAuthorizationDecision::Unknown(_) => assert_eq!(case, "unknown"),
         }
         lease.close().await.expect("lease closed");
+    }
+}
+
+#[tokio::test]
+async fn checkpoint_input_preparation_never_begins_or_authorizes_an_invocation() {
+    use super::agent_lease::{ClaimLeaseMonitor, ClaimLeaseMonitorConfig};
+    use super::agent_preparation::{CheckpointInputError, prepare_checkpoint_input};
+    use crate::protocol::control::ModelCheckpointInspection;
+    use crate::protocol::elitea::runtime::v1::ClaimDispositionV1;
+
+    for case in 0..6 {
+        let (control, state) = control();
+        let verified = parse_and_verify_agent_command(
+            &bytes("signed_command"),
+            Some(&TestOnlyConformanceHmacAuthenticator),
+        )
+        .expect("command");
+        let mut response = state.claim.clone();
+        response.receipt.as_mut().expect("receipt").disposition =
+            ClaimDispositionV1::RecoverAgentModelCheckpoint as i32;
+        let inspection =
+            ModelCheckpointInspection::parse(&verified, response, "workload-1", "worker-1", NOW)
+                .expect("inspection");
+        let clock = Arc::new(TestClock::new(NOW));
+        let mut lease = ClaimLeaseMonitor::start_checkpoint_inspection(
+            control,
+            inspection,
+            clock.clone(),
+            ClaimLeaseMonitorConfig::new(Duration::from_millis(100)).expect("lease config"),
+        );
+        let live = lease
+            .activate_checkpoint_inspection()
+            .await
+            .expect("live inspection");
+        let mut input = TestInput::bytes(
+            state.clone(),
+            input_fixture(AgentExecutionKind::Application),
+        );
+        match case {
+            1 => input.mode = InputMode::Bytes(vec![0xff]),
+            2 => input.observed_after_call = Some(DesiredExecutionStateV1::Cancelled),
+            3 => clock.0.store(DEADLINE, Ordering::SeqCst),
+            4 => input.mode = InputMode::DependencyUnavailable,
+            _ => {}
+        }
+        let verified = if case == 5 {
+            parse_and_verify_agent_command(
+                &bytes("signed_command_adhoc"),
+                Some(&TestOnlyConformanceHmacAuthenticator),
+            )
+            .expect("another command")
+        } else {
+            verified
+        };
+        let outcome =
+            prepare_checkpoint_input(&input, &live, &verified, &mut lease, clock.as_ref()).await;
+        match case {
+            0 => assert!(outcome.is_ok()),
+            1 | 5 => assert!(matches!(outcome, Err(CheckpointInputError::Protocol(_)))),
+            2 => assert!(matches!(outcome, Err(CheckpointInputError::Lease(_)))),
+            3 => assert!(matches!(
+                outcome,
+                Err(CheckpointInputError::DeadlineExceeded)
+            )),
+            4 => assert!(matches!(outcome, Err(CheckpointInputError::Content(_)))),
+            _ => unreachable!(),
+        }
+        let calls = state.calls.lock().expect("calls").clone();
+        assert!(!calls.contains(&"begin") && !calls.contains(&"authorize"));
+        assert_eq!(
+            calls.iter().filter(|call| **call == "input").count(),
+            usize::from(case != 3 && case != 5)
+        );
+        let _ = lease.close().await;
     }
 }

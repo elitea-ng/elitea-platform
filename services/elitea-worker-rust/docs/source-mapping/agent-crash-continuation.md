@@ -262,3 +262,12 @@ No migration is added for this change. Recovery routing and output replacement r
 This is an opt-in coordinator entry point, not an enabled production recovery path. The existing processor still uses `route_verified` until restored assembly, output replacement, and terminal ownership are connected. This preserves the distinction between an implemented routing component and successful deployed continuation.
 
 The claim test checks explicit opt-in, ordinary accepted fallback, checkpoint inspection, and rejection of a mismatched producer fence. Existing agent control and delivery contracts verify unchanged ordinary and terminal routing. These remain component checks; mandatory UI restart verification and external MCP reconnection are pending.
+
+## Recovery request preparation
+
+`src/execution/agent_preparation.rs::prepare_checkpoint_input` now connects supervised inspection input loading to the existing canonical agent request parser. Fresh and recovery preparation share `input_binding_from_parts`, preserving the bundle identity/digest and request entry version/digest.
+`LiveModelCheckpointInspection::matches_command` checks the exact authenticated command binding before any content request. The input fetch runs through the existing lease cancellation boundary, followed by an explicit lease observation and deadline recheck. The caller retains inspection and lease ownership on failure for subsequent terminal/no-ACK policy; this helper neither begins nor authorizes an invocation.
+
+All 17 preparation component tests pass. The recovery case verifies normal parsing, malformed input, cancellation observed after materialization, pre-fetch deadline expiry, input-service failure, and a different signed command. It asserts no BeginExecution or AuthorizeInvocation calls, and no input fetch for rejected command/deadline cases. Strict Clippy verification accompanies the change.
+
+No current-platform business contract or product schema changes here: the ordinary parser remains the behavior reference, and crash continuation is new worker functionality. The production processor still awaits recovery lifecycle and output integration. These checks do not replace mandatory deployed UI and external-client restart verification.
