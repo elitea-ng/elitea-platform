@@ -340,6 +340,33 @@ impl AgentDeliveryRoute {
     }
 }
 
+/// Keeps checkpoint recovery separate from fresh invocation and output replay.
+#[allow(dead_code)]
+pub(crate) enum CheckpointDeliveryRoute {
+    Ordinary(AgentDeliveryRoute),
+    Inspect(Box<CheckpointAgentDelivery>),
+}
+
+#[allow(dead_code)]
+pub(crate) struct CheckpointAgentDelivery {
+    delivery: RedisCommandDelivery,
+    verified: VerifiedAgentCommand,
+    inspection: crate::protocol::control::ModelCheckpointInspection,
+}
+
+#[allow(dead_code)]
+impl CheckpointAgentDelivery {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        RedisCommandDelivery,
+        VerifiedAgentCommand,
+        crate::protocol::control::ModelCheckpointInspection,
+    ) {
+        (self.delivery, self.verified, self.inspection)
+    }
+}
+
 /// Shared application/ad-hoc pre-execution lifecycle owner.
 ///
 /// This is not whole-delivery or invocation admission. It intentionally stops
@@ -412,6 +439,44 @@ where
             .control
             .claim_agent_delivery(&verified, now_unix_millis)
             .await?;
+        self.route_claim_decision(delivery, verified, decision)
+            .await
+    }
+
+    /// The recovery coordinator alone opts in after it can own the full lifecycle.
+    #[allow(dead_code)]
+    pub(crate) async fn route_checkpoint_verified(
+        &self,
+        delivery: RedisCommandDelivery,
+        verified: VerifiedAgentCommand,
+        now_unix_millis: i64,
+    ) -> Result<CheckpointDeliveryRoute, AgentDeliveryError> {
+        use crate::protocol::control::CheckpointClaimDecision;
+        match self
+            .control
+            .claim_agent_checkpoint_delivery(&verified, now_unix_millis)
+            .await?
+        {
+            CheckpointClaimDecision::Inspect(inspection) => Ok(CheckpointDeliveryRoute::Inspect(
+                Box::new(CheckpointAgentDelivery {
+                    delivery,
+                    verified,
+                    inspection: *inspection,
+                }),
+            )),
+            CheckpointClaimDecision::Ordinary(decision) => self
+                .route_claim_decision(delivery, verified, *decision)
+                .await
+                .map(CheckpointDeliveryRoute::Ordinary),
+        }
+    }
+
+    async fn route_claim_decision(
+        &self,
+        delivery: RedisCommandDelivery,
+        verified: VerifiedAgentCommand,
+        decision: AgentClaimDecision,
+    ) -> Result<AgentDeliveryRoute, AgentDeliveryError> {
         match decision {
             AgentClaimDecision::Accepted(claim) => {
                 tracing::info!(

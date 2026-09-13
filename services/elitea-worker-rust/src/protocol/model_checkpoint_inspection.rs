@@ -5,6 +5,68 @@ use super::{
     ControlSemanticError, VerifiedAgentCommand, parse_input_claim_binding,
 };
 
+/// Agent-only claim result for workers that can inspect model checkpoints.
+#[allow(dead_code)] // Enabled only after the complete recovery coordinator is connected.
+pub(crate) enum CheckpointClaimDecision {
+    Ordinary(Box<super::AgentClaimDecision>),
+    Inspect(Box<ModelCheckpointInspection>),
+}
+
+impl<R: crate::transport::ControlRpc> super::AgentControlClient<R> {
+    #[allow(dead_code)]
+    pub(crate) async fn claim_agent_checkpoint_delivery(
+        &self,
+        verified: &VerifiedAgentCommand,
+        now_unix_millis: i64,
+    ) -> Result<CheckpointClaimDecision, super::AgentControlError> {
+        let mut request = super::build_agent_claim_request(
+            verified,
+            &self.workload_session_id,
+            &self.producer_id,
+        )?;
+        request.agent_model_checkpoint_recovery = true;
+        let response = self.control.claim_command(request).await?;
+        parse_checkpoint_claim_decision(
+            verified,
+            response,
+            &self.workload_session_id,
+            &self.producer_id,
+            now_unix_millis,
+        )
+        .map_err(Into::into)
+    }
+}
+
+fn parse_checkpoint_claim_decision(
+    verified: &VerifiedAgentCommand,
+    response: ClaimCommandResponseV1,
+    workload_session_id: &str,
+    producer_id: &str,
+    now_unix_millis: i64,
+) -> Result<CheckpointClaimDecision, ControlSemanticError> {
+    if response.receipt.as_ref().is_some_and(|receipt| {
+        receipt.disposition == ClaimDispositionV1::RecoverAgentModelCheckpoint as i32
+    }) {
+        ModelCheckpointInspection::parse(
+            verified,
+            response,
+            workload_session_id,
+            producer_id,
+            now_unix_millis,
+        )
+        .map(|inspection| CheckpointClaimDecision::Inspect(Box::new(inspection)))
+    } else {
+        super::parse_agent_claim_decision(
+            verified,
+            response,
+            workload_session_id,
+            producer_id,
+            now_unix_millis,
+        )
+        .map(|decision| CheckpointClaimDecision::Ordinary(Box::new(decision)))
+    }
+}
+
 /// Authenticated immutable inputs and a session fence, with no model permit.
 /// This value cannot be passed to `begin_agent_execution`.
 #[allow(dead_code)] // Recovery dispatch remains disabled until output replacement is wired.
@@ -226,6 +288,7 @@ mod tests {
     use tonic::{Request, Response, Status};
 
     struct CheckpointRpc {
+        claim_response: Option<ClaimCommandResponseV1>,
         calls: Arc<AtomicUsize>,
         response: Option<AuthorizeAgentModelCheckpointResponseV1>,
         expected_digest: [u8; 32],
@@ -253,9 +316,13 @@ mod tests {
         }
         async fn claim_command(
             &self,
-            _: Request<ClaimCommandRequestV1>,
+            request: Request<ClaimCommandRequestV1>,
         ) -> Result<Response<ClaimCommandResponseV1>, Status> {
-            panic!("unexpected claim")
+            assert!(request.get_ref().agent_model_checkpoint_recovery);
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Response::new(
+                self.claim_response.clone().expect("expected claim"),
+            ))
         }
         async fn begin_execution(
             &self,
@@ -290,6 +357,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn checkpoint_claim_opt_in_preserves_ordinary_routes_and_validates_inspection() {
+        for case in 0..3 {
+            let verified = parse_and_verify_agent_command(
+                &vector("signed_command"),
+                Some(&TestOnlyConformanceHmacAuthenticator),
+            )
+            .expect("command");
+            let mut response = ClaimCommandResponseV1::decode(vector("accepted_claim").as_slice())
+                .expect("response");
+            let receipt = response.receipt.as_mut().expect("receipt");
+            let fence = receipt.fence.clone().expect("fence");
+            let now = receipt.lease_expires_at_unix_millis - 1000;
+            if case != 0 {
+                receipt.disposition = ClaimDispositionV1::RecoverAgentModelCheckpoint as i32;
+            }
+            if case == 2 {
+                receipt.fence.as_mut().expect("fence").producer_id = "wrong-worker".into();
+            }
+            let calls = Arc::new(AtomicUsize::new(0));
+            let client = super::super::AgentControlClient::new(
+                CheckpointRpc {
+                    claim_response: Some(response),
+                    calls: calls.clone(),
+                    response: None,
+                    expected_digest: [0; 32],
+                },
+                ControlGrpcConfig {
+                    deadline: Duration::from_secs(1),
+                    workload_session_id: fence.workload_session_id,
+                    producer_id: fence.producer_id,
+                },
+            )
+            .expect("client");
+            let outcome = client.claim_agent_checkpoint_delivery(&verified, now).await;
+            match outcome {
+                Ok(CheckpointClaimDecision::Ordinary(decision)) => {
+                    assert_eq!(case, 0);
+                    assert!(matches!(
+                        *decision,
+                        super::super::AgentClaimDecision::Accepted(_)
+                    ));
+                }
+                Ok(CheckpointClaimDecision::Inspect(_)) => assert_eq!(case, 1),
+                Err(_) => assert_eq!(case, 2),
+            }
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[tokio::test]
     async fn only_first_authorization_for_matching_checkpoint_grants_a_permit() {
         for case in 0..4 {
             let verified = parse_and_verify_agent_command(
@@ -314,6 +431,7 @@ mod tests {
             let (pending, _session) = inspection.into_session_inspection();
             let calls = Arc::new(AtomicUsize::new(0));
             let rpc = CheckpointRpc {
+                claim_response: None,
                 expected_digest: [42; 32],
                 calls: calls.clone(),
                 response: (case != 2).then_some(AuthorizeAgentModelCheckpointResponseV1 {
@@ -392,6 +510,7 @@ mod tests {
         claim.identity.execution_id = execution_id.into();
         claim.identity.generation = generation;
         let rpc = CheckpointRpc {
+            claim_response: None,
             calls: Arc::new(AtomicUsize::new(0)),
             expected_digest: digest,
             response: Some(AuthorizeAgentModelCheckpointResponseV1 {

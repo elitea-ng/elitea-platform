@@ -253,3 +253,12 @@ All 11 input-content component tests pass, including a recovery request test tha
 The test bypasses lease activation only to construct its transport fixture; cancellation and expiry at activation are covered by the lease tests above.
 This is new crash-recovery behavior, not a port of the current platform's restart behavior. Checkpoints remain Rust/ADK-owned; Main serves the original immutable input through its existing content contract.
 No migration is added for this change. Recovery routing and output replacement remain unfinished, and no deployed recovery claim is made.
+
+## Agent-only checkpoint delivery routing
+
+`src/protocol/model_checkpoint_inspection.rs::AgentControlClient::claim_agent_checkpoint_delivery` explicitly advertises checkpoint recovery for a verified agent command. Its result distinguishes a validated inspection claim from the existing ordinary claim decisions. The generic claim parser and direct toolkit entry point still reject the checkpoint disposition.
+`src/execution/agent_delivery.rs::AgentDeliveryRouter::route_checkpoint_verified` preserves the exact Redis delivery, signed command, and inspection authority together. Ordinary dispositions reuse the existing fresh, replay, settlement, and retirement routing; inspection itself performs no BeginExecution, invocation authorization, or Redis acknowledgment.
+
+This is an opt-in coordinator entry point, not an enabled production recovery path. The existing processor still uses `route_verified` until restored assembly, output replacement, and terminal ownership are connected. This preserves the distinction between an implemented routing component and successful deployed continuation.
+
+The claim test checks explicit opt-in, ordinary accepted fallback, checkpoint inspection, and rejection of a mismatched producer fence. Existing agent control and delivery contracts verify unchanged ordinary and terminal routing. These remain component checks; mandatory UI restart verification and external MCP reconnection are pending.
