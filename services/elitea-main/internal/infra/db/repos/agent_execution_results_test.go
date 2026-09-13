@@ -15,6 +15,7 @@ import (
 
 type currentAgentTerminalWriterStub struct {
 	scriptedExecutor
+	mixed          sqlcgen.FinalizeCurrentAgentMixedPauseParams
 	existingSkills string
 	hitl           sqlcgen.FinalizeCurrentAgentHITLPauseParams
 	full           sqlcgen.FinalizeCurrentAgentFullMessageParams
@@ -618,5 +619,64 @@ func TestPipelineTerminalReplacesProvisionalHistoryOnlyForPipelineSnapshots(t *t
 				t.Fatalf("cleanup scope for %q: %+v", kind, writer.deletedText)
 			}
 		})
+	}
+}
+
+func (s *currentAgentTerminalWriterStub) FinalizeCurrentAgentMixedPause(_ context.Context, arg sqlcgen.FinalizeCurrentAgentMixedPauseParams) (int64, error) {
+	s.mixed = arg
+	return 1, nil
+}
+
+func TestLoadAndPersistCurrentAgentMixedPausePreservesBothGuards(t *testing.T) {
+	event := []byte(`{"type":"agent_hitl_interrupt","stream_id":"stream-1","message_id":"message-1","content":"Approval required","sio_event":"sio-1","execution_generation":"generation-1","response_metadata":{"thread_id":"thread-1","interrupt_id":"auth-1","hitl_interrupt":{"type":"hitl","interrupt_id":"sensitive-1","available_actions":["approve","reject"]},"hitl_interrupts":[{"type":"hitl","interrupt_id":"sensitive-1","available_actions":["approve","reject"]}],"authorization_requests":[{"interrupt_id":"auth-1","server_url":"https://example.test/mcp"}]}}`)
+	digest := runtimedomain.SHA256(event)
+	cursor := int64(7)
+	contents := []outputapp.AgentExecutionAttachmentContent{{
+		ItemID:  "50000000-0000-4000-8000-000000000001",
+		Content: json.RawMessage(`[{"type":"text","text":"A"},{"type":"text","text":"EXTRACTED TEXT"}]`),
+	}}
+	projection := outputapp.AgentExecutionProjection{
+		Expected: outputapp.ExpectedAgentExecution{
+			ClientStreamID: "stream-1", ClientMessageID: "message-1",
+			SIOEvent: "sio-1", ClientExecutionGeneration: "generation-1",
+		},
+		Frame: outputapp.AgentExecutionFrame{
+			Sequence: 5,
+			Fence:    runtimedomain.Fence{ExecutionID: "execution-1", Generation: 1},
+			Result: outputapp.AgentExecutionResult{
+				TerminalState: outputapp.AgentExecutionTerminalPausedHITL,
+				ResultArtifact: outputapp.AgentExecutionArtifactReference{
+					ArtifactID:       "node-event:execution-1:hitl-interrupt",
+					ImmutableVersion: "sha256:" + hex.EncodeToString(digest[:]),
+					ByteLength:       uint64(len(event)),
+					Digest:           digest,
+				},
+				AttachmentContents: contents,
+			},
+		},
+	}
+	stub := &terminalNodeEventStub{row: sqlcgen.GetAgentExecutionTerminalNodeEventRow{
+		LastNodeCursor:      &cursor,
+		LastNodeSequence:    4,
+		LastNodeEventBytes:  event,
+		LastNodeEventDigest: digest[:],
+	}}
+
+	terminal, err := loadCurrentAgentTerminal(t.Context(), stub, 1, projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if terminal.HITLPause == nil || terminal.AuthorizationPause == nil {
+		t.Fatal("mixed pause lost a guard set")
+	}
+	writer := &currentAgentTerminalWriterStub{existingSkills: `[]`, attachmentRows: 1}
+	if err := persistCurrentAgentTerminal(t.Context(), writer, projection.Expected, terminal); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(writer.mixed.HitlInterrupts), "sensitive-1") || !strings.Contains(string(writer.mixed.AuthorizationRequests), "auth-1") {
+		t.Fatal("mixed projection lost identities")
+	}
+	if writer.hitl.ThreadID != "" {
+		t.Fatal("mixed pause used the single-kind writer")
 	}
 }

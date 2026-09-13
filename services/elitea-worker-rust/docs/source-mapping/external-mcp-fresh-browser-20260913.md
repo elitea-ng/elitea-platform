@@ -290,3 +290,48 @@ The temporary PAT is revoked with HTTP 204.
 The earlier fallback-policy test also removes all fixtures and restores the worker policy file byte-for-byte.
 The live failure log is `elitea-live-mixed-authoritative.log`.
 The reusable local fixture script is `elitea-live-mixed-guards.py`.
+
+## Mixed-pause lifecycle implementation
+
+Rust `AgentPauseAccumulator::finish_mixed` now retains both guard sets in one terminal event.
+The event keeps the existing paused-HITL terminal state and includes the existing authorization metadata.
+The authorization terminal identity remains bound to its last request; each sensitive interrupt retains its own identity.
+The existing total limit of 16 cards applies across both sets.
+No new protobuf state or database migration is introduced.
+
+Main `agent_execution_results.go` validates both existing metadata shapes against the bound terminal artifact.
+It rejects a combined set above the limit and identities duplicated across guard kinds.
+`agent_mixed_pause.sql` persists both sets in one update under the existing terminal transaction.
+It retains unrelated response metadata and stops streaming without marking the pause as an execution error.
+The existing single-kind writers remain unchanged.
+The SQL generator produces the new query binding and interface entry.
+
+The lifecycle regression now expects both sets instead of the previous explicit rejection.
+The bound-artifact regression verifies decoding and selection of the mixed writer.
+`TestMixedPauseSQLPreservesBothGuardSets` passes against isolated PostgreSQL projection columns.
+These checks establish component and SQL behavior. Deployed runtime and browser verification remain pending.
+
+## Deployed mixed-pause acceptance
+
+Main deploys as `elitea-main:mixed-pause-20260913` with image `sha256:3134d5fd03d5fe09f5c69695c769b31199a99e45a7d286d65727f0188ee78085`.
+Rust deploys as `elitea-worker-rust:mixed-pause-20260913` with image `sha256:aa57b19e80d837881d1939d2c7d290859846e9ce3a5ee440f8b807ea3603696d`.
+Both replacements retain their environment, mounts, networks, and resource limits.
+
+A fresh headed Playwright session creates the PAT through account settings.
+The independent MCP client invokes temporary parent agent 30, version 34, with both child agents attached.
+Execution `d82323e078d858a7596ea25d04a46fcf` successfully persists the pause in message group 5906, conversation 575.
+The infrastructure job is `SUCCEEDED`; the requested agent work remains paused.
+The MCP result has `isError: true` and identifies human approval and tool authorization together.
+The initial cursor replays the exact result. The completed cursor returns HTTP 204.
+The client receives one text block and performs no external approval or authorization decision.
+
+A separate fresh headed browser opens conversation 575 after persistence.
+It renders `Authorize`, `Skip Auth`, `Approve`, and `Reject` controls together.
+The screenshot is inspected. This verifies rendering, not successful browser continuation after either decision.
+The local evidence files are `elitea-live-mixed-deployed.log`, `elitea-mixed-chat-ui.log`, and `elitea-mixed-chat-ui.png`.
+
+The original administration guardrails are restored with HTTP 200.
+Temporary applications 28, 29, and 30 and toolkit 41 are deleted with HTTP 204.
+The temporary PAT is revoked with HTTP 204.
+The saved-pipeline combined-guard variant and the remaining point 3 checklist still require verification.
+Pipeline HITL history and participant UI remain outside this fix.

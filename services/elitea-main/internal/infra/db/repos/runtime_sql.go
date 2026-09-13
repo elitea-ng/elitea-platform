@@ -329,3 +329,7 @@ func parseProjectID(value string) (int64, error) {
 	}
 	return projectID, nil
 }
+
+func (e pgxExecutor) FinalizeCurrentAgentMixedPause(ctx context.Context, arg sqlcgen.FinalizeCurrentAgentMixedPauseParams) (int64, error) {
+	return sqlcgen.New(e.queryer).FinalizeCurrentAgentMixedPause(ctx, arg)
+}

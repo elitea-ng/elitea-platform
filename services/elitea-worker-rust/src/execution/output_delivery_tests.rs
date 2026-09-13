@@ -35,9 +35,7 @@ use super::agent_preparation::{
 };
 use super::invocation_admission::{InvocationAdmission, InvocationAdmissionConfig};
 use super::invocation_supervisor::InvocationSupervisor;
-use super::native_agent_lifecycle::{
-    AgentPauseAccumulator, AgentPauseAggregationError, NativeAuthorizedAgentLifecycle,
-};
+use super::native_agent_lifecycle::{AgentPauseAccumulator, NativeAuthorizedAgentLifecycle};
 use super::output_delivery::{
     AcceptedTerminalOutputRecovery, AgentOutputPreflight, AgentOutputPreflightError,
     AgentOutputPreflightKind, AgentOutputPreflightOutcome, AgentOutputRecoveryRequiredKind,
@@ -1781,7 +1779,7 @@ fn parallel_authorization_cards_aggregate_exact_ids_calls_and_hierarchy_in_order
 }
 
 #[test]
-fn mixed_guardrail_cards_fail_before_terminal_authority_is_selected() {
+fn mixed_guardrail_cards_preserve_both_sets_under_hitl_terminal_authority() {
     let sensitive = decode_current_node_event_json(
         &serde_json::to_vec(&json!({
             "type": "agent_hitl_interrupt",
@@ -1801,10 +1799,27 @@ fn mixed_guardrail_cards_fail_before_terminal_authority_is_selected() {
     assert!(pauses.observe(&sensitive).expect("sensitive card"));
     assert!(pauses.observe(&authorization).expect("authorization card"));
 
+    let aggregate = pauses.finish().expect("mixed guards aggregate");
     assert!(matches!(
-        pauses.finish(),
-        Err(AgentPauseAggregationError::MixedGuardrails)
+        aggregate.selection,
+        super::output_delivery::FreshAgentTerminalSelection::PausedHitl
     ));
+    assert_eq!(aggregate.event.r#type, "agent_hitl_interrupt");
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&aggregate.event.response_metadata).unwrap();
+    assert_eq!(
+        metadata["hitl_interrupts"][0]["interrupt_id"],
+        "sensitive-1"
+    );
+    assert_eq!(
+        metadata["authorization_requests"][0]["interrupt_id"],
+        "auth-1"
+    );
+    assert_eq!(
+        metadata["authorization_requests"][0]["parent_agent_call_id"],
+        "parent-1"
+    );
+    assert_eq!(metadata["interrupt_id"], "auth-1");
 }
 
 #[tokio::test]

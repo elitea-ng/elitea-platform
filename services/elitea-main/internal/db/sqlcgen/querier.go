@@ -159,6 +159,7 @@ type Querier interface {
 	FinalizeCurrentAgentAuthorizationPause(ctx context.Context, arg FinalizeCurrentAgentAuthorizationPauseParams) (int64, error)
 	FinalizeCurrentAgentFullMessage(ctx context.Context, arg FinalizeCurrentAgentFullMessageParams) (int64, error)
 	FinalizeCurrentAgentHITLPause(ctx context.Context, arg FinalizeCurrentAgentHITLPauseParams) (int64, error)
+	FinalizeCurrentAgentMixedPause(ctx context.Context, arg FinalizeCurrentAgentMixedPauseParams) (int64, error)
 	// These unqualified names are intentional. Every query is executed inside a
 	// transaction whose local search_path is derived from the authorized project.
 	// This file projects the existing 16-column tenant table; it does not define a

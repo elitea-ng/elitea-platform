@@ -104,6 +104,7 @@ type currentAgentTerminalWriter interface {
 		context.Context,
 		sqlcgen.FinalizeCurrentAgentHITLPauseParams,
 	) (int64, error)
+	FinalizeCurrentAgentMixedPause(context.Context, sqlcgen.FinalizeCurrentAgentMixedPauseParams) (int64, error)
 	FinalizeCurrentAgentAuthorizationPause(
 		context.Context,
 		sqlcgen.FinalizeCurrentAgentAuthorizationPauseParams,
@@ -285,6 +286,28 @@ func loadCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, projectID int
 			return currentAgentTerminal{}, err
 		}
 		terminal.HITLPause = &pause
+		var metadata map[string]json.RawMessage
+		if json.Unmarshal(event.ResponseMetadata, &metadata) != nil {
+			return currentAgentTerminal{}, outputapp.ErrAgentExecutionResultMismatch
+		}
+		if _, mixed := metadata["authorization_requests"]; mixed {
+			authorization, err := decodeCurrentAgentAuthorizationPause(event.Content, event.ResponseMetadata)
+			if err != nil {
+				return currentAgentTerminal{}, err
+			}
+			var hitl, requests []map[string]any
+			if json.Unmarshal(pause.Interrupts, &hitl) != nil || json.Unmarshal(authorization.Requests, &requests) != nil || len(hitl)+len(requests) > 16 {
+				return currentAgentTerminal{}, outputapp.ErrAgentExecutionResultMismatch
+			}
+			for _, request := range requests {
+				for _, interrupt := range hitl {
+					if currentAgentAuthorizationIdentity(request) == interrupt["interrupt_id"] {
+						return currentAgentTerminal{}, outputapp.ErrAgentExecutionResultMismatch
+					}
+				}
+			}
+			terminal.AuthorizationPause = &authorization
+		}
 	case outputapp.AgentExecutionTerminalPausedAuthorization:
 		if artifact.ArtifactID != "node-event:"+frame.Fence.ExecutionID+":mcp-authorization-required" ||
 			event.Type != "mcp_authorization_required" {
@@ -590,6 +613,28 @@ func persistCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, expected o
 		)
 		if err != nil || rows != 1 {
 			return fmt.Errorf("finalize current agent response message group: %w", terminalWriteError(err))
+		}
+		return nil
+	}
+	if terminal.HITLPause != nil && terminal.AuthorizationPause != nil && terminal.FullMessage == nil {
+		pause, authorization := terminal.HITLPause, terminal.AuthorizationPause
+		if pause.ThreadID != authorization.ThreadID {
+			return outputapp.ErrAgentExecutionResultMismatch
+		}
+		skills, err := mergeCurrentAgentInvokedSkills([]byte(existingSkills), pause.InvokedSkills)
+		if err != nil {
+			return outputapp.ErrAgentExecutionResultMismatch
+		}
+		skills, err = mergeCurrentAgentInvokedSkills(skills, authorization.InvokedSkills)
+		if err != nil {
+			return outputapp.ErrAgentExecutionResultMismatch
+		}
+		rows, err := writer.FinalizeCurrentAgentMixedPause(ctx, sqlcgen.FinalizeCurrentAgentMixedPauseParams{
+			ThreadID: pause.ThreadID, HitlInterrupt: []byte(pause.Interrupt), HitlInterrupts: []byte(pause.Interrupts),
+			AuthorizationRequests: []byte(authorization.Requests), InvokedSkills: []byte(skills), MessageGroupID: int64(messageGroupID),
+		})
+		if err != nil || rows != 1 {
+			return fmt.Errorf("persist current agent mixed pause: %w", terminalWriteError(err))
 		}
 		return nil
 	}
