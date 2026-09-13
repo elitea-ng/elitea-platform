@@ -304,7 +304,8 @@ impl ProductionAgentRuntime {
             output.clone(),
             limits.output_max_sessions,
             terminal_recovery,
-        );
+        )
+        .with_checkpoint_recovery(deployment.agent_model_checkpoint_recovery);
         let toolkit = ToolkitDeliveryProcessor::new(
             output_preflight,
             control,

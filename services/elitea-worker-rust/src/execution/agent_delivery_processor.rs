@@ -54,6 +54,7 @@ use crate::transport::redis_commands::{
 /// path may resolve a second client or service locator after claim.
 pub(super) struct AgentDeliveryProcessor<R, RC, T, K, D, I> {
     router: AgentDeliveryRouter<R, RC>,
+    checkpoint_recovery: bool,
     authenticator: Arc<dyn SignedCommandAuthenticator>,
     output: AgentOutputPreflight,
     control: Arc<AgentControlClient<R>>,
@@ -71,7 +72,7 @@ impl<R, RC, T, K, D, I> AgentDeliveryProcessor<R, RC, T, K, D, I>
 where
     R: ControlRpc + 'static,
     RC: RedisRetirementClient + 'static,
-    T: AgentTerminalReplay + 'static,
+    T: AgentTerminalReplay + AgentProgressConnector + 'static,
     K: UnixMillisClock,
     D: AuthorizedAgentLifecycle,
     I: AgentInputMaterializer + 'static,
@@ -94,6 +95,7 @@ where
         let router = AgentDeliveryRouter::from_shared(Arc::clone(&control), Arc::clone(&retirer));
         Self {
             router,
+            checkpoint_recovery: false,
             authenticator,
             output,
             control,
@@ -106,6 +108,11 @@ where
             terminal_recovery,
             coordinator,
         }
+    }
+
+    pub(super) fn with_checkpoint_recovery(mut self, enabled: bool) -> Self {
+        self.checkpoint_recovery = enabled;
+        self
     }
 
     /// Stop later native submissions. Normal process shutdown calls this only
@@ -124,6 +131,9 @@ where
         delivery: RedisCommandDelivery,
         verified: VerifiedAgentCommand,
     ) -> Result<AgentDeliveryProcessOutcome, AgentDeliveryProcessError> {
+        if self.checkpoint_recovery {
+            return self.process_checkpoint_verified(delivery, verified).await;
+        }
         tracing::info!(event = "agent_delivery_routing_started");
         let route = self
             .router
@@ -504,7 +514,7 @@ impl<R, RC, T, K, D, I> RedisDeliveryProcessorContract for AgentDeliveryProcesso
 where
     R: ControlRpc + 'static,
     RC: RedisRetirementClient + 'static,
-    T: AgentTerminalReplay + 'static,
+    T: AgentTerminalReplay + AgentProgressConnector + 'static,
     K: UnixMillisClock,
     D: AuthorizedAgentLifecycle,
     I: AgentInputMaterializer + 'static,

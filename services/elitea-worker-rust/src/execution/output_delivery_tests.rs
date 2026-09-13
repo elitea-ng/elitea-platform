@@ -4766,25 +4766,15 @@ async fn checkpoint_delivery_processor_joins_supervision_or_replays_before_recla
             AgentPreparationConfig::new(Duration::from_secs(10)).expect("preparation"),
             recovery_config(1),
             coordinator,
-        );
+        )
+        .with_checkpoint_recovery(true);
         let raw = bytes("signed_command");
         let verified =
             parse_and_verify_agent_command(&raw, Some(&TestOnlyConformanceHmacAuthenticator))
                 .expect("verified");
-        if let Err(error) = processor
-            .process_checkpoint_verified(redis_delivery(raw), verified)
-            .await
-        {
-            match error {
-                super::agent_delivery_processor::AgentDeliveryProcessError::OutputPreflight(
-                    error,
-                ) => panic!("case {case}: {error:?}"),
-                super::agent_delivery_processor::AgentDeliveryProcessError::TerminalRecovery(
-                    error,
-                ) => panic!("case {case}: {error:?}"),
-                _ => panic!("case {case}: checkpoint processing failed"),
-            }
-        }
+        processor
+            .process_verified_delivery(redis_delivery(raw), verified)
+            .await;
         processor.close().await.expect("drain");
         let events = trace.lock().expect("trace");
         assert_eq!(

@@ -9,7 +9,7 @@ use super::agent_invocation::AuthorizedAgentLifecycle;
 use super::agent_lease::UnixMillisClock;
 use super::agent_preparation::AgentInputMaterializer;
 use super::invocation_supervisor::InvocationSupervisionError;
-use super::output_delivery::{AgentTerminalReplay, ToolkitTerminalReplay};
+use super::output_delivery::{AgentProgressConnector, AgentTerminalReplay, ToolkitTerminalReplay};
 use super::redis_delivery::RedisDeliveryProcessor as RedisDeliveryProcessorContract;
 use super::toolkit_delivery_processor::{ToolkitDeliveryProcessor, process_toolkit_verified};
 use crate::protocol::command::{
@@ -28,7 +28,7 @@ impl<R, RC, T, K, D, I> ExecutionDeliveryProcessor<R, RC, T, K, D, I>
 where
     R: ControlRpc + 'static,
     RC: RedisRetirementClient + 'static,
-    T: AgentTerminalReplay + ToolkitTerminalReplay + 'static,
+    T: AgentTerminalReplay + ToolkitTerminalReplay + AgentProgressConnector + 'static,
     K: UnixMillisClock,
     D: AuthorizedAgentLifecycle,
     I: AgentInputMaterializer + 'static,
@@ -60,7 +60,7 @@ impl<R, RC, T, K, D, I> RedisDeliveryProcessorContract
 where
     R: ControlRpc + 'static,
     RC: RedisRetirementClient + 'static,
-    T: AgentTerminalReplay + ToolkitTerminalReplay + 'static,
+    T: AgentTerminalReplay + ToolkitTerminalReplay + AgentProgressConnector + 'static,
     K: UnixMillisClock,
     D: AuthorizedAgentLifecycle,
     I: AgentInputMaterializer + 'static,
