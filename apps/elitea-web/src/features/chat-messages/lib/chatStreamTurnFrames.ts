@@ -14,7 +14,7 @@ import { ToolActionStatus } from '@/shared/lib/chat';
 
 import { applyThinkingStep, isEmptyTransition } from './chatStreamThinkingFrames';
 import { normalizeExecutionHierarchy } from './executionHierarchy';
-import { applyReasoningDelta, settleReasoning, splitWholeResponse } from './chatStreamReasoning';
+import { applyReasoningDelta, reasoningActionId, settleReasoning, splitWholeResponse } from './chatStreamReasoning';
 import {
   createAssistantMessage,
   replaceAt,
@@ -84,6 +84,11 @@ export function reduceTurnFrame(
       const continuingOutput = frame.response_metadata?.should_continue === true;
       return replaceAt(history, index, {
         content: continuingOutput ? current.content : '',
+        // An interrupted reasoning scanner belongs to the replaced answer.
+        // Keep tool history, but do not route recovered text into its open sink.
+        ...(!continuingOutput && current.toolActions ? {
+          toolActions: (current.toolActions as readonly ToolAction[]).filter((action) => action.id !== reasoningActionId(current.id)),
+        } : {}),
         isStreaming: true,
         isLoading: true,
         references: continuingOutput ? current.references : [],

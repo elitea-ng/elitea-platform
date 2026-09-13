@@ -97,6 +97,28 @@ describe('applyChatStreamFrame', () => {
     expect(history[0]?.content).toBe('');
   });
 
+  it('replaces interrupted reasoning on restart while retaining completed tools', () => {
+    let history: readonly ChatMessage[] = [pendingAssistant()];
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentToolStart, {
+      response_metadata: { tool_run_id: 'saved-tool', tool_name: 'Search' },
+    }), CONTEXT);
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentToolEnd, {
+      content: 'saved result', response_metadata: { tool_run_id: 'saved-tool' },
+    }), CONTEXT);
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentLlmChunk, {
+      content: '<think>interrupted reasoning',
+    }), CONTEXT);
+    const savedTool = (history[0]?.toolActions as readonly ToolAction[] | undefined)?.find((action) => action.id === 'saved-tool');
+    expect(savedTool).toBeDefined();
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentStart), CONTEXT);
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentLlmChunk, {
+      content: 'Recovered answer',
+    }), CONTEXT);
+    expect(history).toHaveLength(1);
+    expect(history[0]?.content).toBe('Recovered answer');
+    expect(history[0]?.toolActions).toEqual([savedTool]);
+  });
+
   it('surfaces a failure without discarding what already streamed', () => {
     const history = applyChatStreamFrame(
       [{ ...pendingAssistant(), content: 'got this far' }],

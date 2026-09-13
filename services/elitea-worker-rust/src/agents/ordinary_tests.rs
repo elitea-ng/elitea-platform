@@ -3306,9 +3306,14 @@ async fn ordinary_assembler_restores_the_authorized_model_request() {
     let mut restored = pending
         .authorize_lifecycle(checkpoint_authorization)
         .expect("matching checkpoint");
-    restored
+    let restart = restored
         .project_start(chrono::Utc::now())
         .expect("restored projection start");
+    let restart = restart.into_iter().next().expect("restart event");
+    assert_eq!(restart.r#type, "agent_start");
+    let metadata: serde_json::Value = serde_json::from_slice(&restart.response_metadata)
+        .expect("restart metadata");
+    assert_eq!(metadata["should_continue"], false);
     let (mut run, mut projector, completion) = restored.start().expect("restored start");
     while let Some(event) = run.next_event().await.expect("restored event") {
         projector.project(&event).expect("projection");
