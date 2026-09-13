@@ -113,6 +113,36 @@ impl ModelCheckpointInspection {
         self.claim.claim_handoff_watermark()
     }
 
+    pub(crate) fn terminal_replacement(
+        &self,
+        frame: &super::ExecutionOutputFrameV1,
+    ) -> Result<super::ExecutionOutputFrameV1, crate::protocol::ProtocolError> {
+        if !self.matches_output_identity(frame)
+            || !frame.terminal
+            || self.claim.claim_handoff_watermark().checked_add(1) != Some(frame.sequence)
+        {
+            return Err(crate::protocol::ProtocolError::AuthorizationFailed(
+                "the checkpoint terminal does not match recovery authority",
+            ));
+        }
+        if let Some(crate::protocol::elitea::runtime::v1::execution_output_frame_v1::Payload::AgentExecution(result)) =
+            frame.payload.as_ref()
+            && !self.claim.matches_agent_result_binding(result)
+        {
+            return Err(crate::protocol::ProtocolError::AuthorizationFailed(
+                "the checkpoint terminal result binding is invalid",
+            ));
+        }
+        let mut replacement = frame.clone();
+        replacement.fence = Some(self.claim.fence.clone());
+        replacement.claim_handoff_watermark = self.claim.claim_handoff_watermark();
+        Ok(replacement)
+    }
+
+    pub(crate) fn into_terminal_recovery(self) -> super::AcceptedTerminalClaimRecovery {
+        self.claim.into_terminal_recovery()
+    }
+
     pub(crate) fn into_lease_supervision(
         self,
     ) -> (PendingModelCheckpointInspection, super::ClaimLeaseHandle) {

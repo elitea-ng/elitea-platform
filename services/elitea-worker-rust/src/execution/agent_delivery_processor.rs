@@ -187,14 +187,40 @@ where
                     .await
                     .map_err(AgentDeliveryProcessError::OutputPreflight)?;
                 let Some(output) = output else {
-                    self.output
-                        .replay_checkpoint_progress(*recovery, self.replay.as_ref())
+                    use super::output_delivery::CheckpointPendingOutput;
+                    match self
+                        .output
+                        .prepare_checkpoint_pending(*recovery)
                         .await
-                        .map_err(AgentDeliveryProcessError::OutputPreflight)?;
-                    return Ok(AgentDeliveryProcessOutcome::retained(
-                        "agent_delivery.checkpoint_output_reclaim",
-                        true,
-                    ));
+                        .map_err(AgentDeliveryProcessError::OutputPreflight)?
+                    {
+                        CheckpointPendingOutput::Progress(recovery) => {
+                            self.output
+                                .replay_checkpoint_progress(*recovery, self.replay.as_ref())
+                                .await
+                                .map_err(AgentDeliveryProcessError::OutputPreflight)?;
+                            return Ok(AgentDeliveryProcessOutcome::retained(
+                                "agent_delivery.checkpoint_output_reclaim",
+                                true,
+                            ));
+                        }
+                        CheckpointPendingOutput::Terminal(terminal) => {
+                            recover_accepted_terminal(
+                                self.control.clone(),
+                                self.retirer.as_ref(),
+                                self.replay.as_ref(),
+                                *terminal,
+                                self.clock.clone(),
+                                self.preparation.lease_config(),
+                                self.terminal_recovery,
+                            )
+                            .await
+                            .map_err(AgentDeliveryProcessError::TerminalRecovery)?;
+                            return Ok(AgentDeliveryProcessOutcome::completed(
+                                "agent_delivery.checkpoint_terminal_retired",
+                            ));
+                        }
+                    }
                 };
                 let waiter = self
                     .coordinator

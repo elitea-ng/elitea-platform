@@ -181,6 +181,11 @@ impl AgentOutputRecoveryRequiredNoAck {
     }
 }
 
+pub(crate) enum CheckpointPendingOutput {
+    Progress(Box<super::agent_delivery::CheckpointAgentDelivery>),
+    Terminal(Box<AcceptedTerminalOutputRecovery>),
+}
+
 /// Closed result of inspecting the current execution's durable output.
 pub enum AgentOutputPreflightOutcome {
     Empty(Box<EmptyAgentOutput>),
@@ -2482,6 +2487,69 @@ impl AgentOutputPreflight {
             }
         }
         Ok(Some(PreparedAgentOutput { prepared, factory }))
+    }
+
+    pub(crate) async fn prepare_checkpoint_pending(
+        &self,
+        recovery: super::agent_delivery::CheckpointAgentDelivery,
+    ) -> Result<CheckpointPendingOutput, AgentOutputPreflightError> {
+        if !recovery.matches_output_transport(
+            &self.policy.output_config.workload_session_id,
+            &self.policy.output_config.producer_id,
+        ) {
+            return Err(AgentOutputPreflightError::InvalidConfiguration(
+                "the output transport identity does not match the checkpoint claim",
+            ));
+        }
+        let factory = AgentOutputSpoolFactory {
+            policy: self.policy.clone(),
+            binding: Arc::new(recovery.spool_identity()),
+        };
+        let mut prepared = factory.reopen().await?;
+        let Some(mut frame) = prepared.pending_replay_frame() else {
+            return Ok(CheckpointPendingOutput::Progress(Box::new(recovery)));
+        };
+        if prepared.pending_frame_count() != 1 {
+            return Err(AgentOutputPreflightError::InvalidDurableState(
+                "multiple pending recovery frames",
+            ));
+        }
+        let kind = recovery.validate_output(&frame).map_err(|_| {
+            AgentOutputPreflightError::InvalidDurableState("invalid checkpoint output frame")
+        })?;
+        if kind == ValidatedAgentOutputFrameKind::Progress {
+            return Ok(CheckpointPendingOutput::Progress(Box::new(recovery)));
+        }
+        let replacement = recovery.terminal_replacement(&frame).map_err(|_| {
+            AgentOutputPreflightError::InvalidDurableState(
+                "checkpoint terminal has no recovery authority",
+            )
+        })?;
+        if replacement != frame {
+            let expected = frame;
+            frame = replacement.clone();
+            prepared = tokio::task::spawn_blocking(move || {
+                prepared.replace_pending_agent_terminal_recovery(&expected, &replacement)?;
+                Ok::<_, OutputGrpcError>(prepared)
+            })
+            .await
+            .map_err(|_| {
+                AgentOutputPreflightError::Unavailable("terminal rebind did not complete")
+            })?
+            .map_err(AgentOutputPreflightError::Output)?;
+        }
+        let encoded = frame.encode_to_vec();
+        let (delivery, verified, claim) = recovery.into_terminal_parts();
+        Ok(CheckpointPendingOutput::Terminal(Box::new(
+            AcceptedTerminalOutputRecovery {
+                delivery,
+                verified,
+                claim,
+                spool: prepared,
+                frame,
+                reopener: factory.seal_terminal(encoded),
+            },
+        )))
     }
 
     /// Replay retained progress exactly once, then require a fresh claim.

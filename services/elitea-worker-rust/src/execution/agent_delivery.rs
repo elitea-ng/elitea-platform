@@ -396,6 +396,28 @@ impl CheckpointAgentDelivery {
         self.inspection.output_watermark()
     }
 
+    pub(crate) fn terminal_replacement(
+        &self,
+        frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
+    ) -> Result<crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1, ProtocolError> {
+        self.validate_output(frame)?;
+        self.inspection.terminal_replacement(frame)
+    }
+
+    pub(crate) fn into_terminal_parts(
+        self,
+    ) -> (
+        RedisCommandDelivery,
+        VerifiedAgentCommand,
+        AcceptedTerminalClaimRecovery,
+    ) {
+        (
+            self.delivery,
+            self.verified,
+            self.inspection.into_terminal_recovery(),
+        )
+    }
+
     pub(crate) fn into_parts(
         self,
     ) -> (

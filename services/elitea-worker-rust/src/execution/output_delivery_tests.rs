@@ -4661,11 +4661,11 @@ async fn checkpoint_progress_replay_preserves_exact_bytes_and_closes_on_error() 
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // Keep the two whole-delivery cases and their ownership assertions together.
 async fn checkpoint_delivery_processor_joins_supervision_or_replays_before_reclaim() {
-    for pending in [false, true] {
+    for case in 0..4 {
         let trace = Arc::new(Mutex::new(Vec::new()));
         let (_temporary, output_root) = root();
         let output = preflight(output_root, "worker-1");
-        if pending {
+        if case != 0 {
             let AgentOutputPreflightOutcome::Empty(empty) =
                 output.prepare(fresh()).await.expect("spool")
             else {
@@ -4678,10 +4678,29 @@ async fn checkpoint_delivery_processor_joins_supervision_or_replays_before_recla
                 .expect("receipt")
                 .fence
                 .expect("fence");
-            prepared
-                .into_test_spool()
-                .persist(progress_frame(&accepted, fence, watermark + 1, watermark))
-                .expect("pending");
+            let mut frame = if case == 1 {
+                progress_frame(&accepted, fence, watermark + 1, watermark)
+            } else {
+                terminal_frame(&accepted)
+            };
+            if case >= 2 {
+                frame.sequence = watermark + 1;
+                frame.event_id = format!(
+                    "{}:{}",
+                    frame.identity.as_ref().expect("identity").command_id,
+                    frame.sequence
+                );
+                let proposal = frame.settlement_proposal.as_mut().expect("settlement");
+                proposal.terminal_sequence = frame.sequence;
+                proposal.terminal_event_id = frame.event_id.clone();
+            }
+            if case == 3 {
+                let prior = frame.fence.as_mut().expect("prior fence");
+                prior.claim_attempt -= 1;
+                prior.lease_epoch -= 1;
+                prior.fence_token[0] ^= 1;
+            }
+            prepared.into_test_spool().persist(frame).expect("pending");
         }
         let control = Arc::new(
             AgentControlClient::new(
@@ -4752,13 +4771,20 @@ async fn checkpoint_delivery_processor_joins_supervision_or_replays_before_recla
         let verified =
             parse_and_verify_agent_command(&raw, Some(&TestOnlyConformanceHmacAuthenticator))
                 .expect("verified");
-        assert!(
-            processor
-                .process_checkpoint_verified(redis_delivery(raw), verified)
-                .await
-                .is_ok(),
-            "checkpoint processing"
-        );
+        if let Err(error) = processor
+            .process_checkpoint_verified(redis_delivery(raw), verified)
+            .await
+        {
+            match error {
+                super::agent_delivery_processor::AgentDeliveryProcessError::OutputPreflight(
+                    error,
+                ) => panic!("case {case}: {error:?}"),
+                super::agent_delivery_processor::AgentDeliveryProcessError::TerminalRecovery(
+                    error,
+                ) => panic!("case {case}: {error:?}"),
+                _ => panic!("case {case}: checkpoint processing failed"),
+            }
+        }
         processor.close().await.expect("drain");
         let events = trace.lock().expect("trace");
         assert_eq!(
@@ -4766,18 +4792,31 @@ async fn checkpoint_delivery_processor_joins_supervision_or_replays_before_recla
                 .iter()
                 .filter(|x| **x == "checkpoint_authorize")
                 .count(),
-            usize::from(!pending)
+            usize::from(case == 0)
         );
         assert_eq!(
             events.iter().filter(|x| **x == "authorized").count(),
-            usize::from(!pending)
+            usize::from(case == 0)
         );
-        assert!(
-            !events.contains(&"begin")
-                && !events.contains(&"authorize")
-                && !events.contains(&"redis")
-        );
-        assert_eq!(state.replays.load(Ordering::SeqCst), usize::from(pending));
+        assert!(!events.contains(&"begin") && !events.contains(&"authorize"));
+        assert_eq!(events.contains(&"redis"), case >= 2);
+        assert_eq!(events.contains(&"settlement"), case >= 2);
+        assert_eq!(state.replays.load(Ordering::SeqCst), usize::from(case == 1));
+        if case >= 2 {
+            let frames = state.frames.lock().expect("terminal frames");
+            assert_eq!(frames.len(), 1);
+            let mut expected = terminal_frame(&fresh());
+            expected.sequence = fresh().claim_handoff_watermark() + 1;
+            expected.event_id = format!(
+                "{}:{}",
+                expected.identity.as_ref().expect("identity").command_id,
+                expected.sequence
+            );
+            let proposal = expected.settlement_proposal.as_mut().expect("settlement");
+            proposal.terminal_sequence = expected.sequence;
+            proposal.terminal_event_id = expected.event_id.clone();
+            assert_eq!(frames[0], expected);
+        }
         assert_eq!(admission.available_capacity(), 1);
     }
 }

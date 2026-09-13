@@ -380,6 +380,23 @@ impl PreparedOutputSpool {
         self.replace_rebound_pending(expected, replacement)
     }
 
+    /// Rebind a validated agent terminal while preserving every result byte.
+    pub(crate) fn replace_pending_agent_terminal_recovery(
+        &mut self,
+        expected: &ExecutionOutputFrameV1,
+        replacement: &ExecutionOutputFrameV1,
+    ) -> Result<(), OutputGrpcError> {
+        self.require_single_expected(expected)?;
+        let mut rebound = expected.clone();
+        rebound.fence.clone_from(&replacement.fence);
+        rebound.claim_handoff_watermark = replacement.claim_handoff_watermark;
+        if &rebound != replacement {
+            return Err(recovery_binding_error(RecoveryKind::Terminal));
+        }
+        validate_recovery_rebind(expected, replacement, RecoveryKind::Terminal)?;
+        self.replace_rebound_pending(expected, replacement)
+    }
+
     /// Rebind an admitted read-tool terminal without changing its payload.
     /// A claim created after its deadline can instead seal a deadline failure.
     pub(crate) fn replace_pending_toolkit_terminal_recovery(
@@ -2857,6 +2874,20 @@ mod tests {
 
     #[test]
     fn toolkit_terminal_rebind_refuses_result_changes_and_stale_compare_exchange() {
+        assert_terminal_rebind_preserves_result(false);
+    }
+
+    #[test]
+    fn agent_terminal_rebind_refuses_result_changes_and_stale_compare_exchange() {
+        assert_terminal_rebind_preserves_result(true);
+    }
+
+    fn assert_terminal_rebind_preserves_result(agent: bool) {
+        let replace = if agent {
+            PreparedOutputSpool::replace_pending_agent_terminal_recovery
+        } else {
+            PreparedOutputSpool::replace_pending_toolkit_terminal_recovery
+        };
         let mutations: &[fn(&mut ExecutionOutputFrameV1)] = &[
             |frame| frame.occurred_at_unix_millis += 1,
             |frame| frame.logical_output_id.push('x'),
@@ -2879,20 +2910,10 @@ mod tests {
             prepared.persist(old.clone()).expect("old terminal");
             let mut changed = replacement.clone();
             mutate(&mut changed);
-            assert!(
-                prepared
-                    .replace_pending_toolkit_terminal_recovery(&old, &changed)
-                    .is_err()
-            );
+            assert!(replace(&mut prepared, &old, &changed).is_err());
             assert!(prepared.replays(&old));
-            prepared
-                .replace_pending_toolkit_terminal_recovery(&old, &replacement)
-                .expect("exact replacement");
-            assert!(
-                prepared
-                    .replace_pending_toolkit_terminal_recovery(&old, &replacement)
-                    .is_err()
-            );
+            replace(&mut prepared, &old, &replacement).expect("exact replacement");
+            assert!(replace(&mut prepared, &old, &replacement).is_err());
             assert!(prepared.replays(&replacement));
         }
     }
