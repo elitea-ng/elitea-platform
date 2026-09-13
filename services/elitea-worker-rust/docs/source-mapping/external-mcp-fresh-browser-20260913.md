@@ -189,3 +189,35 @@ The PAT is revoked with HTTP 204.
 The local evidence log is `elitea-visible-pat-pause-acceptance.log`.
 This proves pause refusal through the independent transport client.
 It does not prove runtime failure, mixed guards, or result replay after a later browser decision.
+
+## Saved-agent runtime failure and imported-schema deletion
+
+A temporary saved agent uses the existing model reference with temperature 99.
+A headed Playwright session opens its editor before the independent MCP call.
+Execution `74c85ef3271974b084fe28c119c03ffb` reaches durable `FAILED` state.
+The external client disconnects after priming and receives `isError=true` through GET.
+The original cursor replays the exact error. The completed cursor returns HTTP 204.
+This proves saved-agent runtime failure delivery, not a provider outage or pipeline failure.
+The temporary PAT is revoked with HTTP 204.
+
+Cleanup initially returns HTTP 500 for application 20 and version 24.
+The imported database has non-cascading application, version, variable, and tag foreign keys.
+Main deletion incorrectly assumes that the native schema's cascading behavior applies to imported tenants.
+`internal/infra/db/repos/applications.go` now locks the application and deletes owned rows in one transaction.
+This includes optional legacy tool rows, variables, tag associations, versions, and the application.
+A failed parent deletion rolls back all preceding changes.
+No product schema or migration changes are required.
+
+The current functional source is Core `api/v2/application.py`, method `delete`, which delegates application deletion to its shared service.
+The native API keeps its existing authorization and published-version checks.
+This Main fix supports cleanup of saved entities exercised through Rust execution; it does not change Rust checkpoint ownership.
+`applications_imported_delete_postgres_integration_test.go` reproduces SQLSTATE 23503 before the fix and passes afterward.
+The test also proves rollback when another reference blocks deletion.
+Existing PostgreSQL deletion tests pass against the native schema.
+
+Main deploys as `elitea-main:imported-delete-final-20260913` with all six existing mounts and unchanged deployment settings.
+Its image is `sha256:95bb2e49469f24e9b31ecbd41dd3df51e54cc23ac762e54e48ab995bf233713a`.
+Fresh headed Playwright verification confirms DELETE 204, subsequent GET 404, and absence from the rendered agent list.
+The fixture is removed. The local cleanup log is `elitea-visible-fixture-cleanup.log`.
+An initial browser login attempt fails with `invalid state cookie` before deletion.
+Using the established settings login entry point succeeds; the login-path difference remains unclassified.

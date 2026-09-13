@@ -533,20 +533,27 @@ func (r *ApplicationsRepo) Delete(ctx context.Context, projectID, applicationID 
 		return apierr.NotFound("application not found")
 	}
 
-	// application_versions, application_variables and
-	// application_version_tag_association all cascade from applications
-	// (migrations/001_initial.sql), so one DELETE is enough for the schema
-	// this service creates. application_tools exists only in pylon-migrated
-	// databases and has no cascade there, so it is cleared first when
-	// present. The previous unconditional DELETE FROM ...application_tools
-	// made every Delete fail with 42P01 on a schema created from 001_initial.
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("applications: delete: begin: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	var lockedID string
+	if err := tx.QueryRow(ctx, fmt.Sprintf(`SELECT id::text FROM %s.applications WHERE id = $1 FOR UPDATE`, s), applicationID).Scan(&lockedID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return apierr.NotFound("application not found")
+		}
+		return fmt.Errorf("applications: delete: lock: %w", err)
+	}
+	// Imported tenants preserve non-cascading foreign keys. Delete owned rows
+	// explicitly and atomically for both imported and native schemas.
 	var applicationTools *string
-	if err := r.pool.QueryRow(ctx, `SELECT to_regclass($1)::text`,
+	if err := tx.QueryRow(ctx, `SELECT to_regclass($1)::text`,
 		"p_"+projectID+".application_tools").Scan(&applicationTools); err != nil {
 		return fmt.Errorf("applications: delete: probe application_tools: %w", err)
 	}
 	if applicationTools != nil {
-		if _, err := r.pool.Exec(ctx, fmt.Sprintf(
+		if _, err := tx.Exec(ctx, fmt.Sprintf(
 			`DELETE FROM %s.application_tools WHERE application_version_id IN
 				(SELECT id FROM %s.application_versions WHERE application_id = $1)`, s, s),
 			applicationID); err != nil {
@@ -554,14 +561,26 @@ func (r *ApplicationsRepo) Delete(ctx context.Context, projectID, applicationID 
 		}
 	}
 
-	ct, err := r.pool.Exec(ctx, fmt.Sprintf(`DELETE FROM %s.applications WHERE id = $1`, s), applicationID)
+	for _, child := range []struct{ table, column string }{
+		{"application_variables", "application_version_id"},
+		{"application_version_tag_association", "version_id"},
+	} {
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`DELETE FROM %s.%s WHERE %s IN (SELECT id FROM %s.application_versions WHERE application_id = $1)`, s, child.table, child.column, s), applicationID); err != nil {
+			return fmt.Errorf("applications: delete %s: %w", child.table, err)
+		}
+	}
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`DELETE FROM %s.application_versions WHERE application_id = $1`, s), applicationID); err != nil {
+		return fmt.Errorf("applications: delete versions: %w", err)
+	}
+
+	ct, err := tx.Exec(ctx, fmt.Sprintf(`DELETE FROM %s.applications WHERE id = $1`, s), applicationID)
 	if err != nil {
 		return fmt.Errorf("applications: delete: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
 		return apierr.NotFound("application not found")
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 func (r *ApplicationsRepo) GetVersion(ctx context.Context, projectID, applicationID, versionID string) (applications.Version, error) {
