@@ -96,3 +96,31 @@ It does not prove a provider invocation resumed after a process crash.
 Ten UI tests pass, including argument-free persistence and explicit authorization after remount.
 Main result and response-mapping tests pass. The PostgreSQL ownership test also verifies original argument retrieval.
 The authorization retry after reload has component and database evidence; its browser OAuth flow remains unverified.
+
+## Combined active-call crash and browser observation
+
+A fresh headed Playwright session starts temporary OpenAPI toolkit 49 from the Toolkit Test pane.
+Its inline schema defines one anonymous synthetic delayed read on the existing trusted TLS fixture.
+The observer stops the Rust worker immediately after the fixture receives the first request.
+The replacement uses the same deployed image and retained runtime mounts.
+
+Execution `49c51791ea126b06f39bd8fbd9c26b0e` moves from `RUNNING` to `FAILED` under claim 2.
+The fixture records one request, zero completed responses, and one client disconnection.
+No second provider request occurs.
+The browser records one POST and two GETs for that exact execution ID.
+Its rendered text changes to `The runtime operation failed.` without another submission.
+This connects the existing takeover reconciliation to the deployed Toolkit Test result observer.
+
+The initial copied-configuration attempt never reaches the delayed fixture and does not trigger a worker restart.
+Its terminal tool failure is excluded from crash evidence. Temporary toolkit 48 is removed with HTTP 204.
+The inline-schema attempt supplies the actual crash proof. Toolkit 49 is removed with HTTP 204 afterward.
+The uniquely identified temporary fixture process stops. The OAuth emulator remains running with its existing grants.
+
+Main image is `sha256:3134d5fd03d5fe09f5c69695c769b31199a99e45a7d286d65727f0188ee78085`.
+Rust image is `sha256:aa57b19e80d837881d1939d2c7d290859846e9ce3a5ee440f8b807ea3603696d`.
+The local browser evidence is `elitea-toolkit-crash-browser-v2.log`.
+The script is `elitea-toolkit-crash-browser-v2.py`; its DOM observation checks the final failure text.
+
+This proves terminal reconciliation and browser observation after an ambiguous in-flight call.
+It does not prove successful provider continuation, cross-replica recovery without local state, or effect rollback.
+Those boundaries must remain explicit when evaluating wider durability gates.
