@@ -2274,26 +2274,57 @@ async fn interrupted_model_restores_saved_request_without_repeating_tool_or_user
     let restored_plan = plan();
     let user_id = restored_plan.user_id().to_string();
     let session_id = restored_plan.session_id().to_string();
-    let restored = super::session::assemble_ordinary_native_from_checkpoint(
-        FixtureBoundModel {
-            model: Arc::new(CapturingFinalLlm {
-                requests: captured.clone(),
-                calls: model_calls.clone(),
-            }),
-            completed: "The resumed answer is 42.".into(),
-        },
-        restored_plan,
-        OrdinaryRuntimeBindings::new(
-            tools(),
-            SensitiveToolCatalog::default(),
-            DelegatedAuthorizationCatalog::default(),
-            ApplicationRuntimeProjection::default(),
-        ),
-        NativeToolExecutionMode::Sequential,
-        sessions.clone(),
-    )
-    .await
-    .expect("recovery assembly");
+    let restore = || {
+        super::session::assemble_ordinary_native_from_checkpoint(
+            FixtureBoundModel {
+                model: Arc::new(CapturingFinalLlm {
+                    requests: captured.clone(),
+                    calls: model_calls.clone(),
+                }),
+                completed: "The resumed answer is 42.".into(),
+            },
+            plan(),
+            OrdinaryRuntimeBindings::new(
+                tools(),
+                SensitiveToolCatalog::default(),
+                DelegatedAuthorizationCatalog::default(),
+                ApplicationRuntimeProjection::default(),
+            ),
+            NativeToolExecutionMode::Sequential,
+            sessions.clone(),
+        )
+    };
+    let denied = restore().await.expect("recovery assembly");
+    let mismatched =
+        super::session::ValidatedModelCheckpoint::test_evidence("execution/one".into(), 3);
+    let (claim, control) = crate::protocol::control::test_checkpoint_authorizer(
+        "execution/one",
+        3,
+        mismatched.digest(),
+    );
+    let wrong_authority = claim
+        .authorize(&control, mismatched)
+        .await
+        .unwrap_or_else(|_| panic!("fixture authorization"));
+    assert!(denied.authorize(wrong_authority).is_err());
+    assert_eq!(model_calls.load(Ordering::SeqCst), 0);
+    let evidence = NativeSessionBackend::injected(sessions.clone())
+        .inspect_model_checkpoint(
+            test_session_authority_for("execution/one", 3),
+            Arc::new(crate::state::TestStateWriterLease::current()),
+            &plan(),
+        )
+        .await
+        .expect("checkpoint inspection");
+    assert_eq!(model_calls.load(Ordering::SeqCst), 0);
+    let (claim, control) =
+        crate::protocol::control::test_checkpoint_authorizer("execution/one", 3, evidence.digest());
+    let authority = claim
+        .authorize(&control, evidence)
+        .await
+        .unwrap_or_else(|_| panic!("checkpoint authorization failed"));
+    let restored = restore().await.expect("recovery assembly");
+    let (restored, _authority) = restored.authorize(authority).expect("matching checkpoint");
     let (mut run, _, completion) = restored.start().expect("recovery start");
     while run.next_event().await.expect("recovery event").is_some() {}
     completion.select().await.expect("completion");

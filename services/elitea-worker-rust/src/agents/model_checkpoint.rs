@@ -42,6 +42,7 @@ struct ModelSnapshot {
 
 /// Opaque evidence produced only after durable checkpoint validation.
 /// It carries no model input, credential, tool result, or session contents.
+#[derive(Clone)]
 pub(crate) struct ValidatedModelCheckpoint {
     execution_id: String,
     generation: u64,
@@ -49,6 +50,12 @@ pub(crate) struct ValidatedModelCheckpoint {
 }
 
 impl ValidatedModelCheckpoint {
+    pub(crate) fn matches_checkpoint(&self, other: &Self) -> bool {
+        self.execution_id == other.execution_id
+            && self.generation == other.generation
+            && self.digest == other.digest
+    }
+
     #[cfg(test)]
     pub(crate) fn test_evidence(execution_id: String, generation: u64) -> Self {
         Self {

@@ -659,6 +659,42 @@ pub(crate) trait NativeAgentAssembler: Send + Sync + 'static {
     ) -> Result<AssembledNativeAgentInvocation<Self::Completion>, NativeAgentAssemblyError>;
 }
 
+/// Restored Runner with no start method until exact checkpoint authorization.
+pub(crate) struct PendingRecoveredAgentInvocation<S> {
+    assembled: AssembledNativeAgentInvocation<S>,
+    checkpoint: super::session::ValidatedModelCheckpoint,
+}
+
+impl<S> PendingRecoveredAgentInvocation<S> {
+    pub(crate) fn new(
+        assembled: AssembledNativeAgentInvocation<S>,
+        checkpoint: super::session::ValidatedModelCheckpoint,
+    ) -> Self {
+        Self {
+            assembled,
+            checkpoint,
+        }
+    }
+
+    /// Confirm that post-authorization assembly restores the inspected state.
+    /// A changed checkpoint never releases a startable Runner.
+    pub(crate) fn authorize(
+        self,
+        authority: crate::protocol::control::AuthorizedModelCheckpoint,
+    ) -> Result<
+        (
+            AssembledNativeAgentInvocation<S>,
+            crate::protocol::control::AuthorizedModelCheckpoint,
+        ),
+        NativeAgentRuntimeError,
+    > {
+        if !authority.matches_checkpoint(&self.checkpoint) {
+            return Err(NativeAgentRuntimeError::invalid_state());
+        }
+        Ok((self.assembled, authority))
+    }
+}
+
 /// Native runner, browser projector and explicit post-EOS result selector.
 ///
 /// This aggregate contains no claim, fence, settlement, or Redis authority.

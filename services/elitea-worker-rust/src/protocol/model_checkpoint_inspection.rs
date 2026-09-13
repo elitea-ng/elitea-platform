@@ -51,9 +51,19 @@ impl ModelCheckpointInspection {
 /// Restored-model authority. The inspection phase already owns session access.
 #[allow(dead_code)] // Consumed by the recovery coordinator integration.
 pub(crate) struct AuthorizedModelCheckpoint {
+    checkpoint: crate::agents::session::ValidatedModelCheckpoint,
     permit: super::InvocationSubmissionPermit,
     output: super::AgentExecutionOutputAuthority,
     runtime_context: super::ClaimBoundRuntimeContextAuthority,
+}
+
+impl AuthorizedModelCheckpoint {
+    pub(crate) fn matches_checkpoint(
+        &self,
+        checkpoint: &crate::agents::session::ValidatedModelCheckpoint,
+    ) -> bool {
+        self.checkpoint.matches_checkpoint(checkpoint)
+    }
 }
 
 /// Failed or uncertain authorization cannot be retried through this value.
@@ -114,6 +124,7 @@ impl InspectedModelCheckpointClaim {
                 let runtime_context =
                     super::ClaimBoundRuntimeContextAuthority::from_claim(&self.claim);
                 Ok(AuthorizedModelCheckpoint {
+                    checkpoint,
                     permit: super::InvocationSubmissionPermit { _sealed: () },
                     output: super::AgentExecutionOutputAuthority { claim: self.claim },
                     runtime_context,
@@ -133,6 +144,18 @@ impl InspectedModelCheckpointClaim {
             }
         }
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_checkpoint_authorizer(
+    execution_id: &str,
+    generation: u64,
+    digest: [u8; 32],
+) -> (
+    InspectedModelCheckpointClaim,
+    super::AgentControlClient<impl crate::transport::ControlRpc>,
+) {
+    tests::authorizer(execution_id, generation, digest)
 }
 
 #[cfg(test)]
@@ -158,6 +181,7 @@ mod tests {
     struct CheckpointRpc {
         calls: Arc<AtomicUsize>,
         response: Option<AuthorizeAgentModelCheckpointResponseV1>,
+        expected_digest: [u8; 32],
     }
     #[async_trait]
     impl ControlRpc for CheckpointRpc {
@@ -173,7 +197,7 @@ mod tests {
                     .as_ref()
                     .expect("digest")
                     .value,
-                vec![42; 32]
+                self.expected_digest.to_vec()
             );
             self.response
                 .clone()
@@ -243,6 +267,7 @@ mod tests {
             let (pending, _session) = inspection.into_session_inspection();
             let calls = Arc::new(AtomicUsize::new(0));
             let rpc = CheckpointRpc {
+                expected_digest: [42; 32],
                 calls: calls.clone(),
                 response: (case != 2).then_some(AuthorizeAgentModelCheckpointResponseV1 {
                     disposition: if case == 1 {
@@ -278,6 +303,65 @@ mod tests {
                 "case {case}"
             );
         }
+    }
+
+    pub(super) fn authorizer(
+        execution_id: &str,
+        generation: u64,
+        digest: [u8; 32],
+    ) -> (
+        InspectedModelCheckpointClaim,
+        super::super::AgentControlClient<impl ControlRpc>,
+    ) {
+        let verified = parse_and_verify_agent_command(
+            &vector("signed_command"),
+            Some(&TestOnlyConformanceHmacAuthenticator),
+        )
+        .expect("command");
+        let response =
+            ClaimCommandResponseV1::decode(vector("accepted_claim").as_slice()).expect("response");
+        let fence = response
+            .receipt
+            .as_ref()
+            .expect("receipt")
+            .fence
+            .clone()
+            .expect("fence");
+        let now = response
+            .receipt
+            .as_ref()
+            .expect("receipt")
+            .lease_expires_at_unix_millis
+            - 1000;
+        let mut claim = parse_accepted_agent_claim(
+            &verified,
+            response,
+            &fence.workload_session_id,
+            &fence.producer_id,
+            now,
+        )
+        .expect("fixture claim");
+        // Unit fixture identity matches the session test; no live claim is changed.
+        claim.identity.execution_id = execution_id.into();
+        claim.identity.generation = generation;
+        let rpc = CheckpointRpc {
+            calls: Arc::new(AtomicUsize::new(0)),
+            expected_digest: digest,
+            response: Some(AuthorizeAgentModelCheckpointResponseV1 {
+                disposition: AuthorizeInvocationDispositionV1::AuthorizedNow as i32,
+                rejection: None,
+            }),
+        };
+        let client = super::super::AgentControlClient::new(
+            rpc,
+            ControlGrpcConfig {
+                deadline: Duration::from_secs(1),
+                workload_session_id: fence.workload_session_id,
+                producer_id: fence.producer_id,
+            },
+        )
+        .expect("client");
+        (InspectedModelCheckpointClaim { claim }, client)
     }
 
     fn vector(name: &str) -> Vec<u8> {

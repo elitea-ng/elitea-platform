@@ -706,6 +706,40 @@ impl NativeSessionBackend {
         }
     }
 
+    /// Read and validate recovery state before runtime credential redemption.
+    /// This path does not construct a model, toolset, Runner, or new user turn.
+    pub(crate) async fn inspect_model_checkpoint(
+        &self,
+        authority: ClaimBoundSessionAuthority,
+        state_writer_lease: Arc<dyn StateWriterLease>,
+        plan: &OrdinaryNativeAgentPlan,
+    ) -> Result<ValidatedModelCheckpoint, NativeAgentAssemblyError> {
+        if plan.regenerate || !self.supports_resume() {
+            return Err(invalid_configuration());
+        }
+        let sessions = self.open(authority, state_writer_lease, plan).await?;
+        let session = sessions
+            .get(GetRequest {
+                app_name: APP_NAME.to_owned(),
+                user_id: plan.user_id.to_string(),
+                session_id: plan.session_id.to_string(),
+                num_recent_events: None,
+                after: None,
+            })
+            .await
+            .map_err(|_| dependency_unavailable())?;
+        super::model_checkpoint::ModelCheckpointWriter::new(
+            sessions,
+            plan.execution_id.clone(),
+            plan.generation,
+            plan.definition_digest,
+        )
+        .restore(session.as_ref())
+        .map_err(|_| invalid_configuration())?
+        .validated_checkpoint()
+        .ok_or_else(invalid_configuration)
+    }
+
     pub(crate) async fn open(
         &self,
         authority: ClaimBoundSessionAuthority,
@@ -1493,9 +1527,10 @@ where
 {
     assemble_ordinary_with_checkpoint_mode(model, plan, runtime, execution_mode, sessions, false)
         .await
+        .map(|(assembled, _)| assembled)
 }
 
-/// Rebuild an explicitly authorized recovery from the same execution checkpoint.
+/// Rebuild a pending recovery from the same execution checkpoint.
 /// Missing or non-model checkpoints never fall back to an ordinary invocation.
 pub(crate) async fn assemble_ordinary_native_from_checkpoint<M>(
     model: M,
@@ -1503,12 +1538,26 @@ pub(crate) async fn assemble_ordinary_native_from_checkpoint<M>(
     runtime: OrdinaryRuntimeBindings,
     execution_mode: NativeToolExecutionMode,
     sessions: Arc<dyn SessionService>,
-) -> Result<AssembledNativeAgentInvocation<OrdinaryAgentCompletion<M>>, NativeAgentAssemblyError>
+) -> Result<
+    super::runtime::PendingRecoveredAgentInvocation<OrdinaryAgentCompletion<M>>,
+    NativeAgentAssemblyError,
+>
 where
     M: BoundOrdinaryAgentModel,
 {
-    assemble_ordinary_with_checkpoint_mode(model, plan, runtime, execution_mode, sessions, true)
-        .await
+    let (assembled, checkpoint) = assemble_ordinary_with_checkpoint_mode(
+        model,
+        plan,
+        runtime,
+        execution_mode,
+        sessions,
+        true,
+    )
+    .await?;
+    Ok(super::runtime::PendingRecoveredAgentInvocation::new(
+        assembled,
+        checkpoint.ok_or_else(invalid_configuration)?,
+    ))
 }
 
 #[allow(clippy::too_many_lines)] // Keep ordered session recovery and Runner assembly together.
@@ -1519,7 +1568,13 @@ async fn assemble_ordinary_with_checkpoint_mode<M>(
     execution_mode: NativeToolExecutionMode,
     sessions: Arc<dyn SessionService>,
     checkpoint_recovery: bool,
-) -> Result<AssembledNativeAgentInvocation<OrdinaryAgentCompletion<M>>, NativeAgentAssemblyError>
+) -> Result<
+    (
+        AssembledNativeAgentInvocation<OrdinaryAgentCompletion<M>>,
+        Option<ValidatedModelCheckpoint>,
+    ),
+    NativeAgentAssemblyError,
+>
 where
     M: BoundOrdinaryAgentModel,
 {
@@ -1618,6 +1673,7 @@ where
     } else {
         checkpoint
     };
+    let evidence = checkpoint.validated_checkpoint();
     let recovering = checkpoint.is_recovery();
     if recovering {
         // Keep the existing user turn. The callback restores the exact pending
@@ -1657,10 +1713,13 @@ where
     } else {
         NativeAgentInvocation::new(runner, user_id, session_id, user_content)
     };
-    Ok(AssembledNativeAgentInvocation::new(
-        invocation,
-        projector,
-        OrdinaryAgentCompletion { model, thread_id },
+    Ok((
+        AssembledNativeAgentInvocation::new(
+            invocation,
+            projector,
+            OrdinaryAgentCompletion { model, thread_id },
+        ),
+        evidence,
     ))
 }
 

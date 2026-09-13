@@ -1,5 +1,11 @@
 #[path = "model_checkpoint_inspection.rs"]
 mod model_checkpoint_inspection;
+#[cfg(test)]
+pub(crate) use model_checkpoint_inspection::test_checkpoint_authorizer;
+#[allow(unused_imports)] // The recovery coordinator consumes these sealed values.
+pub(crate) use model_checkpoint_inspection::{
+    AuthorizedModelCheckpoint, InspectedModelCheckpointClaim, ModelCheckpointAuthorizationFailure,
+};
 
 #[path = "toolkit_invocation.rs"]
 mod toolkit_invocation;

@@ -195,3 +195,29 @@ Five focused tests pass. They cover checkpoint validation, digest binding, inspe
 The authorization tests use a component RPC double. They do not prove recovery through independently deployed services.
 Session access still precedes authorization; runtime credential access follows successful authorization.
 The coordinator must connect these values to lease supervision, restored assembly, and partial-output replacement before enabling recovery.
+
+## Inspection, authorization, and Runner release
+
+`NativeSessionBackend::inspect_model_checkpoint` opens the claim-bound session and validates the checkpoint before runtime credential redemption.
+It constructs no model, toolset, Runner, or new user turn. Missing state and regeneration requests cannot enter recovery.
+
+The coordinator can then authorize the validated digest and obtain runtime-context authority.
+`assemble_ordinary_native_from_checkpoint` returns `PendingRecoveredAgentInvocation`, which has no start method.
+Post-authorization assembly validates the saved checkpoint again. The pending Runner compares this evidence with the authorization receipt.
+Only an exact execution, generation, and digest match releases the assembled Runner.
+This second check detects a checkpoint change between inspection and assembly.
+
+| Rust source | Responsibility |
+| --- | --- |
+| `src/agents/session.rs::NativeSessionBackend::inspect_model_checkpoint` | Reads worker-owned checkpoint evidence before credential redemption. |
+| `src/protocol/model_checkpoint_inspection.rs::AuthorizedModelCheckpoint` | Retains the authorized evidence beside the one-use model permit. |
+| `src/agents/runtime.rs::PendingRecoveredAgentInvocation` | Prevents Runner start until assembled evidence matches authorization. |
+| `src/agents/session_tests.rs::interrupted_model_restores_saved_request_without_repeating_tool_or_user_turn` | Exercises inspection, authorization, restored assembly, and model completion. |
+
+The component test first rejects authority for another checkpoint digest without invoking the model.
+It then inspects state, authorizes the digest, assembles recovery, and completes the pending model step.
+The completed tool runs once. The restored model runs once. Durable history retains one original user event.
+The test uses injected ADK storage and an RPC double. It does not establish deployed crash recovery.
+
+The Redis delivery coordinator still requires recovery routing, lease supervision, and partial-output replacement.
+External MCP reconnect remains a separate unfinished gate. Recovery opt-in remains disabled.
