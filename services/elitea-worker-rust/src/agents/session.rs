@@ -1478,8 +1478,8 @@ where
         tenant_id: _,
         resource_project_id: _,
         projection_project_id: _,
-        execution_id: _,
-        generation: _,
+        execution_id,
+        generation,
         regenerate,
     } = plan;
     let context_compaction =
@@ -1501,6 +1501,12 @@ where
         projection,
         runtime,
         parallel,
+        Some(super::model_checkpoint::ModelCheckpointWriter::new(
+            sessions.clone(),
+            execution_id,
+            generation,
+            definition_digest,
+        )),
     )?;
     if regenerate {
         reset_session_for_regeneration(sessions.as_ref(), &user_id, &session_id).await?;
@@ -1572,6 +1578,7 @@ fn build_runtime_agent(
     projection: AgentEventProjectionContext,
     runtime: OrdinaryRuntimeBindings,
     parallel: bool,
+    checkpoint: Option<super::model_checkpoint::ModelCheckpointWriter>,
 ) -> Result<(Arc<dyn Agent>, AgentEventProjector), NativeAgentAssemblyError> {
     let OrdinaryRuntimeBindings {
         toolsets,
@@ -1593,6 +1600,9 @@ fn build_runtime_agent(
         .max_iterations(max_iterations)
         .disallow_transfer_to_parent(true)
         .disallow_transfer_to_peers(true);
+    if let Some(checkpoint) = checkpoint {
+        builder = checkpoint.bind(builder);
+    }
     if parallel {
         builder = builder.tool_execution_strategy(ToolExecutionStrategy::Parallel);
     }
@@ -1865,6 +1875,7 @@ where
         projection,
         prepared.runtime,
         prepared.parallel_applications,
+        None,
     )?;
     let mut runner_builder = adk_rust::runner::Runner::builder()
         .app_name(APP_NAME)

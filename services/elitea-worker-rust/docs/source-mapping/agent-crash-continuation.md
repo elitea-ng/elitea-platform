@@ -2,6 +2,31 @@
 
 Status: implementation required. This document defines the next recovery change, not a passing gate.
 
+## Checkpoint recording implementation
+
+`src/agents/model_checkpoint.rs` records the ordinary agent's model/tool boundary through ADK 2.2 callbacks.
+`src/agents/session.rs` installs these callbacks during ordinary agent assembly.
+The existing claim-bound session service persists the checkpoint under `elitea.agent.recovery.v1`.
+The checkpoint contains execution, generation, definition digest, invocation ID, and phase.
+
+Before model dispatch, it stores the model request and tool declarations separately.
+ADK excludes `LlmRequest.tools` from its normal serialization. Saving only that serialization would lose available tool schemas.
+Before tool dispatch, the checkpoint becomes `tool_may_have_started` and removes the replayable model request.
+The next model step records its request, including completed tool results from ADK history.
+Existing session limits and writer fencing apply. A failed checkpoint write stops the corresponding dispatch.
+
+This change records recovery evidence. It does not grant recovery authority or replay an interrupted model step yet.
+Specialized guard-resume assembly and pipeline node assembly do not install these callbacks yet.
+No migration or product schema change is added. The change is not deployed as a completed crash recovery feature.
+
+The Runner test checks persisted state inside both the model and tool implementations.
+It verifies two model steps, one tool execution, preserved tool declarations, and the completed result in the next request.
+A second test removes the checkpoint store and verifies that the model receives no invocation.
+The agent suite passes 306 tests before the additional definition-digest field is added.
+Focused checkpoint checks validate the final field layout separately.
+Strict Clippy passes for all targets and features. The new module passes formatting checks.
+Whole-crate formatting still reports an unrelated pending change in `src/agents/graph/compiler_tests.rs`.
+
 ## Confirmed failure
 
 The [Main crash check](chat-restart-observer.md#main-process-crash-acceptance) separates browser observation from runtime continuation.
@@ -23,7 +48,7 @@ The worker reports a model stream failure when Main stops. Control supervision l
 | Rust | `src/agents/replay_history/recovery.rs` | Repairs one unavailable tool selection before semantic output. It does not recover a crashed invocation. |
 | Rust | `src/agents/graph/turn_checkpointer.rs` | Retains graph checkpoints and isolates fresh turns from another execution's frontier. |
 | Rust | `src/state/postgres_session.rs` | Persists sessions and events with writer fencing in the existing runtime state database. |
-| ADK 2.0 | `adk-runner/src/runner.rs::run_with_config` | Accepts new user content and creates a new invocation ID. Reusing this entry point alone is not exact crash resume. |
+| ADK 2.2 | `adk-runner/src/runner.rs::run_with_config` | Accepts new user content and creates a new invocation ID. Reusing this entry point alone is not exact crash resume. |
 
 The legacy platform remains the business reference for chat, tools, and pipeline behavior.
 It does not supply the requested crash-continuation guarantee. Do not copy its restart limitations into this implementation.
