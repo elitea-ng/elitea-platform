@@ -32,8 +32,7 @@
  * IT NEVER RE-STARTS A RUN. Once the POST has succeeded the execution exists
  * server-side, so a transport failure after that point must not fall back to
  * the socket — that would run the agent twice and bill it twice. The stream is
- * REOPENED instead and, once the retry budget is spent, the spinner stops and
- * the failure is surfaced.
+ * REOPENED instead. Extended outages use slower retries without ending the run.
  *
  * STREAM OWNERSHIP (issue #328). A stream belongs to the conversation that
  * started it, and to nothing else. The hook stays mounted across a
@@ -274,9 +273,9 @@ export function useChatStreamTransport(
   const connection = useChatStreamConnection({
     onNodeEvent,
     onFailed,
-    // A spent retry budget ends the turn exactly like a runtime failure: the
-    // reason goes on the message, not only to the caller's toast.
-    onConnectionLost: failWith,
+    // A disconnected observer cannot declare the durable execution failed.
+    // Retain ownership and Stop while the connection keeps retrying.
+    onConnectionInterrupted: (reason) => onStreamErrorRef.current?.(reason),
   });
   closeStreamRef.current = connection.close;
   const { isStreaming, open: openStream } = connection;
