@@ -884,6 +884,7 @@ func mountMCPServerRoutes(
 		pool, resolver, agentStart, toolkitRun,
 		legacyrbac.NewPostgresResolver(pool),
 		v2mcp.WithInternalChatTools(conversationHandler, folderHandler),
+		v2mcp.WithInternalChatRuntime(conversationHandler, typedConfigurations),
 		v2mcp.WithInternalToolkitHandler(toolkitHandler),
 		v2mcp.WithInternalConfigurationHandler(configurationsHandler, typedConfigurations),
 		v2mcp.WithInternalProjectContextHandler(coreHandler),

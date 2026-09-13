@@ -44,7 +44,7 @@ func (p *chatHandlerProbe) UpdateEntitySettings(w http.ResponseWriter, r *http.R
 
 func TestInternalChatCatalogAndEveryHandlerOperation(t *testing.T) {
 	tools, err := (postgresToolSource{}).tools(context.Background(), `"p_7"`, scope{kind: scopeCategory, category: internalChatCategory})
-	if err != nil || len(tools) != 11 {
+	if err != nil || len(tools) != 12 {
 		t.Fatalf("catalog: %d %v", len(tools), err)
 	}
 	fixtures := map[internalChatOperation]struct {
@@ -64,6 +64,9 @@ func TestInternalChatCatalogAndEveryHandlerOperation(t *testing.T) {
 		internalChatFolderUpdate:         {"PUT", map[string]any{"folder_id": 15, "name": "Rename", "position": 10}},
 	}
 	for _, tool := range tools {
+		if tool.internalChatOperation == internalChatSend {
+			continue
+		} // Covered by the durable send tests.
 		t.Run(tool.Name, func(t *testing.T) {
 			f, ok := fixtures[tool.internalChatOperation]
 			if !ok {

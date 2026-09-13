@@ -47,6 +47,11 @@ func WithInternalChatTools(conversations *conversationsapi.Handler, folders *fol
 	}
 }
 func (h *Handler) callInternalChatTool(r *http.Request, projectID int64, target Tool, arguments map[string]any) map[string]any {
+	if target.internalChatOperation == internalChatSend {
+		return h.callInternalTool(r, projectID, target, arguments, "chat send", func(actorID int64) (internalApplicationExecution, error) {
+			return h.internalChatSend.execute(r.Context(), projectID, actorID, arguments)
+		})
+	}
 	if h.internalChat == nil {
 		return errorResult("this deployment cannot execute internal chat tools; nothing was executed")
 	}

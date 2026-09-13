@@ -85,3 +85,41 @@ The resolver creates no execution and has no fallback admission path.
 `TestInternalChatSendTarget*` passes application isolation, principal preservation, catalog membership, and target-refusal cases.
 These tests use handler doubles. They do not establish database authority or deployed message sending.
 The resolver is not yet connected to a published tool; admission and result observation remain pending.
+
+## Send adapter and deployed acceptance
+
+`internal_chat_send.go` connects target resolution to the shared ordinary and saved-application start services.
+`post_elitea_core_messages` requires `models.chat.messages.create` through the existing internal MCP permission gate.
+The endpoint supplies project authority. The schema excludes caller identity and interrupt-decision fields.
+A caller can retain `question_id` for admission retries; an omitted identity is generated once for that call.
+The adapter never retries a failed admission through another target path.
+
+Observation reads only the admitted response message through the existing MCP terminal mapper.
+The default wait is 30 seconds; accepted explicit values range from -1 through 300.
+Zero and -1 return immediately. Expired or unavailable observation returns pending execution references.
+The durable execution remains owned by the worker and existing Main authority.
+A terminal guard produces an MCP error with the execution identity; partial text is not a successful result.
+The response envelope contains execution, response-message, question, and conversation identities plus status and the terminal MCP result.
+It does not reproduce the legacy `message_groups` envelope. Existing authorized conversation reads retain transcript access.
+
+Focused chat tests pass target selection, single-path admission, exact response binding, asynchronous mode, mixed-guard refusal, and forbidden decision arguments.
+The MCP and Main route test selection also passes. These tests use doubles and do not replace deployed evidence.
+No schema migration or protocol regeneration is required.
+
+Main deploys as `elitea-main:chat-send-20260913`, image `sha256:8bdea8b44c21992dac359c57522f602f7d03a2fc64efd65e24e646826982cea4`.
+The replacement retains all six mounts, environment, networks, and resource limits.
+The first deployment review refuses an opaque-script operation. Read-only scope validation then permits the rehearsal-only replacement.
+
+A UI-created temporary PAT drives independent MCP calls for ordinary chat and a saved-agent participant.
+Ordinary execution `571ee3011ec04002e9ee34e004d3643e` completes in chat 578 with the project default model.
+Saved-agent execution `1e93ccb84deb83587bcb1409b9345e42` completes in chat 543, targeting mapped participant 30.
+Both responses contain the expected synthetic marker and `status: completed`.
+A fresh headed browser verifies both persisted answers. The PAT is revoked with HTTP 204.
+Evidence is `elitea-live-chat-send-debug.log`; screenshots are `elitea-chat-send-ordinary.png` and `elitea-chat-send-saved.png`.
+
+The preceding ordinary run in chat 577 completes, but the model declines to repeat its marker.
+Its persisted answer confirms model refusal; that run does not pass the marker assertion.
+No transport fix is inferred from the later successful run.
+
+Live same-project operation denial, paused send, and idempotent repeated-question acceptance remain unverified for this new adapter.
+General external MCP pause and replay proofs do not substitute for those adapter-specific checks.

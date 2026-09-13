@@ -218,9 +218,10 @@ type Handler struct {
 	// has no database composition.
 	internalApplications internalApplicationExecutor
 	// internalSkills executes the fixed internal skill-builder category.
-	internalSkills internalSkillExecutor
-	internalDrafts *draftsapi.Handler
-	internalChat   internalChatExecutor
+	internalSkills   internalSkillExecutor
+	internalDrafts   *draftsapi.Handler
+	internalChat     internalChatExecutor
+	internalChatSend *internalChatSendRuntime
 	// internalToolkits executes the fixed internal toolkit-builder category.
 	internalToolkits internalToolkitExecutor
 	// internalConfigurations executes the fixed internal configurations

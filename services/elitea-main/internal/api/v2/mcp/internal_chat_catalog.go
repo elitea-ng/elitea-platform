@@ -47,5 +47,13 @@ func internalChatTools() []Tool {
 	add("get_elitea_core_folder", "models.chat.folders.get", "List actor-visible folders and conversations, optionally grouped for the sidebar.", internalChatFoldersList, map[string]any{"query": boundedStringProperty("Name search.", 0, 1024), "limit": integerRangeProperty("Maximum rows.", 1, 100), "offset": integerRangeProperty("Offset.", 0, 100000), "grouped": map[string]any{"type": "boolean"}, "folder_id": id("Folder ID."), "date_group": enumProperty("Date group.", "today", "this_week", "older"), "source": boundedStringProperty("Sources, comma separated.", 0, 256), "sort_by": enumProperty("Sort field.", "name", "created_at", "updated_at"), "sort_order": enumProperty("Sort direction.", "asc", "desc")})
 	add("post_elitea_core_folder", "models.chat.folders.create", "Create a folder owned by the authenticated actor.", internalChatFolderCreate, map[string]any{"name": boundedStringProperty("Folder name.", 1, 255)}, "name")
 	add("put_elitea_core_folder", "models.chat.folders.update", "Rename or reorder the authenticated actor's folder.", internalChatFolderUpdate, map[string]any{"folder_id": id("Folder ID."), "name": boundedStringProperty("Folder name.", 1, 255), "position": map[string]any{"type": "integer", "minimum": -2147483648, "maximum": 2147483647}}, "folder_id", "name")
+	add("post_elitea_core_messages", "models.chat.messages.create", "Send to an actor-visible conversation. Omit participant_id for ordinary chat. Saved applications retain their model. Reuse question_id for retries. A timeout returns pending execution references; pending guards are not successful answers.", internalChatSend, map[string]any{
+		"conversation_uuid":  map[string]any{"type": "string", "format": "uuid", "maxLength": 36},
+		"participant_id":     id("Mapped participant ID; omit for the ordinary responder."),
+		"question_id":        map[string]any{"type": "string", "format": "uuid", "maxLength": 36},
+		"user_input":         boundedStringProperty("Message text.", 1, 32768),
+		"llm_settings":       object,
+		"await_task_timeout": integerRangeProperty("Wait seconds, default 30. Zero or -1 returns immediately.", -1, 300),
+	}, "conversation_uuid", "user_input")
 	return tools
 }
