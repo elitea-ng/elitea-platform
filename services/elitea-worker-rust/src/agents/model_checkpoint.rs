@@ -1,20 +1,42 @@
 //! Persist the model/tool boundary before ADK starts the corresponding operation.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use adk_rust::agent::LlmAgentBuilder;
-use adk_rust::session::{AppendEventRequest, SessionService};
-use adk_rust::{AdkIdentity, BeforeModelResult, Event, LlmRequest};
-use serde::Serialize;
+use adk_rust::session::{AppendEventRequest, Session, SessionService};
+use adk_rust::{
+    AdkError, AdkIdentity, BeforeModelResult, ErrorCategory, ErrorComponent, Event, LlmRequest,
+};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub(super) const CHECKPOINT_KEY: &str = "elitea.agent.recovery.v1";
 
-#[derive(Clone, Copy, Serialize)]
+#[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum Phase {
     ModelPending,
     ToolMayHaveStarted,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Checkpoint {
+    version: u8,
+    execution_id: String,
+    generation: u64,
+    definition_digest: [u8; 32],
+    invocation_id: String,
+    phase: Phase,
+    model: Option<ModelSnapshot>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModelSnapshot {
+    request: LlmRequest,
+    tools: HashMap<String, Value>,
 }
 
 #[derive(Clone)]
@@ -23,6 +45,7 @@ pub(super) struct ModelCheckpointWriter {
     execution_id: String,
     generation: u64,
     definition_digest: [u8; 32],
+    replay: Option<Arc<Mutex<Option<LlmRequest>>>>,
 }
 
 impl ModelCheckpointWriter {
@@ -37,7 +60,91 @@ impl ModelCheckpointWriter {
             execution_id,
             generation,
             definition_digest,
+            replay: None,
         }
+    }
+
+    /// Restore only an unfinished model step from this exact execution.
+    /// A tool boundary and a persisted model result are not replay permission.
+    pub(super) fn restore(mut self, session: &dyn Session) -> adk_rust::Result<Self> {
+        let Some(value) = session.state().get(CHECKPOINT_KEY) else {
+            return Ok(self);
+        };
+        // A new user turn shares a session but owns a different execution.
+        if value.get("execution_id").and_then(Value::as_str) != Some(self.execution_id.as_str()) {
+            return Ok(self);
+        }
+        let checkpoint: Checkpoint =
+            serde_json::from_value(value.clone()).map_err(|_| invalid_checkpoint())?;
+        if checkpoint.version != 1
+            || checkpoint.execution_id != self.execution_id
+            || checkpoint.generation != self.generation
+            || checkpoint.definition_digest != self.definition_digest
+            || checkpoint.invocation_id.is_empty()
+            || checkpoint.invocation_id.len() > 256
+        {
+            return Err(invalid_checkpoint());
+        }
+        if !matches!(checkpoint.phase, Phase::ModelPending) {
+            return Err(invalid_checkpoint());
+        }
+        // The marker and state commit together. Refuse a missing marker or a
+        // completed model event after it; those cannot prove an unfinished step.
+        let events = session.events().all();
+        let marker = events
+            .iter()
+            .rposition(|event| {
+                event.author == "elitea-recovery"
+                    && event.invocation_id == checkpoint.invocation_id
+                    && event.actions.state_delta.get(CHECKPOINT_KEY) == Some(&value)
+            })
+            .ok_or_else(invalid_checkpoint)?;
+        if events[marker + 1..].iter().any(|event| {
+            event.invocation_id == checkpoint.invocation_id
+                && !event.llm_response.partial
+                && event
+                    .llm_response
+                    .content
+                    .as_ref()
+                    .is_some_and(|content| !content.parts.is_empty())
+        }) {
+            return Err(invalid_checkpoint());
+        }
+        let Some(mut model) = checkpoint.model else {
+            return Err(invalid_checkpoint());
+        };
+        if model.request.contents.is_empty() {
+            return Err(invalid_checkpoint());
+        }
+        model.request.tools = model.tools;
+        self.replay = Some(Arc::new(Mutex::new(Some(model.request))));
+        Ok(self)
+    }
+
+    pub(super) fn is_recovery(&self) -> bool {
+        self.replay.is_some()
+    }
+
+    fn prepare_request(&self, mut request: LlmRequest) -> adk_rust::Result<LlmRequest> {
+        if let Some(replay) = &self.replay {
+            let mut pending = replay.lock().map_err(|_| invalid_checkpoint())?;
+            if let Some(saved) = pending.as_ref() {
+                // Restored tools must still exist with the same declarations.
+                // Credentials and runtime tool objects come from fresh binding.
+                if saved
+                    .tools
+                    .iter()
+                    .any(|(name, schema)| request.tools.get(name) != Some(schema))
+                {
+                    return Err(invalid_checkpoint());
+                }
+                return pending.take().ok_or_else(invalid_checkpoint);
+            }
+            request
+                .contents
+                .retain(|content| content.role != "user" || !content.parts.is_empty());
+        }
+        Ok(request)
     }
 
     pub(super) fn bind(self, builder: LlmAgentBuilder) -> LlmAgentBuilder {
@@ -46,6 +153,7 @@ impl ModelCheckpointWriter {
             .before_model_callback(Box::new(move |context, request| {
                 let writer = model.clone();
                 Box::pin(async move {
+                    let request = writer.prepare_request(request)?;
                     writer
                         .persist(
                             context.try_identity()?,
@@ -106,6 +214,15 @@ impl ModelCheckpointWriter {
             .append_event_for_identity(AppendEventRequest { identity, event })
             .await
     }
+}
+
+fn invalid_checkpoint() -> AdkError {
+    AdkError::new(
+        ErrorComponent::Session,
+        ErrorCategory::InvalidInput,
+        "agent_recovery.invalid_checkpoint",
+        "the checkpoint does not authorize model continuation",
+    )
 }
 
 #[cfg(test)]
@@ -285,5 +402,93 @@ mod tests {
         assert!(failed);
         assert_eq!(probe.models.load(Ordering::SeqCst), 0);
         assert_eq!(probe.tools.load(Ordering::SeqCst), 0);
+    }
+    #[tokio::test]
+    async fn recovery_rejects_foreign_generation_definition_tools_and_completed_steps() {
+        let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+        let session = sessions
+            .create(CreateRequest {
+                app_name: "checkpoint-test".into(),
+                user_id: "user".into(),
+                session_id: Some("session".into()),
+                state: HashMap::new(),
+            })
+            .await
+            .expect("create");
+        let identity = session.try_identity().expect("identity");
+        let request: LlmRequest = serde_json::from_value(json!({
+            "model": "model", "contents": [{"role": "user", "parts": [{"text": "original"}]}], "config": null,
+        })).expect("request");
+        let mut request = request;
+        request
+            .tools
+            .insert("probe".into(), json!({"type": "object"}));
+        let writer = ModelCheckpointWriter::new(sessions.clone(), "execution".into(), 7, [7; 32]);
+        writer
+            .persist(
+                identity.clone(),
+                "inv-1",
+                Phase::ModelPending,
+                Some(&request),
+            )
+            .await
+            .expect("persist");
+        let load = || {
+            sessions.get(GetRequest {
+                app_name: "checkpoint-test".into(),
+                user_id: "user".into(),
+                session_id: "session".into(),
+                num_recent_events: None,
+                after: None,
+            })
+        };
+        let stored = load().await.expect("load");
+        assert!(
+            ModelCheckpointWriter::new(sessions.clone(), "execution".into(), 8, [7; 32])
+                .restore(stored.as_ref())
+                .is_err()
+        );
+        assert!(
+            ModelCheckpointWriter::new(sessions.clone(), "execution".into(), 7, [8; 32])
+                .restore(stored.as_ref())
+                .is_err()
+        );
+        let replay = writer.clone().restore(stored.as_ref()).expect("restore");
+        let mut changed = request.clone();
+        changed.tools.clear();
+        assert!(replay.prepare_request(changed.clone()).is_err());
+        assert!(replay.prepare_request(changed).is_err());
+        assert_eq!(
+            replay
+                .prepare_request(request.clone())
+                .expect("exact")
+                .tools,
+            request.tools
+        );
+        let mut terminal = Event::new("inv-1");
+        terminal.author = "agent".into();
+        terminal.llm_response = LlmResponse::new(Content::new("model").with_text("done"));
+        sessions
+            .append_event_for_identity(AppendEventRequest {
+                identity: identity.clone(),
+                event: terminal,
+            })
+            .await
+            .expect("terminal");
+        assert!(
+            writer
+                .clone()
+                .restore(load().await.expect("load").as_ref())
+                .is_err()
+        );
+        writer
+            .persist(identity, "inv-1", Phase::ToolMayHaveStarted, None)
+            .await
+            .expect("tool marker");
+        assert!(
+            writer
+                .restore(load().await.expect("load").as_ref())
+                .is_err()
+        );
     }
 }

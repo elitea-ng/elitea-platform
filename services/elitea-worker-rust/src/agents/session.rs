@@ -1001,6 +1001,7 @@ pub(crate) trait DurableModelCompletion: Send + Sync {
 struct RunnerSessionService {
     inner: Arc<dyn SessionService>,
     completion: Option<Arc<dyn DurableModelCompletion>>,
+    omit_empty_user_input: bool,
 }
 
 impl RunnerSessionService {
@@ -1008,7 +1009,26 @@ impl RunnerSessionService {
         inner: Arc<dyn SessionService>,
         completion: Option<Arc<dyn DurableModelCompletion>>,
     ) -> Self {
-        Self { inner, completion }
+        Self {
+            inner,
+            completion,
+            omit_empty_user_input: false,
+        }
+    }
+
+    fn with_recovery(mut self, enabled: bool) -> Self {
+        self.omit_empty_user_input = enabled;
+        self
+    }
+
+    fn omit_resume_input(&self, event: &Event) -> bool {
+        self.omit_empty_user_input
+            && event.author == "user"
+            && event
+                .llm_response
+                .content
+                .as_ref()
+                .is_some_and(|content| content.role == "user" && content.parts.is_empty())
     }
 
     fn durable_event(&self, mut event: Event) -> adk_rust::Result<Event> {
@@ -1075,12 +1095,18 @@ impl SessionService for RunnerSessionService {
     }
 
     async fn append_event(&self, session_id: &str, event: Event) -> adk_rust::Result<()> {
+        if self.omit_resume_input(&event) {
+            return Ok(());
+        }
         self.inner
             .append_event(session_id, self.durable_event(event)?)
             .await
     }
 
     async fn append_event_for_identity(&self, req: AppendEventRequest) -> adk_rust::Result<()> {
+        if self.omit_resume_input(&req.event) {
+            return Ok(());
+        }
         self.inner
             .append_event_for_identity(AppendEventRequest {
                 identity: req.identity,
@@ -1463,10 +1489,42 @@ pub(crate) async fn assemble_ordinary_native_with_sessions_and_runtime_catalogs<
 where
     M: BoundOrdinaryAgentModel,
 {
+    assemble_ordinary_with_checkpoint_mode(model, plan, runtime, execution_mode, sessions, false)
+        .await
+}
+
+/// Rebuild an explicitly authorized recovery from the same execution checkpoint.
+/// Missing or non-model checkpoints never fall back to an ordinary invocation.
+pub(crate) async fn assemble_ordinary_native_from_checkpoint<M>(
+    model: M,
+    plan: OrdinaryNativeAgentPlan,
+    runtime: OrdinaryRuntimeBindings,
+    execution_mode: NativeToolExecutionMode,
+    sessions: Arc<dyn SessionService>,
+) -> Result<AssembledNativeAgentInvocation<OrdinaryAgentCompletion<M>>, NativeAgentAssemblyError>
+where
+    M: BoundOrdinaryAgentModel,
+{
+    assemble_ordinary_with_checkpoint_mode(model, plan, runtime, execution_mode, sessions, true)
+        .await
+}
+
+#[allow(clippy::too_many_lines)] // Keep ordered session recovery and Runner assembly together.
+async fn assemble_ordinary_with_checkpoint_mode<M>(
+    model: M,
+    plan: OrdinaryNativeAgentPlan,
+    runtime: OrdinaryRuntimeBindings,
+    execution_mode: NativeToolExecutionMode,
+    sessions: Arc<dyn SessionService>,
+    checkpoint_recovery: bool,
+) -> Result<AssembledNativeAgentInvocation<OrdinaryAgentCompletion<M>>, NativeAgentAssemblyError>
+where
+    M: BoundOrdinaryAgentModel,
+{
     let OrdinaryNativeAgentPlan {
         user_id,
         session_id,
-        user_content,
+        mut user_content,
         generation_config,
         max_iterations,
         projection,
@@ -1494,25 +1552,27 @@ where
     // notice IN THE RUN, not only the `agent_internal_tool_skipped` log line
     // `InternalToolCatalog::from_values` already writes.
     let internal_tools = runtime.internal_tools;
-    let (agent, projector) = build_runtime_agent(
-        model.provider_model(),
-        generation_config,
-        max_iterations,
-        projection,
-        runtime,
-        parallel,
-        Some(super::model_checkpoint::ModelCheckpointWriter::new(
-            sessions.clone(),
-            execution_id,
-            generation,
-            definition_digest,
-        )),
-    )?;
+    if checkpoint_recovery && regenerate {
+        return Err(invalid_configuration());
+    }
     if regenerate {
         reset_session_for_regeneration(sessions.as_ref(), &user_id, &session_id).await?;
     }
-    let (session, created) =
-        restore_or_create_session(sessions.as_ref(), &user_id, &session_id).await?;
+    let (session, created) = if checkpoint_recovery {
+        let session = sessions
+            .get(GetRequest {
+                app_name: APP_NAME.to_owned(),
+                user_id: user_id.to_string(),
+                session_id: session_id.to_string(),
+                num_recent_events: None,
+                after: None,
+            })
+            .await
+            .map_err(|_| dependency_unavailable())?;
+        (session, false)
+    } else {
+        restore_or_create_session(sessions.as_ref(), &user_id, &session_id).await?
+    };
     let identity = session
         .try_identity()
         .map_err(|_| invalid_configuration())?;
@@ -1539,10 +1599,41 @@ where
         session_bootstrap = if created { "seeded" } else { "restored" },
         "prepared the ADK session for the native agent runner"
     );
-    let runner_sessions = Arc::new(RunnerSessionService::new(
-        sessions,
-        model.durable_completion(),
-    ));
+    let checkpoint = super::model_checkpoint::ModelCheckpointWriter::new(
+        sessions.clone(),
+        execution_id,
+        generation,
+        definition_digest,
+    );
+    let checkpoint = if checkpoint_recovery {
+        let restored = checkpoint
+            .restore(session.as_ref())
+            .map_err(|_| invalid_configuration())?;
+        if !restored.is_recovery() {
+            return Err(invalid_configuration());
+        }
+        restored
+    } else {
+        checkpoint
+    };
+    let recovering = checkpoint.is_recovery();
+    if recovering {
+        // Keep the existing user turn. The callback restores the exact pending
+        // model request and removes this empty ADK Runner input from later calls.
+        user_content = Content::new("user");
+    }
+    let (agent, projector) = build_runtime_agent(
+        model.provider_model(),
+        generation_config,
+        max_iterations,
+        projection,
+        runtime,
+        parallel,
+        Some(checkpoint),
+    )?;
+    let runner_sessions = Arc::new(
+        RunnerSessionService::new(sessions, model.durable_completion()).with_recovery(recovering),
+    );
     let mut runner_builder = adk_rust::runner::Runner::builder()
         .app_name(APP_NAME)
         .agent(agent)

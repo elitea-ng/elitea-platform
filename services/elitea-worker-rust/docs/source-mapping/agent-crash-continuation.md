@@ -15,7 +15,7 @@ Before tool dispatch, the checkpoint becomes `tool_may_have_started` and removes
 The next model step records its request, including completed tool results from ADK history.
 Existing session limits and writer fencing apply. A failed checkpoint write stops the corresponding dispatch.
 
-This change records recovery evidence. It does not grant recovery authority or replay an interrupted model step yet.
+This change records recovery evidence. It does not grant Main recovery authority.
 Specialized guard-resume assembly and pipeline node assembly do not install these callbacks yet.
 No migration or product schema change is added. The change is not deployed as a completed crash recovery feature.
 
@@ -26,6 +26,27 @@ The agent suite passes 306 tests before the additional definition-digest field i
 Focused checkpoint checks validate the final field layout separately.
 Strict Clippy passes for all targets and features. The new module passes formatting checks.
 Whole-crate formatting still reports an unrelated pending change in `src/agents/graph/compiler_tests.rs`.
+
+## Explicit model checkpoint restoration
+
+`assemble_ordinary_native_from_checkpoint` provides a separate Rust assembly entry point.
+Ordinary assembly never infers recovery permission from session state. Later turns and repeated nodes retain their normal behavior.
+The recovery entry point requires a matching execution, generation, definition digest, supported checkpoint version, and pending model phase.
+It also requires the corresponding durable checkpoint event. A subsequent completed model event prevents replay.
+Missing checkpoints, uncertain tool phases, and changed tool declarations cause refusal before model dispatch.
+Recovery loads an existing session. It cannot create a session or apply regeneration cleanup.
+
+ADK's before-model callback substitutes the saved request exactly once. Later model calls consume the restored session's normal tool results.
+The Runner receives empty continuation input. The session wrapper omits this empty user event from durable history.
+The callback also removes empty continuation input from subsequent provider requests.
+This preserves the original user turn without resubmitting its text.
+
+The component test completes one tool, interrupts the following model response after partial text, and constructs a new Runner.
+The restored request contains the completed tool result. The tool executes once, and durable history contains one user event.
+The agent suite passes 308 tests. Three focused checkpoint tests cover recording, failed persistence, and invalid recovery evidence.
+
+The live claim path does not dispatch to this recovery entry point yet. Claim authority, partial-output replacement, and deployed crash acceptance remain unfinished.
+These component results do not close the live continuation gate.
 
 ## Confirmed failure
 

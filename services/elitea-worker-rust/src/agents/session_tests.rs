@@ -2184,3 +2184,146 @@ fn invalid_completed_content_never_becomes_a_browser_terminal() {
     };
     assert_eq!(error.code(), AgentEventProjectionErrorCode::InvalidOutput);
 }
+
+struct InterruptedAfterToolLlm {
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl Llm for InterruptedAfterToolLlm {
+    fn name(&self) -> &'static str {
+        "fixture-model"
+    }
+    async fn generate_content(
+        &self,
+        _: LlmRequest,
+        _: bool,
+    ) -> adk_rust::Result<LlmResponseStream> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Ok(Box::pin(adk_rust::futures::stream::once(async {
+                Ok(tool_call_response())
+            })));
+        }
+        Ok(Box::pin(async_stream::stream! {
+            let mut response = LlmResponse::new(Content::new("model").with_text("partial"));
+            response.partial = true;
+            response.turn_complete = false;
+            yield Ok(response);
+            yield Err(adk_rust::AdkError::agent("fixture transport interruption"));
+        }))
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One interrupted turn and its recovery share the fixture.
+async fn interrupted_model_restores_saved_request_without_repeating_tool_or_user_turn() {
+    let mut request = ordinary_request(AgentExecutionKind::Adhoc);
+    request.payload.chat_history.clear();
+    let profile = OrdinaryNoToolProfile::validate(&request).expect("profile");
+    let plan = || {
+        OrdinaryNativeAgentPlan::from_authorized(
+            &request,
+            &profile,
+            &AuthorizedNativeCommandBinding::fixture(),
+            &request.payload.input_attachments,
+        )
+        .expect("plan")
+    };
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let tool_calls = Arc::new(AtomicUsize::new(0));
+    let tools = || -> Vec<Arc<dyn Toolset>> {
+        vec![Arc::new(BasicToolset::new(
+            "recovery-tools",
+            vec![Arc::new(CountingTool {
+                calls: tool_calls.clone(),
+                read_only: true,
+            })],
+        ))]
+    };
+    let first = assemble_ordinary_native_with_sessions(
+        FixtureBoundModel {
+            model: Arc::new(InterruptedAfterToolLlm {
+                calls: AtomicUsize::new(0),
+            }),
+            completed: String::new(),
+        },
+        plan(),
+        tools(),
+        SensitiveToolCatalog::default(),
+        sessions.clone(),
+    )
+    .await
+    .expect("first assembly");
+    let (mut run, _, _) = first.start().expect("first start");
+    let mut failed = false;
+    loop {
+        match run.next_event().await {
+            Ok(Some(_)) => {}
+            Ok(None) => break,
+            Err(_) => {
+                failed = true;
+                break;
+            }
+        }
+    }
+    assert!(failed);
+    drop(run);
+    assert_eq!(tool_calls.load(Ordering::SeqCst), 1);
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let model_calls = Arc::new(AtomicUsize::new(0));
+    let restored_plan = plan();
+    let user_id = restored_plan.user_id().to_string();
+    let session_id = restored_plan.session_id().to_string();
+    let restored = super::session::assemble_ordinary_native_from_checkpoint(
+        FixtureBoundModel {
+            model: Arc::new(CapturingFinalLlm {
+                requests: captured.clone(),
+                calls: model_calls.clone(),
+            }),
+            completed: "The resumed answer is 42.".into(),
+        },
+        restored_plan,
+        OrdinaryRuntimeBindings::new(
+            tools(),
+            SensitiveToolCatalog::default(),
+            DelegatedAuthorizationCatalog::default(),
+            ApplicationRuntimeProjection::default(),
+        ),
+        NativeToolExecutionMode::Sequential,
+        sessions.clone(),
+    )
+    .await
+    .expect("recovery assembly");
+    let (mut run, _, completion) = restored.start().expect("recovery start");
+    while run.next_event().await.expect("recovery event").is_some() {}
+    completion.select().await.expect("completion");
+    assert_eq!(tool_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(model_calls.load(Ordering::SeqCst), 1);
+    {
+        let requests = captured.lock().expect("requests");
+        assert!(requests[0].contents.iter().any(|c| {
+            c.parts
+                .iter()
+                .any(|p| matches!(p, Part::FunctionResponse { id: Some(id), .. } if id == "call-1"))
+        }));
+    }
+    let session = sessions
+        .get(GetRequest {
+            app_name: "elitea-agent-v1".into(),
+            user_id,
+            session_id,
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .expect("session");
+    assert_eq!(
+        session
+            .events()
+            .all()
+            .iter()
+            .filter(|event| event.author == "user")
+            .count(),
+        1
+    );
+}
