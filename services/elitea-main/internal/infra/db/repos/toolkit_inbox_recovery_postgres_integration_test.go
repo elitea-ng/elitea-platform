@@ -18,6 +18,7 @@ func TestPostgresToolkitInboxTerminalRecovery(t *testing.T) {
 		name, capability, payloadType string
 		recover                       bool
 	}{
+		{"read", executiondomain.ToolkitExecuteReadCapability, payloadTypeToolkitExecuteReadResult, true},
 		{"call", executiondomain.ToolkitCallToolCapability, payloadTypeToolkitCallToolResult, true},
 		{"discovery", executiondomain.ToolkitAvailableToolsCapability, payloadTypeToolkitAvailableToolsResult, true},
 		{"validation", executiondomain.ConfigurationValidationCapability, payloadTypeConfigurationValidation, false},
@@ -44,6 +45,13 @@ func TestPostgresToolkitInboxTerminalRecovery(t *testing.T) {
 			inserted, err := insertOutputInbox(ctx, executor, record)
 			if err != nil || !inserted.Inserted {
 				t.Fatalf("seed durable output: %+v %v", inserted, err)
+			}
+			// Direct-read results have a separate projection step. The shared
+			// Toolkit Test and discovery results are completed by claim recovery.
+			if tc.capability == executiondomain.ToolkitExecuteReadCapability {
+				if err := markOutputProjected(ctx, executor, record.EventID); err != nil {
+					t.Fatal(err)
+				}
 			}
 			expirePostgresClaim(t, pool, seed.claimID)
 			repository, err := NewClaimsRepository(pool)

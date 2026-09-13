@@ -436,7 +436,10 @@ WHERE execution_id = $1 AND generation = $2`, request.ExecutionID, int64(request
 				// A terminal result exists but its predecessor claim is not eligible
 				// for this authenticated handoff. Never re-execute business logic.
 				decision.Disposition = executionapp.ClaimRetryLaterNoACK
-			} else if executiondomain.NodeEventCapability(request.CapabilityID) &&
+			} else if (executiondomain.NodeEventCapability(request.CapabilityID) ||
+				request.CapabilityID == executiondomain.ToolkitExecuteReadCapability ||
+				request.CapabilityID == executiondomain.ToolkitCallToolCapability ||
+				request.CapabilityID == executiondomain.ToolkitAvailableToolsCapability) &&
 				state == executiondomain.JobRunning &&
 				invocationState != "PREPARING" {
 				// A replacement fence over RUNNING may reconcile durable output,
