@@ -240,3 +240,27 @@ The remaining mixed-guard requirement is separate from these failure cases.
 TG-02 describes independent parallel HITL, sensitive-tool, and delegated-authorization guards.
 TG-10 requires external results to remain errors while those guards prevent autonomous completion.
 Individual HITL refusal and terminal error replay do not prove this combined behavior.
+
+## Mixed-guard component verification
+
+The exact Rust test `agents::pipeline_tests::pipeline_agent_node_resumes_parallel_mixed_sensitive_and_authorization_guards` passes.
+It checks separate descendant identities and zero protected calls before decisions.
+After both decisions, each child performs one call and the parent completes without replanning.
+Its model and MCP connectors are doubles. This is component evidence, not deployed acceptance.
+The initial short exact filter selects zero tests and is excluded from evidence.
+
+A real PostgreSQL projection test exposes a reporting gap for both saved agents and pipelines.
+When both guard metadata fields exist, Main reports only human approval.
+The result already remains an error and does not expose partial text.
+`mcp/execute.go` now identifies human approval and tool authorization together.
+It directs the user to resolve each pending request in the conversation.
+It does not add external interrupt decisions or change worker checkpoint ownership.
+`TestExternalAgentAndPipelineReportBothPendingGuardKinds` fails before this change and passes afterward.
+Its two subtests verify both guard descriptions, the execution ID, and absence of partial text.
+Admission and worker execution remain doubles in this PostgreSQL test.
+The current business sources remain the sensitive and delegated guard mappings in `agent-runtime.md`.
+The new Main projection preserves these distinct Rust events in the external error description.
+A deployed combined-guard run remains required.
+Main deploys as `elitea-main:mixed-guard-report-20260913`.
+Its image is `sha256:c3068f0573b0b6d283fc439f75c5697f1d249c86978bef5fad94fe426b70ec9f`.
+The replacement retains all six mounts and existing runtime settings.

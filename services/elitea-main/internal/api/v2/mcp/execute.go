@@ -460,6 +460,11 @@ func (s turnState) result(tool Tool, executionID string) map[string]any {
 		}
 		return errorResult(fmt.Sprintf("the agent behind '%s' failed (execution %s): %s",
 			tool.Name, executionID, message))
+	case s.hitlPause && s.authorizationPause:
+		return errorResult(fmt.Sprintf(
+			"the agent behind '%s' PAUSED for human approval and tool authorization (execution %s). "+
+				"Open the conversation to resolve each pending request. No partial answer is reported here.",
+			tool.Name, executionID))
 	case s.hitlPause:
 		return errorResult(fmt.Sprintf(
 			"the agent behind '%s' PAUSED for human approval and execution %s is waiting on it. "+
