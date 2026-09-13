@@ -26,6 +26,7 @@ def main():
     parser.add_argument("--expect", required=True, help="Synthetic marker required in the result")
     parser.add_argument("--resume", action="store_true", help="Disconnect after the priming event and resume with GET")
     parser.add_argument("--restart-main", action="store_true", help="Restart the named local rehearsal Main after disconnect")
+    parser.add_argument("--expect-error", action="store_true", help="Require an MCP tool error result")
     args = parser.parse_args()
     url = urllib.parse.urlsplit(args.url)
     if url.scheme != "https" and not (url.scheme == "http" and url.hostname in ("localhost", "127.0.0.1")):
@@ -152,10 +153,10 @@ def main():
         raise AssertionError("Exact tool is unavailable")
     assert selected[0]["inputSchema"].get("type") == "object", "Argument schema is missing"
     result = send("tools/call", {"name": args.tool, "arguments": arguments}, 3)
-    assert not result.get("isError", False), "Tool failed or requires a non-autonomous continuation"
+    assert bool(result.get("isError", False)) == args.expect_error, "Unexpected tool success/failure status"
     texts = [item["text"] for item in result.get("content", []) if item.get("type") == "text"]
     assert any(args.expect in item for item in texts), "Expected synthetic marker is absent"
-    print(json.dumps({"passed": True, "protocol": initialized["protocolVersion"], "tool": args.tool, "text_blocks": len(texts), "marker": args.expect, "resumed": args.resume, "main_restarted": args.restart_main}))
+    print(json.dumps({"passed": True, "protocol": initialized["protocolVersion"], "tool": args.tool, "text_blocks": len(texts), "marker": args.expect, "resumed": args.resume, "main_restarted": args.restart_main, "expected_error": args.expect_error}))
 
 
 if __name__ == "__main__":

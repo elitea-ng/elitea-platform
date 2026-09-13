@@ -148,3 +148,30 @@ Tests verify service replacement, original result identity, zero admission on GE
 The external-client result closes the normal autonomous transport-replay proof for these three fixtures.
 It does not prove interrupted provider effects, every provider failure, restricted-user access, or all mixed authorization combinations.
 Those remaining gate requirements require their own evidence before overall point 3 closure.
+
+## Restricted caller and failed-result replay
+
+A fresh headed Playwright session creates a dedicated restricted identity through the local OIDC form.
+Database inspection confirms that this identity has no project membership or administrator role.
+The browser creates a temporary PAT through Personal Tokens.
+An independent Bearer-only client requests the private project MCP endpoint.
+Tool discovery, saved-agent invocation, and internal skill creation each return HTTP 403.
+This proves private-project isolation for a nonmember.
+It does not prove individual operation restrictions for a project member.
+The PAT is revoked with HTTP 204. The dedicated identity remains available for later tests.
+
+A separate headed Playwright session enables Toolkit 31 sharing and creates another temporary PAT.
+The independent client calls its echo operation without the required marker argument.
+The client disconnects after the priming cursor and resumes through GET.
+The terminal result contains `isError=true` and the expected safe failure text.
+The initial cursor replays the exact error response. The completed cursor returns HTTP 204.
+The acceptance client now supports `--expect-error` to verify terminal failures explicitly.
+This case does not restart Main and does not prove saved-agent or pipeline failure behavior.
+The PAT is revoked with HTTP 204. Toolkit sharing returns to disabled after reload.
+
+Local evidence logs are `elitea-visible-restricted-mcp.log` and `elitea-visible-pat-failure-acceptance.log`.
+Both runs use visible Chrome through Python Playwright.
+A separate Computer Use check opens recovered chat 567 in a fresh Chrome tab.
+The complete persisted response includes `MAIN_CHECKPOINT_ORCHARD_FINISHED_20260913`.
+This confirms the rendered result after recovery; it does not repeat the crash experiment.
+Saved-agent and pipeline failure and mixed-guard proofs remain open.
