@@ -68,3 +68,20 @@ Prove UUID and participant scope, operation permission, preserved application mo
 Prove completed, failed, paused, and timed-out observations with the original execution identity.
 Prove reconnecting observation does not admit another message.
 Use a real browser and worker for final acceptance; handler doubles alone do not close this contract.
+
+## Target resolver implementation
+
+`mcp/internal_chat_send_target.go` selects the requested participant through the shared conversation detail handler.
+The handler enforces actor visibility; the resolver checks the returned project and conversation identity.
+It refuses absent, ambiguous, and unsupported participant selections.
+The existing authenticated principal, including token identity, passes unchanged to shared reads.
+
+Application targets retain their saved model and reject ordinary model overrides.
+Ordinary targets resolve omitted model settings through the shared typed model handler.
+The configured default must match an entry in its authorized catalog.
+Shared model lookup retains the requesting project context.
+The resolver creates no execution and has no fallback admission path.
+
+`TestInternalChatSendTarget*` passes application isolation, principal preservation, catalog membership, and target-refusal cases.
+These tests use handler doubles. They do not establish database authority or deployed message sending.
+The resolver is not yet connected to a published tool; admission and result observation remain pending.
