@@ -1676,3 +1676,34 @@ fn checkpoint_only_pipeline_completion_keeps_result_without_new_model_step() {
         assert_eq!(finished.len(), 3);
     }
 }
+
+#[test]
+fn recovered_output_continuation_replaces_attempt_with_exact_bounded_prefix() {
+    for prefix in ["Saved answer.".to_owned(), "🦀\n\"".repeat(8000)] {
+        let mut projector = AgentEventProjector::new(
+            AgentEventProjectionContext::output_continuation_fixture(json!({}), &prefix),
+        )
+        .expect("continuation context");
+        projector.mark_checkpoint_recovery();
+        let events: Vec<_> = projector
+            .start(timestamp(0))
+            .expect("recovery start")
+            .into_iter()
+            .map(|event| current(&event))
+            .collect();
+        assert_eq!(events[0]["type"], "agent_start");
+        assert_eq!(events[0]["response_metadata"]["should_continue"], false);
+        let restored: String = events[1..]
+            .iter()
+            .map(|event| {
+                assert_eq!(event["type"], "agent_llm_chunk");
+                event["content"].as_str().expect("prefix chunk")
+            })
+            .collect();
+        assert_eq!(restored, prefix);
+        assert!(
+            projector.start(timestamp(0)).is_err(),
+            "start cannot replay twice"
+        );
+    }
+}

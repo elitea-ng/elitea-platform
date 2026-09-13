@@ -1680,7 +1680,7 @@ where
         // model request and removes this empty ADK Runner input from later calls.
         user_content = Content::new("user");
     }
-    let (agent, projector) = build_runtime_agent(
+    let (agent, mut projector) = build_runtime_agent(
         model.provider_model(),
         generation_config,
         max_iterations,
@@ -1689,6 +1689,9 @@ where
         parallel,
         Some(checkpoint),
     )?;
+    if recovering {
+        projector.mark_checkpoint_recovery();
+    }
     let runner_sessions = Arc::new(
         RunnerSessionService::new(sessions, model.durable_completion()).with_recovery(recovering),
     );

@@ -119,6 +119,25 @@ describe('applyChatStreamFrame', () => {
     expect(history[0]?.toolActions).toEqual([savedTool]);
   });
 
+  it('replays the frozen prefix once when recovering an interrupted continuation', () => {
+    let history: readonly ChatMessage[] = [{
+      ...pendingAssistant(), content: 'Saved answer. Interrupted continuation',
+    }];
+    const sequence = [
+      frame(SocketMessageType.AgentStart, { response_metadata: { should_continue: false } }),
+      frame(SocketMessageType.AgentLlmChunk, { content: 'Saved ' }),
+      frame(SocketMessageType.AgentLlmChunk, { content: 'answer.' }),
+      frame(SocketMessageType.AgentLlmChunk, { content: ' Recovered continuation.' }),
+      frame(SocketMessageType.AgentResponse, {
+        content: ' Recovered continuation.', response_metadata: { finish_reason: 'stop' },
+      }),
+    ];
+    for (const event of sequence) history = applyChatStreamFrame(history, event, CONTEXT);
+    expect(history).toHaveLength(1);
+    expect(history[0]?.content).toBe('Saved answer. Recovered continuation.');
+    expect(history[0]?.isStreaming).toBe(false);
+  });
+
   it('surfaces a failure without discarding what already streamed', () => {
     const history = applyChatStreamFrame(
       [{ ...pendingAssistant(), content: 'got this far' }],

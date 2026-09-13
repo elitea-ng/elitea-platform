@@ -46,8 +46,8 @@ use crate::toolkits::{
 
 const MAX_TOOL_CALLS_PER_MODEL_TURN: usize = 16;
 const MAX_TOOL_RESULT_BYTES: usize = 1024 * 1024;
-const TOOL_RESULT_CHUNK_BYTES: usize = 8 * 1024;
-const MAX_TOOL_RESULT_CHUNKS: usize = MAX_TOOL_RESULT_BYTES / TOOL_RESULT_CHUNK_BYTES + 1;
+const INLINE_TEXT_CHUNK_BYTES: usize = 8 * 1024;
+const MAX_TOOL_RESULT_CHUNKS: usize = MAX_TOOL_RESULT_BYTES / INLINE_TEXT_CHUNK_BYTES + 1;
 const MAX_PROJECTED_EVENTS_PER_ADK_EVENT: usize =
     3 + 2 * MAX_TOOL_CALLS_PER_MODEL_TURN * MAX_TOOL_RESULT_CHUNKS;
 const MAX_ADK_EVENT_ID_BYTES: usize = 512;
@@ -656,6 +656,7 @@ pub(crate) struct AgentEventProjector {
     pipeline_result: Option<String>,
     saw_pipeline_node_events: bool,
     continuation_overlap: Option<ContinuationOverlap>,
+    checkpoint_recovery: bool,
 }
 
 const MAX_CONTINUATION_OVERLAP_CHARS: usize = 150;
@@ -770,7 +771,14 @@ impl AgentEventProjector {
             pipeline_result: None,
             saw_pipeline_node_events: false,
             continuation_overlap,
+            checkpoint_recovery: false,
         })
+    }
+
+    /// Restored generation replaces its interrupted browser attempt. The
+    /// frozen continuation prefix is replayed before ADK starts producing.
+    pub(crate) fn mark_checkpoint_recovery(&mut self) {
+        self.checkpoint_recovery = true;
     }
 
     /// Emit the current `agent_start` event before the ADK stream is started.
@@ -789,13 +797,32 @@ impl AgentEventProjector {
             None,
             &json!({
                 "invoked_skills": self.context.invoked_skills,
-                "should_continue": self.context.should_continue,
+                "should_continue": self.context.should_continue && !self.checkpoint_recovery,
             }),
             occurred_at,
         )?;
-        self.state = ProjectionState::Started;
         let mut batch = ProjectedAgentEventBatch::new();
         batch.push(event)?;
+        if self.checkpoint_recovery
+            && let Some(prefix) = self.context.continuation_prefix.as_deref()
+        {
+            let mut offset = 0;
+            while offset < prefix.len() {
+                let mut end = (offset + INLINE_TEXT_CHUNK_BYTES).min(prefix.len());
+                while !prefix.is_char_boundary(end) {
+                    end -= 1;
+                }
+                batch.push(self.event(
+                    "agent_llm_chunk",
+                    &Value::String(prefix[offset..end].to_owned()),
+                    None,
+                    &json!({}),
+                    occurred_at,
+                )?)?;
+                offset = end;
+            }
+        }
+        self.state = ProjectionState::Started;
         Ok(batch)
     }
 
@@ -2055,7 +2082,7 @@ impl AgentEventProjector {
         let hash = encoded_hash;
         let mut offset = 0;
         while offset < serialized.len() {
-            let mut end = (offset + TOOL_RESULT_CHUNK_BYTES).min(serialized.len());
+            let mut end = (offset + INLINE_TEXT_CHUNK_BYTES).min(serialized.len());
             while !serialized.is_char_boundary(end) {
                 end -= 1;
             }
