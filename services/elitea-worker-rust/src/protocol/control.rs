@@ -4,8 +4,9 @@ mod model_checkpoint_inspection;
 pub(crate) use model_checkpoint_inspection::test_checkpoint_authorizer;
 #[allow(unused_imports)] // The recovery coordinator consumes these sealed values.
 pub(crate) use model_checkpoint_inspection::{
-    AuthorizedModelCheckpoint, CheckpointClaimDecision, InspectedModelCheckpointClaim,
-    LiveModelCheckpointInspection, ModelCheckpointAuthorizationFailure, ModelCheckpointInspection,
+    AuthorizedModelCheckpoint, CheckpointAssemblyAuthorization, CheckpointClaimDecision,
+    InspectedModelCheckpointClaim, LiveModelCheckpointInspection,
+    ModelCheckpointAuthorizationFailure, ModelCheckpointInspection,
     PendingModelCheckpointInspection,
 };
 

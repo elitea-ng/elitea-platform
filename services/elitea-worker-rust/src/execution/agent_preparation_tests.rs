@@ -1170,3 +1170,98 @@ async fn checkpoint_input_preparation_never_begins_or_authorizes_an_invocation()
         let _ = lease.close().await;
     }
 }
+
+struct RecoveryOnlyAssembler(AtomicBool);
+struct UnusedRecoveryCompletion;
+#[async_trait]
+impl crate::agents::runtime::NativeAgentCompletionSelector for UnusedRecoveryCompletion {
+    async fn select(
+        self,
+    ) -> Result<
+        crate::agents::events::CompletedAgentBrowserOutput,
+        crate::agents::runtime::NativeAgentAssemblyError,
+    > {
+        panic!("failed assembly cannot select a result")
+    }
+}
+#[async_trait]
+impl crate::agents::runtime::NativeAgentAssembler for RecoveryOnlyAssembler {
+    type Completion = UnusedRecoveryCompletion;
+    async fn assemble(
+        &self,
+        _: crate::agents::runtime::AuthorizedNativeAssembly<'_>,
+    ) -> Result<
+        crate::agents::runtime::AssembledNativeAgentInvocation<Self::Completion>,
+        crate::agents::runtime::NativeAgentAssemblyError,
+    > {
+        panic!("recovery must not enter ordinary assembly")
+    }
+    async fn assemble_checkpoint(
+        &self,
+        _: crate::agents::runtime::AuthorizedNativeAssembly<'_>,
+    ) -> Result<
+        crate::agents::runtime::PendingRecoveredAgentInvocation<Self::Completion>,
+        crate::agents::runtime::NativeAgentAssemblyError,
+    > {
+        self.0.store(true, Ordering::SeqCst);
+        Err(crate::agents::runtime::NativeAgentAssemblyError::new(
+            crate::agents::runtime::NativeAgentAssemblyErrorCode::DependencyUnavailable,
+            "fixture dependency unavailable",
+        ))
+    }
+}
+
+#[tokio::test]
+async fn recovery_lifecycle_selects_checkpoint_assembly_and_retains_cleanup() {
+    let (control, state) = control();
+    let admission = admission(1, Duration::from_secs(1));
+    let prepared = prepared_for_authorization(
+        control,
+        state.clone(),
+        &admission,
+        AgentExecutionKind::Application,
+    )
+    .await;
+    let identity = state
+        .claim
+        .receipt
+        .as_ref()
+        .expect("receipt")
+        .identity
+        .as_ref()
+        .expect("identity");
+    let evidence = crate::agents::session::ValidatedModelCheckpoint::test_evidence(
+        identity.execution_id.clone(),
+        identity.generation,
+    );
+    let (claim, authorizer) = crate::protocol::control::test_checkpoint_authorizer(
+        &identity.execution_id,
+        identity.generation,
+        evidence.digest(),
+    );
+    let authority = claim
+        .authorize(&authorizer, evidence)
+        .await
+        .unwrap_or_else(|_| panic!("authorization"));
+    let (reservation, run) = (*prepared).into_test_checkpoint(authority);
+    let run = run
+        .bind_progress_publisher(
+            Channel::from_static("https://output.invalid").connect_lazy(),
+            1,
+        )
+        .unwrap_or_else(|_| panic!("publisher binding"));
+    let assembler = RecoveryOnlyAssembler(AtomicBool::new(false));
+    let super::agent_preparation::AgentNativeAssemblyOutcome::Failed { run, error } =
+        Box::pin(run.assemble_native(&assembler)).await
+    else {
+        panic!("fixture assembly must fail before start")
+    };
+    assert!(assembler.0.load(Ordering::SeqCst));
+    assert_eq!(
+        error.code(),
+        crate::agents::runtime::NativeAgentAssemblyErrorCode::DependencyUnavailable
+    );
+    Box::pin(run.close_no_ack("fixture.assembly_failed", true)).await;
+    drop(reservation);
+    assert_eq!(admission.available_capacity(), 1);
+}

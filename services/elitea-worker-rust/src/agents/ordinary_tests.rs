@@ -3301,8 +3301,10 @@ async fn ordinary_assembler_restores_the_authorized_model_request() {
         .await
         .expect("restored assembly");
     assert_eq!(captured.lock().expect("model calls").len(), 1);
-    let (mut restored, _) = pending
-        .authorize(authorization)
+    let (_permit, _output, _runtime, _session, checkpoint_authorization) =
+        authorization.into_lifecycle_parts();
+    let mut restored = pending
+        .authorize_lifecycle(checkpoint_authorization)
         .expect("matching checkpoint");
     restored
         .project_start(chrono::Utc::now())

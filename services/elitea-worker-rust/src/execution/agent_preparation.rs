@@ -318,6 +318,24 @@ impl PreparedAgentInvocation {
     }
 
     #[cfg(test)]
+    pub(crate) fn into_test_checkpoint(
+        self,
+        authorization: crate::protocol::control::AuthorizedModelCheckpoint,
+    ) -> (InvocationReservation, AuthorizedAgentRun) {
+        (
+            self.reservation,
+            AuthorizedAgentRun::from_checkpoint(
+                self.delivery,
+                self.verified,
+                self.request,
+                self.output_spool,
+                self.lease,
+                authorization,
+            ),
+        )
+    }
+
+    #[cfg(test)]
     pub(crate) fn into_test_cleanup(self) -> (InvocationReservation, ClaimLeaseMonitor) {
         (self.reservation, self.lease)
     }
@@ -417,6 +435,7 @@ impl InvocationAuthorizationPayload for PreparedAgentAuthorizationPayload {
             permit,
             runtime_context,
             session,
+            checkpoint: None,
         }
     }
 
@@ -480,9 +499,35 @@ pub(crate) struct AuthorizedAgentRun {
     permit: InvocationSubmissionPermit,
     runtime_context: ClaimBoundRuntimeContextAuthority,
     session: ClaimBoundSessionAuthority,
+    checkpoint: Option<crate::protocol::control::CheckpointAssemblyAuthorization>,
 }
 
 impl AuthorizedAgentRun {
+    #[allow(dead_code)]
+    pub(crate) fn from_checkpoint(
+        delivery: RedisCommandDelivery,
+        verified: VerifiedAgentCommand,
+        request: AgentExecutionRequest,
+        output: PreparedAgentOutput,
+        lease: ClaimLeaseMonitor,
+        authorization: crate::protocol::control::AuthorizedModelCheckpoint,
+    ) -> Self {
+        let (permit, output_authority, runtime_context, session, checkpoint) =
+            authorization.into_lifecycle_parts();
+        Self {
+            delivery,
+            verified,
+            request,
+            output_authority,
+            output,
+            lease,
+            permit,
+            runtime_context,
+            session,
+            checkpoint: Some(checkpoint),
+        }
+    }
+
     #[must_use]
     pub(crate) const fn execution_kind(&self) -> AgentExecutionKind {
         self.request.kind
@@ -560,6 +605,7 @@ impl AuthorizedAgentRun {
             permit,
             runtime_context,
             session,
+            checkpoint,
         } = self;
         match output_authority.try_into_output_cursor(&verified) {
             Ok(cursor) => {
@@ -579,6 +625,7 @@ impl AuthorizedAgentRun {
                     permit: Some(permit),
                     runtime_context: Some(runtime_context),
                     session: Some(session),
+                    checkpoint,
                 })
             }
             Err(failure) => {
@@ -594,6 +641,7 @@ impl AuthorizedAgentRun {
                         permit,
                         runtime_context,
                         session,
+                        checkpoint,
                     },
                     connector,
                     error: AgentProgressPublishError::InvalidFrame(error),
@@ -637,6 +685,7 @@ pub(crate) struct CursorBoundAuthorizedAgentRun<C: AgentProgressConnector> {
     permit: Option<InvocationSubmissionPermit>,
     runtime_context: Option<ClaimBoundRuntimeContextAuthority>,
     session: Option<ClaimBoundSessionAuthority>,
+    checkpoint: Option<crate::protocol::control::CheckpointAssemblyAuthorization>,
 }
 
 /// Closed outcome of the sole post-authorization assembly attempt.
@@ -719,7 +768,11 @@ where
         self,
     ) -> Result<StartedAuthorizedAgentRun<C, S>, Box<NativeStartFailure<C>>> {
         let Self { mut run, assembled } = self;
-        if run.permit.is_none() || run.runtime_context.is_some() || run.session.is_some() {
+        if run.permit.is_none()
+            || run.runtime_context.is_some()
+            || run.session.is_some()
+            || run.checkpoint.is_some()
+        {
             return Err(Box::new(NativeStartFailure {
                 run,
                 error: NativeAgentRuntimeError::invalid_state_for_lifecycle(),
@@ -814,6 +867,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
             permit,
             runtime_context,
             session,
+            checkpoint,
         } = self;
         let result = lease.check_now().await;
         (
@@ -826,6 +880,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
                 permit,
                 runtime_context,
                 session,
+                checkpoint,
             },
             result,
         )
@@ -849,6 +904,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
             permit,
             mut runtime_context,
             mut session,
+            mut checkpoint,
         } = self;
         let (Some(runtime_context_authority), Some(session_authority)) =
             (runtime_context.take(), session.take())
@@ -863,6 +919,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
                     permit,
                     runtime_context,
                     session,
+                    checkpoint,
                 }),
                 error: crate::agents::runtime::NativeAgentAssemblyError::new(
                     crate::agents::runtime::NativeAgentAssemblyErrorCode::InvalidConfiguration,
@@ -883,6 +940,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
                         permit,
                         runtime_context,
                         session,
+                        checkpoint,
                     }),
                     error,
                 };
@@ -897,7 +955,15 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
             command_binding,
         );
         let assembly_result = lease
-            .run_cancellation_safe_phase(assembler.assemble(assembly))
+            .run_cancellation_safe_phase(async {
+                match checkpoint.take() {
+                    Some(authorization) => assembler
+                        .assemble_checkpoint(assembly)
+                        .await?
+                        .authorize_lifecycle(authorization),
+                    None => assembler.assemble(assembly).await,
+                }
+            })
             .await;
         let run = Self {
             delivery,
@@ -908,6 +974,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
             permit,
             runtime_context,
             session,
+            checkpoint,
         };
         match assembly_result {
             Ok(Ok(assembled_invocation)) => {
@@ -949,6 +1016,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
             permit,
             runtime_context,
             session,
+            checkpoint,
         } = self;
         let selection_result = lease.run_cancellation_safe_phase(selector.select()).await;
         (
@@ -961,6 +1029,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
                 permit,
                 runtime_context,
                 session,
+                checkpoint,
             },
             selection_result,
         )
@@ -1034,6 +1103,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
             permit: _,
             runtime_context: _,
             session: _,
+            checkpoint: _,
         } = self;
         let execution_kind = request.kind;
         let result = async {

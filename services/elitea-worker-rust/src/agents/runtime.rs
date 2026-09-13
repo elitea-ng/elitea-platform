@@ -721,6 +721,20 @@ impl<S> PendingRecoveredAgentInvocation<S> {
         }
     }
 
+    #[allow(clippy::needless_pass_by_value)] // Consume the one-use checkpoint authorization.
+    pub(crate) fn authorize_lifecycle(
+        self,
+        authority: crate::protocol::control::CheckpointAssemblyAuthorization,
+    ) -> Result<AssembledNativeAgentInvocation<S>, NativeAgentAssemblyError> {
+        if !authority.matches(&self.checkpoint) {
+            return Err(NativeAgentAssemblyError::new(
+                NativeAgentAssemblyErrorCode::AuthorizationFailed,
+                "the restored checkpoint differs from its authorization",
+            ));
+        }
+        Ok(self.assembled)
+    }
+
     /// Confirm that post-authorization assembly restores the inspected state.
     /// A changed checkpoint never releases a startable Runner.
     pub(crate) fn authorize(

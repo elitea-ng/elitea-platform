@@ -184,7 +184,43 @@ pub(crate) struct AuthorizedModelCheckpoint {
     runtime_context: super::ClaimBoundRuntimeContextAuthority,
 }
 
+/// One-use proof that Main authorized this exact checkpoint for assembly.
+pub(crate) struct CheckpointAssemblyAuthorization {
+    checkpoint: crate::agents::session::ValidatedModelCheckpoint,
+}
+
+impl CheckpointAssemblyAuthorization {
+    pub(crate) fn matches(
+        &self,
+        checkpoint: &crate::agents::session::ValidatedModelCheckpoint,
+    ) -> bool {
+        self.checkpoint.matches_checkpoint(checkpoint)
+    }
+}
+
 impl AuthorizedModelCheckpoint {
+    #[allow(dead_code)]
+    pub(crate) fn into_lifecycle_parts(
+        self,
+    ) -> (
+        super::InvocationSubmissionPermit,
+        super::AgentExecutionOutputAuthority,
+        super::ClaimBoundRuntimeContextAuthority,
+        ClaimBoundSessionAuthority,
+        CheckpointAssemblyAuthorization,
+    ) {
+        let session = ClaimBoundSessionAuthority::from_claim(&self.output.claim);
+        (
+            self.permit,
+            self.output,
+            self.runtime_context,
+            session,
+            CheckpointAssemblyAuthorization {
+                checkpoint: self.checkpoint,
+            },
+        )
+    }
+
     pub(crate) fn matches_checkpoint(
         &self,
         checkpoint: &crate::agents::session::ValidatedModelCheckpoint,
