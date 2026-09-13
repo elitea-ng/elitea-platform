@@ -199,6 +199,9 @@ func WriteOutcome(w http.ResponseWriter, outcome toolkitcalltoolapp.RunOutcome) 
 		body["reason"] = "authorization_required"
 		body["error"] = outcome.ErrorMessage
 		body["authorization_required"] = outcome.AuthorizationRequired
+		if outcome.AuthorizationRetry != nil {
+			body["authorization_retry"] = outcome.AuthorizationRetry
+		}
 		writeJSON(w, http.StatusConflict, body)
 	case toolkitcalltoolapp.RunStatusUnsupportedToolkit:
 		body["reason"] = "unsupported_toolkit"

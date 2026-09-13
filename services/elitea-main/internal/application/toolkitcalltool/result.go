@@ -2,6 +2,7 @@ package toolkitcalltool
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"unicode/utf8"
@@ -32,6 +33,15 @@ type ResultBindingReader interface {
 	ReadToolkitCallToolResultBinding(context.Context, ResultRequest) (executiondomain.ToolkitCallToolBinding, string, error)
 }
 
+// AuthorizationRetry contains the original caller arguments, never toolkit settings.
+type AuthorizationRetry struct {
+	ToolName   string          `json:"tool_name"`
+	ToolParams json.RawMessage `json:"tool_params"`
+}
+type ResultArgumentsReader interface {
+	ReadToolkitCallToolAuthorizationRequest(context.Context, ResultRequest) (AuthorizationRetry, error)
+}
+
 // ReadToolRun returns a durable result, or pending=true while execution continues.
 func (s *RunService) ReadToolRun(ctx context.Context, request ResultRequest) (RunOutcome, bool, error) {
 	if s == nil || ctx == nil {
@@ -54,6 +64,20 @@ func (s *RunService) ReadToolRun(ctx context.Context, request ResultRequest) (Ru
 	}
 	if found {
 		result, err := decodeSettlement(AdmittedRun{Outcome: executionapp.AdmissionOutcome{ExecutionID: request.ExecutionID}, Binding: binding}, settlement)
+		if err == nil && result.Status == RunStatusAuthorizationRequired {
+			retryReader, ok := s.settlements.(ResultArgumentsReader)
+			if !ok {
+				return RunOutcome{}, false, errors.New("tool authorization recovery reader unavailable")
+			}
+			retry, readErr := retryReader.ReadToolkitCallToolAuthorizationRequest(ctx, request)
+			if readErr != nil {
+				return RunOutcome{}, false, readErr
+			}
+			if retry.ToolName == "" || len(retry.ToolName) > 256 || !validBoundedJSONObject(retry.ToolParams) {
+				return RunOutcome{}, false, ErrInvalidToolRun
+			}
+			result.AuthorizationRetry = &retry
+		}
 		return result, false, err
 	}
 	switch executiondomain.JobState(state) {

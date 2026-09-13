@@ -50,7 +50,7 @@ export interface TestToolkitToolParams {
  * other three are refusals the run never reached the tool for.
  */
 export type TestToolkitToolOutcome =
-  | { readonly kind: 'authorizationRequired'; readonly challenge: ToolkitTestAuthorization; readonly taskId: string }
+  | { readonly kind: 'authorizationRequired'; readonly challenge: ToolkitTestAuthorization; readonly taskId: string; readonly retry?: { readonly toolName: string; readonly toolParams: Readonly<Record<string, unknown>> } }
   | { readonly kind: 'skipped' }
   | { readonly kind: 'ok'; readonly result: unknown; readonly truncated: boolean }
   | { readonly kind: 'toolError'; readonly message: string }
@@ -67,6 +67,7 @@ interface ResponseBodyLike {
   readonly reason?: unknown;
   readonly task_id?: unknown;
   readonly authorization_required?: unknown;
+  readonly authorization_retry?: unknown;
 }
 
 function isResponseBodyLike(value: unknown): value is ResponseBodyLike {
@@ -112,7 +113,15 @@ function readReason(body: ResponseBodyLike | undefined): string | undefined {
 function outcomeFromAuthorization(bodyLike: ResponseBodyLike | undefined, toolkitId: TestToolkitToolParams['toolkitId']): TestToolkitToolOutcome {
     const challenge = readToolkitTestAuthorization(bodyLike?.authorization_required, toolkitId);
     const taskId = bodyLike?.task_id;
-    if (challenge && typeof taskId === 'string' && taskId.length > 0 && taskId.length <= 128) return { kind: 'authorizationRequired', challenge, taskId };
+    if (challenge && typeof taskId === 'string' && taskId.length > 0 && taskId.length <= 128) {
+      const candidate = bodyLike?.authorization_retry;
+      if (typeof candidate === 'object' && candidate !== null && 'tool_name' in candidate && 'tool_params' in candidate &&
+          typeof candidate.tool_name === 'string' && candidate.tool_name.length > 0 && candidate.tool_name.length <= 256 &&
+          typeof candidate.tool_params === 'object' && candidate.tool_params !== null && !Array.isArray(candidate.tool_params)) {
+        return { kind: 'authorizationRequired', challenge, taskId, retry: { toolName: candidate.tool_name, toolParams: candidate.tool_params as Readonly<Record<string, unknown>> } };
+      }
+      return { kind: 'authorizationRequired', challenge, taskId };
+    }
     return { kind: 'failure', message: 'The authorization challenge is invalid. Run the tool again.' };
 }
 

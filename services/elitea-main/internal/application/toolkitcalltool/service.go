@@ -125,6 +125,7 @@ const (
 // JSON document reads as a corrupt result and this boundary must never hand a
 // caller one.
 type RunOutcome struct {
+	AuthorizationRetry    *AuthorizationRetry
 	ExecutionID           string
 	Status                RunStatus
 	ResultJSON            string

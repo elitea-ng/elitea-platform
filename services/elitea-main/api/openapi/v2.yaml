@@ -8022,6 +8022,17 @@ components:
         settings". pylon could not tell these conditions apart, because the SDK
         handed it one dict.
       properties:
+        authorization_retry:
+          type: object
+          description: Original caller arguments returned only to the initiating user for a recovered authorization challenge.
+          required: [tool_name, tool_params]
+          properties:
+            tool_name: { type: string, minLength: 1, maxLength: 256 }
+            tool_params:
+              type: object
+              additionalProperties: true
+
+
         ok:
           type: boolean
           description: >

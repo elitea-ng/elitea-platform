@@ -38,7 +38,7 @@ They also cover Main unavailability and terminal runtime failure.
 Deployed browser acceptance is recorded below.
 
 This change handles a surviving tab after its initial bounded wait.
-Page reload recovery and connection loss before the initial response exposes an execution ID remain open.
+The reload extension below addresses the latest pending test. Connection loss before receipt of an execution ID remains open.
 External MCP request recovery is a separate contract and is not proved by these browser tests.
 
 ## Deployed browser acceptance: 2026-09-13
@@ -58,3 +58,41 @@ A separate browser read retrieves the earlier crash execution `80e4eb10605c424db
 It also retrieves successful execution `6dc13869bfbefcdba8efcfc75cbca2b0` with HTTP 200.
 The UI unit suites pass all 19 tests. TypeScript type checking passes.
 The PostgreSQL ownership test passes all four negative identity cases without skips.
+
+## Tab reload and authorization recovery
+
+`api/toolkitTestRecovery.ts` stores only the latest tab-local project, toolkit, and execution IDs.
+It uses the existing `shared/lib/storage.ts` namespace. Logout removes the record.
+The record contains no arguments, results, token references, or credential values.
+A matching toolkit pane resumes its authorized result read after remount.
+A different toolkit context does not consume the record.
+Corrupt identities and disabled browser storage do not prevent normal live execution.
+
+A recovered authorization challenge also needs the original caller input.
+Main reads the tool name from its prepared command and arguments from the immutable input bundle.
+The read checks project, initiating actor, toolkit, and execution identity.
+It returns these arguments only with the existing authorization challenge.
+It does not return frozen toolkit settings or resolved provider credentials.
+The UI keeps the restored arguments in memory and waits for explicit authorization.
+The existing authorization-reference submission contract then performs the retry.
+
+Unit tests cover remount, one submission, logout cleanup, corrupt identity rejection, and explicit authorization after reload.
+PostgreSQL tests verify original argument retrieval and refusal of all four foreign identity cases.
+Deployed reload acceptance is recorded below.
+Connection loss before receipt of an execution ID remains open.
+
+## Deployed reload acceptance: 2026-09-13
+
+Main image: `sha256:12380697f33167a8a9247e54ff90faf98f1345c2a305e2a37792611ec36be4fa`.
+UI image: `sha256:22c36a65c26951d0b1c63ef5b348af29cf3116f8f5a1ba1d32033a80c3a0d817`.
+
+Execution `415e48b33ac246551e5bd267310483d5` produces marker `RUST_TOOLKIT_UI_RELOAD_20260913` through the real worker.
+Playwright replaces its initial HTTP response with a timeout carrying the original execution ID.
+The browser reloads before polling and displays the stored result after one GET.
+Observed counts: one POST, one GET, and one page reload. The interception is removed afterward.
+This proves reload recovery for the latest pending test in the same tab.
+It does not prove a provider invocation resumed after a process crash.
+
+Ten UI tests pass, including argument-free persistence and explicit authorization after remount.
+Main result and response-mapping tests pass. The PostgreSQL ownership test also verifies original argument retrieval.
+The authorization retry after reload has component and database evidence; its browser OAuth flow remains unverified.
