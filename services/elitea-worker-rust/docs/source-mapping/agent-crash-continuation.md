@@ -139,3 +139,25 @@ The test database applies the migration. The rehearsal deployment does not apply
 
 The broader repository test run still reports an unrelated pending catalogue mismatch for `project_context_builder` and `skill_builder`.
 Focused claim tests and control tests pass. These results do not establish live crash continuation or MCP reconnection.
+
+## Rust authorization transport
+
+`src/transport/control_grpc.rs` calls the dedicated checkpoint authorization RPC through the generated tonic client.
+It preserves workload metadata, request and response size bounds, and the configured deadline.
+It sends one request. A timeout or transport error does not cause an automatic retry.
+The response preserves `ALREADY_AUTHORIZED`; transport success alone never grants invocation permission.
+Adapters without checkpoint support return an explicit unimplemented response.
+
+Transport tests cover connection failure, timeout, exact metadata, and the already-authorized response.
+These are component tests. They do not start an independent Main process.
+
+The remaining coordinator change must address an ordering difference:
+
+1. Ordinary preparation calls `BeginExecution` before claim-bound input materialization.
+2. Ordinary authorization creates session and runtime-context authority before native assembly.
+3. Checkpoint inspection must obtain session access before restored invocation authorization.
+4. The recovery path must validate the saved model request before it obtains a model submission permit.
+
+The relevant boundaries are `agent_preparation.rs`, `agent_invocation.rs`, `native_agent_lifecycle.rs`, and `agents/ordinary.rs`.
+Do not route an inspection claim through ordinary `BeginExecution` or infer fresh authority from its hydrated inputs.
+Recovery opt-in remains disabled until this distinct path and partial-output replacement are implemented.

@@ -15,6 +15,7 @@ use tonic::transport::Channel;
 use tonic::{Request, Response, Status};
 
 use crate::protocol::elitea::runtime::v1::{
+    AuthorizeAgentModelCheckpointRequestV1, AuthorizeAgentModelCheckpointResponseV1,
     AuthorizeInvocationRequestV1, AuthorizeInvocationResponseV1, BeginExecutionRequestV1,
     BeginExecutionResponseV1, ClaimCommandRequestV1, ClaimCommandResponseV1,
     ObserveDesiredStateRequestV1, ObserveDesiredStateResponseV1, PrepareSettlementRequestV1,
@@ -88,6 +89,15 @@ pub trait ControlRpc: Send + Sync {
         request: Request<AuthorizeInvocationRequestV1>,
     ) -> Result<Response<AuthorizeInvocationResponseV1>, Status>;
 
+    async fn authorize_agent_model_checkpoint(
+        &self,
+        _request: Request<AuthorizeAgentModelCheckpointRequestV1>,
+    ) -> Result<Response<AuthorizeAgentModelCheckpointResponseV1>, Status> {
+        Err(Status::unimplemented(
+            "model checkpoint recovery is unavailable",
+        ))
+    }
+
     async fn renew_lease(
         &self,
         request: Request<RenewLeaseRequestV1>,
@@ -141,6 +151,16 @@ impl ControlRpc for TonicControlRpc {
         request: Request<AuthorizeInvocationRequestV1>,
     ) -> Result<Response<AuthorizeInvocationResponseV1>, Status> {
         self.client.clone().authorize_invocation(request).await
+    }
+
+    async fn authorize_agent_model_checkpoint(
+        &self,
+        request: Request<AuthorizeAgentModelCheckpointRequestV1>,
+    ) -> Result<Response<AuthorizeAgentModelCheckpointResponseV1>, Status> {
+        self.client
+            .clone()
+            .authorize_agent_model_checkpoint(request)
+            .await
     }
 
     async fn renew_lease(
@@ -254,6 +274,29 @@ impl<R: ControlRpc> ControlGrpcClient<R> {
             .map_err(|_| unavailable())?
             .map_err(|_| unavailable())?
             .into_inner();
+        validate_response(&response)?;
+        Ok(response)
+    }
+
+    /// Perform one checkpoint-authorization attempt. An uncertain response is
+    /// never retried here because it can follow a committed authority receipt.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable size, configuration, or availability error.
+    pub async fn authorize_agent_model_checkpoint(
+        &self,
+        message: AuthorizeAgentModelCheckpointRequestV1,
+    ) -> Result<AuthorizeAgentModelCheckpointResponseV1, ControlGrpcError> {
+        let request = self.request(message)?;
+        let response = timeout(
+            self.config.deadline,
+            self.rpc.authorize_agent_model_checkpoint(request),
+        )
+        .await
+        .map_err(|_| unavailable())?
+        .map_err(|_| unavailable())?
+        .into_inner();
         validate_response(&response)?;
         Ok(response)
     }
@@ -468,6 +511,23 @@ mod tests {
             ))
         }
 
+        async fn authorize_agent_model_checkpoint(
+            &self,
+            request: Request<AuthorizeAgentModelCheckpointRequestV1>,
+        ) -> Result<Response<AuthorizeAgentModelCheckpointResponseV1>, Status> {
+            self.record("checkpoint", &request)?;
+            self.delay().await;
+            let response = self
+                .authorize_response
+                .lock()
+                .expect("authorize lock")
+                .clone();
+            Ok(Response::new(AuthorizeAgentModelCheckpointResponseV1 {
+                disposition: response.disposition,
+                rejection: response.rejection,
+            }))
+        }
+
         async fn renew_lease(
             &self,
             request: Request<RenewLeaseRequestV1>,
@@ -505,6 +565,25 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn checkpoint_authorization_is_one_attempt_on_failure_or_timeout() {
+        for delay in [false, true] {
+            let rpc = FakeRpc {
+                fail: !delay,
+                delay: delay.then_some(Duration::from_secs(1)),
+                ..FakeRpc::default()
+            };
+            let mut settings = config();
+            settings.deadline = Duration::from_millis(10);
+            let client = ControlGrpcClient::new(rpc, settings).expect("client");
+            let result = client
+                .authorize_agent_model_checkpoint(AuthorizeAgentModelCheckpointRequestV1::default())
+                .await;
+            assert!(matches!(result, Err(ControlGrpcError::Unavailable(_))));
+            assert_eq!(client.rpc.calls.lock().expect("calls").len(), 1);
+        }
+    }
+
     fn config() -> ControlGrpcConfig {
         ControlGrpcConfig {
             deadline: Duration::from_millis(1_250),
@@ -538,6 +617,14 @@ mod tests {
             .authorize_invocation(AuthorizeInvocationRequestV1::default())
             .await
             .expect("authorize");
+        let checkpoint = client
+            .authorize_agent_model_checkpoint(AuthorizeAgentModelCheckpointRequestV1::default())
+            .await
+            .expect("checkpoint");
+        assert_eq!(
+            checkpoint.disposition,
+            AuthorizeInvocationDispositionV1::AlreadyAuthorized as i32
+        );
         client
             .renew_lease(RenewLeaseRequestV1::default())
             .await
@@ -557,6 +644,7 @@ mod tests {
                 "claim",
                 "begin",
                 "authorize",
+                "checkpoint",
                 "renew",
                 "observe",
                 "settlement"
