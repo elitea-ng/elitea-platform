@@ -3208,3 +3208,36 @@ async fn direct_resume_requires_restorable_sessions_before_pat_redemption() {
     assert_eq!(context_calls.load(Ordering::Acquire), 0);
     assert!(captured.lock().expect("captured model requests").is_empty());
 }
+
+#[tokio::test]
+async fn checkpoint_inspection_never_redeems_credentials_or_starts_a_model() {
+    for durable in [false, true] {
+        let request = ordinary_request(AgentExecutionKind::Application);
+        let (runtime_context, context_calls) = runtime_context_client();
+        let (model_gateway, captured) =
+            test_model_gateway_client(Vec::new(), test_model_gateway_config())
+                .expect("model fixture");
+        let mut assembler = OrdinaryNativeAgentAssembler::new(
+            platform_client(runtime_context),
+            Arc::new(ModelFacade::from_gateway(model_gateway)),
+            empty_tool_policy(),
+        );
+        if durable {
+            assembler = assembler.with_sessions(Arc::new(InMemorySessionService::new()));
+        }
+        let result = assembler
+            .inspect_checkpoint(
+                &request,
+                &AuthorizedNativeCommandBinding::fixture(),
+                crate::protocol::control::test_session_authority(),
+                Arc::new(crate::state::TestStateWriterLease::current()),
+            )
+            .await;
+        assert!(
+            result.is_err(),
+            "missing checkpoint must not start a fresh run"
+        );
+        assert_eq!(context_calls.load(Ordering::Acquire), 0);
+        assert!(captured.lock().expect("model requests").is_empty());
+    }
+}

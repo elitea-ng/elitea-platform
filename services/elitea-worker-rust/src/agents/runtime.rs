@@ -259,37 +259,8 @@ impl<'a> AuthorizedNativeAssembly<'a> {
         self,
         policy: &ToolAdmissionPolicy,
     ) -> Result<AdmittedOrdinaryNativeAssembly<'a>, NativeAgentAssemblyError> {
-        let start = admit_native_start(self.request)?;
-        let profile = match &start {
-            AdmittedNativeStart::Fresh => OrdinaryNoToolProfile::validate(self.request)?,
-            AdmittedNativeStart::Regenerate => {
-                OrdinaryNoToolProfile::validate_regeneration(self.request)?
-            }
-            AdmittedNativeStart::OutputContinuation => {
-                OrdinaryNoToolProfile::validate_output_continuation(self.request)?
-            }
-            AdmittedNativeStart::DirectHitl(_) => {
-                OrdinaryNoToolProfile::validate_direct_hitl_resume(self.request)?
-            }
-            AdmittedNativeStart::DelegatedAuthorization(_) => {
-                OrdinaryNoToolProfile::validate_delegated_authorization_resume(self.request)?
-            }
-        };
-        let plan = if matches!(&start, AdmittedNativeStart::OutputContinuation) {
-            OrdinaryNativeAgentPlan::from_authorized_output_continuation(
-                self.request,
-                &profile,
-                &self.command,
-                &self.attachments,
-            )?
-        } else {
-            OrdinaryNativeAgentPlan::from_authorized(
-                self.request,
-                &profile,
-                &self.command,
-                &self.attachments,
-            )?
-        };
+        let (profile, plan, start) =
+            admit_ordinary_plan(self.request, &self.command, &self.attachments)?;
         let toolsets = FrozenToolSnapshot::from_request(self.request)
             .map_err(tool_snapshot_error)?
             .apply_policy(policy);
@@ -558,6 +529,47 @@ pub(crate) struct RedeemedOrdinaryNativeAssembly<'a> {
     pub(super) state_writer_lease: Arc<dyn StateWriterLease>,
 }
 
+/// Pure admission shared by normal assembly and checkpoint inspection.
+/// It does not redeem runtime credentials or materialize provider dependencies.
+pub(super) fn admit_ordinary_plan(
+    request: &AgentExecutionRequest,
+    command: &AuthorizedNativeCommandBinding,
+    attachments: &[serde_json::Value],
+) -> Result<
+    (
+        OrdinaryNoToolProfile,
+        OrdinaryNativeAgentPlan,
+        AdmittedNativeStart,
+    ),
+    NativeAgentAssemblyError,
+> {
+    let start = admit_native_start(request)?;
+    let profile = match &start {
+        AdmittedNativeStart::Fresh => OrdinaryNoToolProfile::validate(request)?,
+        AdmittedNativeStart::Regenerate => OrdinaryNoToolProfile::validate_regeneration(request)?,
+        AdmittedNativeStart::OutputContinuation => {
+            OrdinaryNoToolProfile::validate_output_continuation(request)?
+        }
+        AdmittedNativeStart::DirectHitl(_) => {
+            OrdinaryNoToolProfile::validate_direct_hitl_resume(request)?
+        }
+        AdmittedNativeStart::DelegatedAuthorization(_) => {
+            OrdinaryNoToolProfile::validate_delegated_authorization_resume(request)?
+        }
+    };
+    let plan = if matches!(&start, AdmittedNativeStart::OutputContinuation) {
+        OrdinaryNativeAgentPlan::from_authorized_output_continuation(
+            request,
+            &profile,
+            command,
+            attachments,
+        )?
+    } else {
+        OrdinaryNativeAgentPlan::from_authorized(request, &profile, command, attachments)?
+    };
+    Ok((profile, plan, start))
+}
+
 fn admit_native_start(
     request: &AgentExecutionRequest,
 ) -> Result<AdmittedNativeStart, NativeAgentAssemblyError> {
@@ -652,6 +664,19 @@ fn tool_snapshot_error(
 #[async_trait]
 pub(crate) trait NativeAgentAssembler: Send + Sync + 'static {
     type Completion: NativeAgentCompletionSelector;
+
+    async fn inspect_checkpoint(
+        &self,
+        _request: &AgentExecutionRequest,
+        _command: &AuthorizedNativeCommandBinding,
+        _session: ClaimBoundSessionAuthority,
+        _state_writer_lease: Arc<dyn StateWriterLease>,
+    ) -> Result<super::session::ValidatedModelCheckpoint, NativeAgentAssemblyError> {
+        Err(NativeAgentAssemblyError::new(
+            NativeAgentAssemblyErrorCode::UnsupportedCapability,
+            "model checkpoint inspection is not supported by this assembler",
+        ))
+    }
 
     async fn assemble(
         &self,

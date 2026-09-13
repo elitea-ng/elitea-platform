@@ -271,3 +271,12 @@ The claim test checks explicit opt-in, ordinary accepted fallback, checkpoint in
 All 17 preparation component tests pass. The recovery case verifies normal parsing, malformed input, cancellation observed after materialization, pre-fetch deadline expiry, input-service failure, and a different signed command. It asserts no BeginExecution or AuthorizeInvocation calls, and no input fetch for rejected command/deadline cases. Strict Clippy verification accompanies the change.
 
 No current-platform business contract or product schema changes here: the ordinary parser remains the behavior reference, and crash continuation is new worker functionality. The production processor still awaits recovery lifecycle and output integration. These checks do not replace mandatory deployed UI and external-client restart verification.
+
+## Native assembler checkpoint inspection
+
+`src/agents/runtime.rs::NativeAgentAssembler::inspect_checkpoint` supplies the coordinator with a credential-free inspection entry point. Assemblers without checkpoint support reject it explicitly. `src/agents/native_runtime.rs` dispatches inspection according to the same frozen runtime kind used for assembly; it does not reinterpret a pipeline as an ordinary agent.
+The ordinary implementation in `src/agents/ordinary.rs` uses its configured `NativeSessionBackend` and the shared pure `admit_ordinary_plan` helper. Normal assembly and inspection therefore construct the same profile, definition digest, session identity, and continuation mode. Inspection supplies the frozen attachment metadata for plan construction; the restored model request itself remains the durable checkpoint's authority.
+
+All 309 agent component tests pass after sharing admission. The new ordinary assembler test rejects absent checkpoints in both invocation-local and injected session backends with zero runtime credential redemptions and zero model calls. Existing restoration tests remain the evidence for checkpoint replay; this new test establishes the assembler boundary only. Pipeline inspection uses the explicit unsupported default until pipeline checkpoint support is implemented.
+
+No product schema, proto, or current-platform behavior changes in this step. Restored assembly, output lifecycle integration, and deployed browser/external MCP restart acceptance remain required.

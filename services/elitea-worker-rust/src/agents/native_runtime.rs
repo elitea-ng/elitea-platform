@@ -132,6 +132,27 @@ where
 {
     type Completion = NativeRuntimeCompletion<D::Completion, P::Completion>;
 
+    async fn inspect_checkpoint(
+        &self,
+        request: &super::request::AgentExecutionRequest,
+        command: &super::session::AuthorizedNativeCommandBinding,
+        session: crate::protocol::control::ClaimBoundSessionAuthority,
+        state_writer_lease: std::sync::Arc<dyn crate::state::StateWriterLease>,
+    ) -> Result<super::session::ValidatedModelCheckpoint, NativeAgentAssemblyError> {
+        match NativeRuntimeKind::from_request(request)? {
+            NativeRuntimeKind::Direct => {
+                self.direct
+                    .inspect_checkpoint(request, command, session, state_writer_lease)
+                    .await
+            }
+            NativeRuntimeKind::Pipeline => {
+                self.pipeline
+                    .inspect_checkpoint(request, command, session, state_writer_lease)
+                    .await
+            }
+        }
+    }
+
     async fn assemble(
         &self,
         assembly: AuthorizedNativeAssembly<'_>,

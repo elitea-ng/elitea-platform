@@ -323,6 +323,23 @@ fn tool_binding_error(error: ToolBindingError) -> NativeAgentAssemblyError {
 impl NativeAgentAssembler for OrdinaryNativeAgentAssembler {
     type Completion = OrdinaryAgentCompletion<BoundModelFacade>;
 
+    async fn inspect_checkpoint(
+        &self,
+        request: &super::request::AgentExecutionRequest,
+        command: &super::session::AuthorizedNativeCommandBinding,
+        session: crate::protocol::control::ClaimBoundSessionAuthority,
+        state_writer_lease: Arc<dyn crate::state::StateWriterLease>,
+    ) -> Result<super::session::ValidatedModelCheckpoint, NativeAgentAssemblyError> {
+        let (_, plan, _) = super::runtime::admit_ordinary_plan(
+            request,
+            command,
+            &request.payload.input_attachments,
+        )?;
+        self.sessions
+            .inspect_model_checkpoint(session, state_writer_lease, &plan)
+            .await
+    }
+
     async fn assemble(
         &self,
         assembly: AuthorizedNativeAssembly<'_>,
