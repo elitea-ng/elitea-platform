@@ -9,7 +9,7 @@ use super::{
 /// This value cannot be passed to `begin_agent_execution`.
 #[allow(dead_code)] // Recovery dispatch remains disabled until output replacement is wired.
 pub(crate) struct ModelCheckpointInspection {
-    claim: AcceptedAgentClaim,
+    pub(super) claim: AcceptedAgentClaim,
 }
 
 /// The remaining one-use claim after session inspection authority is issued.
@@ -38,6 +38,47 @@ impl ModelCheckpointInspection {
         Ok(Self { claim })
     }
 
+    pub(crate) fn into_lease_supervision(
+        self,
+    ) -> (PendingModelCheckpointInspection, super::ClaimLeaseHandle) {
+        let lease = super::ClaimLeaseHandle {
+            identity: self.claim.identity.clone(),
+            fence: self.claim.fence.clone(),
+            claim_id: self.claim.claim_id.clone(),
+            lease_expires_at_unix_millis: self.claim.lease_expires_at_unix_millis,
+            renewal_sequence: 0,
+        };
+        (
+            PendingModelCheckpointInspection { claim: self.claim },
+            lease,
+        )
+    }
+
+    #[cfg(test)]
+    fn into_session_inspection(
+        self,
+    ) -> (InspectedModelCheckpointClaim, ClaimBoundSessionAuthority) {
+        LiveModelCheckpointInspection { claim: self.claim }.into_session_inspection()
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) struct PendingModelCheckpointInspection {
+    claim: AcceptedAgentClaim,
+}
+#[allow(dead_code)]
+impl PendingModelCheckpointInspection {
+    pub(crate) fn into_live(self) -> LiveModelCheckpointInspection {
+        LiveModelCheckpointInspection { claim: self.claim }
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) struct LiveModelCheckpointInspection {
+    claim: AcceptedAgentClaim,
+}
+#[allow(dead_code)]
+impl LiveModelCheckpointInspection {
     /// Issue session access once. No runtime credential or submission permit
     /// is created. The retained claim can authorize only the inspected model.
     pub(crate) fn into_session_inspection(

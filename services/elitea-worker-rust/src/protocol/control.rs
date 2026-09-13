@@ -4,7 +4,9 @@ mod model_checkpoint_inspection;
 pub(crate) use model_checkpoint_inspection::test_checkpoint_authorizer;
 #[allow(unused_imports)] // The recovery coordinator consumes these sealed values.
 pub(crate) use model_checkpoint_inspection::{
-    AuthorizedModelCheckpoint, InspectedModelCheckpointClaim, ModelCheckpointAuthorizationFailure,
+    AuthorizedModelCheckpoint, InspectedModelCheckpointClaim, LiveModelCheckpointInspection,
+    ModelCheckpointAuthorizationFailure, ModelCheckpointInspection,
+    PendingModelCheckpointInspection,
 };
 
 #[path = "toolkit_invocation.rs"]
@@ -1515,6 +1517,17 @@ pub(crate) fn test_lease_starting_execution(
     LeaseStartingAgentExecution {
         claim: execution.claim,
         lease,
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_model_checkpoint_inspection(
+    lease_expires_at_unix_millis: i64,
+) -> ModelCheckpointInspection {
+    let mut execution = test_lease_monitored_input_execution(1, [0x61; 32]);
+    execution.claim.lease_expires_at_unix_millis = lease_expires_at_unix_millis;
+    ModelCheckpointInspection {
+        claim: execution.claim,
     }
 }
 

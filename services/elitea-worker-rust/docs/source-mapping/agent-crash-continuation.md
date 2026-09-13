@@ -221,3 +221,22 @@ The test uses injected ADK storage and an RPC double. It does not establish depl
 
 The Redis delivery coordinator still requires recovery routing, lease supervision, and partial-output replacement.
 External MCP reconnect remains a separate unfinished gate. Recovery opt-in remains disabled.
+
+## Lease-supervised checkpoint inspection
+
+`ClaimLeaseMonitor::start_checkpoint_inspection` uses the existing bounded lease actor without calling ordinary `BeginExecution`.
+The monitor retains a pending inspection value and the exact claim lease handle.
+`activate_checkpoint_inspection` consumes that value after renewal and desired-state observation succeed.
+Only the resulting `LiveModelCheckpointInspection` can issue session access in production.
+The ordinary activation method cannot release checkpoint inspection as fresh invocation authority.
+
+The monitor continues renewal after activation. Its existing state probe governs ADK state writes and cooperative cancellation.
+Cancellation or lease loss during the first poll releases no session access.
+Repeated activation fails. Shutdown preserves a latched lease-loss error.
+
+Source owners are `src/execution/agent_lease.rs` and `src/protocol/model_checkpoint_inspection.rs`.
+All 15 lease component tests pass, including the new inspection activation, cancellation, and expiry cases.
+These tests use an RPC double. They do not prove deployed recovery routing or worker replacement.
+
+The next integration must connect the delivery route, immutable input materialization, and output position to this supervised inspection value.
+Recovery opt-in remains disabled until the complete path is ready for deployment verification.
