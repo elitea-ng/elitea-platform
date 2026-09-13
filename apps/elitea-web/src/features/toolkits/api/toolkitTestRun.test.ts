@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '@/test/setup';
 
-import { testToolkitTool } from './toolkitTestRun';
+import { readToolkitToolResult, testToolkitTool } from './toolkitTestRun';
 
 const PATH = '*/api/v2/elitea_core/test_tool/prompt_lib/proj-1/tk-1';
 
@@ -130,4 +130,26 @@ it('gives separate actions new identities and preserves an explicit retry identi
   expect(identities[0]).toEqual(expect.any(String));
   expect(identities[0]).not.toBe(identities[1]);
   expect(identities.slice(2)).toEqual(['retry-request', 'retry-request']);
+});
+
+
+describe('readToolkitToolResult', () => {
+  it('observes pending and then the original result with GET requests only', async () => {
+    let reads = 0;
+    server.use(http.get(`${PATH}/execution-1`, () => {
+      reads += 1;
+      return reads === 1 ? HttpResponse.json({ pending: true, task_id: 'execution-1' }, { status: 202 }) : HttpResponse.json({ ok: true, result: { answer: 42 } });
+    }));
+    const request = { projectId: 'proj-1', toolkitId: 'tk-1', taskId: 'execution-1' };
+    expect(await readToolkitToolResult(request)).toMatchObject({ kind: 'timeout', taskId: 'execution-1' });
+    expect(await readToolkitToolResult(request)).toEqual({ kind: 'ok', result: { answer: 42 }, truncated: false });
+    expect(reads).toBe(2);
+  });
+  it('keeps observing through Main unavailability but exposes terminal runtime failure', async () => {
+    const request = { projectId: 'proj-1', toolkitId: 'tk-1', taskId: 'execution-1' };
+    server.use(http.get(`${PATH}/execution-1`, () => HttpResponse.json({}, { status: 503 })));
+    expect(await readToolkitToolResult(request)).toMatchObject({ kind: 'timeout' });
+    server.use(http.get(`${PATH}/execution-1`, () => HttpResponse.json({ reason: 'runtime_failure', error: 'The execution failed.' }, { status: 500 })));
+    expect(await readToolkitToolResult(request)).toEqual({ kind: 'failure', message: 'The execution failed.' });
+  });
 });

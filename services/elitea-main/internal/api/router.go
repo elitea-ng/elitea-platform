@@ -2760,6 +2760,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(requireToolPatch).
 					Post("/test_tool/prompt_lib/{projectID}/{toolID}", toolkitHandler.TestTool)
 				r.With(requireToolPatch).
+					Get("/test_tool/prompt_lib/{projectID}/{toolID}/{executionID}", toolkitHandler.TestToolResult)
+				r.With(requireToolPatch).
 					Post("/test_toolkit_tool/prompt_lib/{projectID}", toolkitHandler.TestToolkitTool)
 				r.With(toolkitGate("models.applications.export_toolkit.export")).
 					Get("/export_toolkit/prompt_lib/{projectID}/{toolkitID}", toolkitHandler.ExportToolkit)

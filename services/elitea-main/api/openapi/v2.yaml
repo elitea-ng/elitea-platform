@@ -18757,6 +18757,58 @@ paths:
         '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }
 
+  /elitea_core/test_tool/prompt_lib/{project_id}/{tool_id}/{execution_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: tool_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64 }
+      - name: execution_id
+        in: path
+        required: true
+        schema: { type: string, minLength: 1, maxLength: 128 }
+    get:
+      operationId: getToolkitToolResult
+      summary: Read the original toolkit test execution result
+      description: |
+        Requires toolkit test permission and the initiating user's identity.
+        Reads frozen execution state without submitting another tool call.
+        Another project, user, toolkit, or unknown execution receives 404.
+      tags: [toolkits]
+      responses:
+        '200':
+          description: The original result or tool error.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ToolkitToolRunResult' }
+        '202':
+          description: The original execution remains pending.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [pending, task_id]
+                properties:
+                  pending: { type: boolean }
+                  task_id: { type: string }
+        '400':
+          description: Invalid execution identity.
+        '401':
+          description: Authentication required.
+        '403':
+          description: Toolkit test permission denied.
+        '404':
+          description: Execution not found for this caller and toolkit.
+        '409':
+          description: The original execution requires toolkit authorization.
+        '422':
+          description: Unsupported toolkit or unknown tool.
+        '500':
+          description: Runtime failure or unreadable stored result.
+        '503':
+          description: Runtime result service unavailable.
+
   /elitea_core/test_tool/prompt_lib/{project_id}/{tool_id}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'

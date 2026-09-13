@@ -21,7 +21,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { TestToolkitToolOutcome } from '../../api/toolkitTestRun';
-import { testToolkitTool } from '../../api/toolkitTestRun';
+import { readToolkitToolResult, testToolkitTool } from '../../api/toolkitTestRun';
 
 export interface UseToolkitTestToolRunParams {
   readonly projectId: string | number | undefined;
@@ -56,6 +56,24 @@ export function useToolkitTestToolRun({ projectId, toolkitId }: UseToolkitTestTo
     };
   }, []);
 
+  useEffect(() => {
+    if (outcome?.kind !== 'timeout' || !outcome.taskId) return;
+    const taskId = outcome.taskId;
+    const press = currentPressRef.current;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void readToolkitToolResult({ projectId, toolkitId, taskId }).then((result) => {
+        if (cancelled || !mountedRef.current || press !== currentPressRef.current) return;
+        setOutcome(result);
+        if (result.kind !== 'timeout') {
+          setIsRunning(false);
+          if (result.kind !== 'authorizationRequired') pendingRef.current = undefined;
+        }
+      });
+    }, 2000);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [outcome, projectId, toolkitId]);
+
   const reset = useCallback(() => {
     // The press counter moves too: a run in flight when the tool changes must
     // not land on the new tool's empty result panel.
@@ -77,7 +95,7 @@ export function useToolkitTestToolRun({ projectId, toolkitId }: UseToolkitTestTo
       const settled = await testToolkitTool({ projectId, toolkitId, toolName, toolParams: savedParams });
 
       if (!mountedRef.current || press !== currentPressRef.current) return;
-      if (settled.kind === 'authorizationRequired') pendingRef.current = { toolName, toolParams: savedParams, press };
+      if (settled.kind === 'authorizationRequired' || settled.kind === 'timeout') pendingRef.current = { toolName, toolParams: savedParams, press };
       setOutcome(settled);
       setIsRunning(false);
     },
@@ -94,7 +112,7 @@ export function useToolkitTestToolRun({ projectId, toolkitId }: UseToolkitTestTo
     if (!mountedRef.current || pending.press !== currentPressRef.current) return;
     setOutcome(settled);
     setIsRunning(false);
-    if (settled.kind === 'authorizationRequired') pendingRef.current = pending;
+    if (settled.kind === 'authorizationRequired' || settled.kind === 'timeout') pendingRef.current = pending;
   }, [projectId, toolkitId]);
   const skip = useCallback(() => { reset(); setOutcome({ kind: 'skipped' }); }, [reset]);
   return { outcome, isRunning, run, reset, authorize, skip };

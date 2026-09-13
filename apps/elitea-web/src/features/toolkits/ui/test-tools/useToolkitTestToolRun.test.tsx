@@ -36,7 +36,7 @@ describe('useToolkitTestToolRun', () => {
       await result.current.run('list_branches_in_repo', { repository: 'a/b' });
     });
 
-    expect(seen).toEqual({ tool_name: 'list_branches_in_repo', tool_params: { repository: 'a/b' } });
+    expect(seen).toEqual({ request_id: expect.any(String) as unknown, tool_name: 'list_branches_in_repo', tool_params: { repository: 'a/b' } });
     expect(result.current.outcome).toEqual({ kind: 'ok', result: { branches: ['main'] }, truncated: false });
     expect(result.current.isRunning).toBe(false);
   });
@@ -122,3 +122,21 @@ describe('useToolkitTestToolRun', () => {
     });
   });
 });
+
+
+it('retrieves the recovered result without a second submission', async () => {
+  let submissions = 0;
+  let reads = 0;
+  server.use(
+    http.post(RUN_PATH, () => { submissions += 1; return HttpResponse.json({ reason: 'timeout', task_id: 'job-recovery' }, { status: 504 }); }),
+    http.get(`${RUN_PATH}/job-recovery`, () => {
+      reads += 1;
+      return reads === 1 ? HttpResponse.json({ pending: true }, { status: 202 }) : HttpResponse.json({ ok: true, result: 'recovered' });
+    }),
+  );
+  const { result } = renderRun();
+  await act(async () => { await result.current.run('slow_tool', {}); });
+  await waitFor(() => { expect(result.current.outcome).toMatchObject({ kind: 'ok', result: 'recovered' }); }, { timeout: 7000 });
+  expect(submissions).toBe(1);
+  expect(reads).toBe(2);
+}, 10000);

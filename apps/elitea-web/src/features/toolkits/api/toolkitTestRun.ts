@@ -175,3 +175,23 @@ export async function testToolkitTool(params: TestToolkitToolParams): Promise<Te
     return outcomeFromRejection(error, toolkitId);
   }
 }
+
+/** Read the original execution without resolving settings or submitting a call. */
+export async function readToolkitToolResult(
+  params: Pick<TestToolkitToolParams, 'projectId' | 'toolkitId'> & { readonly taskId: string },
+): Promise<TestToolkitToolOutcome> {
+  const pending: TestToolkitToolOutcome = { kind: 'timeout', taskId: params.taskId, message: 'Waiting for the saved tool execution. Results will update automatically.' };
+  try {
+    const { data } = await eliteaFetch<{ data: ResponseBodyLike & { pending?: boolean } }>(
+      `/elitea_core/test_tool/prompt_lib/${String(params.projectId)}/${String(params.toolkitId)}/${encodeURIComponent(params.taskId)}`,
+      { method: 'GET', headers: { 'Cache-Control': 'no-cache' } },
+    );
+    if (data.pending === true) return pending;
+    if (data.ok === true) return { kind: 'ok', result: data.result, truncated: data.truncated === true };
+    return { kind: 'toolError', message: readErrorMessage(data, 'The tool reported an error.') };
+  } catch (error) {
+    // A disconnected Main ends this observation, not the durable execution.
+    if (!isEliteaApiErrorLike(error) || error.failure?.kind !== 'http' || [502, 503, 504].includes(error.failure.status ?? 0)) return pending;
+    return outcomeFromRejection(error, params.toolkitId);
+  }
+}
