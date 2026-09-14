@@ -181,3 +181,22 @@ it('restores authorization arguments in memory after reload and waits for user a
   expect(submitted).toMatchObject({ tool_name: 'echo_marker', tool_params: { marker: 'original-input' }, mcp_authorization_reference: 'a'.repeat(43) });
   expect(result.current.outcome).toMatchObject({ kind: 'ok', result: 'authorized' });
 });
+
+
+it('retains discovery authorization when selecting a tool and clears it when the toolkit changes', async () => {
+  const references: unknown[] = [];
+  server.use(http.post(RUN_PATH, async ({ request }) => {
+    const body = await request.json() as Record<string, unknown>;
+    references.push(body['mcp_authorization_reference']);
+    return HttpResponse.json({ ok: true, result: 'done', truncated: false });
+  }));
+  const { result, rerender } = renderHook(({ toolkitId }) => useToolkitTestToolRun({ projectId: '7', toolkitId }), { initialProps: { toolkitId: '19' } });
+  act(() => {
+    result.current.rememberAuthorization('A'.repeat(43));
+    result.current.reset();
+  });
+  await act(async () => { await result.current.run('echo_marker', { marker: 'first' }); });
+  rerender({ toolkitId: '20' });
+  await act(async () => { await result.current.run('echo_marker', { marker: 'second' }); });
+  expect(references).toEqual(['A'.repeat(43), undefined]);
+});

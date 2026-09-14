@@ -16,6 +16,7 @@ export interface McpToolOption {
 }
 
 export interface UseGetSelectedToolSchemaParams {
+  readonly getAuthorizationReference?: (() => string | undefined) | undefined;
   readonly projectId?: string | number | undefined;
   readonly toolkitId?: string | number | undefined;
   readonly toolkitType: string | undefined;
@@ -94,7 +95,7 @@ export function useGetSelectedToolSchema(params: UseGetSelectedToolSchemaParams)
 
   const dynamic = useQuery({
     queryKey: ['toolkits', 'tools', String(projectId ?? ''), `id:${toolkitId ?? ''}`],
-    queryFn: ({ signal }) => toolkitTools.fetchAvailableTools({ projectId: String(projectId), toolkitId: String(toolkitId) }, signal),
+    queryFn: ({ signal }) => toolkitTools.fetchAvailableTools({ projectId: String(projectId), toolkitId: String(toolkitId), authorizationReference: params.getAuthorizationReference?.() }, signal),
     enabled: canDiscoverSchema(params, toolkitTypeSchema, localSchema, projectId, isError),
     retry: false,
   });

@@ -393,6 +393,7 @@ mod shared_tests {
     async fn standalone_discovery_reuses_native_selection_without_provider_execution() {
         let request = DirectToolkitRequest::parse_discovery(
             "openapi",
+            "19",
             &settings(),
             br#"{"toolkit_security":{}}"#,
         )

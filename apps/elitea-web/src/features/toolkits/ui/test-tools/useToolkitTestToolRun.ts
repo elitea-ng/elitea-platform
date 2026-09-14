@@ -30,6 +30,8 @@ export interface UseToolkitTestToolRunParams {
 }
 
 export interface UseToolkitTestToolRunResult {
+  readonly rememberAuthorization: (reference: string) => void;
+  readonly getAuthorizationReference: () => string | undefined;
   /** The settled outcome of the most recent press, or `undefined` before the first one. */
   readonly outcome: TestToolkitToolOutcome | undefined;
   readonly isRunning: boolean;
@@ -47,6 +49,11 @@ export function useToolkitTestToolRun({ projectId, toolkitId }: UseToolkitTestTo
 
   /** The press whose answer this component still wants. */
   const currentPressRef = useRef(0);
+  const authorizationReference = useRef<string | undefined>(undefined);
+  const getAuthorizationReference = useCallback(() => authorizationReference.current, []);
+  const rememberAuthorization = useCallback((reference: string) => {
+    if (/^[A-Za-z0-9_-]{43}$/.test(reference)) authorizationReference.current = reference;
+  }, []);
   const pendingRef = useRef<{ toolName: string; toolParams: Readonly<Record<string, unknown>>; press: number } | undefined>(undefined);
   /** False after unmount, so a late answer never sets state on a dead component. */
   const mountedRef = useRef(true);
@@ -98,7 +105,7 @@ export function useToolkitTestToolRun({ projectId, toolkitId }: UseToolkitTestTo
 
       const savedParams = structuredClone(toolParams);
       pendingRef.current = undefined;
-      const settled = await testToolkitTool({ projectId, toolkitId, toolName, toolParams: savedParams });
+      const settled = await testToolkitTool({ projectId, toolkitId, toolName, toolParams: savedParams, ...(authorizationReference.current ? { authorizationReference: authorizationReference.current } : {}) });
 
       if (!mountedRef.current || press !== currentPressRef.current) return;
       if (settled.kind === 'authorizationRequired' || settled.kind === 'timeout') pendingRef.current = { toolName, toolParams: savedParams, press };
@@ -111,6 +118,7 @@ export function useToolkitTestToolRun({ projectId, toolkitId }: UseToolkitTestTo
 
   useEffect(() => {
     currentPressRef.current += 1;
+    authorizationReference.current = undefined;
     pendingRef.current = undefined;
     setIsRunning(false);
     const taskId = recalledToolkitTest(projectId, toolkitId);
@@ -130,5 +138,5 @@ export function useToolkitTestToolRun({ projectId, toolkitId }: UseToolkitTestTo
     if (settled.kind === 'authorizationRequired' || settled.kind === 'timeout') pendingRef.current = pending;
   }, [projectId, toolkitId]);
   const skip = useCallback(() => { reset(); setOutcome({ kind: 'skipped' }); }, [reset]);
-  return { outcome, isRunning, run, reset, authorize, skip };
+  return { outcome, isRunning, run, reset, authorize, skip, rememberAuthorization, getAuthorizationReference };
 }

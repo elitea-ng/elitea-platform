@@ -476,6 +476,7 @@ where
             Some(worker_command_v1::CapabilityCommand::ToolkitAvailableTools(discovery)) => {
                 DirectToolkitRequest::parse_discovery(
                     &discovery.toolkit_type,
+                    &discovery.toolkit_id,
                     settings,
                     context.as_bytes(),
                 )
@@ -532,7 +533,18 @@ where
             return bind_call_result(execution, request, summary)
                 .map(|result| ToolkitExecuteReadTerminalOutput::CallTool(Box::new(result)));
         }
-        let value = result.map_err(|error| runtime_failure(error.code()))?;
+        let value = match result {
+            Err(error) if error.authorization().is_some() => {
+                let summary = self
+                    .authorization_summary(verified, request, &error, lease)
+                    .await?;
+                let challenge = summary
+                    .authorization_required
+                    .ok_or(RuntimeFailureKind::AuthorizationFailed)?;
+                discovery_authorization_result(&challenge)?
+            }
+            outcome => outcome.map_err(|error| runtime_failure(error.code()))?,
+        };
         let artifact_bytes =
             serde_json::to_vec(&value).map_err(|_| RuntimeFailureKind::InvalidInput)?;
         let artifact = lease
@@ -571,10 +583,14 @@ where
         {
             return Err(RuntimeFailureKind::AuthorizationFailed);
         }
-        let Some(worker_command_v1::CapabilityCommand::ToolkitCallTool(command)) =
-            verified.command().capability_command.as_ref()
-        else {
-            return Err(RuntimeFailureKind::InvalidInput);
+        let toolkit_id = match verified.command().capability_command.as_ref() {
+            Some(worker_command_v1::CapabilityCommand::ToolkitCallTool(command)) => {
+                &command.toolkit_id
+            }
+            Some(worker_command_v1::CapabilityCommand::ToolkitAvailableTools(command)) => {
+                &command.toolkit_id
+            }
+            _ => return Err(RuntimeFailureKind::InvalidInput),
         };
         let resolved = lease
             .run_pre_invocation(requirement.resolve_public_metadata())
@@ -604,7 +620,7 @@ where
                     .unwrap_or_default()
                     .to_owned(),
                 resource_metadata_json: metadata,
-                toolkit_id: command.toolkit_id.clone(),
+                toolkit_id: toolkit_id.clone(),
             }),
         })
     }
@@ -1232,5 +1248,59 @@ mod shared_result_tests {
         assert!(summary.truncated);
         assert!(summary.result_json.is_empty());
         assert_eq!(summary.status, ToolkitCallToolStatusV1::Ok as i32);
+    }
+}
+
+/// Discovery can finish with a public consent challenge instead of a tool list.
+fn discovery_authorization_result(
+    challenge: &ToolkitAuthorizationRequiredV1,
+) -> Result<serde_json::Value, RuntimeFailureKind> {
+    let metadata = if challenge.resource_metadata_json.is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_slice::<serde_json::Value>(&challenge.resource_metadata_json)
+            .map_err(|_| RuntimeFailureKind::InvalidInput)?
+    };
+    Ok(serde_json::json!({
+        "tools": [], "args_schemas": {},
+        "authorization_required": {
+            "toolkit_id": challenge.toolkit_id,
+            "toolkit_name": challenge.toolkit_name,
+            "toolkit_type": challenge.toolkit_type,
+            "server_url": challenge.server_url,
+            "resource_metadata_url": challenge.resource_metadata_url,
+            "resource_metadata": metadata,
+        }
+    }))
+}
+
+#[cfg(test)]
+mod discovery_authorization_tests {
+    use super::*;
+
+    #[test]
+    fn discovery_preserves_public_challenge_without_tool_results() {
+        let challenge = ToolkitAuthorizationRequiredV1 {
+            toolkit_id: "57".into(),
+            toolkit_name: "mcp".into(),
+            toolkit_type: "mcp".into(),
+            server_url: "https://example.invalid/mcp".into(),
+            resource_metadata_url: String::new(),
+            resource_metadata_json: br#"{"authorization_servers":["https://example.invalid"]}"#
+                .to_vec(),
+        };
+        let result = discovery_authorization_result(&challenge).expect("public challenge");
+        assert_eq!(result["authorization_required"]["toolkit_id"], "57");
+        assert_eq!(
+            result["authorization_required"]["resource_metadata"]["authorization_servers"][0],
+            "https://example.invalid"
+        );
+        assert!(result["tools"].as_array().unwrap().is_empty());
+        assert!(result["args_schemas"].as_object().unwrap().is_empty());
+        let invalid = ToolkitAuthorizationRequiredV1 {
+            resource_metadata_json: b"invalid".to_vec(),
+            ..challenge
+        };
+        assert!(discovery_authorization_result(&invalid).is_err());
     }
 }

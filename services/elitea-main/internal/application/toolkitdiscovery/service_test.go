@@ -24,7 +24,7 @@ type savedReader struct {
 }
 
 func (r *savedReader) GetCurrentToolkit(_ context.Context, p, a, k int32) (indexing.CurrentToolkitSnapshot, bool, error) {
-	r.seen = Request{int64(p), int64(a), int64(k)}
+	r.seen = Request{ProjectID: int64(p), ActorUserID: int64(a), ToolkitID: int64(k)}
 	return indexing.CurrentToolkitSnapshot{ID: k, Type: "github", Name: "saved", Settings: map[string]any{"project": "saved-project"}}, r.found, nil
 }
 
@@ -50,7 +50,7 @@ func TestSavedDiscoveryUsesActorAndReferenceSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := Request{7, 42, 19}
+	request := Request{ProjectID: 7, ActorUserID: 42, ToolkitID: 19}
 	inputs, err := resolver.Resolve(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
@@ -137,6 +137,7 @@ type dispatcherStub struct{ calls int }
 func (s *dispatcherStub) Dispatch(context.Context, Dispatch) error { s.calls++; return nil }
 
 type resultStore struct {
+	content    []byte
 	settlement Settlement
 	found      bool
 	calls      int
@@ -149,6 +150,9 @@ func (s *resultStore) ReadToolkitDiscoveryResult(_ context.Context, project int6
 	s.calls++
 	if project != 7 || id != "execution" || generation != 1 || ref.ArtifactId != "artifact" {
 		return nil, errors.New("wrong scope")
+	}
+	if s.content != nil {
+		return s.content, nil
 	}
 	return []byte(`{"tools":[{"name":"list_issues","description":"List issues"}],"args_schemas":{"list_issues":{"type":"object"}}}`), nil
 }
@@ -166,7 +170,7 @@ func TestDiscoveryWaitConsumesArtifactOnlyAfterSettlement(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			result, err := service.AvailableTools(context.Background(), Request{7, 42, 19})
+			result, err := service.AvailableTools(context.Background(), Request{ProjectID: 7, ActorUserID: 42, ToolkitID: 19})
 			if success {
 				if err != nil || len(result.Tools) != 1 || store.calls != 1 {
 					t.Fatalf("result=%+v err=%v", result, err)
@@ -178,5 +182,48 @@ func TestDiscoveryWaitConsumesArtifactOnlyAfterSettlement(t *testing.T) {
 				t.Fatal("admission replay republished command")
 			}
 		})
+	}
+}
+
+func TestDiscoveryAuthorizationBindsToolkitAndExcludesTools(t *testing.T) {
+	payload, _ := proto.Marshal(&runtimev1.ToolkitAvailableToolsResultV1{ResultArtifact: &runtimev1.ToolkitAvailableToolsArtifactReferenceV1{ArtifactId: "artifact"}})
+	for _, tc := range []struct {
+		name, id, kind, url string
+		tools               bool
+		valid               bool
+	}{
+		{"valid", "19", "github", "https://example.invalid/mcp", false, true},
+		{"foreign toolkit", "20", "github", "https://example.invalid/mcp", false, false},
+		{"foreign type", "19", "mcp", "https://example.invalid/mcp", false, false},
+		{"unsafe URL", "19", "github", "javascript:alert(1)", false, false},
+		{"mixed list", "19", "github", "https://example.invalid/mcp", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			content := map[string]any{"tools": []any{}, "args_schemas": map[string]any{}, "authorization_required": map[string]any{"toolkit_id": tc.id, "toolkit_type": tc.kind, "toolkit_name": "saved", "server_url": tc.url}}
+			if tc.tools {
+				content["tools"] = []any{map[string]any{"name": "search"}}
+			}
+			raw, _ := json.Marshal(content)
+			store := &resultStore{content: raw, found: true, settlement: Settlement{PayloadType: PayloadTypeToolkitAvailableToolsResult, Outcome: executionapp.SettlementSucceeded, Payload: payload}}
+			admissions := &admissionStub{admitted: AdmittedRun{Outcome: executionapp.AdmissionOutcome{ExecutionID: "execution"}}}
+			service, err := NewService(resolverStub{}, verdictStub(true), admissions, &dispatcherStub{}, store, store, DispatchPolicy{CapabilityVersion: "1", ResourceClass: "index", IsolationClass: "isolated", Priority: 1, LimitsRevision: "limits"}, ids(), time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := service.AvailableTools(context.Background(), Request{ProjectID: 7, ActorUserID: 42, ToolkitID: 19})
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v error=%v", tc.valid, err)
+			}
+			if tc.valid && result.AuthorizationRequired == nil {
+				t.Fatal("challenge lost")
+			}
+		})
+	}
+}
+
+func TestDiscoveryRejectsMalformedAuthorizationReference(t *testing.T) {
+	request := Request{ProjectID: 7, ActorUserID: 42, ToolkitID: 19, MCPAuthorizationReference: "not-a-server-reference"}
+	if request.Validate() == nil {
+		t.Fatal("invalid authorization reference accepted")
 	}
 }

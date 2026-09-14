@@ -209,3 +209,18 @@ describe('useGetSelectedToolSchema', () => {
     await waitFor(() => expect(requestCount).toBe(2));
   });
 });
+
+
+it('uses the discovery authorization reference when loading argument schemas', async () => {
+  let reference: string | null = null;
+  server.use(
+    http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({ mcp: {} })),
+    http.get('/api/v2/elitea_core/toolkit_available_tools/prompt_lib/proj-1/19', ({ request }) => {
+      reference = request.headers.get('X-MCP-Authorization-Reference');
+      return HttpResponse.json({ tools: [{ name: 'echo_marker' }], args_schemas: { echo_marker: { type: 'object', properties: { marker: { type: 'string' } } } } });
+    }),
+  );
+  const { box } = renderSelectedToolSchema({ toolkitType: 'mcp', toolkitId: '19', toolOptionType: 'echo_marker', availableMcpTools: undefined, getAuthorizationReference: () => 'A'.repeat(43) });
+  await waitFor(() => expect(box.current?.toolSchema?.properties).toEqual({ marker: { type: 'string' } }));
+  expect(reference).toBe('A'.repeat(43));
+});

@@ -95,8 +95,10 @@ type ToolkitAvailableToolsCommandV1 struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	ToolkitType     string                 `protobuf:"bytes,1,opt,name=toolkit_type,json=toolkitType,proto3" json:"toolkit_type,omitempty"`
 	SettingsEntryId string                 `protobuf:"bytes,2,opt,name=settings_entry_id,json=settingsEntryId,proto3" json:"settings_entry_id,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Saved toolkit identity for delegated authorization. Empty in older commands.
+	ToolkitId     string `protobuf:"bytes,16,opt,name=toolkit_id,json=toolkitId,proto3" json:"toolkit_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ToolkitAvailableToolsCommandV1) Reset() {
@@ -139,6 +141,13 @@ func (x *ToolkitAvailableToolsCommandV1) GetToolkitType() string {
 func (x *ToolkitAvailableToolsCommandV1) GetSettingsEntryId() string {
 	if x != nil {
 		return x.SettingsEntryId
+	}
+	return ""
+}
+
+func (x *ToolkitAvailableToolsCommandV1) GetToolkitId() string {
+	if x != nil {
+		return x.ToolkitId
 	}
 	return ""
 }
@@ -1081,10 +1090,12 @@ var File_elitea_runtime_v1_toolkit_proto protoreflect.FileDescriptor
 
 const file_elitea_runtime_v1_toolkit_proto_rawDesc = "" +
 	"\n" +
-	"\x1felitea/runtime/v1/toolkit.proto\x12\x11elitea.runtime.v1\x1a\x1eelitea/runtime/v1/common.proto\"u\n" +
+	"\x1felitea/runtime/v1/toolkit.proto\x12\x11elitea.runtime.v1\x1a\x1eelitea/runtime/v1/common.proto\"\x94\x01\n" +
 	"\x1eToolkitAvailableToolsCommandV1\x12!\n" +
 	"\ftoolkit_type\x18\x01 \x01(\tR\vtoolkitType\x12*\n" +
-	"\x11settings_entry_id\x18\x02 \x01(\tR\x0fsettingsEntryIdJ\x04\b\x03\x10\x10\"\x9b\x02\n" +
+	"\x11settings_entry_id\x18\x02 \x01(\tR\x0fsettingsEntryId\x12\x1d\n" +
+	"\n" +
+	"toolkit_id\x18\x10 \x01(\tR\ttoolkitIdJ\x04\b\x03\x10\x10\"\x9b\x02\n" +
 	"(ToolkitAvailableToolsArtifactReferenceV1\x12\x1f\n" +
 	"\vartifact_id\x18\x01 \x01(\tR\n" +
 	"artifactId\x12+\n" +

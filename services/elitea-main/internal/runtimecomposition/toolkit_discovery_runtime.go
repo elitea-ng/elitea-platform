@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
+	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
@@ -24,7 +25,7 @@ func newCurrentToolkitDiscoveryRuntime(pool *pgxpool.Pool, toolkits indexingapp.
 	if err != nil {
 		return nil, err
 	}
-	resolver, err := discovery.NewCurrentAuthoritativeInputResolver(reader, settings, guardrails)
+	resolver, err := discovery.NewCurrentAuthoritativeInputResolver(reader, settings, guardrails, toolkitcalltoolapp.WithMCPAuthorization(currentToolkitMCPTokenStore(pool)))
 	if err != nil {
 		return nil, err
 	}

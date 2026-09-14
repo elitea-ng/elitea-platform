@@ -11,6 +11,9 @@ import { ToolListError } from '@/shared/ui/ToolListError';
 
 import { toolkitTools } from '@/entities/toolkit';
 
+import { readToolkitTestAuthorization } from '../../api/toolkitTestAuthorization';
+import type { TestToolPaneProps } from './TestToolPane';
+
 import { ToolArgumentPanel } from './ToolArgumentPanel';
 
 import { IndexesToolsEnum } from '../../indexes/lib/constants/indexDetails.constants';
@@ -111,6 +114,7 @@ import type { LLMModelSelectorProps } from '../../indexes/ui/IndexDetails/IndexC
  * file's own logic.
  */
 export interface TestToolSettingsProps {
+  readonly renderAuthorization?: TestToolPaneProps['renderAuthorization'];
   readonly projectId?: string | number | undefined;
   readonly toolkitId?: string | number | undefined;
   readonly selectedTool: string | null;
@@ -223,6 +227,17 @@ function toolkitDiscoveryIdentity(props: TestToolSettingsProps, selectedProjectI
   };
 }
 
+function discoveryPicker(projectId: string | undefined, discovery: ReturnType<typeof toolkitTools.useToolkitTools>, props: TestToolSettingsProps, fallback: ReactNode): ReactNode {
+  const challenge = readToolkitTestAuthorization(discovery.authorizationRequired, props.toolkitId);
+  if (challenge && projectId && props.renderAuthorization) {
+    return props.renderAuthorization({ projectId, challenge, onAuthorized: discovery.authorize, onSkip: () => props.onChangeTool(null) });
+  }
+  return fallback;
+}
+function toolListReadFailed(discovery: ReturnType<typeof toolkitTools.useToolkitTools>, schemaFailed: boolean): boolean {
+  return discovery.isError || schemaFailed || discovery.authorizationRequired !== undefined;
+}
+
 export function TestToolSettings(props: TestToolSettingsProps): ReactNode {
   const { selectedTool, onChangeTool, toolInputVariables, onChangeInputVariables, onRunTool, isRunning, isValidForm, selectedToolSchema, values, llm, LLMModelSelector, indexNameValidation, toolSchemaRead } = props;
   const { clearIndexNameError, updateIndexNameError, isIndexNameValid, indexNameError } = indexNameValidation;
@@ -306,15 +321,15 @@ export function TestToolSettings(props: TestToolSettingsProps): ReactNode {
           </Box>
         )}
         <Box sx={toolSelectContainerSx}>
-          <ToolPicker
+          {discoveryPicker(projectId, dynamicTools, props, <ToolPicker
             dynamicTierActive={usesDynamicTier}
-            readFailed={dynamicTools.isError || schemasReadFailed}
+            readFailed={toolListReadFailed(dynamicTools, schemasReadFailed)}
             onRetry={onRetryToolList}
             value={selectedTool ?? ''}
             options={allToolsOptions}
             onSelect={onSelectTool}
             onClear={onClearTool}
-          />
+          />)}
         </Box>
 
         {selectedTool && (

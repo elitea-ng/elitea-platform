@@ -119,9 +119,10 @@ impl DirectToolkitRequest {
         Ok(request)
     }
 
-    /// Discovery has no saved-row ID in its contract and never invokes a tool.
+    /// Discovery retains the saved identity for authorization and never invokes a tool.
     pub(crate) fn parse_discovery(
         toolkit_type: &str,
+        toolkit_id: &str,
         settings: &[u8],
         context: &[u8],
     ) -> Result<Self, DirectToolkitRequestError> {
@@ -129,8 +130,17 @@ impl DirectToolkitRequest {
         if !settings.is_object() || !valid_identity(toolkit_type) {
             return Err(invalid_input());
         }
+        let id = if toolkit_id.is_empty() && toolkit_type != "mcp" {
+            1
+        } else {
+            toolkit_id
+                .parse::<u64>()
+                .ok()
+                .filter(|id| *id > 0 && id.to_string() == toolkit_id)
+                .ok_or_else(invalid_input)?
+        };
         let toolkit = serde_json::json!({
-            "id": 1, "type": toolkit_type, "toolkit_name": toolkit_type, "settings": settings
+            "id": id, "type": toolkit_type, "toolkit_name": toolkit_type, "settings": settings
         });
         let mut request = Self::from_message(ToolkitExecuteReadInputV1 {
             schema_revision: String::new(),

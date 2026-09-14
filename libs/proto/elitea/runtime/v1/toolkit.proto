@@ -17,6 +17,8 @@ message ToolkitAvailableToolsCommandV1 {
   string toolkit_type = 1;
   string settings_entry_id = 2;
   reserved 3 to 15;
+  // Saved toolkit identity for delegated authorization. Empty in older commands.
+  string toolkit_id = 16;
 }
 
 // ToolkitAvailableToolsArtifactReferenceV1 identifies the immutable canonical

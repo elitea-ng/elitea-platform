@@ -11,8 +11,8 @@ type CurrentAuthoritativeInputResolver struct {
 	resolver *call.CurrentAuthoritativeInputResolver
 }
 
-func NewCurrentAuthoritativeInputResolver(toolkits call.CurrentToolkitReader, settings call.CurrentToolkitSettingsValidator, guardrails call.CurrentGuardrailResolver) (*CurrentAuthoritativeInputResolver, error) {
-	resolver, err := call.NewCurrentAuthoritativeInputResolver(toolkits, settings, guardrails)
+func NewCurrentAuthoritativeInputResolver(toolkits call.CurrentToolkitReader, settings call.CurrentToolkitSettingsValidator, guardrails call.CurrentGuardrailResolver, options ...call.ResolverOption) (*CurrentAuthoritativeInputResolver, error) {
+	resolver, err := call.NewCurrentAuthoritativeInputResolver(toolkits, settings, guardrails, options...)
 	if err != nil {
 		return nil, err
 	}
@@ -22,7 +22,7 @@ func (r *CurrentAuthoritativeInputResolver) Resolve(ctx context.Context, request
 	if err := request.Validate(); err != nil {
 		return AuthoritativeInputs{}, err
 	}
-	source, err := r.resolver.Resolve(ctx, call.RunRequest{ProjectID: request.ProjectID, ActorUserID: request.ActorUserID, ToolkitID: request.ToolkitID, ToolName: "available_tools", Arguments: json.RawMessage(`{}`)})
+	source, err := r.resolver.Resolve(ctx, request.toolRequest())
 	if err != nil {
 		return AuthoritativeInputs{}, err
 	}

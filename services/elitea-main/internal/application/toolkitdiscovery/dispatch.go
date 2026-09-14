@@ -39,6 +39,7 @@ type Dispatch struct {
 	Traceparent           string
 	Tracestate            string
 	ToolkitType           string
+	ToolkitID             string
 	SettingsEntryID       string
 }
 

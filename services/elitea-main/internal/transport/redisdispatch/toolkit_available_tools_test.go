@@ -50,6 +50,7 @@ func validToolkitAvailableToolsDispatch() discovery.Dispatch {
 		Deadline:              time.Now().Add(time.Hour).UTC(),
 		LimitsRevision:        "limits-v1",
 		ToolkitType:           "github",
+		ToolkitID:             "19",
 		SettingsEntryID:       discovery.SettingsEntryID,
 	}
 }
@@ -70,10 +71,10 @@ func TestToolkitDiscoverySignedCommandContainsOnlyReferences(t *testing.T) {
 		t.Fatal("bad signed envelope")
 	}
 	payload := command.GetToolkitAvailableTools()
-	if payload == nil || payload.ToolkitType != "github" || payload.SettingsEntryId != discovery.SettingsEntryID || command.GetToolkitCallTool() != nil || command.CapabilityId != executiondomain.ToolkitAvailableToolsCapability {
+	if payload == nil || payload.ToolkitType != "github" || payload.ToolkitId != "19" || payload.SettingsEntryId != discovery.SettingsEntryID || command.GetToolkitCallTool() != nil || command.CapabilityId != executiondomain.ToolkitAvailableToolsCapability {
 		t.Fatal("capability mismatch")
 	}
-	if payload.ProtoReflect().Descriptor().Fields().Len() != 2 {
+	if payload.ProtoReflect().Descriptor().Fields().Len() != 3 {
 		t.Fatal("unexpected inline discovery payload")
 	}
 	mutated := proto.Clone(&command).(*runtimev1.WorkerCommandV1)

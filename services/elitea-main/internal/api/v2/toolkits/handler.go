@@ -830,16 +830,17 @@ func (h *Handler) AvailableTools(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
 		return
 	}
-	request := discovery.Request{ProjectID: projectID, ActorUserID: actorID, ToolkitID: toolkitID}
+	request := discovery.Request{ProjectID: projectID, ActorUserID: actorID, ToolkitID: toolkitID, MCPAuthorizationReference: r.Header.Get("X-MCP-Authorization-Reference")}
 	if request.Validate() != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid toolkit discovery identity"})
 		return
 	}
-	result, err := h.discovery.AvailableTools(r.Context(), discovery.Request{ProjectID: projectID, ActorUserID: actorID, ToolkitID: toolkitID})
+	result, err := h.discovery.AvailableTools(r.Context(), request)
 	if err != nil {
 		toolkitrun.WriteError(w, err)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, result)
 }
 

@@ -101,6 +101,7 @@ fn fixture(kind: ToolkitCommandKind) -> (WorkerCommandV1, ClaimCommandResponseV1
             command.capability_command =
                 Some(worker_command_v1::CapabilityCommand::ToolkitAvailableTools(
                     ToolkitAvailableToolsCommandV1 {
+                        toolkit_id: "19".into(),
                         toolkit_type: "openapi".into(),
                         settings_entry_id: "toolkit-settings".into(),
                     },

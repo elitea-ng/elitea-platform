@@ -23,12 +23,14 @@ TOOLKIT_CALL_TOOL_STATUS_V1_UNKNOWN_TOOL: ToolkitCallToolStatusV1
 TOOLKIT_CALL_TOOL_STATUS_V1_AUTHORIZATION_REQUIRED: ToolkitCallToolStatusV1
 
 class ToolkitAvailableToolsCommandV1(_message.Message):
-    __slots__ = ("toolkit_type", "settings_entry_id")
+    __slots__ = ("toolkit_type", "settings_entry_id", "toolkit_id")
     TOOLKIT_TYPE_FIELD_NUMBER: _ClassVar[int]
     SETTINGS_ENTRY_ID_FIELD_NUMBER: _ClassVar[int]
+    TOOLKIT_ID_FIELD_NUMBER: _ClassVar[int]
     toolkit_type: str
     settings_entry_id: str
-    def __init__(self, toolkit_type: _Optional[str] = ..., settings_entry_id: _Optional[str] = ...) -> None: ...
+    toolkit_id: str
+    def __init__(self, toolkit_type: _Optional[str] = ..., settings_entry_id: _Optional[str] = ..., toolkit_id: _Optional[str] = ...) -> None: ...
 
 class ToolkitAvailableToolsArtifactReferenceV1(_message.Message):
     __slots__ = ("artifact_id", "immutable_version", "media_type", "byte_length", "digest", "classification")

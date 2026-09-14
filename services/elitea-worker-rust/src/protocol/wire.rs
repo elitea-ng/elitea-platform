@@ -241,7 +241,7 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
             _ => None,
         },
         Schema::ToolkitAvailableToolsCommand => match field {
-            1..=2 => Some(length()),
+            1..=2 | 16 => Some(length()),
             _ => None,
         },
         Schema::ToolkitExecuteReadInput => match field {

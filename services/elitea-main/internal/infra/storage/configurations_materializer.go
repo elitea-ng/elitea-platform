@@ -143,7 +143,7 @@ func (m *CurrentConfigurationsMaterializer) MaterializeContent(
 		case executiondomain.ToolkitAvailableToolsSettingsRole:
 			return m.materializeToolkitDiscovery(ctx, projectID, actorID, authorization.ToolkitType, source, maxBytes)
 		case "toolkit.available_tools.runtime_context":
-			return source, nil
+			return m.materializeToolkitRuntimeContext(ctx, authorization, source, maxBytes)
 		default:
 			return nil, ErrContentRejected
 		}

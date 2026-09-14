@@ -201,6 +201,7 @@ func toolkitAvailableToolsWorkerCommand(
 		CapabilityCommand: &runtimev1.WorkerCommandV1_ToolkitAvailableTools{
 			ToolkitAvailableTools: &runtimev1.ToolkitAvailableToolsCommandV1{
 				ToolkitType:     dispatch.ToolkitType,
+				ToolkitId:       dispatch.ToolkitID,
 				SettingsEntryId: dispatch.SettingsEntryID,
 			},
 		},

@@ -91,12 +91,14 @@ export function TestToolPane({ projectId, toolkitId, values, renderAuthorization
 
   const indexNameValidation = useIndexNameValidation();
   const { clearIndexNameError, indexNameError } = indexNameValidation;
+  const { outcome, isRunning, run, reset, authorize, skip, rememberAuthorization, getAuthorizationReference } = useToolkitTestToolRun({ projectId, toolkitId });
 
   const {
     toolSchema,
     isError: toolSchemaReadFailed,
     refetch: retryToolSchemaRead,
   } = useGetSelectedToolSchema({
+    getAuthorizationReference,
     projectId,
     toolkitId,
     toolkitType: values.type,
@@ -119,8 +121,6 @@ export function TestToolPane({ projectId, toolkitId, values, renderAuthorization
     // `validateToolkitForm` reads `schema.required ?? []` either way.
     return validateToolkitForm(selectedToolSchema as ToolFormSchema, toolInputVariables);
   }, [selectedTool, toolInputVariables, selectedToolSchema, values.type]);
-
-  const { outcome, isRunning, run, reset, authorize, skip } = useToolkitTestToolRun({ projectId, toolkitId });
 
   const onChangeInputVariables = useCallback((inputVariables: Readonly<Record<string, unknown>>) => {
     setToolInputVariables(inputVariables);
@@ -181,6 +181,7 @@ export function TestToolPane({ projectId, toolkitId, values, renderAuthorization
       data-testid="edit-toolkit-test-pane-slot"
     >
       <TestToolSettings
+        renderAuthorization={renderAuthorization ? (props) => renderAuthorization({ ...props, onAuthorized: async (reference) => { rememberAuthorization(reference); await props.onAuthorized(reference); } }) : undefined}
         projectId={projectId}
         toolkitId={toolkitId}
         selectedTool={selectedTool}

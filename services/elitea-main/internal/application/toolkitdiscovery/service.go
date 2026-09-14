@@ -21,10 +21,21 @@ const PayloadTypeToolkitAvailableToolsResult = "TOOLKIT_AVAILABLE_TOOLS_RESULT"
 var ErrInvalidDiscovery = errors.New("invalid toolkit discovery request")
 var ErrRuntimeFailure = errors.New("toolkit discovery failed")
 
-type Request struct{ ProjectID, ActorUserID, ToolkitID int64 }
+type Request struct {
+	ProjectID, ActorUserID, ToolkitID int64
+	MCPAuthorizationReference         string
+}
+
+func (r Request) toolRequest() call.RunRequest {
+	return call.RunRequest{ProjectID: r.ProjectID, ActorUserID: r.ActorUserID, ToolkitID: r.ToolkitID,
+		ToolName: "available_tools", Arguments: json.RawMessage(`{}`), MCPAuthorizationReference: r.MCPAuthorizationReference}
+}
 
 func (r Request) Validate() error {
 	if r.ProjectID <= 0 || r.ProjectID > math.MaxInt32 || r.ActorUserID <= 0 || r.ActorUserID > math.MaxInt32 || r.ToolkitID <= 0 || r.ToolkitID > math.MaxInt32 {
+		return ErrInvalidDiscovery
+	}
+	if r.toolRequest().Validate() != nil {
 		return ErrInvalidDiscovery
 	}
 	return nil
@@ -35,8 +46,9 @@ type Tool struct {
 	Description string `json:"description"`
 }
 type Result struct {
-	Tools       []Tool                     `json:"tools"`
-	ArgsSchemas map[string]json.RawMessage `json:"args_schemas"`
+	AuthorizationRequired *executiondomain.ToolkitAuthorizationRequired `json:"authorization_required,omitempty"`
+	Tools                 []Tool                                        `json:"tools"`
+	ArgsSchemas           map[string]json.RawMessage                    `json:"args_schemas"`
 }
 type UseCase interface {
 	AvailableTools(context.Context, Request) (Result, error)
@@ -105,7 +117,7 @@ func (s *Service) AvailableTools(ctx context.Context, request Request) (Result, 
 			OutboxID: admitted.OutboxID, CommandID: admitted.Outcome.CommandID, ExecutionID: admitted.Outcome.ExecutionID, Generation: 1, DispatchOrdinal: 1, TenantID: project, ResourceProjectID: project, ProjectionProjectID: project, PrincipalRef: actor,
 			InputBundleID: admitted.InputBundle.ID, InputBundleVersion: admitted.InputBundle.Version, InputBundleMediaType: admitted.InputBundle.MediaType, InputBundleByteLength: uint64(len(admitted.InputBundle.Manifest)), InputBundleDigest: admitted.InputBundle.Digest,
 			CapabilityID: executiondomain.ToolkitAvailableToolsCapability, CapabilityVersion: s.policy.CapabilityVersion, ResourceClass: s.policy.ResourceClass, IsolationClass: s.policy.IsolationClass, Priority: s.policy.Priority, Deadline: admitted.Outcome.Deadline, LimitsRevision: s.policy.LimitsRevision,
-			ToolkitType: admitted.Binding.ToolkitType, SettingsEntryID: admitted.Binding.SettingsEntryID,
+			ToolkitType: admitted.Binding.ToolkitType, ToolkitID: strconv.FormatInt(request.ToolkitID, 10), SettingsEntryID: admitted.Binding.SettingsEntryID,
 		})
 		if err != nil {
 			return Result{}, err
@@ -144,6 +156,12 @@ func (s *Service) AvailableTools(ctx context.Context, request Request) (Result, 
 			var result Result
 			if json.Unmarshal(content, &result) != nil || result.Tools == nil || result.ArgsSchemas == nil {
 				return Result{}, fmt.Errorf("invalid toolkit discovery result")
+			}
+			if result.AuthorizationRequired != nil {
+				challenge := result.AuthorizationRequired
+				if challenge.Validate() != nil || challenge.ToolkitID != strconv.FormatInt(request.ToolkitID, 10) || challenge.ToolkitType != inputs.ToolkitType || len(result.Tools) != 0 || len(result.ArgsSchemas) != 0 {
+					return Result{}, fmt.Errorf("invalid toolkit discovery authorization")
+				}
 			}
 			return result, nil
 		}
