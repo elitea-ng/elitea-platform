@@ -180,7 +180,8 @@ export function TestToolPane({ projectId, toolkitId, values, renderAuthorization
       // stays on the real pane so that wait keeps its meaning.
       data-testid="edit-toolkit-test-pane-slot"
     >
-      <TestToolSettings
+      {outcome?.kind !== 'authorizationRequired' && <TestToolSettings
+        getAuthorizationReference={getAuthorizationReference}
         renderAuthorization={renderAuthorization ? (props) => renderAuthorization({ ...props, onAuthorized: async (reference) => { rememberAuthorization(reference); await props.onAuthorized(reference); } }) : undefined}
         projectId={projectId}
         toolkitId={toolkitId}
@@ -195,7 +196,7 @@ export function TestToolPane({ projectId, toolkitId, values, renderAuthorization
         values={values}
         indexNameValidation={indexNameValidation}
         toolSchemaRead={toolSchemaRead}
-      />
+      />}
       {outcome?.kind === 'authorizationRequired' && !isRunning && (
         renderAuthorization && projectId !== undefined
           ? renderAuthorization({ projectId: String(projectId), challenge: outcome.challenge, onAuthorized: authorize, onSkip: skip })

@@ -17,6 +17,7 @@ import { server } from '@/test/setup';
 import { createTestQueryClient } from '../../__tests__/testUtils';
 
 import { TestToolPane } from './TestToolPane';
+import { rememberToolkitTest, forgetToolkitTest } from '../../api/toolkitTestRecovery';
 
 configure({ asyncUtilTimeout: 5_000 });
 vi.setConfig({ testTimeout: 30_000 });
@@ -41,10 +42,12 @@ const GITHUB_SCHEMA = {
   },
 };
 
-function renderWithHarness(ui: ReactElement) {
+function renderWithHarness(ui: ReactElement, staleTime = 0) {
+  const queryClient = createTestQueryClient();
+  queryClient.setDefaultOptions({ queries: { ...queryClient.getDefaultOptions().queries, staleTime } });
   function RootComponent() {
     return (
-      <QueryClientProvider client={createTestQueryClient()}>
+      <QueryClientProvider client={queryClient}>
         <ThemeProvider
           theme={theme}
           defaultMode={DEFAULT_COLOR_SCHEME}
@@ -199,4 +202,40 @@ describe('TestToolPane', () => {
       expect(screen.queryByTestId('test-tool-result')).not.toBeInTheDocument();
     });
   });
+});
+
+
+it('shows one authorization control for a recovered call and reuses its grant for discovery', async () => {
+  const challenge = { toolkit_id: '19', toolkit_name: 'Saved', toolkit_type: 'mcp', server_url: 'https://example.test/' };
+  let submitted: unknown;
+  let authorizedDiscovery = false;
+  rememberToolkitTest('7', '19', 'saved-auth');
+  server.use(
+    http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({ mcp: {} })),
+    http.get('/api/v2/elitea_core/toolkit_available_tools/prompt_lib/7/19', ({ request }) => {
+      authorizedDiscovery = request.headers.get('X-MCP-Authorization-Reference') === 'a'.repeat(43);
+      return HttpResponse.json(authorizedDiscovery
+        ? { tools: [{ name: 'echo_marker' }], args_schemas: {} }
+        : { tools: [], args_schemas: {}, authorization_required: challenge });
+    }),
+    http.get('/api/v2/elitea_core/test_tool/prompt_lib/7/19/saved-auth', () => HttpResponse.json({
+      task_id: 'saved-auth', reason: 'authorization_required', authorization_required: challenge,
+      authorization_retry: { tool_name: 'echo_marker', tool_params: { marker: 'frozen-input' } },
+    }, { status: 409 })),
+    http.post(RUN_PATH, async ({ request }) => {
+      submitted = await request.json();
+      return HttpResponse.json({ ok: true, result: 'frozen-input' });
+    }),
+  );
+  try {
+    renderWithHarness(<TestToolPane projectId="7" toolkitId="19" values={{ type: 'mcp', settings: {} }} renderAuthorization={({ onAuthorized }) => <button onClick={() => { void onAuthorized('a'.repeat(43)); }}>Authorize</button>} />, 30_000);
+    await waitFor(() => expect(screen.getByTestId('test-tool-result')).toHaveAttribute('data-status', 'authorizationRequired'));
+    expect(screen.getAllByRole('button', { name: /^Authorize$/ })).toHaveLength(1);
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole('button', { name: /^Authorize$/ }));
+    await waitFor(() => expect(screen.getByTestId('test-tool-result')).toHaveAttribute('data-status', 'ok'));
+    expect(submitted).toMatchObject({ tool_name: 'echo_marker', tool_params: { marker: 'frozen-input' }, mcp_authorization_reference: 'a'.repeat(43) });
+    await waitFor(() => expect(authorizedDiscovery).toBe(true));
+    expect(screen.queryByRole('button', { name: /^Authorize$/ })).not.toBeInTheDocument();
+  } finally { forgetToolkitTest('7', '19'); }
 });

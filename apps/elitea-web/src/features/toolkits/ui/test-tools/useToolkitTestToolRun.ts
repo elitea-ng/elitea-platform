@@ -127,6 +127,7 @@ export function useToolkitTestToolRun({ projectId, toolkitId }: UseToolkitTestTo
   const authorize = useCallback(async (reference: string) => {
     const pending = pendingRef.current;
     if (!pending || !mountedRef.current || pending.press !== currentPressRef.current || !/^[A-Za-z0-9_-]{43}$/.test(reference)) return;
+    authorizationReference.current = reference;
     pendingRef.current = undefined;
     forgetToolkitTest(projectId, toolkitId);
     setIsRunning(true);

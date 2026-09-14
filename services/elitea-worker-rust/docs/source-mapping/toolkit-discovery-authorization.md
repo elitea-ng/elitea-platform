@@ -1,6 +1,6 @@
 # Toolkit discovery authorization
 
-Status: deployed discovery authorization and invocation pass headed-browser acceptance on 2026-09-14. The separate pending-call reload check remains open.
+Status: deployed discovery authorization, invocation, and pending-call reload pass headed-browser acceptance on 2026-09-14.
 
 ## Source mapping
 
@@ -88,3 +88,33 @@ The schema-read regression confirms that the authorized argument request carries
 The selected-schema suite passes 10 tests; the test-run hook suite passes nine tests.
 The earlier combined picker, schema, and run suites pass 37 tests before the final schema-reference assertion is added.
 Full production, replacement-soak, and point 4 or point 5 acceptance are not claimed here.
+
+## Pending-call reload correction
+
+A browser fault injection omits one opaque reference after successful discovery authorization.
+The server returns the expected HTTP 409 challenge; it does not invoke the protected tool.
+Reload recovers the original call but initially shows both discovery and call authorization controls.
+The pending call now owns the single control until its authorization resolves.
+Its immutable arguments remain in the existing server result contract.
+A successful retry retains the new reference for subsequent discovery and argument reads.
+An authorized remount refreshes discovery despite the production 30-second cache period.
+Eight pane tests pass, including the duplicate-control and cache regression with production cache timing.
+This change does not alter external MCP, HITL graphs, or sensitive-tool decisions.
+
+## Completed pending-call browser acceptance
+
+A fresh headed Chrome session creates temporary toolkit 67 and completes discovery OAuth.
+The test omits one opaque reference from the first Run Tool request to trigger the real authorization boundary.
+Execution `8bf9682a0c85465d1bc497716f522dab` returns HTTP 409 and the expected public challenge.
+Reload reads the saved execution and displays exactly one Authorize control.
+The user completes fixture consent again without selecting a tool or re-entering its arguments.
+Execution `a5f8c215b61f52d6f773b79b970da060` returns HTTP 200, `ok: true`, and the original marker.
+The result is visible, the tool selector returns, and no Authorize control remains.
+Toolkit cleanup returns HTTP 204.
+Evidence files are `elitea-native-auth-reload-final.log` and `elitea-native-auth-reload-success.png`.
+Web image: `sha256:d854a9c8a0daaf50606e9acd2783c10b4ed04c03da28346ac746974377b5d428`.
+Main and Rust retain the images recorded above.
+TypeScript checking, focused lint, and all eight pane tests pass.
+
+This proof covers a received challenge followed by reload.
+It does not cover connection loss before the browser receives an execution identity.

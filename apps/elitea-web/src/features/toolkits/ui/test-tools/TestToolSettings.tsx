@@ -114,6 +114,7 @@ import type { LLMModelSelectorProps } from '../../indexes/ui/IndexDetails/IndexC
  * file's own logic.
  */
 export interface TestToolSettingsProps {
+  readonly getAuthorizationReference?: (() => string | undefined) | undefined;
   readonly renderAuthorization?: TestToolPaneProps['renderAuthorization'];
   readonly projectId?: string | number | undefined;
   readonly toolkitId?: string | number | undefined;
@@ -268,6 +269,7 @@ export function TestToolSettings(props: TestToolSettingsProps): ReactNode {
   // that read is still in flight is not yet "the static tier gave nothing".
   const usesDynamicTier = usesDynamicToolTier(isFetchingSchemas, explicitSelectedTools.length, schemaToolNames.length);
   const dynamicTools = toolkitTools.useToolkitTools({
+    getAuthorizationReference: props.getAuthorizationReference,
     projectId,
     toolkitId,
     toolkitType: values.type,
@@ -381,6 +383,5 @@ const toolSelectContainerSx: SxProps<Theme> = {
   marginTop: '0.5rem',
   paddingRight: '0.5rem',
 };
-
 
 

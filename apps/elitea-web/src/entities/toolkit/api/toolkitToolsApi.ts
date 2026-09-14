@@ -100,6 +100,7 @@ export async function discoverToolkitTools(params: DiscoverToolsParams, signal?:
 }
 
 export interface UseToolkitToolsParams {
+  readonly getAuthorizationReference?: (() => string | undefined) | undefined;
   /** The project that owns the toolkit. An empty value disables both queries. */
   readonly projectId: string | undefined;
   /** A saved toolkit instance. Present: read its own attached tools. */
@@ -130,14 +131,17 @@ export interface UseToolkitToolsResult {
  * attached to a saved toolkit are the exact set the user may run. The type
  * route is the fallback for a toolkit that has no id yet.
  */
-function referenceFor(identity: string, value: { key: string; reference: string } | undefined): string | undefined {
-  return value?.key === identity ? value.reference : undefined;
+function referenceFor(identity: string, value: { key: string; reference: string } | undefined, fallback?: () => string | undefined): string | undefined {
+  return value?.key === identity ? value.reference : fallback?.();
 }
 function discoveryAuthorization(payload: ToolkitToolsPayload | undefined): unknown {
   return payload?.authorization_required;
 }
 function discoveryIsEmpty(success: boolean, tools: readonly ToolkitTool[], payload: ToolkitToolsPayload | undefined): boolean {
   return success && tools.length === 0 && payload?.authorization_required === undefined;
+}
+function authorizedRemount(reference?: () => string | undefined): true | 'always' {
+  return reference?.() ? 'always' : true;
 }
 
 export function useToolkitTools(params: UseToolkitToolsParams): UseToolkitToolsResult {
@@ -152,9 +156,10 @@ export function useToolkitTools(params: UseToolkitToolsParams): UseToolkitToolsR
     queryKey: [...TOOLKIT_TOOLS_QUERY_ROOT, projectId ?? '', key],
     queryFn: ({ signal }) =>
       byInstance
-        ? fetchAvailableTools({ projectId: projectId ?? '', toolkitId: toolkitId ?? '', authorizationReference: referenceFor(identity, authorization.current) }, signal)
+        ? fetchAvailableTools({ projectId: projectId ?? '', toolkitId: toolkitId ?? '', authorizationReference: referenceFor(identity, authorization.current, params.getAuthorizationReference) }, signal)
         : discoverToolkitTools({ projectId: projectId ?? '', toolkitType: toolkitType ?? '' }, signal),
     enabled: enabled && isAddressable,
+    refetchOnMount: authorizedRemount(params.getAuthorizationReference),
     retry: false,
   });
 
