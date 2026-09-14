@@ -1,6 +1,6 @@
 # Internal chat runtime contract
 
-Status: source review complete; message-send implementation remains pending.
+Status: message sending is implemented and deployed. Remaining acceptance boundaries appear below.
 This contract follows the user's external-MCP restriction on interrupt decisions.
 
 ## Current platform evidence
@@ -25,10 +25,10 @@ Both methods belong to `application/agentexecution.CurrentApplicationStartServic
 The start response includes execution, command, response-message, and event-stream identities.
 The repository validates conversation and participant authority during durable admission.
 
-`mcp.AgentStartUseCase` currently exposes only the saved-application method.
+Before this change, `mcp.AgentStartUseCase` exposes only the saved-application method.
 The send adapter also needs the existing ad-hoc method; changing only the tool catalogue cannot supply ordinary chat execution.
-`mcp/internal_chat_execute.go` currently dispatches eleven data operations through shared handlers.
-It has no message-send operation or durable result observer.
+The existing data adapter dispatches eleven operations through shared handlers.
+The new send adapter adds durable admission and observation beside those operations.
 
 `mcp/execute.go::awaitRunResultWithMode` already observes a bound response message with a finite deadline.
 Its timeout does not cancel durable work. Its terminal mapper refuses partial results when guards remain pending.
@@ -58,7 +58,7 @@ The external MCP result reports a pause as incomplete work and identifies the co
 This restriction also prevents an internal model from approving its own sensitive operation through the MCP catalogue.
 
 The earlier point 3 audit lists two missing runtime operations without this distinction.
-Message sending remains implementation work. Legacy interrupt-decision publication is intentionally excluded by user steering.
+Message sending now uses the shared runtime. Legacy interrupt-decision publication is intentionally excluded by user steering.
 This does not remove browser continuation, recovery, or exact interrupt-ownership requirements from the wider worker goal.
 
 ## Required verification
@@ -84,7 +84,7 @@ The resolver creates no execution and has no fallback admission path.
 
 `TestInternalChatSendTarget*` passes application isolation, principal preservation, catalog membership, and target-refusal cases.
 These tests use handler doubles. They do not establish database authority or deployed message sending.
-The resolver is not yet connected to a published tool; admission and result observation remain pending.
+The send adapter below connects this resolver to the published tool.
 
 ## Send adapter and deployed acceptance
 
@@ -121,5 +121,16 @@ The preceding ordinary run in chat 577 completes, but the model declines to repe
 Its persisted answer confirms model refusal; that run does not pass the marker assertion.
 No transport fix is inferred from the later successful run.
 
-Live same-project operation denial, paused send, and idempotent repeated-question acceptance remain unverified for this new adapter.
+Live send-operation denial and paused send remain unverified for this adapter.
 General external MCP pause and replay proofs do not substitute for those adapter-specific checks.
+
+## Repeated-question acceptance
+
+Two independent MCP submissions reuse question `df87c297-5c8a-4c18-b47a-ed428dc4360b` in chat 579.
+Both return execution `f0407b3b9ae1f8d495614a70f722e691` and response `adc4af00-282d-567a-bd5b-b426b3fade02`.
+Both report completion with the same saved answer.
+A headed browser verifies the answer after each submission.
+A subsequent database query counts exactly one question row for that UUID.
+The temporary PAT revocation returns HTTP 204.
+Evidence is `elitea-chat-send-repeat.log`.
+This proves sequential repeated-question admission; it does not prove simultaneous submissions or disconnected observation.
