@@ -41,19 +41,22 @@
  */
 import * as zod from "zod";
 
-export const tagApplicationCountMin = 0;
+export const ListToolkitAvailableTools200 = zod.object({
+  tools: zod.array(
+    zod.object({
+      name: zod.string(),
+      description: zod.string(),
+    }),
+  ),
+  args_schemas: zod.record(
+    zod.string(),
+    zod.record(zod.string(), zod.unknown()),
+  ),
+});
 
-export const tagSkillCountMin = 0;
-
-export const Tag = zod
-  .object({
-    id: zod.int(),
-    name: zod.string(),
-    application_count: zod.int().min(tagApplicationCountMin).optional(),
-    skill_count: zod.int().min(tagSkillCountMin).optional(),
-    data: zod.unknown().nullable(),
-  })
-  .describe("NOTE(W2): internal\/api\/v2\/tags\/handler.go:13-17.\n");
-
-export type Tag = zod.input<typeof Tag>;
-export type TagOutput = zod.output<typeof Tag>;
+export type ListToolkitAvailableTools200 = zod.input<
+  typeof ListToolkitAvailableTools200
+>;
+export type ListToolkitAvailableTools200Output = zod.output<
+  typeof ListToolkitAvailableTools200
+>;

@@ -40,20 +40,14 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { SearchOption } from "./searchOption.zod";
 
-export const tagApplicationCountMin = 0;
+export const searchOptionPageTotalMin = 0;
 
-export const tagSkillCountMin = 0;
+export const SearchOptionPage = zod.object({
+  total: zod.int().min(searchOptionPageTotalMin),
+  rows: zod.array(SearchOption),
+});
 
-export const Tag = zod
-  .object({
-    id: zod.int(),
-    name: zod.string(),
-    application_count: zod.int().min(tagApplicationCountMin).optional(),
-    skill_count: zod.int().min(tagSkillCountMin).optional(),
-    data: zod.unknown().nullable(),
-  })
-  .describe("NOTE(W2): internal\/api\/v2\/tags\/handler.go:13-17.\n");
-
-export type Tag = zod.input<typeof Tag>;
-export type TagOutput = zod.output<typeof Tag>;
+export type SearchOptionPage = zod.input<typeof SearchOptionPage>;
+export type SearchOptionPageOutput = zod.output<typeof SearchOptionPage>;

@@ -41,19 +41,72 @@
  */
 import * as zod from "zod";
 
-export const tagApplicationCountMin = 0;
+export const getSearchOptionsParamsEntitiesMax = 7;
 
-export const tagSkillCountMin = 0;
+export const getSearchOptionsParamsQueryMax = 1024;
 
-export const Tag = zod
-  .object({
-    id: zod.int(),
-    name: zod.string(),
-    application_count: zod.int().min(tagApplicationCountMin).optional(),
-    skill_count: zod.int().min(tagSkillCountMin).optional(),
-    data: zod.unknown().nullable(),
-  })
-  .describe("NOTE(W2): internal\/api\/v2\/tags\/handler.go:13-17.\n");
+export const getSearchOptionsParamsLimitMin = 0;
+export const getSearchOptionsParamsLimitMax = 1000;
 
-export type Tag = zod.input<typeof Tag>;
-export type TagOutput = zod.output<typeof Tag>;
+export const getSearchOptionsParamsOffsetMin = 0;
+export const getSearchOptionsParamsOffsetMax = 100000;
+
+export const getSearchOptionsParamsTagsMax = 100;
+
+export const getSearchOptionsParamsStatusesItemMax = 64;
+
+export const getSearchOptionsParamsStatusesMax = 32;
+
+export const getSearchOptionsParamsToolkitTypeMax = 128;
+
+export const getSearchOptionsParamsTypeFilterMax = 128;
+
+export const getSearchOptionsParamsSectionMax = 128;
+
+export const GetSearchOptionsParams = zod.object({
+  "entities[]": zod
+    .array(
+      zod.enum([
+        "application",
+        "pipeline",
+        "toolkit",
+        "credential",
+        "skill",
+        "tag",
+        "collection",
+      ]),
+    )
+    .max(getSearchOptionsParamsEntitiesMax),
+  query: zod.string().max(getSearchOptionsParamsQueryMax).optional(),
+  limit: zod
+    .int()
+    .min(getSearchOptionsParamsLimitMin)
+    .max(getSearchOptionsParamsLimitMax)
+    .optional(),
+  offset: zod
+    .int()
+    .min(getSearchOptionsParamsOffsetMin)
+    .max(getSearchOptionsParamsOffsetMax)
+    .optional(),
+  author_id: zod.int().min(1).optional(),
+  "tags[]": zod
+    .array(zod.int().min(1))
+    .max(getSearchOptionsParamsTagsMax)
+    .optional(),
+  "statuses[]": zod
+    .array(zod.string().max(getSearchOptionsParamsStatusesItemMax))
+    .max(getSearchOptionsParamsStatusesMax)
+    .optional(),
+  include_shared: zod.boolean().optional(),
+  toolkit_type: zod
+    .string()
+    .max(getSearchOptionsParamsToolkitTypeMax)
+    .optional(),
+  type_filter: zod.string().max(getSearchOptionsParamsTypeFilterMax).optional(),
+  section: zod.string().max(getSearchOptionsParamsSectionMax).optional(),
+});
+
+export type GetSearchOptionsParams = zod.input<typeof GetSearchOptionsParams>;
+export type GetSearchOptionsParamsOutput = zod.output<
+  typeof GetSearchOptionsParams
+>;

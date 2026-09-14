@@ -39,4 +39,5 @@ Skip displays the skipped result. The fixture's protected-call count remains 15.
 
 Consent exposes a separate `oauth_resource_mismatch` failure during token exchange.
 The OpenAPI flow omits the optional provider resource parameter, but reference storage currently requires that parameter.
-This failure remains open. Picker and Skip evidence do not close the authorization retry gate.
+The [reference binding follow-up](toolkit-test-reference-binding.md) records the repair and successful delegated retry.
+Picker and Skip evidence alone do not close the authorization retry gate.

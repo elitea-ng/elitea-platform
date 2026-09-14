@@ -34,5 +34,6 @@ The temporary TLS server stops automatically. The temporary toolkit is removed a
 This proves cancellation through the existing administrative route after provider invocation starts.
 It does not prove rollback of a provider-side effect.
 The active Toolkit Test pane has no user-facing Cancel control.
-That UI/API integration remains open and must preserve project and actor authorization.
+The user excludes a new Cancel control from this gate.
+The existing administrative cancellation route supplies this verification boundary.
 Worker replacement and recovery remain separate acceptance requirements.

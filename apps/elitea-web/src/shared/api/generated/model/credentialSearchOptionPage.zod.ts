@@ -40,20 +40,22 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { SearchOption } from "./searchOption.zod";
 
-export const tagApplicationCountMin = 0;
+export const credentialSearchOptionPageTotalMin = 0;
 
-export const tagSkillCountMin = 0;
-
-export const Tag = zod
+export const CredentialSearchOptionPage = zod
   .object({
-    id: zod.int(),
-    name: zod.string(),
-    application_count: zod.int().min(tagApplicationCountMin).optional(),
-    skill_count: zod.int().min(tagSkillCountMin).optional(),
-    data: zod.unknown().nullable(),
+    total: zod.int().min(credentialSearchOptionPageTotalMin).optional(),
+    rows: zod.array(SearchOption),
   })
-  .describe("NOTE(W2): internal\/api\/v2\/tags\/handler.go:13-17.\n");
+  .describe(
+    "Requested credential results omit total, as the current Core response does.",
+  );
 
-export type Tag = zod.input<typeof Tag>;
-export type TagOutput = zod.output<typeof Tag>;
+export type CredentialSearchOptionPage = zod.input<
+  typeof CredentialSearchOptionPage
+>;
+export type CredentialSearchOptionPageOutput = zod.output<
+  typeof CredentialSearchOptionPage
+>;

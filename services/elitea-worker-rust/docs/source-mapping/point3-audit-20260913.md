@@ -81,3 +81,9 @@ A later browser HITL decision is not an additional external-MCP progression requ
 The user defers external MCP elicitation on 2026-09-14.
 `external-mcp-elicitation-deferred.md` records client capability requirements and the distinction between client permission and Elitea approval.
 This option is not a point 3 completion requirement.
+
+## Delivery reconciliation, 2026-09-14
+
+The [delivery reconciliation](point3-delivery-reconciliation.md) records the remaining model-default, API-contract, and verification changes.
+It also corrects stale history statements about committed runtime repairs.
+The restricted chat-operation permission matrix remains open.

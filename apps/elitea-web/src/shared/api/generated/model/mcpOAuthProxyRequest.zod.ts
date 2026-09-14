@@ -45,6 +45,8 @@ export const mcpOAuthProxyRequestGrantTypeDefault = `authorization_code`;
 export const mcpOAuthProxyRequestUsedDcrDefault = false;
 export const mcpOAuthProxyRequestToolkitIdTwoMax = 2147483647;
 
+export const mcpOAuthProxyRequestAuthorizationReferenceOnlyDefault = false;
+
 export const McpOAuthProxyRequest = zod
   .object({
     token_endpoint: zod.url(),
@@ -84,6 +86,12 @@ export const McpOAuthProxyRequest = zod
       .optional(),
     toolkit_type: zod.string().optional(),
     configuration_uuid: zod.string().optional(),
+    authorization_reference_only: zod
+      .boolean()
+      .default(mcpOAuthProxyRequestAuthorizationReferenceOnlyDefault)
+      .describe(
+        "Return only a stored grant reference for toolkit Test. Requires a saved toolkit and resource.",
+      ),
   })
   .describe(
     "Exchange a code or refresh a delegated grant. Main resolves stored client credentials.",

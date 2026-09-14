@@ -47,6 +47,7 @@ import type { RequestHandlerOptions } from "msw";
 import type {
   GetToolkitToolResult202,
   InternalMcpPatStatus,
+  ListToolkitAvailableTools200,
   McpDcrProxyResponse,
   McpOAuthProxyResponse,
   McpRegisteredServer,
@@ -61,7 +62,26 @@ import type {
 export const getExchangeMcpOAuthGrantResponseMock = (
   overrideResponse: Partial<Extract<McpOAuthProxyResponse, object>> = {},
 ): McpOAuthProxyResponse => ({
-  access_token: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  authorization_resource: faker.helpers.arrayElement([
+    faker.internet.url(),
+    undefined,
+  ]),
+  authorization_reference: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 43, max: 43 } }),
+    undefined,
+  ]),
+  authorization_revision: faker.helpers.arrayElement([
+    faker.number.int({ min: 1, max: 1 }),
+    undefined,
+  ]),
+  authorization_expires_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  access_token: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   token_type: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
@@ -221,21 +241,18 @@ export const getCreateToolkitResponseMock = (
 });
 
 export const getListToolkitAvailableToolsResponseMock = (
-  overrideResponse: Partial<Extract<ToolkitToolsPayload, object>> = {},
-): ToolkitToolsPayload => ({
+  overrideResponse: Partial<Extract<ListToolkitAvailableTools200, object>> = {},
+): ListToolkitAvailableTools200 => ({
   tools: Array.from(
     { length: faker.number.int({ min: 1, max: 10 }) },
     (_, i) => i + 1,
   ).map(() => ({
-    id: faker.string.alpha({ length: { min: 10, max: 20 } }),
     name: faker.string.alpha({ length: { min: 10, max: 20 } }),
-    type: faker.string.alpha({ length: { min: 10, max: 20 } }),
-    description: faker.helpers.arrayElement([
-      faker.string.alpha({ length: { min: 10, max: 20 } }),
-      undefined,
-    ]),
+    description: faker.string.alpha({ length: { min: 10, max: 20 } }),
   })),
-  total: faker.number.int(),
+  args_schemas: {
+    [faker.string.alphanumeric(5)]: {},
+  },
   ...overrideResponse,
 });
 
@@ -540,10 +557,11 @@ export const getCreateToolkitMockHandler = (
 
 export const getListToolkitAvailableToolsMockHandler = (
   overrideResponse?:
-    | ToolkitToolsPayload
+    | ListToolkitAvailableTools200
     | ((
         info: Parameters<Parameters<typeof http.get>[1]>[0],
-      ) => Promise<ToolkitToolsPayload> | ToolkitToolsPayload),
+      ) =>
+        Promise<ListToolkitAvailableTools200> | ListToolkitAvailableTools200),
   options?: RequestHandlerOptions,
 ) => {
   return http.get(

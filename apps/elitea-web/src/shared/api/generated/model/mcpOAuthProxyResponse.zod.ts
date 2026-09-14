@@ -41,15 +41,44 @@
  */
 import * as zod from "zod";
 
-export const McpOAuthProxyResponse = zod.object({
-  access_token: zod.string(),
-  token_type: zod.string().optional(),
-  refresh_token: zod.string().optional(),
-  id_token: zod.string().optional(),
-  session_id: zod.string().optional(),
-  scope: zod.string().optional(),
-  expires_in: zod.union([zod.number(), zod.string()]).optional(),
-});
+export const mcpOAuthProxyResponseAuthorizationReferenceMin = 43;
+export const mcpOAuthProxyResponseAuthorizationReferenceMax = 43;
+
+export const mcpOAuthProxyResponseAuthorizationRevisionMax = 1;
+
+export const McpOAuthProxyResponse = zod
+  .object({
+    authorization_resource: zod
+      .url()
+      .optional()
+      .describe(
+        "Saved toolkit resource that binds the authorization reference.",
+      ),
+    authorization_reference: zod
+      .string()
+      .min(mcpOAuthProxyResponseAuthorizationReferenceMin)
+      .max(mcpOAuthProxyResponseAuthorizationReferenceMax)
+      .optional()
+      .describe(
+        "Opaque grant bound to the authenticated actor, project, saved toolkit, and resource.",
+      ),
+    authorization_revision: zod
+      .int()
+      .min(1)
+      .max(mcpOAuthProxyResponseAuthorizationRevisionMax)
+      .optional(),
+    authorization_expires_at: zod.iso.datetime({ offset: true }).optional(),
+    access_token: zod.string().optional(),
+    token_type: zod.string().optional(),
+    refresh_token: zod.string().optional(),
+    id_token: zod.string().optional(),
+    session_id: zod.string().optional(),
+    scope: zod.string().optional(),
+    expires_in: zod.union([zod.number(), zod.string()]).optional(),
+  })
+  .describe(
+    "Reference-only exchanges return authorization_reference. Other exchanges retain the access_token response.",
+  );
 
 export type McpOAuthProxyResponse = zod.input<typeof McpOAuthProxyResponse>;
 export type McpOAuthProxyResponseOutput = zod.output<

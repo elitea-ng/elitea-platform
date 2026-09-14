@@ -57,6 +57,7 @@ import type {
   GetToolkitToolResult202,
   GetToolkitToolResultParams,
   InternalMcpPatStatus,
+  ListToolkitAvailableTools200,
   ListToolkitInstancesParams,
   McpDcrProxyRequest,
   McpDcrProxyResponse,
@@ -1970,8 +1971,13 @@ export function useCreateToolkit<
 }
 
 export type listToolkitAvailableToolsResponse200 = {
-  data: ToolkitToolsPayload;
+  data: ListToolkitAvailableTools200;
   status: 200;
+};
+
+export type listToolkitAvailableToolsResponse400 = {
+  data: N400Response;
+  status: 400;
 };
 
 export type listToolkitAvailableToolsResponse401 = {
@@ -1984,9 +1990,24 @@ export type listToolkitAvailableToolsResponse403 = {
   status: 403;
 };
 
+export type listToolkitAvailableToolsResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type listToolkitAvailableToolsResponse422 = {
+  data: void;
+  status: 422;
+};
+
 export type listToolkitAvailableToolsResponse500 = {
   data: N500Response;
   status: 500;
+};
+
+export type listToolkitAvailableToolsResponse503 = {
+  data: void;
+  status: 503;
 };
 
 export type listToolkitAvailableToolsResponseSuccess =
@@ -1994,9 +2015,13 @@ export type listToolkitAvailableToolsResponseSuccess =
     headers: Headers;
   };
 export type listToolkitAvailableToolsResponseError = (
+  | listToolkitAvailableToolsResponse400
   | listToolkitAvailableToolsResponse401
   | listToolkitAvailableToolsResponse403
+  | listToolkitAvailableToolsResponse404
+  | listToolkitAvailableToolsResponse422
   | listToolkitAvailableToolsResponse500
+  | listToolkitAvailableToolsResponse503
 ) & {
   headers: Headers;
 };
@@ -2007,33 +2032,22 @@ export type listToolkitAvailableToolsResponse =
 
 export const getListToolkitAvailableToolsUrl = (
   projectId: string,
-  toolkitId: string,
+  toolkitId: number,
 ) => {
   return `/elitea_core/toolkit_available_tools/prompt_lib/${projectId}/${toolkitId}`;
 };
 
 /**
- * NOTE(#440): internal/api/v2/toolkits/handler.go:511-523
- * (AvailableTools) calling pgRepo.AvailableTools (:1086-1101). The query
- * joins `entity_tool_mapping` to `elitea_tools` on the toolkit id.
- * Registered at internal/api/router.go:1911-1912.
- *
- * GUARDRAILS FILTER THE RESULT. `filterBlockedTools`
- * (internal/api/v2/toolkits/guardrails.go:120-132) drops every row whose
- * TYPE this deployment blocks. The response stays 200 and the count
- * follows the filtered list, because a blocked type is not a tool the
- * caller may run.
- *
- * A LOST READ IS NOT AN EMPTY CATALOGUE (#381). Any repository fault —
- * a dead pool, a missing tenant schema, a bad row, a row set that ends
- * early — gives 500 with `{"error": "available tools read failed"}`. The
- * driver detail goes to the log only. A toolkit with no tools gives 200
- * and an empty array.
- * @summary List the tools that one toolkit instance has
+ * Main reads the saved toolkit with the authenticated actor's access.
+ * Main freezes configuration references and operator guardrails before admission.
+ * The worker discovers tools from those immutable inputs.
+ * The response contains the accepted immutable result artifact.
+ * Discovery is unavailable until the runtime activation flag is enabled.
+ * @summary Discover tools and argument schemas from one saved toolkit
  */
 export const listToolkitAvailableTools = async (
   projectId: string,
-  toolkitId: string,
+  toolkitId: number,
   options?: Parameters<typeof eliteaFetch>[1],
 ): Promise<listToolkitAvailableToolsResponse> => {
   return eliteaFetch<listToolkitAvailableToolsResponse>(
@@ -2047,7 +2061,7 @@ export const listToolkitAvailableTools = async (
 
 export const getListToolkitAvailableToolsQueryKey = (
   projectId: string,
-  toolkitId: string,
+  toolkitId: number,
 ) => {
   return [
     `/elitea_core/toolkit_available_tools/prompt_lib/${projectId}/${toolkitId}`,
@@ -2056,10 +2070,16 @@ export const getListToolkitAvailableToolsQueryKey = (
 
 export const getListToolkitAvailableToolsQueryOptions = <
   TData = Awaited<ReturnType<typeof listToolkitAvailableTools>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | void
+    | N500Response,
 >(
   projectId: string,
-  toolkitId: string,
+  toolkitId: number,
   options?: {
     query?: Partial<
       UseQueryOptions<
@@ -2105,14 +2125,25 @@ export type ListToolkitAvailableToolsQueryResult = NonNullable<
   Awaited<ReturnType<typeof listToolkitAvailableTools>>
 >;
 export type ListToolkitAvailableToolsQueryError =
-  N401Response | N403Response | N500Response;
+  | N400Response
+  | N401Response
+  | N403Response
+  | N404Response
+  | void
+  | N500Response;
 
 export function useListToolkitAvailableTools<
   TData = Awaited<ReturnType<typeof listToolkitAvailableTools>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | void
+    | N500Response,
 >(
   projectId: string,
-  toolkitId: string,
+  toolkitId: number,
   options: {
     query: Partial<
       UseQueryOptions<
@@ -2137,10 +2168,16 @@ export function useListToolkitAvailableTools<
 };
 export function useListToolkitAvailableTools<
   TData = Awaited<ReturnType<typeof listToolkitAvailableTools>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | void
+    | N500Response,
 >(
   projectId: string,
-  toolkitId: string,
+  toolkitId: number,
   options?: {
     query?: Partial<
       UseQueryOptions<
@@ -2165,10 +2202,16 @@ export function useListToolkitAvailableTools<
 };
 export function useListToolkitAvailableTools<
   TData = Awaited<ReturnType<typeof listToolkitAvailableTools>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | void
+    | N500Response,
 >(
   projectId: string,
-  toolkitId: string,
+  toolkitId: number,
   options?: {
     query?: Partial<
       UseQueryOptions<
@@ -2184,15 +2227,21 @@ export function useListToolkitAvailableTools<
   queryKey: DataTag<QueryKey, TData, TError>;
 };
 /**
- * @summary List the tools that one toolkit instance has
+ * @summary Discover tools and argument schemas from one saved toolkit
  */
 
 export function useListToolkitAvailableTools<
   TData = Awaited<ReturnType<typeof listToolkitAvailableTools>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | void
+    | N500Response,
 >(
   projectId: string,
-  toolkitId: string,
+  toolkitId: number,
   options?: {
     query?: Partial<
       UseQueryOptions<

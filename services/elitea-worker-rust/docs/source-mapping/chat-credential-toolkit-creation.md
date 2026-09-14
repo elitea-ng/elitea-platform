@@ -237,3 +237,49 @@ No heavy detail request occurs before a step opens.
 Opening `get_issues` requests trace 7279 with `message_group_id=5820`.
 The stored result and the answer are accessible after reload.
 This closes the observed reload gap for the saved-agent lifecycle case.
+
+### Toolkit terminal recovery repair
+
+The earlier Toolkit Test execution retains its result but has no `projected_at` marker.
+The previous Main toolkit writer omitted this marker.
+Rust retries the stored terminal result with a replacement claim.
+Main rejects that changed fence as a conflict with the durable result.
+The execution therefore remains active although the provider returned successfully.
+
+`internal/infra/db/repos/toolkit_inbox_recovery.go` completes this marker within the Main claim transaction.
+The repair applies only to call-tool and available-tools result payloads.
+These results have no product projection outside the durable inbox.
+Other result types must complete their own product projection.
+The existing claim recovery validates the stored settlement and authenticates the replacement fence.
+The settlement path accepts an expired predecessor result without another provider call.
+The shared projection marker now accepts exact replay and retains its original timestamp.
+A missing output still returns an error.
+No database schema change is required.
+
+The Rust mapping remains `src/execution/toolkit_output.rs` and `src/protocol/control.rs`.
+Rust retains terminal intent across claim replacement.
+Main owns the durable projection and settlement rules.
+The current Python Toolkit Test path is the functionality reference; it does not define this new transport recovery contract.
+
+The PostgreSQL regression covers both toolkit result types and a configuration-validation exclusion.
+It also verifies recovered settlement preparation, stable replay timestamps, and missing-output rejection.
+These are database integration checks, not provider or browser execution checks.
+
+Main image `sha256:e2ba87865ee38e46bf552058a682a7022967a85b4b8411e9ab326128c730ba57` contains the recovery repair.
+The deployment retains the environment and runs with no active claim.
+Execution `f4fe3c68e17ec2ed38c28f12b2da8719` reaches `SUCCEEDED` at 19:26:12 UTC on 2026-09-10.
+Its existing output receives the marker and a committed successful settlement.
+Rust reports `toolkit_delivery.redelivery_retired` for the same Redis entry.
+The recovery uses the stored result and does not restart provider execution.
+
+A fresh Playwright Toolkit Test returns HTTP 200 with 100 visible GitHub issue rows.
+Its execution is `35ce416c493b464e087bd729ed773650`.
+Its request ID is `5ef5123a-7073-450c-af3c-66756a1175b6`.
+The database confirms its projection marker and committed `SUCCEEDED` settlement.
+The Run Tool control becomes available again.
+The first browser response watcher used the wrong path and timed out; the UI operation itself completed.
+The next watcher uses the actual `/test_tool/` route and records the successful response.
+
+Commit `72f509c7` includes this recovery repair and its toolkit-discovery dependencies.
+The later request-recovery ledger records recovery before the browser receives an execution ID.
+See [Toolkit Test request recovery](toolkit-request-recovery.md) for that separate case.

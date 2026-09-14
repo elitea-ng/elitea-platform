@@ -41,19 +41,11 @@
  */
 import * as zod from "zod";
 
-export const tagApplicationCountMin = 0;
+export const SearchOption = zod.object({
+  id: zod.int(),
+  name: zod.string().nullable(),
+  type: zod.string().optional(),
+});
 
-export const tagSkillCountMin = 0;
-
-export const Tag = zod
-  .object({
-    id: zod.int(),
-    name: zod.string(),
-    application_count: zod.int().min(tagApplicationCountMin).optional(),
-    skill_count: zod.int().min(tagSkillCountMin).optional(),
-    data: zod.unknown().nullable(),
-  })
-  .describe("NOTE(W2): internal\/api\/v2\/tags\/handler.go:13-17.\n");
-
-export type Tag = zod.input<typeof Tag>;
-export type TagOutput = zod.output<typeof Tag>;
+export type SearchOption = zod.input<typeof SearchOption>;
+export type SearchOptionOutput = zod.output<typeof SearchOption>;

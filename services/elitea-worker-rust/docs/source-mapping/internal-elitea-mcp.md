@@ -594,22 +594,21 @@ fallback.
 Current Main implements skill, application, and project-context draft generation
 in `internal/api/v2/drafts/drafts.go`. `internal/api/router.go` composes those
 REST handlers with the shared completion client. The earlier claim that Main
-has no model-backed draft operation is stale. Skill and project-context draft
-generation remain unpublished through internal MCP. Their current-platform
+has no model-backed draft operation is stale. Skill and project-context drafting now use the shared Main handlers through internal MCP.
+The [drafting ledger](internal-mcp-drafting.md) records scoped edits and verification. Their current-platform
 `generate_skill_draft.py` and `generate_project_context_draft.py` operations have
 `mcp_tool=True`; `generate_application_draft.py` has `mcp_tool=False` and must
-remain excluded. Before publication, verify permission mapping, the source-owned
-service prompts, failure and validation behavior, and skill edit-by-ID support.
-Current Main refuses skill and application edit-by-ID requests rather than
-returning an incorrect from-scratch draft. Multi-version skills, rich tag metadata,
+remain excluded. The shared draft handler preserves source-owned prompts, validation, and safe failures.
+Skill edits read the selected project, skill, and version without saving.
+Application edit-by-ID remains refused. Multi-version skills, rich tag metadata,
 extended list filters, and actor attribution remain separate parity gates.
 
 Project-context AI draft generation and runtime progressive-disclosure loading
 remain separate gates. Completing builder CRUD does not claim either behavior.
 
-Default-secret metadata and conditional default-name suppression remain a
-shared Main secrets parity gate. The current MCP category cannot fix them in
-isolation because REST and MCP deliberately share the same vault handler.
+Default-secret metadata and conditional suppression now use the shared Main vault handler.
+The [default-secret ledger](internal-mcp-default-secrets.md) records policy, locking, and PostgreSQL proof.
+REST and internal MCP consume the same configured policy.
 
 The Python configuration-list `ids` filter remains a Main parity gate.
 The three typed configuration operations now reuse the production services.

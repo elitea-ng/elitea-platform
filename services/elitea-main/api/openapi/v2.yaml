@@ -227,11 +227,30 @@ components:
             - { type: integer, minimum: 1, maximum: 2147483647 }
         toolkit_type: { type: string }
         configuration_uuid: { type: string }
+        authorization_reference_only:
+          type: boolean
+          default: false
+          description: Return only a stored grant reference for toolkit Test. Requires a saved toolkit and resource.
 
     McpOAuthProxyResponse:
       type: object
-      required: [access_token]
+      description: Reference-only exchanges return authorization_reference. Other exchanges retain the access_token response.
       properties:
+        authorization_resource:
+          type: string
+          format: uri
+          description: Saved toolkit resource that binds the authorization reference.
+        authorization_reference:
+          type: string
+          minLength: 43
+          maxLength: 43
+          description: Opaque grant bound to the authenticated actor, project, saved toolkit, and resource.
+        authorization_revision:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 1
+        authorization_expires_at: { type: string, format: date-time }
         access_token: { type: string }
         token_type: { type: string }
         refresh_token: { type: string }
@@ -6529,6 +6548,8 @@ components:
       properties:
         id: { type: integer }
         name: { type: string }
+        application_count: { type: integer, minimum: 0 }
+        skill_count: { type: integer, minimum: 0 }
         data:
           nullable: true
           x-elitea-passthrough: >-
@@ -7504,19 +7525,45 @@ components:
         internal/api/v2/eliteacore/handler.go:3003-3018 — static list, enabled
         always true; empty array when the request carries no user identity.
 
+    SearchOption:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: integer }
+        name: { type: string, nullable: true }
+        type: { type: string }
+
+    SearchOptionPage:
+      type: object
+      required: [total, rows]
+      properties:
+        total: { type: integer, minimum: 0 }
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/SearchOption' }
+
+    CredentialSearchOptionPage:
+      type: object
+      required: [rows]
+      properties:
+        total: { type: integer, minimum: 0 }
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/SearchOption' }
+      description: Requested credential results omit total, as the current Core response does.
+
     SearchOptions:
       type: object
-      required: [tags, collections]
+      required: [collection, tag, application, pipeline, toolkit, credential, skill]
       properties:
-        tags:
-          type: array
-          items: { type: string }
-        collections:
-          type: array
-          items: { type: object }
-          description: Always empty today (handler.go:187).
-      description: >
-        NOTE(W2): internal/api/v2/eliteacore/handler.go:167-188.
+        collection: { $ref: '#/components/schemas/SearchOptionPage' }
+        tag: { $ref: '#/components/schemas/TagsList' }
+        application: { $ref: '#/components/schemas/SearchOptionPage' }
+        pipeline: { $ref: '#/components/schemas/SearchOptionPage' }
+        toolkit: { $ref: '#/components/schemas/SearchOptionPage' }
+        credential: { $ref: '#/components/schemas/CredentialSearchOptionPage' }
+        skill: { $ref: '#/components/schemas/SearchOptionPage' }
+      description: Actor-scoped search options use seven singular sections. Unrequested sections contain empty rows.
 
     # ---- Social ---------------------------------------------------------
     MemoryContextManagement:
@@ -7981,6 +8028,23 @@ components:
         wins, because the route is what the permission gate resolved
         (response.go:86-95).
       properties:
+        mcp_authorization_reference:
+          type: string
+          minLength: 43
+          maxLength: 43
+          description: Reference from a saved-toolkit OAuth exchange. Main checks actor, project, toolkit, resource, and expiry.
+        llm_model:
+          type: string
+          maxLength: 256
+          description: Saved project model selection for toolkit Test.
+        llm_settings:
+          type: object
+          additionalProperties: false
+          description: Bounded model settings for toolkit Test. Credential values are refused.
+          properties:
+            temperature: { type: number, minimum: 0, maximum: 2 }
+            max_tokens: { type: integer, minimum: -1, maximum: 1048576 }
+            reasoning_effort: { type: string, enum: [none, minimal, low, medium, high, xhigh, max] }
         tool_name:
           type: string
           description: >
@@ -8031,7 +8095,6 @@ components:
             tool_params:
               type: object
               additionalProperties: true
-
 
         ok:
           type: boolean
@@ -9006,10 +9069,7 @@ components:
         is_default:
           type: boolean
           description: >
-            BUG-FOR-BUG: always false from the Go handler. pylon sets it
-            from elitea_core's `default_secret_keys` config
-            (legacy/plugins/secrets/api/v2/secrets.py), which elitea-main
-            does not read.
+            True when the configured default-secret policy includes this name.
       required: [name, secret_name, is_default]
 
     SecretDetail:
@@ -16460,10 +16520,70 @@ paths:
 
   # ==========================================================================
   # SEARCH
-  # NOTE(W1): the former /elitea_core/search/prompt_lib/{project_id} entry was
-  # spec-only drift — the router serves /search_options/prompt_lib/{projectID}
-  # and the UI calls only that shape (src/api/search.js:37). Re-add under the
-  # real path when the search domain is spec'd in W2.
+  # ==========================================================================
+  /elitea_core/search_options/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: getSearchOptions
+      summary: Get visible entity search options
+      tags: [search]
+      parameters:
+        - name: entities[]
+          in: query
+          required: true
+          schema:
+            type: array
+            maxItems: 7
+            items:
+              type: string
+              enum: [application, pipeline, toolkit, credential, skill, tag, collection]
+        - name: query
+          in: query
+          schema: { type: string, maxLength: 1024 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 0, maximum: 1000 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, maximum: 100000 }
+        - name: author_id
+          in: query
+          schema: { type: integer, minimum: 1 }
+        - name: tags[]
+          in: query
+          schema:
+            type: array
+            maxItems: 100
+            items: { type: integer, minimum: 1 }
+        - name: statuses[]
+          in: query
+          schema:
+            type: array
+            maxItems: 32
+            items: { type: string, maxLength: 64 }
+        - name: include_shared
+          in: query
+          schema: { type: boolean }
+        - name: toolkit_type
+          in: query
+          schema: { type: string, maxLength: 128 }
+        - name: type_filter
+          in: query
+          schema: { type: string, maxLength: 128 }
+        - name: section
+          in: query
+          schema: { type: string, maxLength: 128 }
+      responses:
+        '200':
+          description: Visible options
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SearchOptions' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
   # ==========================================================================
 
   # ==========================================================================
@@ -18419,22 +18539,40 @@ paths:
       parameters:
         - name: entity_coverage
           in: query
-          required: false
           schema:
             type: string
             enum: [all, application, pipeline, skill]
           description: >
-            Narrows the list to the tags one KIND of entity carries. A
-            project's `tags` table is shared by everything that can be
-            tagged, so "the tags in this project" and "the tags I can filter
-            agents by" are different sets. `application` is the tags of
-            agents (applications with no pipeline version), `pipeline` the
-            tags of pipelines, `skill` the tags of skill versions. An absent
-            value — or `all` — answers every tag row the project holds,
-            INCLUDING one that nothing carries yet, which is the only way a
-            freshly created tag is visible. A value outside the enum is
-            refused with 400; the legacy implementation answered an empty
-            list, which reads exactly like a project with no tags.
+            Count visible entities with each tag. All coverage merges attached tags from each entity kind.
+            An application with any pipeline version belongs to pipeline coverage.
+            Unattached tags do not appear. Unknown coverage returns 400.
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 0, maximum: 1000 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, maximum: 100000 }
+        - name: query
+          in: query
+          schema: { type: string, maxLength: 1024 }
+        - name: search
+          in: query
+          schema: { type: string, maxLength: 1024 }
+        - name: author_id
+          in: query
+          schema: { type: integer, minimum: 1 }
+        - name: statuses
+          in: query
+          schema: { type: string }
+        - name: my_liked
+          in: query
+          schema: { type: boolean }
+        - name: trend_start_period
+          in: query
+          schema: { type: string, minLength: 19, maxLength: 19 }
+        - name: trend_end_period
+          in: query
+          schema: { type: string, minLength: 19, maxLength: 19 }
       responses:
         '200':
           description: Tags
@@ -18679,44 +18817,47 @@ paths:
       - name: toolkit_id
         in: path
         required: true
-        schema: { type: string }
-        description: >
-          The saved toolkit instance. The handler reads the segment and passes
-          it straight to the query as `entity_version_id`
-          (internal/api/v2/toolkits/handler.go:513, 1086-1101), so it is a
-          string here, like the `{toolkitID}` chi placeholder it fills.
-
+        schema: { type: integer, format: int64, minimum: 1, maximum: 2147483647 }
+        description: Saved toolkit ID in the authorized project.
     get:
       operationId: listToolkitAvailableTools
-      summary: List the tools that one toolkit instance has
+      summary: Discover tools and argument schemas from one saved toolkit
       description: |
-        NOTE(#440): internal/api/v2/toolkits/handler.go:511-523
-        (AvailableTools) calling pgRepo.AvailableTools (:1086-1101). The query
-        joins `entity_tool_mapping` to `elitea_tools` on the toolkit id.
-        Registered at internal/api/router.go:1911-1912.
-
-        GUARDRAILS FILTER THE RESULT. `filterBlockedTools`
-        (internal/api/v2/toolkits/guardrails.go:120-132) drops every row whose
-        TYPE this deployment blocks. The response stays 200 and the count
-        follows the filtered list, because a blocked type is not a tool the
-        caller may run.
-
-        A LOST READ IS NOT AN EMPTY CATALOGUE (#381). Any repository fault —
-        a dead pool, a missing tenant schema, a bad row, a row set that ends
-        early — gives 500 with `{"error": "available tools read failed"}`. The
-        driver detail goes to the log only. A toolkit with no tools gives 200
-        and an empty array.
+        Main reads the saved toolkit with the authenticated actor's access.
+        Main freezes configuration references and operator guardrails before admission.
+        The worker discovers tools from those immutable inputs.
+        The response contains the accepted immutable result artifact.
+        Discovery is unavailable until the runtime activation flag is enabled.
       tags: [toolkits]
       responses:
         '200':
-          description: The tools this toolkit instance has
+          description: Available tool descriptions and argument schemas.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ToolkitToolsPayload'
+                type: object
+                required: [tools, args_schemas]
+                properties:
+                  tools:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, description]
+                      properties:
+                        name: { type: string }
+                        description: { type: string }
+                  args_schemas:
+                    type: object
+                    additionalProperties: { type: object, additionalProperties: true }
+        '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '422':
+          description: The selected worker cannot construct this toolkit type.
         '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: Discovery is unavailable or its durable run has not settled.
 
   /elitea_core/toolkit_discover_tools/prompt_lib/{project_id}/{toolkit_type}:
     parameters:
