@@ -18,9 +18,16 @@ type ResultRequest struct {
 	ActorUserID int64
 	ToolkitID   int64
 	ExecutionID string
+	RequestKey  string
 }
 
 func (r ResultRequest) Validate() error {
+	if r.RequestKey != "" {
+		if r.ExecutionID != "" || !validRequestKey(r.RequestKey) {
+			return ErrInvalidToolRun
+		}
+		r.ExecutionID = r.RequestKey
+	}
 	if r.ProjectID <= 0 || r.ActorUserID <= 0 || r.ToolkitID <= 0 || r.ExecutionID == "" || len(r.ExecutionID) > 128 || !utf8.ValidString(r.ExecutionID) || strings.ContainsAny(r.ExecutionID, "\x00\r\n/") || strings.TrimSpace(r.ExecutionID) != r.ExecutionID {
 		return ErrInvalidToolRun
 	}
@@ -48,6 +55,10 @@ func (s *RunService) ReadToolRun(ctx context.Context, request ResultRequest) (Ru
 		return RunOutcome{}, false, ErrInvalidToolRun
 	}
 	if err := request.Validate(); err != nil {
+		return RunOutcome{}, false, err
+	}
+	request, err := s.resolveResultRequest(ctx, request)
+	if err != nil {
 		return RunOutcome{}, false, err
 	}
 	reader, ok := s.settlements.(ResultBindingReader)

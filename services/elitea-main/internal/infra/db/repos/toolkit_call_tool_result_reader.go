@@ -9,10 +9,25 @@ import (
 
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/proto"
 )
+
+// FindToolkitCallToolExecution reuses the atomic admission ledger and its index.
+func (r *ToolkitCallToolJobsRepository) FindToolkitCallToolExecution(ctx context.Context, scope, key string) (string, error) {
+	outcome, _, err := loadToolRunAdmission(ctx, sqlcgen.New(r.pool), scope, key)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", toolkitcalltoolapp.ErrToolRunNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	return outcome.ExecutionID, nil
+}
+
+var _ toolkitcalltoolapp.ResultRequestReader = (*ToolkitCallToolJobsRepository)(nil)
 
 // ReadToolkitCallToolResultBinding uses the frozen input, not mutable toolkit settings.
 func (r *ToolkitCallToolJobsRepository) ReadToolkitCallToolResultBinding(ctx context.Context, request toolkitcalltoolapp.ResultRequest) (executiondomain.ToolkitCallToolBinding, string, error) {

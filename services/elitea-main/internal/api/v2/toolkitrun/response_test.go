@@ -8,9 +8,30 @@ import (
 	"strings"
 	"testing"
 
+	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 )
+
+func TestRecoverableToolRequestHeaderAndConflict(t *testing.T) {
+	for _, key := range []string{"browser-request", "../invalid"} {
+		r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"tool_name":"echo","tool_params":{}}`))
+		r.Header.Set("Idempotency-Key", key)
+		request, err := DecodeRequest(r, 1, 7, 19)
+		if key == "browser-request" {
+			if err != nil || request.IdempotencyKey != key {
+				t.Fatalf("missing request key: %v", err)
+			}
+		} else if err == nil {
+			t.Fatal("accepted invalid request key")
+		}
+	}
+	recorder := httptest.NewRecorder()
+	WriteError(recorder, executionapp.ErrIdempotencyConflict)
+	if recorder.Code != http.StatusConflict || decodeBody(t, recorder)["reason"] != "idempotency_conflict" {
+		t.Fatalf("conflict response: %s", recorder.Body.String())
+	}
+}
 
 func decodeBody(t *testing.T, recorder *httptest.ResponseRecorder) map[string]any {
 	t.Helper()

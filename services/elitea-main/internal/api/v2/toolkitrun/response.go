@@ -36,6 +36,7 @@ import (
 	"strconv"
 	"strings"
 
+	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 )
 
@@ -110,6 +111,7 @@ func DecodeRequest(
 	}
 	request := toolkitcalltoolapp.RunRequest{
 		RequestID:                 body.RequestID,
+		IdempotencyKey:            r.Header.Get("Idempotency-Key"),
 		ProjectID:                 projectID,
 		ActorUserID:               actorUserID,
 		ToolkitID:                 toolkitID,
@@ -237,6 +239,10 @@ func WriteError(w http.ResponseWriter, err error) {
 	case errors.Is(err, toolkitcalltoolapp.ErrToolkitNotVisible):
 		writeJSON(w, http.StatusNotFound, map[string]any{
 			"ok": false, "error": "toolkit not found",
+		})
+	case errors.Is(err, executionapp.ErrIdempotencyConflict):
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"ok": false, "reason": "idempotency_conflict", "error": "This request key already belongs to a different tool input.",
 		})
 	case errors.Is(err, toolkitcalltoolapp.ErrUnsupportedToolkitType):
 		// Refused BEFORE admission, so there is no task id to report: nothing

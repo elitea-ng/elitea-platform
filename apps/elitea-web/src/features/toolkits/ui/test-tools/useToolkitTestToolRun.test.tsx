@@ -200,3 +200,61 @@ it('retains discovery authorization when selecting a tool and clears it when the
   await act(async () => { await result.current.run('echo_marker', { marker: 'second' }); });
   expect(references).toEqual(['A'.repeat(43), undefined]);
 });
+
+it('saves the reference before POST and recovers after unmount without a received execution id', async () => {
+  let release!: () => void;
+  let reached!: () => void;
+  const arrived = new Promise<void>((resolve) => { reached = resolve; });
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let submissions = 0;
+  let requestKey = '';
+  server.use(
+    http.post(RUN_PATH, async ({ request }) => {
+      submissions += 1;
+      requestKey = request.headers.get('Idempotency-Key') ?? '';
+      expect(requestKey).not.toBe('');
+      const saved = createStorage('session').get('toolkits.pendingTest') ?? '';
+      expect(JSON.parse(saved)).toEqual({ projectId: '7', toolkitId: 'tk-1', taskId: requestKey, lookup: 'request' });
+      expect(saved).not.toContain('private-argument');
+      reached();
+      await held;
+      return HttpResponse.error();
+    }),
+    http.get(`${RUN_PATH}/:receipt`, ({ request, params }) => {
+      expect(params['receipt']).toBe(requestKey);
+      expect(new URL(request.url).searchParams.get('lookup')).toBe('request');
+      return HttpResponse.json({ ok: true, result: 'original-execution-result' });
+    }),
+  );
+  const first = renderRun();
+  let running!: Promise<void>;
+  act(() => { running = first.result.current.run('echo_marker', { marker: 'private-argument' }); });
+  await arrived;
+  first.unmount();
+  release();
+  await running;
+  const second = renderRun();
+  await waitFor(() => { expect(second.result.current.outcome).toMatchObject({ kind: 'ok', result: 'original-execution-result' }); }, { timeout: 4000 });
+  expect(submissions).toBe(1);
+  expect(createStorage('session').get('toolkits.pendingTest')).toBeNull();
+});
+
+it('retains an unconfirmed request for reload and never resubmits it', async () => {
+  let submissions = 0;
+  let reads = 0;
+  server.use(
+    http.post(RUN_PATH, () => { submissions += 1; return HttpResponse.error(); }),
+    http.get(`${RUN_PATH}/:receipt`, () => { reads += 1; return HttpResponse.json({}, { status: 404 }); }),
+  );
+  const first = renderRun();
+  await act(async () => { await first.result.current.run('echo_marker', {}); });
+  await waitFor(() => { expect(first.result.current.outcome?.kind).toBe('unconfirmed'); }, { timeout: 4000 });
+  const receipt = createStorage('session').get('toolkits.pendingTest');
+  expect(receipt).toContain('request');
+  first.unmount();
+  const second = renderRun();
+  await waitFor(() => { expect(second.result.current.outcome?.kind).toBe('unconfirmed'); }, { timeout: 4000 });
+  expect(createStorage('session').get('toolkits.pendingTest')).toBe(receipt);
+  expect(submissions).toBe(1);
+  expect(reads).toBe(2);
+}, 10000);

@@ -45,6 +45,7 @@ import { HttpResponse, delay, http } from "msw";
 import type { RequestHandlerOptions } from "msw";
 
 import type {
+  GetToolkitToolResult202,
   InternalMcpPatStatus,
   McpDcrProxyResponse,
   McpOAuthProxyResponse,
@@ -257,9 +258,19 @@ export const getDiscoverToolkitToolsResponseMock = (
   ...overrideResponse,
 });
 
+export const getGetToolkitToolResultResponseMock = () =>
+  (() => ({ ok: true, result: {} }))();
+
 export const getTestToolkitToolResponseMock = (
   overrideResponse: Partial<Extract<ToolkitToolRunResult, object>> = {},
 ): ToolkitToolRunResult => ({
+  authorization_retry: faker.helpers.arrayElement([
+    {
+      tool_name: faker.string.alpha({ length: { min: 1, max: 256 } }),
+      tool_params: {},
+    },
+    undefined,
+  ]),
   ok: faker.datatype.boolean(),
   task_id: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -579,6 +590,36 @@ export const getDiscoverToolkitToolsMockHandler = (
   );
 };
 
+export const getGetToolkitToolResultMockHandler = (
+  overrideResponse?:
+    | ToolkitToolRunResult
+    | GetToolkitToolResult202
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) =>
+        | Promise<ToolkitToolRunResult | GetToolkitToolResult202>
+        | ToolkitToolRunResult
+        | GetToolkitToolResult202),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/test_tool/prompt_lib/:projectId/:toolId/:executionId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetToolkitToolResultResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getTestToolkitToolMockHandler = (
   overrideResponse?:
     | ToolkitToolRunResult
@@ -689,6 +730,7 @@ export const getToolkitsMock = () => [
   getCreateToolkitMockHandler(),
   getListToolkitAvailableToolsMockHandler(),
   getDiscoverToolkitToolsMockHandler(),
+  getGetToolkitToolResultMockHandler(),
   getTestToolkitToolMockHandler(),
   getListRegisteredMcpServersMockHandler(),
   getCallRegisteredMcpServerToolMockHandler(),

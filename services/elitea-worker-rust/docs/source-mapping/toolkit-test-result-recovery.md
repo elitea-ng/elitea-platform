@@ -124,3 +124,10 @@ The script is `elitea-toolkit-crash-browser-v2.py`; its DOM observation checks t
 This proves terminal reconciliation and browser observation after an ambiguous in-flight call.
 It does not prove successful provider continuation, cross-replica recovery without local state, or effect rollback.
 Those boundaries must remain explicit when evaluating wider durability gates.
+
+
+## Request receipt extension, 2026-09-14
+
+`toolkit-request-recovery.md` closes the earlier response-loss boundary before receipt of an execution ID.
+The deployed browser retrieves the original Rust result without a repeated provider invocation.
+An unaccepted request retains an inconclusive receipt and never triggers automatic resubmission.

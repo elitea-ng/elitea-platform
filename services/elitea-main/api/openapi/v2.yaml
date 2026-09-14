@@ -18786,7 +18786,14 @@ paths:
         Requires toolkit test permission and the initiating user's identity.
         Reads frozen execution state without submitting another tool call.
         Another project, user, toolkit, or unknown execution receives 404.
+        With lookup=request, execution_id contains the original Idempotency-Key.
+        A missing request does not prove that a concurrent admission cannot complete.
       tags: [toolkits]
+      parameters:
+        - name: lookup
+          in: query
+          description: Resolve the path value as an execution ID or a previously submitted Idempotency-Key.
+          schema: { type: string, enum: [execution, request], default: execution }
       responses:
         '200':
           description: The original result or tool error.
@@ -18873,6 +18880,14 @@ paths:
         refuse them sits inside the bundle factory, too late for the caller to
         see why.
       tags: [toolkits]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          description: |
+            Optional opaque request identity for recovery before receipt of the execution ID.
+            Reusing this key with different immutable inputs returns a conflict.
+            Omission retains the existing request_id behavior.
+          schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,128}$' }
       requestBody:
         required: true
         content:
@@ -18907,6 +18922,11 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ToolkitToolRunResult'
+        '409':
+          description: Toolkit authorization is required, or the request key conflicts with different inputs.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ToolkitToolRunResult' }
         '422':
           description: >
             The run was refused before any provider work: `reason` is

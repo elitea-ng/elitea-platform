@@ -22,7 +22,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { TestToolkitToolOutcome } from '../../api/toolkitTestRun';
 import { readToolkitToolResult, testToolkitTool } from '../../api/toolkitTestRun';
-import { forgetToolkitTest, recalledToolkitTest, rememberToolkitTest } from '../../api/toolkitTestRecovery';
+import { forgetToolkitTest, recalledToolkitTest, rememberToolkitTest, rememberToolkitTestOutcome } from '../../api/toolkitTestRecovery';
 
 export interface UseToolkitTestToolRunParams {
   readonly projectId: string | number | undefined;
@@ -67,16 +67,16 @@ export function useToolkitTestToolRun({ projectId, toolkitId }: UseToolkitTestTo
   useEffect(() => {
     if (outcome?.kind !== 'timeout' || !outcome.taskId) return;
     const taskId = outcome.taskId;
+    const lookup = outcome.lookup;
     const press = currentPressRef.current;
     let cancelled = false;
     const timer = setTimeout(() => {
-      void readToolkitToolResult({ projectId, toolkitId, taskId }).then((result) => {
+      void readToolkitToolResult({ projectId, toolkitId, taskId, ...(lookup ? { lookup } : {}) }).then((result) => {
         if (cancelled || !mountedRef.current || press !== currentPressRef.current) return;
         if (result.kind === 'authorizationRequired' && result.retry) pendingRef.current = { ...result.retry, press };
         setOutcome(result);
+        rememberToolkitTestOutcome(projectId, toolkitId, result);
         if (result.kind !== 'timeout') {
-          if (result.kind === 'authorizationRequired') rememberToolkitTest(projectId, toolkitId, result.taskId);
-          else forgetToolkitTest(projectId, toolkitId);
           setIsRunning(false);
           if (result.kind !== 'authorizationRequired') pendingRef.current = undefined;
         }
@@ -97,7 +97,6 @@ export function useToolkitTestToolRun({ projectId, toolkitId }: UseToolkitTestTo
 
   const run = useCallback(
     async (toolName: string, toolParams: Readonly<Record<string, unknown>>): Promise<void> => {
-      forgetToolkitTest(projectId, toolkitId);
       currentPressRef.current += 1;
       const press = currentPressRef.current;
       setOutcome(undefined);
@@ -105,11 +104,13 @@ export function useToolkitTestToolRun({ projectId, toolkitId }: UseToolkitTestTo
 
       const savedParams = structuredClone(toolParams);
       pendingRef.current = undefined;
-      const settled = await testToolkitTool({ projectId, toolkitId, toolName, toolParams: savedParams, ...(authorizationReference.current ? { authorizationReference: authorizationReference.current } : {}) });
+      const requestId = crypto.randomUUID();
+      rememberToolkitTest(projectId, toolkitId, requestId, 'request');
+      const settled = await testToolkitTool({ requestId, projectId, toolkitId, toolName, toolParams: savedParams, ...(authorizationReference.current ? { authorizationReference: authorizationReference.current } : {}) });
 
       if (!mountedRef.current || press !== currentPressRef.current) return;
       if (settled.kind === 'authorizationRequired' || settled.kind === 'timeout') pendingRef.current = { toolName, toolParams: savedParams, press };
-      if ((settled.kind === 'timeout' || settled.kind === 'authorizationRequired') && settled.taskId) rememberToolkitTest(projectId, toolkitId, settled.taskId);
+      rememberToolkitTestOutcome(projectId, toolkitId, settled);
       setOutcome(settled);
       setIsRunning(false);
     },
@@ -121,19 +122,20 @@ export function useToolkitTestToolRun({ projectId, toolkitId }: UseToolkitTestTo
     authorizationReference.current = undefined;
     pendingRef.current = undefined;
     setIsRunning(false);
-    const taskId = recalledToolkitTest(projectId, toolkitId);
-    setOutcome(taskId ? { kind: 'timeout', taskId, message: 'Retrieving the saved tool execution result.' } : undefined);
+    const saved = recalledToolkitTest(projectId, toolkitId);
+    setOutcome(saved ? { kind: 'timeout', ...saved, message: 'Retrieving the saved tool execution result.' } : undefined);
   }, [projectId, toolkitId]);
   const authorize = useCallback(async (reference: string) => {
     const pending = pendingRef.current;
     if (!pending || !mountedRef.current || pending.press !== currentPressRef.current || !/^[A-Za-z0-9_-]{43}$/.test(reference)) return;
     authorizationReference.current = reference;
     pendingRef.current = undefined;
-    forgetToolkitTest(projectId, toolkitId);
     setIsRunning(true);
-    const settled = await testToolkitTool({ projectId, toolkitId, toolName: pending.toolName, toolParams: pending.toolParams, authorizationReference: reference });
+    const requestId = crypto.randomUUID();
+    rememberToolkitTest(projectId, toolkitId, requestId, 'request');
+    const settled = await testToolkitTool({ requestId, projectId, toolkitId, toolName: pending.toolName, toolParams: pending.toolParams, authorizationReference: reference });
     if (!mountedRef.current || pending.press !== currentPressRef.current) return;
-    if ((settled.kind === 'timeout' || settled.kind === 'authorizationRequired') && settled.taskId) rememberToolkitTest(projectId, toolkitId, settled.taskId);
+    rememberToolkitTestOutcome(projectId, toolkitId, settled);
     setOutcome(settled);
     setIsRunning(false);
     if (settled.kind === 'authorizationRequired' || settled.kind === 'timeout') pendingRef.current = pending;

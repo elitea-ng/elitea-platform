@@ -386,3 +386,6 @@ The repository-level `.github/workflows/ci-rust.yml` gate covers this registry.
 It runs locked quality, release, and PostgreSQL-backed test commands.
 
 - [Main sync follow-up](main-sync-20260909-followup.md) records the second sync and shared migration boundary.
+
+- [Toolkit request recovery](toolkit-request-recovery.md) records browser recovery before execution ID receipt and one-call evidence.
+- [Deferred MCP elicitation](external-mcp-elicitation-deferred.md) records the later client approval option and its authority boundary.

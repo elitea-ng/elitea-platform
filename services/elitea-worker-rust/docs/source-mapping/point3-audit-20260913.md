@@ -14,7 +14,7 @@ Do not infer closure from an older pending statement or a later successful smoke
 | 3b credential and toolkit lifecycle | `chat-credential-toolkit-creation.md`: chat creation, updates, saved reference, and GitHub invocation. | `credential-browser-acceptance-20260914.md`: synthetic creation and rotation pass through internal MCP, browser Toolkit Test, and Rust. |
 | 3b entity discovery | `internal-mcp-entity-discovery.md`: shared actor-aware Main service, counts and filter tests. Live chat proof appears below. | Nonzero tag counts and restricted visibility have database evidence, not this browser proof. |
 | 3b actor-scoped chat operations | `internal-mcp-chat-authority.md`: eleven data descriptors. `internal-mcp-chat-runtime-contract.md`: deployed message sending and repeated-question proof. | Viewer conversation listing passes. Full operation-level checks remain. External interrupt-decision publication is intentionally excluded. |
-| 3c Toolkit Test | `toolkit-test-reference-binding.md`, `toolkit-cancellation-acceptance.md`, `toolkit-test-result-recovery.md`: invocation, authorization references, administrative cancellation, result/reload observation. | `toolkit-discovery-authorization.md`: deployed MCP discovery, OAuth, argument loading, and Rust invocation pass headed Chrome acceptance. Pending-call OAuth reload also passes with one control and original arguments. Loss before execution-ID receipt remains open. |
+| 3c Toolkit Test | `toolkit-test-reference-binding.md`, `toolkit-cancellation-acceptance.md`, `toolkit-test-result-recovery.md`: invocation, authorization references, administrative cancellation, result/reload observation. | `toolkit-discovery-authorization.md`: deployed MCP discovery, OAuth, argument loading, and Rust invocation pass headed Chrome acceptance. Pending-call OAuth reload also passes with one control and original arguments. `toolkit-request-recovery.md`: loss before execution-ID receipt now passes deployed reload verification with one provider call. |
 | 3c active worker crash | `toolkit-test-result-recovery.md`: one provider request, replacement claim 2, durable failure, one browser POST and two GETs. | This proves ambiguous-call reconciliation, not successful continuation or cross-replica spool independence. |
 | 3d external MCP | `external-mcp-fresh-browser-20260913.md`: independent PAT calls, saved-agent/pipeline success and failure, pause refusal, mixed guards, exact cursor replay, Main restart cases. | Autonomous success, failure, pause refusal, and transport replay have independent-client evidence. Platform-wide sensitive-tool behavior and browser HITL decisions are separate gates. |
 
@@ -77,3 +77,7 @@ HITL nodes, direct pipeline history, and graph behavior remain in point 5.
 External callers do not receive approval or interrupt-resume controls.
 OAuth consent in the Toolkit Test browser remains part of point 3 credential authorization.
 A later browser HITL decision is not an additional external-MCP progression requirement.
+
+The user defers external MCP elicitation on 2026-09-14.
+`external-mcp-elicitation-deferred.md` records client capability requirements and the distinction between client permission and Elitea approval.
+This option is not a point 3 completion requirement.

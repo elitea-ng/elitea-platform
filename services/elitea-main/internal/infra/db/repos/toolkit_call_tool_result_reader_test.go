@@ -24,6 +24,15 @@ func TestPostgresToolkitResultOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := toolkitcalltoolapp.ResultRequest{ProjectID: 1, ActorUserID: 7, ToolkitID: 19, ExecutionID: admitted.Outcome.ExecutionID}
+	recovered, err := repo.FindToolkitCallToolExecution(ctx, "1/1/7", input.IdempotencyKey)
+	if err != nil || recovered != request.ExecutionID {
+		t.Fatalf("request lookup: execution=%s err=%v", recovered, err)
+	}
+	for _, pair := range [][2]string{{"2/2/7", input.IdempotencyKey}, {"1/1/8", input.IdempotencyKey}, {"1/1/7", "missing-request"}} {
+		if _, err := repo.FindToolkitCallToolExecution(ctx, pair[0], pair[1]); !errors.Is(err, toolkitcalltoolapp.ErrToolRunNotFound) {
+			t.Fatalf("foreign or absent request lookup: %v", err)
+		}
+	}
 	binding, state, err := repo.ReadToolkitCallToolResultBinding(ctx, request)
 	if err != nil || binding.ToolkitID != 19 || binding.ToolkitType != "github" || state != "PENDING" {
 		t.Fatalf("binding=%+v state=%s err=%v", binding, state, err)

@@ -93,7 +93,7 @@ describe('testToolkitTool', () => {
     expect(outcome).toEqual({ kind: 'failure', message: 'boom' });
   });
 
-  it('a network failure (no handler, MSW onUnhandledRequest) still resolves to the generic failure kind', async () => {
+  it('a lost response retains the pre-submission identity for a read', async () => {
     // No `server.use(...)` override — the request itself never reaches a
     // handler in this test's own describe scope, so the shared `server`'s
     // `onUnhandledRequest: 'error'` (see `src/test/setup.ts`) throws inside
@@ -102,7 +102,7 @@ describe('testToolkitTool', () => {
 
     const outcome = await testToolkitTool({ projectId: 'proj-1', toolkitId: 'tk-1', toolName: 'search_index', toolParams: {} });
 
-    expect(outcome.kind).toBe('failure');
+    expect(outcome).toMatchObject({ kind: 'timeout', lookup: 'request', taskId: expect.any(String) });
   });
 });
 
@@ -152,4 +152,17 @@ describe('readToolkitToolResult', () => {
     server.use(http.get(`${PATH}/execution-1`, () => HttpResponse.json({ reason: 'runtime_failure', error: 'The execution failed.' }, { status: 500 })));
     expect(await readToolkitToolResult(request)).toEqual({ kind: 'failure', message: 'The execution failed.' });
   });
+});
+
+it('looks up request receipts and switches pending observation to the accepted execution', async () => {
+  server.use(http.get(`${PATH}/request-key`, ({ request }) => {
+    expect(new URL(request.url).searchParams.get('lookup')).toBe('request');
+    return HttpResponse.json({ pending: true, task_id: 'accepted-execution' }, { status: 202 });
+  }));
+  const params = { projectId: 'proj-1', toolkitId: 'tk-1', taskId: 'request-key', lookup: 'request' as const };
+  const outcome = await readToolkitToolResult(params);
+  expect(outcome).toMatchObject({ kind: 'timeout', taskId: 'accepted-execution' });
+  expect(outcome).not.toHaveProperty('lookup');
+  server.use(http.get(`${PATH}/request-key`, () => HttpResponse.json({}, { status: 404 })));
+  expect(await readToolkitToolResult(params)).toMatchObject({ kind: 'unconfirmed' });
 });

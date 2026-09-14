@@ -36,6 +36,14 @@ func (h *Handler) TestToolResult(w http.ResponseWriter, r *http.Request) {
 	projectID, _ := strconv.ParseInt(chi.URLParam(r, "projectID"), 10, 64)
 	toolkitID, _ := strconv.ParseInt(chi.URLParam(r, "toolID"), 10, 64)
 	request := toolkitcalltoolapp.ResultRequest{ProjectID: projectID, ActorUserID: actorID, ToolkitID: toolkitID, ExecutionID: chi.URLParam(r, "executionID")}
+	switch r.URL.Query().Get("lookup") {
+	case "", "execution":
+	case "request":
+		request.RequestKey, request.ExecutionID = request.ExecutionID, ""
+	default:
+		toolkitrun.WriteInvalidRequest(w)
+		return
+	}
 	if request.Validate() != nil {
 		toolkitrun.WriteInvalidRequest(w)
 		return
@@ -50,7 +58,7 @@ func (h *Handler) TestToolResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if pending {
-		writeJSON(w, http.StatusAccepted, map[string]any{"pending": true, "task_id": request.ExecutionID})
+		writeJSON(w, http.StatusAccepted, map[string]any{"pending": true, "task_id": result.ExecutionID})
 		return
 	}
 	toolkitrun.WriteOutcome(w, result)

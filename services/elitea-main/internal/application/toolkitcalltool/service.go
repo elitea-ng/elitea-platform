@@ -58,6 +58,7 @@ var (
 // running a tool against settings it supplied itself.
 type RunRequest struct {
 	RequestID                 string
+	IdempotencyKey            string
 	ProjectID                 int64
 	ActorUserID               int64
 	ToolkitID                 int64
@@ -69,6 +70,9 @@ type RunRequest struct {
 }
 
 func (r RunRequest) Validate() error {
+	if r.IdempotencyKey != "" && !validRequestKey(r.IdempotencyKey) {
+		return ErrInvalidToolRun
+	}
 	if len(r.RequestID) > 128 || !utf8.ValidString(r.RequestID) || strings.ContainsAny(r.RequestID, "\x00\r\n") || r.RequestID != strings.TrimSpace(r.RequestID) {
 		return ErrInvalidToolRun
 	}
@@ -613,6 +617,9 @@ const (
 // idempotencyKey binds retries to one deliberate request. Callers without a
 // request ID start a new run. Identical settings alone never identify a run.
 func (s *RunService) idempotencyKey(request RunRequest, inputs AuthoritativeInputs) (string, error) {
+	if request.IdempotencyKey != "" {
+		return recoverableRequestKey(request.ProjectID, request.ActorUserID, request.ToolkitID, request.IdempotencyKey), nil
+	}
 	requestID := request.RequestID
 	if requestID == "" {
 		var err error

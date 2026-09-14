@@ -65,6 +65,10 @@ function statusOf(outcome: TestToolkitToolOutcome): string {
   return outcome.kind;
 }
 
+function referenceLabel(lookup?: 'request'): string {
+  return lookup === 'request' ? t('features.toolkits.testToolPane.resultRequestId', 'Request reference:') : t('features.toolkits.testToolPane.resultJobId', 'Job id:');
+}
+
 function OutcomeBody({ outcome }: { readonly outcome: TestToolkitToolOutcome }): ReactNode {
   switch (outcome.kind) {
     case 'ok':
@@ -97,6 +101,7 @@ function OutcomeBody({ outcome }: { readonly outcome: TestToolkitToolOutcome }):
     case 'unsupportedToolkit':
     case 'unknownTool':
     case 'failure':
+    case 'unconfirmed':
       return <Typography variant="bodyMedium">{outcome.message}</Typography>;
     case 'timeout':
       return (
@@ -107,7 +112,7 @@ function OutcomeBody({ outcome }: { readonly outcome: TestToolkitToolOutcome }):
               variant="bodySmall"
               data-testid="test-tool-result-task-id"
             >
-              {t('features.toolkits.testToolPane.resultJobId', 'Job id:')} {outcome.taskId}
+              {referenceLabel(outcome.lookup)} {outcome.taskId}
             </Typography>
           )}
         </>

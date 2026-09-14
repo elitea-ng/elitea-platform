@@ -56,7 +56,8 @@ export type TestToolkitToolOutcome =
   | { readonly kind: 'toolError'; readonly message: string }
   | { readonly kind: 'unsupportedToolkit'; readonly message: string }
   | { readonly kind: 'unknownTool'; readonly message: string }
-  | { readonly kind: 'timeout'; readonly taskId: string | undefined; readonly message: string }
+  | { readonly kind: 'timeout'; readonly taskId: string | undefined; readonly lookup?: 'request'; readonly message: string }
+  | { readonly kind: 'unconfirmed'; readonly message: string }
   | { readonly kind: 'failure'; readonly message: string };
 
 interface ResponseBodyLike {
@@ -110,19 +111,21 @@ function readReason(body: ResponseBodyLike | undefined): string | undefined {
   return typeof body?.reason === 'string' ? body.reason : undefined;
 }
 
+function readAuthorizationRetry(candidate: unknown): { readonly toolName: string; readonly toolParams: Readonly<Record<string, unknown>> } | undefined {
+  if (typeof candidate !== 'object' || candidate === null || !('tool_name' in candidate) || !('tool_params' in candidate)) return undefined;
+  if (typeof candidate.tool_name !== 'string' || candidate.tool_name.length === 0 || candidate.tool_name.length > 256) return undefined;
+  if (typeof candidate.tool_params !== 'object' || candidate.tool_params === null || Array.isArray(candidate.tool_params)) return undefined;
+  return { toolName: candidate.tool_name, toolParams: candidate.tool_params as Readonly<Record<string, unknown>> };
+}
+
 function outcomeFromAuthorization(bodyLike: ResponseBodyLike | undefined, toolkitId: TestToolkitToolParams['toolkitId']): TestToolkitToolOutcome {
-    const challenge = readToolkitTestAuthorization(bodyLike?.authorization_required, toolkitId);
-    const taskId = bodyLike?.task_id;
-    if (challenge && typeof taskId === 'string' && taskId.length > 0 && taskId.length <= 128) {
-      const candidate = bodyLike?.authorization_retry;
-      if (typeof candidate === 'object' && candidate !== null && 'tool_name' in candidate && 'tool_params' in candidate &&
-          typeof candidate.tool_name === 'string' && candidate.tool_name.length > 0 && candidate.tool_name.length <= 256 &&
-          typeof candidate.tool_params === 'object' && candidate.tool_params !== null && !Array.isArray(candidate.tool_params)) {
-        return { kind: 'authorizationRequired', challenge, taskId, retry: { toolName: candidate.tool_name, toolParams: candidate.tool_params as Readonly<Record<string, unknown>> } };
-      }
-      return { kind: 'authorizationRequired', challenge, taskId };
-    }
+  const challenge = readToolkitTestAuthorization(bodyLike?.authorization_required, toolkitId);
+  const taskId = bodyLike?.task_id;
+  if (!challenge || typeof taskId !== 'string' || taskId.length === 0 || taskId.length > 128) {
     return { kind: 'failure', message: 'The authorization challenge is invalid. Run the tool again.' };
+  }
+  const retry = readAuthorizationRetry(bodyLike?.authorization_retry);
+  return { kind: 'authorizationRequired', challenge, taskId, ...(retry ? { retry } : {}) };
 }
 
 /** The non-2xx half of the mapping — split out to keep `testToolkitTool` under the repo's complexity budget. */
@@ -158,11 +161,12 @@ function outcomeFromRejection(error: unknown, toolkitId: TestToolkitToolParams['
 export async function testToolkitTool(params: TestToolkitToolParams): Promise<TestToolkitToolOutcome> {
   const { projectId, toolkitId, toolName, toolParams } = params;
   if (params.authorizationReference !== undefined && !/^[A-Za-z0-9_-]{43}$/.test(params.authorizationReference)) return { kind: 'failure', message: 'The saved authorization reference is invalid.' };
+  const requestId = params.requestId ?? crypto.randomUUID();
   try {
     const envelope = await eliteaFetch<{ data: ResponseBodyLike }>(`/elitea_core/test_tool/prompt_lib/${String(projectId)}/${String(toolkitId)}`, {
       method: 'POST',
       body: JSON.stringify({
-        request_id: params.requestId ?? crypto.randomUUID(),
+        request_id: requestId,
         tool_name: toolName,
         tool_params: toolParams,
         ...(params.llmModel !== undefined ? { llm_model: params.llmModel } : {}),
@@ -173,7 +177,7 @@ export async function testToolkitTool(params: TestToolkitToolParams): Promise<Te
         } } : {}),
         ...(params.authorizationReference !== undefined ? { mcp_authorization_reference: params.authorizationReference } : {}),
       }),
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': requestId },
     });
     const body = envelope.data;
     if (body.ok === true) {
@@ -181,26 +185,43 @@ export async function testToolkitTool(params: TestToolkitToolParams): Promise<Te
     }
     return { kind: 'toolError', message: readErrorMessage(body, 'The tool reported an error.') };
   } catch (error) {
-    return outcomeFromRejection(error, toolkitId);
+    return submissionFailure(error, toolkitId, requestId);
   }
+}
+
+function submissionFailure(error: unknown, toolkitId: TestToolkitToolParams['toolkitId'], requestId: string): TestToolkitToolOutcome {
+  const result = outcomeFromRejection(error, toolkitId);
+  if (!observationInterrupted(error) || (result.kind === 'timeout' && result.taskId)) return result;
+  return { kind: 'timeout', taskId: requestId, lookup: 'request', message: 'The response was lost. Checking whether the tool execution was accepted.' };
+}
+
+function acceptedPending(body: ResponseBodyLike, pending: Extract<TestToolkitToolOutcome, { kind: 'timeout' }>): TestToolkitToolOutcome {
+  return typeof body.task_id === 'string' && body.task_id ? { kind: 'timeout', taskId: body.task_id, message: pending.message } : pending;
+}
+
+function observationInterrupted(error: unknown): boolean {
+  return !isEliteaApiErrorLike(error) || error.failure?.kind !== 'http' || [502, 503, 504].includes(error.failure.status ?? 0);
 }
 
 /** Read the original execution without resolving settings or submitting a call. */
 export async function readToolkitToolResult(
-  params: Pick<TestToolkitToolParams, 'projectId' | 'toolkitId'> & { readonly taskId: string },
+  params: Pick<TestToolkitToolParams, 'projectId' | 'toolkitId'> & { readonly taskId: string; readonly lookup?: 'request' },
 ): Promise<TestToolkitToolOutcome> {
-  const pending: TestToolkitToolOutcome = { kind: 'timeout', taskId: params.taskId, message: 'Waiting for the saved tool execution. Results will update automatically.' };
+  const pending: TestToolkitToolOutcome = { kind: 'timeout', taskId: params.taskId, ...(params.lookup ? { lookup: params.lookup } : {}), message: 'Waiting for the saved tool execution. Results will update automatically.' };
   try {
     const { data } = await eliteaFetch<{ data: ResponseBodyLike & { pending?: boolean } }>(
-      `/elitea_core/test_tool/prompt_lib/${String(params.projectId)}/${String(params.toolkitId)}/${encodeURIComponent(params.taskId)}`,
+      `/elitea_core/test_tool/prompt_lib/${String(params.projectId)}/${String(params.toolkitId)}/${encodeURIComponent(params.taskId)}${params.lookup === 'request' ? '?lookup=request' : ''}`,
       { method: 'GET', headers: { 'Cache-Control': 'no-cache' } },
     );
-    if (data.pending === true) return pending;
+    if (data.pending === true) return acceptedPending(data, pending);
     if (data.ok === true) return { kind: 'ok', result: data.result, truncated: data.truncated === true };
     return { kind: 'toolError', message: readErrorMessage(data, 'The tool reported an error.') };
   } catch (error) {
     // A disconnected Main ends this observation, not the durable execution.
-    if (!isEliteaApiErrorLike(error) || error.failure?.kind !== 'http' || [502, 503, 504].includes(error.failure.status ?? 0)) return pending;
+    if (observationInterrupted(error)) return pending;
+    if (params.lookup === 'request' && isEliteaApiErrorLike(error) && error.failure?.status === 404) {
+      return { kind: 'unconfirmed', message: 'No execution is visible yet. Reload to check again. The tool will not be submitted automatically.' };
+    }
     return outcomeFromRejection(error, params.toolkitId);
   }
 }
