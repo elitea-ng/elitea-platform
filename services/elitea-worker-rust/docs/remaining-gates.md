@@ -10,7 +10,8 @@ Current-platform code defines business behavior, not a requirement to copy its i
 
 - Gate 1 has pipeline turn, regeneration, and nested-resume fixes with regression coverage. Mixed-guard and collaborative proofs remain open.
 - Gate 2 is accepted for progression, with explicit verification debt. OAuth/DCR support is not a claim of complete provider coverage.
-- Gate 3 remains active for the final restricted chat-operation permission check.
+- Gate 3 is accepted for progression. The final restricted chat-operation permission check passes on 2026-09-14.
+- Gate 4 is active for context management and current-platform runtime drift.
 - The [point 3 audit](source-mapping/point3-audit-20260913.md) records the completed acceptance cases and their limits.
 - Production Rust capability registration remains disabled.
 
@@ -35,10 +36,11 @@ OpenAPI supports delegated OAuth and client credentials. DCR remains an MCP or o
 
 ## Final point 3 acceptance
 
-Verify chat-operation denial after successful project admission.
-The test actor must have project-view and chat-list access without the other chat-operation permissions.
-The temporary-role acceptance script is prepared but requires the pending explicit access approval.
-Do not substitute a nonmember HTTP 403 for this operation-level check.
+The approved temporary role grants only project-view and chat-list access.
+Listing succeeds after project admission; all eleven ungranted chat operations return their exact missing permission.
+A fresh headed Chrome session creates the PAT; an independent Python client makes the MCP calls.
+PAT revocation returns HTTP 204, and the temporary role and membership return to their absent baseline.
+See [restricted chat acceptance](source-mapping/internal-mcp-restricted-chat-acceptance.md).
 The positive checks cover all eleven ordinary chat operations, including persisted updates and successful participant deletion.
 See [chat operation acceptance](source-mapping/internal-mcp-no-content-result.md).
 
@@ -72,7 +74,7 @@ Preserve the existing application schema and artifact ledger.
 Require a concrete ownership or contract need before adding a migration or table.
 Continue with one agent. Do not start or resume subagents.
 
-## Deferred point 4 boundary
+## Active point 4 boundary
 
 Context compaction must preserve a durable continuation checkpoint.
 Budget the full model input and reserved output together.
@@ -90,7 +92,7 @@ They reconcile model defaults, API contracts, nested MCP materialization, TLS co
 Source mappings record 112 component checks, 16 form tests, fresh Chrome model-selection checks, and chart verification.
 The 24 staged instruction-authority paths remain preserved separately.
 Other pending point 4 and point 5 work also remains in the worktree.
-This checkpoint does not close the final restricted-operation check.
+The final restricted-operation acceptance now closes point 3 for progression.
 See [delivery reconciliation](source-mapping/point3-delivery-reconciliation.md) and [nested materialization](source-mapping/nested-internal-mcp-materialization.md).
 Direct pipeline HITL history and editor Test chat belong to gate 5.
 Nested HITL controls must not create direct-pipeline history segments.
@@ -142,4 +144,4 @@ Existing source components do not prove those entry points work.
 The Main history-scope classifier is unfinished gate 5 work. Its focused tests pass.
 Admission segmentation, UI response rebinding, and deployed history acceptance remain unimplemented or unverified.
 Do not deploy provisional-text cleanup as a complete history fix.
-Continue gate 3 verification before this work resumes.
+Resume this work at gate 5 after gate 4.

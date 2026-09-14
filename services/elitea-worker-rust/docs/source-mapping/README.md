@@ -48,7 +48,8 @@ Detailed ledgers:
 
 - `../testing-gaps.md` records accepted progression decisions, verification debt, observed warnings, and separate implementation gaps.
 - `../remaining-gates.md` records the continuation order after the latest main sync.
-- `point3-audit-20260913.md` records current point 3 acceptance evidence and the final restricted-operation boundary.
+- `point3-audit-20260913.md` records point 3 progression acceptance and separate verification debt.
+- `internal-mcp-restricted-chat-acceptance.md` records successful project admission, eleven operation refusals, and temporary access cleanup.
 - `point3-delivery-reconciliation.md` records verified delivery of the remaining point 3 worktree changes.
 - `nested-internal-mcp-materialization.md` maps child-tool credential resolution and deployment configuration.
 - `internal-mcp-draft-default-model.md` records deployed drafting, selected-version behavior, and deliberate validation failures.

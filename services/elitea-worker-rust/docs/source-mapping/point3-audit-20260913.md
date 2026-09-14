@@ -1,6 +1,6 @@
 # Point 3 evidence audit
 
-Status: open. This audit distinguishes implementation, deployed proof, and remaining requirements.
+Status: accepted for progression on 2026-09-14. This audit distinguishes implementation, deployed proof, and remaining requirements.
 The broad `internal-elitea-mcp.md` closed-category descriptions predate the focused chat and discovery implementations.
 Use the focused source ledgers below for current ownership and evidence.
 Do not infer closure from an older pending statement or a later successful smoke test.
@@ -13,7 +13,7 @@ Do not infer closure from an older pending statement or a later successful smoke
 | 3b agent creation, separate instructions/settings updates, skill attachment | `chat-internal-mcp-acceptance.md` and `chat-credential-toolkit-creation.md`: persisted changes and saved-agent `load_skill` invocation. | `internal-mcp-copied-skill-acceptance.md`: chat-created version copies the pinned skill, Rust loads that exact version, and browser reload retains the answer. |
 | 3b credential and toolkit lifecycle | `chat-credential-toolkit-creation.md`: chat creation, updates, saved reference, and GitHub invocation. | `credential-browser-acceptance-20260914.md`: synthetic creation and rotation pass through internal MCP, browser Toolkit Test, and Rust. |
 | 3b entity discovery | `internal-mcp-entity-discovery.md`: shared actor-aware Main service, counts and filter tests. Live chat proof appears below. | Nonzero tag counts and restricted visibility have database evidence, not this browser proof. |
-| 3b actor-scoped chat operations | `internal-mcp-chat-authority.md`: eleven data descriptors. `internal-mcp-chat-runtime-contract.md`: deployed message sending and repeated-question proof. | `internal-mcp-no-content-result.md`: all eleven ordinary operations pass deployed checks after the HTTP 204 fix. Restricted live operation denial remains open. External interrupt-decision publication is intentionally excluded. |
+| 3b actor-scoped chat operations | `internal-mcp-chat-authority.md`: eleven data descriptors. `internal-mcp-chat-runtime-contract.md`: deployed message sending and repeated-question proof. | `internal-mcp-no-content-result.md`: all eleven ordinary operations pass deployed checks after the HTTP 204 fix. `internal-mcp-restricted-chat-acceptance.md`: listing succeeds after project admission and eleven ungranted operations are refused. External interrupt-decision publication is intentionally excluded. |
 | 3c Toolkit Test | `toolkit-test-reference-binding.md`, `toolkit-cancellation-acceptance.md`, `toolkit-test-result-recovery.md`: invocation, authorization references, administrative cancellation, result/reload observation. | `toolkit-discovery-authorization.md`: deployed MCP discovery, OAuth, argument loading, and Rust invocation pass headed Chrome acceptance. Pending-call OAuth reload also passes with one control and original arguments. `toolkit-request-recovery.md`: loss before execution-ID receipt now passes deployed reload verification with one provider call. |
 | 3c active worker crash | `toolkit-test-result-recovery.md`: one provider request, replacement claim 2, durable failure, one browser POST and two GETs. | This proves ambiguous-call reconciliation, not successful continuation or cross-replica spool independence. |
 | 3d external MCP | `external-mcp-fresh-browser-20260913.md`: independent PAT calls, saved-agent/pipeline success and failure, pause refusal, mixed guards, exact cursor replay, Main restart cases. | Autonomous success, failure, pause refusal, and transport replay have independent-client evidence. Platform-wide sensitive-tool behavior and browser HITL decisions are separate gates. |
@@ -43,11 +43,10 @@ Rust retains transport and invocation ownership; Main retains project data and a
 
 ## Next implementation boundary
 
-Complete the remaining message-send acceptance checks through the existing Main execution services.
-Preserve actor visibility, exact target identity, bounded observation, and durable execution references.
-Do not create an MCP-only execution engine or transfer checkpoint ownership to Main.
-Verify the existing eleven chat operations and draft refusal with an actor whose project access differs from operation permission.
-A nonmember HTTP 403 cannot substitute for that operation-level proof.
+Continue with point 4 context management and runtime drift.
+The message-send, ordinary operation, and restricted operation checks now have deployed evidence.
+Main retains product authorization; Rust retains execution and checkpoint ownership.
+The broader production and graph gates remain open as listed in `remaining-gates.md`.
 
 ## Restricted viewer acceptance, 2026-09-14
 
@@ -86,4 +85,5 @@ This option is not a point 3 completion requirement.
 
 The [delivery reconciliation](point3-delivery-reconciliation.md) records the remaining model-default, API-contract, and verification changes.
 It also corrects stale history statements about committed runtime repairs.
-The restricted chat-operation permission matrix remains open.
+The [restricted chat-operation matrix](internal-mcp-restricted-chat-acceptance.md) passes after explicit user approval of its two-grant temporary role.
+All temporary access is removed. This is the final point 3 progression check.

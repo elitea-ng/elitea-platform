@@ -63,7 +63,8 @@ The internal-MCP overview now links completed draft and default-secret implement
 The toolkit authorization note now links the completed resource-binding repair.
 Administrative cancellation remains verified; a new Toolkit Test Cancel control is outside the agreed scope.
 
-The remaining restricted chat-operation acceptance requires the pending temporary-access approval.
-This delivery does not mark point 3 complete.
+At this delivery checkpoint, the restricted chat-operation acceptance still requires temporary-access approval.
+The user later approves the precise two-grant test.
+The [restricted acceptance](internal-mcp-restricted-chat-acceptance.md) passes and closes point 3 for progression.
 
 The [nested runtime follow-up](nested-internal-mcp-materialization.md) records the separate materialization and deployment changes.

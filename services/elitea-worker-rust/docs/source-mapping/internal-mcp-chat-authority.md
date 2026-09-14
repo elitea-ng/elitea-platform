@@ -173,6 +173,11 @@ It does not prove deployed browser behavior or independent service execution.
 
 ## Remaining boundaries
 
+Subsequent deployed ordinary-operation proof is in `internal-mcp-no-content-result.md`.
+The restricted operation matrix passes in `internal-mcp-restricted-chat-acceptance.md`.
+Both use the shared Main handlers. They close the point 3 chat-operation acceptance boundary.
+The limits below describe the original implementation slice and the broader continuation gates.
+
 Send and continuation still need bounded waiting, cancellation, HITL, authorization resume, and terminal-result projection.
 Participant display enrichment and cross-entity availability resolution retain the existing Main participant implementation.
 They are not a claim of deployed worker execution or complete legacy entity-enrichment parity.

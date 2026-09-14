@@ -52,7 +52,7 @@ Main image: `sha256:17984c30c0d44c3dd731cfa8694bbd433eacc10a9c0c3561dd69b9304c5a
 The deployment preserves all six Main mounts, environment values, networks, resource limits, and existing database selection.
 Rust and Web retain their previous images.
 
-## Remaining permission boundary
+## Permission boundary follow-up
 
 The deployed checks use an existing account's permissions.
 They do not prove operation denial for a live project member whose chat grants differ.
@@ -60,7 +60,11 @@ The existing protocol tests verify each exact permission; PostgreSQL tests separ
 A proposed live test requires a temporary role for the dedicated test user in project 2.
 Automatic approval review rejects that access change without explicit authorization for its recipient, project, and permissions.
 No live role or membership changes execute in that attempt.
-The restricted live operation matrix remains open.
+That attempt leaves the restricted live operation matrix open.
 The narrowed proposal grants only `projects.projects.project.view` and `models.chat.conversations.list` to test user 6 in project 2.
 It creates a temporary named role, verifies the other operation permissions are refused, then removes the role, membership, and PAT.
 The proposal does not grant viewer, editor, or administrator roles.
+
+The user subsequently approves this exact temporary access through the chat guardrail.
+The [restricted acceptance](internal-mcp-restricted-chat-acceptance.md) then passes with successful project admission, eleven exact permission refusals, and complete cleanup.
+This closes the remaining point 3 operation-permission check.
