@@ -48,11 +48,34 @@ Detailed ledgers:
 
 - `../testing-gaps.md` records accepted progression decisions, verification debt, observed warnings, and separate implementation gaps.
 - `../remaining-gates.md` records the continuation order after the latest main sync.
+- `point3-audit-20260913.md` records current point 3 acceptance evidence and the final restricted-operation boundary.
+- `point3-delivery-reconciliation.md` records verified delivery of the remaining point 3 worktree changes.
+- `nested-internal-mcp-materialization.md` maps child-tool credential resolution and deployment configuration.
+- `internal-mcp-draft-default-model.md` records deployed drafting, selected-version behavior, and deliberate validation failures.
+- `internal-mcp-copied-skill-acceptance.md` records exact copied-skill binding and Rust runtime consumption.
+- `credential-browser-acceptance-20260914.md` records credential creation and rotation through chat and Toolkit Test.
+- `toolkit-request-recovery.md` records recovery before the browser receives an execution ID.
+- `external-mcp-fresh-browser-20260913.md` records independent PAT-client acceptance and its boundaries.
+- `external-mcp-elicitation-deferred.md` records the explicitly deferred approval exchange.
 - `main-sync-20260909.md` records conflict resolutions, regenerated contracts, and merge verification.
 - `pr-883-ci-repair.md` records post-merge CI failures, focused repairs, and local verification limits.
 - `main-sync-20260908.md` records the main integration and rehearsal cutover gate.
 - `toolkit-test.md` records required toolkit Test parity under `TKTEST-RUST-01`.
 - `toolkit-discovery.md` separates standalone discovery command parity from existing Rust runtime tool binding.
+- `toolkit-discovery-main.md` maps Main admission, dispatch, result acceptance, and discovery schema reuse.
+- `toolkit-result-artifacts.md` records immutable discovery output storage and its verification boundary.
+- `toolkit-test-context.md` maps Test runtime context, delegated authorization, and retry identity.
+- `toolkit-test-authorization-ui.md` maps the active Test pane, authorization exchange, retry, and Skip.
+- `delegated-test-token-references.md` records encrypted actor-scoped grants and the required storage boundary.
+- `internal-mcp-drafting.md` maps existing drafting services and their internal MCP adapters.
+- `chat-internal-mcp-acceptance.md` defines chat-driven creation, updates, tool invocation, and persisted-result proof.
+- `internal-mcp-application-filters.md` records application listing and pagination parity.
+- `internal-mcp-skill-contracts.md` records skill version and mutation contracts.
+- `internal-mcp-configuration-ids.md` records configuration selection across shared read paths.
+- `internal-mcp-entity-discovery.md` maps entity discovery and actor-visible search options.
+- `internal-mcp-chat-authority.md` records shared chat authorization and operation-level verification limits.
+- `internal-mcp-default-secrets.md` records protected default-secret policy through existing platform configuration.
+- `external-mcp-completion.md` records external schemas, terminal outcomes, and the remaining deployed proof.
 - `toolkit-terminal-recovery.md` records direct-read terminal takeover and the open horizontal-recovery gates.
 - `agent-runtime.md` maps language-neutral worker delivery and agent execution.
 - `pipeline-nodes.md` maps every current Python pipeline node/edge branch and

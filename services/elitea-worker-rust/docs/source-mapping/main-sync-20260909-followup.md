@@ -25,9 +25,34 @@ No running database changes during this sync.
 - Main API, runtime composition, and startup package tests pass.
 - Rust formatting and locked offline Clippy pass for all targets and features.
 - Rust transport tests pass: 122 tests, zero failures, zero ignored tests.
-- Focused UI tests pass: 94 tests.
+- Focused UI tests pass: 94 tests. Full UI type checking passes after the locked dependency installation.
 - Migration manifest tests and version checks pass. The three new versions have no collisions.
 - The repository-pinned OpenAPI generator rebuilds the Go bindings from the merged schema.
 
 These checks do not close deployed runtime, browser, replacement, load, or production gates.
 Production capability registration stays disabled.
+
+## Integration checkpoint
+
+Commit `44854f72` preserves configuration ID selection across shared read paths.
+Its mapping is [configuration IDs](internal-mcp-configuration-ids.md).
+The configuration API and application suites pass 1,093 test cases without skips.
+The chat and internal MCP integration suites pass 496 test cases without skips.
+A separate PostgreSQL regression verifies settings updates require a mapped participant.
+
+The finalized authorization schema regenerates the UI client successfully.
+Full UI TypeScript checking passes after regeneration.
+The web image `elitea-web:rust-gate3-20260909` builds successfully.
+Its image configuration digest is `sha256:bbcb2b918fb0e6c0686ce1562e64ae9a1f73ae69b629c2496406aabab9d65219`.
+
+Playwright reaches the rehearsal chat and skill pages.
+Those pages still use the earlier deployed images.
+This observation does not verify the new draft or Toolkit Test contracts.
+The new Main, Rust, and web integration deployment remains pending at this historical checkpoint.
+
+## Later deployment and delivery
+
+The [point 3 audit](point3-audit-20260913.md) supersedes this checkpoint's deployment status.
+It links subsequent chat, Toolkit Test, credential, and independent external MCP acceptance.
+Commits `2f206087` and `82e0ef3a` preserve the remaining verified point 3 changes and their source mappings.
+See [delivery reconciliation](point3-delivery-reconciliation.md) for the current delivery boundary.
