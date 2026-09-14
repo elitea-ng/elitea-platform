@@ -10,6 +10,8 @@
 
 #![allow(dead_code)] // Production capability registration remains disabled.
 
+pub(crate) use super::model_checkpoint::ValidatedModelCheckpoint;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -194,11 +196,12 @@ pub(crate) struct OrdinaryRuntimeBindings {
     delegated_authorization: DelegatedAuthorizationCatalog,
     internal_tools: InternalToolCatalog,
     application_runtime: ApplicationRuntimeProjection,
+    instruction_plan: super::instruction_authority::InstructionPlan,
 }
 
 impl OrdinaryRuntimeBindings {
     #[must_use]
-    pub(crate) const fn new(
+    pub(crate) fn new(
         toolsets: Vec<Arc<dyn Toolset>>,
         sensitive_tools: SensitiveToolCatalog,
         delegated_authorization: DelegatedAuthorizationCatalog,
@@ -208,6 +211,7 @@ impl OrdinaryRuntimeBindings {
             toolsets,
             sensitive_tools,
             delegated_authorization,
+            instruction_plan: super::instruction_authority::InstructionPlan::default(),
             internal_tools: InternalToolCatalog::empty(),
             application_runtime,
         }
@@ -216,6 +220,14 @@ impl OrdinaryRuntimeBindings {
     #[must_use]
     pub(crate) const fn with_internal_tools(mut self, internal_tools: InternalToolCatalog) -> Self {
         self.internal_tools = internal_tools;
+        self
+    }
+
+    pub(crate) fn with_instruction_plan(
+        mut self,
+        plan: super::instruction_authority::InstructionPlan,
+    ) -> Self {
+        self.instruction_plan = plan;
         self
     }
 
@@ -345,6 +357,9 @@ impl Agent for DelegatedAuthorizationEventAgent {
     async fn run(&self, context: Arc<dyn InvocationContext>) -> adk_rust::Result<EventStream> {
         let mut events = self.inner.run(context).await?;
         let authorization = self.authorization.clone();
+        let declined_scope = authorization
+            .encode_declined_scope()
+            .map_err(|()| AdkError::agent("delegated authorization scope exceeds its bound"))?;
         Ok(Box::pin(async_stream::stream! {
             while let Some(event) = adk_rust::futures::StreamExt::next(&mut events).await {
                 let mut event = match event {
@@ -354,10 +369,16 @@ impl Agent for DelegatedAuthorizationEventAgent {
                         return;
                     }
                 };
+                if event.actions.tool_confirmation.is_some()
+                    && let Some(scope) = &declined_scope
+                {
+                    event.provider_metadata.insert(crate::toolkits::DELEGATED_AUTHORIZATION_SCOPE_KEY.to_owned(), scope.clone());
+                }
                 if let Some(request) = event.actions.tool_confirmation.as_ref()
                     && let Some(requirement) = authorization.requirement_for(&request.tool_name)
                 {
-                    let Some(encoded) = encode_delegated_authorization_requirement(requirement) else {
+                    let requirement = requirement.resolve_public_metadata().await;
+                    let Some(encoded) = encode_delegated_authorization_requirement(&requirement) else {
                         yield Err(AdkError::agent("delegated authorization metadata could not be encoded"));
                         return;
                     };
@@ -441,6 +462,14 @@ impl AuthorizedNativeCommandBinding {
             sio_event: "chat_predict".to_owned(),
         }
     }
+
+    #[cfg(test)]
+    pub(super) fn fixture_for_execution(execution_id: &str) -> Self {
+        Self {
+            execution_id: execution_id.to_owned(),
+            ..Self::fixture()
+        }
+    }
 }
 
 /// Fully validated local plan built before the execution PAT is redeemed.
@@ -462,6 +491,7 @@ pub(crate) struct OrdinaryNativeAgentPlan {
     execution_id: String,
     generation: u64,
     regenerate: bool,
+    instruction_plan: super::instruction_authority::InstructionPlan,
 }
 
 impl OrdinaryNativeAgentPlan {
@@ -575,6 +605,8 @@ impl OrdinaryNativeAgentPlan {
             super::request::AgentExecutionKind::Application => APPLICATION_CAPABILITY_ID,
             super::request::AgentExecutionKind::Adhoc => ADHOC_CAPABILITY_ID,
         };
+        let projection =
+            projection.with_instruction_skills(profile.instruction_plan().public_active());
         // #606: the turn's own attachments are spliced into the human message
         // after the user's text by `ordinary_user_content`.
         let user_content =
@@ -603,6 +635,7 @@ impl OrdinaryNativeAgentPlan {
             execution_id: binding.execution_id.clone(),
             generation: binding.generation,
             regenerate: request.payload.is_regenerate,
+            instruction_plan: profile.instruction_plan().clone(),
         })
     }
 
@@ -685,6 +718,40 @@ impl NativeSessionBackend {
             #[cfg(test)]
             Self::Injected(_) => true,
         }
+    }
+
+    /// Read and validate recovery state before runtime credential redemption.
+    /// This path does not construct a model, toolset, Runner, or new user turn.
+    pub(crate) async fn inspect_model_checkpoint(
+        &self,
+        authority: ClaimBoundSessionAuthority,
+        state_writer_lease: Arc<dyn StateWriterLease>,
+        plan: &OrdinaryNativeAgentPlan,
+    ) -> Result<ValidatedModelCheckpoint, NativeAgentAssemblyError> {
+        if plan.regenerate || !self.supports_resume() {
+            return Err(invalid_configuration());
+        }
+        let sessions = self.open(authority, state_writer_lease, plan).await?;
+        let session = sessions
+            .get(GetRequest {
+                app_name: APP_NAME.to_owned(),
+                user_id: plan.user_id.to_string(),
+                session_id: plan.session_id.to_string(),
+                num_recent_events: None,
+                after: None,
+            })
+            .await
+            .map_err(|_| dependency_unavailable())?;
+        super::model_checkpoint::ModelCheckpointWriter::new(
+            sessions,
+            plan.execution_id.clone(),
+            plan.generation,
+            plan.definition_digest,
+        )
+        .restore(session.as_ref())
+        .map_err(|_| invalid_configuration())?
+        .validated_checkpoint()
+        .ok_or_else(invalid_configuration)
     }
 
     pub(crate) async fn open(
@@ -959,6 +1026,10 @@ struct PipelineStateServices {
 pub(crate) trait BoundOrdinaryAgentModel: Send + 'static {
     fn adk_model(&self) -> Arc<dyn Llm>;
 
+    fn provider_model(&self) -> Arc<dyn Llm> {
+        super::replay_history::provider_model(self.adk_model())
+    }
+
     fn take_completed_text(self) -> Result<String, NativeAgentAssemblyError>;
 
     fn durable_completion(&self) -> Option<Arc<dyn DurableModelCompletion>> {
@@ -977,17 +1048,43 @@ pub(crate) trait DurableModelCompletion: Send + Sync {
     fn snapshot(&self) -> adk_rust::Result<Option<String>>;
 }
 
-struct CompletionPersistingSessionService {
+struct RunnerSessionService {
     inner: Arc<dyn SessionService>,
-    completion: Arc<dyn DurableModelCompletion>,
+    completion: Option<Arc<dyn DurableModelCompletion>>,
+    omit_empty_user_input: bool,
 }
 
-impl CompletionPersistingSessionService {
-    fn new(inner: Arc<dyn SessionService>, completion: Arc<dyn DurableModelCompletion>) -> Self {
-        Self { inner, completion }
+impl RunnerSessionService {
+    fn new(
+        inner: Arc<dyn SessionService>,
+        completion: Option<Arc<dyn DurableModelCompletion>>,
+    ) -> Self {
+        Self {
+            inner,
+            completion,
+            omit_empty_user_input: false,
+        }
+    }
+
+    fn with_recovery(mut self, enabled: bool) -> Self {
+        self.omit_empty_user_input = enabled;
+        self
+    }
+
+    fn omit_resume_input(&self, event: &Event) -> bool {
+        self.omit_empty_user_input
+            && event.author == "user"
+            && event
+                .llm_response
+                .content
+                .as_ref()
+                .is_some_and(|content| content.role == "user" && content.parts.is_empty())
     }
 
     fn durable_event(&self, mut event: Event) -> adk_rust::Result<Event> {
+        let Some(completion) = &self.completion else {
+            return Ok(event);
+        };
         if event.llm_response.partial || !event.llm_response.turn_complete {
             return Ok(event);
         }
@@ -1000,7 +1097,7 @@ impl CompletionPersistingSessionService {
         if already_has_text {
             return Ok(event);
         }
-        let Some(text) = self.completion.snapshot()? else {
+        let Some(text) = completion.snapshot()? else {
             tracing::warn!(
                 event = "agent_session_terminal_completion_unavailable",
                 event_id = %event.id,
@@ -1027,13 +1124,16 @@ impl CompletionPersistingSessionService {
 }
 
 #[async_trait]
-impl SessionService for CompletionPersistingSessionService {
+impl SessionService for RunnerSessionService {
     async fn create(&self, req: CreateRequest) -> adk_rust::Result<Box<dyn Session>> {
         self.inner.create(req).await
     }
 
     async fn get(&self, req: GetRequest) -> adk_rust::Result<Box<dyn Session>> {
-        self.inner.get(req).await
+        self.inner
+            .get(req)
+            .await
+            .map(super::runner_history::project)
     }
 
     async fn list(&self, req: ListRequest) -> adk_rust::Result<Vec<Box<dyn Session>>> {
@@ -1045,12 +1145,18 @@ impl SessionService for CompletionPersistingSessionService {
     }
 
     async fn append_event(&self, session_id: &str, event: Event) -> adk_rust::Result<()> {
+        if self.omit_resume_input(&event) {
+            return Ok(());
+        }
         self.inner
             .append_event(session_id, self.durable_event(event)?)
             .await
     }
 
     async fn append_event_for_identity(&self, req: AppendEventRequest) -> adk_rust::Result<()> {
+        if self.omit_resume_input(&req.event) {
+            return Ok(());
+        }
         self.inner
             .append_event_for_identity(AppendEventRequest {
                 identity: req.identity,
@@ -1118,6 +1224,7 @@ impl NativeAgentCompletionSelector for PipelineAgentCompletion {
 const PIPELINE_RESUME_MARKER: &str = "[elitea:pipeline-resume:v1]";
 
 /// Activate both durable state contracts and build one admitted graph Runner.
+#[allow(clippy::too_many_lines)] // Preserve the ordered claim, checkpoint, instruction, and Runner composition.
 pub(crate) async fn assemble_pipeline_native(
     plan: OrdinaryNativeAgentPlan,
     definition: PipelineDefinition,
@@ -1157,13 +1264,14 @@ pub(crate) async fn assemble_pipeline_native(
     )
     .await?;
     let is_resume = resume.is_some();
+    let turn_checkpointer = Arc::new(super::graph::turn_checkpointer::TurnCheckpointer::new(
+        Arc::clone(&state.checkpointer),
+        &plan.execution_id,
+        plan.generation,
+        is_resume,
+    ));
     let graph = definition
-        .compile_with_runtime(
-            ROOT_AGENT_NAME,
-            Arc::clone(&state.checkpointer),
-            resume,
-            &node_runtimes,
-        )
+        .compile_with_runtime(ROOT_AGENT_NAME, turn_checkpointer, resume, &node_runtimes)
         .map_err(|error| pipeline_configuration_error(error.code()))?;
     let OrdinaryNativeAgentPlan {
         user_id,
@@ -1183,6 +1291,7 @@ pub(crate) async fn assemble_pipeline_native(
         execution_id: _,
         generation: _,
         regenerate: _,
+        instruction_plan,
     } = plan;
     // The pipeline graph binds one model per node, so there is no single
     // transcript-wide model to summarize with: an active plan is refused.
@@ -1192,7 +1301,12 @@ pub(crate) async fn assemble_pipeline_native(
     {
         return Err(invalid_configuration());
     }
-    let agent = pipeline_graph_agent(graph, &state.checkpointer, printer_catalog, is_resume);
+    // TurnCheckpointer isolates fresh input without deleting recovery history.
+    let agent: Arc<dyn Agent> = Arc::new(
+        EliteaGraphAgent::new(graph)
+            .with_printer_interrupts(Arc::clone(&state.checkpointer), printer_catalog),
+    );
+    let agent = instruction_plan.wrap(agent);
     let agent = node_events.map_or(agent.clone(), |events| {
         Arc::new(PipelineNodeEventStreamingAgent::new(agent, events)) as Arc<dyn Agent>
     });
@@ -1202,7 +1316,7 @@ pub(crate) async fn assemble_pipeline_native(
     let runner = adk_rust::runner::Runner::builder()
         .app_name(APP_NAME)
         .agent(agent)
-        .session_service(state.sessions)
+        .session_service(Arc::new(RunnerSessionService::new(state.sessions, None)))
         .build()
         .map_err(|_| invalid_configuration())?;
     let projector = AgentEventProjector::with_tool_catalogs(
@@ -1225,26 +1339,6 @@ pub(crate) async fn assemble_pipeline_native(
     ))
 }
 
-/// One graph agent, told whether this invocation STARTS a run or CONTINUES a
-/// paused one.
-///
-/// A turn that is not continuing a pause must not inherit the previous run's
-/// checkpoint — `EliteaGraphAgent::starting_a_fresh_run` carries what
-/// inheriting it does to the answer.
-fn pipeline_graph_agent(
-    graph: adk_rust::graph::GraphAgent,
-    checkpointer: &Arc<dyn Checkpointer>,
-    printer_catalog: super::graph::PrinterPauseCatalog,
-    is_resume: bool,
-) -> Arc<dyn Agent> {
-    let agent = EliteaGraphAgent::new(graph)
-        .with_printer_interrupts(Arc::clone(checkpointer), printer_catalog);
-    if is_resume {
-        return Arc::new(agent);
-    }
-    Arc::new(agent.starting_a_fresh_run(Arc::clone(checkpointer)))
-}
-
 async fn resolve_pipeline_start(
     start: PipelineNativeStart,
     state: &PipelineStateServices,
@@ -1253,8 +1347,20 @@ async fn resolve_pipeline_start(
     application_tools: &ApplicationToolPresentationCatalog,
     application_resume: Option<&ApplicationResumeCoordinator>,
 ) -> Result<Option<super::graph::resume::PipelineResume>, NativeAgentAssemblyError> {
+    if matches!(start, PipelineNativeStart::Regenerate) {
+        // ADK loads the latest checkpoint even without an explicit resume ID.
+        // Regeneration must remove that frontier before the graph starts again.
+        // Both services bind deletion to this exact claim, thread and definition.
+        state
+            .checkpointer
+            .delete(plan.session_id.as_ref())
+            .await
+            .map_err(|_| dependency_unavailable())?;
+        reset_session_for_regeneration(state.sessions.as_ref(), &plan.user_id, &plan.session_id)
+            .await?;
+    }
     Ok(match start {
-        PipelineNativeStart::Fresh => {
+        PipelineNativeStart::Fresh | PipelineNativeStart::Regenerate => {
             let (session, created) =
                 restore_or_create_session(state.sessions.as_ref(), &plan.user_id, &plan.session_id)
                     .await?;
@@ -1436,10 +1542,63 @@ pub(crate) async fn assemble_ordinary_native_with_sessions_and_runtime_catalogs<
 where
     M: BoundOrdinaryAgentModel,
 {
+    assemble_ordinary_with_checkpoint_mode(model, plan, runtime, execution_mode, sessions, false)
+        .await
+        .map(|(assembled, _)| assembled)
+}
+
+/// Rebuild a pending recovery from the same execution checkpoint.
+/// Missing or non-model checkpoints never fall back to an ordinary invocation.
+pub(crate) async fn assemble_ordinary_native_from_checkpoint<M>(
+    model: M,
+    plan: OrdinaryNativeAgentPlan,
+    runtime: OrdinaryRuntimeBindings,
+    execution_mode: NativeToolExecutionMode,
+    sessions: Arc<dyn SessionService>,
+) -> Result<
+    super::runtime::PendingRecoveredAgentInvocation<OrdinaryAgentCompletion<M>>,
+    NativeAgentAssemblyError,
+>
+where
+    M: BoundOrdinaryAgentModel,
+{
+    let (assembled, checkpoint) = assemble_ordinary_with_checkpoint_mode(
+        model,
+        plan,
+        runtime,
+        execution_mode,
+        sessions,
+        true,
+    )
+    .await?;
+    Ok(super::runtime::PendingRecoveredAgentInvocation::new(
+        assembled,
+        checkpoint.ok_or_else(invalid_configuration)?,
+    ))
+}
+
+#[allow(clippy::too_many_lines)] // Keep ordered session recovery and Runner assembly together.
+async fn assemble_ordinary_with_checkpoint_mode<M>(
+    model: M,
+    plan: OrdinaryNativeAgentPlan,
+    runtime: OrdinaryRuntimeBindings,
+    execution_mode: NativeToolExecutionMode,
+    sessions: Arc<dyn SessionService>,
+    checkpoint_recovery: bool,
+) -> Result<
+    (
+        AssembledNativeAgentInvocation<OrdinaryAgentCompletion<M>>,
+        Option<ValidatedModelCheckpoint>,
+    ),
+    NativeAgentAssemblyError,
+>
+where
+    M: BoundOrdinaryAgentModel,
+{
     let OrdinaryNativeAgentPlan {
         user_id,
         session_id,
-        user_content,
+        mut user_content,
         generation_config,
         max_iterations,
         projection,
@@ -1451,12 +1610,13 @@ where
         tenant_id: _,
         resource_project_id: _,
         projection_project_id: _,
-        execution_id: _,
-        generation: _,
+        execution_id,
+        generation,
         regenerate,
+        instruction_plan: _,
     } = plan;
     let context_compaction =
-        context_management.prepare_runner_composition(Some(model.adk_model()))?;
+        context_management.prepare_runner_composition(Some(model.provider_model()))?;
     let parallel = execution_mode == NativeToolExecutionMode::ParallelApplications;
     if parallel && runtime.has_confirmation_guards() {
         return Err(invalid_configuration());
@@ -1467,19 +1627,27 @@ where
     // notice IN THE RUN, not only the `agent_internal_tool_skipped` log line
     // `InternalToolCatalog::from_values` already writes.
     let internal_tools = runtime.internal_tools;
-    let (agent, projector) = build_runtime_agent(
-        model.adk_model(),
-        generation_config,
-        max_iterations,
-        projection,
-        runtime,
-        parallel,
-    )?;
+    if checkpoint_recovery && regenerate {
+        return Err(invalid_configuration());
+    }
     if regenerate {
         reset_session_for_regeneration(sessions.as_ref(), &user_id, &session_id).await?;
     }
-    let (session, created) =
-        restore_or_create_session(sessions.as_ref(), &user_id, &session_id).await?;
+    let (session, created) = if checkpoint_recovery {
+        let session = sessions
+            .get(GetRequest {
+                app_name: APP_NAME.to_owned(),
+                user_id: user_id.to_string(),
+                session_id: session_id.to_string(),
+                num_recent_events: None,
+                after: None,
+            })
+            .await
+            .map_err(|_| dependency_unavailable())?;
+        (session, false)
+    } else {
+        restore_or_create_session(sessions.as_ref(), &user_id, &session_id).await?
+    };
     let identity = session
         .try_identity()
         .map_err(|_| invalid_configuration())?;
@@ -1506,14 +1674,44 @@ where
         session_bootstrap = if created { "seeded" } else { "restored" },
         "prepared the ADK session for the native agent runner"
     );
-    let runner_sessions: Arc<dyn SessionService> = model.durable_completion().map_or_else(
-        || Arc::clone(&sessions),
-        |completion| {
-            Arc::new(CompletionPersistingSessionService::new(
-                Arc::clone(&sessions),
-                completion,
-            ))
-        },
+    let checkpoint = super::model_checkpoint::ModelCheckpointWriter::new(
+        sessions.clone(),
+        execution_id,
+        generation,
+        definition_digest,
+    );
+    let checkpoint = if checkpoint_recovery {
+        let restored = checkpoint
+            .restore(session.as_ref())
+            .map_err(|_| invalid_configuration())?;
+        if !restored.is_recovery() {
+            return Err(invalid_configuration());
+        }
+        restored
+    } else {
+        checkpoint
+    };
+    let evidence = checkpoint.validated_checkpoint();
+    let recovering = checkpoint.is_recovery();
+    if recovering {
+        // Keep the existing user turn. The callback restores the exact pending
+        // model request and removes this empty ADK Runner input from later calls.
+        user_content = Content::new("user");
+    }
+    let (agent, mut projector) = build_runtime_agent(
+        model.provider_model(),
+        generation_config,
+        max_iterations,
+        projection,
+        runtime,
+        parallel,
+        Some(checkpoint),
+    )?;
+    if recovering {
+        projector.mark_checkpoint_recovery();
+    }
+    let runner_sessions = Arc::new(
+        RunnerSessionService::new(sessions, model.durable_completion()).with_recovery(recovering),
     );
     let mut runner_builder = adk_rust::runner::Runner::builder()
         .app_name(APP_NAME)
@@ -1536,10 +1734,13 @@ where
     } else {
         NativeAgentInvocation::new(runner, user_id, session_id, user_content)
     };
-    Ok(AssembledNativeAgentInvocation::new(
-        invocation,
-        projector,
-        OrdinaryAgentCompletion { model, thread_id },
+    Ok((
+        AssembledNativeAgentInvocation::new(
+            invocation,
+            projector,
+            OrdinaryAgentCompletion { model, thread_id },
+        ),
+        evidence,
     ))
 }
 
@@ -1550,6 +1751,7 @@ fn build_runtime_agent(
     projection: AgentEventProjectionContext,
     runtime: OrdinaryRuntimeBindings,
     parallel: bool,
+    checkpoint: Option<super::model_checkpoint::ModelCheckpointWriter>,
 ) -> Result<(Arc<dyn Agent>, AgentEventProjector), NativeAgentAssemblyError> {
     let OrdinaryRuntimeBindings {
         toolsets,
@@ -1557,20 +1759,37 @@ fn build_runtime_agent(
         delegated_authorization,
         internal_tools,
         application_runtime,
+        instruction_plan,
     } = runtime;
+    let mut delegated_authorization = delegated_authorization;
+    let (model, toolsets) = crate::toolkits::bind_authorization_model_tools(
+        model,
+        toolsets,
+        &mut delegated_authorization,
+    )
+    .map_err(|_| invalid_configuration())?;
     let mut builder = LlmAgentBuilder::new(ROOT_AGENT_NAME)
         .model(model)
         .generate_content_config(generation_config)
         .max_iterations(max_iterations)
         .disallow_transfer_to_parent(true)
         .disallow_transfer_to_peers(true);
+    builder = instruction_plan.bind_builder(builder);
+    if let Some(checkpoint) = checkpoint {
+        // Persist the prepared request, including authoritative instructions.
+        // Recovery substitutes that exact request after fresh tool binding.
+        builder = checkpoint.bind(builder);
+    }
     if parallel {
         builder = builder.tool_execution_strategy(ToolExecutionStrategy::Parallel);
     }
     for toolset in toolsets {
         builder = builder.toolset(toolset);
     }
-    for tool_name in sensitive_tools.tool_names() {
+    for tool_name in sensitive_tools
+        .tool_names()
+        .filter(|name| !delegated_authorization.is_declined(name))
+    {
         builder = builder.require_tool_confirmation(tool_name);
     }
     for tool_name in delegated_authorization.tool_names() {
@@ -1585,6 +1804,7 @@ fn build_runtime_agent(
         resume: _,
     } = application_runtime;
     let agent: Arc<dyn Agent> = Arc::new(builder.build().map_err(|_| invalid_configuration())?);
+    let agent = instruction_plan.wrap(agent);
     let agent = delegated_authorization_agent(agent, delegated_authorization.clone());
     let agent = clarifying_question_agent(agent, internal_tools);
     let agent = application_events.map_or(agent.clone(), |events| {
@@ -1705,9 +1925,10 @@ async fn prepare_direct_resume(
     let OrdinaryRuntimeBindings {
         toolsets,
         sensitive_tools,
-        delegated_authorization,
+        mut delegated_authorization,
         internal_tools,
         application_runtime,
+        instruction_plan,
     } = runtime;
     let resolved = match start {
         DirectResumeStart::Sensitive(decisions) => decisions
@@ -1728,9 +1949,10 @@ async fn prepare_direct_resume(
     } = application_runtime;
     let (model, run_input, toolsets, parallel_applications) = match resolved {
         ResolvedDirectHitlStart::Direct(decision) => {
+            decision.restore_authorization_scope(&mut delegated_authorization);
             let replay = if decision.is_delegated_authorization() {
                 (*decision)
-                    .into_delegated_authorization_replay(&delegated_authorization)
+                    .into_delegated_authorization_replay(&mut delegated_authorization)
                     .map_err(|error| direct_hitl_error(&error))?
             } else if decision.is_clarifying_question() {
                 (*decision)
@@ -1777,7 +1999,8 @@ async fn prepare_direct_resume(
                 resume: None,
             },
         )
-        .with_internal_tools(internal_tools),
+        .with_internal_tools(internal_tools)
+        .with_instruction_plan(instruction_plan),
         parallel_applications,
     })
 }
@@ -1810,9 +2033,10 @@ where
         execution_id: _,
         generation: _,
         regenerate: _,
+        instruction_plan: _,
     } = plan;
     let context_compaction =
-        context_management.prepare_runner_composition(Some(model.adk_model()))?;
+        context_management.prepare_runner_composition(Some(model.provider_model()))?;
     let stored = sessions
         .get(GetRequest {
             app_name: APP_NAME.to_owned(),
@@ -1824,7 +2048,7 @@ where
         .await
         .map_err(|_| dependency_unavailable())?;
     let prepared =
-        prepare_direct_resume(model.adk_model(), stored.as_ref(), runtime, start).await?;
+        prepare_direct_resume(model.provider_model(), stored.as_ref(), runtime, start).await?;
     let (agent, projector) = build_runtime_agent(
         prepared.model,
         generation_config,
@@ -1832,11 +2056,15 @@ where
         projection,
         prepared.runtime,
         prepared.parallel_applications,
+        None,
     )?;
     let mut runner_builder = adk_rust::runner::Runner::builder()
         .app_name(APP_NAME)
         .agent(agent)
-        .session_service(sessions);
+        .session_service(Arc::new(RunnerSessionService::new(
+            sessions,
+            model.durable_completion(),
+        )));
     if let Some(compaction) = context_compaction {
         runner_builder = runner_builder.context_compaction(compaction);
     }
@@ -2070,6 +2298,9 @@ fn public_application_details(
                 skill.remove("instructions");
             }
         }
+    }
+    if let Some(Value::Object(version)) = application.get_mut("version_details") {
+        version.remove("project_context");
     }
     let application = Value::Object(application);
     let length = serde_json::to_vec(&application)

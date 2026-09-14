@@ -7,20 +7,30 @@
 #![allow(dead_code)] // Materialization remains capability-gated.
 
 mod delegated_auth;
+mod direct_execution;
+mod direct_request;
+mod direct_runtime;
 mod families;
 mod invocation;
 mod materialize;
 mod mcp;
 mod policy;
 mod snapshot;
+mod tool_binding;
 
 #[cfg(test)]
 pub(crate) use delegated_auth::delegated_authorization_error_fixture;
 pub(crate) use delegated_auth::{
-    DELEGATED_AUTHORIZATION_METADATA_KEY, DelegatedAuthorizationCatalog,
-    DelegatedAuthorizationRequirement, decode_delegated_authorization_requirement,
-    delegated_authorization_declined_result, delegated_authorization_requirement,
-    encode_delegated_authorization_requirement,
+    DELEGATED_AUTHORIZATION_METADATA_KEY, DELEGATED_AUTHORIZATION_SCOPE_KEY,
+    DelegatedAuthorizationCatalog, DelegatedAuthorizationRequirement,
+    bind_authorization_model_tools, decode_declined_authorization_scope,
+    decode_delegated_authorization_requirement, delegated_authorization_declined_result,
+    delegated_authorization_granted_result, delegated_authorization_requirement,
+    encode_delegated_authorization_requirement, hide_model_tools,
+};
+pub(crate) use direct_request::{DirectToolkitRequest, DirectToolkitRequestErrorCode};
+pub(crate) use direct_runtime::{
+    DirectToolkitRuntime, DirectToolkitRuntimeError, DirectToolkitRuntimeErrorCode,
 };
 pub(crate) use materialize::{
     ToolsetMaterializationError, ToolsetMaterializationErrorCode,
@@ -40,6 +50,10 @@ pub(crate) use snapshot::{
     AdmittedToolSnapshot, FrozenToolKind, FrozenToolSnapshot, FrozenToolSnapshotError,
     FrozenToolSnapshotErrorCode,
 };
+pub(crate) use tool_binding::{
+    FrozenToolset, ToolBindingError, ToolBindingPlan, bind_frozen_toolsets, bind_toolsets,
+    freeze_toolsets,
+};
 
 #[cfg(test)]
 mod aha_tests;
@@ -47,6 +61,8 @@ mod aha_tests;
 mod azure_search_tests;
 #[cfg(test)]
 mod azure_tests;
+#[cfg(test)]
+mod direct_execution_tests;
 #[cfg(test)]
 mod elastic_tests;
 #[cfg(test)]

@@ -40,15 +40,23 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { CredentialSearchOptionPage } from "./credentialSearchOptionPage.zod";
+import { SearchOptionPage } from "./searchOptionPage.zod";
+import { TagsList } from "./tagsList.zod";
 
 export const SearchOptions = zod
   .object({
-    tags: zod.array(zod.string()),
-    collections: zod
-      .array(zod.looseObject({}))
-      .describe("Always empty today (handler.go:187)."),
+    collection: SearchOptionPage,
+    tag: TagsList,
+    application: SearchOptionPage,
+    pipeline: SearchOptionPage,
+    toolkit: SearchOptionPage,
+    credential: CredentialSearchOptionPage,
+    skill: SearchOptionPage,
   })
-  .describe("NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go:167-188.\n");
+  .describe(
+    "Actor-scoped search options use seven singular sections. Unrequested sections contain empty rows.",
+  );
 
 export type SearchOptions = zod.input<typeof SearchOptions>;
 export type SearchOptionsOutput = zod.output<typeof SearchOptions>;

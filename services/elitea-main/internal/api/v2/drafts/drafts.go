@@ -39,15 +39,10 @@
 //     store row is not. The keys stay valid configuration
 //     (internal/application/configurations); nothing here writes or reads them.
 //
-//   - EDIT MODE BY ID. Legacy accepts application_id+version_id (or
-//     skill_id+version_id), fetches the stored entity and prompts the model to
-//     REWRITE it. That needs a read of the entity being edited, which this
-//     package composes no repository for. A request carrying those ids is
-//     REFUSED with 400 naming the gap rather than silently generating a
-//     from-scratch draft the caller would apply over their existing agent —
-//     an invisible wrong answer is the failure mode #128 records. The project
-//     context's edit mode IS served, because it carries its own prior content
-//     in the body (current_project_background) and needs no repository.
+//   - SKILL EDIT MODE. Main reads the requested project, skill, and version.
+//     The model returns a draft without changing the stored skill.
+//     Application edit mode remains unavailable. Project context edit mode
+//     uses the prior content supplied by the caller.
 //
 //   - RESOURCE SUGGESTIONS ARE NOW REAL (issue #881; this note used to record
 //     why they weren't — kept as a correction, not deleted). Legacy's
@@ -76,6 +71,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -85,6 +81,7 @@ import (
 	v2skills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // maxDraftRequestBytes bounds the body. user_description and
@@ -136,6 +133,16 @@ type SkillsReader interface {
 	List(ctx context.Context, projectID string, params v2skills.ListParams) (v2skills.ListResponse, error)
 }
 
+// SkillVersionReader reads one version within its owning project and skill.
+type SkillVersionReader interface {
+	GetVersion(context.Context, string, string, string) (v2skills.Skill, error)
+}
+
+// WithSkillVersions enables skill edit drafts.
+func WithSkillVersions(repo SkillVersionReader) Option {
+	return func(h *Handler) { h.skillVersions = repo }
+}
+
 // ToolkitsReader is the one v2toolkits.Repository method GenerateApplicationDraft
 // needs (suggested_toolkits/suggested_mcp, split by elitea_tools.type — see
 // suggestToolkits) — same narrowing reason as AppsReader.
@@ -145,7 +152,9 @@ type ToolkitsReader interface {
 
 // Handler serves the three draft routes.
 type Handler struct {
-	completer v2predict.Completer
+	completer     v2predict.Completer
+	skillVersions SkillVersionReader
+	permissions   auth.PermissionResolver
 	// apps/skills/toolkits back GenerateApplicationDraft's five suggested_*
 	// lists (issue #881). All three are optional (nil-safe — see
 	// suggestions.go): a deployment that composes none of them still serves
@@ -204,8 +213,7 @@ type llmSettings struct {
 type skillDraftRequest struct {
 	UserDescription string       `json:"user_description"`
 	LLMSettings     *llmSettings `json:"llm_settings"`
-	// SkillID and VersionID select legacy's edit mode. See the package doc:
-	// they are refused, not ignored.
+	// SkillID and VersionID select one stored skill version together.
 	SkillID   json.RawMessage `json:"skill_id"`
 	VersionID json.RawMessage `json:"version_id"`
 }
@@ -288,14 +296,46 @@ func (h *Handler) GenerateSkillDraft(w http.ResponseWriter, r *http.Request) {
 	if !requireUserDescription(w, body.UserDescription) {
 		return
 	}
-	if present(body.SkillID) || present(body.VersionID) {
-		writeError(w, http.StatusBadRequest,
-			"editing an existing skill is not served here: skill_id and version_id select legacy's edit mode, "+
-				"which rewrites a stored skill and is not ported (#254). Send user_description alone to draft a new skill.")
+	prompt := skillDraftSystemPrompt
+	if present(body.SkillID) != present(body.VersionID) {
+		writeError(w, http.StatusBadRequest, "skill_id and version_id must be supplied together")
 		return
 	}
+	if present(body.SkillID) {
+		skillID, skillErr := draftID(body.SkillID)
+		versionID, versionErr := draftID(body.VersionID)
+		if skillErr != nil || versionErr != nil {
+			writeError(w, http.StatusBadRequest, "skill_id and version_id must be positive integers")
+			return
+		}
+		if h.skillVersions == nil {
+			writeError(w, http.StatusServiceUnavailable, "skill version reader is not configured")
+			return
+		}
+		if !h.authorizeSkillEdit(w, r) {
+			return
+		}
+		current, err := h.skillVersions.GetVersion(r.Context(), chi.URLParam(r, "projectID"), skillID, versionID)
+		if err != nil {
+			var failure *apierr.APIError
+			if errors.As(err, &failure) && failure.Status == http.StatusNotFound {
+				writeError(w, http.StatusNotFound, "skill or version not found")
+			} else {
+				slog.ErrorContext(r.Context(), "draft: skill version read failed", "err", err)
+				writeError(w, http.StatusInternalServerError, "skill version could not be loaded")
+			}
+			return
+		}
+		encoded, err := json.Marshal(SkillDraft{Name: current.Name, Description: current.Description,
+			Instructions: current.Instructions, Tags: current.Tags})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "skill version could not be prepared")
+			return
+		}
+		prompt += "\n\nRevise this stored skill to satisfy the request. Preserve content that still applies. Return the complete draft.\n" + string(encoded)
+	}
 
-	content, ok := h.complete(w, r, skillDraftSystemPrompt, body.UserDescription, body.LLMSettings)
+	content, ok := h.complete(w, r, prompt, body.UserDescription, body.LLMSettings)
 	if !ok {
 		return
 	}
@@ -652,4 +692,52 @@ func callerUserID(ctx context.Context) string {
 		return user.UserID
 	}
 	return user.ID
+}
+
+// draftID accepts numeric and string IDs without float conversion.
+func draftID(raw json.RawMessage) (string, error) {
+	value := strings.TrimSpace(string(raw))
+	if strings.HasPrefix(value, "\"") {
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return "", err
+		}
+	}
+	id, err := strconv.ParseInt(value, 10, 32)
+	if err != nil || id <= 0 {
+		return "", errors.New("invalid ID")
+	}
+	return strconv.FormatInt(id, 10), nil
+}
+
+// WithPermissions enables the detail permission check before stored skill reads.
+func WithPermissions(resolver auth.PermissionResolver) Option {
+	return func(h *Handler) { h.permissions = resolver }
+}
+
+func (h *Handler) authorizeSkillEdit(w http.ResponseWriter, r *http.Request) bool {
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "skill edit requires an authenticated caller")
+		return false
+	}
+	if h.permissions == nil {
+		writeError(w, http.StatusServiceUnavailable, "skill edit authorization is not configured")
+		return false
+	}
+	resolution, err := h.permissions.ResolvePermissions(r.Context(), user, auth.PermissionModeDefault, chi.URLParam(r, "projectID"))
+	if err != nil {
+		if errors.Is(err, auth.ErrPermissionDenied) {
+			writeError(w, http.StatusForbidden, "skill details access is required")
+		} else {
+			writeError(w, http.StatusInternalServerError, "skill edit authorization failed")
+		}
+		return false
+	}
+	for _, permission := range resolution.Permissions {
+		if permission == "models.applications.skills.details" && resolution.UserID > 0 {
+			return true
+		}
+	}
+	writeError(w, http.StatusForbidden, "skill details access is required")
+	return false
 }

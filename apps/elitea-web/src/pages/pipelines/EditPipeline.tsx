@@ -70,7 +70,11 @@ function editorIsLoading(isFetching: boolean, detail: unknown): boolean {
   return isFetching && detail === undefined;
 }
 
-const pageSx: SxProps<Theme> = { height: '100%', display: 'flex', flexDirection: 'column' };
+const pageSx: SxProps<Theme> = {
+  height: '100%',
+  display: 'flex',
+  flexDirection: 'column',
+};
 const tabBarSx: SxProps<Theme> = {
   flexShrink: 0,
   display: 'flex',
@@ -81,7 +85,12 @@ const tabBarSx: SxProps<Theme> = {
   padding: '0 1.5rem',
   minHeight: '3rem',
 };
-const contentSx: SxProps<Theme> = { flex: 1, minHeight: 0, overflowY: 'auto', padding: '1.5rem' };
+const contentSx: SxProps<Theme> = {
+  flex: 1,
+  minHeight: 0,
+  overflowY: 'auto',
+  padding: '1.5rem',
+};
 
 interface EditPipelineParams {
   readonly tab?: string;
@@ -169,7 +178,11 @@ export function EditPipeline(): ReactNode {
   // -> `EditorPanel` render from. Without this the standalone editor page always
   // started from an empty document — a stored pipeline's graph was never shown,
   // so a save could only ever have written an empty graph back.
-  usePipelineVersionSync({ isCreateMode: false, versionDetails: activeVersion, versionId: activeVersion?.id });
+  usePipelineVersionSync({
+    isCreateMode: false,
+    versionDetails: activeVersion,
+    versionId: activeVersion?.id,
+  });
 
   // The version-level fields the configuration form edits (welcome message,
   // chat starters' siblings, variables, step limit, modules, model, tags).
@@ -266,7 +279,13 @@ export function EditPipeline(): ReactNode {
     [applyVersionField],
   );
   // Everything the test-chat slot needs to name the pipeline it talks to.
-  const chatSlotContext = usePipelineChatSlotContext({ projectId, applicationId: params.agentId, detail, activeVersion, user: chatUser });
+  const chatSlotContext = usePipelineChatSlotContext({
+    projectId,
+    applicationId: params.agentId,
+    detail,
+    activeVersion,
+    user: chatUser,
+  });
 
   /*
    * The real configuration form, rendered into `ConfigurationTab`'s
@@ -355,11 +374,7 @@ export function EditPipeline(): ReactNode {
           )}
         </Box>
         <Box sx={contentSx}>
-          <EditPipelineAlerts
-            isError={isError}
-            admissionRefused={admissionRefused}
-            saveError={saveError}
-          />
+          <EditPipelineAlerts isError={isError} admissionRefused={admissionRefused} saveError={saveError} />
           <PipelineConfigurationTabBoundary>
             <ConfigurationTab
               isFetching={isEditorLoading}

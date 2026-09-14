@@ -1,10 +1,9 @@
 //! Claim-scoped model facade over the Elitea gateway transport.
 //!
 //! The facade owns provider selection and returns one provider-neutral ADK
-//! model/completion pair. The lower `model_gateway` module remains the bounded
-//! Elitea `/llm/v1` transport plus its OpenAI-compatible adapter; native
-//! Anthropic is a separate adapter over the same transport. Native `OpenAI` can
-//! therefore be added without pretending it is the OpenAI-compatible dialect.
+//! model/completion pair. The provider-specific facade modules share one
+//! bounded Elitea `/llm/v1` gateway client; native `OpenAI` can therefore be
+//! added without pretending it is the OpenAI-compatible dialect.
 
 #![allow(dead_code)] // Production capability assembly remains gated.
 
@@ -12,16 +11,19 @@ use std::sync::Arc;
 
 use tonic::transport::{Certificate, Identity};
 
-use super::anthropic_gateway::BoundAnthropicGateway;
-use super::model_gateway::{BoundModelGateway, ModelGatewayClient};
+use super::anthropic_facade::BoundAnthropicFacade;
+use super::openai_compatible_facade::{BoundOpenAiCompatibleFacade, ModelGatewayClient};
 use super::runtime_context::ClaimScopedEliteaContext;
 use crate::agents::runtime::NativeAgentAssemblyError;
 use crate::agents::session::{BoundOrdinaryAgentModel, DurableModelCompletion};
 
-pub(crate) use super::model_gateway::{
-    ModelGatewayConfig as ModelFacadeConfig, ModelGatewayError as ModelFacadeError,
-    ModelGatewayInvocation as ModelInvocation, ModelReasoningEffort,
+pub(crate) use super::openai_compatible_facade::{
+    ModelFacadeError, ModelFacadeInvocation as ModelInvocation,
+    ModelGatewayConfig as ModelFacadeConfig, ModelReasoningEffort,
 };
+
+/// No tool call leaves the facade when a requested name is not declared.
+pub(crate) const TOOL_NOT_ADMITTED_CODE: &str = "model_facade.tool_not_admitted";
 
 /// Explicit provider dialect selected from the frozen model configuration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -75,8 +77,8 @@ impl ModelFacade {
 
 /// Provider-neutral bound ADK model and exact final-completion owner.
 pub(crate) enum BoundModelFacade {
-    OpenAiCompatible(BoundModelGateway),
-    Anthropic(BoundAnthropicGateway),
+    OpenAiCompatible(BoundOpenAiCompatibleFacade),
+    Anthropic(BoundAnthropicFacade),
 }
 
 impl BoundOrdinaryAgentModel for BoundModelFacade {

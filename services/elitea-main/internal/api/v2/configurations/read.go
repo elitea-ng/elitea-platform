@@ -104,9 +104,15 @@ func (h *currentConfigurationReadHandler) list(w http.ResponseWriter, r *http.Re
 	}
 
 	query := r.URL.Query()
+	ids, idsErr := configurationQueryIDs(query)
+	if idsErr != nil {
+		writeCurrentConfigurationServiceErrorContext(r.Context(), w, idsErr)
+		return
+	}
 	result, err := h.reader.List(r.Context(), configurationapp.CurrentConfigurationListRequest{
 		ProjectID:       projectID,
 		PublicProjectID: h.publicProjectID,
+		IDs:             ids,
 		Types:           append([]string(nil), query["type"]...),
 		Sections:        append([]string(nil), query["section"]...),
 		Offset:          currentConfigurationQueryInteger(query.Get("offset")),

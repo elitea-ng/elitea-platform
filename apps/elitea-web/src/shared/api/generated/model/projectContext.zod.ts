@@ -41,13 +41,23 @@
  */
 import * as zod from "zod";
 
+export const projectContextContentMax = 2500;
+
+export const projectContextActivationDescriptionMax = 300;
+
 export const ProjectContext = zod
   .object({
-    content: zod.string().nullable(),
-    enabled: zod.boolean().nullable(),
+    id: zod.int().nullable(),
+    content: zod.string().max(projectContextContentMax),
+    enabled: zod.boolean(),
+    activation_description: zod
+      .string()
+      .max(projectContextActivationDescriptionMax)
+      .nullable(),
+    updated_at: zod.iso.datetime({ offset: true }).nullable(),
   })
   .describe(
-    'NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go:110-134 — keys always present; \"\" \/ false when no configuration row exists, null possible when the stored jsonb lacks the key (:130-133). Update echoes the typed request back (:164), so nulls never appear after a write — EXCEPT the test-only nil-pool branch of updateProjectContext (:143-146), which returns {\"ok\": true} instead; unreachable in production (main.go exits when the pool cannot be built, and router.go:236 always passes cfg.Pool).\n',
+    "The current project-context builder response. An absent configuration returns id\/activation_description\/updated_at as null, empty content, and enabled=true.\n",
   );
 
 export type ProjectContext = zod.input<typeof ProjectContext>;

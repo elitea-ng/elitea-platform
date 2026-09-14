@@ -88,6 +88,8 @@ CREATE TABLE p_1.chat_conversations (
     created_at timestamp NOT NULL DEFAULT now(),
     updated_at timestamp
 );
+CREATE TABLE p_1.chat_participants(id serial PRIMARY KEY,entity_name text,entity_meta jsonb);
+CREATE TABLE p_1.chat_participant_mapping(conversation_id integer,participant_id integer);
 CREATE TABLE p_1.chat_message_group (
     id serial PRIMARY KEY,
     conversation_id integer NOT NULL REFERENCES p_1.chat_conversations(id)
@@ -109,6 +111,11 @@ func seedConversation(t *testing.T, pool *pgxpool.Pool, name, source string, aut
 		`INSERT INTO p_1.chat_conversations (name, author_id, meta, source) VALUES ($1, $2, $3::jsonb, $4)`,
 		name, author, string(encoded), source); err != nil {
 		t.Fatalf("seed %q: %v", name, err)
+	}
+	if _, err := pool.Exec(context.Background(), `WITH participant AS (
+ INSERT INTO p_1.chat_participants(entity_name,entity_meta) VALUES ('user',jsonb_build_object('id',$1::integer)) RETURNING id)
+ INSERT INTO p_1.chat_participant_mapping SELECT c.id,p.id FROM p_1.chat_conversations c CROSS JOIN participant p WHERE c.name=$2`, author, name); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -193,17 +200,15 @@ func TestTheDrawersQueryReturnsThisToolkitsOwnConversations(t *testing.T) {
 	}
 }
 
-// `mine=true` is what stops one member reading another's questions. This
-// listing has never read `is_private`, so without it the drawer would show
-// every member's wiki chat in the project.
+// The mine filter cannot widen the shared private-conversation restriction.
 func TestMineExcludesAnotherMembersConversations(t *testing.T) {
 	pool := newListFiltersPool(t)
 	seedTheListingCorpus(t, pool)
 
 	withoutMine := listNames(t, pool,
 		"source=deepwiki&entity_name=toolkit&entity_meta_id=42&hidden=only", "7")
-	if len(withoutMine) != 2 {
-		t.Fatalf("without mine=true the listing returned %v, want both members' chats", withoutMine)
+	if len(withoutMine) != 1 {
+		t.Fatalf("without mine=true the listing returned %v, want only the caller's private chat", withoutMine)
 	}
 	withMine := listNames(t, pool,
 		"source=deepwiki&entity_name=toolkit&entity_meta_id=42&hidden=only&mine=true", "7")
@@ -221,9 +226,15 @@ func TestMineAnswersNothingWithoutACaller(t *testing.T) {
 	pool := newListFiltersPool(t)
 	seedTheListingCorpus(t, pool)
 
-	if got := listNames(t, pool, "hidden=only&mine=true", ""); len(got) != 0 {
-		t.Fatalf("an unauthenticated caller received %v", got)
+	handler := NewHandler(nil).WithPool(pool)
+	router := chi.NewRouter()
+	router.Get("/{projectID}", handler.List)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/1?hidden=only&mine=true", nil))
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("missing actor returned %d", recorder.Code)
 	}
+
 }
 
 // A value that is not `only` takes the default. Reading "anything truthy" as

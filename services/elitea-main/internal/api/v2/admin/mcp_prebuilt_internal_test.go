@@ -143,6 +143,19 @@ func TestPrebuiltMCPSaveRefusesAnUnusableKey(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, recorder.Code)
 }
 
+func TestPrebuiltMCPSaveValidatesTemplatesBeforeSealingSecrets(t *testing.T) {
+	vault := newRecordingVault()
+	recorder := httptest.NewRecorder()
+
+	wiredHandler(vault).PrebuiltMCPSave(recorder, request(http.MethodPut, "ado",
+		`{"display_name":"ADO","url":"https://{org}.example.test/mcp",`+
+			`"client_secret":"must-not-be-sealed","config_schema":{"properties":{`+
+			`"org":{"type":"string","required":true}}}}`))
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Empty(t, vault.stored, "an invalid template must not seal a secret")
+}
+
 // The mask is what makes this surface safe to render. A set secret must show as
 // the mask and never as its value; an unset one must be omitted entirely, so
 // "no secret" and "a secret you may not read" stay distinguishable.
@@ -178,6 +191,17 @@ func TestPrebuiltViewRendersAbsentHeadersAsAnObject(t *testing.T) {
 	encoded, err := json.Marshal(prebuiltView(mcpregistry.PrebuiltServer{Key: "k", DisplayName: "K"}))
 	require.NoError(t, err)
 	require.Contains(t, string(encoded), `"headers":{}`)
+}
+
+func TestPrebuiltViewCarriesTheDynamicConfigurationSchema(t *testing.T) {
+	view := prebuiltView(mcpregistry.PrebuiltServer{
+		Key: "ado", DisplayName: "ADO",
+		ConfigSchema: map[string]any{"properties": map[string]any{
+			"api_token": map[string]any{"type": "string", "secret": true},
+		}},
+	})
+	properties := view.ConfigSchema["properties"].(map[string]any)
+	require.Equal(t, true, properties["api_token"].(map[string]any)["secret"])
 }
 
 // The vault name is derived, never stored, so a row and its secret cannot drift

@@ -304,18 +304,16 @@ export type UseToolkitEditMutation = (
  * callers that already thread `deps.createToolkit` keep working unchanged;
  * they can now simply stop injecting and take this default instead.
  *
- * `meta` is accepted by this signature but NOT sent: `pgRepo.CreateToolkit`
- * reads only `name`/`type`/`description`/`settings`
- * (internal/api/v2/toolkits/handler.go:891-900), and `ToolkitCreateRequest`
- * models exactly those. Passing `meta` through would be contract fiction.
+ * Metadata includes the saved MCP sharing option. Main persists it in the existing toolkit row.
  */
 export function useToolkitCreate(): UseToolkitCreateMutation {
-  return useCallback(async ({ projectId, type, name, description, settings }) => {
+  return useCallback(async ({ projectId, type, name, description, settings, meta }) => {
     const response = await createToolkit(projectId, {
       type,
       ...(name === undefined ? {} : { name }),
       ...(description === undefined ? {} : { description }),
       ...(settings === undefined ? {} : { settings }),
+      ...(meta === undefined ? {} : { meta }),
     });
     return response.data as ToolkitWriteResult;
   }, []);
@@ -330,12 +328,13 @@ export function useToolkitCreate(): UseToolkitCreateMutation {
  * `ToolkitWriteBody` cannot express it, which is the intended guard.
  */
 export function useToolkitEdit(): UseToolkitEditMutation {
-  return useCallback(async ({ projectId, toolId, type, name, description, settings }) => {
+  return useCallback(async ({ projectId, toolId, type, name, description, settings, meta }) => {
     const response = await updateToolkit(projectId, Number(toolId), {
       type,
       ...(name === undefined ? {} : { name }),
       ...(description === undefined ? {} : { description }),
       ...(settings === undefined ? {} : { settings }),
+      ...(meta === undefined ? {} : { meta }),
     });
     return response.data as ToolkitWriteResult;
   }, []);

@@ -54,6 +54,7 @@ use crate::transport::redis_commands::{
 /// path may resolve a second client or service locator after claim.
 pub(super) struct AgentDeliveryProcessor<R, RC, T, K, D, I> {
     router: AgentDeliveryRouter<R, RC>,
+    checkpoint_recovery: bool,
     authenticator: Arc<dyn SignedCommandAuthenticator>,
     output: AgentOutputPreflight,
     control: Arc<AgentControlClient<R>>,
@@ -71,7 +72,7 @@ impl<R, RC, T, K, D, I> AgentDeliveryProcessor<R, RC, T, K, D, I>
 where
     R: ControlRpc + 'static,
     RC: RedisRetirementClient + 'static,
-    T: AgentTerminalReplay + 'static,
+    T: AgentTerminalReplay + AgentProgressConnector + 'static,
     K: UnixMillisClock,
     D: AuthorizedAgentLifecycle,
     I: AgentInputMaterializer + 'static,
@@ -94,6 +95,7 @@ where
         let router = AgentDeliveryRouter::from_shared(Arc::clone(&control), Arc::clone(&retirer));
         Self {
             router,
+            checkpoint_recovery: false,
             authenticator,
             output,
             control,
@@ -106,6 +108,11 @@ where
             terminal_recovery,
             coordinator,
         }
+    }
+
+    pub(super) fn with_checkpoint_recovery(mut self, enabled: bool) -> Self {
+        self.checkpoint_recovery = enabled;
+        self
     }
 
     /// Stop later native submissions. Normal process shutdown calls this only
@@ -124,6 +131,9 @@ where
         delivery: RedisCommandDelivery,
         verified: VerifiedAgentCommand,
     ) -> Result<AgentDeliveryProcessOutcome, AgentDeliveryProcessError> {
+        if self.checkpoint_recovery {
+            return self.process_checkpoint_verified(delivery, verified).await;
+        }
         tracing::info!(event = "agent_delivery_routing_started");
         let route = self
             .router
@@ -131,6 +141,13 @@ where
             .await
             .map_err(AgentDeliveryProcessError::Delivery)?;
         tracing::info!(event = "agent_delivery_routed", route = ?route.kind());
+        self.process_route(route).await
+    }
+
+    async fn process_route(
+        &self,
+        route: AgentDeliveryRoute,
+    ) -> Result<AgentDeliveryProcessOutcome, AgentDeliveryProcessError> {
         match route {
             AgentDeliveryRoute::Fresh(fresh) => Box::pin(self.process_fresh(*fresh)).await,
             AgentDeliveryRoute::OutputRecovery(recovery) => {
@@ -144,6 +161,148 @@ where
                 "agent_delivery.redelivery_retired",
             )),
         }
+    }
+
+    /// Opt-in delivery composition. Bootstrap remains on the ordinary route
+    /// until restored browser output and deployed recovery acceptance pass.
+    pub(super) async fn process_checkpoint_verified(
+        &self,
+        delivery: RedisCommandDelivery,
+        verified: VerifiedAgentCommand,
+    ) -> Result<AgentDeliveryProcessOutcome, AgentDeliveryProcessError>
+    where
+        T: AgentProgressConnector,
+    {
+        use super::agent_delivery::CheckpointDeliveryRoute;
+        match self
+            .router
+            .route_checkpoint_verified(delivery, verified, self.clock.now_unix_millis())
+            .await
+            .map_err(AgentDeliveryProcessError::Delivery)?
+        {
+            CheckpointDeliveryRoute::Ordinary(route) => self.process_route(route).await,
+            CheckpointDeliveryRoute::Inspect(recovery) => {
+                let reservation = match self.admission.reserve().await {
+                    Ok(reservation) => reservation,
+                    Err(error) => {
+                        return Ok(AgentDeliveryProcessOutcome::retained(
+                            error.code().as_str(),
+                            error.retryable(),
+                        ));
+                    }
+                };
+                let output = self
+                    .output
+                    .prepare_checkpoint(&recovery)
+                    .await
+                    .map_err(AgentDeliveryProcessError::OutputPreflight)?;
+                let Some(output) = output else {
+                    use super::output_delivery::CheckpointPendingOutput;
+                    match self
+                        .output
+                        .prepare_checkpoint_pending(*recovery)
+                        .await
+                        .map_err(AgentDeliveryProcessError::OutputPreflight)?
+                    {
+                        CheckpointPendingOutput::Progress(recovery) => {
+                            self.output
+                                .replay_checkpoint_progress(*recovery, self.replay.as_ref())
+                                .await
+                                .map_err(AgentDeliveryProcessError::OutputPreflight)?;
+                            return Ok(AgentDeliveryProcessOutcome::retained(
+                                "agent_delivery.checkpoint_output_reclaim",
+                                true,
+                            ));
+                        }
+                        CheckpointPendingOutput::Terminal(terminal) => {
+                            recover_accepted_terminal(
+                                self.control.clone(),
+                                self.retirer.as_ref(),
+                                self.replay.as_ref(),
+                                *terminal,
+                                self.clock.clone(),
+                                self.preparation.lease_config(),
+                                self.terminal_recovery,
+                            )
+                            .await
+                            .map_err(AgentDeliveryProcessError::TerminalRecovery)?;
+                            return Ok(AgentDeliveryProcessOutcome::completed(
+                                "agent_delivery.checkpoint_terminal_retired",
+                            ));
+                        }
+                    }
+                };
+                let waiter = self
+                    .coordinator
+                    .submit_checkpoint(
+                        *recovery,
+                        output,
+                        reservation,
+                        self.input.clone(),
+                        self.preparation.lease_config(),
+                    )
+                    .map_err(AgentDeliveryProcessError::Supervision)?;
+                let completion = waiter
+                    .wait()
+                    .await
+                    .map_err(AgentDeliveryProcessError::Supervision)?;
+                Self::finish_invocation(completion)
+            }
+        }
+    }
+
+    pub(super) async fn process_verified_delivery(
+        &self,
+        delivery: RedisCommandDelivery,
+        verified: VerifiedAgentCommand,
+    ) {
+        let command = verified.command();
+        let span = tracing::info_span!(
+            parent: None,
+            "agent.delivery",
+            execution_kind = ?verified.kind(),
+            execution_id = %command.execution_id,
+            root_execution_id = %command.root_execution_id,
+            generation = command.generation,
+            command_id = %command.command_id,
+            tenant_id = %command.tenant_id,
+            resource_project_id = %command.resource_project_id,
+            projection_project_id = %command.projection_project_id,
+            capability_id = %command.capability_id,
+            parent_execution_id = %command.parent_execution_id,
+            parent_call_id = %command.parent_call_id,
+            redis_stream = %delivery.stream(),
+            redis_entry_id = %delivery.entry_id(),
+            trace_context_present = !command.traceparent.is_empty(),
+            remote_parent = tracing::field::Empty,
+            outcome = tracing::field::Empty,
+            result_code = tracing::field::Empty,
+            error_code = tracing::field::Empty,
+            retryable = tracing::field::Empty,
+        );
+        let remote_parent =
+            attach_command_trace_parent(&span, &command.traceparent, &command.tracestate);
+        span.record("remote_parent", remote_parent);
+        Box::pin(
+            async move {
+                tracing::info!(event = "agent_delivery_started");
+                match Box::pin(self.process_owned(delivery, verified)).await {
+                    Ok(outcome) => outcome.record(),
+                    Err(error) => {
+                        tracing::Span::current().record("outcome", "failed_no_ack");
+                        tracing::Span::current().record("error_code", error.code());
+                        tracing::Span::current().record("retryable", error.retryable());
+                        tracing::warn!(
+                            event = "agent_delivery_failed",
+                            error_code = error.code(),
+                            retryable = error.retryable(),
+                        );
+                    }
+                }
+            }
+            .instrument(span),
+        )
+        .await;
     }
 
     async fn process_output_recovery(
@@ -355,7 +514,7 @@ impl<R, RC, T, K, D, I> RedisDeliveryProcessorContract for AgentDeliveryProcesso
 where
     R: ControlRpc + 'static,
     RC: RedisRetirementClient + 'static,
-    T: AgentTerminalReplay + 'static,
+    T: AgentTerminalReplay + AgentProgressConnector + 'static,
     K: UnixMillisClock,
     D: AuthorizedAgentLifecycle,
     I: AgentInputMaterializer + 'static,
@@ -398,53 +557,7 @@ where
                 return;
             }
         };
-        let command = verified.command();
-        let span = tracing::info_span!(
-            parent: None,
-            "agent.delivery",
-            execution_kind = ?verified.kind(),
-            execution_id = %command.execution_id,
-            root_execution_id = %command.root_execution_id,
-            generation = command.generation,
-            command_id = %command.command_id,
-            tenant_id = %command.tenant_id,
-            resource_project_id = %command.resource_project_id,
-            projection_project_id = %command.projection_project_id,
-            capability_id = %command.capability_id,
-            parent_execution_id = %command.parent_execution_id,
-            parent_call_id = %command.parent_call_id,
-            redis_stream = %delivery.stream(),
-            redis_entry_id = %delivery.entry_id(),
-            trace_context_present = !command.traceparent.is_empty(),
-            remote_parent = tracing::field::Empty,
-            outcome = tracing::field::Empty,
-            result_code = tracing::field::Empty,
-            error_code = tracing::field::Empty,
-            retryable = tracing::field::Empty,
-        );
-        let remote_parent =
-            attach_command_trace_parent(&span, &command.traceparent, &command.tracestate);
-        span.record("remote_parent", remote_parent);
-        Box::pin(
-            async move {
-                tracing::info!(event = "agent_delivery_started");
-                match Box::pin(self.process_owned(delivery, verified)).await {
-                    Ok(outcome) => outcome.record(),
-                    Err(error) => {
-                        tracing::Span::current().record("outcome", "failed_no_ack");
-                        tracing::Span::current().record("error_code", error.code());
-                        tracing::Span::current().record("retryable", error.retryable());
-                        tracing::warn!(
-                            event = "agent_delivery_failed",
-                            error_code = error.code(),
-                            retryable = error.retryable(),
-                        );
-                    }
-                }
-            }
-            .instrument(span),
-        )
-        .await;
+        self.process_verified_delivery(delivery, verified).await;
     }
 }
 
@@ -497,7 +610,7 @@ where
 }
 
 #[derive(Clone, Copy)]
-enum AgentDeliveryProcessOutcome {
+pub(super) enum AgentDeliveryProcessOutcome {
     Completed { code: &'static str },
     RetainedNoAck { code: &'static str, retryable: bool },
 }
@@ -533,7 +646,7 @@ impl AgentDeliveryProcessOutcome {
     }
 }
 
-enum AgentDeliveryProcessError {
+pub(super) enum AgentDeliveryProcessError {
     Delivery(AgentDeliveryError),
     OutputPreflight(AgentOutputPreflightError),
     Preparation(AgentPreparationError),

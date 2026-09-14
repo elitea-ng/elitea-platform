@@ -627,7 +627,9 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
  * them through the generated hooks, so each is `source: 'generated'` in
  * the manifest (see MANIFEST_ENTRY_COUNT's own note on this step).
  */
-const GENERATED_OPERATION_COUNT = 266;
+// 266 -> 269: exchangeMcpOAuthGrant, registerMcpOAuthClient, and
+// deleteProjectContext. Existing handwritten callers keep the manifest count unchanged.
+const GENERATED_OPERATION_COUNT = 269;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

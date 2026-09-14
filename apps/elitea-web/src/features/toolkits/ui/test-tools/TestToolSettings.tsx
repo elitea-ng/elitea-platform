@@ -11,6 +11,9 @@ import { ToolListError } from '@/shared/ui/ToolListError';
 
 import { toolkitTools } from '@/entities/toolkit';
 
+import { readToolkitTestAuthorization } from '../../api/toolkitTestAuthorization';
+import type { TestToolPaneProps } from './TestToolPane';
+
 import { ToolArgumentPanel } from './ToolArgumentPanel';
 
 import { IndexesToolsEnum } from '../../indexes/lib/constants/indexDetails.constants';
@@ -41,13 +44,12 @@ import type { LLMModelSelectorProps } from '../../indexes/ui/IndexDetails/IndexC
  *     through `entities/toolkit`'s `toolkitTools.useToolkitTools`, so
  *     `allToolsOptions` resolves in the baseline's own order: an explicit
  *     `values.settings.selected_tools`, else the static `selected_tools`
- *     schema, else the catalogue fetched for `values.type`. A FAILED READ
+ *     schema, else discovery for the saved toolkit instance. A FAILED READ
  *     IS ITS OWN STATE — #381 made both routes answer a failed read with an
  *     error rather than `200 {"tools":[]}`, and `ToolPicker` below renders
  *     that as an error with a retry, so an empty picker keeps its one
- *     meaning. `projectId` comes from this slice's own
- *     `useSelectedProjectId`; `toolkitId` stays off the prop list because
- *     this panel knows the toolkit TYPE only.
+ *     meaning. The editor supplies its project and toolkit identity.
+ *     Unsaved toolkit forms retain type discovery as their fallback.
  *
  *  3. **`SHARED_TOUR_TARGET_IDS.testSettings` (`features/interactive-tours`)
  *     is dropped.** That domain does not exist in this worktree and is out
@@ -112,6 +114,10 @@ import type { LLMModelSelectorProps } from '../../indexes/ui/IndexDetails/IndexC
  * file's own logic.
  */
 export interface TestToolSettingsProps {
+  readonly getAuthorizationReference?: (() => string | undefined) | undefined;
+  readonly renderAuthorization?: TestToolPaneProps['renderAuthorization'];
+  readonly projectId?: string | number | undefined;
+  readonly toolkitId?: string | number | undefined;
   readonly selectedTool: string | null;
   readonly onChangeTool: (value: string | null) => void;
   readonly toolInputVariables: Readonly<Record<string, unknown>>;
@@ -215,11 +221,30 @@ function resolveAvailableTools(
   return dynamicToolNames;
 }
 
+function toolkitDiscoveryIdentity(props: TestToolSettingsProps, selectedProjectId: string | undefined) {
+  return {
+    projectId: props.projectId === undefined ? selectedProjectId : String(props.projectId),
+    toolkitId: props.toolkitId === undefined ? undefined : String(props.toolkitId),
+  };
+}
+
+function discoveryPicker(projectId: string | undefined, discovery: ReturnType<typeof toolkitTools.useToolkitTools>, props: TestToolSettingsProps, fallback: ReactNode): ReactNode {
+  const challenge = readToolkitTestAuthorization(discovery.authorizationRequired, props.toolkitId);
+  if (challenge && projectId && props.renderAuthorization) {
+    return props.renderAuthorization({ projectId, challenge, onAuthorized: discovery.authorize, onSkip: () => props.onChangeTool(null) });
+  }
+  return fallback;
+}
+function toolListReadFailed(discovery: ReturnType<typeof toolkitTools.useToolkitTools>, schemaFailed: boolean): boolean {
+  return discovery.isError || schemaFailed || discovery.authorizationRequired !== undefined;
+}
+
 export function TestToolSettings(props: TestToolSettingsProps): ReactNode {
   const { selectedTool, onChangeTool, toolInputVariables, onChangeInputVariables, onRunTool, isRunning, isValidForm, selectedToolSchema, values, llm, LLMModelSelector, indexNameValidation, toolSchemaRead } = props;
   const { clearIndexNameError, updateIndexNameError, isIndexNameValid, indexNameError } = indexNameValidation;
 
-  const projectId = useSelectedProjectId();
+  const selectedProjectId = useSelectedProjectId();
+  const { projectId, toolkitId } = toolkitDiscoveryIdentity(props, selectedProjectId);
   // `isError` has a reader now (#440). A lost schema read empties the static
   // tier, which makes the dynamic tier take over and, on a 200 with no tools,
   // draws an empty picker for a failure. It counts as a failed read here.
@@ -244,7 +269,9 @@ export function TestToolSettings(props: TestToolSettingsProps): ReactNode {
   // that read is still in flight is not yet "the static tier gave nothing".
   const usesDynamicTier = usesDynamicToolTier(isFetchingSchemas, explicitSelectedTools.length, schemaToolNames.length);
   const dynamicTools = toolkitTools.useToolkitTools({
+    getAuthorizationReference: props.getAuthorizationReference,
     projectId,
+    toolkitId,
     toolkitType: values.type,
     enabled: usesDynamicTier,
   });
@@ -296,15 +323,15 @@ export function TestToolSettings(props: TestToolSettingsProps): ReactNode {
           </Box>
         )}
         <Box sx={toolSelectContainerSx}>
-          <ToolPicker
+          {discoveryPicker(projectId, dynamicTools, props, <ToolPicker
             dynamicTierActive={usesDynamicTier}
-            readFailed={dynamicTools.isError || schemasReadFailed}
+            readFailed={toolListReadFailed(dynamicTools, schemasReadFailed)}
             onRetry={onRetryToolList}
             value={selectedTool ?? ''}
             options={allToolsOptions}
             onSelect={onSelectTool}
             onClear={onClearTool}
-          />
+          />)}
         </Box>
 
         {selectedTool && (
@@ -356,6 +383,5 @@ const toolSelectContainerSx: SxProps<Theme> = {
   marginTop: '0.5rem',
   paddingRight: '0.5rem',
 };
-
 
 

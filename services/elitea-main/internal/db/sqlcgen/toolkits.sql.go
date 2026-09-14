@@ -9,6 +9,81 @@ import (
 	"context"
 )
 
+const currentFolderAccessState = `-- name: CurrentFolderAccessState :one
+SELECT CASE
+    WHEN to_regclass('entity_folders') IS NOT NULL
+     AND to_regclass('social_folder_items') IS NOT NULL
+     AND to_regclass('folder_access_overrides') IS NOT NULL THEN 1
+    WHEN to_regclass('folder_access_overrides') IS NULL THEN 0
+    ELSE -1
+END::integer AS state
+`
+
+// The social access feature is optional. Return 0 when its override table is
+// absent, including the older organization-only folder schema. Return 1 when
+// the complete access projection exists. Return -1 when overrides exist
+// without their dependencies, which the repository refuses.
+func (q *Queries) CurrentFolderAccessState(ctx context.Context) (int32, error) {
+	row := q.db.QueryRow(ctx, currentFolderAccessState)
+	var state int32
+	err := row.Scan(&state)
+	return state, err
+}
+
+const getCurrentMCPToolkitVisibleToActor = `-- name: GetCurrentMCPToolkitVisibleToActor :one
+SELECT toolkit.id,
+       toolkit.created_at,
+       toolkit.updated_at,
+       toolkit.type,
+       toolkit.name,
+       toolkit.description,
+       toolkit.settings,
+       toolkit.author_id,
+       toolkit.shared_owner_id,
+       toolkit.shared_id,
+       toolkit.meta
+FROM elitea_tools AS toolkit
+WHERE toolkit.id = $1::integer
+  AND NOT EXISTS (
+      SELECT 1
+      FROM social_folder_items AS item
+      JOIN folder_access_overrides AS access
+        ON access.folder_id = item.folder_id
+      WHERE item.entity IN ('toolkit', 'mcp')
+        AND item.entity_id = toolkit.id
+        AND access.user_id = $2::integer
+        AND access.access_level = 'no_access'
+  )
+LIMIT 1
+`
+
+type GetCurrentMCPToolkitVisibleToActorParams struct {
+	ToolkitID int32 `db:"toolkit_id" json:"toolkit_id"`
+	ActorID   int32 `db:"actor_id" json:"actor_id"`
+}
+
+// Current-platform folder access is a restrictive overlay on project RBAC.
+// A toolkit outside a folder, or inside a folder without an override, remains
+// visible. A no_access override hides both toolkit and MCP folder item kinds.
+func (q *Queries) GetCurrentMCPToolkitVisibleToActor(ctx context.Context, arg GetCurrentMCPToolkitVisibleToActorParams) (EliteaTool, error) {
+	row := q.db.QueryRow(ctx, getCurrentMCPToolkitVisibleToActor, arg.ToolkitID, arg.ActorID)
+	var i EliteaTool
+	err := row.Scan(
+		&i.ID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Type,
+		&i.Name,
+		&i.Description,
+		&i.Settings,
+		&i.AuthorID,
+		&i.SharedOwnerID,
+		&i.SharedID,
+		&i.Meta,
+	)
+	return i, err
+}
+
 const getCurrentToolkit = `-- name: GetCurrentToolkit :one
 
 SELECT id,

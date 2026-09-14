@@ -2,7 +2,7 @@
 
 This ledger maps the current `elitea-sdk` pipeline compiler and worker runtime
 evidence to the Rust files that replace it. It is traceability, not a plan to
-copy Python's class structure. Rust uses ADK-Rust 2.0.0 where it preserves the
+copy Python's class structure. Rust uses ADK-Rust 2.2.0 where it preserves the
 admitted behavior and adds small Elitea boundaries for YAML compatibility,
 authority, durability and policy.
 
@@ -20,6 +20,35 @@ accepted by `create_graph`.
 
 ## Active UI contract
 
+### Fresh-turn checkpoint boundary: 2026-09-07
+
+SDK evidence is `runtime/langchain/langraph_agent.py::LangGraphAgentRunnable.invoke` at `4b7691c7ddc4bc2a8e4f1b5f7da620d845b55b0e`.
+Its completed-run branch starts a new turn with new input.
+Its interrupted-run branch distinguishes explicit continuation from a new request.
+
+ADK-Rust 2.2.0 loads the latest graph checkpoint without an explicit resume identifier.
+A terminal checkpoint has no pending nodes. Loading it for a new turn bypasses node execution.
+This explains the repeated pipeline answer observed in conversation 530.
+
+Rust maps this boundary to `src/agents/session.rs` and `src/agents/graph/turn_checkpointer.rs`.
+Each checkpoint stores its authenticated execution identifier and generation in private metadata.
+A fresh execution loads only its own frontier. Claim replacement retains that frontier for the same execution and generation.
+Explicit continuation still resolves the exact stored interrupt before the graph can load the previous frontier.
+Fresh turns do not delete historical checkpoints or clear conversation history.
+Regeneration retains its separate, claim-fenced reset contract.
+Legacy checkpoints remain readable for explicit continuation. Fresh executions do not load unmarked legacy frontiers.
+
+The two-turn component test fails before this change and passes after it.
+Tests also cover completed and pending frontiers, generation replacement, same-execution replay, and legacy continuation.
+All 35 pipeline tests pass, including nested parallel authorization and regeneration.
+The full suite passes 866 library tests and 83 integration or contract tests with PostgreSQL available.
+No Rust test is ignored. Live authorization grants and repeated child requests after Skip remain separate gates.
+
+Live conversation 532 executes both successive user tasks through the saved pipeline.
+The second task returns `PIPELINE_SECOND_TURN`, not the previous answer.
+See [delegated authorization](delegated-oauth-dcr.md#complete-child-results-and-logical-event-limits)
+for the subsequent fixes to child-task preservation, fragmented node output, and logical-part limits.
+
 | Active designer node | Business contract and Rust disposition |
 | --- | --- |
 | `agent` | Invoke the exact saved application or pipeline selected on the node. A direct child runs as a native `LlmAgent` behind the typed application-tool adapter; a saved pipeline compiles as an isolated checkpointed `SubgraphNode`. Do not rebuild either as an untyped Python-style callback. Implemented capability-disabled for one selected level; recursive pipeline nesting and inner direct-child event streaming remain gated. |
@@ -28,7 +57,7 @@ accepted by `create_graph`.
 | `decision` | Ask a claim-bound model to select one declared route, then apply that answer and its fallback atomically through validated `goto`. Implemented capability-disabled as a no-tool nested ADK `LlmAgent`; it accepts the active UI `nodes` contract and legacy `decisional_inputs`, without reproducing the SDK's `nodes`/`routes` mismatch. |
 | `hitl` | Pause the graph with structured data and resume the exact private checkpoint by a fresh `interrupt_id`. It is distinct from sensitive-tool confirmation and has no tool-call ID. Implemented capability-disabled |
 | `llm` | Build an invocation-owned native ADK `LlmAgent` for the node. The node receives only its UI-connected `tool_names`; an empty selection grants no tools. Alias, policy and frozen configured-selection checks happen before credential redemption; exact dynamic MCP/configured catalog resolution finishes after authorized materialization but before model dispatch. Application references are rejected because the current UI does not expose them on this node. Implemented capability-disabled, including checkpoint-bound sensitive-tool confirmation and delegated MCP/configured-Toolkit authorization. Approval returns the normal result to the native model loop. Reject and Block With Comment return `sensitive_tool_blocked` under the original provider call ID without executing the real tool or asking the model to plan the call again. Authorize rematerializes and replays that original guarded call; Skip supplies `mcp_auth_decision` under its original call ID. No SDK-style model-called auth-control tool is introduced. |
-| `mcp` | Execute one exact selected remote MCP read with the same fixed/state/template input mapping and typed output projection as a Toolkit node. It is a direct native ADK `Tool` call with no model turn. Implemented capability-disabled for claim-materialized HTTP MCP: exact alias/selection and runtime/admin policy are admitted before connection; bounded discovery must return the selected read-only tool. Sensitive reads pause on the graph checkpoint, approval returns the ordinary MCP result, and reject/block preserves both the same-call structured result and the SDK-formatted user message before routing to `END`. A 401/403 challenge becomes the common direct delegated-auth interrupt; exact-server Authorize rebuilds with the claim-fetched token, while Skip nulls declared outputs and routes to `END`. Materializer-known root and pipeline-LLM calls use native original-call confirmation and exact replay. Same-family nested cards retain their exact hierarchy and aggregate under one terminal pause; independent partial resume, prebuilt/static MCP variants, stdio and remote effects remain fail-closed. |
+| `mcp` | Execute one exact selected remote MCP read with the same fixed/state/template input mapping and typed output projection as a Toolkit node. It is a direct native ADK `Tool` call with no model turn. Implemented capability-disabled for claim-materialized HTTP MCP: exact alias/selection and runtime/admin policy are admitted before connection; bounded discovery must return the selected read-only tool. Sensitive reads pause on the graph checkpoint, approval returns the ordinary MCP result, and reject/block preserves both the same-call structured result and the SDK-formatted user message before routing to `END`. A 401/403 challenge becomes the common direct delegated-auth interrupt; exact-server Authorize rebuilds with the claim-fetched token, while Skip nulls declared outputs and routes to `END`. Materializer-known root and pipeline-LLM calls use native original-call confirmation and exact replay. Same-family nested cards retain their exact hierarchy and aggregate under one terminal pause; fixed and declared-parameter catalogue-backed HTTP definitions use Main claim-time resolution; independent partial resume, stdio and remote effects remain fail-closed. |
 | `printer` | Publish the declared state value as an ordinary chat result, durably pause after it, and resume from a compiler-owned reset node without duplicating browser output. Implemented capability-disabled with native ADK `interrupt_after`; it is not a HITL decision card. |
 | `router` | Render a bounded condition from selected state or the whole state and choose only a declared target. Implemented capability-disabled as a deterministic custom ADK node with bounded MiniJinja, `json_loads`, normalized route labels, an exact default and atomic `goto`. |
 | `state_modifier` | Render one bounded MiniJinja template with the four current SDK filters, update the first declared output using the existing state type, and clear declared variables by type. When its explicit route targets the `END` control-flow sink, that output is also a public-result candidate. Implemented capability-disabled |
@@ -39,8 +68,9 @@ artifact-free delegated Graph reads. A missing token uses the same pre-dispatch
 interrupt as OpenAPI, and a Graph 401 raised during the direct call is converted
 to that native interrupt before state projection. Skip still leaves typed
 outputs null and routes to `END`. Empty/all selection, ACS/app-only access,
-document or attachment parsing, writes and model-loop post-token 401 handling
-remain closed. This update supersedes older broad inventory rows below.
+document or attachment parsing, indexing, writes and model-loop post-token 401
+handling remain closed. A mixed saved selection exposes only its selected
+supported reads. This update supersedes older broad inventory rows below.
 
 The UI marks `function`, `condition`, `pipeline`, `loop`, `loop_from_tool` and
 `tool` deprecated and removes them from the add menu. `END`, `ghost` and
@@ -52,8 +82,8 @@ Redis/runtime activation work. Indexer-backed nodes remain last.
 
 | Python source branch / symbol | Current observable behavior | Rust target | ADK-Rust 2.0.0 use | Status / deliberate deviation |
 | --- | --- | --- | --- | --- |
-| `create_graph` plus `utils.py::{create_state,_hitl_decisions_reducer,_parallel_tasks_reducer}`: YAML load, state construction, node loop and entry point | Load `state`, state defaults, `entry_point`, `nodes`, interrupts and graph edges; keep runtime-owned channels separate from user variables | `src/agents/graph/{compiler,yaml,application,llm,direct_tool,printer,router,decision}.rs` | `StateGraph`, `StateSchema`, `Channel` and native ADK reducers | Complete-document compiler implemented for dynamic `hitl`, `state_modifier`, `llm`, configured `toolkit`, direct remote `mcp`, saved direct `agent`, `printer`, `router` and `decision` nodes. It bounds the YAML at 512 KiB, nodes at 128 and declared state keys at 256; validates state types/defaults, the entry point, references, unique IDs and every route before graph construction; and binds a definition digest that includes behaviorally significant state declaration order plus node family, mapping/tool/output settings. `messages` uses ADK list/append reduction, HITL decisions use append-or-clear and parallel task records use merge-or-clear; internal channels cannot be redefined by YAML. Arbitrary user-authored static interrupts and every other node family fail closed before execution authority is built; the compiler itself owns Printer `interrupt_after` checkpoints. |
-| Node types `toolkit`, `mcp` -> `FunctionTool` | Map fixed, state-variable or `{name}` template values to one exact configured or remote-MCP tool argument object, execute once, and project declared outputs; if the selected read is sensitive or requires delegated authorization, pause before dispatch and terminate cleanly when declined | `src/agents/graph/{direct_tool,compiler,resume}.rs`, `src/agents/{pipeline,session,events}.rs`, `src/toolkits/{snapshot,materialize,delegated_auth,mcp,invocation,policy}.rs` | Native ADK `Tool`/`ToolContext`, ADK HTTP MCP toolset, family-neutral typed authorization signal, `interrupt_with_data`, claim-materialized `Toolset`, graph state and `goto END` | Implemented capability-disabled for configured and remote MCP read-only actions. Node kind, alias, frozen selection, blocked and sensitive policy are admitted before credential redemption or MCP connection; exact catalog identity/read-only metadata are checked after bounded materialization. Sensitive arguments are masked publicly and bound to the invocation, checkpoint, pending node, definition, `pipeline:<node>:<step>` call ID and canonical argument digest. Sensitive approval applies the normal result; reject/block executes no provider call, records `sensitive_tool_blocked` under the same call ID, emits the SDK-compatible markdown explanation, leaves typed outputs untouched and routes to `END`. Delegated auth uses a distinct SDK-compatible `mcp_auth` interrupt for both node kinds: remote-MCP or inline OpenAPI Authorize rebuilds the exact resource, while Skip nulls declared data outputs, emits the current authorization-stop message and routes to `END`. Materializer-known LLM calls use native original-call confirmation and exact session/checkpoint replay. Empty outputs and `structured_output` retain the documented projection. Same-family nested cards aggregate with exact identities; effects, independent partial resume, SharePoint, remaining OpenAPI capabilities, prebuilt/static MCP definitions and stdio remain separate gates |
+| `create_graph` plus `utils.py::{create_state,_hitl_decisions_reducer,_parallel_tasks_reducer}`: YAML load, state construction, node loop and entry point | Load `state`, state defaults, `entry_point`, `nodes`, interrupts and graph edges; keep runtime-owned channels separate from user variables. The SDK applies `clean_string` to node IDs, entry points and targets, so an older UI document containing `Agent 1` executes as `Agent1`. | `src/agents/graph/{compiler,yaml,application,llm,direct_tool,printer,router,decision}.rs` | `StateGraph`, `StateSchema`, `Channel` and native ADK reducers | Complete-document compiler implemented for dynamic `hitl`, `state_modifier`, `llm`, configured `toolkit`, direct remote `mcp`, saved direct `agent`, `printer`, `router` and `decision` nodes. It bounds the YAML at 512 KiB, nodes at 128 and declared state keys at 256; validates state types/defaults, the entry point, references, unique IDs and every route before graph construction; and binds a definition digest that includes behaviorally significant state declaration order plus node family, mapping/tool/output settings. Before validation, a runtime-local compatibility pass applies the SDK normalization only to otherwise-invalid legacy graph identifiers and targets. It does not update stored YAML, it preserves already-valid Rust identifiers, and normalized collisions fail closed. `messages` uses ADK list/append reduction, HITL decisions use append-or-clear and parallel task records use merge-or-clear; internal channels cannot be redefined by YAML. Arbitrary user-authored static interrupts and every other node family fail closed before execution authority is built; the compiler itself owns Printer `interrupt_after` checkpoints. |
+| Node types `toolkit`, `mcp` -> `FunctionTool` | Map fixed, state-variable or `{name}` template values to one exact configured or remote-MCP tool argument object, execute once, and project declared outputs; if the selected read is sensitive or requires delegated authorization, pause before dispatch and terminate cleanly when declined | `src/agents/graph/{direct_tool,compiler,resume}.rs`, `src/agents/{pipeline,session,events}.rs`, `src/toolkits/{snapshot,materialize,delegated_auth,mcp,invocation,policy}.rs` | Native ADK `Tool`/`ToolContext`, ADK HTTP MCP toolset, family-neutral typed authorization signal, `interrupt_with_data`, claim-materialized `Toolset`, graph state and `goto END` | Implemented capability-disabled for configured and remote MCP read-only actions. Node kind, alias, frozen selection, blocked and sensitive policy are admitted before credential redemption or MCP connection; exact catalog identity/read-only metadata are checked after bounded materialization. Sensitive arguments are masked publicly and bound to the invocation, checkpoint, pending node, definition, `pipeline:<node>:<step>` call ID and canonical argument digest. Sensitive approval applies the normal result; reject/block executes no provider call, records `sensitive_tool_blocked` under the same call ID, emits the SDK-compatible markdown explanation, leaves typed outputs untouched and routes to `END`. Delegated auth uses a distinct SDK-compatible `mcp_auth` interrupt for both node kinds: remote-MCP or inline OpenAPI Authorize rebuilds the exact resource, while Skip nulls declared outputs, emits the current authorization-stop message and routes to `END`. Materializer-known LLM calls use native original-call confirmation and exact session/checkpoint replay. Empty outputs and `structured_output` retain the documented projection. Same-family nested cards aggregate with exact identities; fixed and declared-parameter catalogue-backed HTTP definitions use Main claim-time resolution; effects, independent partial resume, remaining family capabilities, and stdio remain separate gates |
 | Node type `function` -> `FunctionTool` | Execute a legacy function with declared state mapping | Future typed legacy-function compatibility node | ADK `Tool` plus graph state | Pending. The deprecated node does not displace active-node completion |
 | Node type `tool` -> `ToolNode` | Direct selected-tool execution with structured-output option | `src/agents/graph/nodes/tool.rs` | ADK typed tool | Planned |
 | Node type `loop` -> `LoopNode` | Repeated tool work and declared state projection | `src/agents/graph/nodes/loop.rs` | ADK loop and graph primitives where semantics match | Planned; ADK's sequential `LoopNodeConfig.parallel` is not true parallelism |
@@ -72,6 +102,54 @@ Redis/runtime activation work. Indexer-backed nodes remain last.
 | `interrupt_before`, `interrupt_after`, printer successor analysis | Pause/resume at the current node or successor without false crash classification | `src/agents/graph/{compiler,agent,printer,resume}.rs`, `src/agents/events.rs` | ADK static interrupts/checkpoints | Compiler-owned Printer `interrupt_after` is implemented with exact private checkpoint identity and ordinary-chat continuation. User-authored arbitrary static interrupts remain explicitly rejected until each public projection and resume contract is defined. |
 | `type: parallel` (absent in Python) | Run prepared Agent branch tasks concurrently, wait for all, retain declared result order, aggregate nested pauses, and reuse durable child outcomes | `docs/parallel-pipeline-node-design.md`, then `src/agents/graph/{compiler,parallel}.rs` and `src/state/postgres_checkpointer/parallel_children.rs` | Custom ADK `Node`; one separately checkpointed child `CompiledGraph` per owned Agent branch | Proposed redesign. The node has no implicit model planner and cannot split one raw chat request. V1 owns two to sixteen Agent branches, limits concurrency to eight, uses standard checkpoints, and requires one exact complete decision set. It adds no interrupt table and does not use `PARKED_CHILDREN`. Other branch types and `wait: one`/`many` remain closed. |
 | Future `type: map` | Read one state list, dispatch each item through one owned worker definition, and reduce typed outputs in input order | `docs/map-reduce-pipeline-node-design.md`, then a compiler-owned map node and the parallel child runtime | Custom ADK `Node`; one separately checkpointed child graph per item; approved ADK state reducers | Proposed LangGraph `Send` equivalent and separate from fixed topology. An explicit upstream LLM can derive the source list from chat. `LoopAgent` is sequential. `ParallelAgent` owns a fixed unbounded subagent list and fresh process-local shared state. Activation requires bounded dispatch, reducer descriptors, output selection, child replay, aggregate HITL, and live UI proof. |
+
+## Legacy saved-pipeline proof
+
+The current saved `Resolve Name` pipeline uses `Agent 1` as its stored node
+identifier. Python applies `clean_string` before graph construction. Rust now
+normalizes this legacy identifier to `Agent1` during compilation. Stored YAML
+does not change. Normalized collisions fail validation.
+
+The node identifier remains part of checkpoint and call identity. Public
+participant and breadcrumb labels use the selected application name. The
+projection regression test compiles the legacy document and checks both rules.
+
+Local external-MCP execution `b13c0d177a1da5f35b6c689e88ed8661` invokes
+`Full Name Resolver` through this node. Its `Name Resolver` and
+`Surname Resolver` descendants start model requests 386 microseconds apart.
+The durable session records separate branches and tool-call IDs. The graph
+checkpoint binds two distinct authorization interrupt IDs. The outer job
+settles and releases its claim after Main returns the authorization pause.
+
+Live authorization resume and final pipeline completion remain separate
+gates. See [the external MCP ledger](external-elitea-mcp.md).
+
+## Saved-pipeline regeneration
+
+The current Indexer deletes the requested pipeline checkpoint before regeneration.
+The source is `indexer_worker/methods/indexer_agent.py`, in the `is_regenerate` branch.
+Core prepares the earlier message history in `elitea_core/api/v2/regenerate.py`.
+These sources define behavior, not the Rust implementation structure.
+
+Rust accepts the existing regeneration flag through
+`src/agents/assembly.rs` and `src/agents/runtime.rs`.
+`src/agents/session.rs` resets the exact pipeline checkpoint and session.
+The existing PostgreSQL services enforce claim, thread, and definition ownership.
+The new session receives Main's frozen history. Other pipeline threads remain unchanged.
+
+This reset is necessary because ADK Graph loads the latest checkpoint without an explicit resume identifier.
+Regeneration must not reuse an old pause or a completed graph frontier.
+The operation invalidates old interrupt identifiers for that pipeline thread.
+It does not authorize or resume a protected tool.
+
+Component tests cover paused and completed graphs, unrelated checkpoint preservation,
+fresh interrupt identity, stale resume rejection, and successful resume of the new graph.
+Another test rejects requests that combine regeneration and interrupt resume flags.
+
+The live regression first failed during profile validation, before any model call.
+Execution `5a6c3bd33a5e9135863791271af44825` provides this evidence.
+Its accepted Main request contained the regeneration flag and a saved pipeline version.
+This failure differs from a browser request rejected with HTTP 400.
 
 ## ADK action reuse boundary
 
@@ -242,7 +320,8 @@ connector. Direct-node OAuth/on-demand authorization uses the distinct durable
 `mcp_auth` continuation described above; root and pipeline LLM owners use native
 original-call confirmation plus session/checkpoint replay. Same-family nested
 authorization cards now aggregate at the delivery boundary; independent
-partial sibling resume, mixed-guardrail aggregation, prebuilt/static variants
+partial sibling resume and mixed-guardrail aggregation remain closed. Fixed
+catalogue-backed HTTP definitions use Main claim-time resolution. Parameterized variants
 and stdio remain closed. The tool context preserves the parent invocation/session/user identity,
 scopes, memory, artifacts and described secret access, while the stable
 `pipeline:<node-id>:<graph-step>` function-call identity leaves a clear seam for the later

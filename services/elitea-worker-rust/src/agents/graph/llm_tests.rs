@@ -11,7 +11,7 @@ use serde_json::json;
 
 use super::llm::{
     LlmExecutionError, LlmExecutionInput, LlmInputMapping, LlmNode, LlmNodeDefinition,
-    PipelineLlmAgentFactory,
+    PipelineLlmAgentBinding, PipelineLlmAgentFactory,
 };
 use super::{EliteaGraphAgent, compiler::PipelineDefinition};
 use crate::agents::runtime::NativeAgentInvocation;
@@ -143,7 +143,10 @@ transition: END
 #[test]
 fn llm_node_rejects_ambiguous_tools_outputs_and_mapping_authority() {
     for yaml in [
-        LLM_NODE.replace("slack: [read_messages]", "slack: [search_issues]"),
+        LLM_NODE.replace(
+            "slack: [read_messages]",
+            "slack: [read_messages, read_messages]",
+        ),
         LLM_NODE.replace(
             "output: [summary, facts, messages]",
             "output: [summary, summary]",
@@ -162,6 +165,19 @@ fn llm_node_rejects_ambiguous_tools_outputs_and_mapping_authority() {
             "output: [summary, facts]",
         );
     assert!(LlmNodeDefinition::from_yaml(&plain_multiple).is_err());
+}
+
+#[test]
+fn llm_node_preserves_same_operation_selected_from_distinct_toolkits() {
+    let node = LlmNodeDefinition::from_yaml(
+        "id: answer\ntype: llm\ntool_names:\n  attachments: [list_indexes]\n  configurations: [list_indexes]\ntransition: END\n",
+    )
+    .expect("toolkit-scoped duplicate operation names");
+    assert_eq!(node.tool_selections().len(), 2);
+    assert!(node.tool_selections().iter().all(|selection| {
+        selection.tools() == ["list_indexes"]
+            && matches!(selection.alias(), "attachments" | "configurations")
+    }));
 }
 
 #[test]
@@ -210,15 +226,18 @@ impl PipelineLlmAgentFactory for CapturingFactory {
         input: &LlmExecutionInput,
         output_schema: Option<serde_json::Value>,
         _replay: Option<&super::llm::PipelineLlmReplayEnvelope>,
-    ) -> Result<Arc<dyn Agent>, LlmExecutionError> {
+    ) -> Result<PipelineLlmAgentBinding, LlmExecutionError> {
         let mut captured = self.captured.lock().expect("capture lock");
         captured.system = input.system().to_owned();
         captured.schema = output_schema;
         drop(captured);
-        Ok(Arc::new(CapturingAgent {
-            captured: Arc::clone(&self.captured),
-            response: self.response.clone(),
-        }))
+        Ok(PipelineLlmAgentBinding::new(
+            Arc::new(CapturingAgent {
+                captured: Arc::clone(&self.captured),
+                response: self.response.clone(),
+            }),
+            BTreeMap::new(),
+        ))
     }
 }
 
@@ -316,7 +335,8 @@ async fn native_llm_node_maps_utf8_prompt_history_and_structured_state() {
         captured.history,
         [
             ("user".to_owned(), "earlier".to_owned()),
-            ("model".to_owned(), "prior answer".to_owned())
+            ("model".to_owned(), "prior answer".to_owned()),
+            ("user".to_owned(), "Summarize Київ".to_owned())
         ]
     );
     assert_eq!(
@@ -372,7 +392,10 @@ async fn legacy_messages_mapping_preserves_bounded_text_content_blocks() {
     assert_eq!(captured.task, "Привіт, світ");
     assert_eq!(
         captured.history,
-        [("model".to_owned(), "earlier".to_owned())]
+        [
+            ("model".to_owned(), "earlier".to_owned()),
+            ("user".to_owned(), "Привіт, світ".to_owned()),
+        ]
     );
 }
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -84,32 +85,17 @@ func (h *Handler) GetDefaultVersion(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
 
-	// UI sends limit/offset; convert to page/pageSize
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	if limit < 1 || limit > 100 {
-		limit = 20
+	values, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		apierr.Write(w, apierr.BadRequest("invalid list query"))
+		return
 	}
-	if offset < 0 {
-		offset = 0
+	req, err := parseApplicationList(values)
+	if err != nil {
+		apierr.Write(w, err)
+		return
 	}
-	page := (offset / limit) + 1
-
-	// UI sends "query" for search text
-	search := r.URL.Query().Get("query")
-	if search == "" {
-		search = r.URL.Query().Get("search")
-	}
-
-	req := applications.ListRequest{
-		ProjectID:  projectID,
-		Page:       page,
-		PageSize:   limit,
-		Search:     search,
-		Tags:       r.URL.Query().Get("tags"),
-		FolderID:   r.URL.Query().Get("folder_id"),
-		AgentsType: r.URL.Query().Get("agents_type"),
-	}
+	req.ProjectID = projectID
 
 	resp, err := h.repo.List(r.Context(), req)
 	if err != nil {
@@ -634,6 +620,7 @@ func versionFromBody(vBody map[string]any, authorID int64) *applications.Version
 	welcomeMessage, _ := vBody["welcome_message"].(string)
 	llmSettings, _ := vBody["llm_settings"].(map[string]any)
 	starters, _ := vBody["conversation_starters"].([]any)
+	pipelineSettings, _ := vBody["pipeline_settings"].(map[string]any)
 
 	meta, _ := vBody["meta"].(map[string]any)
 	if meta == nil {
@@ -655,6 +642,7 @@ func versionFromBody(vBody map[string]any, authorID int64) *applications.Version
 		LLMSettings:          llmSettings,
 		ConversationStarters: starters,
 		Meta:                 meta,
+		PipelineSettings:     pipelineSettings,
 	}
 }
 
@@ -678,6 +666,10 @@ func versionDetailsResponse(ver applications.Version, user auth.User, userID str
 	if starters == nil {
 		starters = []any{}
 	}
+	pipelineSettings := ver.PipelineSettings
+	if pipelineSettings == nil {
+		pipelineSettings = map[string]any{}
+	}
 	variables, _ := ver.Meta["variables"].([]any)
 	if variables == nil {
 		variables = []any{}
@@ -698,6 +690,7 @@ func versionDetailsResponse(ver applications.Version, user auth.User, userID str
 		"welcome_message":       ver.WelcomeMessage,
 		"llm_settings":          llm,
 		"conversation_starters": starters,
+		"pipeline_settings":     pipelineSettings,
 		"tools":                 []any{},
 		"variables":             variables,
 		"tags":                  tags,
@@ -1028,7 +1021,9 @@ func (h *Handler) CreateVersion(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := strconv.FormatInt(ownerID, 10)
 
-	ver, err := h.repo.CreateVersion(r.Context(), projectID, applicationID, *versionFromBody(body, ownerID))
+	input := versionFromBody(body, ownerID)
+	input.CopySkillsFromVersionID = optionalSkillSourceVersionID(body["copy_skills_from_version_id"])
+	ver, err := h.repo.CreateVersion(r.Context(), projectID, applicationID, *input)
 	if err != nil {
 		apierr.Write(w, err)
 		return
@@ -1054,9 +1049,20 @@ func (h *Handler) CreateVersion(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// "Save as a new version" clones no tag association — see the `tags`
-	// note on VersionWriteRequest in api/openapi/v2.yaml.
-	writeJSON(w, http.StatusCreated, versionDetailsResponse(ver, user, userID, nil))
+	var storedTags []map[string]any
+	if tags, present := body["tags"].([]any); present {
+		if err := h.replaceVersionTags(r.Context(), projectID, ver.ID, tags); err != nil {
+			if delErr := h.repo.DeleteVersion(r.Context(), projectID, applicationID, ver.ID); delErr != nil {
+				slog.ErrorContext(r.Context(), "rollback of a half-created tagged version failed",
+					"application_id", applicationID, "version_id", ver.ID, "err", delErr)
+			}
+			apierr.Write(w, err)
+			return
+		}
+		s, _ := tenantSchema(projectID)
+		storedTags = h.versionTagsOrEmpty(r.Context(), s, ver.ID)
+	}
+	writeJSON(w, http.StatusCreated, versionDetailsResponse(ver, user, userID, storedTags))
 }
 
 func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {

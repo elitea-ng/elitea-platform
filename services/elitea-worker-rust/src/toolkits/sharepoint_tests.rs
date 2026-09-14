@@ -168,6 +168,42 @@ fn app_only_empty_and_content_profiles_fail_closed_without_secrets() {
 }
 
 #[tokio::test]
+async fn mixed_selection_exposes_supported_reads_and_keeps_deferred_tools_closed() {
+    let config = SharePointToolkitConfig::parse(
+        "Project SharePoint",
+        &settings(&[
+            "index_data",
+            "get_files_list",
+            "read_document",
+            "get_lists",
+            "upload_file",
+        ]),
+        &Map::new(),
+    )
+    .expect("mixed SharePoint configuration");
+    let materialized = build_sharepoint_toolset("Project SharePoint", config, &policy(&[]))
+        .expect("supported SharePoint subset");
+    assert_eq!(
+        materialized
+            .delegated_authorization
+            .tool_names()
+            .collect::<Vec<_>>(),
+        ["get_files_list", "get_lists"]
+    );
+
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = materialized
+        .toolset
+        .tools(readonly)
+        .await
+        .expect("mixed SharePoint catalog");
+    assert_eq!(
+        tools.iter().map(|tool| tool.name()).collect::<Vec<_>>(),
+        ["get_files_list", "get_lists"]
+    );
+}
+
+#[tokio::test]
 async fn missing_token_preserves_original_tools_schemas_and_policy() {
     let config = SharePointToolkitConfig::parse(
         "Project SharePoint",
@@ -559,6 +595,7 @@ async fn configured_materializer_merges_sharepoint_with_the_common_auth_catalog(
         &policy(&[]),
         &Map::new(),
     )
+    .await
     .expect("SharePoint materializer");
     assert_eq!(toolsets.len(), 1);
     assert_eq!(

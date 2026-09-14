@@ -182,6 +182,32 @@ INSERT INTO centry.social_pins (
 		items[0].Shared || !items[1].Shared {
 		t.Fatalf("current project page total=%d items=%#v", total, items)
 	}
+
+	// ID filters apply before count and pagination, inside the selected tenant.
+	for _, sharedOnly := range []bool{false, true} {
+		filter := nilFilter
+		filter.IDs = []int32{projectTwo.ID}
+		filter.SharedOnly = sharedOnly
+		filter.Limit = 1
+		total, err := repository.Count(ctx, filter)
+		if err != nil || total != 1 {
+			t.Fatalf("filtered count: %d %v", total, err)
+		}
+		selected, err := repository.List(ctx, filter)
+		if err != nil || len(selected) != 1 || selected[0].ID != projectTwo.ID || selected[0].ProjectID != 2 {
+			t.Fatalf("filtered rows: %#v %v", selected, err)
+		}
+		filter.Offset = 1
+		selected, err = repository.List(ctx, filter)
+		if err != nil || len(selected) != 0 {
+			t.Fatalf("filtered offset: %#v %v", selected, err)
+		}
+		filter.IDs = []int32{2147483647}
+		total, err = repository.Count(ctx, filter)
+		if err != nil || total != 0 {
+			t.Fatalf("unknown IDs: %d %v", total, err)
+		}
+	}
 	pinnedPage, err := repository.List(ctx, configurationapp.CurrentConfigurationListFilter{
 		ProjectID: 2,
 		Offset:    0,

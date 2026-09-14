@@ -23,7 +23,7 @@ import { useChatStreamConnection } from "./useChatStreamConnection";
 
 const BASE = "/api/v2";
 const EVENTS_URL = "/api/v2/executions/7/exec-1/events";
-const CONNECTION_LOST = "The connection to the agent run was lost.";
+const CONNECTION_LOST = "Connection interrupted. Reconnecting to the existing run.";
 
 const globals = globalThis as unknown as Record<string, unknown>;
 let registry: TestEventSourceRegistry;
@@ -35,7 +35,7 @@ function handlers(): {
   readonly lost: string[];
   readonly onNodeEvent: (frame: ExecutionEventData) => void;
   readonly onFailed: (frame: ExecutionEventData) => void;
-  readonly onConnectionLost: (reason: string) => void;
+  readonly onConnectionInterrupted: (reason: string) => void;
 } {
   const nodeEvents: ExecutionEventData[] = [];
   const failures: ExecutionEventData[] = [];
@@ -46,7 +46,7 @@ function handlers(): {
     lost,
     onNodeEvent: (frame) => nodeEvents.push(frame),
     onFailed: (frame) => failures.push(frame),
-    onConnectionLost: (reason) => lost.push(reason),
+    onConnectionInterrupted: (reason) => lost.push(reason),
   };
 }
 
@@ -144,7 +144,7 @@ describe("useChatStreamConnection", () => {
     expect(spies.lost).toEqual([]);
   });
 
-  it("reports the loss once the four reconnects are spent, and stops trying", () => {
+  it("keeps observing after the short reconnect burst and reports the outage once", () => {
     const spies = handlers();
     const { result } = renderHook(() => useChatStreamConnection(spies));
     act(() => {
@@ -165,15 +165,20 @@ describe("useChatStreamConnection", () => {
     }
     expect(registry.getSources()).toHaveLength(5);
 
-    act(() => {
-      registry.fail();
-      vi.advanceTimersByTime(600_000);
-    });
-
-    // The reason is reported once, and nothing reopens: an unbounded client
-    // turns one dead backend into a retry storm against the admission gate.
-    expect(spies.lost).toEqual([CONNECTION_LOST]);
+    act(() => { registry.fail(); });
+    act(() => { vi.advanceTimersByTime(29_999); });
     expect(registry.getSources()).toHaveLength(5);
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(registry.getSources()).toHaveLength(6);
+    act(() => { registry.fail(); });
+    act(() => { vi.advanceTimersByTime(30_000); });
+    expect(registry.getSources()).toHaveLength(7);
+    expect(spies.lost).toEqual([CONNECTION_LOST]);
+    expect(result.current.isStreaming).toBe(true);
+    act(() => { result.current.close(); });
+    act(() => { vi.advanceTimersByTime(600_000); });
+    expect(registry.getOpen()).toHaveLength(0);
+    expect(registry.getSources()).toHaveLength(7);
   });
 
   it("spends a fresh budget after a delivered frame", () => {

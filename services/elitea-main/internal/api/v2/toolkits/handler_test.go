@@ -16,11 +16,12 @@ import (
 
 // mockRepo implements toolkits.Repository for testing.
 type mockRepo struct {
-	types []string
-	tools []toolkits.Tool
-	valid bool
-	tool  toolkits.Tool
-	err   error
+	availableCalls int
+	types          []string
+	tools          []toolkits.Tool
+	valid          bool
+	tool           toolkits.Tool
+	err            error
 }
 
 func (m *mockRepo) ListTypes(_ context.Context, _ string) ([]string, error) {
@@ -31,6 +32,7 @@ func (m *mockRepo) ListTypes(_ context.Context, _ string) ([]string, error) {
 }
 
 func (m *mockRepo) AvailableTools(_ context.Context, _, _ string) ([]toolkits.Tool, error) {
+	m.availableCalls++
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -108,8 +110,7 @@ func setupRouter(repo toolkits.Repository) *chi.Mux {
 // --- ListTypes ---
 
 func TestListTypes_Success(t *testing.T) {
-	// Mock returns ["openai", "langchain", "custom"]; handler merges with 10 knownToolkitTypes.
-	// "custom" is already in the known list, so result is 10 + 2 = 12.
+	// The two new database types join the 11 built-in types. Custom is deduplicated.
 	repo := &mockRepo{types: []string{"openai", "langchain", "custom"}}
 	r := setupRouter(repo)
 
@@ -129,20 +130,19 @@ func TestListTypes_Success(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected rows array, got %T", resp["rows"])
 	}
-	// 10 knownToolkitTypes + "openai" + "langchain" ("custom" is deduped)
-	if len(types) != 12 {
-		t.Errorf("expected 12 types, got %d", len(types))
+	if len(types) != 13 {
+		t.Errorf("expected 13 types, got %d", len(types))
 	}
 	total := resp["total"].(float64)
-	if int(total) != 12 {
-		t.Errorf("expected total 12, got %v", total)
+	if int(total) != 13 {
+		t.Errorf("expected total 13, got %v", total)
 	}
 }
 
 func TestListTypes_DBError(t *testing.T) {
 	// This route degrades on purpose. The static knownToolkitTypes list is a
 	// correct answer on its own and the create-toolkit form needs it, so a
-	// failed tenant read still gives 200 and the 10 static types. #381 changed
+	// failed tenant read still gives 200 and the 11 static types. #381 changed
 	// only the record: the repository now returns the error and the handler
 	// logs the degradation instead of dropping the error with `_`. The two
 	// tool-LIST routes below are different — an empty list is a real answer
@@ -166,72 +166,42 @@ func TestListTypes_DBError(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected rows array, got %T", resp["rows"])
 	}
-	// DB error means no extra types; only the 10 static knownToolkitTypes are returned.
-	if len(types) != 10 {
-		t.Errorf("expected 10 types on DB error (static list), got %d", len(types))
+	// A failed database read retains the built-in Remote MCP type.
+	if len(types) != 11 {
+		t.Errorf("expected 11 types on DB error (static list), got %d", len(types))
+	}
+	foundMCP := false
+	for _, toolkitType := range types {
+		foundMCP = foundMCP || toolkitType == "mcp"
+	}
+	if !foundMCP {
+		t.Error("remote MCP is missing from the built-in type list")
 	}
 	total := resp["total"].(float64)
-	if int(total) != 10 {
-		t.Errorf("expected total 10 on DB error, got %v", total)
+	if int(total) != 11 {
+		t.Errorf("expected total 11 on DB error, got %v", total)
 	}
 }
 
 // --- AvailableTools ---
 
-func TestAvailableTools_Success(t *testing.T) {
-	repo := &mockRepo{
-		tools: []toolkits.Tool{
-			{ID: "tool-1", Name: "Tool One", Type: "openai"},
-			{ID: "tool-2", Name: "Tool Two", Type: "langchain"},
-		},
-	}
-	r := setupRouter(repo)
-
-	req := httptest.NewRequest(http.MethodGet, "/toolkit_available_tools/prompt_lib/proj-1/toolkit-abc", nil)
+func TestAvailableToolsRejectsAttachmentFallback(t *testing.T) {
+	repo := &mockRepo{tools: []toolkits.Tool{{ID: "1", Name: "attachment", Type: "github"}}}
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
-
-	var resp map[string]any
-	_ = json.NewDecoder(rec.Body).Decode(&resp)
-
-	tools, ok := resp["tools"].([]any)
-	if !ok {
-		t.Fatalf("expected tools array, got %T", resp["tools"])
-	}
-	if len(tools) != 2 {
-		t.Errorf("expected 2 tools, got %d", len(tools))
-	}
-	total := resp["total"].(float64)
-	if int(total) != 2 {
-		t.Errorf("expected total 2, got %v", total)
+	setupRouter(repo).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/toolkit_available_tools/prompt_lib/1/42", nil))
+	assertDiscoveryUnavailable(t, rec)
+	if repo.availableCalls != 0 {
+		t.Fatalf("runtime discovery read %d attachment lists", repo.availableCalls)
 	}
 }
 
-func TestAvailableTools_Empty(t *testing.T) {
+func TestAvailableToolsRejectsEmptyAttachmentFallback(t *testing.T) {
 	repo := &mockRepo{tools: []toolkits.Tool{}}
-	r := setupRouter(repo)
-
-	req := httptest.NewRequest(http.MethodGet, "/toolkit_available_tools/prompt_lib/proj-1/toolkit-none", nil)
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
-
-	var resp map[string]any
-	_ = json.NewDecoder(rec.Body).Decode(&resp)
-
-	tools, ok := resp["tools"].([]any)
-	if !ok {
-		t.Fatalf("expected tools array, got %T", resp["tools"])
-	}
-	if len(tools) != 0 {
-		t.Errorf("expected 0 tools, got %d", len(tools))
+	setupRouter(repo).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/toolkit_available_tools/prompt_lib/1/42", nil))
+	assertDiscoveryUnavailable(t, rec)
+	if repo.availableCalls != 0 {
+		t.Fatalf("runtime discovery read %d attachment lists", repo.availableCalls)
 	}
 }
 
@@ -325,15 +295,14 @@ func assertReadFaultResponse(t *testing.T, rec *httptest.ResponseRecorder, wantR
 	}
 }
 
-func TestAvailableTools_ReadFaultIsNotAnEmptyList(t *testing.T) {
+func TestAvailableToolsDoesNotReadFailedAttachmentRepository(t *testing.T) {
 	repo := &mockRepo{err: errors.New("connection refused")}
-	r := setupRouter(repo)
-
-	req := httptest.NewRequest(http.MethodGet, "/toolkit_available_tools/prompt_lib/proj-1/42", nil)
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
-
-	assertReadFaultResponse(t, rec, "available tools read failed")
+	setupRouter(repo).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/toolkit_available_tools/prompt_lib/1/42", nil))
+	assertDiscoveryUnavailable(t, rec)
+	if repo.availableCalls != 0 {
+		t.Fatalf("runtime discovery read %d attachment lists", repo.availableCalls)
+	}
 }
 
 func TestDiscoverTools_ReadFaultIsNotAnEmptyList(t *testing.T) {
@@ -347,24 +316,16 @@ func TestDiscoverTools_ReadFaultIsNotAnEmptyList(t *testing.T) {
 	assertReadFaultResponse(t, rec, "discover tools read failed")
 }
 
-// The pair above and the two _Empty tests above it only discriminate together.
-// This test states the pair directly, so that a later edit which collapses the
-// two outcomes back into one body fails here and not only in a distant file.
+// Legacy type discovery preserves distinct empty and failed repository responses.
 func TestToolListEmptyAndFailedReadDoNotShareAResponse(t *testing.T) {
 	empty := httptest.NewRecorder()
-	setupRouter(&mockRepo{tools: []toolkits.Tool{}}).ServeHTTP(
-		empty, httptest.NewRequest(http.MethodGet, "/toolkit_available_tools/prompt_lib/proj-1/42", nil))
-
+	setupRouter(&mockRepo{tools: []toolkits.Tool{}}).ServeHTTP(empty, httptest.NewRequest(http.MethodPost, "/toolkit_discover_tools/prompt_lib/1/github", nil))
 	failed := httptest.NewRecorder()
-	setupRouter(&mockRepo{err: errors.New("connection refused")}).ServeHTTP(
-		failed, httptest.NewRequest(http.MethodGet, "/toolkit_available_tools/prompt_lib/proj-1/42", nil))
-
+	setupRouter(&mockRepo{err: errors.New("connection refused")}).ServeHTTP(failed, httptest.NewRequest(http.MethodPost, "/toolkit_discover_tools/prompt_lib/1/github", nil))
 	if empty.Code != http.StatusOK {
-		t.Errorf("a toolkit with no tools answered %d, want 200", empty.Code)
+		t.Fatalf("empty read: %d %s", empty.Code, empty.Body.String())
 	}
-	if empty.Code == failed.Code && empty.Body.String() == failed.Body.String() {
-		t.Fatalf("an empty toolkit and a lost read give the same answer: %d %s", empty.Code, empty.Body.String())
-	}
+	assertReadFaultResponse(t, failed, "discover tools read failed")
 }
 
 // --- ValidateToolkit ---
@@ -535,3 +496,17 @@ func TestTestToolkitTool_NoTester_Returns503(t *testing.T) {
 // rather than serving six hand-written loaders. #394 deleted that handler and
 // its route; internal/api/v2/indextypes is the only implementation now, and
 // internal/api/v2/indextypes/published_envelope_test.go covers its body.
+
+func assertDiscoveryUnavailable(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["error"] != "toolkit discovery unavailable" || len(body) != 1 {
+		t.Fatalf("unexpected unavailable response: %v", body)
+	}
+}

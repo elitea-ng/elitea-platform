@@ -44,7 +44,7 @@ use crate::protocol::control::{
     ClaimBoundRuntimeContextAuthority, ClaimBoundSessionAuthority,
     InvocationAuthorizationCandidate, InvocationAuthorizationNoAckAuthority,
     InvocationAuthorizationPayload, InvocationAuthorizationTerminalCause,
-    InvocationSubmissionPermit, LeaseMonitoredAgentExecution,
+    InvocationSubmissionPermit, LeaseMonitoredAgentExecution, LiveModelCheckpointInspection,
 };
 use crate::protocol::elitea::runtime::v1::{DigestAlgorithmV1, DigestV1};
 use crate::transport::redis_commands::{
@@ -79,19 +79,80 @@ impl AgentPreparationConfig {
 /// coordinator component tests.
 #[async_trait]
 pub(crate) trait AgentInputMaterializer: Send + Sync {
+    async fn materialize_checkpoint(
+        &self,
+        _inspection: &LiveModelCheckpointInspection,
+    ) -> Result<MaterializedInput, InputContentError> {
+        Err(InputContentError::InvalidInput(
+            "checkpoint materialization is unavailable",
+        ))
+    }
+
     async fn materialize(
         &self,
         execution: &LeaseMonitoredAgentExecution,
     ) -> Result<MaterializedInput, InputContentError>;
+
+    async fn materialize_entry(
+        &self,
+        execution: &LeaseMonitoredAgentExecution,
+        entry_id: &str,
+    ) -> Result<MaterializedInput, InputContentError> {
+        if entry_id != execution.request_entry().entry_id {
+            return Err(InputContentError::InvalidInput(
+                "the input entry is not available",
+            ));
+        }
+        self.materialize(execution).await
+    }
+
+    async fn publish_toolkit_discovery(
+        &self,
+        _execution: &LeaseMonitoredAgentExecution,
+        _content: &[u8],
+    ) -> Result<
+        crate::protocol::elitea::runtime::v1::ToolkitAvailableToolsArtifactReferenceV1,
+        InputContentError,
+    > {
+        Err(InputContentError::InvalidInput(
+            "the toolkit result writer is not available",
+        ))
+    }
 }
 
 #[async_trait]
 impl AgentInputMaterializer for InputContentClient {
+    async fn materialize_checkpoint(
+        &self,
+        inspection: &LiveModelCheckpointInspection,
+    ) -> Result<MaterializedInput, InputContentError> {
+        self.fetch_checkpoint_request(inspection).await
+    }
+
     async fn materialize(
         &self,
         execution: &LeaseMonitoredAgentExecution,
     ) -> Result<MaterializedInput, InputContentError> {
         self.fetch_materialized(execution).await
+    }
+
+    async fn materialize_entry(
+        &self,
+        execution: &LeaseMonitoredAgentExecution,
+        entry_id: &str,
+    ) -> Result<MaterializedInput, InputContentError> {
+        self.fetch_materialized_entry(execution, entry_id).await
+    }
+
+    async fn publish_toolkit_discovery(
+        &self,
+        execution: &LeaseMonitoredAgentExecution,
+        content: &[u8],
+    ) -> Result<
+        crate::protocol::elitea::runtime::v1::ToolkitAvailableToolsArtifactReferenceV1,
+        InputContentError,
+    > {
+        InputContentClient::publish_toolkit_discovery(self, execution, content).await
     }
 }
 
@@ -257,6 +318,24 @@ impl PreparedAgentInvocation {
     }
 
     #[cfg(test)]
+    pub(crate) fn into_test_checkpoint(
+        self,
+        authorization: crate::protocol::control::AuthorizedModelCheckpoint,
+    ) -> (InvocationReservation, AuthorizedAgentRun) {
+        (
+            self.reservation,
+            AuthorizedAgentRun::from_checkpoint(
+                self.delivery,
+                self.verified,
+                self.request,
+                self.output_spool,
+                self.lease,
+                authorization,
+            ),
+        )
+    }
+
+    #[cfg(test)]
     pub(crate) fn into_test_cleanup(self) -> (InvocationReservation, ClaimLeaseMonitor) {
         (self.reservation, self.lease)
     }
@@ -356,6 +435,7 @@ impl InvocationAuthorizationPayload for PreparedAgentAuthorizationPayload {
             permit,
             runtime_context,
             session,
+            checkpoint: None,
         }
     }
 
@@ -419,9 +499,35 @@ pub(crate) struct AuthorizedAgentRun {
     permit: InvocationSubmissionPermit,
     runtime_context: ClaimBoundRuntimeContextAuthority,
     session: ClaimBoundSessionAuthority,
+    checkpoint: Option<crate::protocol::control::CheckpointAssemblyAuthorization>,
 }
 
 impl AuthorizedAgentRun {
+    #[allow(dead_code)]
+    pub(crate) fn from_checkpoint(
+        delivery: RedisCommandDelivery,
+        verified: VerifiedAgentCommand,
+        request: AgentExecutionRequest,
+        output: PreparedAgentOutput,
+        lease: ClaimLeaseMonitor,
+        authorization: crate::protocol::control::AuthorizedModelCheckpoint,
+    ) -> Self {
+        let (permit, output_authority, runtime_context, session, checkpoint) =
+            authorization.into_lifecycle_parts();
+        Self {
+            delivery,
+            verified,
+            request,
+            output_authority,
+            output,
+            lease,
+            permit,
+            runtime_context,
+            session,
+            checkpoint: Some(checkpoint),
+        }
+    }
+
     #[must_use]
     pub(crate) const fn execution_kind(&self) -> AgentExecutionKind {
         self.request.kind
@@ -499,6 +605,7 @@ impl AuthorizedAgentRun {
             permit,
             runtime_context,
             session,
+            checkpoint,
         } = self;
         match output_authority.try_into_output_cursor(&verified) {
             Ok(cursor) => {
@@ -518,6 +625,7 @@ impl AuthorizedAgentRun {
                     permit: Some(permit),
                     runtime_context: Some(runtime_context),
                     session: Some(session),
+                    checkpoint,
                 })
             }
             Err(failure) => {
@@ -533,6 +641,7 @@ impl AuthorizedAgentRun {
                         permit,
                         runtime_context,
                         session,
+                        checkpoint,
                     },
                     connector,
                     error: AgentProgressPublishError::InvalidFrame(error),
@@ -576,6 +685,7 @@ pub(crate) struct CursorBoundAuthorizedAgentRun<C: AgentProgressConnector> {
     permit: Option<InvocationSubmissionPermit>,
     runtime_context: Option<ClaimBoundRuntimeContextAuthority>,
     session: Option<ClaimBoundSessionAuthority>,
+    checkpoint: Option<crate::protocol::control::CheckpointAssemblyAuthorization>,
 }
 
 /// Closed outcome of the sole post-authorization assembly attempt.
@@ -658,7 +768,11 @@ where
         self,
     ) -> Result<StartedAuthorizedAgentRun<C, S>, Box<NativeStartFailure<C>>> {
         let Self { mut run, assembled } = self;
-        if run.permit.is_none() || run.runtime_context.is_some() || run.session.is_some() {
+        if run.permit.is_none()
+            || run.runtime_context.is_some()
+            || run.session.is_some()
+            || run.checkpoint.is_some()
+        {
             return Err(Box::new(NativeStartFailure {
                 run,
                 error: NativeAgentRuntimeError::invalid_state_for_lifecycle(),
@@ -753,6 +867,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
             permit,
             runtime_context,
             session,
+            checkpoint,
         } = self;
         let result = lease.check_now().await;
         (
@@ -765,6 +880,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
                 permit,
                 runtime_context,
                 session,
+                checkpoint,
             },
             result,
         )
@@ -788,6 +904,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
             permit,
             mut runtime_context,
             mut session,
+            mut checkpoint,
         } = self;
         let (Some(runtime_context_authority), Some(session_authority)) =
             (runtime_context.take(), session.take())
@@ -802,6 +919,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
                     permit,
                     runtime_context,
                     session,
+                    checkpoint,
                 }),
                 error: crate::agents::runtime::NativeAgentAssemblyError::new(
                     crate::agents::runtime::NativeAgentAssemblyErrorCode::InvalidConfiguration,
@@ -822,6 +940,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
                         permit,
                         runtime_context,
                         session,
+                        checkpoint,
                     }),
                     error,
                 };
@@ -836,7 +955,15 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
             command_binding,
         );
         let assembly_result = lease
-            .run_cancellation_safe_phase(assembler.assemble(assembly))
+            .run_cancellation_safe_phase(async {
+                match checkpoint.take() {
+                    Some(authorization) => assembler
+                        .assemble_checkpoint(assembly)
+                        .await?
+                        .authorize_lifecycle(authorization),
+                    None => assembler.assemble(assembly).await,
+                }
+            })
             .await;
         let run = Self {
             delivery,
@@ -847,6 +974,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
             permit,
             runtime_context,
             session,
+            checkpoint,
         };
         match assembly_result {
             Ok(Ok(assembled_invocation)) => {
@@ -888,6 +1016,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
             permit,
             runtime_context,
             session,
+            checkpoint,
         } = self;
         let selection_result = lease.run_cancellation_safe_phase(selector.select()).await;
         (
@@ -900,6 +1029,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
                 permit,
                 runtime_context,
                 session,
+                checkpoint,
             },
             selection_result,
         )
@@ -973,6 +1103,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
             permit: _,
             runtime_context: _,
             session: _,
+            checkpoint: _,
         } = self;
         let execution_kind = request.kind;
         let result = async {
@@ -1591,9 +1722,18 @@ fn deadline_exceeded<K: UnixMillisClock>(
 fn agent_input_binding(
     execution: &LeaseMonitoredAgentExecution,
 ) -> Result<AgentInputBinding, ProtocolError> {
-    let bundle = execution.input_bundle();
-    let bundle_reference = execution.input_bundle_ref();
-    let request = execution.request_entry();
+    input_binding_from_parts(
+        execution.input_bundle(),
+        execution.input_bundle_ref(),
+        execution.request_entry(),
+    )
+}
+
+fn input_binding_from_parts(
+    bundle: &crate::protocol::elitea::runtime::v1::ExecutionInputBundleV1,
+    bundle_reference: &crate::protocol::elitea::runtime::v1::ExecutionInputBundleReferenceV1,
+    request: &crate::protocol::elitea::runtime::v1::ExecutionInputEntryV1,
+) -> Result<AgentInputBinding, ProtocolError> {
     let content = request.content.as_ref().ok_or(ProtocolError::InvalidInput(
         "the agent request content binding is missing",
     ))?;
@@ -1652,4 +1792,64 @@ fn preparation_error<T>(error: AgentPreparationError) -> Result<T, AgentPreparat
     tracing::Span::current().record("outcome", "error_noack");
     tracing::Span::current().record("error_code", error.code().as_str());
     Err(error)
+}
+
+#[derive(Debug)]
+#[allow(dead_code)] // Consumed by the recovery lifecycle integration.
+pub(crate) enum CheckpointInputError {
+    Lease(ClaimLeaseError),
+    Content(InputContentError),
+    Protocol(ProtocolError),
+    DeadlineExceeded,
+}
+
+/// Load and parse recovery input without ordinary invocation authorization.
+/// The caller retains the lease and inspection for terminal/no-ACK handling.
+#[allow(dead_code)]
+pub(crate) async fn prepare_checkpoint_input<I: AgentInputMaterializer, K: UnixMillisClock>(
+    input: &I,
+    inspection: &LiveModelCheckpointInspection,
+    verified: &VerifiedAgentCommand,
+    lease: &mut ClaimLeaseMonitor,
+    clock: &K,
+) -> Result<AgentExecutionRequest, CheckpointInputError> {
+    if !inspection.matches_command(verified) {
+        return Err(CheckpointInputError::Protocol(
+            ProtocolError::AuthorizationFailed("the recovery input belongs to another command"),
+        ));
+    }
+    check_checkpoint_deadline(verified, clock)?;
+    let materialized = lease
+        .run_cancellation_safe_phase(input.materialize_checkpoint(inspection))
+        .await
+        .map_err(CheckpointInputError::Lease)?
+        .map_err(CheckpointInputError::Content)?;
+    lease
+        .check_now()
+        .await
+        .map_err(CheckpointInputError::Lease)?;
+    check_checkpoint_deadline(verified, clock)?;
+    let (bundle, reference, entry) = inspection.input_binding_parts();
+    let binding = input_binding_from_parts(bundle, reference, entry)
+        .map_err(CheckpointInputError::Protocol)?;
+    let message = parse_agent_execution_input(materialized.as_bytes())
+        .map_err(CheckpointInputError::Protocol)?;
+    crate::agents::request_from(message, verified.kind(), binding)
+        .map_err(CheckpointInputError::Protocol)
+}
+
+fn check_checkpoint_deadline<K: UnixMillisClock>(
+    verified: &VerifiedAgentCommand,
+    clock: &K,
+) -> Result<(), CheckpointInputError> {
+    let now = clock.now_unix_millis();
+    if now <= 0 {
+        return Err(CheckpointInputError::Protocol(ProtocolError::InvalidInput(
+            "the runtime clock is malformed",
+        )));
+    }
+    if verified.command().deadline_unix_millis <= now {
+        return Err(CheckpointInputError::DeadlineExceeded);
+    }
+    Ok(())
 }

@@ -37,6 +37,7 @@ import Box from '@mui/material/Box';
 
 import { conversationNavigation, useChatSessionStore } from '@/entities/conversation';
 import { useDeleteParticipantMutation, type Participant } from '@/entities/participant';
+import { agentEditorHooks } from '@/features/agents';
 import type { AnswerCanvasSelection, CanvasEditPayload, CodeBlockInfo } from '@/features/chat-messages';
 import { AddNewUserModal, canParticipantBeActiveInChat, ParticipantsWrapper, useLocalActiveParticipant } from '@/features/chat-participants';
 import type { ChatBoxProps } from '@/widgets/chat-box';
@@ -167,6 +168,7 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
   const { conversationId: routeConversationId } = useParams({ strict: false }) as { conversationId?: string };
   const { conversationId, messageId } = useDeepLinkedConversationId(routeConversationId);
   const { projectId, user, activeConversation, isLoadingConversation } = useChatPageData({ conversationId });
+  const isMcpVisible = agentEditorHooks.useIsMcpVisible();
   const llm = useChatModelSettings({ activeConversation, projectId, userId: user?.id });
   const { getLocalActiveParticipant, setLocalActiveParticipant, clearLocalActiveParticipant } = useLocalActiveParticipant();
   const { mutate: deleteParticipant } = useDeleteParticipantMutation();
@@ -301,6 +303,7 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
         * the `»` chevron at the top right on load rather than an open panel.
         */}
       <ParticipantsWrapper
+        isMcpVisible={isMcpVisible}
         collapsed={participantsCollapsed}
         onCollapsed={() => setParticipantsCollapsed((prev) => !prev)}
         panelWidth={PARTICIPANTS_PANEL_WIDTH}

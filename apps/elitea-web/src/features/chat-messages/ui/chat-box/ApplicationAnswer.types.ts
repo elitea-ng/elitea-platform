@@ -1,4 +1,5 @@
 import type { AnswerCanvasSelection } from './AnswerContent';
+import type { ChatContinueProps } from '../chat-continue/ChatContinue';
 import type { HitlResumePayload } from '../chat-hitl-actions/ChatHitlActions';
 import type { CanvasEditPayload, CodeBlockInfo } from '../canvas/Canvas';
 
@@ -54,7 +55,8 @@ export interface ApplicationAnswerTts {
 
 /** MCP-auth / token-limit continue-execution props, grouped to stay under the component-props budget. */
 export interface ApplicationAnswerContinuation {
-  readonly onContinueMcpExecution?: ((messageId: string, addToIgnoreList?: boolean) => void) | undefined;
+  readonly onContinueMcpExecution?: ((messageId: string, addToIgnoreList?: boolean, authorizationRequestId?: string) => void) | undefined;
+  readonly renderAuthModal?: ChatContinueProps['renderAuthModal'];
   readonly onContinueTokenLimitExecution?: ((messageId: string) => void) | undefined;
   readonly hideContinueButton?: boolean;
 }

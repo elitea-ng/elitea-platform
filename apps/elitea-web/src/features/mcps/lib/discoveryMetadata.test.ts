@@ -3,6 +3,19 @@ import { describe, expect, it } from 'vitest';
 import { extractAuthServerMetadata, extractConfigAuthMetadata, extractMcpAuthMetadata } from './discoveryMetadata';
 
 describe('extractMcpAuthMetadata', () => {
+  it('preserves confidential DCR requirements in the metadata supplied to consent', () => {
+    const server = {
+      registration_endpoint: 'https://issuer.example.com/register',
+      token_endpoint_auth_methods_supported: ['client_secret_post'],
+      scopes_supported: ['records.read', 'offline_access'],
+      private_extension: 'not projected',
+    };
+    const result = extractMcpAuthMetadata({ response_metadata: { resource_metadata: { oauth_authorization_server: server } } });
+    expect(result.oauthMetadata?.token_endpoint_auth_methods_supported).toEqual(['client_secret_post']);
+    expect(result.oauthMetadata?.scopes_supported).toEqual(['records.read', 'offline_access']);
+    expect(result.oauthMetadata).not.toHaveProperty('private_extension');
+  });
+
   it('reads response_metadata.resource_metadata (the streamed-message shape)', () => {
     const result = extractMcpAuthMetadata({
       response_metadata: {

@@ -13,7 +13,7 @@
 //! `adk_runner::compaction::CompactionConfig`. The config pairs
 //! [`EliteaContextCompaction`] — a [`CompactionStrategy`] that reproduces the
 //! current SDK's `SummarizationMiddleware.before_model` ordering — with
-//! ADK-Rust 2.0.0's `LlmEventSummarizer`, which performs the actual summary
+//! ADK-Rust 2.2.0's `LlmEventSummarizer`, which performs the actual summary
 //! call.
 //!
 //! # Transcript lineage
@@ -23,9 +23,11 @@
 //! view for the current invocation. Nothing is appended to, or removed from,
 //! the `SessionService` behind it, so the `PostgreSQL` checkpointer lineage
 //! stays the single durable transcript and a resume always reloads the full
-//! history and recompacts it. This deliberately avoids ADK's other compaction
-//! surface, `EventsCompactionConfig`, which persists `EventCompaction` markers
-//! into the session service and would make compaction irreversible.
+//! history and recompacts it. ADK's other compaction surface,
+//! `EventsCompactionConfig`, persists `EventCompaction` markers while retaining
+//! original events. Runner history uses the marker boundary on later calls.
+//! This invocation-only implementation does not yet use that durable path.
+//! See `docs/context-continuation-design.md` for the required integration.
 //!
 //! # Known limits
 //!

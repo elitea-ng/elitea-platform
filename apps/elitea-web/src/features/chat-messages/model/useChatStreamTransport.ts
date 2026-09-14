@@ -32,8 +32,7 @@
  * IT NEVER RE-STARTS A RUN. Once the POST has succeeded the execution exists
  * server-side, so a transport failure after that point must not fall back to
  * the socket — that would run the agent twice and bill it twice. The stream is
- * REOPENED instead and, once the retry budget is spent, the spinner stops and
- * the failure is surfaced.
+ * REOPENED instead. Extended outages use slower retries without ending the run.
  *
  * STREAM OWNERSHIP (issue #328). A stream belongs to the conversation that
  * started it, and to nothing else. The hook stays mounted across a
@@ -209,10 +208,14 @@ export function useChatStreamTransport(
       // same array, but the forward below would still fire on it.
       if (!isChatStreamFrame(frame)) return;
       const frameQuestionId = nonEmptyString(frame.question_id);
-      const identifiedFrame =
-        frameQuestionId === undefined && questionIdRef.current !== undefined
-          ? { ...frame, question_id: questionIdRef.current }
-          : frame;
+      // Authorization/output-limit resumes identify the existing answer and
+      // need not repeat its question. Normalize null/empty wire values to
+      // absence even without a request hint: they must not erase that answer's
+      // persisted question link and send the next Regenerate to the legacy API.
+      const identifiedFrame = {
+        ...frame,
+        question_id: frameQuestionId ?? questionIdRef.current,
+      };
       setChatHistory((prev) =>
         applyChatStreamFrame(prev, identifiedFrame, contextRef.current ?? {}),
       );
@@ -246,9 +249,10 @@ export function useChatStreamTransport(
     (reason: string) => {
       const streamContext = contextRef.current;
       const questionId = questionIdRef.current;
+      const responseMessageId = cancelRef.current?.messageGroupUuid;
       detach();
       setChatHistory((prev) =>
-        recordStreamFailure(prev, reason, streamContext, questionId),
+        recordStreamFailure(prev, reason, streamContext, questionId, responseMessageId),
       );
       onStreamErrorRef.current?.(reason);
     },
@@ -269,9 +273,9 @@ export function useChatStreamTransport(
   const connection = useChatStreamConnection({
     onNodeEvent,
     onFailed,
-    // A spent retry budget ends the turn exactly like a runtime failure: the
-    // reason goes on the message, not only to the caller's toast.
-    onConnectionLost: failWith,
+    // A disconnected observer cannot declare the durable execution failed.
+    // Retain ownership and Stop while the connection keeps retrying.
+    onConnectionInterrupted: (reason) => onStreamErrorRef.current?.(reason),
   });
   closeStreamRef.current = connection.close;
   const { isStreaming, open: openStream } = connection;

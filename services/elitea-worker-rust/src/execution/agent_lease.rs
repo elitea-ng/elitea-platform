@@ -19,7 +19,8 @@ use tokio::time::{Instant, MissedTickBehavior, interval_at};
 use crate::protocol::control::{
     AcceptedTerminalClaimRecovery, AgentControlClient, AgentControlError, ClaimLeaseHandle,
     ControlSemanticError, DesiredExecutionState, InactiveAgentExecution,
-    LeaseMonitoredAgentExecution, LeaseStartingAgentExecution, PendingLeaseActivation,
+    LeaseMonitoredAgentExecution, LeaseStartingAgentExecution, LiveModelCheckpointInspection,
+    ModelCheckpointInspection, PendingLeaseActivation, PendingModelCheckpointInspection,
     RuntimeControlRejectionKind,
 };
 use crate::state::{StateWriterLease, StateWriterLeaseLost};
@@ -253,6 +254,7 @@ pub struct ClaimLeaseMonitor {
     shutdown: watch::Sender<bool>,
     actor: Option<JoinHandle<()>>,
     activation: Option<PendingLeaseActivation>,
+    checkpoint_activation: Option<Box<PendingModelCheckpointInspection>>,
     clock: Arc<dyn UnixMillisClock>,
     margin_millis: i64,
     supervision_live: Arc<AtomicBool>,
@@ -371,6 +373,37 @@ impl ClaimLeaseMonitor {
         Self::start_inner(control, lease, clock, config, Some(activation))
     }
 
+    /// Supervise inspection without calling the ordinary `BeginExecution` path.
+    #[allow(dead_code)] // Recovery routing is not enabled yet.
+    pub(crate) fn start_checkpoint_inspection<R, K>(
+        control: Arc<AgentControlClient<R>>,
+        inspection: ModelCheckpointInspection,
+        clock: Arc<K>,
+        config: ClaimLeaseMonitorConfig,
+    ) -> Self
+    where
+        R: ControlRpc + 'static,
+        K: UnixMillisClock,
+    {
+        let (pending, lease) = inspection.into_lease_supervision();
+        let mut monitor = Self::start_inner(control, lease, clock, config, None);
+        monitor.checkpoint_activation = Some(Box::new(pending));
+        monitor
+    }
+
+    /// Issue inspection access only after the exact lease passes its first poll.
+    #[allow(dead_code)]
+    pub(crate) async fn activate_checkpoint_inspection(
+        &mut self,
+    ) -> Result<LiveModelCheckpointInspection, ClaimLeaseError> {
+        let pending = self
+            .checkpoint_activation
+            .take()
+            .ok_or_else(ClaimLeaseError::closed)?;
+        self.check_now().await?;
+        Ok((*pending).into_live())
+    }
+
     /// Start periodic supervision for terminal-only recovery without polling
     /// before the exact durable frame gets its first replay attempt.
     ///
@@ -445,6 +478,7 @@ impl ClaimLeaseMonitor {
             shutdown: shutdown_sender,
             actor: Some(actor),
             activation,
+            checkpoint_activation: None,
             clock: probe_clock,
             margin_millis: config.state_write_margin_millis,
             supervision_live,

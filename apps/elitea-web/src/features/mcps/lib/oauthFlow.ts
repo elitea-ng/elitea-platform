@@ -20,12 +20,13 @@ import { getConfig } from '@/shared/config';
 import { normalizeBasename } from '@/shared/lib/basename';
 
 import { exchangeMcpOAuthToken } from '../api/mcpOAuthClient';
-import type { McpOAuthTokenResponse } from '../api/mcpOAuthClient';
+import type { McpOAuthGrantResponse } from '../api/mcpOAuthClient';
 
 import { MCP_OAUTH_ERRORS } from './constants';
 import { normalizeScope, randomString, sha256, isOIDCFlow } from './crypto';
 import { extractAuthServerMetadata } from './discoveryMetadata';
 import { extractOAuthErrorDetail, registerDynamicClient } from './registerDynamicClient';
+import { saveAuthorizationReference } from './authorizationReference';
 import { isPrebuildMcpType, setAccessToken } from './storage';
 import type { OAuthServerMetadata } from './types';
 import { createAuthorizationMonitor, navigateAuthPopup, openAuthPopup } from './window';
@@ -53,6 +54,7 @@ function getRedirectUri(): string {
 }
 
 interface AuthorizationUrlOptions {
+  resource?: string | undefined;
   authorizationEndpoint: string;
   clientId: string;
   redirectUri: string;
@@ -77,6 +79,7 @@ function buildAuthorizationUrl(options: AuthorizationUrlOptions): string {
   if (isOIDC) params.set('nonce', nonce);
   if (scope) params.set('scope', scope);
   if (prompt) params.set('prompt', prompt);
+  if (options.resource) params.set('resource', options.resource);
 
   return `${authorizationEndpoint}?${params.toString()}`;
 }
@@ -107,6 +110,7 @@ function ensureAuthWindow(providedWindow: Window | null | undefined): Window {
 }
 
 interface ClientCredentialsResolution {
+  clientReference?: string | undefined;
   clientId: string;
   /** The DCR-issued secret, when DCR was used and the server issued one — `undefined` on the caller-provided-`client_id` branch, where there is no DCR-issued secret at all. See `startMcpAuthFlow`'s `resolveEffectiveClientSecret` for how this combines with a caller-supplied secret. */
   clientSecret: string | undefined;
@@ -133,12 +137,13 @@ async function resolveClientCredentials(
   registrationEndpoint: string | undefined,
   initialClientId: string | undefined,
   projectId: string | number | undefined,
+  binding: { tokenEndpoint: string | undefined; resource: string | undefined },
 ): Promise<ClientCredentialsResolution> {
   if (initialClientId) return { clientId: initialClientId, clientSecret: undefined, usedDCR: false };
   if (registrationEndpoint) {
     const redirectUri = getRedirectUri();
-    const { clientId, clientSecret } = await registerDynamicClient(registrationEndpoint, redirectUri, projectId);
-    return { clientId, clientSecret, usedDCR: true };
+    const { clientId, clientSecret, clientReference } = await registerDynamicClient(registrationEndpoint, redirectUri, projectId, binding);
+    return { clientId, clientSecret, clientReference, usedDCR: true };
   }
   throw new Error(
     `${MCP_OAUTH_ERRORS.MISSING_CLIENT_ID}. Server does not support Dynamic Client Registration. Please register an OAuth application manually and provide client credentials.`,
@@ -177,6 +182,9 @@ async function awaitAuthorizationCode(authWindow: Window, authUrl: string, state
 }
 
 interface ExchangeAuthorizationCodeParams {
+  authorizationReferenceOnly?: boolean | undefined;
+  clientReference: string | undefined;
+  resource: string | undefined;
   projectId: string | number | undefined;
   tokenEndpoint: string | undefined;
   code: string;
@@ -197,42 +205,31 @@ function toWireFlag(used: boolean | undefined): boolean | undefined {
   return used || undefined;
 }
 
+function validGrantResponse(response: McpOAuthGrantResponse, referenceOnly: boolean | undefined): boolean {
+  return referenceOnly ? Boolean(response.authorization_reference) : Boolean(response.access_token);
+}
+
 /** Trades the authorization code for a token — credentials (`client_id`/`client_secret`) are sent only when DCR issued them or the toolkit isn't a pre-built MCP (baseline: pre-built MCPs with backend-resolved credentials must not leak them client-side). */
-async function exchangeAuthorizationCode(params: ExchangeAuthorizationCodeParams): Promise<McpOAuthTokenResponse> {
+async function exchangeAuthorizationCode(params: ExchangeAuthorizationCodeParams): Promise<McpOAuthGrantResponse> {
   const shouldSendCredentials = params.usedDCR || !params.isPrebuildMcp;
 
-  let tokenJson: McpOAuthTokenResponse;
+  let tokenJson: McpOAuthGrantResponse;
   try {
     tokenJson = await exchangeMcpOAuthToken({
       projectId: params.projectId ?? 1,
+      authorization_reference_only: params.authorizationReferenceOnly,
       token_endpoint: params.tokenEndpoint,
       code: params.code,
       redirect_uri: params.redirectUri,
       client_id: shouldSendCredentials ? (params.clientId ?? undefined) : undefined,
       client_secret: shouldSendCredentials ? params.clientSecret : undefined,
+      client_reference: params.clientReference,
       code_verifier: params.usePKCE ? params.codeVerifier : undefined,
       scope: params.normalizedScope || undefined,
+      resource: params.resource,
       toolkit_id: params.toolkitId,
       toolkit_type: params.isPrebuildMcp ? params.toolkitType : undefined,
-      // MUST be sent, not merely persisted locally — corrects a prior pass
-      // here that removed it, reasoning the pinned baseline snapshot
-      // (`apps/elitea-ui` submodule, `a55f36cf`) has no such field and no
-      // backend route reads it. That reasoning was wrong on both counts:
-      // (1) `a55f36cf` predates the real upstream fix, `frontends/EliteaUI`
-      // commit `6ebe8ff7` ("fix: [EL-5697] Aha! mcp token issue"), which
-      // adds exactly this field to the request body; (2) the CURRENTLY
-      // RUNNING legacy pylon backend
-      // (`legacy/plugins/elitea_core/api/v2/mcp_oauth_proxy.py`) DOES read
-      // it — `if not client_secret and not data.used_dcr: client_secret =
-      // settings.get('client_secret') or ...` (loads a DB-configured
-      // client_secret for the toolkit). Omitting `used_dcr` here makes the
-      // backend load and send a DB client_secret for what is actually a
-      // DCR-registered PUBLIC client, which some providers (Aha! and
-      // others, per the fix's own commit message) reject with "unknown
-      // client" — the exact bug class `registerDynamicClient.ts`'s
-      // sibling `client_secret`-preservation fix (finding 1,
-      // A5-api-pages) exists to prevent, reintroduced here via the wire
-      // omission instead.
+      // Preserve DCR ownership when Main resolves stored client credentials.
       used_dcr: toWireFlag(params.usedDCR),
     });
   } catch (cause) {
@@ -245,13 +242,15 @@ async function exchangeAuthorizationCode(params: ExchangeAuthorizationCodeParams
     throw new Error(extractOAuthErrorDetail(cause) ?? 'Token exchange failed', { cause });
   }
 
-  if (!tokenJson.access_token) {
+  if (!validGrantResponse(tokenJson, params.authorizationReferenceOnly)) {
     throw new Error('No access token received from token exchange');
   }
   return tokenJson;
 }
 
 interface TokenPersistenceMetadataParams {
+  clientReference: string | undefined;
+  resource: string | undefined;
   tokenEndpoint: string | undefined;
   clientId: string | undefined;
   clientSecret: string | undefined;
@@ -264,30 +263,16 @@ interface TokenPersistenceMetadataParams {
 /** The extra fields `setAccessToken` persists alongside the token itself, so a later proactive refresh (`tokenLifecycle.ts`) has everything it needs without re-discovering the server. */
 function buildTokenPersistenceMetadata(params: TokenPersistenceMetadataParams) {
   return {
+    resource: params.resource,
     token_endpoint: params.tokenEndpoint,
     client_id: params.clientId,
     client_secret: params.clientSecret,
+    client_reference: params.clientReference,
     project_id: params.projectId === undefined ? undefined : String(params.projectId),
     toolkit_id: params.toolkitId,
-    // NOT a baseline field — `mcpAuthFlow.helpers.js`'s own `setAccessToken`
-    // call site (lines 464-490) persists only `token_endpoint`/`client_id`/
-    // `client_secret`/`project_id`/`toolkit_id` (+ the spread OAuth
-    // metadata); it never persists `used_dcr`, and the file is 499 lines
-    // total, so a prior pass's `mcpAuthFlow.helpers.js:536` citation for
-    // this line was fabricated.
-    //
-    // Kept anyway as a DISCLOSED, deliberate deviation (not a silent one):
-    // `tokenLifecycle.ts`'s `applyToolkitCredentialFallback` reads
-    // `tokenInfo.used_dcr` as a gate so a later proactive refresh never lets
-    // the toolkit-DB-configured OAuth client silently replace a DCR-issued
-    // client_id/secret with an unrelated client (see that function's own
-    // comment and `tokenLifecycle.test.ts`'s "used_dcr gate" regression
-    // test, which asserts exactly this). Removing this field would silently
-    // reintroduce that credential mixup for DCR-registered clients — do not
-    // delete it without also removing/replacing `tokenLifecycle.ts`'s gate
-    // and its test (out of this file's scope; see the A5-oauth-discovery
-    // fix report for the precise follow-up).
-    used_dcr: params.usedDCR || undefined,
+    // Retain the issued client's ownership. A later refresh must not replace
+    // DCR credentials with the toolkit's unrelated stored OAuth client.
+    used_dcr: params.usedDCR,
     ...(params.providedOauthMetadata
       ? {
           authorization_endpoint: params.providedOauthMetadata.authorization_endpoint,
@@ -302,7 +287,10 @@ function buildTokenPersistenceMetadata(params: TokenPersistenceMetadataParams) {
 }
 
 export interface StartMcpAuthFlowOptions {
+  authorizationReferenceOnly?: boolean | undefined;
   serverUrl?: string | undefined;
+  /** Protected MCP resource, independent of the credential-scoped storage key. */
+  resourceUrl?: string | undefined;
   resourceMetadata: { authorization_servers?: readonly string[] | undefined; oauth_authorization_server?: OAuthServerMetadata | undefined };
   oauthMetadata?: Partial<OAuthServerMetadata> | null | undefined;
   clientId?: string | undefined;
@@ -315,15 +303,8 @@ export interface StartMcpAuthFlowOptions {
   toolkitType?: string | undefined;
 }
 
-/**
- * Full authorization-code + PKCE flow: resolve auth-server metadata ->
- * (DCR or require a caller-provided client_id) -> open/navigate the popup
- * -> await the redirected code -> exchange it -> persist the token.
- * Throws on any step failure (POPUP_BLOCKED, MISSING_CLIENT_ID, a rejected
- * exchange, ...) — the caller (an OAuth modal) surfaces this as an inline
- * error, matching the baseline.
- */
-export async function startMcpAuthFlow(options: StartMcpAuthFlowOptions): Promise<{ access_token: string; expires_in?: number; session_id?: string; id_token?: string; refresh_token?: string }> {
+/** Registers or resolves a client, obtains consent, exchanges the code, and stores the grant metadata. */
+export async function startMcpAuthFlow(options: StartMcpAuthFlowOptions): Promise<McpOAuthGrantResponse> {
   const { serverUrl, resourceMetadata, oauthMetadata: providedOauthMetadata, clientId: initialClientId, clientSecret, scope, authWindow: initialAuthWindow, projectId, toolkitId, toolkitType } = options;
 
   const isPrebuildMcp = isPrebuildMcpType(toolkitType);
@@ -336,8 +317,12 @@ export async function startMcpAuthFlow(options: StartMcpAuthFlowOptions): Promis
   const asMetadata = extractAuthServerMetadata(resourceMetadata);
   const { authorization_endpoint: authorizationEndpoint, token_endpoint: tokenEndpoint, registration_endpoint: registrationEndpoint } = asMetadata;
 
-  const { clientId, clientSecret: dcrClientSecret, usedDCR } = await resolveClientCredentials(registrationEndpoint, initialClientId, projectId);
+  const { clientId, clientSecret: dcrClientSecret, clientReference, usedDCR } = await resolveClientCredentials(
+    registrationEndpoint, initialClientId, projectId,
+    { tokenEndpoint, resource: options.resourceUrl ?? serverUrl },
+  );
   const effectiveClientSecret = resolveEffectiveClientSecret(usedDCR, dcrClientSecret, clientSecret);
+  const resource = options.resourceUrl ?? (usedDCR ? serverUrl : undefined);
 
   const state = randomString(32);
   const nonce = randomString(32);
@@ -353,6 +338,7 @@ export async function startMcpAuthFlow(options: StartMcpAuthFlowOptions): Promis
   const normalizedScope = normalizeScope(scope, isOIDC);
 
   const authUrl = buildAuthorizationUrl({
+    resource,
     authorizationEndpoint: authorizationEndpoint as string,
     clientId,
     redirectUri,
@@ -368,12 +354,15 @@ export async function startMcpAuthFlow(options: StartMcpAuthFlowOptions): Promis
   const code = await awaitAuthorizationCode(authWindow, authUrl, state);
 
   const tokenJson = await exchangeAuthorizationCode({
+    authorizationReferenceOnly: options.authorizationReferenceOnly,
+    resource,
     projectId,
     tokenEndpoint,
     code,
     redirectUri,
     clientId,
     clientSecret: effectiveClientSecret,
+    clientReference,
     usedDCR,
     isPrebuildMcp,
     usePKCE,
@@ -383,6 +372,11 @@ export async function startMcpAuthFlow(options: StartMcpAuthFlowOptions): Promis
     toolkitType,
   });
 
+  if (options.authorizationReferenceOnly) {
+    saveAuthorizationReference(String(projectId), toolkitId, tokenJson.authorization_resource ?? resource, tokenJson.authorization_reference, tokenJson.authorization_expires_at);
+    return tokenJson;
+  }
+  if (!tokenJson.access_token) throw new Error('No access token received from token exchange');
   const sessionId = tokenJson.session_id ?? undefined;
 
   setAccessToken(
@@ -392,7 +386,7 @@ export async function startMcpAuthFlow(options: StartMcpAuthFlowOptions): Promis
     sessionId,
     tokenJson.id_token,
     tokenJson.refresh_token,
-    buildTokenPersistenceMetadata({ tokenEndpoint, clientId, clientSecret: effectiveClientSecret, projectId, toolkitId, providedOauthMetadata, usedDCR }),
+    { ...buildTokenPersistenceMetadata({ resource, tokenEndpoint, clientId, clientSecret: effectiveClientSecret, clientReference, projectId, toolkitId, providedOauthMetadata, usedDCR }), authorization_reference: tokenJson.authorization_reference },
     toolkitType,
   );
 

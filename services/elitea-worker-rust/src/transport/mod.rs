@@ -1,14 +1,14 @@
-pub(crate) mod anthropic_gateway;
+pub(crate) mod anthropic_facade;
 #[cfg(test)]
-mod anthropic_gateway_tests;
+mod anthropic_facade_tests;
 pub mod control_grpc;
 pub mod input_content;
 #[cfg(test)]
 mod input_content_tests;
 pub(crate) mod model_facade;
-pub(crate) mod model_gateway;
+pub(crate) mod openai_compatible_facade;
 #[cfg(test)]
-mod model_gateway_tests;
+mod openai_compatible_facade_tests;
 pub mod output_grpc;
 mod output_session;
 pub(crate) mod platform_client;

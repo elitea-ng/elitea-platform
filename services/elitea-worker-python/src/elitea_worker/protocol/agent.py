@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Sequence
 from typing import Any
 
@@ -180,6 +181,7 @@ def request_from(
                 else None
             ),
             debug_mode=(message.debug_mode if message.HasField("debug_mode") else None),
+            project_context=_project_context_snapshot(message),
         ),
     )
 
@@ -423,3 +425,23 @@ def _digest(value: bytes):
         algorithm=common_pb2.DIGEST_ALGORITHM_V1_SHA256,
         value=value,
     )
+
+
+def _project_context_snapshot(message: agent_pb2.AgentExecutionInputV1) -> dict[str, str] | None:
+    if not message.HasField("project_context"):
+        return None
+    snapshot = message.project_context
+    clean = agent_pb2.ProjectContextSnapshotV1()
+    clean.CopyFrom(snapshot)
+    clean.DiscardUnknownFields()
+    if (
+        clean.SerializeToString() != snapshot.SerializeToString()
+        or not snapshot.id or len(snapshot.id) > 256
+        or not snapshot.scope or len(snapshot.scope) > 256
+        or not snapshot.content
+        or snapshot.revision != hashlib.sha256(snapshot.content.encode("utf-8")).hexdigest()
+    ):
+        raise InvalidInput("The project context snapshot is invalid.")
+    return {name: getattr(snapshot, name) for name in (
+        "id", "revision", "scope", "content", "activation_description"
+    )}

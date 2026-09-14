@@ -49,6 +49,11 @@ class RuntimeControlServiceStub(object):
                 request_serializer=elitea_dot_runtime_dot_v1_dot_control__pb2.AuthorizeInvocationRequestV1.SerializeToString,
                 response_deserializer=elitea_dot_runtime_dot_v1_dot_control__pb2.AuthorizeInvocationResponseV1.FromString,
                 _registered_method=True)
+        self.AuthorizeAgentModelCheckpoint = channel.unary_unary(
+                '/elitea.runtime.v1.RuntimeControlService/AuthorizeAgentModelCheckpoint',
+                request_serializer=elitea_dot_runtime_dot_v1_dot_control__pb2.AuthorizeAgentModelCheckpointRequestV1.SerializeToString,
+                response_deserializer=elitea_dot_runtime_dot_v1_dot_control__pb2.AuthorizeAgentModelCheckpointResponseV1.FromString,
+                _registered_method=True)
         self.RenewLease = channel.unary_unary(
                 '/elitea.runtime.v1.RuntimeControlService/RenewLease',
                 request_serializer=elitea_dot_runtime_dot_v1_dot_control__pb2.RenewLeaseRequestV1.SerializeToString,
@@ -82,6 +87,12 @@ class RuntimeControlServiceServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def AuthorizeInvocation(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def AuthorizeAgentModelCheckpoint(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -122,6 +133,11 @@ def add_RuntimeControlServiceServicer_to_server(servicer, server):
                     servicer.AuthorizeInvocation,
                     request_deserializer=elitea_dot_runtime_dot_v1_dot_control__pb2.AuthorizeInvocationRequestV1.FromString,
                     response_serializer=elitea_dot_runtime_dot_v1_dot_control__pb2.AuthorizeInvocationResponseV1.SerializeToString,
+            ),
+            'AuthorizeAgentModelCheckpoint': grpc.unary_unary_rpc_method_handler(
+                    servicer.AuthorizeAgentModelCheckpoint,
+                    request_deserializer=elitea_dot_runtime_dot_v1_dot_control__pb2.AuthorizeAgentModelCheckpointRequestV1.FromString,
+                    response_serializer=elitea_dot_runtime_dot_v1_dot_control__pb2.AuthorizeAgentModelCheckpointResponseV1.SerializeToString,
             ),
             'RenewLease': grpc.unary_unary_rpc_method_handler(
                     servicer.RenewLease,
@@ -220,6 +236,33 @@ class RuntimeControlService(object):
             '/elitea.runtime.v1.RuntimeControlService/AuthorizeInvocation',
             elitea_dot_runtime_dot_v1_dot_control__pb2.AuthorizeInvocationRequestV1.SerializeToString,
             elitea_dot_runtime_dot_v1_dot_control__pb2.AuthorizeInvocationResponseV1.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def AuthorizeAgentModelCheckpoint(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/elitea.runtime.v1.RuntimeControlService/AuthorizeAgentModelCheckpoint',
+            elitea_dot_runtime_dot_v1_dot_control__pb2.AuthorizeAgentModelCheckpointRequestV1.SerializeToString,
+            elitea_dot_runtime_dot_v1_dot_control__pb2.AuthorizeAgentModelCheckpointResponseV1.FromString,
             options,
             channel_credentials,
             insecure,

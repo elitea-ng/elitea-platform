@@ -546,7 +546,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// unwired because the settlement engine itself carries no notion of
 	// "this execution is a pipeline run". See the file's own header for why
 	// this lives outside elitea_runtime's claim-fence tables entirely.
-	require.EqualValues(t, 124, Head(shared))
+	// 125 adds the Rust read-only capability without removing Python tool runs.
+	// 126 preserves parameterized static MCP configuration from the Rust branch.
+	// 127 stores encrypted confidential DCR clients.
+	// Main owns 122 through 124. The branch migrations retain their SQL bytes.
+	// Existing rehearsal ledgers require explicit reconciliation before upgrade.
+
+	require.EqualValues(t, 127, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

@@ -787,6 +787,7 @@ question is what this release may consume WITHOUT anybody doing anything —
 {{- $runtime := .Values.main.runtime | default dict -}}
 {{- $agent := $runtime.agentExecutionDispatch | default dict -}}
 {{- $ingest := $runtime.indexIngestDispatch | default dict -}}
+{{- $discovery := $runtime.toolkitDiscovery | default dict -}}
 {{- $scheduling := $runtime.indexScheduling | default dict -}}
 {{- $redis := $runtime.redis | default dict -}}
 {{- $listeners := $runtime.listeners | default dict -}}
@@ -810,7 +811,7 @@ question is what this release may consume WITHOUT anybody doing anything —
 {{- if get $material "secretName" -}}
 {{- fail "runtime.material.secretName is set but runtime.enabled is false. Set runtime.enabled=true, or clear runtime.material.secretName." -}}
 {{- end -}}
-{{- if or $agent.enabled $ingest.enabled $scheduling.enabled -}}
+{{- if or $agent.enabled $ingest.enabled $scheduling.enabled $discovery.enabled -}}
 {{- fail "a runtime dispatch plane is enabled but runtime.enabled is false. internal/runtimecomposition/config.go ignores every dispatch flag while ELITEA_RUNTIME_ENABLED is off, so the routes stay dark. Set runtime.enabled=true." -}}
 {{- end -}}
 {{- else -}}
@@ -916,6 +917,10 @@ question is what this release may consume WITHOUT anybody doing anything —
 {{- if not $material.sizeLimit -}}
 {{- fail "runtime.material.secretName needs runtime.material.sizeLimit, the bound on the memory-backed emptyDir that holds the installed material." -}}
 {{- end -}}
+{{- end -}}
+
+{{- if and $discovery.enabled (not (or $agent.enabled $ingest.enabled)) -}}
+{{- fail "runtime.toolkitDiscovery.enabled=true needs an active agentExecutionDispatch or indexIngestDispatch." -}}
 {{- end -}}
 
 {{/* Agent-execution dispatch: the four agent turn routes. */}}
@@ -1027,6 +1032,7 @@ ELITEA_RUNTIME_ENABLED: "true"
 ELITEA_RUNTIME_COMMAND_STREAM: {{ $runtime.commandStream | quote }}
 ELITEA_RUNTIME_MAX_OUTSTANDING: {{ $runtime.maxOutstanding | toString | quote }}
 ELITEA_RUNTIME_STREAM_MAX_ENTRIES: {{ $runtime.streamMaxEntries | toString | quote }}
+ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED: {{ ((get $runtime "toolkitDiscovery" | default dict).enabled | default false) | toString | quote }}
 {{- if $agent.enabled }}
 ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED: "true"
 ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM: {{ $agent.commandStream | quote }}

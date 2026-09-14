@@ -147,7 +147,7 @@ fn state_modifier_definition_is_strict_bounded_and_digest_stable() {
     assert_eq!(first.config_digest(), second.config_digest());
 
     for yaml in [
-        "id: bad id\ntype: state_modifier\n",
+        "id: bad/id\ntype: state_modifier\n",
         "id: transform\ntype: state_modifier\noutput: ['']\n",
         "id: transform\ntype: state_modifier\ninput: [input, input]\n",
         "id: transform\ntype: state_modifier\nunknown: true\n",

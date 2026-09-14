@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -186,6 +187,21 @@ func TestNestedApplicationVersionServesTheFrozenClaimScopedDefinition(t *testing
 	// the only value ApplicationAssemblyState::build admits for a nested
 	// reference (services/elitea-worker-rust/src/agents/application_tools.rs).
 	require.Equal(t, "agent", frozen["agent_type"])
+	internalTools := 0
+	for _, raw := range frozen["tools"].([]any) {
+		tool := raw.(map[string]any)
+		if strings.HasPrefix(tool["type"].(string), "mcp_elitea_internal_") {
+			internalTools++
+			require.Contains(t, tool["settings"].(map[string]any), "url")
+		}
+	}
+	require.Positive(t, internalTools)
+	projectContext := frozen["project_context"].(map[string]any)
+	require.Equal(t, "project:90106", projectContext["scope"])
+	require.Equal(t, "project-context:90106:9", projectContext["id"])
+	require.Equal(t, "Nested project rules", projectContext["content"])
+	digestContext := sha256.Sum256([]byte("Nested project rules"))
+	require.Equal(t, fmt.Sprintf("%x", digestContext), projectContext["revision"])
 	meta, ok := frozen["meta"].(map[string]any)
 	require.True(t, ok)
 	// `internal_mcp` is dropped because the native runtime's catalogue would
@@ -465,13 +481,15 @@ func TestNestedApplicationVersionCompositionRequiresEveryDependency(t *testing.T
 		return nil, nil
 	})
 
-	_, err := NewRuntimeApplicationVersionService(nil, source, freezer)
+	_, err := NewRuntimeApplicationVersionService(nil, source, freezer, nestedVersionMaterializerForTest(t))
 	require.EqualError(t, err, "runtime application version dependencies are required")
-	_, err = NewRuntimeApplicationVersionService(authorizer, nil, freezer)
+	_, err = NewRuntimeApplicationVersionService(authorizer, nil, freezer, nestedVersionMaterializerForTest(t))
 	require.EqualError(t, err, "runtime application version dependencies are required")
-	_, err = NewRuntimeApplicationVersionService(authorizer, source, nil)
+	_, err = NewRuntimeApplicationVersionService(authorizer, source, nil, nestedVersionMaterializerForTest(t))
 	require.EqualError(t, err, "runtime application version dependencies are required")
-	service, err := NewRuntimeApplicationVersionService(authorizer, source, freezer)
+	_, err = NewRuntimeApplicationVersionService(authorizer, source, freezer, nil)
+	require.EqualError(t, err, "runtime application version dependencies are required")
+	service, err := NewRuntimeApplicationVersionService(authorizer, source, freezer, nestedVersionMaterializerForTest(t))
 	require.NoError(t, err)
 
 	contentAuthorizer := contentAuthorizerFunc(func(
@@ -525,7 +543,7 @@ func newNestedVersionFreezer(t *testing.T) agentexecutionapp.CurrentApplicationV
 		nestedVersionToolkitSettingsStub{result: map[string]any{}},
 		nestedVersionToolkitNameStub{result: "toolkit"},
 		&nestedVersionModelCatalogStub{},
-		nestedVersionGuardrailStub{},
+		nestedVersionGuardrailStub{}, nestedVersionProjectContextStub{},
 		1,
 	)
 	require.NoError(t, err)
@@ -592,7 +610,7 @@ func nestedApplicationVersionService(
 	freezer agentexecutionapp.CurrentApplicationVersionFreezer,
 ) *RuntimeApplicationVersionService {
 	t.Helper()
-	service, err := NewRuntimeApplicationVersionService(authorizer, source, freezer)
+	service, err := NewRuntimeApplicationVersionService(authorizer, source, freezer, nestedVersionMaterializerForTest(t))
 	require.NoError(t, err)
 	return service
 }
@@ -616,4 +634,17 @@ func nestedApplicationVersionRequest(
 	request.Header.Set(claimIDHeader, "claim-1")
 	request.Header.Set(fenceHeader, base64.RawURLEncoding.EncodeToString(fence))
 	return request
+}
+
+type nestedVersionProjectContextStub struct{}
+
+func (nestedVersionProjectContextStub) ResolveCurrentAgentProjectContext(context.Context, int32, int32) (agentexecutionapp.CurrentAgentProjectContext, error) {
+	return agentexecutionapp.CurrentAgentProjectContext{ID: 9, Enabled: true, Content: "Nested project rules", ActivationDescription: "When needed"}, nil
+}
+
+func nestedVersionMaterializerForTest(t *testing.T) *CurrentConfigurationsMaterializer {
+	t.Helper()
+	materializer, err := NewCurrentAgentConfigurationsMaterializer(&currentMaterializationUnsecreterStub{}, &currentAgentPrebuiltMCPResolverStub{found: true, result: map[string]any{"url": "https://main.example.test/app/90106/mcp/elitea_core/skills", "headers": map[string]any{"Authorization": "Bearer runtime-only-token"}}})
+	require.NoError(t, err)
+	return materializer
 }

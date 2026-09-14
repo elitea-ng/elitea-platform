@@ -95,6 +95,7 @@ type prebuiltServerBody struct {
 	ClientSecret *string           `json:"client_secret"`
 	Timeout      int               `json:"timeout"`
 	Headers      map[string]string `json:"headers"`
+	ConfigSchema map[string]any    `json:"config_schema"`
 	Enabled      *bool             `json:"enabled"`
 	Transport    string            `json:"transport"`
 }
@@ -110,6 +111,7 @@ type prebuiltServerView struct {
 	ClientSecret string            `json:"client_secret,omitempty"`
 	Timeout      int               `json:"timeout"`
 	Headers      map[string]string `json:"headers"`
+	ConfigSchema map[string]any    `json:"config_schema"`
 	Enabled      bool              `json:"enabled"`
 }
 
@@ -119,14 +121,18 @@ func prebuiltView(entry mcpregistry.PrebuiltServer) prebuiltServerView {
 		headers = map[string]string{}
 	}
 	view := prebuiltServerView{
-		Key:         entry.Key,
-		DisplayName: entry.DisplayName,
-		URL:         entry.ServerURL,
-		BaseURL:     entry.BaseURL,
-		ClientID:    entry.ClientID,
-		Timeout:     entry.TimeoutSeconds,
-		Headers:     headers,
-		Enabled:     entry.Enabled,
+		Key:          entry.Key,
+		DisplayName:  entry.DisplayName,
+		URL:          entry.ServerURL,
+		BaseURL:      entry.BaseURL,
+		ClientID:     entry.ClientID,
+		Timeout:      entry.TimeoutSeconds,
+		Headers:      headers,
+		ConfigSchema: entry.ConfigSchema,
+		Enabled:      entry.Enabled,
+	}
+	if view.ConfigSchema == nil {
+		view.ConfigSchema = map[string]any{"properties": map[string]any{}}
 	}
 	if entry.ClientSecretRef != "" {
 		view.ClientSecret = prebuiltSecretMask
@@ -171,6 +177,7 @@ func (h *Handler) PrebuiltMCPSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body prebuiltServerBody
+	r.Body = http.MaxBytesReader(w, r.Body, 128*1024)
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
 		return
@@ -208,6 +215,16 @@ func (h *Handler) PrebuiltMCPSave(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "timeout must not be negative"})
 		return
 	}
+	if body.ConfigSchema != nil {
+		if err := mcpregistry.ValidatePrebuiltServer(mcpregistry.PrebuiltServer{
+			ServerURL: body.URL, Headers: body.Headers, ConfigSchema: body.ConfigSchema,
+		}); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error": "the pre-built MCP parameter schema or template is invalid",
+			})
+			return
+		}
+	}
 
 	existing, err := h.prebuiltMCP.Lookup(r.Context(), key)
 	switch {
@@ -215,6 +232,27 @@ func (h *Handler) PrebuiltMCPSave(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusServiceUnavailable,
 			map[string]any{"error": "the pre-built MCP catalogue could not be read"})
+		return
+	}
+	configSchema := body.ConfigSchema
+	if configSchema == nil {
+		configSchema = existing.ConfigSchema
+	}
+	candidate := mcpregistry.PrebuiltServer{
+		Key:            key,
+		DisplayName:    display,
+		ServerURL:      body.URL,
+		BaseURL:        body.BaseURL,
+		ClientID:       body.ClientID,
+		TimeoutSeconds: body.Timeout,
+		Headers:        body.Headers,
+		ConfigSchema:   configSchema,
+		Enabled:        true,
+	}
+	if err := mcpregistry.ValidatePrebuiltServer(candidate); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "the pre-built MCP parameter schema or template is invalid",
+		})
 		return
 	}
 
@@ -257,6 +295,7 @@ func (h *Handler) PrebuiltMCPSave(w http.ResponseWriter, r *http.Request) {
 		ClientSecretRef: secretRef,
 		TimeoutSeconds:  body.Timeout,
 		Headers:         body.Headers,
+		ConfigSchema:    configSchema,
 		Enabled:         enabled,
 	})
 	if err != nil {

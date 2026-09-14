@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
 use adk_rust::futures::stream;
@@ -13,7 +13,8 @@ use super::EliteaGraphAgent;
 use super::compiler::PipelineDefinition;
 use super::decision::{DecisionNode, DecisionNodeDefinition};
 use super::llm::{
-    LlmExecutionError, LlmExecutionInput, LlmNodeDefinition, PipelineLlmAgentFactory,
+    LlmExecutionError, LlmExecutionInput, LlmNodeDefinition, PipelineLlmAgentBinding,
+    PipelineLlmAgentFactory,
 };
 use super::router::{RouterNode, RouterNodeDefinition};
 use crate::agents::runtime::NativeAgentInvocation;
@@ -111,7 +112,7 @@ input: []
 fn router_rejects_ambiguous_labels_unknown_fields_and_invalid_inputs() {
     for yaml in [
         "id: choose\ntype: router\nroutes: [next.step, next_step]\n",
-        "id: choose\ntype: router\nroutes: ['bad target']\n",
+        "id: choose\ntype: router\nroutes: ['bad/target']\n",
         "id: choose\ntype: router\ninput: [value, value]\n",
         "id: choose\ntype: router\ntransition: END\n",
     ] {
@@ -139,7 +140,7 @@ impl PipelineLlmAgentFactory for DecisionFactory {
         _input: &LlmExecutionInput,
         output_schema: Option<Value>,
         _replay: Option<&super::llm::PipelineLlmReplayEnvelope>,
-    ) -> Result<Arc<dyn Agent>, LlmExecutionError> {
+    ) -> Result<PipelineLlmAgentBinding, LlmExecutionError> {
         assert!(output_schema.is_none());
         let mut captured = self.captured.lock().expect("capture lock");
         captured.definition_id = definition.id().to_owned();
@@ -149,10 +150,13 @@ impl PipelineLlmAgentFactory for DecisionFactory {
             .map(|selection| selection.tools().len())
             .sum();
         drop(captured);
-        Ok(Arc::new(DecisionAgent {
-            captured: Arc::clone(&self.captured),
-            response: self.response.clone(),
-        }))
+        Ok(PipelineLlmAgentBinding::new(
+            Arc::new(DecisionAgent {
+                captured: Arc::clone(&self.captured),
+                response: self.response.clone(),
+            }),
+            BTreeMap::new(),
+        ))
     }
 }
 
@@ -267,7 +271,8 @@ async fn decision_reuses_claim_bound_model_without_tools_and_selects_exact_route
         captured.history,
         [
             ("user".to_owned(), "earlier".to_owned()),
-            ("model".to_owned(), "prior answer".to_owned())
+            ("model".to_owned(), "prior answer".to_owned()),
+            ("user".to_owned(), captured.prompt.clone())
         ]
     );
 }

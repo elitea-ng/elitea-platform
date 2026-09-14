@@ -27,6 +27,7 @@ use zeroize::Zeroizing;
 use super::config::{OpenApiAuth, OpenApiClientConfig};
 use super::response_selection::ResponseSelection;
 use super::spec::{OpenApiOperation, OpenApiParameter, OpenApiParameterLocation};
+use crate::toolkits::DelegatedAuthorizationRequirement;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -215,6 +216,8 @@ impl std::error::Error for OpenApiClientError {}
 
 #[async_trait]
 pub(in crate::toolkits) trait OpenApiApi: Send + Sync {
+    fn authorization(&self) -> Option<&DelegatedAuthorizationRequirement>;
+
     async fn execute(
         &self,
         operation: &OpenApiOperation,
@@ -552,6 +555,15 @@ impl OpenApiClient {
 
 #[async_trait]
 impl OpenApiApi for OpenApiClient {
+    fn authorization(&self) -> Option<&DelegatedAuthorizationRequirement> {
+        match &self.config.auth {
+            OpenApiAuth::Delegated { requirement, .. } => Some(requirement),
+            OpenApiAuth::Anonymous
+            | OpenApiAuth::Header { .. }
+            | OpenApiAuth::ClientCredentials { .. } => None,
+        }
+    }
+
     async fn execute(
         &self,
         operation: &OpenApiOperation,

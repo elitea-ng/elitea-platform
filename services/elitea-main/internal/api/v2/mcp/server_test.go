@@ -292,7 +292,10 @@ func TestEachURLShapeReachesTheCatalogAsItsOwnScope(t *testing.T) {
 	}{
 		{"/app/7/mcp", scope{kind: scopeAll}},
 		{"/app/7/mcp/applications", scope{kind: scopeCategory, category: "applications"}},
+		{"/app/7/mcp/elitea_core/applications", scope{kind: scopeCategory, category: "elitea_core/applications"}},
+		{"/app/7/mcp/elitea_core/skills", scope{kind: scopeCategory, category: "elitea_core/skills"}},
 		{"/app/7/mcp/toolkits", scope{kind: scopeCategory, category: "toolkits"}},
+		{"/app/7/mcp/secrets", scope{kind: scopeCategory, category: "secrets"}},
 		{"/app/7/mcp/toolkit/42", scope{kind: scopeResource, resourceType: "toolkit", resourceID: 42}},
 		{"/app/7/mcp/agent/42", scope{kind: scopeResource, resourceType: "application", resourceID: 42}},
 		{"/app/7/mcp/pipeline/9", scope{kind: scopeResource, resourceType: "application", resourceID: 9}},
@@ -341,7 +344,11 @@ func TestPylonAPICategoriesAreRefusedRatherThanReinterpreted(t *testing.T) {
 	source := staticSource(Tool{Name: "some_agent"})
 	router := newTestRouter(newTestHandler(t, source))
 
-	for _, tag := range []string{"elitea_core/applications", "elitea_core/chat", "secrets", "configurations", "api"} {
+	for _, tag := range []string{
+		"elitea_core/analytics",
+		"artifacts",
+		"api",
+	} {
 		recorder := post(t, router, "/app/7/mcp/"+tag, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
 		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("%s: status = %d, want 400 (%s)", tag, recorder.Code, recorder.Body.String())

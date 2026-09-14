@@ -41,6 +41,15 @@ type currentAgentTextDelta struct {
 	content             string
 }
 
+type currentAgentTextOwner struct {
+	ParentAgentName string            `json:"parent_agent_name"`
+	ParentAgentPath []json.RawMessage `json:"parent_agent_path"`
+}
+
+func (owner currentAgentTextOwner) isChild() bool {
+	return strings.TrimSpace(owner.ParentAgentName) != "" || len(owner.ParentAgentPath) > 0
+}
+
 func (postgresCurrentAgentTextProjector) projectAgentTextDelta(
 	ctx context.Context,
 	tx sqlExecutor,
@@ -106,11 +115,23 @@ func decodeCurrentAgentTextDelta(raw json.RawMessage) (currentAgentTextDelta, bo
 		ExecutionGeneration string          `json:"execution_generation"`
 		SIOEvent            string          `json:"sio_event"`
 		Content             json.RawMessage `json:"content"`
+		ResponseMetadata    struct {
+			currentAgentTextOwner
+			Metadata currentAgentTextOwner `json:"metadata"`
+			ToolMeta struct {
+				Metadata currentAgentTextOwner `json:"metadata"`
+			} `json:"tool_meta"`
+		} `json:"response_metadata"`
 	}
 	if err := json.Unmarshal(raw, &event); err != nil {
 		return currentAgentTextDelta{}, false, errors.New("decode current agent text event")
 	}
 	if event.Type != "agent_llm_chunk" {
+		return currentAgentTextDelta{}, false, nil
+	}
+	owner := event.ResponseMetadata
+	if owner.isChild() || owner.Metadata.isChild() || owner.ToolMeta.Metadata.isChild() {
+		// The trace projector stores child output. Do not copy it into the parent answer.
 		return currentAgentTextDelta{}, false, nil
 	}
 	if !validCurrentAgentCorrelation(event.StreamID) ||

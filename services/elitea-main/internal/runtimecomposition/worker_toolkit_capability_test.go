@@ -67,8 +67,8 @@ func TestPinnedWorkerToolkitCapabilityLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load rust capability: %v", err)
 	}
-	if rust.Implementation() != "rust" || len(rust.SupportedNames()) != 22 {
-		t.Errorf("rust implementation=%q supported=%d, want rust and 22",
+	if rust.Implementation() != "rust" || len(rust.SupportedNames()) != 23 {
+		t.Errorf("rust implementation=%q supported=%d, want rust and 23",
 			rust.Implementation(), len(rust.SupportedNames()))
 	}
 	if rust.UnsupportedNames() != nil {
@@ -112,6 +112,9 @@ func TestWorkerToolkitCapabilityVerdicts(t *testing.T) {
 	}
 	if supported, _ := rust.SupportsToolkitType("github", "github"); !supported {
 		t.Error("github has a native family and was refused")
+	}
+	if supported, reason := rust.SupportsToolkitType("mcp", ""); !supported {
+		t.Errorf("direct MCP runtime was refused: %s", reason)
 	}
 	if supported, reason := rust.SupportsToolkitType("jira", "jira"); supported ||
 		!strings.Contains(reason, "jira") {
@@ -181,6 +184,16 @@ func TestRustCapabilitySnapshotMatchesTheRustSource(t *testing.T) {
 		FindAllStringSubmatch(string(source), -1) {
 		found[match[1]] = struct{}{}
 	}
+	// MCP uses the direct runtime branch, outside configured families.
+	direct, err := os.ReadFile(filepath.Join(root, "services", "elitea-worker-rust", "src", "toolkits", "direct_runtime.rs"))
+	if err != nil {
+		t.Fatalf("read direct_runtime.rs: %v", err)
+	}
+	if !strings.Contains(string(direct), "FrozenToolKind::Mcp => {") ||
+		!strings.Contains(string(direct), "materialize_mcp_toolsets_with_tokens_and_authorization(") {
+		t.Fatal("direct MCP materialization is absent; review the runtime capability")
+	}
+	found["mcp"] = struct{}{}
 	if len(found) < 20 {
 		t.Fatalf("extracted only %d families from materialize.rs; the extraction "+
 			"stopped matching, so this test would prove nothing", len(found))

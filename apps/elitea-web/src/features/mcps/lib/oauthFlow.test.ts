@@ -22,7 +22,9 @@ import { resetConfigForTests } from '@/shared/config/get-config';
 
 import { server } from '../../../test/setup';
 
-import { getAccessToken, getTokenInfo } from './storage';
+import { getAccessToken, getTokenInfo, setAccessToken } from './storage';
+import { forgetClientSecret } from './clientSecretVault';
+import { triggerProactiveRefresh, refreshAccessToken } from './tokenLifecycle';
 import { startMcpAuthFlow } from './oauthFlow';
 
 interface FakePopup {
@@ -88,6 +90,50 @@ afterEach(() => {
 });
 
 describe('startMcpAuthFlow', () => {
+  it('retains a Main client reference through code exchange, document-secret loss, and both refresh paths', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    const { popup } = stubPopup();
+    const resource = 'https://confidential.example.com/mcp';
+    // A previous document grant must not contaminate the new client's identity.
+    setAccessToken(resource, 'old', 3600, undefined, undefined, 'old-refresh', { client_secret: 'old-client-secret' });
+    const grants: Record<string, unknown>[] = [];
+    server.use(
+      http.post('*/api/v2/elitea_core/mcp_dcr_proxy/7', async ({ request }) => {
+        expect(await request.json()).toMatchObject({
+          token_endpoint: 'https://as.example.com/token', resource,
+        });
+        return HttpResponse.json({ client_id: 'registered-client', client_reference: 'opaque-reference' });
+      }),
+      http.post('*/api/v2/elitea_core/mcp_oauth_proxy/7', async ({ request }) => {
+        grants.push(await request.json() as Record<string, unknown>);
+        return HttpResponse.json({ access_token: `access-${grants.length}`, expires_in: 3600, refresh_token: 'refresh', authorization_reference: 'R'.repeat(43) });
+      }),
+    );
+    const flow = startMcpAuthFlow({
+      serverUrl: resource, projectId: 7,
+      resourceMetadata: { oauth_authorization_server: {
+        authorization_endpoint: 'https://as.example.com/authorize',
+        token_endpoint: 'https://as.example.com/token',
+        registration_endpoint: 'https://as.example.com/register',
+      } },
+    });
+    await vi.waitFor(() => expect(popup.location.href).toContain('/authorize?'));
+    deliverAuthResult({ code: 'code' }, stateFromPopupUrl(popup));
+    await flow;
+    expect(getTokenInfo(resource)?.authorization_reference).toBe('R'.repeat(43));
+    expect(getTokenInfo(resource)?.client_secret).toBeUndefined();
+    expect(window.sessionStorage.getItem('el.mcp.tokens')).not.toContain('old-client-secret');
+    forgetClientSecret('token', resource);
+    await triggerProactiveRefresh(resource);
+    await refreshAccessToken({ serverUrl: resource, projectId: 7, clientId: 'registered-client', tokenEndpoint: 'https://as.example.com/token' });
+    expect(grants).toHaveLength(3);
+    for (const grant of grants) {
+      expect(grant).toMatchObject({ client_reference: 'opaque-reference', client_id: 'registered-client', used_dcr: true, resource });
+      expect(grant).not.toHaveProperty('client_secret');
+    }
+    expect(getTokenInfo(resource)?.client_reference).toBe('opaque-reference');
+  });
+
   it('rejects immediately when neither serverUrl nor a pre-built toolkitType is given', async () => {
     const { openSpy } = stubPopup();
     await expect(startMcpAuthFlow({ resourceMetadata: {} })).rejects.toThrow('Missing MCP server URL');
@@ -149,6 +195,9 @@ describe('startMcpAuthFlow', () => {
     expect(dcrBody).toMatchObject({ registration_endpoint: 'https://as.example.com/register' });
     expect(exchangeBody).toMatchObject({ grant_type: 'authorization_code', code: 'auth-code-1', client_id: 'dcr-issued-client' });
     expect(exchangeBody).toHaveProperty('code_verifier'); // PKCE used (no client_secret supplied)
+    expect(new URL(popup.location.href).searchParams.get('resource')).toBe('https://mcp.example.com');
+    expect(exchangeBody).toHaveProperty('resource', 'https://mcp.example.com');
+    expect(getTokenInfo('https://mcp.example.com')?.resource).toBe('https://mcp.example.com');
     expect(getAccessToken('https://mcp.example.com')).toBe('issued-access-token');
   });
 
@@ -522,4 +571,46 @@ describe('startMcpAuthFlow', () => {
 
     await expect(flowPromise).resolves.toMatchObject({ access_token: 'reused-token' });
   });
+});
+
+it('Test OAuth stores only the scoped server reference when reference-only mode is requested', async () => {
+  configureGeneratedClient({ baseUrl: '/api/v2' });
+  const { popup } = stubPopup();
+  const resource = 'https://test-only.example/mcp';
+  const reference = 'T'.repeat(43);
+  let requestBody: unknown;
+  server.use(http.post('*/api/v2/elitea_core/mcp_oauth_proxy/7', async ({ request }) => {
+    requestBody = await request.json();
+    return HttpResponse.json({ authorization_reference: reference, authorization_expires_at: new Date(Date.now() + 300000).toISOString() });
+  }));
+  const flow = startMcpAuthFlow({ serverUrl: resource, resourceUrl: resource, toolkitId: '9', projectId: 7, authorizationReferenceOnly: true, clientId: 'configured-client', resourceMetadata: { oauth_authorization_server: { authorization_endpoint: 'https://as.example.com/authorize', token_endpoint: 'https://as.example.com/token' } } });
+  await vi.waitFor(() => expect(popup.location.href).toContain('/authorize?'));
+  deliverAuthResult({ code: 'test-code' }, stateFromPopupUrl(popup));
+  expect(await flow).toMatchObject({ authorization_reference: reference });
+  expect(requestBody).toMatchObject({ authorization_reference_only: true, toolkit_id: '9', resource });
+  expect(getTokenInfo(resource)).toBeNull();
+  const { getAuthorizationReference } = await import('./authorizationReference');
+  expect(getAuthorizationReference('7', '9', resource)).toBe(reference);
+});
+
+it('stores an OpenAPI reference under the server resource without a provider resource parameter', async () => {
+  configureGeneratedClient({ baseUrl: '/api/v2' });
+  const { popup } = stubPopup();
+  const resource = 'https://openapi.example/api';
+  const storageKey = 'configuration:https://issuer.example';
+  const reference = 'O'.repeat(43);
+  let requestBody: unknown;
+  server.use(http.post('*/api/v2/elitea_core/mcp_oauth_proxy/7', async ({ request }) => {
+    requestBody = await request.json();
+    return HttpResponse.json({ authorization_resource: resource, authorization_reference: reference, authorization_expires_at: new Date(Date.now() + 300000).toISOString() });
+  }));
+  const flow = startMcpAuthFlow({ serverUrl: storageKey, toolkitId: '27', toolkitType: 'openapi', projectId: 7, authorizationReferenceOnly: true, clientId: 'configured-client', resourceMetadata: { oauth_authorization_server: { authorization_endpoint: 'https://as.example.com/authorize', token_endpoint: 'https://as.example.com/token' } } });
+  await vi.waitFor(() => expect(popup.location.href).toContain('/authorize?'));
+  expect(new URL(popup.location.href).searchParams.has('resource')).toBe(false);
+  deliverAuthResult({ code: 'openapi-test-code' }, stateFromPopupUrl(popup));
+  await expect(flow).resolves.toMatchObject({ authorization_reference: reference });
+  expect(requestBody).not.toHaveProperty('resource');
+  expect(getTokenInfo(storageKey)).toBeNull();
+  const { getAuthorizationReference } = await import('./authorizationReference');
+  expect(getAuthorizationReference('7', '27', resource)).toBe(reference);
 });

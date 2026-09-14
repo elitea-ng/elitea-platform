@@ -257,6 +257,23 @@ describe('ToolkitForm', () => {
     expect(await findByRole('option', { name: 'text-embedding-3-large' })).toBeVisible();
   });
 
+  it('fills a missing embedding model with the configured default', async () => {
+    mockToolkitFormEndpoints(ARTIFACT_SCHEMA);
+    mockEmbeddingModels([{ name: 'text-embedding-ada-002', project_id: 1, default: true }]);
+    const onChangeToolDetail = vi.fn();
+    const editToolDetail: ToolkitFormEditDetail = { type: 'artifact', name: 'a', settings: {} };
+    renderWithRouterSocketAndProject(
+      <ToolkitForm {...baseProps({ editToolDetail, formValues: editToolDetail, formInitialValues: editToolDetail, onChangeToolDetail })} />,
+      'proj-1',
+    );
+    await waitFor(() => expect(onChangeToolDetail).toHaveBeenCalled());
+    const [updater, options] = onChangeToolDetail.mock.calls.at(-1) as [
+      (previous: Record<string, unknown>) => Record<string, unknown>, unknown,
+    ];
+    expect(updater(editToolDetail)['settings']).toEqual(expect.objectContaining({ embedding_model: 'text-embedding-ada-002' }));
+    expect(options).toEqual({ isAutoSelect: true });
+  });
+
   it('captures a picked embedding model into the toolkit settings as the model NAME', async () => {
     mockToolkitFormEndpoints(ARTIFACT_SCHEMA);
     mockEmbeddingModels([{ name: 'text-embedding-3-small', display_name: 'Embedding Small', project_id: 1 }]);

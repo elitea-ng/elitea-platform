@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react';
+import { useCallback } from 'react';
 
 import Box from '@mui/material/Box';
 
-import { AgentTagEditor, ApplicationInformation, CreateAgentForm } from '@/features/agents';
+import { AgentTagEditor, ApplicationInformation, ApplicationMcpAccessToggle, CreateAgentForm } from '@/features/agents';
 import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import type { ApplicationVersionDetail } from '@/shared/api/generated/model';
 import { AgentModelSettings } from '@/widgets/agent-model-settings';
@@ -92,6 +93,13 @@ function forkOrigin(activeVersion: ApplicationVersionDetail | undefined): {
 export function EditPipelineConfigurationPanel(props: EditPipelineConfigurationPanelProps): ReactNode {
   const { projectId, applicationId, activeVersion, editor, versionFields, isEditorDisabled, isDirty, isReadOnly, onModelSettingsChange } = props;
   const fork = forkOrigin(activeVersion);
+  const tags = versionFields.fields.tags;
+  const setTags = versionFields.setTags;
+  const handleMcpAccessChange = useCallback((enabled: boolean) => {
+    const withoutMcp = tags.filter((tag) => tag.name !== 'mcp');
+    const mcpTag = tags.find((tag) => tag.name === 'mcp') ?? { id: -1, name: 'mcp', data: null };
+    setTags(enabled ? [...withoutMcp, mcpTag] : withoutMcp);
+  }, [setTags, tags]);
 
   return (
     <Box data-testid="edit-pipeline-configuration-panel">
@@ -102,11 +110,15 @@ export function EditPipelineConfigurationPanel(props: EditPipelineConfigurationP
         onFieldChange={editor.onFieldChange}
         disabled={isEditorDisabled}
         tagsSlot={
-          <AgentTagEditor
-            projectId={projectId}
-            value={versionFields.fields.tags}
-            onChange={versionFields.setTags}
-          />
+          <>
+            <ApplicationMcpAccessToggle
+              checked={tags.some((tag) => tag.name === 'mcp')}
+              onChange={handleMcpAccessChange}
+              disabled={isEditorDisabled}
+              entityType="pipeline"
+            />
+            <AgentTagEditor projectId={projectId} value={tags} onChange={setTags} />
+          </>
         }
         modelSettingsSlot={
           <AgentModelSettings

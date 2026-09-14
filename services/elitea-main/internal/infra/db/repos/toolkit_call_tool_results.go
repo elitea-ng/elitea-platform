@@ -2,8 +2,10 @@ package repos
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpoauth"
 	"math"
 	"strconv"
 
@@ -109,6 +111,23 @@ func (r *ToolkitCallToolResultsRepository) ExpectedToolkitCallTool(
 		Settings:            settings,
 		Arguments:           arguments,
 	}
+	var savedBytes []byte
+	if err := r.pool.QueryRow(ctx, `SELECT e.content_bytes FROM elitea_runtime.input_bundle_entries e WHERE e.input_bundle_id=$1 AND e.semantic_role='toolkit.call_tool.settings'`, header.InputBundleID).Scan(&savedBytes); err != nil {
+		return outputapp.ExpectedToolkitCallTool{}, fmt.Errorf("load saved tool-run identity: %w", err)
+	}
+	var saved struct {
+		ID       int64          `json:"id"`
+		Type     string         `json:"type"`
+		Name     string         `json:"toolkit_name"`
+		Settings map[string]any `json:"settings"`
+	}
+	if len(savedBytes) > 256*1024 || json.Unmarshal(savedBytes, &saved) != nil || saved.ID <= 0 {
+		return outputapp.ExpectedToolkitCallTool{}, outputapp.ErrInvalidToolkitCallToolOutput
+	}
+	expected.ToolkitID = strconv.FormatInt(saved.ID, 10)
+	expected.ToolkitType = saved.Type
+	expected.ToolkitName = saved.Name
+	expected.ServerURL, _ = mcpoauth.ToolkitResource(saved.Type, saved.Settings)
 	if err := expected.Validate(); err != nil {
 		return outputapp.ExpectedToolkitCallTool{}, fmt.Errorf("invalid stored tool-run output binding: %w", err)
 	}
@@ -177,6 +196,9 @@ func (r *ToolkitCallToolResultsRepository) ProjectToolkitCallTool(
 		}
 		return outputapp.ProjectionOutcome{}, runtimedomain.ErrStaleFence
 	default:
+		return outputapp.ProjectionOutcome{}, err
+	}
+	if err := markOutputProjected(ctx, executor, record.EventID); err != nil {
 		return outputapp.ProjectionOutcome{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

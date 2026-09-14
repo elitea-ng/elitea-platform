@@ -1,0 +1,144 @@
+# Complete tool results across bounded events
+
+## Current platform evidence
+
+`projects/EliteaUI/src/components/Chat/hooks.js` handles `AgentToolEnd` by appending string output.
+`projects/EliteaUI/src/common/convertChatConversationMessages.js` reads saved tool output from trace details.
+This behavior permits progressive output and subsequent history reads.
+It does not define replay identity, byte offsets, or integrity checks for fragments.
+
+## New platform mapping
+
+| Responsibility | New source |
+| --- | --- |
+| Versioned fragment contract | `libs/proto/elitea/runtime/v1/node_event.proto` |
+| Complete result projection | `services/elitea-worker-rust/src/agents/events.rs` |
+| Claim-fenced ordered frame delivery | `services/elitea-worker-rust/src/execution/output_delivery.rs` |
+| Durable result assembly | `services/elitea-main/internal/infra/db/repos/agent_tool_output_chunks.go` |
+| Existing trace row persistence | `services/elitea-main/internal/infra/db/repos/agent_trace.go` |
+| Browser assembly | `apps/elitea-web/src/features/chat-messages/lib/toolOutputChunks.ts` |
+| Browser lifecycle state | `apps/elitea-web/src/features/chat-messages/lib/chatStreamToolFrames.ts` |
+
+## Implementation
+
+The MCP adapter admits larger values than the previous tool-event projection limit.
+A valid selected GitHub schema exceeds that projection limit after JSON escaping.
+The worker now splits large serialized results into UTF-8 fragments of at most 8192 bytes.
+The maximum complete result is one MiB at this projection boundary.
+Individual tools retain their own admission limits.
+The model receives the original result without event-fragment formatting.
+
+Each fragment has a byte offset, total length, complete-result SHA-256 digest, and final marker.
+Execution identity and tool-call identity scope the fragments.
+The existing output sequence and claim fence govern persistence and replay.
+The worker publishes the durable partial-message frame before the corresponding browser tool-end frame.
+Main rejects gaps, conflicting content, changed result identity, and an invalid final digest.
+An exact duplicate does not append content again.
+
+Main stores the assembled result in the existing `chat_message_trace_step.tool_output` column.
+Small fragment metadata uses the existing trace attributes column.
+The browser preserves input fields and marks completion only after the final fragment.
+No application table or migration is added.
+The existing node-event and stream-frame limits remain unchanged.
+
+## Verification
+
+Targeted Rust tests reconstruct escaped JSON containing multibyte text from bounded frames.
+Go tests check reconstruction, duplicate replay, gaps, and integrity failures.
+A PostgreSQL test reconstructs 100 KB across separate transactions and exact duplicate deliveries.
+Browser tests check byte offsets, replay, and final-only completion.
+The full Rust library suite passes: 955 tests, with no failures or ignored tests.
+Rust Clippy passes with warnings denied.
+The UI reducer and chunk suites pass 92 tests.
+UI type checks and focused lint checks pass.
+The focused Go checks pass eight tests, including PostgreSQL persistence checks, without skips.
+
+## Deployed chat evidence
+
+Main, Rust worker, and UI images run in the rehearsal deployment.
+Their respective image digests are:
+
+- Main: `sha256:bce760ae76b0f76d5a6b96faa1099a43fa454b2ea3f99023230d48ad4f10df53`.
+- Rust: `sha256:2267c5e9390ab6febccca003e08f30c91309aaba6f67f618a606482ba15f9345`.
+- UI: `sha256:e39f5c760dc05e070ef5443fbde85a43ad4c117770118d9cd9de705831f06752`.
+
+Playwright submits a read-only discovery request in chat 545.
+The agent lists toolkit types, then requests the complete GitHub schema.
+Neither call reports a tool failure or resource-limit error.
+The agent produces a schema report, which remains visible after a page reload.
+Trace row 7226 stores 42,316 bytes with final fragment metadata and a `stop` finish reason.
+Trace row 7224 stores the separate type catalog result.
+These rows demonstrate distinct calls, rather than duplicate fragments stored as separate tool results.
+
+This check covers successful schema transport and a saved chat answer.
+It does not establish recovery after the earlier interrupted execution in chat 542.
+It does not establish credential creation, toolkit execution, or model accuracy for every schema field.
+
+## Repeat after the deployment pause
+
+On 2026-09-10, Playwright repeats the same read-only discovery in chat 545.
+The three deployment containers remain running; Main reports healthy.
+The repeated call produces trace row 7231 in message group 5812 at `2026-09-10T18:10:44Z`.
+The row contains 42,316 bytes, valid JSON, the `github` schema, and a `stop` finish reason.
+PostgreSQL computes the stored result SHA-256 and confirms that it matches the final fragment metadata.
+The preceding result in row 7226 also passes the digest check.
+The browser shows no tool failure or resource-limit error for the repeated turn.
+Playwright reloads the page and verifies that the repeated report remains visible.
+The model report includes a conceptual credential example; this example does not prove the accepted credential creation contract.
+
+
+## Large error results
+
+The chunk path previously ran before error classification and marked every final result successful.
+Rust now classifies the original response before selecting the chunk path.
+A failed result retains its complete serialized JSON in `tool_output`.
+The final partial message retains `finish_reason=error` and bounded error metadata.
+The final lifecycle event uses `agent_tool_error`.
+The browser assembles that final fragment before marking the action failed.
+Main preserves the error state when reconstructing the trace and processing exact replay.
+
+Rust tests reconstruct both large successful and failed multibyte results from bounded frames.
+The browser reducer and chunk suites pass 93 tests.
+The Main trace tests verify the complete error output and error status after replay.
+These checks extend the current UI tool-end and tool-error behavior described above.
+They do not alter the model-visible result or increase the model-output limit.
+
+An isolated commit candidate excludes the pending instruction-authority changes.
+Its 29 Rust event tests and Rust Clippy checks pass.
+Its 93 browser tests and focused Oxlint checks pass.
+The Main chunk suite passes against PostgreSQL, including assembly across transactions, without skipped tests.
+The complete working UI also passes TypeScript checking.
+The new error lifecycle behavior still requires deployment verification.
+
+
+The browser also treats an exact earlier-fragment replay as a no-op after completion.
+This preserves the final error status, output, and timestamps.
+The reducer test replays both the final error fragment and an earlier successful fragment.
+
+## Deployment on 2026-09-11
+
+Worker image `sha256:3edd3cb3a3b61c8b8ec915623d2a3e47addde32d3e9fcb0ee8c20d378a31344f` contains the large-error repair.
+UI image `sha256:497ac5ff7016cd401de79d5078671c5fa4ae3678e77d720ffef328f50adbe659` also contains the earlier-fragment replay repair.
+Both deployments retain their existing configuration and use the active-claim guard.
+A fresh Playwright GitHub Toolkit Test returns HTTP 200 and `ok=true`.
+Execution `9b1d76624bff172e3ca01958ecf149f3` reaches durable `SUCCEEDED` state.
+
+The first chat discovery request fails before tool execution.
+Execution `0450024b55004e2e3c8718d0072a4d3e` reaches a 15-second gateway response-header timeout.
+The gateway records HTTP 500 after 31,790 milliseconds, with zero tokens.
+A new tool-free chat also receives a gateway failure.
+Its execution `9b5f3f697ec3db78023f6fb53a431032` records HTTP 503 after 1,267 milliseconds.
+An authenticated direct model request subsequently returns an answer.
+The tool-free chat retry also returns an answer without another deployment or configuration change.
+These observations establish a temporary model-path failure, but do not identify its upstream cause.
+They do not establish a chunk-transport failure.
+
+The full working Rust library run passes 953 tests under the sandbox.
+Three local HTTP-listener tests fail there and pass when rerun outside the sandbox.
+The isolated commit candidate passes Clippy; pending instruction-authority test lint remains separate.
+
+The chat retry invokes `get_elitea_core_toolkits` with `type=github`.
+Trace 7283 in message group 5828 stores 3,181 bytes and `finish_reason=stop` without a tool error.
+This confirms live internal MCP discovery after deployment.
+This smaller result does not exercise the large-error fragment path.
+That path has the isolated Rust, Main, and browser regression evidence above; live large-error provider proof remains open.

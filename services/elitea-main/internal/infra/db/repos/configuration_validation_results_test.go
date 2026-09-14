@@ -269,7 +269,20 @@ func TestRuntimeFailureProjectionDurablyMaterializesCancellationBeforeTypedRejec
 	}
 }
 
-func TestRuntimeFailureProjectionSkipsIndexSideEffectsForConfigurationFailure(t *testing.T) {
+func TestRuntimeFailureProjectionSkipsIndexSideEffectsForNonIndexFailure(t *testing.T) {
+	for _, capability := range []string{
+		executiondomain.ConfigurationValidationCapability,
+		executiondomain.ToolkitCallToolCapability,
+		executiondomain.ToolkitAvailableToolsCapability,
+	} {
+		t.Run(capability, func(t *testing.T) {
+			assertNonIndexRuntimeFailureProjection(t, capability)
+		})
+	}
+}
+
+func assertNonIndexRuntimeFailureProjection(t *testing.T, capability string) {
+	t.Helper()
 	frame := testRuntimeFailureFrame(t)
 	record, _, err := failureOutputRecord(frame)
 	if err != nil {
@@ -304,7 +317,7 @@ func TestRuntimeFailureProjectionSkipsIndexSideEffectsForConfigurationFailure(t 
 	repository.activity = activity
 	projection := outputapp.RuntimeFailureProjection{
 		Frame:        frame,
-		CapabilityID: executiondomain.ConfigurationValidationCapability,
+		CapabilityID: capability,
 		BrowserData: []byte(
 			`{"code":"UNSUPPORTED_CAPABILITY","safe_message":"Unsupported capability.","retryable":false}`,
 		),

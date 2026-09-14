@@ -24,6 +24,9 @@ enum ClaimDispositionV1 {
   // The prior lease durably crossed the invocation fence but left no terminal
   // output. The worker may reconcile output only; it must never invoke the SDK.
   CLAIM_DISPOSITION_V1_RECOVER_AMBIGUOUS_INVOCATION_NOACK = 10;
+  // Input and checkpoint inspection only. Ordinary invocation authorization
+  // remains forbidden. The worker must validate its durable model checkpoint.
+  CLAIM_DISPOSITION_V1_RECOVER_AGENT_MODEL_CHECKPOINT = 11;
 }
 
 enum BeginExecutionDispositionV1 {
@@ -43,6 +46,8 @@ message ClaimCommandRequestV1 {
   string producer_id = 2;
   SignedWorkerCommandEnvelopeV1 signed_command = 3;
   reserved 4 to 15;
+  // Opt in only when the worker implements explicit model checkpoint recovery.
+  bool agent_model_checkpoint_recovery = 16;
 }
 
 // SettlementRecoveryV1 carries only durable recovery material. A worker must
@@ -113,6 +118,21 @@ message AuthorizeInvocationResponseV1 {
   reserved 3 to 15;
 }
 
+// The authenticated recovery worker attests that this digest identifies its
+// validated pending model checkpoint. It never authorizes replay of a tool.
+message AuthorizeAgentModelCheckpointRequestV1 {
+  ExecutionIdentityV1 identity = 1;
+  ExecutionFenceV1 fence = 2;
+  DigestV1 checkpoint_digest = 3;
+  reserved 4 to 15;
+}
+
+message AuthorizeAgentModelCheckpointResponseV1 {
+  AuthorizeInvocationDispositionV1 disposition = 1;
+  RuntimeErrorV1 rejection = 2;
+  reserved 3 to 15;
+}
+
 message RenewLeaseRequestV1 {
   ExecutionIdentityV1 identity = 1;
   ExecutionFenceV1 fence = 2;
@@ -159,6 +179,7 @@ service RuntimeControlService {
   rpc ClaimCommand(ClaimCommandRequestV1) returns (ClaimCommandResponseV1);
   rpc BeginExecution(BeginExecutionRequestV1) returns (BeginExecutionResponseV1);
   rpc AuthorizeInvocation(AuthorizeInvocationRequestV1) returns (AuthorizeInvocationResponseV1);
+  rpc AuthorizeAgentModelCheckpoint(AuthorizeAgentModelCheckpointRequestV1) returns (AuthorizeAgentModelCheckpointResponseV1);
   rpc RenewLease(RenewLeaseRequestV1) returns (RenewLeaseResponseV1);
   rpc ObserveDesiredState(ObserveDesiredStateRequestV1) returns (ObserveDesiredStateResponseV1);
   rpc PrepareSettlement(PrepareSettlementRequestV1) returns (PrepareSettlementResponseV1);

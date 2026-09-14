@@ -67,11 +67,8 @@ function toEditDetail(detail: ToolkitInstance | undefined): EditToolDetail | nul
 }
 
 /**
- * The Indexes tab panel. A separate component purely so `EditToolkit` stays
- * under the §3.5 complexity budget (12) — same reason
- * `useSaveToolkitMutation` below is not inlined. `toolkitId` is `undefined`
- * only while the route params are still resolving, at which point there is
- * no toolkit to list indexes for.
+ * Separate panel keeps `EditToolkit` within its complexity budget.
+ * An unresolved route has no toolkit whose indexes can be listed.
  */
 interface IndexesTabPanelProps {
   readonly toolkitId: string | undefined;

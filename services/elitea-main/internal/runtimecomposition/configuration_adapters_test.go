@@ -14,7 +14,9 @@ import (
 type currentToolkitStoreStub struct {
 	get       func(context.Context, int32, int32) (repos.CurrentToolkit, error)
 	calls     int
+	mcpCalls  int
 	projectID int32
+	actorID   int32
 	toolkitID int32
 }
 
@@ -25,6 +27,19 @@ func (s *currentToolkitStoreStub) Get(
 ) (repos.CurrentToolkit, error) {
 	s.calls++
 	s.projectID = projectID
+	s.toolkitID = toolkitID
+	return s.get(ctx, projectID, toolkitID)
+}
+
+func (s *currentToolkitStoreStub) GetMCPVisible(
+	ctx context.Context,
+	projectID int32,
+	actorID int32,
+	toolkitID int32,
+) (repos.CurrentToolkit, error) {
+	s.mcpCalls++
+	s.projectID = projectID
+	s.actorID = actorID
 	s.toolkitID = toolkitID
 	return s.get(ctx, projectID, toolkitID)
 }
@@ -191,6 +206,42 @@ func TestCurrentNestedToolkitReaderRequiresAndUsesExactNameDeriver(t *testing.T)
 	}
 	if nested.Settings["large_id"] != json.Number("9007199254740993") || names.calls != 1 {
 		t.Fatalf("nested settings=%v name calls=%d", nested.Settings, names.calls)
+	}
+}
+
+func TestCurrentToolkitReaderProjectsMCPMetadataThroughGeneratedRepository(t *testing.T) {
+	storedName := "stored name"
+	store := &currentToolkitStoreStub{get: func(context.Context, int32, int32) (repos.CurrentToolkit, error) {
+		return repos.CurrentToolkit{
+			ID: 19, Type: "github", Name: &storedName,
+			Settings: map[string]any{"selected_tools": []any{"get_issue"}},
+			Meta:     map[string]any{"mcp_options": map[string]any{"available_by_mcp": true}},
+		}, nil
+	}}
+	names := &currentToolkitNameDeriverStub{derive: func(_ context.Context, input CurrentToolkitNameInput) (string, error) {
+		if input.ProjectID != 7 || input.UserID != 11 || input.ToolkitType != "github" ||
+			input.StoredName == nil || *input.StoredName != storedName {
+			t.Fatalf("unexpected name input: %+v", input)
+		}
+		return "Source Control", nil
+	}}
+	reader, err := newCurrentToolkitReaderAdapter(store, names)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	toolkit, found, err := reader.GetCurrentMCPToolkit(context.Background(), 7, 11, 19)
+	if err != nil || !found {
+		t.Fatalf("found=%t err=%v", found, err)
+	}
+	if toolkit.ID != 19 || toolkit.Type != "github" || toolkit.Name != "Source Control" ||
+		toolkit.Settings["selected_tools"] == nil || toolkit.Meta["mcp_options"] == nil {
+		t.Fatalf("unexpected MCP toolkit projection: %+v", toolkit)
+	}
+	if store.calls != 0 || store.mcpCalls != 1 || store.projectID != 7 ||
+		store.actorID != 11 || store.toolkitID != 19 {
+		t.Fatalf("MCP repository calls=%d ordinary=%d project=%d actor=%d toolkit=%d",
+			store.mcpCalls, store.calls, store.projectID, store.actorID, store.toolkitID)
 	}
 }
 

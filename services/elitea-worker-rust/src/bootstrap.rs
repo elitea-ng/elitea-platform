@@ -35,8 +35,10 @@ use crate::transport::runtime_context::{
 use crate::transport::{
     ControlGrpcConfig, ControlGrpcError, InputContentClient, InputContentError, TonicControlRpc,
 };
-use crate::transport::{model_facade::ModelFacade, model_gateway::ModelGatewayConfig};
-use crate::transport::{model_gateway::ModelGatewayError, platform_client::PlatformClient};
+use crate::transport::{model_facade::ModelFacade, openai_compatible_facade::ModelGatewayConfig};
+use crate::transport::{
+    openai_compatible_facade::ModelFacadeError, platform_client::PlatformClient,
+};
 
 const MAX_AGENTSTATE_CONNECTION_BYTES: usize = 16 * 1024;
 const MAX_RUNTIME_CONTEXT_BYTES: usize = 32 * 1024;
@@ -384,13 +386,13 @@ fn map_runtime_context_error(error: &RuntimeContextError) -> ProductionBootstrap
     }
 }
 
-fn map_model_error(error: ModelGatewayError) -> ProductionBootstrapError {
+fn map_model_error(error: ModelFacadeError) -> ProductionBootstrapError {
     match error {
-        ModelGatewayError::InvalidConfiguration | ModelGatewayError::InvalidInvocation => {
+        ModelFacadeError::InvalidConfiguration | ModelFacadeError::InvalidInvocation => {
             ProductionBootstrapError::InvalidConfiguration
         }
-        ModelGatewayError::ResourceExhausted => ProductionBootstrapError::ResourceExhausted,
-        ModelGatewayError::DependencyUnavailable => ProductionBootstrapError::DependencyUnavailable,
+        ModelFacadeError::ResourceExhausted => ProductionBootstrapError::ResourceExhausted,
+        ModelFacadeError::DependencyUnavailable => ProductionBootstrapError::DependencyUnavailable,
     }
 }
 

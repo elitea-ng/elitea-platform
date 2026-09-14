@@ -87,6 +87,8 @@ pub struct RuntimeDeployConfig {
     pub spool_root: PathBuf,
     pub spool_key_path: PathBuf,
     pub agent_checkpoint_connection_path: Option<PathBuf>,
+    #[serde(default)]
+    pub agent_model_checkpoint_recovery: bool,
     pub limits: RuntimeLimits,
 }
 
@@ -124,6 +126,9 @@ impl RuntimeDeployConfig {
         }
         if let Some(path) = &self.agent_checkpoint_connection_path {
             require_absolute_path(path)?;
+        }
+        if self.agent_model_checkpoint_recovery && self.agent_checkpoint_connection_path.is_none() {
+            return Err(invalid_config());
         }
         self.limits.validate()?;
         Ok(self)
@@ -508,6 +513,22 @@ mod tests {
             .expect("write configuration");
         fs::set_permissions(path, fs::Permissions::from_mode(0o600))
             .expect("configuration permissions");
+    }
+
+    #[test]
+    fn checkpoint_recovery_requires_explicit_opt_in_and_durable_storage() {
+        let root = tempdir().expect("root");
+        let mut value = config(root.path());
+        let loaded: super::RuntimeDeployConfig =
+            serde_json::from_value(value.clone()).expect("config");
+        assert!(!loaded.agent_model_checkpoint_recovery);
+        value["agent_model_checkpoint_recovery"] = json!(true);
+        let loaded: super::RuntimeDeployConfig =
+            serde_json::from_value(value.clone()).expect("opt-in");
+        assert!(loaded.validate().is_ok());
+        value["agent_checkpoint_connection_path"] = Value::Null;
+        let loaded: super::RuntimeDeployConfig = serde_json::from_value(value).expect("no storage");
+        assert!(loaded.validate().is_err());
     }
 
     #[test]

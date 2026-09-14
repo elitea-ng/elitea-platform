@@ -14,6 +14,8 @@ import type { SocketClient } from '@/shared/api/socket/client';
 import { ToolActionStatus } from '@/shared/lib/chat';
 import { ROLES } from '@/shared/lib/enums';
 
+import type { McpAuthorizationBatch } from './useChatBoxHandlers.authorization.types';
+
 /** A resolved HITL interrupt action from the user ('approve'/'reject'/'edit'/'block_with_comment'). `value` carries the rewritten prompt/comment text for 'edit'/'block_with_comment'. `childThreadId` (Track-2 independent fan-out child) is present only when this decision resumes ONE still-running child independently of its siblings. */
 export interface HitlInterruptAction {
   readonly action: string;
@@ -84,6 +86,10 @@ export interface ChatBoxHandlerDeps {
   readonly socketId?: string | undefined;
   /** Session-scoped bookkeeping of MCP servers declined/authenticated this conversation (never persisted). Lifetime owned by the caller. */
   readonly sessionDeclinedMcpServersRef?: { current: Map<string, Record<string, unknown>> };
+  /** Pending exact decisions for a parallel delegated-authorization pause. */
+  readonly sessionMcpAuthorizationBatchesRef?: { current: Map<string, McpAuthorizationBatch> };
+  /** Returns the credential-native token map used only by the continuation request. */
+  readonly getMcpTokens?: () => Record<string, unknown>;
   /**
    * Start the run over REST and subscribe to its SSE replay stream
    * (`features/chat-messages`'s `useChatStreamTransport`).
@@ -205,11 +211,13 @@ export interface UseChatBoxHandlersResult {
   readonly deleteAnswer: (messageId: string) => Promise<void>;
   readonly clearChat: () => Promise<void>;
   readonly continueHitl: (action: HitlInterruptAction) => Promise<void>;
-  /** Resumes an MCP-authorization pause: REST first (`agent.continue.authorization.v1`), socket second. `addToIgnoreList` is the user pressing "Skip Auth". */
-  readonly resumeMcpFlow: (messageId: string, addToIgnoreList?: boolean) => Promise<void>;
+  /** Resume the exact authorization request. Skip applies only to this run. */
+  readonly resumeMcpFlow: (messageId: string, addToIgnoreList?: boolean, authorizationRequestId?: string) => Promise<void>;
   readonly continueTokenLimit: (messageId: string) => Promise<void>;
 }
 export interface ToolActionLike {
+  readonly id?: string;
+  readonly authorizationRequestId?: string;
   readonly status?: string;
   readonly name?: string;
   readonly toolOutputs?: unknown;

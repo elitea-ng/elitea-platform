@@ -97,6 +97,47 @@ describe('applyChatStreamFrame', () => {
     expect(history[0]?.content).toBe('');
   });
 
+  it('replaces interrupted reasoning on restart while retaining completed tools', () => {
+    let history: readonly ChatMessage[] = [pendingAssistant()];
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentToolStart, {
+      response_metadata: { tool_run_id: 'saved-tool', tool_name: 'Search' },
+    }), CONTEXT);
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentToolEnd, {
+      content: 'saved result', response_metadata: { tool_run_id: 'saved-tool' },
+    }), CONTEXT);
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentLlmChunk, {
+      content: '<think>interrupted reasoning',
+    }), CONTEXT);
+    const savedTool = (history[0]?.toolActions as readonly ToolAction[] | undefined)?.find((action) => action.id === 'saved-tool');
+    expect(savedTool).toBeDefined();
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentStart), CONTEXT);
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentLlmChunk, {
+      content: 'Recovered answer',
+    }), CONTEXT);
+    expect(history).toHaveLength(1);
+    expect(history[0]?.content).toBe('Recovered answer');
+    expect(history[0]?.toolActions).toEqual([savedTool]);
+  });
+
+  it('replays the frozen prefix once when recovering an interrupted continuation', () => {
+    let history: readonly ChatMessage[] = [{
+      ...pendingAssistant(), content: 'Saved answer. Interrupted continuation',
+    }];
+    const sequence = [
+      frame(SocketMessageType.AgentStart, { response_metadata: { should_continue: false } }),
+      frame(SocketMessageType.AgentLlmChunk, { content: 'Saved ' }),
+      frame(SocketMessageType.AgentLlmChunk, { content: 'answer.' }),
+      frame(SocketMessageType.AgentLlmChunk, { content: ' Recovered continuation.' }),
+      frame(SocketMessageType.AgentResponse, {
+        content: ' Recovered continuation.', response_metadata: { finish_reason: 'stop' },
+      }),
+    ];
+    for (const event of sequence) history = applyChatStreamFrame(history, event, CONTEXT);
+    expect(history).toHaveLength(1);
+    expect(history[0]?.content).toBe('Saved answer. Recovered continuation.');
+    expect(history[0]?.isStreaming).toBe(false);
+  });
+
   it('surfaces a failure without discarding what already streamed', () => {
     const history = applyChatStreamFrame(
       [{ ...pendingAssistant(), content: 'got this far' }],
@@ -279,6 +320,44 @@ describe('the tool lifecycle', () => {
     const twice = applyChatStreamFrame(once, toolFrame(SocketMessageType.AgentToolStart, {}), CONTEXT);
 
     expect(twice[0]?.toolActions).toHaveLength(1);
+  });
+
+  it('keeps chunked output running until its final frame and ignores replay', () => {
+    let history = withStartedTool();
+    const initialStatus = (history[0]?.toolActions?.[0] as ToolAction | undefined)?.status;
+    const first = toolFrame(SocketMessageType.AgentToolEnd, { tool_output: '{"ok":', tool_output_chunk_v1: { offset_bytes: 0, total_bytes: 11, sha256: 'a'.repeat(64), final: false } });
+    history = applyChatStreamFrame(history, first, CONTEXT);
+    history = applyChatStreamFrame(history, first, CONTEXT);
+    expect((history[0]?.toolActions?.[0] as ToolAction | undefined)?.status).toBe(initialStatus);
+    history = applyChatStreamFrame(history, toolFrame(SocketMessageType.AgentToolEnd, { tool_output: 'true}', tool_output_chunk_v1: { offset_bytes: 6, total_bytes: 11, sha256: 'a'.repeat(64), final: true } }), CONTEXT);
+    const action = history[0]?.toolActions?.[0] as ToolAction;
+    expect(action['toolOutputs']).toBe('{"ok":true}');
+    expect(action.status).toBe('complete');
+  });
+
+  it('assembles the final error fragment and keeps the tool failed on replay', () => {
+    let history = withStartedTool();
+    const output = JSON.stringify({ error: 'large failure' });
+    const split = 9;
+    const metadata = { total_bytes: output.length, sha256: 'a'.repeat(64) };
+    const first = toolFrame(SocketMessageType.AgentToolEnd, {
+      tool_output: output.slice(0, split),
+      tool_output_chunk_v1: { ...metadata, offset_bytes: 0, final: false },
+    });
+    history = applyChatStreamFrame(history, first, CONTEXT);
+    const last = toolFrame(SocketMessageType.AgentToolError, {
+      tool_output: output.slice(split), finish_reason: 'error',
+      tool_output_chunk_v1: { ...metadata, offset_bytes: split, final: true },
+    });
+    history = applyChatStreamFrame(history, last, CONTEXT);
+    const completed = history[0]?.toolActions?.[0];
+    history = applyChatStreamFrame(history, last, CONTEXT);
+    history = applyChatStreamFrame(history, first, CONTEXT);
+    expect(history[0]?.toolActions?.[0]).toBe(completed);
+    const action = history[0]?.toolActions?.[0] as ToolAction;
+    expect(action['toolOutputs']).toBe(output);
+    expect(action.status).toBe('error');
+    expect(action['isError']).toBe(true);
   });
 
   it('accumulates string outputs across end frames rather than replacing them', () => {
@@ -877,6 +956,31 @@ describe('applyChatStreamFrame — interrupts', () => {
 
       expect(history[0]?.toolActions).toHaveLength(1);
       expect(((history[0]?.toolActions ?? [])[0] as ToolAction).status).toBe('action_required');
+    });
+
+    it('renders every exact request from a parallel terminal event without duplicates', () => {
+      const request = (interruptId: string, toolCallId: string) => ({
+        interrupt_id: interruptId,
+        tool_call_id: toolCallId,
+        guardrail_type: 'mcp_auth',
+        tool_name: 'SharePoint search',
+        toolkit_type: 'sharepoint',
+        server_url: 'https://sharepoint.example',
+        resource_metadata: {
+          resource_name: 'SharePoint',
+          authorization_servers: ['https://login.example'],
+        },
+      });
+      const terminal = authFrame({
+        authorization_requests: [request('auth-1', 'call-1'), request('auth-2', 'call-2')],
+      });
+      let history = applyChatStreamFrame([pendingAssistant()], terminal, CONTEXT);
+      history = applyChatStreamFrame(history, terminal, CONTEXT);
+
+      expect(history[0]?.toolActions).toHaveLength(2);
+      expect(history[0]?.toolActions?.map(
+        (action) => (action as ToolAction & { authorizationRequestId?: string }).authorizationRequestId,
+      )).toEqual(['auth-1', 'auth-2']);
     });
   });
 });

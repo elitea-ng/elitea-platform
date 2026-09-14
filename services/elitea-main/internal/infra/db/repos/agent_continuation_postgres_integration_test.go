@@ -298,18 +298,6 @@ WHERE id = 41`,
 			restore: `UPDATE application_versions SET meta = meta - 'internal_tools' WHERE id = 41`,
 		},
 		{
-			name: "project context",
-			apply: `INSERT INTO configuration (
-    id, uuid, project_id, elitea_title, type, section, data, meta,
-    shared, status_ok, source, author_id
-) VALUES (
-    2, '60000000-0000-4000-8000-000000000039', 1, 'project_context_gate',
-    'project_context', 'project', '{"content":"Project instructions"}'::jsonb,
-    '{}'::jsonb, false, true, 'user', 11
-)`,
-			restore: `DELETE FROM configuration WHERE elitea_title = 'project_context_gate'`,
-		},
-		{
 			name: "conversation toolkit",
 			apply: `WITH toolkit AS (
     INSERT INTO chat_participants (id, uuid, entity_name, entity_meta)
@@ -1957,6 +1945,10 @@ func insertPostgresCurrentAdhocTurn(
 func seedCurrentAgentContinuationSchema(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	if _, err := pool.Exec(t.Context(), `
+CREATE TABLE p_1.applications (
+    id SERIAL PRIMARY KEY, name VARCHAR(128) NOT NULL,
+    description VARCHAR(2304), owner_id INTEGER NOT NULL
+);
 ALTER TABLE p_1.application_versions
     ADD COLUMN application_id INTEGER NOT NULL,
     ADD COLUMN name VARCHAR(128) NOT NULL,
@@ -2009,6 +2001,8 @@ CREATE TABLE p_1.entity_skill_mapping (
 -- of them (#287) so a pylon-free deployment has them at all, and this seed's
 -- callers run that migration first. Re-creating them here would be a duplicate
 -- relation.
+INSERT INTO p_1.applications (id, name, description, owner_id) VALUES
+    (31, 'Parent Agent', 'Parent agent fixture', 11);
 INSERT INTO p_1.application_versions (
     id, application_id, name, status, author_id, uuid, llm_settings, instructions,
     conversation_starters, welcome_message, agent_type, meta, pipeline_settings

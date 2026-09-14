@@ -46,6 +46,41 @@ authorization, failure behavior, and recovery boundary.
 
 Detailed ledgers:
 
+- `../testing-gaps.md` records accepted progression decisions, verification debt, observed warnings, and separate implementation gaps.
+- `../remaining-gates.md` records the continuation order after the latest main sync.
+- `point3-audit-20260913.md` records point 3 progression acceptance and separate verification debt.
+- `internal-mcp-restricted-chat-acceptance.md` records successful project admission, eleven operation refusals, and temporary access cleanup.
+- `point3-delivery-reconciliation.md` records verified delivery of the remaining point 3 worktree changes.
+- `nested-internal-mcp-materialization.md` maps child-tool credential resolution and deployment configuration.
+- `builtin-runtime-modules.md` records the separate pre-indexing module gate and excludes Swarm.
+- `instruction-authority-main.md` maps immutable instruction admission and the shared wire contract.
+- `instruction-authority.md` maps Rust activation, scoped recovery, provider projection, and checkpoint ordering.
+- `internal-mcp-draft-default-model.md` records deployed drafting, selected-version behavior, and deliberate validation failures.
+- `internal-mcp-copied-skill-acceptance.md` records exact copied-skill binding and Rust runtime consumption.
+- `credential-browser-acceptance-20260914.md` records credential creation and rotation through chat and Toolkit Test.
+- `toolkit-request-recovery.md` records recovery before the browser receives an execution ID.
+- `external-mcp-fresh-browser-20260913.md` records independent PAT-client acceptance and its boundaries.
+- `external-mcp-elicitation-deferred.md` records the explicitly deferred approval exchange.
+- `main-sync-20260909.md` records conflict resolutions, regenerated contracts, and merge verification.
+- `pr-883-ci-repair.md` records post-merge CI failures, focused repairs, and local verification limits.
+- `main-sync-20260908.md` records the main integration and rehearsal cutover gate.
+- `toolkit-test.md` records required toolkit Test parity under `TKTEST-RUST-01`.
+- `toolkit-discovery.md` separates standalone discovery command parity from existing Rust runtime tool binding.
+- `toolkit-discovery-main.md` maps Main admission, dispatch, result acceptance, and discovery schema reuse.
+- `toolkit-result-artifacts.md` records immutable discovery output storage and its verification boundary.
+- `toolkit-test-context.md` maps Test runtime context, delegated authorization, and retry identity.
+- `toolkit-test-authorization-ui.md` maps the active Test pane, authorization exchange, retry, and Skip.
+- `delegated-test-token-references.md` records encrypted actor-scoped grants and the required storage boundary.
+- `internal-mcp-drafting.md` maps existing drafting services and their internal MCP adapters.
+- `chat-internal-mcp-acceptance.md` defines chat-driven creation, updates, tool invocation, and persisted-result proof.
+- `internal-mcp-application-filters.md` records application listing and pagination parity.
+- `internal-mcp-skill-contracts.md` records skill version and mutation contracts.
+- `internal-mcp-configuration-ids.md` records configuration selection across shared read paths.
+- `internal-mcp-entity-discovery.md` maps entity discovery and actor-visible search options.
+- `internal-mcp-chat-authority.md` records shared chat authorization and operation-level verification limits.
+- `internal-mcp-default-secrets.md` records protected default-secret policy through existing platform configuration.
+- `external-mcp-completion.md` records external schemas, terminal outcomes, and the remaining deployed proof.
+- `toolkit-terminal-recovery.md` records direct-read terminal takeover and the open horizontal-recovery gates.
 - `agent-runtime.md` maps language-neutral worker delivery and agent execution.
 - `pipeline-nodes.md` maps every current Python pipeline node/edge branch and
   the capability-closed future explicit pipeline `parallel` node core.
@@ -54,6 +89,18 @@ Detailed ledgers:
 - `../map-reduce-pipeline-node-design.md` defines the separate data-driven map
   node, LangGraph `Send` semantics, reducers, durability, and test gates.
 - `configuration-toolsets.md` maps saved configuration and toolkit families.
+- `prebuilt-mcp.md` maps fixed catalogue-backed HTTP MCP execution.
+- `internal-elitea-mcp.md` separates internal builder categories from external
+  Elitea-as-MCP publishing. It maps the Main-owned applications, skills,
+  toolkit, configuration, notification, project-context, and project-secret
+  operations plus their deliberately closed live discovery and plaintext-secret gates.
+- `external-elitea-mcp.md` maps opt-in project capabilities for external MCP
+  clients and the durable direct execution path.
+- `delegated-oauth-dcr.md` maps the shared UI, Main, and Rust ownership for
+  delegated OAuth, DCR, token refresh, and durable authorization resume.
+- `delegated-auth-expiry.md` maps active-run token rejection and direct-node recovery.
+- `runtime-limits.md` separates event, request, loop, nesting, and session limits.
+  It records the fragment-count fix and the remaining long-running execution gates.
 - `indexing.md` maps indexing behavior and its later Rust capability.
 
 Maintained Rust runtime ownership registry:
@@ -196,8 +243,8 @@ Maintained Rust runtime ownership registry:
   invocation-local channel, strips provider request payloads, stamps the owning
   pipeline node for the UI and leaves graph state/checkpoints business-only.
   `src/agents/graph/routing_tests.rs` owns their current/legacy YAML, exact
-  fallback, normalized-label and common-Runner proof. Prebuilt/static MCP,
-  remote effects, child variables, nested static Printer
+  fallback, normalized-label and common-Runner proof. Remote effects, child
+  variables, nested static Printer
   interrupts, incremental pipeline tool-progress chunks, approved-effect
   receipts, arbitrary static interrupts and production activation remain
   separate gates. Saved-pipeline child events and configured/sensitive HITL
@@ -224,19 +271,22 @@ Maintained Rust runtime ownership registry:
   HTTP URI; API-key, invocation-scoped expiring client-credentials and
   delegated OAuth modes produce schema-complete guarded tools for native
   same-call pause/resume. Remote specifications, legacy auth
-  objects, rich OAuth discovery/DCR, runtime 401 re-authorization, non-JSON
-  bodies and artifact/binary routing remain closed;
+  objects, rich OAuth discovery/DCR, model-loop 401 re-authorization, non-JSON
+  bodies and artifact/binary routing remain closed. Direct Toolkit nodes now
+  preserve delegated 401 guards and exact-node resume; `delegated-auth-expiry.md`
+  records the component proof and remaining deployed gates;
 - `src/toolkits/families/sharepoint/{config,client,tools}.rs`: delegated Azure
   token resolution and eight explicitly selected Microsoft Graph reads for
   lists, columns, metadata-only recursive file discovery and raw bounded
   OneNote XHTML. The client keeps all requests and provider pagination on the
   exact Graph v1.0 origin, preserves SharePoint site/library path resolution,
   and exposes schema-complete guarded tools for native same-call authorization.
-  Empty selection, ACS/app-only auth, file parsing/download, OneNote attachment
-  interpretation, writes, rich discovery/DCR/refresh metadata and production
-  egress remain closed;
+  Empty selection, ACS/app-only auth, file parsing/download, indexing, OneNote
+  attachment interpretation, writes, rich discovery/DCR/refresh metadata and
+  production egress remain closed. A mixed saved selection exposes only its
+  selected supported reads;
 - `src/transport/model_facade.rs`: provider-neutral model ownership over
-  `model_gateway.rs` and `anthropic_gateway.rs`, including frozen
+  `openai_compatible_facade.rs` and `anthropic_facade.rs`, including frozen
   `model_project_id` authority;
 - `src/transport/platform_client.rs`: claim-bound application/version lookup
   today and future artifact grants; `runtime_context.rs` owns the concrete
@@ -361,3 +411,8 @@ repository-relative to `services/elitea-worker-rust/`.
 
 The repository-level `.github/workflows/ci-rust.yml` gate covers this registry.
 It runs locked quality, release, and PostgreSQL-backed test commands.
+
+- [Main sync follow-up](main-sync-20260909-followup.md) records the second sync and shared migration boundary.
+
+- [Toolkit request recovery](toolkit-request-recovery.md) records browser recovery before execution ID receipt and one-call evidence.
+- [Deferred MCP elicitation](external-mcp-elicitation-deferred.md) records the later client approval option and its authority boundary.

@@ -67,7 +67,14 @@ function toVersionWriteRequest(draft: ApplicationVersionDraft): VersionWriteRequ
     // create POST stores it exactly as the edit PUT does.
     ...(draft.welcomeMessage !== undefined ? { welcome_message: draft.welcomeMessage } : {}),
     conversation_starters: [...draft.conversationStarters],
-    variables: draft.variables.map((variable) => ({ name: variable.name, value: variable.value })),
+    variables: draft.variables.map((variable) => ({
+      name: variable.name,
+      value: variable.value,
+    })),
+    // The server resolves version tags by name. Always send this list because
+    // an empty list is the intentional "remove every tag" operation used by
+    // the MCP exposure control as well as by the ordinary tag editor.
+    tags: draft.tags.map((name) => ({ name })),
     // `internal_tools` is copied, not spread through: the draft holds it as a
     // `readonly string[]` and `VersionMeta` now models it as a mutable
     // `string[]` — same copy `conversation_starters` above already makes.
@@ -113,8 +120,8 @@ export interface UseCreateApplicationDraftResult {
  * `webhook_secret` — sent by the baseline's `useCreateApplication.jsx` on
  * every create call — has no field on the generated `ApplicationCreateRequest`
  * (checked directly against `applicationCreateRequest.zod.ts`); dropped
- * here rather than invented, same as the `tags`/`tools`/`pipeline_settings`
- * gap documented on `ApplicationVersionDraft`.
+ * here rather than invented. Version tags and pipeline settings are carried
+ * by `VersionWriteRequest`; tool associations still use their own endpoints.
  */
 export function useCreateApplicationDraft(projectId: string | undefined): UseCreateApplicationDraftResult {
   const queryClient = useQueryClient();
@@ -175,12 +182,12 @@ export interface UseSaveApplicationVersionResult {
  * contract (`services/elitea-main/api/openapi/v2.yaml`, read by
  * `internal/api/v2/applications/handler.go`'s `UpdateVersion` and written by
  * `ApplicationsRepo.UpdateVersion`) and is sent below whenever the draft
- * carries one. `tags`/`tools` are STILL not on this endpoint: a caller that
- * needs to change a version's tools must go through
+ * carries one. `tags` is also carried by the generated contract and always
+ * replaces the stored version tags. `tools` is STILL not on this endpoint:
+ * a caller that needs to change a version's tools must go through
  * `useDeleteApplicationTool` (removal) plus a toolkit-association endpoint
- * (addition) instead of one combined PUT, and there is no generated endpoint
- * at all for `tags` on a version. Flagged, not invented — see the promotion
- * pass's final report for the full list of these gaps.
+ * (addition) instead of one combined PUT. Flagged, not invented — see the
+ * promotion pass's final report for the remaining gap.
  */
 export function useSaveApplicationVersion(
   projectId: string | undefined,
@@ -197,12 +204,7 @@ export function useSaveApplicationVersion(
       setIsSaving(true);
       setError(undefined);
       try {
-        const options = getUpdateApplicationVersionQueryOptions(
-          projectId,
-          applicationId,
-          versionId,
-          toVersionWriteRequest(draft),
-        );
+        const options = getUpdateApplicationVersionQueryOptions(projectId, applicationId, versionId, toVersionWriteRequest(draft));
         const response = await queryClient.query(options);
         // Invalidating any GET-side cache (application detail, version
         // detail) is deliberately left to the caller: this hook only knows

@@ -161,6 +161,11 @@ export default defineConfig({
       },
       override: {
         mutator: { path: path.join(OUT_DIR, 'mutator.ts'), name: 'eliteaFetch' },
+        operations: {
+          // The 200 result and 202 receipt have different required fields.
+          // Use a complete default response; recovery tests provide explicit 202 fixtures.
+          getToolkitToolResult: { mock: { data: () => ({ ok: true, result: {} }) } },
+        },
         query: { useQuery: true, useSuspenseQuery: false, signal: true },
         zod: {
           generate: { param: true, query: true, header: true, body: true, response: true },
