@@ -1,11 +1,12 @@
 # Rust worker verification gaps
 
-Updated: 2026-09-09.
+Updated: 2026-09-14.
 
 ## Progression decision
 
 Gate 2, delegated OAuth and MCP authorization, is accepted for progression.
-The user accepts the verification gaps below so implementation can continue with gate 3.
+Gate 3 is also accepted for progression; [the audit](source-mapping/point3-audit-20260913.md) records its deployed proof and limits.
+Implementation now continues with gate 4. Historical rows below retain broader verification requirements.
 This decision does not declare full parity or permit production capability registration.
 Known implementation gaps remain implementation gaps, not passing tests.
 
@@ -15,9 +16,8 @@ Internal MCP lets chat build Elitea entities through Main-owned operations.
 External MCP shares opted-in agents, pipelines, and toolkits with other systems.
 Both paths already have implementations and retained evidence. Their remaining gaps do not invalidate that evidence.
 
-Standalone toolkit discovery remains separate because Rust does not yet implement `toolkit.available_tools.v1`.
-Runtime tool enumeration and binding already work for supported native families.
-The existing attachment query cannot replace live per-instance discovery.
+Standalone toolkit discovery now implements `toolkit.available_tools.v1` and has deployed gate 3 acceptance.
+The focused [discovery](source-mapping/toolkit-discovery-authorization.md) and [request recovery](source-mapping/toolkit-request-recovery.md) ledgers own that evidence.
 
 ## Evidence retained
 
@@ -48,9 +48,10 @@ The existing attachment query cannot replace live per-instance discovery.
 | TG-11 | Implementation: UI | Unrelated expired grants still trigger refresh failures during token collection. | Isolate grant failure to its credential and avoid unnecessary refresh work. Preserve valid grant reuse. |
 | TG-12 | Verification: runtime and deployment | Process replacement, claim reclaim, lost acknowledgements, Redis TLS/ACL, load, and Kubernetes. | Prove another worker can continue durable work without the original process or local spool. Keep activation closed until these proofs pass. |
 | TG-13 | Verification and UI parity: UI, Main | Participant editing, guard placement, history rendering, and regeneration under collaborative use. | Retain toolkit and owning-agent labels. Prove correct action routing separately from visual parity. Do not attribute a runtime defect to appearance alone. |
-| TG-14 | Implementation: Rust, Main | Standalone `toolkit.available_tools.v1` and the internal saved-instance discovery operation. | Implement the shared command with current actor authority and fenced results. Reuse native enumeration. Stored attachment rows cannot replace live discovery. |
+| TG-14 | Accepted for gate 3 progression: Rust, Main, UI | Standalone `toolkit.available_tools.v1` and saved-instance discovery have deployed evidence. Wider provider coverage remains separate. | Retain actor authority and fenced results; use the focused discovery and recovery ledgers for covered cases. |
 | TG-15 | Verification: Main, Rust, UI | Chat-driven entity building with the three newly exposed typed configuration operations. | Select a real model and verify the endpoint project's saved default. Confirm denied permissions cause no mutation. Component and MCP protocol fixtures are not deployed proof. |
 | TG-16 | Verification: Main, Rust, UI | Save As Version with attached skills, from the agent and pipeline editors and through internal MCP. | Select a non-default source version. Verify exact skill revisions after save and reload, then launch the new version and confirm runtime consumption. Main transaction and MCP protocol fixtures plus UI component tests pass; deployed browser and runtime proof remain open. |
+| MODULE-RUST-01 | Implementation and verification: Rust, Main, UI | Gate 7a built-in runtime modules, distinct from internal MCP. | Complete the [module ledger](source-mapping/builtin-runtime-modules.md), with source mappings, real invocation, UI proof, authority, and replacement behavior before indexing. Exclude Swarm. |
 
 ## Mixed-guard test fixture
 
@@ -78,9 +79,11 @@ Do not weaken approval policy or enable effectful operations to make a test pass
 3. Complete remaining graph capabilities, including deeper composition, child variables, static pauses, and sandboxed Code nodes.
 4. Implement the separately designed fixed parallel and data-driven map nodes.
 5. Complete durable effect receipts, idempotency, authorization, and crash recovery before toolkit writes.
-6. Complete artifact-backed capabilities, then indexing last.
+6. Complete artifact-backed capabilities.
+7. Complete gate 7a built-in runtime modules; exclude Swarm.
+8. Complete indexing last.
 
-The [toolkit Test contract](source-mapping/toolkit-test.md) remains an implementation gate, not a browser-only test gap.
+The [toolkit Test contract](source-mapping/toolkit-test.md) has gate 3 progression evidence; broader variants and production recovery retain their own requirements.
 Detailed diagnostics remain tracked by [OBS-RUST-01](source-mapping/agent-runtime.md#obs-rust-01-detailed-runtime-diagnostics).
 
 ## Maintenance rules

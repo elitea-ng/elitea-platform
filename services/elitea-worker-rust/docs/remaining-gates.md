@@ -28,6 +28,7 @@ Current-platform code defines business behavior, not a requirement to copy its i
 | 5a | New parallel and map nodes | Implement the separate fixed-branch and data-driven designs with durable child state, bounded concurrency, reducers, and recovery. |
 | 6 | Effectful toolkit operations | Require durable intent, effect receipts, idempotency, approval, fencing, and crash reconciliation before writes. |
 | 7 | Artifact-backed capabilities | Complete attachment authority, object grants, storage behavior, and affected toolkit operations. |
+| 7a | Built-in runtime modules | Complete Attachments, Data Analysis, Image Creation, Ask User, Planner, Python Sandbox, and Smart Tools Selection. Reuse builder contracts and exclude Swarm. Verify runtime behavior and UI controls before indexing. |
 | 8 | Indexing | Implement indexing after the agent and artifact gates. Indexing remains last. |
 
 Read-only runtime tool binding already works for supported native families.
@@ -82,6 +83,19 @@ Keep authoritative project context, skill revisions, user instructions, and exec
 Use the installed ADK-Rust primitives where they fit these ownership requirements.
 The local `context-continuation-design.md` draft records the proposed implementation and replacement proof.
 Its verification and delivery remain point 4 work.
+Balanced defaults to a 272,000-token total budget, capped by the model's supported context window.
+Full uses that supported window. Reserve the admitted maximum output inside either budget.
+Track current context use separately from cumulative input/output consumption.
+Existing explicit conversation limits remain overrides; do not rewrite saved settings.
+
+## Built-in modules before indexing
+
+The user adds gate 7a on 2026-09-14.
+Built-in modules are distinct from the internal MCP entity-management tools completed in gate 3.
+The [module ledger](source-mapping/builtin-runtime-modules.md) records their source owners, current runtime limits, and required proofs.
+Attachments depend on gate 7 artifact authority; Python execution depends on the gate 5 sandbox boundary.
+Share these implementations instead of adding a second artifact store or sandbox.
+Swarm is excluded from this scope.
 
 The [follow-up sync ledger](source-mapping/main-sync-20260909-followup.md) records the latest merge and migration boundary.
 
@@ -90,7 +104,8 @@ The [follow-up sync ledger](source-mapping/main-sync-20260909-followup.md) recor
 Commits `2f206087` and `82e0ef3a` are pushed after the earlier implementation and proof commits.
 They reconcile model defaults, API contracts, nested MCP materialization, TLS configuration, and Helm discovery activation.
 Source mappings record 112 component checks, 16 form tests, fresh Chrome model-selection checks, and chart verification.
-The 24 staged instruction-authority paths remain preserved separately.
+Commit `c6782160` delivers the 24 preserved instruction-authority paths and their required Main wiring after isolated verification.
+It passes 82 focused Go checks, eight Python boundary checks, pinned generation, and targeted vet.
 Other pending point 4 and point 5 work also remains in the worktree.
 The final restricted-operation acceptance now closes point 3 for progression.
 See [delivery reconciliation](source-mapping/point3-delivery-reconciliation.md) and [nested materialization](source-mapping/nested-internal-mcp-materialization.md).

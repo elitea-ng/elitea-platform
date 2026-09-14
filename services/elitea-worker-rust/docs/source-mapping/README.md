@@ -52,6 +52,7 @@ Detailed ledgers:
 - `internal-mcp-restricted-chat-acceptance.md` records successful project admission, eleven operation refusals, and temporary access cleanup.
 - `point3-delivery-reconciliation.md` records verified delivery of the remaining point 3 worktree changes.
 - `nested-internal-mcp-materialization.md` maps child-tool credential resolution and deployment configuration.
+- `builtin-runtime-modules.md` records the separate pre-indexing module gate and excludes Swarm.
 - `internal-mcp-draft-default-model.md` records deployed drafting, selected-version behavior, and deliberate validation failures.
 - `internal-mcp-copied-skill-acceptance.md` records exact copied-skill binding and Rust runtime consumption.
 - `credential-browser-acceptance-20260914.md` records credential creation and rotation through chat and Toolkit Test.
