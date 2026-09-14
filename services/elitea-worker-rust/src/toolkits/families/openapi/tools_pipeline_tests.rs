@@ -302,5 +302,6 @@ fn resume_payload(authorize: bool, resource: &str) -> AgentExecutionPayload {
         next_input_suggestion: NextInputSuggestionPolicy::default(),
         toolkit_guardrails: None,
         truncated_content: None,
+        project_context: None,
     }
 }

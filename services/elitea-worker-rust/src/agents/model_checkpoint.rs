@@ -192,7 +192,26 @@ impl ModelCheckpointWriter {
                 {
                     return Err(invalid_checkpoint());
                 }
-                return pending.take().ok_or_else(invalid_checkpoint);
+                let mut saved = pending.take().ok_or_else(invalid_checkpoint)?;
+                // Older checkpoints were written before instruction rehydration.
+                // Only the authority callback creates system contents here;
+                // client history rejects them and static instructions are bound
+                // separately by the provider adapter. Keep a prepared snapshot
+                // exact; repair the old shape from the restored authority state.
+                if !saved
+                    .contents
+                    .iter()
+                    .any(|content| content.role == "system")
+                {
+                    saved.contents.splice(
+                        0..0,
+                        request
+                            .contents
+                            .into_iter()
+                            .filter(|content| content.role == "system"),
+                    );
+                }
+                return Ok(saved);
             }
             request
                 .contents
@@ -287,6 +306,73 @@ mod tests {
     use adk_rust::{Content, Llm, LlmResponse, LlmResponseStream, Part, Tool, ToolContext};
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn prepared_and_legacy_checkpoints_restore_one_authoritative_instruction_block() {
+        for prepared in [false, true] {
+            let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+            let session = sessions
+                .create(CreateRequest {
+                    app_name: "checkpoint-test".into(),
+                    user_id: "user".into(),
+                    session_id: Some("session".into()),
+                    state: HashMap::new(),
+                })
+                .await
+                .expect("session");
+            let writer =
+                ModelCheckpointWriter::new(sessions.clone(), "execution".into(), 7, [7; 32]);
+            let mut saved = LlmRequest::new(
+                "model",
+                vec![Content::new("user").with_text("original task")],
+            );
+            if prepared {
+                saved
+                    .contents
+                    .insert(0, Content::new("system").with_text("checkpoint authority"));
+            }
+            writer
+                .persist(
+                    session.try_identity().expect("identity"),
+                    "invocation",
+                    Phase::ModelPending,
+                    Some(&saved),
+                )
+                .await
+                .expect("persist");
+            let stored = sessions
+                .get(GetRequest {
+                    app_name: "checkpoint-test".into(),
+                    user_id: "user".into(),
+                    session_id: "session".into(),
+                    num_recent_events: None,
+                    after: None,
+                })
+                .await
+                .expect("stored");
+            let replay = writer.restore(stored.as_ref()).expect("restore");
+            let current = LlmRequest::new(
+                "model",
+                vec![
+                    Content::new("system").with_text("restored session authority"),
+                    Content::new("user").with_text("fresh ADK history"),
+                ],
+            );
+            let restored = replay.prepare_request(current).expect("prepare replay");
+            let expected = if prepared {
+                "checkpoint authority"
+            } else {
+                "restored session authority"
+            };
+            assert_eq!(
+                serde_json::to_value(&restored.contents).expect("JSON"),
+                json!([
+                    Content::new("system").with_text(expected),
+                    Content::new("user").with_text("original task"),
+                ])
+            );
+        }
+    }
 
     async fn checkpoint(sessions: &dyn SessionService) -> Value {
         sessions

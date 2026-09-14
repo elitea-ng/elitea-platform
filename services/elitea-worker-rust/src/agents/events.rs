@@ -423,6 +423,11 @@ pub(crate) struct PipelineProjectionInput {
 }
 
 impl AgentEventProjectionContext {
+    pub(crate) fn with_instruction_skills(mut self, skills: Vec<Value>) -> Self {
+        self.invoked_skills.clone_from(&skills);
+        self.applied_skills = skills;
+        self
+    }
     pub(crate) fn ordinary(
         input: OrdinaryProjectionInput,
     ) -> Result<Self, AgentEventProjectionError> {
@@ -864,6 +869,11 @@ impl AgentEventProjector {
                 return Err(AgentEventProjectionError::invalid_state());
             }
             return self.project_descendant_event(event);
+        }
+        if let Some(skills) =
+            super::instruction_authority::public_active_delta(&event.actions.state_delta)
+        {
+            self.context.applied_skills = skills;
         }
         if has_descendant_checkpoint {
             return Err(AgentEventProjectionError::invalid_state());
@@ -2388,7 +2398,9 @@ fn validate_adk_event(
         return Err(AgentEventProjectionError::unsupported());
     }
     if event.content().is_some()
-        && (!event.actions.state_delta.is_empty() || event.actions.skip_summarization)
+        && ((!event.actions.state_delta.is_empty()
+            && !super::instruction_authority::valid_state_delta(&event.actions.state_delta))
+            || event.actions.skip_summarization)
     {
         return Err(AgentEventProjectionError::unsupported());
     }

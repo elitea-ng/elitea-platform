@@ -668,3 +668,45 @@ async fn native_credential_and_completion_are_single_use() {
         "native response"
     );
 }
+
+#[tokio::test]
+async fn authoritative_instruction_content_joins_anthropic_system_blocks() {
+    let response =
+        test_model_gateway_response(Body::new(Full::new(Bytes::from(native_sse(MODEL)))));
+    let (client, captured) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(response)],
+        test_model_gateway_config(),
+    )
+    .unwrap();
+    let bound = client
+        .bind_anthropic_ordinary(
+            &ClaimScopedEliteaContext::fixture(17, TOKEN),
+            17,
+            invocation(MODEL, None),
+        )
+        .unwrap();
+    let mut input = request(MODEL, Some(0.7));
+    input.contents.insert(
+        0,
+        Content::new("system").with_text("Exact restored project instruction."),
+    );
+    drain(bound.generate_for_test(input).await.unwrap())
+        .await
+        .unwrap();
+    let captured = captured.lock().unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&captured[0].body).unwrap();
+    assert!(
+        body["system"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|block| block["text"] == "Exact restored project instruction.")
+    );
+    assert!(
+        body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|message| message["role"] != "system")
+    );
+}

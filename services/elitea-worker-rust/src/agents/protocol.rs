@@ -212,6 +212,15 @@ pub fn request_from(
             next_input_suggestion,
             toolkit_guardrails,
             truncated_content,
+            project_context: message.project_context.map(|context| {
+                super::request::ProjectContextSnapshot {
+                    id: context.id,
+                    revision: context.revision,
+                    scope: context.scope,
+                    content: context.content,
+                    activation_description: context.activation_description,
+                }
+            }),
         },
     })
 }

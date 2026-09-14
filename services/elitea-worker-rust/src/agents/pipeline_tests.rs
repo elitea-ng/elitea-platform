@@ -2587,6 +2587,9 @@ async fn saved_pipeline_sensitive_llm_keeps_call_identity_and_wrapper_hierarchy(
     }))
     .with_tool_policy(sensitive_pipeline_mcp_policy());
     let mut request = agent_pipeline_request("release-agent", "pipeline");
+    request.payload.invoked_skills = vec![
+        json!({"skill_id":10,"id":"skill:10:version:2","revision":super::instruction_authority::content_digest("Parent pipeline only."),"scope":"project:17","name":"parent-skill","instructions":"Parent pipeline only."}),
+    ];
     let private_thread = private_pipeline_session_id(&request);
     let invocation = assembler
         .assemble(authorized(&request))
@@ -2638,6 +2641,20 @@ async fn saved_pipeline_sensitive_llm_keeps_call_identity_and_wrapper_hierarchy(
     assert_llm_blocked_continuation(&captured, "release is frozen");
     assert_eq!(tool_calls.load(Ordering::Acquire), 0);
     assert_eq!(context_calls.load(Ordering::Acquire), 4);
+    for request in captured.lock().unwrap().iter() {
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        assert!(
+            body["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|message| message["role"] == "system")
+                .all(|message| !message["content"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Parent pipeline only."))
+        );
+    }
 }
 
 fn assert_nested_sensitive_browser_completion(resumed: &[Value], expected_path: &Value) {
@@ -3052,6 +3069,16 @@ async fn llm_node_block_actions_replay_same_call_as_structured_tool_result() {
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // Full pause-to-same-call replay is one behavioral proof.
 async fn llm_node_ask_user_resumes_the_checkpointed_call_with_the_answer_result() {
+    pipeline_instruction_pause_proof(false).await;
+}
+
+#[tokio::test]
+async fn pipeline_invoked_instruction_revision_survives_private_pause() {
+    pipeline_instruction_pause_proof(true).await;
+}
+
+#[allow(clippy::too_many_lines)] // Keep the complete pause/replacement proof in one fixture.
+async fn pipeline_instruction_pause_proof(instructions: bool) {
     let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
     let checkpointer = Arc::new(MemoryCheckpointer::new());
     let token_response = || {
@@ -3095,6 +3122,10 @@ async fn llm_node_ask_user_resumes_the_checkpointed_call_with_the_answer_result(
         Arc::new(ModelFacade::from_gateway(gateway)),
     );
     let mut request = ask_user_llm_pipeline_request();
+    let snapshot = |content: &str| json!({"skill_id":1,"id":"skill:1:version:2","revision":super::instruction_authority::content_digest(content),"scope":"project:17","name":"review","instructions":content});
+    if instructions {
+        request.payload.invoked_skills = vec![snapshot("Original pipeline instruction.")];
+    }
     let private_thread = private_pipeline_session_id(&request);
     let invocation = assembler
         .assemble(authorized(&request))
@@ -3125,6 +3156,9 @@ async fn llm_node_ask_user_resumes_the_checkpointed_call_with_the_answer_result(
 
     let encoded_answer = r#"{"q1":"Staging"}"#;
     request.binding.request_content_digest = [14; 32];
+    if instructions {
+        request.payload.invoked_skills = vec![snapshot("Changed after pause.")];
+    }
     request.payload.should_continue = true;
     request.payload.hitl_resume = true;
     request.payload.hitl_action = Some("answer".to_owned());
@@ -3149,6 +3183,18 @@ async fn llm_node_ask_user_resumes_the_checkpointed_call_with_the_answer_result(
     assert_eq!(captured.len(), 2, "resume must not ask the model to replan");
     let continuation: Value =
         serde_json::from_slice(&captured[1].body).expect("ask_user continuation JSON");
+    if instructions {
+        let system = continuation["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|message| message["role"] == "system")
+            .map(|message| message["content"].as_str().unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(system.contains("Original pipeline instruction."));
+        assert!(!system.contains("Changed after pause."));
+    }
     let result = continuation["messages"]
         .as_array()
         .expect("ask_user continuation messages")

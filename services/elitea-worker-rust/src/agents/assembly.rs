@@ -53,6 +53,7 @@ pub(crate) struct OrdinaryNoToolProfile {
     chat_history: Vec<Content>,
     context_management: ContextManagementPlan,
     internal_tools: InternalToolCatalog,
+    instruction_plan: super::instruction_authority::InstructionPlan,
 }
 
 impl OrdinaryNoToolProfile {
@@ -157,6 +158,7 @@ impl OrdinaryNoToolProfile {
             chat_history: common.chat_history,
             context_management: common.context_management,
             internal_tools,
+            instruction_plan: super::instruction_authority::InstructionPlan::admit(request)?,
         })
     }
 
@@ -189,6 +191,7 @@ impl OrdinaryNoToolProfile {
             chat_history: common.chat_history,
             context_management: common.context_management,
             internal_tools,
+            instruction_plan: super::instruction_authority::InstructionPlan::admit(request)?,
         })
     }
 
@@ -226,7 +229,7 @@ impl OrdinaryNoToolProfile {
         }
         validate_feature_array(version.get("tools"), true)?;
         let internal_tools = internal_tools_from_version(version)?;
-        validate_empty_feature_array(version.get("skills"), false)?;
+        validate_feature_array(version.get("skills"), false)?;
         validate_application_meta(version.get("meta"))?;
         // A nested agent renders its OWN declared variables: the SDK reaches
         // one through `client.application()` too (`runtime/tools/
@@ -285,12 +288,21 @@ impl OrdinaryNoToolProfile {
             chat_history: Vec::new(),
             context_management: ContextManagementPlan::Disabled,
             internal_tools,
+            instruction_plan: super::instruction_authority::InstructionPlan::nested(
+                version,
+                &fallback.instruction_plan,
+            )?,
         })
     }
 
     #[must_use]
     pub(crate) const fn kind(&self) -> AgentExecutionKind {
         self.kind
+    }
+
+    #[must_use]
+    pub(crate) fn instruction_plan(&self) -> &super::instruction_authority::InstructionPlan {
+        &self.instruction_plan
     }
 
     #[must_use]
@@ -408,10 +420,7 @@ fn validate_common_profile(
         || payload.is_regenerate != regeneration
         || payload.supports_vision
         || payload.return_chat_history
-        || !payload.invoked_skills.is_empty()
-        || !payload.applied_skills.is_empty()
         || payload.auto_approve_sensitive_actions
-        || !payload.attached_skills.is_empty()
         || payload.parallel_reconcile.is_some()
         || !payload.parallel_terminal_errors.is_empty()
         || payload.exception_handling_enabled == Some(true)
@@ -419,7 +428,10 @@ fn validate_common_profile(
         || payload.next_input_suggestion.enabled
         || payload.debug
         || !payload.meta.is_empty()
-        || payload.persona != "generic"
+        || !matches!(
+            payload.persona.as_str(),
+            "generic" | "qa" | "nerdy" | "quirky" | "cynical" | "none" | "bare"
+        )
         || (output_continuation != valid_truncated_content)
     {
         return Err(unsupported_profile());
@@ -599,7 +611,7 @@ fn application_model_for_agent_type(
     validate_feature_array(version.get("tools"), true)?;
     InternalToolCatalog::from_values(version.get("internal_tools"))
         .map_err(internal_tool_profile_error)?;
-    validate_empty_feature_array(version.get("skills"), false)?;
+    validate_feature_array(version.get("skills"), false)?;
     validate_application_meta(version.get("meta"))?;
     let variables = AgentVariables::admit(version, Some(participant_variables))?;
     let instructions = version
@@ -768,6 +780,7 @@ fn adhoc_model(
     // react path — so the prompt IS rendered, with `current_date` as the only
     // defined name, and every other placeholder survives verbatim.
     let rendered = AgentVariables::default().render(instructions);
+    let rendered = adhoc_persona_instructions(&request.payload.persona, rendered);
     let instructions = rendered.as_str();
     let kwargs = request
         .payload
@@ -776,6 +789,32 @@ fn adhoc_model(
         .and_then(Value::as_object)
         .ok_or_else(invalid_profile)?;
     validate_model(kwargs, ModelFieldNames::ADHOC, None, instructions)
+}
+
+// SDK Assistant._prepare_prompt selects these styles only for ad-hoc chat.
+// Keep project instructions and tool authority in their existing owners.
+fn adhoc_persona_instructions(persona: &str, instructions: String) -> String {
+    let style = match persona {
+        "qa" => {
+            "Use a precise testing perspective. Examine requirements, risks, edge cases, and reproducible evidence."
+        }
+        "nerdy" => {
+            "Use an enthusiastic technical style. Explain concepts accurately with useful technical detail and relevant references."
+        }
+        "quirky" => {
+            "Use a playful, imaginative style with light humor and creative analogies. Keep answers accurate and useful."
+        }
+        "cynical" => {
+            "Use a skeptical, critically analytical style with dry humor. Challenge weak assumptions while remaining helpful and respectful."
+        }
+        // The SDK maps none to its default persona. Bare adds no persona text.
+        _ => return instructions,
+    };
+    if instructions.is_empty() {
+        style.to_owned()
+    } else {
+        format!("{instructions}\n\nResponse style: {style}")
+    }
 }
 
 #[derive(Clone, Copy)]

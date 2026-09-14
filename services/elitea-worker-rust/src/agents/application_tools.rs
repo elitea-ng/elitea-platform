@@ -1454,7 +1454,11 @@ impl LazyNestedAgent {
             .max_iterations(self.profile.step_limit())
             .disallow_transfer_to_parent(true)
             .disallow_transfer_to_peers(true);
-        for toolset in toolsets {
+        builder = self.profile.instruction_plan().bind_builder(builder);
+        for toolset in toolsets
+            .into_iter()
+            .chain(self.profile.instruction_plan().toolsets())
+        {
             builder = builder.toolset(toolset);
         }
         for tool_name in self
@@ -1470,13 +1474,14 @@ impl LazyNestedAgent {
         if self.internal_tools.ask_user_enabled() {
             builder = builder.require_tool_confirmation(ASK_USER_TOOL_NAME);
         }
-        if self.parallel_applications {
+        if self.parallel_applications && self.profile.instruction_plan().is_empty() {
             builder = builder.tool_execution_strategy(ToolExecutionStrategy::Parallel);
         }
         let agent = builder
             .build()
             .map(|agent| Arc::new(agent) as Arc<dyn Agent>)
             .map_err(|_| agent_configuration_error())?;
+        let agent = self.profile.instruction_plan().wrap(agent);
         let agent = delegated_authorization_agent(agent, authorization);
         Ok(clarifying_question_agent(agent, self.internal_tools))
     }
@@ -1714,6 +1719,14 @@ impl ApplicationAgentTool {
                 self.send_fatal(ApplicationEventFailure::ChildExecution)
                     .await?;
                 return Err(application_event_channel_error());
+            }
+            if super::instruction_authority::valid_state_delta(&event.actions.state_delta) {
+                child_context
+                    .session
+                    .state
+                    .write()
+                    .map_err(|_| application_event_channel_error())?
+                    .extend(event.actions.state_delta.clone());
             }
             application_batch.observe_calls(&event, &self.application.child_tools)?;
             if event.llm_response.interrupted || event.actions.tool_confirmation.is_some() {
@@ -2155,6 +2168,10 @@ impl ReadonlyContext for ApplicationRootInvocationContext {
         &self.branch
     }
 
+    fn state(&self) -> Option<&dyn State> {
+        Some(self.inner.session().state())
+    }
+
     fn user_content(&self) -> &Content {
         self.inner.user_content()
     }
@@ -2363,12 +2380,29 @@ impl ApplicationToolInvocationContext {
             parent_ctx.branch()
         };
         let branch = format!("{parent_branch}.application_{ordinal}");
+        let instruction_session_id = format!(
+            "elitea-child-{}",
+            super::instruction_authority::content_digest(&format!(
+                "{}:{}:{}",
+                parent_ctx.session_id(),
+                parent_ctx.function_call_id(),
+                agent.name()
+            ))
+        );
+        let instruction_state = parent_ctx.session().map_or_else(HashMap::new, |session| {
+            super::instruction_authority::state_for_child(
+                session.state(),
+                &instruction_session_id,
+                agent.name(),
+            )
+        });
         Self {
             session: ApplicationToolSession::new(
-                invocation_id.clone(),
+                instruction_session_id,
                 parent_ctx.app_name().to_owned(),
                 parent_ctx.user_id().to_owned(),
                 history,
+                instruction_state,
             ),
             parent_ctx,
             agent,
@@ -2405,6 +2439,10 @@ impl ReadonlyContext for ApplicationToolInvocationContext {
 
     fn branch(&self) -> &str {
         &self.branch
+    }
+
+    fn state(&self) -> Option<&dyn State> {
+        Some(&self.session)
     }
 
     fn user_content(&self) -> &Content {
@@ -2478,12 +2516,18 @@ struct ApplicationToolSession {
 }
 
 impl ApplicationToolSession {
-    fn new(id: String, app_name: String, user_id: String, history: Vec<Content>) -> Self {
+    fn new(
+        id: String,
+        app_name: String,
+        user_id: String,
+        history: Vec<Content>,
+        instruction_state: HashMap<String, Value>,
+    ) -> Self {
         Self {
             id,
             app_name,
             user_id,
-            state: std::sync::RwLock::new(HashMap::new()),
+            state: std::sync::RwLock::new(instruction_state),
             history,
         }
     }

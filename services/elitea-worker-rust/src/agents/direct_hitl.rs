@@ -1849,7 +1849,8 @@ fn semantic_event(event: &Event) -> bool {
     event.llm_response.content.is_some()
         || event.actions.tool_confirmation.is_some()
         || event.actions.tool_confirmation_decision.is_some()
-        || !event.actions.state_delta.is_empty()
+        || (!event.actions.state_delta.is_empty()
+            && !super::instruction_authority::valid_state_delta(&event.actions.state_delta))
         || !event.actions.artifact_delta.is_empty()
         || event.actions.transfer_to_agent.is_some()
         || event.actions.escalate

@@ -23,7 +23,7 @@ Current-platform code defines business behavior, not a requirement to copy its i
 | 3b | Internal MCP discovery and entity parity | Complete tag relation metadata, Search Options, actor-safe chat operations, and the remaining configuration, skill, application, and secret contracts. |
 | 3c | Toolkit discovery and Test | Implement shared `toolkit.available_tools.v1` and `toolkit.call_tool.v1` in Rust. Preserve exact selection, authority, result shape, cancellation, and recovery. |
 | 3d | External MCP | Complete dynamic instance schemas and saved-agent/pipeline autonomous terminal, failure, pause refusal, and transport replay proofs. |
-| 4 | Current-platform runtime drift | Audit context management, summary models, continuation, tool-output editing, skills, project context, provider errors, and tool naming. |
+| 4 | Current-platform runtime drift | Complete context management, pipeline summaries, dedicated summary models, SDK/UI continuation parity, tool-output editing, provider errors and diagnostics, and same-name toolkit binding. Preserve authoritative skills and project context across compaction. |
 | 5 | Remaining graph capabilities | Complete deeper pipeline composition, child variables, static pauses, and isolated Code nodes. |
 | 5a | New parallel and map nodes | Implement the separate fixed-branch and data-driven designs with durable child state, bounded concurrency, reducers, and recovery. |
 | 6 | Effectful toolkit operations | Require durable intent, effect receipts, idempotency, approval, fencing, and crash reconciliation before writes. |
@@ -87,6 +87,17 @@ Balanced defaults to a 272,000-token total budget, capped by the model's support
 Full uses that supported window. Reserve the admitted maximum output inside either budget.
 Track current context use separately from cumulative input/output consumption.
 Existing explicit conversation limits remain overrides; do not rewrite saved settings.
+
+Point 4 also includes the following required work, confirmed by the user on 2026-09-14:
+
+- Wire compaction settings, context budget, status, and continuation through UI, Main, and Rust.
+- Check the current SDK and UI continuation implementation before changing resume behavior. Cover exhausted output, user Continue, partial output, and replacement without duplicate content.
+- Support pipeline summaries and a separately authorized summarization model where the model contract permits it. Preserve its own token and credential limits.
+- Complete tool-output editing without destroying tool identity, outcomes, or authoritative instruction state.
+- Resolve same-name toolkit bindings by exact toolkit and tool identity, using the current SDK fix as behavioral evidence.
+- Complete [OBS-RUST-01](source-mapping/agent-runtime.md#obs-rust-01-detailed-runtime-diagnostics): useful public errors, detailed internal causes, synchronous backtraces, async span context, and release-build symbol information. Keep sensitive payloads out of diagnostics.
+
+These are part of gate 4 acceptance, not optional follow-up work after compaction.
 
 ## Built-in modules before indexing
 

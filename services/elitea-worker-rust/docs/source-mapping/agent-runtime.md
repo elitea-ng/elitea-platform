@@ -348,8 +348,8 @@ metrics and Kubernetes activation remain deployment-owned.
 
 #### OBS-RUST-01: detailed runtime diagnostics
 
-Status: deferred follow-up, recorded on 2026-09-07. Return after the current functional compatibility gaps close.
-This follow-up does not replace any remaining runtime, authorization, or production-activation gate.
+Status: required gate 4 work, confirmed by user steering on 2026-09-14.
+This work does not replace the remaining authorization or production-activation gates.
 
 The browser can show `The runtime operation failed` without enough information to identify the failed boundary.
 The current slice adds the static upstream ADK error code to the existing lifecycle log.
@@ -363,6 +363,11 @@ Scope and ownership:
 - Main and gateway: preserve safe error categories and trace correlation across transport, persistence, and replay.
 - UI: show an actionable safe explanation and a copyable correlation identifier, without exposing internal traces.
 - Operator configuration: control capture, sampling, size bounds, retention, and access to detailed diagnostics.
+- Release packaging: retain the debug information needed to resolve optimized synchronous stack frames. Verify async span context separately; a native stack does not reconstruct suspended task ancestry.
+
+The current release profile uses `debug = 0` and `strip = "symbols"`.
+The diagnostics slice must select and test suitable release debug information and symbol packaging.
+Do not claim symbolized backtraces from debug-build tests alone.
 
 Acceptance criteria:
 
@@ -624,8 +629,8 @@ materialization unported.
 
 ## Known gates
 
-- Return to [OBS-RUST-01](#obs-rust-01-detailed-runtime-diagnostics) after the current functional compatibility gaps close.
-  Detailed diagnostic capture and richer safe UI errors remain deferred.
+- Complete [OBS-RUST-01](#obs-rust-01-detailed-runtime-diagnostics) in gate 4.
+  Detailed diagnostic capture, release symbol information, and richer safe UI errors remain required implementation work.
 - The restricted Redis retirement adapter now consumes opaque terminal proof
   inside the same verified command, full execution identity, outbox ID and
   exact signed-envelope binding. The real restricted redis-rs/Rustls client and

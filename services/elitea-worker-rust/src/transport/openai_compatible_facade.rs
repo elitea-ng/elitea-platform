@@ -554,7 +554,12 @@ fn build_request_body(
         }));
     }
     for (index, content) in contents.iter().enumerate() {
-        append_openai_messages(content, index + 1 == contents.len(), &mut messages)?;
+        append_openai_messages(
+            content,
+            index + 1 == contents.len(),
+            &mut messages,
+            instruction_role(&invocation.model_name),
+        )?;
     }
     body.insert("messages".to_owned(), serde_json::Value::Array(messages));
     if !request.tools.is_empty() {
@@ -648,7 +653,7 @@ fn validate_openai_content(content: &Content) -> Result<(), AdkError> {
         return Err(invalid_llm_request());
     }
     match content.role.as_str() {
-        "user" => content.parts.iter().try_for_each(|part| match part {
+        "system" | "user" => content.parts.iter().try_for_each(|part| match part {
             Part::Text { text } if valid_part_text(text) => Ok(()),
             _ => Err(invalid_llm_request()),
         }),
@@ -737,8 +742,21 @@ fn append_openai_messages(
     content: &Content,
     is_last: bool,
     messages: &mut Vec<serde_json::Value>,
+    system_role: &str,
 ) -> Result<(), AdkError> {
     match content.role.as_str() {
+        "system" => {
+            let text = content
+                .parts
+                .iter()
+                .map(|part| match part {
+                    Part::Text { text } => Ok(text.as_str()),
+                    _ => Err(invalid_llm_request()),
+                })
+                .collect::<Result<Vec<_>, _>>()?
+                .join("\n");
+            messages.push(serde_json::json!({"role": system_role, "content": text}));
+        }
         "user" => {
             let value = if is_last && content.parts.len() == 1 {
                 let Part::Text { text } = &content.parts[0] else {

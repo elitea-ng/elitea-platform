@@ -262,6 +262,7 @@ impl OrdinaryNativeAgentAssembler {
         .await?;
         let internal_tools = profile.internal_tools();
         toolsets.extend(internal_tools.toolsets());
+        toolsets.extend(profile.instruction_plan().toolsets());
         let mut application_runtime = ApplicationRuntimeProjection::default();
         if let Some(materialized) = materialize_application_toolset(
             tool_snapshot,
@@ -288,6 +289,7 @@ impl OrdinaryNativeAgentAssembler {
         }
         let reserved_toolsets = BTreeSet::from([
             ASK_USER_TOOLSET_NAME.to_owned(),
+            super::instruction_authority::TOOLSET_NAME.to_owned(),
             "elitea_nested_applications".to_owned(),
         ]);
         let binding = bind_toolsets(toolsets, &reserved_toolsets, "elitea_ordinary_tool_binding")
@@ -303,6 +305,7 @@ impl OrdinaryNativeAgentAssembler {
             && sensitive_tools.is_empty()
             && delegated_authorization.is_empty()
             && internal_tools.is_empty()
+            && profile.instruction_plan().is_empty()
         {
             NativeToolExecutionMode::ParallelApplications
         } else {
@@ -315,7 +318,8 @@ impl OrdinaryNativeAgentAssembler {
                 delegated_authorization,
                 application_runtime,
             )
-            .with_internal_tools(internal_tools),
+            .with_internal_tools(internal_tools)
+            .with_instruction_plan(profile.instruction_plan().clone()),
             fresh_execution_mode,
         ))
     }

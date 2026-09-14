@@ -90,6 +90,9 @@ That default does not establish the full-request budget or durable checkpoint re
 The 2.2.0 Runner calls `maybe_compact` before `agent.run`; it does not call it inside every `LlmAgent` model iteration.
 The `LlmAgent` before-model callback does execute each iteration, after tool declarations and request contents are assembled.
 Apply the final request check there, after instruction rehydration, with durable persistence before dispatch.
+The provider adapters also inject the bound agent's static system instructions outside `LlmRequest.contents`.
+Include that content and provider framing in the full-input estimate; counting only the callback's contents is insufficient.
+Checkpoint ordering must preserve the prepared dynamic instructions and compacted request before the provider call.
 
 `adk-agent::LlmEventSummarizer` supplies the existing model-backed summarization primitive.
 Its formatter reads only text parts. Normalize complete tool call/result groups into an explicit transcript for summarization.

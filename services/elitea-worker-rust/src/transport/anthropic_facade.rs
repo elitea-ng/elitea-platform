@@ -331,6 +331,7 @@ fn build_anthropic_body(
     let generation = native_generation(invocation)?;
     let messages = contents
         .iter()
+        .filter(|content| content.role != "system")
         .enumerate()
         .map(|(index, content)| anthropic_message(content, index + 1 == contents.len()))
         .collect::<Result<Vec<_>, _>>()?;
@@ -339,11 +340,23 @@ fn build_anthropic_body(
         messages,
         Model::Custom(invocation.model_name.clone()),
     );
+    let mut system_blocks = Vec::new();
     if !invocation.system_instruction.is_empty() {
-        params.system = Some(SystemPrompt::from_blocks(vec![
-            TextBlock::new(&invocation.system_instruction)
-                .with_cache_control(CacheControlEphemeral::new()),
-        ]));
+        system_blocks.push(TextBlock::new(&invocation.system_instruction));
+    }
+    for content in contents.iter().filter(|content| content.role == "system") {
+        for part in &content.parts {
+            let Part::Text { text } = part else {
+                return Err(invalid_anthropic_request());
+            };
+            system_blocks.push(TextBlock::new(text));
+        }
+    }
+    if let Some(last) = system_blocks.last_mut() {
+        *last = last
+            .clone()
+            .with_cache_control(CacheControlEphemeral::new());
+        params.system = Some(SystemPrompt::from_blocks(system_blocks));
     }
     params.temperature = generation.temperature;
     params.thinking = generation.thinking;

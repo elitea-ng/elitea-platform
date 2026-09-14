@@ -843,6 +843,7 @@ fn resume_payload(thread_id: &str, interrupt_id: &str) -> AgentExecutionPayload 
         next_input_suggestion: NextInputSuggestionPolicy::default(),
         toolkit_guardrails: None,
         truncated_content: None,
+        project_context: None,
     }
 }
 

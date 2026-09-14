@@ -70,6 +70,7 @@ fn request(kind: AgentExecutionKind, tools: Vec<Value>) -> AgentExecutionRequest
             next_input_suggestion: NextInputSuggestionPolicy::default(),
             toolkit_guardrails: None,
             truncated_content: None,
+            project_context: None,
         },
     }
 }

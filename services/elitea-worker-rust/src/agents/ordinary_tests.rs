@@ -3209,6 +3209,152 @@ async fn direct_resume_requires_restorable_sessions_before_pat_redemption() {
     assert!(captured.lock().expect("captured model requests").is_empty());
 }
 
+fn instruction_skill(content: &str) -> serde_json::Value {
+    serde_json::json!({"skill_id":1,"id":"skill:1:version:2","revision":super::instruction_authority::content_digest(content),"scope":"project:17","name":"review","instructions":content})
+}
+
+fn instruction_load_response() -> Response<Body> {
+    let first = serde_json::json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_skill","type":"function","function":{"name":"load_skill","arguments":"{\"skill\":\"review\"}"}}]},"finish_reason":null}]});
+    let raw = format!(
+        "data: {first}\n\ndata: {{\"choices\":[{{\"delta\":{{}},\"finish_reason\":\"tool_calls\"}}]}}\n\ndata: [DONE]\n\n"
+    );
+    test_model_gateway_response(Body::new(Full::<Bytes>::from(raw)))
+}
+
+#[tokio::test]
+async fn application_and_adhoc_instruction_loading_rehydrates_and_projects_applied_skills() {
+    for kind in [AgentExecutionKind::Application, AgentExecutionKind::Adhoc] {
+        let mut request = ordinary_request(kind);
+        request.payload.attached_skills =
+            vec![instruction_skill("Always verify the release checklist.")];
+        let (runtime_context, _) = runtime_context_client();
+        let (gateway, captured) = test_model_gateway_client(
+            vec![
+                TestModelGatewayOutcome::Response(instruction_load_response()),
+                TestModelGatewayOutcome::Response(text_response("Checklist verified.")),
+            ],
+            test_model_gateway_config(),
+        )
+        .unwrap();
+        let assembler = OrdinaryNativeAgentAssembler::new(
+            platform_client(runtime_context),
+            Arc::new(ModelFacade::from_gateway(gateway)),
+            empty_tool_policy(),
+        );
+        let mut invocation = assembler
+            .assemble(AuthorizedNativeAssembly::new(
+                &request,
+                test_runtime_context_authority(),
+                AuthorizedNativeCommandBinding::fixture(),
+            ))
+            .await
+            .unwrap();
+        invocation.project_start(chrono::Utc::now()).unwrap();
+        let (mut native, mut projector, completion) = invocation.start().unwrap();
+        let mut public = Vec::new();
+        while let Some(event) = native.next_event().await.unwrap() {
+            public.extend(projector.project(&event).unwrap());
+        }
+        public.extend(
+            projector
+                .finish_after_eos(completion.select().await.unwrap(), chrono::Utc::now())
+                .unwrap(),
+        );
+        let captured = captured.lock().unwrap();
+        assert_eq!(captured.len(), 2);
+        let second: serde_json::Value = serde_json::from_slice(&captured[1].body).unwrap();
+        assert!(second["messages"].as_array().unwrap().iter().any(|m| {
+            m["role"] == "system"
+                && m["content"]
+                    .as_str()
+                    .is_some_and(|t| t.contains("Always verify the release checklist."))
+        }));
+        assert!(public.iter().any(|event| {
+            String::from_utf8(encode_current_node_event_json(event).unwrap())
+                .unwrap()
+                .contains("skill:1:version:2")
+        }));
+    }
+}
+
+#[tokio::test]
+async fn nested_instruction_loading_keeps_parent_and_child_scopes_separate() {
+    let mut request = ordinary_request(AgentExecutionKind::Application);
+    attach_nested_agent(&mut request);
+    request.payload.project_context = Some(super::request::ProjectContextSnapshot {
+        id: "project:17".to_owned(),
+        revision: super::instruction_authority::content_digest("Parent-only instruction."),
+        scope: "project:17".to_owned(),
+        content: "Parent-only instruction.".to_owned(),
+        activation_description: String::new(),
+    });
+    let mut child = nested_agent_version("Child task.", "child-model", 23, vec![]);
+    child["skills"] = serde_json::json!([instruction_skill("Child-only skill instruction.")]);
+    let runtime_context = runtime_context_client_from(
+        VecDeque::from([
+            runtime_context_response(
+                &serde_json::json!({"schema_version":"elitea.runtime.elitea-client-token.v1","project_id":17,"token":TOKEN}),
+            ),
+            application_version_response(31, 41, child),
+        ]),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(Mutex::new(Vec::new())),
+    );
+    let (gateway, captured) = test_model_gateway_client(
+        vec![
+            TestModelGatewayOutcome::Response(nested_agent_call_response()),
+            TestModelGatewayOutcome::Response(instruction_load_response()),
+            TestModelGatewayOutcome::Response(text_response("Child done.")),
+            TestModelGatewayOutcome::Response(text_response("Parent done.")),
+        ],
+        test_model_gateway_config(),
+    )
+    .unwrap();
+    let assembler = OrdinaryNativeAgentAssembler::new(
+        platform_client(runtime_context),
+        Arc::new(ModelFacade::from_gateway(gateway)),
+        empty_tool_policy(),
+    );
+    let mut invocation = assembler
+        .assemble(AuthorizedNativeAssembly::new(
+            &request,
+            test_runtime_context_authority(),
+            AuthorizedNativeCommandBinding::fixture(),
+        ))
+        .await
+        .unwrap();
+    invocation.project_start(chrono::Utc::now()).unwrap();
+    let (mut native, mut projector, completion) = invocation.start().unwrap();
+    while let Some(event) = native.next_event().await.unwrap() {
+        projector.project(&event).unwrap();
+    }
+    completion.select().await.unwrap();
+    let captured = captured.lock().unwrap();
+    assert_eq!(captured.len(), 4);
+    let child: serde_json::Value = serde_json::from_slice(&captured[2].body).unwrap();
+    let system = child["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["role"] == "system")
+        .map(|m| m["content"].as_str().unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(system.contains("Child-only skill instruction."));
+    assert!(!system.contains("Parent-only instruction."));
+    let parent: serde_json::Value = serde_json::from_slice(&captured[3].body).unwrap();
+    let system = parent["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["role"] == "system")
+        .map(|m| m["content"].as_str().unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(system.contains("Parent-only instruction."));
+    assert!(!system.contains("Child-only skill instruction."));
+}
+
 #[tokio::test]
 async fn checkpoint_inspection_never_redeems_credentials_or_starts_a_model() {
     for durable in [false, true] {
@@ -3244,7 +3390,29 @@ async fn checkpoint_inspection_never_redeems_credentials_or_starts_a_model() {
 
 #[tokio::test]
 async fn ordinary_assembler_restores_the_authorized_model_request() {
-    let request = ordinary_request(AgentExecutionKind::Application);
+    ordinary_model_checkpoint_proof(false).await;
+}
+
+#[tokio::test]
+async fn model_checkpoint_contains_rehydrated_instructions_without_duplicate_replay() {
+    ordinary_model_checkpoint_proof(true).await;
+}
+
+#[allow(clippy::too_many_lines)] // One failure, persisted request inspection, and authorized replay proof.
+async fn ordinary_model_checkpoint_proof(with_instructions: bool) {
+    let mut request = ordinary_request(AgentExecutionKind::Application);
+    if with_instructions {
+        request.payload.invoked_skills =
+            vec![instruction_skill("Keep the release checklist exact.")];
+    }
+    let plan = OrdinaryNativeAgentPlan::from_authorized(
+        &request,
+        &OrdinaryNoToolProfile::validate(&request).expect("profile"),
+        &AuthorizedNativeCommandBinding::fixture(),
+        &request.payload.input_attachments,
+    )
+    .expect("session plan");
+    let sessions = Arc::new(InMemorySessionService::new());
     let (runtime_context, context_calls) = runtime_context_client_for_redemptions(2);
     let (model_gateway, captured) = test_model_gateway_client(
         vec![
@@ -3259,7 +3427,7 @@ async fn ordinary_assembler_restores_the_authorized_model_request() {
         Arc::new(ModelFacade::from_gateway(model_gateway)),
         empty_tool_policy(),
     )
-    .with_sessions(Arc::new(InMemorySessionService::new()));
+    .with_sessions(sessions.clone());
     let mut initial = assembler
         .assemble(AuthorizedNativeAssembly::new(
             &request,
@@ -3272,9 +3440,49 @@ async fn ordinary_assembler_restores_the_authorized_model_request() {
         .project_start(chrono::Utc::now())
         .expect("initial projection start");
     let (mut run, _, _) = initial.start().expect("initial start");
-    assert!(run.next_event().await.is_err());
+    let failed = loop {
+        match run.next_event().await {
+            Err(_) => break true,
+            Ok(None) => break false,
+            Ok(Some(_)) => {}
+        }
+    };
+    assert!(
+        failed,
+        "the model fixture must fail after instruction activation"
+    );
     drop(run);
     assert_eq!(captured.lock().expect("model calls").len(), 1);
+
+    if with_instructions {
+        let stored = sessions
+            .get(GetRequest {
+                app_name: "elitea-agent-v1".to_owned(),
+                user_id: plan.user_id().to_owned(),
+                session_id: plan.session_id().to_owned(),
+                num_recent_events: None,
+                after: None,
+            })
+            .await
+            .expect("checkpoint session");
+        let snapshot = stored
+            .state()
+            .get(super::model_checkpoint::CHECKPOINT_KEY)
+            .expect("model checkpoint");
+        assert!(
+            snapshot["model"]["request"]["contents"]
+                .as_array()
+                .expect("contents")
+                .iter()
+                .any(|content| {
+                    content["role"] == "system"
+                        && content
+                            .to_string()
+                            .contains("Keep the release checklist exact.")
+                }),
+            "persist the prepared request after authoritative instruction rehydration"
+        );
+    }
 
     let evidence = assembler
         .inspect_checkpoint(
@@ -3311,8 +3519,8 @@ async fn ordinary_assembler_restores_the_authorized_model_request() {
         .expect("restored projection start");
     let restart = restart.into_iter().next().expect("restart event");
     assert_eq!(restart.r#type, "agent_start");
-    let metadata: serde_json::Value = serde_json::from_slice(&restart.response_metadata)
-        .expect("restart metadata");
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&restart.response_metadata).expect("restart metadata");
     assert_eq!(metadata["should_continue"], false);
     let (mut run, mut projector, completion) = restored.start().expect("restored start");
     while let Some(event) = run.next_event().await.expect("restored event") {

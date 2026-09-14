@@ -93,6 +93,7 @@ pub struct AgentExecutionPayload {
     /// Visible root-assistant output that ended on the provider token limit.
     /// Presence distinguishes output continuation from HITL/authorization.
     pub truncated_content: Option<String>,
+    pub project_context: Option<ProjectContextSnapshot>,
 }
 
 #[derive(Eq, PartialEq)]
@@ -100,4 +101,16 @@ pub struct AgentExecutionRequest {
     pub kind: AgentExecutionKind,
     pub binding: AgentInputBinding,
     pub payload: AgentExecutionPayload,
+}
+
+/// Main freezes this authorized content in the immutable input bundle.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectContextSnapshot {
+    pub id: String,
+    pub revision: String,
+    pub scope: String,
+    pub content: String,
+    #[serde(default)]
+    pub activation_description: String,
 }

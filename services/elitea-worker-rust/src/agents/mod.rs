@@ -7,6 +7,7 @@ pub(crate) mod context_management;
 pub(crate) mod direct_hitl;
 pub(crate) mod events;
 pub mod graph;
+pub(crate) mod instruction_authority;
 pub(crate) mod internal_tools;
 mod model_checkpoint;
 pub(crate) mod native_runtime;

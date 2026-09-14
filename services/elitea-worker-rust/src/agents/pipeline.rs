@@ -933,6 +933,7 @@ impl PipelineDirectToolResolver for NativePipelineDirectToolResolver {
 }
 
 impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
+    #[allow(clippy::too_many_lines)] // Keep model, replay, instruction, and tool binding in one ordered path.
     fn build(
         &self,
         definition: &LlmNodeDefinition,
@@ -979,7 +980,14 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
         if let Some(replay) = replay {
             replay.apply_authorization_scope(&mut authorization)?;
         }
-        let selected_toolsets = binding.into_toolsets();
+        if binding
+            .bindings()
+            .any(|(_, _, name)| matches!(name, "load_skill" | "read_project_context"))
+        {
+            return Err(LlmExecutionError::Unavailable);
+        }
+        let mut selected_toolsets = binding.into_toolsets();
+        selected_toolsets.extend(self.profile.instruction_plan().toolsets());
         let (model, selected_toolsets) =
             prepare_pipeline_llm_replay(model.provider_model(), selected_toolsets, replay);
         let (model, selected_toolsets) = crate::toolkits::bind_authorization_model_tools(
@@ -1023,6 +1031,8 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
             .tool_timeout(Duration::from_secs(definition.tool_execution_timeout()))
             .disallow_transfer_to_parent(true)
             .disallow_transfer_to_peers(true);
+        let instruction_plan = self.profile.instruction_plan().for_pipeline_node();
+        builder = instruction_plan.bind_builder(builder);
         if let Some(schema) = output_schema {
             builder = builder.output_schema(schema).output_max_retries(2);
         }
@@ -1036,7 +1046,12 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
             .build()
             .map(|agent| Arc::new(agent) as Arc<dyn Agent>)
             .map_err(|_| LlmExecutionError::Unavailable)?;
-        Ok(PipelineLlmAgentBinding::new(agent, guards))
+        Ok(
+            PipelineLlmAgentBinding::new(instruction_plan.wrap(agent), guards)
+                .with_instruction_inheritance(
+                    self.profile.instruction_plan().inherits_pipeline_parent(),
+                ),
+        )
     }
 
     fn event_sender(&self) -> Option<PipelineNodeEventSender> {

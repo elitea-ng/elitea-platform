@@ -196,11 +196,12 @@ pub(crate) struct OrdinaryRuntimeBindings {
     delegated_authorization: DelegatedAuthorizationCatalog,
     internal_tools: InternalToolCatalog,
     application_runtime: ApplicationRuntimeProjection,
+    instruction_plan: super::instruction_authority::InstructionPlan,
 }
 
 impl OrdinaryRuntimeBindings {
     #[must_use]
-    pub(crate) const fn new(
+    pub(crate) fn new(
         toolsets: Vec<Arc<dyn Toolset>>,
         sensitive_tools: SensitiveToolCatalog,
         delegated_authorization: DelegatedAuthorizationCatalog,
@@ -210,6 +211,7 @@ impl OrdinaryRuntimeBindings {
             toolsets,
             sensitive_tools,
             delegated_authorization,
+            instruction_plan: super::instruction_authority::InstructionPlan::default(),
             internal_tools: InternalToolCatalog::empty(),
             application_runtime,
         }
@@ -218,6 +220,14 @@ impl OrdinaryRuntimeBindings {
     #[must_use]
     pub(crate) const fn with_internal_tools(mut self, internal_tools: InternalToolCatalog) -> Self {
         self.internal_tools = internal_tools;
+        self
+    }
+
+    pub(crate) fn with_instruction_plan(
+        mut self,
+        plan: super::instruction_authority::InstructionPlan,
+    ) -> Self {
+        self.instruction_plan = plan;
         self
     }
 
@@ -481,6 +491,7 @@ pub(crate) struct OrdinaryNativeAgentPlan {
     execution_id: String,
     generation: u64,
     regenerate: bool,
+    instruction_plan: super::instruction_authority::InstructionPlan,
 }
 
 impl OrdinaryNativeAgentPlan {
@@ -594,6 +605,8 @@ impl OrdinaryNativeAgentPlan {
             super::request::AgentExecutionKind::Application => APPLICATION_CAPABILITY_ID,
             super::request::AgentExecutionKind::Adhoc => ADHOC_CAPABILITY_ID,
         };
+        let projection =
+            projection.with_instruction_skills(profile.instruction_plan().public_active());
         // #606: the turn's own attachments are spliced into the human message
         // after the user's text by `ordinary_user_content`.
         let user_content =
@@ -622,6 +635,7 @@ impl OrdinaryNativeAgentPlan {
             execution_id: binding.execution_id.clone(),
             generation: binding.generation,
             regenerate: request.payload.is_regenerate,
+            instruction_plan: profile.instruction_plan().clone(),
         })
     }
 
@@ -1210,6 +1224,7 @@ impl NativeAgentCompletionSelector for PipelineAgentCompletion {
 const PIPELINE_RESUME_MARKER: &str = "[elitea:pipeline-resume:v1]";
 
 /// Activate both durable state contracts and build one admitted graph Runner.
+#[allow(clippy::too_many_lines)] // Preserve the ordered claim, checkpoint, instruction, and Runner composition.
 pub(crate) async fn assemble_pipeline_native(
     plan: OrdinaryNativeAgentPlan,
     definition: PipelineDefinition,
@@ -1276,6 +1291,7 @@ pub(crate) async fn assemble_pipeline_native(
         execution_id: _,
         generation: _,
         regenerate: _,
+        instruction_plan,
     } = plan;
     // The pipeline graph binds one model per node, so there is no single
     // transcript-wide model to summarize with: an active plan is refused.
@@ -1290,6 +1306,7 @@ pub(crate) async fn assemble_pipeline_native(
         EliteaGraphAgent::new(graph)
             .with_printer_interrupts(Arc::clone(&state.checkpointer), printer_catalog),
     );
+    let agent = instruction_plan.wrap(agent);
     let agent = node_events.map_or(agent.clone(), |events| {
         Arc::new(PipelineNodeEventStreamingAgent::new(agent, events)) as Arc<dyn Agent>
     });
@@ -1596,6 +1613,7 @@ where
         execution_id,
         generation,
         regenerate,
+        instruction_plan: _,
     } = plan;
     let context_compaction =
         context_management.prepare_runner_composition(Some(model.provider_model()))?;
@@ -1741,6 +1759,7 @@ fn build_runtime_agent(
         delegated_authorization,
         internal_tools,
         application_runtime,
+        instruction_plan,
     } = runtime;
     let mut delegated_authorization = delegated_authorization;
     let (model, toolsets) = crate::toolkits::bind_authorization_model_tools(
@@ -1755,7 +1774,10 @@ fn build_runtime_agent(
         .max_iterations(max_iterations)
         .disallow_transfer_to_parent(true)
         .disallow_transfer_to_peers(true);
+    builder = instruction_plan.bind_builder(builder);
     if let Some(checkpoint) = checkpoint {
+        // Persist the prepared request, including authoritative instructions.
+        // Recovery substitutes that exact request after fresh tool binding.
         builder = checkpoint.bind(builder);
     }
     if parallel {
@@ -1782,6 +1804,7 @@ fn build_runtime_agent(
         resume: _,
     } = application_runtime;
     let agent: Arc<dyn Agent> = Arc::new(builder.build().map_err(|_| invalid_configuration())?);
+    let agent = instruction_plan.wrap(agent);
     let agent = delegated_authorization_agent(agent, delegated_authorization.clone());
     let agent = clarifying_question_agent(agent, internal_tools);
     let agent = application_events.map_or(agent.clone(), |events| {
@@ -1905,6 +1928,7 @@ async fn prepare_direct_resume(
         mut delegated_authorization,
         internal_tools,
         application_runtime,
+        instruction_plan,
     } = runtime;
     let resolved = match start {
         DirectResumeStart::Sensitive(decisions) => decisions
@@ -1975,7 +1999,8 @@ async fn prepare_direct_resume(
                 resume: None,
             },
         )
-        .with_internal_tools(internal_tools),
+        .with_internal_tools(internal_tools)
+        .with_instruction_plan(instruction_plan),
         parallel_applications,
     })
 }
@@ -2008,6 +2033,7 @@ where
         execution_id: _,
         generation: _,
         regenerate: _,
+        instruction_plan: _,
     } = plan;
     let context_compaction =
         context_management.prepare_runner_composition(Some(model.provider_model()))?;
@@ -2272,6 +2298,9 @@ fn public_application_details(
                 skill.remove("instructions");
             }
         }
+    }
+    if let Some(Value::Object(version)) = application.get_mut("version_details") {
+        version.remove("project_context");
     }
     let application = Value::Object(application);
     let length = serde_json::to_vec(&application)

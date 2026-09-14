@@ -518,6 +518,8 @@ pub(crate) struct PipelineLlmReplayEnvelope {
     decisions: BTreeMap<String, PipelineLlmReplayDecision>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     declined_authorizations: Vec<DelegatedAuthorizationRequirement>,
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    instruction_state: std::collections::HashMap<String, Value>,
 }
 
 impl PipelineLlmReplayEnvelope {
@@ -533,6 +535,9 @@ impl PipelineLlmReplayEnvelope {
             .filter(|prior| same_content(&prior.pending_content, &pending_content))
             .map_or_else(BTreeMap::new, |prior| prior.decisions.clone());
         let envelope = Self {
+            instruction_state: prior.map_or_else(std::collections::HashMap::new, |prior| {
+                prior.instruction_state.clone()
+            }),
             schema_revision: LLM_TOOL_REPLAY_SCHEMA.to_owned(),
             node_name: definition.id().to_owned(),
             definition_digest: definition.digest_label(),
@@ -558,6 +563,11 @@ impl PipelineLlmReplayEnvelope {
             || self.decisions.len() > MAX_LLM_REPLAY_DECISIONS
             || self.declined_authorizations.len() > MAX_LLM_REPLAY_DECISIONS
             || self.pending_content.role != "model"
+        {
+            return Err(LlmExecutionError::InvalidInputMapping);
+        }
+        if !self.instruction_state.is_empty()
+            && !crate::agents::instruction_authority::valid_state_delta(&self.instruction_state)
         {
             return Err(LlmExecutionError::InvalidInputMapping);
         }
@@ -936,14 +946,23 @@ pub(crate) enum PipelineToolGuard {
 
 /// One node-local agent plus guards keyed by its provider-visible tool names.
 pub(crate) struct PipelineLlmAgentBinding {
+    inherit_root_instructions: bool,
     agent: Arc<dyn Agent>,
     guards: BTreeMap<String, PipelineToolGuard>,
 }
 
 impl PipelineLlmAgentBinding {
+    pub(crate) fn with_instruction_inheritance(mut self, enabled: bool) -> Self {
+        self.inherit_root_instructions = enabled;
+        self
+    }
     #[must_use]
     pub(crate) fn new(agent: Arc<dyn Agent>, guards: BTreeMap<String, PipelineToolGuard>) -> Self {
-        Self { agent, guards }
+        Self {
+            agent,
+            guards,
+            inherit_root_instructions: false,
+        }
     }
 
     fn agent(&self) -> Arc<dyn Agent> {
@@ -1269,6 +1288,7 @@ pub(super) async fn run_model_agent_text(
     }
 }
 
+#[allow(clippy::too_many_lines)] // Keep checkpoint admission, instruction restoration, and event ordering together.
 async fn run_model_agent(
     definition: &LlmNodeDefinition,
     mut input: LlmExecutionInput,
@@ -1301,10 +1321,11 @@ async fn run_model_agent(
         agent.clone(),
         context.config.parent_context.clone(),
         replay,
-    ));
+        binding.inherit_root_instructions,
+    )?);
     tracing::Span::current().record("stage", "model_tool_loop");
     let stream = agent
-        .run(invocation)
+        .run(invocation.clone())
         .await
         .map_err(|_| LlmExecutionError::Unavailable)?;
     tokio::pin!(stream);
@@ -1320,7 +1341,7 @@ async fn run_model_agent(
             let pending_prefix = pending_prefix
                 .take()
                 .ok_or(LlmExecutionError::Unavailable)?;
-            let replay = PipelineLlmReplayEnvelope::new(
+            let mut replay = PipelineLlmReplayEnvelope::new(
                 definition,
                 input_digest.to_owned(),
                 predecessor,
@@ -1328,6 +1349,8 @@ async fn run_model_agent(
                 pending_content,
                 replay,
             )?;
+            replay.instruction_state = adk_rust::State::all(&invocation.session.state);
+            replay.validate()?;
             let guard = binding
                 .guard(&request.tool_name)
                 .ok_or(LlmExecutionError::Unavailable)?;
@@ -1338,6 +1361,15 @@ async fn run_model_agent(
                     guard,
                 },
             )));
+        }
+        if crate::agents::instruction_authority::valid_state_delta(&event.actions.state_delta) {
+            invocation
+                .session
+                .state
+                .values
+                .write()
+                .map_err(|_| LlmExecutionError::Unavailable)?
+                .extend(event.actions.state_delta.clone());
         }
         if !event.llm_response.partial
             && let Some(event_content) = event.llm_response.content.as_mut()
@@ -1915,7 +1947,8 @@ impl PipelineLlmInvocationContext {
         agent: Arc<dyn Agent>,
         parent: Option<Arc<dyn InvocationContext>>,
         replay: Option<&PipelineLlmReplayEnvelope>,
-    ) -> Self {
+        inherit_root_instructions: bool,
+    ) -> Result<Self, LlmExecutionError> {
         let (user_id, app_name, branch, mut run_config) = parent.as_ref().map_or_else(
             || {
                 (
@@ -1946,7 +1979,25 @@ impl PipelineLlmInvocationContext {
             // A replay transcript already contains this exact original task.
             input.history.push(input.task.clone());
         }
-        Self {
+        let instruction_state = replay
+            .map_or_else(
+                || {
+                    parent.as_ref().map_or_else(
+                        || Ok(std::collections::HashMap::new()),
+                        |parent| {
+                            crate::agents::instruction_authority::inherited_pipeline_state(
+                                parent.as_ref(),
+                                session_id,
+                                agent.name(),
+                                inherit_root_instructions,
+                            )
+                        },
+                    )
+                },
+                |replay| Ok(replay.instruction_state.clone()),
+            )
+            .map_err(|_| LlmExecutionError::InvalidInputMapping)?;
+        Ok(Self {
             invocation_id: format!(
                 "{session_id}:{}:{}",
                 agent.name(),
@@ -1954,14 +2005,20 @@ impl PipelineLlmInvocationContext {
             ),
             user_content: input.task,
             agent,
-            session: PipelineLlmSession::new(session_id, &app_name, &user_id, input.history),
+            session: PipelineLlmSession::new(
+                session_id,
+                &app_name,
+                &user_id,
+                input.history,
+                instruction_state,
+            ),
             run_config,
             parent,
             ended: AtomicBool::new(false),
             user_id,
             app_name,
             branch,
-        }
+        })
     }
 }
 
@@ -1983,6 +2040,9 @@ impl adk_rust::ReadonlyContext for PipelineLlmInvocationContext {
     }
     fn branch(&self) -> &str {
         &self.branch
+    }
+    fn state(&self) -> Option<&dyn adk_rust::State> {
+        Some(&self.session.state)
     }
     fn user_content(&self) -> &Content {
         &self.user_content
@@ -2069,12 +2129,20 @@ struct PipelineLlmSession {
 }
 
 impl PipelineLlmSession {
-    fn new(id: &str, app_name: &str, user_id: &str, history: Vec<Content>) -> Self {
+    fn new(
+        id: &str,
+        app_name: &str,
+        user_id: &str,
+        history: Vec<Content>,
+        instruction_state: std::collections::HashMap<String, Value>,
+    ) -> Self {
         Self {
             id: id.to_owned(),
             app_name: app_name.to_owned(),
             user_id: user_id.to_owned(),
-            state: PipelineLlmSessionState::default(),
+            state: PipelineLlmSessionState {
+                values: std::sync::RwLock::new(instruction_state),
+            },
             history: std::sync::RwLock::new(history),
         }
     }
