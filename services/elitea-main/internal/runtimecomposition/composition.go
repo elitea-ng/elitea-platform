@@ -1239,6 +1239,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			contentRepository,
 			agentNestedVersions,
 			agentFreezer,
+			agentMaterializer,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("construct nested application version context: %w", err)

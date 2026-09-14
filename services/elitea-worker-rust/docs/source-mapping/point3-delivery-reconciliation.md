@@ -65,3 +65,5 @@ Administrative cancellation remains verified; a new Toolkit Test Cancel control 
 
 The remaining restricted chat-operation acceptance requires the pending temporary-access approval.
 This delivery does not mark point 3 complete.
+
+The [nested runtime follow-up](nested-internal-mcp-materialization.md) records the separate materialization and deployment changes.

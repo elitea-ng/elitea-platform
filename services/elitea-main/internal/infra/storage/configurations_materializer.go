@@ -740,3 +740,28 @@ func currentMaterializationError(ctx context.Context, err error) error {
 }
 
 var _ ContentMaterializer = (*CurrentConfigurationsMaterializer)(nil)
+
+// MaterializeCurrentApplicationVersion redeems a child's frozen settings only
+// after RuntimeApplicationVersionService has authorized its parent claim.
+func (m *CurrentConfigurationsMaterializer) MaterializeCurrentApplicationVersion(ctx context.Context, projectID, actorID int32, source json.RawMessage) (json.RawMessage, error) {
+	if m == nil || projectID <= 0 || actorID <= 0 || ctx == nil {
+		return nil, ErrContentRejected
+	}
+	version, err := decodeCurrentMaterializationObject(source)
+	if err != nil {
+		return nil, ErrContentRejected
+	}
+	tools, ok := version["tools"].([]any)
+	if !ok {
+		return nil, ErrContentRejected
+	}
+	walker := currentFrozenConfigurationWalker{unsecreter: m.unsecreter}
+	if err := m.materializeCurrentAgentTools(ctx, projectID, actorID, tools, &walker); err != nil {
+		return nil, ErrContentRejected
+	}
+	result, err := json.Marshal(version)
+	if err != nil || len(result) > maxRuntimeApplicationVersionResponseBytes {
+		return nil, ErrContentRejected
+	}
+	return result, nil
+}
