@@ -95,6 +95,21 @@ message AgentExecutionInputV1 {
   // language the same unambiguous continuation discriminator.
   bytes truncated_content = 39;
   reserved 40 to 63;
+  // Main resolves and freezes this project-owned content after authorization.
+  // Absence disables Project Context for this independent turn.
+  ProjectContextSnapshotV1 project_context = 64;
+}
+
+// ProjectContextSnapshotV1 remains in the immutable input data plane.
+// Empty activation_description selects the legacy eager instruction mode.
+message ProjectContextSnapshotV1 {
+  string id = 1;
+  // Lowercase SHA-256 of the exact UTF-8 content bytes.
+  string revision = 2;
+  string scope = 3;
+  string content = 4;
+  string activation_description = 5;
+  reserved 6 to 15;
 }
 
 enum AgentExecutionTerminalStateV1 {

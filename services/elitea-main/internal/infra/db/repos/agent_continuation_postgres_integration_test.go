@@ -298,18 +298,6 @@ WHERE id = 41`,
 			restore: `UPDATE application_versions SET meta = meta - 'internal_tools' WHERE id = 41`,
 		},
 		{
-			name: "project context",
-			apply: `INSERT INTO configuration (
-    id, uuid, project_id, elitea_title, type, section, data, meta,
-    shared, status_ok, source, author_id
-) VALUES (
-    2, '60000000-0000-4000-8000-000000000039', 1, 'project_context_gate',
-    'project_context', 'project', '{"content":"Project instructions"}'::jsonb,
-    '{}'::jsonb, false, true, 'user', 11
-)`,
-			restore: `DELETE FROM configuration WHERE elitea_title = 'project_context_gate'`,
-		},
-		{
 			name: "conversation toolkit",
 			apply: `WITH toolkit AS (
     INSERT INTO chat_participants (id, uuid, entity_name, entity_meta)

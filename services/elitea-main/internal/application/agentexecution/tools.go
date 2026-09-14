@@ -76,6 +76,7 @@ type CurrentApplicationToolSnapshotService struct {
 	names           CurrentAgentToolkitNameResolver
 	models          CurrentAgentModelCatalog
 	guardrails      CurrentAgentGuardrailResolver
+	projectContext  CurrentProjectContextResolver
 	publicProjectID int32
 }
 
@@ -98,14 +99,15 @@ func NewCurrentApplicationToolSnapshotService(
 	names CurrentAgentToolkitNameResolver,
 	models CurrentAgentModelCatalog,
 	guardrailPolicies CurrentAgentGuardrailResolver,
+	projectContext CurrentProjectContextResolver,
 	publicProjectID int32,
 ) (*CurrentApplicationToolSnapshotService, error) {
-	if settings == nil || names == nil || models == nil || guardrailPolicies == nil || publicProjectID <= 0 {
+	if settings == nil || names == nil || models == nil || guardrailPolicies == nil || projectContext == nil || publicProjectID <= 0 {
 		return nil, errors.New("current agent toolkit snapshot dependencies are required")
 	}
 	return &CurrentApplicationToolSnapshotService{
 		settings: settings, names: names, models: models,
-		guardrails: guardrailPolicies, publicProjectID: publicProjectID,
+		guardrails: guardrailPolicies, projectContext: projectContext, publicProjectID: publicProjectID,
 	}, nil
 }
 
@@ -118,7 +120,7 @@ func (service *CurrentApplicationToolSnapshotService) FreezeCurrentApplicationVe
 	request CurrentApplicationVersionFreezeRequest,
 ) (json.RawMessage, error) {
 	if service == nil || service.settings == nil || service.names == nil || service.models == nil ||
-		service.guardrails == nil ||
+		service.guardrails == nil || service.projectContext == nil ||
 		service.publicProjectID <= 0 || ctx == nil ||
 		request.ProjectID <= 0 || request.ActorUserID <= 0 ||
 		!validJSONObject(request.VersionDetails) {
@@ -279,6 +281,9 @@ func (service *CurrentApplicationToolSnapshotService) FreezeCurrentApplicationVe
 		return nil, err
 	}
 	version["tools"] = frozenTools
+	if err := service.freezeCurrentInstructionSnapshots(ctx, request, version); err != nil {
+		return nil, err
+	}
 
 	encoded, err := json.Marshal(version)
 	if err != nil || !validJSONObject(encoded) || len(encoded) > executiondomain.MaxAgentExecutionInputBytes {

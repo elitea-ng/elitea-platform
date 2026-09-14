@@ -37,7 +37,7 @@ func newCurrentAgentVersionFreezer(
 		currentAgentToolkitSettingsResolver{inner: settings, prebuilt: prebuilt},
 		currentAgentToolkitNameAdapter{names: names},
 		configurations.models,
-		guardrailPolicies,
+		guardrailPolicies, repos.NewCurrentAgentProjectContextRepository(pool),
 		configurations.publicProjectID,
 	)
 }

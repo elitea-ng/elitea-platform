@@ -268,13 +268,6 @@ WITH resolved AS MATERIALIZED (
       ) = ''
       AND NOT EXISTS (
           SELECT 1
-          FROM configuration AS project_context
-          WHERE project_context.type = 'project_context'
-            AND project_context.data ->> 'enabled' = 'true'
-            AND COALESCE(project_context.data ->> 'content', '') <> ''
-      )
-      AND NOT EXISTS (
-          SELECT 1
           FROM chat_participant_mapping AS unsupported_mapping
           JOIN chat_participants AS unsupported_participant
             ON unsupported_participant.id = unsupported_mapping.participant_id
@@ -706,13 +699,6 @@ WITH resolved AS MATERIALIZED (
           conversation.meta #>> '{context_analytics,last_summarization,summary_content}',
           ''
       ) = ''
-      AND NOT EXISTS (
-          SELECT 1
-          FROM configuration AS project_context
-          WHERE project_context.type = 'project_context'
-            AND COALESCE(project_context.data ->> 'enabled', 'true') = 'true'
-            AND COALESCE(project_context.data ->> 'content', '') <> ''
-      )
       AND NOT EXISTS (
           SELECT 1
           FROM chat_participant_mapping AS toolkit_mapping
@@ -1335,13 +1321,6 @@ WHERE conversation.uuid = $5::uuid
       conversation.meta #>> '{context_analytics,last_summarization,summary_content}',
       ''
   ) = ''
-  AND NOT EXISTS (
-      SELECT 1
-      FROM configuration AS project_context
-      WHERE project_context.type = 'project_context'
-        AND project_context.data ->> 'enabled' = 'true'
-        AND COALESCE(project_context.data ->> 'content', '') <> ''
-  )
   AND NOT EXISTS (
       SELECT 1
       FROM chat_participant_mapping AS unsupported_mapping
@@ -2145,13 +2124,6 @@ WHERE conversation.uuid = $4::uuid
       conversation.meta #>> '{context_analytics,last_summarization,summary_content}',
       ''
   ) = ''
-  AND NOT EXISTS (
-      SELECT 1
-      FROM configuration AS project_context
-      WHERE project_context.type = 'project_context'
-        AND COALESCE(project_context.data ->> 'enabled', 'true') = 'true'
-        AND COALESCE(project_context.data ->> 'content', '') <> ''
-  )
   AND NOT EXISTS (
       SELECT 1
       FROM chat_participant_mapping AS toolkit_mapping

@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -195,6 +196,12 @@ func TestNestedApplicationVersionServesTheFrozenClaimScopedDefinition(t *testing
 		}
 	}
 	require.Positive(t, internalTools)
+	projectContext := frozen["project_context"].(map[string]any)
+	require.Equal(t, "project:90106", projectContext["scope"])
+	require.Equal(t, "project-context:90106:9", projectContext["id"])
+	require.Equal(t, "Nested project rules", projectContext["content"])
+	digestContext := sha256.Sum256([]byte("Nested project rules"))
+	require.Equal(t, fmt.Sprintf("%x", digestContext), projectContext["revision"])
 	meta, ok := frozen["meta"].(map[string]any)
 	require.True(t, ok)
 	// `internal_mcp` is dropped because the native runtime's catalogue would
@@ -536,7 +543,7 @@ func newNestedVersionFreezer(t *testing.T) agentexecutionapp.CurrentApplicationV
 		nestedVersionToolkitSettingsStub{result: map[string]any{}},
 		nestedVersionToolkitNameStub{result: "toolkit"},
 		&nestedVersionModelCatalogStub{},
-		nestedVersionGuardrailStub{},
+		nestedVersionGuardrailStub{}, nestedVersionProjectContextStub{},
 		1,
 	)
 	require.NoError(t, err)
@@ -627,6 +634,12 @@ func nestedApplicationVersionRequest(
 	request.Header.Set(claimIDHeader, "claim-1")
 	request.Header.Set(fenceHeader, base64.RawURLEncoding.EncodeToString(fence))
 	return request
+}
+
+type nestedVersionProjectContextStub struct{}
+
+func (nestedVersionProjectContextStub) ResolveCurrentAgentProjectContext(context.Context, int32, int32) (agentexecutionapp.CurrentAgentProjectContext, error) {
+	return agentexecutionapp.CurrentAgentProjectContext{ID: 9, Enabled: true, Content: "Nested project rules", ActivationDescription: "When needed"}, nil
 }
 
 func nestedVersionMaterializerForTest(t *testing.T) *CurrentConfigurationsMaterializer {

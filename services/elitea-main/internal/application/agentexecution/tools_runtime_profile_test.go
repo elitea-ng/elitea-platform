@@ -28,7 +28,7 @@ func freezeVersionForRuntimeProfileTest(t *testing.T, versionDetails string) map
 	compatible := true
 	service, err := NewCurrentApplicationToolSnapshotService(
 		&currentAgentSettingsResolverStub{}, &currentAgentNameResolverStub{},
-		currentAgentModelCatalogForTest(compatible), &currentAgentGuardrailStub{}, 1,
+		currentAgentModelCatalogForTest(compatible), &currentAgentGuardrailStub{}, &currentProjectContextStub{}, 1,
 	)
 	if err != nil {
 		t.Fatal(err)

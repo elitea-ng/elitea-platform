@@ -79,7 +79,7 @@ func TestCurrentApplicationToolSnapshotFreezesGenericToolkitReferences(t *testin
 	}}
 	names := &currentAgentNameResolverStub{result: "team_docs"}
 	models := currentAgentModelCatalogForTest(true)
-	service, err := NewCurrentApplicationToolSnapshotService(settings, names, models, &currentAgentGuardrailStub{}, 1)
+	service, err := NewCurrentApplicationToolSnapshotService(settings, names, models, &currentAgentGuardrailStub{}, &currentProjectContextStub{}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestCurrentApplicationToolSnapshotFreezesSavedMCPReferenceWithoutSpecialCas
 		settings,
 		names,
 		currentAgentModelCatalogForTest(false),
-		&currentAgentGuardrailStub{},
+		&currentAgentGuardrailStub{}, &currentProjectContextStub{},
 		1,
 	)
 	if err != nil {
@@ -196,7 +196,7 @@ func TestCurrentApplicationToolSnapshotOmitsOnlySchemaUnavailableToolkit(t *test
 		settings,
 		names,
 		currentAgentModelCatalogForTest(false),
-		&currentAgentGuardrailStub{},
+		&currentAgentGuardrailStub{}, &currentProjectContextStub{},
 		1,
 	)
 	if err != nil {
@@ -237,7 +237,7 @@ func TestCurrentApplicationToolSnapshotDoesNotHideToolkitDependencyFailure(t *te
 		settings,
 		&currentAgentNameResolverStub{},
 		currentAgentModelCatalogForTest(false),
-		&currentAgentGuardrailStub{},
+		&currentAgentGuardrailStub{}, &currentProjectContextStub{},
 		1,
 	)
 	if err != nil {
@@ -266,7 +266,7 @@ func TestCurrentApplicationToolSnapshotPreservesSameProjectLeafApplicationRefere
 		settings,
 		names,
 		currentAgentModelCatalogForTest(false),
-		&currentAgentGuardrailStub{},
+		&currentAgentGuardrailStub{}, &currentProjectContextStub{},
 		1,
 	)
 	if err != nil {
@@ -331,7 +331,7 @@ func TestCurrentApplicationToolSnapshotPreservesSameProjectPipelineReference(t *
 		&currentAgentSettingsResolverStub{},
 		&currentAgentNameResolverStub{},
 		currentAgentModelCatalogForTest(false),
-		&currentAgentGuardrailStub{},
+		&currentAgentGuardrailStub{}, &currentProjectContextStub{},
 		1,
 	)
 	if err != nil {
@@ -385,7 +385,7 @@ func TestCurrentApplicationToolSnapshotPreservesStoredApplicationReference(t *te
 		settings,
 		names,
 		currentAgentModelCatalogForTest(false),
-		&currentAgentGuardrailStub{},
+		&currentAgentGuardrailStub{}, &currentProjectContextStub{},
 		1,
 	)
 	if err != nil {
@@ -539,7 +539,7 @@ func TestCurrentApplicationToolSnapshotRejectsUnsupportedApplicationReferences(t
 			}
 			service, err := NewCurrentApplicationToolSnapshotService(
 				&currentAgentSettingsResolverStub{}, &currentAgentNameResolverStub{},
-				currentAgentModelCatalogForTest(false), &currentAgentGuardrailStub{}, 1,
+				currentAgentModelCatalogForTest(false), &currentAgentGuardrailStub{}, &currentProjectContextStub{}, 1,
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -560,22 +560,22 @@ func TestCurrentApplicationToolSnapshotRejectsUnsupportedApplicationReferences(t
 func TestCurrentApplicationToolSnapshotValidatesConstruction(t *testing.T) {
 	models := currentAgentModelCatalogForTest(false)
 	rails := &currentAgentGuardrailStub{}
-	if service, err := NewCurrentApplicationToolSnapshotService(nil, &currentAgentNameResolverStub{}, models, rails, 1); err == nil || service != nil {
+	if service, err := NewCurrentApplicationToolSnapshotService(nil, &currentAgentNameResolverStub{}, models, rails, &currentProjectContextStub{}, 1); err == nil || service != nil {
 		t.Fatalf("service=%#v error=%v", service, err)
 	}
-	if service, err := NewCurrentApplicationToolSnapshotService(&currentAgentSettingsResolverStub{}, nil, models, rails, 1); err == nil || service != nil {
+	if service, err := NewCurrentApplicationToolSnapshotService(&currentAgentSettingsResolverStub{}, nil, models, rails, &currentProjectContextStub{}, 1); err == nil || service != nil {
 		t.Fatalf("service=%#v error=%v", service, err)
 	}
-	if service, err := NewCurrentApplicationToolSnapshotService(&currentAgentSettingsResolverStub{}, &currentAgentNameResolverStub{}, nil, rails, 1); err == nil || service != nil {
+	if service, err := NewCurrentApplicationToolSnapshotService(&currentAgentSettingsResolverStub{}, &currentAgentNameResolverStub{}, nil, rails, &currentProjectContextStub{}, 1); err == nil || service != nil {
 		t.Fatalf("service=%#v error=%v", service, err)
 	}
 	// The guardrail resolver is required, not optional. A service built without
 	// one would enforce nothing and be indistinguishable from one whose operator
 	// had configured nothing — see CurrentAgentGuardrailResolver.
-	if service, err := NewCurrentApplicationToolSnapshotService(&currentAgentSettingsResolverStub{}, &currentAgentNameResolverStub{}, models, nil, 1); err == nil || service != nil {
+	if service, err := NewCurrentApplicationToolSnapshotService(&currentAgentSettingsResolverStub{}, &currentAgentNameResolverStub{}, models, nil, &currentProjectContextStub{}, 1); err == nil || service != nil {
 		t.Fatalf("service=%#v error=%v", service, err)
 	}
-	if service, err := NewCurrentApplicationToolSnapshotService(&currentAgentSettingsResolverStub{}, &currentAgentNameResolverStub{}, models, rails, 0); err == nil || service != nil {
+	if service, err := NewCurrentApplicationToolSnapshotService(&currentAgentSettingsResolverStub{}, &currentAgentNameResolverStub{}, models, rails, &currentProjectContextStub{}, 0); err == nil || service != nil {
 		t.Fatalf("service=%#v error=%v", service, err)
 	}
 }
@@ -601,7 +601,7 @@ func TestCurrentApplicationToolSnapshotPreservesProviderAutoMaxTokens(t *testing
 			}}
 			service, err := NewCurrentApplicationToolSnapshotService(
 				&currentAgentSettingsResolverStub{}, &currentAgentNameResolverStub{}, models,
-				&currentAgentGuardrailStub{}, 1,
+				&currentAgentGuardrailStub{}, &currentProjectContextStub{}, 1,
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -685,7 +685,7 @@ func TestCurrentApplicationToolSnapshotAlwaysCarriesATemperature(t *testing.T) {
 			}}
 			service, err := NewCurrentApplicationToolSnapshotService(
 				&currentAgentSettingsResolverStub{}, &currentAgentNameResolverStub{}, models,
-				&currentAgentGuardrailStub{}, 1,
+				&currentAgentGuardrailStub{}, &currentProjectContextStub{}, 1,
 			)
 			if err != nil {
 				t.Fatal(err)

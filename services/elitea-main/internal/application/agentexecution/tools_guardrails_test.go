@@ -41,7 +41,7 @@ func freezeWithPolicy(
 		settings,
 		&currentAgentNameResolverStub{result: "toolkit"},
 		currentAgentModelCatalogForTest(true),
-		&currentAgentGuardrailStub{policy: policy},
+		&currentAgentGuardrailStub{policy: policy}, &currentProjectContextStub{},
 		1,
 	)
 	if err != nil {
@@ -141,7 +141,7 @@ func TestFreezeFailsWhenThePolicyCannotBeRead(t *testing.T) {
 		&currentAgentSettingsResolverStub{result: map[string]any{"selected_tools": []any{}}},
 		&currentAgentNameResolverStub{result: "toolkit"},
 		currentAgentModelCatalogForTest(true),
-		&currentAgentGuardrailStub{err: errors.New("pool is gone")},
+		&currentAgentGuardrailStub{err: errors.New("pool is gone")}, &currentProjectContextStub{},
 		1,
 	)
 	if err != nil {

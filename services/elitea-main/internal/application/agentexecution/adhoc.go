@@ -333,11 +333,16 @@ func currentAdhocInput(
 	if err != nil {
 		return nil, err
 	}
+	projectContext, err := currentFrozenProjectContext(snapshot)
+	if err != nil {
+		return nil, err
+	}
 	threadID := request.ConversationUUID
 	conversationID := request.ConversationUUID
 	executionGeneration := request.QuestionID
 	input := &runtimev1.AgentExecutionInputV1{
 		SchemaRevision: "elitea.runtime.agent-execution-input.v1",
+		ProjectContext: projectContext,
 		Llm:            llm, ChatHistory: bytes.Clone(target.ChatHistory), UserInput: userInput,
 		ThreadId: &threadID, Tools: toolsJSON, Application: application,
 		InternalTools: internalTools, McpTokens: currentMCPTokens(request.MCPTokens),

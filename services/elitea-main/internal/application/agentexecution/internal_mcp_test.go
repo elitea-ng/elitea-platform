@@ -23,7 +23,8 @@ func TestCurrentInternalMCPSelectionBecomesExecutableReferences(t *testing.T) {
 		{"deduplicated flags", `{"meta":{"internal_tools":["internal_mcp","skill_builder"]}}`, `["internal_mcp","project_context_builder"]`, 9},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			freezer, err := NewCurrentApplicationToolSnapshotService(&currentAgentSettingsResolverStub{}, &currentAgentNameResolverStub{}, currentAgentModelCatalogForTest(true), &currentAgentGuardrailStub{}, 1)
+			reader := &currentProjectContextStub{}
+			freezer, err := NewCurrentApplicationToolSnapshotService(&currentAgentSettingsResolverStub{}, &currentAgentNameResolverStub{}, currentAgentModelCatalogForTest(true), &currentAgentGuardrailStub{}, reader, 1)
 			require.NoError(t, err)
 			version, err := decodeCurrentApplicationVersion([]byte(tc.version))
 			require.NoError(t, err)
