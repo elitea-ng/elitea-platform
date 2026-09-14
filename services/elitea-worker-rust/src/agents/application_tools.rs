@@ -1410,6 +1410,7 @@ struct PreparedChildApplicationResume {
 impl LazyNestedAgent {
     fn bind_model(&self) -> adk_rust::Result<Arc<dyn adk_rust::Llm>> {
         let invocation = ModelInvocation {
+            context_budget: self.profile.context_budget(),
             model_name: self.profile.model_name().to_owned(),
             system_instruction: self.profile.instructions().to_owned(),
             max_tokens: self.profile.max_tokens(),

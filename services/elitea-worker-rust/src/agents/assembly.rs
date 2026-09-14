@@ -52,6 +52,7 @@ pub(crate) struct OrdinaryNoToolProfile {
     step_limit: u32,
     chat_history: Vec<Content>,
     context_management: ContextManagementPlan,
+    context_budget: Option<super::context_budget::RequestContextBudget>,
     internal_tools: InternalToolCatalog,
     instruction_plan: super::instruction_authority::InstructionPlan,
 }
@@ -146,6 +147,11 @@ impl OrdinaryNoToolProfile {
         let model = application_model_for_agent_type(request, "pipeline")?;
         let internal_tools = application_internal_tools(request)?;
         Ok(Self {
+            context_budget: super::context_budget::RequestContextBudget::resolve(
+                request.payload.model_context_limits,
+                &request.payload.context_settings,
+                model.max_tokens,
+            )?,
             kind: request.kind,
             instructions: model.instructions,
             model_name: model.model_name,
@@ -179,6 +185,11 @@ impl OrdinaryNoToolProfile {
             }
         };
         Ok(Self {
+            context_budget: super::context_budget::RequestContextBudget::resolve(
+                request.payload.model_context_limits,
+                &request.payload.context_settings,
+                model.max_tokens,
+            )?,
             kind: request.kind,
             instructions: model.instructions,
             model_name: model.model_name,
@@ -276,6 +287,29 @@ impl OrdinaryNoToolProfile {
             Some(_) => return Err(invalid_profile()),
         };
         Ok(Self {
+            context_budget: {
+                let limits = match version.get("model_context_limits") {
+                    Some(value) => {
+                        Some(serde_json::from_value(value.clone()).map_err(|_| invalid_profile())?)
+                    }
+                    None if model.model_name == fallback.model_name
+                        && model.model_project_id == fallback.model_project_id =>
+                    {
+                        fallback.context_budget.map(|budget| budget.limits)
+                    }
+                    None => None,
+                };
+                match (limits, fallback.context_budget) {
+                    (Some(limits), Some(budget)) => {
+                        Some(budget.for_model(limits, model.max_tokens)?)
+                    }
+                    _ => super::context_budget::RequestContextBudget::resolve(
+                        limits,
+                        &Map::new(),
+                        model.max_tokens,
+                    )?,
+                }
+            },
             kind: AgentExecutionKind::Application,
             instructions: model.instructions,
             model_name: model.model_name,
@@ -351,6 +385,12 @@ impl OrdinaryNoToolProfile {
     }
 
     #[must_use]
+    pub(crate) const fn context_budget(
+        &self,
+    ) -> Option<super::context_budget::RequestContextBudget> {
+        self.context_budget
+    }
+
     pub(crate) fn context_management(&self) -> ContextManagementPlan {
         self.context_management.clone()
     }

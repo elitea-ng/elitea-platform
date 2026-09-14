@@ -117,6 +117,7 @@ pub(super) fn ordinary_request(kind: AgentExecutionKind) -> AgentExecutionReques
             toolkit_guardrails: None,
             truncated_content: None,
             project_context: None,
+            model_context_limits: None,
         },
     }
 }
@@ -203,6 +204,49 @@ fn application_and_adhoc_ordinary_profiles_normalize_current_main_model_contract
         Some(ReasoningEffort::None)
     );
     assert_eq!(disabled_reasoning.temperature(), Some(0.7));
+}
+
+#[test]
+fn both_execution_profiles_admit_model_budgets_before_provider_binding() {
+    for kind in [AgentExecutionKind::Application, AgentExecutionKind::Adhoc] {
+        let mut request = ordinary_request(kind);
+        assert!(
+            OrdinaryNoToolProfile::validate(&request)
+                .unwrap()
+                .context_budget()
+                .is_none()
+        );
+        request.payload.model_context_limits = Some(super::request::ModelContextLimits {
+            context_window_tokens: 1_000_000,
+            max_output_tokens: 128_000,
+            context_window_fallback: false,
+            max_output_fallback: false,
+            max_input_tokens: None,
+        });
+        let profile = OrdinaryNoToolProfile::validate(&request).unwrap();
+        let budget = profile.context_budget().unwrap();
+        assert_eq!(budget.total_tokens, 272_000);
+        assert_eq!(budget.output_reservation, profile.max_tokens().unwrap());
+        request
+            .payload
+            .context_settings
+            .insert("budget_mode".to_owned(), json!("full"));
+        assert_eq!(
+            OrdinaryNoToolProfile::validate(&request)
+                .unwrap()
+                .context_budget()
+                .unwrap()
+                .total_tokens,
+            1_000_000
+        );
+        request
+            .payload
+            .model_context_limits
+            .as_mut()
+            .unwrap()
+            .max_output_tokens = 1;
+        assert!(OrdinaryNoToolProfile::validate(&request).is_err());
+    }
 }
 
 #[test]

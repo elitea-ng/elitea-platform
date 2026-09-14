@@ -34,7 +34,7 @@ class AgentExecutionCommandV1(_message.Message):
     def __init__(self, request_entry_id: _Optional[str] = ..., client_stream_id: _Optional[str] = ..., client_message_id: _Optional[str] = ..., sio_event: _Optional[str] = ...) -> None: ...
 
 class AgentExecutionInputV1(_message.Message):
-    __slots__ = ("schema_revision", "llm", "chat_history", "user_input", "thread_id", "checkpoint_id", "debug", "tools", "application", "internal_tools", "steps_limit", "mcp_tokens", "ignored_mcp_servers", "user_declined_mcp_servers", "should_continue", "hitl_resume", "hitl_action", "hitl_value", "hitl_decisions", "execution_generation", "is_regenerate", "meta", "conversation_id", "persona", "context_settings", "supports_vision", "return_chat_history", "invoked_skills", "applied_skills", "auto_approve_sensitive_actions", "attached_skills", "input_attachments", "parallel_reconcile", "parallel_terminal_errors", "exception_handling_enabled", "debug_mode", "next_input_suggestion", "toolkit_guardrails", "truncated_content", "project_context")
+    __slots__ = ("schema_revision", "llm", "chat_history", "user_input", "thread_id", "checkpoint_id", "debug", "tools", "application", "internal_tools", "steps_limit", "mcp_tokens", "ignored_mcp_servers", "user_declined_mcp_servers", "should_continue", "hitl_resume", "hitl_action", "hitl_value", "hitl_decisions", "execution_generation", "is_regenerate", "meta", "conversation_id", "persona", "context_settings", "supports_vision", "return_chat_history", "invoked_skills", "applied_skills", "auto_approve_sensitive_actions", "attached_skills", "input_attachments", "parallel_reconcile", "parallel_terminal_errors", "exception_handling_enabled", "debug_mode", "next_input_suggestion", "toolkit_guardrails", "truncated_content", "project_context", "model_context_limits")
     SCHEMA_REVISION_FIELD_NUMBER: _ClassVar[int]
     LLM_FIELD_NUMBER: _ClassVar[int]
     CHAT_HISTORY_FIELD_NUMBER: _ClassVar[int]
@@ -75,6 +75,7 @@ class AgentExecutionInputV1(_message.Message):
     TOOLKIT_GUARDRAILS_FIELD_NUMBER: _ClassVar[int]
     TRUNCATED_CONTENT_FIELD_NUMBER: _ClassVar[int]
     PROJECT_CONTEXT_FIELD_NUMBER: _ClassVar[int]
+    MODEL_CONTEXT_LIMITS_FIELD_NUMBER: _ClassVar[int]
     schema_revision: str
     llm: bytes
     chat_history: bytes
@@ -115,7 +116,22 @@ class AgentExecutionInputV1(_message.Message):
     toolkit_guardrails: bytes
     truncated_content: bytes
     project_context: ProjectContextSnapshotV1
-    def __init__(self, schema_revision: _Optional[str] = ..., llm: _Optional[bytes] = ..., chat_history: _Optional[bytes] = ..., user_input: _Optional[bytes] = ..., thread_id: _Optional[str] = ..., checkpoint_id: _Optional[str] = ..., debug: bool = ..., tools: _Optional[bytes] = ..., application: _Optional[bytes] = ..., internal_tools: _Optional[bytes] = ..., steps_limit: _Optional[int] = ..., mcp_tokens: _Optional[bytes] = ..., ignored_mcp_servers: _Optional[bytes] = ..., user_declined_mcp_servers: _Optional[bytes] = ..., should_continue: bool = ..., hitl_resume: bool = ..., hitl_action: _Optional[str] = ..., hitl_value: _Optional[str] = ..., hitl_decisions: _Optional[bytes] = ..., execution_generation: _Optional[str] = ..., is_regenerate: bool = ..., meta: _Optional[bytes] = ..., conversation_id: _Optional[str] = ..., persona: _Optional[str] = ..., context_settings: _Optional[bytes] = ..., supports_vision: bool = ..., return_chat_history: bool = ..., invoked_skills: _Optional[bytes] = ..., applied_skills: _Optional[bytes] = ..., auto_approve_sensitive_actions: bool = ..., attached_skills: _Optional[bytes] = ..., input_attachments: _Optional[bytes] = ..., parallel_reconcile: _Optional[bytes] = ..., parallel_terminal_errors: _Optional[bytes] = ..., exception_handling_enabled: bool = ..., debug_mode: bool = ..., next_input_suggestion: _Optional[bytes] = ..., toolkit_guardrails: _Optional[bytes] = ..., truncated_content: _Optional[bytes] = ..., project_context: _Optional[_Union[ProjectContextSnapshotV1, _Mapping]] = ...) -> None: ...
+    model_context_limits: ModelContextLimitsV1
+    def __init__(self, schema_revision: _Optional[str] = ..., llm: _Optional[bytes] = ..., chat_history: _Optional[bytes] = ..., user_input: _Optional[bytes] = ..., thread_id: _Optional[str] = ..., checkpoint_id: _Optional[str] = ..., debug: bool = ..., tools: _Optional[bytes] = ..., application: _Optional[bytes] = ..., internal_tools: _Optional[bytes] = ..., steps_limit: _Optional[int] = ..., mcp_tokens: _Optional[bytes] = ..., ignored_mcp_servers: _Optional[bytes] = ..., user_declined_mcp_servers: _Optional[bytes] = ..., should_continue: bool = ..., hitl_resume: bool = ..., hitl_action: _Optional[str] = ..., hitl_value: _Optional[str] = ..., hitl_decisions: _Optional[bytes] = ..., execution_generation: _Optional[str] = ..., is_regenerate: bool = ..., meta: _Optional[bytes] = ..., conversation_id: _Optional[str] = ..., persona: _Optional[str] = ..., context_settings: _Optional[bytes] = ..., supports_vision: bool = ..., return_chat_history: bool = ..., invoked_skills: _Optional[bytes] = ..., applied_skills: _Optional[bytes] = ..., auto_approve_sensitive_actions: bool = ..., attached_skills: _Optional[bytes] = ..., input_attachments: _Optional[bytes] = ..., parallel_reconcile: _Optional[bytes] = ..., parallel_terminal_errors: _Optional[bytes] = ..., exception_handling_enabled: bool = ..., debug_mode: bool = ..., next_input_suggestion: _Optional[bytes] = ..., toolkit_guardrails: _Optional[bytes] = ..., truncated_content: _Optional[bytes] = ..., project_context: _Optional[_Union[ProjectContextSnapshotV1, _Mapping]] = ..., model_context_limits: _Optional[_Union[ModelContextLimitsV1, _Mapping]] = ...) -> None: ...
+
+class ModelContextLimitsV1(_message.Message):
+    __slots__ = ("context_window_tokens", "max_output_tokens", "context_window_fallback", "max_output_fallback", "max_input_tokens")
+    CONTEXT_WINDOW_TOKENS_FIELD_NUMBER: _ClassVar[int]
+    MAX_OUTPUT_TOKENS_FIELD_NUMBER: _ClassVar[int]
+    CONTEXT_WINDOW_FALLBACK_FIELD_NUMBER: _ClassVar[int]
+    MAX_OUTPUT_FALLBACK_FIELD_NUMBER: _ClassVar[int]
+    MAX_INPUT_TOKENS_FIELD_NUMBER: _ClassVar[int]
+    context_window_tokens: int
+    max_output_tokens: int
+    context_window_fallback: bool
+    max_output_fallback: bool
+    max_input_tokens: int
+    def __init__(self, context_window_tokens: _Optional[int] = ..., max_output_tokens: _Optional[int] = ..., context_window_fallback: bool = ..., max_output_fallback: bool = ..., max_input_tokens: _Optional[int] = ...) -> None: ...
 
 class ProjectContextSnapshotV1(_message.Message):
     __slots__ = ("id", "revision", "scope", "content", "activation_description")

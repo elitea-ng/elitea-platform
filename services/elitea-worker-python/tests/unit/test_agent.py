@@ -98,6 +98,25 @@ def _input(*, application: bool = True) -> agent_pb2.AgentExecutionInputV1:
     )
 
 
+@pytest.mark.parametrize("application", [True, False])
+def test_model_context_limits_are_a_recognized_shared_wire_field(application):
+    message = _input(application=application)
+    assert not message.HasField("model_context_limits")
+    message.model_context_limits.CopyFrom(agent_pb2.ModelContextLimitsV1(
+        context_window_tokens=1_000_000, max_output_tokens=128_000,
+        max_output_fallback=True, max_input_tokens=872_000,
+    ))
+    decoded = parse_agent_execution_input(message.SerializeToString())
+    assert decoded.model_context_limits == message.model_context_limits
+    request = request_from(
+        decoded, kind=AgentExecutionKind.APPLICATION if application else AgentExecutionKind.ADHOC,
+        input_bundle_id="bundle", input_bundle_digest=b"b" * 32,
+        request_entry_id="request", request_immutable_version="v1", request_content_digest=b"c" * 32,
+    )
+    # The shared wire accepts the snapshot; this Rust policy does not change SDK kwargs.
+    assert request.payload.user_input == "current"
+
+
 def _request(*, application: bool = True):
     message = _input(application=application)
     return request_from(

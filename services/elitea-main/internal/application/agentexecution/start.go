@@ -334,12 +334,17 @@ func currentApplicationInput(
 	if err != nil {
 		return nil, err
 	}
+	modelContextLimits, err := currentFrozenModelContextLimits(version)
+	if err != nil {
+		return nil, err
+	}
 	threadID := request.ConversationUUID
 	conversationID := request.ConversationUUID
 	executionGeneration := request.QuestionID
 	input := &runtimev1.AgentExecutionInputV1{
-		SchemaRevision: "elitea.runtime.agent-execution-input.v1",
-		ProjectContext: projectContext,
+		SchemaRevision:     "elitea.runtime.agent-execution-input.v1",
+		ProjectContext:     projectContext,
+		ModelContextLimits: modelContextLimits,
 		// Current chat history remains authoritative for ordinary turns. The
 		// shared LangGraph checkpoint stores resumable graph state for this stable
 		// thread; it does not replace the current chat-history projection.

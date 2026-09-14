@@ -1080,3 +1080,57 @@ async fn o_series_role_and_configuration_boundaries_are_explicit() {
         ));
     }
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn full_request_context_budget_refuses_each_input_component_before_network() {
+    use crate::agents::{context_budget::RequestContextBudget, request::ModelContextLimits};
+    for component in 0..4 {
+        let (client, captured) =
+            test_model_gateway_client(Vec::new(), test_model_gateway_config()).unwrap();
+        let mut invocation = test_model_facade_invocation();
+        invocation.context_budget = RequestContextBudget::resolve(
+            Some(ModelContextLimits {
+                context_window_tokens: 8_000,
+                max_output_tokens: 4_000,
+                context_window_fallback: false,
+                max_output_fallback: false,
+                max_input_tokens: None,
+            }),
+            &serde_json::Map::new(),
+            Some(4_000),
+        )
+        .unwrap();
+        let mut request = test_model_request("small user input");
+        let large = "private-context-fixture ".repeat(700);
+        match component {
+            0 => invocation.system_instruction = large,
+            1 => request
+                .contents
+                .insert(0, Content::new("system").with_text(large)),
+            2 => {
+                request.tools.insert("inspect".to_owned(), serde_json::json!({
+                "description": "Read an item.",
+                "parameters": {"type":"object", "properties": {"item": {"type":"string", "description": large}}}
+            }));
+            }
+            3 => request.contents.push(Content::new("user").with_text(large)),
+            _ => unreachable!(),
+        }
+        let bound = client
+            .bind_ordinary(
+                &ClaimScopedEliteaContext::fixture(17, TOKEN),
+                17,
+                invocation,
+            )
+            .unwrap();
+        let Err(error) = bound.generate_for_test(request).await else {
+            panic!("oversized request was submitted")
+        };
+        assert_eq!(
+            error.code, "context_budget_exceeded",
+            "component {component}"
+        );
+        assert!(!error.to_string().contains("private-context-fixture"));
+        assert!(captured.lock().unwrap().is_empty());
+    }
+}

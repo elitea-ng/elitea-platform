@@ -46,6 +46,29 @@ fn application_message() -> AgentExecutionInputV1 {
 }
 
 #[test]
+fn authorized_model_limits_survive_canonical_wire_and_old_inputs_remain_absent() {
+    use elitea_worker_rust::protocol::elitea::runtime::v1::ModelContextLimitsV1;
+    use prost::Message;
+    let mut message = application_message();
+    assert!(message.model_context_limits.is_none());
+    message.model_context_limits = Some(ModelContextLimitsV1 {
+        context_window_tokens: 1_000_000,
+        max_output_tokens: 128_000,
+        context_window_fallback: false,
+        max_output_fallback: true,
+        max_input_tokens: Some(872_000),
+    });
+    let decoded = parse_agent_execution_input(&message.encode_to_vec()).unwrap();
+    let request = request_from(decoded, AgentExecutionKind::Application, binding()).unwrap();
+    let limits = request.payload.model_context_limits.unwrap();
+    assert_eq!(limits.context_window_tokens, 1_000_000);
+    assert_eq!(limits.max_output_tokens, 128_000);
+    assert_eq!(limits.max_input_tokens, Some(872_000));
+    assert!(!limits.context_window_fallback);
+    assert!(limits.max_output_fallback);
+}
+
+#[test]
 fn python_generated_application_fixture_maps_all_current_fields() {
     let raw = application_bytes();
     let message = parse_agent_execution_input(&raw).expect("canonical Python protobuf");

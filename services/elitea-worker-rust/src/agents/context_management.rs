@@ -61,8 +61,9 @@ const SDK_HISTORY_PLACEHOLDER: &str = "{messages}";
 const COMPACTION_ATTEMPTS: usize = 1;
 
 /// Every key Main is allowed to freeze into `context_settings`.
-const ADMITTED_KEYS: [&str; 8] = [
+const ADMITTED_KEYS: [&str; 9] = [
     "enabled",
+    "budget_mode",
     "enable_summarization",
     "enable_context_editing",
     "max_context_tokens",

@@ -337,13 +337,18 @@ func currentAdhocInput(
 	if err != nil {
 		return nil, err
 	}
+	modelContextLimits, err := currentFrozenModelContextLimits(snapshot)
+	if err != nil {
+		return nil, err
+	}
 	threadID := request.ConversationUUID
 	conversationID := request.ConversationUUID
 	executionGeneration := request.QuestionID
 	input := &runtimev1.AgentExecutionInputV1{
-		SchemaRevision: "elitea.runtime.agent-execution-input.v1",
-		ProjectContext: projectContext,
-		Llm:            llm, ChatHistory: bytes.Clone(target.ChatHistory), UserInput: userInput,
+		SchemaRevision:     "elitea.runtime.agent-execution-input.v1",
+		ProjectContext:     projectContext,
+		ModelContextLimits: modelContextLimits,
+		Llm:                llm, ChatHistory: bytes.Clone(target.ChatHistory), UserInput: userInput,
 		ThreadId: &threadID, Tools: toolsJSON, Application: application,
 		InternalTools: internalTools, McpTokens: currentMCPTokens(request.MCPTokens),
 		IgnoredMcpServers: []byte(`[]`), UserDeclinedMcpServers: []byte(`[]`),

@@ -99,6 +99,10 @@ Point 4 also includes the following required work, confirmed by the user on 2026
 
 These are part of gate 4 acceptance, not optional follow-up work after compaction.
 
+The [model budget foundation](source-mapping/model-context-budget.md) freezes authorized limits and checks the complete provider request.
+It reserves output inside the effective window and preserves explicit limits.
+Settings delivery, durable compaction, deployed UI verification, and the other point 4 contracts remain open.
+
 ## Built-in modules before indexing
 
 The user adds gate 7a on 2026-09-14.

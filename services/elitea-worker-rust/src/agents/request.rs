@@ -94,6 +94,21 @@ pub struct AgentExecutionPayload {
     /// Presence distinguishes output continuation from HITL/authorization.
     pub truncated_content: Option<String>,
     pub project_context: Option<ProjectContextSnapshot>,
+    pub model_context_limits: Option<ModelContextLimits>,
+}
+
+/// Authorized model limits from the language-neutral runtime contract.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelContextLimits {
+    pub context_window_tokens: u32,
+    pub max_output_tokens: u32,
+    #[serde(default)]
+    pub context_window_fallback: bool,
+    #[serde(default)]
+    pub max_output_fallback: bool,
+    #[serde(default)]
+    pub max_input_tokens: Option<u32>,
 }
 
 #[derive(Eq, PartialEq)]

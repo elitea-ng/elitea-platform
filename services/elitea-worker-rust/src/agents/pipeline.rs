@@ -947,6 +947,7 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
             input.system().to_owned()
         };
         let invocation = ModelInvocation {
+            context_budget: self.profile.context_budget(),
             model_name: self.profile.model_name().to_owned(),
             system_instruction,
             max_tokens: self.profile.max_tokens(),

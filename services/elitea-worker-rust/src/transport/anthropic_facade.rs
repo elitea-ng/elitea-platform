@@ -371,6 +371,9 @@ fn build_anthropic_body(
             "the native Anthropic request exceeds its approved limit",
         ));
     }
+    if let Some(budget) = invocation.context_budget {
+        budget.check_provider_request(&encoded)?;
+    }
     Ok(Bytes::from(encoded))
 }
 

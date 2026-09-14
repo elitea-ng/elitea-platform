@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	currentLocalDefaultContextWindow   int64 = 128000
-	currentLocalDefaultMaxOutputTokens int64 = 16000
+	currentLocalDefaultContextWindow   int64 = DefaultLLMContextWindow
+	currentLocalDefaultMaxOutputTokens int64 = DefaultLLMMaxOutputTokens
 	currentLocalProjectContextMaxRunes       = 2500
 )
 

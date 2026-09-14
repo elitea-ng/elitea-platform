@@ -116,6 +116,12 @@ Complete integration with that state rather than asking a summary model to recre
 Main `agentexecution/start.go` and `adhoc.go` still dispatch empty context settings.
 Complete authorized settings and model-limit delivery before claiming that UI compaction controls affect this worker.
 
+The [model budget foundation](source-mapping/model-context-budget.md) now freezes catalogue limits in the input contract.
+Both provider adapters check their completed request against input capacity after output reservation and margin.
+This final check prevents oversized dispatch when compaction is absent or insufficient.
+It does not replace the before-model compaction callback or durable summary persistence.
+Main still needs to deliver resolved user and conversation settings before the UI can control that policy.
+
 ## Point 4 baseline verification, 2026-09-14
 
 The existing Rust context-management suite passes 21 tests with no ignored cases.

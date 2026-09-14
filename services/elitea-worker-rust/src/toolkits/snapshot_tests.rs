@@ -71,6 +71,7 @@ fn request(kind: AgentExecutionKind, tools: Vec<Value>) -> AgentExecutionRequest
             toolkit_guardrails: None,
             truncated_content: None,
             project_context: None,
+            model_context_limits: None,
         },
     }
 }

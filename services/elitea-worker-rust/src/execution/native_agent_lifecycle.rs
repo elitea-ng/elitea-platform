@@ -355,7 +355,7 @@ where
             );
             return Box::pin(finalize(
                 run,
-                RuntimeFailureKind::Internal,
+                model_failure(error.upstream_code()),
                 control,
                 retirer,
                 clock,
@@ -601,7 +601,7 @@ where
                             "native agent event stream failed"
                         );
                         return NativeStreamOutcome::Failure(
-                            failure.unwrap_or(RuntimeFailureKind::Internal),
+                            failure.unwrap_or_else(|| model_failure(error.upstream_code())),
                         );
                     }
                 };
@@ -1194,11 +1194,31 @@ fn projection_failure(error: &AgentEventProjectionError) -> RuntimeFailureKind {
     }
 }
 
+fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
+    match upstream_code {
+        Some("context_budget_exceeded") => RuntimeFailureKind::ResourceExhausted,
+        _ => RuntimeFailureKind::Internal,
+    }
+}
+
 #[cfg(test)]
 mod taxonomy_tests {
     use super::assembly_failure;
     use crate::agents::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
     use crate::protocol::output::RuntimeFailureKind;
+
+    #[test]
+    fn context_budget_failure_is_a_resource_limit_without_exposing_provider_text() {
+        assert_eq!(
+            super::model_failure(Some("context_budget_exceeded")),
+            RuntimeFailureKind::ResourceExhausted
+        );
+        assert_eq!(
+            super::model_failure(Some("unknown_provider_error")),
+            RuntimeFailureKind::Internal
+        );
+        assert_eq!(super::model_failure(None), RuntimeFailureKind::Internal);
+    }
 
     #[test]
     fn assembly_failures_keep_the_canonical_terminal_kind() {

@@ -612,7 +612,7 @@ func (service *CurrentApplicationToolSnapshotService) resolveCurrentAgentModel(
 	}
 	settings["openai_compatible"] = compatible
 	version["llm_settings"] = settings
-	return nil
+	return freezeCurrentModelContextLimits(version, selected)
 }
 
 // currentAgentRuntimeDirectAgentType is the agent_type the runtime's direct

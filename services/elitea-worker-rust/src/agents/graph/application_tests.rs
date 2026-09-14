@@ -844,6 +844,7 @@ fn resume_payload(thread_id: &str, interrupt_id: &str) -> AgentExecutionPayload 
         toolkit_guardrails: None,
         truncated_content: None,
         project_context: None,
+        model_context_limits: None,
     }
 }
 

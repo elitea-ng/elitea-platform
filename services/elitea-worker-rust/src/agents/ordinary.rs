@@ -331,6 +331,7 @@ impl OrdinaryNativeAgentAssembler {
         output_continuation: bool,
     ) -> Result<BoundModelFacade, NativeAgentAssemblyError> {
         let invocation = ModelInvocation {
+            context_budget: profile.context_budget(),
             model_name: profile.model_name().to_owned(),
             system_instruction: profile.instructions().to_owned(),
             max_tokens: profile.max_tokens(),

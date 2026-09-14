@@ -419,8 +419,7 @@ where
                     }
                     Err(rejected) => {
                         let code = rejected.error().code();
-                        let lease_error = rejected
-                            .close()
+                        let lease_error = Box::pin(rejected.close())
                             .await
                             .map_err(AgentDeliveryProcessError::RejectedClose)?;
                         if let Some(error) = lease_error {

@@ -55,6 +55,7 @@ Detailed ledgers:
 - `builtin-runtime-modules.md` records the separate pre-indexing module gate and excludes Swarm.
 - `instruction-authority-main.md` maps immutable instruction admission and the shared wire contract.
 - `instruction-authority.md` maps Rust activation, scoped recovery, provider projection, and checkpoint ordering.
+- `model-context-budget.md` maps authorized model limits, combined budgets, provider request checks, and pending UI integration.
 - `internal-mcp-draft-default-model.md` records deployed drafting, selected-version behavior, and deliberate validation failures.
 - `internal-mcp-copied-skill-acceptance.md` records exact copied-skill binding and Rust runtime consumption.
 - `credential-browser-acceptance-20260914.md` records credential creation and rotation through chat and Toolkit Test.

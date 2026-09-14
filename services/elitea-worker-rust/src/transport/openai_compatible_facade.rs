@@ -102,6 +102,7 @@ impl ModelGatewayConfig {
 
 /// Frozen generation controls admitted before the PAT reaches this module.
 pub(crate) struct ModelFacadeInvocation {
+    pub(crate) context_budget: Option<crate::agents::context_budget::RequestContextBudget>,
     pub(crate) model_name: String,
     pub(crate) system_instruction: String,
     pub(crate) max_tokens: Option<u32>,
@@ -614,6 +615,9 @@ fn build_request_body(
             "model_gateway.request_too_large",
             "the model gateway request exceeds its approved limit",
         ));
+    }
+    if let Some(budget) = invocation.context_budget {
+        budget.check_provider_request(&encoded)?;
     }
     Ok(Bytes::from(encoded))
 }
@@ -1971,6 +1975,7 @@ pub(crate) fn test_model_gateway_client(
 #[cfg(test)]
 pub(super) fn test_model_facade_invocation() -> ModelFacadeInvocation {
     ModelFacadeInvocation {
+        context_budget: None,
         model_name: "fixture-model".to_owned(),
         system_instruction: "review carefully\nbe concise".to_owned(),
         max_tokens: Some(4_000),
