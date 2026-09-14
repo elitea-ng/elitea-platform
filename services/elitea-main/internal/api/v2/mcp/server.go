@@ -517,12 +517,12 @@ func (h *Handler) callInternalTool(
 	if err != nil {
 		return errorResult("the internal " + category + " operation failed; nothing else was disclosed")
 	}
-	if execution.status >= http.StatusInternalServerError || !json.Valid(execution.body) {
-		return errorResult("the internal " + category + " operation failed; nothing else was disclosed")
-	}
 	text := strings.TrimSpace(string(execution.body))
-	if text == "" {
+	if execution.status == http.StatusNoContent && text == "" {
 		text = "{}"
+	}
+	if execution.status >= http.StatusInternalServerError || !json.Valid([]byte(text)) {
+		return errorResult("the internal " + category + " operation failed; nothing else was disclosed")
 	}
 	if execution.status < http.StatusOK || execution.status >= http.StatusMultipleChoices {
 		return errorResult(text)

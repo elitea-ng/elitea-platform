@@ -40,4 +40,27 @@ This database test uses a fake model and does not prove deployed authentication.
 
 Deployed chat 545 also requests missing skill 2147483647 with version 5.
 Trace 7333 records one draft call with `is_error=true` and no successful draft output.
-Live restricted-user permission verification remains open.
+Live restricted-user permission verification passes on 2026-09-14, as recorded in `point3-audit-20260913.md`.
+
+## Selected-version browser acceptance, 2026-09-14
+
+A fresh headed Chrome session opens internal-MCP chat 545.
+Two temporary skills provide distinct base, selected, and foreign version markers.
+The first call selects skill 6, version 7, and omits `llm_settings`.
+Message group 5920 stores trace 7432 with `is_error=false`.
+The returned instructions retain `SELECTED_DRAFT_SOURCE_20260914` and exclude both other markers.
+
+The second call deliberately selects skill 6 with version 8, which belongs to another skill.
+Trace 7433 stores those exact arguments with `is_error=true` and no successful draft output.
+The browser displays the failed tool row. This is the required validation refusal, not a failed acceptance run.
+The generic tool error does not itself identify the validation cause.
+The existing PostgreSQL test separately proves rejection before model invocation.
+
+Full skill reads remain identical before and after both calls.
+Both temporary skill deletions return HTTP 204.
+The script exits successfully, and the screenshot shows the successful draft followed by the deliberate refusal.
+Evidence: `elitea-selected-draft-browser.py`, `elitea-selected-draft-browser.log`, and `elitea-selected-draft-browser.png`.
+Main image: `sha256:1111a68e414a4331a4b3448af440411f58dec5dd8d7b4cb2ef7889ea4d11a9d8`.
+Rust image: `sha256:5d024c10addbb14f58be732f3e48059df1abaf1ad5dc4d46fcca5588c04ce78d`.
+Web image: `sha256:6f6767ebb1dacfd2a5dd409aa05648b8e244059f65d1673eed587140ab59e893`.
+No schema changes occur.
