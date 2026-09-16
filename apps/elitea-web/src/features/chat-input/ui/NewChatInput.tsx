@@ -211,7 +211,7 @@ export const NewChatInput = forwardRef(function NewChatInput(
         field: { placeholder },
         mention: mentions,
         highlight: { ranges: content.slashHighlights },
-        sendButton: { tooltipOfSendButton: content.tooltipOfSendButton },
+        sendButton: { tooltipOfSendButton: content.tooltipOfSendButton, keepWhileStreaming: state.allowSendWhileStreaming },
       }}
       callbacks={{
         onSend: handleSend,

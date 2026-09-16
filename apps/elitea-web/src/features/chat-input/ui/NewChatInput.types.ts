@@ -120,6 +120,13 @@ export interface NewChatInputStateProps {
   readonly disabledSend?: boolean | undefined;
   readonly isCreatingConversation?: boolean | undefined;
   readonly isEditorDirty?: boolean | undefined;
+  /**
+   * A17 (ELITEA-2871): keep the send control beside Stop while a turn is open.
+   * The host that sets it QUEUES what is sent there rather than starting a
+   * second turn — see `widgets/chat-box`'s `ChatBoxQueuedMessages`. It reaches
+   * `UserInput` as `slotProps.sendButton.keepWhileStreaming`.
+   */
+  readonly allowSendWhileStreaming?: boolean | undefined;
 }
 
 export interface NewChatInputContentProps {

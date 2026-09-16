@@ -122,3 +122,57 @@ describe('validateAttachmentFiles', () => {
     expect(result.validFiles).toHaveLength(0);
   });
 });
+
+/**
+ * The TYPE check (#940 A15). `undefined` and `[]` are different answers and
+ * this is where that is pinned — every caller downstream depends on it.
+ */
+describe('validateAttachmentFiles — the served allow-list', () => {
+  const allowed = ['.pdf', '.txt', '.sql', '.sh', '.png'];
+
+  it('accepts a code file and a document the list carries (ELITEA-0484/0486)', () => {
+    const files = [makeFile('report.sql', 100), makeFile('brief.txt', 100)];
+    const result = validateAttachmentFiles(files, [], ATTACHMENT_LIMITS, allowed);
+    expect(result.validFiles).toHaveLength(2);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('rejects an extension the list does not carry, and says it is the TYPE (ELITEA-0488)', () => {
+    const result = validateAttachmentFiles([makeFile('installer.exe', 100)], [], ATTACHMENT_LIMITS, allowed);
+    expect(result.validFiles).toHaveLength(0);
+    expect(result.errors[0]).toContain('not a supported file type');
+    // Not a size message: the reader must not be told a smaller copy would work.
+    expect(result.errors[0]).not.toContain('limit');
+  });
+
+  it('matches case-insensitively, in both directions', () => {
+    const result = validateAttachmentFiles([makeFile('REPORT.SQL', 100)], [], ATTACHMENT_LIMITS, ['.sql']);
+    expect(result.validFiles).toHaveLength(1);
+    const upper = validateAttachmentFiles([makeFile('report.sql', 100)], [], ATTACHMENT_LIMITS, ['.SQL']);
+    expect(upper.validFiles).toHaveLength(1);
+  });
+
+  it('rejects a file with no extension at all', () => {
+    const result = validateAttachmentFiles([makeFile('Makefile', 100)], [], ATTACHMENT_LIMITS, allowed);
+    expect(result.validFiles).toHaveLength(0);
+    expect(result.errors[0]).toContain('no file extension');
+  });
+
+  it('rejects everything when the list is EMPTY (ELITEA-0489)', () => {
+    const result = validateAttachmentFiles([makeFile('brief.txt', 100)], [], ATTACHMENT_LIMITS, []);
+    expect(result.validFiles).toHaveLength(0);
+  });
+
+  it('accepts everything when there is NO list, which is not the same as an empty one', () => {
+    const result = validateAttachmentFiles([makeFile('installer.exe', 100)], [], ATTACHMENT_LIMITS, undefined);
+    expect(result.validFiles).toHaveLength(1);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('reports the type rejection BEFORE the size one for a file that fails both', () => {
+    const huge = makeFile('installer.exe', ATTACHMENT_LIMITS.DEFAULT_MAX_FILE_SIZE + 1);
+    const result = validateAttachmentFiles([huge], [], ATTACHMENT_LIMITS, allowed);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain('not a supported file type');
+  });
+});

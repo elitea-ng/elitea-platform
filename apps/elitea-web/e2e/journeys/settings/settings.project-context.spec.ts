@@ -9,31 +9,42 @@
  * of scope for this chromium-lane file — see `S/port/ledger-P3-settings.tsv`
  * (STREAM-DEFERRED) for the full list and what the mock model would need.
  *
- * ── THE HEADLINE FINDING: Project Context can never actually be saved ──────
+ * ── THE HEADLINE FINDING, AND ITS FIX (#888) ───────────────────────────────
  *
- * `UpdateProjectContext` (`services/elitea-main/internal/api/v2/eliteacore/
- * handler.go:623-651`) always answers 200 with the request body echoed back,
- * regardless of whether anything was written. Its `INSERT … ON CONFLICT
- * (elitea_title) WHERE type = 'project_context' DO UPDATE …` names a PARTIAL
- * unique index that does not exist — the migration
- * (`internal/infra/db/migrations/001_initial.sql:823`) gives `elitea_title`
- * only a plain, non-partial `UNIQUE` constraint, which does not satisfy a
- * `WHERE`-qualified ON CONFLICT inference. Postgres therefore refuses that
- * INSERT on every call (a static/plan-time error, not a real conflict), the
- * handler falls back to `UPDATE … WHERE type = 'project_context'` (which
- * touches zero rows on a project that has never had one), swallows BOTH
- * errors, and writes the 200 anyway. Verified directly against this stack
- * with `PUT` then an immediate `GET` on both project 1 and a second project —
- * neither ever reflects a save, ever. See `S/port/defects.md` for the full
- * writeup and `PJC-PERSIST` below for the pinned regression.
+ * This file was first written against a backend that could not save Project
+ * Context AT ALL. `UpdateProjectContext` answered 200 with the request body
+ * echoed back whatever happened: its INSERT omitted `project_id` (which the
+ * tenant `configuration` table declares NOT NULL, so every project without a
+ * prior row — every project on a seeded stack — failed with SQLSTATE 23502),
+ * its `ON CONFLICT (elitea_title) WHERE type = 'project_context'` named a
+ * partial unique index that `001_initial.sql` never creates, and BOTH errors
+ * were discarded. Every "save, reload, it is still there" case therefore
+ * reduced to that one defect and was folded into `PJC-PERSIST` as a single
+ * fail-marked regression.
  *
- * Consequently, most onetest cases whose entire point is "Save, then reload,
- * and the content is still there" reduce to the SAME one defect and are not
- * repeated as separate tests — they are folded into `PJC-PERSIST`'s tag list.
- * What remains PORTED here is everything genuinely independent of that bug:
- * in-session editor behaviour (typing, uploading, truncating, previewing)
- * that the FRONTEND gets right even though the backend never durably stores
- * any of it.
+ * The handler now writes UPDATE-first, names `project_id`, and returns a
+ * typed 500 (`project_context_write_failed`) instead of swallowing the error
+ * — see `project_context_postgres_integration_test.go` for the Postgres-level
+ * acceptance. The fail marks below are gone and the persistence assertions
+ * they stood in for are real again.
+ *
+ * ── WHAT THAT FIX COSTS THIS FILE: the row is shared MUTABLE state now ─────
+ *
+ * Project Context is ONE ROW PER PROJECT and every persona here works in
+ * project 1. While the save no-opped, "the project starts empty and stays
+ * empty" held for every test at any concurrency — which is what this file's
+ * first version assumed out loud. A working save makes that false: under
+ * `fullyParallel: true`, `PJC-PERSIST`'s save, `PJC03a`'s baseline,
+ * `PJC06`'s toggle reading and `PJC08`'s empty state — plus
+ * `settings.p13-project-context.spec.ts`, a different FILE — all read and
+ * write the same row. Interleaved, that is a clobber, not a flake a retry
+ * fixes.
+ *
+ * So every test here takes the project-context mutex
+ * (`fixtures/projectContext.ts`) for its whole body and starts from a row
+ * reset to the seeded default. The mutex is a second window, independent of
+ * the platform-flag one: a project-context test has no reason to queue
+ * behind an MCP-flag test.
  *
  * ── Two projects, not "Private" and "Team" ─────────────────────────────────
  *
@@ -52,24 +63,17 @@ import { test, expect, type Page } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL, STORAGE_STATE } from '../../../playwright.config';
-import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, PUBLISH_AUTHOR_PROJECT_NAME, resolvePublishAuthorProjectId } from '../../fixtures/api';
+import { AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, PUBLISH_AUTHOR_PROJECT_NAME, resolvePublishAuthorProjectId } from '../../fixtures/api';
+import {
+  acquireProjectContextLock,
+  readProjectContext,
+  resetProjectContext,
+  seedProjectContextAsAdmin,
+} from '../../fixtures/projectContext';
 import { ensureProjectSelected } from '../../fixtures/project';
 
 const PROJECT_PARAMS_PAGE = `${BASE_URL}/app/settings/project-params`;
 const MAX_CHARS = 2500;
-
-/** GET the raw `{content, enabled}` blob for a project, bypassing the SPA — the one place this file asks what the SERVER actually stored. */
-async function readProjectContext(
-  page: Page,
-  projectId: string,
-): Promise<{ content: string; enabled: boolean }> {
-  const resp = await page.request.get(
-    `${API_BASE}/elitea_core/project_context/prompt_lib/${projectId}/project-context`,
-  );
-  expect(resp.status(), `GET project context for ${projectId}`).toBe(200);
-  const body = (await resp.json()) as { data?: { content?: string; enabled?: boolean } };
-  return { content: body.data?.content ?? '', enabled: body.data?.enabled ?? true };
-}
 
 /**
  * Lands on the Project Context tab of the CURRENTLY selected project and
@@ -81,13 +85,13 @@ async function readProjectContext(
  *    server has no saved (non-blank) content and `isEditing` is still
  *    false — clicking "Create" flips `isEditing` and bypasses it.
  *  - `deriveShowFlags`'s `showEditorContent = enabled || content.trim() ||
- *    !canEdit`. This stack's projects seed `enabled: false` with empty
- *    content, which satisfies none of those — `EditorSection` does not
- *    mount, only the (always-rendered) toggle card does. Flipping that
- *    switch on is what makes the editor appear; only the LOCAL, optimistic
- *    half of that flip is checked here (see the file header — the switch's
- *    own save is exactly as durable as every other save on this page, i.e.
- *    not durable at all, so waiting on the SERVER to confirm it would hang).
+ *    !canEdit`. Every test here starts from a row reset to `enabled: false`
+ *    with empty content (see the header's mutex note), which satisfies none
+ *    of those — `EditorSection` does not mount, only the (always-rendered)
+ *    toggle card does. Flipping that switch on is what makes the editor
+ *    appear; only the LOCAL, optimistic half of that flip is waited on here,
+ *    because a test that needs the SERVER's copy asserts it explicitly
+ *    (`PJC-PERSIST`) rather than implicitly through a helper.
  */
 async function openEditor(page: Page): Promise<void> {
   await page.goto(PROJECT_PARAMS_PAGE, { waitUntil: 'domcontentloaded' });
@@ -136,43 +140,103 @@ async function clickSave(page: Page): Promise<void> {
 }
 
 test.describe('project-context: settings/config coverage', () => {
+  /*
+   * ONE TEST AT A TIME, FROM A KNOWN ROW — see the file header.
+   *
+   * The lock is taken in `beforeEach` and released in `afterEach` so a test
+   * that throws mid-way still frees the row; the release is stored in a
+   * module-scope binding, which is safe because a worker runs its tests one
+   * after another (the concurrency this guards against is BETWEEN workers).
+   *
+   * The reset runs as ADMIN, not as the test's own persona: the viewer
+   * describe below holds `models.project_context.view` and specifically not
+   * `.edit`, and must still be able to arrange its precondition.
+   */
+  let releaseProjectContext: (() => Promise<void>) | undefined;
+
+  test.beforeEach(async () => {
+    releaseProjectContext = await acquireProjectContextLock();
+    await resetProjectContext(DEFAULT_PROJECT_ID);
+  });
+
+  test.afterEach(async () => {
+    const release = releaseProjectContext;
+    releaseProjectContext = undefined;
+    await release?.();
+  });
+
   /* ── PJC-PERSIST ────────────────────────────────────────────────────
    * onetest: ELITEA-0942, ELITEA-0949, ELITEA-0950, ELITEA-0953,
    *          ELITEA-0956, ELITEA-0957 — the persistence half of each of
-   *          these cases. PRODUCT GAP, see the file header for the exact
-   *          backend defect (a malformed `ON CONFLICT … WHERE` clause whose
-   *          errors are swallowed, so every save is silently a no-op that
-   *          still answers 200).
+   *          these cases, which #888 made unprovable and this package
+   *          restored. Three distinct claims, in order:
+   *
+   *            1. the SERVER's row holds what was saved (not the echo the
+   *               broken handler used to answer with);
+   *            2. a full page RELOAD reads it back — the app's own path,
+   *               through the query cache, not just the raw route;
+   *            3. the enable/disable TOGGLE persists the same way, including
+   *               the `false` direction (ELITEA-0953), which a "write only
+   *               non-empty fields" handler would silently drop.
+   *
+   *          The first save goes into a project whose row does not exist
+   *          yet (the beforeEach reset leaves it empty), so this covers the
+   *          INSERT branch — the one the missing `project_id` column killed
+   *          — and the second save covers the UPDATE branch.
    * ──────────────────────────────────────────────────────────────────── */
-  test('PJC-PERSIST: a saved Project Context does not survive a reload — product gap', async ({ page }) => {
-    test.fail(
-      true,
-      'ELITEA-0949 (#888) (and 0942/0950/0953/0956/0957\'s persistence half): product gap — UpdateProjectContext ' +
-        'always answers 200 but never durably writes (handler.go:623-651, migrations/001_initial.sql:823)',
-    );
+  test('PJC-PERSIST: a saved Project Context survives a reload, content and toggle alike', async ({ page }) => {
     await openEditor(page);
     const text = `${AUTOTEST_PREFIX}persist-probe-${Date.now()}`;
     await typeContent(page, text);
     await clickSave(page);
 
-    // SHOULD hold: the server's own row reflects what was just saved. It
-    // never does — this poll times out holding the pre-save value.
+    // 1. The server's own row, not the response echo.
     await expect
-      .poll(async () => (await readProjectContext(page, DEFAULT_PROJECT_ID)).content, { timeout: 8_000 })
+      .poll(async () => (await readProjectContext(page.request, DEFAULT_PROJECT_ID)).content, {
+        timeout: 8_000,
+      })
       .toBe(text);
+    expect((await readProjectContext(page.request, DEFAULT_PROJECT_ID)).enabled).toBe(true);
+
+    // 2. A reload reads it back through the app.
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await expect(page.getByTestId('project-context-body')).toBeVisible({ timeout: 20_000 });
+    await expect(editorContent(page)).toContainText(text, { timeout: 10_000 });
+    // Saved content means the empty state must NOT be what a reload lands on.
+    await expect(page.getByTestId('project-context-empty-state')).toHaveCount(0);
+
+    // 3. The toggle, in the direction that is easiest to lose: off.
+    const toggle = page.getByRole('switch');
+    await expect(toggle).toBeChecked();
+    await toggle.click();
+    await expect(toggle).not.toBeChecked();
+    await expect
+      .poll(async () => (await readProjectContext(page.request, DEFAULT_PROJECT_ID)).enabled, {
+        timeout: 8_000,
+      })
+      .toBe(false);
+    // …and the content it was saved with is not collateral damage of the
+    // toggle's own write.
+    expect((await readProjectContext(page.request, DEFAULT_PROJECT_ID)).content).toBe(text);
+
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await expect(page.getByRole('switch')).not.toBeChecked({ timeout: 20_000 });
   });
 
   /* ── PJC01 ────────────────────────────────────────────────────────────
    * onetest: ELITEA-0957 — the page loads without error in a SECOND
-   * project (not just the default one), for an Admin. The "and the content
-   * persists" half of this case is answered by PJC-PERSIST instead — see
-   * the file header.
+   * project (not just the default one), for an Admin, AND the two projects'
+   * contexts are independent: a save in one is not a save in the other.
+   * That second half is what the schema predicate in the handler's write
+   * actually buys, and it is checked here rather than in PJC-PERSIST
+   * because this is the only test that holds two projects at once.
    * ──────────────────────────────────────────────────────────────────── */
   test.describe('as admin, in the second project', () => {
     test.use({ storageState: STORAGE_STATE.admin });
 
     test('PJC01: Project Context is reachable and editable in a second project as Admin', async ({ page, request }) => {
-      await resolvePublishAuthorProjectId(request); // asserts the project resolves; id unused beyond that.
+      const secondProjectId = await resolvePublishAuthorProjectId(request);
+      await resetProjectContext(secondProjectId);
       // `ensureProjectSelected` reads the sidebar's switcher, which exists
       // only once the app shell has mounted — a fresh test starts on
       // `about:blank`, so the shell needs a navigation first (`auth.setup.ts`
@@ -189,6 +253,14 @@ test.describe('project-context: settings/config coverage', () => {
       // confirmed via the button re-disabling); only an ERROR toast would
       // indicate the save was refused.
       await expect(page.getByRole('alert').filter({ hasText: /fail/i })).toHaveCount(0);
+
+      // It landed in THIS project's row…
+      await expect
+        .poll(async () => (await readProjectContext(request, secondProjectId)).content, { timeout: 8_000 })
+        .toBe(text);
+      // …and project 1's row, which the beforeEach emptied, is still empty:
+      // a write that ignored the project id would have filled it too.
+      expect((await readProjectContext(request, DEFAULT_PROJECT_ID)).content).toBe('');
 
       await checkA11y(page);
     });
@@ -264,16 +336,18 @@ test.describe('project-context: settings/config coverage', () => {
     });
     await expect(editorContent(page)).toContainText('Respond concisely', { timeout: 10_000 });
 
-    // Reload WITHOUT saving the upload — it must be lost. (The saved
-    // baseline is ALSO lost, per PJC-PERSIST — the empty-state screen this
-    // reload lands on either way is consistent with that, not a second bug.)
+    // Reload WITHOUT saving the upload — it must be lost, and the SAVED
+    // baseline must be what comes back. Both halves matter: "the upload is
+    // gone" alone passed vacuously while no save persisted at all (#888),
+    // because the reload landed on the empty state and there was nothing on
+    // screen to contain the uploaded text.
     await page.reload({ waitUntil: 'domcontentloaded' });
-    const empty = page.getByTestId('project-context-empty-state');
-    const body = page.getByTestId('project-context-body');
-    await expect(body.or(empty)).toBeVisible({ timeout: 20_000 });
-    if (await body.isVisible().catch(() => false)) {
-      await expect(editorContent(page)).not.toContainText('Respond concisely');
-    }
+    await expect(page.getByTestId('project-context-body')).toBeVisible({ timeout: 20_000 });
+    // 20 s, not 10: CodeMirror mounts after the query settles, and this file
+    // serialises on a mutex, so a reload here can land while three other
+    // workers are busy.
+    await expect(editorContent(page)).toContainText('baseline-before-upload', { timeout: 20_000 });
+    await expect(editorContent(page)).not.toContainText('Respond concisely');
 
     // A 0-byte .md file is accepted and clears the editor, with no error toast.
     await openEditor(page);
@@ -472,34 +546,29 @@ test.describe('project-context: settings/config coverage', () => {
    * grant would otherwise have made ANY `viewer` role-holder here as
    * privileged as admin/editor).
    *
-   * WHAT THIS CANNOT ALSO PROVE END-TO-END, AND WHY. PJC-PERSIST above (this
-   * file's own headline finding) means `UpdateProjectContext` never durably
-   * saves ANYTHING, for ANY persona — so no project on this stack can ever
-   * carry SAVED content for a viewer to read back. ELITEA-0941's own
-   * precondition ("Admin has saved Markdown content") is therefore
-   * unreachable here, on ANY signed-in persona, and with it the two
-   * assertions that depend on saved content existing: the read-only EDITOR
-   * showing that content, and Preview rendering it as formatted Markdown.
-   * Both are unit-tested instead, directly against `ProjectContext.tsx` with
-   * a mocked server response that this real backend cannot currently produce
-   * — see `ProjectContext.test.tsx`'s "a viewer (canEdit=false) sees a
-   * read-only editor..." and "...and Preview renders the saved content"
-   * tests, which the `canEdit`/`showEditorContent` derivation this component
-   * already has makes straightforward to prove without a real save.
+   * BOTH HALVES ARE REAL NOW. ELITEA-0941's precondition is "Admin has saved
+   * Markdown content", which #888 made unreachable on any persona — no
+   * project on this stack could carry a saved row for a viewer to read back,
+   * so the two assertions that depend on it (the read-only EDITOR showing
+   * that content, and Preview rendering it as formatted Markdown) were left
+   * to `ProjectContext.test.tsx` against a mocked response. With the save
+   * fixed, this test arranges the precondition itself — as ADMIN, through
+   * the API, because the viewer persona deliberately cannot write — and then
+   * proves both halves end to end.
    *
-   * What DOES hold end-to-end, with the real viewer persona: `canView` is
-   * true (the page loads; no "no access" banner), and — since every project
-   * here starts, and stays, without saved content — a genuine viewer lands
-   * on the EMPTY state's OWN read-only branch: no Create / Build-with-AI
-   * buttons, and the "contact your project admin" copy instead of the
-   * editable invitation (`ProjectContextEmptyState.tsx`'s `canEdit` prop).
+   * The empty-state branch keeps its own test below, seeded explicitly
+   * rather than inherited from "every project here starts empty", which a
+   * working save stops guaranteeing.
    * ──────────────────────────────────────────────────────────────────────── */
   test.describe('as viewer', () => {
     test.use({ storageState: STORAGE_STATE.viewer });
 
-    test('PJC08: a viewer can open Project Context (canView) and sees the read-only empty state (canEdit=false)', async ({
+    test('PJC08: a viewer reads saved Project Context read-only, in Edit and in Preview (canView, canEdit=false)', async ({
       page,
     }) => {
+      const saved = `${AUTOTEST_PREFIX}# Viewer Heading\n\n**Bold for the viewer**`;
+      await seedProjectContextAsAdmin(DEFAULT_PROJECT_ID, { content: saved, enabled: true });
+
       await page.goto(PROJECT_PARAMS_PAGE, { waitUntil: 'domcontentloaded' });
 
       // canView: the page loads at all — not the permission-denied banner
@@ -507,14 +576,44 @@ test.describe('project-context: settings/config coverage', () => {
       // is absent.
       await expect(page.getByText(/do not have permission to view this setting/i)).toHaveCount(0);
 
-      const empty = page.getByTestId('project-context-empty-state');
-      const body = page.getByTestId('project-context-body');
-      await expect(body.or(empty)).toBeVisible({ timeout: 20_000 });
+      // The saved content is on screen, in the editor a viewer gets
+      // (`showEditorContent` is `enabled || content || !canEdit`).
+      await expect(page.getByTestId('project-context-body')).toBeVisible({ timeout: 20_000 });
+      await expect(editorContent(page)).toContainText('Bold for the viewer', { timeout: 10_000 });
 
-      // Every project on this stack starts (and stays — PJC-PERSIST) without
-      // saved content, so a genuine viewer always lands on the empty state,
-      // and specifically on its canEdit=false branch.
-      await expect(empty).toBeVisible();
+      // …and it is read-only. `showEditorControls` is `enabled && canEdit`,
+      // so the whole editor TOOLBAR is absent for this persona — Import,
+      // Copy, the AI generator and the Edit/Preview tabs with them. Save and
+      // Discard are rendered but disabled (`ProjectContextBody.tsx` keeps
+      // them outside that flag and gates them on `canEdit`), so the check is
+      // "disabled", not "absent": asserting absence here would pass for the
+      // wrong reason if a later change hid them for everyone.
+      await expect(page.getByTestId('project-context-save-button')).toBeDisabled();
+      await expect(page.getByTestId('project-context-discard-button')).toBeDisabled();
+      await expect(page.getByRole('button', { name: 'Import markdown file' })).toHaveCount(0);
+      await expect(page.getByRole('tab', { name: 'Preview mode' })).toHaveCount(0);
+      // The toggle is on screen (it is how an editor turns the context off)
+      // and refuses this persona.
+      await expect(page.getByRole('switch')).toBeDisabled();
+
+      // ELITEA-0941's "and Preview renders it as Markdown" half is a legacy-
+      // UI detail that does not survive the port: the mode tabs live inside
+      // `showEditorControls`, so a viewer in THIS app has no Preview mode to
+      // open at all. The equivalent behaviour — Preview rendering saved
+      // content as formatted Markdown — is covered for an editor by PJC07,
+      // and for the read-only component shape by
+      // `ProjectContext.test.tsx`'s viewer tests.
+    });
+
+    test('PJC08b: with nothing saved, a viewer sees the empty state\'s read-only branch', async ({ page }) => {
+      // The beforeEach already emptied the row; re-stating it here is what
+      // makes this test's precondition its OWN rather than an inheritance
+      // from a backend that could not save.
+      await resetProjectContext(DEFAULT_PROJECT_ID);
+      await page.goto(PROJECT_PARAMS_PAGE, { waitUntil: 'domcontentloaded' });
+
+      const empty = page.getByTestId('project-context-empty-state');
+      await expect(empty).toBeVisible({ timeout: 20_000 });
       await expect(page.getByTestId('project-context-create-button')).toHaveCount(0);
       await expect(page.getByTestId('project-context-build-with-ai-button')).toHaveCount(0);
       await expect(page.getByText(/contact your project admin to configure it/i)).toBeVisible();

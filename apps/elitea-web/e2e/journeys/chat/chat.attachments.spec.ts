@@ -337,7 +337,12 @@ test('J12c: staged files show as removable chips before the message is sent', as
 // Journey 13: Attach a large file (>5 MiB, chunked with progress)
 // ─────────────────────────────────────────────────────────────────────────────
 test('J13: attach a large file chunked upload with progress', async ({ page }) => {
-  const tmpFile = path.join(os.tmpdir(), 'e2e-large-file-attach.bin');
+  // `.txt`, not `.bin`. Since #940 A15 the composer validates the extension
+  // against the deployment's served allow-list
+  // (`GET /elitea_core/index_types/…`), and `.bin` is not in it — the file was
+  // refused before it ever reached the chunker, which is the gate working. The
+  // SIZE is what this journey is about, and a 6 MiB `.txt` chunks identically.
+  const tmpFile = path.join(os.tmpdir(), 'e2e-large-file-attach.txt');
   const SIX_MIB = 6 * 1024 * 1024;
   fs.writeFileSync(tmpFile, Buffer.alloc(SIX_MIB, 0xab));
   let createdConversationId: string | undefined;
@@ -393,7 +398,7 @@ test('J13: attach a large file chunked upload with progress', async ({ page }) =
     expect(secondResp!.status()).toBe(201);
     const uploaded = (await secondResp!.json()) as Array<{ filepath?: unknown; file_size?: unknown }>;
     expect(uploaded).toHaveLength(1);
-    expect(uploaded[0]!.filepath).toBe(`/chat-attachments/${convId}/e2e-large-file-attach.bin`);
+    expect(uploaded[0]!.filepath).toBe(`/chat-attachments/${convId}/e2e-large-file-attach.txt`);
     expect(uploaded[0]!.file_size).toBe(SIX_MIB);
   } finally {
     fs.unlinkSync(tmpFile);

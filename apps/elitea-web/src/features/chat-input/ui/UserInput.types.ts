@@ -55,6 +55,17 @@ export interface UserInputSendButtonConfig {
   readonly size?: string | undefined;
   /** Baseline: `NewChatInput.jsx`'s own `tooltipOfSendButton` prop, threaded through `UserInput`'s `tooltipOfSendButton` prop into `SendButton`. Folded into this existing config bag (rather than spending a new top-level `UserInput`/`NewChatInput` prop slot) since it travels the exact same path as the rest of this object. */
   readonly tooltipOfSendButton?: string | undefined;
+  /**
+   * A17 (ELITEA-2871): keep the send control on screen WHILE a turn is open,
+   * beside Stop rather than replaced by it — the host queues what is sent
+   * there ("Waiting messages") instead of putting a second turn on the wire.
+   *
+   * Off by default, so every host that has no queue keeps the baseline's
+   * either/or footer. Folded into this config bag for the reason
+   * `tooltipOfSendButton` above was: `UserInputProps` sits exactly on the §3.5
+   * 12-prop budget, and this travels the same path as the rest of the object.
+   */
+  readonly keepWhileStreaming?: boolean | undefined;
 }
 
 /** Everything the real `SendButton`/stop-button (baseline: `features/chat/ui/chat-button/SendButton.jsx`, unit C6) consumed — read from that file directly to build this bag. */

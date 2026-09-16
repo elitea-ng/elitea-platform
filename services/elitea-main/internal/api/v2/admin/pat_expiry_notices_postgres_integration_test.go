@@ -63,11 +63,11 @@ type patExpiryNotificationRow struct {
 //	                        Outside a 24-hour window, inside a 60-day one, and
 //	                        its total lifetime (70 days) is longer than either.
 //	                        This is the one that must be announced.
-//	9002 "short-lived"    — owner, expires in 30 days, minted TODAY. Its whole
-//	                        lifetime is 30 days, so it is eligible under a
-//	                        24-hour window but NOT under a 60-day one:
-//	                        ELITEA-0755's rule, expressed relative to the same
-//	                        window the look-ahead uses.
+//	9002 "short-lived"    — owner, expires in TWELVE HOURS, minted today. Its
+//	                        whole lifetime is under a day, so ELITEA-0755 says
+//	                        it is never warned about — under the production
+//	                        window, where it sits squarely inside the
+//	                        look-ahead, or under any wider one.
 //	9003 "never-expires"  — owner, `expires` NULL. Never announced.
 //	9004 "bystander-key"  — the OTHER user, same shape as 9001. Announced to
 //	                        its own owner and to nobody else.
@@ -79,7 +79,7 @@ INSERT INTO centry.project (id, name, owner_id, create_success)
 VALUES (9100, 'pat expiry fixture', 9101, true);
 INSERT INTO auth_core__token (id, uuid, expires, user_id, name) VALUES
     (9001, '00000000-0000-4000-8000-000000009001', NOW() + INTERVAL '30 days', 9101, 'ci-deploy-key'),
-    (9002, '00000000-0000-4000-8000-000000009002', NOW() + INTERVAL '30 days', 9101, 'short-lived'),
+    (9002, '00000000-0000-4000-8000-000000009002', NOW() + INTERVAL '12 hours', 9101, 'short-lived'),
     (9003, '00000000-0000-4000-8000-000000009003', NULL,                       9101, 'never-expires'),
     (9004, '00000000-0000-4000-8000-000000009004', NOW() + INTERVAL '30 days', 9102, 'bystander-key');
 INSERT INTO elitea_identity.token_lifecycle (token_id, issued_at) VALUES
@@ -170,8 +170,8 @@ func TestPATExpiryNoticeAnnouncesOneTokenToItsOwnerOnly(t *testing.T) {
 	handler := newPATExpiryHandler(t, pool)
 
 	// A 60-day look-ahead, so token 9001 (30 days left, 70-day lifetime) is
-	// inside it and token 9002 (30 days left, 30-day lifetime) is excluded by
-	// the lifetime rule rather than by the window.
+	// inside it — and token 9002, which is inside EVERY window, is excluded by
+	// the lifetime rule and not by the look-ahead.
 	result := runPATExpiryPass(t, handler, "1440h")
 	if result.Produced != 2 {
 		t.Fatalf("produced = %d, want 2 (one per owner of an eligible token): %+v", result.Produced, result)
@@ -279,8 +279,11 @@ func TestPATExpiryNoticeProductionWindowExcludesADistantExpiry(t *testing.T) {
 	handler := newPATExpiryHandler(t, pool)
 
 	// No `within` at all — the route falls back to patexpiry.DefaultWindow.
+	// Token 9002 expires in twelve hours and is inside that window; it is
+	// excluded by the lifetime rule, which is what makes this assertion about
+	// the WINDOW rather than about an empty fixture.
 	if result := runPATExpiryPass(t, handler, ""); result.Examined != 0 || result.Produced != 0 {
-		t.Errorf("the 24-hour window examined %+v, want nothing: every fixture token expires in 30 days", result)
+		t.Errorf("the 24-hour window examined %+v, want nothing", result)
 	}
 
 	// The same tokens, moved to within a day, ARE announced — otherwise the

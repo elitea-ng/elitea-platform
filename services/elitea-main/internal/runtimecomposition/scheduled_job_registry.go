@@ -7,7 +7,8 @@ import (
 )
 
 // scheduledJobs builds the schedulingapp.Job values New() registers — the
-// current index scan and the S14 artifact retention sweep. Extracted from
+// current index scan, the S14 artifact retention sweep and the
+// personal-access-token expiry notice (#940 A3). Extracted from
 // New()'s inline construction so a composition-level test can call this
 // exact function (the same one New() calls) and assert both jobs are
 // present via Registry.RegisteredJobs(), without needing New()'s full
@@ -20,8 +21,10 @@ import (
 func scheduledJobs(
 	indexHandler schedulingapp.Handler,
 	retentionHandler schedulingapp.Handler,
+	patExpiryHandler schedulingapp.Handler,
 	indexSchedule schedulingapp.Schedule,
 	retentionSchedule schedulingapp.Schedule,
+	patExpirySchedule schedulingapp.Schedule,
 ) []schedulingapp.Job {
 	jobs := []schedulingapp.Job{
 		{
@@ -41,6 +44,19 @@ func scheduledJobs(
 			Schedule: retentionSchedule,
 			Timeout:  artifactRetentionSweepHandlerTimeout,
 			Handler:  retentionHandler,
+		})
+	}
+	// #940 A3. Registered on the same terms as the retention sweep: a nil
+	// handler or a nil schedule leaves it out entirely rather than registering
+	// a job that cannot run. A deployment with no pool has neither.
+	if patExpiryHandler != nil && patExpirySchedule != nil {
+		jobs = append(jobs, schedulingapp.Job{
+			ID:       patExpirySweepCapability,
+			Revision: patExpirySweepRevision,
+			Mode:     schedulingapp.ModeLocalBounded,
+			Schedule: patExpirySchedule,
+			Timeout:  patExpirySweepHandlerTimeout,
+			Handler:  patExpiryHandler,
 		})
 	}
 	return jobs

@@ -16,68 +16,120 @@
  * ELITEA-2805/2806/2808 (`generate_project_context_draft` — a real model
  * call, 2808 explicitly a real-provider compatibility matrix) are LIVE-ONLY.
  *
- * ## ELITEA-2798/2799/2800 are ALL one confirmed, present-tense bug: a PUT
- * to Project Context never persists at all, on this stack or any other
+ * ## ELITEA-2798/2799/2800: the round trip, now that it round-trips (#888)
  *
- * `UpdateProjectContext` (`internal/api/v2/eliteacore/handler.go`) writes
- * with:
- *   INSERT INTO %s.configuration (elitea_title, ...) VALUES ('project_context_' || $1, ...)
- *   ON CONFLICT (elitea_title) WHERE type = 'project_context' DO UPDATE SET data = $2
- * `ON CONFLICT (col) WHERE …` names a PARTIAL unique index — but
- * `configuration.elitea_title` (`internal/infra/db/migrations/001_initial.sql:823`)
- * is a plain, non-partial `UNIQUE` constraint. Postgres rejects an ON
- * CONFLICT target that names a predicate no matching index actually has —
- * "there is no unique or exclusion constraint matching the ON CONFLICT
- * specification" — on EVERY call, insert or not; the error is swallowed
- * (`_, err := h.pool.Exec(...)`), and the fallback `UPDATE … WHERE type =
- * 'project_context'` finds no row (the INSERT never landed) and silently
- * affects zero rows. The handler then answers 200 with the SUBMITTED body
- * echoed back (`writeJSON(w, http.StatusOK, map[string]any{"content":
- * body.Content, "enabled": body.Enabled})`) regardless of what, if
- * anything, actually reached the table — measured directly against the
- * running stack: a PUT answers 200 with the exact body sent, and every
- * following GET answers the untouched default `{"content": "", "enabled":
- * false}`, forever. This makes ELITEA-2798 (get returns a pre-existing
- * value), ELITEA-2799 (put + get round-trips a full payload) and ELITEA-2800
- * (partial update preserves content) all unprovable on the SAME single root
- * cause — one FAIL-MARK, not three, per the write's own echo being the only
- * thing that ever looked right.
+ * These three cases were one fail-mark, not three, because one defect made
+ * them all unprovable: `UpdateProjectContext` wrote with an INSERT that
+ * omitted `project_id` (NOT NULL on the tenant `configuration` table) under
+ * an `ON CONFLICT (elitea_title) WHERE type = 'project_context'` clause
+ * naming a partial unique index `001_initial.sql` never creates, discarded
+ * both errors, and answered 200 with the SUBMITTED body echoed back. A PUT
+ * looked perfect and every following GET answered the untouched default.
+ *
+ * The handler now writes UPDATE-first with `project_id` named, and answers a
+ * typed 500 (`project_context_write_failed`) when it cannot write — so the
+ * echo is no longer the only thing that ever looked right, and these three
+ * cases are separable again:
+ *
+ *   ELITEA-2798 — a GET returns the value already stored;
+ *   ELITEA-2799 — a full payload PUT round-trips;
+ *   ELITEA-2800 — a partial update does not lose the other field.
+ *
+ * ELITEA-2800 needs a word: this route takes `{content, enabled}` as a whole
+ * and has no partial-update form (no PATCH, and an omitted key decodes to
+ * the zero value, not to "leave it alone"). The case's real question —
+ * "changing one field does not silently destroy the other" — is asked here
+ * in the shape this API has: a second PUT that keeps `content` and flips
+ * `enabled` must leave `content` exactly as it was.
+ *
+ * ## Sharing the row
+ *
+ * Project Context is ONE ROW PER PROJECT and this file writes project 1's,
+ * as does `settings.project-context.spec.ts` under `fullyParallel: true`.
+ * While nothing persisted that was harmless; now it is a clobber. Both files
+ * take the project-context mutex (`fixtures/projectContext.ts`) and start
+ * from a reset row.
  */
 import { expect, test } from '@playwright/test';
 
-import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID } from '../../fixtures/api';
+import { AUTOTEST_PREFIX, DEFAULT_PROJECT_ID } from '../../fixtures/api';
+import {
+  acquireProjectContextLock,
+  readProjectContext,
+  resetProjectContext,
+  writeProjectContext,
+} from '../../fixtures/projectContext';
 
-const CONTEXT_URL = `${API_BASE}/elitea_core/project_context/prompt_lib/${DEFAULT_PROJECT_ID}/project-context`;
+let releaseProjectContext: (() => Promise<void>) | undefined;
 
-interface ProjectContextBody {
-  readonly content?: string;
-  readonly enabled?: boolean;
-}
+test.beforeEach(async () => {
+  releaseProjectContext = await acquireProjectContextLock();
+  await resetProjectContext(DEFAULT_PROJECT_ID);
+});
 
-/* onetest: ELITEA-2798, ELITEA-2799, ELITEA-2800 — PRODUCT GAP, see file header: a project-context PUT
- * never actually persists (an invalid ON CONFLICT target vs. a plain UNIQUE constraint), so get after
- * put never shows what was written, a full-payload round-trip does not round-trip, and the
- * partial-update-preserves-content question is moot — nothing survives a PUT at all. */
-test('ELITEA-2798/2799/2800: a project-context PUT never actually persists — get after put shows the untouched default', async ({
+test.afterEach(async () => {
+  const release = releaseProjectContext;
+  releaseProjectContext = undefined;
+  await release?.();
+});
+
+/* onetest: ELITEA-2798, ELITEA-2799, ELITEA-2800 — the project-context round trip: a full payload
+ * survives the PUT and comes back on the next GET (2799), a GET returns a value that was already
+ * stored rather than a default (2798), and a second PUT that changes only `enabled` leaves `content`
+ * intact (2800, asked in the shape this whole-object API has — see the file header). */
+test('ELITEA-2798/2799/2800: a project-context PUT persists, reads back, and does not lose the other field', async ({
   request,
 }) => {
-  test.fail(
-    true,
-    'ELITEA-2798/2799/2800: product gap — UpdateProjectContext\'s ON CONFLICT (elitea_title) WHERE ' +
-      "type = 'project_context' names a partial unique index that does not exist (elitea_title carries " +
-      'only a plain UNIQUE constraint, migrations/001_initial.sql:823), so the write silently no-ops ' +
-      'and the 200 response merely echoes the submitted body — get_project_context never returns what ' +
-      'was just put_project_context\'d, on a full payload or a partial one',
-  );
-
+  // 2799 — the full payload, written into a project with NO prior row (the
+  // beforeEach emptied it), which is the INSERT branch the missing
+  // `project_id` column used to kill.
   const fullContent = `${AUTOTEST_PREFIX}p13-project-context-full-${Date.now()}`;
-  const put = await request.put(CONTEXT_URL, { data: { content: fullContent, enabled: true } });
-  expect(put.status(), await put.text()).toBe(200);
+  await writeProjectContext(request, DEFAULT_PROJECT_ID, { content: fullContent, enabled: true });
 
-  const got = await request.get(CONTEXT_URL);
-  expect(got.status(), await got.text()).toBe(200);
-  const body = (await got.json()) as ProjectContextBody;
-  // What the case says SHOULD hold (2798's read-back, 2799's round-trip).
-  expect(body.content).toBe(fullContent);
-  expect(body.enabled).toBe(true);
+  // 2798 — a GET returns what is stored. Read TWICE, because a handler that
+  // answered from a per-request cache of its own write would satisfy one
+  // read; the second read is a fresh request with nothing in front of it.
+  expect(await readProjectContext(request, DEFAULT_PROJECT_ID)).toEqual({
+    content: fullContent,
+    enabled: true,
+  });
+  expect(await readProjectContext(request, DEFAULT_PROJECT_ID)).toEqual({
+    content: fullContent,
+    enabled: true,
+  });
+
+  // 2800 — change one field, keep the other. `content` must come back
+  // byte-identical, not emptied by the write that was about `enabled`.
+  await writeProjectContext(request, DEFAULT_PROJECT_ID, { content: fullContent, enabled: false });
+  expect(await readProjectContext(request, DEFAULT_PROJECT_ID)).toEqual({
+    content: fullContent,
+    enabled: false,
+  });
+
+  // And the reverse edit, on the UPDATE branch: a new content value replaces
+  // the old one rather than being appended as a second row the GET's
+  // `LIMIT 1` would then choose between.
+  const replaced = `${fullContent}-replaced`;
+  await writeProjectContext(request, DEFAULT_PROJECT_ID, { content: replaced, enabled: true });
+  expect(await readProjectContext(request, DEFAULT_PROJECT_ID)).toEqual({
+    content: replaced,
+    enabled: true,
+  });
 });
+
+/*
+ * THE REFUSAL HALF IS NOT REACHABLE FROM HERE, and is not silently dropped.
+ *
+ * The write now answers a typed 500 (`project_context_write_failed`) instead
+ * of the 200-with-an-echo that hid #888. Asking for it over HTTP means naming
+ * a project whose tenant schema does not exist — and `projectScoped` refuses a
+ * project the caller is not a member of with 403 BEFORE the handler runs, so
+ * no request from a browser session can reach that branch. Measured: 403, not
+ * 500.
+ *
+ * It is covered where it can be: `services/elitea-main/internal/api/v2/
+ * eliteacore/project_context_postgres_integration_test.go`'s
+ * TestProjectContextRefusesAWriteItCannotPersist, which mounts the handler
+ * without the permission middleware and asserts both the status and that the
+ * body leaks no table name or SQLSTATE.
+ */

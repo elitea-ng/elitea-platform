@@ -55,6 +55,23 @@ export function resolveSendButtonConfig(sendButton: UserInputSlotProps['sendButt
   return { ...sendButton, tooltipOfSendButton: sendButton?.tooltipOfSendButton };
 }
 
+/**
+ * Which of the two composer end-controls the footer shows.
+ *
+ * A17: the send control is no longer the "else" of Stop. A host that QUEUES
+ * what is sent during a run (`UserInputSendButtonConfig.keepWhileStreaming`)
+ * shows both; every other host keeps the baseline's either/or. A pure function
+ * because `UserInput` itself sits on the §3.5 complexity ceiling.
+ */
+export function resolveFooterControls(flags: {
+  readonly isStreaming: boolean;
+  readonly isUploading: boolean;
+  readonly keepSendWhileStreaming: boolean | undefined;
+}): { readonly showStop: boolean; readonly showSend: boolean } {
+  const showStop = flags.isStreaming && !flags.isUploading;
+  return { showStop, showSend: !showStop || flags.keepSendWhileStreaming === true };
+}
+
 export function resolveAttachmentsProps(attachments: UserInputAttachmentsProps | undefined): {
   readonly items: readonly Attachment[];
   readonly onDelete: UserInputAttachmentsProps['onDelete'];

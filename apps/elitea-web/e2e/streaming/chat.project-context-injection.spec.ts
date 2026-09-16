@@ -6,58 +6,45 @@
  * precondition none of them state: that saving the content actually works.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * IT DOES NOT. MEASURED DIRECTLY AGAINST THE LIVE STACK, NOT ONLY READ FROM SOURCE.
+ * IT DID NOT, UNTIL #888. THE ROUND TRIP IS THE PRECONDITION, AND IT IS TESTED HERE.
  * ─────────────────────────────────────────────────────────────────────────────
  * `PUT /api/v2/elitea_core/project_context/prompt_lib/{projectId}/project-context`
- * answers 200 and ECHOES the body sent — `{"content": "…", "enabled": true}` —
- * which looks exactly like a successful save. A `GET` on the same route
- * immediately afterward returns `{"content": "", "enabled": false}`: the write
- * never reached the row it claims to have written.
- *
- * `internal/api/v2/eliteacore/handler.go`'s `UpdateProjectContext` explains
- * why. Its `INSERT` never names a `project_id` column:
- *
- *   INSERT INTO %s.configuration
- *     (elitea_title, label, type, data, section, status_ok, created_at)
- *   VALUES ('project_context_' || $1, 'Project Context', 'project_context',
- *           $2, 'project_context', true, NOW())
- *   ON CONFLICT (elitea_title) WHERE type = 'project_context' DO UPDATE …
- *
- * For a project with no PRE-EXISTING `project_context` row (any project that
- * has never saved one before — which is every project a fresh onetest run
- * would use), there is nothing for `ON CONFLICT` to match, so Postgres
- * attempts the bare `INSERT` — and the tenant schema's `configuration` table
- * requires `project_id NOT NULL`. Measured directly in this stack's own
- * Postgres log at the moment of the write:
+ * used to answer 200 and ECHO the body sent — `{"content": "…", "enabled":
+ * true}` — which looked exactly like a successful save, while a `GET` on the
+ * same route immediately afterward returned `{"content": "", "enabled":
+ * false}`. `UpdateProjectContext`'s INSERT never named a `project_id` column,
+ * which the tenant `configuration` table requires NOT NULL, so on any project
+ * with no pre-existing row the write died in the database:
  *
  *   ERROR: null value in column "project_id" of relation "configuration"
  *          violates not-null constraint
  *
- * The handler's own fallback (`UPDATE … WHERE type = 'project_context'`,
- * guarded by `_, _ = h.pool.Exec(...)  // fallback update; ignore error,
- * best-effort`) matches zero rows for the same reason and is not checked
- * either way — so the handler falls all the way through to `writeJSON(w,
- * http.StatusOK, map[string]any{"content": body.Content, "enabled":
- * body.Enabled})` regardless of whether either statement wrote anything. The
- * route cannot currently tell a caller "your save did not persist".
+ * — and the handler's own fallback (`UPDATE … WHERE type = 'project_context'`,
+ * under `_, _ = h.pool.Exec(...)  // ignore error, best-effort`) matched zero
+ * rows for the same reason and was not checked either way. Both errors were
+ * discarded and the 200 was written regardless.
  *
- * This is a MORE FUNDAMENTAL gap than "the content is never woven into a
- * prompt" (`internal/application/agentexecution/memories.go`'s own doc
- * comment, and the admission-time `NOT EXISTS` gate in
- * `internal/db/sqlcgen/agent_chat.sql.go` that the earlier draft of this file
- * targeted): that gate can never even be REACHED, because the row it checks
- * for never gets written in the first place. Every onetest case in this
- * cluster — isolation, the per-agent Ignore toggle, multi-model, sub-agent
- * exclusion, direct-chat injection — collapses to this one root cause: the
- * save silently no-ops.
+ * The handler now writes UPDATE-first with `project_id` named, and returns a
+ * typed 500 (`project_context_write_failed`) rather than swallowing a failed
+ * write. The round trip below is no longer a fail-marked product gap: it is
+ * the PRECONDITION every injection case in this cluster (ELITEA-0939/0943/
+ * 0944/0945/0946/0948/0951/0952/0954) silently assumes, asserted directly,
+ * without needing a model turn.
  *
- * Written as the onetest cases all implicitly assume (a save actually
- * persists) and marked `test.fail`, per the porting rulebook's "no
- * `test.skip` for a product gap" rule. It fails at the round trip itself —
- * PUT then GET — which is fast and needs no model turn at all, rather than at
- * a chat turn that a persistence failure makes meaningless to attempt (if the
- * content never saved, a turn answering normally proves nothing about
- * injection either way).
+ * What is STILL not proven by this file is the injection itself — that the
+ * saved content reaches a turn's system prompt (`memories.go`), and that the
+ * admission-time `NOT EXISTS` gate in `agent_chat.sql.go` behaves. Those need
+ * a real model turn. With the save fixed, the gate is at least REACHABLE now,
+ * which it was not before.
+ *
+ * NOTE ON WHERE THIS RAN. This package's own stack (`chat-stream`) is not
+ * available in the wave that fixed #888, so the assertion below was flipped
+ * off `test.fail` on the strength of the same round trip proven two other
+ * ways: `services/elitea-main/internal/api/v2/eliteacore/
+ * project_context_postgres_integration_test.go` (PUT-then-GET through the
+ * handler on the real migration corpus, both the no-prior-row and the
+ * existing-row branch) and `journeys/settings/settings.p13-project-context.
+ * spec.ts` (the same round trip over HTTP against the journeys stack).
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * WHY THE CLEANUP IS A `finally`, UNLIKE THIS DIRECTORY'S OTHER SPECS
@@ -94,17 +81,12 @@ function projectContextUrl(projectId: string): string {
   return `${BASE_URL}/api/v2/elitea_core/project_context/prompt_lib/${projectId}/project-context`;
 }
 
+/* onetest: ELITEA-0954 — and the precondition half of ELITEA-0939/0943/0944/0945/0946/0948/0951/0952:
+ * Project Context saved with content and the toggle on is READABLE BACK, which every injection case in
+ * this cluster assumes without stating. The injection itself (does the content reach the turn's system
+ * prompt) needs a model turn and is not asserted here — see the file header. */
 test('Project Context, once saved with content enabled, reads back what was saved', async ({ page }) => {
   test.setTimeout(60_000);
-  test.fail(
-    true,
-    'ELITEA-0954 (#888) (and the whole project-context cluster: 0939/0943/0944/0945/0946/0948/0951/0952): ' +
-      'product gap — UpdateProjectContext\'s INSERT omits `project_id`, which the tenant `configuration` ' +
-      'table requires NOT NULL; for a project with no pre-existing row the write fails silently ' +
-      '(confirmed in this stack\'s own Postgres log: "null value in column \\"project_id\\" … violates ' +
-      'not-null constraint") and the route still answers 200 with the body echoed back. A GET ' +
-      'immediately after a PUT shows the save never took effect. See S/port/defects.md.',
-  );
 
   const projectId = await readCallerPersonalProjectId(page.request);
   expect(projectId, 'this persona must work inside its own project').not.toBe('');
@@ -123,15 +105,15 @@ test('Project Context, once saved with content enabled, reads back what was save
       300,
     );
     const savedBody = (await saved.json()) as ProjectContextBody;
-    // The route's OWN claim: it echoes the body it was sent regardless of
-    // whether it wrote anything, so this much always passes — the gap is
-    // below, in the READ.
+    // The route's OWN claim. It echoed the body it was sent regardless of
+    // whether it wrote anything, so this much always passed even while the
+    // write was a no-op — the assertion that discriminates is the READ.
     expect(savedBody.enabled, 'the save response itself must claim the toggle is ON').toBe(true);
     expect(savedBody.content, 'the save response itself must echo the content sent').toBe(phrase);
 
     // THE assertion this file exists for: what a caller can actually observe
-    // persisted, not what the write route claimed. This is where the gap is —
-    // a working save would read back identically to what was just written.
+    // persisted, not what the write route claimed. A working save reads back
+    // identically to what was just written.
     const readBack = await page.request.get(projectContextUrl(projectId));
     expect(readBack.ok(), 'the project context must be readable after saving it').toBe(true);
     const readBackBody = (await readBack.json()) as ProjectContextBody;
@@ -141,8 +123,8 @@ test('Project Context, once saved with content enabled, reads back what was save
         'past the response that claimed to have written it',
     ).toEqual({ content: phrase, enabled: true });
   } finally {
-    // Restored REGARDLESS of the assertion above, and before this test's
-    // (expected) failure is allowed to end the test — see the header.
+    // Restored REGARDLESS of the assertion above — see the header. It
+    // matters more now than it did: the save it undoes actually persists.
     const restored = await page.request.put(projectContextUrl(projectId), {
       data: { content: priorState.content ?? '', enabled: priorState.enabled ?? false },
     });
