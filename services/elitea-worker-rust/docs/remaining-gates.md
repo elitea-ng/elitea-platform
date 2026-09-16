@@ -93,6 +93,8 @@ Point 4 also includes the following required work, confirmed by the user on 2026
 - Wire compaction settings, context budget, status, and continuation through UI, Main, and Rust.
 - Check the current SDK and UI continuation implementation before changing resume behavior. Cover exhausted output, user Continue, partial output, and replacement without duplicate content.
 - Support pipeline summaries and a separately authorized summarization model where the model contract permits it. Preserve its own token and credential limits.
+- Inherit context policy for nested agents and applications, with independent occupancy and durable summaries. Recompute capacity against each child's model.
+- Apply pipeline compaction to eligible history at model invocations. Preserve exact graph state and keep deterministic nodes free of summarization calls.
 - Complete tool-output editing without destroying tool identity, outcomes, or authoritative instruction state.
 - Resolve same-name toolkit bindings by exact toolkit and tool identity, using the current SDK fix as behavioral evidence.
 - Complete [OBS-RUST-01](source-mapping/agent-runtime.md#obs-rust-01-detailed-runtime-diagnostics): useful public errors, detailed internal causes, synchronous backtraces, async span context, and release-build symbol information. Keep sensitive payloads out of diagnostics.

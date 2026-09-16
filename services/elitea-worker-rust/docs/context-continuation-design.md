@@ -65,6 +65,51 @@ An output cap limits one response. It does not implement context compaction.
 When protected content alone exceeds the available input budget, return an explicit bounded failure.
 Do not silently discard instructions or send an already known oversized request.
 
+## Child agents and pipeline model requests
+
+User clarification on 2026-09-16 applies independent compaction to nested agents and applications.
+Each child inherits the parent's admitted context policy, including the preset, explicit limit, preservation rules, and compaction thresholds.
+Freeze that policy for the child invocation and retain it during recovery.
+The proposed default trigger is 90 percent of usable input capacity, with a target of 70 percent after compaction.
+These thresholds remain proposed behavior, not implemented acceptance evidence.
+
+Each child measures its own complete model request and retains its own summary and source coverage.
+It does not inherit the parent's occupancy, summary, or private transcript automatically.
+Explicit task and history mappings still determine the child's input.
+Parent compaction must not change a child's checkpoint; child compaction must not change its parent or siblings.
+The returned child result counts toward the parent's next request when that request includes it.
+Aggregate execution usage and concurrency limits remain separate controls.
+
+Inherit the policy, then recompute capacity against the child's authorized model and admitted output cap.
+A Balanced child has at most 272,000 total tokens, even when its model supports a larger window.
+A smaller child model lowers that total; a different output cap changes its usable input and trigger.
+Inherit Full as a preset, not as the parent's resolved token count.
+Any inherited summary-model selection still requires authorization and its own request limits.
+
+A pipeline has durable graph state, but it does not necessarily have a model conversation.
+Carry the context policy through the graph and apply it at each model invocation.
+Do not summarize the entire graph checkpoint or replace its state variables with a narrative summary.
+
+| Execution kind | Context behavior |
+| --- | --- |
+| Nested agent or application | Use an independent compaction scope with inherited policy and child-specific model limits. |
+| Pipeline LLM node | Budget each complete request. Compact eligible mapped history and completed local tool exchanges before each model call. |
+| Model-backed decision node | Apply the same request budget. Preserve exact routing instructions, declared choices, and required data. |
+| Direct tool, code, or deterministic map/reduce step | Do not invoke a summarizer. Preserve exact state and use the node's existing resource limits. |
+| Map branch or reducer that invokes a model | Apply the policy to that model request or nested agent. Keep branch and iteration scopes separate. |
+
+Mixed pipelines and pipelines containing only LLM nodes follow the same model-invocation rule.
+Budget only the graph values actually included in a request, together with its instructions, history, tools, and framing.
+Keep current mapped task data exact; compact only content admitted as summarizable history.
+If required data alone exceeds capacity, return a clear failure rather than silently changing its meaning.
+Explicit chunking, reduction, and authored summary nodes retain separate graph semantics.
+
+Store model-history summaries with execution, child path, node invocation, and source-coverage identity through existing checkpoint infrastructure.
+Reuse a summary only when its scope and covered source events still match.
+A loop visit or map item must not reuse another invocation's summary merely because the node name matches.
+Persist this state before relying on it, and restore the same scope after worker replacement.
+Keep original graph data and conversation events available for replay and audit.
+
 ## Compaction sequence
 
 1. Load authoritative instructions and the latest valid continuation checkpoint.
@@ -136,6 +181,11 @@ Verify compaction during a long tool loop without separating calls from results.
 Verify original user intent and later corrections survive repeated compactions.
 Verify skill and project-context revisions remain exact after source edits.
 Verify completed work remains completed and ambiguous effects are not retried automatically.
+Verify inherited policies with different child models and output caps, without sharing parent or sibling occupancy.
+Verify child compaction and recovery leave parent and sibling checkpoints unchanged.
+Verify graphs without model calls perform no summarization.
+Verify mixed graphs preserve exact state while model requests compact only eligible history.
+Verify loops and concurrent branches cannot reuse summaries from a different invocation or source history.
 Restart the worker after checkpoint persistence and resume through the UI.
 Confirm the next action uses the retained objective, instructions, artifacts, and pending execution state.
 Keep the gate open until these tests and the deployed continuation proof pass.
