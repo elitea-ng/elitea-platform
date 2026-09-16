@@ -265,7 +265,7 @@ objectInit:
   enabled: false
 
   image:
-    repository: docker.io/minio/mc
+    repository: quay.io/minio/mc
     tag: "latest"
     pullPolicy: IfNotPresent
 
