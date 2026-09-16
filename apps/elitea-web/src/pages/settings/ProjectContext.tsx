@@ -154,13 +154,24 @@ export function ProjectContext({
   const isProjectContext =
     serverData && typeof serverData === 'object' && 'content' in serverData;
 
+  /*
+   * `!isDirty`: don't let a BACKGROUND REFETCH clobber an in-session edit.
+   * `handleToggle` saves the toggle immediately but sends the SAVED content,
+   * not the buffer — its own `invalidateQueries` refetch resolves with the
+   * OLD content, and without this guard this effect reset a typed-but-
+   * unsaved edit to that stale value, flipping `showDisabledBanner` back off
+   * right after a toggle-off turned it on (CI-only race — e2e `PJC06`; see
+   * `ProjectContext.test.tsx`'s "toggle-triggered background refetch"
+   * regression test). Skipping the sync while dirty leaves the edit
+   * authoritative until Save/Discard settles it, as those buttons assume.
+   */
   useEffect(() => {
-    if (isProjectContext && serverData !== undefined) {
+    if (isProjectContext && serverData !== undefined && !isDirty) {
       setContent(serverData.content ?? '');
       setEnabled(serverData.enabled ?? true);
       setIsDirty(false);
     }
-  }, [isProjectContext, serverData]);
+  }, [isProjectContext, serverData, isDirty]);
 
   /* ── event handlers ─────────────────────────────────────────────── */
 

@@ -812,6 +812,15 @@ test('AHA-10b: the Aha Configuration dropdown should support search/filter', asy
   await seedAhaCredential(page.request, name, { shared: false });
   await gotoCreateAhaToolkit(page);
   await ahaConfigPicker(page).click();
-  const searchBox = page.getByPlaceholder(/search/i);
+  // Scoped to the OPEN DROPDOWN POPUP (`role="listbox"`), not the page —
+  // an earlier, unscoped `page.getByPlaceholder(/search/i)` matched the
+  // unrelated "Search tools" field further down the same form (the TOOLS
+  // section's own filter), so this test "passed unexpectedly" in CI with
+  // the credential dropdown's own gap untouched (measured: the listbox has
+  // zero placeholder-matching descendants; the page has exactly one, and
+  // it isn't this one).
+  const listbox = page.getByRole('listbox');
+  await expect(listbox, 'the Aha Configuration dropdown must open').toBeVisible({ timeout: 5_000 });
+  const searchBox = listbox.getByPlaceholder(/search/i);
   await expect(searchBox, 'the dropdown must offer a search/filter field').toBeVisible({ timeout: 5_000 });
 });

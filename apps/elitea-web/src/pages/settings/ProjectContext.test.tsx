@@ -25,6 +25,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { resetBackendCapabilitiesForTests, setBackendCapabilityForTests } from '@/shared/config/backendCapabilities';
+import { installCodeMirrorTestPolyfills } from '@/shared/ui/lib/field/codeMirrorTestPolyfills';
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
 import { server } from '@/test/setup';
@@ -37,6 +38,7 @@ vi.setConfig({ testTimeout: 30_000 });
 const BASE = '/api/v2';
 const CONTEXT_PATH = `${BASE}/elitea_core/project_context/prompt_lib/:projectId/project-context`;
 const PERMISSIONS_PATH = `${BASE}/auth/permissions/prompt_lib/:projectId`;
+const MAX_CHARS = 2500;
 
 function mount(overrides: { canView?: boolean; canEdit?: boolean } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -199,5 +201,92 @@ describe('Settings › Project Context', () => {
     // unreachable.
     expect(screen.queryByRole('tab', { name: 'Preview mode' })).not.toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: 'Edit mode' })).not.toBeInTheDocument();
+  });
+
+  /*
+   * ── regression guard: toggle's background refetch vs. an unsaved edit ────
+   *
+   * CI-only failure on `PJC06` (e2e/journeys/settings/settings.project-
+   * context.spec.ts, a fresh scratch project — no saved row, so the server's
+   * `content` starts at ""): type content, toggle off, expect the "Project
+   * Context is turned off" banner (`!enabled && content.trim()`) — passed
+   * locally, failed on both engines in CI. `handleToggle` saves the toggle
+   * immediately but sends the SAVED content, not the editor's buffer, so its
+   * own `invalidateQueries` refetch resolves with the server's untouched ""
+   * content. The mount effect that syncs `content`/`enabled` from that query
+   * had no `isDirty` guard, so whenever the refetch landed — reliably, given
+   * enough wall-clock time; a slower CI container just made it land inside
+   * the test's own 5s assertion window — it reset the typed-but-unsaved
+   * content back to "", which also flipped the banner's `content.trim()`
+   * half back to false right after it had just gone true. A routed response
+   * logger against the real E2E stack showed exactly this sequence: GET "" →
+   * PUT enabled:true → GET "" → PUT enabled:false → GET "", the last GET
+   * landing squarely inside the banner assertion and erasing the typed text.
+   * This test reproduces the same race at the unit level with a real
+   * (non-mocked) React Query refetch cycle, waiting for the char counter —
+   * driven by the PARENT's `content` state, not CodeMirror's own document —
+   * exactly as the E2E journey's `editorContentCommitted` does, so the edit
+   * is provably committed before the toggle races it.
+   */
+  it('does not let the toggle-triggered background refetch clobber an unsaved edit', async () => {
+    let serverContent = '';
+    let serverEnabled = false;
+    let getCalls = 0;
+    server.use(
+      http.get(CONTEXT_PATH, () => {
+        getCalls += 1;
+        return HttpResponse.json({ content: serverContent, enabled: serverEnabled });
+      }),
+      http.put(CONTEXT_PATH, async ({ request }) => {
+        const body = (await request.json()) as { content: string; enabled: boolean };
+        // The toggle sends the SAVED content, which is still "" — this
+        // handler never receives the typed buffer, matching the real
+        // handler's `UpdateProjectContext`.
+        serverContent = body.content;
+        serverEnabled = body.enabled;
+        return HttpResponse.json({ content: body.content, enabled: body.enabled });
+      }),
+    );
+
+    const { container } = mount();
+    const user = userEvent.setup();
+    installCodeMirrorTestPolyfills();
+
+    // Nothing saved yet — the empty state, exactly like a fresh scratch
+    // project.
+    await user.click(await screen.findByTestId('project-context-create-button'));
+    await screen.findByTestId('project-context-body');
+
+    // Enable, as `openEditor` does in the E2E journey, to reveal the editor.
+    const toggle = await screen.findByRole('switch');
+    await user.click(toggle);
+    await waitFor(() => expect(toggle).toBeChecked());
+    const editor = await waitFor(() => {
+      const el = container.querySelector('.cm-content');
+      if (!(el instanceof HTMLElement)) throw new Error('CodeMirror content element not found');
+      return el;
+    });
+
+    const probe = 'Unsaved edit';
+    await user.click(editor);
+    await user.keyboard(probe);
+    // Wait for the PARENT's `content` state, not merely CodeMirror's own
+    // document — the char counter renders `MAX_CHARS - content.length`.
+    await waitFor(() => expect(screen.getByTestId('project-context-char-counter'))
+      .toHaveTextContent(`${String(MAX_CHARS - probe.length)} characters left.`));
+
+    const getsBeforeToggleOff = getCalls;
+    await user.click(toggle);
+    await waitFor(() => expect(toggle).not.toBeChecked());
+    await waitFor(() => expect(screen.getByText(/Project Context is turned off/i)).toBeInTheDocument());
+
+    // The toggle's own PUT-then-invalidate must actually have triggered the
+    // background GET this race depends on — not merely asserting an absence.
+    await waitFor(() => expect(getCalls).toBeGreaterThan(getsBeforeToggleOff));
+    // Give the resolved query time to reach the (guarded) sync effect.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    expect(container.querySelector('.cm-content')).toHaveTextContent(probe);
+    expect(screen.getByText(/Project Context is turned off/i)).toBeInTheDocument();
   });
 });
