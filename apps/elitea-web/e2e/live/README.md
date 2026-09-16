@@ -96,6 +96,40 @@ and non-empty. Optional variables have a working default.
 | `E2E_LIVE_CONFLUENCE_SPACE` | yes | — the evidence string |
 | `E2E_LIVE_CONFLUENCE_LABEL` | no | `test` |
 
+### Aha! — `toolkits.aha.spec.ts`
+
+| Variable | Required | Default |
+|---|---|---|
+| `E2E_LIVE_AHA_BASE_URL` | yes | — (e.g. `https://mycompany.aha.io`) |
+| `E2E_LIVE_AHA_API_KEY` | yes | — |
+| `E2E_LIVE_AHA_PRODUCT_NAME` | yes | — a real product/company name in the tenant; the evidence string |
+
+Only the `find_project` probe is wired (no required arguments — the cheapest
+real read this provider offers). The legacy public suite's other Aha! cases
+(list/get/search/mutate tools, pagination, error-code handling, credential
+form UI) are ledgered in `S/port/ledger-P8-toolkits-A.tsv` rather than wired
+here — each needs its own tenant fixture (a specific record id, 500+ rows to
+page through, a deliberately-permission-less credential, …) that a single
+`E2E_LIVE_AHA_*` set cannot produce.
+
+### SharePoint — `toolkits.sharepoint.spec.ts`
+
+| Variable | Required | Default |
+|---|---|---|
+| `E2E_LIVE_SHAREPOINT_CLIENT_ID` | yes | — App-only auth (no interactive OAuth consent) |
+| `E2E_LIVE_SHAREPOINT_CLIENT_SECRET` | yes | — |
+| `E2E_LIVE_SHAREPOINT_SITE_URL` | yes | — |
+| `E2E_LIVE_SHAREPOINT_NOTEBOOK_NAME` | yes | — the display name of a real OneNote notebook on that site; the evidence string |
+
+Only `onenote_get_notebooks` is wired (no required arguments). The credential
+is deliberately App-only, not Delegated: the Delegated auth subsection
+(`oauth_discovery_endpoint`/`scopes`/`auto_refresh_token`) needs a human OAuth
+consent screen no scripted lane can drive. The legacy suite's other 8
+SharePoint cases (attachment reads, hierarchy navigation, index search,
+page CRUD, `index_data`'s `include_onenote`/`onenote_filter` scoping, a
+Pipeline Toolkit Call node) are ledgered, not wired — each needs a different
+real OneNote/SharePoint fixture a single notebook name cannot stand in for.
+
 ### Image generation — `image.creation.spec.ts`, `image.imagegen-toolkit.spec.ts`
 
 | Variable | Required | Default |
