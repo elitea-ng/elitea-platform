@@ -124,7 +124,28 @@ impl ModelCheckpointWriter {
 
     /// Restore only an unfinished model step from this exact execution.
     /// A tool boundary and a persisted model result are not replay permission.
-    pub(super) fn restore(mut self, session: &dyn Session) -> adk_rust::Result<Self> {
+    pub(super) fn restore(self, session: &dyn Session) -> adk_rust::Result<Self> {
+        let allow_context_preparation = self.context_compaction.is_some();
+        self.restore_validated(session, allow_context_preparation)
+    }
+
+    /// Validate evidence before credential redemption, without constructing a model.
+    /// This returns no executable writer; restoration still requires a compactor.
+    pub(super) fn inspect(
+        self,
+        session: &dyn Session,
+        allow_context_preparation: bool,
+    ) -> adk_rust::Result<Option<ValidatedModelCheckpoint>> {
+        Ok(self
+            .restore_validated(session, allow_context_preparation)?
+            .validated_checkpoint())
+    }
+
+    fn restore_validated(
+        mut self,
+        session: &dyn Session,
+        allow_context_preparation: bool,
+    ) -> adk_rust::Result<Self> {
         let Some(value) = session.state().get(CHECKPOINT_KEY) else {
             return Ok(self);
         };
@@ -146,8 +167,7 @@ impl ModelCheckpointWriter {
         if !matches!(
             checkpoint.phase,
             Phase::ModelPending | Phase::ContextPending
-        ) || matches!(checkpoint.phase, Phase::ContextPending)
-            && self.context_compaction.is_none()
+        ) || matches!(checkpoint.phase, Phase::ContextPending) && !allow_context_preparation
         {
             return Err(invalid_checkpoint());
         }

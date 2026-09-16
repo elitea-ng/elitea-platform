@@ -1160,6 +1160,57 @@ fn a_nested_agent_renders_its_own_variables() {
     );
 }
 
+#[test]
+fn nested_profiles_inherit_policy_and_recompute_their_own_model_capacity() {
+    use super::request::ModelContextLimits;
+    for settings in [
+        json!({"enabled":true,"budget_mode":"balanced","preserve_recent_messages":7,"summary_instructions":"Keep decisions and evidence."}),
+        json!({"enabled":true,"budget_mode":"full","preserve_recent_messages":9}),
+        json!({"enabled":true,"max_context_tokens":90_000}),
+        json!({"enabled":false}),
+    ] {
+        let mut request = ordinary_request(AgentExecutionKind::Application);
+        request.payload.context_settings = settings.as_object().unwrap().clone();
+        request.payload.model_context_limits = Some(ModelContextLimits {
+            context_window_tokens: 1_000_000,
+            max_output_tokens: 128_000,
+            context_window_fallback: false,
+            max_output_fallback: false,
+            max_input_tokens: None,
+        });
+        let parent = OrdinaryNoToolProfile::validate(&request).unwrap();
+        for agent_type in ["agent", "pipeline"] {
+            let child = object(json!({
+                "agent_type":agent_type,"instructions":"Child task instructions.","tools":[],"meta":{},
+                "llm_settings":{"model_name":"smaller-child","model_project_id":17,"max_tokens":2048,"openai_compatible":true},
+                "model_context_limits":{"context_window_tokens":100_000,"max_output_tokens":16_000,"context_window_fallback":false,"max_output_fallback":false,"max_input_tokens":null}
+            }));
+            let child = if agent_type == "agent" {
+                OrdinaryNoToolProfile::from_nested_version(&child, &parent)
+            } else {
+                OrdinaryNoToolProfile::from_nested_pipeline_version(&child, &parent)
+            }
+            .unwrap();
+            assert_eq!(child.context_management(), parent.context_management());
+            let budget = child.context_budget().unwrap();
+            assert_eq!(
+                budget.total_tokens,
+                if settings.get("max_context_tokens").is_some() {
+                    90_000
+                } else {
+                    100_000
+                }
+            );
+            assert_eq!(budget.output_reservation, 2048);
+            assert_eq!(
+                budget.input_limit,
+                budget.total_tokens - 2048 - budget.margin_tokens
+            );
+            assert!(child.chat_history().is_empty());
+        }
+    }
+}
+
 /// A PIPELINE's instructions are graph YAML, and the SDK does not render them.
 ///
 /// `assistant.py`'s `pipeline()` hands `self.prompt` straight to

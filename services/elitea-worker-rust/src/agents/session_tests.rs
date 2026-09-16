@@ -2358,3 +2358,66 @@ async fn interrupted_model_restores_saved_request_without_repeating_tool_or_user
         1
     );
 }
+
+#[tokio::test]
+async fn checkpoint_inspection_admits_summary_preparation_before_model_binding() {
+    use adk_rust::session::{AppendEventRequest, CreateRequest};
+    let mut request = ordinary_request(AgentExecutionKind::Adhoc);
+    request.payload.context_settings = json!({"enabled":true}).as_object().unwrap().clone();
+    request.payload.model_context_limits = Some(super::request::ModelContextLimits {
+        context_window_tokens: 32_000,
+        max_output_tokens: 8_000,
+        context_window_fallback: false,
+        max_output_fallback: false,
+        max_input_tokens: None,
+    });
+    let profile = OrdinaryNoToolProfile::validate(&request).unwrap();
+    let plan = OrdinaryNativeAgentPlan::from_authorized(
+        &request,
+        &profile,
+        &AuthorizedNativeCommandBinding::fixture(),
+        &[],
+    )
+    .unwrap();
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let session = sessions
+        .create(CreateRequest {
+            app_name: "elitea-agent-v1".into(),
+            user_id: plan.user_id().into(),
+            session_id: Some(plan.session_id().into()),
+            state: std::collections::HashMap::default(),
+        })
+        .await
+        .unwrap();
+    let pending = LlmRequest::new(
+        "fixture-model",
+        vec![Content::new("user").with_text("Exact input awaiting summary.")],
+    );
+    let checkpoint = json!({
+        "version":1, "execution_id":"execution/one", "generation":3,
+        "definition_digest":plan.definition_digest(), "invocation_id":"interrupted-summary",
+        "phase":"context_pending", "model":{"request":pending,"tools":{}},
+    });
+    let mut marker = adk_rust::Event::new("interrupted-summary");
+    marker.author = "elitea-recovery".into();
+    marker
+        .actions
+        .state_delta
+        .insert(super::model_checkpoint::CHECKPOINT_KEY.into(), checkpoint);
+    sessions
+        .append_event_for_identity(AppendEventRequest {
+            identity: session.try_identity().unwrap(),
+            event: marker,
+        })
+        .await
+        .unwrap();
+    let evidence = NativeSessionBackend::injected(sessions)
+        .inspect_model_checkpoint(
+            test_session_authority_for("execution/one", 3),
+            Arc::new(crate::state::TestStateWriterLease::current()),
+            &plan,
+        )
+        .await
+        .expect("inspection needs no model or credential");
+    assert!(evidence.matches_execution("execution/one", 3));
+}

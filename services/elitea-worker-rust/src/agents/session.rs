@@ -748,9 +748,11 @@ impl NativeSessionBackend {
             plan.generation,
             plan.definition_digest,
         )
-        .restore(session.as_ref())
+        .inspect(
+            session.as_ref(),
+            matches!(plan.context_management, ContextManagementPlan::Summarize(_)),
+        )
         .map_err(|_| invalid_configuration())?
-        .validated_checkpoint()
         .ok_or_else(invalid_configuration)
     }
 

@@ -320,7 +320,9 @@ impl OrdinaryNoToolProfile {
             temperature: model.temperature,
             step_limit: fallback.step_limit,
             chat_history: Vec::new(),
-            context_management: ContextManagementPlan::Disabled,
+            // The child owns its history. Carry only the admitted policy;
+            // its model capacity is resolved independently above.
+            context_management: fallback.context_management.clone(),
             internal_tools,
             instruction_plan: super::instruction_authority::InstructionPlan::nested(
                 version,

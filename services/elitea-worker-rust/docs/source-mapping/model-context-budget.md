@@ -105,7 +105,7 @@ SDK revision `18704a4070d098761fd1d35897dc53e412b4cbcc` provides the current fun
 | --- | --- | --- |
 | SDK `runtime/langchain/langraph_agent.py::create_graph` | Passes mapped inputs and context middleware to each `LLMNode`. | `agents/graph/llm.rs::map_execution_input` separates mapped system, task, and history content. Preserve this boundary during compaction. |
 | SDK `runtime/tools/llm.py::invoke` and `_prepare_output_messages` | Runs context hooks and returns message-removal updates for checkpoint persistence. | Use existing durable Rust session and graph checkpoints. Keep original records and exact graph values rather than copying removal behavior. |
-| Rust `agents/assembly.rs`, nested profile construction | Inherits the budget selection and recomputes child model capacity. Sets `context_management` to `Disabled`. | Complete child compaction-policy inheritance and independent summary persistence. Budget inheritance alone does not close this requirement. |
+| Rust `agents/assembly.rs`, nested profile construction | Inherits the admitted context policy and budget selection. Recomputes child model capacity. | The profile now preserves policy. Child model callbacks and independent summary persistence remain open. |
 | Rust `agents/pipeline.rs::NativePipelineLlmAgentFactory::build` | Binds a node model with the pipeline profile's budget and authoritative instructions. | Add compaction before each model call within the correct node invocation. |
 | Rust `agents/graph/decision.rs` | Uses the same model factory for model-backed routing without tools. | Include decision requests in budget enforcement; preserve exact route constraints. |
 | Rust `agents/session.rs`, pipeline runner construction | Rejects an active transcript-wide context plan because the graph has no single summarization model. | Carry policy to model consumers without summarizing the graph itself. |
@@ -114,6 +114,11 @@ Purely deterministic pipelines must not acquire model calls solely because compa
 Point 5 retains ownership of new map and parallel node capabilities.
 Point 4 must define isolated model-history scopes that those nodes can reuse.
 Required proofs include child isolation, mixed graphs, repeated node visits, branch separation, and replacement-worker summary recovery.
+
+Nested agent and pipeline profiles now copy the admitted parent policy, including disabled settings and retained-message controls.
+They retain empty child history and recompute output reservation and input capacity for the authorized child model.
+Focused fixtures cover Balanced, Full, explicit token limits, disabled settings, and a smaller child model.
+This does not yet activate child compaction or define saved-child defaults without an inherited policy.
 
 ## Complete request measurement, 2026-09-16
 

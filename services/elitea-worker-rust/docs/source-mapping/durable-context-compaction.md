@@ -80,6 +80,12 @@ The state contains the definition identity, original-task anchor, covered-source
 The in-memory record changes only after persistence succeeds.
 Task-model dispatch therefore cannot precede durable summary and request storage.
 
+Recovery inspection runs before model credentials are redeemed.
+`NativeSessionBackend::inspect_model_checkpoint` validates `context_pending` when the admitted plan enables summarization.
+It returns only checkpoint evidence and does not construct a model or an executable writer.
+Executable restoration still requires a bound compactor. Inspection does not authorize direct dispatch of the uncompacted request.
+Both stages verify the same checkpoint digest before the recovery coordinator permits execution.
+
 A replacement restores an interrupted preparation and can repeat the summary call.
 It restores an already prepared request without generating that summary again.
 This does not promise exactly-once provider billing when the summary response was lost before persistence.
@@ -94,15 +100,36 @@ That marker cannot express the protected user messages or source-content coverag
 The private record extends the existing checkpoint mechanism; it does not introduce another storage service or scheduler.
 Pipeline and child scopes must use their own durable lineage before this mechanism is applied there.
 
+## Child and pipeline ownership trace
+
+`application_tools.rs::LazyNestedAgent` currently binds a model separately for each child call.
+`ApplicationToolInvocationContext` derives an instruction-session identity from the parent session, tool-call ID, and child name.
+Its session is local memory. The parent forwards child events through the existing application event channel.
+These paths do not yet inject the durable session service into a child before-model callback.
+The nested profile now carries its parent's admitted policy; runtime consumption remains open.
+
+`pipeline.rs::NativePipelineLlmAgentFactory` binds the model and tools for each LLM node.
+`graph/llm.rs::PipelineLlmInvocationContext` currently creates a local session using the graph thread ID.
+Its process-local invocation sequence does not provide durable identity across replacement.
+Node step, graph activation, child path, and source coverage must distinguish repeated visits and parallel branches.
+Reuse existing graph and child lineage when wiring scoped storage.
+
+Do not attach the root checkpoint key to a shared parent session for these model calls.
+That would let a child overwrite root recovery evidence or another node's summary.
+Pass the existing claim-fenced session service through assembly and use independent model scopes.
+Preserve direct-HITL replay and authorization replay ordering when adding their callbacks.
+
 ## Verification and remaining gates
 
 Verification on 2026-09-16:
 
-- Agent suite: 332 tests pass, with no failures or ignored tests.
+- Agent suite: 334 tests pass, with no failures or ignored tests.
 - Provider suites: 36 tests pass, with no failures or ignored tests.
 - PostgreSQL recovery uses three separate processes and an isolated test database.
 - The first process leaves interrupted summary preparation. The second saves the validated summary and prepared request.
 - The third process restores that request without another summary call.
+- Both replacement processes validate checkpoint evidence before executable restoration.
+- The production session-backend inspector admits interrupted summary preparation without model binding.
 - Failed checkpoint persistence prevents task-model dispatch.
 - Coverage checks include repeated compaction, changed history, JSON object ordering, protected input, and complete tool groups.
 - Both provider adapters reject incomplete and truncated summary streams without changing the captured chat answer.

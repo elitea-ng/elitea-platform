@@ -375,7 +375,18 @@ async fn run_with_summary_failure(
         .with_request_budget(Some(Arc::new(Budget)))
         .with_context_compaction(Some(compaction));
     if recover {
+        // Production validates evidence before it can construct a summary model.
+        let evidence = ModelCheckpointWriter::new(sessions.clone(), "execution".into(), 7, [7; 32])
+            .inspect(session.as_ref(), true)
+            .unwrap()
+            .unwrap();
         writer = writer.restore(session.as_ref()).unwrap();
+        assert!(
+            writer
+                .validated_checkpoint()
+                .unwrap()
+                .matches_checkpoint(&evidence)
+        );
     }
     let model = Arc::new(ModelAfterCheckpoint {
         sessions: sessions.clone(),
@@ -494,6 +505,11 @@ async fn failed_summary_persistence_prevents_model_dispatch() {
     assert_eq!(
         stored.state().get(CHECKPOINT_KEY).unwrap()["phase"],
         "context_pending"
+    );
+    assert!(
+        ModelCheckpointWriter::new(sessions.clone(), "execution".into(), 7, [7; 32])
+            .inspect(stored.as_ref(), false)
+            .is_err()
     );
     assert!(
         ModelCheckpointWriter::new(sessions, "execution".into(), 7, [7; 32])
