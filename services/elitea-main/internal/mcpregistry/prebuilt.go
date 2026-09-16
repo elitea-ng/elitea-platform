@@ -49,6 +49,7 @@ type PrebuiltServer struct {
 	ClientSecretRef string
 	TimeoutSeconds  int
 	Headers         map[string]string
+	ConfigSchema    map[string]any
 	Enabled         bool
 }
 

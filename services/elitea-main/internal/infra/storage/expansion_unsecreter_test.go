@@ -167,7 +167,7 @@ func TestCurrentVaultUnsecreterPreservesCancellationAndRedactsDependencies(t *te
 					return nil, errors.New("project-vault-canary")
 				},
 			},
-			input: map[string]any{},
+			input: map[string]any{"value": "{{secret.name}}"},
 			want:  ErrCurrentUnsecretUnavailable,
 		},
 		{
@@ -202,7 +202,7 @@ func TestCurrentVaultUnsecreterPreservesCancellationAndRedactsDependencies(t *te
 					return nil, context.DeadlineExceeded
 				},
 			},
-			input: map[string]any{},
+			input: map[string]any{"value": "{{secret.name}}"},
 			want:  context.DeadlineExceeded,
 		},
 	}
@@ -217,6 +217,32 @@ func TestCurrentVaultUnsecreterPreservesCancellationAndRedactsDependencies(t *te
 			}
 		})
 	}
+}
+
+func TestCurrentVaultUnsecreterDoesNotOpenVaultWithoutSecretReferences(t *testing.T) {
+	t.Parallel()
+
+	loaderCalls := 0
+	unsecreter, err := NewCurrentVaultUnsecreter(currentUnsecretLoaderStub{
+		project: func(context.Context, int64) (SecretVault, error) {
+			loaderCalls++
+			return nil, errors.New("must not load project vault")
+		},
+		admin: func(context.Context) (SecretVault, error) {
+			loaderCalls++
+			return nil, errors.New("must not load admin vault")
+		},
+	})
+	require.NoError(t, err)
+
+	input := map[string]any{
+		"clear_text": "value",
+		"nested":     []any{map[string]any{"enabled": true}},
+	}
+	result, err := unsecreter.Unsecret(context.Background(), 2, input)
+	require.NoError(t, err)
+	require.Equal(t, input, result)
+	require.Zero(t, loaderCalls)
 }
 
 func TestCurrentVaultUnsecreterStopsOnCancellationBeforeAdminFallback(t *testing.T) {

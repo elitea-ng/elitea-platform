@@ -22,8 +22,12 @@ import type { EditPipelineVersionFields } from './useEditPipelineVersionFields';
 export const EMPTY_FORM_VALUES: ApplicationCreationInput = {
   name: '',
   description: '',
-  version_details: { conversation_starters: [] },
+  version_details: { conversation_starters: [], tags: [] },
 };
+
+function storedVersionTagNames(version: ApplicationVersionDetail | undefined): string[] {
+  return (version?.tags ?? []).map((tag) => tag.name).filter((name): name is string => typeof name === 'string');
+}
 
 /** Generated `ApplicationVersionSummary[]` (snake_case) -> `entities/version`'s `VersionSummary[]` (camelCase) — needed only to satisfy `useIsVersionNotFound`'s parameter type. */
 export function toVersionSummaries(versions: readonly ApplicationVersionSummary[]): VersionSummary[] {
@@ -47,17 +51,13 @@ export function pipelineDetailDisplayName(detail: ApplicationDetail): string {
   return detail.name.trim() !== '' ? detail.name : 'Untitled';
 }
 
-export function toFormValues(
-  detail: ApplicationDetail,
-  version: ApplicationVersionDetail | undefined,
-): ApplicationCreationInput {
+export function toFormValues(detail: ApplicationDetail, version: ApplicationVersionDetail | undefined): ApplicationCreationInput {
   return {
     name: detail.name,
     description: detail.description,
     version_details: {
-      conversation_starters: (version?.conversation_starters ?? []).filter(
-        (entry): entry is string => typeof entry === 'string',
-      ),
+      conversation_starters: (version?.conversation_starters ?? []).filter((entry): entry is string => typeof entry === 'string'),
+      tags: storedVersionTagNames(version),
     },
   };
 }
@@ -256,9 +256,7 @@ function buildDefinedVersionChatFields(
   };
 }
 
-export function toChatPipelineVersionDetails(
-  version: ApplicationVersionDetail | undefined,
-): ConfigurationTabProps['versionDetails'] {
+export function toChatPipelineVersionDetails(version: ApplicationVersionDetail | undefined): ConfigurationTabProps['versionDetails'] {
   if (!version) return undefined;
 
   const metaRecord: Record<string, unknown> = version.meta ?? {};
@@ -349,12 +347,9 @@ export function toVersionOptions(versions: readonly ApplicationVersionSummary[])
  *    fixing that is a change to a page this unit does not own.)
  *
  * `instructions` is the version's STORED graph, not the live canvas. That is
- * deliberate and is only half the story: `versionFromBody` reads no
- * `pipeline_settings` key at all and `insertVersion`'s column list does not
- * carry it, so the POST cannot persist the laid-out geometry no matter what
- * it is given. `lib/carryPipelineGraphToVersion.ts` follows the create with
- * the PUT that CAN write both, so the live graph reaches the new version
- * through one mechanism rather than half through each.
+ * deliberate: this mapper has no live canvas reader. Main accepts geometry
+ * on creation now, but this caller still supplies the live instructions and
+ * geometry together through `carryPipelineGraphToVersion` after creation.
  */
 export function toNewPipelineVersionBody(
   version: ApplicationVersionDetail,

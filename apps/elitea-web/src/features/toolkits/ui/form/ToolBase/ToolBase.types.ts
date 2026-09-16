@@ -81,6 +81,8 @@ export interface ToolBaseSlots extends ToolBasePropertySlots {
   readonly openApiOAuthStatus?: ReactNode;
   readonly toolActionsExtra?:
     | {
+        /** Discovery preview only; saved selections remain tool names. */
+        readonly availableTools?: readonly string[] | undefined;
         readonly onLoadTools?: (() => void) | undefined;
         readonly isLoadingTools?: boolean | undefined;
         readonly canLoadTools?: boolean | undefined;

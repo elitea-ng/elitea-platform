@@ -329,6 +329,21 @@ struct TestInput {
 }
 
 impl TestInput {
+    async fn read_input(&self) -> Result<MaterializedInput, InputContentError> {
+        self.state.calls.lock().expect("calls").push("input");
+        if let Some(desired) = self.observed_after_call {
+            self.state.observe.lock().expect("observe").desired_state = desired as i32;
+        }
+        let _guard = InputFutureGuard(Arc::clone(&self.dropped));
+        match &self.mode {
+            InputMode::Bytes(value) => Ok(MaterializedInput::for_test(value.clone())),
+            InputMode::DependencyUnavailable => Err(InputContentError::DependencyUnavailable(
+                "the input content service is unavailable",
+            )),
+            InputMode::Pending => pending().await,
+        }
+    }
+
     fn bytes(state: Arc<TestControlState>, value: Vec<u8>) -> Self {
         Self {
             state,
@@ -349,22 +364,18 @@ impl Drop for InputFutureGuard {
 
 #[async_trait]
 impl AgentInputMaterializer for TestInput {
+    async fn materialize_checkpoint(
+        &self,
+        _inspection: &crate::protocol::control::LiveModelCheckpointInspection,
+    ) -> Result<MaterializedInput, InputContentError> {
+        self.read_input().await
+    }
+
     async fn materialize(
         &self,
         _execution: &LeaseMonitoredAgentExecution,
     ) -> Result<MaterializedInput, InputContentError> {
-        self.state.calls.lock().expect("calls").push("input");
-        if let Some(desired) = self.observed_after_call {
-            self.state.observe.lock().expect("observe").desired_state = desired as i32;
-        }
-        let _guard = InputFutureGuard(Arc::clone(&self.dropped));
-        match &self.mode {
-            InputMode::Bytes(value) => Ok(MaterializedInput::for_test(value.clone())),
-            InputMode::DependencyUnavailable => Err(InputContentError::DependencyUnavailable(
-                "the input content service is unavailable",
-            )),
-            InputMode::Pending => pending().await,
-        }
+        self.read_input().await
     }
 }
 
@@ -1005,4 +1016,252 @@ fn pre_invocation_error_messages_and_codes_are_operator_safe() {
         deadline.to_string(),
         "the agent command deadline was exceeded before invocation"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn toolkit_invocation_authority_preserves_all_control_outcomes() {
+    use super::agent_lease::{ClaimLeaseActivation, ClaimLeaseMonitor};
+    use crate::protocol::control::{BeginAgentExecution, ToolkitInvocationPayload};
+
+    for case in ["authorized", "already", "rejected", "unknown"] {
+        let (control, state) = control();
+        match case {
+            "already" => {
+                state.authorize.lock().expect("authorize").disposition =
+                    AuthorizeInvocationDispositionV1::AlreadyAuthorized as i32;
+            }
+            "rejected" => {
+                *state.authorize.lock().expect("authorize") = AuthorizeInvocationResponseV1 {
+                    disposition: AuthorizeInvocationDispositionV1::Unspecified as i32,
+                    rejection: Some(RuntimeErrorV1 {
+                        code: RuntimeErrorCodeV1::Cancelled as i32,
+                        safe_message: "Execution was cancelled.".to_owned(),
+                        retryable: false,
+                    }),
+                }
+            }
+            "unknown" => state.authorize_unavailable.store(true, Ordering::SeqCst),
+            _ => {}
+        }
+        // Reuse the signed claim fixture: this tests the shared control contract,
+        // not toolkit payload decoding or a provider implementation.
+        let verified = parse_and_verify_agent_command(
+            &bytes("signed_command"),
+            Some(&TestOnlyConformanceHmacAuthenticator as &dyn SignedCommandAuthenticator),
+        )
+        .expect("verified fixture");
+        let claim = control.claim_agent(&verified, NOW).await.expect("claim");
+        let BeginAgentExecution::Preparing(preparing) =
+            control.begin_agent_execution(claim).await.expect("begin")
+        else {
+            panic!("fresh claim must prepare")
+        };
+        let mut lease = ClaimLeaseMonitor::start(
+            Arc::clone(&control),
+            preparing.start_lease_monitor(),
+            Arc::new(TestClock::new(NOW)),
+            config(Duration::from_secs(10)).lease_config(),
+        );
+        let ClaimLeaseActivation::Active(execution) = lease.activate().await else {
+            panic!("fixture lease must activate")
+        };
+        let decision = control
+            .authorize_agent_invocation(execution.bind_invocation(ToolkitInvocationPayload))
+            .await;
+        match decision {
+            InvocationAuthorizationDecision::AuthorizedNow(authorized) => {
+                assert_eq!(case, "authorized");
+                assert_eq!(
+                    authorized.execution().request_entry().entry_id,
+                    "agent-request"
+                );
+                drop(authorized.into_output_authority());
+            }
+            InvocationAuthorizationDecision::AlreadyAuthorized(terminal) => {
+                assert_eq!(case, "already");
+                assert_eq!(
+                    terminal.cause.runtime_failure_kind(),
+                    RuntimeFailureKind::Internal
+                );
+            }
+            InvocationAuthorizationDecision::Rejected(terminal) => {
+                assert_eq!(case, "rejected");
+                assert_eq!(
+                    terminal.cause.runtime_failure_kind(),
+                    RuntimeFailureKind::Cancelled
+                );
+            }
+            InvocationAuthorizationDecision::Unknown(_) => assert_eq!(case, "unknown"),
+        }
+        lease.close().await.expect("lease closed");
+    }
+}
+
+#[tokio::test]
+async fn checkpoint_input_preparation_never_begins_or_authorizes_an_invocation() {
+    use super::agent_lease::{ClaimLeaseMonitor, ClaimLeaseMonitorConfig};
+    use super::agent_preparation::{CheckpointInputError, prepare_checkpoint_input};
+    use crate::protocol::control::ModelCheckpointInspection;
+    use crate::protocol::elitea::runtime::v1::ClaimDispositionV1;
+
+    for case in 0..6 {
+        let (control, state) = control();
+        let verified = parse_and_verify_agent_command(
+            &bytes("signed_command"),
+            Some(&TestOnlyConformanceHmacAuthenticator),
+        )
+        .expect("command");
+        let mut response = state.claim.clone();
+        response.receipt.as_mut().expect("receipt").disposition =
+            ClaimDispositionV1::RecoverAgentModelCheckpoint as i32;
+        let inspection =
+            ModelCheckpointInspection::parse(&verified, response, "workload-1", "worker-1", NOW)
+                .expect("inspection");
+        let clock = Arc::new(TestClock::new(NOW));
+        let mut lease = ClaimLeaseMonitor::start_checkpoint_inspection(
+            control,
+            inspection,
+            clock.clone(),
+            ClaimLeaseMonitorConfig::new(Duration::from_millis(100)).expect("lease config"),
+        );
+        let live = lease
+            .activate_checkpoint_inspection()
+            .await
+            .expect("live inspection");
+        let mut input = TestInput::bytes(
+            state.clone(),
+            input_fixture(AgentExecutionKind::Application),
+        );
+        match case {
+            1 => input.mode = InputMode::Bytes(vec![0xff]),
+            2 => input.observed_after_call = Some(DesiredExecutionStateV1::Cancelled),
+            3 => clock.0.store(DEADLINE, Ordering::SeqCst),
+            4 => input.mode = InputMode::DependencyUnavailable,
+            _ => {}
+        }
+        let verified = if case == 5 {
+            parse_and_verify_agent_command(
+                &bytes("signed_command_adhoc"),
+                Some(&TestOnlyConformanceHmacAuthenticator),
+            )
+            .expect("another command")
+        } else {
+            verified
+        };
+        let outcome =
+            prepare_checkpoint_input(&input, &live, &verified, &mut lease, clock.as_ref()).await;
+        match case {
+            0 => assert!(outcome.is_ok()),
+            1 | 5 => assert!(matches!(outcome, Err(CheckpointInputError::Protocol(_)))),
+            2 => assert!(matches!(outcome, Err(CheckpointInputError::Lease(_)))),
+            3 => assert!(matches!(
+                outcome,
+                Err(CheckpointInputError::DeadlineExceeded)
+            )),
+            4 => assert!(matches!(outcome, Err(CheckpointInputError::Content(_)))),
+            _ => unreachable!(),
+        }
+        let calls = state.calls.lock().expect("calls").clone();
+        assert!(!calls.contains(&"begin") && !calls.contains(&"authorize"));
+        assert_eq!(
+            calls.iter().filter(|call| **call == "input").count(),
+            usize::from(case != 3 && case != 5)
+        );
+        let _ = lease.close().await;
+    }
+}
+
+struct RecoveryOnlyAssembler(AtomicBool);
+struct UnusedRecoveryCompletion;
+#[async_trait]
+impl crate::agents::runtime::NativeAgentCompletionSelector for UnusedRecoveryCompletion {
+    async fn select(
+        self,
+    ) -> Result<
+        crate::agents::events::CompletedAgentBrowserOutput,
+        crate::agents::runtime::NativeAgentAssemblyError,
+    > {
+        panic!("failed assembly cannot select a result")
+    }
+}
+#[async_trait]
+impl crate::agents::runtime::NativeAgentAssembler for RecoveryOnlyAssembler {
+    type Completion = UnusedRecoveryCompletion;
+    async fn assemble(
+        &self,
+        _: crate::agents::runtime::AuthorizedNativeAssembly<'_>,
+    ) -> Result<
+        crate::agents::runtime::AssembledNativeAgentInvocation<Self::Completion>,
+        crate::agents::runtime::NativeAgentAssemblyError,
+    > {
+        panic!("recovery must not enter ordinary assembly")
+    }
+    async fn assemble_checkpoint(
+        &self,
+        _: crate::agents::runtime::AuthorizedNativeAssembly<'_>,
+    ) -> Result<
+        crate::agents::runtime::PendingRecoveredAgentInvocation<Self::Completion>,
+        crate::agents::runtime::NativeAgentAssemblyError,
+    > {
+        self.0.store(true, Ordering::SeqCst);
+        Err(crate::agents::runtime::NativeAgentAssemblyError::new(
+            crate::agents::runtime::NativeAgentAssemblyErrorCode::DependencyUnavailable,
+            "fixture dependency unavailable",
+        ))
+    }
+}
+
+#[tokio::test]
+async fn recovery_lifecycle_selects_checkpoint_assembly_and_retains_cleanup() {
+    let (control, state) = control();
+    let admission = admission(1, Duration::from_secs(1));
+    let prepared = prepared_for_authorization(
+        control,
+        state.clone(),
+        &admission,
+        AgentExecutionKind::Application,
+    )
+    .await;
+    let identity = state
+        .claim
+        .receipt
+        .as_ref()
+        .expect("receipt")
+        .identity
+        .as_ref()
+        .expect("identity");
+    let evidence = crate::agents::session::ValidatedModelCheckpoint::test_evidence(
+        identity.execution_id.clone(),
+        identity.generation,
+    );
+    let (claim, authorizer) = crate::protocol::control::test_checkpoint_authorizer(
+        &identity.execution_id,
+        identity.generation,
+        evidence.digest(),
+    );
+    let authority = claim
+        .authorize(&authorizer, evidence)
+        .await
+        .unwrap_or_else(|_| panic!("authorization"));
+    let (reservation, run) = (*prepared).into_test_checkpoint(authority);
+    let run = run
+        .bind_progress_publisher(
+            Channel::from_static("https://output.invalid").connect_lazy(),
+            1,
+        )
+        .unwrap_or_else(|_| panic!("publisher binding"));
+    let assembler = RecoveryOnlyAssembler(AtomicBool::new(false));
+    let super::agent_preparation::AgentNativeAssemblyOutcome::Failed { run, error } =
+        Box::pin(run.assemble_native(&assembler)).await
+    else {
+        panic!("fixture assembly must fail before start")
+    };
+    assert!(assembler.0.load(Ordering::SeqCst));
+    assert_eq!(
+        error.code(),
+        crate::agents::runtime::NativeAgentAssemblyErrorCode::DependencyUnavailable
+    );
+    Box::pin(run.close_no_ack("fixture.assembly_failed", true)).await;
+    drop(reservation);
+    assert_eq!(admission.available_capacity(), 1);
 }

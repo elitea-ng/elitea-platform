@@ -7,7 +7,7 @@
 
 #![allow(dead_code)] // Production activation waits for the durable resume ledger.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,7 +17,7 @@ use serde_json::{Map, Value};
 
 use super::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
 use crate::toolkits::{
-    AdmittedToolSnapshot, FrozenToolKind, SensitiveToolPolicy, ToolAdmissionPolicy,
+    AdmittedToolSnapshot, FrozenToolKind, SensitiveToolPolicy, ToolAdmissionPolicy, ToolBindingPlan,
 };
 
 const TOOL_ENUMERATION_TIMEOUT: Duration = Duration::from_secs(1);
@@ -58,7 +58,14 @@ pub(crate) fn policy_for_guardrails(
 /// authority do not exist until the model emits a call.
 #[derive(Clone, Default)]
 pub(crate) struct SensitiveToolCatalog {
-    entries: BTreeMap<Box<str>, SensitiveToolEntry>,
+    scoped_entries: BTreeMap<SensitiveToolIdentity, SensitiveToolEntry>,
+    provider_entries: BTreeMap<Box<str>, SensitiveToolEntry>,
+}
+
+#[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
+struct SensitiveToolIdentity {
+    toolkit_name: Box<str>,
+    tool_name: Box<str>,
 }
 
 #[derive(Clone)]
@@ -70,16 +77,31 @@ struct SensitiveToolEntry {
 impl SensitiveToolCatalog {
     #[must_use]
     pub(crate) fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.scoped_entries.is_empty()
     }
 
     pub(crate) fn tool_names(&self) -> impl Iterator<Item = &str> {
-        self.entries.keys().map(AsRef::as_ref)
+        self.provider_entries.keys().map(AsRef::as_ref)
     }
 
     #[must_use]
     pub(crate) fn policy_for(&self, tool_name: &str) -> Option<&SensitiveToolPolicy> {
-        self.entries.get(tool_name).map(|entry| &entry.policy)
+        self.provider_entries
+            .get(tool_name)
+            .map(|entry| &entry.policy)
+    }
+
+    pub(crate) fn policy_for_scoped(
+        &self,
+        toolkit_name: &str,
+        tool_name: &str,
+    ) -> Option<&SensitiveToolPolicy> {
+        self.scoped_entries
+            .get(&SensitiveToolIdentity {
+                toolkit_name: toolkit_name.into(),
+                tool_name: tool_name.into(),
+            })
+            .map(|entry| &entry.policy)
     }
 
     /// Return whether one exact sensitive tool was admitted as read-only.
@@ -89,24 +111,80 @@ impl SensitiveToolCatalog {
     /// the durable effect owner is still absent.
     #[must_use]
     pub(crate) fn is_read_only(&self, tool_name: &str) -> Option<bool> {
-        self.entries.get(tool_name).map(|entry| entry.read_only)
+        self.provider_entries
+            .get(tool_name)
+            .map(|entry| entry.read_only)
     }
 
     pub(crate) fn merge(&mut self, other: Self) -> Result<(), NativeAgentAssemblyError> {
         if self
-            .entries
+            .scoped_entries
             .len()
-            .checked_add(other.entries.len())
+            .checked_add(other.scoped_entries.len())
             .is_none_or(|count| count > MAX_CONFIRMED_TOOLS)
         {
             return Err(resource_exhausted());
         }
-        for (name, policy) in other.entries {
-            if self.entries.insert(name, policy).is_some() {
+        for (identity, policy) in other.scoped_entries {
+            if self.scoped_entries.insert(identity, policy).is_some() {
                 return Err(invalid_configuration());
             }
         }
+        self.rebuild_unqualified_provider_entries();
         Ok(())
+    }
+
+    pub(crate) fn bind_provider_names(
+        mut self,
+        binding: &ToolBindingPlan,
+    ) -> Result<Self, NativeAgentAssemblyError> {
+        let mut provider_entries = BTreeMap::new();
+        for (identity, entry) in &self.scoped_entries {
+            let provider_name = binding
+                .provider_name(&identity.toolkit_name, &identity.tool_name)
+                .ok_or_else(invalid_configuration)?;
+            if provider_entries
+                .insert(provider_name.into(), entry.clone())
+                .is_some()
+            {
+                return Err(invalid_configuration());
+            }
+        }
+        self.provider_entries = provider_entries;
+        Ok(self)
+    }
+
+    fn insert_scoped(
+        &mut self,
+        toolkit_name: &str,
+        tool_name: &str,
+        entry: SensitiveToolEntry,
+    ) -> Result<(), NativeAgentAssemblyError> {
+        if !valid_identity(toolkit_name) || !valid_identity(tool_name) {
+            return Err(invalid_configuration());
+        }
+        let identity = SensitiveToolIdentity {
+            toolkit_name: toolkit_name.into(),
+            tool_name: tool_name.into(),
+        };
+        if self.scoped_entries.insert(identity, entry).is_some() {
+            return Err(invalid_configuration());
+        }
+        self.rebuild_unqualified_provider_entries();
+        Ok(())
+    }
+
+    fn rebuild_unqualified_provider_entries(&mut self) {
+        let mut counts = BTreeMap::<&str, usize>::new();
+        for identity in self.scoped_entries.keys() {
+            *counts.entry(&identity.tool_name).or_default() += 1;
+        }
+        self.provider_entries = self
+            .scoped_entries
+            .iter()
+            .filter(|(identity, _)| counts.get(identity.tool_name.as_ref()) == Some(&1))
+            .map(|(identity, entry)| (identity.tool_name.clone(), entry.clone()))
+            .collect();
     }
 
     #[cfg(test)]
@@ -119,9 +197,13 @@ impl SensitiveToolCatalog {
         {
             return Err(invalid_configuration());
         }
-        Ok(Self {
-            entries: BTreeMap::from([(tool_name.into(), SensitiveToolEntry { policy, read_only })]),
-        })
+        let mut catalog = Self::default();
+        catalog.insert_scoped(
+            "fixture",
+            tool_name,
+            SensitiveToolEntry { policy, read_only },
+        )?;
+        Ok(catalog)
     }
 }
 
@@ -136,17 +218,26 @@ pub(crate) async fn sensitive_tools_for_kind(
     toolsets: &[Arc<dyn Toolset>],
     policy: &ToolAdmissionPolicy,
 ) -> Result<SensitiveToolCatalog, NativeAgentAssemblyError> {
-    let references = snapshot
-        .iter()
-        .filter(|reference| reference.kind() == kind)
-        .collect::<Vec<_>>();
-    if references.len() != toolsets.len() {
-        return Err(invalid_configuration());
+    let mut toolsets_by_name = BTreeMap::new();
+    for toolset in toolsets {
+        if toolsets_by_name.insert(toolset.name(), toolset).is_some() {
+            return Err(invalid_configuration());
+        }
     }
+    let mut reference_names = BTreeSet::new();
     let context: Arc<dyn ReadonlyContext> =
         Arc::new(SimpleToolContext::new("elitea_sensitive_policy"));
     let mut catalog = SensitiveToolCatalog::default();
-    for (reference, toolset) in references.into_iter().zip(toolsets) {
+    for reference in snapshot.iter().filter(|reference| reference.kind() == kind) {
+        if !reference_names.insert(reference.toolkit_name()) {
+            return Err(invalid_configuration());
+        }
+        let Some(toolset) = toolsets_by_name.remove(reference.toolkit_name()) else {
+            // Configured toolkit families can be intentionally unavailable in this
+            // runtime. Their materializer omits them before this catalogue is built.
+            // Do not shift the next materialized toolset onto the omitted identity.
+            continue;
+        };
         let tools = tokio::time::timeout(
             TOOL_ENUMERATION_TIMEOUT,
             toolset.tools(Arc::clone(&context)),
@@ -163,22 +254,24 @@ pub(crate) async fn sensitive_tools_for_kind(
             else {
                 continue;
             };
-            if catalog
-                .entries
-                .insert(
-                    tool.name().into(),
-                    SensitiveToolEntry {
-                        policy: sensitive,
-                        read_only: tool.is_read_only(),
-                    },
-                )
-                .is_some()
-            {
-                return Err(invalid_configuration());
-            }
+            catalog.insert_scoped(
+                reference.toolkit_name(),
+                tool.name(),
+                SensitiveToolEntry {
+                    policy: sensitive,
+                    read_only: tool.is_read_only(),
+                },
+            )?;
         }
     }
+    if !toolsets_by_name.is_empty() {
+        return Err(invalid_configuration());
+    }
     Ok(catalog)
+}
+
+fn valid_identity(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 1_024 && !value.chars().any(char::is_control)
 }
 
 const fn invalid_configuration() -> NativeAgentAssemblyError {
@@ -204,12 +297,19 @@ const fn dependency_unavailable() -> NativeAgentAssemblyError {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::sync::Arc;
 
+    use adk_rust::tool::{BasicToolset, FunctionTool};
+    use adk_rust::{Tool, Toolset};
     use serde_json::{Map, Value, json};
 
-    use super::policy_for_guardrails;
-    use crate::toolkits::ToolAdmissionPolicy;
+    use super::{
+        SensitiveToolCatalog, SensitiveToolEntry, policy_for_guardrails, sensitive_tools_for_kind,
+    };
+    use crate::toolkits::{
+        FrozenToolKind, FrozenToolSnapshot, SensitiveToolPolicy, ToolAdmissionPolicy, bind_toolsets,
+    };
 
     fn policy(security: Value) -> Arc<ToolAdmissionPolicy> {
         let runtime = Map::from_iter([("toolkit_security".to_owned(), security)]);
@@ -259,5 +359,95 @@ mod tests {
                 .sensitive_tool("openapi", "customer_api", "create_item")
                 .is_some()
         );
+    }
+
+    #[tokio::test]
+    async fn provider_aliases_retain_exact_sensitive_toolkit_identity() {
+        let policy = policy(json!({
+            "sensitive_tools": {"mcp": ["lookup"]},
+            "sensitive_action_company_name": "Example Org"
+        }));
+        let mut catalog = SensitiveToolCatalog::default();
+        let mut toolsets = Vec::new();
+        for toolkit_name in ["release intelligence", "audit intelligence"] {
+            let sensitive = policy
+                .sensitive_tool("mcp", toolkit_name, "lookup")
+                .expect("sensitive fixture policy");
+            catalog
+                .insert_scoped(
+                    toolkit_name,
+                    "lookup",
+                    SensitiveToolEntry {
+                        policy: sensitive,
+                        read_only: true,
+                    },
+                )
+                .expect("scoped sensitive tool");
+            let tool: Arc<dyn Tool> = Arc::new(FunctionTool::new(
+                "lookup",
+                "Read one exact source",
+                |_context, _arguments| async { Ok(json!({})) },
+            ));
+            toolsets
+                .push(Arc::new(BasicToolset::new(toolkit_name, vec![tool])) as Arc<dyn Toolset>);
+        }
+        let binding = bind_toolsets(toolsets, &BTreeSet::new(), "sensitive_alias_test")
+            .await
+            .expect("provider binding");
+        let catalog = catalog
+            .bind_provider_names(&binding)
+            .expect("bound sensitive catalog");
+        assert_eq!(
+            catalog
+                .policy_for("release_intelligence__lookup")
+                .map(SensitiveToolPolicy::toolkit_name),
+            Some("release intelligence")
+        );
+        assert_eq!(
+            catalog
+                .policy_for("audit_intelligence__lookup")
+                .map(SensitiveToolPolicy::toolkit_name),
+            Some("audit intelligence")
+        );
+        assert!(catalog.policy_for("lookup").is_none());
+    }
+
+    #[tokio::test]
+    async fn omitted_unsupported_toolkit_does_not_shift_sensitive_identity() {
+        let policy = policy(json!({
+            "sensitive_tools": {
+                "artifact": ["lookup"],
+                "github": ["lookup"]
+            }
+        }));
+        let version = json!({
+            "tools": [
+                {"id": 1, "type": "artifact", "toolkit_name": "attachments", "settings": {}},
+                {"id": 2, "type": "github", "toolkit_name": "repository", "settings": {}}
+            ]
+        });
+        let snapshot =
+            FrozenToolSnapshot::from_version_details(version.as_object().expect("version object"))
+                .expect("frozen tools")
+                .apply_policy(policy.as_ref());
+        let tool: Arc<dyn Tool> = Arc::new(FunctionTool::new(
+            "lookup",
+            "Read one exact source",
+            |_context, _arguments| async { Ok(json!({})) },
+        ));
+        let toolsets =
+            vec![Arc::new(BasicToolset::new("repository", vec![tool])) as Arc<dyn Toolset>];
+
+        let catalog = sensitive_tools_for_kind(
+            &snapshot,
+            FrozenToolKind::Configured,
+            &toolsets,
+            policy.as_ref(),
+        )
+        .await
+        .expect("omitted unsupported toolkit");
+
+        assert!(catalog.policy_for_scoped("attachments", "lookup").is_none());
+        assert!(catalog.policy_for_scoped("repository", "lookup").is_some());
     }
 }

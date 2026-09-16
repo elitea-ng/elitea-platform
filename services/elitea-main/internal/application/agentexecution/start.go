@@ -109,6 +109,7 @@ type CurrentApplicationStartRequest struct {
 	QuestionID          string
 	UserInput           string
 	InteractionUUID     string
+	MCPTokens           json.RawMessage
 	// Attachments carries `payload.attachments` from the start body: the
 	// files the composer uploaded before sending, already split into
 	// (bucket, name) by the route. #606.
@@ -119,7 +120,8 @@ func (request CurrentApplicationStartRequest) Validate() error {
 	if request.ProjectID <= 0 || request.ActorUserID <= 0 || request.TargetParticipantID <= 0 ||
 		!validUUID(request.ConversationUUID) || !validUUID(request.QuestionID) ||
 		!validCurrentAgentText(request.UserInput, maxCurrentAgentUserInputBytes) ||
-		(request.InteractionUUID != "" && !validUUID(request.InteractionUUID)) {
+		(request.InteractionUUID != "" && !validUUID(request.InteractionUUID)) ||
+		!validCurrentMCPTokens(request.MCPTokens) {
 		return ErrInvalidCurrentAgentStart
 	}
 	return nil
@@ -196,6 +198,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 			ProjectID:      int32(request.ProjectID),
 			ActorUserID:    int32(request.ActorUserID),
 			VersionDetails: target.VersionDetails,
+			InternalTools:  target.InternalTools,
 		},
 	)
 	if err != nil {
@@ -327,18 +330,28 @@ func currentApplicationInput(
 	if err != nil {
 		return nil, err
 	}
+	projectContext, err := currentFrozenProjectContext(version)
+	if err != nil {
+		return nil, err
+	}
+	modelContextLimits, err := currentFrozenModelContextLimits(version)
+	if err != nil {
+		return nil, err
+	}
 	threadID := request.ConversationUUID
 	conversationID := request.ConversationUUID
 	executionGeneration := request.QuestionID
 	input := &runtimev1.AgentExecutionInputV1{
-		SchemaRevision: "elitea.runtime.agent-execution-input.v1",
+		SchemaRevision:     "elitea.runtime.agent-execution-input.v1",
+		ProjectContext:     projectContext,
+		ModelContextLimits: modelContextLimits,
 		// Current chat history remains authoritative for ordinary turns. The
 		// shared LangGraph checkpoint stores resumable graph state for this stable
 		// thread; it does not replace the current chat-history projection.
 		Llm: llm, ChatHistory: bytes.Clone(target.ChatHistory),
 		UserInput: userInput, ThreadId: &threadID, Tools: []byte(`[]`),
 		Application: application, InternalTools: internalTools,
-		McpTokens: []byte(`{}`), IgnoredMcpServers: []byte(`[]`),
+		McpTokens: currentMCPTokens(request.MCPTokens), IgnoredMcpServers: []byte(`[]`),
 		UserDeclinedMcpServers: []byte(`[]`), HitlDecisions: []byte(`[]`),
 		ExecutionGeneration: &executionGeneration, Meta: []byte(`{}`),
 		ConversationId: &conversationID, ContextSettings: []byte(`{}`),
@@ -434,7 +447,7 @@ func currentRuntimeInternalTools(raw json.RawMessage) ([]byte, error) {
 	seen := make(map[string]bool, len(configured))
 	for _, name := range configured {
 		switch {
-		case name == "internal_mcp":
+		case currentBuilderFlag(name):
 			// Internal MCP is materialized through the frozen tools projection.
 		case currentPlatformInternalTools[name]:
 			if !seen[name] {

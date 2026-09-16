@@ -259,37 +259,8 @@ impl<'a> AuthorizedNativeAssembly<'a> {
         self,
         policy: &ToolAdmissionPolicy,
     ) -> Result<AdmittedOrdinaryNativeAssembly<'a>, NativeAgentAssemblyError> {
-        let start = admit_native_start(self.request)?;
-        let profile = match &start {
-            AdmittedNativeStart::Fresh => OrdinaryNoToolProfile::validate(self.request)?,
-            AdmittedNativeStart::Regenerate => {
-                OrdinaryNoToolProfile::validate_regeneration(self.request)?
-            }
-            AdmittedNativeStart::OutputContinuation => {
-                OrdinaryNoToolProfile::validate_output_continuation(self.request)?
-            }
-            AdmittedNativeStart::DirectHitl(_) => {
-                OrdinaryNoToolProfile::validate_direct_hitl_resume(self.request)?
-            }
-            AdmittedNativeStart::DelegatedAuthorization(_) => {
-                OrdinaryNoToolProfile::validate_delegated_authorization_resume(self.request)?
-            }
-        };
-        let plan = if matches!(&start, AdmittedNativeStart::OutputContinuation) {
-            OrdinaryNativeAgentPlan::from_authorized_output_continuation(
-                self.request,
-                &profile,
-                &self.command,
-                &self.attachments,
-            )?
-        } else {
-            OrdinaryNativeAgentPlan::from_authorized(
-                self.request,
-                &profile,
-                &self.command,
-                &self.attachments,
-            )?
-        };
+        let (profile, plan, start) =
+            admit_ordinary_plan(self.request, &self.command, &self.attachments)?;
         let toolsets = FrozenToolSnapshot::from_request(self.request)
             .map_err(tool_snapshot_error)?
             .apply_policy(policy);
@@ -311,6 +282,7 @@ impl<'a> AuthorizedNativeAssembly<'a> {
         self,
         policy: &ToolAdmissionPolicy,
     ) -> Result<AdmittedPipelineNativeAssembly<'a>, NativeAgentAssemblyError> {
+        tracing::Span::current().record("stage", "start_admission");
         let has_continuation = has_continuation(self.request);
         let start = if has_continuation {
             if self.request.payload.should_continue && !self.request.payload.hitl_resume {
@@ -331,9 +303,12 @@ impl<'a> AuthorizedNativeAssembly<'a> {
                     .map(PipelineNativeStart::Hitl)
                     .map_err(|error| pipeline_hitl_admission_error(&error))?
             }
+        } else if self.request.payload.is_regenerate {
+            PipelineNativeStart::Regenerate
         } else {
             PipelineNativeStart::Fresh
         };
+        tracing::Span::current().record("stage", "profile_validation");
         let mut profile = match &start {
             PipelineNativeStart::McpAuthorization(_) => {
                 PipelineExecutionProfile::validate_mcp_authorization_resume(self.request)?
@@ -345,10 +320,13 @@ impl<'a> AuthorizedNativeAssembly<'a> {
             }
             _ => PipelineExecutionProfile::validate(self.request, start.is_resume())?,
         };
+        tracing::Span::current().record("stage", "tool_snapshot");
         let frozen_toolsets =
             FrozenToolSnapshot::from_request(self.request).map_err(tool_snapshot_error)?;
+        tracing::Span::current().record("stage", "tool_scope");
         profile.validate_tool_snapshot(&frozen_toolsets, policy)?;
         let toolsets = frozen_toolsets.apply_policy(policy);
+        tracing::Span::current().record("stage", "execution_plan");
         let plan = OrdinaryNativeAgentPlan::from_authorized_pipeline(
             self.request,
             profile.shell(),
@@ -386,6 +364,7 @@ impl<'a> AuthorizedNativeAssembly<'a> {
 
 pub(crate) enum PipelineNativeStart {
     Fresh,
+    Regenerate,
     Hitl(PipelineContinuationDecision),
     McpAuthorization(PipelineMcpAuthorizationContinuation),
     Printer(PrinterContinuation),
@@ -394,7 +373,7 @@ pub(crate) enum PipelineNativeStart {
 impl PipelineNativeStart {
     #[must_use]
     pub(crate) const fn is_resume(&self) -> bool {
-        !matches!(self, Self::Fresh)
+        !matches!(self, Self::Fresh | Self::Regenerate)
     }
 
     #[must_use]
@@ -550,6 +529,47 @@ pub(crate) struct RedeemedOrdinaryNativeAssembly<'a> {
     pub(super) state_writer_lease: Arc<dyn StateWriterLease>,
 }
 
+/// Pure admission shared by normal assembly and checkpoint inspection.
+/// It does not redeem runtime credentials or materialize provider dependencies.
+pub(super) fn admit_ordinary_plan(
+    request: &AgentExecutionRequest,
+    command: &AuthorizedNativeCommandBinding,
+    attachments: &[serde_json::Value],
+) -> Result<
+    (
+        OrdinaryNoToolProfile,
+        OrdinaryNativeAgentPlan,
+        AdmittedNativeStart,
+    ),
+    NativeAgentAssemblyError,
+> {
+    let start = admit_native_start(request)?;
+    let profile = match &start {
+        AdmittedNativeStart::Fresh => OrdinaryNoToolProfile::validate(request)?,
+        AdmittedNativeStart::Regenerate => OrdinaryNoToolProfile::validate_regeneration(request)?,
+        AdmittedNativeStart::OutputContinuation => {
+            OrdinaryNoToolProfile::validate_output_continuation(request)?
+        }
+        AdmittedNativeStart::DirectHitl(_) => {
+            OrdinaryNoToolProfile::validate_direct_hitl_resume(request)?
+        }
+        AdmittedNativeStart::DelegatedAuthorization(_) => {
+            OrdinaryNoToolProfile::validate_delegated_authorization_resume(request)?
+        }
+    };
+    let plan = if matches!(&start, AdmittedNativeStart::OutputContinuation) {
+        OrdinaryNativeAgentPlan::from_authorized_output_continuation(
+            request,
+            &profile,
+            command,
+            attachments,
+        )?
+    } else {
+        OrdinaryNativeAgentPlan::from_authorized(request, &profile, command, attachments)?
+    };
+    Ok((profile, plan, start))
+}
+
 fn admit_native_start(
     request: &AgentExecutionRequest,
 ) -> Result<AdmittedNativeStart, NativeAgentAssemblyError> {
@@ -589,7 +609,6 @@ fn has_continuation(request: &AgentExecutionRequest) -> bool {
         || payload.hitl_action.is_some()
         || payload.hitl_value.is_some()
         || !payload.hitl_decisions.is_empty()
-        || !payload.mcp_tokens.is_empty()
         || !payload.ignored_mcp_servers.is_empty()
         || !payload.user_declined_mcp_servers.is_empty()
 }
@@ -646,10 +665,93 @@ fn tool_snapshot_error(
 pub(crate) trait NativeAgentAssembler: Send + Sync + 'static {
     type Completion: NativeAgentCompletionSelector;
 
+    async fn inspect_checkpoint(
+        &self,
+        _request: &AgentExecutionRequest,
+        _command: &AuthorizedNativeCommandBinding,
+        _session: ClaimBoundSessionAuthority,
+        _state_writer_lease: Arc<dyn StateWriterLease>,
+    ) -> Result<super::session::ValidatedModelCheckpoint, NativeAgentAssemblyError> {
+        Err(NativeAgentAssemblyError::new(
+            NativeAgentAssemblyErrorCode::UnsupportedCapability,
+            "model checkpoint inspection is not supported by this assembler",
+        ))
+    }
+
+    async fn assemble_checkpoint(
+        &self,
+        _assembly: AuthorizedNativeAssembly<'_>,
+    ) -> Result<PendingRecoveredAgentInvocation<Self::Completion>, NativeAgentAssemblyError> {
+        Err(NativeAgentAssemblyError::new(
+            NativeAgentAssemblyErrorCode::UnsupportedCapability,
+            "model checkpoint restoration is not supported by this assembler",
+        ))
+    }
+
     async fn assemble(
         &self,
         assembly: AuthorizedNativeAssembly<'_>,
     ) -> Result<AssembledNativeAgentInvocation<Self::Completion>, NativeAgentAssemblyError>;
+}
+
+/// Restored Runner with no start method until exact checkpoint authorization.
+pub(crate) struct PendingRecoveredAgentInvocation<S> {
+    assembled: AssembledNativeAgentInvocation<S>,
+    checkpoint: super::session::ValidatedModelCheckpoint,
+}
+
+impl<S> PendingRecoveredAgentInvocation<S> {
+    pub(crate) fn new(
+        assembled: AssembledNativeAgentInvocation<S>,
+        checkpoint: super::session::ValidatedModelCheckpoint,
+    ) -> Self {
+        Self {
+            assembled,
+            checkpoint,
+        }
+    }
+
+    pub(crate) fn map_completion<T>(
+        self,
+        map: impl FnOnce(S) -> T,
+    ) -> PendingRecoveredAgentInvocation<T> {
+        PendingRecoveredAgentInvocation {
+            assembled: self.assembled.map_completion(map),
+            checkpoint: self.checkpoint,
+        }
+    }
+
+    #[allow(clippy::needless_pass_by_value)] // Consume the one-use checkpoint authorization.
+    pub(crate) fn authorize_lifecycle(
+        self,
+        authority: crate::protocol::control::CheckpointAssemblyAuthorization,
+    ) -> Result<AssembledNativeAgentInvocation<S>, NativeAgentAssemblyError> {
+        if !authority.matches(&self.checkpoint) {
+            return Err(NativeAgentAssemblyError::new(
+                NativeAgentAssemblyErrorCode::AuthorizationFailed,
+                "the restored checkpoint differs from its authorization",
+            ));
+        }
+        Ok(self.assembled)
+    }
+
+    /// Confirm that post-authorization assembly restores the inspected state.
+    /// A changed checkpoint never releases a startable Runner.
+    pub(crate) fn authorize(
+        self,
+        authority: crate::protocol::control::AuthorizedModelCheckpoint,
+    ) -> Result<
+        (
+            AssembledNativeAgentInvocation<S>,
+            crate::protocol::control::AuthorizedModelCheckpoint,
+        ),
+        NativeAgentRuntimeError,
+    > {
+        if !authority.matches_checkpoint(&self.checkpoint) {
+            return Err(NativeAgentRuntimeError::invalid_state());
+        }
+        Ok((self.assembled, authority))
+    }
 }
 
 /// Native runner, browser projector and explicit post-EOS result selector.
@@ -738,19 +840,20 @@ impl NativeAgentRuntimeErrorCode {
 
 /// Redacted ADK execution failure.
 ///
-/// The upstream value is retained for future typed classification but is not
+/// The upstream value is retained for typed classification but is not
 /// exposed through `Debug`, `Display`, or `Error::source`: provider, tool, and
-/// request data can occur inside an ADK error chain.
+/// request data can occur inside an ADK error chain. Only its static code is
+/// available to the lifecycle's operator log.
 pub(crate) struct NativeAgentRuntimeError {
     code: NativeAgentRuntimeErrorCode,
-    _upstream: Option<Box<AdkError>>,
+    upstream: Option<Box<AdkError>>,
 }
 
 impl NativeAgentRuntimeError {
     fn invalid_state() -> Self {
         Self {
             code: NativeAgentRuntimeErrorCode::InvalidState,
-            _upstream: None,
+            upstream: None,
         }
     }
 
@@ -761,27 +864,31 @@ impl NativeAgentRuntimeError {
     fn start_failed(error: AdkError) -> Self {
         Self {
             code: NativeAgentRuntimeErrorCode::StartFailed,
-            _upstream: Some(Box::new(error)),
+            upstream: Some(Box::new(error)),
         }
     }
 
     fn start_deferred() -> Self {
         Self {
             code: NativeAgentRuntimeErrorCode::StartFailed,
-            _upstream: None,
+            upstream: None,
         }
     }
 
     fn event_failed(error: AdkError) -> Self {
         Self {
             code: NativeAgentRuntimeErrorCode::EventFailed,
-            _upstream: Some(Box::new(error)),
+            upstream: Some(Box::new(error)),
         }
     }
 
     #[must_use]
     pub(crate) const fn code(&self) -> NativeAgentRuntimeErrorCode {
         self.code
+    }
+
+    pub(crate) fn upstream_code(&self) -> Option<&'static str> {
+        self.upstream.as_ref().map(|error| error.code)
     }
 }
 
@@ -982,5 +1089,37 @@ impl Drop for NativeAgentRun {
                 self.runner
                     .interrupt_identity(&self.app_name, &self.user_id, &self.session_id);
         }
+    }
+}
+
+#[cfg(test)]
+mod error_redaction_tests {
+    use super::*;
+
+    #[test]
+    fn runtime_failure_exposes_only_static_upstream_code() {
+        for wrap in [
+            NativeAgentRuntimeError::start_failed,
+            NativeAgentRuntimeError::event_failed,
+        ] {
+            let upstream = AdkError::new(
+                adk_rust::ErrorComponent::Model,
+                adk_rust::ErrorCategory::Unavailable,
+                "model_gateway.provider_error",
+                "private provider body with credentials",
+            );
+            let error = wrap(upstream);
+            assert_eq!(error.upstream_code(), Some("model_gateway.provider_error"));
+            assert!(!format!("{error} {error:?}").contains("private provider"));
+            assert!(std::error::Error::source(&error).is_none());
+        }
+        assert_eq!(
+            NativeAgentRuntimeError::invalid_state().upstream_code(),
+            None
+        );
+        assert_eq!(
+            NativeAgentRuntimeError::start_deferred().upstream_code(),
+            None
+        );
     }
 }

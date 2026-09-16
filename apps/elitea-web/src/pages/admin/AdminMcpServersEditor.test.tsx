@@ -23,11 +23,13 @@
  * No fixture value here is or resembles a real credential.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { QueryClient } from '@tanstack/react-query';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
+import { getListToolkitsQueryKey } from '@/shared/api/generated/toolkits/toolkits';
 import { server } from '@/test/setup';
 
 import { AdminMcpServersEditor } from './AdminMcpServersEditor';
@@ -43,7 +45,12 @@ const CATALOGUE = [
     client_id: 'copilot-client',
     client_secret: '******',
     timeout: 30,
-    headers: {},
+    headers: { Authorization: 'Bearer {api_token}' },
+    config_schema: {
+      properties: {
+        api_token: { type: 'string', required: true, secret: true },
+      },
+    },
     enabled: true,
   },
   {
@@ -54,6 +61,7 @@ const CATALOGUE = [
     client_id: '',
     timeout: 0,
     headers: {},
+    config_schema: { properties: {} },
     enabled: false,
   },
 ];
@@ -90,6 +98,15 @@ function useCatalogueHandlers(
 
 function writes(): RecordedRequest[] {
   return recorded.filter((entry) => entry.method !== 'GET');
+}
+
+function catalogueCacheClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: Infinity },
+      mutations: { retry: false },
+    },
+  });
 }
 
 beforeEach(() => {
@@ -200,6 +217,78 @@ describe('Admin › MCP Servers catalogue', () => {
     expect(body['transport']).toBe('http');
   });
 
+  it('invalidates every project toolkit catalogue after a save', async () => {
+    const user = userEvent.setup();
+    const queryClient = catalogueCacheClient();
+    renderAdminRoute(<AdminMcpServersEditor />, { queryClient });
+    await openEditFor('GitHub Copilot');
+
+    const privateCatalogue = getListToolkitsQueryKey('private-project');
+    const publicCatalogue = getListToolkitsQueryKey('public-project');
+    const unrelated = ['unrelated', 'query'] as const;
+    queryClient.setQueryData(privateCatalogue, { data: {} });
+    queryClient.setQueryData(publicCatalogue, { data: {} });
+    queryClient.setQueryData(unrelated, 'keep');
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      expect(queryClient.getQueryState(privateCatalogue)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(publicCatalogue)?.isInvalidated).toBe(true);
+    });
+    expect(queryClient.getQueryState(unrelated)?.isInvalidated).toBe(false);
+  });
+
+  it('edits templated headers and the dynamic project parameter schema', async () => {
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminMcpServersEditor />);
+    await openEditFor('GitHub Copilot');
+
+    fireEvent.change(await screen.findByLabelText('Headers (YAML mapping)'), {
+      target: {
+        value: 'Authorization: Bearer {project_token}\nX-Tenant: "{tenant}"\n',
+      },
+    });
+    fireEvent.change(screen.getByLabelText('Project parameter schema (YAML mapping)'), {
+      target: {
+        value:
+          'properties:\n  project_token:\n    type: string\n    required: true\n    secret: true\n  tenant:\n    type: string\n    required: true\n',
+      },
+    });
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      expect(writes()).toHaveLength(1);
+    });
+    const body = writes()[0]?.body as Record<string, unknown>;
+    expect(body['headers']).toEqual({
+      Authorization: 'Bearer {project_token}',
+      'X-Tenant': '{tenant}',
+    });
+    expect(body['config_schema']).toEqual({
+      properties: {
+        project_token: { type: 'string', required: true, secret: true },
+        tenant: { type: 'string', required: true },
+      },
+    });
+  });
+
+  it('keeps an invalid YAML mapping in the dialog and sends no write', async () => {
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminMcpServersEditor />);
+    await openEditFor('GitHub Copilot');
+
+    fireEvent.change(await screen.findByLabelText('Headers (YAML mapping)'), {
+      target: { value: '- not\n- a\n- mapping\n' },
+    });
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByTestId('admin-mcp-server-dialog-error')).toHaveTextContent(
+      'Headers must be a valid YAML mapping.',
+    );
+    expect(writes()).toHaveLength(0);
+  });
+
   it('keeps the dialog open and renders the SERVER reason when a save is refused', async () => {
     const user = userEvent.setup();
     useCatalogueHandlers({
@@ -242,6 +331,27 @@ describe('Admin › MCP Servers catalogue', () => {
     });
     expect(writes()[0]?.method).toBe('DELETE');
     expect(writes()[0]?.url).toContain('/administration/github_copilot');
+  });
+
+  it('invalidates every project toolkit catalogue after a delete', async () => {
+    const user = userEvent.setup();
+    const queryClient = catalogueCacheClient();
+    renderAdminRoute(<AdminMcpServersEditor />, { queryClient });
+    await screen.findByText('GitHub Copilot');
+
+    const catalogue = getListToolkitsQueryKey('private-project');
+    queryClient.setQueryData(catalogue, { data: {} });
+
+    const row = screen.getByText('GitHub Copilot').closest('tr');
+    const remove = Array.from(row?.querySelectorAll('button') ?? []).find(
+      (button) => button.textContent === 'Remove',
+    );
+    await user.click(remove as HTMLElement);
+    await user.click(screen.getByTestId('admin-mcp-server-delete-confirm'));
+
+    await waitFor(() => {
+      expect(queryClient.getQueryState(catalogue)?.isInvalidated).toBe(true);
+    });
   });
 
   it('shows an empty catalogue as a statement, not as a blank pane', async () => {

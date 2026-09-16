@@ -59,7 +59,9 @@ function buildTestRouter(initialPath: string, content: ReactElement, projectId: 
     component: () => content,
   });
 
-  const routeTree = rootRoute.addChildren([createRoute_.addChildren([createTypeRoute]), editRoute]);
+  const createMcpRoute = createRoute({ getParentRoute: () => rootRoute, path: '/mcps/create', component: () => content });
+  const createMcpTypeRoute = createRoute({ getParentRoute: () => createMcpRoute, path: '$toolkitType', component: () => content });
+  const routeTree = rootRoute.addChildren([createRoute_.addChildren([createTypeRoute]), editRoute, createMcpRoute.addChildren([createMcpTypeRoute])]);
 
   return createRouter({
     routeTree,

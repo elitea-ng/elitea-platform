@@ -8,12 +8,18 @@
 //!
 //! # Composition
 //!
-//! An admitted plan is composed onto the ADK Runner from
+//! Ordinary roots with frozen model limits use `context_compaction` through
+//! the model checkpoint callback. That path stores structured summary coverage
+//! and the prepared request before dispatch. Ordinary child agents use separate
+//! model sessions. Pipeline model nodes apply the same callback in independent
+//! scopes; the graph Runner never summarizes exact graph state.
+//!
+//! Legacy bindings without frozen limits compose the plan onto the ADK Runner from
 //! [`ContextManagementPlan::prepare_runner_composition`], which yields an
 //! `adk_runner::compaction::CompactionConfig`. The config pairs
 //! [`EliteaContextCompaction`] — a [`CompactionStrategy`] that reproduces the
 //! current SDK's `SummarizationMiddleware.before_model` ordering — with
-//! ADK-Rust 2.0.0's `LlmEventSummarizer`, which performs the actual summary
+//! ADK-Rust 2.2.0's `LlmEventSummarizer`, which performs the actual summary
 //! call.
 //!
 //! # Transcript lineage
@@ -23,11 +29,13 @@
 //! view for the current invocation. Nothing is appended to, or removed from,
 //! the `SessionService` behind it, so the `PostgreSQL` checkpointer lineage
 //! stays the single durable transcript and a resume always reloads the full
-//! history and recompacts it. This deliberately avoids ADK's other compaction
-//! surface, `EventsCompactionConfig`, which persists `EventCompaction` markers
-//! into the session service and would make compaction irreversible.
+//! history and recompacts it. ADK's other compaction surface,
+//! `EventsCompactionConfig`, persists `EventCompaction` markers while retaining
+//! original events. Runner history uses the marker boundary on later calls.
+//! This legacy strategy does not use that durable path.
+//! See `docs/context-continuation-design.md` for the required integration.
 //!
-//! # Known limits
+//! # Legacy strategy limits
 //!
 //! * The summary is derived per invocation and is never persisted, so an
 //!   over-budget conversation pays one summarization call per turn.
@@ -59,8 +67,9 @@ const SDK_HISTORY_PLACEHOLDER: &str = "{messages}";
 const COMPACTION_ATTEMPTS: usize = 1;
 
 /// Every key Main is allowed to freeze into `context_settings`.
-const ADMITTED_KEYS: [&str; 8] = [
+const ADMITTED_KEYS: [&str; 9] = [
     "enabled",
+    "budget_mode",
     "enable_summarization",
     "enable_context_editing",
     "max_context_tokens",
@@ -180,9 +189,9 @@ impl ContextManagementPlan {
 
     /// Compose the admitted plan onto the exclusive Runner, after admission and
     /// before the Runner is built. `summarization_model` is the invocation's
-    /// bound model; a caller that has none (the pipeline graph runs one model
-    /// per node) passes `None` and an active plan is refused rather than
-    /// half-applied.
+    /// isolated summary model. An active plan with no model is refused rather
+    /// than half-applied. Pipeline graphs instead apply the policy within each
+    /// model node and do not call this Runner-level composition method.
     ///
     /// # Errors
     ///

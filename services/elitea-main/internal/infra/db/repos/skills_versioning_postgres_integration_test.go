@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // This file is the #874 acceptance suite: skills gained the multi-version
@@ -22,7 +23,7 @@ import (
 
 func createSkillWithBase(t *testing.T, repo *SkillsRepo, ctx context.Context, name string) skills.Skill {
 	t.Helper()
-	created, err := repo.Create(ctx, "1", skills.Skill{
+	created, err := repo.Create(ctx, "1", skills.Skill{AuthorID: 1,
 		Name: name, Description: "d", Instructions: "base instructions", Tags: []string{"base-tag"},
 	})
 	if err != nil {
@@ -34,12 +35,12 @@ func createSkillWithBase(t *testing.T, repo *SkillsRepo, ctx context.Context, na
 func TestSkillsRepoPostgres_CreateVersionClonesBaseWhenNoContentGiven(t *testing.T) {
 	pool := newSkillsTestPool(t)
 	repo := NewSkillsRepo(pool)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(auth.ContextWithUser(context.Background(), auth.User{UserID: "1"}), 20*time.Second)
 	defer cancel()
 
 	sk := createSkillWithBase(t, repo, ctx, "Cloner")
 
-	created, err := repo.CreateVersion(ctx, "1", sk.ID, skills.VersionCreateInput{Name: "v2"})
+	created, err := repo.CreateVersion(ctx, "1", sk.ID, skills.VersionCreateInput{AuthorID: 1, Name: "v2"})
 	if err != nil {
 		t.Fatalf("create version: %v", err)
 	}
@@ -84,12 +85,12 @@ func TestSkillsRepoPostgres_CreateVersionClonesBaseWhenNoContentGiven(t *testing
 func TestSkillsRepoPostgres_CreateVersionWithExplicitContentAndDuplicateNameConflict(t *testing.T) {
 	pool := newSkillsTestPool(t)
 	repo := NewSkillsRepo(pool)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(auth.ContextWithUser(context.Background(), auth.User{UserID: "1"}), 20*time.Second)
 	defer cancel()
 
 	sk := createSkillWithBase(t, repo, ctx, "Explicit Content")
 
-	created, err := repo.CreateVersion(ctx, "1", sk.ID, skills.VersionCreateInput{
+	created, err := repo.CreateVersion(ctx, "1", sk.ID, skills.VersionCreateInput{AuthorID: 1,
 		Name: "release-1", Instructions: "release instructions", Tags: []string{"release"},
 	})
 	if err != nil {
@@ -105,7 +106,7 @@ func TestSkillsRepoPostgres_CreateVersionWithExplicitContentAndDuplicateNameConf
 	}
 
 	// A duplicate name is a 409, not a silent overwrite or a second row.
-	_, err = repo.CreateVersion(ctx, "1", sk.ID, skills.VersionCreateInput{
+	_, err = repo.CreateVersion(ctx, "1", sk.ID, skills.VersionCreateInput{AuthorID: 1,
 		Name: "release-1", Instructions: "different content",
 	})
 	if err == nil {
@@ -144,11 +145,11 @@ func TestSkillsRepoPostgres_CreateVersionWithExplicitContentAndDuplicateNameConf
 func TestSkillsRepoPostgres_CompareTwoVersionsReadsIndependentPersistedContent(t *testing.T) {
 	pool := newSkillsTestPool(t)
 	repo := NewSkillsRepo(pool)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(auth.ContextWithUser(context.Background(), auth.User{UserID: "1"}), 20*time.Second)
 	defer cancel()
 
 	sk := createSkillWithBase(t, repo, ctx, "Comparable")
-	v2, err := repo.CreateVersion(ctx, "1", sk.ID, skills.VersionCreateInput{
+	v2, err := repo.CreateVersion(ctx, "1", sk.ID, skills.VersionCreateInput{AuthorID: 1,
 		Name: "v2", Instructions: "v2 instructions", Tags: []string{"v2-tag"},
 	})
 	if err != nil {
@@ -193,17 +194,17 @@ func TestSkillsRepoPostgres_CompareTwoVersionsReadsIndependentPersistedContent(t
 func TestSkillsRepoPostgres_UpdateVersionPersistsAndRefusesPublished(t *testing.T) {
 	pool := newSkillsTestPool(t)
 	repo := NewSkillsRepo(pool)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(auth.ContextWithUser(context.Background(), auth.User{UserID: "1"}), 20*time.Second)
 	defer cancel()
 
 	sk := createSkillWithBase(t, repo, ctx, "Editable Version")
-	created, err := repo.CreateVersion(ctx, "1", sk.ID, skills.VersionCreateInput{Name: "draft-2", Instructions: "v1"})
+	created, err := repo.CreateVersion(ctx, "1", sk.ID, skills.VersionCreateInput{AuthorID: 1, Name: "draft-2", Instructions: "v1"})
 	if err != nil {
 		t.Fatalf("create version: %v", err)
 	}
 	versionID := created.VersionDetails.ID
 
-	updated, err := repo.UpdateVersion(ctx, "1", sk.ID, versionID, skills.Skill{
+	updated, err := repo.UpdateVersion(ctx, "1", sk.ID, versionID, skills.Skill{AuthorID: 1,
 		Name: sk.Name, Description: sk.Description, Instructions: "v2", Tags: []string{"edited"},
 	})
 	if err != nil {
@@ -231,7 +232,7 @@ func TestSkillsRepoPostgres_UpdateVersionPersistsAndRefusesPublished(t *testing.
 	if _, err := pool.Exec(ctx, `UPDATE p_1.skill_versions SET status = 'published' WHERE id = $1`, versionID); err != nil {
 		t.Fatalf("mark published: %v", err)
 	}
-	_, err = repo.UpdateVersion(ctx, "1", sk.ID, versionID, skills.Skill{
+	_, err = repo.UpdateVersion(ctx, "1", sk.ID, versionID, skills.Skill{AuthorID: 1,
 		Name: sk.Name, Description: sk.Description, Instructions: "v3",
 	})
 	if err == nil {
@@ -253,7 +254,7 @@ func TestSkillsRepoPostgres_UpdateVersionPersistsAndRefusesPublished(t *testing.
 func TestSkillsRepoPostgres_DeleteVersionRefusesBaseDefaultAndPublished(t *testing.T) {
 	pool := newSkillsTestPool(t)
 	repo := NewSkillsRepo(pool)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(auth.ContextWithUser(context.Background(), auth.User{UserID: "1"}), 20*time.Second)
 	defer cancel()
 
 	sk := createSkillWithBase(t, repo, ctx, "Delete Guard")
@@ -270,7 +271,7 @@ func TestSkillsRepoPostgres_DeleteVersionRefusesBaseDefaultAndPublished(t *testi
 	// 2. The current DEFAULT version cannot be deleted until a different one
 	// is set — deleting it would leave a fresh attachment's proposed version
 	// pointing at nothing.
-	named, err := repo.CreateVersion(ctx, "1", sk.ID, skills.VersionCreateInput{Name: "candidate", Instructions: "c"})
+	named, err := repo.CreateVersion(ctx, "1", sk.ID, skills.VersionCreateInput{AuthorID: 1, Name: "candidate", Instructions: "c"})
 	if err != nil {
 		t.Fatalf("create version: %v", err)
 	}
@@ -296,7 +297,7 @@ func TestSkillsRepoPostgres_DeleteVersionRefusesBaseDefaultAndPublished(t *testi
 	}
 
 	// 3. A published version is frozen, same as application_versions.
-	published, err := repo.CreateVersion(ctx, "1", sk.ID, skills.VersionCreateInput{Name: "shipped", Instructions: "s"})
+	published, err := repo.CreateVersion(ctx, "1", sk.ID, skills.VersionCreateInput{AuthorID: 1, Name: "shipped", Instructions: "s"})
 	if err != nil {
 		t.Fatalf("create version: %v", err)
 	}
@@ -322,11 +323,11 @@ func TestSkillsRepoPostgres_DeleteVersionRefusesBaseDefaultAndPublished(t *testi
 func TestSkillsRepoPostgres_RestoreVersionRollsBackBaseWithLineage(t *testing.T) {
 	pool := newSkillsTestPool(t)
 	repo := NewSkillsRepo(pool)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(auth.ContextWithUser(context.Background(), auth.User{UserID: "1"}), 20*time.Second)
 	defer cancel()
 
 	sk := createSkillWithBase(t, repo, ctx, "Rollback Target")
-	old, err := repo.CreateVersion(ctx, "1", sk.ID, skills.VersionCreateInput{
+	old, err := repo.CreateVersion(ctx, "1", sk.ID, skills.VersionCreateInput{AuthorID: 1,
 		Name: "v1.0", Instructions: "the good version", Tags: []string{"stable"},
 	})
 	if err != nil {
@@ -335,7 +336,7 @@ func TestSkillsRepoPostgres_RestoreVersionRollsBackBaseWithLineage(t *testing.T)
 	oldID := old.VersionDetails.ID
 
 	// Drift base away from the good version, the way ordinary editing would.
-	if _, err := repo.Update(ctx, "1", sk.ID, skills.Skill{
+	if _, err := repo.Update(ctx, "1", sk.ID, skills.Skill{AuthorID: 1,
 		Name: sk.Name, Description: sk.Description, Instructions: "a broken edit", Tags: []string{"broken"},
 	}); err != nil {
 		t.Fatalf("drift base: %v", err)
@@ -390,11 +391,11 @@ func TestSkillsRepoPostgres_RestoreVersionRollsBackBaseWithLineage(t *testing.T)
 func TestSkillsRepoPostgres_SetDefaultVersionPersistsAndMarksExactlyOneVersion(t *testing.T) {
 	pool := newSkillsTestPool(t)
 	repo := NewSkillsRepo(pool)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(auth.ContextWithUser(context.Background(), auth.User{UserID: "1"}), 20*time.Second)
 	defer cancel()
 
 	sk := createSkillWithBase(t, repo, ctx, "Default Pointer")
-	named, err := repo.CreateVersion(ctx, "1", sk.ID, skills.VersionCreateInput{Name: "v2", Instructions: "x"})
+	named, err := repo.CreateVersion(ctx, "1", sk.ID, skills.VersionCreateInput{AuthorID: 1, Name: "v2", Instructions: "x"})
 	if err != nil {
 		t.Fatalf("create version: %v", err)
 	}
@@ -448,11 +449,11 @@ func TestSkillsRepoPostgres_SetDefaultVersionPersistsAndMarksExactlyOneVersion(t
 func TestSkillsRepoPostgres_WorkerReadPathUnchangedByVersioning(t *testing.T) {
 	pool := newSkillsTestPool(t)
 	repo := NewSkillsRepo(pool)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(auth.ContextWithUser(context.Background(), auth.User{UserID: "1"}), 20*time.Second)
 	defer cancel()
 
 	sk := createSkillWithBase(t, repo, ctx, "Attached Skill")
-	named, err := repo.CreateVersion(ctx, "1", sk.ID, skills.VersionCreateInput{
+	named, err := repo.CreateVersion(ctx, "1", sk.ID, skills.VersionCreateInput{AuthorID: 1,
 		Name: "pinned", Instructions: "the pinned version's instructions",
 	})
 	if err != nil {

@@ -180,7 +180,7 @@ fn agent_node_rejects_ambiguous_or_undeclared_contracts() {
             "task: {type: expression, value: topic}",
         ),
         AGENT_NODE.replace("output: [answer, messages]", "output: [answer, answer]"),
-        AGENT_NODE.replace("transition: END", "transition: 'bad target'"),
+        AGENT_NODE.replace("transition: END", "transition: 'bad/target'"),
         format!("{AGENT_NODE}\nvariables: {{}}"),
     ] {
         assert!(ApplicationNodeDefinition::from_yaml(&yaml).is_err());
@@ -843,6 +843,8 @@ fn resume_payload(thread_id: &str, interrupt_id: &str) -> AgentExecutionPayload 
         next_input_suggestion: NextInputSuggestionPolicy::default(),
         toolkit_guardrails: None,
         truncated_content: None,
+        project_context: None,
+        model_context_limits: None,
     }
 }
 

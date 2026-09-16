@@ -520,7 +520,7 @@ func TestCurrentApplicationStartRouteFallsBackBeforeUseCaseForUnsupportedTurn(t 
 	useCase := &currentStartUseCaseStub{}
 	permissions := allowCurrentStartPermission()
 	route := newCurrentStartRoute(t, useCase, permissions)
-	body := strings.Replace(validCurrentStartBody(), `"mcp_tokens":{}`, `"mcp_tokens":{"server":{"access_token":"not-forwarded"}}`, 1)
+	body := strings.Replace(validCurrentStartBody(), `"mcp_tokens":{}`, `"mcp_tokens":[]`, 1)
 
 	response := httptest.NewRecorder()
 	route.ServeHTTP(response, currentStartRequest(body))

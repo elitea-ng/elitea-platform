@@ -292,13 +292,17 @@ INSERT INTO p_3.application_versions (
 // the point of these cases is the version READ, not the schema history: what
 // matters is that `p_<id>` exists, that `centry.project` lists the project (both
 // are what tenant.BindProject checks before it will install a search path), and
-// that the seven tables the projection touches are there with the shapes
+// that the tables the projection touches are there with the shapes
 // internal/infra/db/migrations/001_initial.sql gives them.
 func seedCurrentAgentForeignProjectSchema(t *testing.T, pool *pgxpool.Pool, projectID int64) {
 	t.Helper()
 	if _, err := pool.Exec(t.Context(), fmt.Sprintf(`
 INSERT INTO centry.project (id, create_success, suspended) VALUES (%[1]d, TRUE, FALSE);
 CREATE SCHEMA p_%[1]d;
+CREATE TABLE p_%[1]d.applications (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(128) NOT NULL
+);
 CREATE TABLE p_%[1]d.application_versions (
     id SERIAL PRIMARY KEY,
     application_id INTEGER NOT NULL,

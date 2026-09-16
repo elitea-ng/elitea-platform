@@ -83,6 +83,29 @@ where
     RC: RedisRetirementClient + 'static,
     K: UnixMillisClock,
 {
+    fn inspect_checkpoint<'a>(
+        &'a self,
+        request: &'a crate::agents::AgentExecutionRequest,
+        command: &'a crate::agents::session::AuthorizedNativeCommandBinding,
+        session: crate::protocol::control::ClaimBoundSessionAuthority,
+        lease: Arc<dyn crate::state::StateWriterLease>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        crate::agents::session::ValidatedModelCheckpoint,
+                        NativeAgentAssemblyError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(
+            self.native_factory
+                .inspect_checkpoint(request, command, session, lease),
+        )
+    }
+
     fn run(&self, run: AuthorizedAgentRun) -> OwnedFuture<AgentAuthorizedLifecycleCompletion> {
         let execution_kind = run.execution_kind();
         let native_factory = Arc::clone(&self.native_factory);
@@ -327,11 +350,12 @@ where
             let (run, error) = (*failure).into_parts();
             tracing::warn!(
                 error_code = error.code().as_str(),
+                upstream_error_code = error.upstream_code(),
                 "native agent runtime failed to start"
             );
             return Box::pin(finalize(
                 run,
-                RuntimeFailureKind::Internal,
+                model_failure(error.upstream_code()),
                 control,
                 retirer,
                 clock,
@@ -573,10 +597,11 @@ where
                         tracing::warn!(
                             error = %error,
                             error_code = error.code().as_str(),
+                            upstream_error_code = error.upstream_code(),
                             "native agent event stream failed"
                         );
                         return NativeStreamOutcome::Failure(
-                            failure.unwrap_or(RuntimeFailureKind::Internal),
+                            failure.unwrap_or_else(|| model_failure(error.upstream_code())),
                         );
                     }
                 };
@@ -704,7 +729,6 @@ const MAX_PENDING_PAUSE_CARDS: usize = 16;
 pub(super) enum AgentPauseAggregationError {
     InvalidState,
     ResourceExhausted,
-    MixedGuardrails,
     InvalidOutput,
 }
 
@@ -713,7 +737,6 @@ impl AgentPauseAggregationError {
         match self {
             Self::InvalidState => "agent_pause.invalid_state",
             Self::ResourceExhausted => "agent_pause.resource_exhausted",
-            Self::MixedGuardrails => "agent_pause.mixed_guardrails_unsupported",
             Self::InvalidOutput => "agent_pause.invalid_output",
         }
     }
@@ -819,10 +842,28 @@ impl AgentPauseAccumulator {
             self.authorization_requests.is_empty(),
         ) {
             (true, true) => Err(AgentPauseAggregationError::InvalidState),
-            (false, false) => Err(AgentPauseAggregationError::MixedGuardrails),
+            (false, false) => self.finish_mixed(),
             (false, true) => self.finish_hitl(),
             (true, false) => self.finish_authorization(),
         }
+    }
+
+    fn finish_mixed(&mut self) -> Result<AggregatedAgentPause, AgentPauseAggregationError> {
+        let mut hitl = self.finish_hitl()?;
+        let authorization = self.finish_authorization()?;
+        let hitl_metadata = pause_metadata(&hitl.event)?;
+        let mut metadata = pause_metadata(&authorization.event)?;
+        for key in ["hitl_interrupt", "hitl_interrupts"] {
+            metadata.insert(
+                key.to_owned(),
+                hitl_metadata
+                    .get(key)
+                    .cloned()
+                    .ok_or(AgentPauseAggregationError::InvalidState)?,
+            );
+        }
+        bind_pause_metadata(&mut hitl.event, metadata)?;
+        Ok(hitl)
     }
 
     fn finish_hitl(&mut self) -> Result<AggregatedAgentPause, AgentPauseAggregationError> {
@@ -1039,7 +1080,7 @@ where
     RC: RedisRetirementClient + 'static,
     K: UnixMillisClock,
 {
-    finish_after_stream(
+    Box::pin(finish_after_stream(
         run,
         Some(failure),
         FreshAgentTerminalSelection::Completed,
@@ -1047,7 +1088,7 @@ where
         retirer,
         clock,
         terminal_recovery,
-    )
+    ))
     .await
 }
 
@@ -1123,7 +1164,7 @@ fn sampled_time<K: UnixMillisClock>(clock: &K) -> Result<(i64, DateTime<Utc>), &
     Ok((now, time))
 }
 
-fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailureKind {
+pub(super) fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailureKind {
     match error.code() {
         NativeAgentAssemblyErrorCode::UnsupportedCapability => {
             RuntimeFailureKind::UnsupportedCapability
@@ -1153,11 +1194,37 @@ fn projection_failure(error: &AgentEventProjectionError) -> RuntimeFailureKind {
     }
 }
 
+fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
+    match upstream_code {
+        Some("context_budget_exceeded" | "model_request_bytes_exceeded") => {
+            RuntimeFailureKind::ResourceExhausted
+        }
+        _ => RuntimeFailureKind::Internal,
+    }
+}
+
 #[cfg(test)]
 mod taxonomy_tests {
     use super::assembly_failure;
     use crate::agents::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
     use crate::protocol::output::RuntimeFailureKind;
+
+    #[test]
+    fn context_budget_failure_is_a_resource_limit_without_exposing_provider_text() {
+        assert_eq!(
+            super::model_failure(Some("context_budget_exceeded")),
+            RuntimeFailureKind::ResourceExhausted
+        );
+        assert_eq!(
+            super::model_failure(Some("model_request_bytes_exceeded")),
+            RuntimeFailureKind::ResourceExhausted
+        );
+        assert_eq!(
+            super::model_failure(Some("unknown_provider_error")),
+            RuntimeFailureKind::Internal
+        );
+        assert_eq!(super::model_failure(None), RuntimeFailureKind::Internal);
+    }
 
     #[test]
     fn assembly_failures_keep_the_canonical_terminal_kind() {

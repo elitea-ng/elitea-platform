@@ -98,6 +98,25 @@ def _input(*, application: bool = True) -> agent_pb2.AgentExecutionInputV1:
     )
 
 
+@pytest.mark.parametrize("application", [True, False])
+def test_model_context_limits_are_a_recognized_shared_wire_field(application):
+    message = _input(application=application)
+    assert not message.HasField("model_context_limits")
+    message.model_context_limits.CopyFrom(agent_pb2.ModelContextLimitsV1(
+        context_window_tokens=1_000_000, max_output_tokens=128_000,
+        max_output_fallback=True, max_input_tokens=872_000,
+    ))
+    decoded = parse_agent_execution_input(message.SerializeToString())
+    assert decoded.model_context_limits == message.model_context_limits
+    request = request_from(
+        decoded, kind=AgentExecutionKind.APPLICATION if application else AgentExecutionKind.ADHOC,
+        input_bundle_id="bundle", input_bundle_digest=b"b" * 32,
+        request_entry_id="request", request_immutable_version="v1", request_content_digest=b"c" * 32,
+    )
+    # The shared wire accepts the snapshot; this Rust policy does not change SDK kwargs.
+    assert request.payload.user_input == "current"
+
+
 def _request(*, application: bool = True):
     message = _input(application=application)
     return request_from(
@@ -1366,3 +1385,59 @@ def test_sdk_adapter_rejects_hitl_without_continuation_marker() -> None:
 
     with pytest.raises(UnsupportedCapability, match="continuation marker"):
         _adapter(_Client()).execute_application(payload)
+
+
+@pytest.mark.parametrize("application", [True, False])
+@pytest.mark.parametrize("activation", ["", "When reviewing code"])
+def test_project_context_snapshot_reaches_existing_sdk_boundary(application, activation, monkeypatch):
+    from dataclasses import replace
+    from elitea_worker.agents import sdk_adapter
+
+    # This test checks constructor propagation; question-tool loading is independent.
+    monkeypatch.setattr(sdk_adapter, "_install_ask_user_question_ids", lambda: None)
+    snapshot = {
+        "id": "project-context:7:9", "scope": "project:7",
+        "content": " Project rules \n", "activation_description": activation,
+    }
+    snapshot["revision"] = hashlib.sha256(snapshot["content"].encode()).hexdigest()
+    payload = replace(_request(application=application).payload, project_context=snapshot)
+    client = _Client()
+    adapter = _adapter(client)
+    if application:
+        payload.application["version_details"]["instructions"] = "Agent rules"
+        adapter.execute_application(payload)
+        call = client.application_calls[0]
+        instructions = call["version_details"]["instructions"]
+    else:
+        adapter.execute_adhoc(payload)
+        call = client.adhoc_calls[0]
+        instructions = call["instructions"]
+    if activation:
+        assert call["project_context"] == snapshot
+        assert call["project_context"] is not snapshot
+        assert "Project rules" not in instructions
+    else:
+        assert instructions.startswith("# Project Context\n\n Project rules \n\n\n---\n\n")
+        assert "project_context" not in call
+    assert payload.project_context == snapshot
+
+
+def test_project_context_wire_snapshot_rejects_revision_mismatch():
+    message = _input()
+    message.project_context.CopyFrom(agent_pb2.ProjectContextSnapshotV1(
+        id="project-context:7:9", scope="project:7", content="Rules",
+        revision=hashlib.sha256(b"Rules").hexdigest(), activation_description="When needed",
+    ))
+    request = request_from(
+        message, kind=AgentExecutionKind.APPLICATION,
+        input_bundle_id="bundle", input_bundle_digest=b"b" * 32,
+        request_entry_id="request", request_immutable_version="v1", request_content_digest=b"c" * 32,
+    )
+    assert request.payload.project_context["content"] == "Rules"
+    message.project_context.content = "Changed"
+    with pytest.raises(InvalidInput):
+        request_from(
+            message, kind=AgentExecutionKind.APPLICATION,
+            input_bundle_id="bundle", input_bundle_digest=b"b" * 32,
+            request_entry_id="request", request_immutable_version="v1", request_content_digest=b"c" * 32,
+        )

@@ -15,25 +15,30 @@ const (
 	IndexIngestCapability             = "index.ingest.v1"
 	AgentApplicationCapability        = "agent.execute.application.v1"
 	AgentAdhocCapability              = "agent.execute.adhoc.v1"
+	ToolkitExecuteReadCapability      = "toolkit.execute.read.v1"
 	ToolkitCallToolCapability         = "toolkit.call_tool.v1"
 	SettingsJSONMediaType             = "application/json"
 	AgentExecutionInputMediaType      = "application/vnd.elitea.agent-execution-input.v1+protobuf"
+	ToolkitExecuteReadInputMediaType  = "application/vnd.elitea.toolkit-execute-read-input.v1+protobuf"
 	InputBundleManifestMediaType      = "application/x-protobuf"
 	MaxInputBundleEntries             = 16
 	MaxInputEntryContentBytes         = 256 * 1024
 	MaxAgentExecutionInputBytes       = 1024 * 1024
+	MaxToolkitExecuteReadInputBytes   = 1024 * 1024
 
-	IndexToolkitConfigurationRole = "index.toolkit_configuration"
-	IndexToolParametersRole       = "index.tool_parameters"
-	IndexLLMModelRole             = "index.llm_model"
-	IndexLLMConfigurationRole     = "index.llm_configuration"
-	IndexMCPTokensRole            = "index.mcp_tokens"
-	IndexEmbeddingBindingRole     = "index.embedding_binding"
-	AgentExecutionRequestRole     = "agent.execution_request"
-	ToolkitCallToolSettingsRole   = "toolkit.call_tool.settings"
-	ToolkitCallToolArgumentsRole  = "toolkit.call_tool.arguments"
-	MaxIndexMetaIDBytes           = 256
-	MaxIndexMetaCorrelationBytes  = 512
+	IndexToolkitConfigurationRole     = "index.toolkit_configuration"
+	IndexToolParametersRole           = "index.tool_parameters"
+	IndexLLMModelRole                 = "index.llm_model"
+	IndexLLMConfigurationRole         = "index.llm_configuration"
+	IndexMCPTokensRole                = "index.mcp_tokens"
+	IndexEmbeddingBindingRole         = "index.embedding_binding"
+	AgentExecutionRequestRole         = "agent.execution_request"
+	ToolkitExecuteReadRequestRole     = "toolkit.execute_read_request"
+	ToolkitCallToolRuntimeContextRole = "toolkit.call_tool.runtime_context"
+	ToolkitCallToolSettingsRole       = "toolkit.call_tool.settings"
+	ToolkitCallToolArgumentsRole      = "toolkit.call_tool.arguments"
+	MaxIndexMetaIDBytes               = 256
+	MaxIndexMetaCorrelationBytes      = 512
 	// MaxSafeCommandStringBytes is the bound every worker applies to a bounded
 	// command string. Exceeding it here would produce a command the worker
 	// refuses, so the refusal belongs on this side where the caller can see it.
@@ -107,6 +112,8 @@ func maxInputEntryContentBytes(mediaType string) int64 {
 		return MaxInputEntryContentBytes
 	case AgentExecutionInputMediaType:
 		return MaxAgentExecutionInputBytes
+	case ToolkitExecuteReadInputMediaType:
+		return MaxToolkitExecuteReadInputBytes
 	default:
 		return 0
 	}
@@ -182,11 +189,31 @@ func SupportedCapability(capabilityID string) bool {
 		IndexIngestCapability,
 		AgentApplicationCapability,
 		AgentAdhocCapability,
-		ToolkitCallToolCapability:
+		ToolkitExecuteReadCapability,
+		ToolkitCallToolCapability, ToolkitAvailableToolsCapability:
 		return true
 	default:
 		return false
 	}
+}
+
+// ToolkitExecuteReadBinding binds one direct read request to one immutable
+// protobuf input. The toolkit snapshot, arguments and policy stay off Redis.
+type ToolkitExecuteReadBinding struct {
+	RequestEntryID string
+}
+
+func (b ToolkitExecuteReadBinding) Validate(bundle InputBundle) error {
+	if b.RequestEntryID == "" || len(bundle.Entries) != 1 {
+		return ErrInvalidInputBundle
+	}
+	entry := bundle.Entries[0]
+	if entry.ID != b.RequestEntryID ||
+		entry.SemanticRole != ToolkitExecuteReadRequestRole ||
+		entry.MediaType != ToolkitExecuteReadInputMediaType {
+		return ErrInvalidInputBundle
+	}
+	return nil
 }
 
 func NodeEventCapability(capabilityID string) bool {
@@ -354,7 +381,7 @@ func (b ToolkitCallToolBinding) Validate(bundle InputBundle) error {
 		!validIndexMetaText(b.ToolkitType, MaxSafeCommandStringBytes) ||
 		!validIndexMetaText(b.ToolName, MaxSafeCommandStringBytes) ||
 		!validOptionalIndexMetaText(b.ToolkitVersion, MaxSafeCommandStringBytes) ||
-		len(bundle.Entries) != 2 {
+		len(bundle.Entries) != 3 {
 		return ErrInvalidInputBundle
 	}
 	for _, reference := range []struct {
@@ -363,6 +390,7 @@ func (b ToolkitCallToolBinding) Validate(bundle InputBundle) error {
 	}{
 		{id: b.SettingsEntryID, role: ToolkitCallToolSettingsRole},
 		{id: b.ArgumentsEntryID, role: ToolkitCallToolArgumentsRole},
+		{id: "toolkit-runtime-context", role: ToolkitCallToolRuntimeContextRole},
 	} {
 		entry, found := bundle.entryByID(reference.id)
 		if !found || entry.SemanticRole != reference.role {
@@ -413,6 +441,31 @@ func (a Admission) Validate() error {
 	}
 	if a.Job.ID != a.Outbox.ExecutionID || a.Job.CommandID != a.Outbox.CommandID || a.Job.Generation != a.Outbox.Generation {
 		return errors.New("job and outbox identity mismatch")
+	}
+	return nil
+}
+
+const ToolkitAvailableToolsCapability = "toolkit.available_tools.v1"
+const ToolkitAvailableToolsSettingsRole = "toolkit.available_tools.settings"
+
+type ToolkitAvailableToolsBinding struct {
+	ToolkitType     string
+	ToolkitID       int64
+	ToolkitVersion  string
+	SettingsEntryID string
+}
+
+func (b ToolkitAvailableToolsBinding) Validate(bundle InputBundle) error {
+	if b.ToolkitID <= 0 || !validIndexMetaText(b.ToolkitType, MaxSafeCommandStringBytes) || !validOptionalIndexMetaText(b.ToolkitVersion, MaxSafeCommandStringBytes) || b.SettingsEntryID == "" || len(bundle.Entries) != 2 {
+		return ErrInvalidInputBundle
+	}
+	entry, found := bundle.entryByID(b.SettingsEntryID)
+	if !found || entry.SemanticRole != ToolkitAvailableToolsSettingsRole {
+		return ErrInvalidInputBundle
+	}
+	contextEntry, found := bundle.entryByID("toolkit-runtime-context")
+	if !found || contextEntry.SemanticRole != "toolkit.available_tools.runtime_context" {
+		return ErrInvalidInputBundle
 	}
 	return nil
 }

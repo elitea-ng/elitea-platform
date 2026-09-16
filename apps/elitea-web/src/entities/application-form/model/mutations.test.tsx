@@ -16,7 +16,10 @@ import { useCreateApplicationDraft, useSaveApplicationVersion } from './mutation
 
 function createWrapper(): ({ children }: { children: ReactNode }) => ReactNode {
   const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+    defaultOptions: {
+      queries: { retry: false, gcTime: 0 },
+      mutations: { retry: false },
+    },
   });
   return function Wrapper({ children }: { children: ReactNode }) {
     return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
@@ -33,7 +36,9 @@ afterEach(() => {
 
 describe('useCreateApplicationDraft', () => {
   it('is a no-op and returns undefined while projectId is undefined', async () => {
-    const { result } = renderHook(() => useCreateApplicationDraft(undefined), { wrapper: createWrapper() });
+    const { result } = renderHook(() => useCreateApplicationDraft(undefined), {
+      wrapper: createWrapper(),
+    });
     await act(async () => {
       const response = await result.current.create({ name: 'Agent' });
       expect(response).toBeUndefined();
@@ -53,15 +58,24 @@ describe('useCreateApplicationDraft', () => {
         created_at: '2026-01-01T00:00:00Z',
       }),
     );
-    const { result } = renderHook(() => useCreateApplicationDraft('p1'), { wrapper: createWrapper() });
+    const { result } = renderHook(() => useCreateApplicationDraft('p1'), {
+      wrapper: createWrapper(),
+    });
 
     let response;
     await act(async () => {
-      response = await result.current.create({ name: 'Agent', description: 'Does things' });
+      response = await result.current.create({
+        name: 'Agent',
+        description: 'Does things',
+      });
     });
 
     expect(response).toEqual(
-      expect.objectContaining({ id: '42', name: 'Agent', description: 'Does things' }),
+      expect.objectContaining({
+        id: '42',
+        name: 'Agent',
+        description: 'Does things',
+      }),
     );
     expect(result.current.isCreating).toBe(false);
     expect(result.current.error).toBeUndefined();
@@ -84,18 +98,26 @@ describe('useCreateApplicationDraft', () => {
       }),
     );
     const { result: draftResult } = renderHook(() => useCreateApplicationInitialValues(true));
-    const { result } = renderHook(() => useCreateApplicationDraft('p1'), { wrapper: createWrapper() });
+    const { result } = renderHook(() => useCreateApplicationDraft('p1'), {
+      wrapper: createWrapper(),
+    });
 
     await act(async () => {
       await result.current.create({
         name: 'Pipeline',
-        version: draftResult.current.versionDetails,
+        version: { ...draftResult.current.versionDetails, tags: ['mcp'] },
       });
     });
 
     expect(capturedBody).toMatchObject({
       name: 'Pipeline',
-      versions: [expect.objectContaining({ agent_type: 'pipeline', name: 'base' })],
+      versions: [
+        expect.objectContaining({
+          agent_type: 'pipeline',
+          name: 'base',
+          tags: [{ name: 'mcp' }],
+        }),
+      ],
     });
   });
 
@@ -120,19 +142,28 @@ describe('useCreateApplicationDraft', () => {
       }),
     );
     const { result: draftResult } = renderHook(() => useCreateApplicationInitialValues(false));
-    const { result } = renderHook(() => useCreateApplicationDraft('p1'), { wrapper: createWrapper() });
+    const { result } = renderHook(() => useCreateApplicationDraft('p1'), {
+      wrapper: createWrapper(),
+    });
 
     await act(async () => {
       await result.current.create({
         name: 'Agent',
         version: {
           ...draftResult.current.versionDetails,
-          llmSettings: { model_name: 'qwen3.5', model_project_id: 17, max_tokens: -1, temperature: 0.6 },
+          llmSettings: {
+            model_name: 'qwen3.5',
+            model_project_id: 17,
+            max_tokens: -1,
+            temperature: 0.6,
+          },
         },
       });
     });
 
-    const body = JSON.parse(capturedText) as { versions: { llm_settings?: unknown }[] };
+    const body = JSON.parse(capturedText) as {
+      versions: { llm_settings?: unknown }[];
+    };
     expect(body.versions[0]?.llm_settings).toEqual({
       model_name: 'qwen3.5',
       model_project_id: 17,
@@ -164,10 +195,15 @@ describe('useCreateApplicationDraft', () => {
       }),
     );
     const { result: draftResult } = renderHook(() => useCreateApplicationInitialValues(false));
-    const { result } = renderHook(() => useCreateApplicationDraft('p1'), { wrapper: createWrapper() });
+    const { result } = renderHook(() => useCreateApplicationDraft('p1'), {
+      wrapper: createWrapper(),
+    });
 
     await act(async () => {
-      await result.current.create({ name: 'Agent', version: draftResult.current.versionDetails });
+      await result.current.create({
+        name: 'Agent',
+        version: draftResult.current.versionDetails,
+      });
     });
 
     const version = (capturedBody['versions'] as Record<string, unknown>[])[0] ?? {};
@@ -197,12 +233,17 @@ describe('useCreateApplicationDraft', () => {
       }),
     );
     const { result: draftResult } = renderHook(() => useCreateApplicationInitialValues(false));
-    const { result } = renderHook(() => useCreateApplicationDraft('p1'), { wrapper: createWrapper() });
+    const { result } = renderHook(() => useCreateApplicationDraft('p1'), {
+      wrapper: createWrapper(),
+    });
 
     await act(async () => {
       await result.current.create({
         name: 'Agent',
-        version: { ...draftResult.current.versionDetails, welcomeMessage: 'Hi there' },
+        version: {
+          ...draftResult.current.versionDetails,
+          welcomeMessage: 'Hi there',
+        },
       });
     });
 
@@ -230,10 +271,15 @@ describe('useCreateApplicationDraft', () => {
       }),
     );
     const { result: draftResult } = renderHook(() => useCreateApplicationInitialValues(false));
-    const { result } = renderHook(() => useCreateApplicationDraft('p1'), { wrapper: createWrapper() });
+    const { result } = renderHook(() => useCreateApplicationDraft('p1'), {
+      wrapper: createWrapper(),
+    });
 
     await act(async () => {
-      await result.current.create({ name: 'Agent', version: draftResult.current.versionDetails });
+      await result.current.create({
+        name: 'Agent',
+        version: draftResult.current.versionDetails,
+      });
     });
 
     const version = (capturedBody['versions'] as Record<string, unknown>[])[0] ?? {};
@@ -241,12 +287,10 @@ describe('useCreateApplicationDraft', () => {
   });
 
   it('captures an error and clears isCreating on failure', async () => {
-    server.use(
-      http.post('*/elitea_core/applications/prompt_lib/:projectId', () =>
-        HttpResponse.json({ error: 'boom' }, { status: 500 }),
-      ),
-    );
-    const { result } = renderHook(() => useCreateApplicationDraft('p1'), { wrapper: createWrapper() });
+    server.use(http.post('*/elitea_core/applications/prompt_lib/:projectId', () => HttpResponse.json({ error: 'boom' }, { status: 500 })));
+    const { result } = renderHook(() => useCreateApplicationDraft('p1'), {
+      wrapper: createWrapper(),
+    });
 
     await act(async () => {
       const response = await result.current.create({ name: 'Agent' });
@@ -289,7 +333,9 @@ describe('useSaveApplicationVersion', () => {
         status: 'draft',
       }),
     );
-    const { result } = renderHook(() => useSaveApplicationVersion('p1', 1, 7), { wrapper: createWrapper() });
+    const { result } = renderHook(() => useSaveApplicationVersion('p1', 1, 7), {
+      wrapper: createWrapper(),
+    });
 
     let response;
     await act(async () => {
@@ -312,6 +358,38 @@ describe('useSaveApplicationVersion', () => {
     expect(result.current.error).toBeUndefined();
   });
 
+  it('replaces the stored version tags by name, including an empty list', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    server.use(
+      getUpdateApplicationVersionMockHandler(async (info) => {
+        bodies.push((await info.request.json()) as Record<string, unknown>);
+        return { id: '7', application_id: '1', name: 'base', status: 'draft' };
+      }),
+    );
+    const { result } = renderHook(() => useSaveApplicationVersion('p1', 1, 7), {
+      wrapper: createWrapper(),
+    });
+    const baseDraft = {
+      name: 'base',
+      agentType: 'pipeline' as const,
+      instructions: '',
+      conversationStarters: [],
+      variables: [],
+      meta: { step_limit: 25, internal_tools: [] },
+      llmSettings: undefined,
+      tools: [],
+      pipelineSettings: undefined,
+    };
+
+    await act(async () => {
+      await result.current.save({ ...baseDraft, tags: ['mcp', 'release'] });
+      await result.current.save({ ...baseDraft, tags: [] });
+    });
+
+    expect(bodies[0]?.['tags']).toEqual([{ name: 'mcp' }, { name: 'release' }]);
+    expect(bodies[1]?.['tags']).toEqual([]);
+  });
+
   // #135: the PUT used to leave the flow graph off the wire entirely, so the
   // server answered 200 and the edit was gone on reload.
   it('puts the draft pipelineSettings on the wire as pipeline_settings', async () => {
@@ -322,7 +400,9 @@ describe('useSaveApplicationVersion', () => {
         return { id: '7', application_id: '1', name: 'base', status: 'draft' };
       }),
     );
-    const { result } = renderHook(() => useSaveApplicationVersion('p1', 1, 7), { wrapper: createWrapper() });
+    const { result } = renderHook(() => useSaveApplicationVersion('p1', 1, 7), {
+      wrapper: createWrapper(),
+    });
 
     await act(async () => {
       await result.current.save({
@@ -361,7 +441,9 @@ describe('useSaveApplicationVersion', () => {
         return { id: '7', application_id: '1', name: 'base', status: 'draft' };
       }),
     );
-    const { result } = renderHook(() => useSaveApplicationVersion('p1', 1, 7), { wrapper: createWrapper() });
+    const { result } = renderHook(() => useSaveApplicationVersion('p1', 1, 7), {
+      wrapper: createWrapper(),
+    });
 
     await act(async () => {
       await result.current.save({

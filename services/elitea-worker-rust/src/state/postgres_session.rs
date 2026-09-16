@@ -14,7 +14,7 @@ use adk_rust::session::{
     AppendEventRequest, CreateRequest, DeleteRequest, Events, GetRequest, ListRequest, Session,
     SessionService, State, extract_state_deltas, merge_states,
 };
-use adk_rust::{AdkError, ErrorCategory, ErrorComponent, Event};
+use adk_rust::{AdkError, AdkIdentity, ErrorCategory, ErrorComponent, Event};
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone as _, Utc};
 use serde::de::DeserializeOwned;
@@ -126,7 +126,7 @@ impl PostgresSessionError {
         }
     }
 
-    fn into_adk(self) -> AdkError {
+    pub(crate) fn into_adk(self) -> AdkError {
         let (category, message) = match self {
             Self::InvalidConfiguration | Self::InvalidScope => (
                 ErrorCategory::InvalidInput,
@@ -161,6 +161,7 @@ impl PostgresSessionError {
 ///
 /// Raw construction is crate-private. The native invocation coordinator will
 /// derive it from the accepted claim and the admitted frozen definition.
+#[derive(Clone)]
 pub(crate) struct SessionWriterAuthority {
     tenant_id: String,
     resource_project_id: i32,
@@ -278,6 +279,7 @@ pub struct PostgresSessionService {
     authority: SessionWriterAuthority,
     limits: SessionLimits,
     state_writer_lease: Arc<dyn StateWriterLease>,
+    parent: Option<Arc<Self>>,
 }
 
 struct StoredSession {
@@ -363,12 +365,25 @@ impl PostgresSessionService {
         limits: SessionLimits,
         state_writer_lease: Arc<dyn StateWriterLease>,
     ) -> Result<Self, PostgresSessionError> {
+        Self::activate_with_parent(pool, authority, limits, state_writer_lease, None).await
+    }
+
+    async fn activate_with_parent(
+        pool: PgPool,
+        authority: SessionWriterAuthority,
+        limits: SessionLimits,
+        state_writer_lease: Arc<dyn StateWriterLease>,
+        parent: Option<Arc<Self>>,
+    ) -> Result<Self, PostgresSessionError> {
         authority.validate()?;
         let limits = limits.validate()?;
         state_writer_lease
             .ensure_current()
             .map_err(|_| PostgresSessionError::WriterNotCurrent)?;
         let mut transaction = pool.begin().await.map_err(storage_error)?;
+        if let Some(parent) = &parent {
+            parent.lock_writer_row(&mut transaction, false).await?;
+        }
         let activated =
             activate_writer_row(&mut transaction, &authority, authority.claim_started_at).await?;
         if activated.as_deref() != Some(authority.claim_id.as_str()) {
@@ -383,7 +398,35 @@ impl PostgresSessionService {
             authority,
             limits,
             state_writer_lease,
+            parent,
         })
+    }
+
+    /// Derive a worker-owned model session without widening the root service scope.
+    /// Both writer rows remain fenced by the same supervised execution claim.
+    pub(crate) async fn model_scope(
+        self: &Arc<Self>,
+        identity: &AdkIdentity,
+    ) -> Result<Self, PostgresSessionError> {
+        self.require_app_user(identity.app_name.as_ref(), identity.user_id.as_ref())?;
+        let suffix = identity.session_id.as_ref().strip_prefix("elitea-model-");
+        if self.parent.is_some()
+            || !suffix.is_some_and(|value| {
+                value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+        {
+            return Err(PostgresSessionError::InvalidScope);
+        }
+        let mut authority = self.authority.clone();
+        authority.session_id = identity.session_id.to_string();
+        Self::activate_with_parent(
+            self.pool.clone(),
+            authority,
+            self.limits,
+            self.state_writer_lease.clone(),
+            Some(self.clone()),
+        )
+        .await
     }
 
     fn require_identity(
@@ -409,6 +452,19 @@ impl PostgresSessionService {
     }
 
     async fn lock_current_writer(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        exclusive: bool,
+    ) -> Result<(), PostgresSessionError> {
+        // Lock the root first. Replacement cannot admit a stale child write,
+        // even before this worker observes loss of its live lease.
+        if let Some(parent) = &self.parent {
+            parent.lock_writer_row(transaction, false).await?;
+        }
+        self.lock_writer_row(transaction, exclusive).await
+    }
+
+    async fn lock_writer_row(
         &self,
         transaction: &mut Transaction<'_, Postgres>,
         exclusive: bool,

@@ -22,6 +22,38 @@ type currentMaterializationUnsecreterStub struct {
 	fn       func(int32, map[string]any) (map[string]any, error)
 }
 
+type currentAgentPrebuiltMCPResolverStub struct {
+	result   map[string]any
+	found    bool
+	err      error
+	toolType string
+	settings map[string]any
+	keep     []string
+	calls    int
+}
+
+func (stub *currentAgentPrebuiltMCPResolverStub) ResolveCurrentAgentPrebuiltMCP(
+	_ context.Context,
+	_ int32,
+	_ int32,
+	toolType string,
+	settings map[string]any,
+	_ func(map[string]any) (map[string]any, error),
+) (map[string]any, bool, error) {
+	stub.calls++
+	stub.toolType = toolType
+	stub.settings = settings
+	if stub.keep != nil {
+		stub.settings = make(map[string]any, len(stub.keep))
+		for _, name := range stub.keep {
+			if value, ok := settings[name]; ok {
+				stub.settings[name] = value
+			}
+		}
+	}
+	return stub.result, stub.found, stub.err
+}
+
 func (s *currentMaterializationUnsecreterStub) Unsecret(
 	_ context.Context,
 	projectID int32,
@@ -238,6 +270,170 @@ func TestCurrentConfigurationsMaterializerRedeemsAdhocAgentToolsAtClaimTime(t *t
 	}
 }
 
+func TestCurrentConfigurationsMaterializerRedeemsDirectToolkitAtClaimTime(t *testing.T) {
+	unsecreter := &currentMaterializationUnsecreterStub{values: map[int32]map[string]string{
+		7: {"GITHUB_TOKEN": "plain-token"},
+	}}
+	materializer := newCurrentConfigurationsMaterializerForTest(t, unsecreter)
+	request := &runtimev1.ToolkitExecuteReadInputV1{
+		SchemaRevision:    "elitea.runtime.toolkit-execute-read-input.v1",
+		ToolkitType:       "github",
+		ToolkitName:       "Source Control",
+		ToolName:          "get_issue",
+		Toolkit:           []byte(`{"id":19,"type":"github","toolkit_name":"Source Control","settings":{"token":"{{secret.GITHUB_TOKEN}}","selected_tools":["get_issue"]}}`),
+		Arguments:         []byte(`{"issue":7}`),
+		ToolkitGuardrails: []byte(`{"blocked_tools":{},"sensitive_tools":{}}`),
+	}
+	source, err := proto.MarshalOptions{Deterministic: true}.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := materializer.MaterializeContent(context.Background(), ContentAuthorization{
+		ResourceProjectID: "7",
+		ActorID:           "11",
+		CapabilityID:      executiondomain.ToolkitExecuteReadCapability,
+		SemanticRole:      executiondomain.ToolkitExecuteReadRequestRole,
+	}, source, executiondomain.MaxToolkitExecuteReadInputBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var materialized runtimev1.ToolkitExecuteReadInputV1
+	if err := proto.Unmarshal(result, &materialized); err != nil {
+		t.Fatal(err)
+	}
+	toolkit, err := decodeCurrentMaterializationObject(materialized.GetToolkit())
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, ok := toolkit["settings"].(map[string]any)
+	if !ok {
+		t.Fatalf("settings = %#v", toolkit["settings"])
+	}
+	if settings["token"] != "plain-token" {
+		t.Fatalf("materialized token = %#v", settings["token"])
+	}
+	if string(materialized.GetArguments()) != string(request.GetArguments()) ||
+		string(materialized.GetToolkitGuardrails()) != string(request.GetToolkitGuardrails()) {
+		t.Fatal("claim materialization changed invocation arguments or guardrails")
+	}
+}
+
+func TestCurrentAgentMaterializerUsesOnlyResolvedPrebuiltMCPAuthority(t *testing.T) {
+	unsecreter := &currentMaterializationUnsecreterStub{values: map[int32]map[string]string{
+		7: {"CALLER_SECRET": "must-not-be-redeemed"},
+	}}
+	resolver := &currentAgentPrebuiltMCPResolverStub{
+		found: true,
+		keep:  []string{"server_name", "selected_tools"},
+		result: map[string]any{
+			"server_name":    "release_intelligence",
+			"url":            "https://mcp.example.test/v1/mcp",
+			"headers":        map[string]any{"X-Platform": "fixed-secret"},
+			"selected_tools": []any{"lookup_release"},
+		},
+	}
+	materializer, err := NewCurrentAgentConfigurationsMaterializer(
+		unsecreter,
+		resolver,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := currentAgentMaterializationRequest(`[{
+		"id":3,
+		"type":"mcp_config",
+		"toolkit_name":"release intelligence",
+		"settings":{
+			"server_name":"release_intelligence",
+			"url":"https://caller.example.test/mcp",
+			"headers":{"Authorization":"caller-secret"},
+			"unknown":"{{secret.CALLER_SECRET}}",
+			"selected_tools":["lookup_release"]
+		}
+	}]`)
+	source, err := proto.MarshalOptions{Deterministic: true}.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := materializer.MaterializeContent(context.Background(), ContentAuthorization{
+		ResourceProjectID: "7",
+		ActorID:           "42",
+		CapabilityID:      executiondomain.AgentAdhocCapability,
+		SemanticRole:      executiondomain.AgentExecutionRequestRole,
+	}, source, 256*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolver.calls != 1 || resolver.toolType != "mcp_config" {
+		t.Fatalf("resolver calls=%d type=%q", resolver.calls, resolver.toolType)
+	}
+	if _, present := resolver.settings["unknown"]; present || len(unsecreter.projects) != 0 {
+		t.Fatal("caller connection fields reached claim-time secret resolution")
+	}
+
+	var materialized runtimev1.AgentExecutionInputV1
+	if err := proto.Unmarshal(result, &materialized); err != nil {
+		t.Fatal(err)
+	}
+	tools, err := decodeCurrentMaterializationArray(materialized.GetTools())
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := tools[0].(map[string]any)["settings"].(map[string]any)
+	if settings["url"] != "https://mcp.example.test/v1/mcp" {
+		t.Fatalf("materialized settings=%#v", settings)
+	}
+	if strings.Contains(string(result), "caller-secret") ||
+		strings.Contains(string(result), "caller.example.test") {
+		t.Fatal("caller connection authority reached the claimed input")
+	}
+}
+
+func TestCurrentAgentMaterializerRejectsUnresolvedPrebuiltMCP(t *testing.T) {
+	request := currentAgentMaterializationRequest(`[{"id":3,"type":"mcp_config","settings":{"server_name":"missing"}}]`)
+	source, err := proto.MarshalOptions{Deterministic: true}.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorization := ContentAuthorization{
+		ResourceProjectID: "7",
+		ActorID:           "42",
+		CapabilityID:      executiondomain.AgentAdhocCapability,
+		SemanticRole:      executiondomain.AgentExecutionRequestRole,
+	}
+	materializer := newCurrentConfigurationsMaterializerForTest(
+		t,
+		&currentMaterializationUnsecreterStub{},
+	)
+	if _, err := materializer.MaterializeContent(
+		context.Background(), authorization, source, 256*1024,
+	); !errors.Is(err, ErrContentRejected) {
+		t.Fatalf("unwired prebuilt error=%v", err)
+	}
+
+	resolver := &currentAgentPrebuiltMCPResolverStub{}
+	materializer, err = NewCurrentAgentConfigurationsMaterializer(
+		&currentMaterializationUnsecreterStub{},
+		resolver,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := materializer.MaterializeContent(
+		context.Background(), authorization, source, 256*1024,
+	); !errors.Is(err, ErrContentRejected) {
+		t.Fatalf("missing catalogue entry error=%v", err)
+	}
+
+	resolver.err = errors.New("catalogue unavailable details")
+	if _, err := materializer.MaterializeContent(
+		context.Background(), authorization, source, 256*1024,
+	); !errors.Is(err, ErrContentUnavailable) || strings.Contains(err.Error(), "details") {
+		t.Fatalf("catalogue dependency error=%v", err)
+	}
+}
+
 func TestCurrentConfigurationsMaterializerRejectsIncompleteFrozenConfigurationMetadata(t *testing.T) {
 	unsecreter := &currentMaterializationUnsecreterStub{}
 	materializer := newCurrentConfigurationsMaterializerForTest(t, unsecreter)
@@ -340,6 +536,11 @@ func TestCurrentConfigurationsMaterializerValidatesConstructionAndModelShape(t *
 	if _, err := NewCurrentConfigurationsMaterializer(nil); err == nil {
 		t.Fatal("expected missing unsecreter to fail")
 	}
+	if _, err := NewCurrentAgentConfigurationsMaterializer(
+		&currentMaterializationUnsecreterStub{}, nil,
+	); err == nil {
+		t.Fatal("expected missing prebuilt MCP resolver to fail")
+	}
 	materializer := newCurrentConfigurationsMaterializerForTest(t, &currentMaterializationUnsecreterStub{})
 	authorization := ContentAuthorization{
 		ResourceProjectID: "7",
@@ -362,6 +563,30 @@ func TestCurrentConfigurationsMaterializerValidatesConstructionAndModelShape(t *
 		1024,
 	); err != nil || !reflect.DeepEqual(result, binding) {
 		t.Fatalf("embedding binding result=%s error=%v", result, err)
+	}
+}
+
+func currentAgentMaterializationRequest(tools string) *runtimev1.AgentExecutionInputV1 {
+	return &runtimev1.AgentExecutionInputV1{
+		SchemaRevision:         "elitea.runtime.agent-execution-input.v1",
+		Llm:                    []byte(`{"kwargs":{}}`),
+		ChatHistory:            []byte(`[]`),
+		UserInput:              []byte(`"hello"`),
+		Tools:                  []byte(tools),
+		Application:            []byte(`{"instructions":"Use the attached tools."}`),
+		InternalTools:          []byte(`[]`),
+		McpTokens:              []byte(`{}`),
+		IgnoredMcpServers:      []byte(`[]`),
+		UserDeclinedMcpServers: []byte(`[]`),
+		HitlDecisions:          []byte(`[]`),
+		Meta:                   []byte(`{}`),
+		ContextSettings:        []byte(`{}`),
+		InvokedSkills:          []byte(`[]`),
+		AppliedSkills:          []byte(`[]`),
+		AttachedSkills:         []byte(`[]`),
+		InputAttachments:       []byte(`[]`),
+		ParallelReconcile:      []byte(`null`),
+		ParallelTerminalErrors: []byte(`[]`),
 	}
 }
 

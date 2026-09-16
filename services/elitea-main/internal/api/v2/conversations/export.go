@@ -337,6 +337,9 @@ func (h *Handler) buildExportDocument(r *http.Request, projectID, conversationID
 
 // Export serves one conversation's transcript as a downloadable document.
 func (h *Handler) Export(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeConversation(w, r) {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	conversationID := chi.URLParam(r, "conversationID")
 

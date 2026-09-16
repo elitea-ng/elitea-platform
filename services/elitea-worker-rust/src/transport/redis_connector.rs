@@ -132,6 +132,7 @@ mod tests {
             ed25519_keyring_path: PathBuf::from("/runtime/keyring.json"),
             spool_root: PathBuf::from("/runtime/spool"),
             spool_key_path: PathBuf::from("/runtime/spool.key"),
+            agent_model_checkpoint_recovery: false,
             agent_checkpoint_connection_path: Some(PathBuf::from("/runtime/agentstate")),
             limits: RuntimeLimits {
                 redis_read_batch: 8,

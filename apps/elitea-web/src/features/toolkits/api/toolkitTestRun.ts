@@ -28,12 +28,19 @@
  * the saved toolkit row server-side (`response.go`'s own `Body` doc: "a
  * caller that can supply settings can supply credentials").
  */
+import { readToolkitTestAuthorization } from './toolkitTestAuthorization';
+import type { ToolkitTestAuthorization } from './toolkitTestAuthorization';
+
 import { eliteaFetch } from '@/shared/api/generated/mutator';
 
 export interface TestToolkitToolParams {
+  readonly requestId?: string;
   readonly projectId: string | number | undefined;
   readonly toolkitId: string | number | undefined;
   readonly toolName: string;
+  readonly authorizationReference?: string;
+  readonly llmModel?: string;
+  readonly llmSettings?: { readonly temperature: number; readonly max_tokens: number; readonly reasoning_effort?: string };
   readonly toolParams: Readonly<Record<string, unknown>>;
 }
 
@@ -43,11 +50,14 @@ export interface TestToolkitToolParams {
  * other three are refusals the run never reached the tool for.
  */
 export type TestToolkitToolOutcome =
+  | { readonly kind: 'authorizationRequired'; readonly challenge: ToolkitTestAuthorization; readonly taskId: string; readonly retry?: { readonly toolName: string; readonly toolParams: Readonly<Record<string, unknown>> } }
+  | { readonly kind: 'skipped' }
   | { readonly kind: 'ok'; readonly result: unknown; readonly truncated: boolean }
   | { readonly kind: 'toolError'; readonly message: string }
   | { readonly kind: 'unsupportedToolkit'; readonly message: string }
   | { readonly kind: 'unknownTool'; readonly message: string }
-  | { readonly kind: 'timeout'; readonly taskId: string | undefined; readonly message: string }
+  | { readonly kind: 'timeout'; readonly taskId: string | undefined; readonly lookup?: 'request'; readonly message: string }
+  | { readonly kind: 'unconfirmed'; readonly message: string }
   | { readonly kind: 'failure'; readonly message: string };
 
 interface ResponseBodyLike {
@@ -57,6 +67,8 @@ interface ResponseBodyLike {
   readonly error?: unknown;
   readonly reason?: unknown;
   readonly task_id?: unknown;
+  readonly authorization_required?: unknown;
+  readonly authorization_retry?: unknown;
 }
 
 function isResponseBodyLike(value: unknown): value is ResponseBodyLike {
@@ -95,15 +107,39 @@ function outcomeFrom422(reason: string | undefined, bodyLike: ResponseBodyLike |
   return undefined;
 }
 
+function readReason(body: ResponseBodyLike | undefined): string | undefined {
+  return typeof body?.reason === 'string' ? body.reason : undefined;
+}
+
+function readAuthorizationRetry(candidate: unknown): { readonly toolName: string; readonly toolParams: Readonly<Record<string, unknown>> } | undefined {
+  if (typeof candidate !== 'object' || candidate === null || !('tool_name' in candidate) || !('tool_params' in candidate)) return undefined;
+  if (typeof candidate.tool_name !== 'string' || candidate.tool_name.length === 0 || candidate.tool_name.length > 256) return undefined;
+  if (typeof candidate.tool_params !== 'object' || candidate.tool_params === null || Array.isArray(candidate.tool_params)) return undefined;
+  return { toolName: candidate.tool_name, toolParams: candidate.tool_params as Readonly<Record<string, unknown>> };
+}
+
+function outcomeFromAuthorization(bodyLike: ResponseBodyLike | undefined, toolkitId: TestToolkitToolParams['toolkitId']): TestToolkitToolOutcome {
+  const challenge = readToolkitTestAuthorization(bodyLike?.authorization_required, toolkitId);
+  const taskId = bodyLike?.task_id;
+  if (!challenge || typeof taskId !== 'string' || taskId.length === 0 || taskId.length > 128) {
+    return { kind: 'failure', message: 'The authorization challenge is invalid. Run the tool again.' };
+  }
+  const retry = readAuthorizationRetry(bodyLike?.authorization_retry);
+  return { kind: 'authorizationRequired', challenge, taskId, ...(retry ? { retry } : {}) };
+}
+
 /** The non-2xx half of the mapping — split out to keep `testToolkitTool` under the repo's complexity budget. */
-function outcomeFromRejection(error: unknown): TestToolkitToolOutcome {
+function outcomeFromRejection(error: unknown, toolkitId: TestToolkitToolParams['toolkitId']): TestToolkitToolOutcome {
   if (!isEliteaApiErrorLike(error) || error.failure?.kind !== 'http') {
     return { kind: 'failure', message: GENERIC_FAILURE_MESSAGE };
   }
   const { status, body } = error.failure;
   const bodyLike = isResponseBodyLike(body) ? body : undefined;
-  const reason = bodyLike !== undefined && typeof bodyLike.reason === 'string' ? bodyLike.reason : undefined;
+  const reason = readReason(bodyLike);
 
+  if (status === 409 && reason === 'authorization_required') {
+    return outcomeFromAuthorization(bodyLike, toolkitId);
+  }
   if (status === 422) {
     const outcome = outcomeFrom422(reason, bodyLike);
     if (outcome !== undefined) return outcome;
@@ -124,11 +160,24 @@ function outcomeFromRejection(error: unknown): TestToolkitToolOutcome {
  */
 export async function testToolkitTool(params: TestToolkitToolParams): Promise<TestToolkitToolOutcome> {
   const { projectId, toolkitId, toolName, toolParams } = params;
+  if (params.authorizationReference !== undefined && !/^[A-Za-z0-9_-]{43}$/.test(params.authorizationReference)) return { kind: 'failure', message: 'The saved authorization reference is invalid.' };
+  const requestId = params.requestId ?? crypto.randomUUID();
   try {
     const envelope = await eliteaFetch<{ data: ResponseBodyLike }>(`/elitea_core/test_tool/prompt_lib/${String(projectId)}/${String(toolkitId)}`, {
       method: 'POST',
-      body: JSON.stringify({ tool_name: toolName, tool_params: toolParams }),
-      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        request_id: requestId,
+        tool_name: toolName,
+        tool_params: toolParams,
+        ...(params.llmModel !== undefined ? { llm_model: params.llmModel } : {}),
+        ...(params.llmSettings !== undefined ? { llm_settings: {
+          temperature: params.llmSettings.temperature,
+          max_tokens: params.llmSettings.max_tokens,
+          ...(params.llmSettings.reasoning_effort !== undefined ? { reasoning_effort: params.llmSettings.reasoning_effort } : {}),
+        } } : {}),
+        ...(params.authorizationReference !== undefined ? { mcp_authorization_reference: params.authorizationReference } : {}),
+      }),
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': requestId },
     });
     const body = envelope.data;
     if (body.ok === true) {
@@ -136,6 +185,43 @@ export async function testToolkitTool(params: TestToolkitToolParams): Promise<Te
     }
     return { kind: 'toolError', message: readErrorMessage(body, 'The tool reported an error.') };
   } catch (error) {
-    return outcomeFromRejection(error);
+    return submissionFailure(error, toolkitId, requestId);
+  }
+}
+
+function submissionFailure(error: unknown, toolkitId: TestToolkitToolParams['toolkitId'], requestId: string): TestToolkitToolOutcome {
+  const result = outcomeFromRejection(error, toolkitId);
+  if (!observationInterrupted(error) || (result.kind === 'timeout' && result.taskId)) return result;
+  return { kind: 'timeout', taskId: requestId, lookup: 'request', message: 'The response was lost. Checking whether the tool execution was accepted.' };
+}
+
+function acceptedPending(body: ResponseBodyLike, pending: Extract<TestToolkitToolOutcome, { kind: 'timeout' }>): TestToolkitToolOutcome {
+  return typeof body.task_id === 'string' && body.task_id ? { kind: 'timeout', taskId: body.task_id, message: pending.message } : pending;
+}
+
+function observationInterrupted(error: unknown): boolean {
+  return !isEliteaApiErrorLike(error) || error.failure?.kind !== 'http' || [502, 503, 504].includes(error.failure.status ?? 0);
+}
+
+/** Read the original execution without resolving settings or submitting a call. */
+export async function readToolkitToolResult(
+  params: Pick<TestToolkitToolParams, 'projectId' | 'toolkitId'> & { readonly taskId: string; readonly lookup?: 'request' },
+): Promise<TestToolkitToolOutcome> {
+  const pending: TestToolkitToolOutcome = { kind: 'timeout', taskId: params.taskId, ...(params.lookup ? { lookup: params.lookup } : {}), message: 'Waiting for the saved tool execution. Results will update automatically.' };
+  try {
+    const { data } = await eliteaFetch<{ data: ResponseBodyLike & { pending?: boolean } }>(
+      `/elitea_core/test_tool/prompt_lib/${String(params.projectId)}/${String(params.toolkitId)}/${encodeURIComponent(params.taskId)}${params.lookup === 'request' ? '?lookup=request' : ''}`,
+      { method: 'GET', headers: { 'Cache-Control': 'no-cache' } },
+    );
+    if (data.pending === true) return acceptedPending(data, pending);
+    if (data.ok === true) return { kind: 'ok', result: data.result, truncated: data.truncated === true };
+    return { kind: 'toolError', message: readErrorMessage(data, 'The tool reported an error.') };
+  } catch (error) {
+    // A disconnected Main ends this observation, not the durable execution.
+    if (observationInterrupted(error)) return pending;
+    if (params.lookup === 'request' && isEliteaApiErrorLike(error) && error.failure?.status === 404) {
+      return { kind: 'unconfirmed', message: 'No execution is visible yet. Reload to check again. The tool will not be submitted automatically.' };
+    }
+    return outcomeFromRejection(error, params.toolkitId);
   }
 }

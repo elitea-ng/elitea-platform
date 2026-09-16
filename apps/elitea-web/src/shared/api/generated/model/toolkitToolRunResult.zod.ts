@@ -41,8 +41,22 @@
  */
 import * as zod from "zod";
 
+export const toolkitToolRunResultAuthorizationRetryToolNameMax = 256;
+
 export const ToolkitToolRunResult = zod
   .object({
+    authorization_retry: zod
+      .object({
+        tool_name: zod
+          .string()
+          .min(1)
+          .max(toolkitToolRunResultAuthorizationRetryToolNameMax),
+        tool_params: zod.record(zod.string(), zod.unknown()),
+      })
+      .optional()
+      .describe(
+        "Original caller arguments returned only to the initiating user for a recovered authorization challenge.",
+      ),
     ok: zod
       .boolean()
       .describe(

@@ -549,8 +549,18 @@ func mergeCurrentAgentTraceRows(
 	for _, incoming := range delta.toolCalls {
 		incoming.entry = sanitizeCurrentAgentJSON(incoming.entry).(map[string]any)
 		if index, ok := positions[incoming.key]; ok {
+			merged, err := mergeAgentToolOutputChunk(toolCalls[index].entry, incoming.entry)
+			if err != nil {
+				return nil, err
+			}
+			incoming.entry = merged
 			toolCalls[index] = incoming
 		} else {
+			merged, err := mergeAgentToolOutputChunk(nil, incoming.entry)
+			if err != nil {
+				return nil, err
+			}
+			incoming.entry = merged
 			positions[incoming.key] = len(toolCalls)
 			toolCalls = append(toolCalls, incoming)
 		}
@@ -598,6 +608,9 @@ func reconstructCurrentAgentTrace(
 				"error":            nil,
 				"timestamp_start":  currentAgentTimeString(row.startedAt),
 				"timestamp_finish": currentAgentTimeString(row.finishedAt),
+			}
+			if chunk, ok := row.attrs["tool_output_chunk_v1"]; ok {
+				entry["tool_output_chunk_v1"] = chunk
 			}
 			if row.isError {
 				if value := stringPointerValue(row.toolOutput); value != nil && value != "" {
@@ -905,6 +918,9 @@ func currentAgentHierarchyMetadata(entry map[string]any) map[string]any {
 
 func currentAgentToolCallAttrs(entry map[string]any) map[string]any {
 	attrs := map[string]any{}
+	if chunk, ok := entry["tool_output_chunk_v1"]; ok {
+		attrs["tool_output_chunk_v1"] = chunk
+	}
 	metadata := allowlistedCurrentAgentMetadata(currentAgentMap(entry, "metadata"))
 	for key, value := range currentAgentHierarchyMetadata(entry) {
 		if _, exists := metadata[key]; !exists {

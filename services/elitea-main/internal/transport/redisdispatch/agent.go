@@ -8,6 +8,7 @@ import (
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
+	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
@@ -29,6 +30,7 @@ type AgentExecutionProducerConfig struct {
 	EnvelopeSchemaRevision       string
 	ApplicationCapabilityVersion string
 	AdhocCapabilityVersion       string
+	ToolkitReadCapabilityVersion string
 	Limits                       Limits
 	AllowTestOnlyHMAC            bool
 }
@@ -57,7 +59,11 @@ func NewAgentExecutionProducer(config AgentExecutionProducerConfig, signer Comma
 		redisRouteKeysOverlap(config.Stream, config.IndexIngestStream) {
 		return nil, errors.New("agent execution Redis stream overlaps the index delivery index")
 	}
-	for _, version := range []string{config.ApplicationCapabilityVersion, config.AdhocCapabilityVersion} {
+	for _, version := range []string{
+		config.ApplicationCapabilityVersion,
+		config.AdhocCapabilityVersion,
+		config.ToolkitReadCapabilityVersion,
+	} {
 		if version == "" || len(version) > config.Limits.MaxStringBytes || strings.ContainsAny(version, "\r\n\x00") {
 			return nil, errors.New("invalid agent execution capability version")
 		}
@@ -81,10 +87,27 @@ func NewAgentExecutionProducer(config AgentExecutionProducerConfig, signer Comma
 		consumerGroup:    config.ConsumerGroup,
 		protocolRevision: config.ProtocolRevision,
 		capabilityVersions: map[string]string{
-			executiondomain.AgentApplicationCapability: config.ApplicationCapabilityVersion,
-			executiondomain.AgentAdhocCapability:       config.AdhocCapabilityVersion,
+			executiondomain.AgentApplicationCapability:   config.ApplicationCapabilityVersion,
+			executiondomain.AgentAdhocCapability:         config.AdhocCapabilityVersion,
+			executiondomain.ToolkitExecuteReadCapability: config.ToolkitReadCapabilityVersion,
 		},
 	}, nil
+}
+
+func (p *AgentExecutionProducer) PrepareToolkitExecuteRead(
+	ctx context.Context,
+	dispatch toolkitexecutionapp.ToolkitExecuteReadDispatch,
+) (executionapp.PreparedCommandEnvelope, error) {
+	version, ok := p.capabilityVersions[dispatch.CapabilityID]
+	if !ok || dispatch.CapabilityVersion != version ||
+		dispatch.LimitsRevision != p.producer.config.Limits.Revision {
+		return executionapp.PreparedCommandEnvelope{}, toolkitexecutionapp.ErrInvalidToolkitExecuteReadDispatch
+	}
+	command, err := toolkitExecuteReadWorkerCommand(p.protocolRevision, dispatch)
+	if err != nil {
+		return executionapp.PreparedCommandEnvelope{}, err
+	}
+	return p.Prepare(ctx, command)
 }
 
 func (p *AgentExecutionProducer) Stream() string {
@@ -138,6 +161,9 @@ func (p *AgentExecutionProducer) validateCommand(command *runtimev1.WorkerComman
 	if !ok || command.GetCapabilityVersion() != expectedVersion {
 		return ErrInvalidAgentExecutionCommand
 	}
+	if command.GetCapabilityId() == executiondomain.ToolkitExecuteReadCapability {
+		return p.validateToolkitExecuteReadCommand(command)
+	}
 	expectedType := runtimev1.WorkerCommandTypeV1_WORKER_COMMAND_TYPE_V1_AGENT_EXECUTE_APPLICATION
 	if command.GetCapabilityId() == executiondomain.AgentAdhocCapability {
 		expectedType = runtimev1.WorkerCommandTypeV1_WORKER_COMMAND_TYPE_V1_AGENT_EXECUTE_ADHOC
@@ -163,6 +189,37 @@ func (p *AgentExecutionProducer) validateCommand(command *runtimev1.WorkerComman
 	}
 	if agent.GetSioEvent() != "chat_predict" && agent.GetSioEvent() != "chat_continue_predict" {
 		return ErrInvalidAgentExecutionCommand
+	}
+	if command.GetGeneration() == 0 || command.GetDispatchOrdinal() == 0 ||
+		command.GetPriority() == 0 || command.GetDeadlineUnixMillis() <= 0 ||
+		input.GetByteLength() == 0 || !validSHA256Digest(input.GetDigest()) {
+		return ErrInvalidAgentExecutionCommand
+	}
+	if err := validateBoundedStrings(command, p.producer.config.Limits.MaxStringBytes); err != nil {
+		return ErrInvalidAgentExecutionCommand
+	}
+	return nil
+}
+
+func (p *AgentExecutionProducer) validateToolkitExecuteReadCommand(command *runtimev1.WorkerCommandV1) error {
+	input := command.GetInputBundleRef()
+	toolkit := command.GetToolkitExecuteRead()
+	if command.GetCommandType() != runtimev1.WorkerCommandTypeV1_WORKER_COMMAND_TYPE_V1_TOOLKIT_EXECUTE_READ ||
+		input == nil || toolkit == nil || command.GetRootExecutionId() != command.GetExecutionId() ||
+		command.GetParentExecutionId() != "" || command.GetParentCallId() != "" {
+		return ErrInvalidAgentExecutionCommand
+	}
+	values := []string{
+		command.GetCommandId(), command.GetIdempotencyKey(), command.GetExecutionId(),
+		command.GetTenantId(), command.GetResourceProjectId(), command.GetProjectionProjectId(),
+		command.GetPrincipalRef(), command.GetResourceClass(), command.GetIsolationClass(),
+		input.GetInputBundleId(), input.GetImmutableVersion(), input.GetMediaType(),
+		toolkit.GetRequestEntryId(),
+	}
+	for _, value := range values {
+		if !validAgentText(value, p.producer.config.Limits.MaxStringBytes) {
+			return ErrInvalidAgentExecutionCommand
+		}
 	}
 	if command.GetGeneration() == 0 || command.GetDispatchOrdinal() == 0 ||
 		command.GetPriority() == 0 || command.GetDeadlineUnixMillis() <= 0 ||

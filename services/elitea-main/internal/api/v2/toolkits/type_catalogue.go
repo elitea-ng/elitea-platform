@@ -1,6 +1,7 @@
 package toolkits
 
 import (
+	"context"
 	"fmt"
 	"sort"
 )
@@ -115,7 +116,7 @@ var nativeWorkerGatedToolkitTypes = map[string]string{
 // state shared by every request, and this function adds metadata to the schema
 // it serves, so an in-place edit would leak one request's capability verdict
 // into every later one.
-func (h *Handler) toolkitTypeCatalogue() (map[string]map[string]any, error) {
+func (h *Handler) toolkitTypeCatalogue(ctx context.Context) (map[string]map[string]any, error) {
 	types := h.catalogueToolkitTypes()
 	catalogue := make(map[string]map[string]any, len(types))
 	for _, toolkitType := range types {
@@ -124,6 +125,18 @@ func (h *Handler) toolkitTypeCatalogue() (map[string]map[string]any, error) {
 			return nil, err
 		}
 		catalogue[toolkitType] = typeSchema
+	}
+	if h.dynamicTypeSchemas != nil {
+		dynamic, err := h.dynamicTypeSchemas.ListToolkitTypeSchemas(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("dynamic toolkit type schemas: %w", err)
+		}
+		for toolkitType, schema := range dynamic {
+			if _, collision := catalogue[toolkitType]; collision {
+				return nil, fmt.Errorf("dynamic toolkit type %q collides with a built-in type", toolkitType)
+			}
+			catalogue[toolkitType] = schema
+		}
 	}
 	return catalogue, nil
 }
@@ -156,12 +169,8 @@ func (h *Handler) catalogueToolkitTypes() []string {
 
 // toolkitTypeSchema assembles one served type schema from up to four sources.
 //
-// The hand-written entry WINS over the SDK settings schema where both exist.
-// The four overlapping keys (artifact, github, jira, openapi) carry client
-// contract that the SDK model does not: openapi's ui_component and its
-// "a URL is not fetched" description, github's inline access_token. Replacing
-// them would change four working create forms in a change whose subject is the
-// forty-four that do not exist yet.
+// Preserve explicit UI contracts for native overrides. GitHub uses its SDK
+// settings, including credential, embedding model, and branch fields.
 func (h *Handler) toolkitTypeSchema(toolkitType string) (map[string]any, error) {
 	settings, metadata, catalogued, err := h.toolkitCatalogueEntry(toolkitType)
 	if err != nil {
@@ -174,7 +183,7 @@ func (h *Handler) toolkitTypeSchema(toolkitType string) (map[string]any, error) 
 	}
 
 	typeSchema := settings
-	if hasHandWritten {
+	if hasHandWritten && !(toolkitType == "github" && catalogued) {
 		typeSchema = handWritten
 	} else {
 		typeSchema = withNameRequired(typeSchema)

@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // The tenant the shared template migrates (postgresIntegrationTenant).
@@ -37,7 +38,7 @@ func TestConversationMetaRoundTrips(t *testing.T) {
 	repo := NewConversationsRepo(pool)
 
 	t.Run("create stores the document the first send carries", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		ctx, cancel := context.WithTimeout(auth.ContextWithUser(context.Background(), auth.User{ID: "1"}), 20*time.Second)
 		defer cancel()
 
 		created, err := repo.Create(ctx, conversationMetaProject, conversations.Conversation{
@@ -61,7 +62,7 @@ func TestConversationMetaRoundTrips(t *testing.T) {
 	})
 
 	t.Run("update writes internal_tools and get reads it back", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		ctx, cancel := context.WithTimeout(auth.ContextWithUser(context.Background(), auth.User{ID: "1"}), 20*time.Second)
 		defer cancel()
 
 		conv, err := repo.Create(ctx, conversationMetaProject, conversations.Conversation{Name: "meta-switch"})
@@ -110,7 +111,7 @@ func TestConversationMetaRoundTrips(t *testing.T) {
 	})
 
 	t.Run("a rename leaves the stored document alone", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		ctx, cancel := context.WithTimeout(auth.ContextWithUser(context.Background(), auth.User{ID: "1"}), 20*time.Second)
 		defer cancel()
 
 		conv, err := repo.Create(ctx, conversationMetaProject, conversations.Conversation{

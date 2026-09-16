@@ -15,12 +15,8 @@
  * §3.5 component-props budget — see sibling `ActionView.tsx`/`entities/agents`
  * for the same established grouping pattern elsewhere in this Wave.
  *
- * Per-word TTS highlight sync (issue #625 item 1): `tts.spokenRange` reaches
- * `shared/ui/Markdown` now, but only for the row `tts.speakingMessageId`
- * names — `spokenRange` is one global offset range, not scoped to a message
- * id, so every other row must see `undefined` rather than highlight an
- * unrelated offset at the same position. `speakingSegments` still has no
- * reader; nothing in this pass needed it.
+ * TTS highlighting applies only to `tts.speakingMessageId` (#625).
+ * Other rows receive no range: the global offset is not scoped to a message.
  *
  * Canvas message items ARE rendered now (issue 853): `./AnswerMessageItems`
  * walks `message_items` in their stored order and mounts the ported `Canvas`
@@ -48,6 +44,8 @@ import type { McpAuthRequiredAction } from '../chat-continue/ChatContinue';
 import { ChatHitlActions } from '../chat-hitl-actions/ChatHitlActions';
 import type { HitlInterrupt } from '../chat-hitl-actions/ChatHitlActions';
 import { ErrorTrace } from '../error-trace/ErrorTrace';
+
+import { PersistedMessageTrace } from './PersistedMessageTrace';
 
 import { AnswerContent } from './AnswerContent';
 import { readAnswerItems } from './AnswerMessageItems';
@@ -81,6 +79,13 @@ export type {
   ApplicationAnswerTts,
 } from './ApplicationAnswer.types';
 
+function authorizationRequestId(action: SubAgentGroupable): string | undefined {
+  const draft = asDraft(action);
+  const metadata = (draft.toolMeta ?? {}) as Record<string, unknown>;
+  const value = draft.authorizationRequestId ?? metadata['authorization_request_id'] ?? metadata['interrupt_id'] ?? draft.id;
+  return typeof value === 'string' && value !== '' ? value : undefined;
+}
+
 /** Defensive read of a message-level token-limit pause signal — not yet a typed `ChatMessage` field (see module doc). */
 function getRequiresConfirmation(answer: ChatMessage): { readonly message?: string } | undefined {
   return (answer as unknown as { requiresConfirmation?: { readonly message?: string } }).requiresConfirmation;
@@ -102,7 +107,7 @@ export function ApplicationAnswer({
   status: { isLoading = false, isStreaming = false, isRegenerating = false } = {},
   actions: { onCopy, onDelete, onRegenerate, shouldDisableRegenerate = false, onEditCanvas, selectedCodeBlockInfo, onCreateCanvasFromSelection } = {},
   tts: { onAutoSpeak, speakingMessageId, spokenRange } = {},
-  continuation: { onContinueMcpExecution, onContinueTokenLimitExecution, hideContinueButton = false } = {},
+  continuation: { onContinueMcpExecution, onContinueTokenLimitExecution, renderAuthModal, hideContinueButton = false } = {},
   hitl: { hitlInterrupt, hitlInterrupts, onHitlResume } = {},
   feedback: { projectId: feedbackProjectId, enabled: feedbackEnabled = true } = {},
 }: ApplicationAnswerProps): ReactNode {
@@ -158,8 +163,8 @@ export function ApplicationAnswer({
     return { swarmChildActions: swarm, nonSwarmChildActions: others };
   }, [toolActions, isProcessing]);
 
-  const authRequiredAction = useMemo(
-    () => toolActions.find((action) => asDraft(action).status === ToolActionStatus.actionRequired),
+  const authRequiredActions = useMemo(
+    () => toolActions.filter((action) => asDraft(action).status === ToolActionStatus.actionRequired),
     [toolActions],
   );
 
@@ -167,14 +172,6 @@ export function ApplicationAnswer({
     const list = Array.isArray(hitlInterrupts) && hitlInterrupts.length > 0 ? hitlInterrupts : hitlInterrupt ? [hitlInterrupt] : [];
     return list as unknown as readonly HitlInterrupt[];
   }, [hitlInterrupt, hitlInterrupts]);
-
-  const onContinueWithoutAuth = useCallback(() => {
-    onContinueMcpExecution?.(messageId, true);
-  }, [onContinueMcpExecution, messageId]);
-
-  const onAuthSuccess = useCallback(() => {
-    onContinueMcpExecution?.(messageId, false);
-  }, [onContinueMcpExecution, messageId]);
 
   const onContinueWithConfirmation = useCallback(() => {
     onContinueTokenLimitExecution?.(messageId);
@@ -195,7 +192,7 @@ export function ApplicationAnswer({
   const shouldRenderAnswerBlock =
     hasTextContent ||
     !!exception ||
-    (!!authRequiredAction && !!onContinueMcpExecution) ||
+    (authRequiredActions.length > 0 && !!onContinueMcpExecution) ||
     (!!requiresConfirmationSignal && !!onContinueTokenLimitExecution) ||
     effectiveHitlInterrupts.length > 0;
 
@@ -233,6 +230,28 @@ export function ApplicationAnswer({
           memoriesUsed={answer.memoriesUsed}
         />
       )}
+
+      {authRequiredActions.map((action, index) => {
+        const requestId = authorizationRequestId(action);
+        const owner = asDraft(action).parent_agent_name || asDraft(action).name || 'Toolkit';
+        return (
+          <Box key={requestId ?? `authorization-${index}`} component="section"
+            aria-label={`${owner} authorization`} sx={{ p: 1.5, border: 1, borderColor: 'warning.main' }}>
+            <Typography variant="subtitle2">{owner} — Authorization required</Typography>
+            <Typography variant="body2">Execution is paused. The protected tool has not run.</Typography>
+            <ChatContinue
+              authRequired
+              disabled={!onContinueMcpExecution || !requestId}
+              onContinueWithoutAuth={() => { onContinueMcpExecution?.(messageId, true, requestId); }}
+              onAuthSuccess={() => { onContinueMcpExecution?.(messageId, false, requestId); }}
+              authRequiredAction={action as unknown as McpAuthRequiredAction}
+              renderAuthModal={renderAuthModal}
+            />
+          </Box>
+        );
+      })}
+
+      {!isProcessing && toolActions.length === 0 && <PersistedMessageTrace value={answer.persistedTrace} />}
 
       {nonSwarmChildActions.length > 0 && <ApplicationAnswerThinking actions={nonSwarmChildActions} isStreaming={isProcessing} />}
 
@@ -287,16 +306,6 @@ export function ApplicationAnswer({
           )}
 
           {!!exception && <ErrorTrace error={exception} />}
-
-          {!!authRequiredAction && (
-            <ChatContinue
-              authRequired
-              disabled={!onContinueMcpExecution}
-              onContinueWithoutAuth={onContinueWithoutAuth}
-              onAuthSuccess={onAuthSuccess}
-              authRequiredAction={authRequiredAction as unknown as McpAuthRequiredAction}
-            />
-          )}
 
           {!hideContinueButton && !!requiresConfirmationSignal && (
             <ChatContinue

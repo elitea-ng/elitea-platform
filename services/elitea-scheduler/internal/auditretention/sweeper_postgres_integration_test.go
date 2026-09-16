@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,8 +34,9 @@ import (
 const bootstrapDDLPath = "../../../elitea-main/internal/infra/db/migrations/001_initial.sql"
 
 var (
-	auditTableDDLRe = regexp.MustCompile(`(?is)CREATE TABLE IF NOT EXISTS centry\.audit_events \(.*?\n\);`)
-	auditIndexDDLRe = regexp.MustCompile(`(?im)^CREATE INDEX IF NOT EXISTS ix_audit_events_timestamp .*;$`)
+	auditTableDDLRe       = regexp.MustCompile(`(?is)CREATE TABLE IF NOT EXISTS centry\.audit_events \(.*?\n\);`)
+	auditIndexDDLRe       = regexp.MustCompile(`(?im)^CREATE INDEX IF NOT EXISTS ix_audit_events_timestamp .*;$`)
+	auditDatabaseSequence atomic.Uint64
 )
 
 func auditEventsDDL(t *testing.T) []string {
@@ -78,7 +80,8 @@ func newAuditPool(t *testing.T) *pgxpool.Pool {
 	}
 	defer adminPool.Close()
 
-	databaseName := fmt.Sprintf("elitea_audit_%d_%d", os.Getpid(), time.Now().UnixNano())
+	// Parallel tests can read the same clock tick. The sequence keeps their databases separate.
+	databaseName := fmt.Sprintf("elitea_audit_%d_%d_%d", os.Getpid(), time.Now().UnixNano(), auditDatabaseSequence.Add(1))
 	if _, err := adminPool.Exec(ctx, "CREATE DATABASE "+pgx.Identifier{databaseName}.Sanitize()); err != nil {
 		t.Fatalf("create isolated database: %v", err)
 	}

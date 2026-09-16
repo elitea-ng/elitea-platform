@@ -283,6 +283,8 @@ fn request(tools: Vec<Value>) -> AgentExecutionRequest {
             next_input_suggestion: NextInputSuggestionPolicy::default(),
             toolkit_guardrails: None,
             truncated_content: None,
+            project_context: None,
+            model_context_limits: None,
         },
     }
 }

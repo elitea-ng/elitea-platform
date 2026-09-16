@@ -17,6 +17,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -71,6 +72,11 @@ type Handler struct {
 	// response's `shared` block serves. Zero means "not configured", and the
 	// block is then empty — see sharedConfigurationSchema.
 	publicProjectID int
+	// tracingAccess contains the current platform's temporary containment:
+	// tracing credentials may be managed only by project admins or inside the
+	// actor's own personal project. It is derived from the same pool by default
+	// so REST and Internal MCP cannot forget to compose it independently.
+	tracingAccess tracingAccessChecker
 	// toolkitChecker probes a TOOLKIT credential (github, gitlab, bitbucket,
 	// jira, confluence) with one authenticated metadata GET — the half of #319
 	// the gateway cannot serve, because the gateway speaks to LLM providers.
@@ -133,6 +139,9 @@ func WithPublicProjectID(projectID int) Option {
 
 func NewHandler(pool *pgxpool.Pool, opts ...Option) *Handler {
 	handler := &Handler{pool: pool}
+	if pool != nil {
+		handler.tracingAccess = postgresTracingAccessChecker{queries: sqlcgen.New(pool)}
+	}
 	// A malformed embedded snapshot must not stop the process: every other
 	// route in this handler is independent of the catalogue. Available alone
 	// reports the failure, as an explicit "catalog is unavailable" error
@@ -330,6 +339,15 @@ func (h *Handler) require(permission string) func(http.Handler) http.Handler {
 // (#131). Section filtering follows Flask request.args.getlist semantics, as
 // on the production route.
 func (h *Handler) Available(w http.ResponseWriter, r *http.Request) {
+	h.available(w, r, false)
+}
+
+// DiscoverAvailable lists type names or returns one complete schema for agent use.
+func (h *Handler) DiscoverAvailable(w http.ResponseWriter, r *http.Request) {
+	h.available(w, r, true)
+}
+
+func (h *Handler) available(w http.ResponseWriter, r *http.Request, discovery bool) {
 	entries, err := h.catalog.CompleteEntries(r.URL.Query()["section"]...)
 	if err != nil {
 		status := http.StatusInternalServerError
@@ -337,6 +355,28 @@ func (h *Handler) Available(w http.ResponseWriter, r *http.Request) {
 			status = http.StatusServiceUnavailable
 		}
 		writeCurrentConfigurationError(w, status, "configuration catalog is unavailable")
+		return
+	}
+	entries = h.filterAvailableTracingTypes(
+		r.Context(), availableProjectID(r.URL.Query().Get("project_id")), entries,
+	)
+	if discovery {
+		selected := r.URL.Query().Get("type")
+		if selected == "" {
+			summary := make([]map[string]string, 0, len(entries))
+			for _, entry := range entries {
+				summary = append(summary, map[string]string{"type": entry.Type, "section": entry.Section})
+			}
+			writeJSON(w, http.StatusOK, summary)
+			return
+		}
+		for _, entry := range entries {
+			if entry.Type == selected {
+				writeJSON(w, http.StatusOK, []CurrentAvailableConfigurationTypeDTO{newCurrentAvailableConfigurationTypeDTO(entry)})
+				return
+			}
+		}
+		writeJSON(w, http.StatusOK, []CurrentAvailableConfigurationTypeDTO{})
 		return
 	}
 	writeJSON(w, http.StatusOK, newCurrentAvailableConfigurationTypesDTO(entries))
@@ -436,6 +476,8 @@ type SharedSection struct {
 // applies (application/configurations/crud.go,
 // normalizeCurrentConfigurationListRequest).
 type configurationListQuery struct {
+	ids           []int32
+	idsErr        error
 	sections      []string
 	types         []string
 	search        string
@@ -449,7 +491,9 @@ type configurationListQuery struct {
 }
 
 func parseConfigurationListQuery(values url.Values) configurationListQuery {
+	ids, err := configurationQueryIDs(values)
 	return configurationListQuery{
+		ids: ids, idsErr: err,
 		sections:      values["section"],
 		types:         values["type"],
 		search:        values.Get("query"),
@@ -497,7 +541,7 @@ func configurationListOffset(raw string) int {
 // (application/configurations/crud.go, normalizeCurrentConfigurationListRequest).
 // This route refuses it with the same status and the same message.
 func configurationListQueryInBounds(request configurationListQuery) bool {
-	if len(request.search) > maxConfigurationQueryLength {
+	if request.idsErr != nil || len(request.search) > maxConfigurationQueryLength {
 		return false
 	}
 	return configurationFilterInBounds(request.sections) && configurationFilterInBounds(request.types)
@@ -581,6 +625,11 @@ func configurationOrderBy(sortBy, sortOrder string) string {
 func configurationRowFilter(request configurationListQuery, placeholder int) (string, []any) {
 	clause, args := configurationSectionFilter(request.sections, placeholder)
 	placeholder += len(args)
+	if len(request.ids) > 0 {
+		clause += " AND id = ANY($" + strconv.Itoa(placeholder) + "::integer[])"
+		args = append(args, request.ids)
+		placeholder++
+	}
 	if len(request.types) > 0 {
 		clause += " AND type = ANY($" + strconv.Itoa(placeholder) + ")"
 		args = append(args, request.types)
@@ -819,7 +868,7 @@ func (h *Handler) appendSharedConfigurations(
 	response *ListResponse,
 ) bool {
 	sharedFilter, sharedArgs := configurationRowFilter(
-		configurationListQuery{sections: request.sections, types: request.types}, 1)
+		configurationListQuery{sections: request.sections, types: request.types, ids: request.ids}, 1)
 
 	var sharedTotal int
 	sharedCountQ := fmt.Sprintf(
@@ -993,6 +1042,11 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		apierr.WriteStatus(w, http.StatusNotFound, "configuration not found")
 		return
 	}
+	projectIDNumber, parseErr := strconv.ParseInt(projectID, 10, 64)
+	if parseErr != nil || h.tracingWriteForbidden(ctx, projectIDNumber, c.Type) {
+		apierr.WriteStatus(w, http.StatusNotFound, "configuration not found")
+		return
+	}
 	if err := json.Unmarshal(data, &c.Data); err != nil {
 		apierr.WriteStatus(w, http.StatusInternalServerError, "invalid stored configuration")
 		return
@@ -1058,6 +1112,15 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	configType := strVal(body, "type")
+	projectIDNumber, parseErr := strconv.ParseInt(projectID, 10, 64)
+	if parseErr != nil {
+		apierr.WriteStatus(w, http.StatusBadRequest, "invalid project")
+		return
+	}
+	if h.tracingWriteForbidden(ctx, projectIDNumber, configType) {
+		apierr.WriteStatus(w, http.StatusForbidden, "tracing configurations are managed by project admins")
+		return
+	}
 	// The api_key the caller sends must never reach the row. It goes to the
 	// project vault, and the row keeps the {{secret.NAME}} reference.
 	sealedData, secretMutations, failure := h.sealConfigurationSecrets(ctx, configType, dataMap)
@@ -1250,6 +1313,17 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.pool == nil {
 		apierr.WriteStatus(w, http.StatusServiceUnavailable, "the configuration store is not available")
+		return
+	}
+	storedType, typeErr := h.storedConfigurationType(ctx, schema, configID)
+	if typeErr != nil {
+		writeConfigurationUpdateFailure(ctx, w, projectID, configID, typeErr)
+		return
+	}
+	requestedType := strVal(body, "type")
+	if h.tracingWriteForbidden(ctx, int64(pID), storedType) ||
+		h.tracingWriteForbidden(ctx, int64(pID), requestedType) {
+		apierr.WriteStatus(w, http.StatusForbidden, "tracing configurations are managed by project admins")
 		return
 	}
 
@@ -1985,4 +2059,12 @@ func decodeBoundedJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 		return false
 	}
 	return true
+}
+
+// configurationQueryIDs rejects repeated filters instead of silently discarding values.
+func configurationQueryIDs(values url.Values) ([]int32, error) {
+	if len(values["ids"]) > 1 {
+		return nil, configurationapp.ErrInvalidCurrentConfigurationRequest
+	}
+	return configurationapp.ParseCurrentConfigurationIDs(values.Get("ids"))
 }

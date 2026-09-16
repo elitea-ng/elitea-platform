@@ -41,7 +41,7 @@ export interface UseChatBoxActionsResult {
   readonly handleDeleteAnswer: (messageId: string) => void;
   readonly handleSubmitEditedMessage: (messageId: string, updatedItems: readonly { uuid?: string | undefined; content: string; item_type: string }[]) => void;
   readonly handleHitlResume: (payload: { action: 'approve' | 'reject' | 'edit' | 'block_with_comment' | 'answer'; value?: string | undefined; toolCallId?: string | undefined }) => void;
-  readonly handleContinueMcpExecution: (messageId: string, addToIgnoreList?: boolean) => void;
+  readonly handleContinueMcpExecution: (messageId: string, addToIgnoreList?: boolean, authorizationRequestId?: string) => void;
   readonly handleContinueTokenLimit: (messageId: string) => void;
   readonly handleClear: () => void;
 }
@@ -134,7 +134,9 @@ export function useChatBoxActions({
   );
 
   const handleContinueMcpExecution = useCallback(
-    (messageId: string, addToIgnoreList?: boolean) => { void handlers.resumeMcpFlow(messageId, addToIgnoreList); },
+    (messageId: string, addToIgnoreList?: boolean, authorizationRequestId?: string) => {
+      void handlers.resumeMcpFlow(messageId, addToIgnoreList, authorizationRequestId);
+    },
     [handlers],
   );
 

@@ -22,14 +22,14 @@ const TEST_DATABASE_URL: &str = "ELITEA_TEST_DATABASE_URL";
 const SESSION_MIGRATION: &str =
     include_str!("../../../elitea-main/migrations/agentstate/0002_agent_sessions.sql");
 
-struct IsolatedPostgres {
-    pool: PgPool,
+pub(crate) struct IsolatedPostgres {
+    pub(crate) pool: PgPool,
     admin_options: PgConnectOptions,
-    database_name: String,
+    pub(crate) database_name: String,
 }
 
 impl IsolatedPostgres {
-    async fn create(database_url: &str) -> Self {
+    pub(crate) async fn create(database_url: &str) -> Self {
         let admin_options = PgConnectOptions::from_str(database_url)
             .expect("parse PostgreSQL session component-test URL")
             .disable_statement_logging();
@@ -97,14 +97,14 @@ impl Drop for IsolatedPostgres {
     }
 }
 
-async fn install_schema(pool: &PgPool) {
+pub(crate) async fn install_schema(pool: &PgPool) {
     sqlx::raw_sql(SESSION_MIGRATION)
         .execute(pool)
         .await
         .expect("apply session migration");
 }
 
-fn authority_for(
+pub(crate) fn authority_for(
     claim_id: &str,
     claim_attempt: u64,
     lease_epoch: u64,

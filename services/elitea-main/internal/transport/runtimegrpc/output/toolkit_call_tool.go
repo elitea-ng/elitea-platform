@@ -8,6 +8,7 @@ import (
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
+	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"google.golang.org/protobuf/proto"
 )
@@ -24,6 +25,17 @@ type ToolkitCallToolIngestor interface {
 // would have doubled that list to serve one new arm. A capability that is
 // neither a prerequisite of nor prerequisite to the others belongs here.
 type ServerOption func(*Server) error
+
+// WithToolkitExecuteRead composes the separately admitted read-only result.
+func WithToolkitExecuteRead(ingestor ToolkitExecuteReadIngestor) ServerOption {
+	return func(server *Server) error {
+		if ingestor == nil {
+			return errors.New("direct toolkit output ingestor is required")
+		}
+		server.toolkits = ingestor
+		return nil
+	}
+}
 
 // WithToolkitCallTool admits the tool-run terminal arm. Left unset, a tool-run
 // frame is refused exactly as it was before this capability existed.
@@ -50,7 +62,7 @@ func NewServerWithCapabilities(
 	nodeEvents NodeEventIngestor,
 	options ...ServerOption,
 ) (*Server, error) {
-	server, err := newServer(config, authorizer, ingestor, failures, indexes, agents, nodeEvents)
+	server, err := newServer(config, authorizer, ingestor, failures, indexes, agents, nil, nodeEvents)
 	if err != nil {
 		return nil, err
 	}
@@ -198,6 +210,8 @@ func toolkitCallToolSummaryDomain(
 	}
 	var status outputapp.ToolkitCallToolStatus
 	switch summary.GetStatus() {
+	case runtimev1.ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_AUTHORIZATION_REQUIRED:
+		status = outputapp.ToolkitCallToolStatusAuthorizationRequired
 	case runtimev1.ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_OK:
 		status = outputapp.ToolkitCallToolStatusOK
 	case runtimev1.ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_TOOL_ERROR:
@@ -214,6 +228,12 @@ func toolkitCallToolSummaryDomain(
 		ResultJSON:   summary.GetResultJson(),
 		Truncated:    summary.GetTruncated(),
 		ErrorMessage: summary.GetErrorMessage(),
+	}
+	if challenge := summary.GetAuthorizationRequired(); challenge != nil {
+		if hasUnknown(challenge.ProtoReflect()) {
+			return outputapp.ToolkitCallToolSummary{}, outputapp.ErrInvalidToolkitCallToolOutput
+		}
+		domain.AuthorizationRequired = &executiondomain.ToolkitAuthorizationRequired{ToolkitName: challenge.GetToolkitName(), ToolkitType: challenge.GetToolkitType(), ToolkitID: challenge.GetToolkitId(), ServerURL: challenge.GetServerUrl(), ResourceMetadataURL: challenge.GetResourceMetadataUrl(), ResourceMetadata: append([]byte(nil), challenge.GetResourceMetadataJson()...)}
 	}
 	if err := domain.Validate(); err != nil {
 		return outputapp.ToolkitCallToolSummary{}, err

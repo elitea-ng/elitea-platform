@@ -153,6 +153,33 @@ const START = {
 };
 
 describe("useChatStreamTransport", () => {
+  it.each([null, "", undefined])("preserves the original question after a resume with an absent frame link: %s", async (questionId) => {
+    server.use(http.post(`${BASE}/elitea_core/continue_predict/prompt_lib/7/uuid-1`, () =>
+      HttpResponse.json({ task_id: "exec-1", events_url: EVENTS_URL, response_message_id: MESSAGE_ID }),
+    ));
+    const { api, history, Probe } = harness([
+      userQuestion(), { ...pendingAssistant(), questionId: QUESTION_ID },
+    ]);
+    render(<Probe />);
+    await act(async () => {
+      await expect(api.current?.resume({
+        projectId: 7, conversationUuid: "uuid-1",
+        contract: "agent.continue.authorization.v1",
+        body: { message_id: MESSAGE_ID, authorization_request_id: "auth-1", authorization_action: "skip" },
+      })).resolves.toBe(true);
+    });
+    await waitFor(() => expect(registry.getOpen()).toHaveLength(1));
+    act(() => {
+      for (const type of ["agent_start", "chat_predict_summary_started", "agent_llm_chunk", "pipeline_finish"]) {
+        registry.emit("execution.node_event", nodeEvent({ type, question_id: questionId, content: "Completed after Skip" }));
+      }
+    });
+    expect(history.current).toHaveLength(2);
+    expect(history.current[1]?.questionId).toBe(QUESTION_ID);
+    expect(history.current[1]?.isStreaming).toBe(false);
+    expect(history.current[0]?.content).toBe("hi");
+  });
+
   it("renders a real recorded turn end to end, from POST through SSE to chat history", async () => {
     okStart();
     const { api, history, Probe } = harness();
@@ -603,6 +630,7 @@ describe("useChatStreamTransport", () => {
     // Captured before `detach` clears it, so regenerate can still find the
     // question this refused turn answered.
     expect(failure?.questionId).toBe(QUESTION_ID);
+    expect(failure?.id).toBe(RESPONSE_MESSAGE_ID);
   });
 
   it("keeps the user's question when the turn is refused", async () => {
@@ -1064,76 +1092,42 @@ describe("resume after a drop (#329)", () => {
     expect(registry.getOpen()[0]?.url).not.toContain("cursor");
   });
 
-  it("bounds the retries at four, then settles the message and says the connection was lost", async () => {
+  it("keeps the run attached across an extended outage and delivers recovery", async () => {
     okStart();
     const { api, history, errors, Probe } = harness();
     render(<Probe />);
     await started(api);
-
-    // 1s, 2s, 4s, 8s — `streamReconnectDelayMs`. Each step is asserted for
-    // BOTH halves: nothing reopens a millisecond early, and it does reopen.
-    for (const delay of [1_000, 2_000, 4_000, 8_000]) {
-      const opened = registry.getSources().length;
-      act(() => {
-        registry.fail();
-        vi.advanceTimersByTime(delay - 1);
-      });
-      expect(registry.getSources()).toHaveLength(opened);
-      act(() => {
-        vi.advanceTimersByTime(1);
-      });
-      // eslint-disable-next-line no-await-in-loop -- sequential by construction: each backoff step must be observed before the next drop.
-      await waitFor(() =>
-        expect(registry.getSources()).toHaveLength(opened + 1),
-      );
-    }
-
-    // The fifth failure is where the budget runs out.
     act(() => {
-      registry.fail();
-      vi.advanceTimersByTime(600_000);
+      registry.emit("execution.node_event", nodeEvent({ type: "agent_llm_chunk", content: "before" }), "41");
     });
-
-    expect(registry.getSources()).toHaveLength(5);
-    expect(registry.getOpen()).toHaveLength(0);
-    expect(history.current[0]?.isStreaming).toBe(false);
-    expect(history.current[0]?.isLoading).toBe(false);
-    // The reason goes ON the message, not only to `onStreamError`: the
-    // callback drives a toast that is gone in seconds, while the transcript is
-    // what the user still has when they come back to the tab.
-    expect(history.current[0]?.exception).toBe(
-      "The connection to the agent run was lost.",
-    );
-    expect(errors).toEqual(["The connection to the agent run was lost."]);
+    for (const delay of [1_000, 2_000, 4_000, 8_000, 30_000, 30_000]) {
+      act(() => { registry.fail(); });
+      act(() => { vi.advanceTimersByTime(delay); });
+      await waitFor(() => expect(registry.getOpen()).toHaveLength(1));
+    }
+    expect(api.current?.isStreaming).toBe(true);
+    expect(registry.getOpen()[0]?.url).toContain("cursor=41");
+    expect(history.current[0]?.exception).toBeUndefined();
+    expect(errors).toEqual(["Connection interrupted. Reconnecting to the existing run."]);
+    act(() => {
+      registry.emit("execution.node_event", nodeEvent({ type: "agent_llm_chunk", content: " recovered" }), "42");
+    });
+    expect(history.current[0]?.content).toContain("recovered");
   });
 
-  it("still says the connection was lost when the stream never delivered a frame", async () => {
-    // The same hole as the early refusal, on the other path: a stream that
-    // dies before its first frame leaves nothing in flight for
-    // `settleInFlight` to mark, so the turn ended with an untouched
-    // transcript and a silently re-enabled composer.
+  it("does not invent a failure when an outage precedes the first frame", async () => {
     okStart();
     const { api, history, Probe } = harness([userQuestion()]);
     render(<Probe />);
     await started(api);
-
-    for (const delay of [1_000, 2_000, 4_000, 8_000]) {
-      act(() => {
-        registry.fail();
-        vi.advanceTimersByTime(delay);
-      });
+    for (const delay of [1_000, 2_000, 4_000, 8_000, 30_000]) {
+      act(() => { registry.fail(); });
+      act(() => { vi.advanceTimersByTime(delay); });
+      await waitFor(() => expect(registry.getOpen()).toHaveLength(1));
     }
-    act(() => {
-      registry.fail();
-      vi.advanceTimersByTime(600_000);
-    });
-
-    expect(history.current).toHaveLength(2);
-    expect(history.current[0]).toEqual(userQuestion());
-    expect(history.current[1]?.role).toBe("assistant");
-    expect(history.current[1]?.exception).toBe(
-      "The connection to the agent run was lost.",
-    );
+    expect(api.current?.isStreaming).toBe(true);
+    expect(history.current).toEqual([userQuestion()]);
+    expect(registry.getOpen()[0]?.url).not.toContain("cursor");
   });
 
   it("spends a fresh budget after a delivered frame, not the one the last outage exhausted", async () => {

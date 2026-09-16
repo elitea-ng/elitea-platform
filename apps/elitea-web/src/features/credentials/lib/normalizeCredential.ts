@@ -20,6 +20,7 @@ export function normalizeCredential(wire: ConfigurationWire): Credential {
   return {
     ...credential,
     ...(wire.uid !== undefined ? { uid: wire.uid } : {}),
+    ...(wire.uuid !== undefined ? { uuid: wire.uuid } : {}),
     ...(wire.data !== undefined ? { data: wire.data } : {}),
     ...(wire.elitea_title !== undefined ? { eliteaTitle: wire.elitea_title } : {}),
     ...(wire.label !== undefined ? { label: wire.label } : {}),

@@ -12,6 +12,7 @@ import { useToolkitSaveValidation } from '../model/useToolkitSaveValidation';
 import type { SharepointAuthModalRenderers } from '../sharepoint/ui/SharepointOAuthStatus';
 import type { ToolBaseSlots } from './form/ToolBase/ToolBase.types';
 import { ToolkitForm, type ToolkitFormEditDetail } from './form/ToolkitForm/ToolkitForm';
+import type { TestToolPaneProps } from './test-tools/TestToolPane';
 import { TestToolPane } from './test-tools/TestToolPane';
 import type { SaveToolkitPayload } from './form/ToolkitForm/ToolkitsOperationButtons';
 
@@ -126,6 +127,8 @@ export interface ConfigurationTabSlots {
    * state every MCP toolkit's form was in before this slot was forwarded.
    */
   readonly toolActionsExtra?: ToolBaseSlots['toolActionsExtra'];
+  readonly mcpAuthStatus?: ToolBaseSlots['mcpAuthStatus'];
+  readonly renderTestAuthorization?: TestToolPaneProps['renderAuthorization'];
 }
 
 /** @public */
@@ -200,6 +203,7 @@ function toTestPaneValues(detail: ToolkitFormEditDetail | null): { readonly type
  * keys pushed it to 14.
  */
 interface TestPaneAreaProps {
+  readonly renderAuthorization: TestToolPaneProps['renderAuthorization'];
   readonly render: ConfigurationTabSlots['renderTestPane'];
   readonly projectId: string | undefined;
   readonly toolkitId: string | undefined;
@@ -223,6 +227,7 @@ function TestPaneArea(props: TestPaneAreaProps): ReactNode {
   }
   return (
     <TestToolPane
+      renderAuthorization={props.renderAuthorization}
       projectId={projectId}
       toolkitId={toolkitId}
       values={toTestPaneValues(editToolDetail)}
@@ -243,7 +248,7 @@ export function ConfigurationTab({
   saveHandlers,
   slots,
 }: ConfigurationTabProps): ReactNode {
-  const { renderTestPane, renderRunHistory, sharepointAuth, renderCredentialPicker, toolActionsExtra } = slots;
+  const { renderTestPane, renderRunHistory, sharepointAuth, renderCredentialPicker, toolActionsExtra, mcpAuthStatus } = slots;
   const { editToolDetail, onChangeToolDetail, isToolDirty } = toolDetailState;
   const { saveToolkit, onSaveSuccess, onSaveError } = saveHandlers;
   /**
@@ -261,13 +266,14 @@ export function ConfigurationTab({
   // `ToolkitForm.hooks.ts`'s own note — but a fresh object here would also
   // remount nothing, it would just churn; keep it cheap and stable).
   const formSlots = useMemo<ToolBaseSlots | undefined>(() => {
-    if (sharepointAuth === undefined && renderCredentialPicker === undefined && toolActionsExtra === undefined) return undefined;
+    if (sharepointAuth === undefined && renderCredentialPicker === undefined && toolActionsExtra === undefined && mcpAuthStatus === undefined) return undefined;
     return {
       ...(sharepointAuth === undefined ? {} : { sharepointAuthModals: sharepointAuth }),
       ...(renderCredentialPicker === undefined ? {} : { renderCredentialPicker }),
       ...(toolActionsExtra === undefined ? {} : { toolActionsExtra }),
+      ...(mcpAuthStatus === undefined ? {} : { mcpAuthStatus }),
     };
-  }, [sharepointAuth, renderCredentialPicker, toolActionsExtra]);
+  }, [sharepointAuth, renderCredentialPicker, toolActionsExtra, mcpAuthStatus]);
 
   const handleShowHistory = useCallback(() => setShowHistory(true), []);
   const handleCloseHistory = useCallback(() => setShowHistory(false), []);
@@ -356,6 +362,7 @@ export function ConfigurationTab({
         )}
         <TestPaneArea
           render={renderTestPane}
+          renderAuthorization={slots.renderTestAuthorization}
           projectId={projectId}
           toolkitId={toolkitId}
           editToolDetail={editToolDetail}

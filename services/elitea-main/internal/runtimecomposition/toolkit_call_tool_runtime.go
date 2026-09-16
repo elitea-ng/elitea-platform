@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
+	"log/slog"
 	"time"
 
 	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/redisdispatch"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -29,9 +32,11 @@ const (
 // currentToolkitCallToolRuntime is the composed producer for one synchronous
 // tool run.
 type currentToolkitCallToolRuntime struct {
-	run     *toolkitcalltoolapp.RunService
-	jobs    *repos.ToolkitCallToolJobsRepository
-	results *repos.ToolkitCallToolResultsRepository
+	run        *toolkitcalltoolapp.RunService
+	jobs       *repos.ToolkitCallToolJobsRepository
+	results    *repos.ToolkitCallToolResultsRepository
+	dispatcher *toolkitcalltoolapp.Dispatcher
+	logger     *slog.Logger
 }
 
 // toolkitTypeVerdictAdapter answers the same question
@@ -61,8 +66,8 @@ func (a toolkitTypeVerdictAdapter) SupportsToolkitType(toolkitType string) (bool
 
 var _ toolkitcalltoolapp.ToolkitTypeVerdict = toolkitTypeVerdictAdapter{}
 
-// newCurrentToolkitCallToolRuntime composes the tool-run producer on top of the
-// index runtime's own toolkit reader and settings resolver.
+// newCurrentToolkitCallToolRuntime composes the tool-run producer using the
+// configured worker's shared toolkit reader and settings resolver.
 //
 // It REUSES them rather than building a second graph, deliberately: the reader
 // is where cross-project visibility is decided and the resolver is where a
@@ -71,20 +76,32 @@ var _ toolkitcalltoolapp.ToolkitTypeVerdict = toolkitTypeVerdictAdapter{}
 func newCurrentToolkitCallToolRuntime(
 	admissionPool *pgxpool.Pool,
 	results *repos.ToolkitCallToolResultsRepository,
-	index *currentIndexRuntime,
+	toolkits indexingapp.CurrentToolkitReader, settings indexingapp.CurrentToolkitSettingsValidator,
 	catalogue *CurrentToolkitCatalogueSnapshot,
 	capability *WorkerToolkitCapability,
 	producer *redisdispatch.ToolkitCallToolProducer,
 	policy repos.ToolkitCallToolDispatchPolicy,
 	deadline time.Duration,
 	records *repos.ToolCallRecordsRepository,
+	logger *slog.Logger,
 ) (*currentToolkitCallToolRuntime, error) {
-	if admissionPool == nil || results == nil || index == nil ||
-		index.toolkits == nil || index.settings == nil || producer == nil {
+	if admissionPool == nil || results == nil || toolkits == nil || settings == nil || producer == nil {
 		return nil, errors.New("tool-run runtime dependencies are required")
 	}
+	guardrails, err := platformconfig.NewGuardrailPolicyAdapter(admissionPool)
+	if err != nil {
+		return nil, fmt.Errorf("construct tool-run guardrails: %w", err)
+	}
+	actorReader, err := newCurrentActorToolkitReader(toolkits)
+	if err != nil {
+		return nil, err
+	}
+	var resolverOptions []toolkitcalltoolapp.ResolverOption
+	if tokens := currentToolkitMCPTokenStore(admissionPool); tokens != nil {
+		resolverOptions = append(resolverOptions, toolkitcalltoolapp.WithMCPAuthorization(tokens))
+	}
 	resolver, err := toolkitcalltoolapp.NewCurrentAuthoritativeInputResolver(
-		index.toolkits, index.settings,
+		actorReader, settings, guardrails, resolverOptions...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("construct tool-run input resolver: %w", err)
@@ -99,7 +116,7 @@ func newCurrentToolkitCallToolRuntime(
 	if err != nil {
 		return nil, fmt.Errorf("construct tool-run input bundle factory: %w", err)
 	}
-	jobs, err := repos.NewToolkitCallToolJobsRepository(admissionPool, policy)
+	jobs, err := repos.NewToolkitCallToolJobsRepository(admissionPool, policy, producer)
 	if err != nil {
 		return nil, fmt.Errorf("construct tool-run jobs repository: %w", err)
 	}
@@ -131,7 +148,7 @@ func newCurrentToolkitCallToolRuntime(
 	if err != nil {
 		return nil, fmt.Errorf("construct tool-run service: %w", err)
 	}
-	return &currentToolkitCallToolRuntime{run: run, jobs: jobs, results: results}, nil
+	return &currentToolkitCallToolRuntime{run: run, jobs: jobs, results: results, dispatcher: dispatcher, logger: logger}, nil
 }
 
 // toolRunRecorderAdapter turns one settled explicit tool run into the shared
@@ -170,4 +187,33 @@ func (a toolRunRecorderAdapter) RecordToolRun(
 		ActorUserID: record.ActorUserID,
 		ExecutionID: record.ExecutionID,
 	})
+}
+
+// Run recovers prepared commands without tying execution to an HTTP connection.
+func (r *currentToolkitCallToolRuntime) Run(ctx context.Context) error {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		iteration, cancel := context.WithTimeout(ctx, 8*time.Second)
+		ids, err := r.jobs.ListPreparedToolkitCallToolRecovery(iteration, 32)
+		if err == nil {
+			for _, id := range ids {
+				if err = r.dispatcher.RecoverPrepared(iteration, id); err != nil {
+					break
+				}
+			}
+		}
+		cancel()
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err != nil && r.logger != nil {
+			r.logger.Error("recover prepared toolkit command", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }

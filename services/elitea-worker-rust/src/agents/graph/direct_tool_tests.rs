@@ -382,7 +382,11 @@ async fn sensitive_toolkit_node_pauses_then_approval_returns_the_normal_tool_res
 
 #[tokio::test]
 async fn direct_nodes_share_one_delegated_authorization_interrupt_and_safe_resume() {
-    for (node_type, toolkit_type) in [("mcp", "mcp"), ("toolkit", "sharepoint")] {
+    for (node_type, toolkit_type) in [
+        ("mcp", "mcp"),
+        ("toolkit", "sharepoint"),
+        ("toolkit", "openapi"),
+    ] {
         assert_direct_delegated_authorization(node_type, toolkit_type).await;
     }
 }
@@ -928,6 +932,7 @@ async fn direct_delegated_authorization_skip_reaches_end_with_sdk_terminal_state
             "sharepoint",
             "sharepoint-authorization-skip-thread",
         ),
+        ("toolkit", "openapi", "openapi-authorization-skip-thread"),
     ] {
         let definition = PipelineDefinition::from_yaml(
             &sensitive_pipeline_definition_yaml()
@@ -1129,6 +1134,8 @@ fn tool_resume_payload(
         next_input_suggestion: NextInputSuggestionPolicy::default(),
         toolkit_guardrails: None,
         truncated_content: None,
+        project_context: None,
+        model_context_limits: None,
     }
 }
 

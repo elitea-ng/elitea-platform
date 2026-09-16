@@ -21,6 +21,7 @@ import (
 
 // mockRepo implements conversations.Repository for testing.
 type mockRepo struct {
+	authorizeFn               func(context.Context, string, string) error
 	listFn                    func(ctx context.Context, projectID string, page, pageSize int) (conversations.ListResponse, error)
 	getFn                     func(ctx context.Context, projectID, conversationID string) (conversations.Conversation, error)
 	createFn                  func(ctx context.Context, projectID string, conv conversations.Conversation) (conversations.Conversation, error)
@@ -106,6 +107,15 @@ func (m *mockRepo) ListMessages(ctx context.Context, projectID, conversationID s
 
 func (m *mockRepo) AddParticipant(ctx context.Context, projectID, conversationID string, body map[string]any) error {
 	return m.addParticipantFn(ctx, projectID, conversationID, body)
+}
+
+func (m *mockRepo) AddParticipants(ctx context.Context, projectID, conversationID string, bodies []map[string]any) error {
+	for _, body := range bodies {
+		if err := m.AddParticipant(ctx, projectID, conversationID, body); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (m *mockRepo) RemoveParticipant(ctx context.Context, projectID, conversationID, participantID string) error {
@@ -247,7 +257,12 @@ func newRouter(h *conversations.Handler) chi.Router {
 	r := chi.NewRouter()
 	r.Route("/projects/{projectID}/conversations", func(r chi.Router) {
 		r.Get("/", h.List)
-		r.Post("/", h.Create)
+		r.Post("/", func(w http.ResponseWriter, r *http.Request) {
+			if _, ok := auth.UserFromContext(r.Context()); !ok {
+				r = r.WithContext(auth.ContextWithUser(r.Context(), auth.User{ID: "1"}))
+			}
+			h.Create(w, r)
+		})
 		r.Get("/{conversationID}", h.Get)
 		r.Put("/{conversationID}", h.Update)
 		r.Delete("/{conversationID}", h.Delete)
@@ -823,7 +838,7 @@ func TestAddParticipant_Success(t *testing.T) {
 	router := newRouter(h)
 
 	// Handler expects a JSON array of participant objects.
-	body, _ := json.Marshal([]map[string]any{{"user_id": "u-1"}})
+	body, _ := json.Marshal([]map[string]any{{"entity_name": "user", "entity_meta": map[string]any{"id": 1}}})
 	req := httptest.NewRequest(http.MethodPost, "/projects/proj-1/conversations/conv-1/participants", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -843,7 +858,7 @@ func TestAddParticipant_Error(t *testing.T) {
 
 	// Handler expects a JSON array; a single object returns 400 (decode error).
 	// Send a proper array so the handler reaches the repository and returns 500.
-	req := httptest.NewRequest(http.MethodPost, "/projects/proj-1/conversations/conv-1/participants", bytes.NewBufferString(`[{}]`))
+	req := httptest.NewRequest(http.MethodPost, "/projects/proj-1/conversations/conv-1/participants", bytes.NewBufferString(`[{"entity_name":"dummy","entity_meta":{}}]`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -1894,4 +1909,11 @@ func TestCreate_CarriesTheMetaTheFirstSendSends(t *testing.T) {
 	if seen == nil || seen["steps_limit"] == nil {
 		t.Errorf("the repository was asked to store %v, which drops the step limit the composer sent", seen)
 	}
+}
+
+func (m *mockRepo) AuthorizeChatResource(ctx context.Context, projectID, resourceKind, conversationID string) error {
+	if m.authorizeFn != nil {
+		return m.authorizeFn(ctx, projectID, conversationID)
+	}
+	return nil
 }

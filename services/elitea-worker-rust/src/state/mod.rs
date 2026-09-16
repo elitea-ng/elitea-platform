@@ -9,7 +9,7 @@ mod postgres_checkpointer;
 mod postgres_checkpointer_tests;
 mod postgres_session;
 #[cfg(test)]
-mod postgres_session_tests;
+pub(crate) mod postgres_session_tests;
 mod writer_lease;
 
 pub(crate) use postgres_checkpointer::CheckpointWriterAuthority;

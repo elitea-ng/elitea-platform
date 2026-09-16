@@ -41,9 +41,50 @@
  */
 import * as zod from "zod";
 
+export const listTagsParamsLimitMin = 0;
+export const listTagsParamsLimitMax = 1000;
+
+export const listTagsParamsOffsetMin = 0;
+export const listTagsParamsOffsetMax = 100000;
+
+export const listTagsParamsQueryMax = 1024;
+
+export const listTagsParamsSearchMax = 1024;
+
+export const listTagsParamsTrendStartPeriodMin = 19;
+export const listTagsParamsTrendStartPeriodMax = 19;
+
+export const listTagsParamsTrendEndPeriodMin = 19;
+export const listTagsParamsTrendEndPeriodMax = 19;
+
 export const ListTagsParams = zod.object({
   entity_coverage: zod
     .enum(["all", "application", "pipeline", "skill"])
+    .optional(),
+  limit: zod
+    .int()
+    .min(listTagsParamsLimitMin)
+    .max(listTagsParamsLimitMax)
+    .optional(),
+  offset: zod
+    .int()
+    .min(listTagsParamsOffsetMin)
+    .max(listTagsParamsOffsetMax)
+    .optional(),
+  query: zod.string().max(listTagsParamsQueryMax).optional(),
+  search: zod.string().max(listTagsParamsSearchMax).optional(),
+  author_id: zod.int().min(1).optional(),
+  statuses: zod.string().optional(),
+  my_liked: zod.boolean().optional(),
+  trend_start_period: zod
+    .string()
+    .min(listTagsParamsTrendStartPeriodMin)
+    .max(listTagsParamsTrendStartPeriodMax)
+    .optional(),
+  trend_end_period: zod
+    .string()
+    .min(listTagsParamsTrendEndPeriodMin)
+    .max(listTagsParamsTrendEndPeriodMax)
     .optional(),
 });
 

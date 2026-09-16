@@ -48,6 +48,31 @@ SELECT EXISTS (
       AND project.suspended IS FALSE
 ) AS is_member;
 
+-- Exact current-platform containment for tracing credentials. Project role
+-- identifiers are compared exactly: billing-admin does
+-- not carry administrator authority. The personal-project signal is
+-- independent of role assignment so a missing role row cannot revoke an
+-- owner's access to project_user_<userID>.
+-- name: CanManageCurrentTracingConfiguration :one
+SELECT CASE WHEN
+    EXISTS (
+        SELECT 1
+        FROM public.auth_core__project_user_role AS assignment
+        JOIN public.auth_core__project_role AS project_role
+          ON project_role.id = assignment.role_id
+         AND project_role.project_id = assignment.project_id
+        WHERE assignment.project_id = sqlc.arg('project_id')::bigint
+          AND assignment.user_id = sqlc.arg('user_id')::bigint
+          AND project_role.name = ANY(ARRAY['admin', 'super_admin', 'system']::text[])
+    )
+    OR EXISTS (
+        SELECT 1
+        FROM centry.project AS project
+        WHERE project.id = sqlc.arg('project_id')::bigint
+          AND project.name = 'project_user_' || sqlc.arg('user_id')::bigint::text
+    )
+THEN TRUE ELSE FALSE END AS can_manage;
+
 -- name: ListCurrentUserProjects :many
 WITH candidate_projects AS MATERIALIZED (
     SELECT

@@ -140,6 +140,7 @@ LIMIT sqlc.arg('limit_rows')::integer;
 SELECT count(*)
 FROM configuration
 WHERE project_id = sqlc.arg('project_id')::integer
+  AND (COALESCE(cardinality(sqlc.arg('ids')::integer[]), 0) = 0 OR id = ANY(sqlc.arg('ids')::integer[]))
   AND (COALESCE(cardinality(sqlc.arg('types')::text[]), 0) = 0 OR type = ANY(sqlc.arg('types')::text[]))
   AND (COALESCE(cardinality(sqlc.arg('sections')::text[]), 0) = 0 OR section = ANY(sqlc.arg('sections')::text[]))
   AND (sqlc.arg('label_query')::text = '' OR label ILIKE ('%' || sqlc.arg('label_query')::text || '%'));
@@ -168,6 +169,7 @@ LEFT JOIN centry.social_pins
  AND social_pins.project_id = sqlc.arg('project_id')::integer
  AND social_pins.entity_id = configuration.id
 WHERE configuration.project_id = sqlc.arg('project_id')::integer
+  AND (COALESCE(cardinality(sqlc.arg('ids')::integer[]), 0) = 0 OR configuration.id = ANY(sqlc.arg('ids')::integer[]))
   AND (COALESCE(cardinality(sqlc.arg('types')::text[]), 0) = 0 OR configuration.type = ANY(sqlc.arg('types')::text[]))
   AND (COALESCE(cardinality(sqlc.arg('sections')::text[]), 0) = 0 OR configuration.section = ANY(sqlc.arg('sections')::text[]))
   AND (sqlc.arg('label_query')::text = '' OR configuration.label ILIKE ('%' || sqlc.arg('label_query')::text || '%'))
@@ -215,6 +217,7 @@ SELECT count(*)
 FROM configuration
 WHERE project_id = sqlc.arg('project_id')::integer
   AND shared = true
+  AND (COALESCE(cardinality(sqlc.arg('ids')::integer[]), 0) = 0 OR id = ANY(sqlc.arg('ids')::integer[]))
   AND (COALESCE(cardinality(sqlc.arg('types')::text[]), 0) = 0 OR type = ANY(sqlc.arg('types')::text[]))
   AND (COALESCE(cardinality(sqlc.arg('sections')::text[]), 0) = 0 OR section = ANY(sqlc.arg('sections')::text[]));
 
@@ -239,6 +242,7 @@ SELECT id,
 FROM configuration
 WHERE project_id = sqlc.arg('project_id')::integer
   AND shared = true
+  AND (COALESCE(cardinality(sqlc.arg('ids')::integer[]), 0) = 0 OR id = ANY(sqlc.arg('ids')::integer[]))
   AND (COALESCE(cardinality(sqlc.arg('types')::text[]), 0) = 0 OR type = ANY(sqlc.arg('types')::text[]))
   AND (COALESCE(cardinality(sqlc.arg('sections')::text[]), 0) = 0 OR section = ANY(sqlc.arg('sections')::text[]))
 ORDER BY

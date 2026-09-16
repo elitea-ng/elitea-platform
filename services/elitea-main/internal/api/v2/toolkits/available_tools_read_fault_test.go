@@ -1,28 +1,9 @@
 package toolkits
 
-// Real-database proof for #381: a tool-list read that fails must not answer
-// with an empty tool list.
-//
-// The handler tests in handler_test.go inject the failure at the Repository
-// seam, so they prove the handler contract but not the repository that produces
-// it — and the repository was the first of the two swallows. `pool.Query` errors
-// became `[]Tool{}, nil` there, so the handler branch could never run. These
-// tests therefore drive the real pgRepo against a real PostgreSQL service and
-// make the read fail for real:
-//
-//   - a tenant schema that does not exist (the case the issue names: a new
-//     project has no tenant data yet), and
-//   - a table that is dropped under a schema that does exist.
-//
-// Both are read faults that the caller cannot fix by adding tools.
-//
-// The empty case and the populated case run against the same fixture, because
-// one alone does not discriminate: a repository that returns an error for
-// everything passes the failure test, and a repository that returns an empty
-// list for everything passes the empty test.
-//
-// Requires a PostgreSQL service (ELITEA_TEST_DATABASE_URL); the shared helper in
-// create_toolkit_owner_id_test.go creates a throwaway database per test.
+// These PostgreSQL tests verify attachment repository reads and legacy type discovery.
+// Runtime toolkit discovery has separate service and HTTP contracts.
+// Fixtures use private databases and retain read, scan, and empty-result checks.
+// Set ELITEA_TEST_DATABASE_URL to run these tests.
 
 import (
 	"context"
@@ -81,20 +62,16 @@ func newToolListFixture(t *testing.T) *toolListFixture {
 		}
 	}
 
-	// The two routes as router.go mounts them, over the real pgRepo.
+	// Legacy type discovery uses the real repository.
 	router := chi.NewRouter()
 	handler := NewHandler(pool)
-	router.Get("/toolkit_available_tools/prompt_lib/{projectID}/{toolkitID}", handler.AvailableTools)
 	router.Post("/toolkit_discover_tools/prompt_lib/{projectID}/{toolkitType}", handler.DiscoverTools)
 	return &toolListFixture{pool: pool, router: router}
 }
 
-func (f *toolListFixture) availableTools(t *testing.T, projectID, versionID string) *httptest.ResponseRecorder {
+func (f *toolListFixture) attachedTools(t *testing.T, projectID, versionID string) ([]Tool, error) {
 	t.Helper()
-	rec := httptest.NewRecorder()
-	f.router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
-		"/toolkit_available_tools/prompt_lib/"+projectID+"/"+versionID, nil))
-	return rec
+	return (&pgRepo{pool: f.pool}).AvailableTools(context.Background(), projectID, versionID)
 }
 
 func (f *toolListFixture) discoverTools(t *testing.T, projectID, toolkitType string) *httptest.ResponseRecorder {
@@ -151,21 +128,24 @@ func assertRealReadFault(t *testing.T, rec *httptest.ResponseRecorder, wantReaso
 // covers the second swallowed error — the per-row `continue` — because a scan
 // that fails for every row produced the same empty list as an unattached
 // toolkit, and nothing here would have told the two apart.
-func TestAvailableToolsReturnsTheAttachedToolsFromTheDatabase(t *testing.T) {
+func TestAttachedToolsReturnsTheAttachedToolsFromTheDatabase(t *testing.T) {
 	fixture := newToolListFixture(t)
 
-	tools := decodeToolList(t, fixture.availableTools(t, "1", populatedVersionID))
+	tools, err := fixture.attachedTools(t, "1", populatedVersionID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(tools) != 2 {
 		t.Fatalf("expected the 2 attached tools, got %d: %#v", len(tools), tools)
 	}
 	names := map[string]bool{}
 	for _, tool := range tools {
-		name, _ := tool["name"].(string)
+		name := tool.Name
 		names[name] = true
-		if id, _ := tool["id"].(string); id == "" {
+		if tool.ID == "" {
 			t.Errorf("tool %q came back with no id: %#v", name, tool)
 		}
-		if toolType, _ := tool["type"].(string); toolType != "github" {
+		if toolType := tool.Type; toolType != "github" {
 			t.Errorf("tool %q has type %q, want github", name, toolType)
 		}
 	}
@@ -178,30 +158,27 @@ func TestAvailableToolsReturnsTheAttachedToolsFromTheDatabase(t *testing.T) {
 
 // Direction two, half one: a toolkit that really has no tools keeps the empty
 // success answer.
-func TestAvailableToolsReturnsAnEmptyListForAToolkitWithNoTools(t *testing.T) {
+func TestAttachedToolsReturnsAnEmptyListForAToolkitWithNoTools(t *testing.T) {
 	fixture := newToolListFixture(t)
-
-	tools := decodeToolList(t, fixture.availableTools(t, "1", emptyVersionID))
-	if len(tools) != 0 {
-		t.Fatalf("expected no tools, got %d: %#v", len(tools), tools)
-	}
-	if body := fixture.availableTools(t, "1", emptyVersionID).Body.String(); !jsonHasEmptyToolsArray(body) {
-		t.Errorf("an empty result must encode as \"tools\":[], got %s", body)
+	tools, err := fixture.attachedTools(t, "1", emptyVersionID)
+	if err != nil || tools == nil || len(tools) != 0 {
+		t.Fatalf("empty attachment rows: %#v %v", tools, err)
 	}
 }
 
-// Direction two, half two: the same route, the same shape of request, and a
-// database read that cannot answer. The tenant schema does not exist.
-func TestAvailableToolsReportsAMissingTenantSchemaAsAFailure(t *testing.T) {
+// A missing tenant schema produces a repository error.
+func TestAttachedToolsReportsAMissingTenantSchemaAsAFailure(t *testing.T) {
 	fixture := newToolListFixture(t)
 
-	assertRealReadFault(t, fixture.availableTools(t, missingSchemaProjectID, populatedVersionID),
-		"available tools read failed")
+	tools, err := fixture.attachedTools(t, missingSchemaProjectID, populatedVersionID)
+	if err == nil || tools != nil {
+		t.Fatalf("read fault: %#v %v", tools, err)
+	}
 }
 
 // The same fault from the other direction: the schema exists and the table is
 // gone. This is the shape a partial migration leaves behind.
-func TestAvailableToolsReportsADroppedTableAsAFailure(t *testing.T) {
+func TestAttachedToolsReportsADroppedTableAsAFailure(t *testing.T) {
 	fixture := newToolListFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -210,8 +187,10 @@ func TestAvailableToolsReportsADroppedTableAsAFailure(t *testing.T) {
 		t.Fatalf("drop the mapping table: %v", err)
 	}
 
-	assertRealReadFault(t, fixture.availableTools(t, "1", populatedVersionID),
-		"available tools read failed")
+	tools, err := fixture.attachedTools(t, "1", populatedVersionID)
+	if err == nil || tools != nil {
+		t.Fatalf("read fault: %#v %v", tools, err)
+	}
 }
 
 func TestDiscoverToolsReturnsTheTypesToolsFromTheDatabase(t *testing.T) {
@@ -242,7 +221,7 @@ func TestDiscoverToolsReportsAMissingTenantSchemaAsAFailure(t *testing.T) {
 // column type changes under the query, which is what a bad migration does. The
 // old `continue` dropped every such row and answered 200 with the rows that
 // were left — an empty list when all rows fail.
-func TestAvailableToolsReportsARowThatFailsToScanAsAFailure(t *testing.T) {
+func TestAttachedToolsReportsARowThatFailsToScanAsAFailure(t *testing.T) {
 	fixture := newToolListFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -252,8 +231,10 @@ func TestAvailableToolsReportsARowThatFailsToScanAsAFailure(t *testing.T) {
 		t.Fatalf("change the name column type: %v", err)
 	}
 
-	assertRealReadFault(t, fixture.availableTools(t, "1", populatedVersionID),
-		"available tools read failed")
+	tools, err := fixture.attachedTools(t, "1", populatedVersionID)
+	if err == nil || tools != nil {
+		t.Fatalf("read fault: %#v %v", tools, err)
+	}
 }
 
 func jsonHasEmptyToolsArray(body string) bool {

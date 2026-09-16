@@ -68,6 +68,7 @@ type ContentClaim struct {
 
 type ContentAuthorization struct {
 	ResourceProjectID string
+	ToolkitType       string
 	// ActorID is the exact durable execution_jobs.actor_id. Materializers own
 	// any capability-specific interpretation, including current user lookup.
 	ActorID           string
@@ -99,15 +100,16 @@ type ContentMaterializer interface {
 }
 
 type ContentServer struct {
-	authorizer      ContentAuthorizer
-	store           ContentStore
-	materializer    ContentMaterializer
-	runtimeToken    *EliteaClientTokenService
-	runtimeVersions *RuntimeApplicationVersionService
-	runtimeObjects  *RuntimeAttachmentObjectService
-	maxBytes        int64
-	requests        chan struct{}
-	logger          *slog.Logger
+	authorizer       ContentAuthorizer
+	store            ContentStore
+	materializer     ContentMaterializer
+	runtimeToken     *EliteaClientTokenService
+	runtimeVersions  *RuntimeApplicationVersionService
+	runtimeObjects   *RuntimeAttachmentObjectService
+	toolkitArtifacts ToolkitDiscoveryArtifactStore
+	maxBytes         int64
+	requests         chan struct{}
+	logger           *slog.Logger
 }
 
 func NewContentServer(authorizer ContentAuthorizer, store ContentStore, maxBytes int64) (*ContentServer, error) {
@@ -286,6 +288,10 @@ func newContentServer(
 // Routes exposes only the internal, claim-bound input data plane.
 func (s *ContentServer) Routes() http.Handler {
 	r := chi.NewRouter()
+	if s.toolkitArtifacts != nil {
+		r.Put("/executions/{executionID}/generations/{generation}/inputs/{contentID}/versions/{version}/toolkit-discovery-result", s.PutToolkitDiscoveryArtifact)
+		r.Get("/executions/{executionID}/generations/{generation}/inputs/{contentID}/versions/{version}/toolkit-discovery-result", s.GetToolkitDiscoveryArtifact)
+	}
 	r.Get("/executions/{executionID}/generations/{generation}/inputs/{contentID}/versions/{version}", s.Get)
 	if s.runtimeToken != nil {
 		r.Post("/executions/{executionID}/generations/{generation}/runtime-context/elitea-client-token", s.PostEliteaClientToken)

@@ -47,6 +47,9 @@ import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import type { ToolkitTestAuthorization } from '../../api/toolkitTestAuthorization';
+import { t } from '@/shared/i18n';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { ToolTypes } from '@/entities/toolkit';
@@ -65,14 +68,22 @@ import type { McpToolOption } from './useGetSelectedToolSchema';
 import { useGetSelectedToolSchema } from './useGetSelectedToolSchema';
 import { useToolkitTestToolRun } from './useToolkitTestToolRun';
 
+export interface ToolkitTestAuthorizationRenderProps {
+  readonly projectId: string;
+  readonly challenge: ToolkitTestAuthorization;
+  readonly onAuthorized: (reference: string) => Promise<void>;
+  readonly onSkip: () => void;
+}
+
 export interface TestToolPaneProps {
+  readonly renderAuthorization?: ((props: ToolkitTestAuthorizationRenderProps) => ReactNode) | undefined;
   readonly projectId: string | number | undefined;
   readonly toolkitId: string | number | undefined;
   /** The toolkit being edited, as the form currently holds it — its `type` picks the tool catalogue and its `settings` the explicit tool list. */
   readonly values: ToolkitConversationValues;
 }
 
-export function TestToolPane({ projectId, toolkitId, values }: TestToolPaneProps): ReactNode {
+export function TestToolPane({ projectId, toolkitId, values, renderAuthorization }: TestToolPaneProps): ReactNode {
   const [selectedTool, setSelectedTool] = useState<string | null>(null);
   const [toolInputVariables, setToolInputVariables] = useState<Record<string, unknown>>({});
   /** The tool whose schema defaults have already been applied, so they are applied once per pick. */
@@ -80,12 +91,16 @@ export function TestToolPane({ projectId, toolkitId, values }: TestToolPaneProps
 
   const indexNameValidation = useIndexNameValidation();
   const { clearIndexNameError, indexNameError } = indexNameValidation;
+  const { outcome, isRunning, run, reset, authorize, skip, rememberAuthorization, getAuthorizationReference } = useToolkitTestToolRun({ projectId, toolkitId });
 
   const {
     toolSchema,
     isError: toolSchemaReadFailed,
     refetch: retryToolSchemaRead,
   } = useGetSelectedToolSchema({
+    getAuthorizationReference,
+    projectId,
+    toolkitId,
     toolkitType: values.type,
     toolOptionType: selectedTool,
     availableMcpTools: values.settings?.['available_mcp_tools'] as readonly McpToolOption[] | undefined,
@@ -106,8 +121,6 @@ export function TestToolPane({ projectId, toolkitId, values }: TestToolPaneProps
     // `validateToolkitForm` reads `schema.required ?? []` either way.
     return validateToolkitForm(selectedToolSchema as ToolFormSchema, toolInputVariables);
   }, [selectedTool, toolInputVariables, selectedToolSchema, values.type]);
-
-  const { outcome, isRunning, run, reset } = useToolkitTestToolRun({ projectId, toolkitId });
 
   const onChangeInputVariables = useCallback((inputVariables: Readonly<Record<string, unknown>>) => {
     setToolInputVariables(inputVariables);
@@ -167,7 +180,11 @@ export function TestToolPane({ projectId, toolkitId, values }: TestToolPaneProps
       // stays on the real pane so that wait keeps its meaning.
       data-testid="edit-toolkit-test-pane-slot"
     >
-      <TestToolSettings
+      {outcome?.kind !== 'authorizationRequired' && <TestToolSettings
+        getAuthorizationReference={getAuthorizationReference}
+        renderAuthorization={renderAuthorization ? (props) => renderAuthorization({ ...props, onAuthorized: async (reference) => { rememberAuthorization(reference); await props.onAuthorized(reference); } }) : undefined}
+        projectId={projectId}
+        toolkitId={toolkitId}
         selectedTool={selectedTool}
         onChangeTool={onChangeTool}
         toolInputVariables={toolInputVariables}
@@ -179,7 +196,12 @@ export function TestToolPane({ projectId, toolkitId, values }: TestToolPaneProps
         values={values}
         indexNameValidation={indexNameValidation}
         toolSchemaRead={toolSchemaRead}
-      />
+      />}
+      {outcome?.kind === 'authorizationRequired' && !isRunning && (
+        renderAuthorization && projectId !== undefined
+          ? renderAuthorization({ projectId: String(projectId), challenge: outcome.challenge, onAuthorized: authorize, onSkip: skip })
+          : <Button onClick={skip}>{t('features.toolkits.testToolPane.skip', 'Skip')}</Button>
+      )}
       <TestToolResultPanel
         outcome={outcome}
         isRunning={isRunning}

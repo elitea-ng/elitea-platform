@@ -41,13 +41,26 @@
  */
 import * as zod from "zod";
 
+export const projectContextUpdateRequestContentDefault = ``;
+export const projectContextUpdateRequestContentMax = 2500;
+
+export const projectContextUpdateRequestEnabledDefault = true;
+export const projectContextUpdateRequestActivationDescriptionMax = 300;
+
 export const ProjectContextUpdateRequest = zod
   .object({
-    content: zod.string().optional(),
-    enabled: zod.boolean().optional(),
+    content: zod
+      .string()
+      .max(projectContextUpdateRequestContentMax)
+      .default(projectContextUpdateRequestContentDefault),
+    enabled: zod.boolean().default(projectContextUpdateRequestEnabledDefault),
+    activation_description: zod
+      .string()
+      .max(projectContextUpdateRequestActivationDescriptionMax)
+      .nullish(),
   })
   .describe(
-    "NOTE(W2): typed decode, internal\/api\/v2\/eliteacore\/handler.go:137-141.\n",
+    "Content and enabled use replacement defaults on every PUT. Omitting activation_description preserves its current non-empty value; null or a blank string removes it.\n",
   );
 
 export type ProjectContextUpdateRequest = zod.input<

@@ -116,6 +116,9 @@ export { AgentToolsPanel } from './ui/AgentToolsPanel';
  */
 export { AgentTagEditor } from './ui/AgentTagEditor';
 
+/** Explicit UI for the application-version `mcp` tag, shared by agent and pipeline edit pages. */
+export { ApplicationMcpAccessToggle } from './ui/ApplicationMcpAccessToggle';
+
 /**
  * The "Information" accordion — entity id, version id, the pipeline trigger
  * rows (type/schedule/timezone/last run/webhook type), "Forked from", and the

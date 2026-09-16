@@ -50,6 +50,9 @@ message AgentExecutionInputV1 {
   bytes meta = 22;
   optional string conversation_id = 23;
   string persona = 24;
+  // Context strategy JSON. budget_mode admits "balanced" and "full".
+  // max_context_tokens preserves an explicit combined-window override.
+  // Output reservation stays inside that window; it is not additional capacity.
   bytes context_settings = 25;
   bool supports_vision = 26;
   bool return_chat_history = 27;
@@ -95,6 +98,35 @@ message AgentExecutionInputV1 {
   // language the same unambiguous continuation discriminator.
   bytes truncated_content = 39;
   reserved 40 to 63;
+  // Main resolves and freezes this project-owned content after authorization.
+  // Absence disables Project Context for this independent turn.
+  ProjectContextSnapshotV1 project_context = 64;
+  // Main freezes the authorized catalogue limits. Absence preserves old inputs.
+  ModelContextLimitsV1 model_context_limits = 65;
+}
+
+// Limits describe one model, not cumulative execution usage.
+// Nested application version snapshots use this same JSON field shape.
+message ModelContextLimitsV1 {
+  uint32 context_window_tokens = 1;
+  uint32 max_output_tokens = 2;
+  bool context_window_fallback = 3;
+  bool max_output_fallback = 4;
+  // A provider can impose an input-only maximum within its combined window.
+  optional uint32 max_input_tokens = 5;
+  reserved 6 to 15;
+}
+
+// ProjectContextSnapshotV1 remains in the immutable input data plane.
+// Empty activation_description selects the legacy eager instruction mode.
+message ProjectContextSnapshotV1 {
+  string id = 1;
+  // Lowercase SHA-256 of the exact UTF-8 content bytes.
+  string revision = 2;
+  string scope = 3;
+  string content = 4;
+  string activation_description = 5;
+  reserved 6 to 15;
 }
 
 enum AgentExecutionTerminalStateV1 {

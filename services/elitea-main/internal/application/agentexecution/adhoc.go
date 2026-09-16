@@ -82,6 +82,7 @@ type CurrentAdhocStartRequest struct {
 	UserInput           string
 	InteractionUUID     string
 	LLMSettings         json.RawMessage
+	MCPTokens           json.RawMessage
 	// Attachments carries `payload.attachments` from the start body: the
 	// files the composer uploaded before sending, already split into
 	// (bucket, name) by the route. #606.
@@ -93,7 +94,7 @@ func (request CurrentAdhocStartRequest) Validate() error {
 		!validUUID(request.ConversationUUID) || !validUUID(request.QuestionID) ||
 		!validCurrentAgentText(request.UserInput, maxCurrentAgentUserInputBytes) ||
 		(request.InteractionUUID != "" && !validUUID(request.InteractionUUID)) ||
-		!validJSONObject(request.LLMSettings) {
+		!validJSONObject(request.LLMSettings) || !validCurrentMCPTokens(request.MCPTokens) {
 		return ErrInvalidCurrentAgentStart
 	}
 	return nil
@@ -216,7 +217,12 @@ func currentAdhocSnapshot(
 	if err := decodeCurrentJSON(target.Tools, &tools); err != nil {
 		return nil, err
 	}
+	var meta map[string]any
+	if err := decodeCurrentJSON(target.ConversationMeta, &meta); err != nil {
+		return nil, err
+	}
 	encoded, err := json.Marshal(map[string]any{
+		"meta":         meta,
 		"llm_settings": base,
 		"tools":        tools,
 	})
@@ -327,14 +333,24 @@ func currentAdhocInput(
 	if err != nil {
 		return nil, err
 	}
+	projectContext, err := currentFrozenProjectContext(snapshot)
+	if err != nil {
+		return nil, err
+	}
+	modelContextLimits, err := currentFrozenModelContextLimits(snapshot)
+	if err != nil {
+		return nil, err
+	}
 	threadID := request.ConversationUUID
 	conversationID := request.ConversationUUID
 	executionGeneration := request.QuestionID
 	input := &runtimev1.AgentExecutionInputV1{
-		SchemaRevision: "elitea.runtime.agent-execution-input.v1",
-		Llm:            llm, ChatHistory: bytes.Clone(target.ChatHistory), UserInput: userInput,
+		SchemaRevision:     "elitea.runtime.agent-execution-input.v1",
+		ProjectContext:     projectContext,
+		ModelContextLimits: modelContextLimits,
+		Llm:                llm, ChatHistory: bytes.Clone(target.ChatHistory), UserInput: userInput,
 		ThreadId: &threadID, Tools: toolsJSON, Application: application,
-		InternalTools: internalTools, McpTokens: []byte(`{}`),
+		InternalTools: internalTools, McpTokens: currentMCPTokens(request.MCPTokens),
 		IgnoredMcpServers: []byte(`[]`), UserDeclinedMcpServers: []byte(`[]`),
 		HitlDecisions: []byte(`[]`), ExecutionGeneration: &executionGeneration,
 		Meta: []byte(`{}`), ConversationId: &conversationID, Persona: persona,

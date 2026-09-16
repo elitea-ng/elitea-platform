@@ -6,7 +6,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { server } from '@/test/setup';
 
 import { createTestQueryClient, renderHookWithProviders } from '../__tests__/testUtils';
-import { useToolkitDelete, useToolkitDetail, useToolkitTypes, useToolkitsList } from './toolkits';
+import { useToolkitCreate, useToolkitEdit, useToolkitDelete, useToolkitDetail, useToolkitTypes, useToolkitsList } from './toolkits';
 
 beforeEach(() => {
   configureGeneratedClient({ baseUrl: '/api/v2' });
@@ -164,5 +164,43 @@ describe('useToolkitDelete', () => {
 
     expect(deletedProjectId).toBe('proj-1');
     expect(deletedToolId).toBe('42');
+  });
+});
+
+
+describe('toolkit MCP sharing persistence', () => {
+  it.each([true, false])('sends the explicit sharing value %s on update', async (available) => {
+    let saved: unknown;
+    server.use(http.put('/api/v2/elitea_core/tool/prompt_lib/2/31', async ({ request }) => {
+      saved = await request.json();
+      return HttpResponse.json({ id: '31', type: 'openapi', name: 'Echo' });
+    }));
+    const { result } = renderHookWithProviders(() => useToolkitEdit());
+    const meta = { mcp_options: { available_by_mcp: available }, icon_meta: { icon: 'echo' } };
+    await result.current({ projectId: '2', toolId: '31', type: 'openapi', meta });
+    expect(saved).toEqual({ type: 'openapi', meta });
+  });
+
+  it('preserves sharing metadata when creating a toolkit', async () => {
+    let saved: unknown;
+    server.use(http.post('/api/v2/elitea_core/tools/prompt_lib/2', async ({ request }) => {
+      saved = await request.json();
+      return HttpResponse.json({ id: '31', type: 'openapi', name: 'Echo' });
+    }));
+    const { result } = renderHookWithProviders(() => useToolkitCreate());
+    const meta = { mcp_options: { available_by_mcp: true } };
+    await result.current({ projectId: '2', type: 'openapi', name: 'Echo', meta });
+    expect(saved).toEqual({ type: 'openapi', name: 'Echo', meta });
+  });
+
+  it('omits metadata when a caller leaves it unchanged', async () => {
+    let saved: unknown;
+    server.use(http.put('/api/v2/elitea_core/tool/prompt_lib/2/31', async ({ request }) => {
+      saved = await request.json();
+      return HttpResponse.json({ id: '31', type: 'openapi', name: 'Echo' });
+    }));
+    const { result } = renderHookWithProviders(() => useToolkitEdit());
+    await result.current({ projectId: '2', toolId: '31', type: 'openapi', name: 'Renamed' });
+    expect(saved).toEqual({ type: 'openapi', name: 'Renamed' });
   });
 });

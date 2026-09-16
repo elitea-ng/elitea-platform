@@ -8103,15 +8103,12 @@ export const getSaveApplicationNewVersionUrl = (
 };
 
 /**
- * NOTE(W2): internal/api/v2/applications/handler.go:696-806 — responds
- * 201 with the full new-version detail (author/is_forked variant).
- * `name` is REQUIRED on this operation only: CreateVersion hard-rejects
- * an empty/missing name with 400 "version name is required" (:706-710),
- * whereas the shared VersionWriteRequest is also used by the PUT (which
- * only applies name when non-empty, :841) and by
- * ApplicationCreateRequest.versions[0] (which defaults it to "latest",
- * :388-391) — hence the allOf+required override rather than a required
- * list on the shared schema.
+ * CreateVersion in internal/api/v2/applications/handler.go returns 201
+ * with the new version detail. The name is required on this operation.
+ * The optional copy_skills_from_version_id copies exact skill bindings
+ * from a version in the same application and project. A missing, invalid,
+ * or foreign source is ignored. A database copy failure rolls back the
+ * new version. The source option is not stored in version metadata.
  * @summary Create a new version for an existing application
  */
 export const saveApplicationNewVersion = async (
@@ -15097,11 +15094,18 @@ export type getProjectContextResponse403 = {
   status: 403;
 };
 
+export type getProjectContextResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
 export type getProjectContextResponseSuccess = getProjectContextResponse200 & {
   headers: Headers;
 };
 export type getProjectContextResponseError = (
-  getProjectContextResponse401 | getProjectContextResponse403
+  | getProjectContextResponse401
+  | getProjectContextResponse403
+  | getProjectContextResponse500
 ) & {
   headers: Headers;
 };
@@ -15114,8 +15118,9 @@ export const getGetProjectContextUrl = (projectId: string) => {
 };
 
 /**
- * NOTE(W2): internal/api/v2/eliteacore/handler.go:110-134.
- * @summary Retrieve the shared context blob for a project
+ * Returns the current project-context configuration, or the exact enabled
+ * default when the project has not created one.
+ * @summary Retrieve project context builder state
  */
 export const getProjectContext = async (
   projectId: string,
@@ -15138,7 +15143,7 @@ export const getGetProjectContextQueryKey = (projectId: string) => {
 
 export const getGetProjectContextQueryOptions = <
   TData = Awaited<ReturnType<typeof getProjectContext>>,
-  TError = N401Response | N403Response,
+  TError = N401Response | N403Response | N500Response,
 >(
   projectId: string,
   options?: {
@@ -15177,11 +15182,12 @@ export const getGetProjectContextQueryOptions = <
 export type GetProjectContextQueryResult = NonNullable<
   Awaited<ReturnType<typeof getProjectContext>>
 >;
-export type GetProjectContextQueryError = N401Response | N403Response;
+export type GetProjectContextQueryError =
+  N401Response | N403Response | N500Response;
 
 export function useGetProjectContext<
   TData = Awaited<ReturnType<typeof getProjectContext>>,
-  TError = N401Response | N403Response,
+  TError = N401Response | N403Response | N500Response,
 >(
   projectId: string,
   options: {
@@ -15208,7 +15214,7 @@ export function useGetProjectContext<
 };
 export function useGetProjectContext<
   TData = Awaited<ReturnType<typeof getProjectContext>>,
-  TError = N401Response | N403Response,
+  TError = N401Response | N403Response | N500Response,
 >(
   projectId: string,
   options?: {
@@ -15235,7 +15241,7 @@ export function useGetProjectContext<
 };
 export function useGetProjectContext<
   TData = Awaited<ReturnType<typeof getProjectContext>>,
-  TError = N401Response | N403Response,
+  TError = N401Response | N403Response | N500Response,
 >(
   projectId: string,
   options?: {
@@ -15253,12 +15259,12 @@ export function useGetProjectContext<
   queryKey: DataTag<QueryKey, TData, TError>;
 };
 /**
- * @summary Retrieve the shared context blob for a project
+ * @summary Retrieve project context builder state
  */
 
 export function useGetProjectContext<
   TData = Awaited<ReturnType<typeof getProjectContext>>,
-  TError = N401Response | N403Response,
+  TError = N401Response | N403Response | N500Response,
 >(
   projectId: string,
   options?: {
@@ -15305,6 +15311,11 @@ export type updateProjectContextResponse403 = {
   status: 403;
 };
 
+export type updateProjectContextResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
 export type updateProjectContextResponseSuccess =
   updateProjectContextResponse200 & {
     headers: Headers;
@@ -15313,6 +15324,7 @@ export type updateProjectContextResponseError = (
   | updateProjectContextResponse400
   | updateProjectContextResponse401
   | updateProjectContextResponse403
+  | updateProjectContextResponse500
 ) & {
   headers: Headers;
 };
@@ -15325,9 +15337,10 @@ export const getUpdateProjectContextUrl = (projectId: string) => {
 };
 
 /**
- * NOTE(W2): internal/api/v2/eliteacore/handler.go:136-165 — typed
- * decode {content, enabled}; the same pair is echoed back.
- * @summary Replace the shared context blob for a project
+ * Creates the project-context configuration if missing. Content and
+ * enabled are replacement values; activation_description remains
+ * backward-compatible with clients that omit it.
+ * @summary Create or replace project context builder state
  */
 export const updateProjectContext = async (
   projectId: string,
@@ -15369,7 +15382,7 @@ export const getUpdateProjectContextQueryKey = (
 
 export const getUpdateProjectContextQueryOptions = <
   TData = Awaited<ReturnType<typeof updateProjectContext>>,
-  TError = N400Response | N401Response | N403Response,
+  TError = N400Response | N401Response | N403Response | N500Response,
 >(
   projectId: string,
   projectContextUpdateRequest: ProjectContextUpdateRequest,
@@ -15414,11 +15427,11 @@ export type UpdateProjectContextQueryResult = NonNullable<
   Awaited<ReturnType<typeof updateProjectContext>>
 >;
 export type UpdateProjectContextQueryError =
-  N400Response | N401Response | N403Response;
+  N400Response | N401Response | N403Response | N500Response;
 
 export function useUpdateProjectContext<
   TData = Awaited<ReturnType<typeof updateProjectContext>>,
-  TError = N400Response | N401Response | N403Response,
+  TError = N400Response | N401Response | N403Response | N500Response,
 >(
   projectId: string,
   projectContextUpdateRequest: ProjectContextUpdateRequest,
@@ -15446,7 +15459,7 @@ export function useUpdateProjectContext<
 };
 export function useUpdateProjectContext<
   TData = Awaited<ReturnType<typeof updateProjectContext>>,
-  TError = N400Response | N401Response | N403Response,
+  TError = N400Response | N401Response | N403Response | N500Response,
 >(
   projectId: string,
   projectContextUpdateRequest: ProjectContextUpdateRequest,
@@ -15474,7 +15487,7 @@ export function useUpdateProjectContext<
 };
 export function useUpdateProjectContext<
   TData = Awaited<ReturnType<typeof updateProjectContext>>,
-  TError = N400Response | N401Response | N403Response,
+  TError = N400Response | N401Response | N403Response | N500Response,
 >(
   projectId: string,
   projectContextUpdateRequest: ProjectContextUpdateRequest,
@@ -15493,12 +15506,12 @@ export function useUpdateProjectContext<
   queryKey: DataTag<QueryKey, TData, TError>;
 };
 /**
- * @summary Replace the shared context blob for a project
+ * @summary Create or replace project context builder state
  */
 
 export function useUpdateProjectContext<
   TData = Awaited<ReturnType<typeof updateProjectContext>>,
-  TError = N400Response | N401Response | N403Response,
+  TError = N400Response | N401Response | N403Response | N500Response,
 >(
   projectId: string,
   projectContextUpdateRequest: ProjectContextUpdateRequest,
@@ -15521,6 +15534,225 @@ export function useUpdateProjectContext<
     projectContextUpdateRequest,
     options,
   );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type deleteProjectContextResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type deleteProjectContextResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type deleteProjectContextResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type deleteProjectContextResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type deleteProjectContextResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type deleteProjectContextResponseSuccess =
+  deleteProjectContextResponse204 & {
+    headers: Headers;
+  };
+export type deleteProjectContextResponseError = (
+  | deleteProjectContextResponse401
+  | deleteProjectContextResponse403
+  | deleteProjectContextResponse404
+  | deleteProjectContextResponse500
+) & {
+  headers: Headers;
+};
+
+export type deleteProjectContextResponse =
+  deleteProjectContextResponseSuccess | deleteProjectContextResponseError;
+
+export const getDeleteProjectContextUrl = (projectId: string) => {
+  return `/elitea_core/project_context/prompt_lib/${projectId}/project-context`;
+};
+
+/**
+ * Deletes the project's stored project-context configuration.
+ * @summary Delete project context builder state
+ */
+export const deleteProjectContext = async (
+  projectId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<deleteProjectContextResponse> => {
+  return eliteaFetch<deleteProjectContextResponse>(
+    getDeleteProjectContextUrl(projectId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getDeleteProjectContextQueryKey = (projectId: string) => {
+  return [
+    "DELETE",
+    `/elitea_core/project_context/prompt_lib/${projectId}/project-context`,
+  ] as const;
+};
+
+export const getDeleteProjectContextQueryOptions = <
+  TData = Awaited<ReturnType<typeof deleteProjectContext>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteProjectContext>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getDeleteProjectContextQueryKey(projectId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof deleteProjectContext>>
+  > = ({ signal }) =>
+    deleteProjectContext(projectId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof deleteProjectContext>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DeleteProjectContextQueryResult = NonNullable<
+  Awaited<ReturnType<typeof deleteProjectContext>>
+>;
+export type DeleteProjectContextQueryError =
+  N401Response | N403Response | N404Response | N500Response;
+
+export function useDeleteProjectContext<
+  TData = Awaited<ReturnType<typeof deleteProjectContext>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteProjectContext>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteProjectContext>>,
+          TError,
+          Awaited<ReturnType<typeof deleteProjectContext>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteProjectContext<
+  TData = Awaited<ReturnType<typeof deleteProjectContext>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteProjectContext>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteProjectContext>>,
+          TError,
+          Awaited<ReturnType<typeof deleteProjectContext>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteProjectContext<
+  TData = Awaited<ReturnType<typeof deleteProjectContext>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteProjectContext>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Delete project context builder state
+ */
+
+export function useDeleteProjectContext<
+  TData = Awaited<ReturnType<typeof deleteProjectContext>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteProjectContext>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDeleteProjectContextQueryOptions(projectId, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

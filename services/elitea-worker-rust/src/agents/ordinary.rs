@@ -8,6 +8,7 @@
 
 #![allow(dead_code)] // Capability registration remains intentionally disabled.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -15,6 +16,7 @@ use tracing::Instrument as _;
 
 use super::application_tools::{ApplicationToolDependencies, materialize_application_toolset};
 use super::assembly::{OrdinaryModelProvider, OrdinaryNoToolProfile, ReasoningEffort};
+use super::internal_tools::ASK_USER_TOOLSET_NAME;
 use super::runtime::{
     AdmittedNativeStart, AssembledNativeAgentInvocation, AuthorizedNativeAssembly,
     NativeAgentAssembler, NativeAgentAssemblyError, NativeAgentAssemblyErrorCode,
@@ -34,8 +36,8 @@ use crate::protocol::control::ClaimBoundRuntimeContextAuthority;
 use crate::state::SessionLimits;
 use crate::toolkits::{
     AdkHttpMcpConnector, AdmittedToolSnapshot, FrozenToolKind, McpConnector,
-    McpMaterializationError, McpMaterializationErrorCode, ToolAdmissionPolicy,
-    ToolsetMaterializationError, ToolsetMaterializationErrorCode,
+    McpMaterializationError, McpMaterializationErrorCode, ToolAdmissionPolicy, ToolBindingError,
+    ToolsetMaterializationError, ToolsetMaterializationErrorCode, bind_toolsets,
     materialize_configured_toolsets_with_tokens_and_authorization,
     materialize_mcp_toolsets_with_tokens_and_authorization,
 };
@@ -58,6 +60,16 @@ pub(crate) struct OrdinaryNativeAgentAssembler {
     tool_policy: Arc<ToolAdmissionPolicy>,
     mcp_connector: Arc<dyn McpConnector>,
     sessions: NativeSessionBackend,
+}
+
+/// Shared provider/session dependencies; constructing them never starts Runner.
+struct OrdinaryRunnerInputs {
+    model: BoundModelFacade,
+    plan: super::session::OrdinaryNativeAgentPlan,
+    runtime: OrdinaryRuntimeBindings,
+    mode: NativeToolExecutionMode,
+    sessions: Arc<dyn adk_rust::session::SessionService>,
+    start: AdmittedNativeStart,
 }
 
 impl OrdinaryNativeAgentAssembler {
@@ -111,37 +123,14 @@ impl OrdinaryNativeAgentAssembler {
         AssembledNativeAgentInvocation<OrdinaryAgentCompletion<BoundModelFacade>>,
         NativeAgentAssemblyError,
     > {
-        let RedeemedOrdinaryNativeAssembly {
-            profile,
+        let OrdinaryRunnerInputs {
+            model,
             plan,
-            toolsets: tool_snapshot,
+            runtime,
+            mode: fresh_execution_mode,
+            sessions,
             start,
-            mcp_tokens,
-            context: claim_context,
-            runtime_context,
-            session: session_authority,
-            state_writer_lease,
-        } = redeemed;
-        let context = Arc::new(claim_context);
-        tracing::Span::current().record("stage", "toolsets");
-        let (runtime, fresh_execution_mode) = self
-            .materialize_runtime(
-                &tool_snapshot,
-                mcp_tokens,
-                &runtime_context,
-                context.clone(),
-                &profile,
-                &tool_policy,
-            )
-            .await?;
-        let output_continuation = matches!(&start, AdmittedNativeStart::OutputContinuation);
-        tracing::Span::current().record("output_continuation", output_continuation);
-        let model = self.bind_model(&profile, context.as_ref(), output_continuation)?;
-        tracing::Span::current().record("stage", "runner");
-        let sessions = self
-            .sessions
-            .open(session_authority, state_writer_lease, &plan)
-            .await?;
+        } = self.prepare_runner_inputs(redeemed, tool_policy).await?;
         match start {
             AdmittedNativeStart::Fresh
             | AdmittedNativeStart::Regenerate
@@ -184,6 +173,70 @@ impl OrdinaryNativeAgentAssembler {
         }
     }
 
+    async fn prepare_runner_inputs(
+        &self,
+        redeemed: RedeemedOrdinaryNativeAssembly<'_>,
+        tool_policy: Arc<ToolAdmissionPolicy>,
+    ) -> Result<OrdinaryRunnerInputs, NativeAgentAssemblyError> {
+        let RedeemedOrdinaryNativeAssembly {
+            profile,
+            plan,
+            toolsets: tool_snapshot,
+            start,
+            mcp_tokens,
+            context: claim_context,
+            runtime_context,
+            session: session_authority,
+            state_writer_lease,
+        } = redeemed;
+        let (sessions, model_scopes) = self
+            .sessions
+            .open_with_model_scopes(session_authority, state_writer_lease, &plan)
+            .await?;
+        let context = Arc::new(claim_context);
+        tracing::Span::current().record("stage", "toolsets");
+        let (runtime, fresh_execution_mode) = self
+            .materialize_runtime(
+                &tool_snapshot,
+                mcp_tokens,
+                &runtime_context,
+                context.clone(),
+                &profile,
+                &tool_policy,
+                model_scopes,
+            )
+            .await?;
+        let output_continuation = matches!(&start, AdmittedNativeStart::OutputContinuation);
+        tracing::Span::current().record("output_continuation", output_continuation);
+        let model = self.bind_model(&profile, context.as_ref(), output_continuation)?;
+        tracing::Span::current().record("stage", "runner");
+        Ok(OrdinaryRunnerInputs {
+            model,
+            plan,
+            runtime,
+            mode: fresh_execution_mode,
+            sessions,
+            start,
+        })
+    }
+
+    async fn redeem_for_runner<'a>(
+        &self,
+        assembly: AuthorizedNativeAssembly<'a>,
+        tool_policy: &ToolAdmissionPolicy,
+    ) -> Result<RedeemedOrdinaryNativeAssembly<'a>, NativeAgentAssemblyError> {
+        let admitted = assembly.admit_llm_agent(tool_policy)?;
+        if admitted.is_resume() && !self.sessions.supports_resume() {
+            return Err(unsupported_session_resume());
+        }
+        tracing::Span::current().record("stage", "runtime_context");
+        admitted
+            .redeem_runtime_context(self.platform.as_ref())
+            .await
+            .map_err(NativeAgentAssemblyError::from)
+    }
+
+    #[allow(clippy::too_many_arguments)] // Keep claim authority, tool policy, and model storage explicit at assembly.
     async fn materialize_runtime(
         &self,
         tool_snapshot: &AdmittedToolSnapshot<'_>,
@@ -192,6 +245,7 @@ impl OrdinaryNativeAgentAssembler {
         context: Arc<ClaimScopedEliteaContext>,
         profile: &OrdinaryNoToolProfile,
         tool_policy: &Arc<ToolAdmissionPolicy>,
+        model_scopes: super::model_scope::ModelScopeSessions,
     ) -> Result<(OrdinaryRuntimeBindings, NativeToolExecutionMode), NativeAgentAssemblyError> {
         let tool_reference_count = tool_snapshot.iter().count();
         let nested_application_count = tool_snapshot
@@ -211,6 +265,7 @@ impl OrdinaryNativeAgentAssembler {
         .await?;
         let internal_tools = profile.internal_tools();
         toolsets.extend(internal_tools.toolsets());
+        toolsets.extend(profile.instruction_plan().toolsets());
         let mut application_runtime = ApplicationRuntimeProjection::default();
         if let Some(materialized) = materialize_application_toolset(
             tool_snapshot,
@@ -223,7 +278,8 @@ impl OrdinaryNativeAgentAssembler {
                 Arc::clone(tool_policy),
                 self.mcp_connector.clone(),
                 mcp_tokens,
-            ),
+            )
+            .with_model_scopes(model_scopes),
         )
         .await?
         {
@@ -235,11 +291,25 @@ impl OrdinaryNativeAgentAssembler {
                 materialized.resume,
             );
         }
+        let reserved_toolsets = BTreeSet::from([
+            ASK_USER_TOOLSET_NAME.to_owned(),
+            super::instruction_authority::TOOLSET_NAME.to_owned(),
+            "elitea_nested_applications".to_owned(),
+        ]);
+        let binding = bind_toolsets(toolsets, &reserved_toolsets, "elitea_ordinary_tool_binding")
+            .await
+            .map_err(tool_binding_error)?;
+        let sensitive_tools = sensitive_tools.bind_provider_names(&binding)?;
+        let delegated_authorization = delegated_authorization
+            .bind_provider_names(&binding)
+            .map_err(|()| invalid_tool_authorization_catalog())?;
+        let toolsets = binding.into_toolsets();
         tracing::Span::current().record("materialized_toolset_count", toolsets.len());
         let fresh_execution_mode = if application_only
             && sensitive_tools.is_empty()
             && delegated_authorization.is_empty()
             && internal_tools.is_empty()
+            && profile.instruction_plan().is_empty()
         {
             NativeToolExecutionMode::ParallelApplications
         } else {
@@ -252,7 +322,8 @@ impl OrdinaryNativeAgentAssembler {
                 delegated_authorization,
                 application_runtime,
             )
-            .with_internal_tools(internal_tools),
+            .with_internal_tools(internal_tools)
+            .with_instruction_plan(profile.instruction_plan().clone()),
             fresh_execution_mode,
         ))
     }
@@ -264,6 +335,7 @@ impl OrdinaryNativeAgentAssembler {
         output_continuation: bool,
     ) -> Result<BoundModelFacade, NativeAgentAssemblyError> {
         let invocation = ModelInvocation {
+            context_budget: profile.context_budget(),
             model_name: profile.model_name().to_owned(),
             system_instruction: profile.instructions().to_owned(),
             max_tokens: profile.max_tokens(),
@@ -292,9 +364,72 @@ impl OrdinaryNativeAgentAssembler {
     }
 }
 
+fn tool_binding_error(error: ToolBindingError) -> NativeAgentAssemblyError {
+    let code = match error {
+        ToolBindingError::InvalidConfiguration => {
+            NativeAgentAssemblyErrorCode::InvalidConfiguration
+        }
+        ToolBindingError::ResourceExhausted => NativeAgentAssemblyErrorCode::ResourceExhausted,
+        ToolBindingError::DependencyUnavailable => {
+            NativeAgentAssemblyErrorCode::DependencyUnavailable
+        }
+    };
+    NativeAgentAssemblyError::new(code, "the model-callable toolkit namespace is invalid")
+}
+
 #[async_trait]
 impl NativeAgentAssembler for OrdinaryNativeAgentAssembler {
     type Completion = OrdinaryAgentCompletion<BoundModelFacade>;
+
+    async fn inspect_checkpoint(
+        &self,
+        request: &super::request::AgentExecutionRequest,
+        command: &super::session::AuthorizedNativeCommandBinding,
+        session: crate::protocol::control::ClaimBoundSessionAuthority,
+        state_writer_lease: Arc<dyn crate::state::StateWriterLease>,
+    ) -> Result<super::session::ValidatedModelCheckpoint, NativeAgentAssemblyError> {
+        let (_, plan, _) = super::runtime::admit_ordinary_plan(
+            request,
+            command,
+            &request.payload.input_attachments,
+        )?;
+        self.sessions
+            .inspect_model_checkpoint(session, state_writer_lease, &plan)
+            .await
+    }
+
+    async fn assemble_checkpoint(
+        &self,
+        assembly: AuthorizedNativeAssembly<'_>,
+    ) -> Result<
+        super::runtime::PendingRecoveredAgentInvocation<Self::Completion>,
+        NativeAgentAssemblyError,
+    > {
+        if !self.sessions.supports_resume() {
+            return Err(unsupported_session_resume());
+        }
+        let tool_policy = policy_for_guardrails(
+            assembly.request().payload.toolkit_guardrails.as_ref(),
+            &self.tool_policy,
+        )?;
+        // The saved model request already contains resolved attachments. Do not
+        // reread mutable documents while reconstructing this execution.
+        let redeemed = self
+            .redeem_for_runner(assembly, tool_policy.as_ref())
+            .await?;
+        let OrdinaryRunnerInputs {
+            model,
+            plan,
+            runtime,
+            mode,
+            sessions,
+            ..
+        } = self.prepare_runner_inputs(redeemed, tool_policy).await?;
+        super::session::assemble_ordinary_native_from_checkpoint(
+            model, plan, runtime, mode, sessions,
+        )
+        .await
+    }
 
     async fn assemble(
         &self,
@@ -318,15 +453,9 @@ impl NativeAgentAssembler for OrdinaryNativeAgentAssembler {
                 .resolve_attachment_contents(self.platform.as_ref())
                 .await;
             tracing::Span::current().record("stage", "admission");
-            let admitted = assembly.admit_llm_agent(tool_policy.as_ref())?;
-            if admitted.is_resume() && !self.sessions.supports_resume() {
-                return Err(unsupported_session_resume());
-            }
-            tracing::Span::current().record("stage", "runtime_context");
-            let redeemed = admitted
-                .redeem_runtime_context(self.platform.as_ref())
-                .await
-                .map_err(NativeAgentAssemblyError::from)?;
+            let redeemed = self
+                .redeem_for_runner(assembly, tool_policy.as_ref())
+                .await?;
             self.assemble_redeemed(redeemed, tool_policy).await
         }
         .instrument(span.clone())
@@ -402,6 +531,7 @@ async fn materialize_direct_toolsets(
 > {
     let (mut toolsets, mut delegated_authorization) =
         materialize_configured_toolsets_with_tokens_and_authorization(snapshot, policy, mcp_tokens)
+            .await
             .map_err(tool_materialization_error)?;
     let mut sensitive = sensitive_tools_for_kind(
         snapshot,
@@ -469,6 +599,9 @@ fn tool_materialization_error(error: ToolsetMaterializationError) -> NativeAgent
         }
         ToolsetMaterializationErrorCode::UnsupportedToolkit => {
             NativeAgentAssemblyErrorCode::UnsupportedCapability
+        }
+        ToolsetMaterializationErrorCode::DependencyUnavailable => {
+            NativeAgentAssemblyErrorCode::DependencyUnavailable
         }
         ToolsetMaterializationErrorCode::ResourceExhausted => {
             NativeAgentAssemblyErrorCode::ResourceExhausted

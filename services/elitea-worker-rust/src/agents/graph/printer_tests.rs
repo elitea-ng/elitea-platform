@@ -460,5 +460,7 @@ fn printer_resume_payload(input: &str) -> AgentExecutionPayload {
         next_input_suggestion: NextInputSuggestionPolicy::default(),
         toolkit_guardrails: None,
         truncated_content: None,
+        project_context: None,
+        model_context_limits: None,
     }
 }

@@ -603,6 +603,12 @@ class EliteaSdkAgentAdapter:
             application = payload.application
             version_details = deepcopy(application.get("version_details") or {})
             _serve_version_internal_tools(version_details)
+            instructions, project_context = _project_context_delivery(
+                version_details.get("instructions", ""), payload.project_context
+            )
+            if payload.project_context is not None:
+                version_details["instructions"] = instructions
+            version_details.pop("project_context", None)
             llm_kwargs = _llm_kwargs(payload.llm)
             executor = self._client.application(
                 application_id=application.get("id"),
@@ -611,6 +617,7 @@ class EliteaSdkAgentAdapter:
                 memory=memory,
                 application_variables=deepcopy(application.get("variables")),
                 version_details=version_details or None,
+                **({"project_context": project_context} if project_context else {}),
                 mcp_tokens=deepcopy(payload.mcp_tokens),
                 conversation_id=payload.conversation_id,
                 ignored_mcp_servers=list(payload.ignored_mcp_servers),
@@ -649,11 +656,14 @@ class EliteaSdkAgentAdapter:
                     "openai_compatible": llm_kwargs.get("openai_compatible", False),
                 },
             )
+            instructions, project_context = _project_context_delivery(
+                payload.application.get("instructions", "You are a helpful assistant."),
+                payload.project_context,
+            )
             executor = self._client.predict_agent(
                 llm=llm,
-                instructions=payload.application.get(
-                    "instructions", "You are a helpful assistant."
-                ),
+                instructions=instructions,
+                **({"project_context": project_context} if project_context else {}),
                 tools=deepcopy(payload.tools),
                 chat_history=deepcopy(payload.chat_history),
                 memory=memory,
@@ -1699,3 +1709,14 @@ def _indexing_client_type() -> type[Any]:
             "The installed Elitea SDK artifact does not match the admitted package tree."
         )
     return module.EliteAClient
+
+
+def _project_context_delivery(
+    instructions: str, snapshot: dict[str, str] | None,
+) -> tuple[str, dict[str, str] | None]:
+    """Keep Core's eager/on-demand split at the existing SDK boundary."""
+    if snapshot is None:
+        return instructions, None
+    if snapshot["activation_description"]:
+        return instructions, deepcopy(snapshot)
+    return f"# Project Context\n\n{snapshot['content']}\n\n---\n\n{instructions}", None

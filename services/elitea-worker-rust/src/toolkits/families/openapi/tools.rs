@@ -12,7 +12,7 @@ use crate::toolkits::delegated_auth::{
 use crate::toolkits::invocation::{MaterializedToolsetError, admit_materialized_toolset};
 use crate::toolkits::policy::{ToolAdmissionDecision, ToolAdmissionPolicy};
 
-use super::client::{OpenApiApi, OpenApiClient, OpenApiClientError};
+use super::client::{OpenApiApi, OpenApiClient, OpenApiClientError, OpenApiClientErrorCode};
 use super::config::{OpenApiConfigError, OpenApiConfigErrorCode, OpenApiToolkitConfig};
 use super::spec::OpenApiOperation;
 
@@ -222,7 +222,17 @@ impl Tool for OpenApiOperationTool {
         self.client
             .execute(self.operation.as_ref(), arguments)
             .await
-            .map_err(OpenApiClientError::into_adk)
+            .map_err(|error| {
+                if error.code() == OpenApiClientErrorCode::Authentication
+                    && let Some(requirement) = self.client.authorization()
+                {
+                    // A rejected delegated token needs the existing exact-call
+                    // guard. Other auth modes and forbidden operations do not.
+                    delegated_authorization_error(requirement)
+                } else {
+                    error.into_adk()
+                }
+            })
     }
 }
 
@@ -302,3 +312,7 @@ fn invalid_arguments() -> AdkError {
         "the OpenAPI operation arguments are invalid",
     )
 }
+
+#[cfg(test)]
+#[path = "tools_error_tests.rs"]
+mod error_tests;

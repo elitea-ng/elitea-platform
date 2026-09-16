@@ -91,6 +91,7 @@ export function resolveStartContract(target: unknown): string {
 }
 
 export function buildStartBody(params: {
+  readonly mcpTokens?: Readonly<Record<string, unknown>>;
   readonly conversationUuid: string;
   readonly projectId: string | undefined;
   readonly payload: Record<string, unknown>;
@@ -107,6 +108,7 @@ export function buildStartBody(params: {
     conversation_uuid: params.conversationUuid,
     question_id: payload['question_id'],
     interaction_uuid: crypto.randomUUID(),
+    mcp_tokens: params.mcpTokens ?? {},
     payload: { user_input: question, ...(payload['attachments'] ? { attachments: payload['attachments'] } : {}) },
   };
   if (params.isApplicationTurn) {
@@ -125,6 +127,7 @@ export function buildStartBody(params: {
 }
 
 export function buildRegenerateBody(params: {
+  readonly mcpTokens?: Readonly<Record<string, unknown>>;
   readonly conversationUuid: string;
   readonly projectId: string | undefined;
   readonly responseMessageId: string;
@@ -144,7 +147,7 @@ export function buildRegenerateBody(params: {
     payload: {
       user_input: params.question,
       attachments_info: [],
-      mcp_tokens: {},
+      mcp_tokens: params.mcpTokens ?? {},
       ...(!params.isApplicationTurn
         ? {
             llm_settings: {
@@ -176,4 +179,17 @@ export function adhocParticipants(input: {
     ...(input.userId !== undefined ? [{ entity_name: 'user', entity_meta: { id: Number(input.userId) } }] : []),
     { entity_name: 'dummy', entity_meta: { name: input.modelName }, entity_settings: { llm_settings: llmSettings } },
   ];
+}
+
+export function creationMeta(settings: Readonly<Record<string, unknown>> | undefined, internalTools: readonly string[] | undefined): Record<string, unknown> {
+  const stepsLimit = executionStepsLimit(settings);
+  return {
+    ...(stepsLimit !== undefined ? { steps_limit: stepsLimit } : {}),
+    ...(internalTools !== undefined ? { internal_tools: internalTools } : {}),
+  };
+}
+
+export async function internalToolsSaveFailure(getTools: (() => Promise<readonly string[]>) | undefined): Promise<{ readonly started: false; readonly reason: 'rejected'; readonly message: string } | undefined> {
+  try { await getTools?.(); return undefined; }
+  catch { return { started: false, reason: 'rejected', message: 'Internal tools configuration could not be saved. Select the tools again and retry.' }; }
 }

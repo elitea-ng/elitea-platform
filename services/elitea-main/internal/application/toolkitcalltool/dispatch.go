@@ -142,13 +142,33 @@ func (d *Dispatcher) Dispatch(ctx context.Context, dispatch Dispatch) error {
 		}
 		stored = &selected
 	}
+	return d.appendStored(ctx, dispatch.OutboxID, stored)
+}
+
+// RecoverPrepared publishes only bytes selected before a previous Main process stopped.
+// It cannot reconstruct a command or start a new admission.
+func (d *Dispatcher) RecoverPrepared(ctx context.Context, outboxID string) error {
+	stored, err := d.store.LoadPreparedToolkitCallTool(ctx, outboxID)
+	if errors.Is(err, executionapp.ErrDispatchRetired) || errors.Is(err, executionapp.ErrDispatchDeadlineExpired) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if stored == nil {
+		return nil
+	}
+	return d.appendStored(ctx, outboxID, stored)
+}
+
+func (d *Dispatcher) appendStored(ctx context.Context, outboxID string, stored *executionapp.StoredPreparedEnvelope) error {
 	if err := stored.Validate(); err != nil {
 		return err
 	}
-	if err := d.producer.AppendPrepared(ctx, dispatch.OutboxID, stored.Envelope.Clone()); err != nil {
+	if err := d.producer.AppendPrepared(ctx, outboxID, stored.Envelope.Clone()); err != nil {
 		return fmt.Errorf("append prepared tool-run reference: %w", err)
 	}
-	if err := d.store.MarkToolkitCallToolPublished(ctx, dispatch.OutboxID, stored.Envelope.Digest); err != nil {
+	if err := d.store.MarkToolkitCallToolPublished(ctx, outboxID, stored.Envelope.Digest); err != nil {
 		if errors.Is(err, executionapp.ErrDispatchRetired) {
 			return nil
 		}
