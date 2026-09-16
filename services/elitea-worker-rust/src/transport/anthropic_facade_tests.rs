@@ -834,6 +834,109 @@ async fn context_measurement_matches_dispatched_body_without_spending_turns() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn context_reservation_matches_native_reasoning_output_on_the_wire() {
+    use crate::agents::{context_budget::RequestContextBudget, request::ModelContextLimits};
+    for (model, effort, selected_output, expected_output) in [
+        (MODEL, None, 4_000, 4_000),
+        (MODEL, Some(ModelReasoningEffort::None), 4_000, 4_000),
+        (MODEL, Some(ModelReasoningEffort::Low), 4_000, 6_048),
+        (MODEL, Some(ModelReasoningEffort::Medium), 4_000, 8_096),
+        (MODEL, Some(ModelReasoningEffort::High), 4_000, 13_092),
+        (MODEL, Some(ModelReasoningEffort::High), 16_000, 16_000),
+        (
+            "claude-sonnet-4-6",
+            Some(ModelReasoningEffort::High),
+            4_000,
+            4_000,
+        ),
+    ] {
+        let (client, captured) = test_model_gateway_client(
+            vec![TestModelGatewayOutcome::Response(
+                test_model_gateway_response(Body::new(Full::new(Bytes::from(native_sse(model))))),
+            )],
+            test_model_gateway_config(),
+        )
+        .unwrap();
+        let mut settings = invocation(model, effort);
+        settings.max_tokens = Some(selected_output);
+        settings.context_budget = RequestContextBudget::resolve(
+            Some(ModelContextLimits {
+                context_window_tokens: 32_000,
+                max_output_tokens: 16_000,
+                context_window_fallback: false,
+                max_output_fallback: false,
+                max_input_tokens: None,
+            }),
+            &serde_json::Map::new(),
+            Some(selected_output),
+        )
+        .unwrap();
+        let bound = client
+            .bind_anthropic_ordinary(&ClaimScopedEliteaContext::fixture(17, TOKEN), 17, settings)
+            .unwrap();
+        let mut input = request(model, effort.is_none().then_some(0.7));
+        input.config.as_mut().unwrap().max_output_tokens =
+            Some(selected_output.try_into().unwrap());
+        let usage = bound.request_budget().unwrap().measure(&input).unwrap();
+        assert_eq!(usage.budget.output_reservation, expected_output);
+        assert_eq!(usage.budget.input_limit, 32_000 - 1_024 - expected_output);
+        assert!(captured.lock().unwrap().is_empty());
+        drain(bound.generate_for_test(input).await.unwrap())
+            .await
+            .unwrap();
+        let requests = captured.lock().unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(body["max_tokens"], expected_output);
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn reasoning_output_cannot_exceed_model_or_combined_capacity() {
+    use crate::agents::{context_budget::RequestContextBudget, request::ModelContextLimits};
+    for (window, maximum_output, text_bytes) in [
+        (32_000, 4_000, 0), // The model maximum cannot contain the requested reasoning budget.
+        (32_000, 8_000, 0), // Text plus reasoning exceeds the model output maximum.
+        (14_000, 13_500, 0), // No input room remains after reasoning and margin.
+        (20_000, 16_000, 26_000), // Input fits only if reasoning is incorrectly omitted.
+    ] {
+        let (client, captured) =
+            test_model_gateway_client(Vec::new(), test_model_gateway_config()).unwrap();
+        let mut settings = invocation(MODEL, Some(ModelReasoningEffort::High));
+        settings.context_budget = RequestContextBudget::resolve(
+            Some(ModelContextLimits {
+                context_window_tokens: window,
+                max_output_tokens: maximum_output,
+                context_window_fallback: false,
+                max_output_fallback: false,
+                max_input_tokens: None,
+            }),
+            &serde_json::Map::new(),
+            Some(4_000),
+        )
+        .unwrap();
+        let bound = client
+            .bind_anthropic_ordinary(&ClaimScopedEliteaContext::fixture(17, TOKEN), 17, settings)
+            .unwrap();
+        let mut input = request(MODEL, None);
+        if text_bytes > 0 {
+            input
+                .contents
+                .push(Content::new("user").with_text("x".repeat(text_bytes)));
+        }
+        let measurement = bound.request_budget().unwrap().measure(&input);
+        let error = measurement
+            .and_then(crate::agents::context_budget::RequestContextUsage::check)
+            .unwrap_err();
+        assert_eq!(error.code, "context_budget_exceeded");
+        let Err(error) = bound.generate_for_test(input).await else {
+            panic!("invalid output reservation reached the provider")
+        };
+        assert_eq!(error.code, "context_budget_exceeded");
+        assert!(captured.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn adk_summaries_are_complete_and_isolated_from_the_chat_binding() {
     use adk_rust::{BaseEventsSummarizer as _, Event, agent::LlmEventSummarizer};
     let (client, captured) = test_model_gateway_client(

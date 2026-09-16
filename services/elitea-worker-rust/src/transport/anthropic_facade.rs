@@ -22,7 +22,7 @@ use adk_anthropic::{
 };
 use adk_rust::model::anthropic::AnthropicSchemaAdapter;
 use adk_rust::{
-    AdkError, Content, ErrorCategory, FinishReason, Llm, LlmRequest, LlmResponse,
+    AdkError, Content, ErrorCategory, ErrorComponent, FinishReason, Llm, LlmRequest, LlmResponse,
     LlmResponseStream, Part, SchemaAdapter, UsageMetadata,
 };
 use async_stream::try_stream;
@@ -43,6 +43,7 @@ use super::openai_compatible_facade::{
     validate_llm_request, validate_response_head,
 };
 use super::runtime_context::ClaimScopedEliteaContext;
+use crate::agents::context_budget::RequestContextBudget;
 use crate::agents::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
 use crate::agents::session::{BoundOrdinaryAgentModel, DurableModelCompletion};
 
@@ -245,10 +246,8 @@ impl crate::agents::context_budget::ModelRequestBudget for EliteaAnthropicModel 
         &self,
         request: &LlmRequest,
     ) -> adk_rust::Result<crate::agents::context_budget::RequestContextUsage> {
-        let budget = self
-            .invocation
-            .context_budget
-            .ok_or_else(invalid_anthropic_request)?;
+        let budget =
+            native_context_budget(&self.invocation)?.ok_or_else(invalid_anthropic_request)?;
         let encoded = encode_anthropic_body(request, true, &self.invocation)?;
         budget.measure_provider_request(&encoded, self.config.max_request_bytes)
     }
@@ -377,7 +376,7 @@ fn build_anthropic_body(
             "the native Anthropic request exceeds its approved limit",
         ));
     }
-    if let Some(budget) = invocation.context_budget {
+    if let Some(budget) = native_context_budget(invocation)? {
         budget.check_provider_request(&encoded)?;
     }
     Ok(Bytes::from(encoded))
@@ -517,6 +516,31 @@ struct NativeGeneration {
     output_config: Option<OutputConfig>,
 }
 
+/// Reserve the complete native output, including legacy reasoning padding.
+/// Measurement and dispatch use this same calculation before any network call.
+fn native_context_budget(
+    invocation: &ModelFacadeInvocation,
+) -> Result<Option<RequestContextBudget>, AdkError> {
+    invocation
+        .context_budget
+        .map(|budget| {
+            let output = native_generation(invocation)?.max_tokens;
+            budget
+                .for_model(budget.limits, Some(output))
+                .map_err(|_| invalid_output_budget())
+        })
+        .transpose()
+}
+
+fn invalid_output_budget() -> AdkError {
+    AdkError::new(
+        ErrorComponent::Model,
+        ErrorCategory::InvalidInput,
+        "context_budget_exceeded",
+        "The configured output and reasoning allowance cannot fit the model context limits.",
+    )
+}
+
 fn native_generation(invocation: &ModelFacadeInvocation) -> Result<NativeGeneration, AdkError> {
     let max_tokens = invocation
         .max_tokens
@@ -560,10 +584,22 @@ fn native_generation(invocation: &ModelFacadeInvocation) -> Result<NativeGenerat
         ModelReasoningEffort::High => 9_092,
         ModelReasoningEffort::None => return Err(invalid_anthropic_request()),
     };
-    let max_tokens = max_tokens
-        .checked_add(budget)
-        .filter(|value| i32::try_from(*value).is_ok())
-        .ok_or_else(invalid_anthropic_request)?;
+    // The authoritative model maximum already includes all output. Main also
+    // resolves Auto to that value, so adding reasoning would exceed the maximum.
+    let uses_model_maximum = invocation.context_budget.is_some_and(|context| {
+        !context.limits.max_output_fallback && max_tokens == context.limits.max_output_tokens
+    });
+    let max_tokens = if uses_model_maximum {
+        max_tokens
+    } else {
+        max_tokens
+            .checked_add(budget)
+            .filter(|value| i32::try_from(*value).is_ok())
+            .ok_or_else(invalid_anthropic_request)?
+    };
+    if budget >= max_tokens {
+        return Err(invalid_output_budget());
+    }
     Ok(NativeGeneration {
         max_tokens,
         temperature: Some(1.0),

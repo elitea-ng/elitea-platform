@@ -143,6 +143,32 @@ The durable checkpoint retains its original replay records.
 Oversized requests fail before checkpoint persistence or model dispatch.
 The lifecycle classifies `model_request_bytes_exceeded` and `context_budget_exceeded` as resource-limit failures.
 Diagnostics contain numeric estimates and limits, without request content.
+
+## Native reasoning reservation, 2026-09-16
+
+Current SDK `runtime/clients/client.py::get_llm` adds a reasoning allowance to a custom visible-output cap.
+It does not add that allowance to the resolved model maximum.
+SDK revision `18704a4070d098761fd1d35897dc53e412b4cbcc` provides this functional reference.
+
+The Rust legacy Anthropic adapter already adds 2,048, 4,096, or 9,092 reasoning tokens according to effort.
+Its request estimate previously reserved only the original output cap.
+The regression test proves a 4,000-token reservation for a request that actually permits 6,048 output tokens.
+
+`transport/anthropic_facade.rs::native_context_budget` now resolves capacity from the complete native output cap.
+Both before-model measurement and provider dispatch use this calculation.
+They preserve the inherited Balanced, Full, or explicit budget selection.
+The compaction trigger and target therefore use the corrected input capacity.
+
+A cap equal to the authoritative model maximum already includes reasoning.
+The native adapter keeps that total unchanged instead of adding reasoning beyond the maximum.
+An incompatible reasoning allowance or combined capacity fails with `context_budget_exceeded` before network dispatch.
+Legacy inputs without authoritative limits retain their existing behavior.
+Adaptive thinking retains its existing total-output contract and receives no additional reservation.
+This change does not redefine model-selection or output-limit UI controls.
+
+Validation: 18 native Anthropic tests pass. Rust formatting, strict library/test Clippy, and Git whitespace checks pass.
+The fixtures cover each reasoning effort, adaptive output, the resolved maximum, and refusal before network dispatch.
+These are component checks. Deployment and browser acceptance remain open.
 Child and pipeline before-model integration still requires their scoped compaction implementation.
 
 Both adapter suites pass 32 tests without ignored cases.
