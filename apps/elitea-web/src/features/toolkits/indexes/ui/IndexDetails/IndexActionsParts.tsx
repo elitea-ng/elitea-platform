@@ -133,6 +133,19 @@ function ScheduleSwitch(props: ScheduleSwitchProps): ReactNode {
   );
 }
 
+/**
+ * The Save / Save & Reindex pair (ELITEA-2880 … ELITEA-2887), supplied by
+ * `IndexDetails`' `useIndexConfigSave`. Absent on a screen that has no
+ * configuration form to save (the run/history tabs, and any caller that has
+ * not wired the hook) — which is exactly when only "Reindex" is offered.
+ */
+export interface IndexConfigSaveActions {
+  readonly isDirty: boolean;
+  readonly isSaving: boolean;
+  readonly onSave: () => void;
+  readonly onSaveAndReindex: () => void;
+}
+
 export interface EditModeActionsProps {
   readonly scheduleData: ScheduleEntry;
   readonly schedulingTooltipMessage: string | null;
@@ -144,6 +157,54 @@ export interface EditModeActionsProps {
   readonly isRemovingDisabled: boolean;
   readonly onIndexData: () => void;
   readonly onDelete: () => void;
+  readonly configSave?: IndexConfigSaveActions | undefined;
+}
+
+/**
+ * The dirty-state button pair.
+ *
+ * WHY THE BUTTONS SWAP RATHER THAN GREY OUT. A clean form offers "Reindex"
+ * and nothing else; a dirty one offers "Save" and "Save & Reindex" and
+ * withdraws "Reindex". That is the behaviour every one of the eight cases
+ * describes (ELITEA-2883 steps 2/4/6/9/13 state it four separate ways), and
+ * it is also the only arrangement in which the three buttons cannot lie:
+ * a "Reindex" offered next to unsaved edits would run the LAST SAVED
+ * configuration while the screen showed a different one, which is precisely
+ * the confusion ELITEA-2887 §"Unsaved Changes NOT Used by Manual Reindex" is
+ * about.
+ *
+ * Both buttons stay ENABLED while the form is invalid, on purpose: the
+ * refusal and its reason are what the user needs (ELITEA-2882 clicks
+ * "Save & Reindex" on invalid JSON and expects to be told), and a disabled
+ * button explains nothing. `isSaving` is the only thing that disables them.
+ */
+function SaveActions(props: { readonly configSave: IndexConfigSaveActions; readonly isActionsDisabled: boolean }): ReactNode {
+  const { configSave, isActionsDisabled } = props;
+  const disabled = isActionsDisabled || configSave.isSaving;
+  return (
+    <>
+      <MuiButton
+        variant="elitea"
+        color="secondary"
+        onClick={configSave.onSave}
+        disabled={disabled}
+        data-testid="index-config-save"
+        sx={{ minWidth: '4.875rem' }}
+      >
+        {t('features.toolkits.indexActions.save', 'Save')}
+      </MuiButton>
+      <MuiButton
+        variant="elitea"
+        color="secondary"
+        onClick={configSave.onSaveAndReindex}
+        disabled={disabled}
+        data-testid="index-config-save-reindex"
+        sx={{ minWidth: '4.875rem' }}
+      >
+        {t('features.toolkits.indexActions.saveAndReindex', 'Save & Reindex')}
+      </MuiButton>
+    </>
+  );
 }
 
 export function EditModeActions(props: EditModeActionsProps): ReactNode {
@@ -158,7 +219,9 @@ export function EditModeActions(props: EditModeActionsProps): ReactNode {
     isRemovingDisabled,
     onIndexData,
     onDelete,
+    configSave,
   } = props;
+  const isDirty = configSave?.isDirty === true;
   return (
     <>
       <ScheduleSwitch
@@ -168,19 +231,26 @@ export function EditModeActions(props: EditModeActionsProps): ReactNode {
         onToggle={onToggleSchedule}
         onOpenModal={onOpenScheduleModal}
       />
-      <Tooltip title={isReindexDisabled ? t('features.toolkits.indexActions.reindexDisabled', 'Go to "Configuration" tab to reindex') : ''}>
-        <Box component="span">
-          <MuiButton
-            variant="elitea"
-            color="secondary"
-            onClick={onIndexData}
-            disabled={isActionsDisabled || isReindexDisabled}
-            sx={{ minWidth: '4.875rem' }}
-          >
-            {t('features.toolkits.indexActions.reindex', 'Reindex')}
-          </MuiButton>
-        </Box>
-      </Tooltip>
+      {isDirty && configSave !== undefined ? (
+        <SaveActions
+          configSave={configSave}
+          isActionsDisabled={isActionsDisabled}
+        />
+      ) : (
+        <Tooltip title={isReindexDisabled ? t('features.toolkits.indexActions.reindexDisabled', 'Go to "Configuration" tab to reindex') : ''}>
+          <Box component="span">
+            <MuiButton
+              variant="elitea"
+              color="secondary"
+              onClick={onIndexData}
+              disabled={isActionsDisabled || isReindexDisabled}
+              sx={{ minWidth: '4.875rem' }}
+            >
+              {t('features.toolkits.indexActions.reindex', 'Reindex')}
+            </MuiButton>
+          </Box>
+        </Tooltip>
+      )}
 
       <RemoveIndexButton
         disabled={isActionsDisabled}

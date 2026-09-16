@@ -149,6 +149,82 @@ describe('ChatHitlActions — the ask_user clarification card', () => {
     expect(JSON.parse(answered.value ?? '')).toBe('Staging');
   });
 
+  // #940 A8 — the stepped multi-question flow (ELITEA-2790/2791/2792).
+
+  /** Three questions: one required select, one optional free-text, one required select. */
+  const THREE_QUESTION_INTERRUPT: HitlInterrupt = {
+    ...ASK_USER_INTERRUPT,
+    questions: [
+      { id: 'scope', question: 'Which scope?', options: [{ label: 'Project' }], allow_other: false },
+      { id: 'notes', question: 'Anything else?', optional: true },
+      { id: 'tone', question: 'Which tone?', options: [{ label: 'Formal' }], allow_other: false },
+    ],
+  };
+
+  it('ELITEA-2791: a single-question flow shows Submit only — no progress, no Back/Next', () => {
+    renderCard(ASK_USER_INTERRUPT, vi.fn());
+
+    expect(screen.getByTestId('hitl-answer-submit')).toBeTruthy();
+    // The three controls the case says must NOT be there. Asserted as absent
+    // rather than as hidden: a rendered-but-invisible Next is still a control
+    // a keyboard user reaches.
+    expect(screen.queryByTestId('hitl-answer-progress')).toBeNull();
+    expect(screen.queryByTestId('hitl-answer-back')).toBeNull();
+    expect(screen.queryByTestId('hitl-answer-next')).toBeNull();
+  });
+
+  it('ELITEA-2790: a multi-question flow steps, keeps answers on Back, and submits once at the end', () => {
+    const onHitlResume = vi.fn();
+    renderCard(THREE_QUESTION_INTERRUPT, onHitlResume);
+
+    // Step 1 of 3: Next, no Back, no Submit — and Next is disabled until the
+    // required question is answered.
+    expect(screen.getByTestId('hitl-answer-progress').textContent).toBe('Question 1 of 3');
+    expect(screen.queryByTestId('hitl-answer-back')).toBeNull();
+    expect(screen.queryByTestId('hitl-answer-submit')).toBeNull();
+    expect(screen.getByTestId('hitl-answer-next').hasAttribute('disabled')).toBe(true);
+
+    fireEvent.click(screen.getByTestId('hitl-answer-option-0-0'));
+    expect(screen.getByTestId('hitl-answer-next').hasAttribute('disabled')).toBe(false);
+    fireEvent.click(screen.getByTestId('hitl-answer-next'));
+
+    // Step 2 of 3: Back appears.
+    expect(screen.getByTestId('hitl-answer-progress').textContent).toBe('Question 2 of 3');
+    expect(screen.getByTestId('hitl-answer-back')).toBeTruthy();
+
+    // Back re-populates what was already chosen. This is the half that makes
+    // stepping safe: state that is dropped on navigation silently loses an
+    // answer the user believes they gave.
+    fireEvent.click(screen.getByTestId('hitl-answer-back'));
+    expect(screen.getByTestId('hitl-answer-progress').textContent).toBe('Question 1 of 3');
+    expect(screen.getByTestId('hitl-answer-option-0-0').className).toContain('MuiButton-contained');
+
+    fireEvent.click(screen.getByTestId('hitl-answer-next'));
+    fireEvent.click(screen.getByTestId('hitl-answer-next'));
+
+    // Step 3 of 3: Submit replaces Next.
+    expect(screen.getByTestId('hitl-answer-progress').textContent).toBe('Question 3 of 3');
+    expect(screen.queryByTestId('hitl-answer-next')).toBeNull();
+    fireEvent.click(screen.getByTestId('hitl-answer-option-2-0'));
+    fireEvent.click(screen.getByTestId('hitl-answer-submit'));
+
+    // ONE resume, carrying every step's answer — not one per question.
+    expect(onHitlResume).toHaveBeenCalledTimes(1);
+    const payload = onHitlResume.mock.calls[0]?.[0] as HitlResumePayload;
+    expect(JSON.parse(payload.value ?? '')).toEqual({ scope: 'Project', tone: 'Formal' });
+  });
+
+  it('ELITEA-2792: an unanswered OPTIONAL question is marked and does not block Next', () => {
+    renderCard(THREE_QUESTION_INTERRUPT, vi.fn());
+
+    fireEvent.click(screen.getByTestId('hitl-answer-option-0-0'));
+    fireEvent.click(screen.getByTestId('hitl-answer-next'));
+
+    // Marked optional on screen, and Next stays enabled with nothing entered.
+    expect(screen.getByTestId('hitl-answer-optional-1')).toBeTruthy();
+    expect(screen.getByTestId('hitl-answer-next').hasAttribute('disabled')).toBe(false);
+  });
+
   it('leaves the approve/reject card alone for a pause that is not a clarification', () => {
     const onHitlResume = vi.fn();
     renderCard({ message: 'Approve?', available_actions: ['approve', 'reject'] }, onHitlResume);

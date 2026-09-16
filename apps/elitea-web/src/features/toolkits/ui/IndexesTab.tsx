@@ -192,11 +192,19 @@ export interface IndexesTabProps {
    * given) — so this is tested against `undefined`, never for truthiness.
    */
   readonly unavailableReason?: string | undefined;
+  /**
+   * Reports whether the selected index's configuration form holds unsaved
+   * edits (ELITEA-2885). `pages/toolkits/EditToolkit.tsx` arms the app-wide
+   * unsaved-changes guard with it — a `features/**` file may not import
+   * `widgets/app-shell` itself (`no-upward-from-features`), which is why the
+   * flag travels up rather than the guard down.
+   */
+  readonly onConfigDirtyChange?: ((dirty: boolean) => void) | undefined;
 }
 
 /** @public Rendered by `pages/toolkits/EditToolkit.tsx` as the Indexes tab panel. */
 export function IndexesTab(props: IndexesTabProps): ReactNode {
-  const { toolkitId, values, selectedIndexTools, chatUI, renderCredentialsSelect, unavailableReason } = props;
+  const { toolkitId, values, selectedIndexTools, chatUI, renderCredentialsSelect, unavailableReason, onConfigDirtyChange } = props;
 
   /**
    * `IndexActions` reads exactly two fields off `editToolDetail`: `type`,
@@ -349,6 +357,8 @@ export function IndexesTab(props: IndexesTabProps): ReactNode {
         ClearChatButton={ClearChatButton}
         renderCredentialsSelect={renderCredentialsSelect}
         onError={onError}
+        onSuccess={onSuccess}
+        onConfigDirtyChange={onConfigDirtyChange}
       />
       {/*
         * No global toast host exists in this app (the gap `IndexActions.tsx`

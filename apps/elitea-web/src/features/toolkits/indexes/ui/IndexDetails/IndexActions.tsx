@@ -21,6 +21,7 @@ import { useIndexesStore } from '../../model/indexesStore';
 import type { IndexRow, ScheduleEntry } from '../../model/indexesStore';
 import type { CredentialsFieldDescriptor, CredentialsSelectSlotProps } from './IndexScheduleModal';
 import { IndexScheduleModal } from './IndexScheduleModal';
+import type { IndexConfigSaveActions } from './IndexActionsParts';
 import { CreateModeActions, EditModeActions, IndexingInProgressActions } from './IndexActionsParts';
 
 /**
@@ -81,6 +82,8 @@ export interface IndexActionsProps {
   readonly currentProjectName?: string | undefined;
   readonly isPrivateProject?: boolean | undefined;
   readonly renderCredentialsSelect?: ((props: CredentialsSelectSlotProps) => ReactNode) | undefined;
+  /** The Save / Save & Reindex pair (ELITEA-2880…2887). Absent when the caller has no configuration form to save — then only "Reindex" is offered, which is the pre-split behaviour. */
+  readonly configSave?: IndexConfigSaveActions | undefined;
 }
 
 /**
@@ -205,6 +208,7 @@ export function IndexActions(props: IndexActionsProps): ReactNode {
     currentProjectName,
     isPrivateProject,
     renderCredentialsSelect,
+    configSave,
   } = props;
 
   const projectId = useSelectedProjectId();
@@ -302,6 +306,7 @@ export function IndexActions(props: IndexActionsProps): ReactNode {
             isRemovingDisabled={isRemovingDisabled}
             onIndexData={indexData}
             onDelete={handleDeleteIndex}
+            configSave={configSave}
           />
         ) : (
           <CreateModeActions

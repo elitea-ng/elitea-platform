@@ -60,6 +60,7 @@ import (
 	v2tracing "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tracing"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/artifactbootstrap"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/patexpiry"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcatalogue"
@@ -417,10 +418,14 @@ type RouterConfig struct {
 	// CurrentApplicationTask serves the legacy application_task path (issue
 	// 254 P2): GET polls the run bound to a response message, DELETE stops
 	// it through the SAME use case CurrentAgentCancel runs.
-	CurrentApplicationTask     http.Handler
-	CurrentIndexCancel         http.Handler
-	CurrentIndexMeta           http.Handler
-	CurrentIndexMetaDelete     http.Handler
+	CurrentApplicationTask http.Handler
+	CurrentIndexCancel     http.Handler
+	CurrentIndexMeta       http.Handler
+	CurrentIndexMetaDelete http.Handler
+	// CurrentIndexConfiguration is the SAVE half of the index editor's
+	// "Save" / "Save & Reindex" split: it persists one index's configuration
+	// without starting a run.
+	CurrentIndexConfiguration  http.Handler
 	CurrentIndexScheduleUpdate http.Handler
 	CurrentIndexScheduleDelete http.Handler
 	CurrentNotifications       http.Handler
@@ -1410,6 +1415,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// never to receive a boxed nil pointer.
 				v2core.WithCostBudgets(cfg.GatewayStatus != nil),
 				v2core.WithEvents(cfg.DomainEvents),
+				// The AI step of publish validation (#940 A18), over the SAME
+				// blocking gateway hop predict_llm and the draft routes use.
+				// nil PredictCompleter — a deployment with no LLM_GATEWAY_URL —
+				// leaves the option off, and the validation answers
+				// `ai_validation_available: false` exactly as it always has.
+				v2core.WithPublishAIValidation(publishAIValidator(cfg.PredictCompleter)),
 			)
 
 			// === Auth endpoints ===
@@ -1455,7 +1466,22 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					backgroundJobsStore = store
 				}
 			}
+			// The personal-access-token expiry producer behind the same page's
+			// run-now route (#940 A3). Built on the same rule: a nil pool
+			// leaves the option off and the route answers 503, rather than 200
+			// with nothing produced — which would read as "nobody was due".
+			var patExpiryNotifier *patexpiry.Notifier
+			if cfg.Pool != nil {
+				if store, err := dbrepos.NewPATExpiryNotificationRepository(cfg.Pool); err == nil {
+					if notifier, notifierErr := patexpiry.New(store); notifierErr == nil {
+						patExpiryNotifier = notifier
+					}
+				}
+			}
 			adminOptions := []admin.Option{}
+			if patExpiryNotifier != nil {
+				adminOptions = append(adminOptions, admin.WithPATExpiryNotifier(patExpiryNotifier))
+			}
 			if backgroundJobsStore != nil {
 				adminOptions = append(adminOptions,
 					admin.WithBackgroundJobs(backgroundJobsStore),
@@ -1905,6 +1931,19 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(requireRuntimePlugins).Post(
 					"/background_jobs/administration/{kind}/{jobID}:cancel",
 					adminHandler.CancelBackgroundJob,
+				)
+				// Run the personal-access-token expiry notice pass now
+				// (#940 A3). Same surface, same `runtime.plugins` gate, and
+				// the same producer the scheduler runs — see
+				// admin/pat_expiry_notices.go for why an operator needs it and
+				// why it must not be a second implementation.
+				//
+				// One static segment, so it cannot collide with the
+				// `{kind}/{jobID}:cancel` route above: that pattern is two
+				// segments, this is one.
+				r.With(requireRuntimePlugins).Post(
+					"/background_jobs/administration/pat_expiry_notices:run",
+					adminHandler.RunPATExpiryNotices,
 				)
 
 				// Regular app admin endpoints (with projectID)
@@ -4272,4 +4311,44 @@ func configurationSecretSealer(pool *pgxpool.Pool) v2configs.SecretSealer {
 		return nil
 	}
 	return sealer
+}
+
+// publishAIValidator adapts the predict gateway hop onto the four fields the
+// publish validation's AI step needs (internal/api/v2/eliteacore/
+// publish_ai_validation.go).
+//
+// It exists so eliteacore depends on its own small interface rather than on
+// v2predict's request struct — and so the step's tests take a four-line fake
+// instead of a gateway. A nil completer answers nil, which leaves the option
+// unapplied rather than installing a client that panics on first use.
+func publishAIValidator(completer v2predict.Completer) v2core.PublishModelClient {
+	if completer == nil {
+		return nil
+	}
+	return publishAICompleter{completer: completer}
+}
+
+type publishAICompleter struct {
+	completer v2predict.Completer
+}
+
+func (p publishAICompleter) Complete(
+	ctx context.Context, request v2core.PublishModelRequest,
+) (string, error) {
+	// Temperature 0: this is a review, and a review that answers differently
+	// on two identical versions is not one. MaxTokens bounds what one advisory
+	// pass can cost — the answer is a short JSON object by construction.
+	temperature := 0.0
+	maxTokens := 800
+	return p.completer.Complete(ctx, v2predict.CompletionRequest{
+		ProjectID: request.ProjectID,
+		UserID:    request.UserID,
+		Model:     request.Model,
+		Messages: []v2predict.Message{
+			{Role: "system", Content: request.System},
+			{Role: "user", Content: request.User},
+		},
+		Temperature: &temperature,
+		MaxTokens:   &maxTokens,
+	})
 }

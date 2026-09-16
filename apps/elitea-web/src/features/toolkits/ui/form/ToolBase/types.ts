@@ -104,6 +104,10 @@ export interface ToolPropertySchema extends ToolPropertySchemaBranch {
   readonly options?: unknown;
   readonly items?: ToolPropertySchemaItems;
   readonly args_schemas?: Readonly<Record<string, unknown>>;
+  /** Tool name → group id, served at `properties.selected_tools.tool_groups` (`internal/api/v2/toolkits/tool_groups.go`). Absent means "this type's tools are not classified" — see `ToolActionsSelector`'s own prop doc. */
+  readonly tool_groups?: Readonly<Record<string, string>>;
+  /** The served fixed group order that goes with `tool_groups`. */
+  readonly tool_group_order?: readonly string[];
   readonly toolkit_filter?: unknown;
   readonly agent_filter?: unknown;
   readonly pipeline_filter?: unknown;

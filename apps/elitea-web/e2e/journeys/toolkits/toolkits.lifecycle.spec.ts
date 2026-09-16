@@ -54,7 +54,7 @@ import { readsPlatformFlags } from '../../fixtures/platformFlags';
 const toolkitName = (): string => `${AUTOTEST_PREFIX}tk${Date.now()}`;
 
 /*
- * J17.3 asserts the "Make tools available by MCP" field, which `ToolBase` draws
+ * J17.3 asserts the MCP access control, which `ToolBase` draws
  * only while `useIsMcpVisible()` is true — that is the platform-wide
  * `mcp_enabled` row, and `admin.features.spec.ts` turns it off and back on to
  * prove the platform obeys it. J17.3 failed inside that window in 2 local runs
@@ -187,9 +187,15 @@ test('J17.2: the create page offers real, server-supplied toolkit types', async 
  * So the CodeMirror assertions encoded a UI shape that only appears when the
  * backend is broken. They are replaced below by assertions against the form
  * the app actually renders — which is itself backend-derived: the Tools
- * section's "Make tools available by MCP" field is drawn by
- * `ToolBase.render.tsx:296-306`, reachable ONLY via the ToolBase branch, i.e.
- * only when the server supplied a typed `custom` schema.
+ * section's MCP access control is drawn by `ToolsSectionParts.tsx`'s
+ * `resolveMcpExposureField`, reachable ONLY via the ToolBase branch, i.e. only
+ * when the server supplied a typed `custom` schema.
+ *
+ * It is a SWITCH labelled "Enable MCP access for selected tools" since issue
+ * 940/A7 (ELITEA-2687); it was a checkbox labelled "Make tools available by
+ * MCP", above the chips rather than after them. Same field
+ * (`meta.mcp_options.available_by_mcp`), same backend-derived reachability,
+ * which is all this assertion ever used it for.
  */
 test('J17.3: create a toolkit, persist it, and reopen it from the list', async ({ page }) => {
   const name = toolkitName();
@@ -211,9 +217,9 @@ test('J17.3: create a toolkit, persist it, and reopen it from the list', async (
   // Backend-derived, per the header: this field is rendered only down the
   // ToolBase branch, which `getToolComponent` picks only because the server's
   // `custom` schema carries `"type": "object"`. Against the old {rows,total}
-  // envelope the app fell back to ToolCustom's JSON editor and this checkbox
+  // envelope the app fell back to ToolCustom's JSON editor and this control
   // did not exist.
-  await expect(page.getByRole('checkbox', { name: 'Make tools available by MCP' })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole('switch', { name: 'Enable MCP access for selected tools' })).toBeVisible({ timeout: 15_000 });
 
   // The form is seeded from the picked type's initial values, then renamed.
   const nameField = page.getByRole('textbox', { name: 'Toolkit Name' });

@@ -304,18 +304,24 @@ export type UseToolkitEditMutation = (
  * callers that already thread `deps.createToolkit` keep working unchanged;
  * they can now simply stop injecting and take this default instead.
  *
- * `meta` is accepted by this signature but NOT sent: `pgRepo.CreateToolkit`
- * reads only `name`/`type`/`description`/`settings`
- * (internal/api/v2/toolkits/handler.go:891-900), and `ToolkitCreateRequest`
- * models exactly those. Passing `meta` through would be contract fiction.
+ * CORRECTION (issue 940/A7): `meta` IS sent now, and the sentence that stood
+ * here — "NOT sent … passing `meta` through would be contract fiction" — was
+ * measured against the wrong line. `pgRepo.CreateToolkit` marshals a `meta`
+ * key straight into the column and always has
+ * (`internal/api/v2/toolkits/handler.go`'s `metaJSON`); what was missing was
+ * the CONTRACT, so orval generated a body type without the field and the
+ * Tools section's MCP access toggle (`meta.mcp_options.available_by_mcp`) was
+ * dropped on the way out. A toolkit created with it on was stored with it off
+ * — ELITEA-2541, filed as a product gap because nothing pointed here.
  */
 export function useToolkitCreate(): UseToolkitCreateMutation {
-  return useCallback(async ({ projectId, type, name, description, settings }) => {
+  return useCallback(async ({ projectId, type, name, description, settings, meta }) => {
     const response = await createToolkit(projectId, {
       type,
       ...(name === undefined ? {} : { name }),
       ...(description === undefined ? {} : { description }),
       ...(settings === undefined ? {} : { settings }),
+      ...(meta === undefined ? {} : { meta }),
     });
     return response.data as ToolkitWriteResult;
   }, []);
@@ -328,14 +334,30 @@ export function useToolkitCreate(): UseToolkitCreateMutation {
  * NEVER send `has_relation`: that key makes the handler dispatch to
  * `updateToolRelation` instead of updating the toolkit at all (issue #38).
  * `ToolkitWriteBody` cannot express it, which is the intended guard.
+ *
+ * `meta` IS sent, since issue 940/A7 — and the comment on `useToolkitCreate`
+ * above, which says it is "contract fiction", was only ever true of CREATE.
+ * `pgRepo.UpdateToolkit` has always applied a `meta` key when one is present
+ * (`internal/api/v2/toolkits/handler.go`); what was missing was the CONTRACT,
+ * so the generated client dropped the key and the Tools section's MCP access
+ * toggle (`meta.mcp_options.available_by_mcp`) could be changed on screen and
+ * read back off the next time the page loaded — ELITEA-2541, filed as a
+ * product gap because nothing pointed at this line.
+ *
+ * The caller must send the meta it READ with its edits applied:
+ * `pgRepo.UpdateToolkit` REPLACES the column, and that column also holds
+ * `indexes_meta`, the per-index schedule map. `pages/toolkits/EditToolkit.tsx`
+ * does exactly that — its `toEditDetail` carries the fetched `meta` forward
+ * and `editField` merges into it.
  */
 export function useToolkitEdit(): UseToolkitEditMutation {
-  return useCallback(async ({ projectId, toolId, type, name, description, settings }) => {
+  return useCallback(async ({ projectId, toolId, type, name, description, settings, meta }) => {
     const response = await updateToolkit(projectId, Number(toolId), {
       type,
       ...(name === undefined ? {} : { name }),
       ...(description === undefined ? {} : { description }),
       ...(settings === undefined ? {} : { settings }),
+      ...(meta === undefined ? {} : { meta }),
     });
     return response.data as ToolkitWriteResult;
   }, []);

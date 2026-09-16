@@ -1,7 +1,6 @@
 import type { ChangeEvent, ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
-
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 
 import { NameDescriptionInput } from '../NameDescriptionInput';
@@ -13,6 +12,7 @@ import { ToolActionsSelector } from './ToolActionsSelector';
 import { ToolBaseProperty } from './ToolBaseProperty';
 import type { ToolBasePropertyCredentialContext, ToolBasePropertyFormState, ToolBasePropertySlots } from './ToolBaseProperty';
 import { ToolSection } from './ToolSection';
+import { resolveMcpExposureField, resolveToolGroups } from './ToolsSectionParts';
 import type { EditToolDetail, EditToolField, SetEditToolDetail, ToolPropertySchema, ToolSchema } from './types';
 import type { ResolvedFieldBehavior, ResolvedFieldOrder, ResolvedFieldPresentation, ResolvedSections } from './ToolBase.options';
 import type { ToolBaseSlots } from './ToolBase.types';
@@ -331,30 +331,11 @@ export function ToolBaseStatusSlots({ schema, editToolDetail, projectId, slots, 
   );
 }
 
-/** The "Make tools available by MCP" extra field — split out of `ToolBaseToolsSection` to keep it under the §3.5 complexity budget. */
-function resolveMcpExposureField(
-  isMcpExposureEnabled: boolean,
-  editToolDetail: EditToolDetail,
-  passParams: PropertyPassParams,
-  disabled: boolean | undefined,
-): ReactNode {
-  if (!isMcpExposureEnabled) return null;
-  return (
-    <ToolBaseProperty
-      field={{ key: 'available_by_mcp', schema: { title: 'Make tools available by MCP', type: 'boolean' }, required: false, editFieldRootPath: 'meta.mcp_options' }}
-      formState={passParams.formState}
-      settings={editToolDetail.meta?.mcp_options ?? {}}
-      editField={passParams.editField}
-      handleInputChange={passParams.handleInputChange}
-      disabled={disabled}
-    />
-  );
-}
-
 /** The `selected_tools` chip picker (`ToolBase.jsx:524-564`, `renderTools`). */
 export function ToolBaseToolsSection({ schema, editToolDetail, passParams, isMcpExposureEnabled, shouldUseAccordionView, slots, disabled }: ToolBaseToolsSectionProps): ReactNode {
   const isPreconfiguredMcp = isPreconfiguredMcpType(editToolDetail);
-  const extraProperties = resolveMcpExposureField(isMcpExposureEnabled, editToolDetail, passParams, disabled);
+  const trailingProperties = resolveMcpExposureField(isMcpExposureEnabled, editToolDetail, passParams, disabled);
+  const { groups, order } = resolveToolGroups(schema);
 
   return (
     <ToolActionsSelector
@@ -363,7 +344,9 @@ export function ToolBaseToolsSection({ schema, editToolDetail, passParams, isMcp
       selectedTools={passParams.settings['selected_tools'] as readonly string[] | undefined}
       isRemoteMcp={schema.title === 'mcp'}
       isPreconfiguredMcp={isPreconfiguredMcp}
-      extraProperties={extraProperties}
+      toolGroups={groups}
+      toolGroupOrder={order}
+      trailingProperties={trailingProperties}
       disabled={disabled}
       onLoadTools={slots?.toolActionsExtra?.onLoadTools}
       isLoadingTools={slots?.toolActionsExtra?.isLoadingTools}

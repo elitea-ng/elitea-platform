@@ -48,6 +48,11 @@ type PublicRoutes struct {
 	// is exposed only with the coordinated Go index owner and receives
 	// production authentication and project RBAC at the Main composition edge.
 	IndexMetaDelete indexingapi.CurrentIndexMetaDeleter
+	// IndexConfiguration persists one index's configuration without running
+	// it. It shares IndexMetaDelete's exposure rule: the Go index owner must
+	// be composed, because the field it writes is the same field the run path
+	// and the scheduler read.
+	IndexConfiguration indexingapi.CurrentIndexConfigurationSaver
 	// IndexScheduleUpdate/Delete preserve the current UI contracts and are
 	// exposed only when the distributed Go schedule owner is enabled.
 	IndexScheduleUpdate indexingapi.CurrentIndexScheduleUpdater

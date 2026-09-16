@@ -1523,6 +1523,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	var currentIndexCancel http.Handler
 	var currentIndexMeta http.Handler
 	var currentIndexMetaDelete http.Handler
+	var currentIndexConfiguration http.Handler
 	var currentIndexScheduleUpdate http.Handler
 	var currentIndexScheduleDelete http.Handler
 	if runtimeConfig.Enabled {
@@ -1780,6 +1781,20 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			if err != nil {
 				return fmt.Errorf(
 					"compose current index metadata delete route: %w",
+					err,
+				)
+			}
+		}
+		if publicRoutes.IndexConfiguration != nil {
+			currentIndexConfiguration, err =
+				indexingapi.NewCurrentIndexConfigurationRoute(
+					publicRoutes.IndexConfiguration,
+					apiGroupAuth,
+					legacyrbac.NewPostgresResolver(pool),
+				)
+			if err != nil {
+				return fmt.Errorf(
+					"compose current index configuration route: %w",
 					err,
 				)
 			}
@@ -2129,6 +2144,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CurrentIndexCancel:         currentIndexCancel,
 		CurrentIndexMeta:           currentIndexMeta,
 		CurrentIndexMetaDelete:     currentIndexMetaDelete,
+		CurrentIndexConfiguration:  currentIndexConfiguration,
 		CurrentIndexScheduleUpdate: currentIndexScheduleUpdate,
 		CurrentIndexScheduleDelete: currentIndexScheduleDelete,
 		CurrentNotifications:       currentNotifications,

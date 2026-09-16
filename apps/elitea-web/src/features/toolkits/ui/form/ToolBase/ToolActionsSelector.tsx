@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 
 import Box from '@mui/material/Box';
 import type { Theme } from '@mui/material/styles';
@@ -9,7 +9,10 @@ import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import { t } from '@/shared/i18n';
 
 import { EmptyMcpTools } from './EmptyMcpTools';
+import { ToolActionsGroupedItems } from './ToolActionsGroupedItems';
 import { ToolActionsItems, type ToolActionOption } from './ToolActionsItems';
+import { buildToolGroupSections, toggleGroupSelection } from './toolGroups';
+import type { ToolGroupSection } from './toolGroups';
 
 /**
  * Ported from `apps/elitea-ui/src/[fsd]/features/toolkits/ui/form/
@@ -60,6 +63,22 @@ export interface ToolActionsSelectorProps {
   readonly canLoadTools?: boolean | undefined;
   readonly mcpAuthModal?: ReactNode;
   readonly shouldUseAccordionView?: boolean | undefined;
+  /**
+   * Tool name → group id, as elitea-main serves it at
+   * `properties.selected_tools.tool_groups`
+   * (`internal/api/v2/toolkits/tool_groups.go`).
+   *
+   * ABSENT IS A REAL ANSWER, not a default. A toolkit whose tools are
+   * discovered at run time — a Remote MCP server — has no served
+   * classification, and this component keeps rendering the flat chip list it
+   * always did for it (ELITEA-2688). "No answer" and "everything is a read"
+   * must not look the same on screen.
+   */
+  readonly toolGroups?: Readonly<Record<string, string>> | undefined;
+  /** The served fixed group order. Falls back to this app's own when absent. */
+  readonly toolGroupOrder?: readonly string[] | undefined;
+  /** Rendered at the very END of the Tools section, after every group — the MCP access toggle (ELITEA-2687). */
+  readonly trailingProperties?: ReactNode;
 }
 
 function toOption(tool: string | ToolActionOption): ToolActionOption {
@@ -118,33 +137,61 @@ interface ToolsSectionContentProps {
   readonly extraProperties: ReactNode;
   readonly hasNoTools: boolean;
   readonly items: ReactNode;
+  readonly trailingProperties: ReactNode;
 }
 
 /** The accordion/flat body — split out of `ToolActionsSelector` for the same complexity-budget reason as `LoadToolsAction`. */
-function ToolsSectionContent({ isMcpLike, extraProperties, hasNoTools, items }: ToolsSectionContentProps): ReactNode {
+function ToolsSectionContent({ isMcpLike, extraProperties, hasNoTools, items, trailingProperties }: ToolsSectionContentProps): ReactNode {
   return (
     <>
       {!isMcpLike && extraProperties}
       {isMcpLike && hasNoTools && <EmptyMcpTools />}
       {items}
+      {/*
+        * LAST, after every group — the MCP access toggle governs the tools
+        * above it, and a control that governs a list belongs after the list
+        * (ELITEA-2687 step 3).
+        *
+        * `!isMcpLike` is the pre-existing rule, unchanged: this control used
+        * to render as `extraProperties` under exactly the same condition. A
+        * toolkit that IS a Remote MCP client does not re-publish its own
+        * tools over MCP, so the toggle would govern nothing there.
+        */}
+      {!isMcpLike && trailingProperties}
     </>
   );
 }
 
-export function ToolActionsSelector({
-  availableTools,
-  onChange,
-  selectedTools = [],
-  extraProperties,
-  disabled,
-  isRemoteMcp = false,
-  isPreconfiguredMcp = false,
-  onLoadTools,
-  isLoadingTools = false,
-  canLoadTools = false,
-  mcpAuthModal,
-  shouldUseAccordionView = true,
-}: ToolActionsSelectorProps): ReactNode {
+/** Stable empty array, so the unavailable-chips row above the groups does not get a new `toolsOptions` identity on every render. */
+const EMPTY_TOOL_OPTIONS: readonly ToolActionOption[] = [];
+
+export function ToolActionsSelector(props: ToolActionsSelectorProps): ReactNode {
+  /*
+   * Destructured in the BODY, not in the signature. §3.5 caps a component at
+   * 12 signature props and `scripts/lib/budgets-core.mjs` counts the
+   * destructuring pattern itself, so a 15-prop picker has to unpack here —
+   * the same shape `ToolBase.tsx`, `IndexActions.tsx` and the rest of this
+   * slice already use. Bundling the extra three into one object prop instead
+   * would hide three independent answers (the classification, its order, and
+   * a rendered node) behind one name.
+   */
+  const {
+    availableTools,
+    onChange,
+    selectedTools = [],
+    extraProperties,
+    disabled,
+    isRemoteMcp = false,
+    isPreconfiguredMcp = false,
+    onLoadTools,
+    isLoadingTools = false,
+    canLoadTools = false,
+    mcpAuthModal,
+    shouldUseAccordionView = true,
+    toolGroups,
+    toolGroupOrder,
+    trailingProperties,
+  } = props;
   const toolsOptions = useMemo(() => availableTools.map(toOption), [availableTools]);
   const toolsOptionsValues = useMemo(() => toolsOptions.map((option) => option.value), [toolsOptions]);
   const warningTools = useMemo(
@@ -162,7 +209,52 @@ export function ToolActionsSelector({
   );
 
   const isMcpLike = isRemoteMcp || isPreconfiguredMcp;
-  const items = (
+
+  const [query, setQuery] = useState('');
+  const isGrouped = toolGroups !== undefined && Object.keys(toolGroups).length > 0;
+  const { sections, noMatches } = useMemo(
+    () => buildToolGroupSections({ toolsOptions, toolGroups, groupOrder: toolGroupOrder, selectedTools, query }),
+    [toolsOptions, toolGroups, toolGroupOrder, selectedTools, query],
+  );
+
+  const onToggleGroup = useCallback(
+    (section: ToolGroupSection) => {
+      // `allToolValues`, not `section.tools`: the header toggles the WHOLE
+      // group, including the tools the search box is currently hiding
+      // (ELITEA-2685/2696). Toggling only the visible ones would make the
+      // count the header shows disagree with what the click just did.
+      onChange(toggleGroupSelection({ selectedTools, groupTools: section.allToolValues, select: !section.allSelected }));
+    },
+    [onChange, selectedTools],
+  );
+
+  /*
+   * The UNAVAILABLE chips stay in `ToolActionsItems` and stay ABOVE the
+   * groups, with an empty `toolsOptions` so it renders nothing else. They are
+   * deliberately outside the search: an unavailable tool is a problem to
+   * clear, and a filter that hid it would hide the problem (ELITEA-2691).
+   */
+  const items = isGrouped ? (
+    <>
+      <ToolActionsItems
+        toolsOptions={EMPTY_TOOL_OPTIONS}
+        warningTools={warningTools}
+        selectedTools={selectedTools}
+        onSelectTool={onSelectTool}
+        disabled={disabled}
+      />
+      <ToolActionsGroupedItems
+        sections={sections}
+        selectedTools={selectedTools}
+        query={query}
+        onQueryChange={setQuery}
+        noMatches={noMatches}
+        onSelectTool={onSelectTool}
+        onToggleGroup={onToggleGroup}
+        disabled={disabled}
+      />
+    </>
+  ) : (
     <ToolActionsItems
       toolsOptions={toolsOptions}
       warningTools={warningTools}
@@ -177,6 +269,7 @@ export function ToolActionsSelector({
       extraProperties={extraProperties}
       hasNoTools={availableTools.length === 0}
       items={items}
+      trailingProperties={trailingProperties}
     />
   );
 
@@ -185,6 +278,7 @@ export function ToolActionsSelector({
       <Box sx={containerSx(false)}>
         <Typography variant="bodyMedium">{t('features.toolkits.toolBase.toolActionsSelector.title', 'Tools')}</Typography>
         {items}
+        {trailingProperties}
         {mcpAuthModal}
       </Box>
     );

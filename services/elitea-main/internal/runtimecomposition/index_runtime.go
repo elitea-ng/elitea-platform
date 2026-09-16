@@ -33,6 +33,7 @@ type currentIndexRuntime struct {
 	materializer   *storage.CurrentConfigurationsMaterializer
 	indexMeta      *indexmetaapp.Service
 	indexDelete    *indexmetaapp.DeleteService
+	indexConfig    *indexmetaapp.ConfigurationService
 	toolkits       indexingapp.CurrentToolkitReader
 	settings       indexingapp.CurrentToolkitSettingsValidator
 	inputs         *indexingapp.CurrentAuthoritativeInputResolver
@@ -255,6 +256,15 @@ func newCurrentIndexRuntime(
 		return nil, err
 	}
 
+	indexConfig, err := indexmetaapp.NewConfigurationService(
+		toolkits,
+		settings,
+		pgvector.NewCurrentIndexConfigurationWriter(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("construct current index configuration service: %w", err)
+	}
+
 	return &currentIndexRuntime{
 		start:        start,
 		cancel:       cancel,
@@ -262,6 +272,7 @@ func newCurrentIndexRuntime(
 		materializer: materializer,
 		indexMeta:    indexMeta,
 		indexDelete:  indexDelete,
+		indexConfig:  indexConfig,
 		toolkits:     toolkits,
 		settings:     settings,
 		inputs:       inputs,

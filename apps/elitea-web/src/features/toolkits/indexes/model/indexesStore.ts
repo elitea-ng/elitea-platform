@@ -48,6 +48,21 @@ export interface IndexDepMetaPatch {
   readonly state?: string;
   readonly task_id?: string;
   readonly conversation_id?: string;
+  /**
+   * The index's stored configuration, patched in by a successful
+   * "Save"/"Save & Reindex" (issue 940/A5).
+   *
+   * It is here because a REINDEX of an existing index deliberately runs
+   * `index.metadata.index_configuration` — the SERVER's copy — and not the
+   * form (`useToolkitChat.hooks.ts`'s `resolveRunInputVariables`), which is
+   * the rule that makes "Reindex uses the last SAVED configuration" true.
+   * Without this patch, "Save & Reindex" would store the new configuration
+   * and then immediately reindex with the OLD one: the save invalidates the
+   * list query, but the refetch lands after the run has already been
+   * dispatched. Patching the overlay closes that window without weakening
+   * the rule.
+   */
+  readonly index_configuration?: Readonly<Record<string, unknown>>;
 }
 
 /** Loosely typed to match the historically dynamic shape of an index row (`{id, metadata: {...}}`) this domain has always used. */
@@ -98,6 +113,7 @@ function createIndexesStore(): IndexesStore {
             ...(patch.state !== undefined && { state: patch.state }),
             ...(patch.task_id !== undefined && { task_id: patch.task_id }),
             ...(patch.conversation_id !== undefined && { conversation_id: patch.conversation_id }),
+            ...(patch.index_configuration !== undefined && { index_configuration: patch.index_configuration }),
           },
         },
       })),

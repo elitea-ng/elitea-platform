@@ -1,10 +1,13 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import type { JsonSchemaLike } from '../../lib/helpers/indexChat.helpers';
 import { toDisplayString } from '../../lib/helpers/displayString.local';
 import type { IndexRow } from '../../model/indexesStore';
 import { EditViewTabsEnum, IndexStatuses, IndexViewsEnum, IndexesToolsEnum, RUNNABLE_INDEX_STATUSES } from '../../lib/constants/indexDetails.constants';
+import { useIndexConfigSave } from '../../lib/hooks/useIndexConfigSave.hooks';
+import type { IndexConfigSaveResult } from '../../lib/hooks/useIndexConfigSave.hooks';
+import { useSelectedProjectId } from '../../lib/hooks/useSelectedProjectId';
 import type { ChatDisplayMessage } from './IndexChat';
 
 /** `disableRunTabReason`'s computation, split out of `IndexDetails.tsx`'s `useMemo` body — same 400-line-budget reason as the rest of this file. */
@@ -307,4 +310,52 @@ export interface SelectedToolSchemaRead {
   readonly toolSchema: JsonSchemaLike | null;
   readonly isError: boolean;
   readonly refetch: () => void;
+}
+
+export interface IndexConfigSaveBindingParams {
+  readonly index: IndexRow;
+  readonly toolkitId: string;
+  /** The tool schema the configuration form renders — its property keys ARE the editable surface. */
+  readonly schema: JsonSchemaLike | null | undefined;
+  readonly current: Record<string, unknown>;
+  readonly isConfigurationTab: boolean;
+  readonly isValidForm: boolean;
+  readonly onReindex: () => void;
+  readonly onSuccess?: ((message: string) => void) | undefined;
+  readonly onError?: ((message: string) => void) | undefined;
+  readonly onDirtyChange?: ((dirty: boolean) => void) | undefined;
+}
+
+/**
+ * Binds `useIndexConfigSave` to what `IndexDetails` already has on hand: the
+ * selected index row, the adjusted tool schema and the live form values.
+ *
+ * It lives here rather than inline for the same budget reason every other
+ * extraction in this file records — `IndexDetails.tsx` is at its 400-line
+ * limit — and, unlike the pure helpers above, it is deliberately the ONLY
+ * place that knows the stored configuration hangs off
+ * `index.metadata.index_configuration` and that the index is addressed by
+ * `metadata.collection` rather than by its row id. Both facts are shared with
+ * the schedule PATCH and neither is obvious from the route's own parameter
+ * names (see `internal/api/v2/toolkits/index_write.go`'s header).
+ */
+export function useIndexConfigSaveBinding(params: IndexConfigSaveBindingParams): IndexConfigSaveResult {
+  const { index, toolkitId, schema, current, isConfigurationTab, isValidForm, onReindex, onSuccess, onError, onDirtyChange } = params;
+  const projectId = useSelectedProjectId();
+  const schemaKeys = useMemo(() => Object.keys(schema?.properties ?? {}), [schema]);
+  return useIndexConfigSave({
+    projectId,
+    toolkitId,
+    indexName: toDisplayString(index.metadata['collection']),
+    indexId: index.id,
+    schemaKeys,
+    storedConfiguration: index.metadata['index_configuration'] as Record<string, unknown> | undefined,
+    current,
+    isConfigurationTab,
+    isValidForm,
+    onReindex,
+    onSuccess,
+    onError,
+    onDirtyChange,
+  });
 }

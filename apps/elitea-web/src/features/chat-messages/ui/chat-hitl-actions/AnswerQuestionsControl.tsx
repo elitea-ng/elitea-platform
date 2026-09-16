@@ -18,6 +18,21 @@
  * and refuses an id it never asked about, so the keys are the ids off the
  * questions themselves and never anything derived on screen. A multi-select
  * question answers with an ARRAY; every other question answers with a string.
+ *
+ * ONE QUESTION AT A TIME (#940 A8, ELITEA-2790/2791/2792). A pause with more
+ * than one question is a stepped flow — "Question 2 of 3", Back/Next, Submit
+ * only on the last — and a pause with exactly one is unchanged: the question
+ * and a Submit, with no progress indicator and no navigation. That split is
+ * the cases' own, and it is also why the stepping is not a second component:
+ * the single-question card IS this card with one step, so a separate
+ * implementation would be a second place for the answer-building rules
+ * (`buildAnswerValue`) to drift.
+ *
+ * NOTHING IS SUBMITTED UNTIL THE LAST STEP. Navigating keeps every answer in
+ * this component's own state — Back re-populates what was typed or picked —
+ * and the single `onSubmit` carries all of them at once, because the runtime
+ * substitutes ONE tool result for the parked call and a per-question resume
+ * would need a second pause it never created.
  */
 import type { ReactNode } from 'react';
 import { useState } from 'react';
@@ -72,6 +87,29 @@ function questionId(question: HitlQuestion, index: number): string {
 /** serde renames `multi_select` to `multiSelect`; the raw tool arguments use either. */
 function isMultiSelect(question: HitlQuestion): boolean {
   return question.multiSelect === true || question.multi_select === true;
+}
+
+/**
+ * Whether this question may be left unanswered (ELITEA-2792).
+ *
+ * Absent reads as REQUIRED. The runtime defaults the flag to `false` for the
+ * same reason (`AskUserQuestion::normalize`): a stored pause from before the
+ * field existed carries no key, and treating that as optional would relax
+ * every old clarification at once.
+ */
+function isOptional(question: HitlQuestion): boolean {
+  return question.optional === true;
+}
+
+/** Whether the question at `index` has an answer on screen right now. */
+function isAnswered(
+  question: HitlQuestion,
+  index: number,
+  selected: SelectionMap,
+  typed: TextMap,
+): boolean {
+  const id = questionId(question, index);
+  return (selected[id] ?? []).length > 0 || (typed[id] ?? '').trim() !== '';
 }
 
 /** The label text of one option, or `''` for an option that carries none. */
@@ -144,6 +182,20 @@ function QuestionRow({ question, index, disabled, picked, text, onPick, onText }
           sx={{ color: 'text.primary' }}
         >
           {question.question}
+          {/* ELITEA-2792 step 1: an optional question SAYS so. Without it the
+              relaxed Next/Submit rule is invisible — the user cannot tell a
+              question they may skip from one whose control is enabled because
+              they already answered it. */}
+          {isOptional(question) && (
+            <Typography
+              component="span"
+              data-testid={`hitl-answer-optional-${index}`}
+              variant="caption"
+              sx={{ color: 'text.secondary', ml: 0.5 }}
+            >
+              {t('chatMessages.hitlAnswer.optional', '(optional)')}
+            </Typography>
+          )}
         </Typography>
       )}
       {options.length > 0 && (
@@ -198,6 +250,7 @@ function AnswerQuestionsControl({
 }: AnswerQuestionsControlProps): ReactNode {
   const [selected, setSelected] = useState<SelectionMap>({});
   const [typed, setTyped] = useState<TextMap>({});
+  const [step, setStep] = useState(0);
 
   const pick = (question: HitlQuestion, index: number, label: string): void => {
     const id = questionId(question, index);
@@ -222,23 +275,79 @@ function AnswerQuestionsControl({
   const submitted: string | Record<string, string | readonly string[]> = freeTextOnly
     ? ((answers['q1'] as string | undefined) ?? '')
     : answers;
-  const canSubmit = freeTextOnly ? submitted !== '' : Object.keys(answers).length > 0;
+  // `step` is clamped rather than trusted: a pause whose questions change
+  // under an open card (a re-render from a refreshed transcript) must not
+  // leave the index past the end and render nothing at all.
+  const lastStep = rows.length - 1;
+  const current = Math.min(step, lastStep);
+  const question = rows[current];
+  const onLastStep = current === lastStep;
+  const stepped = rows.length > 1;
+  // ELITEA-2790/2792: a REQUIRED question blocks Next and Submit until it is
+  // answered; an optional one never does. The gate is per-STEP, not over the
+  // whole set, because the user can only see the step they are on — a Submit
+  // disabled by an unanswered question three screens back is a dead end.
+  const canAdvance =
+    question === undefined || isOptional(question) || isAnswered(question, current, selected, typed);
+  // The last step additionally has to produce SOMETHING: an all-optional flow
+  // that submits an empty object resumes the run with no answer at all, which
+  // reads to the model as a user who said nothing rather than one who skipped.
+  const canSubmit = freeTextOnly
+    ? submitted !== ''
+    : canAdvance && Object.keys(answers).length > 0;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, mt: 1, width: '100%' }}>
-      {rows.map((question, index) => (
+      {stepped && (
+        <Typography
+          data-testid="hitl-answer-progress"
+          variant="caption"
+          sx={{ color: 'text.secondary' }}
+        >
+          {t('chatMessages.hitlAnswer.progress', 'Question {{current}} of {{total}}', {
+            current: current + 1,
+            total: rows.length,
+          })}
+        </Typography>
+      )}
+      {question !== undefined && (
         <QuestionRow
-          key={questionId(question, index)}
+          key={questionId(question, current)}
           question={question}
-          index={index}
+          index={current}
           disabled={disabled}
-          picked={selected[questionId(question, index)] ?? []}
-          text={typed[questionId(question, index)] ?? ''}
-          onPick={(label) => pick(question, index, label)}
-          onText={(value) => setTyped((previous) => ({ ...previous, [questionId(question, index)]: value }))}
+          picked={selected[questionId(question, current)] ?? []}
+          text={typed[questionId(question, current)] ?? ''}
+          onPick={(label) => pick(question, current, label)}
+          onText={(value) => setTyped((previous) => ({ ...previous, [questionId(question, current)]: value }))}
         />
-      ))}
-      <Box>
+      )}
+      <Box sx={{ display: 'flex', gap: 1 }}>
+        {stepped && current > 0 && (
+          <Button
+            data-testid="hitl-answer-back"
+            size="small"
+            variant="outlined"
+            color="primary"
+            onClick={() => setStep(current - 1)}
+            disabled={disabled}
+          >
+            {t('chatMessages.hitlAnswer.back', 'Back')}
+          </Button>
+        )}
+        {!onLastStep && (
+          <Button
+            data-testid="hitl-answer-next"
+            size="small"
+            variant="contained"
+            color="primary"
+            onClick={() => setStep(current + 1)}
+            disabled={disabled || !canAdvance}
+          >
+            {t('chatMessages.hitlAnswer.next', 'Next')}
+          </Button>
+        )}
+        {onLastStep && (
         <Button
           data-testid="hitl-answer-submit"
           size="small"
@@ -249,6 +358,7 @@ function AnswerQuestionsControl({
         >
           {t('chatMessages.hitlAnswer.submit', 'Send answer')}
         </Button>
+        )}
       </Box>
     </Box>
   );

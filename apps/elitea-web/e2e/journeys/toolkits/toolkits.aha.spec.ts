@@ -636,9 +636,11 @@ test('AHA-9: the TOOLS section offers every served tool, selection persists, and
   await page.getByRole('button', { name: /find.project/i }).click();
   await page.getByRole('button', { name: /add.comment/i }).click();
 
-  const mcpCheckbox = page.getByRole('checkbox', { name: 'Make tools available by MCP' });
-  await expect(mcpCheckbox).toBeVisible({ timeout: 15_000 });
-  await mcpCheckbox.check();
+  // The MCP access control is a SWITCH at the end of the Tools section since
+  // issue 940/A7 (ELITEA-2687); it was a checkbox above the chips before.
+  const mcpToggle = page.getByRole('switch', { name: 'Enable MCP access for selected tools' });
+  await expect(mcpToggle).toBeVisible({ timeout: 15_000 });
+  await mcpToggle.check();
 
   const name = tag('tools_persist');
   await page.getByRole('textbox', { name: 'Toolkit Name' }).fill(name);
@@ -687,21 +689,25 @@ test('AHA-9: the TOOLS section offers every served tool, selection persists, and
 });
 
 /**
- * AHA-9b: "Make tools available by MCP" does not persist — a product gap.
- * Confirmed live, twice: check it, Save, reopen the toolkit — the checkbox
- * reads back unchecked. `saved.settings.available_by_mcp` either is never
- * written from `meta.mcp_options` or never round-trips back into the field
- * on load; either way the setting the legacy case names does not survive a
- * save + reload.
+ * AHA-9b: the MCP access setting persists across a Save and a reload.
+ *
+ * CLOSED (issue 940/A7). This test carried `test.fail` and the note
+ * "ELITEA-2541 (#928): product gap — reads back unchecked after Save +
+ * reload, confirmed live on two separate runs". The observation was right and
+ * the diagnosis in that note ("`saved.settings.available_by_mcp` either is
+ * never written from `meta.mcp_options` or never round-trips") stopped one
+ * layer short of the cause: the value was never SENT. `pgRepo.CreateToolkit`
+ * and `pgRepo.UpdateToolkit` both marshal a `meta` key into the column and
+ * always have, but `api/openapi/v2.yaml` described no `meta` field on either
+ * request, so orval generated a body type without it and
+ * `features/toolkits/api/toolkits.ts` dropped the key on the way out. Both
+ * schemas describe it now and both mutations forward it.
+ *
+ * The control is also a SWITCH now, at the END of the Tools section
+ * (ELITEA-2687).
  */
-test('AHA-9b: "Make tools available by MCP" should persist after Save', async ({ page }) => {
-  /* onetest: ELITEA-2541 — product gap: the MCP checkbox does not persist
-     across a save + page reload. */
-  test.fail(
-    true,
-    'ELITEA-2541 (#928): product gap — "Make tools available by MCP" reads back unchecked after Save + reload, ' +
-      'confirmed live on two separate runs',
-  );
+test('AHA-9b: the MCP access setting persists after Save', async ({ page }) => {
+  /* onetest: ELITEA-2541 — the MCP access setting survives a save and a page reload. */
   const credentialName = tag('mcp_persist_cred');
   await seedAhaCredential(page.request, credentialName, { shared: true });
 
@@ -709,9 +715,9 @@ test('AHA-9b: "Make tools available by MCP" should persist after Save', async ({
   await ahaConfigPicker(page).click();
   await page.getByRole('option').filter({ hasText: credentialName }).click();
 
-  const mcpCheckbox = page.getByRole('checkbox', { name: 'Make tools available by MCP' });
-  await expect(mcpCheckbox).toBeVisible({ timeout: 15_000 });
-  await mcpCheckbox.check();
+  const mcpToggle = page.getByRole('switch', { name: 'Enable MCP access for selected tools' });
+  await expect(mcpToggle).toBeVisible({ timeout: 15_000 });
+  await mcpToggle.check();
 
   const name = tag('mcp_persist');
   await page.getByRole('textbox', { name: 'Toolkit Name' }).fill(name);
@@ -726,11 +732,11 @@ test('AHA-9b: "Make tools available by MCP" should persist after Save', async ({
   createdToolkitIds.push(toolkitId);
 
   await gotoEditAhaToolkit(page, toolkitId);
-  const reopened = page.getByRole('checkbox', { name: 'Make tools available by MCP' });
+  const reopened = page.getByRole('switch', { name: 'Enable MCP access for selected tools' });
   if ((await reopened.count()) === 0) {
     await page.getByRole('button', { name: 'Tools', exact: true }).click();
   }
-  await expect(reopened, 'the MCP checkbox must read back checked after Save + reload').toBeChecked({
+  await expect(reopened, 'the MCP access toggle must read back on after Save + reload').toBeChecked({
     timeout: 15_000,
   });
 });

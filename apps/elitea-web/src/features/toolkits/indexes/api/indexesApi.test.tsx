@@ -24,6 +24,7 @@ import {
   getIndexesList,
   startIndexExecution,
   stopIndexingItem,
+  saveIndexConfiguration,
   updateIndexSchedule,
   useDeleteIndexItemMutation,
   useIndexHistoryConversationDetailsQuery,
@@ -142,6 +143,36 @@ describe('updateIndexSchedule', () => {
       credentials: 'cred-1',
     });
     expect(capturedBody).toEqual({ timezone: 'UTC', cron: '0 0 * * 6', enabled: true, credentials: 'cred-1' });
+  });
+});
+
+/**
+ * ELITEA-2880 — the SAVE half of the Indexes tab's Save / Save & Reindex
+ * split. The URL is asserted because the client builds it by interpolation
+ * and the index segment carries a NAME, which may contain characters a path
+ * segment cannot.
+ */
+describe('saveIndexConfiguration', () => {
+  it('PUTs the configuration under an index_configuration key, at the per-index configuration path', async () => {
+    let capturedBody: unknown;
+    let capturedUrl = '';
+    server.use(
+      http.put(`${BASE}/elitea_core/index_meta/prompt_lib/7/tk-1/:indexName/configuration`, async ({ request }) => {
+        capturedBody = await request.json();
+        capturedUrl = new URL(request.url).pathname;
+        return HttpResponse.json({ ok: true });
+      }),
+    );
+    await saveIndexConfiguration({
+      projectId: 7,
+      toolkitId: 'tk-1',
+      indexName: 'my index/name',
+      configuration: { progress_step: 75, folder: undefined },
+    });
+    expect(capturedUrl).toBe(`${BASE}/elitea_core/index_meta/prompt_lib/7/tk-1/my%20index%2Fname/configuration`);
+    // `folder: undefined` survives as an explicit `null` (#311): a cleared
+    // field that vanished from the body would come back re-defaulted.
+    expect(capturedBody).toEqual({ index_configuration: { progress_step: 75, folder: null } });
   });
 });
 

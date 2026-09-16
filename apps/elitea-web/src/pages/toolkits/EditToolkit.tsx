@@ -12,6 +12,7 @@ import { t } from '@/shared/i18n';
 import { ViewMode } from '@/shared/lib/enums';
 import { BaseTab } from '@/shared/ui/BaseTab';
 import { BaseTabs } from '@/shared/ui/BaseTabs';
+import { useUnsavedChangesNavBlocker } from '@/widgets/app-shell';
 
 import { useScheduleCredentialsSelectSlot, useToolkitCredentialPickerSlot } from './lib/credentialPickerSlots';
 import { useCopyLinkMenuItem, useToolkitActionPermissions } from './lib/useToolkitHeaderActions';
@@ -77,9 +78,10 @@ interface IndexesTabPanelProps {
   readonly toolkitId: string | undefined;
   readonly state: IndexesTabState;
   readonly renderCredentialsSelect: ComponentProps<typeof IndexesTab>['renderCredentialsSelect'];
+  readonly onConfigDirtyChange: (dirty: boolean) => void;
 }
 
-function IndexesTabPanel({ toolkitId, state, renderCredentialsSelect }: IndexesTabPanelProps): ReactNode {
+function IndexesTabPanel({ toolkitId, state, renderCredentialsSelect, onConfigDirtyChange }: IndexesTabPanelProps): ReactNode {
   if (toolkitId === undefined) return null;
   return (
     <Box
@@ -92,6 +94,7 @@ function IndexesTabPanel({ toolkitId, state, renderCredentialsSelect }: IndexesT
         selectedIndexTools={state.selectedIndexTools}
         chatUI={INDEXES_CHAT_UI}
         renderCredentialsSelect={renderCredentialsSelect}
+        onConfigDirtyChange={onConfigDirtyChange}
         // The worker-capability verdict off the served type schema. The KEY is
         // omitted when the worker can run this type (`exactOptionalPropertyTypes`),
         // and an empty string is a real verdict — see `IndexesTab`.
@@ -230,6 +233,15 @@ export function EditToolkit({ isMCP = false, deps }: EditToolkitProps): ReactNod
   const [editToolDetail, setEditToolDetail] = useState<EditToolDetail | null>(null);
   const [isToolDirty, setIsToolDirty] = useState(false);
   const [tab, setTab] = useState(0);
+  /*
+   * ELITEA-2885 — the index configuration form's unsaved edits arm the app's
+   * one navigation guard (`widgets/app-shell`'s `NavBlockerDialog`, mounted
+   * by `AppShell` under every page). The flag is reported UP from
+   * `features/toolkits`' index panel because a `features/**` file may not
+   * import `widgets/**`; this page may, and it is where the guard belongs.
+   */
+  const [isIndexConfigDirty, setIsIndexConfigDirty] = useState(false);
+  useUnsavedChangesNavBlocker(isIndexConfigDirty);
 
   useEffect(() => {
     setEditToolDetail(toEditDetail(detail));
@@ -342,6 +354,7 @@ export function EditToolkit({ isMCP = false, deps }: EditToolkitProps): ReactNod
             toolkitId={toolkitId}
             state={indexesTab}
             renderCredentialsSelect={renderCredentialsSelect}
+            onConfigDirtyChange={setIsIndexConfigDirty}
           />
         )}
       </Box>

@@ -36,6 +36,7 @@ import (
 	v2evaluation "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
 	v2events "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/events"
 	v2folders "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
+	v2indexing "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
 	v2indextypes "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
 	v2inventory "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/inventory"
 	v2memories "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/memories"
@@ -176,6 +177,14 @@ func buildFullSurfaceConfig() api.RouterConfig {
 		// cancelInventoryInvocation, and those three operations resolve to no
 		// route at all unless this field is non-nil.
 		Inventory: &v2inventory.Route{},
+
+		// The index CONFIGURATION save (issue 940/A5). MANDATORY here, not an
+		// optional stub: v2.yaml describes saveIndexConfiguration, and that
+		// operation resolves to no route at all unless this field is
+		// non-nil. Same zero-value scheme as the facades above — its
+		// ServeHTTP answers 404 for a zero value rather than panicking, and
+		// this walk never serves a request.
+		CurrentIndexConfiguration: &v2indexing.CurrentIndexConfigurationRoute{},
 
 		// The index-types and attached-skills reads (#394, #395). Both are
 		// MANDATORY here, not optional stubs: each is the ONLY handler for a

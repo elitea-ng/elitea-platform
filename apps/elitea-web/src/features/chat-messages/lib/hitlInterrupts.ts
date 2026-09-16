@@ -45,6 +45,13 @@ export type HitlQuestion = {
   readonly multiSelect?: boolean;
   readonly multi_select?: boolean;
   readonly allow_other?: boolean;
+  /**
+   * Whether the user may move past this question without answering it (#940
+   * A8, ELITEA-2792). Absent means REQUIRED, which is what every question was
+   * before the runtime grew the field — a stored pause from before it must not
+   * become skippable because the key is missing.
+   */
+  readonly optional?: boolean;
 };
 
 /**

@@ -45,6 +45,7 @@ import { HttpResponse, delay, http } from "msw";
 import type { RequestHandlerOptions } from "msw";
 
 import type {
+  IndexWriteAck,
   InternalMcpPatStatus,
   McpRegisteredServer,
   RuntimeCapabilities,
@@ -99,6 +100,13 @@ export const getGetRuntimeCapabilitiesResponseMock = (
 
 export const getListToolkitsResponseMock = (): ToolkitTypeSchemas => ({
   [faker.string.alphanumeric(5)]: {},
+});
+
+export const getSaveIndexConfigurationResponseMock = (
+  overrideResponse: Partial<Extract<IndexWriteAck, object>> = {},
+): IndexWriteAck => ({
+  ok: faker.helpers.arrayElement([true] as const),
+  ...overrideResponse,
 });
 
 export const getListToolkitInstancesResponseMock = (
@@ -339,6 +347,32 @@ export const getListToolkitsMockHandler = (
   );
 };
 
+export const getSaveIndexConfigurationMockHandler = (
+  overrideResponse?:
+    | IndexWriteAck
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<IndexWriteAck> | IndexWriteAck),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/index_meta/prompt_lib/:projectId/:toolkitId/:indexName/configuration",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSaveIndexConfigurationResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListToolkitInstancesMockHandler = (
   overrideResponse?:
     | ToolkitInstanceListResponse
@@ -547,6 +581,7 @@ export const getToolkitsMock = () => [
   getUpdateToolkitMockHandler(),
   getGetRuntimeCapabilitiesMockHandler(),
   getListToolkitsMockHandler(),
+  getSaveIndexConfigurationMockHandler(),
   getListToolkitInstancesMockHandler(),
   getCreateToolkitMockHandler(),
   getListToolkitAvailableToolsMockHandler(),
