@@ -2267,7 +2267,7 @@ WIKI_PAGE
     # (rustfs-bucket-init), so this adds no new dependency to the stack.
     $EXEC_BIN run --rm --network "${E2E_PROJECT}_default" \
       -v "${WIKI_TMP}:/wiki:ro" \
-      --entrypoint sh docker.io/minio/mc:latest -c "
+      --entrypoint sh quay.io/minio/mc:latest -c "
         mc alias set rustfs http://rustfs:9000 elitea elitea-dev-secret >/dev/null &&
         mc cp --recursive /wiki/${WIKI_ID} rustfs/elitea-artifacts/p/90200/b/wiki-artifacts/o/ >/dev/null
       " || {
@@ -2285,7 +2285,7 @@ WIKI_PAGE
     # leaves the browser empty. This lists the exact prefix elitea-main derives
     # for (project 1, bucket wiki-artifacts) and requires the manifest in it.
     WIKI_OBJECTS=$($EXEC_BIN run --rm --network "${E2E_PROJECT}_default" \
-      --entrypoint sh docker.io/minio/mc:latest -c "
+      --entrypoint sh quay.io/minio/mc:latest -c "
         mc alias set rustfs http://rustfs:9000 elitea elitea-dev-secret >/dev/null &&
         mc ls --recursive rustfs/elitea-artifacts/p/90200/b/wiki-artifacts/o/ 2>/dev/null
       " || true)
