@@ -285,6 +285,7 @@ fn request(tools: Vec<Value>) -> AgentExecutionRequest {
             truncated_content: None,
             project_context: None,
             model_context_limits: None,
+            summary_model: None,
         },
     }
 }

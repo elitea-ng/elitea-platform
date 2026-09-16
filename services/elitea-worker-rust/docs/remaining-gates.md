@@ -107,7 +107,9 @@ Settings delivery, recovery integration, deployed UI verification, and the other
 The [model compaction implementation](source-mapping/durable-context-compaction.md) adds structured notes and durable preparation checkpoints.
 Ordinary child agents now use separate model sessions, inherited policies, and root-fenced PostgreSQL persistence.
 Pipeline LLM and model-backed Decision nodes now have independent scoped persistence; mixed and model-free graph component tests pass.
-The agent suite passes 343 checks, including PostgreSQL summary reload, writer takeover, and complete streamed-result persistence.
+The agent suite passes 344 checks, including PostgreSQL summary reload, writer takeover, and complete streamed-result persistence.
+The [dedicated summary-model component](source-mapping/dedicated-summary-model.md) separates authorized model selection, provider binding, and output limits.
+Main still sends empty context settings. Stored selection, UI controls, and deployed acceptance remain open.
 Nested and graph-model recovery coordination, deployed settings, and browser acceptance remain open.
 The pipeline container has no separate compaction control.
 Model conversations inherit a caller policy when available; otherwise saved children use explicit settings or Balanced defaults.

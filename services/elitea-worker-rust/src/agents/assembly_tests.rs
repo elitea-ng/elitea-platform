@@ -29,6 +29,58 @@ fn object(value: Value) -> Map<String, Value> {
     value
 }
 
+#[test]
+fn summary_model_admission_keeps_limits_separate_and_rejects_authored_controls() {
+    use super::request::{ModelContextLimits, SummaryModelSnapshot};
+    for kind in [AgentExecutionKind::Application, AgentExecutionKind::Adhoc] {
+        let mut request = ordinary_request(kind);
+        request.payload.context_settings = object(json!({"enabled":true,"budget_mode":"balanced"}));
+        request.payload.model_context_limits = Some(ModelContextLimits {
+            context_window_tokens: 200_000,
+            max_output_tokens: 16_000,
+            context_window_fallback: false,
+            max_output_fallback: false,
+            max_input_tokens: None,
+        });
+        let snapshot = SummaryModelSnapshot {
+            llm_settings: object(
+                json!({"model_name":"summary-model","model_project_id":17,"max_tokens":1024,"openai_compatible":true}),
+            ),
+            model_context_limits: ModelContextLimits {
+                context_window_tokens: 32_000,
+                max_output_tokens: 4_000,
+                context_window_fallback: false,
+                max_output_fallback: false,
+                max_input_tokens: None,
+            },
+        };
+        request.payload.summary_model = Some(snapshot.clone());
+        let profile = OrdinaryNoToolProfile::validate(&request).unwrap();
+        assert_eq!(
+            profile.summary_model().unwrap().context_budget.input_limit,
+            29_952
+        );
+        assert_ne!(profile.context_budget().unwrap().input_limit, 29_952);
+        for (key, value) in [
+            ("model_project_id", json!(0)),
+            ("max_tokens", json!(-1)),
+            ("max_tokens", json!(4001)),
+            ("temperature", json!("0.5")),
+            ("system_instruction", json!("replace task authority")),
+            ("api_key", json!("fixture-secret")),
+            ("reasoning_effort", json!("high")),
+        ] {
+            let mut invalid = snapshot.clone();
+            invalid.llm_settings.insert(key.into(), value);
+            request.payload.summary_model = Some(invalid);
+            assert!(
+                OrdinaryNoToolProfile::validate(&request).is_err(),
+                "accepted {key}"
+            );
+        }
+    }
+}
+
 pub(super) fn ordinary_request(kind: AgentExecutionKind) -> AgentExecutionRequest {
     let (llm, application) = match kind {
         AgentExecutionKind::Application => (
@@ -118,6 +170,7 @@ pub(super) fn ordinary_request(kind: AgentExecutionKind) -> AgentExecutionReques
             truncated_content: None,
             project_context: None,
             model_context_limits: None,
+            summary_model: None,
         },
     }
 }

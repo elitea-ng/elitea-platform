@@ -69,6 +69,31 @@ fn authorized_model_limits_survive_canonical_wire_and_old_inputs_remain_absent()
 }
 
 #[test]
+fn summary_model_requires_its_own_limits_and_preserves_its_selection() {
+    use elitea_worker_rust::protocol::elitea::runtime::v1::{
+        ModelContextLimitsV1, SummaryModelSnapshotV1,
+    };
+    use prost::Message;
+    let mut message = application_message();
+    assert!(message.summary_model.is_none());
+    message.summary_model = Some(SummaryModelSnapshotV1 {
+        llm_settings: br#"{"model_name":"summary-model","model_project_id":7,"max_tokens":2048,"openai_compatible":true}"#.to_vec(),
+        model_context_limits: Some(ModelContextLimitsV1 {
+            context_window_tokens: 32_000, max_output_tokens: 4_000,
+            context_window_fallback: false, max_output_fallback: false, max_input_tokens: Some(24_000),
+        }),
+    });
+    let decoded = parse_agent_execution_input(&message.encode_to_vec()).unwrap();
+    let request = request_from(decoded, AgentExecutionKind::Application, binding()).unwrap();
+    let summary = request.payload.summary_model.unwrap();
+    assert_eq!(summary.llm_settings["model_name"], "summary-model");
+    assert_eq!(summary.model_context_limits.max_input_tokens, Some(24_000));
+    assert!(request.payload.model_context_limits.is_none());
+    message.summary_model.as_mut().unwrap().model_context_limits = None;
+    assert!(request_from(message, AgentExecutionKind::Application, binding()).is_err());
+}
+
+#[test]
 fn python_generated_application_fixture_maps_all_current_fields() {
     let raw = application_bytes();
     let message = parse_agent_execution_input(&raw).expect("canonical Python protobuf");

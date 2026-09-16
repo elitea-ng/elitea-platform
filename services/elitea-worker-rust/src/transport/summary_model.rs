@@ -23,6 +23,7 @@ or invent results. Skills and project context retain separate authoritative sour
 /// Each summary call gets its own completion capture. The handle bounds total calls.
 pub(super) struct SummaryModel {
     invocation: ModelFacadeInvocation,
+    output_cap: Option<u32>,
     max_calls: u32,
     calls: AtomicU32,
     fresh_model: Box<dyn Fn(ModelFacadeInvocation) -> Arc<dyn Llm> + Send + Sync>,
@@ -31,10 +32,12 @@ pub(super) struct SummaryModel {
 impl SummaryModel {
     pub(super) fn new(
         invocation: &ModelFacadeInvocation,
+        output_cap: Option<u32>,
         fresh_model: impl Fn(ModelFacadeInvocation) -> Arc<dyn Llm> + Send + Sync + 'static,
     ) -> Self {
         Self {
             invocation: invocation.clone(),
+            output_cap,
             max_calls: invocation.max_model_turns,
             calls: AtomicU32::new(0),
             fresh_model: Box::new(fresh_model),
@@ -66,7 +69,7 @@ impl Llm for SummaryModel {
         // ADK formats the entire transcript as one text part. Preserve every
         // byte while respecting the ordinary provider's per-part bound.
         request.contents[0].parts = split_text_parts(&request.contents[0].parts)?;
-        let invocation = summary_invocation(&self.invocation)?;
+        let invocation = summary_invocation(&self.invocation, self.output_cap)?;
         request.config = Some(GenerateContentConfig {
             temperature: invocation.temperature,
             max_output_tokens: invocation.max_tokens.and_then(|v| i32::try_from(v).ok()),
@@ -126,14 +129,21 @@ impl Llm for SummaryModel {
 
 /// Summary output has its own bound, independent of a short chat reply cap.
 /// Recompute the reservation from catalogue limits before provider admission.
-fn summary_invocation(source: &ModelFacadeInvocation) -> adk_rust::Result<ModelFacadeInvocation> {
+fn summary_invocation(
+    source: &ModelFacadeInvocation,
+    output_cap: Option<u32>,
+) -> adk_rust::Result<ModelFacadeInvocation> {
     let mut invocation = source.clone();
     INSTRUCTION.clone_into(&mut invocation.system_instruction);
     invocation.max_model_turns = 1;
     invocation.reasoning_effort = None;
     invocation.max_tokens = match source.context_budget {
         Some(budget) => {
-            let output = budget.limits.max_output_tokens.min(MAX_OUTPUT_TOKENS);
+            let output = match output_cap {
+                Some(output) if output > 0 && output <= budget.limits.max_output_tokens => output,
+                Some(_) => return Err(invalid_summary()),
+                None => budget.limits.max_output_tokens.min(MAX_OUTPUT_TOKENS),
+            };
             invocation.context_budget = Some(
                 budget
                     .for_model(budget.limits, Some(output))
@@ -150,9 +160,10 @@ fn summary_invocation(source: &ModelFacadeInvocation) -> adk_rust::Result<ModelF
         }
         // Older inputs have no catalogue snapshot. Do not invent a larger
         // authorized maximum or change the provider's existing Auto omission.
-        None => source
+        None if output_cap.is_none() => source
             .max_tokens
             .map(|output| output.min(MAX_OUTPUT_TOKENS)),
+        None => return Err(invalid_summary()),
     };
     Ok(invocation)
 }

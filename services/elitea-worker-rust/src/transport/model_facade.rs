@@ -14,6 +14,7 @@ use tonic::transport::{Certificate, Identity};
 use super::anthropic_facade::BoundAnthropicFacade;
 use super::openai_compatible_facade::{BoundOpenAiCompatibleFacade, ModelGatewayClient};
 use super::runtime_context::ClaimScopedEliteaContext;
+use crate::agents::assembly::{OrdinaryModelProvider, SummaryModelProfile};
 use crate::agents::runtime::NativeAgentAssemblyError;
 use crate::agents::session::{BoundOrdinaryAgentModel, DurableModelCompletion};
 
@@ -62,58 +63,111 @@ impl ModelFacade {
         model_project_id: u32,
         invocation: ModelInvocation,
     ) -> Result<BoundModelFacade, ModelFacadeError> {
-        match adapter {
+        let primary = match adapter {
             ModelAdapterKind::OpenAiCompatible => self
                 .gateway
                 .bind_ordinary(context, model_project_id, invocation)
-                .map(BoundModelFacade::OpenAiCompatible),
+                .map(BoundProviderModel::OpenAiCompatible),
             ModelAdapterKind::Anthropic => self
                 .gateway
                 .bind_anthropic_ordinary(context, model_project_id, invocation)
-                .map(BoundModelFacade::Anthropic),
+                .map(BoundProviderModel::Anthropic),
+        }?;
+        Ok(BoundModelFacade {
+            primary,
+            summary: None,
+        })
+    }
+
+    pub(crate) fn bind_with_summary(
+        &self,
+        adapter: ModelAdapterKind,
+        context: &ClaimScopedEliteaContext,
+        model_project_id: u32,
+        invocation: ModelInvocation,
+        summary: Option<&SummaryModelProfile>,
+    ) -> Result<BoundModelFacade, ModelFacadeError> {
+        let turns = invocation.max_model_turns;
+        let mut bound = self.bind(adapter, context, model_project_id, invocation)?;
+        if let Some(summary) = summary {
+            let adapter = match summary.model_provider {
+                OrdinaryModelProvider::OpenAiChat => ModelAdapterKind::OpenAiCompatible,
+                OrdinaryModelProvider::NativeAnthropic => ModelAdapterKind::Anthropic,
+            };
+            let selected = self.bind(
+                adapter,
+                context,
+                summary.model_project_id,
+                ModelInvocation {
+                    context_budget: Some(summary.context_budget),
+                    model_name: summary.model_name.clone(),
+                    system_instruction: super::summary_model::INSTRUCTION.to_owned(),
+                    max_tokens: Some(summary.max_tokens),
+                    reasoning_effort: None,
+                    temperature: summary.temperature,
+                    max_model_turns: turns,
+                },
+            )?;
+            bound.summary = Some(match selected.primary {
+                BoundProviderModel::OpenAiCompatible(model) => {
+                    model.summary_model_with_output(Some(summary.max_tokens))
+                }
+                BoundProviderModel::Anthropic(model) => {
+                    model.summary_model_with_output(Some(summary.max_tokens))
+                }
+            });
         }
+        Ok(bound)
     }
 }
 
 /// Provider-neutral bound ADK model and exact final-completion owner.
-pub(crate) enum BoundModelFacade {
+pub(crate) struct BoundModelFacade {
+    primary: BoundProviderModel,
+    summary: Option<Arc<dyn adk_rust::Llm>>,
+}
+
+enum BoundProviderModel {
     OpenAiCompatible(BoundOpenAiCompatibleFacade),
     Anthropic(BoundAnthropicFacade),
 }
 
 impl BoundOrdinaryAgentModel for BoundModelFacade {
     fn summarization_model(&self) -> Option<Arc<dyn adk_rust::Llm>> {
-        match self {
-            Self::OpenAiCompatible(model) => model.summarization_model(),
-            Self::Anthropic(model) => model.summarization_model(),
+        if let Some(summary) = &self.summary {
+            return Some(summary.clone());
+        }
+        match &self.primary {
+            BoundProviderModel::OpenAiCompatible(model) => model.summarization_model(),
+            BoundProviderModel::Anthropic(model) => model.summarization_model(),
         }
     }
 
     fn request_budget(&self) -> Option<Arc<dyn crate::agents::context_budget::ModelRequestBudget>> {
-        match self {
-            Self::OpenAiCompatible(model) => model.request_budget(),
-            Self::Anthropic(model) => model.request_budget(),
+        match &self.primary {
+            BoundProviderModel::OpenAiCompatible(model) => model.request_budget(),
+            BoundProviderModel::Anthropic(model) => model.request_budget(),
         }
     }
 
     fn adk_model(&self) -> Arc<dyn adk_rust::Llm> {
-        match self {
-            Self::OpenAiCompatible(model) => model.adk_model(),
-            Self::Anthropic(model) => model.adk_model(),
+        match &self.primary {
+            BoundProviderModel::OpenAiCompatible(model) => model.adk_model(),
+            BoundProviderModel::Anthropic(model) => model.adk_model(),
         }
     }
 
     fn take_completed_text(self) -> Result<String, NativeAgentAssemblyError> {
-        match self {
-            Self::OpenAiCompatible(model) => model.take_completed_text(),
-            Self::Anthropic(model) => model.take_completed_text(),
+        match self.primary {
+            BoundProviderModel::OpenAiCompatible(model) => model.take_completed_text(),
+            BoundProviderModel::Anthropic(model) => model.take_completed_text(),
         }
     }
 
     fn durable_completion(&self) -> Option<Arc<dyn DurableModelCompletion>> {
-        match self {
-            Self::OpenAiCompatible(model) => model.durable_completion(),
-            Self::Anthropic(model) => model.durable_completion(),
+        match &self.primary {
+            BoundProviderModel::OpenAiCompatible(model) => model.durable_completion(),
+            BoundProviderModel::Anthropic(model) => model.durable_completion(),
         }
     }
 }

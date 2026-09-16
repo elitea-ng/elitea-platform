@@ -9,6 +9,7 @@
 
 use adk_rust::Content;
 use serde_json::{Map, Value};
+use std::sync::Arc;
 
 use super::attachments;
 use super::context_management::ContextManagementPlan;
@@ -53,8 +54,66 @@ pub(crate) struct OrdinaryNoToolProfile {
     chat_history: Vec<Content>,
     context_management: ContextManagementPlan,
     context_budget: Option<super::context_budget::RequestContextBudget>,
+    summary_model: Option<Arc<SummaryModelProfile>>,
     internal_tools: InternalToolCatalog,
     instruction_plan: super::instruction_authority::InstructionPlan,
+}
+
+/// Admitted independently from the task model before credential redemption.
+#[derive(Clone, Debug)]
+pub(crate) struct SummaryModelProfile {
+    pub(crate) model_name: String,
+    pub(crate) model_project_id: u32,
+    pub(crate) model_provider: OrdinaryModelProvider,
+    pub(crate) max_tokens: u32,
+    pub(crate) temperature: Option<f32>,
+    pub(crate) context_budget: super::context_budget::RequestContextBudget,
+}
+
+impl SummaryModelProfile {
+    pub(crate) fn admit(
+        snapshot: &super::request::SummaryModelSnapshot,
+        settings: &Map<String, Value>,
+    ) -> Result<Self, NativeAgentAssemblyError> {
+        const KEYS: [&str; 5] = [
+            "model_name",
+            "model_project_id",
+            "openai_compatible",
+            "max_tokens",
+            "temperature",
+        ];
+        if snapshot
+            .llm_settings
+            .keys()
+            .any(|key| !KEYS.contains(&key.as_str()))
+        {
+            return Err(invalid_profile());
+        }
+        let model = validate_model(
+            &snapshot.llm_settings,
+            ModelFieldNames::APPLICATION,
+            None,
+            "",
+        )?;
+        let max_tokens = model.max_tokens.ok_or_else(invalid_profile)?;
+        if max_tokens > snapshot.model_context_limits.max_output_tokens {
+            return Err(invalid_profile());
+        }
+        let context_budget = super::context_budget::RequestContextBudget::resolve(
+            Some(snapshot.model_context_limits),
+            settings,
+            Some(max_tokens),
+        )?
+        .ok_or_else(invalid_profile)?;
+        Ok(Self {
+            model_name: model.model_name,
+            model_project_id: model.model_project_id,
+            model_provider: model.model_provider,
+            max_tokens,
+            temperature: model.temperature,
+            context_budget,
+        })
+    }
 }
 
 impl OrdinaryNoToolProfile {
@@ -147,6 +206,15 @@ impl OrdinaryNoToolProfile {
         let model = application_model_for_agent_type(request, "pipeline")?;
         let internal_tools = application_internal_tools(request)?;
         Ok(Self {
+            summary_model: request
+                .payload
+                .summary_model
+                .as_ref()
+                .map(|snapshot| {
+                    SummaryModelProfile::admit(snapshot, &request.payload.context_settings)
+                        .map(Arc::new)
+                })
+                .transpose()?,
             context_budget: super::context_budget::RequestContextBudget::resolve(
                 request.payload.model_context_limits,
                 &request.payload.context_settings,
@@ -185,6 +253,15 @@ impl OrdinaryNoToolProfile {
             }
         };
         Ok(Self {
+            summary_model: request
+                .payload
+                .summary_model
+                .as_ref()
+                .map(|snapshot| {
+                    SummaryModelProfile::admit(snapshot, &request.payload.context_settings)
+                        .map(Arc::new)
+                })
+                .transpose()?,
             context_budget: super::context_budget::RequestContextBudget::resolve(
                 request.payload.model_context_limits,
                 &request.payload.context_settings,
@@ -287,6 +364,7 @@ impl OrdinaryNoToolProfile {
             Some(_) => return Err(invalid_profile()),
         };
         Ok(Self {
+            summary_model: fallback.summary_model.clone(),
             context_budget: {
                 let limits = match version.get("model_context_limits") {
                     Some(value) => {
@@ -395,6 +473,13 @@ impl OrdinaryNoToolProfile {
 
     pub(crate) fn context_management(&self) -> ContextManagementPlan {
         self.context_management.clone()
+    }
+
+    pub(crate) fn summary_model(&self) -> Option<&SummaryModelProfile> {
+        match self.context_management {
+            ContextManagementPlan::Disabled => None,
+            ContextManagementPlan::Summarize(_) => self.summary_model.as_deref(),
+        }
     }
 
     #[must_use]

@@ -359,7 +359,13 @@ impl OrdinaryNativeAgentAssembler {
         tracing::Span::current().record("model_project_id", profile.model_project_id());
         tracing::Span::current().record("stage", "model_binding");
         self.model_facade
-            .bind(adapter, context, profile.model_project_id(), invocation)
+            .bind_with_summary(
+                adapter,
+                context,
+                profile.model_project_id(),
+                invocation,
+                profile.summary_model(),
+            )
             .map_err(model_binding_error)
     }
 }

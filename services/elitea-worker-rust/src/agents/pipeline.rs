@@ -974,11 +974,12 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
         };
         let model = self
             .model_facade
-            .bind(
+            .bind_with_summary(
                 adapter,
                 self.context.as_ref(),
                 self.profile.model_project_id(),
                 invocation,
+                self.profile.summary_model(),
             )
             .map_err(|_| LlmExecutionError::Unavailable)?;
         let checkpoint = match self.profile.context_management() {

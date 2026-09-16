@@ -3888,7 +3888,7 @@ async fn supervisor_stop_race_returns_unpolled_authorization_for_noack_cleanup()
     let (error, reservation, job) = rejected.into_parts();
     assert_eq!(error.code(), "invocation_supervision.closed");
     assert!(
-        job.close_unstarted()
+        Box::pin(job.close_unstarted())
             .await
             .expect("unstarted cleanup")
             .is_none()

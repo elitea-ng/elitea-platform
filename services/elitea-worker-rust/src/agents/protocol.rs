@@ -212,15 +212,25 @@ pub fn request_from(
             next_input_suggestion,
             toolkit_guardrails,
             truncated_content,
-            model_context_limits: message.model_context_limits.map(|limits| {
-                super::request::ModelContextLimits {
-                    context_window_tokens: limits.context_window_tokens,
-                    max_output_tokens: limits.max_output_tokens,
-                    context_window_fallback: limits.context_window_fallback,
-                    max_output_fallback: limits.max_output_fallback,
-                    max_input_tokens: limits.max_input_tokens,
-                }
-            }),
+            model_context_limits: message.model_context_limits.map(model_context_limits),
+            summary_model: message
+                .summary_model
+                .map(|summary| {
+                    Ok(super::request::SummaryModelSnapshot {
+                        llm_settings: json_object(
+                            &summary.llm_settings,
+                            "the summary model settings must be an object",
+                        )?,
+                        model_context_limits: model_context_limits(
+                            summary.model_context_limits.ok_or(
+                                AgentProtocolError::InvalidInput(
+                                    "the summary model limits are required",
+                                ),
+                            )?,
+                        ),
+                    })
+                })
+                .transpose()?,
             project_context: message.project_context.map(|context| {
                 super::request::ProjectContextSnapshot {
                     id: context.id,
@@ -232,6 +242,18 @@ pub fn request_from(
             }),
         },
     })
+}
+
+fn model_context_limits(
+    limits: crate::protocol::elitea::runtime::v1::ModelContextLimitsV1,
+) -> super::request::ModelContextLimits {
+    super::request::ModelContextLimits {
+        context_window_tokens: limits.context_window_tokens,
+        max_output_tokens: limits.max_output_tokens,
+        context_window_fallback: limits.context_window_fallback,
+        max_output_fallback: limits.max_output_fallback,
+        max_input_tokens: limits.max_input_tokens,
+    }
 }
 
 fn validate_binding(binding: &AgentInputBinding) -> Result<(), AgentProtocolError> {

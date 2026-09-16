@@ -8,7 +8,7 @@ Sources are inspected on 2026-09-16. SDK revision: `18704a4070d098761fd1d35897dc
 
 | Current source or dependency | Behavior | Rust owner |
 | --- | --- | --- |
-| SDK `runtime/clients/client.py::_inject_summarization` | Reads conversation settings, retained messages, summary instructions, and a low-tier model with independent output controls. | `agents/context_management.rs` admits settings. `agents/context_compaction.rs` applies the policy. `transport/summary_model.rs` separates summary output controls. Dedicated model selection remains open. |
+| SDK `runtime/clients/client.py::_inject_summarization` | Reads conversation settings, retained messages, summary instructions, and a low-tier model with independent output controls. | `agents/context_management.rs` admits settings. `agents/context_compaction.rs` applies the policy. `transport/summary_model.rs` separates summary output controls. See [dedicated summary models](dedicated-summary-model.md). |
 | SDK `runtime/clients/client.py::_inject_context_editing` | Treats tool-output editing as a separate enabled strategy. | This change preserves complete tool groups. Tool-output editing remains separate point 4 work. |
 | SDK `runtime/tools/application.py::formulate_query` and `Application._run` | Keeps the delegated task explicit. Removes parent execution state and separates parallel child checkpoint identities. | `application_tools.rs` preserves task and instruction ownership. `model_scope.rs` derives independent model sessions from existing child lineage. |
 | SDK `runtime/langchain/langraph_agent.py::create_graph` and `runtime/tools/llm.py::invoke` | Applies context middleware to model nodes and carries message updates into graph execution. | `pipeline.rs::NativePipelineLlmAgentFactory` applies the policy inside each model loop. `graph/llm.rs::PipelineModelScope` isolates node visits. Exact graph state is never summarized. |
@@ -201,7 +201,7 @@ They do not replace browser acceptance or live-provider quality tests.
 Local evidence uses `elitea-point4-pipeline-scope-postgres.log` and `elitea-point4-pipeline-scope-clippy.log`; earlier storage coverage is in `elitea-point4-child-scope-storage.log`.
 Independent summary-output checks use `elitea-point4-summary-budget-tests.log` and `elitea-point4-summary-budget-clippy.log`.
 
-Remaining work includes nested and graph-model recovery coordination, default policy delivery, summary-model selection, UI controls/status, and browser acceptance.
+Remaining work includes nested and graph-model recovery coordination, default policy delivery, stored summary-model settings, UI controls/status, and browser acceptance.
 Large-input summary admission and representative live-model structured-output quality still need acceptance coverage.
 Historical events remain available in storage; model-facing retrieval of omitted evidence needs explicit integration and verification.
 Continuation, tool-output editing, same-name toolkit bindings, and runtime diagnostics remain separate point 4 requirements.

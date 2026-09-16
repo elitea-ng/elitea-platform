@@ -103,6 +103,19 @@ message AgentExecutionInputV1 {
   ProjectContextSnapshotV1 project_context = 64;
   // Main freezes the authorized catalogue limits. Absence preserves old inputs.
   ModelContextLimitsV1 model_context_limits = 65;
+  // Main resolves this optional model from the actor's authorized catalogue.
+  // Absence uses the task model for summarization. Never accept a client-authored snapshot.
+  SummaryModelSnapshotV1 summary_model = 66;
+}
+
+// A separately authorized summarizer. Credentials stay in claim-scoped redemption.
+// llm_settings uses the frozen application-model shape: model_name,
+// model_project_id, openai_compatible, max_tokens, and temperature.
+// max_tokens is an explicit summary output cap. No tools or task instructions belong here.
+message SummaryModelSnapshotV1 {
+  bytes llm_settings = 1;
+  ModelContextLimitsV1 model_context_limits = 2;
+  reserved 3 to 15;
 }
 
 // Limits describe one model, not cumulative execution usage.

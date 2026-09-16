@@ -59,7 +59,7 @@ fn request(model: &str, temperature: Option<f32>) -> LlmRequest {
     }
 }
 
-fn native_sse(model: &str) -> String {
+pub(super) fn native_sse(model: &str) -> String {
     format!(
         concat!(
             "event: message_start\n",

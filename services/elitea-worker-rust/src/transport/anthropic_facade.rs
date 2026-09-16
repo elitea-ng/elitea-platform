@@ -118,11 +118,12 @@ pub(crate) struct BoundAnthropicFacade {
     completion: AnthropicCompletion,
 }
 
-impl BoundOrdinaryAgentModel for BoundAnthropicFacade {
-    fn summarization_model(&self) -> Option<Arc<dyn Llm>> {
+impl BoundAnthropicFacade {
+    pub(super) fn summary_model_with_output(&self, output_cap: Option<u32>) -> Arc<dyn Llm> {
         let source = self.model.clone();
-        Some(Arc::new(super::summary_model::SummaryModel::new(
+        Arc::new(super::summary_model::SummaryModel::new(
             &self.model.invocation,
+            output_cap,
             move |invocation| {
                 Arc::new(EliteaAnthropicModel {
                     transport: source.transport.clone(),
@@ -135,7 +136,13 @@ impl BoundOrdinaryAgentModel for BoundAnthropicFacade {
                     calls: AtomicU32::new(0),
                 })
             },
-        )))
+        ))
+    }
+}
+
+impl BoundOrdinaryAgentModel for BoundAnthropicFacade {
+    fn summarization_model(&self) -> Option<Arc<dyn Llm>> {
+        Some(self.summary_model_with_output(None))
     }
 
     fn request_budget(&self) -> Option<Arc<dyn crate::agents::context_budget::ModelRequestBudget>> {

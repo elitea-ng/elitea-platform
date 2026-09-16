@@ -181,7 +181,7 @@ where
     /// Close the unstarted job and then release its exact admission slot.
     pub(super) async fn close(self) -> Result<Option<ClaimLeaseError>, AgentAuthorizationJobError> {
         let (_error, reservation, job) = self.rejected.into_parts();
-        let result = job.close_unstarted().await;
+        let result = Box::pin(job.close_unstarted()).await;
         drop(reservation);
         result
     }

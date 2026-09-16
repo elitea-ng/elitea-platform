@@ -95,6 +95,14 @@ pub struct AgentExecutionPayload {
     pub truncated_content: Option<String>,
     pub project_context: Option<ProjectContextSnapshot>,
     pub model_context_limits: Option<ModelContextLimits>,
+    pub summary_model: Option<SummaryModelSnapshot>,
+}
+
+/// Main resolves this model and its limits before execution admission.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SummaryModelSnapshot {
+    pub llm_settings: Map<String, Value>,
+    pub model_context_limits: ModelContextLimits,
 }
 
 /// Authorized model limits from the language-neutral runtime contract.

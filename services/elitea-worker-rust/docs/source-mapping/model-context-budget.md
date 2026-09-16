@@ -10,7 +10,7 @@ Sources are inspected on 2026-09-14.
 | --- | --- | --- |
 | Centry `configurations/models/pd/llm_model.py` | Model metadata supplies `context_window` and `max_output_tokens`. Defaults are 128,000 and 16,000. | Main `application/configurations/models.go` preserves read-time fallback provenance. |
 | SDK `runtime/clients/client.py`, `_required_provider_max_tokens` and model construction | Native Anthropic needs an output limit. Model name and project identify the configured model. | Main `agentexecution/model_context_limits.go` freezes the authorized catalogue limits. |
-| SDK `runtime/clients/client.py`, `_inject_summarization` | Context thresholds and a low-tier summary model have separate responsibilities. | Rust `agents/context_budget.rs` owns request capacity; `agents/context_compaction.rs` owns durable model-history projection. Dedicated summary-model selection remains open. |
+| SDK `runtime/clients/client.py`, `_inject_summarization` | Context thresholds and a low-tier summary model have separate responsibilities. | Rust `agents/context_budget.rs` owns request capacity; `agents/context_compaction.rs` owns durable model-history projection. See [dedicated summary models](dedicated-summary-model.md). |
 | EliteaUI `src/[fsd]/widgets/llm-model-selector/lib/validation.js` | A selected output cap must fit the configured model maximum. | Rust admission validates explicit caps before provider binding. |
 
 Source revisions: Configurations `906664480690620a79498232bfafa683ed205143`, SDK `18704a4070d098761fd1d35897dc53e412b4cbcc`, UI `fb805e6af02f5fc56662fa32ff29241488f78ca8`.
@@ -97,7 +97,8 @@ Point 4 remains open under `remaining-gates.md`.
 ## Independent summary output, 2026-09-16
 
 The SDK's `_inject_summarization` selects a low-tier model and separate output settings, with a 4,000-token default.
-Rust's current adapter still uses the authorized chat model; different model selection remains open.
+The same-model adapter uses the authorized chat model when no separate summary snapshot exists.
+The [dedicated model component](dedicated-summary-model.md) adds an independent authorized binding. Stored selection and deployed acceptance remain open.
 It now separates summary output from chat reply controls.
 With frozen limits, it reserves up to 8,192 summary output tokens, capped by the catalogue output maximum.
 It recalculates input capacity with the existing preset, margin, and input-only maximum.
@@ -106,7 +107,7 @@ Legacy inputs without catalogue limits keep their existing cap or Auto omission,
 
 Both provider suites pass 42 checks, including summary reservation, native thinking isolation, and pre-dispatch refusal of oversized summary input.
 An invalid summary reservation or oversized summary input does not consume a chat model turn.
-Large histories that need multiple summary requests, dedicated model selection, and browser acceptance remain open.
+Large histories that need multiple summary requests, stored model selection, and browser acceptance remain open.
 
 ## Child and pipeline scope clarification, 2026-09-16
 

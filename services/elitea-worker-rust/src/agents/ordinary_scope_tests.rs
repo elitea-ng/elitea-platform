@@ -58,6 +58,10 @@ async fn nested_agent_compacts_its_tool_loop_without_compacting_parent_or_losing
         max_output_fallback: false,
         max_input_tokens: None,
     });
+    request.payload.summary_model = Some(crate::agents::request::SummaryModelSnapshot {
+        llm_settings: serde_json::json!({"model_name":"dedicated-summary","model_project_id":23,"max_tokens":1024,"temperature":null,"openai_compatible":true}).as_object().unwrap().clone(),
+        model_context_limits: ModelContextLimits { context_window_tokens: 32_000, max_output_tokens: 4_000, context_window_fallback: false, max_output_fallback: false, max_input_tokens: None },
+    });
     let mut child = nested_agent_version(
         "Answer only the delegated task.",
         "child-model",
@@ -116,6 +120,10 @@ async fn nested_agent_compacts_its_tool_loop_without_compacting_parent_or_losing
         .map(|request| serde_json::from_slice(&request.body).unwrap())
         .collect();
     assert_eq!(captured.len(), 6);
+    assert_eq!(captured[3]["model"], "dedicated-summary");
+    assert_eq!(captured[3]["max_completion_tokens"], 1024);
+    assert_eq!(captured[4]["model"], "child-model");
+    assert_eq!(captured[5]["model"], "fixture-model");
     assert!(
         captured[3].to_string().contains("SOURCE_0"),
         "summary consumes older evidence"

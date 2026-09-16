@@ -40,6 +40,9 @@ type CurrentApplicationVersionFreezeRequest struct {
 	ActorUserID    int32
 	VersionDetails json.RawMessage
 	InternalTools  json.RawMessage
+	// SummaryLLMSettings comes from the resolved context strategy. A saved
+	// version cannot supply the authorized summary_model snapshot itself.
+	SummaryLLMSettings map[string]any
 }
 
 type CurrentAgentToolkitNameRequest struct {
@@ -139,6 +142,12 @@ func (service *CurrentApplicationToolSnapshotService) FreezeCurrentApplicationVe
 			return nil, contextErr
 		}
 		return nil, unsupportedStartBecause("model resolution", err)
+	}
+	if err := service.freezeCurrentSummaryModel(ctx, request.ProjectID, request.SummaryLLMSettings, version); err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, contextErr
+		}
+		return nil, unsupportedStartBecause("summary model resolution", err)
 	}
 	normalizeCurrentAgentRuntimeProfile(ctx, version, request.ProjectID)
 	tools, ok := version["tools"].([]any)

@@ -341,6 +341,10 @@ func currentAdhocInput(
 	if err != nil {
 		return nil, err
 	}
+	summaryModel, err := currentFrozenSummaryModel(snapshot)
+	if err != nil {
+		return nil, err
+	}
 	threadID := request.ConversationUUID
 	conversationID := request.ConversationUUID
 	executionGeneration := request.QuestionID
@@ -348,6 +352,7 @@ func currentAdhocInput(
 		SchemaRevision:     "elitea.runtime.agent-execution-input.v1",
 		ProjectContext:     projectContext,
 		ModelContextLimits: modelContextLimits,
+		SummaryModel:       summaryModel,
 		Llm:                llm, ChatHistory: bytes.Clone(target.ChatHistory), UserInput: userInput,
 		ThreadId: &threadID, Tools: toolsJSON, Application: application,
 		InternalTools: internalTools, McpTokens: currentMCPTokens(request.MCPTokens),

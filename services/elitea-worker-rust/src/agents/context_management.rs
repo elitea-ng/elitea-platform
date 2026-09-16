@@ -147,8 +147,8 @@ impl ContextManagementPlan {
         if admit_bool(settings, "enable_context_editing", false)? {
             return Err(unsupported());
         }
-        // A dedicated summarization model needs a second credential resolution
-        // that the claim does not carry.
+        // Authored model settings are not a runtime authority. Main must resolve
+        // them into the separate summary_model snapshot before dispatch.
         match settings.get("summary_llm_settings") {
             None | Some(Value::Null) => {}
             Some(Value::Object(_)) => return Err(unsupported()),

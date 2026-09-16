@@ -31,7 +31,7 @@ fn stream_body(chunks: Vec<Bytes>) -> Body {
     Body::new(StreamBody::new(tokio_stream::iter(frames)))
 }
 
-fn ordinary_sse() -> Vec<u8> {
+pub(super) fn ordinary_sse() -> Vec<u8> {
     concat!(
         "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"Hel\"},\"finish_reason\":null}]}\n\n",
         "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"check\"},\"finish_reason\":null}]}\n\n",

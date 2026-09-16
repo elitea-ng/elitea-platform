@@ -74,6 +74,8 @@ The summary call has a separate bounded output allowance; a short chat reply cap
 The current same-model adapter reserves up to 8,192 tokens, capped by the frozen catalogue output maximum.
 It recomputes summary input capacity and leaves chat controls unchanged.
 A different summary model must receive its own authorized binding and frozen limits before selection is enabled.
+The [dedicated model component](source-mapping/dedicated-summary-model.md) now supplies that binding through protobuf field 66.
+Stored settings resolution and deployed selection remain open. The snapshot carries no credentials, tools, or task instructions.
 
 ## Child agents and pipeline model requests
 
