@@ -10,9 +10,9 @@
  * per-case verdict; this file's own doc comments explain each defect where
  * one is asserted.
  */
-import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { expect, test, request as apiRequest, type APIRequestContext, type Page } from '@playwright/test';
 
-import { BASE_URL } from '../../../playwright.config';
+import { BASE_URL, STORAGE_STATE } from '../../../playwright.config';
 import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID } from '../../fixtures/api';
 
 const RUN_ID = String(Date.now()).slice(-6);
@@ -194,3 +194,83 @@ test('ELITEA-1088/1090/1091/1093/1097: PRODUCT GAP — a toolkit whose credentia
  * the settings diff), so this is an environment limit, not a product gap —
  * see `S/port/ledger-P9-toolkits-B.tsv`.
  */
+
+/*
+ * ── viewer-role gating (issue #940 Bucket D6, onetest ELITEA-1072) ─────────
+ *
+ * The harness had no restricted-viewer persona before this package —
+ * `scripts/e2e-stack.sh seed` and `playwright.config.ts` now seed one
+ * (`STORAGE_STATE.viewer`: project 1's `viewer` role, with
+ * `configuration.secrets.secret.create` specifically revoked).
+ *
+ * PRODUCT-DESIGN DELTA FROM THE ONETEST CASE, not a defect. ELITEA-1072
+ * expects a Viewer to see NEITHER the CREATE section NOR any saved secrets
+ * in the dropdown. This app's migration
+ * `services/elitea-main/migrations/shared/0083_viewer_secret_list_and_own_
+ * avatar.sql` DELIBERATELY grants the default-mode viewer
+ * `configuration.secrets.secret.list` — its own header explains why: the
+ * list route discloses names only (never a value, which stays gated behind
+ * `.unsecret`), and a viewer needs to be able to tell "a toolkit's secret
+ * reference is missing" from "the secret has the wrong value" — this exact
+ * dropdown is example 3 in that migration's own reasoning. So on this port,
+ * a Viewer sees the SAVED SECRETS list (names only) but not the CREATE
+ * section — the test below asserts that real, current behaviour rather
+ * than the case's original expectation.
+ */
+test.describe('as viewer', () => {
+  test.use({ storageState: STORAGE_STATE.viewer });
+
+  test('ELITEA-1072: a Viewer sees no CREATE section, but DOES see saved secret names (migration 0083 delta) — no crash, no console error', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+
+    // A saved project secret must exist first — created directly through the
+    // API, as ADMIN: the viewer persona this describe block signs in as
+    // cannot create one (`configuration.secrets.secret.create` is revoked),
+    // which is the whole point of the assertion below.
+    const secretName = `${AUTOTEST_PREFIX}cred_viewer_secret_${RUN_ID}`;
+    const admin = await apiRequest.newContext({ baseURL: BASE_URL, storageState: STORAGE_STATE.admin });
+    try {
+      const created = await admin.post(`${API_BASE}/secrets/secrets/default/${DEFAULT_PROJECT_ID}`, {
+        data: { name: secretName, value: 'placeholder-secret-value' },
+      });
+      expect(created.status(), `create ${secretName} as admin`).toBeLessThan(300);
+    } finally {
+      await admin.dispose();
+    }
+
+    const consoleErrors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text());
+    });
+
+    await openGithubCredentialForm(page, `${AUTOTEST_PREFIX}cred_viewer_${RUN_ID}`);
+
+    // NOT `openSecretDropdown` (the helper the other tests in this file
+    // share): it asserts "Create new secret" is VISIBLE, which is exactly
+    // the thing this persona must NOT see — so the wait here is on the
+    // dropdown opening at all (the saved secret's own option, the one thing
+    // guaranteed present for every persona once one secret exists).
+    await page.getByRole('button', { name: 'Secret', exact: true }).click();
+    await page.getByRole('combobox').click();
+    await expect(page.getByRole('option', { name: secretName })).toBeVisible({ timeout: 10_000 });
+
+    // No CREATE section: `configuration.secrets.secret.create` is revoked for
+    // this persona, so `useSecretFieldOptions`' `canCreate` is false and
+    // `SecretField`'s `SecretSelect` renders neither the "Create new secret"
+    // item nor its "SAVED SECRETS" subheader.
+    await expect(page.getByRole('option', { name: 'Create new secret' })).toHaveCount(0);
+    await expect(page.getByText('Saved secrets', { exact: false })).toHaveCount(0);
+
+    // No crash, no error toast/alert from opening the dropdown.
+    await expect(page.getByRole('alert').filter({ hasText: /fail|error/i })).toHaveCount(0);
+    expect(consoleErrors, `console errors while a Viewer opened the secret dropdown: ${consoleErrors.join('; ')}`).toHaveLength(0);
+
+    // Cleanup: the secret this test created (admin-authenticated — the
+    // viewer persona cannot delete it either).
+    const cleanup = await apiRequest.newContext({ baseURL: BASE_URL, storageState: STORAGE_STATE.admin });
+    await cleanup.delete(`${API_BASE}/secrets/secret/default/${DEFAULT_PROJECT_ID}/${encodeURIComponent(secretName)}`).catch(() => {});
+    await cleanup.dispose();
+  });
+});

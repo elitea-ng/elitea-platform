@@ -177,6 +177,22 @@ export async function resolvePublishAuthorProjectId(
 }
 
 /**
+ * The seeded FRONTEND-public project (issue #940 D5): id 99, matching
+ * `deploy/docker-compose.e2e-standalone.yml`'s `VITE_PUBLIC_PROJECT_ID=99` —
+ * see that file's own comment on why it is deliberately NOT the same value
+ * as the backend's `ELITEA_AI_PROJECT_ID` (project 1). `entities/project`'s
+ * `isPublicProject` is a bare id comparison against this value, so any
+ * project seeded at id 99 renders as "public" in the sidebar/agents/
+ * pipelines pages — nothing else about it is special.
+ */
+export const PUBLIC_PROJECT_NAME = 'e2e-public';
+
+/** The seeded frontend-public project's id — see `PUBLIC_PROJECT_NAME`. */
+export async function resolvePublicProjectId(request: APIRequestContext): Promise<string> {
+  return resolveProjectIdByName(request, PUBLIC_PROJECT_NAME);
+}
+
+/**
  * The CATALOGUE project's id, as the server itself reports it.
  *
  * The deployment decides this (`ELITEA_AI_PROJECT_ID`, `internal/publicproject`),

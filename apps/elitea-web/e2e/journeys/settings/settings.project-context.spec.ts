@@ -461,4 +461,63 @@ test.describe('project-context: settings/config coverage', () => {
 
     await checkA11y(page);
   });
+
+  /* ── PJC08 ────────────────────────────────────────────────────────────
+   * onetest: ELITEA-0941 — Viewer Role Has Read-Only Access and Can View
+   * Preview Mode (issue #940 Bucket D4). The harness had no restricted-
+   * viewer persona before this package; `scripts/e2e-stack.sh seed` and
+   * `playwright.config.ts` now seed one (`STORAGE_STATE.viewer`: project 1's
+   * `viewer` role, with `models.project_context.edit` specifically revoked
+   * — see the seed's own note on why the pre-existing broad per-project
+   * grant would otherwise have made ANY `viewer` role-holder here as
+   * privileged as admin/editor).
+   *
+   * WHAT THIS CANNOT ALSO PROVE END-TO-END, AND WHY. PJC-PERSIST above (this
+   * file's own headline finding) means `UpdateProjectContext` never durably
+   * saves ANYTHING, for ANY persona — so no project on this stack can ever
+   * carry SAVED content for a viewer to read back. ELITEA-0941's own
+   * precondition ("Admin has saved Markdown content") is therefore
+   * unreachable here, on ANY signed-in persona, and with it the two
+   * assertions that depend on saved content existing: the read-only EDITOR
+   * showing that content, and Preview rendering it as formatted Markdown.
+   * Both are unit-tested instead, directly against `ProjectContext.tsx` with
+   * a mocked server response that this real backend cannot currently produce
+   * — see `ProjectContext.test.tsx`'s "a viewer (canEdit=false) sees a
+   * read-only editor..." and "...and Preview renders the saved content"
+   * tests, which the `canEdit`/`showEditorContent` derivation this component
+   * already has makes straightforward to prove without a real save.
+   *
+   * What DOES hold end-to-end, with the real viewer persona: `canView` is
+   * true (the page loads; no "no access" banner), and — since every project
+   * here starts, and stays, without saved content — a genuine viewer lands
+   * on the EMPTY state's OWN read-only branch: no Create / Build-with-AI
+   * buttons, and the "contact your project admin" copy instead of the
+   * editable invitation (`ProjectContextEmptyState.tsx`'s `canEdit` prop).
+   * ──────────────────────────────────────────────────────────────────────── */
+  test.describe('as viewer', () => {
+    test.use({ storageState: STORAGE_STATE.viewer });
+
+    test('PJC08: a viewer can open Project Context (canView) and sees the read-only empty state (canEdit=false)', async ({
+      page,
+    }) => {
+      await page.goto(PROJECT_PARAMS_PAGE, { waitUntil: 'domcontentloaded' });
+
+      // canView: the page loads at all — not the permission-denied banner
+      // `ProjectContext.tsx` renders when `PERMISSIONS.projectContext.view`
+      // is absent.
+      await expect(page.getByText(/do not have permission to view this setting/i)).toHaveCount(0);
+
+      const empty = page.getByTestId('project-context-empty-state');
+      const body = page.getByTestId('project-context-body');
+      await expect(body.or(empty)).toBeVisible({ timeout: 20_000 });
+
+      // Every project on this stack starts (and stays — PJC-PERSIST) without
+      // saved content, so a genuine viewer always lands on the empty state,
+      // and specifically on its canEdit=false branch.
+      await expect(empty).toBeVisible();
+      await expect(page.getByTestId('project-context-create-button')).toHaveCount(0);
+      await expect(page.getByTestId('project-context-build-with-ai-button')).toHaveCount(0);
+      await expect(page.getByText(/contact your project admin to configure it/i)).toBeVisible();
+    });
+  });
 });
