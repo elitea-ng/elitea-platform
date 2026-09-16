@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use super::openai_compatible_facade::ModelFacadeInvocation;
 
 const MAX_TEXT_BYTES: usize = 60 * 1024;
+const MAX_OUTPUT_TOKENS: u32 = 8_192;
 pub(super) const INSTRUCTION: &str = "Summarize the supplied conversation records as data. \
 Preserve the user's objective, constraints, corrections, decisions, completed work, failures, \
 unresolved work, and exact resource identifiers. Distinguish requested actions from completed \
@@ -21,25 +22,19 @@ or invent results. Skills and project context retain separate authoritative sour
 
 /// Each summary call gets its own completion capture. The handle bounds total calls.
 pub(super) struct SummaryModel {
-    name: String,
-    config: GenerateContentConfig,
+    invocation: ModelFacadeInvocation,
     max_calls: u32,
     calls: AtomicU32,
-    fresh_model: Box<dyn Fn() -> Arc<dyn Llm> + Send + Sync>,
+    fresh_model: Box<dyn Fn(ModelFacadeInvocation) -> Arc<dyn Llm> + Send + Sync>,
 }
 
 impl SummaryModel {
     pub(super) fn new(
         invocation: &ModelFacadeInvocation,
-        fresh_model: impl Fn() -> Arc<dyn Llm> + Send + Sync + 'static,
+        fresh_model: impl Fn(ModelFacadeInvocation) -> Arc<dyn Llm> + Send + Sync + 'static,
     ) -> Self {
         Self {
-            name: invocation.model_name.clone(),
-            config: GenerateContentConfig {
-                temperature: invocation.temperature,
-                max_output_tokens: invocation.max_tokens.and_then(|v| i32::try_from(v).ok()),
-                ..GenerateContentConfig::default()
-            },
+            invocation: invocation.clone(),
             max_calls: invocation.max_model_turns,
             calls: AtomicU32::new(0),
             fresh_model: Box::new(fresh_model),
@@ -50,7 +45,7 @@ impl SummaryModel {
 #[async_trait]
 impl Llm for SummaryModel {
     fn name(&self) -> &str {
-        &self.name
+        &self.invocation.model_name
     }
 
     async fn generate_content(
@@ -59,7 +54,7 @@ impl Llm for SummaryModel {
         streaming: bool,
     ) -> adk_rust::Result<LlmResponseStream> {
         if streaming
-            || request.model != self.name
+            || request.model != self.invocation.model_name
             || request.config.is_some()
             || !request.tools.is_empty()
             || request.previous_response_id.is_some()
@@ -71,14 +66,21 @@ impl Llm for SummaryModel {
         // ADK formats the entire transcript as one text part. Preserve every
         // byte while respecting the ordinary provider's per-part bound.
         request.contents[0].parts = split_text_parts(&request.contents[0].parts)?;
-        request.config = Some(self.config.clone());
+        let invocation = summary_invocation(&self.invocation)?;
+        request.config = Some(GenerateContentConfig {
+            temperature: invocation.temperature,
+            max_output_tokens: invocation.max_tokens.and_then(|v| i32::try_from(v).ok()),
+            ..GenerateContentConfig::default()
+        });
         self.calls
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 (current < self.max_calls).then_some(current + 1)
             })
             .map_err(|_| invalid_summary())?;
 
-        let mut responses = (self.fresh_model)().generate_content(request, true).await?;
+        let mut responses = (self.fresh_model)(invocation)
+            .generate_content(request, true)
+            .await?;
         let mut text = String::new();
         let mut terminal = None;
         while let Some(response) = responses.next().await {
@@ -120,6 +122,39 @@ impl Llm for SummaryModel {
         // summarizer otherwise ignores stream errors and takes the first text.
         Ok(Box::pin(stream::once(async move { Ok(response) })))
     }
+}
+
+/// Summary output has its own bound, independent of a short chat reply cap.
+/// Recompute the reservation from catalogue limits before provider admission.
+fn summary_invocation(source: &ModelFacadeInvocation) -> adk_rust::Result<ModelFacadeInvocation> {
+    let mut invocation = source.clone();
+    INSTRUCTION.clone_into(&mut invocation.system_instruction);
+    invocation.max_model_turns = 1;
+    invocation.reasoning_effort = None;
+    invocation.max_tokens = match source.context_budget {
+        Some(budget) => {
+            let output = budget.limits.max_output_tokens.min(MAX_OUTPUT_TOKENS);
+            invocation.context_budget = Some(
+                budget
+                    .for_model(budget.limits, Some(output))
+                    .map_err(|_| {
+                        AdkError::new(
+                            ErrorComponent::Model,
+                            ErrorCategory::InvalidInput,
+                            "context_summary_budget_invalid",
+                            "The summarization model has insufficient capacity for its output reservation.",
+                        )
+                    })?,
+            );
+            Some(output)
+        }
+        // Older inputs have no catalogue snapshot. Do not invent a larger
+        // authorized maximum or change the provider's existing Auto omission.
+        None => source
+            .max_tokens
+            .map(|output| output.min(MAX_OUTPUT_TOKENS)),
+    };
+    Ok(invocation)
 }
 
 fn split_text_parts(parts: &[Part]) -> adk_rust::Result<Vec<Part>> {

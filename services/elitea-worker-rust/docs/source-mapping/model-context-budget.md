@@ -94,6 +94,20 @@ Regenerated Python bindings recognize the field; the Python SDK adapter does not
 No deployment or fresh browser acceptance is claimed for this slice.
 Point 4 remains open under `remaining-gates.md`.
 
+## Independent summary output, 2026-09-16
+
+The SDK's `_inject_summarization` selects a low-tier model and separate output settings, with a 4,000-token default.
+Rust's current adapter still uses the authorized chat model; different model selection remains open.
+It now separates summary output from chat reply controls.
+With frozen limits, it reserves up to 8,192 summary output tokens, capped by the catalogue output maximum.
+It recalculates input capacity with the existing preset, margin, and input-only maximum.
+It omits the chat reasoning control and preserves independent completion capture and call limits.
+Legacy inputs without catalogue limits keep their existing cap or Auto omission, with an 8,192-token ceiling on explicit summary caps.
+
+Both provider suites pass 42 checks, including summary reservation, native thinking isolation, and pre-dispatch refusal of oversized summary input.
+An invalid summary reservation or oversized summary input does not consume a chat model turn.
+Large histories that need multiple summary requests, dedicated model selection, and browser acceptance remain open.
+
 ## Child and pipeline scope clarification, 2026-09-16
 
 This section records source inspection, component implementation, and remaining integration requirements.

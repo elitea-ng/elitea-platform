@@ -8,7 +8,7 @@ Sources are inspected on 2026-09-16. SDK revision: `18704a4070d098761fd1d35897dc
 
 | Current source or dependency | Behavior | Rust owner |
 | --- | --- | --- |
-| SDK `runtime/clients/client.py::_inject_summarization` | Reads conversation settings, retained messages, summary instructions, and a low-tier summary model. | `agents/context_management.rs` admits settings. `agents/context_compaction.rs` applies the admitted policy before model calls. Dedicated model selection remains open. |
+| SDK `runtime/clients/client.py::_inject_summarization` | Reads conversation settings, retained messages, summary instructions, and a low-tier model with independent output controls. | `agents/context_management.rs` admits settings. `agents/context_compaction.rs` applies the policy. `transport/summary_model.rs` separates summary output controls. Dedicated model selection remains open. |
 | SDK `runtime/clients/client.py::_inject_context_editing` | Treats tool-output editing as a separate enabled strategy. | This change preserves complete tool groups. Tool-output editing remains separate point 4 work. |
 | SDK `runtime/tools/application.py::formulate_query` and `Application._run` | Keeps the delegated task explicit. Removes parent execution state and separates parallel child checkpoint identities. | `application_tools.rs` preserves task and instruction ownership. `model_scope.rs` derives independent model sessions from existing child lineage. |
 | SDK `runtime/langchain/langraph_agent.py::create_graph` and `runtime/tools/llm.py::invoke` | Applies context middleware to model nodes and carries message updates into graph execution. | `pipeline.rs::NativePipelineLlmAgentFactory` applies the policy inside each model loop. `graph/llm.rs::PipelineModelScope` isolates node visits. Exact graph state is never summarized. |
@@ -51,9 +51,20 @@ The configured recent-message count is a minimum when a complete tool group cros
 
 `transport/summary_model.rs` adapts ADK's non-streaming summarizer request to the authorized streaming provider bindings.
 Each summary call owns a fresh completion capture. The summary handle bounds total calls.
-It retains the authorized model, generation controls, shared transport, project, and execution identity.
+It retains the authorized model, shared transport, project, and execution identity.
 It uses summary-specific system instructions and exposes no tools.
 It does not consume chat model turns or replace the captured chat answer.
+
+For inputs with frozen model limits, summary output uses the smaller of 8,192 tokens and the catalogue output maximum.
+This bounded allowance is independent of the chat reply cap and the 32-KiB structured-record validation limit.
+The summary call recomputes its input capacity with this output reservation, the admitted context preset, and the existing margin.
+It also preserves any separate model input-only limit.
+It does not copy the chat reasoning effort. The provider's normal behavior applies when that control is absent.
+The native Anthropic path therefore does not add the chat's explicit thinking allowance to summary output.
+Older inputs without catalogue limits retain their output cap or Auto omission; explicit caps cannot exceed 8,192 summary tokens.
+An impossible reservation fails with `context_summary_budget_invalid` before provider dispatch.
+The complete serialized summary request still passes the provider's token and byte admission checks.
+These checks do not yet split source history across multiple summary calls when one request cannot fit.
 
 ADK 2.2.0 takes the first content response and ignores subsequent stream errors in its summarizer.
 The adapter consumes the complete bounded provider stream before returning one response to ADK.
@@ -163,7 +174,7 @@ Verification on 2026-09-16:
 
 - Agent suite: 343 tests pass, with no failures or ignored tests.
 - Session-storage suite: five tests pass, including the PostgreSQL component test.
-- Provider suites: 36 tests pass, with no failures or ignored tests.
+- Provider suites: 42 tests pass, with no failures or ignored tests.
 - PostgreSQL recovery uses three separate processes and an isolated test database.
 - The first process leaves interrupted summary preparation. The second saves the validated summary and prepared request.
 - The third process restores that request without another summary call.
@@ -181,11 +192,14 @@ Verification on 2026-09-16:
 - Replay checks require the exact pending result once, then permit later compacted history; completed child replay prepares its first real provider call.
 - Coverage checks include repeated compaction, changed history, JSON object ordering, protected input, and complete tool groups.
 - Both provider adapters reject incomplete and truncated summary streams without changing the captured chat answer.
+- Summary fixtures cover short and large chat caps, smaller catalogue limits, native thinking, separate input limits, and oversized-source refusal before dispatch.
+- A failed summary admission leaves the chat completion and its model-turn allowance unchanged.
 - Rust formatting, Clippy with warnings denied, and Git whitespace checks pass.
 
 The component fixtures test mechanics and use deterministic summary/model responses.
 They do not replace browser acceptance or live-provider quality tests.
 Local evidence uses `elitea-point4-pipeline-scope-postgres.log` and `elitea-point4-pipeline-scope-clippy.log`; earlier storage coverage is in `elitea-point4-child-scope-storage.log`.
+Independent summary-output checks use `elitea-point4-summary-budget-tests.log` and `elitea-point4-summary-budget-clippy.log`.
 
 Remaining work includes nested and graph-model recovery coordination, default policy delivery, summary-model selection, UI controls/status, and browser acceptance.
 Large-input summary admission and representative live-model structured-output quality still need acceptance coverage.

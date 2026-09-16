@@ -1009,6 +1009,128 @@ async fn adk_summaries_are_complete_and_isolated_from_the_chat_binding() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn summary_reserves_its_own_output_without_changing_chat_controls() {
+    use crate::agents::{context_budget::RequestContextBudget, request::ModelContextLimits};
+    use adk_rust::{BaseEventsSummarizer as _, Event, agent::LlmEventSummarizer};
+    for (chat_output, model_output, effort, history_bytes, summary_output, wire_output) in [
+        (128, 16_000, None, 75_000, 8_192, 128),
+        (16_000, 16_000, None, 75_000, 8_192, 16_000),
+        (
+            4_000,
+            16_000,
+            Some(ModelReasoningEffort::High),
+            75_000,
+            8_192,
+            13_092,
+        ),
+        (128, 2_048, None, 1_000, 2_048, 128),
+    ] {
+        let (client, captured) = test_model_gateway_client(
+            (0..2)
+                .map(|_| {
+                    TestModelGatewayOutcome::Response(test_model_gateway_response(Body::new(
+                        Full::new(Bytes::from(native_sse(MODEL))),
+                    )))
+                })
+                .collect(),
+            test_model_gateway_config(),
+        )
+        .unwrap();
+        let mut settings = invocation(MODEL, effort);
+        settings.max_tokens = Some(chat_output);
+        settings.max_model_turns = 1;
+        settings.context_budget = RequestContextBudget::resolve(
+            Some(ModelContextLimits {
+                context_window_tokens: 32_000,
+                max_output_tokens: model_output,
+                context_window_fallback: false,
+                max_output_fallback: false,
+                max_input_tokens: None,
+            }),
+            &serde_json::Map::new(),
+            Some(chat_output),
+        )
+        .unwrap();
+        let bound = client
+            .bind_anthropic_ordinary(&ClaimScopedEliteaContext::fixture(17, TOKEN), 17, settings)
+            .unwrap();
+        let summarizer = LlmEventSummarizer::new(bound.summarization_model().unwrap());
+        let mut event = Event::new("summary-budget");
+        event.set_content(Content::new("user").with_text("x".repeat(history_bytes)));
+        summarizer
+            .summarize_events(&[event])
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            bound
+                .durable_completion()
+                .unwrap()
+                .snapshot()
+                .unwrap()
+                .is_none()
+        );
+        let mut chat = request(MODEL, effort.is_none().then_some(0.7));
+        chat.config.as_mut().unwrap().max_output_tokens = Some(chat_output.try_into().unwrap());
+        drain(bound.generate_for_test(chat).await.unwrap())
+            .await
+            .unwrap();
+        let requests = captured.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        let summary: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        let chat: serde_json::Value = serde_json::from_slice(&requests[1].body).unwrap();
+        assert_eq!(summary["max_tokens"], summary_output);
+        assert!(summary.get("thinking").is_none());
+        assert_eq!(chat["max_tokens"], wire_output);
+        assert_eq!(chat.get("thinking").is_some(), effort.is_some());
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn oversized_summary_refuses_dispatch_without_spending_a_chat_turn() {
+    use crate::agents::{context_budget::RequestContextBudget, request::ModelContextLimits};
+    use adk_rust::{BaseEventsSummarizer as _, Event, agent::LlmEventSummarizer};
+    let (client, captured) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(
+            test_model_gateway_response(Body::new(Full::new(Bytes::from(native_sse(MODEL))))),
+        )],
+        test_model_gateway_config(),
+    )
+    .unwrap();
+    let mut settings = invocation(MODEL, None);
+    settings.max_tokens = Some(128);
+    settings.max_model_turns = 1;
+    settings.context_budget = RequestContextBudget::resolve(
+        Some(ModelContextLimits {
+            context_window_tokens: 16_000,
+            max_output_tokens: 8_192,
+            context_window_fallback: false,
+            max_output_fallback: false,
+            max_input_tokens: None,
+        }),
+        &serde_json::Map::new(),
+        Some(128),
+    )
+    .unwrap();
+    let bound = client
+        .bind_anthropic_ordinary(&ClaimScopedEliteaContext::fixture(17, TOKEN), 17, settings)
+        .unwrap();
+    let summarizer = LlmEventSummarizer::new(bound.summarization_model().unwrap());
+    let mut event = Event::new("summary-budget");
+    event.set_content(Content::new("user").with_text("private-summary-source ".repeat(2_000)));
+    let error = summarizer.summarize_events(&[event]).await.unwrap_err();
+    assert_eq!(error.code, "context_budget_exceeded");
+    assert!(!error.to_string().contains("private-summary-source"));
+    assert!(captured.lock().unwrap().is_empty());
+    let mut chat = request(MODEL, Some(0.7));
+    chat.config.as_mut().unwrap().max_output_tokens = Some(128);
+    drain(bound.generate_for_test(chat).await.unwrap())
+        .await
+        .unwrap();
+    assert_eq!(captured.lock().unwrap().len(), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn adk_summary_rejects_truncation_and_stream_failure_after_text() {
     use adk_rust::{BaseEventsSummarizer as _, Event, agent::LlmEventSummarizer};
     for body in [

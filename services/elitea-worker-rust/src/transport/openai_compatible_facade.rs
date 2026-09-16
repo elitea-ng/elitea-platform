@@ -319,10 +319,7 @@ impl BoundOrdinaryAgentModel for BoundOpenAiCompatibleFacade {
         let source = self.model.clone();
         Some(Arc::new(super::summary_model::SummaryModel::new(
             &self.model.invocation,
-            move || {
-                let mut invocation = source.invocation.clone();
-                super::summary_model::INSTRUCTION.clone_into(&mut invocation.system_instruction);
-                invocation.max_model_turns = 1;
+            move |invocation| {
                 Arc::new(EliteaOpenAiCompatibleModel {
                     transport: source.transport.clone(),
                     config: source.config.clone(),

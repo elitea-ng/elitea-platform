@@ -70,13 +70,18 @@ An output cap limits one response. It does not implement context compaction.
 When protected content alone exceeds the available input budget, return an explicit bounded failure.
 Do not silently discard instructions or send an already known oversized request.
 
+The summary call has a separate bounded output allowance; a short chat reply cap must not truncate continuation notes.
+The current same-model adapter reserves up to 8,192 tokens, capped by the frozen catalogue output maximum.
+It recomputes summary input capacity and leaves chat controls unchanged.
+A different summary model must receive its own authorized binding and frozen limits before selection is enabled.
+
 ## Child agents and pipeline model requests
 
 User clarification on 2026-09-16 applies independent compaction to nested agents and applications.
 Each child inherits the parent's admitted context policy, including the preset, explicit limit, preservation rules, and compaction thresholds.
 Freeze that policy for the child invocation and retain it during recovery.
 The default trigger calculation uses 90 percent of usable input capacity, with a target of 70 percent after compaction.
-The numeric thresholds have component checks; automatic triggering and durable compaction still require integration.
+Automatic triggering and durable model projection have component checks. Deployed settings and browser acceptance remain open.
 The target does not authorize dropping protected content; the complete request must still pass its final capacity check.
 
 Each child measures its own complete model request and retains its own summary and source coverage.
