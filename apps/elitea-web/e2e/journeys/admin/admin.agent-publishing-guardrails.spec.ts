@@ -187,6 +187,20 @@ adminTest(
         const combobox = editor.getByRole('combobox', { name: /Publishing Allowed Projects/ });
         await combobox.fill('e2e-publish-author');
         await page.getByRole('option', { name: 'e2e-publish-author' }).click();
+        // `disableCloseOnSelect` (module doc) keeps the popper OPEN after a
+        // multi-select pick — by design, so the operator can keep adding
+        // projects without reopening it — and the input clears back to the
+        // full, unfiltered option list underneath. On webkit specifically,
+        // that still-open popper sits over the Save button's screen
+        // position closely enough that Playwright's actionability check
+        // never resolves it as clickable, and the click retries for the
+        // rest of the test's budget (reproduced locally: the popper visibly
+        // covers the panel below it in the failure screenshot). Chromium
+        // dismisses cleanly enough not to hit this; Escape is the same
+        // close path a real keyboard user has, and it is unambiguous here
+        // regardless of engine.
+        await page.keyboard.press('Escape');
+        await expect(page.getByRole('listbox')).toHaveCount(0);
 
         await page.getByRole('button', { name: 'Save' }).click();
         await expect(page.getByText('Feature settings saved.')).toBeVisible({ timeout: 10_000 });

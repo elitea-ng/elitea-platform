@@ -393,9 +393,17 @@ test.describe('project-context: settings/config coverage', () => {
     // `e.target.value` synchronously right after calling it — so checking
     // "not contain" too early passes VACUOUSLY (the read simply hasn't
     // resolved yet), which is exactly the false-negative this rulebook warns
-    // against. Waiting for the read to genuinely settle first (confirmed via
-    // manual reproduction: ~1s) is what makes the absence check meaningful.
-    await page.waitForTimeout(1_500);
+    // against. A FIXED sleep here (previously 1.5s) is itself a race against
+    // `FileReader`'s real completion time: under worker contention — webkit
+    // especially, being the slower engine — the read can take longer than any
+    // fixed budget, so the "not contain" check would then pass vacuously and
+    // `test.fail()` would report "expected to fail, but passed" (observed
+    // locally, ~30% of runs under load). Waiting POSITIVELY for the leaked
+    // text to actually land — which the product gap guarantees it eventually
+    // will — proves the read settled no matter how long it takes, and turns
+    // the final assertion into a genuine, deterministic failure instead of a
+    // coin flip.
+    await expect(editorContent(page)).toContainText('Same content, wrong extension', { timeout: 10_000 });
     // SHOULD hold: the .txt content must not reach the editor. It does.
     await expect(editorContent(page)).not.toContainText('Same content, wrong extension');
   });
@@ -479,6 +487,17 @@ test.describe('project-context: settings/config coverage', () => {
   test('PJC06: the Enable toggle changes the page immediately, in both directions', async ({ page }) => {
     await openEditor(page);
     await typeContent(page, `${AUTOTEST_PREFIX}toggle-probe`);
+    // The banner below is driven by REACT state (`content.trim()`), which
+    // CodeMirror's `onChange` reaches only after its own debounce — same
+    // race PJC02 and PJC07 wait out after typing, missing here previously.
+    // `toggle` and `editorContent` were both already satisfied by
+    // `openEditor`, so the two `expect`s right after typing resolve
+    // instantly and give no real buffer on their own; on webkit, that was
+    // thin enough (under worker contention) for the click below to land
+    // before `content` had committed, so `!enabled && content.trim()`
+    // read `content` as still empty and the "turned off" banner never
+    // rendered. Waiting past the debounce first makes it deterministic.
+    await page.waitForTimeout(400);
     const toggle = page.getByRole('switch');
     await expect(toggle).toBeChecked();
     await expect(editorContent(page)).toBeVisible();

@@ -502,14 +502,24 @@ test('M1b: cancelling the delete confirmation leaves the conversation on the rai
   await expect(row).toBeVisible({ timeout: 15_000 });
   await expect(row).toContainText(name);
 
-  // The kebab is `display: none` until the row is hovered (`ConversationItem.styles.ts`).
+  // The kebab is `display: none` until the row is hovered
+  // (`ConversationItem.styles.ts`'s `isHovering`-driven `menuWrapper`), and
+  // hovering itself reflows the row (`computeMainBodyWidth` shrinks
+  // `mainBody` by 32px to make room for it) — a single `hover()` then
+  // `click()` can lose the hover state to that reflow before the click
+  // lands, observed in CI as the trigger cycling "not stable" / "not
+  // visible" for the rest of the test's budget (M1, right above, hit the
+  // same shape for a different reason — see its own comment on the
+  // pointer-jiggle history). `toPass` re-issues the WHOLE gesture — a fresh
+  // hover, not just a fresh click — so a hover dropped mid-attempt is
+  // recovered rather than retried against a target that is still hidden.
   const trigger = page.locator(`#conversation-menu-${conversationId}-trigger`);
-  await row.hover();
-  await expect(trigger).toBeVisible({ timeout: 5_000 });
-  await trigger.click();
-
   const menu = page.locator(`#conversation-menu-${conversationId}-menu`);
-  await expect(menu).toBeVisible({ timeout: 5_000 });
+  await expect(async () => {
+    await row.hover();
+    await trigger.click({ timeout: 2_000 });
+    await expect(menu).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 20_000 });
   await menu.getByRole('menuitem', { name: 'Delete' }).click();
   await expect(menu).toContainText("Are you sure to delete conversation? It can't be restored.");
 
