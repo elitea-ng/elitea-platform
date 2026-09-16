@@ -30,12 +30,14 @@ use tokio::sync::{Mutex, mpsc};
 use tracing::Instrument as _;
 
 use super::assembly::{OrdinaryModelProvider, OrdinaryNoToolProfile, ReasoningEffort};
+use super::context_management::ContextManagementPlan;
 use super::direct_hitl::{ResolvedDirectHitlDecision, sensitive_call_identity};
 use super::events::{
     APPLICATION_BRANCH_ROOT, ApplicationToolGuardCatalogs, ApplicationToolPresentationCatalog,
     DESCENDANT_CONTAINER_INVOCATION_KEY, DESCENDANT_PARENT_CALL_KEY,
 };
 use super::internal_tools::{ASK_USER_TOOL_NAME, ASK_USER_TOOLSET_NAME, InternalToolCatalog};
+use super::model_scope::{ModelScopeSessions, ScopedModelCheckpoint};
 use super::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
 use super::sensitive_tools::{SensitiveToolCatalog, sensitive_tools_for_kind};
 use super::session::{
@@ -50,7 +52,8 @@ use crate::toolkits::{
     materialize_mcp_toolsets_with_tokens_and_authorization,
 };
 use crate::transport::model_facade::{
-    ModelAdapterKind, ModelFacade, ModelFacadeError, ModelInvocation, ModelReasoningEffort,
+    BoundModelFacade, ModelAdapterKind, ModelFacade, ModelFacadeError, ModelInvocation,
+    ModelReasoningEffort,
 };
 use crate::transport::platform_client::PlatformClient;
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
@@ -794,6 +797,7 @@ pub(crate) struct ApplicationToolDependencies<'a> {
     mcp_tokens: &'a Map<String, Value>,
     event_sender: Option<ApplicationEventSender>,
     resume: Option<ApplicationResumeCoordinator>,
+    model_scopes: Option<ModelScopeSessions>,
 }
 
 impl<'a> ApplicationToolDependencies<'a> {
@@ -811,7 +815,13 @@ impl<'a> ApplicationToolDependencies<'a> {
             mcp_tokens,
             event_sender: None,
             resume: None,
+            model_scopes: None,
         }
+    }
+
+    pub(super) fn with_model_scopes(mut self, scopes: ModelScopeSessions) -> Self {
+        self.model_scopes = Some(scopes);
+        self
     }
 }
 
@@ -973,6 +983,7 @@ pub(crate) async fn materialize_application_tools(
         hops: 0,
         event_sender: dependencies.event_sender,
         resume: dependencies.resume,
+        model_scopes: dependencies.model_scopes,
     };
     let mut tools = Vec::with_capacity(references.len());
     for reference in references {
@@ -1013,6 +1024,7 @@ struct ApplicationAssemblyState<'a> {
     hops: usize,
     event_sender: Option<ApplicationEventSender>,
     resume: Option<ApplicationResumeCoordinator>,
+    model_scopes: Option<ModelScopeSessions>,
 }
 
 impl ApplicationAssemblyState<'_> {
@@ -1143,6 +1155,7 @@ impl ApplicationAssemblyState<'_> {
             delegated_authorization: delegated_authorization.clone(),
             internal_tools,
             parallel_applications,
+            model_scopes: self.model_scopes.clone(),
         });
         Ok(Arc::new(BuiltApplication {
             agent,
@@ -1374,6 +1387,7 @@ struct LazyNestedAgent {
     delegated_authorization: DelegatedAuthorizationCatalog,
     internal_tools: InternalToolCatalog,
     parallel_applications: bool,
+    model_scopes: Option<ModelScopeSessions>,
 }
 
 #[async_trait]
@@ -1391,10 +1405,13 @@ impl Agent for LazyNestedAgent {
     }
 
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> adk_rust::Result<EventStream> {
+        let model = self.bind_model()?;
+        let checkpoint = self.context_checkpoint(&model, None)?;
         let agent = self.build_agent(
-            self.bind_model()?,
+            model.provider_model(),
             self.toolsets.clone(),
             self.delegated_authorization.clone(),
+            checkpoint,
         )?;
         agent.run(ctx).await
     }
@@ -1408,7 +1425,7 @@ struct PreparedChildApplicationResume {
 }
 
 impl LazyNestedAgent {
-    fn bind_model(&self) -> adk_rust::Result<Arc<dyn adk_rust::Llm>> {
+    fn bind_model(&self) -> adk_rust::Result<BoundModelFacade> {
         let invocation = ModelInvocation {
             context_budget: self.profile.context_budget(),
             model_name: self.profile.model_name().to_owned(),
@@ -1429,8 +1446,33 @@ impl LazyNestedAgent {
                 self.profile.model_project_id(),
                 invocation,
             )
-            .map(|model| model.provider_model())
             .map_err(model_error)
+    }
+
+    fn context_checkpoint(
+        &self,
+        model: &BoundModelFacade,
+        replay_marker: Option<Content>,
+    ) -> adk_rust::Result<Option<Arc<ScopedModelCheckpoint>>> {
+        let ContextManagementPlan::Summarize(plan) = self.profile.context_management() else {
+            return Ok(None);
+        };
+        let storage = self
+            .model_scopes
+            .as_ref()
+            .ok_or_else(agent_configuration_error)?;
+        Ok(Some(
+            storage.checkpoint(
+                plan,
+                model
+                    .request_budget()
+                    .ok_or_else(agent_configuration_error)?,
+                model
+                    .summarization_model()
+                    .ok_or_else(agent_configuration_error)?,
+                replay_marker,
+            ),
+        ))
     }
 
     fn build_agent(
@@ -1438,6 +1480,7 @@ impl LazyNestedAgent {
         model: Arc<dyn adk_rust::Llm>,
         toolsets: Vec<Arc<dyn Toolset>>,
         mut authorization: DelegatedAuthorizationCatalog,
+        checkpoint: Option<Arc<ScopedModelCheckpoint>>,
     ) -> adk_rust::Result<Arc<dyn Agent>> {
         let (model, toolsets) =
             crate::toolkits::bind_authorization_model_tools(model, toolsets, &mut authorization)?;
@@ -1456,6 +1499,9 @@ impl LazyNestedAgent {
             .disallow_transfer_to_parent(true)
             .disallow_transfer_to_peers(true);
         builder = self.profile.instruction_plan().bind_builder(builder);
+        if let Some(checkpoint) = &checkpoint {
+            builder = checkpoint.clone().bind(builder);
+        }
         for toolset in toolsets
             .into_iter()
             .chain(self.profile.instruction_plan().toolsets())
@@ -1482,6 +1528,10 @@ impl LazyNestedAgent {
             .build()
             .map(|agent| Arc::new(agent) as Arc<dyn Agent>)
             .map_err(|_| agent_configuration_error())?;
+        let agent = checkpoint.map_or_else(
+            || agent.clone(),
+            |checkpoint| checkpoint.wrap(agent.clone()),
+        );
         let agent = self.profile.instruction_plan().wrap(agent);
         let agent = delegated_authorization_agent(agent, authorization);
         Ok(clarifying_question_agent(agent, self.internal_tools))
@@ -1504,11 +1554,13 @@ impl LazyNestedAgent {
                     (*decision).into_direct_replay(sensitive_tools)
                 }
                 .map_err(direct_hitl_execution_error)?;
-                let prepared = replay.bind(self.bind_model()?);
+                let bound = self.bind_model()?;
+                let prepared = replay.bind(bound.provider_model());
                 let (model, run_input, toolsets) = prepared.into_parts(self.toolsets.clone());
                 let (user_content, run_config) = run_input.into_parts();
+                let checkpoint = self.context_checkpoint(&bound, Some(user_content.clone()))?;
                 Ok(PreparedChildApplicationResume {
-                    agent: self.build_agent(model, toolsets, authorization)?,
+                    agent: self.build_agent(model, toolsets, authorization, checkpoint)?,
                     user_content,
                     run_config,
                     children: None,
@@ -1520,8 +1572,10 @@ impl LazyNestedAgent {
                 let interrupt_ids =
                     resume_interrupt_ids(&children).map_err(nested_resume_execution_error)?;
                 let user_content = nested_resume_user_content(&interrupt_ids);
+                let bound = self.bind_model()?;
+                let checkpoint = self.context_checkpoint(&bound, Some(user_content.clone()))?;
                 let model: Arc<dyn Llm> = Arc::new(ApplicationReplayModel {
-                    delegate: self.bind_model()?,
+                    delegate: bound.provider_model(),
                     state: AtomicU8::new(REPLAY_APPLICATIONS_PENDING),
                     calls,
                     replay_marker: user_content.clone(),
@@ -1531,6 +1585,7 @@ impl LazyNestedAgent {
                         model,
                         self.toolsets.clone(),
                         self.delegated_authorization.clone(),
+                        checkpoint,
                     )?,
                     user_content,
                     run_config: application_run_config(),

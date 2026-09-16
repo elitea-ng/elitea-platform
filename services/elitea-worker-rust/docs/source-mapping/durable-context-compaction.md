@@ -1,6 +1,6 @@
 # Durable context compaction
 
-Status: ordinary root-agent component implementation. Point 4 and deployed browser acceptance remain open.
+Status: ordinary root and nested-agent component implementation. Point 4 and deployed browser acceptance remain open.
 
 ## Functional source mapping
 
@@ -10,6 +10,7 @@ Sources are inspected on 2026-09-16. SDK revision: `18704a4070d098761fd1d35897dc
 | --- | --- | --- |
 | SDK `runtime/clients/client.py::_inject_summarization` | Reads conversation settings, retained messages, summary instructions, and a low-tier summary model. | `agents/context_management.rs` admits settings. `agents/context_compaction.rs` applies the admitted policy before model calls. Dedicated model selection remains open. |
 | SDK `runtime/clients/client.py::_inject_context_editing` | Treats tool-output editing as a separate enabled strategy. | This change preserves complete tool groups. Tool-output editing remains separate point 4 work. |
+| SDK `runtime/tools/application.py::formulate_query` and `Application._run` | Keeps the delegated task explicit. Removes parent execution state and separates parallel child checkpoint identities. | `application_tools.rs` preserves task and instruction ownership. `model_scope.rs` derives independent model sessions from existing child lineage. |
 | ADK 2.2.0 `adk-agent/src/compaction.rs::LlmEventSummarizer` | Formats text events and returns an `EventCompaction` result. | The new compactor uses this summarizer with normalized structured tool records and a continuation-record prompt. |
 | ADK 2.2.0 `adk-agent/src/llm_agent.rs` | Runs before-model callbacks inside the model/tool loop. | `agents/model_checkpoint.rs` composes preparation, summary persistence, and model-request persistence in this callback. |
 | ADK 2.2.0 `adk-runner/src/runner.rs` | Runs its compactor before the agent invocation. | Existing Runner compaction remains for old bindings without model-limit snapshots. The new path also handles model-loop iterations. |
@@ -64,7 +65,8 @@ The complete request still passes the provider's token and byte limits.
 The new path applies when an ordinary root invocation has an admitted summary plan and frozen model limits.
 Main currently sends empty context settings, so deployed activation still requires settings delivery.
 Old unversioned bindings retain their previous Runner path, now with an isolated summary binding.
-Direct HITL resume, child agents, and pipeline model scopes still need equivalent integration.
+Direct root HITL resume and pipeline model scopes still need equivalent integration.
+Nested ordinary agents now use the same model checkpoint callback with independent session storage.
 
 The compactor uses the complete provider-request estimate and the existing 90-percent pressure trigger.
 It summarizes the oldest eligible prefix while retaining the configured recent messages and complete tool groups.
@@ -98,15 +100,40 @@ The implementation uses ADK's summarizer, callbacks, and session state/event app
 It does not publish a transcript-wide timestamp compaction marker to the Runner.
 That marker cannot express the protected user messages or source-content coverage required here.
 The private record extends the existing checkpoint mechanism; it does not introduce another storage service or scheduler.
-Pipeline and child scopes must use their own durable lineage before this mechanism is applied there.
+Pipeline scopes still require their own durable lineage before this mechanism applies there.
 
 ## Child and pipeline ownership trace
 
-`application_tools.rs::LazyNestedAgent` currently binds a model separately for each child call.
+`application_tools.rs::LazyNestedAgent` binds a model separately for each child call.
 `ApplicationToolInvocationContext` derives an instruction-session identity from the parent session, tool-call ID, and child name.
-Its session is local memory. The parent forwards child events through the existing application event channel.
-These paths do not yet inject the durable session service into a child before-model callback.
-The nested profile now carries its parent's admitted policy; runtime consumption remains open.
+Its working session remains local memory. The parent forwards child events through the existing application event channel.
+`model_scope.rs` adds an independent durable model session when the inherited policy enables compaction.
+Its identity includes execution, generation, child instruction-session identity, and child agent name.
+Provider call-ID reuse across executions cannot reuse another execution's summary.
+A checkpoint writer binds to one identity. It rejects accidental reuse by a sibling.
+
+The child retains its bound model's request measurement and isolated summary handle.
+Its before-model callback runs after authoritative instruction preparation, inside the existing ADK model/tool loop.
+The callback stores source coverage, summary state, and the prepared provider request before dispatch.
+The child wrapper stores model and tool events before forwarding them to its parent.
+Original events remain available after model-facing compaction. Parent and sibling checkpoints remain separate.
+The existing compaction and checkpoint keys are relative to each model session.
+
+The root PostgreSQL service continues to reject other session identities.
+An internal factory derives a separate child service under the same admitted claim and definition.
+Activation and subsequent operations lock the root writer before the child writer.
+Root-writer takeover therefore blocks stale child writes, even before local lease-loss detection.
+This uses existing session and writer tables. No schema migration occurs.
+
+A replacement can reload matching summary coverage through the derived child service.
+Loading this state does not authorize replay of the parent's tool call or an unfinished child effect.
+Automatic recovery of an in-flight nested call still requires parent recovery integration.
+The existing parent recovery guard continues to reject an ambiguous tool boundary.
+
+Authorized child guard replay keeps its first deterministic pending-call request intact.
+Later provider requests remove the private replay marker before measurement, compaction, and checkpoint persistence.
+This preserves the existing replay adapter's ordering without treating control input as a user correction.
+End-to-end compaction during nested guard resume still requires acceptance coverage.
 
 `pipeline.rs::NativePipelineLlmAgentFactory` binds the model and tools for each LLM node.
 `graph/llm.rs::PipelineLlmInvocationContext` currently creates a local session using the graph thread ID.
@@ -123,7 +150,8 @@ Preserve direct-HITL replay and authorization replay ordering when adding their 
 
 Verification on 2026-09-16:
 
-- Agent suite: 334 tests pass, with no failures or ignored tests.
+- Agent suite: 338 tests pass, with no failures or ignored tests.
+- Session-storage suite: five tests pass, including the PostgreSQL component test.
 - Provider suites: 36 tests pass, with no failures or ignored tests.
 - PostgreSQL recovery uses three separate processes and an isolated test database.
 - The first process leaves interrupted summary preparation. The second saves the validated summary and prepared request.
@@ -131,14 +159,19 @@ Verification on 2026-09-16:
 - Both replacement processes validate checkpoint evidence before executable restoration.
 - The production session-backend inspector admits interrupted summary preparation without model binding.
 - Failed checkpoint persistence prevents task-model dispatch.
+- An ordinary nested-agent fixture compacts older tool evidence while retaining its task and the recent complete tool group.
+- The fixture retains both original tool results in child storage. Its parent receives only the child answer.
+- Child fixtures verify separate sibling identities, execution/generation isolation, summary reload, and private replay-marker removal.
+- A PostgreSQL fixture verifies child-summary reload and rejection of stale writes after root-writer takeover.
 - Coverage checks include repeated compaction, changed history, JSON object ordering, protected input, and complete tool groups.
 - Both provider adapters reject incomplete and truncated summary streams without changing the captured chat answer.
 - Rust formatting, Clippy with warnings denied, and Git whitespace checks pass.
 
 The component fixtures test mechanics and use deterministic summary/model responses.
 They do not replace browser acceptance or live-provider quality tests.
+Local evidence uses the `elitea-point4-child-scope-postgres.log`, `elitea-point4-child-scope-storage.log`, and `elitea-point4-child-scope-clippy.log` files.
 
-Remaining work includes child and pipeline scope integration, default policy delivery, summary-model selection, UI controls/status, and browser acceptance.
+Remaining work includes nested recovery coordination, pipeline scope integration, default policy delivery, summary-model selection, UI controls/status, and browser acceptance.
 Large-input summary admission and representative live-model structured-output quality still need acceptance coverage.
 Historical events remain available in storage; model-facing retrieval of omitted evidence needs explicit integration and verification.
 Continuation, tool-output editing, same-name toolkit bindings, and runtime diagnostics remain separate point 4 requirements.

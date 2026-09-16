@@ -1,6 +1,6 @@
 # Rust worker remaining gates
 
-Updated: 2026-09-14. Main integration baseline: `1dee0c89`.
+Updated: 2026-09-16. Main integration baseline: `1dee0c89`.
 
 This register orders implementation work. The [testing register](testing-gaps.md) owns detailed proof requirements.
 Source mappings remain the behavioral evidence for each capability.
@@ -104,8 +104,9 @@ These are part of gate 4 acceptance, not optional follow-up work after compactio
 The [model budget foundation](source-mapping/model-context-budget.md) freezes authorized limits and checks the complete provider request.
 It reserves output inside the effective window and preserves explicit limits.
 Settings delivery, durable compaction, deployed UI verification, and the other point 4 contracts remain open.
-The [ordinary root compaction implementation](source-mapping/durable-context-compaction.md) adds structured notes and durable preparation checkpoints.
-Its scope does not yet include child or pipeline model integration, deployed settings, or browser acceptance.
+The [ordinary agent compaction implementation](source-mapping/durable-context-compaction.md) adds structured notes and durable preparation checkpoints.
+Ordinary child agents now use separate model sessions, inherited policies, and root-fenced PostgreSQL persistence.
+Nested recovery coordination, pipeline model integration, deployed settings, and browser acceptance remain open.
 The pipeline container has no separate compaction control.
 Model conversations inherit a caller policy when available; otherwise saved children use explicit settings or Balanced defaults.
 Plain LLM nodes also compact their accumulated history, as confirmed on 2026-09-16.

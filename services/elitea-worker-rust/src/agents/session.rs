@@ -495,6 +495,17 @@ pub(crate) struct OrdinaryNativeAgentPlan {
 }
 
 impl OrdinaryNativeAgentPlan {
+    pub(super) fn model_scope_sessions(
+        &self,
+        sessions: super::model_scope::ModelScopeBackend,
+    ) -> super::model_scope::ModelScopeSessions {
+        super::model_scope::ModelScopeSessions::new(
+            sessions,
+            self.execution_id.clone(),
+            self.generation,
+            self.definition_digest,
+        )
+    }
     /// `attachments` is the RESOLVED chunk list for this turn — see
     /// [`ordinary_user_content`]. Callers that performed no read pass
     /// `&request.payload.input_attachments`, which renders exactly what
@@ -762,6 +773,23 @@ impl NativeSessionBackend {
         state_writer_lease: Arc<dyn StateWriterLease>,
         plan: &OrdinaryNativeAgentPlan,
     ) -> Result<Arc<dyn SessionService>, NativeAgentAssemblyError> {
+        self.open_with_model_scopes(authority, state_writer_lease, plan)
+            .await
+            .map(|(sessions, _)| sessions)
+    }
+
+    pub(super) async fn open_with_model_scopes(
+        &self,
+        authority: ClaimBoundSessionAuthority,
+        state_writer_lease: Arc<dyn StateWriterLease>,
+        plan: &OrdinaryNativeAgentPlan,
+    ) -> Result<
+        (
+            Arc<dyn SessionService>,
+            super::model_scope::ModelScopeSessions,
+        ),
+        NativeAgentAssemblyError,
+    > {
         let claim = authority.into_writer_binding();
         if claim.tenant_id != plan.tenant_id
             || claim.resource_project_id != plan.resource_project_id
@@ -774,7 +802,11 @@ impl NativeSessionBackend {
         match self {
             Self::InvocationLocal => {
                 drop(claim);
-                Ok(Arc::new(InMemorySessionService::new()))
+                let service: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+                let scopes = plan.model_scope_sessions(
+                    super::model_scope::ModelScopeBackend::Local(service.clone()),
+                );
+                Ok((service, scopes))
             }
             Self::Postgres { pool, limits } => {
                 let resource_project_id = claim
@@ -823,12 +855,19 @@ impl NativeSessionBackend {
                 )
                 .await
                 .map_err(|error| session_activation_error(&error))?;
-                Ok(Arc::new(service))
+                let service = Arc::new(service);
+                let scopes = plan.model_scope_sessions(
+                    super::model_scope::ModelScopeBackend::Postgres(service.clone()),
+                );
+                Ok((service, scopes))
             }
             #[cfg(test)]
             Self::Injected(service) => {
                 drop(claim);
-                Ok(Arc::clone(service))
+                let scopes = plan.model_scope_sessions(
+                    super::model_scope::ModelScopeBackend::Local(service.clone()),
+                );
+                Ok((Arc::clone(service), scopes))
             }
         }
     }

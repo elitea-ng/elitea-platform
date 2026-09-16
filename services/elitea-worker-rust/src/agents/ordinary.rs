@@ -189,6 +189,10 @@ impl OrdinaryNativeAgentAssembler {
             session: session_authority,
             state_writer_lease,
         } = redeemed;
+        let (sessions, model_scopes) = self
+            .sessions
+            .open_with_model_scopes(session_authority, state_writer_lease, &plan)
+            .await?;
         let context = Arc::new(claim_context);
         tracing::Span::current().record("stage", "toolsets");
         let (runtime, fresh_execution_mode) = self
@@ -199,16 +203,13 @@ impl OrdinaryNativeAgentAssembler {
                 context.clone(),
                 &profile,
                 &tool_policy,
+                model_scopes,
             )
             .await?;
         let output_continuation = matches!(&start, AdmittedNativeStart::OutputContinuation);
         tracing::Span::current().record("output_continuation", output_continuation);
         let model = self.bind_model(&profile, context.as_ref(), output_continuation)?;
         tracing::Span::current().record("stage", "runner");
-        let sessions = self
-            .sessions
-            .open(session_authority, state_writer_lease, &plan)
-            .await?;
         Ok(OrdinaryRunnerInputs {
             model,
             plan,
@@ -235,6 +236,7 @@ impl OrdinaryNativeAgentAssembler {
             .map_err(NativeAgentAssemblyError::from)
     }
 
+    #[allow(clippy::too_many_arguments)] // Keep claim authority, tool policy, and model storage explicit at assembly.
     async fn materialize_runtime(
         &self,
         tool_snapshot: &AdmittedToolSnapshot<'_>,
@@ -243,6 +245,7 @@ impl OrdinaryNativeAgentAssembler {
         context: Arc<ClaimScopedEliteaContext>,
         profile: &OrdinaryNoToolProfile,
         tool_policy: &Arc<ToolAdmissionPolicy>,
+        model_scopes: super::model_scope::ModelScopeSessions,
     ) -> Result<(OrdinaryRuntimeBindings, NativeToolExecutionMode), NativeAgentAssemblyError> {
         let tool_reference_count = tool_snapshot.iter().count();
         let nested_application_count = tool_snapshot
@@ -275,7 +278,8 @@ impl OrdinaryNativeAgentAssembler {
                 Arc::clone(tool_policy),
                 self.mcp_connector.clone(),
                 mcp_tokens,
-            ),
+            )
+            .with_model_scopes(model_scopes),
         )
         .await?
         {

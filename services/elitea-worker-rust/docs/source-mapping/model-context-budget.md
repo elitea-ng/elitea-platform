@@ -95,7 +95,7 @@ Point 4 remains open under `remaining-gates.md`.
 
 ## Child and pipeline scope clarification, 2026-09-16
 
-This section records source inspection and implementation requirements. It does not claim new runtime behavior.
+This section records source inspection, component implementation, and remaining integration requirements.
 The [context design](../context-continuation-design.md#child-agents-and-pipeline-model-requests) defines inherited policy and independent child compaction.
 It also separates pipeline model-history projection from authoritative graph state.
 
@@ -105,7 +105,7 @@ SDK revision `18704a4070d098761fd1d35897dc53e412b4cbcc` provides the current fun
 | --- | --- | --- |
 | SDK `runtime/langchain/langraph_agent.py::create_graph` | Passes mapped inputs and context middleware to each `LLMNode`. | `agents/graph/llm.rs::map_execution_input` separates mapped system, task, and history content. Preserve this boundary during compaction. |
 | SDK `runtime/tools/llm.py::invoke` and `_prepare_output_messages` | Runs context hooks and returns message-removal updates for checkpoint persistence. | Use existing durable Rust session and graph checkpoints. Keep original records and exact graph values rather than copying removal behavior. |
-| Rust `agents/assembly.rs`, nested profile construction | Inherits the admitted context policy and budget selection. Recomputes child model capacity. | The profile now preserves policy. Child model callbacks and independent summary persistence remain open. |
+| Rust `agents/assembly.rs`, nested profile construction | Inherits the admitted context policy and budget selection. Recomputes child model capacity. | `agents/model_scope.rs` now applies the policy through child callbacks and independent summary persistence. Pipeline integration remains open. |
 | Rust `agents/pipeline.rs::NativePipelineLlmAgentFactory::build` | Binds a node model with the pipeline profile's budget and authoritative instructions. | Add compaction before each model call within the correct node invocation. |
 | Rust `agents/graph/decision.rs` | Uses the same model factory for model-backed routing without tools. | Include decision requests in budget enforcement; preserve exact route constraints. |
 | Rust `agents/session.rs`, pipeline runner construction | Rejects an active transcript-wide context plan because the graph has no single summarization model. | Carry policy to model consumers without summarizing the graph itself. |
@@ -118,7 +118,9 @@ Required proofs include child isolation, mixed graphs, repeated node visits, bra
 Nested agent and pipeline profiles now copy the admitted parent policy, including disabled settings and retained-message controls.
 They retain empty child history and recompute output reservation and input capacity for the authorized child model.
 Focused fixtures cover Balanced, Full, explicit token limits, disabled settings, and a smaller child model.
-This does not yet activate child compaction or define saved-child defaults without an inherited policy.
+Ordinary children now consume that policy through independent model checkpoints and root-fenced session storage.
+The [durable compaction mapping](durable-context-compaction.md) records the implementation and component evidence.
+Saved-child defaults without an inherited policy, pipeline consumers, and deployed settings remain open.
 
 ## Complete request measurement, 2026-09-16
 

@@ -10,8 +10,8 @@
 //!
 //! Ordinary roots with frozen model limits use `context_compaction` through
 //! the model checkpoint callback. That path stores structured summary coverage
-//! and the prepared request before dispatch. Child and pipeline integration
-//! remains separate work.
+//! and the prepared request before dispatch. Ordinary child agents use separate
+//! model sessions. Pipeline integration remains separate work.
 //!
 //! Legacy bindings without frozen limits compose the plan onto the ADK Runner from
 //! [`ContextManagementPlan::prepare_runner_composition`], which yields an

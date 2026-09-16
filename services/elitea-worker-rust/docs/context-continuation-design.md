@@ -210,7 +210,10 @@ The legacy Rust `src/agents/context_management.rs` strategy compacts only the in
 Old bindings without frozen limits retain that path.
 Ordinary roots with an admitted summary plan and frozen limits now use `src/agents/context_compaction.rs`.
 That path persists exact source coverage and the prepared request through the existing model checkpoint writer.
-Child scopes, pipeline models, direct HITL resume, and deployed settings delivery remain open.
+Ordinary child agents now use independent model sessions through `src/agents/model_scope.rs`.
+These sessions inherit policy, preserve original events, and share the root execution's claim fence.
+Summary reload does not authorize a parent tool retry.
+Nested recovery coordination, pipeline models, direct root HITL resume, and deployed settings delivery remain open.
 `src/agents/instruction_authority.rs` already provides separate versioned instruction state and rehydration.
 Complete integration with that state rather than asking a summary model to recreate instructions.
 Main `agentexecution/start.go` and `adhoc.go` still dispatch empty context settings.

@@ -272,56 +272,86 @@ impl ModelCheckpointWriter {
             .before_model_callback(Box::new(move |context, request| {
                 let writer = model.clone();
                 Box::pin(async move {
-                    let request = writer.prepare_request(request)?;
-                    let (request, compaction_record) = if let Some(compaction) = &writer.context_compaction {
-                        let request = super::replay_history::model_history(request)?;
-                        let source_request = request.clone();
-                        compaction.prepare(request, || async {
-                            writer.persist(context.try_identity()?, context.invocation_id(),
-                                Phase::ContextPending, Some(&source_request), None).await
-                        }).await?
-                    } else {
-                        (request, None)
-                    };
-                    if let Some(budget) = &writer.request_budget {
-                        let provider_request =
-                            super::replay_history::model_history(request.clone())?;
-                        budget.measure(&provider_request)?.check()?;
-                    }
                     writer
-                        .persist(
-                            context.try_identity()?,
-                            context.invocation_id(),
-                            Phase::ModelPending,
-                            Some(&request),
-                            writer.context_compaction.as_ref().map(|_| {
-                                super::context_compaction::DurableContextCompaction::state_value(compaction_record.as_ref())
-                            }).transpose()?,
-                        )
-                        .await?;
-                    if let Some(compaction) = &writer.context_compaction {
-                        compaction.committed(compaction_record)?;
-                    }
-                    Ok(BeforeModelResult::Continue(request))
+                        .before_model(context.try_identity()?, context.invocation_id(), request)
+                        .await
                 })
             }))
             .before_tool_callback(Box::new(move |context| {
                 let writer = self.clone();
                 Box::pin(async move {
-                    // A pending model checkpoint must stop authorizing replay
-                    // before any tool can cross its invocation boundary.
                     writer
-                        .persist(
-                            context.try_identity()?,
-                            context.invocation_id(),
-                            Phase::ToolMayHaveStarted,
-                            None,
-                            None,
-                        )
+                        .before_tool(context.try_identity()?, context.invocation_id())
                         .await?;
                     Ok(None)
                 })
             }))
+    }
+
+    pub(super) async fn before_model(
+        &self,
+        identity: AdkIdentity,
+        invocation_id: &str,
+        request: LlmRequest,
+    ) -> adk_rust::Result<BeforeModelResult> {
+        let request = self.prepare_request(request)?;
+        let (request, record) = if let Some(compaction) = &self.context_compaction {
+            let request = super::replay_history::model_history(request)?;
+            let source = request.clone();
+            compaction
+                .prepare(request, || async {
+                    self.persist(
+                        identity.clone(),
+                        invocation_id,
+                        Phase::ContextPending,
+                        Some(&source),
+                        None,
+                    )
+                    .await
+                })
+                .await?
+        } else {
+            (request, None)
+        };
+        if let Some(budget) = &self.request_budget {
+            let provider_request = super::replay_history::model_history(request.clone())?;
+            budget.measure(&provider_request)?.check()?;
+        }
+        self.persist(
+            identity,
+            invocation_id,
+            Phase::ModelPending,
+            Some(&request),
+            self.context_compaction
+                .as_ref()
+                .map(|_| {
+                    super::context_compaction::DurableContextCompaction::state_value(
+                        record.as_ref(),
+                    )
+                })
+                .transpose()?,
+        )
+        .await?;
+        if let Some(compaction) = &self.context_compaction {
+            compaction.committed(record)?;
+        }
+        Ok(BeforeModelResult::Continue(request))
+    }
+
+    pub(super) async fn before_tool(
+        &self,
+        identity: AdkIdentity,
+        invocation_id: &str,
+    ) -> adk_rust::Result<()> {
+        // Stop authorizing model replay before any tool crosses its boundary.
+        self.persist(
+            identity,
+            invocation_id,
+            Phase::ToolMayHaveStarted,
+            None,
+            None,
+        )
+        .await
     }
 
     async fn persist(

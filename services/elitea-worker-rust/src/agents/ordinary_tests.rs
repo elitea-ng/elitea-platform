@@ -41,6 +41,9 @@ use crate::transport::runtime_context::{
 
 const TOKEN: &str = "ephemeral-ordinary-fixture-token";
 
+#[path = "ordinary_scope_tests.rs"]
+mod model_scope_tests;
+
 fn empty_tool_policy() -> Arc<ToolAdmissionPolicy> {
     Arc::new(ToolAdmissionPolicy::new(&[], &BTreeMap::new()).expect("empty toolkit policy"))
 }

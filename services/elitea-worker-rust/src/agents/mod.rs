@@ -13,6 +13,7 @@ pub mod graph;
 pub(crate) mod instruction_authority;
 pub(crate) mod internal_tools;
 mod model_checkpoint;
+mod model_scope;
 pub(crate) mod native_runtime;
 pub(crate) mod ordinary;
 pub(crate) mod pipeline;
