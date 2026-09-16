@@ -15,6 +15,7 @@ use tracing::Instrument as _;
 
 use super::application_tools::{ApplicationToolDependencies, materialize_application_toolset};
 use super::assembly::{OrdinaryModelProvider, OrdinaryNoToolProfile, ReasoningEffort};
+use super::internal_tools::BuilderToolAuthority;
 use super::runtime::{
     AdmittedNativeStart, AssembledNativeAgentInvocation, AuthorizedNativeAssembly,
     NativeAgentAssembler, NativeAgentAssemblyError, NativeAgentAssemblyErrorCode,
@@ -123,6 +124,12 @@ impl OrdinaryNativeAgentAssembler {
             state_writer_lease,
         } = redeemed;
         let context = Arc::new(claim_context);
+        // Shared, not duplicated. The two builder tools (#940 A8) are called
+        // DURING the run and must write under this same claim, so the single
+        // minted authority has to outlive assembly — see
+        // `internal_tools::BuilderToolAuthority` for why sharing it is the only
+        // correct option and minting a second one is not.
+        let runtime_context = Arc::new(runtime_context);
         tracing::Span::current().record("stage", "toolsets");
         let (runtime, fresh_execution_mode) = self
             .materialize_runtime(
@@ -188,7 +195,7 @@ impl OrdinaryNativeAgentAssembler {
         &self,
         tool_snapshot: &AdmittedToolSnapshot<'_>,
         mcp_tokens: &serde_json::Map<String, serde_json::Value>,
-        runtime_context: &ClaimBoundRuntimeContextAuthority,
+        runtime_context: &Arc<ClaimBoundRuntimeContextAuthority>,
         context: Arc<ClaimScopedEliteaContext>,
         profile: &OrdinaryNoToolProfile,
         tool_policy: &Arc<ToolAdmissionPolicy>,
@@ -210,12 +217,15 @@ impl OrdinaryNativeAgentAssembler {
         )
         .await?;
         let internal_tools = profile.internal_tools();
-        toolsets.extend(internal_tools.toolsets());
+        toolsets.extend(internal_tools.toolsets(Some(&BuilderToolAuthority::new(
+            Arc::clone(&self.platform),
+            Arc::clone(runtime_context),
+        ))));
         let mut application_runtime = ApplicationRuntimeProjection::default();
         if let Some(materialized) = materialize_application_toolset(
             tool_snapshot,
             self.platform.as_ref(),
-            runtime_context,
+            runtime_context.as_ref(),
             context,
             profile,
             ApplicationToolDependencies::new(

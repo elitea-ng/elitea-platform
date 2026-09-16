@@ -35,6 +35,19 @@ use crate::protocol::control::{
 const TOKEN_CONTEXT_SCHEMA: &str = "elitea.runtime.elitea-client-token.v1";
 const APPLICATION_VERSION_SCHEMA: &str = "elitea.runtime.application-version.v1";
 const ATTACHMENT_OBJECT_SCHEMA: &str = "elitea.runtime.attachment-object.v1";
+const SKILL_WRITE_SCHEMA: &str = "elitea.runtime.skill-write.v1";
+const PROJECT_CONTEXT_WRITE_SCHEMA: &str = "elitea.runtime.project-context-write.v1";
+/// The two builder WRITE bodies' own ceiling, enforced on this side before a
+/// request is sent.
+///
+/// Main refuses anything larger with 413 and the individual field caps with 422
+/// (`maxRuntimeBuilderRequestBytes`,
+/// `services/elitea-main/internal/infra/storage/runtime_entity_builder.go`).
+/// Checking here too is not redundant: a request that cannot possibly be
+/// accepted should not spend the turn's deadline crossing the network to be
+/// told so, and the tool can answer the model with something it can act on
+/// (write less) instead of a transport failure.
+const MAX_BUILDER_REQUEST_BYTES: usize = 64 * 1_024;
 const MAX_SAFE_TEXT_BYTES: usize = 256;
 const MAX_ORIGIN_BYTES: usize = 2_048;
 const MAX_TOKEN_CONTEXT_BYTES: usize = 32 * 1_024;
@@ -130,6 +143,14 @@ pub(crate) enum RuntimeContextError {
     /// back, so a retry only spends the turn's budget on a failure whose
     /// reason is already known.
     NotFound(&'static str),
+    /// The claim was accepted and the DOCUMENT cannot be stored as written.
+    ///
+    /// Only the two builder WRITE routes produce this (main answers 422). It is
+    /// terminal and deliberately distinct from `NotFound`: the reference is
+    /// fine, the content is not, so the caller's honest move is to tell the
+    /// model what it wrote is too large or empty and let it write again —
+    /// retrying the identical body would fail identically.
+    Rejected(&'static str),
     DependencyUnavailable(&'static str),
     Transport(RuntimeContextTransportError),
     Timeout(&'static str),
@@ -144,6 +165,7 @@ impl RuntimeContextError {
             Self::ResourceExhausted(_) => "runtime_context.resource_exhausted",
             Self::AuthorizationFailed(_) => "runtime_context.authorization_failed",
             Self::NotFound(_) => "runtime_context.not_found",
+            Self::Rejected(_) => "runtime_context.rejected",
             Self::DependencyUnavailable(_) | Self::Transport(_) => {
                 "runtime_context.dependency_unavailable"
             }
@@ -177,6 +199,7 @@ impl fmt::Display for RuntimeContextError {
             | Self::ResourceExhausted(message)
             | Self::AuthorizationFailed(message)
             | Self::NotFound(message)
+            | Self::Rejected(message)
             | Self::DependencyUnavailable(message)
             | Self::Timeout(message) => formatter.write_str(message),
             Self::Transport(error) => error.fmt(formatter),
@@ -450,6 +473,100 @@ impl RuntimeContextClient {
             .await
             .map_err(|_| RuntimeContextError::Timeout("the attachment request timed out"))?
     }
+
+    /// Create or update one Skill through the same live claim (#940 A8).
+    ///
+    /// This is a WRITE, and it is the first one on this channel. Everything the
+    /// reads above rely on still holds — one bounded attempt, one origin, the
+    /// claim and fence as the only authority — and the project is still main's
+    /// to decide: nothing in this request names one, exactly as nothing in the
+    /// attachment read does.
+    ///
+    /// The write is NOT retried on a transport failure here, and that is the
+    /// point of leaving it to the single attempt the rest of this module makes:
+    /// a retried create whose first attempt actually landed would produce a
+    /// second skill with the same name, which is precisely the duplicate case
+    /// the by-name selection exists to prevent.
+    pub(crate) async fn write_skill(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        request: &SkillWriteRequest,
+    ) -> Result<SkillWriteOutcome, RuntimeContextError> {
+        let binding = authority.redemption_binding();
+        validate_binding(&binding)?;
+        let body = encode_builder_body(request)?;
+        let http_request = build_builder_request(&binding, "skills", body, "the skill write")?;
+        let operation =
+            write_skill_response(self.rpc.as_ref(), http_request, &binding, &self.config);
+        timeout(self.config.deadline, operation)
+            .await
+            .map_err(|_| RuntimeContextError::Timeout("the skill write request timed out"))?
+    }
+
+    /// Write the claimed project's Project Context through the same live claim.
+    pub(crate) async fn write_project_context(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        request: &ProjectContextWriteRequest,
+    ) -> Result<ProjectContextWriteOutcome, RuntimeContextError> {
+        let binding = authority.redemption_binding();
+        validate_binding(&binding)?;
+        let body = encode_builder_body(request)?;
+        let http_request = build_builder_request(
+            &binding,
+            "project-context",
+            body,
+            "the project context write",
+        )?;
+        let operation =
+            write_project_context_response(self.rpc.as_ref(), http_request, &binding, &self.config);
+        timeout(self.config.deadline, operation)
+            .await
+            .map_err(|_| {
+                RuntimeContextError::Timeout("the project context write request timed out")
+            })?
+    }
+}
+
+/// The `skills_builder` request body. Field names are main's
+/// (`RuntimeSkillWriteRequest`), and main decodes with
+/// `DisallowUnknownFields`, so a key added on one side and not the other fails
+/// the write loudly instead of half-applying it.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+pub(crate) struct SkillWriteRequest {
+    pub(crate) name: String,
+    pub(crate) description: String,
+    pub(crate) instructions: String,
+}
+
+/// The `project_context_builder` request body.
+///
+/// `enabled` is an `Option` and is SKIPPED when absent, not sent as null: main
+/// reads absence as "keep whatever the project already had", and a null would
+/// decode to the same `nil` only by accident of Go's zero values — sending
+/// nothing is the contract both sides can state.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+pub(crate) struct ProjectContextWriteRequest {
+    pub(crate) content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) enabled: Option<bool>,
+}
+
+/// One written skill, already proven by main to belong to the claimed
+/// execution's own project.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SkillWriteOutcome {
+    pub(crate) skill_id: String,
+    pub(crate) name: String,
+    pub(crate) created: bool,
+}
+
+/// One written project context.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ProjectContextWriteOutcome {
+    pub(crate) content_bytes: u64,
+    pub(crate) enabled: bool,
+    pub(crate) created: bool,
 }
 
 /// One claim-scoped attachment document, already proven to belong to the
@@ -611,6 +728,142 @@ fn build_attachment_request(
         })?;
     insert_claim_headers(&mut request, binding)?;
     Ok(request)
+}
+
+fn encode_builder_body<T: serde::Serialize>(request: &T) -> Result<Vec<u8>, RuntimeContextError> {
+    let body = serde_json::to_vec(request).map_err(|_| {
+        RuntimeContextError::InvalidConfiguration("the builder request is not encodable")
+    })?;
+    if body.len() > MAX_BUILDER_REQUEST_BYTES {
+        return Err(RuntimeContextError::ResourceExhausted(
+            "the builder request exceeds the approved limit",
+        ));
+    }
+    Ok(body)
+}
+
+fn build_builder_request(
+    binding: &RuntimeContextRedemptionBinding<'_>,
+    resource: &str,
+    body: Vec<u8>,
+    subject: &'static str,
+) -> Result<Request<Body>, RuntimeContextError> {
+    let execution = utf8_percent_encode(binding.execution_id, PATH_SEGMENT);
+    let path = format!(
+        "/executions/{execution}/generations/{}/runtime-context/{resource}",
+        binding.generation
+    );
+    let length = body.len();
+    let mut request = Request::builder()
+        .method(Method::POST)
+        .uri(path)
+        .header(CONTENT_TYPE, "application/json")
+        .header(CONTENT_LENGTH, length)
+        .body(Body::new(http_body_util::Full::new(bytes::Bytes::from(
+            body,
+        ))))
+        .map_err(|_| {
+            RuntimeContextError::AuthorizationFailed(builder_authority_message(subject))
+        })?;
+    insert_claim_headers(&mut request, binding)?;
+    Ok(request)
+}
+
+/// The authority-malformed message for one builder route.
+///
+/// Both messages are `&'static str` literals chosen by the caller's `subject`
+/// rather than formatted, because `RuntimeContextError` carries only static
+/// strings — deliberately, so a failure can never smuggle claim, fence or
+/// tenant data into a log line.
+const fn builder_authority_message(subject: &str) -> &'static str {
+    match subject.as_bytes() {
+        b"the skill write" => "the skill write request authority is malformed",
+        _ => "the project context write request authority is malformed",
+    }
+}
+
+/// 422 means the DOCUMENT is refused, not the claim — see
+/// `RuntimeContextError::Rejected`. It is checked before the shared head
+/// validation because that function maps every non-success status onto the
+/// retryable dependency-unavailable branch, which for this one status would
+/// turn "write less" into "try the identical body again".
+fn builder_rejection(response: &Response<Body>) -> Option<RuntimeContextError> {
+    (response.status() == StatusCode::UNPROCESSABLE_ENTITY).then_some(
+        RuntimeContextError::Rejected("the builder document cannot be stored as written"),
+    )
+}
+
+async fn write_skill_response(
+    rpc: &dyn RuntimeContextRpc,
+    request: Request<Body>,
+    binding: &RuntimeContextRedemptionBinding<'_>,
+    config: &RuntimeContextConfig,
+) -> Result<SkillWriteOutcome, RuntimeContextError> {
+    let response = rpc
+        .post(request)
+        .await
+        .map_err(RuntimeContextError::Transport)?;
+    if let Some(rejected) = builder_rejection(&response) {
+        return Err(rejected);
+    }
+    let declared_length = validate_response_head(&response, config)?;
+    let body = collect_body(response, declared_length, config.max_response_bytes).await?;
+    let decoded: SkillWriteResponse = serde_json::from_slice(&body).map_err(|_| {
+        RuntimeContextError::InvalidResponse("the skill write response is malformed")
+    })?;
+    // The project is re-checked against the ACCEPTED execution, the same way
+    // every read on this channel does. Main derives it from the claim, so a
+    // response naming a different project means the two ends disagree about
+    // what was authorized — and this one wrote a row, so a silent mismatch
+    // would be a write into a tenant this turn never had.
+    if decoded.schema_version != SKILL_WRITE_SCHEMA
+        || decoded.project_id == 0
+        || decoded.project_id.to_string() != binding.resource_project_id
+        || decoded.skill_id.is_empty()
+        || decoded.name.is_empty()
+    {
+        return Err(RuntimeContextError::AuthorizationFailed(
+            "the skill write response does not match the accepted execution",
+        ));
+    }
+    Ok(SkillWriteOutcome {
+        skill_id: decoded.skill_id,
+        name: decoded.name,
+        created: decoded.created,
+    })
+}
+
+async fn write_project_context_response(
+    rpc: &dyn RuntimeContextRpc,
+    request: Request<Body>,
+    binding: &RuntimeContextRedemptionBinding<'_>,
+    config: &RuntimeContextConfig,
+) -> Result<ProjectContextWriteOutcome, RuntimeContextError> {
+    let response = rpc
+        .post(request)
+        .await
+        .map_err(RuntimeContextError::Transport)?;
+    if let Some(rejected) = builder_rejection(&response) {
+        return Err(rejected);
+    }
+    let declared_length = validate_response_head(&response, config)?;
+    let body = collect_body(response, declared_length, config.max_response_bytes).await?;
+    let decoded: ProjectContextWriteResponse = serde_json::from_slice(&body).map_err(|_| {
+        RuntimeContextError::InvalidResponse("the project context write response is malformed")
+    })?;
+    if decoded.schema_version != PROJECT_CONTEXT_WRITE_SCHEMA
+        || decoded.project_id == 0
+        || decoded.project_id.to_string() != binding.resource_project_id
+    {
+        return Err(RuntimeContextError::AuthorizationFailed(
+            "the project context write response does not match the accepted execution",
+        ));
+    }
+    Ok(ProjectContextWriteOutcome {
+        content_bytes: decoded.content_bytes,
+        enabled: decoded.enabled,
+        created: decoded.created,
+    })
 }
 
 fn insert_claim_headers(
@@ -988,6 +1241,26 @@ struct AttachmentObjectResponse {
     media_type: String,
     byte_length: u64,
     content: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SkillWriteResponse {
+    schema_version: String,
+    project_id: u64,
+    skill_id: String,
+    name: String,
+    created: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectContextWriteResponse {
+    schema_version: String,
+    project_id: u64,
+    content_bytes: u64,
+    enabled: bool,
+    created: bool,
 }
 
 #[derive(Deserialize)]

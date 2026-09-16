@@ -10,8 +10,9 @@ use std::sync::Arc;
 use crate::protocol::control::ClaimBoundRuntimeContextAuthority;
 
 use super::runtime_context::{
-    ClaimScopedEliteaContext, RuntimeApplicationVersion, RuntimeAttachmentObject,
-    RuntimeContextClient, RuntimeContextError,
+    ClaimScopedEliteaContext, ProjectContextWriteOutcome, ProjectContextWriteRequest,
+    RuntimeApplicationVersion, RuntimeAttachmentObject, RuntimeContextClient, RuntimeContextError,
+    SkillWriteOutcome, SkillWriteRequest,
 };
 
 /// Shared platform transport facade. Invocation authority is always supplied
@@ -76,6 +77,38 @@ impl PlatformClient {
     ) -> Result<RuntimeAttachmentObject, RuntimeContextError> {
         self.runtime_context
             .load_attachment_object(authority, bucket, name)
+            .await
+    }
+
+    /// Create or update one Skill from the conversation (#940 A8).
+    ///
+    /// This is the facade's first WRITE, and it is deliberately as narrow as
+    /// the reads above: the authority stays non-cloneable and separate, the
+    /// project is main's to resolve from the claim, and this method adds no
+    /// scope of its own.
+    ///
+    /// A failure here is NOT a failure of the turn. Its caller (the
+    /// `skills_builder` tool) turns every error into a tool RESULT the model
+    /// reads and can act on — the same rule `read_attachment_object` follows
+    /// and for a stronger reason: the conversation that composed the skill is
+    /// the expensive thing, and killing the turn discards it.
+    pub(crate) async fn write_skill(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        request: &SkillWriteRequest,
+    ) -> Result<SkillWriteOutcome, RuntimeContextError> {
+        self.runtime_context.write_skill(authority, request).await
+    }
+
+    /// Write the claimed project's Project Context (#940 A8). Twin of
+    /// `write_skill` above, same non-fatal error contract.
+    pub(crate) async fn write_project_context(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        request: &ProjectContextWriteRequest,
+    ) -> Result<ProjectContextWriteOutcome, RuntimeContextError> {
+        self.runtime_context
+            .write_project_context(authority, request)
             .await
     }
 }

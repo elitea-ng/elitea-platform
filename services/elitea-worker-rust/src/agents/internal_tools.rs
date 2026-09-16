@@ -14,7 +14,26 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
+use crate::protocol::control::ClaimBoundRuntimeContextAuthority;
+use crate::transport::platform_client::PlatformClient;
+use crate::transport::runtime_context::{
+    ProjectContextWriteRequest, RuntimeContextError, SkillWriteRequest,
+};
+
 pub(crate) const ASK_USER_TOOL_NAME: &str = "ask_user";
+/// The two chat-authored builder modules (#940 A8).
+///
+/// They are NOT in `PLATFORM_INTERNAL_TOOLS` below, and the distinction is the
+/// whole point of that list: it names what this runtime RECOGNIZES and SKIPS.
+/// These two it implements — `SkillsBuilderTool` and `ProjectContextBuilderTool`
+/// in this file, writing through the claim-bound content listener — so they
+/// bind real tools instead of a warning.
+pub(crate) const SKILLS_BUILDER_TOOL_NAME: &str = "skills_builder";
+pub(crate) const PROJECT_CONTEXT_BUILDER_TOOL_NAME: &str = "project_context_builder";
+const SKILLS_BUILDER_TOOLSET_NAME: &str = "skills_builder";
+const PROJECT_CONTEXT_BUILDER_TOOLSET_NAME: &str = "project_context_builder";
+const CREATE_SKILL_TOOL_NAME: &str = "create_or_update_skill";
+const WRITE_PROJECT_CONTEXT_TOOL_NAME: &str = "write_project_context";
 
 /// The platform's authorable internal-tool names this runtime does NOT
 /// implement yet — the create-agent form's own catalogue
@@ -76,6 +95,12 @@ const ASK_USER_DESCRIPTION: &str = "Ask the user a clarifying question when info
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct InternalToolCatalog {
     ask_user: bool,
+    /// #940 A8's two modules. Plain flags beside `ask_user` rather than bits in
+    /// `skipped`, because `skipped` means "recognized and NOT served" — putting
+    /// an implemented capability there would make `skipped_tools_notice_text`
+    /// tell the user the tool is unavailable in the same turn it runs.
+    skills_builder: bool,
+    project_context_builder: bool,
     skipped: u8,
 }
 
@@ -84,6 +109,8 @@ impl InternalToolCatalog {
     pub(crate) const fn empty() -> Self {
         Self {
             ask_user: false,
+            skills_builder: false,
+            project_context_builder: false,
             skipped: 0,
         }
     }
@@ -97,6 +124,8 @@ impl InternalToolCatalog {
         for value in values {
             match value.as_str() {
                 Some(ASK_USER_TOOL_NAME) => catalog.ask_user = true,
+                Some(SKILLS_BUILDER_TOOL_NAME) => catalog.skills_builder = true,
+                Some(PROJECT_CONTEXT_BUILDER_TOOL_NAME) => catalog.project_context_builder = true,
                 Some(name) if PLATFORM_INTERNAL_TOOLS.contains(&name) => {
                     // Same contract as the toolkit-family skip
                     // (`agent_toolkit_skipped` in materialize.rs): the agent
@@ -138,6 +167,8 @@ impl InternalToolCatalog {
     pub(crate) const fn merge(self, other: Self) -> Self {
         Self {
             ask_user: self.ask_user || other.ask_user,
+            skills_builder: self.skills_builder || other.skills_builder,
+            project_context_builder: self.project_context_builder || other.project_context_builder,
             skipped: self.skipped | other.skipped,
         }
     }
@@ -148,8 +179,18 @@ impl InternalToolCatalog {
     }
 
     #[must_use]
+    pub(crate) const fn skills_builder_enabled(self) -> bool {
+        self.skills_builder
+    }
+
+    #[must_use]
+    pub(crate) const fn project_context_builder_enabled(self) -> bool {
+        self.project_context_builder
+    }
+
+    #[must_use]
     pub(crate) const fn is_empty(self) -> bool {
-        !self.ask_user && self.skipped == 0
+        !self.ask_user && !self.skills_builder && !self.project_context_builder && self.skipped == 0
     }
 
     /// The platform-catalogue names this runtime skipped, in
@@ -189,14 +230,298 @@ impl InternalToolCatalog {
         }))
     }
 
-    pub(crate) fn toolsets(self) -> Vec<Arc<dyn Toolset>> {
-        if !self.ask_user {
-            return Vec::new();
+    /// The toolsets this catalog binds, given the live platform authority.
+    ///
+    /// `builders` is an `Option` and not a required argument because the two
+    /// builder tools are the only members of this catalog that need to reach
+    /// main at EXECUTION time — `ask_user` is parked and resumed by the
+    /// runtime itself, and every other recognized name is skipped. A caller
+    /// that has no authority to lend (every unit test of the `ask_user` half,
+    /// and any future assembly path that binds internal tools before
+    /// redemption) passes `None` and gets exactly what it got before #940.
+    ///
+    /// A builder toggle with no authority is DROPPED, not bound-and-failing:
+    /// a tool the model can call that answers "this deployment cannot write"
+    /// on every call spends the turn discovering a fact the assembly already
+    /// knew.
+    pub(crate) fn toolsets(self, builders: Option<&BuilderToolAuthority>) -> Vec<Arc<dyn Toolset>> {
+        let mut toolsets: Vec<Arc<dyn Toolset>> = Vec::new();
+        if self.ask_user {
+            toolsets.push(Arc::new(BasicToolset::new(
+                ASK_USER_TOOLSET_NAME,
+                vec![Arc::new(AskUserTool) as Arc<dyn Tool>],
+            )));
         }
-        vec![Arc::new(BasicToolset::new(
-            ASK_USER_TOOLSET_NAME,
-            vec![Arc::new(AskUserTool) as Arc<dyn Tool>],
-        ))]
+        let Some(builders) = builders else {
+            return toolsets;
+        };
+        if self.skills_builder_enabled() {
+            toolsets.push(Arc::new(BasicToolset::new(
+                SKILLS_BUILDER_TOOLSET_NAME,
+                vec![Arc::new(SkillsBuilderTool {
+                    authority: builders.clone(),
+                }) as Arc<dyn Tool>],
+            )));
+        }
+        if self.project_context_builder_enabled() {
+            toolsets.push(Arc::new(BasicToolset::new(
+                PROJECT_CONTEXT_BUILDER_TOOLSET_NAME,
+                vec![Arc::new(ProjectContextBuilderTool {
+                    authority: builders.clone(),
+                }) as Arc<dyn Tool>],
+            )));
+        }
+        toolsets
+    }
+}
+
+/// The live claim the two builder tools write under, shared for the duration of
+/// one run.
+///
+/// `ClaimBoundRuntimeContextAuthority` is deliberately neither cloneable nor
+/// formattable (`protocol::control`), and this type does NOT weaken either
+/// property: it shares the single minted authority behind an `Arc` rather than
+/// duplicating it, exactly as `ClaimScopedEliteaContext` is already shared for
+/// the whole run by the model facade. What it does change is LIFETIME — the
+/// authority now outlives assembly and lives as long as the run does — and that
+/// is load-bearing rather than incidental: a tool the model calls mid-run has no
+/// other way to hold the claim it must write under, and minting a second one
+/// would be a second authorization this worker is not permitted to perform.
+#[derive(Clone)]
+pub(crate) struct BuilderToolAuthority {
+    platform: Arc<PlatformClient>,
+    authority: Arc<ClaimBoundRuntimeContextAuthority>,
+}
+
+impl BuilderToolAuthority {
+    #[must_use]
+    pub(crate) const fn new(
+        platform: Arc<PlatformClient>,
+        authority: Arc<ClaimBoundRuntimeContextAuthority>,
+    ) -> Self {
+        Self {
+            platform,
+            authority,
+        }
+    }
+}
+
+/// Turns one transport failure into the sentence the MODEL reads.
+///
+/// Every builder failure comes back as a tool RESULT, never an `AdkError` that
+/// aborts the turn, and the three buckets are chosen so the model's next move
+/// differs: a rejected document says write less, an unavailable dependency says
+/// the platform could not be reached right now, and a refused claim says stop
+/// asking. Returning an error instead would discard the conversation that
+/// composed the document, which is the expensive half of this feature.
+fn builder_failure_text(subject: &str, error: &RuntimeContextError) -> String {
+    match error {
+        RuntimeContextError::Rejected(_) | RuntimeContextError::ResourceExhausted(_) => format!(
+            "The {subject} was not saved: the content is empty or larger than this platform              accepts. Shorten it and try once more."
+        ),
+        RuntimeContextError::AuthorizationFailed(_) | RuntimeContextError::NotFound(_) => format!(
+            "The {subject} was not saved: this conversation is not authorized to write it.              Do not retry; tell the user."
+        ),
+        _ => format!(
+            "The {subject} was not saved: the platform could not be reached.              Tell the user it was not saved."
+        ),
+    }
+}
+
+/// Reads one required string argument, rejecting anything that is not a
+/// non-empty string. Returns `None` so the caller answers the model rather than
+/// failing the turn, the same contract the write failures above follow.
+fn builder_string_argument(arguments: &Value, key: &str) -> Option<String> {
+    let value = arguments.as_object()?.get(key)?.as_str()?.trim();
+    (!value.is_empty()).then(|| value.to_owned())
+}
+
+fn builder_optional_string(arguments: &Value, key: &str) -> String {
+    arguments
+        .as_object()
+        .and_then(|object| object.get(key))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_owned()
+}
+
+struct SkillsBuilderTool {
+    authority: BuilderToolAuthority,
+}
+
+#[async_trait]
+impl Tool for SkillsBuilderTool {
+    fn name(&self) -> &str {
+        CREATE_SKILL_TOOL_NAME
+    }
+
+    fn description(&self) -> &'static str {
+        "Create a new Skill in this project, or update the existing Skill with the same name,          from what the user asked for. Provide the skill's name, a one-line description, and the          full instructions the skill should follow. Do not guess any of the three: if the user          has not said, ask them first."
+    }
+
+    fn is_read_only(&self) -> bool {
+        false
+    }
+
+    fn is_concurrency_safe(&self) -> bool {
+        false
+    }
+
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(json!({
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "minLength": 1, "maxLength": 128},
+                "description": {"type": "string", "maxLength": 4096},
+                "instructions": {"type": "string", "minLength": 1, "maxLength": 49152}
+            },
+            "required": ["name", "instructions"],
+            "additionalProperties": false
+        }))
+    }
+
+    fn response_schema(&self) -> Option<Value> {
+        Some(json!({"type": "string"}))
+    }
+
+    async fn execute(
+        &self,
+        _context: Arc<dyn ToolContext>,
+        arguments: Value,
+    ) -> adk_rust::Result<Value> {
+        let Some(name) = builder_string_argument(&arguments, "name") else {
+            return Ok(Value::String(
+                "The skill was not saved: a non-empty name is required.".to_owned(),
+            ));
+        };
+        let Some(instructions) = builder_string_argument(&arguments, "instructions") else {
+            return Ok(Value::String(
+                "The skill was not saved: non-empty instructions are required.".to_owned(),
+            ));
+        };
+        let request = SkillWriteRequest {
+            name,
+            description: builder_optional_string(&arguments, "description"),
+            instructions,
+        };
+        match self
+            .authority
+            .platform
+            .write_skill(&self.authority.authority, &request)
+            .await
+        {
+            Ok(outcome) => {
+                let verb = if outcome.created {
+                    "Created"
+                } else {
+                    "Updated"
+                };
+                Ok(Value::String(format!(
+                    "{verb} Skill: [{}](/app/skills/{}). Tell the user by that name and link.",
+                    outcome.name, outcome.skill_id
+                )))
+            }
+            Err(error) => {
+                tracing::warn!(
+                    event = "agent_internal_tool_failed",
+                    internal_tool = SKILLS_BUILDER_TOOL_NAME,
+                    reason_code = error.code(),
+                    "the skills builder could not write the skill"
+                );
+                Ok(Value::String(builder_failure_text("skill", &error)))
+            }
+        }
+    }
+}
+
+struct ProjectContextBuilderTool {
+    authority: BuilderToolAuthority,
+}
+
+#[async_trait]
+impl Tool for ProjectContextBuilderTool {
+    fn name(&self) -> &str {
+        WRITE_PROJECT_CONTEXT_TOOL_NAME
+    }
+
+    fn description(&self) -> &'static str {
+        "Write this project's Project Context — the shared background every conversation in the          project is given. A project has exactly ONE context, so this REPLACES it: to extend the          existing context, include the parts that should stay, and do not guess what they are.          Omit `enabled` to leave the project's current on/off setting alone."
+    }
+
+    fn is_read_only(&self) -> bool {
+        false
+    }
+
+    fn is_concurrency_safe(&self) -> bool {
+        false
+    }
+
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(json!({
+            "type": "object",
+            "properties": {
+                "content": {"type": "string", "minLength": 1, "maxLength": 49152},
+                "enabled": {"type": "boolean"}
+            },
+            "required": ["content"],
+            "additionalProperties": false
+        }))
+    }
+
+    fn response_schema(&self) -> Option<Value> {
+        Some(json!({"type": "string"}))
+    }
+
+    async fn execute(
+        &self,
+        _context: Arc<dyn ToolContext>,
+        arguments: Value,
+    ) -> adk_rust::Result<Value> {
+        let Some(content) = builder_string_argument(&arguments, "content") else {
+            return Ok(Value::String(
+                "The project context was not saved: non-empty content is required.".to_owned(),
+            ));
+        };
+        let enabled = arguments
+            .as_object()
+            .and_then(|object| object.get("enabled"))
+            .and_then(Value::as_bool);
+        let request = ProjectContextWriteRequest { content, enabled };
+        match self
+            .authority
+            .platform
+            .write_project_context(&self.authority.authority, &request)
+            .await
+        {
+            Ok(outcome) => {
+                let verb = if outcome.created {
+                    "Created"
+                } else {
+                    "Updated"
+                };
+                let state = if outcome.enabled {
+                    "in effect for this project"
+                } else {
+                    "saved but currently switched off"
+                };
+                Ok(Value::String(format!(
+                    "{verb} Project Context: [this project's context](/app/settings/project-context)                      — {state}. Tell the user by that name and link."
+                )))
+            }
+            Err(error) => {
+                tracing::warn!(
+                    event = "agent_internal_tool_failed",
+                    internal_tool = PROJECT_CONTEXT_BUILDER_TOOL_NAME,
+                    reason_code = error.code(),
+                    "the project context builder could not write the context"
+                );
+                Ok(Value::String(builder_failure_text(
+                    "project context",
+                    &error,
+                )))
+            }
+        }
     }
 }
 
@@ -223,6 +548,16 @@ pub(crate) struct AskUserQuestion {
     #[serde(rename = "multiSelect")]
     multi_select: bool,
     allow_other: bool,
+    /// Whether the user may move past this question without answering it
+    /// (#940 A8, ELITEA-2792).
+    ///
+    /// It defaults to FALSE, which is the same behaviour every question had
+    /// before this field existed: the card's control stays disabled until the
+    /// question is answered. Only a model that explicitly marks a question
+    /// optional gets the relaxed rule, so a clarification built by an older
+    /// prompt cannot accidentally become skippable.
+    #[serde(default)]
+    optional: bool,
 }
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
@@ -366,6 +701,7 @@ impl AskUserQuestion {
                     | "multi_select"
                     | "multiSelect"
                     | "allow_other"
+                    | "optional"
             )
         }) {
             return Err(InternalToolError::InvalidInput);
@@ -396,6 +732,7 @@ impl AskUserQuestion {
             .or(bool_field(object, "multiSelect")?)
             .unwrap_or(false);
         let allow_other = bool_field(object, "allow_other")?.unwrap_or(true);
+        let optional = bool_field(object, "optional")?.unwrap_or(false);
         Ok(Self {
             id,
             question,
@@ -403,6 +740,7 @@ impl AskUserQuestion {
             options,
             multi_select,
             allow_other,
+            optional,
         })
     }
 }
@@ -533,7 +871,8 @@ impl Tool for AskUserTool {
                                 }
                             },
                             "multi_select": {"type": "boolean"},
-                            "allow_other": {"type": "boolean"}
+                            "allow_other": {"type": "boolean"},
+                            "optional": {"type": "boolean"}
                         },
                         "required": ["question"],
                         "additionalProperties": false
@@ -605,7 +944,7 @@ mod tests {
         assert_eq!(duplicated.merge(once), once);
 
         for catalog in [duplicated, duplicated.merge(once)] {
-            let toolsets = catalog.toolsets();
+            let toolsets = catalog.toolsets(None);
             assert_eq!(toolsets.len(), 1);
             let tools = toolsets[0]
                 .tools(Arc::new(SimpleToolContext::new("internal-tools-test")))
@@ -637,7 +976,7 @@ mod tests {
         .map(ToOwned::to_owned);
         let catalog = InternalToolCatalog::from_names(&all_platform).expect("catalog");
         assert!(catalog.ask_user_enabled());
-        assert_eq!(catalog.toolsets().len(), 1);
+        assert_eq!(catalog.toolsets(None).len(), 1);
 
         // Outside the platform catalogue is still a refusal: it names nothing
         // the product can do, so skipping it would hide malformed config.
@@ -756,5 +1095,142 @@ mod tests {
             catalog.skipped_tools_notice_text().as_deref(),
             Some("internal tool 'planner' is not available on this worker")
         );
+    }
+
+    /// ELITEA-2783/2778: the two builder modules are INDEPENDENT toggles, and
+    /// enabling one changes nothing about `ask_user` or about the other.
+    #[test]
+    fn the_two_builder_modules_toggle_independently() {
+        let neither = InternalToolCatalog::from_names(&[]).expect("empty catalog");
+        assert!(!neither.skills_builder_enabled());
+        assert!(!neither.project_context_builder_enabled());
+
+        let skills_only = InternalToolCatalog::from_names(&[SKILLS_BUILDER_TOOL_NAME.to_owned()])
+            .expect("skills builder");
+        assert!(skills_only.skills_builder_enabled());
+        assert!(!skills_only.project_context_builder_enabled());
+        assert!(!skills_only.ask_user_enabled());
+
+        let context_only =
+            InternalToolCatalog::from_names(&[PROJECT_CONTEXT_BUILDER_TOOL_NAME.to_owned()])
+                .expect("project context builder");
+        assert!(context_only.project_context_builder_enabled());
+        assert!(!context_only.skills_builder_enabled());
+
+        // Both, plus ask_user, is the ELITEA-2778 regression shape: nothing
+        // that was already on gets turned off by the new names arriving.
+        let all = InternalToolCatalog::from_names(&[
+            ASK_USER_TOOL_NAME.to_owned(),
+            SKILLS_BUILDER_TOOL_NAME.to_owned(),
+            PROJECT_CONTEXT_BUILDER_TOOL_NAME.to_owned(),
+        ])
+        .expect("all three");
+        assert!(all.ask_user_enabled());
+        assert!(all.skills_builder_enabled());
+        assert!(all.project_context_builder_enabled());
+        // And neither of them is reported as a SKIPPED platform tool, which
+        // would tell the user in-conversation that the tool they just used is
+        // not available on this worker.
+        assert_eq!(all.skipped_tools_notice_text(), None);
+    }
+
+    /// ELITEA-2779: a disabled module binds NO tool, so the model has nothing
+    /// to call however explicit the user's request is. Asserted on the SERVED
+    /// toolsets rather than on the flags, because a flag that is false while a
+    /// tool is still bound is exactly the bug this case describes.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_disabled_builder_module_binds_no_tool() {
+        let disabled = InternalToolCatalog::from_names(&[ASK_USER_TOOL_NAME.to_owned()])
+            .expect("ask_user only");
+        let names = served_tool_names(disabled).await;
+        assert_eq!(names, [ASK_USER_TOOL_NAME]);
+    }
+
+    /// The same catalog with a builder enabled but NO authority to write under
+    /// still binds no builder tool — a toggle the deployment cannot serve is
+    /// dropped, not bound-and-failing (see `toolsets`' own doc comment).
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_builder_module_without_authority_binds_no_tool() {
+        let enabled = InternalToolCatalog::from_names(&[
+            ASK_USER_TOOL_NAME.to_owned(),
+            SKILLS_BUILDER_TOOL_NAME.to_owned(),
+            PROJECT_CONTEXT_BUILDER_TOOL_NAME.to_owned(),
+        ])
+        .expect("catalog");
+        assert_eq!(served_tool_names(enabled).await, [ASK_USER_TOOL_NAME]);
+        // Two enabled builder modules and one bound toolset: the ask_user one.
+        assert_eq!(enabled.toolsets(None).len(), 1);
+    }
+
+    async fn served_tool_names(catalog: InternalToolCatalog) -> Vec<String> {
+        let mut names = Vec::new();
+        for toolset in catalog.toolsets(None) {
+            let tools = toolset
+                .tools(Arc::new(SimpleToolContext::new("internal-tools-test")))
+                .await
+                .expect("internal toolset tools");
+            names.extend(tools.iter().map(|tool| tool.name().to_owned()));
+        }
+        names
+    }
+
+    /// ELITEA-2792: `optional` is carried through normalization, defaults to
+    /// false, and survives the encode/decode round trip the durable
+    /// clarification decision stores the request through — a flag that is set
+    /// on the way in and lost on the way out would leave the CARD (which reads
+    /// the decoded request) enforcing the strict rule anyway.
+    #[test]
+    fn an_optional_question_keeps_its_flag_through_the_durable_round_trip() {
+        let request = AskUserRequest::from_arguments(&json!({
+            "questions": [
+                {"id": "scope", "question": "Scope?", "options": ["Project"]},
+                {"id": "notes", "question": "Anything else?", "optional": true}
+            ]
+        }))
+        .expect("request");
+        let questions = request.questions_value();
+        let rows = questions.as_array().expect("questions array");
+        assert_eq!(rows[0]["optional"], json!(false));
+        assert_eq!(rows[1]["optional"], json!(true));
+
+        let encoded = encode_ask_user_request(&request).expect("encoded");
+        let decoded = decode_ask_user_request(&encoded).expect("decoded");
+        assert!(
+            decoded == request,
+            "the decoded request must equal the encoded one"
+        );
+    }
+
+    /// A refused document and a refused claim must not read the same to the
+    /// model: one says write less, the other says stop. Both are RESULTS, never
+    /// turn failures — the conversation that composed the document is the
+    /// expensive thing (see `builder_failure_text`).
+    #[test]
+    fn builder_failures_tell_the_model_what_to_do_next() {
+        let rejected = builder_failure_text(
+            "skill",
+            &RuntimeContextError::Rejected("the builder document cannot be stored as written"),
+        );
+        assert!(rejected.contains("Shorten it"), "{rejected}");
+
+        let refused = builder_failure_text(
+            "project context",
+            &RuntimeContextError::AuthorizationFailed("refused"),
+        );
+        assert!(refused.contains("Do not retry"), "{refused}");
+
+        let unavailable = builder_failure_text(
+            "skill",
+            &RuntimeContextError::DependencyUnavailable("unreachable"),
+        );
+        assert!(
+            unavailable.contains("could not be reached"),
+            "{unavailable}"
+        );
+        // The three must be distinguishable from each other, not merely
+        // non-empty: one shared sentence is how "retry" and "stop" became the
+        // same instruction.
+        assert_ne!(rejected, refused);
+        assert_ne!(refused, unavailable);
     }
 }

@@ -1,8 +1,7 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback } from 'react';
 
 import { agentEditorHooks } from '@/features/agents';
 import { useEditPipeline, usePipelineCreation } from '@/features/pipelines';
-import { toolkitEditorHooks, useToolkitCreate, useToolkitEdit } from '@/features/toolkits';
 import type { CanvasEditPayload } from '@/features/chat-messages';
 import type { Participant } from '@/entities/participant';
 import { ChatParticipantType } from '@/shared/lib/chat';
@@ -21,6 +20,7 @@ import {
 import { useAttachCreatedParticipant, toAddedParticipantLike, type AttachCreatedParticipant } from '../lib/useAttachCreatedParticipant';
 import { useEditorMutex, type EditorOpenInfo } from '../model/useEditorMutex';
 import { useCanvasEditing } from './useCanvasEditing';
+import { useToolkitEditing } from './useToolkitEditing';
 
 /**
  * The real wiring behind `ChatWithEditors.tsx` — split into this sibling
@@ -104,7 +104,21 @@ function useAgentEditing(isEditingAgent: boolean, attach: AttachCreatedParticipa
       if (!created) return;
       const added = await attach({
         entity_name: ChatParticipantType.Applications,
-        entity_meta: { id: created.id },
+        // NAME and PROJECT travel with the id (#940 A12). This used to send
+        // `{ id }` alone while the created agent carried both — and the
+        // participant rail renders `entity_meta.name`, so an agent created
+        // from chat joined the conversation as an UNNAMED row with no edit
+        // control on it (`EditParticipantButton`'s accessible name is built
+        // from the same field, and its action bar only renders on hover over
+        // a row the user therefore could not identify). The picker path next
+        // to it has always sent all three
+        // (`useAddEntityParticipant.helpers.ts`), which is why the same rail
+        // looked different depending on how the entity got there.
+        entity_meta: {
+          id: created.id,
+          ...(created.name !== undefined ? { name: created.name } : {}),
+          ...(created.project_id !== undefined ? { project_id: created.project_id } : {}),
+        },
         ...(created.version_details?.id !== undefined ? { entity_settings: { version_id: created.version_details.id } } : {}),
       });
       if (added) onAdded(added.map(toAddedParticipantLike));
@@ -136,68 +150,21 @@ function usePipelineEditing(isEditingPipeline: boolean, attach: AttachCreatedPar
       if (!created) return;
       void attach({
         entity_name: created.entity_name,
-        entity_meta: created.entity_meta,
+        // The NAME, for the same reason the agent branch above states.
+        // `usePipelineCreation` builds `entity_meta` by spreading the created
+        // pipeline's OWN `entity_meta`, which a freshly-created row does not
+        // have — so it came out as `{ id }` and the rail drew a nameless
+        // participant that could not be re-opened for editing.
+        entity_meta: {
+          ...created.entity_meta,
+          ...(created.name !== undefined ? { name: created.name } : {}),
+        },
         entity_settings: created.entity_settings,
       });
     },
   });
 
   return { editPipeline, pipelineCreation };
-}
-
-/**
- * Toolkit editing is opened from the conversation participant rail. The page
- * normalizes the wire participant and calls `handleShowToolkitEditor`, which
- * enters the same editor mutex used by agent and pipeline editors. MCP
- * participants use this path too because they are toolkit participants with
- * `meta.mcp` set.
- */
-function useToolkitEditing(isEditingToolkit: boolean, attach: AttachCreatedParticipant) {
-  const setToolkitEditingBlockNav = useCallback((blocked: boolean) => {
-    useEditorStateStore.getState().setEditingToolkit(blocked);
-    useNavBlockerStore.getState().setBlockNav(blocked, NAV_BLOCK_WARNING);
-  }, []);
-  // Baseline: a Redux `isToolkitCreateMode` flag distinct from
-  // `isEditingToolkit`. No consumer anywhere else in this worktree reads an
-  // equivalent flag (`useEditToolkit`'s OWN `isToolkitCreateMode` return
-  // value already tracks this locally for its own callers) — a disclosed
-  // no-op, not a silently-dropped write.
-  const setToolkitCreateMode = useCallback((_creating: boolean) => {}, []);
-
-  const editToolkit = toolkitEditorHooks.useEditToolkit({
-    navBlocker: { isEditingToolkit, setToolkitEditingBlockNav, setToolkitCreateMode },
-  });
-
-  // `addNewParticipants` is real now (issue #867) — posts the freshly
-  // created toolkit onto the current conversation via `attach`, the same
-  // path `useAgentEditing` uses. Toolkits are never activated (they are
-  // tools, not conversational entities — `useToolkitCreation`'s own doc
-  // comment), so there is no `onSetActiveParticipant`/`onAdded` callback to
-  // honour here at all, unlike the agent wrapper.
-  const toolkitCreation = toolkitEditorHooks.useToolkitCreation({
-    onToolkitEditorCreated: editToolkit.onToolkitEditorCreated,
-    addNewParticipants: async (participants) => {
-      const created = participants[0];
-      if (!created) return;
-      await attach({
-        entity_name: ChatParticipantType.Toolkits,
-        entity_meta: { id: created.id },
-        ...(created.version_details?.id !== undefined ? { entity_settings: { version_id: created.version_details.id } } : {}),
-      });
-    },
-  });
-
-  // The REAL create/save mutations for `<ToolkitEditor>`'s non-optional
-  // `deps.createToolkit`/`deps.saveToolkit`. These used to be a
-  // reject-with-"no backend endpoint yet" stub — stale since Phase 1c made
-  // both generated operations real (`features/toolkits/api/toolkits.ts`'s
-  // CORRECTION; `pages/toolkits` already saves through the same hooks), so
-  // every toolkit create/save FROM CHAT failed by construction.
-  const createToolkit = useToolkitCreate();
-  const saveToolkit = useToolkitEdit();
-  const toolkitWriteDeps = useMemo(() => ({ createToolkit, saveToolkit }), [createToolkit, saveToolkit]);
-
-  return { editToolkit, toolkitCreation, toolkitWriteDeps };
 }
 
 export interface ChatWithEditorsWiring {

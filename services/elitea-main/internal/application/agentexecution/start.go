@@ -418,8 +418,15 @@ var currentPlatformInternalTools = map[string]bool{
 	"image_generation": true,
 	"lazy_tools_mode":  true,
 	"planner":          true,
-	"pyodide":          true,
-	"swarm":            true,
+	// The two chat-authored builder modules (#940 A8). Unlike every other
+	// name here they are served by the NATIVE runtime and skipped by the
+	// Python worker — the reverse of the rest of this map — which is why
+	// this layer still forwards rather than judges: the same reason the doc
+	// comment above gives, read the other way round.
+	"project_context_builder": true,
+	"pyodide":                 true,
+	"skills_builder":          true,
+	"swarm":                   true,
 }
 
 func currentRuntimeInternalTools(raw json.RawMessage) ([]byte, error) {
