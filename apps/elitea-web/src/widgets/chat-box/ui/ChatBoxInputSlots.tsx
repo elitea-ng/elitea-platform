@@ -39,6 +39,15 @@ type VoiceControlProps = ComponentProps<typeof VoiceControlButton>;
 interface ChatBoxInputSlotsAttachments {
   readonly attachments: ComponentProps<typeof AttachmentButton>['attachments'] | undefined;
   readonly onAttachFiles: ComponentProps<typeof AttachmentButton>['onAttachFiles'] | undefined;
+  /**
+   * A17 (ELITEA-2867): attachments are refused for the whole of an open run.
+   * `disableAttachments` is the one switch that covers every way in — the "+"
+   * menu's own Attach Files row, the bare paperclip, AND the drop/paste bridge,
+   * which delivers files through `attachmentButtonRef.current.onDrop(...)` and
+   * is gated on the same flag inside `AttachmentButton`. Gating only the button
+   * would leave drag-and-drop and Ctrl+V attaching to a turn already in flight.
+   */
+  readonly disabled: boolean;
 }
 
 interface ChatBoxInputSlotsInternalTools {
@@ -146,13 +155,16 @@ export interface ChatBoxInputSlotsResult {
 export function buildChatBoxAttachmentProps(attachments: {
   readonly state: { readonly attachments: readonly File[]; readonly onAttachFiles: (files: readonly File[]) => void; readonly onDeleteAttachment: (index: number) => void };
   readonly upload: { readonly isUploading: boolean; readonly uploadProgress: number };
-}): NonNullable<ComponentProps<typeof NewChatInput>['attachments']> {
+}, disabled = false): NonNullable<ComponentProps<typeof NewChatInput>['attachments']> {
   return {
     items: attachments.state.attachments,
     onAttachFiles: attachments.state.onAttachFiles,
     onDeleteAttachment: attachments.state.onDeleteAttachment,
     isUploading: attachments.upload.isUploading,
     uploadProgress: attachments.upload.uploadProgress,
+    // A17: `NewChatInput`'s drop/paste bridge reads THIS flag
+    // (`useNewChatInputAttachmentBridge`), so a run in flight blocks both.
+    disabled,
   };
 }
 
@@ -185,7 +197,7 @@ export function buildChatBoxInputSlots({
   voice,
 }: ChatBoxInputSlotsProps): ChatBoxInputSlotsResult {
   const attachmentButtonProps = {
-    disableAttachments: false,
+    disableAttachments: attachments.disabled,
     ...optField('attachments', attachments.attachments),
     ...optField('onAttachFiles', attachments.onAttachFiles),
   };

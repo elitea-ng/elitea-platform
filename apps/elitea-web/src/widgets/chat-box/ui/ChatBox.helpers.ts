@@ -173,7 +173,7 @@ export function buildTtsProps(readAloud: {
   };
 }
 
-/** `ChatBox`'s input-disable/loading derivation — extracted to keep `ChatBox`'s own complexity down (a pure boolean-combination has no reason to live inside a component body). */
+/** `ChatBox`'s input-disable/loading derivation — extracted to keep `ChatBox`'s own complexity down (a pure boolean-combination has no reason to live inside a component body). A17: a run in flight no longer blocks the COMPOSER — what is typed during one is QUEUED (`ChatBoxQueuedMessages`), so `isComposerBusy` (the text area + the send control) omits `isStreaming`, while `isInputLoading` keeps it for the controls that must still go inert mid-run. */
 export function deriveChatBoxInputState(flags: {
   readonly isLoadingConversation: boolean | undefined;
   readonly isFetchingParticipantDetails: boolean;
@@ -185,21 +185,20 @@ export function deriveChatBoxInputState(flags: {
   readonly isProcessingSymbols: boolean;
   readonly hasPendingHitlInterrupt: boolean;
   readonly isActiveParticipantBroken: boolean;
-}): { readonly isInputLoading: boolean; readonly disabledSend: boolean } {
-  const isInputLoading =
+}): { readonly isInputLoading: boolean; readonly isComposerBusy: boolean; readonly disabledSend: boolean } {
+  const isComposerBusy =
     Boolean(flags.isLoadingConversation) ||
     flags.isFetchingParticipantDetails ||
     flags.isUploadingAttachments ||
     flags.isUpdatingInternalToolsConfig ||
-    Boolean(flags.isConversationSending) ||
-    flags.isStreaming;
+    Boolean(flags.isConversationSending);
   const disabledSend =
     !flags.hasChatInput ||
-    isInputLoading ||
+    isComposerBusy ||
     flags.isProcessingSymbols ||
     flags.hasPendingHitlInterrupt ||
     flags.isActiveParticipantBroken;
-  return { isInputLoading, disabledSend };
+  return { isInputLoading: isComposerBusy || flags.isStreaming, isComposerBusy, disabledSend };
 }
 
 /** Flattens `ChatBox`'s grouped `user`/`llm`/`onDelete` props back to individual values — extracted to keep `ChatBox`'s own complexity down (each `?.` below is one fewer branch counted against the component). */

@@ -44,6 +44,7 @@ import type { ChatBoxHandle } from './ChatBox.types';
 import { buildChatBoxContinuationProps } from './ChatBoxContinuation';
 import { useChatBoxLlmSettingsDialog } from './ChatBoxLlmSettingsDialog';
 import { buildChatBoxAttachmentProps, buildChatBoxInputSlots } from './ChatBoxInputSlots';
+import { ChatBoxQueuedMessages, chatBoxQueueKey, useChatBoxQueuedMessages } from './ChatBoxQueuedMessages';
 import { buildChatBoxPopupsProps, ChatBoxPopups } from './ChatBoxPopups';
 import { ChatBoxDeleteModal } from './ChatBoxDeleteModal';
 import { ChatEmptyGreeting } from './ChatEmptyGreeting';
@@ -65,10 +66,6 @@ import { useStableRef } from './hooks/useStableRef';
 
 /** `NewChatInputHandle` stays unexported from `features/chat-input`'s barrel — derived via `ComponentRef`, matching that barrel's own documented convention. */
 type NewChatInputHandle = ComponentRef<typeof NewChatInput>;
-
-/* ------------------------------------------------------------------ */
-/*  Props & handle                                                      */
-/* ------------------------------------------------------------------ */
 
 /** @public Props for the ChatBox composition root. */
 export interface ChatBoxProps {
@@ -101,10 +98,6 @@ export interface ChatBoxProps {
 }
 
 export type { ChatBoxHandle };
-
-/* ------------------------------------------------------------------ */
-/*  Component                                                           */
-/* ------------------------------------------------------------------ */
 
 const ChatBoxInner = memo(function ChatBox({
   ref,
@@ -161,9 +154,8 @@ const ChatBoxInner = memo(function ChatBox({
   });
   const lifecycle = data.lifecycle;
 
-  // Mirror the live, socket-synced history out to the parent's own mirror,
-  // when one is supplied (no live caller exists yet — the routing gap this
-  // whole unit operates under).
+  // Mirror the live, socket-synced history out to the parent's own mirror, when one
+  // is supplied (no live caller exists yet — the routing gap this unit operates under).
   useEffect(() => {
     setChatHistory?.(messages);
   }, [messages, setChatHistory]);
@@ -196,9 +188,9 @@ const ChatBoxInner = memo(function ChatBox({
   });
   // After `useChatBoxSend`: a "+" pick on a chat with no conversation has to create one first, and it reuses the adapter the first send would have used, so an eagerly created conversation is seeded exactly like a send-created one.
   const entityParticipantActions = useAddEntityParticipant({ projectId, conversationId, participants: normalisedParticipants, onChangeParticipant, createConversation: () => createConversationForSend(''), ...(onConversationCreated ? { onConversationCreated } : {}) });
-  // `isStreamingNow` is derived from the PERSISTED message groups, which carry
-  // no in-flight flag while an SSE turn runs — without the transport's own flag
-  // the composer never offers Stop for the very turn Stop exists to cancel (#328).
+  // `isStreamingNow` is derived from the PERSISTED message groups, which carry no
+  // in-flight flag while an SSE turn runs — without the transport's own flag the
+  // composer never offers Stop for the turn Stop exists to cancel (#328).
   const isStreaming = [data.streaming.isStreamingNow, data.messageList.isStreamingFromHistory, isStreamedExecution].some(Boolean);
 
   // Action handlers — real socket protocol (chat_predict / chat_continue_predict),
@@ -270,7 +262,7 @@ const ChatBoxInner = memo(function ChatBox({
   const { handleMentionChange, handleSelectUserMention, handleSelectSkillTool } = useChatBoxMentions({ state, onChangeParticipant });
 
   // Input disable/loading derivation
-  const { isInputLoading, disabledSend } = deriveChatBoxInputState({
+  const { isInputLoading, isComposerBusy, disabledSend } = deriveChatBoxInputState({
     isLoadingConversation,
     isFetchingParticipantDetails,
     isUploadingAttachments: data.attachments.upload.isUploading,
@@ -283,8 +275,7 @@ const ChatBoxInner = memo(function ChatBox({
     isActiveParticipantBroken: state.isActiveParticipantBroken,
   });
 
-  // Action callbacks (send, regenerate, copy, delete, edit-resubmit, HITL
-  // resume, MCP/token-limit continue, clear chat, conversation-starter send)
+  // Action callbacks (send, regenerate, copy, delete, edit-resubmit, HITL resume, MCP/token-limit continue, clear chat, starter send)
   const readAloudRef = useStableRef(readAloud);
   const readAloudStop = useCallback(() => { readAloudRef.current.stop(); }, [readAloudRef]);
   const {
@@ -299,6 +290,14 @@ const ChatBoxInner = memo(function ChatBox({
     handleContinueTokenLimit,
     handleClear,
   } = useChatBoxActions({ chatInputRef, data, state, handlers, deleteAlert, messages, isAgentsPage, readAloudStop, onConversationCreated });
+
+  // A17: while a turn is open the composer QUEUES instead of sending; the queue
+  // drains FIFO on settle down this same `sendQuestion` path, survives Stop and
+  // a reload, and stamps its deliveries so the transcript can label them.
+  const queued = useChatBoxQueuedMessages({
+    conversationKey: chatBoxQueueKey(conversationUuid, conversationId), isStreaming,
+    onSendNow: handleSend, send: handlers.sendQuestion, onConversationCreated,
+  });
 
   // Imperative handle (stable via refs, so identity never churns)
   const handleClearRef = useStableRef(handleClear);
@@ -331,7 +330,7 @@ const ChatBoxInner = memo(function ChatBox({
       <Box sx={chatColumnSx(isEmptyConversation)}>
         <ChatMessageList
           assistantName={assistantName} emptyState={<ChatEmptyGreeting userName={userName} />}
-          chatHistory={messages} isStreaming={isStreaming} userId={userId ?? ''} projectId={projectIdString}
+          chatHistory={queued.decorate(messages)} isStreaming={isStreaming} userId={userId ?? ''} projectId={projectIdString}
           messageActions={{
             onCopyToClipboard: handleCopy,
             onDeleteAnswer: handleDeleteAnswer,
@@ -349,6 +348,7 @@ const ChatBoxInner = memo(function ChatBox({
         )}
       </Box>
       <Box sx={{ p: 1 }}>
+        <ChatBoxQueuedMessages queue={queued} />
         <ChatBoxPopups
           {...buildChatBoxPopupsProps({
             state,
@@ -362,9 +362,9 @@ const ChatBoxInner = memo(function ChatBox({
         <NewChatInput
           ref={chatInputRef}
           conversationId={conversationId !== undefined ? String(conversationId) : undefined}
-          state={{ isLoading: isInputLoading, isStreaming, disabledSend, isCreatingConversation: data.lifecycle.isCreating }}
+          state={{ isLoading: isComposerBusy, isStreaming, disabledSend, isCreatingConversation: data.lifecycle.isCreating, allowSendWhileStreaming: true }}
           content={{ placeholder: t('widgets.chatBox.inputPlaceholder', 'Type your message...'), clearInputAfterSubmit: true, slashHighlights: state.combinedHighlightRanges }}
-          callbacks={{ onSend: handleSend, onStopGeneration: stopGeneration, onNormalKeyDown: state.onNormalKeyDown, onInputChange: state.onInputChange }}
+          callbacks={{ onSend: queued.onSend, onStopGeneration: stopGeneration, onNormalKeyDown: state.onNormalKeyDown, onInputChange: state.onInputChange }}
           agentEditor={buildAgentEditorProps({
             participantForEditor,
             activeParticipantDetails: agentEditorParticipantDetails,
@@ -374,11 +374,11 @@ const ChatBoxInner = memo(function ChatBox({
             onSelectVersion: (version) => { void handleSelectVersion(version); },
             editorCallbacks, onEditLlmSettings: llmSettingsDialog.onEdit,
           })}
-          attachments={buildChatBoxAttachmentProps(data.attachments)}
+          attachments={buildChatBoxAttachmentProps(data.attachments, isStreaming)}
           mentions={{ users: state.users, onMentionChange: handleMentionChange }}
           voice={{ isSpeakingMode: state.isSpeakingMode, onSpeakingModeToggle: () => state.setIsSpeakingMode(!state.isSpeakingMode), isTTSPlaying: readAloud.isPlaying }}
           slots={buildChatBoxInputSlots({
-            attachments: { attachments: data.attachments.state.attachments, onAttachFiles: data.attachments.state.onAttachFiles },
+            attachments: { attachments: data.attachments.state.attachments, onAttachFiles: data.attachments.state.onAttachFiles, disabled: isStreaming },
             internalTools: { disabled: isInputLoading, tools: internalToolsButtonTools, onToolChange: handleInternalToolChange },
             model: { llmSettings, onSetLLMSettings, selectedModel: selectedLlmModel, onSelectModel: handleSelectModel, models: modelsList },
             clearChat: { disabled: shouldDisableClearChat(isStreaming, messages.length), onClear: handleClear },

@@ -26,7 +26,7 @@ import { AttachmentButton, ChatInternalToolsConfigButton, PlusChatButton, VoiceB
 import { VoiceControlButton } from '@/features/chat-input';
 import { LLMModelSelector } from '@/widgets/llm-model-selector';
 
-import { buildChatBoxInputSlots } from './ChatBoxInputSlots';
+import { buildChatBoxAttachmentProps, buildChatBoxInputSlots } from './ChatBoxInputSlots';
 
 type ToolRow = { key: string; label: string; enabled: boolean };
 
@@ -49,9 +49,11 @@ function buildSlots(
   tools: ToolRow[] | undefined = [{ key: 'planner', label: 'Planner', enabled: true }],
   onToolChange: ((toolKey: string, enabled: boolean) => void) | undefined = vi.fn(),
   clearChat: { disabled: boolean; onClear: () => void } = { disabled: false, onClear: vi.fn() },
+  /** A17: a turn is open, so every attachment path is refused (ELITEA-2867). */
+  attachmentsDisabled = false,
 ) {
   return buildChatBoxInputSlots({
-    attachments: { attachments: [], onAttachFiles: vi.fn() },
+    attachments: { attachments: [], onAttachFiles: vi.fn(), disabled: attachmentsDisabled },
     internalTools: { disabled: false, tools, onToolChange },
     model: { llmSettings: undefined, onSetLLMSettings: undefined, selectedModel: undefined, onSelectModel: undefined, models: [] },
     clearChat,
@@ -119,7 +121,7 @@ describe('buildChatBoxInputSlots — drop/paste attachment handle', () => {
     // every drop/paste on /chat discarded with no error.
     const attachmentButtonRef = { current: null };
     const slots = buildChatBoxInputSlots({
-      attachments: { attachments: [], onAttachFiles: vi.fn() },
+      attachments: { attachments: [], onAttachFiles: vi.fn(), disabled: false },
       internalTools: { disabled: false, tools: [], onToolChange: vi.fn() },
       model: { llmSettings: undefined, onSetLLMSettings: undefined, selectedModel: undefined, onSelectModel: undefined, models: [] },
       clearChat: { disabled: false, onClear: vi.fn() },
@@ -244,5 +246,37 @@ describe('buildChatBoxInputSlots — the conversation-surface clear-history cont
     // beside the panel. Supplying one here too would put two clear controls
     // on the same screen — the mirror of the modules-gear case above.
     expect(buildSlots(true, undefined, undefined, { disabled: false, onClear: vi.fn() }).clearChat).toBeUndefined();
+  });
+});
+
+/*
+ * A17 (ELITEA-2867): attachments are refused for the whole of an open run, and
+ * `disableAttachments` is the ONE switch that covers every way in — the "+"
+ * menu's Attach Files row, the bare paperclip, and the drop/paste bridge, which
+ * delivers through `attachmentButtonRef.current.onDrop(...)` and is gated on
+ * the same flag inside `AttachmentButton`. Gating only the visible button would
+ * leave drag-and-drop and Ctrl+V attaching to a turn already in flight, which
+ * is precisely what the case calls a failure.
+ */
+describe('attachments while a turn is open', () => {
+  it('disables the chat surface "+" menu', () => {
+    const slots = buildSlots(false);
+    expect((slots.attachmentButton as ReactElement<{ disableAttachments?: boolean }>).props.disableAttachments).toBe(false);
+    const running = buildSlots(false, undefined, undefined, undefined, true);
+    expect((running.attachmentButton as ReactElement<{ disableAttachments?: boolean }>).props.disableAttachments).toBe(true);
+  });
+
+  it('disables the agents-page paperclip', () => {
+    const running = buildSlots(true, undefined, undefined, undefined, true);
+    expect((running.attachmentButton as ReactElement<{ disableAttachments?: boolean }>).props.disableAttachments).toBe(true);
+  });
+
+  it('tells the composer to refuse drop and paste too', () => {
+    const state = { attachments: [], onAttachFiles: vi.fn(), onDeleteAttachment: vi.fn() };
+    const upload = { isUploading: false, uploadProgress: 0 };
+    // `NewChatInput`'s `useNewChatInputAttachmentBridge` reads exactly this
+    // field; without it the bridge stays open while a run streams.
+    expect(buildChatBoxAttachmentProps({ state, upload }).disabled).toBe(false);
+    expect(buildChatBoxAttachmentProps({ state, upload }, true).disabled).toBe(true);
   });
 });
