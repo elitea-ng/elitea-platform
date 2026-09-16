@@ -104,6 +104,8 @@ These are part of gate 4 acceptance, not optional follow-up work after compactio
 The [model budget foundation](source-mapping/model-context-budget.md) freezes authorized limits and checks the complete provider request.
 It reserves output inside the effective window and preserves explicit limits.
 Settings delivery, durable compaction, deployed UI verification, and the other point 4 contracts remain open.
+The [ordinary root compaction implementation](source-mapping/durable-context-compaction.md) adds structured notes and durable preparation checkpoints.
+Its scope does not yet include child or pipeline model integration, deployed settings, or browser acceptance.
 The pipeline container has no separate compaction control.
 Model conversations inherit a caller policy when available; otherwise saved children use explicit settings or Balanced defaults.
 Plain LLM nodes also compact their accumulated history, as confirmed on 2026-09-16.

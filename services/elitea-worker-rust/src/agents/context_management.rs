@@ -8,7 +8,12 @@
 //!
 //! # Composition
 //!
-//! An admitted plan is composed onto the ADK Runner from
+//! Ordinary roots with frozen model limits use `context_compaction` through
+//! the model checkpoint callback. That path stores structured summary coverage
+//! and the prepared request before dispatch. Child and pipeline integration
+//! remains separate work.
+//!
+//! Legacy bindings without frozen limits compose the plan onto the ADK Runner from
 //! [`ContextManagementPlan::prepare_runner_composition`], which yields an
 //! `adk_runner::compaction::CompactionConfig`. The config pairs
 //! [`EliteaContextCompaction`] — a [`CompactionStrategy`] that reproduces the
@@ -26,10 +31,10 @@
 //! history and recompacts it. ADK's other compaction surface,
 //! `EventsCompactionConfig`, persists `EventCompaction` markers while retaining
 //! original events. Runner history uses the marker boundary on later calls.
-//! This invocation-only implementation does not yet use that durable path.
+//! This legacy strategy does not use that durable path.
 //! See `docs/context-continuation-design.md` for the required integration.
 //!
-//! # Known limits
+//! # Legacy strategy limits
 //!
 //! * The summary is derived per invocation and is never persisted, so an
 //!   over-budget conversation pays one summarization call per turn.
@@ -183,7 +188,7 @@ impl ContextManagementPlan {
 
     /// Compose the admitted plan onto the exclusive Runner, after admission and
     /// before the Runner is built. `summarization_model` is the invocation's
-    /// bound model; a caller that has none (the pipeline graph runs one model
+    /// isolated summary model; a caller that has none (the pipeline graph runs one model
     /// per node) passes `None` and an active plan is refused rather than
     /// half-applied.
     ///

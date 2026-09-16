@@ -82,6 +82,13 @@ pub(crate) enum BoundModelFacade {
 }
 
 impl BoundOrdinaryAgentModel for BoundModelFacade {
+    fn summarization_model(&self) -> Option<Arc<dyn adk_rust::Llm>> {
+        match self {
+            Self::OpenAiCompatible(model) => model.summarization_model(),
+            Self::Anthropic(model) => model.summarization_model(),
+        }
+    }
+
     fn request_budget(&self) -> Option<Arc<dyn crate::agents::context_budget::ModelRequestBudget>> {
         match self {
             Self::OpenAiCompatible(model) => model.request_budget(),

@@ -21,6 +21,7 @@ pub mod redis_streams;
 pub(crate) mod runtime_context;
 #[cfg(test)]
 mod runtime_context_tests;
+mod summary_model;
 
 pub use control_grpc::{
     ControlGrpcClient, ControlGrpcConfig, ControlGrpcError, ControlRpc, TonicControlRpc,

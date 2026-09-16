@@ -17,6 +17,7 @@ pub(super) const CHECKPOINT_KEY: &str = "elitea.agent.recovery.v1";
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum Phase {
+    ContextPending,
     ModelPending,
     ToolMayHaveStarted,
 }
@@ -83,6 +84,7 @@ pub(super) struct ModelCheckpointWriter {
     replay: Option<Arc<Mutex<Option<LlmRequest>>>>,
     validated_digest: Option<[u8; 32]>,
     request_budget: Option<Arc<dyn super::context_budget::ModelRequestBudget>>,
+    context_compaction: Option<Arc<super::context_compaction::DurableContextCompaction>>,
 }
 
 impl ModelCheckpointWriter {
@@ -100,7 +102,16 @@ impl ModelCheckpointWriter {
             replay: None,
             validated_digest: None,
             request_budget: None,
+            context_compaction: None,
         }
+    }
+
+    pub(super) fn with_context_compaction(
+        mut self,
+        compaction: Option<Arc<super::context_compaction::DurableContextCompaction>>,
+    ) -> Self {
+        self.context_compaction = compaction;
+        self
     }
 
     pub(super) fn with_request_budget(
@@ -132,7 +143,12 @@ impl ModelCheckpointWriter {
         {
             return Err(invalid_checkpoint());
         }
-        if !matches!(checkpoint.phase, Phase::ModelPending) {
+        if !matches!(
+            checkpoint.phase,
+            Phase::ModelPending | Phase::ContextPending
+        ) || matches!(checkpoint.phase, Phase::ContextPending)
+            && self.context_compaction.is_none()
+        {
             return Err(invalid_checkpoint());
         }
         // The marker and state commit together. Refuse a missing marker or a
@@ -237,6 +253,16 @@ impl ModelCheckpointWriter {
                 let writer = model.clone();
                 Box::pin(async move {
                     let request = writer.prepare_request(request)?;
+                    let (request, compaction_record) = if let Some(compaction) = &writer.context_compaction {
+                        let request = super::replay_history::model_history(request)?;
+                        let source_request = request.clone();
+                        compaction.prepare(request, || async {
+                            writer.persist(context.try_identity()?, context.invocation_id(),
+                                Phase::ContextPending, Some(&source_request), None).await
+                        }).await?
+                    } else {
+                        (request, None)
+                    };
                     if let Some(budget) = &writer.request_budget {
                         let provider_request =
                             super::replay_history::model_history(request.clone())?;
@@ -248,8 +274,14 @@ impl ModelCheckpointWriter {
                             context.invocation_id(),
                             Phase::ModelPending,
                             Some(&request),
+                            writer.context_compaction.as_ref().map(|_| {
+                                super::context_compaction::DurableContextCompaction::state_value(compaction_record.as_ref())
+                            }).transpose()?,
                         )
                         .await?;
+                    if let Some(compaction) = &writer.context_compaction {
+                        compaction.committed(compaction_record)?;
+                    }
                     Ok(BeforeModelResult::Continue(request))
                 })
             }))
@@ -264,6 +296,7 @@ impl ModelCheckpointWriter {
                             context.invocation_id(),
                             Phase::ToolMayHaveStarted,
                             None,
+                            None,
                         )
                         .await?;
                     Ok(None)
@@ -277,6 +310,7 @@ impl ModelCheckpointWriter {
         invocation_id: &str,
         phase: Phase,
         request: Option<&LlmRequest>,
+        context_state: Option<Value>,
     ) -> adk_rust::Result<()> {
         let mut event = Event::new(invocation_id);
         "elitea-recovery".clone_into(&mut event.author);
@@ -296,6 +330,12 @@ impl ModelCheckpointWriter {
             .actions
             .state_delta
             .insert(CHECKPOINT_KEY.to_owned(), checkpoint);
+        if let Some(value) = context_state {
+            event
+                .actions
+                .state_delta
+                .insert(super::context_compaction::STATE_KEY.to_owned(), value);
+        }
         // The existing session implementation enforces claim fencing and size
         // limits. A failed write stops ADK before the provider/tool call.
         self.sessions
@@ -352,6 +392,7 @@ mod tests {
                     "invocation",
                     Phase::ModelPending,
                     Some(&saved),
+                    None,
                 )
                 .await
                 .expect("persist");
@@ -688,6 +729,7 @@ mod tests {
                 "inv-1",
                 Phase::ModelPending,
                 Some(&request),
+                None,
             )
             .await
             .expect("persist");
@@ -751,7 +793,7 @@ mod tests {
                 .is_err()
         );
         writer
-            .persist(identity, "inv-1", Phase::ToolMayHaveStarted, None)
+            .persist(identity, "inv-1", Phase::ToolMayHaveStarted, None, None)
             .await
             .expect("tool marker");
         assert!(

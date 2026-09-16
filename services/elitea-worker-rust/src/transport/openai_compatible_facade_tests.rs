@@ -1198,3 +1198,117 @@ async fn context_measurement_matches_dispatched_body_without_spending_turns() {
     );
     assert_eq!(bound.take_completion_for_test().unwrap(), "Hello 🌍");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn adk_summaries_are_complete_and_isolated_from_the_chat_binding() {
+    use adk_rust::{BaseEventsSummarizer as _, Event, agent::LlmEventSummarizer};
+    let (client, captured) = test_model_gateway_client(
+        (0..3)
+            .map(|_| {
+                TestModelGatewayOutcome::Response(test_model_gateway_response(Body::new(
+                    Full::new(Bytes::from(ordinary_sse())),
+                )))
+            })
+            .collect(),
+        test_model_gateway_config(),
+    )
+    .unwrap();
+    let mut invocation = test_model_facade_invocation();
+    invocation.max_model_turns = 2;
+    let bound = client
+        .bind_ordinary(
+            &ClaimScopedEliteaContext::fixture(17, TOKEN),
+            17,
+            invocation,
+        )
+        .unwrap();
+    let summarizer = LlmEventSummarizer::new(bound.summarization_model().unwrap());
+    let original = format!("{}🦀 end of history", "x".repeat(60 * 1024 - 40));
+    let mut event = Event::new("summary-fixture");
+    event.author = "user".into();
+    event.set_content(Content::new("user").with_text(original.clone()));
+    for _ in 0..2 {
+        let summary = summarizer
+            .summarize_events(&[event.clone()])
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            summary.actions.compaction.unwrap().compacted_content.parts,
+            vec![Part::Text {
+                text: "Hello 🌍".into()
+            }]
+        );
+        assert!(
+            bound
+                .durable_completion()
+                .unwrap()
+                .snapshot()
+                .unwrap()
+                .is_none()
+        );
+    }
+    assert!(summarizer.summarize_events(&[event]).await.is_err());
+    drain(
+        bound
+            .generate_for_test(test_model_request("ordinary chat"))
+            .await
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(bound.take_completion_for_test().unwrap(), "Hello 🌍");
+    let requests = captured.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(body["stream"], true);
+    assert_eq!(body["max_completion_tokens"], 4_000);
+    assert!(body.get("tools").is_none());
+    assert_eq!(
+        body["messages"][0]["content"],
+        super::summary_model::INSTRUCTION
+    );
+    let parts = body["messages"][1]["content"].as_array().unwrap();
+    assert!(parts.len() > 1);
+    let prompt: String = parts.iter().map(|p| p["text"].as_str().unwrap()).collect();
+    assert!(prompt.ends_with(&format!("user: {original}")));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn adk_summary_rejects_truncation_and_stream_failure_after_text() {
+    use adk_rust::{BaseEventsSummarizer as _, Event, agent::LlmEventSummarizer};
+    let text = String::from_utf8(ordinary_sse()).unwrap();
+    for body in [
+        text.replace("\"finish_reason\":\"stop\"", "\"finish_reason\":\"length\""),
+        text.replace("data: [DONE]\n\n", ""),
+    ] {
+        let (client, captured) = test_model_gateway_client(
+            vec![TestModelGatewayOutcome::Response(
+                test_model_gateway_response(Body::new(Full::new(Bytes::from(body)))),
+            )],
+            test_model_gateway_config(),
+        )
+        .unwrap();
+        let bound = client
+            .bind_ordinary(
+                &ClaimScopedEliteaContext::fixture(17, TOKEN),
+                17,
+                test_model_facade_invocation(),
+            )
+            .unwrap();
+        let summarizer = LlmEventSummarizer::new(bound.summarization_model().unwrap());
+        let mut event = Event::new("summary-fixture");
+        event.set_content(Content::new("user").with_text("private summary fixture"));
+        let error = summarizer.summarize_events(&[event]).await.unwrap_err();
+        assert!(!error.to_string().contains("private summary fixture"));
+        assert!(
+            bound
+                .durable_completion()
+                .unwrap()
+                .snapshot()
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(captured.lock().unwrap().len(), 1);
+    }
+}

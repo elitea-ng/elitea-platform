@@ -14,12 +14,17 @@ Keep these components distinct:
 - Original user request and subsequent user instructions, linked to their immutable conversation events.
 - Current objective, constraints, decisions, completed work, unfinished work, and the next action.
 - Tool calls, results, artifact references, approvals, interrupts, and resume identities from durable execution records.
-- A generated narrative summary of older conversation content, explicitly marked as derived information.
+- A generated structured continuation record of older conversation content, explicitly marked as derived information.
 
 A summary must not replace authoritative instructions or invent successful work.
 Completed operations must reference actual tool outcomes or durable receipts.
 Pending and ambiguous operations remain pending until their state is reconciled.
 Keep full conversation history available for retrieval and audit.
+
+The [ordinary root implementation](source-mapping/durable-context-compaction.md) now validates a structured continuation record.
+It separates completed work, evidence references, open work, next steps, decisions, constraints, and unresolved issues.
+Format and reference checks do not prove semantic completeness; live-model quality acceptance remains required.
+Original events stay stored while the next model request uses a compact projection.
 
 ## Token budget
 
@@ -201,9 +206,11 @@ Verify replacement-worker replay and summary bounds before enabling it.
 Use these primitives with Elitea-owned authority, request budgeting, and failure handling.
 Do not copy another framework's runtime or replace the current language-neutral contracts.
 
-Current Rust `src/agents/context_management.rs` compacts the invocation's event view.
-It does not persist the generated summary, so later invocations can repeat summarization.
-Its history budget does not include all injected instructions, tool schemas, new user input, and output reservation.
+The legacy Rust `src/agents/context_management.rs` strategy compacts only the invocation's event view.
+Old bindings without frozen limits retain that path.
+Ordinary roots with an admitted summary plan and frozen limits now use `src/agents/context_compaction.rs`.
+That path persists exact source coverage and the prepared request through the existing model checkpoint writer.
+Child scopes, pipeline models, direct HITL resume, and deployed settings delivery remain open.
 `src/agents/instruction_authority.rs` already provides separate versioned instruction state and rehydration.
 Complete integration with that state rather than asking a summary model to recreate instructions.
 Main `agentexecution/start.go` and `adhoc.go` still dispatch empty context settings.

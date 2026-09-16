@@ -1026,6 +1026,11 @@ struct PipelineStateServices {
 pub(crate) trait BoundOrdinaryAgentModel: Send + 'static {
     fn adk_model(&self) -> Arc<dyn Llm>;
 
+    /// A separate summary binding must not capture the answer or spend chat turns.
+    fn summarization_model(&self) -> Option<Arc<dyn Llm>> {
+        None
+    }
+
     fn request_budget(&self) -> Option<Arc<dyn super::context_budget::ModelRequestBudget>> {
         None
     }
@@ -1619,8 +1624,21 @@ where
         regenerate,
         instruction_plan: _,
     } = plan;
-    let context_compaction =
-        context_management.prepare_runner_composition(Some(model.provider_model()))?;
+    let durable_context_plan = match (
+        &context_management,
+        model.request_budget(),
+        model.summarization_model(),
+    ) {
+        (ContextManagementPlan::Summarize(plan), Some(budget), Some(summary_model)) => {
+            Some((plan.clone(), budget, summary_model))
+        }
+        _ => None,
+    };
+    let context_compaction = if durable_context_plan.is_some() {
+        None
+    } else {
+        context_management.prepare_runner_composition(model.summarization_model())?
+    };
     let parallel = execution_mode == NativeToolExecutionMode::ParallelApplications;
     if parallel && runtime.has_confirmation_guards() {
         return Err(invalid_configuration());
@@ -1678,13 +1696,27 @@ where
         session_bootstrap = if created { "seeded" } else { "restored" },
         "prepared the ADK session for the native agent runner"
     );
+    let durable_context = durable_context_plan
+        .map(|(plan, budget, summary_model)| {
+            super::context_compaction::DurableContextCompaction::new(
+                plan,
+                budget,
+                summary_model,
+                definition_digest,
+                session.as_ref(),
+            )
+            .map(Arc::new)
+        })
+        .transpose()
+        .map_err(|_| invalid_configuration())?;
     let checkpoint = super::model_checkpoint::ModelCheckpointWriter::new(
         sessions.clone(),
         execution_id,
         generation,
         definition_digest,
     )
-    .with_request_budget(model.request_budget());
+    .with_request_budget(model.request_budget())
+    .with_context_compaction(durable_context);
     let checkpoint = if checkpoint_recovery {
         let restored = checkpoint
             .restore(session.as_ref())
@@ -2041,7 +2073,7 @@ where
         instruction_plan: _,
     } = plan;
     let context_compaction =
-        context_management.prepare_runner_composition(Some(model.provider_model()))?;
+        context_management.prepare_runner_composition(model.summarization_model())?;
     let stored = sessions
         .get(GetRequest {
             app_name: APP_NAME.to_owned(),

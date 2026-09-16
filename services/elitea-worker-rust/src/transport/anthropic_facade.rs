@@ -118,6 +118,28 @@ pub(crate) struct BoundAnthropicFacade {
 }
 
 impl BoundOrdinaryAgentModel for BoundAnthropicFacade {
+    fn summarization_model(&self) -> Option<Arc<dyn Llm>> {
+        let source = self.model.clone();
+        Some(Arc::new(super::summary_model::SummaryModel::new(
+            &self.model.invocation,
+            move || {
+                let mut invocation = source.invocation.clone();
+                super::summary_model::INSTRUCTION.clone_into(&mut invocation.system_instruction);
+                invocation.max_model_turns = 1;
+                Arc::new(EliteaAnthropicModel {
+                    transport: source.transport.clone(),
+                    config: source.config.clone(),
+                    invocation,
+                    billing_project_id: source.billing_project_id,
+                    token: source.token.clone(),
+                    execution_id: source.execution_id.clone(),
+                    completion: Arc::new(Mutex::new(AnthropicCompletionState::default())),
+                    calls: AtomicU32::new(0),
+                })
+            },
+        )))
+    }
+
     fn request_budget(&self) -> Option<Arc<dyn crate::agents::context_budget::ModelRequestBudget>> {
         self.model.invocation.context_budget.map(|_| {
             self.model.clone() as Arc<dyn crate::agents::context_budget::ModelRequestBudget>
