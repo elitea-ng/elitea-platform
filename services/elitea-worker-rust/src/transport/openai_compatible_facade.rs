@@ -314,6 +314,12 @@ pub(crate) struct BoundOpenAiCompatibleFacade {
 }
 
 impl BoundOrdinaryAgentModel for BoundOpenAiCompatibleFacade {
+    fn request_budget(&self) -> Option<Arc<dyn crate::agents::context_budget::ModelRequestBudget>> {
+        self.model.invocation.context_budget.map(|_| {
+            self.model.clone() as Arc<dyn crate::agents::context_budget::ModelRequestBudget>
+        })
+    }
+
     fn adk_model(&self) -> Arc<dyn Llm> {
         self.model.clone()
     }
@@ -406,6 +412,20 @@ struct EliteaOpenAiCompatibleModel {
     execution_id: String,
     completion: Arc<Mutex<CompletionState>>,
     calls: AtomicU32,
+}
+
+impl crate::agents::context_budget::ModelRequestBudget for EliteaOpenAiCompatibleModel {
+    fn measure(
+        &self,
+        request: &LlmRequest,
+    ) -> adk_rust::Result<crate::agents::context_budget::RequestContextUsage> {
+        let budget = self
+            .invocation
+            .context_budget
+            .ok_or_else(invalid_llm_request)?;
+        let encoded = encode_request_body(request, true, &self.invocation)?;
+        budget.measure_provider_request(&encoded, self.config.max_request_bytes)
+    }
 }
 
 #[async_trait]
@@ -540,6 +560,25 @@ fn build_request_body(
     invocation: &ModelFacadeInvocation,
     config: &ModelGatewayConfig,
 ) -> Result<Bytes, AdkError> {
+    let encoded = encode_request_body(request, stream, invocation)?;
+    if encoded.len() > config.max_request_bytes {
+        return Err(model_error(
+            ErrorCategory::InvalidInput,
+            "model_gateway.request_too_large",
+            "the model gateway request exceeds its approved limit",
+        ));
+    }
+    if let Some(budget) = invocation.context_budget {
+        budget.check_provider_request(&encoded)?;
+    }
+    Ok(Bytes::from(encoded))
+}
+
+fn encode_request_body(
+    request: &LlmRequest,
+    stream: bool,
+    invocation: &ModelFacadeInvocation,
+) -> Result<Vec<u8>, AdkError> {
     let contents = validate_llm_request(request, stream, invocation)?;
     let mut body = serde_json::Map::new();
     body.insert(
@@ -602,24 +641,13 @@ fn build_request_body(
             serde_json::Value::String(reasoning_effort.as_str().to_owned()),
         );
     }
-    let encoded = serde_json::to_vec(&body).map_err(|_| {
+    serde_json::to_vec(&body).map_err(|_| {
         model_error(
             ErrorCategory::InvalidInput,
             "model_gateway.request_encoding",
             "the model gateway request is malformed",
         )
-    })?;
-    if encoded.len() > config.max_request_bytes {
-        return Err(model_error(
-            ErrorCategory::InvalidInput,
-            "model_gateway.request_too_large",
-            "the model gateway request exceeds its approved limit",
-        ));
-    }
-    if let Some(budget) = invocation.context_budget {
-        budget.check_provider_request(&encoded)?;
-    }
-    Ok(Bytes::from(encoded))
+    })
 }
 
 pub(super) fn validate_llm_request<'a>(

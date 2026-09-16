@@ -70,8 +70,9 @@ Do not silently discard instructions or send an already known oversized request.
 User clarification on 2026-09-16 applies independent compaction to nested agents and applications.
 Each child inherits the parent's admitted context policy, including the preset, explicit limit, preservation rules, and compaction thresholds.
 Freeze that policy for the child invocation and retain it during recovery.
-The proposed default trigger is 90 percent of usable input capacity, with a target of 70 percent after compaction.
-These thresholds remain proposed behavior, not implemented acceptance evidence.
+The default trigger calculation uses 90 percent of usable input capacity, with a target of 70 percent after compaction.
+The numeric thresholds have component checks; automatic triggering and durable compaction still require integration.
+The target does not authorize dropping protected content; the complete request must still pass its final capacity check.
 
 Each child measures its own complete model request and retains its own summary and source coverage.
 It does not inherit the parent's occupancy, summary, or private transcript automatically.
@@ -87,7 +88,12 @@ Inherit Full as a preset, not as the parent's resolved token count.
 Any inherited summary-model selection still requires authorization and its own request limits.
 
 A pipeline has durable graph state, but it does not necessarily have a model conversation.
-Carry the context policy through the graph and apply it at each model invocation.
+The pipeline container has no separate compaction setting.
+Pass an inherited agent or chat policy through the graph when one exists.
+Without an inherited policy, a saved child uses its explicit context setting or defaults to Balanced.
+Plain LLM nodes also compact their own accumulated model history, as confirmed by the user on 2026-09-16.
+They use the inherited policy when available and otherwise default to Balanced.
+No new per-node compaction control is required for this default.
 Do not summarize the entire graph checkpoint or replace its state variables with a narrative summary.
 
 | Execution kind | Context behavior |
@@ -109,6 +115,48 @@ Reuse a summary only when its scope and covered source events still match.
 A loop visit or map item must not reuse another invocation's summary merely because the node name matches.
 Persist this state before relying on it, and restore the same scope after worker replacement.
 Keep original graph data and conversation events available for replay and audit.
+
+### Fan-out and model-backed reduction
+
+Map and parallel containers can own work that invokes LLMs, agents, or nested pipelines.
+Their scheduling and collection operations do not define a shared model context window.
+Each descendant model conversation owns its occupancy and summaries under the inherited policy.
+
+```mermaid
+flowchart TD
+    P[Pipeline context policy] --> F[Map or parallel activation]
+    F --> A[Branch or item A: LLM or agent context]
+    F --> B[Branch or item B: LLM or agent context]
+    F --> C[Branch or item C: direct execution]
+    A --> J[Exact ordered result collection]
+    B --> J
+    C --> J
+    J --> R[LLM reduction: separate model context]
+```
+
+Use the existing child lineage for compaction ownership.
+Map identity includes activation, source digest, item ordinal, item digest, and worker definition.
+Parallel identity includes activation, branch identity, ordinal, mapped input, and worker definition.
+The descendant model scope also identifies its node invocation and covered source history.
+Persist summary state under that lineage, without introducing a second scheduler or identity system.
+
+A semantic reduce step is an explicit LLM or agent operation with its own request budget.
+The mechanical `append`, `sum`, and `merge` reducers keep their deterministic contracts.
+Compaction must not silently convert mechanical collection into semantic reduction.
+
+Branch context windows do not add together into the reduce model's capacity.
+Eight branch outputs of 32,000 tokens produce about 256,000 input tokens before instructions and provider framing.
+They cannot fit a Balanced reduce request with a 128,000-token output reservation and 141,280 usable input tokens.
+Compacting branch histories does not reduce those already returned output values.
+Use an explicit bounded chunk/reduce graph or artifact references when the authored workflow requires larger inputs.
+Persist intermediate reduce outputs so replacement does not repeat completed model work.
+Do not silently omit items, truncate structured results, or invoke hidden summarizers to make the join fit.
+
+Show context pressure for the active model scope in runtime status.
+Container progress reports branch outcomes; aggregate token usage reports execution cost.
+Neither value represents one pipeline-wide context occupancy.
+Keep inherited settings as the default without requiring authors to configure every node separately.
+When a pipeline starts without an inherited policy, apply the child-setting and Balanced fallback rules above.
 
 ## Compaction sequence
 

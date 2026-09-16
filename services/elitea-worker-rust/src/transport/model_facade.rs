@@ -82,6 +82,13 @@ pub(crate) enum BoundModelFacade {
 }
 
 impl BoundOrdinaryAgentModel for BoundModelFacade {
+    fn request_budget(&self) -> Option<Arc<dyn crate::agents::context_budget::ModelRequestBudget>> {
+        match self {
+            Self::OpenAiCompatible(model) => model.request_budget(),
+            Self::Anthropic(model) => model.request_budget(),
+        }
+    }
+
     fn adk_model(&self) -> Arc<dyn adk_rust::Llm> {
         match self {
             Self::OpenAiCompatible(model) => model.adk_model(),

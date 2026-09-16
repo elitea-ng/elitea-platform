@@ -1196,7 +1196,9 @@ fn projection_failure(error: &AgentEventProjectionError) -> RuntimeFailureKind {
 
 fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
     match upstream_code {
-        Some("context_budget_exceeded") => RuntimeFailureKind::ResourceExhausted,
+        Some("context_budget_exceeded" | "model_request_bytes_exceeded") => {
+            RuntimeFailureKind::ResourceExhausted
+        }
         _ => RuntimeFailureKind::Internal,
     }
 }
@@ -1211,6 +1213,10 @@ mod taxonomy_tests {
     fn context_budget_failure_is_a_resource_limit_without_exposing_provider_text() {
         assert_eq!(
             super::model_failure(Some("context_budget_exceeded")),
+            RuntimeFailureKind::ResourceExhausted
+        );
+        assert_eq!(
+            super::model_failure(Some("model_request_bytes_exceeded")),
             RuntimeFailureKind::ResourceExhausted
         );
         assert_eq!(

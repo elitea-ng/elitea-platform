@@ -3298,8 +3298,7 @@ async fn stopped_native_coordinator_returns_an_explicitly_closeable_unstarted_jo
     };
     assert_eq!(rejected.error().code(), "invocation_supervision.closed");
     assert!(
-        rejected
-            .close()
+        Box::pin(rejected.close())
             .await
             .expect("close rejected invocation")
             .is_none()

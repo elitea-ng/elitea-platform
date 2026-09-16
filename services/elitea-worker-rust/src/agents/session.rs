@@ -1026,6 +1026,10 @@ struct PipelineStateServices {
 pub(crate) trait BoundOrdinaryAgentModel: Send + 'static {
     fn adk_model(&self) -> Arc<dyn Llm>;
 
+    fn request_budget(&self) -> Option<Arc<dyn super::context_budget::ModelRequestBudget>> {
+        None
+    }
+
     fn provider_model(&self) -> Arc<dyn Llm> {
         super::replay_history::provider_model(self.adk_model())
     }
@@ -1679,7 +1683,8 @@ where
         execution_id,
         generation,
         definition_digest,
-    );
+    )
+    .with_request_budget(model.request_budget());
     let checkpoint = if checkpoint_recovery {
         let restored = checkpoint
             .restore(session.as_ref())

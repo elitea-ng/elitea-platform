@@ -114,3 +114,68 @@ Purely deterministic pipelines must not acquire model calls solely because compa
 Point 5 retains ownership of new map and parallel node capabilities.
 Point 4 must define isolated model-history scopes that those nodes can reuse.
 Required proofs include child isolation, mixed graphs, repeated node visits, branch separation, and replacement-worker summary recovery.
+
+## Complete request measurement, 2026-09-16
+
+The before-model integration needs an estimate before provider dispatch can reject an oversized request.
+Counting only ADK contents would omit bound system instructions, provider tool conversion, and wire framing.
+
+`agents/context_budget.rs::ModelRequestBudget` defines this consumer boundary for both provider adapters.
+`BoundOrdinaryAgentModel::request_budget` exposes the measurement from an authorized model binding with frozen limits.
+Old bindings without model limits return no measurement capability.
+The provider-neutral facade delegates to the selected adapter.
+
+Both adapters share their request encoder between measurement and dispatch.
+Measurement validates the model and generation contract but permits an oversized body to be measured before compaction.
+It returns numeric occupancy, reserved output, margin, input capacity, body bytes, and the transport byte limit.
+It does not dispatch, consume an invocation turn, or change captured completion state.
+Normal dispatch retains the existing byte and context checks.
+
+The default trigger is the ceiling of 90 percent of usable input capacity.
+The default target is the floor of 70 percent of that capacity.
+Exceeding the transport byte limit also reports pressure even when the token estimate fits.
+These methods do not generate summaries or activate a before-model callback by themselves.
+
+`agents/model_checkpoint.rs` consumes this measurement before saving each ordinary pending-model checkpoint.
+It measures after authoritative instruction preparation and pending-request restoration.
+It uses the existing replay-history projection, matching the request normalization before provider dispatch.
+The durable checkpoint retains its original replay records.
+Oversized requests fail before checkpoint persistence or model dispatch.
+The lifecycle classifies `model_request_bytes_exceeded` and `context_budget_exceeded` as resource-limit failures.
+Diagnostics contain numeric estimates and limits, without request content.
+Child and pipeline before-model integration still requires their scoped compaction implementation.
+
+Both adapter suites pass 32 tests without ignored cases.
+New tests measure twice, then successfully use a binding limited to one model turn.
+Their measured body lengths match the dispatched OpenAI-compatible and native Anthropic bodies, including Unicode and provider framing.
+Existing oversized-component cases now verify measurement before the unchanged dispatch refusal.
+Ten focused budget checks pass, including different parent/child limits, rounding, and independent transport pressure.
+The focused checks overlap two adapter cases; their counts are not additive.
+The new Runner case proves that neither an oversized token estimate nor an oversized body creates a recoverable model checkpoint.
+The final agent suite passes 322 checks without ignored cases, including PostgreSQL instruction recovery after process replacement.
+This suite includes the checkpoint checks and the final replay-history projection.
+Instruction recovery does not prove durable summary recovery; that integration remains open.
+Production and test Clippy checks pass with warnings denied.
+The stopped-coordinator test now boxes its rejected-delivery cleanup future, matching the production cleanup path.
+The focused coordinator cleanup and resource-limit classification tests each pass without ignored cases.
+Formatting and whitespace checks pass.
+
+Evidence logs use the `elitea-point4-request-measurement-*` prefix in the temporary evidence directory.
+This slice has no public API, schema, UI, or deployment changes.
+Durable compaction, inherited/default policy delivery, browser status, and all other point 4 requirements remain open.
+
+## Native ADK integration boundary
+
+The pinned ADK version is 2.2.0. Its `LlmAgent` owns the model and tool loop.
+Its before-model callbacks run during that loop and support request preparation without a second execution engine.
+`adk-runner/src/runner.rs` invokes `IntraInvocationCompactor` before `agent.run`.
+That placement alone does not check each model call inside a long tool loop.
+`adk-agent/src/llm_agent.rs` runs before-model callbacks for those individual calls.
+The current measurement uses that callback boundary through the existing model checkpoint writer.
+
+ADK session, graph, summarizer, and compaction types remain the integration foundation.
+Elitea owns complete provider-request admission, authoritative instructions, execution lineage, and generation-fenced persistence.
+These responsibilities preserve the existing transport and recovery contracts.
+Summary integration must persist scope and source coverage before the model relies on a compacted request.
+Replacement must restore that summary without mixing child histories or replacing exact graph values.
+Those summary guarantees remain implementation requirements, not results of the checks above.

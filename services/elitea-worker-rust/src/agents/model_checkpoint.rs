@@ -82,6 +82,7 @@ pub(super) struct ModelCheckpointWriter {
     definition_digest: [u8; 32],
     replay: Option<Arc<Mutex<Option<LlmRequest>>>>,
     validated_digest: Option<[u8; 32]>,
+    request_budget: Option<Arc<dyn super::context_budget::ModelRequestBudget>>,
 }
 
 impl ModelCheckpointWriter {
@@ -98,7 +99,16 @@ impl ModelCheckpointWriter {
             definition_digest,
             replay: None,
             validated_digest: None,
+            request_budget: None,
         }
+    }
+
+    pub(super) fn with_request_budget(
+        mut self,
+        budget: Option<Arc<dyn super::context_budget::ModelRequestBudget>>,
+    ) -> Self {
+        self.request_budget = budget;
+        self
     }
 
     /// Restore only an unfinished model step from this exact execution.
@@ -227,6 +237,11 @@ impl ModelCheckpointWriter {
                 let writer = model.clone();
                 Box::pin(async move {
                     let request = writer.prepare_request(request)?;
+                    if let Some(budget) = &writer.request_budget {
+                        let provider_request =
+                            super::replay_history::model_history(request.clone())?;
+                        budget.measure(&provider_request)?.check()?;
+                    }
                     writer
                         .persist(
                             context.try_identity()?,
@@ -542,6 +557,109 @@ mod tests {
         assert!(failed);
         assert_eq!(probe.models.load(Ordering::SeqCst), 0);
         assert_eq!(probe.tools.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn oversized_request_never_becomes_a_recoverable_model_checkpoint() {
+        use super::super::context_budget::{
+            ModelRequestBudget, RequestContextBudget, RequestContextUsage,
+        };
+        use super::super::request::ModelContextLimits;
+
+        struct Measurement {
+            byte_limit: usize,
+        }
+        impl ModelRequestBudget for Measurement {
+            fn measure(&self, request: &LlmRequest) -> adk_rust::Result<RequestContextUsage> {
+                let budget = RequestContextBudget::resolve(
+                    Some(ModelContextLimits {
+                        context_window_tokens: 8_000,
+                        max_output_tokens: 4_000,
+                        context_window_fallback: false,
+                        max_output_fallback: false,
+                        max_input_tokens: None,
+                    }),
+                    &serde_json::Map::new(),
+                    Some(4_000),
+                )
+                .unwrap()
+                .unwrap();
+                budget.measure_provider_request(
+                    &serde_json::to_vec(request).unwrap(),
+                    self.byte_limit,
+                )
+            }
+        }
+
+        for (text, byte_limit, code) in [
+            (
+                "private checkpoint fixture ".repeat(1_000),
+                1_048_576,
+                "context_budget_exceeded",
+            ),
+            (
+                "small request".to_owned(),
+                1,
+                "model_request_bytes_exceeded",
+            ),
+        ] {
+            let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+            sessions
+                .create(CreateRequest {
+                    app_name: "checkpoint-test".into(),
+                    user_id: "user".into(),
+                    session_id: Some("session".into()),
+                    state: HashMap::default(),
+                })
+                .await
+                .unwrap();
+            let probe = Arc::new(Probe {
+                sessions: sessions.clone(),
+                models: AtomicUsize::new(0),
+                tools: AtomicUsize::new(0),
+            });
+            let agent =
+                ModelCheckpointWriter::new(sessions.clone(), "execution".into(), 7, [7; 32])
+                    .with_request_budget(Some(Arc::new(Measurement { byte_limit })))
+                    .bind(LlmAgentBuilder::new("agent").model(probe.clone()))
+                    .build()
+                    .unwrap();
+            let runner = adk_rust::runner::Runner::builder()
+                .app_name("checkpoint-test")
+                .agent(Arc::new(agent))
+                .session_service(sessions.clone())
+                .build()
+                .unwrap();
+            let mut events = runner
+                .run(
+                    "user".try_into().unwrap(),
+                    "session".try_into().unwrap(),
+                    Content::new("user").with_text(text),
+                )
+                .await
+                .unwrap();
+            let mut errors = Vec::new();
+            while let Some(event) = events.next().await {
+                if let Err(error) = event {
+                    errors.push(error);
+                }
+            }
+            assert_eq!(errors.len(), 1);
+            assert_eq!(errors[0].code, code);
+            assert!(!errors[0].to_string().contains("private checkpoint fixture"));
+            assert_eq!(probe.models.load(Ordering::SeqCst), 0);
+            let stored = sessions
+                .get(GetRequest {
+                    app_name: "checkpoint-test".into(),
+                    user_id: "user".into(),
+                    session_id: "session".into(),
+                    num_recent_events: None,
+                    after: None,
+                })
+                .await
+                .unwrap();
+            assert!(stored.state().get(CHECKPOINT_KEY).is_none());
+        }
     }
     #[tokio::test]
     async fn recovery_rejects_foreign_generation_definition_tools_and_completed_steps() {

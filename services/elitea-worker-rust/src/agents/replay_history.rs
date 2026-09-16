@@ -54,7 +54,8 @@ pub(super) fn model_continuation(
     model_history(request)
 }
 
-fn model_history(mut request: LlmRequest) -> adk_rust::Result<LlmRequest> {
+/// Also used for preflight measurement; durable checkpoints keep the original replay records.
+pub(super) fn model_history(mut request: LlmRequest) -> adk_rust::Result<LlmRequest> {
     let mut calls = HashMap::new();
     let mut results = HashMap::new();
     for (index, content) in request.contents.iter().enumerate() {

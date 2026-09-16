@@ -1,12 +1,68 @@
 //! Combined request budget, independent of cumulative usage and output caps.
 
-use adk_rust::{AdkError, Content, ErrorCategory, ErrorComponent, Event};
+use adk_rust::{AdkError, Content, ErrorCategory, ErrorComponent, Event, LlmRequest};
 use serde_json::{Map, Value};
 
 use super::request::ModelContextLimits;
 use super::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
 
 const BALANCED_TOKENS: u32 = 272_000;
+
+/// The compaction boundary consumes measurements of the actual provider body.
+/// Implementations must not dispatch, consume a model turn, or change completion state.
+pub(crate) trait ModelRequestBudget: Send + Sync {
+    fn measure(&self, request: &LlmRequest) -> adk_rust::Result<RequestContextUsage>;
+}
+
+/// Request occupancy, independent of cumulative usage and without request content.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RequestContextUsage {
+    pub(crate) budget: RequestContextBudget,
+    pub(crate) estimated_input: u64,
+    pub(crate) request_bytes: usize,
+    pub(crate) request_byte_limit: usize,
+}
+
+impl RequestContextUsage {
+    /// Refuse an unusable model checkpoint before it can authorize recovery.
+    pub(crate) fn check(self) -> adk_rust::Result<()> {
+        tracing::debug!(
+            estimated_input = self.estimated_input,
+            output_reservation = self.budget.output_reservation,
+            margin_tokens = self.budget.margin_tokens,
+            total_tokens = self.budget.total_tokens,
+            input_limit = self.budget.input_limit,
+            compaction_trigger = self.budget.compaction_trigger(),
+            compaction_target = self.budget.compaction_target(),
+            needs_compaction = self.needs_compaction(),
+            request_bytes = self.request_bytes,
+            request_byte_limit = self.request_byte_limit,
+            "checked model request capacity before checkpoint persistence"
+        );
+        if self.fits() {
+            return Ok(());
+        }
+        if self.estimated_input > u64::from(self.budget.input_limit) {
+            return Err(budget_error());
+        }
+        Err(AdkError::new(
+            ErrorComponent::Model,
+            ErrorCategory::InvalidInput,
+            "model_request_bytes_exceeded",
+            "The model request exceeds the permitted request size.",
+        ))
+    }
+
+    pub(crate) fn needs_compaction(self) -> bool {
+        self.estimated_input >= self.budget.compaction_trigger()
+            || self.request_bytes > self.request_byte_limit
+    }
+
+    pub(crate) fn fits(self) -> bool {
+        self.estimated_input <= u64::from(self.budget.input_limit)
+            && self.request_bytes <= self.request_byte_limit
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BudgetSelection {
@@ -26,6 +82,28 @@ pub(crate) struct RequestContextBudget {
 }
 
 impl RequestContextBudget {
+    /// Trigger before exhausting usable input; output and margin are already reserved.
+    pub(crate) fn compaction_trigger(self) -> u64 {
+        (u64::from(self.input_limit) * 90).div_ceil(100)
+    }
+
+    pub(crate) fn compaction_target(self) -> u64 {
+        u64::from(self.input_limit) * 70 / 100
+    }
+
+    pub(crate) fn measure_provider_request(
+        self,
+        encoded: &[u8],
+        request_byte_limit: usize,
+    ) -> adk_rust::Result<RequestContextUsage> {
+        Ok(RequestContextUsage {
+            budget: self,
+            estimated_input: estimate_provider_request(encoded)?,
+            request_bytes: encoded.len(),
+            request_byte_limit,
+        })
+    }
+
     pub(crate) fn resolve(
         limits: Option<ModelContextLimits>,
         settings: &Map<String, Value>,
@@ -115,11 +193,7 @@ impl RequestContextBudget {
     /// tool declarations, and protocol framing. ADK supplies the byte heuristic.
     /// This is an estimate, not a provider tokenizer or a billing measurement.
     pub(crate) fn check_provider_request(&self, encoded: &[u8]) -> adk_rust::Result<()> {
-        let text = std::str::from_utf8(encoded).map_err(|_| budget_error())?;
-        let mut event = Event::new("context-budget-estimate");
-        event.set_content(Content::new("user").with_text(text));
-        let estimated_input = adk_rust::intra_compaction::estimate_tokens(&[event], 4)
-            + u64::from(!encoded.len().is_multiple_of(4));
+        let estimated_input = estimate_provider_request(encoded)?;
         tracing::debug!(
             estimated_input,
             output_reservation = self.output_reservation,
@@ -135,6 +209,14 @@ impl RequestContextBudget {
         }
         Ok(())
     }
+}
+
+fn estimate_provider_request(encoded: &[u8]) -> adk_rust::Result<u64> {
+    let text = std::str::from_utf8(encoded).map_err(|_| budget_error())?;
+    let mut event = Event::new("context-budget-estimate");
+    event.set_content(Content::new("user").with_text(text));
+    Ok(adk_rust::intra_compaction::estimate_tokens(&[event], 4)
+        + u64::from(!encoded.len().is_multiple_of(4)))
 }
 
 fn invalid_budget() -> NativeAgentAssemblyError {
@@ -220,6 +302,65 @@ mod tests {
         let child = parent.for_model(limits(400_000, 64_000), None).unwrap();
         assert_eq!(child.total_tokens, 400_000);
         assert_eq!(child.input_limit + child.margin_tokens, 336_000);
+    }
+
+    #[test]
+    fn compaction_pressure_uses_each_request_capacity_and_transport_limit() {
+        let parent = RequestContextBudget::resolve(
+            Some(limits(1_000_000, 128_000)),
+            &Map::new(),
+            Some(64_000),
+        )
+        .unwrap()
+        .unwrap();
+        let child = parent.for_model(limits(128_000, 16_000), None).unwrap();
+        assert_eq!(parent.compaction_trigger(), 184_752);
+        assert_eq!(parent.compaction_target(), 143_696);
+        assert_eq!(child.compaction_trigger(), 99_648);
+        assert_eq!(child.compaction_target(), 77_504);
+
+        let request = RequestContextUsage {
+            budget: parent,
+            estimated_input: 100_000,
+            request_bytes: 400_000,
+            request_byte_limit: 1_048_576,
+        };
+        assert!(!request.needs_compaction());
+        assert!(
+            RequestContextUsage {
+                budget: child,
+                ..request
+            }
+            .needs_compaction()
+        );
+        assert!(request.fits());
+        request.check().unwrap();
+        let too_many_bytes = RequestContextUsage {
+            request_byte_limit: 399_999,
+            ..request
+        };
+        assert!(too_many_bytes.needs_compaction());
+        assert!(!too_many_bytes.fits());
+        assert_eq!(
+            too_many_bytes.check().unwrap_err().code,
+            "model_request_bytes_exceeded"
+        );
+        assert!(
+            !RequestContextUsage {
+                estimated_input: u64::from(parent.input_limit) + 1,
+                ..request
+            }
+            .fits()
+        );
+
+        for capacity in 1..100 {
+            let tiny = RequestContextBudget {
+                input_limit: capacity,
+                ..parent
+            };
+            assert!(tiny.compaction_trigger() > 0);
+            assert!(tiny.compaction_target() < tiny.compaction_trigger());
+        }
     }
 
     #[test]

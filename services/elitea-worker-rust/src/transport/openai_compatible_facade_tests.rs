@@ -20,6 +20,7 @@ use super::openai_compatible_facade::{
     test_model_gateway_response, test_model_request,
 };
 use super::runtime_context::ClaimScopedEliteaContext;
+use crate::agents::session::BoundOrdinaryAgentModel as _;
 
 const TOKEN: &str = "ephemeral-model-fixture-token";
 
@@ -1123,6 +1124,10 @@ async fn full_request_context_budget_refuses_each_input_component_before_network
                 invocation,
             )
             .unwrap();
+        let usage = bound.request_budget().unwrap().measure(&request).unwrap();
+        assert!(usage.needs_compaction(), "component {component}");
+        assert!(!usage.fits(), "component {component}");
+        assert!(captured.lock().unwrap().is_empty());
         let Err(error) = bound.generate_for_test(request).await else {
             panic!("oversized request was submitted")
         };
@@ -1133,4 +1138,63 @@ async fn full_request_context_budget_refuses_each_input_component_before_network
         assert!(!error.to_string().contains("private-context-fixture"));
         assert!(captured.lock().unwrap().is_empty());
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn context_measurement_matches_dispatched_body_without_spending_turns() {
+    use crate::agents::{context_budget::RequestContextBudget, request::ModelContextLimits};
+    let (client, captured) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(
+            test_model_gateway_response(Body::new(Full::new(Bytes::from(ordinary_sse())))),
+        )],
+        test_model_gateway_config(),
+    )
+    .unwrap();
+    let mut invocation = test_model_facade_invocation();
+    invocation.max_model_turns = 1;
+    invocation.context_budget = RequestContextBudget::resolve(
+        Some(ModelContextLimits {
+            context_window_tokens: 128_000,
+            max_output_tokens: 4_000,
+            context_window_fallback: false,
+            max_output_fallback: false,
+            max_input_tokens: None,
+        }),
+        &serde_json::Map::new(),
+        Some(4_000),
+    )
+    .unwrap();
+    let bound = client
+        .bind_ordinary(
+            &ClaimScopedEliteaContext::fixture(17, TOKEN),
+            17,
+            invocation,
+        )
+        .unwrap();
+    let request = test_model_request("Measure the full request, including 🦀 and framing.");
+    let measurement = bound.request_budget().unwrap();
+    let usage = measurement.measure(&request).unwrap();
+    assert_eq!(measurement.measure(&request).unwrap(), usage);
+    assert!(usage.fits());
+    assert!(!usage.needs_compaction());
+    assert!(captured.lock().unwrap().is_empty());
+    assert!(
+        bound
+            .durable_completion()
+            .unwrap()
+            .snapshot()
+            .unwrap()
+            .is_none()
+    );
+    drain(bound.generate_for_test(request).await.unwrap())
+        .await
+        .unwrap();
+    let requests = captured.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(usage.request_bytes, requests[0].body.len());
+    assert_eq!(
+        usage.estimated_input,
+        u64::try_from(requests[0].body.len().div_ceil(4)).unwrap()
+    );
+    assert_eq!(bound.take_completion_for_test().unwrap(), "Hello 🌍");
 }
