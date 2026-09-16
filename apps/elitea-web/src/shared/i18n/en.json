@@ -4378,5 +4378,12 @@
   "features.chatMessages.canvas.document.openAsDocument": "Open as document",
   "features.chatMessages.canvas.document.orderedList": "Numbered list",
   "features.chatMessages.canvas.document.unlink": "Remove link",
-  "processes.chat.fileCanvas.unsupportedFormat": "This file format is not supported in canvas — download it instead."
+  "processes.chat.fileCanvas.unsupportedFormat": "This file format is not supported in canvas — download it instead.",
+  "pages.admin.configuration.projectListEditor.filterAll": "All types",
+  "pages.admin.configuration.projectListEditor.filterLabel": "Show",
+  "pages.admin.configuration.projectListEditor.filterPrivate": "Private",
+  "pages.admin.configuration.projectListEditor.filterPublic": "Public",
+  "pages.admin.configuration.projectListEditor.filterTeam": "Team",
+  "pages.admin.configuration.projectListEditor.projectById": "Project {{id}}",
+  "pages.admin.configuration.projectListEditor.searchPlaceholder": "Search by project name"
 }
