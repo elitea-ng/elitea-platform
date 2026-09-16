@@ -922,6 +922,31 @@ fn valid_sha256_label(value: &str) -> bool {
         && value[7..].bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+/// Stable model activation within one graph thread and parent application call.
+pub(crate) struct PipelineModelScope(String);
+
+impl PipelineModelScope {
+    fn for_node(
+        definition: &LlmNodeDefinition,
+        context: &NodeContext,
+        parent: Option<&PipelineNodeEventScope>,
+    ) -> Result<Self, LlmExecutionError> {
+        let source = serde_json::to_vec(&(
+            "elitea.pipeline.model.v1",
+            &context.config.thread_id,
+            definition.digest_label(),
+            context.step,
+            parent,
+        ))
+        .map_err(|_| LlmExecutionError::InvalidInputMapping)?;
+        Ok(Self(hex(digest::digest(&digest::SHA256, &source).as_ref())))
+    }
+
+    pub(crate) fn identity(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Invocation-owned factory that binds a fresh model and exact node toolsets.
 pub(crate) trait PipelineLlmAgentFactory: Send + Sync {
     fn build(
@@ -930,6 +955,7 @@ pub(crate) trait PipelineLlmAgentFactory: Send + Sync {
         input: &LlmExecutionInput,
         output_schema: Option<Value>,
         replay: Option<&PipelineLlmReplayEnvelope>,
+        scope: &PipelineModelScope,
     ) -> Result<PipelineLlmAgentBinding, LlmExecutionError>;
 
     fn event_sender(&self) -> Option<PipelineNodeEventSender> {
@@ -1313,7 +1339,8 @@ async fn run_model_agent(
     if let Some(replay) = replay {
         input.history = replay.replay_history();
     }
-    let binding = factory.build(definition, &input, output_schema, replay)?;
+    let scope = PipelineModelScope::for_node(definition, context, event_scope.as_ref())?;
+    let binding = factory.build(definition, &input, output_schema, replay, &scope)?;
     let agent = binding.agent();
     let invocation = Arc::new(PipelineLlmInvocationContext::new(
         &context.config.thread_id,
@@ -1482,7 +1509,8 @@ fn confirmation_argument_digest(
 }
 
 const PIPELINE_REPLAY_PENDING: u8 = 0;
-const PIPELINE_REPLAY_DELEGATING: u8 = 1;
+const PIPELINE_REPLAY_EMITTED: u8 = 1;
+const PIPELINE_REPLAY_DELEGATING: u8 = 2;
 
 struct PipelineLlmReplayModel {
     delegate: Arc<dyn Llm>,
@@ -1513,7 +1541,7 @@ impl Llm for PipelineLlmReplayModel {
             .state
             .compare_exchange(
                 PIPELINE_REPLAY_PENDING,
-                PIPELINE_REPLAY_DELEGATING,
+                PIPELINE_REPLAY_EMITTED,
                 Ordering::AcqRel,
                 Ordering::Acquire,
             )
@@ -1537,7 +1565,11 @@ impl Llm for PipelineLlmReplayModel {
             };
             return Ok(Box::pin(stream::once(async move { Ok(response) })));
         }
-        validate_replay_results(&request, &self.pending_content)?;
+        if self.state.load(Ordering::Acquire) == PIPELINE_REPLAY_EMITTED {
+            validate_replay_results(&request, &self.pending_content)?;
+            self.state
+                .store(PIPELINE_REPLAY_DELEGATING, Ordering::Release);
+        }
         self.delegate
             .generate_content(request, stream_response)
             .await
@@ -2377,3 +2409,7 @@ pub(crate) enum LlmExecutionError {
     #[error("the LLM runtime is unavailable")]
     Unavailable,
 }
+
+#[cfg(test)]
+#[path = "llm_scope_tests.rs"]
+mod scope_tests;

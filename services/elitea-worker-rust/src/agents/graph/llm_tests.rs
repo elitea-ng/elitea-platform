@@ -226,6 +226,7 @@ impl PipelineLlmAgentFactory for CapturingFactory {
         input: &LlmExecutionInput,
         output_schema: Option<serde_json::Value>,
         _replay: Option<&super::llm::PipelineLlmReplayEnvelope>,
+        _scope: &super::llm::PipelineModelScope,
     ) -> Result<PipelineLlmAgentBinding, LlmExecutionError> {
         let mut captured = self.captured.lock().expect("capture lock");
         captured.system = input.system().to_owned();

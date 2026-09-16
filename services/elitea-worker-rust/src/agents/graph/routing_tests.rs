@@ -140,6 +140,7 @@ impl PipelineLlmAgentFactory for DecisionFactory {
         _input: &LlmExecutionInput,
         output_schema: Option<Value>,
         _replay: Option<&super::llm::PipelineLlmReplayEnvelope>,
+        _scope: &super::llm::PipelineModelScope,
     ) -> Result<PipelineLlmAgentBinding, LlmExecutionError> {
         assert!(output_schema.is_none());
         let mut captured = self.captured.lock().expect("capture lock");

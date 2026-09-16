@@ -53,7 +53,7 @@ pub(crate) use direct_tool::{
 };
 pub(crate) use llm::{
     LlmExecutionError, LlmExecutionInput, LlmNodeDefinition, PipelineLlmAgentBinding,
-    PipelineLlmAgentFactory, PipelineLlmReplayEnvelope, PipelineToolGuard,
+    PipelineLlmAgentFactory, PipelineLlmReplayEnvelope, PipelineModelScope, PipelineToolGuard,
     prepare_pipeline_llm_replay,
 };
 pub(crate) use node_events::{

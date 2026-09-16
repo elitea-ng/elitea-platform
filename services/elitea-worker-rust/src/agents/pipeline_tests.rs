@@ -47,6 +47,9 @@ use crate::transport::runtime_context::{
     RuntimeContextClient, RuntimeContextConfig, RuntimeContextRpc, RuntimeContextTransportError,
 };
 
+#[path = "pipeline_scope_tests.rs"]
+mod model_scope_tests;
+
 const PIPELINE: &str = r"
 state:
   answer: string

@@ -105,6 +105,7 @@ fn checkpoint(storage: &ModelScopeSessions, summary: Arc<Summary>) -> Arc<Scoped
         Arc::new(Budget),
         summary,
         None,
+        None,
     )
 }
 
@@ -217,6 +218,7 @@ async fn replay_control_input_stays_outside_compaction_and_pending_provider_requ
         Arc::new(Budget),
         summary.clone(),
         Some(marker.clone()),
+        None,
     );
     let context = Context::child("parent-call-one");
     let mut request = history();
@@ -255,6 +257,77 @@ async fn replay_control_input_stays_outside_compaction_and_pending_provider_requ
 }
 
 #[tokio::test]
+async fn completed_guard_replay_prepares_the_first_real_provider_request() {
+    let storage = storage(ModelScopeBackend::Local(Arc::new(
+        InMemorySessionService::new(),
+    )));
+    let summary = Arc::new(Summary::default());
+    let base = checkpoint(&storage, summary.clone());
+    let marker = Content::new("user").with_text("PRIVATE_REPLAY_CONTROL");
+    let scope = storage
+        .checkpoint(
+            base.plan.clone(),
+            Arc::new(Budget),
+            summary.clone(),
+            Some(marker.clone()),
+            None,
+        )
+        .with_replay_pending(false);
+    let context = Context::child("parent-call-one");
+    let mut request = history();
+    request.contents.push(marker);
+    let BeforeModelResult::Continue(prepared) =
+        scope.before_model(&context, request).await.unwrap()
+    else {
+        panic!("provider request")
+    };
+    assert_eq!(summary.0.load(Ordering::SeqCst), 1);
+    assert!(
+        !serde_json::to_string(&prepared)
+            .unwrap()
+            .contains("PRIVATE_REPLAY_CONTROL")
+    );
+    assert_eq!(
+        stored(&scope, &context)
+            .await
+            .state()
+            .get(CHECKPOINT_KEY)
+            .unwrap()["phase"],
+        "model_pending"
+    );
+}
+
+struct Completion;
+impl crate::agents::session::DurableModelCompletion for Completion {
+    fn snapshot(&self) -> adk_rust::Result<Option<String>> {
+        Ok(Some("Complete streamed child result".into()))
+    }
+}
+
+async fn append_streamed_terminal(scope: &ScopedModelCheckpoint, child: &Context) {
+    let mut event = Event::new(child.invocation_id());
+    event.author = "child-agent".into();
+    event.llm_response.partial = true;
+    event.set_content(Content::new("model").with_text("Complete "));
+    scope.append(child, event.clone()).await.unwrap();
+    event.set_content(Content::new("model").with_text("streamed child result"));
+    scope.append(child, event.clone()).await.unwrap();
+    event.llm_response.partial = false;
+    event.llm_response.turn_complete = true;
+    event.llm_response.content = None;
+    scope.append(child, event.clone()).await.unwrap();
+    let stored = stored(scope, child).await;
+    let events = stored.events().all();
+    let matching: Vec<_> = events.iter().filter(|saved| saved.id == event.id).collect();
+    assert_eq!(matching.len(), 1);
+    assert!(
+        serde_json::to_string(matching[0])
+            .unwrap()
+            .contains("Complete streamed child result")
+    );
+}
+
+#[tokio::test]
 async fn postgres_child_scope_is_fenced_by_root_takeover_and_reuses_its_own_summary() {
     use crate::state::postgres_session_tests::{IsolatedPostgres, authority_for, install_schema};
     let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
@@ -277,7 +350,15 @@ async fn postgres_child_scope_is_fenced_by_root_takeover_and_reuses_its_own_summ
     let storage = storage(ModelScopeBackend::Postgres(root.clone()));
     let summary = Arc::new(Summary::default());
     let first = checkpoint(&storage, summary.clone());
+    let first = storage.checkpoint(
+        first.plan.clone(),
+        Arc::new(Budget),
+        summary.clone(),
+        None,
+        Some(Arc::new(Completion)),
+    );
     let prepared = prepare(&first, &child).await;
+    append_streamed_terminal(&first, &child).await;
     let mut event = Event::new(child.invocation_id());
     event.author = "child-agent".into();
     event.set_content(Content::new("model").with_text("Durable child result"));

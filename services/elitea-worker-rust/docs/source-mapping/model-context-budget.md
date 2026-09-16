@@ -10,7 +10,7 @@ Sources are inspected on 2026-09-14.
 | --- | --- | --- |
 | Centry `configurations/models/pd/llm_model.py` | Model metadata supplies `context_window` and `max_output_tokens`. Defaults are 128,000 and 16,000. | Main `application/configurations/models.go` preserves read-time fallback provenance. |
 | SDK `runtime/clients/client.py`, `_required_provider_max_tokens` and model construction | Native Anthropic needs an output limit. Model name and project identify the configured model. | Main `agentexecution/model_context_limits.go` freezes the authorized catalogue limits. |
-| SDK `runtime/clients/client.py`, `_inject_summarization` | Context thresholds and a low-tier summary model have separate responsibilities. | Rust `agents/context_budget.rs` owns request capacity. Durable summary integration remains open. |
+| SDK `runtime/clients/client.py`, `_inject_summarization` | Context thresholds and a low-tier summary model have separate responsibilities. | Rust `agents/context_budget.rs` owns request capacity; `agents/context_compaction.rs` owns durable model-history projection. Dedicated summary-model selection remains open. |
 | EliteaUI `src/[fsd]/widgets/llm-model-selector/lib/validation.js` | A selected output cap must fit the configured model maximum. | Rust admission validates explicit caps before provider binding. |
 
 Source revisions: Configurations `906664480690620a79498232bfafa683ed205143`, SDK `18704a4070d098761fd1d35897dc53e412b4cbcc`, UI `fb805e6af02f5fc56662fa32ff29241488f78ca8`.
@@ -84,7 +84,8 @@ Go vet and Rust Clippy pass after the bounded-future fix.
 Main still sends empty context settings. New model snapshots select Balanced by default in Rust.
 User defaults, conversation presets, status, and UI controls still need end-to-end wiring.
 The final provider check prevents oversized dispatch; it does not generate or persist a summary.
-Complete the before-model compaction callback and durable checkpoint integration before acceptance.
+The before-model callback and durable summary persistence now have component coverage for roots, children, and pipeline models.
+Complete recovery coordination, settings delivery, and live acceptance before closure.
 Preserve complete tool groups and authoritative instruction state across repeated compaction and replacement.
 Keep cumulative usage separate from the current request estimate.
 
@@ -105,10 +106,10 @@ SDK revision `18704a4070d098761fd1d35897dc53e412b4cbcc` provides the current fun
 | --- | --- | --- |
 | SDK `runtime/langchain/langraph_agent.py::create_graph` | Passes mapped inputs and context middleware to each `LLMNode`. | `agents/graph/llm.rs::map_execution_input` separates mapped system, task, and history content. Preserve this boundary during compaction. |
 | SDK `runtime/tools/llm.py::invoke` and `_prepare_output_messages` | Runs context hooks and returns message-removal updates for checkpoint persistence. | Use existing durable Rust session and graph checkpoints. Keep original records and exact graph values rather than copying removal behavior. |
-| Rust `agents/assembly.rs`, nested profile construction | Inherits the admitted context policy and budget selection. Recomputes child model capacity. | `agents/model_scope.rs` now applies the policy through child callbacks and independent summary persistence. Pipeline integration remains open. |
-| Rust `agents/pipeline.rs::NativePipelineLlmAgentFactory::build` | Binds a node model with the pipeline profile's budget and authoritative instructions. | Add compaction before each model call within the correct node invocation. |
+| Rust `agents/assembly.rs`, nested profile construction | Inherits the admitted context policy and budget selection. Recomputes child model capacity. | `agents/model_scope.rs` applies the policy through child callbacks and independent summary persistence. |
+| Rust `agents/pipeline.rs::NativePipelineLlmAgentFactory::build` | Binds a node model with the pipeline profile's budget and authoritative instructions. | Applies scoped compaction before each real model call; instruction preparation runs first. |
 | Rust `agents/graph/decision.rs` | Uses the same model factory for model-backed routing without tools. | Include decision requests in budget enforcement; preserve exact route constraints. |
-| Rust `agents/session.rs`, pipeline runner construction | Rejects an active transcript-wide context plan because the graph has no single summarization model. | Carry policy to model consumers without summarizing the graph itself. |
+| Rust `agents/session.rs`, pipeline runner construction | Opens model-session storage alongside graph checkpoints. The graph Runner has no compactor. | Model consumers use independent sessions. Deterministic graph state remains exact. |
 
 Purely deterministic pipelines must not acquire model calls solely because compaction is enabled.
 Point 5 retains ownership of new map and parallel node capabilities.
@@ -120,7 +121,8 @@ They retain empty child history and recompute output reservation and input capac
 Focused fixtures cover Balanced, Full, explicit token limits, disabled settings, and a smaller child model.
 Ordinary children now consume that policy through independent model checkpoints and root-fenced session storage.
 The [durable compaction mapping](durable-context-compaction.md) records the implementation and component evidence.
-Saved-child defaults without an inherited policy, pipeline consumers, and deployed settings remain open.
+Pipeline consumers now have stable per-node/step/parent identities and component coverage for mixed and model-free graphs.
+Saved-child defaults without an inherited policy, recovery coordination, and deployed settings remain open.
 
 ## Complete request measurement, 2026-09-16
 
@@ -176,7 +178,7 @@ This change does not redefine model-selection or output-limit UI controls.
 Validation: 18 native Anthropic tests pass. Rust formatting, strict library/test Clippy, and Git whitespace checks pass.
 The fixtures cover each reasoning effort, adaptive output, the resolved maximum, and refusal before network dispatch.
 These are component checks. Deployment and browser acceptance remain open.
-Child and pipeline before-model integration still requires their scoped compaction implementation.
+Subsequent child and pipeline scope integration is recorded in [durable context compaction](durable-context-compaction.md).
 
 Both adapter suites pass 32 tests without ignored cases.
 New tests measure twice, then successfully use a binding limited to one model turn.
@@ -211,4 +213,4 @@ Elitea owns complete provider-request admission, authoritative instructions, exe
 These responsibilities preserve the existing transport and recovery contracts.
 Summary integration must persist scope and source coverage before the model relies on a compacted request.
 Replacement must restore that summary without mixing child histories or replacing exact graph values.
-Those summary guarantees remain implementation requirements, not results of the checks above.
+The checks above establish the budget foundation; later summary component evidence is recorded in [durable context compaction](durable-context-compaction.md).

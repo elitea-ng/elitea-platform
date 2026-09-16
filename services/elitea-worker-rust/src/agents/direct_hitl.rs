@@ -1079,6 +1079,10 @@ fn authorization_scope(
 }
 
 impl DirectHitlReplay {
+    pub(super) fn emits_pending_call(&self) -> bool {
+        matches!(self.resume_mode, ReplayResumeMode::ExecuteCall)
+    }
+
     /// Bind the one-shot replay model and exact ADK confirmation decision.
     pub(crate) fn bind(self, delegate: Arc<dyn Llm>) -> PreparedDirectHitlReplay {
         let hidden = self

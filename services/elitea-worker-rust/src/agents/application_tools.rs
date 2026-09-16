@@ -1471,6 +1471,7 @@ impl LazyNestedAgent {
                     .summarization_model()
                     .ok_or_else(agent_configuration_error)?,
                 replay_marker,
+                model.durable_completion(),
             ),
         ))
     }
@@ -1555,10 +1556,13 @@ impl LazyNestedAgent {
                 }
                 .map_err(direct_hitl_execution_error)?;
                 let bound = self.bind_model()?;
+                let replay_pending = replay.emits_pending_call();
                 let prepared = replay.bind(bound.provider_model());
                 let (model, run_input, toolsets) = prepared.into_parts(self.toolsets.clone());
                 let (user_content, run_config) = run_input.into_parts();
-                let checkpoint = self.context_checkpoint(&bound, Some(user_content.clone()))?;
+                let checkpoint = self
+                    .context_checkpoint(&bound, Some(user_content.clone()))?
+                    .map(|checkpoint| checkpoint.with_replay_pending(replay_pending));
                 Ok(PreparedChildApplicationResume {
                     agent: self.build_agent(model, toolsets, authorization, checkpoint)?,
                     user_content,

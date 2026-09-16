@@ -44,6 +44,7 @@ pub(super) struct ModelScopeSessions {
     execution_id: String,
     generation: u64,
     definition_digest: [u8; 32],
+    node_scope: Option<String>,
 }
 
 impl ModelScopeSessions {
@@ -58,7 +59,14 @@ impl ModelScopeSessions {
             execution_id,
             generation,
             definition_digest,
+            node_scope: None,
         }
+    }
+
+    pub(super) fn for_node(&self, identity: &str) -> Self {
+        let mut scopes = self.clone();
+        scopes.node_scope = Some(identity.to_owned());
+        scopes
     }
 
     fn identity(&self, context: &dyn ReadonlyContext) -> adk_rust::Result<AdkIdentity> {
@@ -73,6 +81,11 @@ impl ModelScopeSessions {
             context.agent_name(),
         ))
         .map_err(|_| invalid_scope())?;
+        let source = if let Some(node_scope) = &self.node_scope {
+            serde_json::to_string(&(source, node_scope)).map_err(|_| invalid_scope())?
+        } else {
+            source
+        };
         identity.session_id = format!(
             "elitea-model-{}",
             super::instruction_authority::content_digest(&source)
@@ -88,6 +101,7 @@ impl ModelScopeSessions {
         budget: Arc<dyn ModelRequestBudget>,
         model: Arc<dyn Llm>,
         replay_marker: Option<Content>,
+        completion: Option<Arc<dyn super::session::DurableModelCompletion>>,
     ) -> Arc<ScopedModelCheckpoint> {
         Arc::new(ScopedModelCheckpoint {
             storage: self.clone(),
@@ -97,6 +111,7 @@ impl ModelScopeSessions {
             writer: OnceCell::new(),
             skip_replay_model: AtomicBool::new(replay_marker.is_some()),
             replay_marker,
+            completion,
         })
     }
 }
@@ -110,6 +125,7 @@ pub(super) struct ScopedModelCheckpoint {
     writer: OnceCell<ScopedWriter>,
     skip_replay_model: AtomicBool,
     replay_marker: Option<Content>,
+    completion: Option<Arc<dyn super::session::DurableModelCompletion>>,
 }
 
 struct ScopedWriter {
@@ -119,12 +135,20 @@ struct ScopedWriter {
 }
 
 impl ScopedModelCheckpoint {
+    pub(super) fn with_replay_pending(self: Arc<Self>, pending: bool) -> Arc<Self> {
+        self.skip_replay_model.store(pending, Ordering::Release);
+        self
+    }
     async fn writer(&self, context: &dyn ReadonlyContext) -> adk_rust::Result<&ScopedWriter> {
         let identity = self.storage.identity(context)?;
         let writer = self
             .writer
             .get_or_try_init(|| async {
-                let sessions = self.storage.sessions.open(&identity).await?;
+                let sessions: Arc<dyn SessionService> =
+                    Arc::new(super::session::RunnerSessionService::new(
+                        self.storage.sessions.open(&identity).await?,
+                        self.completion.clone(),
+                    ));
                 let session = match sessions
                     .get(GetRequest {
                         app_name: identity.app_name.to_string(),
@@ -195,6 +219,11 @@ impl ScopedModelCheckpoint {
         context: &dyn ReadonlyContext,
         mut event: Event,
     ) -> adk_rust::Result<()> {
+        // Match ADK Runner persistence: streamed deltas share the terminal ID.
+        // The existing completion adapter enriches only the stored terminal copy.
+        if event.llm_response.partial {
+            return Ok(());
+        }
         let writer = self.writer(context).await?;
         event.llm_request = None;
         event

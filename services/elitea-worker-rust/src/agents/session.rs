@@ -918,7 +918,7 @@ impl NativePipelineStateBackend {
         }
     }
 
-    async fn open(
+    pub(super) async fn open(
         &self,
         authority: ClaimBoundSessionAuthority,
         state_writer_lease: Arc<dyn StateWriterLease>,
@@ -961,6 +961,9 @@ impl NativePipelineStateBackend {
                 Ok(PipelineStateServices {
                     sessions: Arc::clone(sessions),
                     checkpointer: Arc::clone(checkpointer),
+                    model_scopes: plan.model_scope_sessions(
+                        super::model_scope::ModelScopeBackend::Local(sessions.clone()),
+                    ),
                 })
             }
         }
@@ -1048,15 +1051,21 @@ async fn activate_pipeline_postgres(
     )
     .await
     .map_err(|error| checkpoint_activation_error(&error))?;
+    let sessions = Arc::new(sessions);
+    let model_scopes = plan.model_scope_sessions(super::model_scope::ModelScopeBackend::Postgres(
+        sessions.clone(),
+    ));
     Ok(PipelineStateServices {
-        sessions: Arc::new(sessions),
+        sessions,
         checkpointer: Arc::new(checkpointer),
+        model_scopes,
     })
 }
 
-struct PipelineStateServices {
+pub(super) struct PipelineStateServices {
     sessions: Arc<dyn SessionService>,
     checkpointer: Arc<dyn Checkpointer>,
+    pub(super) model_scopes: super::model_scope::ModelScopeSessions,
 }
 
 /// One bound provider invocation that remains paired with its completion.
@@ -1098,14 +1107,14 @@ pub(crate) trait DurableModelCompletion: Send + Sync {
     fn snapshot(&self) -> adk_rust::Result<Option<String>>;
 }
 
-struct RunnerSessionService {
+pub(super) struct RunnerSessionService {
     inner: Arc<dyn SessionService>,
     completion: Option<Arc<dyn DurableModelCompletion>>,
     omit_empty_user_input: bool,
 }
 
 impl RunnerSessionService {
-    fn new(
+    pub(super) fn new(
         inner: Arc<dyn SessionService>,
         completion: Option<Arc<dyn DurableModelCompletion>>,
     ) -> Self {
@@ -1273,15 +1282,13 @@ impl NativeAgentCompletionSelector for PipelineAgentCompletion {
 
 const PIPELINE_RESUME_MARKER: &str = "[elitea:pipeline-resume:v1]";
 
-/// Activate both durable state contracts and build one admitted graph Runner.
+/// Build one admitted graph Runner with activated durable state contracts.
 #[allow(clippy::too_many_lines)] // Preserve the ordered claim, checkpoint, instruction, and Runner composition.
-pub(crate) async fn assemble_pipeline_native(
+pub(super) async fn assemble_pipeline_native(
     plan: OrdinaryNativeAgentPlan,
     definition: PipelineDefinition,
     start: PipelineNativeStart,
-    session_authority: ClaimBoundSessionAuthority,
-    state_writer_lease: Arc<dyn StateWriterLease>,
-    backend: &NativePipelineStateBackend,
+    state: PipelineStateServices,
     runtime: PipelineRuntimeBindings,
 ) -> Result<AssembledNativeAgentInvocation<PipelineAgentCompletion>, NativeAgentAssemblyError> {
     let PipelineRuntimeBindings {
@@ -1294,14 +1301,6 @@ pub(crate) async fn assemble_pipeline_native(
         events: application_events,
         resume: application_resume,
     } = application_runtime;
-    let state = backend
-        .open(
-            session_authority,
-            state_writer_lease,
-            &plan,
-            definition.definition_digest(),
-        )
-        .await?;
     let printer_catalog = definition.printer_pause_catalog();
     let printer_resume = matches!(&start, PipelineNativeStart::Printer(_));
     let resume = resolve_pipeline_start(
@@ -1332,7 +1331,7 @@ pub(crate) async fn assemble_pipeline_native(
         projection,
         thread_id,
         chat_history: _,
-        context_management,
+        context_management: _,
         capability_id: _,
         definition_digest: _,
         tenant_id: _,
@@ -1343,14 +1342,8 @@ pub(crate) async fn assemble_pipeline_native(
         regenerate: _,
         instruction_plan,
     } = plan;
-    // The pipeline graph binds one model per node, so there is no single
-    // transcript-wide model to summarize with: an active plan is refused.
-    if context_management
-        .prepare_runner_composition(None)?
-        .is_some()
-    {
-        return Err(invalid_configuration());
-    }
+    // Node models consume the admitted policy. The Runner never summarizes
+    // deterministic graph state or introduces a pipeline-wide summary model.
     // TurnCheckpointer isolates fresh input without deleting recovery history.
     let agent: Arc<dyn Agent> = Arc::new(
         EliteaGraphAgent::new(graph)

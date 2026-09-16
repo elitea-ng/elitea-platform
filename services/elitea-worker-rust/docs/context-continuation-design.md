@@ -213,7 +213,9 @@ That path persists exact source coverage and the prepared request through the ex
 Ordinary child agents now use independent model sessions through `src/agents/model_scope.rs`.
 These sessions inherit policy, preserve original events, and share the root execution's claim fence.
 Summary reload does not authorize a parent tool retry.
-Nested recovery coordination, pipeline models, direct root HITL resume, and deployed settings delivery remain open.
+Pipeline LLM and model-backed Decision nodes now use scoped callbacks with stable graph-step and parent-call identities.
+Mixed-graph component tests preserve exact state and deterministic output; model-free graphs make no summary call.
+Nested and graph-model recovery coordination, direct root HITL resume, and deployed settings delivery remain open.
 `src/agents/instruction_authority.rs` already provides separate versioned instruction state and rehydration.
 Complete integration with that state rather than asking a summary model to recreate instructions.
 Main `agentexecution/start.go` and `adhoc.go` still dispatch empty context settings.

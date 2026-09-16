@@ -22,17 +22,19 @@ use super::application_tools::{
     ApplicationToolDependencies, MaterializedApplicationRuntime, materialize_application_runtime,
 };
 use super::assembly::{OrdinaryModelProvider, OrdinaryNoToolProfile, ReasoningEffort};
+use super::context_management::ContextManagementPlan;
 use super::graph::compiler::PipelineNodeRuntimes;
 use super::graph::compiler::{PipelineConfigurationError, PipelineDefinition};
 use super::graph::{
     ApplicationExecutionError, DirectToolExecutionError, DirectToolNodeKind, DirectToolSelection,
     LlmExecutionError, LlmExecutionInput, LlmNodeDefinition, PipelineApplicationResolver,
     PipelineApplicationSelection, PipelineDirectToolResolver, PipelineLlmAgentBinding,
-    PipelineLlmAgentFactory, PipelineLlmReplayEnvelope, PipelineNodeEventSender, PipelineToolGuard,
-    ResolvedApplicationParticipant, ResolvedDirectTool, pipeline_node_event_channel,
-    prepare_pipeline_llm_replay,
+    PipelineLlmAgentFactory, PipelineLlmReplayEnvelope, PipelineModelScope,
+    PipelineNodeEventSender, PipelineToolGuard, ResolvedApplicationParticipant, ResolvedDirectTool,
+    pipeline_node_event_channel, prepare_pipeline_llm_replay,
 };
 use super::internal_tools::{ASK_USER_TOOL_NAME, ASK_USER_TOOLSET_NAME};
+use super::model_scope::ModelScopeSessions;
 use super::request::AgentExecutionRequest;
 use super::runtime::{
     AssembledNativeAgentInvocation, AuthorizedNativeAssembly, NativeAgentAssembler,
@@ -79,6 +81,7 @@ struct PipelineApplicationRuntime<'a> {
     node_events: PipelineNodeEventSender,
     mcp_tokens: &'a Map<String, Value>,
     tool_policy: Arc<ToolAdmissionPolicy>,
+    model_scopes: ModelScopeSessions,
 }
 
 /// Frozen, fully admitted application pipeline definition.
@@ -381,6 +384,7 @@ impl PipelineNativeAgentAssembler {
         mcp_tokens: &Map<String, Value>,
         runtime_context: &ClaimBoundRuntimeContextAuthority,
         tool_policy: &Arc<ToolAdmissionPolicy>,
+        model_scopes: ModelScopeSessions,
     ) -> Result<PipelineRuntimeBindings, NativeAgentAssemblyError> {
         let has_llm_nodes = profile.definition().has_llm_nodes();
         let has_direct_tool_nodes = profile.definition().has_direct_tool_nodes();
@@ -456,6 +460,7 @@ impl PipelineNativeAgentAssembler {
                     node_events: node_event_sender.clone(),
                     mcp_tokens,
                     tool_policy: Arc::clone(tool_policy),
+                    model_scopes: model_scopes.clone(),
                 });
         let (application_resolver, application_runtime) = self
             .build_application_resolver(
@@ -475,6 +480,7 @@ impl PipelineNativeAgentAssembler {
                 delegated_authorization,
                 ask_user_enabled: profile.shell().internal_tools().ask_user_enabled(),
                 node_events: node_event_sender,
+                model_scopes,
             }) as Arc<dyn PipelineLlmAgentFactory>
         });
         Ok(PipelineRuntimeBindings {
@@ -530,7 +536,8 @@ impl PipelineNativeAgentAssembler {
                 Arc::clone(&runtime.tool_policy),
                 Arc::clone(&self.mcp_connector),
                 runtime.mcp_tokens,
-            ),
+            )
+            .with_model_scopes(runtime.model_scopes.clone()),
             Some(&direct_aliases),
         )
         .await?;
@@ -682,6 +689,7 @@ impl PipelineNativeAgentAssembler {
                 delegated_authorization,
                 ask_user_enabled: profile.shell().internal_tools().ask_user_enabled(),
                 node_events: runtime.node_events.clone(),
+                model_scopes: runtime.model_scopes.clone(),
             }) as Arc<dyn PipelineLlmAgentFactory>
         });
         Ok(PipelineNodeRuntimes::new(
@@ -730,6 +738,16 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
             let admitted = assembly.admit_pipeline_with_policy(tool_policy.as_ref())?;
             let (profile, plan, toolsets, mcp_tokens, start, runtime_context, session, lease) =
                 admitted.into_parts();
+            tracing::Span::current().record("stage", "state");
+            let state = self
+                .state
+                .open(
+                    session,
+                    lease,
+                    &plan,
+                    profile.definition().definition_digest(),
+                )
+                .await?;
             let node_runtimes = self
                 .bind_node_runtimes(
                     &profile,
@@ -737,19 +755,12 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
                     mcp_tokens,
                     &runtime_context,
                     &tool_policy,
+                    state.model_scopes.clone(),
                 )
                 .await?;
             tracing::Span::current().record("stage", "state");
-            assemble_pipeline_native(
-                plan,
-                profile.into_definition(),
-                start,
-                session,
-                lease,
-                &self.state,
-                node_runtimes,
-            )
-            .await
+            assemble_pipeline_native(plan, profile.into_definition(), start, state, node_runtimes)
+                .await
         }
         .instrument(span.clone())
         .await;
@@ -775,6 +786,7 @@ struct NativePipelineLlmAgentFactory {
     delegated_authorization: DelegatedAuthorizationCatalog,
     ask_user_enabled: bool,
     node_events: PipelineNodeEventSender,
+    model_scopes: ModelScopeSessions,
 }
 
 struct NativePipelineDirectToolResolver {
@@ -940,6 +952,7 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
         input: &LlmExecutionInput,
         output_schema: Option<serde_json::Value>,
         replay: Option<&PipelineLlmReplayEnvelope>,
+        scope: &PipelineModelScope,
     ) -> Result<PipelineLlmAgentBinding, LlmExecutionError> {
         let system_instruction = if input.system().trim().is_empty() {
             "You are an AI assistant executing one bounded Elitea pipeline node.".to_owned()
@@ -968,6 +981,25 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
                 invocation,
             )
             .map_err(|_| LlmExecutionError::Unavailable)?;
+        let checkpoint = match self.profile.context_management() {
+            ContextManagementPlan::Disabled => None,
+            ContextManagementPlan::Summarize(plan) => Some(
+                self.model_scopes
+                    .for_node(scope.identity())
+                    .checkpoint(
+                        plan,
+                        model
+                            .request_budget()
+                            .ok_or(LlmExecutionError::Unavailable)?,
+                        model
+                            .summarization_model()
+                            .ok_or(LlmExecutionError::Unavailable)?,
+                        None,
+                        model.durable_completion(),
+                    )
+                    .with_replay_pending(replay.is_some()),
+            ),
+        };
         let binding = self.bind_selected_tools(definition)?;
         let mut guards = self.guards_for_binding(&binding)?;
         let mut authorization = DelegatedAuthorizationCatalog::default();
@@ -1034,6 +1066,9 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
             .disallow_transfer_to_peers(true);
         let instruction_plan = self.profile.instruction_plan().for_pipeline_node();
         builder = instruction_plan.bind_builder(builder);
+        if let Some(checkpoint) = &checkpoint {
+            builder = checkpoint.clone().bind(builder);
+        }
         if let Some(schema) = output_schema {
             builder = builder.output_schema(schema).output_max_retries(2);
         }
@@ -1047,6 +1082,10 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
             .build()
             .map(|agent| Arc::new(agent) as Arc<dyn Agent>)
             .map_err(|_| LlmExecutionError::Unavailable)?;
+        let agent = match checkpoint {
+            Some(checkpoint) => checkpoint.wrap(agent),
+            None => agent,
+        };
         Ok(
             PipelineLlmAgentBinding::new(instruction_plan.wrap(agent), guards)
                 .with_instruction_inheritance(

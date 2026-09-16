@@ -11,7 +11,8 @@
 //! Ordinary roots with frozen model limits use `context_compaction` through
 //! the model checkpoint callback. That path stores structured summary coverage
 //! and the prepared request before dispatch. Ordinary child agents use separate
-//! model sessions. Pipeline integration remains separate work.
+//! model sessions. Pipeline model nodes apply the same callback in independent
+//! scopes; the graph Runner never summarizes exact graph state.
 //!
 //! Legacy bindings without frozen limits compose the plan onto the ADK Runner from
 //! [`ContextManagementPlan::prepare_runner_composition`], which yields an
@@ -188,9 +189,9 @@ impl ContextManagementPlan {
 
     /// Compose the admitted plan onto the exclusive Runner, after admission and
     /// before the Runner is built. `summarization_model` is the invocation's
-    /// isolated summary model; a caller that has none (the pipeline graph runs one model
-    /// per node) passes `None` and an active plan is refused rather than
-    /// half-applied.
+    /// isolated summary model. An active plan with no model is refused rather
+    /// than half-applied. Pipeline graphs instead apply the policy within each
+    /// model node and do not call this Runner-level composition method.
     ///
     /// # Errors
     ///
