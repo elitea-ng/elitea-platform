@@ -3,7 +3,7 @@
  * (`BucketAccessPanel.test.tsx`) cannot reach through the server, because they
  * are decisions about what to draw rather than about what to fetch.
  */
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -92,5 +92,94 @@ describe('BucketAccessDialog', () => {
       rows: [{ user_id: 11, name: 'Blocked Member', email: 'blocked@example.test', bucket_permissions: { reports: [] } }],
     })} />);
     expect(await screen.findByLabelText('Remove exception for Blocked Member')).toBeDisabled();
+  });
+});
+
+/**
+ * Issue 940/A10 (ELITEA-2480) — bulk edit: a header "Select all" checkbox,
+ * a per-row checkbox, and a pencil icon above the table that opens a modal
+ * applying one permission to every selected row via the same `onSetAccess`
+ * a single row's own `<Select>` already calls.
+ */
+describe('BucketAccessDialog — bulk edit (issue 940/A10)', () => {
+  const threeRows = [
+    { user_id: 1, name: 'User A', email: 'a@example.test', bucket_permissions: { reports: ['read'] } },
+    { user_id: 2, name: 'User B', email: 'b@example.test', bucket_permissions: { reports: ['read'] } },
+    { user_id: 3, name: 'User C', email: 'c@example.test', bucket_permissions: { reports: [] } },
+  ];
+
+  it('keeps the bulk-edit icon disabled until at least one row is selected', async () => {
+    renderWithProviders(<BucketAccessDialog {...props({ rows: threeRows })} />);
+    expect(await screen.findByTestId('bucket-access-bulk-edit-open')).toBeDisabled();
+
+    await userEvent.click(screen.getByLabelText('Select User A'));
+    expect(screen.getByTestId('bucket-access-bulk-edit-open')).not.toBeDisabled();
+  });
+
+  it('"Select all" selects every row, and clicking it again deselects every row', async () => {
+    renderWithProviders(<BucketAccessDialog {...props({ rows: threeRows })} />);
+
+    await userEvent.click(await screen.findByLabelText('Select all exceptions'));
+    expect(screen.getByLabelText('Select User A')).toBeChecked();
+    expect(screen.getByLabelText('Select User B')).toBeChecked();
+    expect(screen.getByLabelText('Select User C')).toBeChecked();
+
+    await userEvent.click(screen.getByLabelText('Select all exceptions'));
+    expect(screen.getByLabelText('Select User A')).not.toBeChecked();
+    expect(screen.getByLabelText('Select User B')).not.toBeChecked();
+    expect(screen.getByLabelText('Select User C')).not.toBeChecked();
+  });
+
+  it('applies the chosen permission to every selected row, and leaves unselected rows untouched', async () => {
+    const onSetAccess = vi.fn();
+    renderWithProviders(<BucketAccessDialog {...props({ rows: threeRows, onSetAccess })} />);
+
+    await userEvent.click(await screen.findByLabelText('Select User A'));
+    await userEvent.click(screen.getByLabelText('Select User B'));
+    await userEvent.click(screen.getByTestId('bucket-access-bulk-edit-open'));
+
+    expect(await screen.findByText('2 users selected')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByLabelText('Bulk edit permissions value'));
+    await userEvent.click(await screen.findByRole('option', { name: 'No access' }));
+    await userEvent.click(screen.getByTestId('bucket-access-bulk-edit-save'));
+
+    expect(onSetAccess).toHaveBeenCalledTimes(2);
+    expect(onSetAccess).toHaveBeenCalledWith(1, 'no_access');
+    expect(onSetAccess).toHaveBeenCalledWith(2, 'no_access');
+    expect(onSetAccess).not.toHaveBeenCalledWith(3, expect.anything());
+  });
+
+  // ELITEA-2480's own acceptance text: choosing "Read & Write" for every
+  // selected row removes them from the Exceptions table (back to default) —
+  // the same removal `onSetAccess`/`permissionsFromAccess` already give a
+  // single row's "Read/write (default)" choice, just called once per row.
+  it('"Read/write (default)" removes every selected row from the exceptions table', async () => {
+    const onSetAccess = vi.fn();
+    renderWithProviders(<BucketAccessDialog {...props({ rows: threeRows, onSetAccess })} />);
+
+    await userEvent.click(await screen.findByLabelText('Select all exceptions'));
+    await userEvent.click(screen.getByTestId('bucket-access-bulk-edit-open'));
+    await userEvent.click(screen.getByLabelText('Bulk edit permissions value'));
+    await userEvent.click(await screen.findByRole('option', { name: 'Read/write (default)' }));
+    await userEvent.click(screen.getByTestId('bucket-access-bulk-edit-save'));
+
+    expect(onSetAccess).toHaveBeenCalledTimes(3);
+    for (const id of [1, 2, 3]) expect(onSetAccess).toHaveBeenCalledWith(id, 'read_write');
+  });
+
+  it('clears the selection and closes the modal after saving', async () => {
+    renderWithProviders(<BucketAccessDialog {...props({ rows: threeRows })} />);
+
+    await userEvent.click(await screen.findByLabelText('Select User A'));
+    await userEvent.click(screen.getByTestId('bucket-access-bulk-edit-open'));
+    await userEvent.click(screen.getByTestId('bucket-access-bulk-edit-save'));
+
+    // MUI's `Dialog` unmounts its content only after its exit TRANSITION
+    // settles, not synchronously on `open={false}` — `waitFor` lets that
+    // finish rather than asserting mid-transition.
+    await waitFor(() => expect(screen.queryByTestId('bucket-access-bulk-edit-dialog')).not.toBeInTheDocument());
+    expect(screen.getByLabelText('Select User A')).not.toBeChecked();
+    expect(screen.getByTestId('bucket-access-bulk-edit-open')).toBeDisabled();
   });
 });

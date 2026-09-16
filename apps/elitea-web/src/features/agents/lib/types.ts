@@ -107,4 +107,15 @@ export interface AgentPipelineVersionOption {
    * same as `false` rather than as "no default exists".
    */
   readonly is_default?: boolean | undefined;
+  /**
+   * Issue 940/A11 (ELITEA-3278) — the version's creator, read the same way
+   * `is_default` above is: off the wire, ahead of `ApplicationVersionSummary`
+   * (the generated OpenAPI schema) actually modeling it, via a narrow cast
+   * (`editApplicationMappers.ts`'s `readAuthor`/`editPipelineMappers.ts`'s
+   * twin). `services/elitea-main/internal/api/v2/applications/handler.go`'s
+   * `getVersions` now answers `versions[].author = {id, email, name}`,
+   * absent when the version genuinely has no recorded author. This is what
+   * the version-selector dropdown's search box filters by, alongside name.
+   */
+  readonly author?: { readonly id?: string; readonly email?: string; readonly name?: string } | undefined;
 }

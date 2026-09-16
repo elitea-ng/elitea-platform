@@ -10,12 +10,26 @@
  * loaded graph and moves the default pointer; it opens the menu but never
  * asserts on the menu's own contents (row count, the checkmark, the default
  * marker). This file closes that gap.
+ *
+ * Issue 940/A11 (ELITEA-3278/3280/3281) added a SEARCH box to the dropdown,
+ * filtering by name and creator while preserving the timestamp sort — see
+ * this file's own tests below. Landing that search meaningfully needed real
+ * creator data on the version list (`services/elitea-main/internal/api/v2/
+ * applications/handler.go`'s `getVersions` now answers `versions[].author`,
+ * the same `{id,email,name}` shape `fetchVersionDetails` already gave a
+ * single version), which also closed ELITEA-3279 (below) as a side effect —
+ * the row's own secondary line now names the creator and a full
+ * "MMM D, YYYY, h:mm AM/PM" timestamp, so that case's `test.fail` is now a
+ * real, green assertion.
  */
 import { expect, test, type Page } from '@playwright/test';
 
 import { BASE_URL } from '../../../playwright.config';
 import { AUTOTEST_PREFIX } from '../../fixtures/api';
 import { createPipelineThroughApi, deletePipeline, type CreatedPipeline } from '../../fixtures/pipelines';
+
+/** The `member` persona's own identity — every version this file creates is authored by it (default project storageState, `playwright.config.ts`). Same constant `artifacts.p13-bucket-permissions.spec.ts` already uses for the identical persona. */
+const MEMBER_EMAIL = 'e2e-member@autotest.local';
 
 const created: CreatedPipeline[] = [];
 
@@ -110,9 +124,9 @@ test('"Set as default" moves the dropdown\'s Default marker to the new version',
   await expect(menu.getByRole('menuitem', { name: 'base', exact: true }).getByTestId('agent-version-default-marker')).toHaveCount(0);
 });
 
-/* onetest: ELITEA-3279 — product gap: the dropdown row shows neither the creator's name/email nor a "MMM DD, YYYY, hh:mm AM/PM" timestamp. */
-test('a version row names its creator and shows a full date+time — PRODUCT GAP', async ({ page }) => {
-  test.fail(true, 'ELITEA-3279 (#900): product gap — AgentPipelineVersionSelector.tsx:formatVersionDisplayText renders only "<name> – DD.MM.YYYY" (day.month.year, no time, no AM/PM) and the menu row renders no creator name or email anywhere');
+/* onetest: ELITEA-3279 — FIXED (was a product gap, flipped green by issue 940/A11): the dropdown row
+ * now names its creator and shows a full "MMM D, YYYY, h:mm AM/PM" timestamp. */
+test('a version row names its creator and shows a full date+time', async ({ page }) => {
   const name = `${AUTOTEST_PREFIX}ver-meta-${Date.now() % 1e9}`;
   const pipeline = await createPipelineThroughApi(page.request, name);
   created.push(pipeline);
@@ -128,8 +142,105 @@ test('a version row names its creator and shows a full date+time — PRODUCT GAP
   const row = page.getByRole('menu').getByRole('menuitem', { name: new RegExp(versionName) });
   const text = (await row.innerText()).trim();
 
-  // The spec's required format: "MMM DD, YYYY, hh:mm AM/PM" (e.g. "Sep 10, 2026, 03:45 PM").
+  // The spec's required format: "MMM DD, YYYY, hh:mm AM/PM" (e.g. "Sep 10, 2026, 03:45 PM";
+  // `versionMetaLine`'s own formatter does not zero-pad the day/hour, so 1-2 digits are both accepted).
   expect(text, 'the row must carry a month-name date with a time and AM/PM').toMatch(/[A-Za-z]{3}\s\d{1,2},\s\d{4},\s\d{1,2}:\d{2}\s(AM|PM)/);
-  // The spec requires the creator's name and/or email to be visible.
-  expect(text.toLowerCase(), 'the row must name its creator').toMatch(/@|\b[a-z]+\s[a-z]+\b/);
+  // The row must name its creator (name or email) — the authenticated
+  // persona's own identity. `[a-z0-9]`, not `[a-z]` alone: this stack's own
+  // seeded persona name is "E2E Member" (digits in "E2E"), which a
+  // letters-only pattern would not match.
+  expect(text.toLowerCase(), 'the row must name its creator').toMatch(/@|\b[a-z0-9]+\s[a-z0-9]+\b/);
+  // `versionCreatorLabel` prefers the resolved NAME over the email when a
+  // name is known ("E2E Member"), so the visible text names the persona by
+  // name, not by the email `MEMBER_EMAIL` itself names it by.
+  expect(text.toLowerCase(), 'the creator must be the persona that actually created this version').toContain('e2e member');
+});
+
+/* onetest: ELITEA-3278 — the search box filters the version list by NAME and by CREATOR
+ * (case-insensitively, partial match), including special characters, and shows "No versions found"
+ * for a query that matches nothing. */
+test('the version search filters by name and by creator', async ({ page }) => {
+  const pipelineName = `${AUTOTEST_PREFIX}ver-search-${Date.now() % 1e9}`;
+  const pipeline = await createPipelineThroughApi(page.request, pipelineName);
+  created.push(pipeline);
+  await openEditor(page, pipeline);
+
+  const versionName = `feature/prod-${Date.now() % 1e5}`;
+  await saveAsVersion(page, versionName);
+
+  await page.getByTestId('version-selector-trigger').click();
+  const menu = page.getByRole('menu');
+  const search = page.getByTestId('version-selector-search');
+  await expect(search).toBeVisible({ timeout: 10_000 });
+
+  // By name, case-insensitively and partially.
+  await search.fill('PROD');
+  await expect(menu.getByRole('menuitem', { name: new RegExp(versionName.replace('/', '\\/')) })).toBeVisible({ timeout: 10_000 });
+  await expect(menu.getByRole('menuitem', { name: 'base', exact: true })).toHaveCount(0);
+
+  // Special characters in the name (the slash) are matched literally.
+  await search.fill('feature/prod');
+  await expect(menu.getByRole('menuitem', { name: new RegExp(versionName.replace('/', '\\/')) })).toBeVisible({ timeout: 10_000 });
+
+  // By creator email — the persona that authored EVERY version in this
+  // pipeline, `base` included: `base` is a real row with a real author, its
+  // row simply never RENDERS the creator line (a display choice, not a
+  // search exclusion — see `AgentPipelineVersionSelector.menu.tsx`'s own
+  // `version.isLatest` guard) — so a creator search legitimately still
+  // matches it.
+  await search.fill(MEMBER_EMAIL);
+  await expect(menu.getByRole('menuitem', { name: new RegExp(versionName.replace('/', '\\/')) })).toBeVisible({ timeout: 10_000 });
+  await expect(menu.getByRole('menuitem', { name: 'base', exact: true })).toBeVisible();
+
+  // No results.
+  await search.fill('nonexistent-xyz-123');
+  await expect(menu.getByText('No versions found')).toBeVisible({ timeout: 10_000 });
+
+  // Clearing restores the full list.
+  await search.fill('');
+  await expect(menu.getByRole('menuitem', { name: 'base', exact: true })).toBeVisible({ timeout: 10_000 });
+  await expect(menu.getByRole('menuitem', { name: new RegExp(versionName.replace('/', '\\/')) })).toBeVisible();
+});
+
+/* onetest: ELITEA-3280 — the newest-first timestamp sort survives a search: filtered results stay in
+ * the same relative order the full, unfiltered list already has. */
+test('timestamp sort order is preserved while searching', async ({ page }) => {
+  const pipelineName = `${AUTOTEST_PREFIX}ver-sort-${Date.now() % 1e9}`;
+  const pipeline = await createPipelineThroughApi(page.request, pipelineName);
+  created.push(pipeline);
+  await openEditor(page, pipeline);
+
+  // Two versions sharing a "sortv" marker, saved in order — v1 (older) then
+  // v2 (newer) — so the newest-first order is `base, v2, v1` before AND
+  // after a search that matches only the two "sortv" rows.
+  const tag = `sortv-${Date.now() % 1e5}`;
+  await saveAsVersion(page, `${tag}-v1`);
+  await saveAsVersion(page, `${tag}-v2`);
+
+  await page.getByTestId('version-selector-trigger').click();
+  const menu = page.getByRole('menu');
+  await page.getByTestId('version-selector-search').fill(tag);
+
+  const rows = menu.getByRole('menuitem').filter({ hasText: tag });
+  await expect(rows).toHaveCount(2, { timeout: 10_000 });
+  await expect(rows.nth(0)).toContainText(`${tag}-v2`);
+  await expect(rows.nth(1)).toContainText(`${tag}-v1`);
+});
+
+/* onetest: ELITEA-3281 — the search input's own styling is the SAME component instance the agent
+ * editor's dropdown mounts (no separate implementation to drift), so UI consistency holds by
+ * construction — verified here by asserting the search box actually renders in this (pipeline)
+ * context with the identical placeholder text `AgentPipelineVersionSelector.menu.tsx` renders
+ * everywhere it mounts. */
+test('the search input is the same shared component pipelines and agents both mount', async ({ page }) => {
+  const pipelineName = `${AUTOTEST_PREFIX}ver-ui-${Date.now() % 1e9}`;
+  const pipeline = await createPipelineThroughApi(page.request, pipelineName);
+  created.push(pipeline);
+  await openEditor(page, pipeline);
+  await saveAsVersion(page, `v${Date.now() % 1e5}`);
+
+  await page.getByTestId('version-selector-trigger').click();
+  const search = page.getByTestId('version-selector-search');
+  await expect(search).toBeVisible({ timeout: 10_000 });
+  await expect(search).toHaveAttribute('placeholder', 'Search versions');
 });

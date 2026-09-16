@@ -47,6 +47,7 @@ function renderItem(overrides: Partial<ConversationItemProps> = {}): ReturnType<
     onEdit: vi.fn(),
     onPlayback: vi.fn(),
     onPin: vi.fn(),
+    onDuplicate: vi.fn(),
     onCreateConversation: vi.fn().mockResolvedValue(undefined),
     onCancelCreate: vi.fn(),
     onChangeActiveConversationName: vi.fn(),
@@ -242,6 +243,7 @@ describe('ConversationItem', () => {
             onEdit={vi.fn()}
             onPlayback={vi.fn()}
             onPin={vi.fn()}
+            onDuplicate={vi.fn()}
             onCreateConversation={vi.fn()}
             onCancelCreate={vi.fn()}
             onChangeActiveConversationName={vi.fn()}

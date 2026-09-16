@@ -1,45 +1,30 @@
 import type { MouseEvent, ReactNode } from 'react';
 import { useCallback, useMemo, useState } from 'react';
 
-import CheckIcon from '@mui/icons-material/Check';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import Box from '@mui/material/Box';
 import CircularProgress from '@mui/material/CircularProgress';
-import IconButton from '@mui/material/IconButton';
-import Menu from '@mui/material/Menu';
-import MenuItem from '@mui/material/MenuItem';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 import { combineSx } from '@/shared/ui/lib/combineSx';
-import { RefreshIcon } from '@/shared/ui/icons/refresh-icon';
 
 import type { AgentPipelineVersionOption } from '../lib/types';
 
-import { renderDeleteItem, renderSetDefaultItem } from './AgentVersionMenuCommands';
+import { renderMenu } from './AgentPipelineVersionSelector.menu';
+import { LATEST_VERSION_NAME, filterVersionsBySearch, formatVersionDisplayText, toDisplayVersions } from './AgentPipelineVersionSelector.search';
+import type { DisplayVersion } from './AgentPipelineVersionSelector.search';
 import {
   contentWrapperSx,
-  defaultMarkerSx,
   dropdownIconInvalidSx,
   dropdownIconSx,
-  menuItemSx,
-  menuListSx,
-  menuPaperSx,
-  refreshIconStyle,
-  rowEndSx,
-  selectedCheckIconSx,
-  selectedMenuItemSx,
   selectorSx,
-  versionHeaderSx,
-  versionHeaderTitleSx,
   versionTextInvalidSx,
   versionTextSx,
   warningIconSx,
 } from './AgentPipelineVersionSelector.styles';
-
-const LATEST_VERSION_NAME = 'base';
 
 /**
  * Ported from `apps/elitea-ui/src/pages/Applications/Components/Tools/AgentPipelineVersionSelector.jsx`.
@@ -141,34 +126,6 @@ export interface AgentPipelineVersionSelectorProps {
   readonly onDeleteVersion?: ((version: AgentPipelineVersionOption) => void) | undefined;
 }
 
-interface DisplayVersion extends AgentPipelineVersionOption {
-  readonly isLatest: boolean;
-}
-
-function toDisplayVersions(versions: readonly AgentPipelineVersionOption[]): readonly DisplayVersion[] {
-  return [...versions]
-    .map((version): DisplayVersion => ({ ...version, isLatest: version.name === LATEST_VERSION_NAME }))
-    .sort((a, b) => {
-      if (a.isLatest && !b.isLatest) return -1;
-      if (!a.isLatest && b.isLatest) return 1;
-      const dateA = new Date(a.created_at ?? 0).getTime();
-      const dateB = new Date(b.created_at ?? 0).getTime();
-      return dateB - dateA;
-    });
-}
-
-function formatVersionDisplayText(version: DisplayVersion): string {
-  if (version.isLatest) return LATEST_VERSION_NAME;
-  const versionName = version.name || 'Unnamed version';
-  if (!version.created_at) return versionName;
-  const date = new Date(version.created_at);
-  if (Number.isNaN(date.getTime())) return versionName;
-  const day = String(date.getDate()).padStart(2, '0');
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const year = date.getFullYear();
-  return `${versionName} – ${day}.${month}.${year}`;
-}
-
 function renderTrigger(params: { displayText: string; isInvalid: boolean; isSwitching: boolean; disabled: boolean | undefined; isOpen: boolean; onClick: (event: MouseEvent<HTMLElement>) => void }): ReactNode {
   const { displayText, isInvalid, isSwitching, disabled, isOpen, onClick } = params;
   return (
@@ -201,85 +158,6 @@ function renderTrigger(params: { displayText: string; isInvalid: boolean; isSwit
   );
 }
 
-function renderMenu(params: {
-  anchorEl: HTMLElement | null;
-  onClose: () => void;
-  isRefreshingVersions: boolean;
-  onRefresh: (event: MouseEvent) => void;
-  displayVersions: readonly DisplayVersion[];
-  selectedVersion: DisplayVersion | undefined;
-  onVersionClick: (version: DisplayVersion) => () => void;
-  defaultVersionId: number | undefined;
-  onSetDefaultVersion: ((version: AgentPipelineVersionOption) => void) | undefined;
-  onDeleteVersion: ((version: AgentPipelineVersionOption) => void) | undefined;
-}): ReactNode {
-  const { anchorEl, onClose, isRefreshingVersions, onRefresh, displayVersions, selectedVersion, onVersionClick } = params;
-  const { defaultVersionId, onSetDefaultVersion, onDeleteVersion } = params;
-  const selectedVersionId = selectedVersion?.id;
-  return (
-    <Menu
-      anchorEl={anchorEl}
-      open={Boolean(anchorEl)}
-      onClose={onClose}
-      transformOrigin={{ horizontal: 'left', vertical: 'top' }}
-      anchorOrigin={{ horizontal: 'left', vertical: 'bottom' }}
-      slotProps={{ paper: { sx: menuPaperSx }, list: { sx: menuListSx } }}
-    >
-      <Box sx={versionHeaderSx}>
-        <Typography
-          variant="labelSmall"
-          sx={versionHeaderTitleSx}
-        >
-          {t('agents.versionSelector.versionsHeading', 'Versions')}
-        </Typography>
-        <Tooltip
-          title={t('agents.versionSelector.refreshTooltip', 'Refresh versions')}
-          placement="top"
-        >
-          <IconButton
-            color="tertiary"
-            size="small"
-            onClick={onRefresh}
-            disabled={isRefreshingVersions}
-          >
-            {isRefreshingVersions ? <CircularProgress size={12} /> : <RefreshIcon style={refreshIconStyle} />}
-          </IconButton>
-        </Tooltip>
-      </Box>
-
-      {displayVersions.length === 0 && <MenuItem disabled>{t('agents.versionSelector.noVersions', 'No versions available')}</MenuItem>}
-
-      {displayVersions.map((version) => {
-        const isSelected = selectedVersionId === version.id;
-        return (
-          <MenuItem
-            key={version.id}
-            onClick={onVersionClick(version)}
-            sx={isSelected ? selectedMenuItemSx : menuItemSx}
-          >
-            <Typography variant="bodyMedium">{formatVersionDisplayText(version)}</Typography>
-            <Box sx={rowEndSx}>
-              {version.id === defaultVersionId && (
-                <Typography
-                  variant="labelSmall"
-                  data-testid="agent-version-default-marker"
-                  sx={defaultMarkerSx}
-                >
-                  {t('agents.versionSelector.defaultMarker', 'Default')}
-                </Typography>
-              )}
-              {isSelected && <CheckIcon sx={selectedCheckIconSx} />}
-            </Box>
-          </MenuItem>
-        );
-      })}
-
-      {renderSetDefaultItem({ selectedVersion, defaultVersionId, onSetDefaultVersion })}
-      {renderDeleteItem({ selectedVersion, defaultVersionId, onDeleteVersion })}
-    </Menu>
-  );
-}
-
 export function AgentPipelineVersionSelector({
   applicationVersionId,
   disabled,
@@ -293,8 +171,20 @@ export function AgentPipelineVersionSelector({
   onDeleteVersion,
 }: AgentPipelineVersionSelectorProps): ReactNode {
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
+  // Issue 940/A11 — the dropdown's own search text. Local to this component
+  // (not lifted to the caller): search is a pure view-filter over the
+  // `versions` prop the caller already supplies, with no server round trip.
+  const [searchQuery, setSearchQuery] = useState('');
 
   const displayVersions = useMemo(() => toDisplayVersions(versions), [versions]);
+
+  // ELITEA-3278/3280 — filtered by name+creator, in the SAME order
+  // `toDisplayVersions` already sorted (`.filter()` never reorders), so the
+  // timestamp sort survives a search untouched. Distinct from
+  // `displayVersions`: the TRIGGER's own label and the invalid-reference
+  // check below must keep reading the FULL list — a search that hides the
+  // selected row must not make the trigger forget what is selected.
+  const filteredVersions = useMemo(() => filterVersionsBySearch(displayVersions, searchQuery), [displayVersions, searchQuery]);
 
   const isInvalidVersionReference = useMemo(
     () => !!applicationVersionId && displayVersions.length > 0 && !displayVersions.some((v) => v.id === applicationVersionId),
@@ -309,7 +199,13 @@ export function AgentPipelineVersionSelector({
   }, [isInvalidVersionReference, selectedVersion]);
 
   const handleClick = useCallback((event: MouseEvent<HTMLElement>) => setAnchorEl(event.currentTarget), []);
-  const handleClose = useCallback(() => setAnchorEl(null), []);
+  // Reopening always starts from the full, unfiltered list — the same
+  // "no stale state carried between sessions" rule the bell popover's own
+  // infinite scroll follows (issue 940/A4).
+  const handleClose = useCallback(() => {
+    setAnchorEl(null);
+    setSearchQuery('');
+  }, []);
 
   const handleRefresh = useCallback(
     (event: MouseEvent) => {
@@ -361,7 +257,10 @@ export function AgentPipelineVersionSelector({
         onClose: handleClose,
         isRefreshingVersions,
         onRefresh: handleRefresh,
-        displayVersions,
+        allVersionsCount: displayVersions.length,
+        displayVersions: filteredVersions,
+        searchQuery,
+        onSearchChange: setSearchQuery,
         selectedVersion,
         onVersionClick: handleVersionClick,
         defaultVersionId,

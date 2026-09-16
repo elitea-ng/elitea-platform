@@ -68,6 +68,12 @@ export const versionHeaderSx: SxProps<Theme> = (theme: Theme) => ({
 
 export const versionHeaderTitleSx: SxProps<Theme> = (theme: Theme) => ({ color: theme.vars.palette.text.default, textTransform: 'uppercase' });
 
+/** Issue 940/A11 — wraps the search box, matching `ToolMenuDropdown.tsx`'s own established `searchBoxSx` padding for a search field sitting directly inside a `Menu`. `onKeyDown` (set by the component, not here) stops the Menu's own typeahead/arrow-key handling from swallowing keystrokes meant for the input. */
+export const searchBoxSx: SxProps<Theme> = { padding: '0.25rem 0.75rem 0.5rem 1.25rem' };
+
+/** Issue 940/A11 (ELITEA-3279) — the row's secondary "creator · timestamp" line, sat under the version name rather than beside it (`menuItemBaseSx`'s `space-between` keeps the Default marker/checkmark cluster on the right). */
+export const versionMetaLineSx: SxProps<Theme> = (theme: Theme) => ({ ...versionTextBaseSx, display: 'block', color: theme.vars.palette.text.default, maxWidth: '10rem' });
+
 const menuItemBaseSx = { padding: '0.5rem 1.25rem', minHeight: '2.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' } as const;
 export const menuItemSx: SxProps<Theme> = (theme: Theme) => ({ ...menuItemBaseSx, color: theme.vars.palette.text.secondary, cursor: 'pointer' });
 export const selectedMenuItemSx: SxProps<Theme> = (theme: Theme) => ({ ...menuItemBaseSx, fontWeight: 500, color: theme.vars.palette.text.secondary, background: theme.vars.palette.background.conversation.selected, cursor: 'default' });

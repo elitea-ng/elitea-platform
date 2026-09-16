@@ -49,6 +49,7 @@ function baseConversationItemParams(overrides: Partial<UseRenderConversationItem
     onPlaybackConversation: vi.fn(),
     onDeleteConversation: vi.fn(),
     onPinConversation: vi.fn(),
+    onDuplicateConversation: vi.fn(),
     onCreateConversation: vi.fn().mockResolvedValue(undefined),
     onCancelCreateConversation: vi.fn(),
     onChangeActiveConversationName: vi.fn(),

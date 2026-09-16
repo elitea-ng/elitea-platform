@@ -10,6 +10,7 @@
 // baseline's `1rem` (16px) — same substitution `ui/folders/FolderItem.tsx`'s
 // own `<DeleteOutlineIcon fontSize="small" />` already established for an
 // identical baseline `sx={{fontSize:'1rem'}}` icon.
+import ContentCopyOutlinedIcon from '@mui/icons-material/ContentCopyOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined';
 import DriveFileMoveOutlinedIcon from '@mui/icons-material/DriveFileMoveOutlined';
 import FileDownloadOutlinedIcon from '@mui/icons-material/FileDownloadOutlined';
@@ -26,7 +27,7 @@ import { PinIcon } from '@/shared/ui/icons/pin-icon';
 import { PlayIcon } from '@/shared/ui/icons/play-icon';
 
 import { menuIconStyle } from './ConversationItem.styles';
-import type { ConversationWithOwnerMeta } from './ConversationItem.types';
+import type { ConversationExportFormat, ConversationWithOwnerMeta } from './ConversationItem.types';
 
 /** `getConversationType` — `ConversationItem.jsx:101-106`. */
 export function getConversationType(conversation: ConversationWithOwnerMeta): 'public' | 'private_with_users' | 'private_without_users' {
@@ -97,6 +98,15 @@ export interface MenuItemsParams {
   readonly onShareByLink: () => void;
   readonly onPlayback: () => void;
   readonly onPin: () => void;
+  /**
+   * Issue 940/A6 — clones this conversation (participants + settings) into a
+   * brand-new, independent one. Not part of the baseline app: no legacy
+   * `ConversationItem.jsx` menu entry ever offered it (grepped, confirmed —
+   * see the unit's own port evidence). Composed client-side by the caller
+   * from the existing create/details/participant endpoints; this file only
+   * renders the entry and forwards the click.
+   */
+  readonly onDuplicate: () => void;
 }
 
 /** Playback rows only ever offer Delete/Edit (`ConversationItem.jsx:264-278`). */
@@ -147,18 +157,6 @@ function buildDeleteEditItems(params: MenuItemsParams, deleteEditDisabled: boole
     },
   ];
 }
-
-/**
- * The formats the export route serves.
- *
- * Declared here rather than imported from `entities/conversation`, which owns
- * the fetcher: that slice's public API is exactly at its export budget, and
- * `no-deep-slice-import-cross-slice` forbids this feature reaching past its
- * `index.ts` for one string union. The two definitions are structurally
- * identical, so the exporter this feeds still type-checks against the entity's
- * own parameter — a value outside the union cannot reach it.
- */
-export type ConversationExportFormat = 'md' | 'json';
 
 /**
  * The two formats the export route serves, as the two menu entries that were
@@ -253,6 +251,18 @@ export function buildActiveMenuItems(params: MenuItemsParams): ControlsDropdownI
   const secondaryFillSx: SxProps<Theme> = { svg: { path: { fill: theme.vars.palette.secondary.main } } };
 
   const items: ControlsDropdownItem[] = [...buildDeleteEditItems(params, deleteEditDisabled, secondaryFillSx), ...buildMoveAndExportItems(params, isEditingActive)];
+
+  // Issue 940/A6. Available to any viewer of the row (not gated by
+  // `deleteEditDisabled`'s author-only check): duplicating creates a NEW
+  // conversation owned by the current user, so it never mutates the
+  // original the way Delete/Edit would.
+  items.push({
+    key: 'duplicate',
+    label: t('features.chatConversationList.conversationItem.menu.duplicate', 'Duplicate'),
+    icon: <ContentCopyOutlinedIcon fontSize="small" />,
+    disabled: isEditingActive,
+    onClick: params.onDuplicate,
+  });
 
   if (conversation.isPrivate && !isPublicOrPersonal) {
     items.push({

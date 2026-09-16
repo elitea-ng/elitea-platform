@@ -12,6 +12,7 @@ export {
   useBulkDeleteNotifications,
   useBulkMarkSeenNotifications,
   useDeleteNotification,
+  useNotificationsInfiniteList,
   useNotificationsList,
   useReadNotification,
 } from './api/useNotifications';

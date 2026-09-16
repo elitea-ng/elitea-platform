@@ -65,6 +65,7 @@ export interface EditApplicationVersionOption {
   readonly created_at?: string | undefined;
   readonly status?: string | undefined;
   readonly is_default?: boolean | undefined;
+  readonly author?: { readonly id?: string; readonly email?: string; readonly name?: string } | undefined;
 }
 
 /**
@@ -86,6 +87,17 @@ function readIsDefault(version: ApplicationVersionSummary): boolean {
   return (version as { readonly is_default?: unknown }).is_default === true;
 }
 
+/**
+ * `versions[].author`, read off the wire the same narrow-cast way
+ * `readIsDefault` above reads `is_default` — see that function's own doc
+ * comment, and `AgentPipelineVersionOption.author`'s, for why this rides on
+ * the response ahead of the generated schema.
+ */
+function readAuthor(version: ApplicationVersionSummary): EditApplicationVersionOption['author'] {
+  const author = (version as { readonly author?: { readonly id?: string; readonly email?: string; readonly name?: string } }).author;
+  return author === undefined ? undefined : author;
+}
+
 export function toVersionOptions(
   versions: readonly ApplicationVersionSummary[],
 ): EditApplicationVersionOption[] {
@@ -102,6 +114,7 @@ export function toVersionOptions(
     created_at: version.created_at,
     status: version.status,
     is_default: readIsDefault(version),
+    author: readAuthor(version),
   }));
 }
 

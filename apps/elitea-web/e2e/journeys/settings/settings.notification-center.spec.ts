@@ -23,14 +23,17 @@
  * which is the one thing a mock list cannot fake for itself.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * WHAT IS NOT PORTED HERE (see ledger + not-applicable.md)
+ * ELITEA-0747/ELITEA-0748 — NO LONGER NA (issue 940/A4)
  * ─────────────────────────────────────────────────────────────────────────────
- * ELITEA-0747/ELITEA-0748 (scroll-load state resets on popup close/reopen;
- * infinite-scroll groups) describe a popover this app does not have: the
- * real bell popover (`widgets/sidebar/ui/NotificationButton.tsx`) shows a
- * FIXED top-5 unread rows with no scroll handler at all, and the full list
- * lives on this settings page with ordinary page-based pagination
- * (`NotificationsTablePagination`), not infinite scroll. Recorded NA.
+ * This comment used to record ELITEA-0747/ELITEA-0748 as not-applicable: the
+ * bell popover showed a fixed top-5 with no scroll handler at all. That gap
+ * is closed — the popover now pages through the real API on scroll
+ * (`useNotificationsInfiniteList`, `widgets/sidebar/ui/
+ * NotificationPopoverContent.tsx`) — and the two cases are ported in
+ * `settings.notification-popover-scroll.spec.ts`, next to this file. This
+ * settings page's own page-based pagination (`NotificationsTablePagination`)
+ * is untouched by that addition, and this file's own tests above are
+ * unaffected.
  */
 import { expect, test, type Page } from '@playwright/test';
 

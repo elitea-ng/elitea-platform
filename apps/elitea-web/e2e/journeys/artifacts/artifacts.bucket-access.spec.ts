@@ -80,27 +80,32 @@ async function selectedProjectId(page: Page): Promise<string> {
 }
 
 /** Idempotent backend fixture: the bucket plus one object to read. */
-async function seedAclBucket(request: APIRequestContext, projectId: string): Promise<void> {
+async function seedAclBucket(request: APIRequestContext, projectId: string, bucket: string = ACL_BUCKET): Promise<void> {
   const created = await request.post(`/api/v2/artifacts/buckets/${projectId}`, {
-    data: { name: ACL_BUCKET },
+    data: { name: bucket },
   });
   expect([200, 201, 409]).toContain(created.status());
 
   const uploaded = await request.post(
-    `/api/v2/artifacts/objects/${projectId}/${ACL_BUCKET}?overwrite=true`,
+    `/api/v2/artifacts/objects/${projectId}/${bucket}?overwrite=true`,
     { multipart: { file: { name: ACL_FILE, mimeType: 'text/plain', buffer: Buffer.from(ACL_BODY) } } },
   );
   expect(uploaded.status(), await uploaded.text()).toBe(201);
 }
 
-/** The member persona's own database id, from the project member listing. */
-async function memberUserId(request: APIRequestContext, projectId: string): Promise<number> {
+/** Any project member's own database id, from the project member listing. */
+async function resolveUserId(request: APIRequestContext, projectId: string, email: string): Promise<number> {
   const response = await request.get(`/api/v2/admin/users/default/${projectId}?limit=100&offset=0`);
   expect(response.status(), await response.text()).toBe(200);
   const body = (await response.json()) as { rows: Array<{ id: string; email: string }> };
-  const member = body.rows.find((row) => row.email === MEMBER_EMAIL);
-  expect(member, `${MEMBER_EMAIL} must be a member of project ${projectId}`).toBeDefined();
-  return Number((member as { id: string }).id);
+  const user = body.rows.find((row) => row.email === email);
+  expect(user, `${email} must be a member of project ${projectId}`).toBeDefined();
+  return Number((user as { id: string }).id);
+}
+
+/** The member persona's own database id, from the project member listing. */
+async function memberUserId(request: APIRequestContext, projectId: string): Promise<number> {
+  return resolveUserId(request, projectId, MEMBER_EMAIL);
 }
 
 /** Remove every exception this spec could have left behind. */
@@ -228,5 +233,117 @@ test.describe('J20 artifacts bucket access lists', () => {
     await clearExceptions(request, projectId, userId);
     const restored = await request.get(`/api/v2/artifacts/objects/${projectId}/${ACL_BUCKET}`);
     expect(restored.status(), await restored.text()).toBe(200);
+  });
+
+  /**
+   * Issue 940/A10 (ELITEA-2480) — bulk edit. A bucket OF ITS OWN
+   * (`BULK_BUCKET`), same reason `ACL_BUCKET` is: a shared blast radius with
+   * J20h-j would make a mid-run failure here corrupt their exception state
+   * too.
+   */
+  test('J20k: bulk edit applies one permission to every selected exception, and Read/write removes them from the table', async ({ page, request }) => {
+    const BULK_BUCKET = 'autotest-j20k-bulk-art';
+    const ADMIN_EMAIL = 'e2e-admin@autotest.local';
+    const VIEWER_EMAIL = 'e2e-viewer@autotest.local';
+
+    await openArtifacts(page);
+    const projectId = await selectedProjectId(page);
+    await seedAclBucket(request, projectId, BULK_BUCKET);
+    const memberId = await resolveUserId(request, projectId, MEMBER_EMAIL);
+    const adminId = await resolveUserId(request, projectId, ADMIN_EMAIL);
+    const viewerId = await resolveUserId(request, projectId, VIEWER_EMAIL);
+
+    // Seed the case's own starting shape: 3 exceptions (User A/B read-only,
+    // User C no access).
+    await request.put(`/api/v2/artifacts/bucket_permissions/${projectId}`, {
+      data: { user_id: memberId, bucket_permissions: { [BULK_BUCKET]: ['read'] } },
+    });
+    await request.put(`/api/v2/artifacts/bucket_permissions/${projectId}`, {
+      data: { user_id: adminId, bucket_permissions: { [BULK_BUCKET]: ['read'] } },
+    });
+    await request.put(`/api/v2/artifacts/bucket_permissions/${projectId}`, {
+      data: { user_id: viewerId, bucket_permissions: { [BULK_BUCKET]: [] } },
+    });
+
+    try {
+      await reenterArtifacts(page);
+      await page.getByLabel(`Manage access to ${BULK_BUCKET}`).click();
+      const dialog = page.getByTestId('bucket-access-dialog');
+      await expect(dialog).toBeVisible();
+      await expect(dialog.getByText('Exceptions')).toContainText('3');
+
+      // Header checkbox selects, then deselects, every row.
+      const selectAll = page.getByLabel('Select all exceptions');
+      await selectAll.click();
+      await expect(page.getByTestId(`bucket-access-row-${memberId}`).getByRole('checkbox')).toBeChecked();
+      await expect(page.getByTestId(`bucket-access-row-${adminId}`).getByRole('checkbox')).toBeChecked();
+      await expect(page.getByTestId(`bucket-access-row-${viewerId}`).getByRole('checkbox')).toBeChecked();
+      await selectAll.click();
+      await expect(page.getByTestId(`bucket-access-row-${memberId}`).getByRole('checkbox')).not.toBeChecked();
+
+      // Select User A + User B (member + admin) only.
+      await page.getByTestId(`bucket-access-row-${memberId}`).getByRole('checkbox').click();
+      await page.getByTestId(`bucket-access-row-${adminId}`).getByRole('checkbox').click();
+
+      const bulkEditOpen = page.getByTestId('bucket-access-bulk-edit-open');
+      await expect(bulkEditOpen).toBeEnabled();
+      await bulkEditOpen.click();
+
+      const bulkDialog = page.getByTestId('bucket-access-bulk-edit-dialog');
+      await expect(bulkDialog).toBeVisible();
+      await expect(bulkDialog.getByText('2 users selected')).toBeVisible();
+
+      await page.getByLabel('Bulk edit permissions value').click();
+      await page.getByRole('option', { name: 'No access' }).click();
+      await page.getByTestId('bucket-access-bulk-edit-save').click();
+
+      // Bulk edit fires ONE `onSetAccess` write per selected row (two here,
+      // member + admin) — both in flight together, not one awaited request.
+      // Polled rather than raced against a single `waitForResponse`, which
+      // only ever catches whichever of the two lands first.
+      const readBucketPermissions = async () => {
+        const response = await request.get(`/api/v2/artifacts/bucket_permissions/${projectId}`);
+        expect(response.status()).toBe(200);
+        return (await response.json()) as { rows: Array<{ user_id: number; bucket_permissions: Record<string, string[]> }> };
+      };
+      const byId = (rows: Array<{ user_id: number; bucket_permissions: Record<string, string[]> }>, id: number) =>
+        rows.find((r) => r.user_id === id)?.bucket_permissions[BULK_BUCKET];
+
+      await expect
+        .poll(async () => byId((await readBucketPermissions()).rows, memberId), { timeout: 15_000 })
+        .toEqual([]);
+      await expect
+        .poll(async () => byId((await readBucketPermissions()).rows, adminId), { timeout: 15_000 })
+        .toEqual([]);
+      // C (never selected) is untouched — still "No access" from the seed.
+      expect(byId((await readBucketPermissions()).rows, viewerId)).toEqual([]);
+
+      // Select ALL, bulk edit to "Read & Write" (the default) — every
+      // selected row is REMOVED from the exceptions table.
+      await page.getByLabel('Select all exceptions').click();
+      await page.getByTestId('bucket-access-bulk-edit-open').click();
+      await expect(page.getByTestId('bucket-access-bulk-edit-dialog')).toBeVisible();
+      await page.getByLabel('Bulk edit permissions value').click();
+      await page.getByRole('option', { name: 'Read/write (default)' }).click();
+      await page.getByTestId('bucket-access-bulk-edit-save').click();
+
+      // Three rows selected this time — three `onSetAccess` writes in
+      // flight together; the empty state only appears once the LAST of
+      // them has settled and refetched, so it is itself the poll.
+      await expect(page.getByTestId('bucket-access-empty')).toBeVisible({ timeout: 15_000 });
+      await expect
+        .poll(
+          async () => {
+            const rows = (await readBucketPermissions()).rows;
+            return [memberId, adminId, viewerId].every((id) => byId(rows, id) === undefined);
+          },
+          { timeout: 15_000, message: 'every selected user must have no exception left on the server' },
+        )
+        .toBe(true);
+    } finally {
+      await clearExceptions(request, projectId, memberId);
+      await clearExceptions(request, projectId, adminId);
+      await clearExceptions(request, projectId, viewerId);
+    }
   });
 });

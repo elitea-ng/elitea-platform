@@ -446,3 +446,104 @@ describe('useConversationSidebar — playback', () => {
     await waitFor(() => expect((router as unknown as SearchState).state.location.search['playback']).not.toBe('1'));
   });
 });
+
+/**
+ * Issue 940/A6 — Chat "Duplicate" action. No dedicated Go clone route exists,
+ * so `onDuplicateConversation` composes the copy from the same 3 endpoints
+ * `entities/conversation`/`entities/participant` already wrap: GET details,
+ * POST create, and POST participants.
+ */
+describe('useConversationSidebar — conversation duplicate', () => {
+  it('creates a "(copy)"-named conversation carrying the source participants and public visibility, and navigates to it', async () => {
+    seedProjectSeven();
+    const createBodies: unknown[] = [];
+    const participantBodies: unknown[] = [];
+    let editCalls = 0;
+    server.use(
+      http.get('/api/v2/elitea_core/conversation/prompt_lib/7/c1', () =>
+        HttpResponse.json({
+          id: 'c1',
+          name: 'Old name',
+          is_private: false,
+          meta: { steps_limit: 5 },
+          participants: [
+            { id: 'p1', entity_name: 'application', entity_meta: { id: '42' }, entity_settings: { version_id: 'v1' } },
+            { id: 'p2', entity_name: 'user', entity_meta: { id: '9' } },
+          ],
+        }),
+      ),
+      http.post('/api/v2/elitea_core/conversations/prompt_lib/7', async ({ request }) => {
+        createBodies.push(await request.json());
+        return HttpResponse.json({ id: 'c2', name: 'Old name (copy)', is_private: true });
+      }),
+      http.put('/api/v2/elitea_core/conversation/prompt_lib/7/c2', () => {
+        editCalls += 1;
+        return HttpResponse.json({ id: 'c2', name: 'Old name (copy)', is_private: false });
+      }),
+      http.post('/api/v2/elitea_core/participants/prompt_lib/7/c2', async ({ request }) => {
+        participantBodies.push(await request.json());
+        return HttpResponse.json([]);
+      }),
+    );
+
+    const { Wrapper, router } = makeRoutedWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current).not.toBeNull());
+
+    act(() => result.current.conversationsProps.onDuplicateConversation({ ...conversation, isPrivate: false }));
+
+    await waitFor(() => expect(createBodies).toEqual([{ name: 'Old name (copy)', is_private: true, meta: { steps_limit: 5 } }]));
+    // Public visibility is a second PUT (the same route "Make public" uses) —
+    // the create route itself ignores `is_private` (Go's `Create` handler
+    // reads only `name`/`meta`/`author_id`).
+    await waitFor(() => expect(editCalls).toBe(1));
+    await waitFor(() =>
+      expect(participantBodies).toEqual([
+        [
+          { entity_name: 'application', entity_meta: { id: '42' }, entity_settings: { version_id: 'v1' } },
+          { entity_name: 'user', entity_meta: { id: '9' } },
+        ],
+      ]),
+    );
+    await waitFor(() => expect(result.current.conversationsProps.selectedConversationId).toBe('c2'));
+    expect(router.state.location.pathname).toBe('/chat/c2');
+  });
+
+  it('does not make the duplicate public for a private original (no participants to copy either)', async () => {
+    seedProjectSeven();
+    let editCalled = false;
+    server.use(
+      http.get('/api/v2/elitea_core/conversation/prompt_lib/7/c1', () =>
+        HttpResponse.json({ id: 'c1', name: 'Old', is_private: true, participants: [] }),
+      ),
+      http.post('/api/v2/elitea_core/conversations/prompt_lib/7', () => HttpResponse.json({ id: 'c3', name: 'Old (copy)', is_private: true })),
+      // If duplicating a private original ever called this, that would be the defect.
+      http.put('/api/v2/elitea_core/conversation/prompt_lib/7/c3', () => {
+        editCalled = true;
+        return HttpResponse.json({ id: 'c3', name: 'Old (copy)', is_private: false });
+      }),
+    );
+    const { Wrapper, router } = makeRoutedWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current).not.toBeNull());
+
+    act(() => result.current.conversationsProps.onDuplicateConversation(conversation));
+
+    await waitFor(() => expect(result.current.conversationsProps.selectedConversationId).toBe('c3'));
+    expect(router.state.location.pathname).toBe('/chat/c3');
+    expect(editCalled).toBe(false);
+  });
+
+  it('surfaces an error message and does not navigate when the source conversation cannot be read', async () => {
+    seedProjectSeven();
+    server.use(http.get('/api/v2/elitea_core/conversation/prompt_lib/7/c1', () => HttpResponse.json({ error: 'boom' }, { status: 500 })));
+    const { Wrapper, router } = makeRoutedWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current).not.toBeNull());
+
+    act(() => result.current.conversationsProps.onDuplicateConversation(conversation));
+
+    await waitFor(() => expect(result.current.errorMessage).toBe('Failed to duplicate the conversation'));
+    expect(router.state.location.pathname).toBe('/chat');
+  });
+});

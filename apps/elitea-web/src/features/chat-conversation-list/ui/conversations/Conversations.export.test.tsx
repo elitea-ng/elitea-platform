@@ -54,6 +54,7 @@ function renderConversations(overrides: Partial<ConversationsProps> = {}): Retur
     onPlaybackConversation: vi.fn(),
     onDeleteConversation: vi.fn(),
     onPinConversation: vi.fn(),
+    onDuplicateConversation: vi.fn(),
     onCreateConversation: vi.fn(),
     onCancelCreateConversation: vi.fn(),
     onChangeActiveConversationName: vi.fn(),
