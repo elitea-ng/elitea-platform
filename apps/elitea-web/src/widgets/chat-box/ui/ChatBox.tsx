@@ -41,6 +41,8 @@ import type { ChatBoxEditorCallbacks } from './ChatBox.helpers';
 import type { ChatBoxAgentEventSink, ChatBoxConversationProp } from './ChatBox.props';
 import { unwrapChatBoxConversation } from './ChatBox.props';
 import type { ChatBoxHandle } from './ChatBox.types';
+import { buildChatBoxContinuationProps } from './ChatBoxContinuation';
+import { useChatBoxLlmSettingsDialog } from './ChatBoxLlmSettingsDialog';
 import { buildChatBoxAttachmentProps, buildChatBoxInputSlots } from './ChatBoxInputSlots';
 import { buildChatBoxPopupsProps, ChatBoxPopups } from './ChatBoxPopups';
 import { ChatBoxDeleteModal } from './ChatBoxDeleteModal';
@@ -262,6 +264,8 @@ const ChatBoxInner = memo(function ChatBox({
     activeParticipantVersions,
   });
 
+  // A14 (ELITEA-0386): per-participant LLM-settings edit dialog
+  const llmSettingsDialog = useChatBoxLlmSettingsDialog({ projectId: projectIdString, conversationId, participant: participantForEditor });
   // "@" mention -> send-to-user/everyone routing, "~" skill selection
   const { handleMentionChange, handleSelectUserMention, handleSelectSkillTool } = useChatBoxMentions({ state, onChangeParticipant });
 
@@ -334,11 +338,7 @@ const ChatBoxInner = memo(function ChatBox({
             onRegenerateAnswer: handleRegenerate,
             onSubmitEditedMessage: handleSubmitEditedMessage,
           }}
-          continuation={{
-            onHitlResume: handleHitlResume,
-            onContinueMcpExecution: handleContinueMcpExecution,
-            onContinueTokenLimitExecution: handleContinueTokenLimit,
-          }}
+          continuation={buildChatBoxContinuationProps({ onHitlResume: handleHitlResume, onContinueMcpExecution: handleContinueMcpExecution, onContinueTokenLimitExecution: handleContinueTokenLimit }, projectIdString)}
           tts={buildTtsProps(readAloud)} canvas={buildCanvasProps(editorCallbacks)}
         />
         {state.shouldShowStarters && (
@@ -372,7 +372,7 @@ const ChatBoxInner = memo(function ChatBox({
             selectSavedOrDefaultModel: data.selectSavedOrDefaultModel,
             onShowParticipantsList: () => state.setShowRecommendationList(!state.showRecommendationList),
             onSelectVersion: (version) => { void handleSelectVersion(version); },
-            editorCallbacks,
+            editorCallbacks, onEditLlmSettings: llmSettingsDialog.onEdit,
           })}
           attachments={buildChatBoxAttachmentProps(data.attachments)}
           mentions={{ users: state.users, onMentionChange: handleMentionChange }}
@@ -382,14 +382,14 @@ const ChatBoxInner = memo(function ChatBox({
             internalTools: { disabled: isInputLoading, tools: internalToolsButtonTools, onToolChange: handleInternalToolChange },
             model: { llmSettings, onSetLLMSettings, selectedModel: selectedLlmModel, onSelectModel: handleSelectModel, models: modelsList },
             clearChat: { disabled: shouldDisableClearChat(isStreaming, messages.length), onClear: handleClear },
-            refs: { attachmentButtonRef, voiceButtonRef, voiceInputRef: chatInputRef },
+            refs: { attachmentButtonRef, voiceButtonRef, voiceInputRef: chatInputRef }, voice: readAloud.voicePlayerProps,
             isAgentsPage: !!isAgentsPage, participants: normalisedParticipants,
             entitySubmenus: { ...entitySubmenus, onSelectParticipant: entityParticipantActions.onSelectParticipant, getParticipantMenuState: entityParticipantActions.getParticipantMenuState }, ...buildCreateHandlerProps(editorCallbacks),
           })}
           refs={{ attachmentButtonRef, voiceButtonRef }}
         />
       </Box>
-      <ChatBoxDeleteModal alert={deleteAlert} />
+      <ChatBoxDeleteModal alert={deleteAlert} />{llmSettingsDialog.dialog}
     </Box>
   );
 });

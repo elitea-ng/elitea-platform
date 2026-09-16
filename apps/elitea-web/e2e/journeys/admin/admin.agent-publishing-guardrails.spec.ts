@@ -3,23 +3,31 @@
  * default OFF state / persistence across a reload.
  *
  * Ported by use case from the w1-admin-portal package's
- * `admin-portal/agent-publishing-guardrails` cases (ELITEA-0015, ELITEA-0017,
- * ELITEA-0019). What this file does NOT re-prove:
+ * `admin-portal/agent-publishing-guardrails` cases (ELITEA-0015, ELITEA-0016,
+ * ELITEA-0017, ELITEA-0019). What this file does NOT re-prove:
  *
- *  - ELITEA-0018 ("Reload required" indicator + toast wording) is NOT ported.
- *    This platform enforces the guardrail LIVE off the same write — there is
- *    no elitea_core plugin to reload and no "reload required" concept at all
- *    (`admin.features.spec.ts`'s J36c PUTs the flag and reads a 403 on the
- *    very next request, no reload step anywhere in between). The save toast
- *    this app actually shows is the generic `admin-features-saved` ("Feature
- *    settings saved."), already asserted by J36c/J36g rather than re-asserted
- *    here.
- *  - ELITEA-0016 (a multi-select DROPDOWN listing Team/Private projects, with
- *    Public excluded) is NOT ported — genuinely absent. The real control
- *    (`ConfigurationListEditor.tsx`) is a plain integer-id LIST editor: the
- *    operator types numeric project ids by hand, there is no project picker,
- *    no project names, and therefore no Team/Private/Public filtering to
- *    assert. Recorded NA with this evidence.
+ *  - ELITEA-0018 ("Reload required" indicator + toast wording) is NA, not
+ *    ported, and re-asserted here as the thing this platform does instead
+ *    (F5's own brief: "assert live enforcement instead and say so"). This
+ *    platform enforces the guardrail LIVE off the same write — there is no
+ *    elitea_core plugin to reload and no "reload required" concept at all.
+ *    `admin.features.spec.ts`'s J36c already PUTs the flag and reads a 403 on
+ *    the very next request, no reload step anywhere in between; this file's
+ *    own "ELITEA-0015 + ELITEA-0020" test below does the identical thing
+ *    (write, then immediately probe `POST /publish` with no intervening
+ *    reload/restart of anything) for the exception-list shape specifically.
+ *    The save toast this app actually shows is the generic
+ *    `admin-features-saved` ("Feature settings saved."), already asserted by
+ *    J36c/J36g rather than re-asserted here.
+ *  - ELITEA-0016 (a project-NAME picker with Team/Private/Public filtering,
+ *    replacing a raw integer-id list) is NOW REAL (F5) —
+ *    `ConfigurationListEditor.tsx`'s plain integer-id rows are replaced by
+ *    `ProjectListEditor.tsx` for exactly this field (and its skill-publishing
+ *    twin), a name-searchable multi-select `Autocomplete` with a "Show"
+ *    type filter (All/Team/Private/Public — Public computed client-side
+ *    against `VITE_PUBLIC_PROJECT_ID`, since the admin projects listing
+ *    itself only distinguishes team/personal). Still stores plain project
+ *    ids on the wire — ported below.
  *  - ELITEA-0020 (publish blocked, empty whitelist) is exactly
  *    `admin.features.spec.ts`'s J36c — recorded DUP, not repeated.
  *  - ELITEA-1694 through ELITEA-1698 (the PGVector Configuration dropdown on
@@ -151,6 +159,61 @@ adminTest(
 );
 
 /*
+ * ELITEA-0016: the exception list is a project-NAME picker (still storing
+ * plain ids on the wire), not a raw integer-id list — see this file's own
+ * header for the widget swap this proves.
+ */
+adminTest(
+  'ELITEA-0016: the exception list is searched and picked by project NAME, and still saves the plain id',
+  async ({ page, request }) => {
+    await withPlatformFlagLock(async () => {
+      try {
+        await restoreAgentPublishing(request);
+        await openFeatures(page);
+        await page.getByRole('switch', { name: 'Block Agent Publishing' }).click();
+
+        const editor = page.getByTestId('admin-config-list-publish_whitelist_project_ids');
+        await expect(editor).toBeVisible();
+
+        // No raw-integer text row anywhere — the reference's own defect this
+        // control replaces (a bare id list an operator has to look up
+        // elsewhere, with no name and no way to filter by project type).
+        await expect(editor.getByRole('textbox', { name: /Publishing Allowed Projects/ })).toHaveCount(0);
+
+        // 90500 ('e2e-publish-author') is a real, seeded, admin-visible team
+        // project this file's own ELITEA-0015 test already relies on — the
+        // one non-default project this admin persona holds publish
+        // permission on.
+        const combobox = editor.getByRole('combobox', { name: /Publishing Allowed Projects/ });
+        await combobox.fill('e2e-publish-author');
+        await page.getByRole('option', { name: 'e2e-publish-author' }).click();
+
+        await page.getByRole('button', { name: 'Save' }).click();
+        await expect(page.getByText('Feature settings saved.')).toBeVisible({ timeout: 10_000 });
+
+        // The NAME was picked; the wire still carries the plain project id —
+        // a NUMBER, per the schema (`items.type: integer`) — not a name and
+        // not a string.
+        const stored = await getAgentPublishing(request);
+        expect(stored['publish_whitelist_project_ids']).toEqual([90500]);
+
+        // The Team/Private/Public filter narrows the picker's OWN options,
+        // and does not disturb what is already selected.
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        await openFeatures(page);
+        await expect(editor.locator('.MuiChip-root')).toHaveCount(1);
+        await editor.getByRole('combobox', { name: 'Show' }).click();
+        await page.getByRole('option', { name: 'Public' }).click();
+        await combobox.click();
+        await expect(page.getByRole('option', { name: 'e2e-publish-author' })).toHaveCount(0);
+      } finally {
+        await restoreAgentPublishing(request);
+      }
+    });
+  },
+);
+
+/*
  * ELITEA-0015 + ELITEA-0020 (0020 is the same 403, DUP of J36c) — an
  * exception project publishes past the guardrail; a non-exception project is
  * refused, with the guardrail's own sentence.
@@ -228,22 +291,22 @@ adminTest(
 
         await openFeatures(page);
         await expect(page.getByRole('switch', { name: 'Block Agent Publishing' })).toBeChecked();
-        const rows = page.getByTestId('admin-config-list-publish_whitelist_project_ids').getByRole('textbox');
-        await expect(rows).toHaveCount(2);
-        await expect(rows.nth(0)).toHaveValue('1');
-        await expect(rows.nth(1)).toHaveValue('4');
+        // F5/ELITEA-0016: the row editor is gone — `ProjectListEditor`'s
+        // Autocomplete renders one chip per stored id (its real name when the
+        // admin projects listing resolves it, else `Project {id}` — either
+        // way, one chip per stored id, which is what persistence is about
+        // here). The API-level assertion below (`getAgentPublishing`) is what
+        // actually pins the ids; this just proves the UI reflects them.
+        const editor = page.getByTestId('admin-config-list-publish_whitelist_project_ids');
+        await expect(editor.locator('.MuiChip-root')).toHaveCount(2);
+        expect((await getAgentPublishing(request))['publish_whitelist_project_ids']).toEqual([1, 4]);
 
         // The refresh a browser session or logout/login round trip both
         // amount to: a fresh load of the same server-stored section.
         await page.reload({ waitUntil: 'domcontentloaded' });
         await openFeatures(page);
         await expect(page.getByRole('switch', { name: 'Block Agent Publishing' })).toBeChecked();
-        const rowsAfterReload = page
-          .getByTestId('admin-config-list-publish_whitelist_project_ids')
-          .getByRole('textbox');
-        await expect(rowsAfterReload).toHaveCount(2);
-        await expect(rowsAfterReload.nth(0)).toHaveValue('1');
-        await expect(rowsAfterReload.nth(1)).toHaveValue('4');
+        await expect(editor.locator('.MuiChip-root')).toHaveCount(2);
       } finally {
         await restoreAgentPublishing(request);
       }

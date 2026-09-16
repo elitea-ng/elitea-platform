@@ -389,7 +389,7 @@
       "source": "generated",
       "responseSchema": "DocumentLoadersResponse",
       "fixture": null,
-      "usedBy": []
+      "usedBy": ["entities/attachment"]
     },
     {
       "id": "applications.getPipelineTrigger",
@@ -1581,6 +1581,19 @@
       "id": "toolkits.updateIndexSchedule",
       "method": "PATCH",
       "path": "/elitea_core/index_meta/prompt_lib/{projectId}/{toolkitId}/{indexName}",
+      "operationId": null,
+      "source": "handwritten",
+      "responseSchema": "unknown",
+      "fixture": null,
+      "usedBy": [
+        "features/toolkits"
+      ]
+    },
+    {
+      "$comment": "The SAVE half of the Indexes tab's Save / Save & Reindex split (ELITEA-2880). Persists one index's configuration WITHOUT starting a run — until it existed the only writer of `index_configuration` was the indexing run itself, so a configuration change could be persisted only by re-indexing, and a scheduled reindex kept using the last RUN's configuration. Go: internal/api/v2/indexing/index_meta_configuration.go, permission models.applications.index_meta.edit.",
+      "id": "toolkits.saveIndexConfiguration",
+      "method": "PUT",
+      "path": "/elitea_core/index_meta/prompt_lib/{projectId}/{toolkitId}/{indexName}/configuration",
       "operationId": null,
       "source": "handwritten",
       "responseSchema": "unknown",

@@ -101,3 +101,8 @@ export function switchEntityTooltip(isPipeline: boolean): string {
     ? t('chatInput.agentEditorPanel.switchPipeline', 'Switch Pipeline')
     : t('chatInput.agentEditorPanel.switchAgent', 'Switch Agent');
 }
+
+/** A14 (ELITEA-0386): whether the "Edit LLM settings" button renders — split out to keep `AgentEditorPanel`'s own cyclomatic complexity under the §3.5 budget (12). */
+export function showEditLlmSettingsButton(onEditLlmSettings: (() => void) | undefined, canEdit: boolean): boolean {
+  return !!onEditLlmSettings && canEdit;
+}

@@ -128,6 +128,7 @@ export function ChatMessageList({
     onHitlResume,
     hideContinueButton = false,
     hideHitlActions = false,
+    renderAuthModal,
   } = {},
   pagination: { isLoadingMore = false, onScrollToTop } = {},
   emptyState,
@@ -310,6 +311,7 @@ export function ChatMessageList({
                     hideContinueButton,
                     onContinueMcpExecution: isLastMessage ? onContinueMcpExecution : undefined,
                     onContinueTokenLimitExecution: isLastMessage ? onContinueTokenLimitExecution : undefined,
+                    renderAuthModal,
                   }}
                   hitl={{
                     hitlInterrupt: hideHitlActions ? undefined : message.hitlInterrupt,

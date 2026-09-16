@@ -66,6 +66,11 @@ type Handler struct {
 	// Nil unless WithEvalRunCancel is applied; an eval row's cancel then
 	// answers 503 while every other kind still stops.
 	evalRunCancel EvalRunCanceller
+	// The personal-access-token expiry producer behind the Tasks page's
+	// run-now route (pat_expiry_notices.go). Nil unless
+	// WithPATExpiryNotifier is applied, and the route answers 503 while it is
+	// — never 200 with zero produced, which would read as "nobody was due".
+	patExpiryNotifier PATExpiryNotifier
 }
 
 // Option configures a Handler at construction time.

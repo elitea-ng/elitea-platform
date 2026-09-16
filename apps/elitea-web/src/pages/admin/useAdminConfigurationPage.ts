@@ -251,7 +251,11 @@ export function useAdminConfigurationPage(): AdminConfigurationPageState {
   return useAdminConfigSectionsPage(undefined);
 }
 
-/** Admin › Features: the six sections the reference relocates there. */
+/**
+ * Admin › Features: five sections (was six — `resources`/"Help Center"
+ * moved back to Configuration, A2/ELITEA-0032, `config_schemas.go`'s
+ * `resourcesSection` own doc comment has the full history).
+ */
 export function useAdminFeaturesPage(): AdminConfigurationPageState {
   return useAdminConfigSectionsPage(ADMIN_CONFIG_PAGE_FEATURES);
 }

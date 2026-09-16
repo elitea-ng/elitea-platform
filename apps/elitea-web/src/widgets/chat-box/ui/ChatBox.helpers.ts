@@ -278,9 +278,9 @@ export function buildAgentEditorProps(params: {
   readonly onShowParticipantsList: NewChatInputAgentEditorProps['onShowParticipantsList'];
   readonly onSelectVersion: NewChatInputAgentEditorProps['onSelectVersion'];
   readonly editorCallbacks: ChatBoxEditorCallbacks | undefined;
+  /** A14 (ELITEA-0386): `ChatBoxLlmSettingsDialog.tsx`'s `onEdit` slot. */ readonly onEditLlmSettings?: NewChatInputAgentEditorProps['onEditLlmSettings'];
 }): NewChatInputAgentEditorProps {
-  const versionId = params.participantForEditor?.entitySettings?.versionId;
-  const editorCallbacks = resolveEditorCallbacks(params.editorCallbacks);
+  const versionId = params.participantForEditor?.entitySettings?.versionId; const editorCallbacks = resolveEditorCallbacks(params.editorCallbacks);
   return {
     activeParticipant: params.participantForEditor,
     activeParticipantDetails: params.activeParticipantDetails,
@@ -291,7 +291,7 @@ export function buildAgentEditorProps(params: {
     selectedVersionId: versionId !== undefined ? String(versionId) : undefined,
     onSelectVersion: params.onSelectVersion,
     variables: [],
-    onChangeVariables: () => {},
+    onChangeVariables: () => {}, onEditLlmSettings: params.onEditLlmSettings,
     ...editorCallbacks,
   };
 }

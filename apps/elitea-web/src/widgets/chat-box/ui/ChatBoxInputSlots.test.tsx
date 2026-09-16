@@ -22,12 +22,27 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
-import { AttachmentButton, ChatInternalToolsConfigButton, PlusChatButton } from '@/widgets/chat';
+import { AttachmentButton, ChatInternalToolsConfigButton, PlusChatButton, VoiceButton } from '@/widgets/chat';
+import { VoiceControlButton } from '@/features/chat-input';
 import { LLMModelSelector } from '@/widgets/llm-model-selector';
 
 import { buildChatBoxInputSlots } from './ChatBoxInputSlots';
 
 type ToolRow = { key: string; label: string; enabled: boolean };
+
+/** Minimal `VoicePlayerProps` stand-in — same shape `VoiceControlButton.test.tsx`'s own `baseProps()` uses. */
+function baseVoiceProps() {
+  return {
+    isPlaying: false,
+    onPlay: vi.fn(),
+    onStop: vi.fn(),
+    voiceConfig: { voiceName: null, voiceId: null, rate: 1, volume: 1 },
+    voices: [],
+    onVoiceConfigChange: vi.fn(),
+    ttsModel: null,
+    hasModelTTS: false,
+  };
+}
 
 function buildSlots(
   isAgentsPage: boolean,
@@ -41,6 +56,7 @@ function buildSlots(
     model: { llmSettings: undefined, onSetLLMSettings: undefined, selectedModel: undefined, onSelectModel: undefined, models: [] },
     clearChat,
     refs: { attachmentButtonRef: { current: null }, voiceButtonRef: { current: null }, voiceInputRef: { current: null } },
+    voice: baseVoiceProps(),
     isAgentsPage,
     entitySubmenus: undefined,
     participants: undefined,
@@ -78,6 +94,19 @@ describe("buildChatBoxInputSlots — the composer's left-hand control", () => {
     expect(typeOf(selector)).toBe(LLMModelSelector);
     expect((selector.props as { showStepsLimit?: boolean }).showStepsLimit).toBe(true);
   });
+
+  it('mounts the TTS gear/settings control (VoiceControlButton) beside the ASR mic control in the voiceButton slot (A9)', () => {
+    // `VoiceControlButton` — the gear icon that opens `VoiceConfigDialog` —
+    // had no render site anywhere in `src/` (ELITEA-1312/1313/1315). This
+    // asserts the composition root now mounts it, not just that the
+    // component itself works (its own test file already covers that).
+    const slots = buildSlots(false);
+    const voiceButton = slots.voiceButton as ReactElement;
+    const children = (voiceButton.props as { children: ReactElement[] }).children;
+
+    expect(typeOf(children[0])).toBe(VoiceButton);
+    expect(typeOf(children[1])).toBe(VoiceControlButton);
+  });
 });
 
 describe('buildChatBoxInputSlots — drop/paste attachment handle', () => {
@@ -95,6 +124,7 @@ describe('buildChatBoxInputSlots — drop/paste attachment handle', () => {
       model: { llmSettings: undefined, onSetLLMSettings: undefined, selectedModel: undefined, onSelectModel: undefined, models: [] },
       clearChat: { disabled: false, onClear: vi.fn() },
       refs: { attachmentButtonRef, voiceButtonRef: { current: null }, voiceInputRef: { current: null } },
+      voice: baseVoiceProps(),
       isAgentsPage: false,
       entitySubmenus: undefined,
       participants: undefined,

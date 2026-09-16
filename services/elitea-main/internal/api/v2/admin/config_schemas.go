@@ -1170,15 +1170,22 @@ func resourcesSection() map[string]any {
 	result = append(result, fields[4:]...)
 
 	return map[string]any{
-		"id":   "resources",
-		"page": configPageFeatures,
-		// #217 rendered this section on the Configuration page and said in its
-		// own report that it belonged here — it put it there because that is
-		// where the server's schema had it, and leaving it out would have kept
-		// #26 (every Help Center card reading "No links configured") open for
-		// another unit. The reference is unambiguous: `ConfigurationPage.jsx`
-		// subtracts `resources` via `MOVED_TO_FEATURES` and `FeaturesPage.jsx`
-		// renders it as "Help Center". It moves now.
+		"id": "resources",
+		// A2 (ELITEA-0032, onetest "Resources Section Appears in Admin
+		// Configuration Before Banner"): back on Configuration — NO `page` key,
+		// which `configSections()`'s own doc comment states is what puts a
+		// section there ("A section with no `page` belongs to Configuration").
+		//
+		// #217 originally had it here too ("it belonged here — it put it there
+		// because that is where the server's schema had it"), then a later unit
+		// moved it to Features, citing the reference's `FeaturesPage.jsx`/
+		// `ConfigurationPage.jsx` client-side routing as "unambiguous". The
+		// onetest suite — a direct behavioural record of the reference product,
+		// not a reading of its client source — puts Help Center on Configuration
+		// instead, ordered before Banner (`dedicatedBannerSection`'s `order: 89`
+		// below; `order: 13` here already satisfies "before" once both sections
+		// share a page again). Deferring to that evidence over the source-code
+		// inference it disagrees with.
 		//
 		// Nothing about the Help Center's own read changes: it calls
 		// `GET /admin/plugin_config_values/prompt_lib/resources`, which is a

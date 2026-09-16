@@ -176,48 +176,67 @@ export function useUpdateParticipantSettingsMutation(): UseMutationResult<
 export interface UpdateParticipantLlmSettingsParams {
   readonly projectId: string | number;
   readonly conversationId: string;
+  /** The participant whose `entity_settings` this call replaces. */
+  readonly participantId: string;
+  /**
+   * The participant's CURRENT `entity_settings` (wire shape, e.g.
+   * `version_id`/`variables`/`icon_meta`), spread first. Required because
+   * `ConversationsRepo.UpdateEntitySettings` — the repo method BOTH this
+   * batch route and the single-participant PUT ultimately call — is a full
+   * REPLACE (`UPDATE ... SET entity_settings = $1`
+   * `internal/infra/db/repos/conversations.go:895`), not a merge. Sending
+   * only `{llm_settings}` would silently wipe every other field the batch
+   * request omits. Same rule `features/agents/model/
+   * useApplicationChatSwitchVersion.ts`'s own doc comment already states for
+   * the single-participant PUT this shares a repo method with.
+   */
+  readonly currentEntitySettings?: Readonly<Record<string, unknown>> | undefined;
   readonly llm_settings: Readonly<Record<string, unknown>>;
 }
 
 /**
- * **REAL, DISCLOSED BACKEND/CLIENT CONTRACT MISMATCH — not silently fixed.**
- * `chat.api.js:171-184`'s `updateParticipantLlmSettings` PATCHes this exact
- * URL with body `{llm_settings}` (a single JSON OBJECT). The Go route this
- * URL now resolves to is `BatchUpdateEntitySettings`
- * (`internal/api/router.go:428`, `internal/api/v2/conversations/
- * handler.go:663-676`), which decodes the body as `var body []map[string]
- * any` — a JSON ARRAY of PER-PARTICIPANT settings maps, each keyed by a
- * `participant_id` field the handler pulls out and deletes before applying
- * the rest as that one participant's `entity_settings`
- * (`internal/infra/db/repos/conversations.go:288-296`,
- * `internal/api/v2/conversations/handler_test.go:735-749` confirms the real
- * body shape: `[{"id": "p1", "key": "val"}]`-style array). Sending an
- * object where the decoder expects an array fails JSON unmarshalling and
- * the handler responds `400 {"error": "invalid request body"}}` — this
- * call, ported byte-for-byte from the old app's wire contract, WILL 400
- * against the real Go backend as it stands today. This is a genuine,
- * previously-undiagnosed backend/frontend contract drift (the old pylon
- * backend evidently accepted the single-object "patch llm_settings for
- * every participant in this conversation" semantic the RTK mutation's name
- * and shape imply; the new Go handler instead implements a batch
- * per-participant update keyed by `participant_id`, a materially different
- * operation). Not "fixed" here by reshaping the body to the array form,
- * because the correct per-participant semantics this call site actually
- * needs (which participant(s), and whether an all-participants intent maps
- * to "every current participant's id" or something else) are a chat-feature
- * design decision this entity-layer port has no mandate to invent — a
- * future C2-C6 caller (or a backend fix restoring the old PATCH-object
- * semantics) must resolve this before this endpoint is wired to real UI.
+ * **FIXED — client body shape now matches the handler it actually hits
+ * (A14, ELITEA-0386).** `chat.api.js:171-184`'s `updateParticipantLlmSettings`
+ * PATCHed this URL with body `{llm_settings}` (a single JSON OBJECT). The Go
+ * route this URL resolves to is `BatchUpdateEntitySettings`
+ * (`internal/api/router.go:3015`, `internal/api/v2/conversations/
+ * handler.go:1295-1308`), which decodes the body as `var body []map[string]
+ * any` — a JSON ARRAY of per-participant settings maps. Sending an object
+ * where the decoder expects an array failed JSON unmarshalling — 400
+ * `{"error": "invalid request body"}` — for EVERY call. This was never wired
+ * to any UI (zero callers anywhere in `src/`), so the defect was latent.
+ * Fixed by sending the one-element batch array the handler actually
+ * decodes, keyed by `participant_id` (not `id` — the repo reads
+ * `participant_id` specifically, `conversations.go:904`; `handler_test.go`'s
+ * own fixture body uses `id`, but its mock repo ignores the argument
+ * entirely, so that test does not discriminate between the two keys — the
+ * repo source is the ground truth here, not the test fixture).
+ *
+ * **DISCLOSED — this route does NOT run the non-published-agent
+ * llm_settings-override guard.** That guard (`apierr.BadRequest("LLM
+ * settings override is only allowed for published agents from agent
+ * studio")`) lives ONLY in the HTTP handler function `(h *Handler)
+ * UpdateEntitySettings` (`handler.go:1207-1240`, the single-participant PUT).
+ * `BatchUpdateEntitySettings`'s repo half
+ * (`ConversationsRepo.BatchUpdateEntitySettings`,
+ * `internal/infra/db/repos/conversations.go:902-911`) calls the REPO
+ * method of the same name directly — a plain jsonb replace with no
+ * validation — never the HTTP handler, so this route cannot itself produce
+ * ELITEA-0386's "spurious error": a caller through THIS endpoint always
+ * succeeds. Real per-participant validation the batch route may need is a
+ * backend decision (`do not change the Go contract` — this unit's brief),
+ * not something to invent client-side.
  */
 export async function updateParticipantLlmSettings(
   params: UpdateParticipantLlmSettingsParams,
 ): Promise<{ readonly ok: boolean }> {
-  const { projectId, conversationId, llm_settings } = params;
+  const { projectId, conversationId, participantId, currentEntitySettings, llm_settings } = params;
+  const entitySettings = { ...currentEntitySettings, llm_settings };
   return fetchData<{ readonly ok: boolean }>(
     `/elitea_core/entity_settings/prompt_lib/${String(projectId)}/${conversationId}`,
     {
       method: 'PATCH',
-      body: JSON.stringify({ llm_settings }),
+      body: JSON.stringify([{ participant_id: participantId, ...entitySettings }]),
       headers: { 'Content-Type': 'application/json' },
     },
   );

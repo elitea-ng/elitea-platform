@@ -78,7 +78,16 @@ export function useReadAloud(params: UseReadAloudParams): UseReadAloudResult {
   const ttsModel = useMemo(() => pickDefaultModel(ttsModelsData?.items), [ttsModelsData]);
   const hasModelTTS = !!(ttsModel && socket);
 
-  const { config: voiceConfig, setConfig: setVoiceConfig, browserVoices, resolvedBrowserVoice } = useVoiceConfig({ persist: false });
+  // `persist: true` (A9, ELITEA-1312/1313/1315): `voicePlayerProps.
+  // onVoiceConfigChange` is the ONLY way a caller can change this hook's
+  // `voiceConfig` — it is exposed for exactly one purpose, spreading onto
+  // `VoiceControlButton`'s gear-icon `VoiceConfigDialog` (Apply/Cancel).
+  // That dialog stages edits in its own local state and only calls this
+  // setter on Apply, so an explicit Apply is the only trigger that reaches
+  // storage — same `chat-input.voice-config` key `VoicePersonalizationSection`
+  // (Settings > Personalization) reads/writes, so a change from either
+  // surface is visible on the other.
+  const { config: voiceConfig, setConfig: setVoiceConfig, browserVoices, resolvedBrowserVoice } = useVoiceConfig({ persist: true });
   const ttsVoicesQuery = useTtsVoices(
     { projectId: ttsModel?.project_id ?? projectId, modelName: ttsModel?.name },
     { enabled: !!ttsModel },

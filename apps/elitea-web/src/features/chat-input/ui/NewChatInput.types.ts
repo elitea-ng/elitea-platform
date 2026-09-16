@@ -156,6 +156,8 @@ interface NewChatInputAgentEditorProps {
   readonly onShowPipelineEditor?: ((participant: Participant) => void) | undefined;
   readonly onCloseAgentEditor?: (() => void) | undefined;
   readonly onClosePipelineEditor?: (() => void) | undefined;
+  /** A14 (ELITEA-0386): see `AgentEditorPanelProps.onEditLlmSettings`'s own doc comment. */
+  readonly onEditLlmSettings?: (() => void) | undefined;
 }
 
 export interface NewChatInputAttachmentsProps {

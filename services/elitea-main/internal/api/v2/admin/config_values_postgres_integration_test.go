@@ -770,16 +770,17 @@ func TestEverySectionDeclaresWhichPageItBelongsTo(t *testing.T) {
 		}
 	}
 
-	// The reference's own six, in the reference's own order.
+	// The reference's five (was six — `resources` moved back to Configuration,
+	// see below), in the reference's own order.
 	for _, id := range []string{
 		"mcp_configuration", "agent_publishing", "skill_publishing",
-		"resources", "support_assistant", "voice_features",
+		"support_assistant", "voice_features",
 	} {
 		if !features[id] {
 			t.Errorf("section %q is not on the Features page", id)
 		}
 	}
-	// `analytics` is the reference's six PLUS one: it did not exist as a
+	// `analytics` is the reference's five PLUS one: it did not exist as a
 	// Features section in the reference at all, and arrives here as a field
 	// ported off the withheld Configuration `observability` section (see
 	// config_schemas.go's "Observability, Runtime and Admin Panel are GONE
@@ -787,15 +788,61 @@ func TestEverySectionDeclaresWhichPageItBelongsTo(t *testing.T) {
 	if !features["analytics"] {
 		t.Error("analytics is not on the Features page")
 	}
-	if len(features) != 7 {
-		t.Errorf("Features page has %d sections, want the reference's 6 plus analytics (7)", len(features))
+	if len(features) != 6 {
+		t.Errorf("Features page has %d sections, want the reference's 5 plus analytics (6)", len(features))
 	}
-	// `resources` moving is the entanglement #217 recorded and deferred: it put
-	// the section on Configuration because that is where the server's schema had
-	// it, and said it should move when Features landed. This is that move, and
-	// this assertion is what stops it drifting back.
-	if !features["resources"] {
-		t.Error("resources must be on the Features page, not Configuration")
+	// A2 (ELITEA-0032, onetest "Resources Section Appears in Admin
+	// Configuration Before Banner"): `resources` is back on Configuration.
+	// #217 originally put it there ("that is where the server's schema had
+	// it"); a later unit moved it to Features, reasoning from the reference's
+	// CLIENT-SIDE routing (`FeaturesPage.jsx`/`ConfigurationPage.jsx`); the
+	// onetest suite — a behavioural record of the reference, not an inference
+	// from its source — puts it on Configuration instead, before Banner. This
+	// assertion is what stops it drifting back to Features.
+	if features["resources"] {
+		t.Error("resources must be on the Configuration page, not Features")
+	}
+}
+
+// TestResourcesOrdersBeforeBannerOnConfiguration — A2 (ELITEA-0032)'s literal
+// assertion: "Resources Section Appears in Admin Configuration Before Banner".
+// Page placement alone (the test above) is not the same claim; an operator
+// reads the Configuration sidebar top to bottom, so this pins the ORDER too.
+func TestResourcesOrdersBeforeBannerOnConfiguration(t *testing.T) {
+	_, router := newConfigEnvironment(t)
+	recorder := configDo(t, router, http.MethodGet, "/admin/plugin_config_schemas/administration", nil)
+	var schema struct {
+		Sections []struct {
+			ID    string `json:"id"`
+			Page  string `json:"page"`
+			Order int    `json:"order"`
+		} `json:"sections"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &schema); err != nil {
+		t.Fatalf("decode schema: %v", err)
+	}
+
+	var resourcesOrder, bannerOrder int
+	var haveResources, haveBanner bool
+	for _, section := range schema.Sections {
+		switch section.ID {
+		case "resources":
+			if section.Page != "" {
+				t.Fatalf("resources section.Page = %q, want Configuration (empty)", section.Page)
+			}
+			resourcesOrder, haveResources = section.Order, true
+		case "dedicated_banner":
+			if section.Page != "" {
+				t.Fatalf("dedicated_banner section.Page = %q, want Configuration (empty)", section.Page)
+			}
+			bannerOrder, haveBanner = section.Order, true
+		}
+	}
+	if !haveResources || !haveBanner {
+		t.Fatalf("expected both resources (found=%v) and dedicated_banner (found=%v) in the schema", haveResources, haveBanner)
+	}
+	if resourcesOrder >= bannerOrder {
+		t.Errorf("resources.order = %d, dedicated_banner.order = %d — resources must sort before Banner", resourcesOrder, bannerOrder)
 	}
 }
 

@@ -192,6 +192,7 @@ export const NewChatInput = forwardRef(function NewChatInput(
                 onRefresh: agentEditor.onRefreshParticipantDetails,
               },
               variablesEditor: { variables: agentEditor.variables, onChange: agentEditor.onChangeVariables },
+              onEditLlmSettings: agentEditor.onEditLlmSettings,
               editorNav: {
                 onShowAgentEditor: agentEditor.onShowAgentEditor,
                 onShowPipelineEditor: agentEditor.onShowPipelineEditor,

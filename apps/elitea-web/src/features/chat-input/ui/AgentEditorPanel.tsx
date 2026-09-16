@@ -29,6 +29,7 @@ import {
 } from './AgentEditorPanel.derive';
 import type { AgentEditorPanelProps } from './AgentEditorPanel.types';
 import { AgentEditorPanelSkeleton } from './AgentEditorPanelSkeleton';
+import { EditLlmSettingsButton } from './EditLlmSettingsButton';
 import { EntitySwitchButton } from './EntitySwitchButton';
 import { SettingsButton } from './SettingsButton';
 import { SwitchToModelButton } from './SwitchToModelButton';
@@ -124,6 +125,7 @@ export function AgentEditorPanel(props: AgentEditorPanelProps): ReactNode {
     version,
     variablesEditor,
     editorNav,
+    onEditLlmSettings,
   } = props;
 
   const { checkPermission } = useCheckPermission();
@@ -224,6 +226,18 @@ export function AgentEditorPanel(props: AgentEditorPanelProps): ReactNode {
           isBeingEdited={isBeingEdited}
           canEdit={canEdit}
           styles={styles}
+        />
+
+        {/*
+         * A14 (ELITEA-0386): per-participant LLM settings, independent of
+         * the full agent/pipeline editor `SettingsButton` opens above (that
+         * button's own gate — `settingsDisabled` — is about the CANVAS
+         * editor, not this).
+         */}
+        <EditLlmSettingsButton
+          onEditLlmSettings={onEditLlmSettings}
+          canEdit={canEdit}
+          disabled={Boolean(disabled)}
         />
       </ButtonGroup>
 

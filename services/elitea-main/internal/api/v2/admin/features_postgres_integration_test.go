@@ -370,17 +370,20 @@ func TestTheUnavailableFieldIsStillDECLARED(t *testing.T) {
  * When one is withheld again, this test comes back with it.
  */
 
-/* ── the move ──────────────────────────────────────────────────────────── */
+/* ── the move(s) ──────────────────────────────────────────────────────────── */
 
-// TestResourcesStillServesTheHelpCenterAfterMovingToFeatures.
+// TestResourcesStillServesTheHelpCenterAcrossPageMoves.
 //
-// This is the assertion that makes the move safe. #217 built `resources` on the
-// Configuration page and wired `/help-center` to it; moving the section to
-// Features must not touch that read, because the Help Center calls a SEPARATE
-// route (`prompt_lib`) that has no notion of which admin page authored the row.
+// This is the assertion that makes EITHER move safe. #217 built `resources` on
+// the Configuration page and wired `/help-center` to it; a later unit moved the
+// section to Features citing the reference's own client routing; A2 (ELITEA-0032)
+// moved it back to Configuration on the onetest suite's evidence instead (see
+// `config_schemas.go`'s `resourcesSection` for the full history). None of those
+// moves may touch the Help Center's own read, because it calls a SEPARATE route
+// (`prompt_lib`) that has no notion of which admin page authored the row.
 // Proved by writing through the admin PUT and reading back through the public
 // route, rather than by inspecting that the code was not edited.
-func TestResourcesStillServesTheHelpCenterAfterMovingToFeatures(t *testing.T) {
+func TestResourcesStillServesTheHelpCenterAcrossPageMoves(t *testing.T) {
 	_, router := newConfigEnvironment(t)
 
 	recorder := saveSection(t, router, "resources", map[string]any{
