@@ -39,29 +39,22 @@ import { useState } from 'react';
 
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import Stack from '@mui/material/Stack';
-import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 
 import type { HitlQuestion } from '../../lib/hitlInterrupts';
-
-/** One question's answer: a list for multi-select, one entry otherwise. */
-type SelectionMap = Readonly<Record<string, readonly string[]>>;
-type TextMap = Readonly<Record<string, string>>;
-
-/**
- * What a pause that carries NO questions is answered with.
- *
- * A pause can reach the browser with its `questions` dropped (an older stored
- * row, a path that never carried them). The user still owes the run an answer,
- * so one free-text row is offered and the submitted value is then a bare JSON
- * STRING rather than a per-question object — the shape
- * `AskUserRequest::format_answer` reads as "User answered: <text>" and the
- * continuation route admits alongside the object one.
- */
-const FALLBACK_QUESTIONS: readonly HitlQuestion[] = [{ id: 'q1', allow_other: true, options: [] }];
+import {
+  buildAnswerValue,
+  FALLBACK_QUESTIONS,
+  isAnswered,
+  isMultiSelect,
+  isOptional,
+  questionId,
+  type SelectionMap,
+  type TextMap,
+} from './answerQuestionsHelpers';
+import { QuestionRow } from './QuestionRow';
 
 /** @public Props for `AnswerQuestionsControl`. */
 export interface AnswerQuestionsControlProps {
@@ -71,172 +64,6 @@ export interface AnswerQuestionsControlProps {
   readonly disabled?: boolean;
   /** Called with the JSON-encoded `{id: answer}` object. */
   readonly onSubmit: (value: string) => void;
-}
-
-/**
- * The id one question's answer is keyed by.
- *
- * `q{n}` mirrors the runtime's own default (`AskUserQuestion::normalize`), so
- * a question that reached the browser without an id is still answerable rather
- * than silently dropped from the submitted object.
- */
-function questionId(question: HitlQuestion, index: number): string {
-  return question.id && question.id.trim() ? question.id : `q${index + 1}`;
-}
-
-/** serde renames `multi_select` to `multiSelect`; the raw tool arguments use either. */
-function isMultiSelect(question: HitlQuestion): boolean {
-  return question.multiSelect === true || question.multi_select === true;
-}
-
-/**
- * Whether this question may be left unanswered (ELITEA-2792).
- *
- * Absent reads as REQUIRED. The runtime defaults the flag to `false` for the
- * same reason (`AskUserQuestion::normalize`): a stored pause from before the
- * field existed carries no key, and treating that as optional would relax
- * every old clarification at once.
- */
-function isOptional(question: HitlQuestion): boolean {
-  return question.optional === true;
-}
-
-/** Whether the question at `index` has an answer on screen right now. */
-function isAnswered(
-  question: HitlQuestion,
-  index: number,
-  selected: SelectionMap,
-  typed: TextMap,
-): boolean {
-  const id = questionId(question, index);
-  return (selected[id] ?? []).length > 0 || (typed[id] ?? '').trim() !== '';
-}
-
-/** The label text of one option, or `''` for an option that carries none. */
-function optionLabel(option: { readonly label?: string } | undefined): string {
-  return typeof option?.label === 'string' ? option.label : '';
-}
-
-/**
- * The answer object, built from what is on screen.
- *
- * A question with nothing chosen and nothing typed is OMITTED rather than sent
- * as an empty string: the runtime renders every answered question into the
- * substituted tool result, and an empty one would read to the model as an
- * answer the user did not give.
- */
-function buildAnswerValue(
-  questions: readonly HitlQuestion[],
-  selected: SelectionMap,
-  typed: TextMap,
-): Record<string, string | readonly string[]> {
-  const answers: Record<string, string | readonly string[]> = {};
-  questions.forEach((question, index) => {
-    const id = questionId(question, index);
-    const picked = selected[id] ?? [];
-    const text = (typed[id] ?? '').trim();
-    if (isMultiSelect(question)) {
-      const values = text ? [...picked, text] : [...picked];
-      if (values.length > 0) answers[id] = values;
-      return;
-    }
-    const value = text || picked[0] || '';
-    if (value) answers[id] = value;
-  });
-  return answers;
-}
-
-interface QuestionRowProps {
-  readonly question: HitlQuestion;
-  readonly index: number;
-  readonly disabled: boolean;
-  readonly picked: readonly string[];
-  readonly text: string;
-  readonly onPick: (label: string) => void;
-  readonly onText: (value: string) => void;
-}
-
-/** One question: its header, its text, its option buttons and its free-text field. */
-function QuestionRow({ question, index, disabled, picked, text, onPick, onText }: QuestionRowProps): ReactNode {
-  const options = question.options ?? [];
-  // A question with no options cannot be answered any other way, so the field
-  // is offered whether or not the model set `allow_other`.
-  const showText = question.allow_other === true || options.length === 0;
-
-  return (
-    <Box
-      data-testid={`hitl-answer-question-${index}`}
-      sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}
-    >
-      {question.header && (
-        <Typography
-          variant="caption"
-          sx={{ fontWeight: 600, color: 'text.secondary' }}
-        >
-          {question.header}
-        </Typography>
-      )}
-      {question.question && (
-        <Typography
-          variant="body2"
-          sx={{ color: 'text.primary' }}
-        >
-          {question.question}
-          {/* ELITEA-2792 step 1: an optional question SAYS so. Without it the
-              relaxed Next/Submit rule is invisible — the user cannot tell a
-              question they may skip from one whose control is enabled because
-              they already answered it. */}
-          {isOptional(question) && (
-            <Typography
-              component="span"
-              data-testid={`hitl-answer-optional-${index}`}
-              variant="caption"
-              sx={{ color: 'text.secondary', ml: 0.5 }}
-            >
-              {t('chatMessages.hitlAnswer.optional', '(optional)')}
-            </Typography>
-          )}
-        </Typography>
-      )}
-      {options.length > 0 && (
-        <Stack
-          direction="row"
-          spacing={1}
-          sx={{ flexWrap: 'wrap', gap: 1 }}
-        >
-          {options.map((option, optionIndex) => {
-            const label = optionLabel(option);
-            const isPicked = picked.includes(label);
-            return (
-              <Button
-                key={`${label}-${optionIndex}`}
-                data-testid={`hitl-answer-option-${index}-${optionIndex}`}
-                size="small"
-                variant={isPicked ? 'contained' : 'outlined'}
-                color="primary"
-                onClick={() => onPick(label)}
-                disabled={disabled || !label}
-                {...(option.description ? { title: option.description } : {})}
-              >
-                {label}
-              </Button>
-            );
-          })}
-        </Stack>
-      )}
-      {showText && (
-        <TextField
-          fullWidth
-          size="small"
-          value={text}
-          onChange={(event) => onText(event.target.value)}
-          disabled={disabled}
-          placeholder={t('chatMessages.hitlAnswer.otherPlaceholder', 'Type another answer…')}
-          slotProps={{ htmlInput: { 'data-testid': `hitl-answer-other-${index}` } }}
-        />
-      )}
-    </Box>
-  );
 }
 
 /**

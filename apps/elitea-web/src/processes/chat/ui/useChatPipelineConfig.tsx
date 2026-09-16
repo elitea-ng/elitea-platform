@@ -51,7 +51,7 @@ import { useGetApplication, useGetApplicationVersionDetail } from '@/shared/api/
 import type { ApplicationVersionDetail } from '@/shared/api/generated/model';
 
 /** The participant identity the chat editor opens a pipeline with. */
-export interface ChatConfigParticipant {
+interface ChatConfigParticipant {
   readonly entity_meta?: { readonly id?: string | number } | undefined;
   readonly entity_settings?: { readonly version_id?: string | number } | undefined;
 }
