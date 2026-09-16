@@ -389,7 +389,19 @@ test('attachments are blocked while a turn is running', async ({ page }) => {
     attachRow,
     'the attach row must be inert while a turn is running',
   ).toHaveAttribute('aria-disabled', 'true');
-  await page.keyboard.press('Escape');
+  // Closed through the control's OWN toggle, not with `Escape`.
+  //
+  // `PlusChatButton` renders the menu in a `Popper` closed by `toggleMenu` or
+  // by its `ClickAwayListener`; nothing in it listens for `Escape`. The first
+  // version of this step pressed `Escape`, which left the menu OPEN — so the
+  // `plus.click()` at the END of this test CLOSED it instead of opening it,
+  // and the restored attach row read as an absent one. Measured twice,
+  // deterministically: the failure looked exactly like "attaching never came
+  // back". (That `Escape` does not dismiss this menu is a real keyboard-
+  // dismissal nit, but it is not ELITEA-2867's subject and is not asserted
+  // here.)
+  await plus.click();
+  await expect(attachRow, 'the menu must close again before the drop test').toHaveCount(0, { timeout: 10_000 });
 
   // ── Drag-and-drop ───────────────────────────────────────────────────────
   // The interesting half: the drop/paste bridge does NOT go through the button
