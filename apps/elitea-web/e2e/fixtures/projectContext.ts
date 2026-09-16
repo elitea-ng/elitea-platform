@@ -1,42 +1,32 @@
 /**
- * Project Context: the raw read/write pair, and the mutex that fixing #888
- * made necessary.
+ * Project Context: the raw read/write pair.
  *
- * ## Why a lock exists here now
+ * ## Why there is no lock here any more
  *
  * Project Context is ONE ROW PER PROJECT (`p_<id>.configuration` where
- * `type = 'project_context'`), and every journey persona works inside project
- * 1. While the write silently no-opped (#888) that did not matter: the row
- * never changed, so "the project starts empty and stays empty" was true for
- * every test, in any order, at any concurrency — which is exactly what the
- * old `settings.project-context.spec.ts` header wrote down and relied on.
+ * `type = 'project_context'`). While the write silently no-opped (#888) every
+ * journey could share project 1: the row never changed, so "the project starts
+ * empty and stays empty" was true for every test, in any order, at any
+ * concurrency.
  *
- * Making the write real (this package) turns that shared row into shared
- * MUTABLE state, under `fullyParallel: true`, across two spec files:
+ * Making the write real turned that shared row into shared MUTABLE state under
+ * `fullyParallel: true`, and the first answer was a cross-worker mutex over it
+ * (`mutex.ts`, under the name `project-context`). It did not hold: the file it
+ * was written for went on failing a DIFFERENT test on each CI run. A lock
+ * serialises the WRITES and nothing else — it cannot stop the page's React
+ * Query cache and one-shot mount fetch from having read the row a moment
+ * before the lock changed hands, and it leaves every test depending on the
+ * previous holder having reset the row.
  *
- *  - `settings.project-context.spec.ts` — saves through the UI, and asserts
- *    the toggle's initial position and the empty state's read-only branch,
- *    both of which are properties OF THE ROW;
- *  - `settings.p13-project-context.spec.ts` — PUTs a payload through the API
- *    and reads it straight back.
- *
- * Two of those interleaved is a clobber, not a flake that a retry fixes: the
- * value one test polls for is overwritten by another test's save. So both
- * files take this mutex for the whole of each test and start from a KNOWN
- * row (`resetProjectContext`), rather than from whatever the previous test
- * left behind.
- *
- * ## The mutex
- *
- * `mutex.ts`'s named lock, under the name `project-context`. It is a second,
- * independent window rather than a widening of `platformFlags.ts`'s: a
- * project-context test has no reason to queue behind an MCP-flag test.
+ * Both callers now provision a project of their own instead
+ * (`scratchProject.ts`), so no row is shared and there is nothing to
+ * serialise. `mutex.ts` itself stays — `settings.pat-expiry-notifications`
+ * holds a genuinely deployment-wide window through it.
  */
 import { request as apiRequest, type APIRequestContext } from '@playwright/test';
 
 import { BASE_URL, STORAGE_STATE } from '../../playwright.config';
 import { API_BASE } from './api';
-import { acquireNamedLock } from './mutex';
 
 /** What `{content, enabled}` the route answers for a project that has never saved one. */
 export interface ProjectContextState {
@@ -99,7 +89,7 @@ export async function writeProjectContext(
 }
 
 /**
- * Puts one project's row back to the seeded default, as ADMIN.
+ * Puts one project's row back to the empty default, as ADMIN.
  *
  * Admin rather than the calling test's own persona because the viewer
  * persona (`STORAGE_STATE.viewer`, which holds `models.project_context.view`
@@ -124,20 +114,4 @@ export async function seedProjectContextAsAdmin(
   } finally {
     await admin.dispose();
   }
-}
-
-/* ── the mutex ─────────────────────────────────────────────────────────── */
-
-/**
- * Takes the project-context window and returns its release.
- *
- * Call it in `beforeEach` and release in `afterEach`, so a test that throws
- * mid-way still frees the row for the next one.
- *
- * The mechanism lives in `mutex.ts` and is shared with the other journeys that
- * act on state there is exactly one of; the NAME is what keeps them from
- * queueing behind each other.
- */
-export async function acquireProjectContextLock(): Promise<() => Promise<void>> {
-  return acquireNamedLock('project-context');
 }

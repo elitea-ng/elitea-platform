@@ -42,36 +42,44 @@
  * in the shape this API has: a second PUT that keeps `content` and flips
  * `enabled` must leave `content` exactly as it was.
  *
- * ## Sharing the row
+ * ## Not sharing the row
  *
- * Project Context is ONE ROW PER PROJECT and this file writes project 1's,
- * as does `settings.project-context.spec.ts` under `fullyParallel: true`.
- * While nothing persisted that was harmless; now it is a clobber. Both files
- * take the project-context mutex (`fixtures/projectContext.ts`) and start
- * from a reset row.
+ * Project Context is ONE ROW PER PROJECT, and this file used to write project
+ * 1's — as did `settings.project-context.spec.ts` under `fullyParallel: true`,
+ * and as does every repeat of THIS test under `--repeat-each`. While nothing
+ * persisted that was harmless; once the write became real it was a clobber,
+ * and the cross-worker mutex both files then took only serialised the writes
+ * (see `settings.project-context.spec.ts`'s header for what that did not fix).
+ *
+ * So this test provisions a project of its own (`fixtures/scratchProject.ts`)
+ * and deletes it afterwards. Nothing here reads or writes project 1, and the
+ * INSERT branch the case below is about is genuinely an insert: the project
+ * has never held a row.
  */
 import { expect, test } from '@playwright/test';
 
-import { AUTOTEST_PREFIX, DEFAULT_PROJECT_ID } from '../../fixtures/api';
-import {
-  acquireProjectContextLock,
-  readProjectContext,
-  resetProjectContext,
-  writeProjectContext,
-} from '../../fixtures/projectContext';
+import { AUTOTEST_PREFIX } from '../../fixtures/api';
+import { readProjectContext, writeProjectContext } from '../../fixtures/projectContext';
+import { createScratchProject, deleteScratchProject, type ScratchProject } from '../../fixtures/scratchProject';
 
-let releaseProjectContext: (() => Promise<void>) | undefined;
+/** This test's own project — provisioned per test, deleted whatever the verdict. */
+let scratch: ScratchProject | undefined;
 
 test.beforeEach(async () => {
-  releaseProjectContext = await acquireProjectContextLock();
-  await resetProjectContext(DEFAULT_PROJECT_ID);
+  scratch = await createScratchProject(`p13_${test.info().project.name}`);
 });
 
 test.afterEach(async () => {
-  const release = releaseProjectContext;
-  releaseProjectContext = undefined;
-  await release?.();
+  const project = scratch;
+  scratch = undefined;
+  await deleteScratchProject(project);
 });
+
+/** The test's own project, or a loud failure rather than a silent fallback to a shared one. */
+function projectId(): string {
+  if (scratch === undefined) throw new Error('the scratch project was not provisioned');
+  return scratch.id;
+}
 
 /* onetest: ELITEA-2798, ELITEA-2799, ELITEA-2800 — the project-context round trip: a full payload
  * survives the PUT and comes back on the next GET (2799), a GET returns a value that was already
@@ -80,28 +88,29 @@ test.afterEach(async () => {
 test('ELITEA-2798/2799/2800: a project-context PUT persists, reads back, and does not lose the other field', async ({
   request,
 }) => {
-  // 2799 — the full payload, written into a project with NO prior row (the
-  // beforeEach emptied it), which is the INSERT branch the missing
+  const target = projectId();
+  // 2799 — the full payload, written into a project with NO prior row (it was
+  // provisioned moments ago), which is the INSERT branch the missing
   // `project_id` column used to kill.
   const fullContent = `${AUTOTEST_PREFIX}p13-project-context-full-${Date.now()}`;
-  await writeProjectContext(request, DEFAULT_PROJECT_ID, { content: fullContent, enabled: true });
+  await writeProjectContext(request, target, { content: fullContent, enabled: true });
 
   // 2798 — a GET returns what is stored. Read TWICE, because a handler that
   // answered from a per-request cache of its own write would satisfy one
   // read; the second read is a fresh request with nothing in front of it.
-  expect(await readProjectContext(request, DEFAULT_PROJECT_ID)).toEqual({
+  expect(await readProjectContext(request, target)).toEqual({
     content: fullContent,
     enabled: true,
   });
-  expect(await readProjectContext(request, DEFAULT_PROJECT_ID)).toEqual({
+  expect(await readProjectContext(request, target)).toEqual({
     content: fullContent,
     enabled: true,
   });
 
   // 2800 — change one field, keep the other. `content` must come back
   // byte-identical, not emptied by the write that was about `enabled`.
-  await writeProjectContext(request, DEFAULT_PROJECT_ID, { content: fullContent, enabled: false });
-  expect(await readProjectContext(request, DEFAULT_PROJECT_ID)).toEqual({
+  await writeProjectContext(request, target, { content: fullContent, enabled: false });
+  expect(await readProjectContext(request, target)).toEqual({
     content: fullContent,
     enabled: false,
   });
@@ -110,8 +119,8 @@ test('ELITEA-2798/2799/2800: a project-context PUT persists, reads back, and doe
   // the old one rather than being appended as a second row the GET's
   // `LIMIT 1` would then choose between.
   const replaced = `${fullContent}-replaced`;
-  await writeProjectContext(request, DEFAULT_PROJECT_ID, { content: replaced, enabled: true });
-  expect(await readProjectContext(request, DEFAULT_PROJECT_ID)).toEqual({
+  await writeProjectContext(request, target, { content: replaced, enabled: true });
+  expect(await readProjectContext(request, target)).toEqual({
     content: replaced,
     enabled: true,
   });

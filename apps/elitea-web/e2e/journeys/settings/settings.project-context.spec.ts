@@ -28,56 +28,81 @@
  * acceptance. The fail marks below are gone and the persistence assertions
  * they stood in for are real again.
  *
- * ── WHAT THAT FIX COSTS THIS FILE: the row is shared MUTABLE state now ─────
+ * ── WHAT THAT FIX COST THIS FILE, AND WHY EVERY TEST NOW OWNS A PROJECT ────
  *
- * Project Context is ONE ROW PER PROJECT and every persona here works in
- * project 1. While the save no-opped, "the project starts empty and stays
- * empty" held for every test at any concurrency — which is what this file's
- * first version assumed out loud. A working save makes that false: under
- * `fullyParallel: true`, `PJC-PERSIST`'s save, `PJC03a`'s baseline,
- * `PJC06`'s toggle reading and `PJC08`'s empty state — plus
- * `settings.p13-project-context.spec.ts`, a different FILE — all read and
+ * Project Context is ONE ROW PER PROJECT. While the save no-opped, "the
+ * project starts empty and stays empty" held for every test at any
+ * concurrency, and every persona here could share project 1. A working save
+ * makes that false: under `fullyParallel: true`, `PJC-PERSIST`'s save,
+ * `PJC03a`'s baseline, `PJC06`'s toggle reading and `PJC08`'s empty state —
+ * plus `settings.p13-project-context.spec.ts`, a different FILE — all read and
  * write the same row. Interleaved, that is a clobber, not a flake a retry
  * fixes.
  *
- * So every test here takes the project-context mutex
- * (`fixtures/projectContext.ts`) for its whole body and starts from a row
- * reset to the seeded default. The mutex is a second window, independent of
- * the platform-flag one: a project-context test has no reason to queue
- * behind an MCP-flag test.
+ * A cross-worker mutex over that row was tried first, twice, and did not hold:
+ * this file went on failing a DIFFERENT test on each CI run (chromium PJC01
+ * and PJC06, webkit PJC04, and PJC03b/PJC02/PJC08 before them). A lock
+ * serialises the WRITES; it does not stop the page's own React Query cache and
+ * one-shot mount fetch from having read the row a moment before the lock
+ * changed hands, and it leaves each test depending on the previous holder
+ * having reset the row correctly. The failure looks exactly like the feature
+ * being broken, which is why each round of "settle the debounce, wait
+ * positively" bought a run or two and then moved the failure elsewhere.
+ *
+ * So no test here shares a row with anything any more. `beforeEach` PROVISIONS
+ * A PROJECT (`fixtures/scratchProject.ts` — the real
+ * `POST /projects/project/administration` pipeline, ~250 ms), the page is
+ * switched to it through the product's own switcher, the assertions run there,
+ * and `afterEach` deletes it. Project 1 is not read or written by this file at
+ * all, the mutex is gone, and so are the "reset the shared row first" steps
+ * that only existed to make a shared row survivable.
  *
  * ── Two projects, not "Private" and "Team" ─────────────────────────────────
  *
  * The onetest cases assume a Private-project/Team-project split. This stack's
- * two journey personas (`member`, `admin`) hold no personal project of their
- * own — `auth.setup.ts` documents that `resolvePersonalProjectID`'s third
- * branch answers project 1 for both, because neither has a
- * `project_user_<uid>` row. So there is no genuinely-private project to test
- * against here. The one case that still needs a SECOND project
- * (ELITEA-0957's "page loads in more than one project") uses project 1
- * (`DEFAULT_PROJECT_ID`) and the seeded `e2e-publish-author` project (both
- * personas hold the admin role there too, per `PUBLISH_AUTHOR_PROJECT_NAME`'s
- * doc comment).
+ * journey personas hold no personal project that is private in that sense, so
+ * there is no genuinely-private project to test against here. The one case
+ * that needs a SECOND project (ELITEA-0957's "the page loads in more than one
+ * project", plus its per-project independence half) provisions a second
+ * scratch project of its own — two projects that exist only for that test,
+ * which is a stronger statement than the old pairing of project 1 with a
+ * seeded shared project could make.
  */
 import { test, expect, type Page } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL, STORAGE_STATE } from '../../../playwright.config';
-import { AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, PUBLISH_AUTHOR_PROJECT_NAME, resolvePublishAuthorProjectId } from '../../fixtures/api';
+import { AUTOTEST_PREFIX } from '../../fixtures/api';
 import {
-  acquireProjectContextLock,
   readProjectContext,
   resetProjectContext,
   seedProjectContextAsAdmin,
 } from '../../fixtures/projectContext';
+import { createScratchProject, deleteScratchProject, type ScratchProject } from '../../fixtures/scratchProject';
 import { ensureProjectSelected } from '../../fixtures/project';
 
 const PROJECT_PARAMS_PAGE = `${BASE_URL}/app/settings/project-params`;
 const MAX_CHARS = 2500;
 
 /**
- * Lands on the Project Context tab of the CURRENTLY selected project and
- * leaves the EDITOR (not just the page) open.
+ * Puts the browser in `project` and lands on its Project Context tab.
+ *
+ * `ensureProjectSelected` reads the sidebar's switcher, which exists only once
+ * the app shell has mounted — a fresh test starts on `about:blank`, so the
+ * shell needs a navigation first (`auth.setup.ts` does the same before its own
+ * call). The scratch project is not the one the persona's storage state pins,
+ * so this always performs a real switch on the first call and costs one
+ * `textContent()` read on any later one.
+ */
+async function gotoProjectParams(page: Page, project: ScratchProject): Promise<void> {
+  await page.goto(`${BASE_URL}/app/`, { waitUntil: 'domcontentloaded' });
+  await ensureProjectSelected(page, project.name);
+  await page.goto(PROJECT_PARAMS_PAGE, { waitUntil: 'domcontentloaded' });
+}
+
+/**
+ * Lands on the Project Context tab of `project` and leaves the EDITOR (not
+ * just the page) open.
  *
  * Two gates stand between "the page is open" and "the editor is on screen":
  *
@@ -85,16 +110,15 @@ const MAX_CHARS = 2500;
  *    server has no saved (non-blank) content and `isEditing` is still
  *    false — clicking "Create" flips `isEditing` and bypasses it.
  *  - `deriveShowFlags`'s `showEditorContent = enabled || content.trim() ||
- *    !canEdit`. Every test here starts from a row reset to `enabled: false`
- *    with empty content (see the header's mutex note), which satisfies none
- *    of those — `EditorSection` does not mount, only the (always-rendered)
- *    toggle card does. Flipping that switch on is what makes the editor
- *    appear; only the LOCAL, optimistic half of that flip is waited on here,
- *    because a test that needs the SERVER's copy asserts it explicitly
- *    (`PJC-PERSIST`) rather than implicitly through a helper.
+ *    !canEdit`. A freshly provisioned project has no saved row at all, which
+ *    satisfies none of those — `EditorSection` does not mount, only the
+ *    (always-rendered) toggle card does. Flipping that switch on is what makes
+ *    the editor appear; only the LOCAL, optimistic half of that flip is waited
+ *    on here, because a test that needs the SERVER's copy asserts it
+ *    explicitly (`PJC-PERSIST`) rather than implicitly through a helper.
  */
-async function openEditor(page: Page): Promise<void> {
-  await page.goto(PROJECT_PARAMS_PAGE, { waitUntil: 'domcontentloaded' });
+async function openEditor(page: Page, project: ScratchProject): Promise<void> {
+  await gotoProjectParams(page, project);
   const body = page.getByTestId('project-context-body');
   const empty = page.getByTestId('project-context-empty-state');
   await expect(body.or(empty)).toBeVisible({ timeout: 20_000 });
@@ -125,13 +149,41 @@ async function typeContent(page: Page, text: string): Promise<void> {
 }
 
 /**
+ * Waits until the editor's text has reached REACT state, not merely
+ * CodeMirror's own document.
+ *
+ * CodeMirror's `onChange` is debounced (`CHANGE_DEBOUNCE_MS`, shared/ui/
+ * CodeMirrorEditor), so the DOM shows a keystroke long before `content` — the
+ * state the Preview pane and the "context is off" banner render from — has it.
+ * Every check that reads one of those has to wait for the commit first, and
+ * the fixed sleeps this file used to spend on it were a race against the
+ * debounce under four workers rather than a proof: PJC07's Preview assertion
+ * still lost one run in 33 on chromium behind a 300 ms one.
+ *
+ * The character counter is that same `content`, rendered as
+ * `MAX_CHARS - content.length` (`EditorSection.tsx`), so the expected
+ * remainder appearing there IS the commit — for a clear (`''`) exactly as for
+ * a typed string. It is `visibility: hidden` while the editor is unfocused,
+ * which does not affect `toContainText`.
+ *
+ * Not the Save button: `isDirty` is a flag that a change sets and only a SAVE
+ * clears, so it says nothing about an edit that returns the editor to what is
+ * stored (measured: after clearing, Save stays enabled).
+ */
+async function editorContentCommitted(page: Page, text: string): Promise<void> {
+  await expect(page.getByTestId('project-context-char-counter')).toContainText(
+    new RegExp(`\\b${String(MAX_CHARS - text.length)} characters left`),
+    { timeout: 10_000 },
+  );
+}
+
+/**
  * Clicks Save and waits for the FRONTEND to consider it settled
  * (`isDirty` reset, which only happens on `handleSave`'s success path).
  *
- * Deliberately does NOT verify the server's own row — seepage file header.
- * This is the helper every test EXCEPT `PJC-PERSIST` uses, because every
- * other test's claim is about in-session/client behaviour, not about
- * whether the write survives a reload (it never does, currently).
+ * Deliberately does NOT verify the server's own row: the tests that use this
+ * helper make claims about in-session/client behaviour, and `PJC-PERSIST` —
+ * whose whole claim is about the stored row — reads the route itself.
  */
 async function clickSave(page: Page): Promise<void> {
   const btn = page.getByTestId('project-context-save-button');
@@ -141,29 +193,36 @@ async function clickSave(page: Page): Promise<void> {
 
 test.describe('project-context: settings/config coverage', () => {
   /*
-   * ONE TEST AT A TIME, FROM A KNOWN ROW — see the file header.
+   * ONE PROJECT PER TEST — see the file header.
    *
-   * The lock is taken in `beforeEach` and released in `afterEach` so a test
-   * that throws mid-way still frees the row; the release is stored in a
-   * module-scope binding, which is safe because a worker runs its tests one
-   * after another (the concurrency this guards against is BETWEEN workers).
+   * Provisioned in `beforeEach` and deprovisioned in `afterEach`, so a test
+   * that throws mid-way still takes its tenant schema with it. The id is held
+   * in a module-scope binding, which is safe because a worker runs its tests
+   * one after another (the concurrency this isolates against is BETWEEN
+   * workers, and between the two engines).
    *
-   * The reset runs as ADMIN, not as the test's own persona: the viewer
-   * describe below holds `models.project_context.view` and specifically not
-   * `.edit`, and must still be able to arrange its precondition.
+   * The nested describes below (`as admin`, `as viewer`) inherit these hooks:
+   * the scratch project makes ALL THREE personas members — admin and member as
+   * project admins, viewer as a project `viewer` whose central grants withhold
+   * `models.project_context.edit`.
    */
-  let releaseProjectContext: (() => Promise<void>) | undefined;
+  let scratch: ScratchProject | undefined;
 
   test.beforeEach(async () => {
-    releaseProjectContext = await acquireProjectContextLock();
-    await resetProjectContext(DEFAULT_PROJECT_ID);
+    scratch = await createScratchProject(`pjc_${test.info().project.name}`);
   });
 
   test.afterEach(async () => {
-    const release = releaseProjectContext;
-    releaseProjectContext = undefined;
-    await release?.();
+    const project = scratch;
+    scratch = undefined;
+    await deleteScratchProject(project);
   });
+
+  /** The test's own project, or a loud failure rather than a silent fallback to a shared one. */
+  function project(): ScratchProject {
+    if (scratch === undefined) throw new Error('the scratch project was not provisioned');
+    return scratch;
+  }
 
   /* ── PJC-PERSIST ────────────────────────────────────────────────────
    * onetest: ELITEA-0942, ELITEA-0949, ELITEA-0950, ELITEA-0953,
@@ -179,24 +238,25 @@ test.describe('project-context: settings/config coverage', () => {
    *               the `false` direction (ELITEA-0953), which a "write only
    *               non-empty fields" handler would silently drop.
    *
-   *          The first save goes into a project whose row does not exist
-   *          yet (the beforeEach reset leaves it empty), so this covers the
-   *          INSERT branch — the one the missing `project_id` column killed
-   *          — and the second save covers the UPDATE branch.
+   *          The first save goes into a project that has never held a row
+   *          (it was provisioned moments ago), so this covers the INSERT
+   *          branch — the one the missing `project_id` column killed — and
+   *          the second save covers the UPDATE branch.
    * ──────────────────────────────────────────────────────────────────── */
   test('PJC-PERSIST: a saved Project Context survives a reload, content and toggle alike', async ({ page }) => {
-    await openEditor(page);
+    const target = project();
+    await openEditor(page, target);
     const text = `${AUTOTEST_PREFIX}persist-probe-${Date.now()}`;
     await typeContent(page, text);
     await clickSave(page);
 
     // 1. The server's own row, not the response echo.
     await expect
-      .poll(async () => (await readProjectContext(page.request, DEFAULT_PROJECT_ID)).content, {
+      .poll(async () => (await readProjectContext(page.request, target.id)).content, {
         timeout: 8_000,
       })
       .toBe(text);
-    expect((await readProjectContext(page.request, DEFAULT_PROJECT_ID)).enabled).toBe(true);
+    expect((await readProjectContext(page.request, target.id)).enabled).toBe(true);
 
     // 2. A reload reads it back through the app.
     await page.reload({ waitUntil: 'domcontentloaded' });
@@ -211,13 +271,13 @@ test.describe('project-context: settings/config coverage', () => {
     await toggle.click();
     await expect(toggle).not.toBeChecked();
     await expect
-      .poll(async () => (await readProjectContext(page.request, DEFAULT_PROJECT_ID)).enabled, {
+      .poll(async () => (await readProjectContext(page.request, target.id)).enabled, {
         timeout: 8_000,
       })
       .toBe(false);
     // …and the content it was saved with is not collateral damage of the
     // toggle's own write.
-    expect((await readProjectContext(page.request, DEFAULT_PROJECT_ID)).content).toBe(text);
+    expect((await readProjectContext(page.request, target.id)).content).toBe(text);
 
     await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.getByRole('switch')).not.toBeChecked({ timeout: 20_000 });
@@ -225,44 +285,46 @@ test.describe('project-context: settings/config coverage', () => {
 
   /* ── PJC01 ────────────────────────────────────────────────────────────
    * onetest: ELITEA-0957 — the page loads without error in a SECOND
-   * project (not just the default one), for an Admin, AND the two projects'
-   * contexts are independent: a save in one is not a save in the other.
-   * That second half is what the schema predicate in the handler's write
-   * actually buys, and it is checked here rather than in PJC-PERSIST
-   * because this is the only test that holds two projects at once.
+   * project (not the one the persona's storage state selects), for an
+   * Admin, AND the two projects' contexts are independent: a save in one is
+   * not a save in the other. That second half is what the schema predicate
+   * in the handler's write actually buys, and it is checked here rather
+   * than in PJC-PERSIST because this is the only test that holds two
+   * projects at once — both of them its own, so "the other project's row is
+   * still empty" is a statement about the write and not about what some
+   * other worker happened to be doing.
    * ──────────────────────────────────────────────────────────────────── */
   test.describe('as admin, in the second project', () => {
     test.use({ storageState: STORAGE_STATE.admin });
 
     test('PJC01: Project Context is reachable and editable in a second project as Admin', async ({ page, request }) => {
-      const secondProjectId = await resolvePublishAuthorProjectId(request);
-      await resetProjectContext(secondProjectId);
-      // `ensureProjectSelected` reads the sidebar's switcher, which exists
-      // only once the app shell has mounted — a fresh test starts on
-      // `about:blank`, so the shell needs a navigation first (`auth.setup.ts`
-      // does the same before its own call).
-      await page.goto(BASE_URL + '/app/', { waitUntil: 'domcontentloaded' });
-      await ensureProjectSelected(page, PUBLISH_AUTHOR_PROJECT_NAME);
-      await openEditor(page);
+      const target = project();
+      // A project this test writes NOTHING into, to read back at the end.
+      const untouched = await createScratchProject(`pjc01_other_${Date.now()}`);
+      try {
+        await openEditor(page, target);
 
-      const text = `${AUTOTEST_PREFIX}QA admin context ${Date.now()}`;
-      await typeContent(page, text);
-      await expect(editorContent(page)).toContainText(text);
-      await clickSave(page);
-      // A SUCCESS toast is expected here (and is what `clickSave` already
-      // confirmed via the button re-disabling); only an ERROR toast would
-      // indicate the save was refused.
-      await expect(page.getByRole('alert').filter({ hasText: /fail/i })).toHaveCount(0);
+        const text = `${AUTOTEST_PREFIX}QA admin context ${Date.now()}`;
+        await typeContent(page, text);
+        await expect(editorContent(page)).toContainText(text);
+        await clickSave(page);
+        // A SUCCESS toast is expected here (and is what `clickSave` already
+        // confirmed via the button re-disabling); only an ERROR toast would
+        // indicate the save was refused.
+        await expect(page.getByRole('alert').filter({ hasText: /fail/i })).toHaveCount(0);
 
-      // It landed in THIS project's row…
-      await expect
-        .poll(async () => (await readProjectContext(request, secondProjectId)).content, { timeout: 8_000 })
-        .toBe(text);
-      // …and project 1's row, which the beforeEach emptied, is still empty:
-      // a write that ignored the project id would have filled it too.
-      expect((await readProjectContext(request, DEFAULT_PROJECT_ID)).content).toBe('');
+        // It landed in THIS project's row…
+        await expect
+          .poll(async () => (await readProjectContext(request, target.id)).content, { timeout: 8_000 })
+          .toBe(text);
+        // …and the other project's row is still empty: a write that ignored
+        // the project id would have filled it too.
+        expect((await readProjectContext(request, untouched.id)).content).toBe('');
 
-      await checkA11y(page);
+        await checkA11y(page);
+      } finally {
+        await deleteScratchProject(untouched);
+      }
     });
   });
 
@@ -273,29 +335,31 @@ test.describe('project-context: settings/config coverage', () => {
    * "survives a RELOAD" half is PJC-PERSIST's.
    * ──────────────────────────────────────────────────────────────────── */
   test('PJC02: content survives edit/replace/clear in-session, and a Unicode upload renders correctly', async ({ page }) => {
-    await openEditor(page);
+    await openEditor(page, project());
 
-    // Each edit below is settled (a real wait, past CodeMirrorEditor's own
-    // `CHANGE_DEBOUNCE_MS`, not just a DOM-text check) before the next one
-    // starts. Chaining edits without settling was measured to let a STALE
-    // debounced `onChange` — from an EARLIER edit — land after a LATER one,
-    // clobbering it back to the earlier value; this is what makes the
-    // Preview check below meaningful rather than a coin flip.
-    await typeContent(page, `${AUTOTEST_PREFIX}Version A content`);
+    // Each edit below is settled — waited for POSITIVELY, through
+    // `editorContentCommitted`, not slept past — before the next one starts.
+    // Chaining edits without settling was measured to let a STALE debounced
+    // `onChange` — from an EARLIER edit — land after a LATER one, clobbering
+    // it back to the earlier value; this is what makes the Preview check
+    // below meaningful rather than a coin flip.
+    const versionA = `${AUTOTEST_PREFIX}Version A content`;
+    await typeContent(page, versionA);
     await expect(editorContent(page)).toContainText('Version A content');
-    await page.waitForTimeout(400);
+    await editorContentCommitted(page, versionA);
 
-    await typeContent(page, `${AUTOTEST_PREFIX}Version B content`);
+    const versionB = `${AUTOTEST_PREFIX}Version B content`;
+    await typeContent(page, versionB);
     await expect(editorContent(page)).toContainText('Version B content');
     await expect(editorContent(page)).not.toContainText('Version A content');
-    await page.waitForTimeout(400);
+    await editorContentCommitted(page, versionB);
 
     const editor = editorContent(page);
     await editor.click();
     await page.keyboard.press('ControlOrMeta+a');
     await page.keyboard.press('Delete');
     await expect(editor).toHaveText('');
-    await page.waitForTimeout(400);
+    await editorContentCommitted(page, '');
 
     // Unicode/emoji, via the .md upload path (issue 841's own regression case).
     const unicode = `# 🌍 Unicode Test\n\n中文: 人工智能\nRussian: Привет\nArabic: مرحبا\nEmoji: ✅🔴🟠`;
@@ -323,7 +387,8 @@ test.describe('project-context: settings/config coverage', () => {
    * half is PJC-PERSIST's.
    * ──────────────────────────────────────────────────────────────────── */
   test('PJC03a: a valid .md upload loads into the editor, and is lost on reload if not saved', async ({ page }) => {
-    await openEditor(page);
+    const target = project();
+    await openEditor(page, target);
     await typeContent(page, `${AUTOTEST_PREFIX}baseline-before-upload`);
     await clickSave(page);
 
@@ -343,19 +408,19 @@ test.describe('project-context: settings/config coverage', () => {
     // screen to contain the uploaded text.
     await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('project-context-body')).toBeVisible({ timeout: 20_000 });
-    // 20 s, not 10: CodeMirror mounts after the query settles, and this file
-    // serialises on a mutex, so a reload here can land while three other
-    // workers are busy.
+    // 20 s, not 10: CodeMirror mounts after the query settles, and three
+    // other workers are driving their own projects against the same stack.
     await expect(editorContent(page)).toContainText('baseline-before-upload', { timeout: 20_000 });
     await expect(editorContent(page)).not.toContainText('Respond concisely');
 
     // A 0-byte .md file is accepted and clears the editor, with no error toast.
-    await openEditor(page);
-    await typeContent(page, 'placeholder before clearing');
-    await expect(editorContent(page)).toContainText('placeholder before clearing');
+    await openEditor(page, target);
+    const placeholder = 'placeholder before clearing';
+    await typeContent(page, placeholder);
+    await expect(editorContent(page)).toContainText(placeholder);
     // A REAL wait, not just a DOM-text check — see PJC02's note on a stale
     // debounced `onChange` clobbering a later, faster change.
-    await page.waitForTimeout(400);
+    await editorContentCommitted(page, placeholder);
     await page.getByRole('button', { name: 'Import markdown file' }).click();
     await page.locator('input[type="file"]').setInputFiles({
       name: 'empty.md',
@@ -380,7 +445,7 @@ test.describe('project-context: settings/config coverage', () => {
    * ──────────────────────────────────────────────────────────────────── */
   test('PJC03b: a .txt file with the same content is rejected — product gap', async ({ page }) => {
     test.fail(true, 'ELITEA-0940 (#889): product gap — handleFileUpload never checks file name/type, only length');
-    await openEditor(page);
+    await openEditor(page, project());
     await typeContent(page, `${AUTOTEST_PREFIX}baseline-before-wrong-type`);
 
     await page.getByRole('button', { name: 'Import markdown file' }).click();
@@ -415,7 +480,7 @@ test.describe('project-context: settings/config coverage', () => {
    * reload/persistence needed for this case's own claim.
    * ──────────────────────────────────────────────────────────────────── */
   test('PJC04: a .md import over 2500 characters is rejected without clearing existing content', async ({ page }) => {
-    await openEditor(page);
+    await openEditor(page, project());
     const original = `${AUTOTEST_PREFIX}short project overview, well under the limit`;
     await typeContent(page, original);
     await clickSave(page);
@@ -452,7 +517,7 @@ test.describe('project-context: settings/config coverage', () => {
    * why that half is not repeated here as if it were a real check).
    * ──────────────────────────────────────────────────────────────────── */
   test('PJC05: typing and pasting are truncated at 2500 characters', async ({ page }) => {
-    await openEditor(page);
+    await openEditor(page, project());
     const editor = editorContent(page);
     await editor.click();
     await page.keyboard.press('ControlOrMeta+a');
@@ -481,12 +546,12 @@ test.describe('project-context: settings/config coverage', () => {
    * onetest: ELITEA-0953 — the Enable toggle's IN-SESSION effect: flipping
    * it changes `showDisabledBanner`/the editor's visibility immediately,
    * without a page reload. The persistence half (does it stay flipped
-   * after reload, is it independent per project) is PJC-PERSIST's — the
-   * toggle saves through the exact same broken endpoint as the editor.
+   * after reload, is it independent per project) is PJC-PERSIST's.
    * ──────────────────────────────────────────────────────────────────── */
   test('PJC06: the Enable toggle changes the page immediately, in both directions', async ({ page }) => {
-    await openEditor(page);
-    await typeContent(page, `${AUTOTEST_PREFIX}toggle-probe`);
+    await openEditor(page, project());
+    const probe = `${AUTOTEST_PREFIX}toggle-probe`;
+    await typeContent(page, probe);
     // The banner below is driven by REACT state (`content.trim()`), which
     // CodeMirror's `onChange` reaches only after its own debounce — same
     // race PJC02 and PJC07 wait out after typing, missing here previously.
@@ -496,8 +561,8 @@ test.describe('project-context: settings/config coverage', () => {
     // thin enough (under worker contention) for the click below to land
     // before `content` had committed, so `!enabled && content.trim()`
     // read `content` as still empty and the "turned off" banner never
-    // rendered. Waiting past the debounce first makes it deterministic.
-    await page.waitForTimeout(400);
+    // rendered. Waiting for the COMMIT makes it deterministic.
+    await editorContentCommitted(page, probe);
     const toggle = page.getByRole('switch');
     await expect(toggle).toBeChecked();
     await expect(editorContent(page)).toBeVisible();
@@ -520,16 +585,18 @@ test.describe('project-context: settings/config coverage', () => {
    * in-session — unaffected by the persistence defect.
    * ──────────────────────────────────────────────────────────────────── */
   test('PJC07: Editor and Preview modes switch without reload and without losing content', async ({ page }) => {
-    await openEditor(page);
-    await typeContent(page, `${AUTOTEST_PREFIX}# Heading\n\n**Bold text**`);
+    await openEditor(page, project());
+    const markdown = `${AUTOTEST_PREFIX}# Heading\n\n**Bold text**`;
+    await typeContent(page, markdown);
     // The Preview pane reads REACT state (`content`), which CodeMirror's
     // `onChange` reaches only after its own debounce — the CM DOCUMENT
     // updates instantly, but switching modes before the debounce fires
-    // would preview the PRIOR (empty) state. Waiting for the editor's own
-    // text confirms CodeMirror settled; `pipelines.validation.spec.ts`
-    // additionally sleeps past `CHANGE_DEBOUNCE_MS` for the same reason.
+    // previews the PRIOR (empty) state. The editor's own text only confirms
+    // CodeMirror settled; a fixed 300 ms sleep for the rest was a race, and
+    // lost one run in 33 here under four workers. `editorContentCommitted`
+    // waits for the state itself.
     await expect(editorContent(page)).toContainText('Bold text');
-    await page.waitForTimeout(300);
+    await editorContentCommitted(page, markdown);
 
     const navigations: string[] = [];
     page.on('framenavigated', (frame) => {
@@ -557,13 +624,16 @@ test.describe('project-context: settings/config coverage', () => {
 
   /* ── PJC08 ────────────────────────────────────────────────────────────
    * onetest: ELITEA-0941 — Viewer Role Has Read-Only Access and Can View
-   * Preview Mode (issue #940 Bucket D4). The harness had no restricted-
-   * viewer persona before this package; `scripts/e2e-stack.sh seed` and
-   * `playwright.config.ts` now seed one (`STORAGE_STATE.viewer`: project 1's
-   * `viewer` role, with `models.project_context.edit` specifically revoked
-   * — see the seed's own note on why the pre-existing broad per-project
-   * grant would otherwise have made ANY `viewer` role-holder here as
-   * privileged as admin/editor).
+   * Preview Mode (issue #940 Bucket D4).
+   *
+   * The viewer persona is a project `viewer` in the scratch project, added
+   * by `fixtures/scratchProject.ts`. It is genuinely restricted there
+   * WITHOUT the revoke `scripts/e2e-stack.sh seed` has to perform on
+   * project 1: a freshly provisioned project writes no
+   * `auth_core__project_role_permission` rows at all, so its roles resolve
+   * the CENTRAL grants, where `models.project_context.edit` reaches
+   * `admin`/`editor` only (shared/0068) and `.view` reaches every role
+   * (shared/0062).
    *
    * BOTH HALVES ARE REAL NOW. ELITEA-0941's precondition is "Admin has saved
    * Markdown content", which #888 made unreachable on any persona — no
@@ -575,9 +645,7 @@ test.describe('project-context: settings/config coverage', () => {
    * the API, because the viewer persona deliberately cannot write — and then
    * proves both halves end to end.
    *
-   * The empty-state branch keeps its own test below, seeded explicitly
-   * rather than inherited from "every project here starts empty", which a
-   * working save stops guaranteeing.
+   * The empty-state branch keeps its own test below.
    * ──────────────────────────────────────────────────────────────────────── */
   test.describe('as viewer', () => {
     test.use({ storageState: STORAGE_STATE.viewer });
@@ -585,10 +653,11 @@ test.describe('project-context: settings/config coverage', () => {
     test('PJC08: a viewer reads saved Project Context read-only, in Edit and in Preview (canView, canEdit=false)', async ({
       page,
     }) => {
+      const target = project();
       const saved = `${AUTOTEST_PREFIX}# Viewer Heading\n\n**Bold for the viewer**`;
-      await seedProjectContextAsAdmin(DEFAULT_PROJECT_ID, { content: saved, enabled: true });
+      await seedProjectContextAsAdmin(target.id, { content: saved, enabled: true });
 
-      await page.goto(PROJECT_PARAMS_PAGE, { waitUntil: 'domcontentloaded' });
+      await gotoProjectParams(page, target);
 
       // canView: the page loads at all — not the permission-denied banner
       // `ProjectContext.tsx` renders when `PERMISSIONS.projectContext.view`
@@ -625,11 +694,12 @@ test.describe('project-context: settings/config coverage', () => {
     });
 
     test('PJC08b: with nothing saved, a viewer sees the empty state\'s read-only branch', async ({ page }) => {
-      // The beforeEach already emptied the row; re-stating it here is what
-      // makes this test's precondition its OWN rather than an inheritance
-      // from a backend that could not save.
-      await resetProjectContext(DEFAULT_PROJECT_ID);
-      await page.goto(PROJECT_PARAMS_PAGE, { waitUntil: 'domcontentloaded' });
+      const target = project();
+      // The project was provisioned moments ago and holds no row; writing the
+      // empty state explicitly makes this test's precondition its OWN rather
+      // than an inheritance from how provisioning happens to leave a project.
+      await resetProjectContext(target.id);
+      await gotoProjectParams(page, target);
 
       const empty = page.getByTestId('project-context-empty-state');
       await expect(empty).toBeVisible({ timeout: 20_000 });

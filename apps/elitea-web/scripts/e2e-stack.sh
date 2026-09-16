@@ -1753,6 +1753,29 @@ CROSS JOIN LATERAL (
     SELECT id AS user_id, email AS user_email FROM auth_core__user WHERE email = 'e2e-admin@autotest.local'
 ) AS actor
 CROSS JOIN LATERAL (SELECT 1 AS project_id) AS proj;
+
+-- ── the project id sequence must start ABOVE every id seeded by hand ──────
+--
+-- Everything above inserts `centry.project` rows with an EXPLICIT id (1, 99,
+-- 90001, 90500, …) so the fixtures can name them. The column's sequence does
+-- not move when an id is supplied, so it stays at 1 — and the provisioning
+-- pipeline, which does NOT name an id (`INSERT INTO centry.project (name,
+-- owner_id, …) RETURNING id`), then walks up from there through ids the seed
+-- already used. Measured: after enough projects were provisioned in one
+-- session, `create_project` answered 500 with
+-- `insert project: duplicate key value violates unique constraint
+-- "project_pkey"` on reaching id 99 (`e2e-public`) — a failure with nothing to
+-- do with the caller, and one a journey that provisions a project per test
+-- (`e2e/fixtures/scratchProject.ts`) meets sooner than anything else.
+--
+-- `setval` puts the sequence past the highest seeded id, so provisioning
+-- allocates 90501+ and cannot collide. `pg_get_serial_sequence` answers NULL
+-- if the column is ever redefined without one, and `setval` is strict, so this
+-- degrades to a no-op rather than an error.
+SELECT setval(
+    pg_get_serial_sequence('centry.project', 'id'),
+    GREATEST((SELECT max(id) FROM centry.project), 1)
+);
 ENDSQL
 
     # Use the correct binary for exec: podman exec or docker exec.
