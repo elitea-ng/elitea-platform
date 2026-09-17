@@ -11,7 +11,7 @@ import type { ReactNode } from 'react';
 import Box from '@mui/material/Box';
 
 import { AgentSkillsPanel } from '@/features/agent-skills';
-import { AgentTagEditor, ApplicationInformation, CreateAgentForm } from '@/features/agents';
+import { AgentIconEditor, AgentTagEditor, ApplicationInformation, CreateAgentForm } from '@/features/agents';
 import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import type { ApplicationVersionDetail } from '@/shared/api/generated/model';
 import { AgentModelSettings } from '@/widgets/agent-model-settings';
@@ -67,6 +67,25 @@ function forkOrigin(activeVersion: ApplicationVersionDetail | undefined): {
   };
 }
 
+/**
+ * `elitea_issues: #6627` — `application_versions.meta.icon_meta`, narrowed to
+ * the `{name?, url}` shape `AgentIconEditor` binds. A local twin of
+ * `forkOrigin` above for the same reason (this panel's own `meta` read, not a
+ * shared export — `features/agents`' curated barrel has no room, see that
+ * barrel's own `AgentIconEditor` doc comment).
+ */
+function applicationIconMetaOf(
+  activeVersion: ApplicationVersionDetail | undefined,
+): { readonly name?: string | undefined; readonly url: string } | null {
+  const meta: Record<string, unknown> = activeVersion?.meta ?? {};
+  const iconMeta = meta['icon_meta'];
+  if (iconMeta === null || typeof iconMeta !== 'object') return null;
+  const url = (iconMeta as Record<string, unknown>)['url'];
+  if (typeof url !== 'string' || url === '') return null;
+  const name = (iconMeta as Record<string, unknown>)['name'];
+  return { url, ...(typeof name === 'string' ? { name } : {}) };
+}
+
 export function EditApplicationConfigurationPanel(props: EditApplicationConfigurationPanelProps): ReactNode {
   const {
     projectId,
@@ -80,6 +99,7 @@ export function EditApplicationConfigurationPanel(props: EditApplicationConfigur
     onModelSettingsChange,
   } = props;
   const fork = forkOrigin(activeVersion);
+  const iconMeta = applicationIconMetaOf(activeVersion);
 
   return (
     <Box data-testid="edit-application-configuration-tab-panel">
@@ -91,6 +111,16 @@ export function EditApplicationConfigurationPanel(props: EditApplicationConfigur
            `toVersionSaveBody`'s `tags`, which `UpdateVersion` now
            writes as association rows. */
         instructionsAiEditSlot={props.instructionsAiEditSlot}
+        iconSlot={
+          <AgentIconEditor
+            projectId={projectId}
+            applicationId={applicationId}
+            versionId={activeVersion?.id}
+            agentName={editor.values.name ?? ''}
+            iconMeta={iconMeta}
+            disabled={isEditorDisabled}
+          />
+        }
         tagsSlot={
           <AgentTagEditor
             projectId={projectId}

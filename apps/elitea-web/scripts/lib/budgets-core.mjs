@@ -31,6 +31,12 @@
  *     consumer (`widgets/sidebar/ui/NotificationButton.tsx`) and no smaller
  *     bundling was available without renaming the 5 already-shipped
  *     individual hook exports this same barrel carries.
+ *   agents/index.ts: slice-public-api waived (21/20) — elitea_issues #6627
+ *     added exactly one new component (`AgentIconEditor`, the editable agent
+ *     icon `CreateAgentForm.tsx`'s own doc comment disclosed as a standing
+ *     gap) to a barrel already sitting exactly at the 20 cap with nothing
+ *     left to curate away; one real external consumer
+ *     (`pages/agents/ui/EditApplicationConfigurationPanel.tsx`).
  *
  * Deliberately NOT implemented here (recorded, not forgotten):
  *   cyclomatic complexity 12 — oxlint native `complexity` rule (.oxlintrc.json)
@@ -59,6 +65,7 @@ export const BUDGET_WAIVERS = Object.freeze({
   'src/features/skills/index.ts': ['slice-public-api'],
   'src/features/interactive-tours/lib/hooks/useInteractiveTourController.hooks.ts': ['hook-deps'],
   'src/features/notifications/index.ts': ['slice-public-api'],
+  'src/features/agents/index.ts': ['slice-public-api'],
 });
 
 /** Check if a file has a waiver for a specific budget rule. */
