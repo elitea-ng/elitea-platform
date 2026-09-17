@@ -43,6 +43,7 @@ async function ensureBucket(request: APIRequestContext, projectId: string, name:
 }
 
 /* onetest: ELITEA-2475 — "Manage access" must be visible only in Team projects; PRODUCT GAP: the icon renders unconditionally regardless of project type */
+/* elitea_issues: #6101, #5832 — same product gap (parent story #5832: "bucket permissions only for Team projects"; #6101: "Manage Access incorrectly available in Public projects") */
 test('bucket "Manage access" is visible in the shared Team project but must be absent in the caller\'s own private project', async ({
   page,
   request,

@@ -95,7 +95,8 @@ export function BucketList(props: BucketListProps): ReactNode {
                     <EditOutlinedIcon fontSize="small" />
                   </IconButton>
                 </Tooltip>
-                <Tooltip title={t('artifacts.buckets.manageAccess', 'Manage access')}>
+                {/* elitea_issues: #6111 — the visible tooltip label matches the dialog's own title ("Manage Permissions"); aria-label stays "Manage access to <bucket>" (test hook + BucketAccessPanel.test.tsx / e2e specs key off it) */}
+                <Tooltip title={t('artifacts.buckets.manageAccess', 'Manage permissions')}>
                   <IconButton
                     size="small"
                     color="tertiary"
