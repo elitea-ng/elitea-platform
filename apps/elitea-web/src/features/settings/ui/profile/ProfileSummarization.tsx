@@ -12,6 +12,7 @@ import { useFormikContext } from 'formik';
 import { createContextStrategyFormData, type ProfileFormValues } from '@/features/settings/lib/profile/profileUtils';
 import ContextStrategySummarization from './context-budget/ContextStrategySummarization';
 import { handleConvertToNumberChange } from '@/features/settings/lib/profile/context-budget/validation';
+import { SummaryModelSelect } from '../memory/SummaryModelSelect';
 import { t } from '@/shared/i18n';
 
 export interface ProfileSummarizationProps {
@@ -23,10 +24,9 @@ export interface ProfileSummarizationProps {
   }>;
 }
 
-export const ProfileSummarization = memo(({ modelList: _modelList }: ProfileSummarizationProps) => {
+export const ProfileSummarization = memo(({ modelList }: ProfileSummarizationProps) => {
   const { values, errors, setFieldValue } = useFormikContext<ProfileFormValues>();
 
-  // The modelList prop is available for future model selection in summarization.
 
   /*
    * [#71] Was an inline object literal duplicating
@@ -88,6 +88,7 @@ export const ProfileSummarization = memo(({ modelList: _modelList }: ProfileSumm
           title: t('settings.profile.summarization.title', 'Default Summarization'),
           content: (
             <Box sx={styles.accordionContent}>
+              <SummaryModelSelect models={modelList} disabled={!values.context_enabled || !values.enable_summarization} />
               <ContextStrategySummarization
                 formData={contextFormData}
                 errors={contextErrors}

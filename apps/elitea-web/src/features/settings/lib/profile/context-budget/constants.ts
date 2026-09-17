@@ -17,7 +17,6 @@ export const SEPARATOR = '$$$';
 /** Default context strategy configuration. */
 export const DEFAULT_CONTEXT_STRATEGY = {
   ENABLED: true,
-  MAX_CONTEXT_TOKENS: 64000,
   PRESERVE_RECENT_MESSAGES: 5,
   PRESERVE_SYSTEM_MESSAGES: true,
   ENABLE_SUMMARIZATION: true,
@@ -26,10 +25,6 @@ export const DEFAULT_CONTEXT_STRATEGY = {
 
 /** Validation limits — used by Yup schemas. */
 export const VALIDATION_LIMITS = {
-  MAX_CONTEXT_TOKENS: {
-    MIN: 1000,
-    MAX: 10_000_000,
-  },
   PRESERVE_RECENT_MESSAGES: {
     MIN: 1,
     MAX: 99,

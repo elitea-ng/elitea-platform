@@ -35,19 +35,17 @@ export interface ContextBudgetPanelProps {
   readonly onEdit?: () => void;
 }
 
-/**
- * The old app's `ContextBudgetStatsDisplay` hides every stat except
- * `Messages` when `maxTokens === 0` (the context manager is off for this
- * conversation, so summaries and the strategy do not apply). Kept.
- */
+/** Unknown runtime usage shows the selected policy without inventing counts. */
 function visibleStatRows(stats: ContextBudgetStats): readonly { readonly key: string; readonly label: string; readonly value: string }[] {
   const messages = {
     key: 'messages',
     label: t('widgets.contextBudget.messages', 'Messages'),
     value: String(stats.messageGroups),
   };
-  if (stats.maxTokens === 0) return [messages];
+  const mode = { key: 'mode', label: t('widgets.contextBudget.mode', 'Window'), value: stats.budgetMode === 'full' ? t('contextBudget.mode.full', 'Full') : t('contextBudget.mode.balanced', 'Balanced') };
+  if (!stats.usageAvailable) return [mode];
   return [
+    mode,
     messages,
     { key: 'summaries', label: t('widgets.contextBudget.summaries', 'Summaries'), value: String(stats.summariesGenerated) },
     { key: 'strategy', label: t('widgets.contextBudget.strategy', 'Strategy'), value: stats.strategyName },
@@ -57,7 +55,7 @@ function visibleStatRows(stats: ContextBudgetStats): readonly { readonly key: st
 export function ContextBudgetPanel({ stats, onEdit }: ContextBudgetPanelProps): ReactNode {
   // The bar itself caps at 100%; the number above it does not (the old app
   // shows the true over-budget percentage and flags it with the warning icon).
-  const barPercentage = Math.min(stats.utilizationPercentage, 100);
+  const barPercentage = Math.min(stats.utilizationPercentage ?? 0, 100);
 
   return (
     <Box
@@ -112,7 +110,7 @@ export function ContextBudgetPanel({ stats, onEdit }: ContextBudgetPanelProps): 
             data-testid="context-budget-tokens"
             sx={(theme: Theme) => ({ color: theme.vars.palette.text.secondary })}
           >
-            {t('widgets.contextBudget.tokens', '{{tokens}} tokens', { tokens: stats.tokensDisplay })}
+            {stats.usageAvailable ? t('widgets.contextBudget.tokens', '{{tokens}} tokens', { tokens: stats.tokensDisplay }) : t('widgets.contextBudget.unknown', 'Usage not yet measured')}
           </Typography>
           <Box sx={(theme: Theme) => ({ display: 'flex', alignItems: 'center', gap: theme.spacing(0.5) })}>
             <Typography
@@ -120,7 +118,7 @@ export function ContextBudgetPanel({ stats, onEdit }: ContextBudgetPanelProps): 
               data-testid="context-budget-utilization"
               sx={(theme: Theme) => ({ color: theme.vars.palette.text.secondary })}
             >
-              {t('widgets.contextBudget.percentage', '{{percentage}}%', { percentage: stats.utilizationPercentage })}
+              {stats.usageAvailable ? t('widgets.contextBudget.percentage', '{{percentage}}%', { percentage: stats.utilizationPercentage }) : '—'}
             </Typography>
             {stats.isHighUtilization && (
               <Tooltip
@@ -134,7 +132,7 @@ export function ContextBudgetPanel({ stats, onEdit }: ContextBudgetPanelProps): 
             )}
           </Box>
         </Box>
-        <ProgressBar percentage={barPercentage} isHigh={stats.isHighUtilization} />
+        {stats.usageAvailable && <ProgressBar percentage={barPercentage} isHigh={stats.isHighUtilization} />}
       </Box>
 
       {visibleStatRows(stats).map((row) => (
@@ -179,10 +177,10 @@ export function ContextBudgetPanel({ stats, onEdit }: ContextBudgetPanelProps): 
 export function ContextBudgetCollapsed({ stats }: ContextBudgetPanelProps): ReactNode {
   return (
     <Tooltip
-      title={t('widgets.contextBudget.collapsedTooltip', '{{tokens}} tokens — {{percentage}}% of the context budget', {
+      title={stats.usageAvailable ? t('widgets.contextBudget.collapsedTooltip', '{{tokens}} tokens — {{percentage}}% of the context budget', {
         tokens: stats.tokensDisplay,
         percentage: stats.utilizationPercentage,
-      })}
+      }) : t('widgets.contextBudget.unknown', 'Usage not yet measured')}
       placement="left"
     >
       <Box
@@ -194,12 +192,12 @@ export function ContextBudgetCollapsed({ stats }: ContextBudgetPanelProps): Reac
           data-testid="context-budget-utilization"
           sx={(theme: Theme) => ({ color: theme.vars.palette.text.default })}
         >
-          {t('widgets.contextBudget.collapsedPercentage', '{{percentage}}%', { percentage: stats.utilizationPercentage })}
+          {stats.usageAvailable ? t('widgets.contextBudget.collapsedPercentage', '{{percentage}}%', { percentage: stats.utilizationPercentage }) : '—'}
         </Typography>
-        <Box sx={{ width: '2.25rem', height: '0.1875rem' }}>
+        {stats.usageAvailable && <Box sx={{ width: '2.25rem', height: '0.1875rem' }}>
           <Box
             data-testid="context-budget-progress"
-            data-percentage={Math.min(stats.utilizationPercentage, 100)}
+            data-percentage={Math.min(stats.utilizationPercentage ?? 0, 100)}
             sx={(theme: Theme) => ({
               width: '100%',
               height: '100%',
@@ -207,7 +205,7 @@ export function ContextBudgetCollapsed({ stats }: ContextBudgetPanelProps): Reac
               backgroundColor: stats.isHighUtilization ? theme.vars.palette.warning.yellow : theme.vars.palette.success.main,
             })}
           />
-        </Box>
+        </Box>}
       </Box>
     </Tooltip>
   );

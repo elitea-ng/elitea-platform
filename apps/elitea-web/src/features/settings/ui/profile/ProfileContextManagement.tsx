@@ -11,6 +11,7 @@ import { AccordionConstants } from '@/shared/lib/constants';
 import { BaseSwitch } from '@/shared/ui/BaseSwitch';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import { InfoLabelWithTooltip } from '@/shared/ui/InfoLabelWithTooltip';
+import { ContextBudgetModeControl } from '@/shared/ui/ContextBudgetModeControl';
 import { InputBase } from '@/shared/ui/InputBase';
 import { useFormikContext } from 'formik';
 
@@ -47,7 +48,7 @@ export function ProfileContextManagement({
   );
 
   const handleNumericInputChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>, fieldName: keyof Pick<ProfileFormValues, 'max_context_tokens' | 'preserve_recent_messages'>) => {
+    (e: React.ChangeEvent<HTMLInputElement>, fieldName: keyof Pick<ProfileFormValues, 'preserve_recent_messages'>) => {
       const setValue = (f: string, v: unknown) => void setFieldValue(f, v);
       handleConvertToNumberChange(e.target.value, fieldName, setValue);
     },
@@ -91,27 +92,10 @@ export function ProfileContextManagement({
 
               <Box sx={styles.fieldsRow}>
                 <Box sx={styles.field}>
-                  <InfoLabelWithTooltip
-                    label={t('settings.profile.contextManagement.maxContextTokens', 'Max Context Tokens')}
-                    tooltip={t('settings.profile.contextManagement.maxContextTokensTooltip', 'Maximum number of tokens to keep in conversation context')}
-                  />
-                  <InputBase
-                    type="text"
-                    inputMode="numeric"
-                    value={values.max_context_tokens}
-                    onChange={(e) =>
-                      handleNumericInputChange(e as React.ChangeEvent<HTMLInputElement>, 'max_context_tokens')
-                    }
-                    error={!!errors.max_context_tokens}
-                    helperText={errors.max_context_tokens || ' '}
+                  <ContextBudgetModeControl
+                    value={values.budget_mode}
+                    onChange={(mode) => { void setFieldValue('budget_mode', mode); onAutoSaveRequested?.(); }}
                     disabled={!isEnabled}
-                    slotProps={{
-                      htmlInput: {
-                        pattern: '[1-9][0-9]*',
-                        'data-testid': 'max-context-tokens-input',
-                      },
-                    }}
-                    containerSx={styles.formInput}
                   />
                 </Box>
 

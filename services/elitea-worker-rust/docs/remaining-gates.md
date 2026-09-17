@@ -1,6 +1,6 @@
 # Rust worker remaining gates
 
-Updated: 2026-09-16. Main integration baseline: `1dee0c89`.
+Updated: 2026-09-17. Main integration baseline: `1dee0c89`.
 
 This register orders implementation work. The [testing register](testing-gaps.md) owns detailed proof requirements.
 Source mappings remain the behavioral evidence for each capability.
@@ -110,7 +110,9 @@ Pipeline LLM and model-backed Decision nodes now have independent scoped persist
 The agent suite passes 344 checks, including PostgreSQL summary reload, writer takeover, and complete streamed-result persistence.
 The [dedicated summary-model component](source-mapping/dedicated-summary-model.md) separates authorized model selection, provider binding, and output limits.
 [Main settings delivery](source-mapping/context-policy-delivery.md) now resolves presets and summary selections, and preserves admitted continuation policies.
-UI controls, runtime occupancy projection, and deployed acceptance remain open.
+[UI preset controls and the composer indicator](source-mapping/context-policy-ui.md) pass 295 component tests and a fresh headed-browser check with intercepted settings writes.
+Runtime occupancy projection, live compaction notices, persisted UI acceptance, and deployed model execution remain open.
+Main chat shows detailed usage; nested agents show brief compaction activity text, with separate model scopes and no combined parent/child meter.
 Nested and graph-model recovery coordination, deployed settings, and browser acceptance remain open.
 The pipeline container has no separate compaction control.
 Model conversations inherit a caller policy when available; otherwise saved children use explicit settings or Balanced defaults.

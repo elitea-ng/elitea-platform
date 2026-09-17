@@ -43,7 +43,7 @@ const OVERRIDES: Record<string, string> = {
   'settings.profile.contextManagement.title': 'TITLE-XX',
   'settings.profile.contextManagement.enableAriaLabel': 'ARIA-XX',
   'settings.profile.contextManagement.enableLabel': 'ENABLE-XX',
-  'settings.profile.contextManagement.maxContextTokens': 'MAXTOKENS-XX',
+  'contextBudget.mode.title': 'MAXTOKENS-XX',
   'settings.profile.contextManagement.preserveRecentMessages': 'PRESERVE-XX',
 };
 
@@ -89,7 +89,7 @@ describe('ProfileContextManagement — i18n', () => {
 
     expect(screen.getByText('TITLE-XX')).toBeInTheDocument();
     expect(screen.getByText('ENABLE-XX')).toBeInTheDocument();
-    expect(screen.getByText('MAXTOKENS-XX')).toBeInTheDocument();
+    expect(screen.getAllByText('MAXTOKENS-XX')[0]).toBeInTheDocument();
     expect(screen.getByText('PRESERVE-XX')).toBeInTheDocument();
     expect(screen.getByLabelText('ARIA-XX')).toBeInTheDocument();
   });
@@ -98,6 +98,6 @@ describe('ProfileContextManagement — i18n', () => {
     renderSection();
 
     expect(screen.getByText('Default Context Management')).toBeInTheDocument();
-    expect(screen.getByText('Max Context Tokens')).toBeInTheDocument();
+    expect(screen.getByText('Context window')).toBeInTheDocument();
   });
 });

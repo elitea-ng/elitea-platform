@@ -1,6 +1,6 @@
 # Context policy delivery
 
-Status: Main component implementation, 2026-09-17. UI controls and deployed acceptance remain open.
+Status: Main component implementation, 2026-09-17. [UI controls](context-policy-ui.md) have component/browser proof; deployed acceptance remains open.
 
 ## Functional source mapping
 
@@ -13,7 +13,7 @@ Other runtime features still require current-platform functional references.
 | SDK `runtime/clients/client.py::_inject_summarization` receives conversation policy and separate summary controls. | Main `domain/contextsettings/runtime.go` creates the runtime projection and separate authored model selection. |
 | Centry `elitea_core/utils/context_analytics.py::set_context_strategy` combines user defaults and conversation settings. | `contextsettings.Resolve` retains this precedence. New compaction uses Balanced or Full. |
 | Centry `social/models/pd/users.py` stores context and summarization preferences. | Existing `UserContextDefaultsRepo` reads the authenticated actor's preferences. No schema change is required. |
-| Current UI context controls expose settings and usage. | Preset controls and accurate runtime occupancy remain required UI integration work. Legacy numeric controls do not satisfy this contract. |
+| Current UI context controls expose settings and usage. | Preset controls and an accessible composer indicator are implemented. Accurate worker occupancy remains required integration work. Legacy numeric controls do not satisfy this contract. |
 
 ## Presets and output controls
 
@@ -65,5 +65,5 @@ The runtime status API does not invent preset capacity from legacy analytics; un
 No migration, new table, or application database rewrite is required.
 
 Deploy the compatible Rust worker before the updated Main.
-Complete Balanced/Full UI controls, worker occupancy projection, summary quality, and fresh browser tests before claiming acceptance.
+Complete worker occupancy projection, summary quality, and deployed save/reload/model-loop browser tests before claiming acceptance.
 The rehearsal deployment has not changed in this slice.

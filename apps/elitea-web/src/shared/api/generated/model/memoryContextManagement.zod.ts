@@ -48,10 +48,17 @@ export const memoryContextManagementPreserveRecentMessagesMax = 99;
 export const MemoryContextManagement = zod
   .object({
     enabled: zod.boolean().optional(),
+    budget_mode: zod
+      .enum(["balanced", "full"])
+      .optional()
+      .describe(
+        "Balanced caps the combined context window at 272000 tokens or the model window, whichever is smaller. Full uses the model window. Both reserve model output and a safety margin before calculating usable input. Absent legacy selections resolve to balanced.\n",
+      ),
     max_context_tokens: zod
       .int()
       .min(memoryContextManagementMaxContextTokensMin)
-      .optional(),
+      .optional()
+      .describe("Legacy preference. New execution budgets use budget_mode."),
     preserve_recent_messages: zod
       .int()
       .min(1)

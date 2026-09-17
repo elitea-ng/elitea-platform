@@ -21,7 +21,7 @@ interface SummaryLlmSettings {
 
 interface ContextFormData {
   enabled: boolean;
-  max_context_tokens: number;
+
   preserve_recent_messages: number;
   enable_summarization: boolean;
   summary_llm_settings: SummaryLlmSettings;

@@ -65,9 +65,6 @@ import { useStableRef } from './hooks/useStableRef';
 /** `NewChatInputHandle` stays unexported from `features/chat-input`'s barrel — derived via `ComponentRef`, matching that barrel's own documented convention. */
 type NewChatInputHandle = ComponentRef<typeof NewChatInput>;
 
-/* ------------------------------------------------------------------ */
-/*  Props & handle                                                      */
-/* ------------------------------------------------------------------ */
 
 /** @public Props for the ChatBox composition root. */
 export interface ChatBoxProps {
@@ -91,6 +88,7 @@ export interface ChatBoxProps {
   readonly onDelete?: { readonly answer?: (messageId: string) => void; readonly all?: () => void };
   /** Host-supplied composer extension points, bundled to stay under the §3.5 component-props budget (one slot instead of two, as `onDelete` above); both pass straight through. */
   readonly extensions?: {
+    readonly contextIndicator?: React.ReactNode;
     /** Agent/pipeline editor open/close callbacks — see `ChatBox.helpers.ts`'s `buildAgentEditorProps`. Optional; falls back to the pre-existing no-ops. */
     readonly editorCallbacks?: ChatBoxEditorCallbacks;
     /** Real lists for the composer's "+" menu — see `processes/chat/model/usePlusMenuEntities.ts`, which is the only layer allowed to fetch them. */
@@ -119,7 +117,7 @@ const ChatBoxInner = memo(function ChatBox({
   onDelete,
   extensions,
 }: ChatBoxProps) {
-  const { editorCallbacks, entitySubmenus, onAgentEvent } = extensions ?? {};
+  const { editorCallbacks, entitySubmenus, onAgentEvent, contextIndicator } = extensions ?? {};
   const chatInputRef = useRef<NewChatInputHandle>(null);
   const attachmentButtonRef = useRef<AttachmentButtonHandle>(null); const voiceButtonRef = useRef<VoiceButtonHandle>(null);
   const { activeConversation, isLoadingConversation, onConversationCreated } = unwrapChatBoxConversation(conversation);
@@ -359,6 +357,7 @@ const ChatBoxInner = memo(function ChatBox({
             onSelectTool: handleSelectSkillTool,
           })}
         />
+        {contextIndicator}
         <NewChatInput
           ref={chatInputRef}
           conversationId={conversationId !== undefined ? String(conversationId) : undefined}

@@ -18,20 +18,23 @@ import { t } from '@/shared/i18n';
 import { AccordionConstants } from '@/shared/lib/constants';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import { InfoLabelWithTooltip } from '@/shared/ui/InfoLabelWithTooltip';
+import { ContextBudgetModeControl } from '@/shared/ui/ContextBudgetModeControl';
 import { InputBase } from '@/shared/ui/InputBase';
 
 import type { SettingsProfileFormValues } from '../ai-personality/settingsProfileForm';
+import type { SummaryModelOption } from './SummaryModelSelect';
 import { MemorySummarization } from './MemorySummarization';
 import { SettingsToggleCard } from './SettingsToggleCard';
 
-type NumericField = 'max_context_tokens' | 'preserve_recent_messages';
+type NumericField = 'preserve_recent_messages';
 
 export interface MemoryContextManagementProps {
+  models?: readonly SummaryModelOption[];
   /** Called after a change that must persist immediately (both toggles). */
   onAutoSaveRequested?: () => void;
 }
 
-export const MemoryContextManagement = memo(({ onAutoSaveRequested }: MemoryContextManagementProps) => {
+export const MemoryContextManagement = memo(({ onAutoSaveRequested, models = [] }: MemoryContextManagementProps) => {
   const { values, errors, setFieldValue } = useFormikContext<SettingsProfileFormValues>();
 
   const handleContextEnabledChange = useCallback(
@@ -85,29 +88,11 @@ export const MemoryContextManagement = memo(({ onAutoSaveRequested }: MemoryCont
 
               {values.context_enabled && (
                 <>
+                  <ContextBudgetModeControl
+                    value={values.budget_mode}
+                    onChange={(mode) => { void setFieldValue('budget_mode', mode); onAutoSaveRequested?.(); }}
+                  />
                   <Box sx={styles.fieldsRow}>
-                    <Box sx={styles.field}>
-                      <InfoLabelWithTooltip
-                        label={t('settings.memory.contextManagement.maxContextTokens', 'Max Context Tokens')}
-                        tooltip={t(
-                          'settings.memory.contextManagement.maxContextTokensTooltip',
-                          'Maximum number of tokens to keep in conversation context',
-                        )}
-                      />
-                      <InputBase
-                        type="text"
-                        inputMode="numeric"
-                        value={values.max_context_tokens}
-                        onChange={(event) => handleNumericChange(event.target.value, 'max_context_tokens')}
-                        error={Boolean(errors.max_context_tokens)}
-                        helperText={errors.max_context_tokens ?? ' '}
-                        slotProps={{
-                          htmlInput: { pattern: '[1-9][0-9]*', 'data-testid': 'max-context-tokens-input' },
-                        }}
-                        containerSx={styles.inputContainer}
-                      />
-                    </Box>
-
                     <Box sx={styles.field}>
                       <InfoLabelWithTooltip
                         label={t(
@@ -149,7 +134,7 @@ export const MemoryContextManagement = memo(({ onAutoSaveRequested }: MemoryCont
                   />
 
                   <Box sx={styles.subSections}>
-                    <MemorySummarization />
+                    <MemorySummarization models={models} />
                   </Box>
                 </>
               )}

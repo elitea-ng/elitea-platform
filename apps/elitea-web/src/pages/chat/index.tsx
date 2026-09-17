@@ -42,7 +42,7 @@ import type { AnswerCanvasSelection, CanvasEditPayload, CodeBlockInfo } from '@/
 import { AddNewUserModal, canParticipantBeActiveInChat, ParticipantsWrapper, useLocalActiveParticipant } from '@/features/chat-participants';
 import type { ChatBoxProps } from '@/widgets/chat-box';
 import { ChatBox, toParticipant } from '@/widgets/chat-box';
-import { ContextBudget } from '@/widgets/context-budget';
+import { ContextBudget, ContextBudgetIndicator } from '@/widgets/context-budget';
 
 import { useChatPageData } from './useChatPageData';
 import { useChatModelSettings } from './useChatModelSettings';
@@ -274,14 +274,11 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
           {...(user ? { user } : {})}
           llm={{ settings: llm.settings, onSetSettings: llm.onSetSettings }}
           participant={{ active: activeParticipant, onChange: handleChangeParticipant }}
-          {...(editorCallbacks || entitySubmenus
-            ? {
-                extensions: {
-                  ...(editorCallbacks ? { editorCallbacks } : {}),
-                  ...(entitySubmenus ? { entitySubmenus } : {}),
-                },
-              }
-            : {})}
+          extensions={{
+            ...(editorCallbacks ? { editorCallbacks } : {}),
+            ...(entitySubmenus ? { entitySubmenus } : {}),
+            contextIndicator: <ContextBudgetIndicator conversationId={conversationIdOf(activeConversation)} projectId={projectId} />,
+          }}
         />
       </Box>
       {/*

@@ -21,9 +21,10 @@ import { t } from '@/shared/i18n';
 import { InputBase } from '@/shared/ui/InputBase';
 
 import type { SettingsProfileFormValues } from '../ai-personality/settingsProfileForm';
+import { SummaryModelSelect, type SummaryModelOption } from './SummaryModelSelect';
 import { SettingsToggleCard } from './SettingsToggleCard';
 
-export const MemorySummarization = memo(() => {
+export const MemorySummarization = memo(({ models = [] }: { models?: readonly SummaryModelOption[] }) => {
   const { values, errors, setFieldValue } = useFormikContext<SettingsProfileFormValues>();
 
   const isSummarizationDisabled = !values.context_enabled || !values.enable_summarization;
@@ -61,14 +62,16 @@ export const MemorySummarization = memo(() => {
         data-testid="automatic-summarization-toggle"
         title={t('settings.memory.summarization.title', 'Automatic Summarization')}
         description={t(
-          'settings.memory.summarization.description',
-          'Summarize older messages to free up context space when the limit is reached',
+          'settings.memory.summarization.compactionDescription',
+          'Compact older history at 90% of usable input, retaining recent messages and authoritative instructions.',
         )}
         checked={values.enable_summarization}
         onToggle={handleSummarizationEnabledChange}
         disabled={!values.context_enabled}
         switchAriaLabel={t('settings.memory.summarization.enableAriaLabel', 'Enable automatic summarization')}
       />
+
+      <SummaryModelSelect models={models} disabled={isSummarizationDisabled} />
 
       <Box sx={styles.section}>
         <InputBase
