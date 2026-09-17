@@ -31,6 +31,7 @@
   "agents.deleteApplicationButton.title": "Delete agent",
   "agents.enhancedCardToolActions.copyTooltip": "Copy the tool name",
   "agents.enhancedCardToolActions.unavailableTooltip": "Tool is not available",
+  "agents.entityIcon.editAlt": "Change agent icon",
   "agents.entityIcon.previewAlt": "Preview",
   "agents.exportApplicationButton.ariaLabel": "export agent",
   "agents.exportApplicationButton.title": "Export agent",
