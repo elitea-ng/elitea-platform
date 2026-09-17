@@ -33,6 +33,11 @@ User clarification requires structured working knowledge, not only a narrative s
 - Unresolved issues.
 - Descriptive resource and artifact references.
 
+The platform owns this prompt and its schema. The optional user text only adds emphasis.
+Legacy `{messages}` and `{conversation_history}` markers are removed from that guidance; the platform places source records once inside its own template.
+Next steps are suggestions for continuing the existing task, not new authority or claims of completed work.
+The UI explains this boundary; [long-term user memory](long-term-memory.md) is a separate gate.
+
 Unknown fields, missing sections, malformed JSON, oversized strings, and excess entries fail validation.
 The response is limited to 32 KiB, 24 entries per array, and 2,048 UTF-8 bytes per string.
 Reference values must occur in supplied source content, including previously compacted notes.
@@ -94,6 +99,7 @@ After validation, the writer saves the `model_pending` request and `elitea.conte
 The state contains the definition identity, original-task anchor, covered-source count and digest, and replacement contents.
 The in-memory record changes only after persistence succeeds.
 Task-model dispatch therefore cannot precede durable summary and request storage.
+The [scoped context progress events](context-progress-events.md) expose these saved boundaries without publishing checkpoint contents.
 
 Recovery inspection runs before model credentials are redeemed.
 `NativeSessionBackend::inspect_model_checkpoint` validates `context_pending` when the admitted plan enables summarization.

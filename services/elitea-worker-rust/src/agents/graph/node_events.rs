@@ -138,6 +138,22 @@ pub(crate) fn pipeline_node_event_channel() -> (PipelineNodeEventSender, Pipelin
 }
 
 impl PipelineNodeEventSender {
+    /// Reuse the invocation-owned bridge for before-model progress. The outer
+    /// wrapper supplies the agent identity; graph forwarding adds node scope.
+    pub(crate) async fn send_context_status(&self, event: Event) -> adk_rust::Result<()> {
+        if crate::agents::context_status::ModelContextStatus::from_event(&event)?.is_none() {
+            return Err(pipeline_node_event_channel_error());
+        }
+        self.inner
+            .send(PipelineNodeEventSignal {
+                node_name: None,
+                scope: None,
+                event: Box::new(event),
+            })
+            .await
+            .map_err(|_| pipeline_node_event_channel_error())
+    }
+
     /// Forward one ordinary model/tool event. Confirmations stay owned by the
     /// graph interrupt, and incremental tool-progress events remain closed
     /// until the public projection has a bounded schema for them.

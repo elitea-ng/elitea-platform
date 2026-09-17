@@ -82,6 +82,14 @@ pub(crate) struct RequestContextBudget {
 }
 
 impl RequestContextBudget {
+    pub(super) fn mode(self) -> &'static str {
+        match self.selection {
+            BudgetSelection::Balanced => "balanced",
+            BudgetSelection::Full => "full",
+            BudgetSelection::Explicit(_) => "legacy",
+        }
+    }
+
     /// Trigger before exhausting usable input; output and margin are already reserved.
     pub(crate) fn compaction_trigger(self) -> u64 {
         (u64::from(self.input_limit) * 90).div_ceil(100)

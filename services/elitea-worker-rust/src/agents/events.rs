@@ -916,25 +916,60 @@ impl AgentEventProjector {
             return Ok(batch);
         }
         validate_adk_event(event, &self.context.root_agent_name)?;
+        let batch = if let Some(status) =
+            super::context_status::ModelContextStatus::from_event(event)
+                .map_err(|_| AgentEventProjectionError::invalid_state())?
+        {
+            self.project_context_status(event, &status)?
+        } else {
+            self.project_ordinary_event(event)?
+        };
+        self.bind_invocation_id(event);
+        Ok(batch)
+    }
+
+    fn project_context_status(
+        &self,
+        event: &Event,
+        status: &super::context_status::ModelContextStatus,
+    ) -> Result<ProjectedAgentEventBatch, AgentEventProjectionError> {
+        if !matches!(
+            self.state,
+            ProjectionState::Started | ProjectionState::Active(_) | ProjectionState::Complete(_)
+        ) {
+            return Err(AgentEventProjectionError::invalid_state());
+        }
+        let mut batch = ProjectedAgentEventBatch::new();
+        batch.push(self.event(
+            "agent_context_status", &Value::Null, None,
+            &json!({
+                "context_status": status,
+                "model_scope": if pipeline_node_name(event)?.is_some() { "pipeline_node" } else { "agent" },
+                "node_name": pipeline_node_name(event)?,
+            }), event.timestamp,
+        )?)?;
+        Ok(batch)
+    }
+
+    fn project_ordinary_event(
+        &mut self,
+        event: &Event,
+    ) -> Result<ProjectedAgentEventBatch, AgentEventProjectionError> {
         let tool_calls = event.tool_calls();
         let tool_results = event.tool_results();
         if !tool_calls.is_empty() && !tool_results.is_empty() {
             return Err(AgentEventProjectionError::invalid_state());
         }
         if !tool_results.is_empty() {
-            let batch = self.project_tool_results(event, &tool_results)?;
-            self.bind_invocation_id(event);
-            return Ok(batch);
+            return self.project_tool_results(event, &tool_results);
         }
         let Some(model_event) = ordinary_model_event(event, !tool_calls.is_empty())? else {
-            self.bind_invocation_id(event);
             return Ok(ProjectedAgentEventBatch::new());
         };
         let mut batch = self.project_model_event(event, model_event)?;
         if !tool_calls.is_empty() {
             self.project_tool_starts(event, &tool_calls, &mut batch)?;
         }
-        self.bind_invocation_id(event);
         Ok(batch)
     }
 

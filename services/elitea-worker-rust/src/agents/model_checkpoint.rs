@@ -85,6 +85,7 @@ pub(super) struct ModelCheckpointWriter {
     validated_digest: Option<[u8; 32]>,
     request_budget: Option<Arc<dyn super::context_budget::ModelRequestBudget>>,
     context_compaction: Option<Arc<super::context_compaction::DurableContextCompaction>>,
+    context_events: Option<super::graph::PipelineNodeEventSender>,
 }
 
 impl ModelCheckpointWriter {
@@ -103,7 +104,31 @@ impl ModelCheckpointWriter {
             validated_digest: None,
             request_budget: None,
             context_compaction: None,
+            context_events: None,
         }
+    }
+
+    pub(super) fn with_context_events(
+        mut self,
+        events: super::graph::PipelineNodeEventSender,
+    ) -> Self {
+        self.context_events = Some(events);
+        self
+    }
+
+    async fn emit_context_status(
+        &self,
+        phase: super::context_status::ContextPhase,
+        usage: super::context_budget::RequestContextUsage,
+    ) -> adk_rust::Result<()> {
+        if let Some(events) = &self.context_events {
+            events
+                .send_context_status(
+                    super::context_status::ModelContextStatus::new(phase, usage).event()?,
+                )
+                .await?;
+        }
+        Ok(())
     }
 
     pub(super) fn with_context_compaction(
@@ -295,28 +320,38 @@ impl ModelCheckpointWriter {
         request: LlmRequest,
     ) -> adk_rust::Result<BeforeModelResult> {
         let request = self.prepare_request(request)?;
+        let mut compacted = false;
         let (request, record) = if let Some(compaction) = &self.context_compaction {
             let request = super::replay_history::model_history(request)?;
             let source = request.clone();
+            let pending_identity = identity.clone();
+            let was_compacted = &mut compacted;
             compaction
-                .prepare(request, || async {
+                .prepare(request, |usage| async move {
                     self.persist(
-                        identity.clone(),
+                        pending_identity,
                         invocation_id,
                         Phase::ContextPending,
                         Some(&source),
                         None,
                     )
-                    .await
+                    .await?;
+                    *was_compacted = true;
+                    self.emit_context_status(super::context_status::ContextPhase::Compacting, usage)
+                        .await
                 })
                 .await?
         } else {
             (request, None)
         };
-        if let Some(budget) = &self.request_budget {
+        let usage = if let Some(budget) = &self.request_budget {
             let provider_request = super::replay_history::model_history(request.clone())?;
-            budget.measure(&provider_request)?.check()?;
-        }
+            let usage = budget.measure(&provider_request)?;
+            usage.check()?;
+            Some(usage)
+        } else {
+            None
+        };
         self.persist(
             identity,
             invocation_id,
@@ -334,6 +369,17 @@ impl ModelCheckpointWriter {
         .await?;
         if let Some(compaction) = &self.context_compaction {
             compaction.committed(record)?;
+        }
+        if let Some(usage) = usage {
+            self.emit_context_status(
+                if compacted {
+                    super::context_status::ContextPhase::Compacted
+                } else {
+                    super::context_status::ContextPhase::Measured
+                },
+                usage,
+            )
+            .await?;
         }
         Ok(BeforeModelResult::Continue(request))
     }

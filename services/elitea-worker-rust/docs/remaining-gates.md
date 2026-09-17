@@ -29,6 +29,7 @@ Current-platform code defines business behavior, not a requirement to copy its i
 | 6 | Effectful toolkit operations | Require durable intent, effect receipts, idempotency, approval, fencing, and crash reconciliation before writes. |
 | 7 | Artifact-backed capabilities | Complete attachment authority, object grants, storage behavior, and affected toolkit operations. |
 | 7a | Built-in runtime modules | Complete Attachments, Data Analysis, Image Creation, Ask User, Planner, Python Sandbox, and Smart Tools Selection. Reuse builder contracts and exclude Swarm. Verify runtime behavior and UI controls before indexing. |
+| 7b | Long-term user memory | Audit existing memory CRUD/recall and ADK memory/graph-memory integrations. Complete persistent cross-conversation recall, user control, isolation, provenance, and recovery. Keep it separate from execution compaction. |
 | 8 | Indexing | Implement indexing after the agent and artifact gates. Indexing remains last. |
 
 Read-only runtime tool binding already works for supported native families.
@@ -86,6 +87,9 @@ Its verification and delivery remain point 4 work.
 Balanced defaults to a 272,000-token total budget, capped by the model's supported context window.
 Full uses that supported window. Reserve the admitted maximum output inside either budget.
 Track current context use separately from cumulative input/output consumption.
+The platform owns the predefined structured summary prompt and validates its JSON contract, including facts, outcomes, unresolved work, next-step hints, and verified references.
+User-authored summary text is optional additional guidance, not a replacement prompt or schema.
+Long-term user memory belongs to [gate 7b](source-mapping/long-term-memory.md); compaction does not implicitly save memories.
 The 2026-09-17 clarification retires legacy numeric context settings from new compaction. Use Balanced or Full without rewriting old records.
 
 Point 4 also includes the following required work, confirmed by the user on 2026-09-14:
@@ -107,11 +111,12 @@ Settings delivery, recovery integration, deployed UI verification, and the other
 The [model compaction implementation](source-mapping/durable-context-compaction.md) adds structured notes and durable preparation checkpoints.
 Ordinary child agents now use separate model sessions, inherited policies, and root-fenced PostgreSQL persistence.
 Pipeline LLM and model-backed Decision nodes now have independent scoped persistence; mixed and model-free graph component tests pass.
-The agent suite passes 344 checks, including PostgreSQL summary reload, writer takeover, and complete streamed-result persistence.
+The agent suite passes 350 checks, including PostgreSQL summary reload, writer takeover, complete streamed-result persistence, and scoped compaction progress.
 The [dedicated summary-model component](source-mapping/dedicated-summary-model.md) separates authorized model selection, provider binding, and output limits.
 [Main settings delivery](source-mapping/context-policy-delivery.md) now resolves presets and summary selections, and preserves admitted continuation policies.
 [UI preset controls and the composer indicator](source-mapping/context-policy-ui.md) pass 295 component tests and a fresh headed-browser check with intercepted settings writes.
 Runtime occupancy projection, live compaction notices, persisted UI acceptance, and deployed model execution remain open.
+[Rust context progress events](source-mapping/context-progress-events.md) now expose measured usage and durable compaction boundaries through the existing bounded stream; Main/UI integration remains open.
 Main chat shows detailed usage; nested agents show brief compaction activity text, with separate model scopes and no combined parent/child meter.
 Nested and graph-model recovery coordination, deployed settings, and browser acceptance remain open.
 The pipeline container has no separate compaction control.

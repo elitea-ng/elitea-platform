@@ -38,6 +38,8 @@ export const VALIDATION_LIMITS = {
 /** Messages used in the context-budget UI. */
 export const CONTEXT_MESSAGES = {
   HIGH_USAGE_WARNING: 'Context usage is high. Consider configuring budget settings.',
-  DEFAULT_SUMMARY_INSTRUCTION:
-    'Generate a concise summary of the following conversation messages.',
+  SUMMARY_GUIDANCE_PLACEHOLDER:
+    'Optional: emphasize decision reasons, deliverables, and unresolved risks.',
+  SUMMARY_CONTRACT_DESCRIPTION:
+    'Elitea always preserves the task, constraints, key facts, decisions, completed work, open issues, next steps, and verified references in a structured summary. Your guidance only adds emphasis.',
 };

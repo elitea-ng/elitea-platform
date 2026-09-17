@@ -13,7 +13,7 @@ use ring::digest;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::context_budget::ModelRequestBudget;
+use super::context_budget::{ModelRequestBudget, RequestContextUsage};
 use super::context_management::ContextCompactionPlan;
 
 pub(super) const STATE_KEY: &str = "elitea.context.root.v1";
@@ -71,7 +71,7 @@ impl DurableContextCompaction {
         let record = record.filter(|record| record.definition_digest == definition_digest);
         let summarizer = Arc::new(
             LlmEventSummarizer::new(model)
-                .with_prompt_template(super::context_summary::prompt(&plan.prompt_template())),
+                .with_prompt_template(super::context_summary::prompt(&plan.summary_instructions)),
         );
         Ok(Self {
             plan,
@@ -90,7 +90,7 @@ impl DurableContextCompaction {
         before_summary: F,
     ) -> adk_rust::Result<(LlmRequest, Option<CompactionRecord>)>
     where
-        F: FnOnce() -> Fut + Send,
+        F: FnOnce(RequestContextUsage) -> Fut + Send,
         Fut: std::future::Future<Output = adk_rust::Result<()>> + Send,
     {
         let mut pinned = Vec::new();
@@ -152,7 +152,7 @@ impl DurableContextCompaction {
             .collect::<Vec<_>>();
         request.contents = joined(&pinned, &minimum);
         self.budget.measure(&request)?.check()?;
-        before_summary().await?;
+        before_summary(before).await?;
         let text = self
             .summarize(
                 pinned.last().ok_or_else(invalid_compaction)?,

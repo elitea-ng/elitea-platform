@@ -118,6 +118,120 @@ fn terminal_event_without_content(id: &str, second: u32) -> Event {
     event
 }
 
+fn context_status_event() -> Event {
+    let mut event = Event::new("invocation-1");
+    event.author = "root-agent".into();
+    event.llm_response.partial = true;
+    event.provider_metadata.insert(super::context_status::METADATA_KEY.into(), json!({
+        "version":1, "phase":"compacting", "budget_mode":"balanced", "total_tokens":272_000,
+        "usable_input_tokens":205_280, "reserved_output_tokens":64_000, "safety_margin_tokens":2720,
+        "estimated_input_tokens":190_000, "compaction_trigger_tokens":184_752, "compaction_target_tokens":143_696,
+    }).to_string());
+    event
+}
+
+#[test]
+fn context_status_preserves_model_turn_boundaries_and_scopes_pipeline_nodes() {
+    let mut projector =
+        AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({}))).unwrap();
+    projector.start(timestamp(0)).unwrap();
+    let status = context_status_event();
+    let batch: Vec<_> = projector
+        .project(&status)
+        .unwrap()
+        .into_iter()
+        .map(|event| current(&event))
+        .collect();
+    assert_eq!(batch.len(), 1);
+    assert_eq!(batch[0]["type"], "agent_context_status");
+    assert_eq!(batch[0]["response_metadata"]["model_scope"], "agent");
+    assert_eq!(
+        batch[0]["response_metadata"]["context_status"]["reserved_output_tokens"],
+        64_000
+    );
+    assert_eq!(batch[0]["content"], Value::Null);
+    let model = event(
+        "answer",
+        2,
+        false,
+        true,
+        vec![Part::Text {
+            text: "One answer".into(),
+        }],
+    );
+    let batch: Vec<_> = projector
+        .project(&model)
+        .unwrap()
+        .into_iter()
+        .map(|event| current(&event))
+        .collect();
+    assert_eq!(batch[0]["type"], "agent_llm_start");
+    let mut pipeline_status = status;
+    pipeline_status.provider_metadata.insert(
+        super::graph::PIPELINE_NODE_METADATA_KEY.into(),
+        "review_model".into(),
+    );
+    let batch: Vec<_> = projector
+        .project(&pipeline_status)
+        .unwrap()
+        .into_iter()
+        .map(|event| current(&event))
+        .collect();
+    assert_eq!(batch.len(), 1);
+    assert_eq!(
+        batch[0]["response_metadata"]["model_scope"],
+        "pipeline_node"
+    );
+    assert_eq!(batch[0]["response_metadata"]["node_name"], "review_model");
+}
+
+#[test]
+fn child_context_status_keeps_the_exact_parent_call_hierarchy() {
+    let mut projector = AgentEventProjector::with_tool_catalogs(
+        AgentEventProjectionContext::fixture(json!({})),
+        super::sensitive_tools::SensitiveToolCatalog::default(),
+        nested_application_catalog(),
+    )
+    .unwrap();
+    projector.start(timestamp(0)).unwrap();
+    projector
+        .project(&event(
+            "delegation",
+            1,
+            false,
+            true,
+            vec![Part::FunctionCall {
+                name: "elitea_agent_17_v_9".into(),
+                args: json!({"task":"Child task"}),
+                id: Some("child-call-1".into()),
+                thought_signature: None,
+            }],
+        ))
+        .unwrap();
+    let mut status = context_status_event();
+    status.invocation_id = "child-invocation-1".into();
+    status.author = "elitea_agent_17_v_9".into();
+    status.provider_metadata.insert(
+        DESCENDANT_CONTAINER_INVOCATION_KEY.into(),
+        "invocation-1".into(),
+    );
+    status
+        .provider_metadata
+        .insert(DESCENDANT_PARENT_CALL_KEY.into(), "child-call-1".into());
+    let batch: Vec<_> = projector
+        .project(&status)
+        .unwrap()
+        .into_iter()
+        .map(|event| current(&event))
+        .collect();
+    assert_eq!(batch.len(), 1);
+    let metadata = &batch[0]["response_metadata"];
+    assert_eq!(metadata["parent_agent_call_id"], "child-call-1");
+    assert_eq!(metadata["parent_agent_path"][0]["call_id"], "child-call-1");
+    assert_eq!(metadata["context_status"]["phase"], "compacting");
+    assert_eq!(metadata["model_scope"], "agent");
+}
+
 fn pipeline_hitl_event(data: Value) -> Event {
     let payload = GraphInterruptPayload {
         kind: "dynamic".to_owned(),

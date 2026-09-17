@@ -103,6 +103,7 @@ impl ModelScopeSessions {
         replay_marker: Option<Content>,
         completion: Option<Arc<dyn super::session::DurableModelCompletion>>,
     ) -> Arc<ScopedModelCheckpoint> {
+        let (context_events, context_receiver) = super::graph::pipeline_node_event_channel();
         Arc::new(ScopedModelCheckpoint {
             storage: self.clone(),
             plan,
@@ -112,6 +113,8 @@ impl ModelScopeSessions {
             skip_replay_model: AtomicBool::new(replay_marker.is_some()),
             replay_marker,
             completion,
+            context_events,
+            context_receiver,
         })
     }
 }
@@ -126,6 +129,8 @@ pub(super) struct ScopedModelCheckpoint {
     skip_replay_model: AtomicBool,
     replay_marker: Option<Content>,
     completion: Option<Arc<dyn super::session::DurableModelCompletion>>,
+    context_events: super::graph::PipelineNodeEventSender,
+    context_receiver: super::graph::PipelineNodeEventReceiver,
 }
 
 struct ScopedWriter {
@@ -200,6 +205,7 @@ impl ScopedModelCheckpoint {
                     self.storage.definition_digest,
                 )
                 .with_request_budget(Some(self.budget.clone()))
+                .with_context_events(self.context_events.clone())
                 .with_context_compaction(Some(compaction));
                 Ok(ScopedWriter {
                     identity: identity.clone(),
@@ -243,7 +249,10 @@ impl ScopedModelCheckpoint {
 
     pub(super) fn wrap(self: Arc<Self>, inner: Arc<dyn Agent>) -> Arc<dyn Agent> {
         Arc::new(ModelScopeAgent {
-            inner,
+            inner: Arc::new(super::graph::PipelineNodeEventStreamingAgent::new(
+                inner,
+                self.context_receiver.clone(),
+            )),
             checkpoint: self,
         })
     }

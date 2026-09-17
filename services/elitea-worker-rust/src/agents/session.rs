@@ -1846,11 +1846,15 @@ fn build_runtime_agent(
         .disallow_transfer_to_parent(true)
         .disallow_transfer_to_peers(true);
     builder = instruction_plan.bind_builder(builder);
-    if let Some(checkpoint) = checkpoint {
+    let context_events = if let Some(checkpoint) = checkpoint {
         // Persist the prepared request, including authoritative instructions.
         // Recovery substitutes that exact request after fresh tool binding.
-        builder = checkpoint.bind(builder);
-    }
+        let (events, receiver) = super::graph::pipeline_node_event_channel();
+        builder = checkpoint.with_context_events(events).bind(builder);
+        Some(receiver)
+    } else {
+        None
+    };
     if parallel {
         builder = builder.tool_execution_strategy(ToolExecutionStrategy::Parallel);
     }
@@ -1875,6 +1879,9 @@ fn build_runtime_agent(
         resume: _,
     } = application_runtime;
     let agent: Arc<dyn Agent> = Arc::new(builder.build().map_err(|_| invalid_configuration())?);
+    let agent: Arc<dyn Agent> = context_events.map_or(agent.clone(), |events| {
+        Arc::new(PipelineNodeEventStreamingAgent::new(agent, events))
+    });
     let agent = instruction_plan.wrap(agent);
     let agent = delegated_authorization_agent(agent, delegated_authorization.clone());
     let agent = clarifying_question_agent(agent, internal_tools);

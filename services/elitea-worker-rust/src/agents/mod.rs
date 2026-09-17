@@ -6,6 +6,7 @@ pub(crate) mod attachments;
 pub(crate) mod context_budget;
 mod context_compaction;
 pub(crate) mod context_management;
+mod context_status;
 mod context_summary;
 pub(crate) mod direct_hitl;
 pub(crate) mod events;

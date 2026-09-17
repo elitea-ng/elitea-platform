@@ -76,10 +76,10 @@ export const MemorySummarization = memo(({ models = [] }: { models?: readonly Su
       <Box sx={styles.section}>
         <InputBase
           data-testid="summary-instructions-input"
-          label={t('settings.memory.summarization.instructions', 'Summarization instructions')}
+          label={t('settings.memory.summarization.additionalGuidance', 'Additional summary guidance (optional)')}
           tooltipDescription={t(
-            'settings.memory.summarization.instructionsTooltip',
-            'Custom instructions for how summaries should be generated',
+            'settings.memory.summarization.contractDescription',
+            CONTEXT_MESSAGES.SUMMARY_CONTRACT_DESCRIPTION,
           )}
           autoComplete="off"
           outlined
@@ -87,9 +87,9 @@ export const MemorySummarization = memo(({ models = [] }: { models?: readonly Su
           value={values.summary_llm_settings.instructions}
           onChange={handleInstructionsChange}
           error={Boolean(fieldErrors?.instructions)}
-          helperText={fieldErrors?.instructions ?? ' '}
+          helperText={fieldErrors?.instructions ?? t('settings.memory.summarization.contractDescription', CONTEXT_MESSAGES.SUMMARY_CONTRACT_DESCRIPTION)}
           disabled={isSummarizationDisabled}
-          placeholder={CONTEXT_MESSAGES.DEFAULT_SUMMARY_INSTRUCTION}
+          placeholder={t('settings.memory.summarization.guidancePlaceholder', CONTEXT_MESSAGES.SUMMARY_GUIDANCE_PLACEHOLDER)}
           actions={{ enabled: true, showCopy: true }}
           containerSx={styles.inputContainer}
         />

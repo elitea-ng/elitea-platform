@@ -19,6 +19,9 @@ Old numeric records remain readable and display Balanced; saving the form change
 The rail editor preserves other account fields and the existing enabled flag.
 Choosing the chat model clears the separate summary-model owner; choosing a dedicated model sends its numeric project ID.
 An unavailable saved model selection stays visible until the user chooses another model.
+The summary field is labelled “Additional summary guidance (optional)”. Its help text explains the mandatory platform summary contract.
+The platform always places the source records and validates the structured result. Legacy transcript placeholders in user guidance do not replace that template.
+This is separate from the existing long-term-memory controls and the [gate 7b audit](long-term-memory.md).
 
 Balanced is capped at 272,000 total tokens and the model window. Full uses the model window.
 Both reserve output and a safety margin internally. The UI explains the 90-percent usable-input trigger.
@@ -40,6 +43,7 @@ This slice does not yet implement those worker events or claim live compaction n
 - An existing copied-skill test conversation opens the composer details with Enter and closes with Escape. The unknown reading is visible. There are no browser page errors.
 - Browser reads use the rehearsal backend. Profile PUTs are intercepted to inspect request shape without activating new settings against the older deployed Main. This is UI/request-contract proof, not persisted full-stack acceptance.
 - The regenerated Go API compiles; focused Main context and execution tests pass.
+- The optional-guidance clarification passes nine focused UI tests, TypeScript, Oxlint, and a repeated fresh-browser check. The platform prompt remains mandatory and its output is validated separately in Rust.
 
 The temporary evidence prefix is `elitea-point4-context-`; browser results are in `context-browser-result.json` under that prefix.
 No application schema change or deployment occurs in this slice.

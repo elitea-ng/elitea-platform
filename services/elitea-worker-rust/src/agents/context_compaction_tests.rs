@@ -10,6 +10,7 @@ use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::agents::context_budget::{RequestContextBudget, RequestContextUsage};
+use crate::agents::context_status::ContextPhase;
 use crate::agents::model_checkpoint::{CHECKPOINT_KEY, ModelCheckpointWriter};
 use crate::agents::request::ModelContextLimits;
 
@@ -37,6 +38,7 @@ impl ModelRequestBudget for Budget {
 struct Summary {
     requests: Mutex<Vec<LlmRequest>>,
     fail: bool,
+    pause: Option<Arc<tokio::sync::Notify>>,
 }
 #[async_trait]
 impl Llm for Summary {
@@ -50,6 +52,9 @@ impl Llm for Summary {
     ) -> adk_rust::Result<LlmResponseStream> {
         assert!(!streaming);
         self.requests.lock().unwrap().push(request);
+        if let Some(pause) = &self.pause {
+            pause.notified().await;
+        }
         if self.fail {
             return Err(AdkError::new(
                 ErrorComponent::Model,
@@ -97,7 +102,7 @@ fn plan() -> ContextCompactionPlan {
     }
 }
 
-async fn checkpoint_ready() -> adk_rust::Result<()> {
+async fn checkpoint_ready(_: RequestContextUsage) -> adk_rust::Result<()> {
     Ok(())
 }
 
@@ -253,7 +258,7 @@ async fn oversized_protected_input_fails_without_spending_a_summary_call() {
     let mut request = history();
     request.contents[0] = Content::new("system").with_text("protected ".repeat(4000));
     let result = compaction
-        .prepare(request, || async {
+        .prepare(request, |_| async {
             panic!("must fail before summary preparation")
         })
         .await;
@@ -351,6 +356,106 @@ async fn run(sessions: Arc<dyn SessionService>, recover: bool) -> (usize, usize,
     run_with_summary_failure(sessions, recover, false).await
 }
 
+#[tokio::test]
+async fn compaction_progress_is_observable_while_the_summary_model_is_pending() {
+    use crate::agents::context_status::ModelContextStatus;
+    use crate::agents::graph::{PipelineNodeEventStreamingAgent, pipeline_node_event_channel};
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    seed(sessions.as_ref()).await;
+    let stored = sessions.get(load_request()).await.unwrap();
+    let release = Arc::new(tokio::sync::Notify::new());
+    let summary = Arc::new(Summary {
+        pause: Some(release.clone()),
+        ..Summary::default()
+    });
+    let compaction = Arc::new(
+        DurableContextCompaction::new(plan(), Arc::new(Budget), summary, [7; 32], stored.as_ref())
+            .unwrap(),
+    );
+    let (sender, receiver) = pipeline_node_event_channel();
+    let writer = ModelCheckpointWriter::new(sessions.clone(), "execution".into(), 7, [7; 32])
+        .with_request_budget(Some(Arc::new(Budget)))
+        .with_context_compaction(Some(compaction))
+        .with_context_events(sender);
+    let model = Arc::new(ModelAfterCheckpoint {
+        sessions: sessions.clone(),
+        calls: AtomicUsize::new(0),
+    });
+    let builder = adk_rust::agent::LlmAgentBuilder::new("agent")
+        .model(model.clone())
+        .before_model_callback(Box::new(|_, mut request| {
+            Box::pin(async move {
+                request.contents.insert(
+                    0,
+                    Content::new("system").with_text("EXACT_SKILL_REVISION_AND_PROJECT_CONTEXT"),
+                );
+                Ok(BeforeModelResult::Continue(request))
+            })
+        }));
+    let runner = adk_rust::runner::Runner::builder()
+        .app_name("elitea-agent-v1")
+        .agent(Arc::new(PipelineNodeEventStreamingAgent::new(
+            Arc::new(writer.bind(builder).build().unwrap()),
+            receiver,
+        )))
+        .session_service(sessions.clone())
+        .build()
+        .unwrap();
+    let mut events = runner
+        .run(
+            "user-1".try_into().unwrap(),
+            "session-1".try_into().unwrap(),
+            Content::new("user").with_text("Continue."),
+        )
+        .await
+        .unwrap();
+    let first = tokio::time::timeout(std::time::Duration::from_secs(2), events.next())
+        .await
+        .expect("status must arrive before summary completion")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        ModelContextStatus::from_event(&first)
+            .unwrap()
+            .unwrap()
+            .phase,
+        ContextPhase::Compacting
+    );
+    let pending = sessions
+        .get(load_request())
+        .await
+        .unwrap()
+        .state()
+        .get(CHECKPOINT_KEY)
+        .unwrap();
+    assert_eq!(pending["phase"], "context_pending");
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0);
+    release.notify_one();
+    let finished = events.next().await.unwrap().unwrap();
+    assert_eq!(
+        ModelContextStatus::from_event(&finished)
+            .unwrap()
+            .unwrap()
+            .phase,
+        ContextPhase::Compacted
+    );
+    assert_eq!(
+        sessions
+            .get(load_request())
+            .await
+            .unwrap()
+            .state()
+            .get(CHECKPOINT_KEY)
+            .unwrap()["phase"],
+        "model_pending"
+    );
+    assert_eq!(
+        events.next().await.unwrap().unwrap_err().code,
+        "fixture_after_checkpoint"
+    );
+    assert!(events.next().await.is_none());
+}
+
 async fn run_with_summary_failure(
     sessions: Arc<dyn SessionService>,
     recover: bool,
@@ -374,6 +479,8 @@ async fn run_with_summary_failure(
     let mut writer = ModelCheckpointWriter::new(sessions.clone(), "execution".into(), 7, [7; 32])
         .with_request_budget(Some(Arc::new(Budget)))
         .with_context_compaction(Some(compaction));
+    let (context_events, context_receiver) = crate::agents::graph::pipeline_node_event_channel();
+    writer = writer.with_context_events(context_events);
     if recover {
         // Production validates evidence before it can construct a summary model.
         let evidence = ModelCheckpointWriter::new(sessions.clone(), "execution".into(), 7, [7; 32])
@@ -405,7 +512,12 @@ async fn run_with_summary_failure(
         }));
     let runner = adk_rust::runner::Runner::builder()
         .app_name("elitea-agent-v1")
-        .agent(Arc::new(writer.bind(builder).build().unwrap()))
+        .agent(Arc::new(
+            crate::agents::graph::PipelineNodeEventStreamingAgent::new(
+                Arc::new(writer.bind(builder).build().unwrap()),
+                context_receiver,
+            ),
+        ))
         .session_service(sessions)
         .build()
         .unwrap();
@@ -418,13 +530,43 @@ async fn run_with_summary_failure(
         .await
         .unwrap();
     let mut errors = Vec::new();
+    let mut phases = Vec::new();
     while let Some(event) = stream.next().await {
-        if let Err(error) = event {
-            errors.push(error.code.to_string());
+        match event {
+            Err(error) => errors.push(error.code.to_string()),
+            Ok(event) => {
+                if let Some(status) =
+                    crate::agents::context_status::ModelContextStatus::from_event(&event).unwrap()
+                {
+                    assert_eq!(event.author, "agent");
+                    assert!(event.content().is_none());
+                    phases.push(status.phase);
+                }
+            }
         }
     }
     let summaries = summary.requests.lock().unwrap().len();
+    assert_context_phases(summaries, model.calls.load(Ordering::SeqCst), &phases);
     (summaries, model.calls.load(Ordering::SeqCst), errors)
+}
+
+fn assert_context_phases(summaries: usize, model_calls: usize, phases: &[ContextPhase]) {
+    if summaries > 0 {
+        assert_eq!(phases.first(), Some(&ContextPhase::Compacting));
+    }
+    if model_calls > 0 {
+        assert_eq!(
+            phases.last(),
+            Some(&if summaries > 0 {
+                ContextPhase::Compacted
+            } else {
+                ContextPhase::Measured
+            })
+        );
+        assert_eq!(phases.len(), if summaries > 0 { 2 } else { 1 });
+    } else {
+        assert!(!phases.contains(&ContextPhase::Compacted));
+    }
 }
 
 async fn seed(sessions: &dyn SessionService) {
