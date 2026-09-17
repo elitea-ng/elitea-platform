@@ -145,6 +145,10 @@ adminTest('ELITEA-0030: every card configuration block is present on the Help Ce
 adminTest(
   'ELITEA-0025: the Information card’s version field persists and reaches the public Help Center page',
   async ({ page, request }) => {
+    // The lock's own arithmetic (see `admin.features.spec.ts`): up to
+    // STALE_MS (90 s) to take the writer, up to STALE_MS again for the
+    // readers to drain, and about 30 s of assertions after that.
+    adminTest.setTimeout(210_000);
     heldLock = true;
     await withPlatformFlagLock(async () => {
       const probeVersion = `E2E-${RUN_ID}`;
@@ -185,6 +189,8 @@ adminTest(
 adminTest(
   'ELITEA-0029 + ELITEA-0031: disabling a card persists and hides it on /help-center; re-enabling restores it',
   async ({ page, request }) => {
+    // See the timeout note on ELITEA-0025 above — same lock arithmetic.
+    adminTest.setTimeout(210_000);
     heldLock = true;
     await withPlatformFlagLock(async () => {
       try {
