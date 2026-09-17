@@ -64,9 +64,14 @@ export function BucketList(props: BucketListProps): ReactNode {
                 onClick={() => props.onSelect(bucket)}
               >
                 <BucketIcon style={bucketIconStyle} />
-                <Typography sx={nameSx}>
-                  {bucket.name}
-                </Typography>
+                {/* elitea_issues: #2723 — a long bucket name ellipsizes (nameSx's textOverflow) with no
+                 * way to read the rest; a Tooltip on hover/focus restores that, matching the action
+                 * icons' own Tooltips in this row. */}
+                <Tooltip title={bucket.name}>
+                  <Typography sx={nameSx}>
+                    {bucket.name}
+                  </Typography>
+                </Tooltip>
               </Box>
               <Box
                 className="artifact-bucket-actions"
