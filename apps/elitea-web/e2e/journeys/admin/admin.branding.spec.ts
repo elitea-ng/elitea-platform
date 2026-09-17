@@ -79,6 +79,11 @@ async function openBranding(page: Page): Promise<void> {
   await expect(page.getByRole('textbox', { name: 'Product name' })).toBeVisible({ timeout: 20_000 });
 }
 
+/* elitea_issues: #3732 — COVERED-EXISTING: on-prem theming (configurable
+   logo/favicon, colour palette, WCAG contrast, "Reset to defaults", the public
+   `/api/v2/branding/bootstrap.js` broadcast) is already fully shipped here —
+   this whole file, not a gap. See also J38b (per-field server validation),
+   J38d (package export/import) and the "Reset to defaults" coverage below. */
 adminTest('J38: a rebrand saved through the page reaches the bootstrap route', async ({ page }, testInfo) => {
   const project = testInfo.project.name;
   await withPlatformFlagLock(async () => {
