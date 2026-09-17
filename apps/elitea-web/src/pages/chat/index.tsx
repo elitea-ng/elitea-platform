@@ -38,7 +38,13 @@ import Box from '@mui/material/Box';
 import { conversationNavigation, useChatSessionStore } from '@/entities/conversation';
 import { useDeleteParticipantMutation, type Participant } from '@/entities/participant';
 import type { AnswerCanvasSelection, CanvasEditPayload, CodeBlockInfo } from '@/features/chat-messages';
-import { AddNewUserModal, canParticipantBeActiveInChat, ParticipantsWrapper, useLocalActiveParticipant } from '@/features/chat-participants';
+import {
+  AddNewUserModal,
+  canParticipantBeActiveInChat,
+  ParticipantsWrapper,
+  useIsMcpVisible,
+  useLocalActiveParticipant,
+} from '@/features/chat-participants';
 import type { ChatBoxProps } from '@/widgets/chat-box';
 import { ChatBox, toParticipant } from '@/widgets/chat-box';
 import { ContextBudget } from '@/widgets/context-budget';
@@ -170,6 +176,16 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
   const llm = useChatModelSettings({ activeConversation, projectId, userId: user?.id });
   const { getLocalActiveParticipant, setLocalActiveParticipant, clearLocalActiveParticipant } = useLocalActiveParticipant();
   const { mutate: deleteParticipant } = useDeleteParticipantMutation();
+  /**
+   * elitea_issues #5367 (adjacent finding): `<ParticipantsWrapper>` below
+   * never received an `isMcpVisible` prop, and `Participants.tsx` defaults
+   * it `false` — so an mcp-classified participant (local OR remote) was
+   * dropped from every rendered group, not merely placed under the wrong
+   * one. This is the platform's actual MCP-visibility setting, the same one
+   * `PlusChatButton`/`useSlashMention` already gate their own MCP entry
+   * points on.
+   */
+  const isMcpVisible = useIsMcpVisible();
   useMessageIdToView(messageId, conversationIdOf(activeConversation));
 
   const [activeParticipant, setActiveParticipant] = useState<unknown>(undefined);
@@ -304,6 +320,7 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
         collapsed={participantsCollapsed}
         onCollapsed={() => setParticipantsCollapsed((prev) => !prev)}
         panelWidth={PARTICIPANTS_PANEL_WIDTH}
+        isMcpVisible={isMcpVisible}
         {...(activeConversation
           // `ChatBoxActiveConversation` types `participants` as `unknown[]`,
           // the rail's own prop as `Record<string, unknown>[]`. Same rows, two
