@@ -117,9 +117,20 @@ func bucketNamed(t *testing.T, buckets []pagedBucket, name string) pagedBucket {
 // seedTodayConversations seeds n conversations that all land in the "Today"
 // bucket, newest last, and returns their ids in the order the rail must serve
 // them: newest first.
+//
+// The handler's "Today" boundary (handler.go groupByDate) is midnight in
+// time.Now().Location() at request time — not a fixed offset from "now". A
+// seed base of "now minus 2 hours" used to assume the clock was always at
+// least 2 hours past local midnight, which is false for the first two hours
+// of the day (00:00-02:00 UTC in CI, where the process runs in UTC): the
+// whole 13-minute spread of seeded rows then landed before midnight, in
+// "Yesterday", and no "Today" bucket was ever returned. Anchoring to
+// midnight itself keeps every seeded row on the bucket's own side of the
+// boundary at any hour.
 func seedTodayConversations(t *testing.T, pool *pgxpool.Pool, prefix string, n int) []int {
 	t.Helper()
-	base := time.Now().UTC().Add(-2 * time.Hour)
+	now := time.Now()
+	base := time.Date(now.Year(), now.Month(), now.Day(), 0, 1, 0, 0, now.Location())
 	ids := make([]int, 0, n)
 	for i := range n {
 		id := seedPinnedListingConversationAt(t, pool, fmt.Sprintf("%s_%02d", prefix, i), base.Add(time.Duration(i)*time.Minute), nil)
