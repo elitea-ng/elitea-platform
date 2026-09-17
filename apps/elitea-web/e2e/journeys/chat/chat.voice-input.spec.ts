@@ -344,3 +344,42 @@ test('voice dictation inserts at the last edited position, not a bare click', as
   );
   await expect(input).toHaveValue('Hello world beautiful');
 });
+
+/*
+ * onetest: ELITEA-1319 — a network interruption during an active recording session must not crash
+ * or permanently freeze the input field, and the interface must stay usable for typed input once the
+ * session ends.
+ *
+ * Dictation is entirely CLIENT-SIDE on this stack (module header above): `useSpeechRecognition` never
+ * makes a network call of its own, so there is no request for a dropped connection to fail. The real
+ * risk this case guards — and the one asserted here — is the INPUT FIELD wedging while offline, not a
+ * fetch rejecting. The onetest source's own note that the mic icon "may visually remain in active
+ * state" is a stated ACCEPTED limitation there too, so it is not asserted either way.
+ */
+test('a network interruption during active recording does not freeze the input field', async ({
+  page,
+  context,
+}) => {
+  await openChat(page);
+  const input = page.getByTestId('chat-message-input');
+
+  const mic = page.locator('button[aria-pressed]');
+  await mic.click();
+  await fireTranscript(page, 'checking the network', false);
+  await expect(input).toHaveValue('checking the network');
+
+  await context.setOffline(true);
+  await page.waitForTimeout(1_000);
+
+  // Still alive and responsive — not a crashed or frozen tab.
+  await expect(input).toBeVisible();
+  await expect(input).toBeEditable();
+
+  await context.setOffline(false);
+
+  // Whatever the mic icon's own visual state settled on, typed input keeps working afterwards.
+  await input.fill('');
+  await input.fill('Network restored');
+  await expect(input).toHaveValue('Network restored');
+  await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 5_000 });
+});

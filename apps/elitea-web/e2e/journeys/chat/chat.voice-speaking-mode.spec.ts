@@ -374,3 +374,41 @@ test('switching tabs and back does not disable Speaking Mode', async ({ page, co
 
   await other.close();
 });
+
+/*
+ * onetest: ELITEA-1341 — regression test for #5235: the Voice Mini Player / read-out controls must
+ * NOT be visible in a default chat conversation before Voice/Read-out has been explicitly activated.
+ *
+ * The onetest source's precondition is a completed AI response; this file's own header states why
+ * that never happens on this stack's `journeys` project (no worker). The claim asserted here is
+ * STRICTER, not weaker: the player must be absent on load AND after a real send that this deployment
+ * cannot answer — a build that renders it only once a response streams in would still fail the
+ * moment one eventually arrived, so proving it is absent with no response yet in flight is the
+ * meaningful, checkable half of the regression.
+ */
+test('the Voice Mini Player is not rendered by default in a chat conversation (regression #5235)', async ({
+  page,
+}) => {
+  await page.goto(`${BASE_URL}/app/chat`, { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId('chat-voice-mini-player')).toHaveCount(0);
+
+  const text = uniqueName('minicheck');
+  await page.getByTestId('chat-message-input').fill(text);
+  const sendButton = page.getByTestId('chat-send-button');
+  await expect(sendButton).toBeEnabled({ timeout: 5_000 });
+  const created = page.waitForResponse(
+    (response) => response.url().includes(CONVERSATIONS_PATH) && response.request().method() === 'POST',
+    { timeout: 15_000 },
+  );
+  await sendButton.click();
+  const response = await created;
+  const body = (await response.json()) as { id?: string };
+
+  try {
+    await expect(page.getByTestId('user-message').first()).toContainText(text, { timeout: 15_000 });
+    await expect(page.getByTestId('chat-voice-mini-player')).toHaveCount(0);
+  } finally {
+    if (body.id) await deleteConversation(page.request, body.id);
+  }
+});
