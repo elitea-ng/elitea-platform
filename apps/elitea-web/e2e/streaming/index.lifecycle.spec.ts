@@ -268,6 +268,12 @@ test('an existing index can be re-indexed, and the server records the new run', 
   const restarted = page.waitForResponse((r) => START_RE.test(r.url()) && r.request().method() === 'POST', { timeout: 60_000 });
   await reindexButton.click();
 
+  // issue #5984: `ReindexButton` now opens a BaseModal confirmation before
+  // firing — the PUT does not go out until it is confirmed.
+  const confirmDialog = page.getByRole('dialog', { name: 'Reindex confirmation' });
+  await expect(confirmDialog).toBeVisible({ timeout: 10_000 });
+  await confirmDialog.getByRole('button', { name: 'Reindex', exact: true }).click();
+
   const restartResponse = await restarted;
   expect(
     restartResponse.status(),
