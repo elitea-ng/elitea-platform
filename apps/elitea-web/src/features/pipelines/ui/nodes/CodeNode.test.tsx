@@ -195,4 +195,10 @@ describe('CodeNode', () => {
 
     expect(container.querySelector('.react-flow__handle')).not.toBeInTheDocument();
   });
+
+  /* elitea_issues: #5203 — product gap: no `debug` toggle exists on the Code node, so there is no way to capture the assembled preamble+user code the sandbox actually ran to a `code_debug` artifact. */
+  it.fails('elitea_issues 5203: a Debug toggle exists on the Code node for artifact capture', () => {
+    const { getByRole } = renderCodeNode();
+    expect(getByRole('checkbox', { name: /debug/i })).toBeInTheDocument();
+  });
 });
