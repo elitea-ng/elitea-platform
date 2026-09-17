@@ -3162,6 +3162,7 @@
   "features.agents.compareVersions.title": "Compare versions",
   "features.agents.compareVersions.toolsSkills": "Tools & Skills",
   "features.agents.compareVersions.tooltip": "Compare versions",
+  "features.agents.compareVersions.versionByAuthor": "{{name}} · {{author}}",
   "features.agents.compareVersions.welcomeMessage": "Welcome message",
   "features.toolkits.indexingReport.andMore": "… and {{count}} more",
   "features.toolkits.indexingReport.andMoreErrors": "… and {{count}} more distinct errors",
