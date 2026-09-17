@@ -388,6 +388,17 @@ test.describe('bucket permission exceptions: edit/remove/enforcement (ELITEA-247
       const memberCtx = await browser.newContext({ storageState: STORAGE_STATE.member });
       const memberPage = await memberCtx.newPage();
       await openArtifacts(memberPage);
+      // A settling assertion before the SECOND navigation — the same shape
+      // ELITEA-2482/2487 already use above. `openArtifacts` alone does not
+      // wait for the first document's own boot traffic (the OIDC session
+      // probe) to finish, and firing a second `.goto()` immediately races it:
+      // WebKit cancels the in-flight navigation and can leave the frame on
+      // the interrupted redirect target (`oidc.localhost/oauth2/authorize`)
+      // instead of the app — measured as this exact test's own failure, a
+      // `row` that never becomes visible because the frame is still on the
+      // identity provider (`artifacts.bucket-access.spec.ts`'s header
+      // documents the same WebKit boot-traffic race).
+      await expect(memberPage.getByText(bucket, { exact: true })).toBeVisible({ timeout: 15_000 });
       await memberPage.goto(`${ARTIFACTS_URL}?bucket=${bucket}`);
       await memberPage.waitForURL('**/artifacts**', { timeout: 15_000 });
 
