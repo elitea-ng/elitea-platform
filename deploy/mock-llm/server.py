@@ -423,6 +423,27 @@ def _tool_result_text_this_turn(messages: list[dict]) -> str | None:
     return None
 
 
+def _tool_results_this_turn(messages: list[dict]) -> list[str]:
+    """Every tool result belonging to the CURRENT turn, oldest first.
+
+    The plural of `_tool_result_text_this_turn`, for the same reason
+    `_call_tool_markers` is the plural of `_call_tool_marker`: a turn that
+    emitted several calls comes back carrying several results, and a resume
+    detector that reads only the newest one would answer as though the others
+    had never happened — which is exactly the difference a "the blocked call
+    did not stop the one beside it" assertion is made of.
+    """
+    results: list[str] = []
+    for message in reversed(messages or []):
+        role = message.get("role")
+        if role == "user":
+            break
+        if role in ("tool", "function"):
+            results.append(_message_text(message))
+    results.reverse()
+    return results
+
+
 class _ChatScript(NamedTuple):
     """What one chat request is answered with, and how fast."""
 
@@ -527,6 +548,18 @@ def _marker_body(prompt: str, start: int) -> str | None:
     one, so every prompt written before this existed parses as it did — a
     stray `]]` in the trailing text is still past the end and still ignored.
     """
+    found = _marker_body_span(prompt, start)
+    return None if found is None else found[0]
+
+
+def _marker_body_span(prompt: str, start: int) -> tuple[str, int] | None:
+    """`_marker_body`, plus the index just past the marker's closing `]]`.
+
+    Split out so a prompt carrying SEVERAL markers can be scanned left to
+    right: the next scan starts where the previous marker ended, which is what
+    keeps a NESTED marker (the delegation shape, whose `]]` closes first) from
+    being read as a second top-level call.
+    """
     depth = 0
     index = start
     while index < len(prompt) - 1:
@@ -538,7 +571,7 @@ def _marker_body(prompt: str, start: int) -> str | None:
         if pair == "]]":
             depth -= 1
             if depth == 0:
-                return prompt[start + len(CALL_TOOL_MARKER_PREFIX):index]
+                return prompt[start + len(CALL_TOOL_MARKER_PREFIX):index], index + 2
             index += 2
             continue
         index += 1
@@ -587,7 +620,52 @@ def _call_tool_marker(prompt: str) -> tuple[str, str] | None:
     return operation, json.dumps(decoded)
 
 
-def _call_tool_call_id(operation: str, prompt: str) -> str:
+def _call_tool_markers(prompt: str) -> list[tuple[str, str]]:
+    """Every TOP-LEVEL `[[mock:call_tool …]]` marker, left to right.
+
+    One marker is the whole of what this mock scripted until the sensitive-tool
+    tail cases needed a turn that calls MORE THAN ONE tool: "the same sensitive
+    tool twice in one turn is authorized once", "two different sensitive tools
+    each raise their own pause", and "a blocked sensitive call does not stop the
+    non-sensitive call beside it" are all properties of ONE assistant message
+    carrying several `tool_calls`, and none of them is observable from a turn
+    that can only ever emit one.
+
+    Scanning resumes past each marker's own close rather than from the next
+    `[[`, so a marker NESTED inside another's arguments (the two-level
+    delegation shape) is still part of its parent and never counted as a second
+    top-level call. A prompt with exactly one marker therefore yields exactly
+    what `_call_tool_marker` yields, and every prompt written before this
+    existed is scripted byte for byte as it was.
+    """
+    markers: list[tuple[str, str]] = []
+    index = 0
+    while True:
+        start = prompt.find(CALL_TOOL_MARKER_PREFIX, index)
+        if start < 0:
+            return markers
+        found = _marker_body_span(prompt, start)
+        if found is None:
+            return markers
+        body, index = found
+        operation, _, raw_arguments = body.strip().partition(" ")
+        operation = operation.strip()
+        if not operation:
+            continue
+        raw_arguments = raw_arguments.strip()
+        if not raw_arguments:
+            markers.append((operation, CALL_TOOL_DEFAULT_ARGUMENTS))
+            continue
+        try:
+            decoded = json.loads(raw_arguments)
+        except ValueError:
+            continue
+        if not isinstance(decoded, dict):
+            continue
+        markers.append((operation, json.dumps(decoded)))
+
+
+def _call_tool_call_id(operation: str, prompt: str, ordinal: int = 0) -> str:
     """A call id that is stable for one prompt and distinct between prompts.
 
     A fixed literal would repeat inside one conversation, and the HITL journey
@@ -596,7 +674,7 @@ def _call_tool_call_id(operation: str, prompt: str) -> str:
     stale one. Deriving it from the prompt keeps a rerun reproducible while
     keeping two different turns apart.
     """
-    digest = hashlib.sha256(f"{operation}\0{prompt}".encode()).hexdigest()[:16]
+    digest = hashlib.sha256(f"{operation}\0{prompt}\0{ordinal}".encode()).hexdigest()[:16]
     return f"call_mock_tool_{digest}"
 
 
@@ -610,13 +688,25 @@ def _call_tool_calls(operation: str, arguments: str, prompt: str) -> list[dict]:
     arguments carries them verbatim — see CALL_TOOL_DEFAULT_ARGUMENTS for the
     tool class that cannot be called without them.
     """
+    return _call_tool_calls_for([(operation, arguments)], prompt)
+
+
+def _call_tool_calls_for(markers: list[tuple[str, str]], prompt: str) -> list[dict]:
+    """One `tool_calls` entry per marker, in the order the prompt named them.
+
+    The call id carries the marker's ORDINAL as well as its operation, because
+    the same operation may be named twice in one prompt and two calls that
+    share an id cannot be told apart by anything downstream — not the runtime's
+    per-call HITL decision map, not the transcript, not a test.
+    """
     return [
         {
-            "index": 0,
-            "id": _call_tool_call_id(operation, prompt),
+            "index": ordinal,
+            "id": _call_tool_call_id(operation, prompt, ordinal),
             "type": "function",
             "function": {"name": operation, "arguments": arguments},
         }
+        for ordinal, (operation, arguments) in enumerate(markers)
     ]
 
 
@@ -665,24 +755,32 @@ def _script_for(messages: list[dict]) -> _ChatScript:
             "ask_user_resumed",
         )
 
-    marker = _call_tool_marker(prompt)
-    if marker is not None:
-        operation, arguments = marker
-        answered = _tool_result_text_this_turn(messages)
-        if answered is None:
-            # First pass: invoke the tool the marker names.
+    markers = _call_tool_markers(prompt)
+    if markers:
+        answered = _tool_results_this_turn(messages)
+        if not answered:
+            # First pass: invoke every tool the prompt's markers name.
             return _ChatScript(
                 "",
-                _call_tool_calls(operation, arguments, prompt),
+                _call_tool_calls_for(markers, prompt),
                 CHUNK_DELAY_SECONDS,
                 "call_tool",
             )
-        # Resume: quote the tool result verbatim. That is what makes the
+        # Resume: quote the tool results verbatim. That is what makes the
         # answer discriminating — a run whose tool was never dispatched, or
         # whose call was BLOCKED, carries a different result string, and the
         # stored reply says which one happened without reading a single log.
+        #
+        # The single-marker sentence is emitted UNCHANGED, because ~30 specs
+        # assert on it; a multi-call turn appends one clause per result, in the
+        # order the results came back, so a blocked call and an executed one
+        # are both readable off the same reply.
+        if len(markers) == 1 and len(answered) == 1:
+            body = f"tool {markers[0][0]} said {answered[0]}"
+        else:
+            body = " ".join(f"tool result {index + 1} said {text}" for index, text in enumerate(answered))
         return _ChatScript(
-            f"{PREFIX} tool {operation} said {answered} {CALL_TOOL_SENTINEL}".strip(),
+            f"{PREFIX} {body} {CALL_TOOL_SENTINEL}".strip(),
             None,
             CHUNK_DELAY_SECONDS,
             "call_tool_resumed",
