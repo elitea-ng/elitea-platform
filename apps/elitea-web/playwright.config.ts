@@ -6,6 +6,12 @@
  *   chromium      — every journey under e2e/journeys against the real
  *                   stack, chromium
  *   webkit        — the same journeys, webkit (spec §6.2)
+ *   platform-flags,
+ *   platform-flags-webkit
+ *                 — the journeys that WRITE a platform-wide flag, one worker
+ *                   each, `testIgnore`d out of chromium/webkit so the sharded
+ *                   legs never queue on the platform-flag mutex; see
+ *                   `PLATFORM_FLAG_JOURNEYS` below
  *
  * The count is deliberately NOT written here. It was "30" and had drifted:
  * journeys are discovered by the testMatch glob below, so a number in this
@@ -236,6 +242,74 @@ const EMPTY_TOOLKIT_LIST_JOURNEY = /journeys\/toolkits\/toolkits\.emptyList\.spe
  * while being `setup`'s teardown is a cycle.
  */
 const FIXTURE_ISOLATION_JOURNEY = /journeys\/api\/api\.fixture-isolation\.spec\.ts/;
+
+/*
+ * ── THE PLATFORM-FLAG WRITERS, AND WHY THEY LEFT THE SHARDED PROJECTS ─────
+ *
+ * Every spec named below takes `withPlatformFlagLock` (e2e/fixtures/
+ * platformFlags.ts) — a PLATFORM-WIDE mutex, because the rows it writes
+ * (`mcp_enabled`, `support_assistant_enabled`, the branding pack, the
+ * guardrail maps, the Help Center cards, the publishing guardrails) are one
+ * row for the whole deployment. While one of them is inside its window the
+ * platform IS changed, for every other worker as well.
+ *
+ * `fullyParallel: true` + `workers: 4` put those writers on four workers that
+ * then queue for one lock, and every journey added to the set lengthened the
+ * queue. Two failure shapes came out of it, and BOTH were read as product
+ * defects on PR #947 and #957:
+ *
+ *  - starvation: the slowest writer on the shard exceeds any fixed budget.
+ *    Raising the per-test timeout to the lock's documented worst case
+ *    (210 s, set in each spec) moved the boundary and did not remove it.
+ *  - MUTUAL EXCLUSION ACTUALLY BREAKING. Measured on run 35278339078,
+ *    `E2E (webkit-1of2)`, 44 s into the run: ELITEA-0017 wrote "Block Agent
+ *    Publishing" on, reloaded, and found it OFF —
+ *    `expect(locator).toBeChecked() … Received: unchecked`, raised INSIDE
+ *    `withPlatformFlagLock`. A queue cannot produce that; only a second
+ *    writer inside the window can, and the lock has two ways to hand one out
+ *    (a beat that went stale while a holder's `onLastExit` was still writing
+ *    the flags back, and the `WAIT_LIMIT_MS` break a waiter takes at the
+ *    outer bound). The same run marked J38e, ELITEA-0029+0031 and one
+ *    unrelated journey flaky.
+ *
+ * The lock is still the right object — a local full-suite run has readers in
+ * `chromium`/`webkit` and writers here, on one machine, and that is exactly
+ * what it is for. What is wrong is making CI depend on it under load. These
+ * projects run the writers with `workers: 1`, so on a CI leg there is never a
+ * second writer to exclude: the lock is taken uncontended and the two shapes
+ * above cannot occur.
+ *
+ * THE READERS STAY. `readsPlatformFlags` (mcps.oauth, mcps.secret-field,
+ * toolkits.aha/catalogue/emptyList/lifecycle) takes the SHARED side, which
+ * never waits for another reader and only waits when a WRITER is held. With
+ * every writer moved out of the sharded projects, and each CI leg running one
+ * project on its own runner (the lock lives in `tmpdir()`, so a leg's lock
+ * directory is its own), no writer is ever held while those legs run: the
+ * read side costs one `stat` and one file. Moving them here too would only
+ * re-serialise six files for a lock nobody takes.
+ *
+ * ONE PROJECT PER ENGINE, and they are run by SEPARATE CI legs on purpose.
+ * Per-project `workers` caps a project, not the run: named in one command
+ * (`--project=platform-flags --project=platform-flags-webkit`) the two would
+ * get one worker EACH and contend over the same lock directory again, which
+ * is the thing this whole arrangement removes. `.github/workflows/
+ * ci-web-e2e.yml` gives each its own matrix leg, and
+ * `scripts/e2e-journey-shape.test.mjs` rule 9 asserts that both are wired.
+ *
+ * The list is the gate's input as well as the config's: rule 9 scans every
+ * journey spec for `withPlatformFlagLock(` and fails when one is not matched
+ * here, so a new flag-writing journey cannot land in a sharded project by
+ * default.
+ */
+const PLATFORM_FLAG_JOURNEYS = [
+  /journeys\/admin\/admin\.agent-publishing-guardrails\.spec\.ts/,
+  /journeys\/admin\/admin\.branding\.spec\.ts/,
+  /journeys\/admin\/admin\.features\.spec\.ts/,
+  /journeys\/admin\/admin\.guardrails\.spec\.ts/,
+  /journeys\/admin\/admin\.resources-help-center\.spec\.ts/,
+  /journeys\/support\/support\.entrypoints\.spec\.ts/,
+  /journeys\/support\/support\.widget\.spec\.ts/,
+];
 /*
  * THE INVENTORY JOURNEYS (journeys/inventory, INV-001..010) HAVE NO CONSTANT
  * HERE, AND THAT IS THE DECISION.
@@ -447,6 +521,7 @@ export default defineConfig({
         SUPPORT_JOURNEY,
         EMPTY_TOOLKIT_LIST_JOURNEY,
         FIXTURE_ISOLATION_JOURNEY,
+        ...PLATFORM_FLAG_JOURNEYS,
       ],
       use: {
         ...devices['Desktop Chrome'],
@@ -467,6 +542,7 @@ export default defineConfig({
         SUPPORT_JOURNEY,
         EMPTY_TOOLKIT_LIST_JOURNEY,
         FIXTURE_ISOLATION_JOURNEY,
+        ...PLATFORM_FLAG_JOURNEYS,
       ],
       use: {
         ...devices['Desktop Safari'],
@@ -474,6 +550,60 @@ export default defineConfig({
       },
       dependencies: ['setup', 'toolkits-empty'],
       testMatch: /journeys\/.+\.spec\.ts/,
+    },
+
+    /*
+     * ── platform-flags / platform-flags-webkit ────────────────────────────
+     *
+     * The journeys that WRITE a platform-wide flag, one worker, one engine
+     * per project. See `PLATFORM_FLAG_JOURNEYS` above for the measurement
+     * that put them here and for why the readers stayed behind.
+     *
+     * `workers: 1` IS THE MECHANISM, and `fullyParallel: false` alone is not:
+     * without a worker cap Playwright puts every FILE on its own worker and
+     * seven files then queue for one lock exactly as before. The same
+     * distinction is drawn on the `chat-stream` project below, which buys it
+     * with `--workers=1` on the command line because a per-project cap did
+     * not exist when it was written; `testProject.workers` (Playwright
+     * 1.62.1) caps THIS project without touching the sharded ones, so the
+     * cap lives in the config where the reason for it is.
+     *
+     * `fullyParallel: false` is kept for the files that are `serial` at file
+     * level (support.widget, support.entrypoints): it keeps a file's tests
+     * together in one worker in declaration order, which is the shape their
+     * headers describe. It does NOT put the other five files into serial
+     * mode, so a failure here still reports every test after it — the #539
+     * property `scripts/e2e-journey-shape.test.mjs` rule 1 exists to hold.
+     *
+     * `storageState` is the member state, the same default the engine
+     * projects carry: six of the seven files call `.use({ storageState:
+     * STORAGE_STATE.admin })` themselves, and `admin.guardrails.spec.ts`
+     * drives the API as the project default. Changing the default here would
+     * silently re-authenticate that one file.
+     */
+    {
+      name: 'platform-flags',
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: STORAGE_STATE.member,
+        launchOptions: CHROMIUM_LAUNCH_OPTIONS,
+      },
+      dependencies: ['setup', 'toolkits-empty'],
+      testMatch: PLATFORM_FLAG_JOURNEYS,
+      workers: 1,
+      fullyParallel: false,
+    },
+
+    {
+      name: 'platform-flags-webkit',
+      use: {
+        ...devices['Desktop Safari'],
+        storageState: STORAGE_STATE.member,
+      },
+      dependencies: ['setup', 'toolkits-empty'],
+      testMatch: PLATFORM_FLAG_JOURNEYS,
+      workers: 1,
+      fullyParallel: false,
     },
 
     /*
