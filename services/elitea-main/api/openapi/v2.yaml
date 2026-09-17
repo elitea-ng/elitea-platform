@@ -7570,9 +7570,19 @@ components:
       type: object
       properties:
         enabled: { type: boolean }
+        budget_mode:
+          type: string
+          enum: [balanced, full]
+          description: >
+            Balanced caps the combined context window at 272000 tokens or the
+            model window, whichever is smaller. Full uses the model window.
+            Both reserve model output and a safety margin before calculating
+            usable input. Absent legacy selections resolve to balanced.
         max_context_tokens:
           type: integer
           minimum: 1000
+          deprecated: true
+          description: Legacy preference. New execution budgets use budget_mode.
         preserve_recent_messages:
           type: integer
           minimum: 1

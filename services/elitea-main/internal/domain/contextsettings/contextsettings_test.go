@@ -17,7 +17,7 @@ func TestDefaultStrategyIsTheFrozenContract(t *testing.T) {
 		t.Fatalf("encode default strategy: %v", err)
 	}
 	const want = `{"name":"default","enabled":true,"enable_summarization":true,` +
-		`"enable_context_editing":false,"max_context_tokens":64000,` +
+		`"enable_context_editing":false,"max_context_tokens":0,"budget_mode":"balanced",` +
 		`"preserve_recent_messages":5,"preserve_system_messages":true,` +
 		`"summary_instructions":"Generate a concise summary of the following conversation messages",` +
 		`"summary_llm_settings":null}`
@@ -102,16 +102,12 @@ func TestResolveSurvivesAMalformedStoredStrategy(t *testing.T) {
 }
 
 func TestApplyValidatesTheMergedValue(t *testing.T) {
-	// The cross-field rule has to see both sides. Here the request moves only
-	// the context budget, and the summary budget it must clear comes from the
-	// stored strategy.
+	// Legacy context numbers do not constrain the independent summary output.
 	stored := contextsettings.Resolve(
 		[]byte(`{"summary_llm_settings": {"max_tokens": 4000}}`), contextsettings.UserDefaults{})
 	smaller := 3000
-	if _, fieldErr := stored.Apply(contextsettings.StrategyUpdate{MaxContextTokens: &smaller}); fieldErr == nil {
-		t.Fatal("a context budget smaller than the stored summary budget was accepted")
-	} else if fieldErr.Field != "summary_llm_settings.max_tokens" {
-		t.Fatalf("field = %q, want summary_llm_settings.max_tokens", fieldErr.Field)
+	if _, fieldErr := stored.Apply(contextsettings.StrategyUpdate{MaxContextTokens: &smaller}); fieldErr != nil {
+		t.Fatalf("legacy context number constrained summary output: %v", fieldErr)
 	}
 
 	larger := 40000
@@ -264,6 +260,7 @@ func TestBuildStatusRefusesWhatItCannotCompute(t *testing.T) {
 func TestBuildStatusReportsARatioNotAPercentage(t *testing.T) {
 	strategy := contextsettings.DefaultStrategy()
 	strategy.MaxContextTokens = 10000
+	strategy.BudgetMode = ""
 	status := contextsettings.BuildStatus(strategy,
 		[]byte(`{"current_context_tokens": 2500, "messages_in_context": 4, "summaries_generated": 1}`), 4)
 

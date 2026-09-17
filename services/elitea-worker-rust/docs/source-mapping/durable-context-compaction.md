@@ -75,7 +75,7 @@ The complete request still passes the provider's token and byte limits.
 ## Durable preparation and coverage
 
 The new path applies when an ordinary root invocation has an admitted summary plan and frozen model limits.
-Main currently sends empty context settings, so deployed activation still requires settings delivery.
+Main now has [settings delivery](context-policy-delivery.md) component coverage. Deployed activation and UI acceptance remain open.
 Old unversioned bindings retain their previous Runner path, now with an isolated summary binding.
 Direct root HITL resume still needs equivalent integration.
 Nested ordinary agents now use the same model checkpoint callback with independent session storage.
@@ -201,7 +201,7 @@ They do not replace browser acceptance or live-provider quality tests.
 Local evidence uses `elitea-point4-pipeline-scope-postgres.log` and `elitea-point4-pipeline-scope-clippy.log`; earlier storage coverage is in `elitea-point4-child-scope-storage.log`.
 Independent summary-output checks use `elitea-point4-summary-budget-tests.log` and `elitea-point4-summary-budget-clippy.log`.
 
-Remaining work includes nested and graph-model recovery coordination, default policy delivery, stored summary-model settings, UI controls/status, and browser acceptance.
+Remaining work includes nested and graph-model recovery coordination, deployed policy delivery, UI controls/status, and browser acceptance.
 Large-input summary admission and representative live-model structured-output quality still need acceptance coverage.
 Historical events remain available in storage; model-facing retrieval of omitted evidence needs explicit integration and verification.
 Continuation, tool-output editing, same-name toolkit bindings, and runtime diagnostics remain separate point 4 requirements.

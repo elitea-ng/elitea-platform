@@ -673,6 +673,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		// (agentGuardrails, agentVersions above), not RouterConfig's
 		// MemoriesRepo (main.go) — see that field's own comment.
 		agentStart = agentStart.WithMemories(repos.NewMemoriesRepo(dependencies.AdmissionPool))
+		agentStart = agentStart.WithContextPolicy(repos.NewCurrentAgentContextPolicyRepository(dependencies.AdmissionPool))
 		agentDispatcher, err := agentexecutionapp.NewDispatcher(agentJobs, agentProducer)
 		if err != nil {
 			return nil, err

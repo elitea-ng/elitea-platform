@@ -86,7 +86,7 @@ Its verification and delivery remain point 4 work.
 Balanced defaults to a 272,000-token total budget, capped by the model's supported context window.
 Full uses that supported window. Reserve the admitted maximum output inside either budget.
 Track current context use separately from cumulative input/output consumption.
-Existing explicit conversation limits remain overrides; do not rewrite saved settings.
+The 2026-09-17 clarification retires legacy numeric context settings from new compaction. Use Balanced or Full without rewriting old records.
 
 Point 4 also includes the following required work, confirmed by the user on 2026-09-14:
 
@@ -102,14 +102,15 @@ Point 4 also includes the following required work, confirmed by the user on 2026
 These are part of gate 4 acceptance, not optional follow-up work after compaction.
 
 The [model budget foundation](source-mapping/model-context-budget.md) freezes authorized limits and checks the complete provider request.
-It reserves output inside the effective window and preserves explicit limits.
+It reserves output inside the effective window. Existing frozen inputs remain readable.
 Settings delivery, recovery integration, deployed UI verification, and the other point 4 contracts remain open.
 The [model compaction implementation](source-mapping/durable-context-compaction.md) adds structured notes and durable preparation checkpoints.
 Ordinary child agents now use separate model sessions, inherited policies, and root-fenced PostgreSQL persistence.
 Pipeline LLM and model-backed Decision nodes now have independent scoped persistence; mixed and model-free graph component tests pass.
 The agent suite passes 344 checks, including PostgreSQL summary reload, writer takeover, and complete streamed-result persistence.
 The [dedicated summary-model component](source-mapping/dedicated-summary-model.md) separates authorized model selection, provider binding, and output limits.
-Main still sends empty context settings. Stored selection, UI controls, and deployed acceptance remain open.
+[Main settings delivery](source-mapping/context-policy-delivery.md) now resolves presets and summary selections, and preserves admitted continuation policies.
+UI controls, runtime occupancy projection, and deployed acceptance remain open.
 Nested and graph-model recovery coordination, deployed settings, and browser acceptance remain open.
 The pipeline container has no separate compaction control.
 Model conversations inherit a caller policy when available; otherwise saved children use explicit settings or Balanced defaults.

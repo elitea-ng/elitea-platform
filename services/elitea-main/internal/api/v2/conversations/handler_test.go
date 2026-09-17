@@ -1449,8 +1449,8 @@ func TestGetContextStatus_ServesTheRecordedCounters(t *testing.T) {
 	if result["current_tokens"].(float64) != 2500 {
 		t.Errorf("current_tokens = %v, want 2500", result["current_tokens"])
 	}
-	if result["utilization"].(float64) != 0.25 {
-		t.Errorf("utilization = %v, want 0.25 (a ratio, not a percentage)", result["utilization"])
+	if result["utilization"].(float64) != 0 || result["max_tokens"].(float64) != 0 {
+		t.Errorf("legacy analytics must not invent a preset model capacity: %v", result)
 	}
 	if result["summary_count"].(float64) != 2 {
 		t.Errorf("summary_count = %v, want 2", result["summary_count"])
@@ -1537,9 +1537,7 @@ func TestUpdateContextStrategy_RefusesOutOfRangeByField(t *testing.T) {
 		{"below the token floor", `{"max_context_tokens": 999}`, "max_context_tokens"},
 		{"zero preserved messages", `{"preserve_recent_messages": 0}`, "preserve_recent_messages"},
 		{"more than 99 preserved messages", `{"preserve_recent_messages": 100}`, "preserve_recent_messages"},
-		{"summary budget at least as large as the context",
-			`{"max_context_tokens": 4000, "summary_llm_settings": {"max_tokens": 4000}}`,
-			"summary_llm_settings.max_tokens"},
+		{"unknown preset", `{"budget_mode":"custom"}`, "budget_mode"},
 		{"summary budget under the floor",
 			`{"summary_llm_settings": {"max_tokens": 10}}`, "summary_llm_settings.max_tokens"},
 		{"wrong type", `{"max_context_tokens": "lots"}`, "max_context_tokens"},

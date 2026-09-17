@@ -57,9 +57,8 @@ These component fixtures do not establish live-provider summary quality or brows
 
 ## Remaining integration
 
-Main still sends empty context settings to the worker.
-Start, Continue, and Regenerate do not yet resolve stored summary selections into the new freezer input.
-Connect conversation settings and user defaults before claiming deployed selection.
+Main now resolves selections for Start and Regenerate. Continue restores the admitted snapshot from immutable execution input.
+The [settings delivery mapping](context-policy-delivery.md) records component evidence. Deployed selection remains open.
 Complete UI controls, context status, representative summary quality, and recovery acceptance.
 Deploy compatible workers before Main emits field 66; older strict readers reject unknown fields.
 Large histories that require multiple summary requests remain separate point 4 work.

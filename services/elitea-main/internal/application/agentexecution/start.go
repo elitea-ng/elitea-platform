@@ -146,7 +146,8 @@ type CurrentApplicationStartService struct {
 	// memories is optional — attached after construction via WithMemories
 	// (#870, memories.go). A service nobody attaches it to injects no
 	// long-term memory, exactly its pre-#870 behavior.
-	memories CurrentMemoryRecallResolver
+	memories      CurrentMemoryRecallResolver
+	contextPolicy CurrentContextPolicySource
 }
 
 func NewCurrentApplicationStartService(
@@ -192,7 +193,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 		(len(target.InternalTools) != 0 && !validJSONArray(target.InternalTools)) {
 		return CurrentApplicationStartOutcome{}, ErrUnsupportedCurrentAgentStart
 	}
-	frozenVersion, err := service.freezer.FreezeCurrentApplicationVersion(
+	frozenVersion, contextSettings, err := service.freezeVersionWithContext(
 		ctx,
 		CurrentApplicationVersionFreezeRequest{
 			ProjectID:      int32(request.ProjectID),
@@ -200,6 +201,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 			VersionDetails: target.VersionDetails,
 			InternalTools:  target.InternalTools,
 		},
+		request.ConversationUUID,
 	)
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
@@ -239,6 +241,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
 	}
+	input.ContextSettings = contextSettings
 	projectID := strconv.FormatInt(request.ProjectID, 10)
 	actorID := strconv.FormatInt(request.ActorUserID, 10)
 	outcome, err := service.admissions.Submit(ctx, SubmitRequest{

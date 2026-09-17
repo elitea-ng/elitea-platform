@@ -32,7 +32,9 @@ It does not infer capacity from model names.
 
 Rust resolves Balanced to 272,000 tokens, capped by the model window.
 Full uses the configured window and refuses a read-time window fallback.
-An explicit stored `max_context_tokens` remains an override.
+Previously frozen inputs with `max_context_tokens` retain compatibility.
+New product settings use Balanced or Full; legacy numeric context settings no longer define a combined window.
+This follows the user clarification on 2026-09-17. Stored records remain unchanged.
 The selected output cap becomes the reservation; absence reserves the model maximum.
 A selected cap can supersede an unknown output maximum's fallback.
 The existing provider Auto omission behavior remains unchanged.
@@ -81,7 +83,8 @@ Go vet and Rust Clippy pass after the bounded-future fix.
 
 ## Remaining integration
 
-Main still sends empty context settings. New model snapshots select Balanced by default in Rust.
+Main now resolves settings for Start and Regenerate and restores admitted settings for Continue.
+The [settings delivery mapping](context-policy-delivery.md) records this component and its remaining acceptance gates.
 User defaults, conversation presets, status, and UI controls still need end-to-end wiring.
 The final provider check prevents oversized dispatch; it does not generate or persist a summary.
 The before-model callback and durable summary persistence now have component coverage for roots, children, and pipeline models.
@@ -98,7 +101,7 @@ Point 4 remains open under `remaining-gates.md`.
 
 The SDK's `_inject_summarization` selects a low-tier model and separate output settings, with a 4,000-token default.
 The same-model adapter uses the authorized chat model when no separate summary snapshot exists.
-The [dedicated model component](dedicated-summary-model.md) adds an independent authorized binding. Stored selection and deployed acceptance remain open.
+The [dedicated model component](dedicated-summary-model.md) adds an independent authorized binding. Stored selection has component coverage. Deployed acceptance remains open.
 It now separates summary output from chat reply controls.
 With frozen limits, it reserves up to 8,192 summary output tokens, capped by the catalogue output maximum.
 It recalculates input capacity with the existing preset, margin, and input-only maximum.

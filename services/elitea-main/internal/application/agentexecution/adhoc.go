@@ -124,12 +124,13 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, fmt.Errorf("build current ad-hoc snapshot: %w", err)
 	}
-	frozen, err := service.freezer.FreezeCurrentApplicationVersion(
+	frozen, contextSettings, err := service.freezeVersionWithContext(
 		ctx,
 		CurrentApplicationVersionFreezeRequest{
 			ProjectID: int32(request.ProjectID), ActorUserID: int32(request.ActorUserID),
 			VersionDetails: snapshot,
 		},
+		request.ConversationUUID,
 	)
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, fmt.Errorf("freeze current ad-hoc snapshot: %w", err)
@@ -159,6 +160,7 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, fmt.Errorf("build current ad-hoc execution input: %w", err)
 	}
+	input.ContextSettings = contextSettings
 	questionItemID := currentTurnUUID(request.QuestionID, "question-item")
 	responseMessageID := currentTurnUUID(request.QuestionID, "response-message")
 	questionMeta := json.RawMessage(`{}`)

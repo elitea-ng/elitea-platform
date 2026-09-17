@@ -16,10 +16,11 @@ import (
 // non-pointer bool here would silently turn an untouched account into an
 // explicit `enabled: false`.
 type ContextManagement struct {
-	Enabled                *bool `json:"enabled,omitempty"`
-	MaxContextTokens       *int  `json:"max_context_tokens,omitempty"`
-	PreserveRecentMessages *int  `json:"preserve_recent_messages,omitempty"`
-	EnableContextEditing   *bool `json:"enable_context_editing,omitempty"`
+	Enabled                *bool       `json:"enabled,omitempty"`
+	BudgetMode             *BudgetMode `json:"budget_mode,omitempty"`
+	MaxContextTokens       *int        `json:"max_context_tokens,omitempty"`
+	PreserveRecentMessages *int        `json:"preserve_recent_messages,omitempty"`
+	EnableContextEditing   *bool       `json:"enable_context_editing,omitempty"`
 }
 
 // Summarization is the user-level `default_summarization` block — pylon's
@@ -82,7 +83,12 @@ func (c *ContextManagement) Validate() *FieldError {
 	if c == nil {
 		return nil
 	}
-	if c.MaxContextTokens != nil && *c.MaxContextTokens < MinMaxContextTokens {
+	if c.BudgetMode != nil {
+		if err := validateBudgetMode(*c.BudgetMode); err != nil {
+			return prefixField("default_context_management", err)
+		}
+	}
+	if (c.BudgetMode == nil || *c.BudgetMode == "") && c.MaxContextTokens != nil && *c.MaxContextTokens < MinMaxContextTokens {
 		return fieldErrorf("default_context_management.max_context_tokens",
 			"max_context_tokens must be at least %d", MinMaxContextTokens)
 	}
@@ -99,10 +105,8 @@ func (c *ContextManagement) Validate() *FieldError {
 //
 // `target_summary_tokens` becomes the strategy's
 // `summary_llm_settings.max_tokens` (set_context_strategy), so it takes that
-// field's floor. Its cross-field rule — must be under the context budget —
-// cannot be checked here: the budget it will be compared against is whatever
-// the conversation resolves to at the time, not necessarily this user's
-// default. Resolve() runs the merged check.
+// field's floor. Model capacity and output limits are validated at admission,
+// after the authorized summary model has been selected.
 func (s *Summarization) Validate() *FieldError {
 	if s == nil {
 		return nil
@@ -153,6 +157,12 @@ func Resolve(stored []byte, defaults UserDefaults) Strategy {
 		if cm.MaxContextTokens != nil {
 			strategy.MaxContextTokens = *cm.MaxContextTokens
 		}
+		if cm.BudgetMode != nil {
+			strategy.BudgetMode = *cm.BudgetMode
+			if strategy.BudgetMode != "" {
+				strategy.MaxContextTokens = 0
+			}
+		}
 		if cm.PreserveRecentMessages != nil {
 			strategy.PreserveRecentMessages = *cm.PreserveRecentMessages
 		}
@@ -171,9 +181,9 @@ func Resolve(stored []byte, defaults UserDefaults) Strategy {
 		llm := map[string]any{}
 		if sm.SummaryModelName != nil && *sm.SummaryModelName != "" {
 			llm["model_name"] = *sm.SummaryModelName
-		}
-		if sm.SummaryModelProjectID != nil {
-			llm["model_project_id"] = *sm.SummaryModelProjectID
+			if sm.SummaryModelProjectID != nil {
+				llm["model_project_id"] = *sm.SummaryModelProjectID
+			}
 		}
 		if sm.TargetSummaryTokens != nil {
 			llm["max_tokens"] = *sm.TargetSummaryTokens
@@ -184,18 +194,16 @@ func Resolve(stored []byte, defaults UserDefaults) Strategy {
 	}
 
 	if !isAbsentJSON(stored) {
-		// Best effort: the column is trusted JSON this service wrote. A
-		// document that will not decode leaves the resolved defaults standing,
-		// which is a usable answer; refusing the whole read would take the
-		// chat window down over one malformed blob.
-		_ = json.Unmarshal(stored, &strategy)
+		var fields map[string]json.RawMessage
+		resolved := strategy
+		// Read malformed legacy documents without applying a partial decode.
+		if json.Unmarshal(stored, &fields) == nil && json.Unmarshal(stored, &resolved) == nil {
+			strategy = resolved
+		}
 	}
-
-	// A strategy written before this rule existed — by pylon, or by the
-	// route's previous write-the-body-verbatim behaviour — can hold an empty
-	// summary-model object. It is normalized on the way OUT as well as on the
-	// way in, because the runtime refuses `{}` and nothing rewrites stored
-	// documents. See Strategy.normalizeSummaryLLMSettings.
+	if strategy.BudgetMode == "" {
+		strategy.BudgetMode = BudgetBalanced
+	}
 	strategy.normalizeSummaryLLMSettings()
 
 	return strategy

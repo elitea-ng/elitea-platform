@@ -18,6 +18,14 @@ func (service *CurrentApplicationToolSnapshotService) freezeCurrentSummaryModel(
 	if len(requested) == 0 {
 		return nil
 	}
+	// Stored strategies decode numbers as float64. Normalize through JSON's
+	// integer representation before applying the shared model admission rules.
+	encodedSelection, encodeErr := json.Marshal(requested)
+	var normalized map[string]any
+	if encodeErr != nil || decodeCurrentJSON(encodedSelection, &normalized) != nil {
+		return unsupportedStart("the summary model settings are invalid")
+	}
+	requested = normalized
 	for key := range requested {
 		switch key {
 		case "model_name", "model_project_id", "max_tokens", "temperature":

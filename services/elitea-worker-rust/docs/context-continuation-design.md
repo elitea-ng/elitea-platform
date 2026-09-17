@@ -33,7 +33,10 @@ User steering on 2026-09-14 asks for a simple default and full-model option. The
 - Balanced: a default total budget of 272,000 tokens, capped by the model's supported context window.
 - Full: the model's supported total context window.
 
-Existing explicit conversation token limits remain overrides. Do not migrate or silently rewrite stored limits.
+User clarification on 2026-09-17 replaces legacy numeric context settings with Balanced or Full.
+Do not reinterpret a historical 64,000-token value as the combined window.
+Keep model output caps separate. Read old records without migrating or rewriting them.
+Already admitted execution inputs retain their frozen policy during continuation.
 Store new selections in the existing context-strategy metadata if that contract can express them.
 Main resolves provider limits from the authorized model catalogue and freezes the admitted limits for Rust.
 Do not infer a model's capacity from its name or add its advertised input and output maxima together.
@@ -75,7 +78,8 @@ The current same-model adapter reserves up to 8,192 tokens, capped by the frozen
 It recomputes summary input capacity and leaves chat controls unchanged.
 A different summary model must receive its own authorized binding and frozen limits before selection is enabled.
 The [dedicated model component](source-mapping/dedicated-summary-model.md) now supplies that binding through protobuf field 66.
-Stored settings resolution and deployed selection remain open. The snapshot carries no credentials, tools, or task instructions.
+Main now resolves stored settings and restores admitted policies for continuation. Deployed selection and browser acceptance remain open.
+The snapshot carries no credentials, tools, or task instructions.
 
 ## Child agents and pipeline model requests
 
@@ -225,7 +229,8 @@ Mixed-graph component tests preserve exact state and deterministic output; model
 Nested and graph-model recovery coordination, direct root HITL resume, and deployed settings delivery remain open.
 `src/agents/instruction_authority.rs` already provides separate versioned instruction state and rehydration.
 Complete integration with that state rather than asking a summary model to recreate instructions.
-Main `agentexecution/start.go` and `adhoc.go` still dispatch empty context settings.
+Main now resolves context policies for Start and Regenerate, and restores admitted policies for Continue.
+See [settings delivery](source-mapping/context-policy-delivery.md). Deployment, UI controls, and browser acceptance remain open.
 Complete authorized settings and model-limit delivery before claiming that UI compaction controls affect this worker.
 
 The [model budget foundation](source-mapping/model-context-budget.md) now freezes catalogue limits in the input contract.

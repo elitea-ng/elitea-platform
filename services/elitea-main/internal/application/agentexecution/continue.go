@@ -692,6 +692,9 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 		return nil, nil, "", ErrUnsupportedCurrentAgentStart
 	}
 
+	if err := service.restoreContinuationContext(ctx, request, target, input); err != nil {
+		return nil, nil, "", err
+	}
 	input.ThreadId = stringPointer(target.ThreadID)
 	input.ExecutionGeneration = stringPointer(target.ExecutionGeneration)
 	input.ShouldContinue = true

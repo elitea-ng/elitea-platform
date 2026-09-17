@@ -230,13 +230,14 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 		if err != nil {
 			return nil, nil, "", err
 		}
-		frozen, err := service.freezer.FreezeCurrentApplicationVersion(
+		frozen, contextSettings, err := service.freezeVersionWithContext(
 			ctx,
 			CurrentApplicationVersionFreezeRequest{
 				ProjectID: projectID32, ActorUserID: actorUserID32,
 				VersionDetails: resolved.VersionDetails,
 				InternalTools:  resolved.InternalTools,
 			},
+			target.ConversationUUID,
 		)
 		if err != nil {
 			return nil, nil, "", err
@@ -250,6 +251,7 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 		if err != nil {
 			return nil, nil, "", err
 		}
+		input.ContextSettings = contextSettings
 		input.IsRegenerate = true
 		turn.ApplicationID = resolved.ApplicationID
 		turn.ApplicationVersionID = resolved.ApplicationVersionID
@@ -271,12 +273,13 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 		if err != nil {
 			return nil, nil, "", err
 		}
-		frozen, err := service.freezer.FreezeCurrentApplicationVersion(
+		frozen, contextSettings, err := service.freezeVersionWithContext(
 			ctx,
 			CurrentApplicationVersionFreezeRequest{
 				ProjectID: projectID32, ActorUserID: actorUserID32,
 				VersionDetails: snapshot,
 			},
+			target.ConversationUUID,
 		)
 		if err != nil {
 			return nil, nil, "", err
@@ -286,6 +289,7 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 		if err != nil {
 			return nil, nil, "", err
 		}
+		input.ContextSettings = contextSettings
 		input.IsRegenerate = true
 		return input, turn, executiondomain.AgentAdhocCapability, nil
 	default:
