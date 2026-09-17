@@ -947,7 +947,7 @@ async fn ask_user_pauses_and_resumes_as_the_original_correlated_tool_result() {
     let sessions = Arc::new(InMemorySessionService::new());
     let injected_sessions: Arc<dyn SessionService> = sessions.clone();
     let runtime = OrdinaryRuntimeBindings::new(
-        internal_tools.toolsets(),
+        internal_tools.toolsets(None),
         SensitiveToolCatalog::default(),
         DelegatedAuthorizationCatalog::default(),
         ApplicationRuntimeProjection::default(),
@@ -1019,7 +1019,7 @@ async fn ask_user_pauses_and_resumes_as_the_original_correlated_tool_result() {
         completed: "continued after clarification".to_owned(),
     };
     let resume_runtime = OrdinaryRuntimeBindings::new(
-        internal_tools.toolsets(),
+        internal_tools.toolsets(None),
         SensitiveToolCatalog::default(),
         DelegatedAuthorizationCatalog::default(),
         ApplicationRuntimeProjection::default(),
@@ -1106,7 +1106,7 @@ async fn a_fresh_session_is_seeded_with_a_notice_for_every_skipped_internal_tool
     let sessions = Arc::new(InMemorySessionService::new());
     let injected_sessions: Arc<dyn SessionService> = sessions.clone();
     let runtime = OrdinaryRuntimeBindings::new(
-        internal_tools.toolsets(),
+        internal_tools.toolsets(None),
         SensitiveToolCatalog::default(),
         DelegatedAuthorizationCatalog::default(),
         ApplicationRuntimeProjection::default(),
@@ -1179,7 +1179,7 @@ async fn a_fresh_session_with_no_skipped_internal_tools_gets_no_notice() {
     let sessions = Arc::new(InMemorySessionService::new());
     let injected_sessions: Arc<dyn SessionService> = sessions.clone();
     let runtime = OrdinaryRuntimeBindings::new(
-        internal_tools.toolsets(),
+        internal_tools.toolsets(None),
         SensitiveToolCatalog::default(),
         DelegatedAuthorizationCatalog::default(),
         ApplicationRuntimeProjection::default(),

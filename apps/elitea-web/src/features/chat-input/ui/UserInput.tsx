@@ -9,6 +9,7 @@ import {
   resolveAttachmentsProps,
   resolveCallbacks,
   resolveField,
+  resolveFooterControls,
   resolveHighlightRanges,
   resolveMention,
   resolveSendButtonConfig,
@@ -122,6 +123,7 @@ export const UserInput = forwardRef(function UserInput(props: UserInputProps, re
   useUserInputMentions({ inputContent, users: mention.users, onMentionChange: mention.onMentionChange, inputRef });
 
   const { isDragOver, handleDragOver, handleDragLeave, handleDrop } = useFileDragAndDrop(sp.container?.onDrop);
+  const footerControls = resolveFooterControls({ isStreaming, isUploading, keepSendWhileStreaming: sendButtonConfig.keepWhileStreaming });
 
   const hasHighlights = highlightRanges.length > 0 && inputContent !== '';
 
@@ -194,7 +196,8 @@ export const UserInput = forwardRef(function UserInput(props: UserInputProps, re
           />
           <UserInputFooter
             footer={footer}
-            showStop={isStreaming && !isUploading}
+            showStop={footerControls.showStop}
+            showSend={footerControls.showSend}
             sendControl={sendControl}
             sendControlProps={{
               isSpeakingMode,

@@ -244,6 +244,28 @@ function useFeatureHandlers(): void {
   );
 }
 
+/** A1 (ELITEA-0016): the org-wide listing `ProjectListEditor`'s picker reads — same fixture shape `PlatformModelsPanel.test.tsx`'s own `useProjects` helper uses for the identical endpoint. */
+function useAdminProjectsHandler(rows: readonly { id: number; name: string; is_personal?: boolean }[]): void {
+  server.use(
+    http.get('*/admin/projects/administration', () =>
+      HttpResponse.json({
+        rows: rows.map((row) => ({
+          owner_id: 1,
+          owner_name: 'owner',
+          admin_names: [],
+          status: 'active',
+          suspended: false,
+          create_success: true,
+          is_personal: false,
+          ...row,
+        })),
+        total: rows.length,
+        counts: { team: rows.length, personal: 0 },
+      }),
+    ),
+  );
+}
+
 function writes(): RecordedRequest[] {
   return recorded.filter((entry) => entry.method === 'PUT');
 }
@@ -502,7 +524,11 @@ describe('AdminFeatures — the array fields', () => {
     expect(lastWriteValues()).toEqual({ agent_categories: ['Security Review'] });
   });
 
-  it('keeps a half-typed project id on screen and flags it, rather than coercing it', async () => {
+  it('A1 (ELITEA-0016): the whitelist is a project-NAME picker — picking one by name sends its id as a NUMBER on the wire', async () => {
+    useAdminProjectsHandler([
+      { id: 4, name: 'Marketing Team' },
+      { id: 9, name: 'Finance Team' },
+    ]);
     renderAdminRoute(<AdminFeatures />);
     await waitForMcpSection();
     await openSection('Agent Publishing');
@@ -510,32 +536,43 @@ describe('AdminFeatures — the array fields', () => {
     // The whitelist is behind `visible_when`.
     await userEvent.click(screen.getByRole('switch', { name: 'Block Agent Publishing' }));
     const editor = await screen.findByTestId('admin-config-list-publish_whitelist_project_ids');
-    await userEvent.click(within(editor).getByRole('button', { name: /Add entry/ }));
 
-    const row = within(editor).getAllByRole('textbox')[0] as HTMLElement;
-    await userEvent.type(row, '12a');
+    // No raw-integer text row anywhere — the reference's own defect this
+    // control replaces (a bare id list an operator has to look up elsewhere).
+    expect(within(editor).queryByRole('textbox', { name: /Enter a whole number/ })).not.toBeInTheDocument();
 
-    // What was typed is still there. Coercing to 12 would make the field
-    // disagree with the screen; dropping the row would delete the keystroke.
-    expect(row).toHaveValue('12a');
-    expect(editor).toHaveTextContent('Enter a whole number');
+    await userEvent.click(within(editor).getByRole('combobox', { name: /Publishing Allowed Projects/ }));
+    await userEvent.click(await screen.findByRole('option', { name: 'Marketing Team' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    // The NAME was picked; the wire still carries the plain project id, a
+    // NUMBER — not the string a hand-typed row could have sent.
+    expect(lastWriteValues().publish_whitelist_project_ids).toEqual([4]);
   });
 
-  it('converts a valid project id to a NUMBER on the wire', async () => {
+  it('A1 (ELITEA-0016): the Team/Private/Public filter narrows which projects the picker offers', async () => {
+    useAdminProjectsHandler([
+      { id: 4, name: 'Marketing Team', is_personal: false },
+      { id: 7, name: 'project_user_7', is_personal: true },
+    ]);
     renderAdminRoute(<AdminFeatures />);
     await waitForMcpSection();
     await openSection('Agent Publishing');
-
     await userEvent.click(screen.getByRole('switch', { name: 'Block Agent Publishing' }));
     const editor = await screen.findByTestId('admin-config-list-publish_whitelist_project_ids');
-    await userEvent.click(within(editor).getByRole('button', { name: /Add entry/ }));
-    await userEvent.type(within(editor).getAllByRole('textbox')[0] as HTMLElement, '4');
-    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
 
-    // A string "4" would be stored, echoed back and then SKIPPED by the
-    // guardrail's `float64` assertion — the category of defect this whole unit
-    // is about, one level down.
-    expect(lastWriteValues().publish_whitelist_project_ids).toEqual([4]);
+    const combobox = within(editor).getByRole('combobox', { name: /Publishing Allowed Projects/ });
+    await userEvent.click(combobox);
+    expect(await screen.findByRole('option', { name: 'Marketing Team' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'project_user_7' })).toBeInTheDocument();
+    await userEvent.keyboard('{Escape}');
+
+    await userEvent.click(within(editor).getByRole('combobox', { name: 'Show' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'Private' }));
+    await userEvent.click(combobox);
+
+    expect(await screen.findByRole('option', { name: 'project_user_7' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Marketing Team' })).not.toBeInTheDocument();
   });
 
   it('removes a row', async () => {

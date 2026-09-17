@@ -27,15 +27,23 @@
  * platform-wide section, but a different card keeps the two files' fixture
  * data disjoint even from a stale `finally`.
  *
- * ELITEA-0024 (environment-wide effect across projects) and ELITEA-0032
- * (Resources appears before Banner in Configuration) are NOT ported — see
+ * ELITEA-0024 (environment-wide effect across projects) is NOT ported — see
  * `S/port/ledger-P10-admin-ops.tsv` / `not-applicable.md`: the "Resources
- * subsection" this platform actually built lives on the FEATURES page as
- * "Help Center" (`config_schemas.go`'s `resourcesSection`, `page:
- * configPageFeatures`), not on the Configuration page at all, and it is ONE
- * environment-wide `/help-center` route rather than a per-project "Resources
- * page" — so there is no per-project variation to prove identical, and no
- * ordering against Banner to assert.
+ * subsection" this platform built is ONE environment-wide `/help-center`
+ * route rather than a per-project "Resources page", so there is no
+ * per-project variation to prove identical.
+ *
+ * ELITEA-0032 (Resources appears before Banner in Configuration) is NOW
+ * PORTED (A2/F5) — see the test below. It was previously NA: the section
+ * lived on the FEATURES page as "Help Center" (`config_schemas.go`'s
+ * `resourcesSection`, `page: configPageFeatures`), not on Configuration at
+ * all. `resourcesSection` dropped that `page` key — a section with none
+ * defaults to Configuration (`useAdminConfigurationPage.ts`'s own doc
+ * comment) — so `openHelpCenter` below now navigates to
+ * `/admin/app/configuration`, not `/admin/app/features`; every write/read
+ * mechanism in this file is unchanged (same admin PUT/GET section id,
+ * same public `/help-center` route with no notion of which admin page
+ * authored the row).
  */
 import { expect, test as adminTest, type APIRequestContext, type Page } from '@playwright/test';
 
@@ -88,9 +96,11 @@ async function restoreOwnedFields(request: APIRequestContext): Promise<void> {
 }
 
 async function openHelpCenter(page: Page): Promise<void> {
-  const response = await page.goto(BASE_URL + '/admin/app/features', { waitUntil: 'domcontentloaded' });
-  expect(response?.status(), 'the admin SPA must serve the features route, not 404').toBeLessThan(400);
-  await expect(page.getByRole('switch', { name: 'Enable MCP' })).toBeVisible({ timeout: 20_000 });
+  // A2 (ELITEA-0032): Configuration, not Features — see this file's own
+  // header for the section's page-placement history.
+  const response = await page.goto(BASE_URL + '/admin/app/configuration', { waitUntil: 'domcontentloaded' });
+  expect(response?.status(), 'the admin SPA must serve the configuration route, not 404').toBeLessThan(400);
+  await expect(page.getByRole('button', { name: /Guardrails/ })).toBeVisible({ timeout: 20_000 });
   await page.getByRole('button', { name: /Help Center/ }).click();
   await expect(page.getByRole('switch', { name: 'Information Card Enabled' })).toBeVisible({ timeout: 15_000 });
 }
@@ -207,7 +217,6 @@ adminTest(
         const reenabled = await putResources(request, { resources_release_notes_enabled: true });
         expect(reenabled.status, reenabled.body).toBe(200);
 
-        await page.goto(BASE_URL + '/admin/app/features', { waitUntil: 'domcontentloaded' });
         await openHelpCenter(page);
         await expect(page.getByRole('switch', { name: 'Release Notes Card Enabled' })).toBeChecked();
 
@@ -219,3 +228,41 @@ adminTest(
     });
   },
 );
+
+/*
+ * ELITEA-0032: Resources ("Help Center") appears on the Configuration
+ * page, before Banner — a pure page-placement/ordering read, no write, so
+ * it does not need `withPlatformFlagLock`.
+ */
+adminTest('ELITEA-0032: Help Center appears on Configuration, before Banner', async ({ page }) => {
+  const response = await page.goto(BASE_URL + '/admin/app/configuration', { waitUntil: 'domcontentloaded' });
+  expect(response?.status(), 'the admin SPA must serve the configuration route, not 404').toBeLessThan(400);
+  await expect(page.getByRole('button', { name: /Guardrails/ })).toBeVisible({ timeout: 20_000 });
+
+  // On Configuration at all — the schema declares no `page` for this
+  // section, which `useAdminConfigurationPage.ts`'s own doc comment states
+  // is what puts a section here.
+  const helpCenterButton = page.getByRole('button', { name: /Help Center/ });
+  await expect(helpCenterButton).toBeVisible();
+
+  // Not on Features — the section moved OFF that page, not aliased onto both.
+  const featuresResponse = await page.goto(BASE_URL + '/admin/app/features', { waitUntil: 'domcontentloaded' });
+  expect(featuresResponse?.status()).toBeLessThan(400);
+  await expect(page.getByRole('switch', { name: 'Enable MCP' })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole('button', { name: /Help Center/ })).toHaveCount(0);
+
+  // Before Banner, in the Configuration SIDEBAR'S OWN rendered order — not
+  // just both present, which page placement alone would not distinguish.
+  await page.goto(BASE_URL + '/admin/app/configuration', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('button', { name: /Guardrails/ })).toBeVisible({ timeout: 20_000 });
+  const sidebarButtons = page.getByRole('navigation').getByRole('button');
+  const labels = await sidebarButtons.allTextContents();
+  const helpCenterIndex = labels.findIndex((label) => label.includes('Help Center'));
+  const bannerIndex = labels.findIndex((label) => label.includes('Banner'));
+  expect(helpCenterIndex, `Help Center must be present in the sidebar: ${JSON.stringify(labels)}`).toBeGreaterThanOrEqual(0);
+  expect(bannerIndex, `Banner must be present in the sidebar: ${JSON.stringify(labels)}`).toBeGreaterThanOrEqual(0);
+  expect(
+    helpCenterIndex,
+    `Help Center (index ${helpCenterIndex}) must sort before Banner (index ${bannerIndex}): ${JSON.stringify(labels)}`,
+  ).toBeLessThan(bannerIndex);
+});

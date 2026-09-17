@@ -33,7 +33,8 @@ export interface UpdatedMessageItem { readonly uuid?: string | undefined; readon
  * result too, and the caller announces it either way — see
  * `useChatBoxActions`'s `handleSend`.
  */
-export interface SendResult { readonly success: boolean; readonly createdConversation?: { readonly id?: string | number; readonly uuid?: string } }
+/** `questionId` is the client-generated `question_id` this turn was admitted under — the value the start route persists as the question row's own uuid, so a caller still recognises the row after a reload (A17's queue marks its interjections with it). */
+export interface SendResult { readonly success: boolean; readonly createdConversation?: { readonly id?: string | number; readonly uuid?: string }; readonly questionId?: string }
 export interface SendQuestionParams {
   readonly question: string;
   readonly attachments?: readonly File[];
@@ -361,8 +362,8 @@ export function buildOptimisticUserMessage(questionId: string, question: string,
  * path a first attachment takes.
  */
 export const resolveUploadConversationId = (createdConversation: { readonly id?: string | number; readonly uuid?: string } | undefined, fallbackUuid: string | undefined): string | undefined => createdConversation?.uuid ?? fallbackUuid;
-export const buildSendResult = (createdConversation: { readonly id?: string | number; readonly uuid?: string } | undefined, success = true): SendResult =>
-  createdConversation ? { success, createdConversation } : { success };
+export const buildSendResult = (createdConversation: { readonly id?: string | number; readonly uuid?: string } | undefined, success = true, questionId?: string): SendResult =>
+  ({ success, ...(createdConversation ? { createdConversation } : {}), ...(questionId !== undefined ? { questionId } : {}) });
 /** `chatHistory.find` for the question a given answer replies to. */
 export function findQuestionForAnswer(chatHistory: readonly ChatMessage[], answer: ChatMessage | undefined): ChatMessage | undefined {
   if (answer?.questionId === undefined) return undefined;

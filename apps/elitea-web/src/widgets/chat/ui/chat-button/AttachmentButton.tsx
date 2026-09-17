@@ -8,8 +8,10 @@ import type { Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
+import { useAllowedAttachmentTypes } from '@/entities/attachment';
 import { t } from '@/shared/i18n';
 import { ATTACHMENT_LIMITS, getRemainingAttachmentCapacity, validateAttachmentFiles } from '@/shared/lib/attachments';
+import { useSelectedProjectId } from '../../lib/useSelectedProjectId';
 
 /**
  * Chat button primitive: AttachmentButton
@@ -34,12 +36,14 @@ import { ATTACHMENT_LIMITS, getRemainingAttachmentCapacity, validateAttachmentFi
  * identical disclosure); the caller decides how to surface the message
  * until one lands.
  *
- * `disabled` factors in every signal this component can actually observe
- * today (`disableAttachments`/in-flight processing/at-capacity/at-max-size).
- * Baseline additionally factors in `isLoading`/`noFileTypesAvailable` from a
- * dynamic backend file-types query (`useFileTypes`/`useAllowedExtensions`) —
- * no such hook exists anywhere in this codebase yet (disclosed gap, not
- * invented here).
+ * `disabled` factors in `disableAttachments`, in-flight processing,
+ * at-capacity, at-max-size — and, since #940 A15, the backend-served file-type
+ * list: a deployment that SERVES an empty allow-list disables the control
+ * entirely (ELITEA-0489), exactly as the baseline's `noFileTypesAvailable`
+ * does. A deployment that cannot enumerate loaders at all (501) is a different
+ * answer and keeps the control live on the defaults — see
+ * `entities/attachment`'s `allowedTypes.ts` for why those two must not
+ * collapse into one.
  *
  * Prop contract (injected by the composition root through `slots.attachmentButton`):
  *   - `onAttachFiles`  — called with the validated, accepted File(s)
@@ -94,19 +98,28 @@ export const AttachmentButton = memo(
 
       const effectiveLimits = useMemo<typeof ATTACHMENT_LIMITS>(() => ({ ...ATTACHMENT_LIMITS, ...limits }), [limits]);
 
+      // The allow-list this deployment serves for the selected project.
+      // `isServed` with no extensions is the one state that turns the control
+      // off; anything else leaves it live.
+      const projectId = useSelectedProjectId();
+      const allowedTypes = useAllowedAttachmentTypes(projectId);
+      const noFileTypesAvailable = allowedTypes.isServed && allowedTypes.extensions.length === 0;
+
       const processFiles = useCallback(
         (files: readonly File[]) => {
           if (files.length === 0) return;
           setIsProcessing(true);
           try {
-            const { validFiles, errors } = validateAttachmentFiles(files, attachments, effectiveLimits);
+            const { validFiles, errors } = validateAttachmentFiles(
+              files, attachments, effectiveLimits, allowedTypes.extensions,
+            );
             if (errors.length > 0) onError?.(errors.join('\n'));
             if (validFiles.length > 0) onAttachFiles?.(validFiles);
           } finally {
             setIsProcessing(false);
           }
         },
-        [attachments, effectiveLimits, onAttachFiles, onError],
+        [attachments, allowedTypes.extensions, effectiveLimits, onAttachFiles, onError],
       );
 
       useImperativeHandle(
@@ -122,7 +135,9 @@ export const AttachmentButton = memo(
       );
 
       const capacity = getRemainingAttachmentCapacity(attachments, effectiveLimits);
-      const isDisabled = disableAttachments || isProcessing || capacity.isAtMaxCapacity || capacity.isAtMaxSize;
+      const isDisabled = attachmentsDisabled(
+        { disableAttachments, isProcessing, noFileTypesAvailable }, capacity,
+      );
 
       const handleButtonClick = useCallback(() => {
         if (capacity.isAtMaxCapacity) {
@@ -151,7 +166,9 @@ export const AttachmentButton = memo(
       // AFTER every hook, so the handle above is live on this instance too.
       if (dropTargetOnly) return null;
 
-      const tooltipText = attachmentTooltip(isProcessing, capacity, effectiveLimits.MAX_ATTACHMENTS);
+      const tooltipText = noFileTypesAvailable
+        ? t('widgets.chat.attachmentButton.noFileTypesTooltip', 'This deployment accepts no attachment types')
+        : attachmentTooltip(isProcessing, capacity, effectiveLimits.MAX_ATTACHMENTS);
 
       // The row form carries the remaining count as visible text, so the
       // tooltip that exists to surface it on the icon form is redundant there.
@@ -182,11 +199,16 @@ export const AttachmentButton = memo(
           {control}
 
           {/* Hidden file input — only accept when attachments aren't disabled */}
+          {/* `accept` is a HINT the OS picker honours, never the check: a
+            * drag-and-drop, a changed OS filter and `setInputFiles` all reach
+            * `processFiles` regardless, which is why `validateAttachmentFiles`
+            * takes the same list. */}
           <input
             ref={fileInputRef}
             type="file"
             multiple
             hidden
+            accept={allowedTypes.extensions.join(',')}
             disabled={isDisabled}
             onChange={handleFileChange}
             aria-hidden="true"
@@ -196,6 +218,22 @@ export const AttachmentButton = memo(
     },
   ),
 );
+
+/**
+ * Every reason the control is off, in one place. Module-level for the same
+ * reason `attachmentTooltip` below is: the component sits at the §3.5
+ * cyclomatic-complexity-12 ceiling and this chain alone is five of its
+ * branches.
+ */
+function attachmentsDisabled(
+  signals: { disableAttachments: boolean; isProcessing: boolean; noFileTypesAvailable: boolean },
+  capacity: ReturnType<typeof getRemainingAttachmentCapacity>,
+): boolean {
+  return (
+    signals.disableAttachments || signals.isProcessing || signals.noFileTypesAvailable ||
+    capacity.isAtMaxCapacity || capacity.isAtMaxSize
+  );
+}
 
 /**
  * The icon form's hover text. Module-level rather than inline, because the

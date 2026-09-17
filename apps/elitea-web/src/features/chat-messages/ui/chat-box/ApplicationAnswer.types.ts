@@ -1,4 +1,5 @@
 import type { AnswerCanvasSelection } from './AnswerContent';
+import type { ChatContinueProps } from '../chat-continue/ChatContinue';
 import type { HitlResumePayload } from '../chat-hitl-actions/ChatHitlActions';
 import type { CanvasEditPayload, CodeBlockInfo } from '../canvas/Canvas';
 
@@ -57,6 +58,14 @@ export interface ApplicationAnswerContinuation {
   readonly onContinueMcpExecution?: ((messageId: string, addToIgnoreList?: boolean) => void) | undefined;
   readonly onContinueTokenLimitExecution?: ((messageId: string) => void) | undefined;
   readonly hideContinueButton?: boolean;
+  /**
+   * A13 (ELITEA-0725): fills `ChatContinue`'s `renderAuthModal` slot with the
+   * real `McpAuthModal` — see that component's own module doc for why this
+   * stays a slot (`no-sideways-features` forbids `chat-messages` importing
+   * `features/mcps`) rather than a hard import. Built once, above both
+   * features, by `widgets/chat-box`.
+   */
+  readonly renderAuthModal?: ChatContinueProps['renderAuthModal'];
 }
 
 /** Message feedback (#880) props, grouped to stay under the component-props budget. */

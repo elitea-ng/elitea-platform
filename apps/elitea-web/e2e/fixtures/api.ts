@@ -177,6 +177,22 @@ export async function resolvePublishAuthorProjectId(
 }
 
 /**
+ * The seeded FRONTEND-public project (issue #940 D5): id 99, matching
+ * `deploy/docker-compose.e2e-standalone.yml`'s `VITE_PUBLIC_PROJECT_ID=99` —
+ * see that file's own comment on why it is deliberately NOT the same value
+ * as the backend's `ELITEA_AI_PROJECT_ID` (project 1). `entities/project`'s
+ * `isPublicProject` is a bare id comparison against this value, so any
+ * project seeded at id 99 renders as "public" in the sidebar/agents/
+ * pipelines pages — nothing else about it is special.
+ */
+export const PUBLIC_PROJECT_NAME = 'e2e-public';
+
+/** The seeded frontend-public project's id — see `PUBLIC_PROJECT_NAME`. */
+export async function resolvePublicProjectId(request: APIRequestContext): Promise<string> {
+  return resolveProjectIdByName(request, PUBLIC_PROJECT_NAME);
+}
+
+/**
  * The CATALOGUE project's id, as the server itself reports it.
  *
  * The deployment decides this (`ELITEA_AI_PROJECT_ID`, `internal/publicproject`),
@@ -340,6 +356,75 @@ export async function deleteConversation(
   projectId: string = DEFAULT_PROJECT_ID,
 ): Promise<void> {
   await request.delete(`${API_BASE}/elitea_core/conversation/prompt_lib/${projectId}/${id}`);
+}
+
+/**
+ * Issue 940/A6 — flips a conversation's `is_private` flag, the same PUT the
+ * row menu's own "Make public" confirm sends. Seeding a PUBLIC original
+ * conversation through the UI would need a second confirm-dialog round trip
+ * per test; this is the one-call equivalent.
+ */
+export async function setConversationPrivacy(
+  request: APIRequestContext,
+  id: string,
+  isPrivate: boolean,
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<void> {
+  const url = `${API_BASE}/elitea_core/conversation/prompt_lib/${projectId}/${id}`;
+  const resp = await request.put(url, { data: { is_private: isPrivate } });
+  if (!resp.ok()) {
+    throw new Error(
+      `setConversationPrivacy: PUT ${url} -> ${resp.status()} ${resp.statusText()}${await describeRefusal(resp)}`,
+    );
+  }
+}
+
+/**
+ * Issue 940/A6 — seeds ONE participant onto a conversation, the same route
+ * (and body shape) the app's own `useAddParticipantMutation` posts through.
+ * Used to prove the Duplicate action copies participants: a `'user'`
+ * participant needs only `entity_meta.id`; an `'application'`/`'toolkit'`/
+ * `'pipeline'` participant additionally needs `entity_meta.id` naming the
+ * real entity — the route resolves display metadata from it, so a
+ * fabricated id would add a participant row that renders as "unavailable".
+ */
+export async function addConversationParticipant(
+  request: APIRequestContext,
+  conversationId: string,
+  participant: { readonly entity_name: string; readonly entity_meta?: Readonly<Record<string, unknown>>; readonly entity_settings?: Readonly<Record<string, unknown>> },
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<void> {
+  const url = `${API_BASE}/elitea_core/participants/prompt_lib/${projectId}/${conversationId}`;
+  const resp = await request.post(url, { data: [participant] });
+  if (!resp.ok()) {
+    throw new Error(
+      `addConversationParticipant: POST ${url} -> ${resp.status()} ${resp.statusText()}${await describeRefusal(resp)}`,
+    );
+  }
+}
+
+/** The conversation's own participants, as `GET .../conversation/...` embeds them. */
+export interface ConversationParticipantRow {
+  readonly id: number;
+  readonly entity_name: string;
+  readonly entity_meta?: Readonly<Record<string, unknown>>;
+}
+
+/** Issue 940/A6 — reads a conversation's `is_private` + `participants[]` straight from the server, the ground truth `chat.duplicate.spec.ts` checks the duplicate against. */
+export async function readConversationDetails(
+  request: APIRequestContext,
+  conversationId: string,
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<{ readonly is_private?: boolean; readonly participants: readonly ConversationParticipantRow[] }> {
+  const url = `${API_BASE}/elitea_core/conversation/prompt_lib/${projectId}/${conversationId}`;
+  const resp = await request.get(url);
+  if (!resp.ok()) {
+    throw new Error(
+      `readConversationDetails: GET ${url} -> ${resp.status()} ${resp.statusText()}${await describeRefusal(resp)}`,
+    );
+  }
+  const body = (await resp.json()) as { is_private?: boolean; participants?: readonly ConversationParticipantRow[] };
+  return { is_private: body.is_private, participants: body.participants ?? [] };
 }
 
 /** An agent created through the API, with the initial version it owns. */

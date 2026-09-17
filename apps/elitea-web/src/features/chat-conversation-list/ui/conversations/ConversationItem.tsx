@@ -21,104 +21,13 @@ import {
   isPersonalProject,
   isPublicOrPersonalProject,
 } from './ConversationItem.menu';
-import type { ConversationExportFormat } from './ConversationItem.menu';
 import { ConversationItemEditor } from './ConversationItem.editor';
 import { ConversationItemRow } from './ConversationItem.row';
-import type { ConversationWithOwnerMeta } from './ConversationItem.types';
+import type { ConversationItemProps } from './ConversationItem.types';
 import { DraggableConversationItem } from './DraggableConversationItem';
 import { ConversationShareDialog } from './ConversationItem.share';
 
-export type { ConversationWithOwnerMeta } from './ConversationItem.types';
-
-/**
- * Every optional field below is `?: T | undefined`, not just `?: T` — this
- * codebase's `tsconfig.json` sets `exactOptionalPropertyTypes: true`, under
- * which `field?: T` means the KEY may be absent but, if present, may not be
- * `undefined`. `Conversations.tsx`'s `renderConversationItem` passes several
- * of these straight through from its OWN optional props via plain JSX
- * attributes (`projectId={projectId}`, etc.) — an always-present attribute
- * whose value happens to be `undefined` — so the explicit `| undefined` is
- * required, not decorative. Same convention already established throughout
- * `shared/ui` (e.g. `StateVariableIconButtonProps`, `FolderAccordionProps`).
- */
-export interface ConversationItemProps {
-  readonly conversation: ConversationWithOwnerMeta;
-  readonly onSelectConversation: (conversation: ConversationWithOwnerMeta) => void;
-  readonly isActive?: boolean | undefined;
-  readonly onDelete: (conversation: ConversationWithOwnerMeta) => void;
-  /**
-   * Downloads this conversation's transcript in the named format (issue 851).
-   * Still optional, and still what decides whether the Export row is live:
-   * the row is disabled when no exporter is supplied, so a surface that does
-   * not offer export shows a disabled entry rather than live options wired to
-   * nothing.
-   */
-  readonly onExport?: ((format: ConversationExportFormat) => void) | undefined;
-  readonly onEdit: (conversation: ConversationWithOwnerMeta) => void;
-  readonly onPlayback: (conversation: ConversationWithOwnerMeta) => void;
-  readonly onPin: (conversation: ConversationWithOwnerMeta, shouldPin: boolean) => void;
-  readonly onCreateConversation: (conversation: ConversationWithOwnerMeta) => Promise<unknown>;
-  readonly onCancelCreate: () => void;
-  readonly onChangeActiveConversationName: (name: string) => void;
-  readonly moveToFoldersMenuItems?: readonly ControlsDropdownLeafItem[] | undefined;
-  /**
-   * Plain boolean PROP (baseline: `ConversationItem.jsx:50` already has it
-   * as a prop too, not a `useSelector` read) — the caller (eventually a
-   * page/composition-root unit) supplies it from `shared/lib/editorState.ts`'s
-   * `useEditorStateStore`; this leaf component never reads that store itself.
-   */
-  readonly isEditingCanvas?: boolean | undefined;
-  readonly enableDragAndDrop?: boolean | undefined;
-  readonly isDragDisabled?: boolean | undefined;
-  readonly isNextItemHovered?: boolean | undefined;
-  readonly onItemHover?: ((itemId: string, isHovered: boolean) => void) | undefined;
-  /**
-   * N4 signature deviation (explicit param instead of an internal
-   * `useSelectedProjectId()`/Redux read) — also doubles as the param
-   * `useHasPermission` needs for the "Move to" item's permission check and
-   * the param `handleShareConversation` needs to build the share link.
-   */
-  readonly projectId?: string | undefined;
-  /**
-   * Baseline: `const { id: userId, personal_project_id } = useSelector(state
-   * => state.user);` (`ConversationItem.jsx:74`) — turned into three
-   * explicit props (this one, `personalProjectId`, `publicProjectId` below),
-   * same substitution instruction as `isEditingCanvas` above.
-   * `currentUserId` is ALSO what `Conversations.jsx:82`'s own `state.user`
-   * read resolves to (`userId`), so `Conversations.tsx` threads the exact
-   * same prop value into both its own `getMoveConversationToFoldersMenuItems`
-   * ownership check and this component.
-   */
-  readonly currentUserId?: string | undefined;
-  readonly personalProjectId?: string | number | undefined;
-  /**
-   * Baseline: the module-level `PUBLIC_PROJECT_ID` constant
-   * (`common/constants.js:14,61`, `+VITE_PUBLIC_PROJECT_ID`) — per
-   * `entities/project/model/selectors.ts`'s own `isPublicProject` doc
-   * comment, this is a per-deployment runtime-config value, not an
-   * invented in-package constant, so it is a required parameter here too
-   * (reused via `isPublicProject`, not re-derived).
-   */
-  readonly publicProjectId?: string | number | undefined;
-  /**
-   * DEPENDENCY-INJECTION DEVIATION (deliberate, documented) — same class
-   * `shared/ui/CopyToClipboardButton.tsx`'s own doc comment already
-   * establishes: "no shared toast infrastructure yet" (grepped, confirmed
-   * again for this unit). The baseline calls `useToast().toastInfo(...)`
-   * directly after copying the share link; this takes an `onShareLinkCopied`
-   * callback instead so the caller decides how to surface it.
-   */
-  readonly onShareLinkCopied?: (() => void) | undefined;
-  /**
-   * Baseline: `getBasename()` from `@/routes` (`ConversationItem.jsx:34,155`).
-   * `app/providers/basename.ts`'s `getAppBasename()` is the new equivalent,
-   * but `features/` may not import from `app/` (R-L1, strict downward
-   * layering) — an explicit prop instead, matching this file's own N4
-   * convention for `projectId`. Defaults to `''` (root-relative), the same
-   * fallback `getAppBasename()` itself resolves to outside a real router.
-   */
-  readonly basename?: string | undefined;
-}
+export type { ConversationItemProps, ConversationWithOwnerMeta } from './ConversationItem.types';
 
 interface ResolvedConversationItemDefaults {
   readonly isActive: boolean;
@@ -194,7 +103,7 @@ function resolveConversationItemDefaults(props: ConversationItemProps): Resolved
  *    reproduced, rather than carried over as dead weight.
  */
 export const ConversationItem = memo(function ConversationItem(props: ConversationItemProps): ReactNode {
-  const { conversation, onSelectConversation, onDelete, onExport, onEdit, onPlayback, onPin, onCreateConversation, onCancelCreate, onChangeActiveConversationName, onItemHover, projectId, currentUserId, personalProjectId, publicProjectId, onShareLinkCopied } = props;
+  const { conversation, onSelectConversation, onDelete, onExport, onEdit, onPlayback, onPin, onDuplicate, onCreateConversation, onCancelCreate, onChangeActiveConversationName, onItemHover, projectId, currentUserId, personalProjectId, publicProjectId, onShareLinkCopied } = props;
   const { name, chatHistory } = conversation;
   const { isActive, moveToFoldersMenuItems, isEditingCanvas, enableDragAndDrop, isDragDisabled, isNextItemHovered, basename, isPlayback, isPinned, isNamingPending, isNew } = resolveConversationItemDefaults(props);
 
@@ -255,6 +164,10 @@ export const ConversationItem = memo(function ConversationItem(props: Conversati
     onPlayback(conversation);
   }, [conversation, onPlayback]);
 
+  const handleDuplicate = useCallback(() => {
+    onDuplicate(conversation);
+  }, [conversation, onDuplicate]);
+
   const handleShareConversation = useCallback(async () => {
     const baseUrl = `${window.location.protocol}//${window.location.host}`;
     const destinationUrl = `${baseUrl}${basename}/${String(projectId)}/chat/${conversation.id}?${SearchParams.Name}=${conversation.name.replaceAll(' ', '+')}&${SearchParams.SharedChat}=1`;
@@ -291,8 +204,9 @@ export const ConversationItem = memo(function ConversationItem(props: Conversati
       onShareByLink: () => setIsShareDialogOpen(true),
       onPlayback: handlePlayback,
       onPin: handlePin,
+      onDuplicate: handleDuplicate,
     }),
-    [handleDelete, handleEdit, onExport, handleMakePublic, handleShareConversation, handlePlayback, handlePin],
+    [handleDelete, handleEdit, onExport, handleMakePublic, handleShareConversation, handlePlayback, handlePin, handleDuplicate],
   );
 
   const menuItems = useMemo<ControlsDropdownItem[]>(() => {

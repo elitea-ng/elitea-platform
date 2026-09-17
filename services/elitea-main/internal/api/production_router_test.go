@@ -1986,6 +1986,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"PATCH /api/v2/scim/v2/Groups/{id}",
 		"PATCH /api/v2/scim/v2/Users/{id}",
 		"POST /api/v2/admin/auth_users/{mode}",
+		"POST /api/v2/admin/background_jobs/administration/pat_expiry_notices:run",
 		"POST /api/v2/admin/background_jobs/administration/{kind}/{jobID}:cancel",
 		"POST /api/v2/admin/branding/assets/{kind}",
 		"POST /api/v2/admin/branding/package/administration",

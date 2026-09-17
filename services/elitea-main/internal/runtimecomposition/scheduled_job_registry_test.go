@@ -32,15 +32,18 @@ func TestArtifactRetentionScheduledJobsIncludesBothIndexAndSweepJobs(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	jobs := scheduledJobs(stubSchedulingHandler{}, stubSchedulingHandler{}, schedule, schedule)
+	jobs := scheduledJobs(
+		stubSchedulingHandler{}, stubSchedulingHandler{}, stubSchedulingHandler{},
+		schedule, schedule, schedule,
+	)
 	registry, err := scheduledJobRegistry(currentIndexScheduleLeaseDuration, jobs...)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	registered := registry.RegisteredJobs()
-	if len(registered) != 2 {
-		t.Fatalf("expected exactly 2 registered jobs, got %d: %+v", len(registered), registered)
+	if len(registered) != 3 {
+		t.Fatalf("expected exactly 3 registered jobs, got %d: %+v", len(registered), registered)
 	}
 	revisionByID := make(map[string]string, len(registered))
 	for _, job := range registered {
@@ -52,6 +55,12 @@ func TestArtifactRetentionScheduledJobsIncludesBothIndexAndSweepJobs(t *testing.
 	if revisionByID[artifactRetentionSweepCapability] != artifactRetentionSweepRevision {
 		t.Errorf("artifact retention sweep job missing or has the wrong revision: %+v", revisionByID)
 	}
+	// #940 A3. Same guard, same reason: a producer that is correct and
+	// unit-tested but never reaches the registry warns nobody about anything,
+	// and no unit test of the notifier can see that.
+	if revisionByID[patExpirySweepCapability] != patExpirySweepRevision {
+		t.Errorf("personal access token expiry sweep job missing or has the wrong revision: %+v", revisionByID)
+	}
 }
 
 func TestScheduledJobsKeepsIndexSchedulingWithoutArtifactStore(t *testing.T) {
@@ -59,7 +68,7 @@ func TestScheduledJobsKeepsIndexSchedulingWithoutArtifactStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	jobs := scheduledJobs(stubSchedulingHandler{}, nil, schedule, nil)
+	jobs := scheduledJobs(stubSchedulingHandler{}, nil, nil, schedule, nil, nil)
 	registry, err := scheduledJobRegistry(currentIndexScheduleLeaseDuration, jobs...)
 	if err != nil {
 		t.Fatal(err)

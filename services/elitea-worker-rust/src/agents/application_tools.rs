@@ -1102,7 +1102,15 @@ impl ApplicationAssemblyState<'_> {
         let (mut toolsets, sensitive_tools, delegated_authorization) =
             self.materialize_non_application_toolsets(&frozen).await?;
         let internal_tools = profile.internal_tools();
-        toolsets.extend(internal_tools.toolsets());
+        // `None`: a NESTED child does not get the builder tools (#940 A8).
+        // The toggles are conversation-scoped capabilities the user turned on
+        // for the chat they are in; a child agent called as a tool is running
+        // on the parent's behalf, and handing it a project WRITE the user
+        // enabled for the parent's own turn would widen the toggle past what
+        // was switched on. The parent keeps its own builder tools either way,
+        // so nothing the user asked for is lost — the write happens one level
+        // up, where it was authorized.
+        toolsets.extend(internal_tools.toolsets(None));
         let has_non_application_tools = !toolsets.is_empty();
         let nested_references = application_references(&frozen, None)?;
         let parallel_applications = !nested_references.is_empty()

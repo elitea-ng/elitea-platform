@@ -434,7 +434,14 @@ impl PipelineNativeAgentAssembler {
             .map_err(|()| unsupported_pipeline_runtime())?;
         materialized.append(&mut mcp);
         let mut toolsets = toolsets_by_alias(materialized)?;
-        for toolset in profile.shell().internal_tools().toolsets() {
+        // `None`: a PIPELINE node does not bind the builder tools (#940 A8).
+        // Both cases the modules exist for are chat turns, and a pipeline's
+        // node profile carries no conversation the user toggled anything on
+        // for — the shell's internal tools here come from the stored version,
+        // not from a Modules menu. A toggle stored on a pipeline version is
+        // therefore not silently honoured with a project write nobody asked
+        // for in this run.
+        for toolset in profile.shell().internal_tools().toolsets(None) {
             if toolsets
                 .insert(toolset.name().to_owned(), toolset)
                 .is_some()
@@ -658,7 +665,14 @@ impl PipelineNativeAgentAssembler {
             .map_err(|()| unsupported_pipeline_runtime())?;
         materialized.append(&mut mcp);
         let mut toolsets = toolsets_by_alias(materialized)?;
-        for toolset in profile.shell().internal_tools().toolsets() {
+        // `None`: a PIPELINE node does not bind the builder tools (#940 A8).
+        // Both cases the modules exist for are chat turns, and a pipeline's
+        // node profile carries no conversation the user toggled anything on
+        // for — the shell's internal tools here come from the stored version,
+        // not from a Modules menu. A toggle stored on a pipeline version is
+        // therefore not silently honoured with a project write nobody asked
+        // for in this run.
+        for toolset in profile.shell().internal_tools().toolsets(None) {
             if toolsets
                 .insert(toolset.name().to_owned(), toolset)
                 .is_some()

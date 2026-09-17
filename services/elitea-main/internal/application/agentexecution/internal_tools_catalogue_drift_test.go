@@ -15,7 +15,12 @@ package agentexecution
 //   - Go map  = web list − internal_mcp + ask_user (internal_mcp is dropped
 //     by the freeze and materialized through the tools projection; ask_user
 //     is runtime-authored, not form-authored).
-//   - Rust list = web list exactly (ask_user is served, not skipped).
+//   - Rust: the web list is exactly PLATFORM_INTERNAL_TOOLS (what the native
+//     runtime RECOGNIZES and SKIPS) plus the names it IMPLEMENTS
+//     (SKILLS_BUILDER_TOOL_NAME / PROJECT_CONTEXT_BUILDER_TOOL_NAME, #940 A8).
+//     A name must be in exactly one of the two: in neither, the runtime
+//     refuses the whole profile; in both, it would warn that a tool it is
+//     about to run is unavailable.
 //   - Every SQL admission list = web list + ask_user, at every gate site.
 
 import (
@@ -92,24 +97,44 @@ func TestInternalToolsCatalogueAgreesAcrossWebGoRustAndSQL(t *testing.T) {
 		}
 	}
 
-	// Rust skip-list = web list exactly.
+	// Rust: skipped ∪ implemented = web list, and the two sets are disjoint.
 	rustSource := readCatalogueFile(t, root, "services", "elitea-worker-rust", "src", "agents", "internal_tools.rs")
 	rustBlock := regexp.MustCompile(`(?s)PLATFORM_INTERNAL_TOOLS: &\[&str\] = &\[(.*?)\];`).FindStringSubmatch(rustSource)
 	if rustBlock == nil {
 		t.Fatal("PLATFORM_INTERNAL_TOOLS not found in internal_tools.rs — the pattern stopped matching, so this gate measured nothing")
 	}
-	rustSet := map[string]bool{}
+	skippedSet := map[string]bool{}
 	for _, match := range regexp.MustCompile(`"([a-z_]+)"`).FindAllStringSubmatch(rustBlock[1], -1) {
-		rustSet[match[1]] = true
+		skippedSet[match[1]] = true
+	}
+	// The names the native runtime IMPLEMENTS, read from their own constants
+	// rather than restated here — a constant renamed or a tool deleted makes
+	// this gate fail with the relationship named, which is the whole point.
+	implementedSet := map[string]bool{}
+	for _, match := range regexp.MustCompile(
+		`(?m)^pub\(crate\) const (?:SKILLS_BUILDER_TOOL_NAME|PROJECT_CONTEXT_BUILDER_TOOL_NAME): &str = "([a-z_]+)";`,
+	).FindAllStringSubmatch(rustSource, -1) {
+		implementedSet[match[1]] = true
+	}
+	if len(implementedSet) != 2 {
+		t.Fatalf("parsed %d implemented builder names from internal_tools.rs (%v) — the constant pattern stopped matching, so this half of the gate measured nothing", len(implementedSet), sortedNames(implementedSet))
 	}
 	for name := range webSet {
-		if !rustSet[name] {
-			t.Errorf("web authors %q but the Rust PLATFORM_INTERNAL_TOOLS skip-list lacks it — the native runtime refuses the WHOLE profile instead of skipping it", name)
+		if !skippedSet[name] && !implementedSet[name] {
+			t.Errorf("web authors %q but the native runtime neither implements nor skips it — it refuses the WHOLE profile instead", name)
+		}
+		if skippedSet[name] && implementedSet[name] {
+			t.Errorf("the native runtime both implements and skips %q — the run would warn the tool is unavailable in the same turn it runs", name)
 		}
 	}
-	for name := range rustSet {
+	for name := range skippedSet {
 		if !webSet[name] {
 			t.Errorf("Rust skips %q, which the web list does not author — stale entry", name)
+		}
+	}
+	for name := range implementedSet {
+		if !webSet[name] {
+			t.Errorf("Rust implements %q, which the web list does not author — the toggle is unreachable", name)
 		}
 	}
 

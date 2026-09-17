@@ -173,7 +173,7 @@ export function buildTtsProps(readAloud: {
   };
 }
 
-/** `ChatBox`'s input-disable/loading derivation — extracted to keep `ChatBox`'s own complexity down (a pure boolean-combination has no reason to live inside a component body). */
+/** `ChatBox`'s input-disable/loading derivation — extracted to keep `ChatBox`'s own complexity down (a pure boolean-combination has no reason to live inside a component body). A17: a run in flight no longer blocks the COMPOSER — what is typed during one is QUEUED (`ChatBoxQueuedMessages`), so `isComposerBusy` (the text area + the send control) omits `isStreaming`, while `isInputLoading` keeps it for the controls that must still go inert mid-run. */
 export function deriveChatBoxInputState(flags: {
   readonly isLoadingConversation: boolean | undefined;
   readonly isFetchingParticipantDetails: boolean;
@@ -185,21 +185,20 @@ export function deriveChatBoxInputState(flags: {
   readonly isProcessingSymbols: boolean;
   readonly hasPendingHitlInterrupt: boolean;
   readonly isActiveParticipantBroken: boolean;
-}): { readonly isInputLoading: boolean; readonly disabledSend: boolean } {
-  const isInputLoading =
+}): { readonly isInputLoading: boolean; readonly isComposerBusy: boolean; readonly disabledSend: boolean } {
+  const isComposerBusy =
     Boolean(flags.isLoadingConversation) ||
     flags.isFetchingParticipantDetails ||
     flags.isUploadingAttachments ||
     flags.isUpdatingInternalToolsConfig ||
-    Boolean(flags.isConversationSending) ||
-    flags.isStreaming;
+    Boolean(flags.isConversationSending);
   const disabledSend =
     !flags.hasChatInput ||
-    isInputLoading ||
+    isComposerBusy ||
     flags.isProcessingSymbols ||
     flags.hasPendingHitlInterrupt ||
     flags.isActiveParticipantBroken;
-  return { isInputLoading, disabledSend };
+  return { isInputLoading: isComposerBusy || flags.isStreaming, isComposerBusy, disabledSend };
 }
 
 /** Flattens `ChatBox`'s grouped `user`/`llm`/`onDelete` props back to individual values — extracted to keep `ChatBox`'s own complexity down (each `?.` below is one fewer branch counted against the component). */
@@ -278,9 +277,9 @@ export function buildAgentEditorProps(params: {
   readonly onShowParticipantsList: NewChatInputAgentEditorProps['onShowParticipantsList'];
   readonly onSelectVersion: NewChatInputAgentEditorProps['onSelectVersion'];
   readonly editorCallbacks: ChatBoxEditorCallbacks | undefined;
+  /** A14 (ELITEA-0386): `ChatBoxLlmSettingsDialog.tsx`'s `onEdit` slot. */ readonly onEditLlmSettings?: NewChatInputAgentEditorProps['onEditLlmSettings'];
 }): NewChatInputAgentEditorProps {
-  const versionId = params.participantForEditor?.entitySettings?.versionId;
-  const editorCallbacks = resolveEditorCallbacks(params.editorCallbacks);
+  const versionId = params.participantForEditor?.entitySettings?.versionId; const editorCallbacks = resolveEditorCallbacks(params.editorCallbacks);
   return {
     activeParticipant: params.participantForEditor,
     activeParticipantDetails: params.activeParticipantDetails,
@@ -291,7 +290,7 @@ export function buildAgentEditorProps(params: {
     selectedVersionId: versionId !== undefined ? String(versionId) : undefined,
     onSelectVersion: params.onSelectVersion,
     variables: [],
-    onChangeVariables: () => {},
+    onChangeVariables: () => {}, onEditLlmSettings: params.onEditLlmSettings,
     ...editorCallbacks,
   };
 }

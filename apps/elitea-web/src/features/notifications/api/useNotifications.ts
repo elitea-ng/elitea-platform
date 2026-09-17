@@ -14,8 +14,8 @@
  * shared `TAG_NOTIFICATIONS` tag had (`notifications.js:9,25,32,41,49,57`:
  * every mutation invalidates the one tag every list `providesTags`).
  */
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { UseMutationResult, UseQueryResult } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { InfiniteData, UseInfiniteQueryResult, UseMutationResult, UseQueryResult } from '@tanstack/react-query';
 
 import type { NormalizedNotification } from './normalize';
 import { normalizeNotificationList } from './normalize';
@@ -64,6 +64,51 @@ export function useNotificationsList(
     enabled: options.enabled ?? true,
     refetchInterval: options.refetchInterval ?? false,
     refetchIntervalInBackground: options.refetchIntervalInBackground ?? false,
+  });
+}
+
+/* ── Issue 940/A4 — bell popover infinite scroll ──────────────────────────
+ *
+ * The real popover (`widgets/sidebar/ui/NotificationButton.tsx`) used to
+ * show a fixed top-`POPOVER_PAGE_SIZE` (5) slice via `useNotificationsList`
+ * and never paged further (ELITEA-0747/0748's own grep evidence). This
+ * builds a real page-through-on-scroll query on the SAME `listNotifications`
+ * fetcher (`page`/`pageSize` → `offset`/`limit`, already wired and already
+ * used by the settings page's own page-based `NotificationsTablePagination`
+ * — untouched by this addition, which is a second, independent consumer of
+ * the same fetcher, not a replacement for it).
+ *
+ * `getNextPageParam` compares rows loaded so far against the server's own
+ * `total` (the same field the badge query already reads) — the last group
+ * naturally reports `hasNextPage: false` once every row is accounted for,
+ * without any group needing to know it is "the last" one up front. This is
+ * what ELITEA-0748's "last partial group... does not auto-trigger another
+ * load" comes from: a false `hasNextPage`, not a special partial-group case.
+ */
+export interface NotificationsInfiniteListParams {
+  readonly projectId: string | number;
+  readonly pageSize?: number;
+  readonly params?: Readonly<Record<string, string | number | boolean>>;
+}
+
+export function useNotificationsInfiniteList(
+  params: NotificationsInfiniteListParams,
+  options: { readonly enabled?: boolean } = {},
+): UseInfiniteQueryResult<InfiniteData<NormalizedNotificationPage>, Error> {
+  const { projectId, pageSize = 20, params: extra } = params;
+  return useInfiniteQuery({
+    queryKey: [...NOTIFICATIONS_QUERY_ROOT, 'infinite', projectId, pageSize, extra],
+    queryFn: async ({ pageParam, signal }) => {
+      const page = await listNotifications({ projectId, page: pageParam, pageSize, ...(extra !== undefined ? { params: extra } : {}) }, signal);
+      return { rows: normalizeNotificationList(page.rows), total: page.total };
+    },
+    initialPageParam: 0,
+    getNextPageParam: (_lastPage, allPages) => {
+      const loaded = allPages.reduce((sum, loadedPage) => sum + loadedPage.rows.length, 0);
+      const total = allPages[allPages.length - 1]?.total ?? 0;
+      return loaded < total ? allPages.length : undefined;
+    },
+    enabled: options.enabled ?? true,
   });
 }
 

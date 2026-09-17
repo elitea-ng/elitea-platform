@@ -102,7 +102,7 @@ export function ApplicationAnswer({
   status: { isLoading = false, isStreaming = false, isRegenerating = false } = {},
   actions: { onCopy, onDelete, onRegenerate, shouldDisableRegenerate = false, onEditCanvas, selectedCodeBlockInfo, onCreateCanvasFromSelection } = {},
   tts: { onAutoSpeak, speakingMessageId, spokenRange } = {},
-  continuation: { onContinueMcpExecution, onContinueTokenLimitExecution, hideContinueButton = false } = {},
+  continuation: { onContinueMcpExecution, onContinueTokenLimitExecution, hideContinueButton = false, renderAuthModal } = {},
   hitl: { hitlInterrupt, hitlInterrupts, onHitlResume } = {},
   feedback: { projectId: feedbackProjectId, enabled: feedbackEnabled = true } = {},
 }: ApplicationAnswerProps): ReactNode {
@@ -295,6 +295,7 @@ export function ApplicationAnswer({
               onContinueWithoutAuth={onContinueWithoutAuth}
               onAuthSuccess={onAuthSuccess}
               authRequiredAction={authRequiredAction as unknown as McpAuthRequiredAction}
+              renderAuthModal={renderAuthModal}
             />
           )}
 

@@ -41,6 +41,7 @@ function params(conversation: ConversationWithOwnerMeta, currentUserId: string |
     onShareByLink: vi.fn(),
     onPlayback: vi.fn(),
     onPin: vi.fn(),
+    onDuplicate: vi.fn(),
   };
 }
 
@@ -144,5 +145,29 @@ describe('buildActiveMenuItems — the Export entry', () => {
     for (const child of item?.items ?? []) {
       expect(child.onClick, `${child.key} must not pretend to do something`).toBeUndefined();
     }
+  });
+});
+
+/** Issue 940/A6 — Duplicate entry (ELITEA-2638 evidence: visible in every row's context menu). */
+describe('buildActiveMenuItems — the Duplicate entry', () => {
+  function duplicateItem(items: readonly ControlsDropdownItem[]): ControlsDropdownItem | undefined {
+    return items.find((item) => item.key === 'duplicate');
+  }
+
+  it('is present and enabled for a non-author viewer (duplicating never mutates the original)', () => {
+    const items = buildActiveMenuItems(params({ ...conversation, authorId: 'user-2' }, 'user-1'));
+    expect(duplicateItem(items)?.disabled).toBe(false);
+  });
+
+  it('calls onDuplicate when clicked', () => {
+    const onDuplicate = vi.fn();
+    const items = buildActiveMenuItems({ ...params({ ...conversation, authorId: 'user-1' }, 'user-1'), onDuplicate });
+    duplicateItem(items)?.onClick?.();
+    expect(onDuplicate).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables Duplicate while the canvas is actively being edited', () => {
+    const items = buildActiveMenuItems({ ...params({ ...conversation, authorId: 'user-1' }, 'user-1'), isActive: true, isEditingCanvas: true });
+    expect(duplicateItem(items)?.disabled).toBe(true);
   });
 });

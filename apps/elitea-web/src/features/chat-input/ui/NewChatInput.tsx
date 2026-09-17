@@ -192,6 +192,7 @@ export const NewChatInput = forwardRef(function NewChatInput(
                 onRefresh: agentEditor.onRefreshParticipantDetails,
               },
               variablesEditor: { variables: agentEditor.variables, onChange: agentEditor.onChangeVariables },
+              onEditLlmSettings: agentEditor.onEditLlmSettings,
               editorNav: {
                 onShowAgentEditor: agentEditor.onShowAgentEditor,
                 onShowPipelineEditor: agentEditor.onShowPipelineEditor,
@@ -210,7 +211,7 @@ export const NewChatInput = forwardRef(function NewChatInput(
         field: { placeholder },
         mention: mentions,
         highlight: { ranges: content.slashHighlights },
-        sendButton: { tooltipOfSendButton: content.tooltipOfSendButton },
+        sendButton: { tooltipOfSendButton: content.tooltipOfSendButton, keepWhileStreaming: state.allowSendWhileStreaming },
       }}
       callbacks={{
         onSend: handleSend,

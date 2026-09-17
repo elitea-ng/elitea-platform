@@ -446,3 +446,399 @@ describe('useConversationSidebar — playback', () => {
     await waitFor(() => expect((router as unknown as SearchState).state.location.search['playback']).not.toBe('1'));
   });
 });
+
+/**
+ * Issue 940/A6 — Chat "Duplicate" action. No dedicated Go clone route exists,
+ * so `onDuplicateConversation` composes the copy from the same 3 endpoints
+ * `entities/conversation`/`entities/participant` already wrap: GET details,
+ * POST create, and POST participants.
+ */
+describe('useConversationSidebar — conversation duplicate', () => {
+  it('creates a "(copy)"-named conversation carrying the source participants and public visibility, and navigates to it', async () => {
+    seedProjectSeven();
+    const createBodies: unknown[] = [];
+    const participantBodies: unknown[] = [];
+    let editCalls = 0;
+    server.use(
+      http.get('/api/v2/elitea_core/conversation/prompt_lib/7/c1', () =>
+        HttpResponse.json({
+          id: 'c1',
+          name: 'Old name',
+          is_private: false,
+          meta: { steps_limit: 5 },
+          participants: [
+            { id: 'p1', entity_name: 'application', entity_meta: { id: '42' }, entity_settings: { version_id: 'v1' } },
+            { id: 'p2', entity_name: 'user', entity_meta: { id: '9' } },
+          ],
+        }),
+      ),
+      http.post('/api/v2/elitea_core/conversations/prompt_lib/7', async ({ request }) => {
+        createBodies.push(await request.json());
+        return HttpResponse.json({ id: 'c2', name: 'Old name (copy)', is_private: true });
+      }),
+      http.put('/api/v2/elitea_core/conversation/prompt_lib/7/c2', () => {
+        editCalls += 1;
+        return HttpResponse.json({ id: 'c2', name: 'Old name (copy)', is_private: false });
+      }),
+      http.post('/api/v2/elitea_core/participants/prompt_lib/7/c2', async ({ request }) => {
+        participantBodies.push(await request.json());
+        return HttpResponse.json([]);
+      }),
+    );
+
+    const { Wrapper, router } = makeRoutedWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current).not.toBeNull());
+
+    act(() => result.current.conversationsProps.onDuplicateConversation({ ...conversation, isPrivate: false }));
+
+    await waitFor(() => expect(createBodies).toEqual([{ name: 'Old name (copy)', is_private: true, meta: { steps_limit: 5 } }]));
+    // Public visibility is a second PUT (the same route "Make public" uses) —
+    // the create route itself ignores `is_private` (Go's `Create` handler
+    // reads only `name`/`meta`/`author_id`).
+    await waitFor(() => expect(editCalls).toBe(1));
+    await waitFor(() =>
+      expect(participantBodies).toEqual([
+        [
+          { entity_name: 'application', entity_meta: { id: '42' }, entity_settings: { version_id: 'v1' } },
+          { entity_name: 'user', entity_meta: { id: '9' } },
+        ],
+      ]),
+    );
+    await waitFor(() => expect(result.current.conversationsProps.selectedConversationId).toBe('c2'));
+    expect(router.state.location.pathname).toBe('/chat/c2');
+  });
+
+  it('does not make the duplicate public for a private original (no participants to copy either)', async () => {
+    seedProjectSeven();
+    let editCalled = false;
+    server.use(
+      http.get('/api/v2/elitea_core/conversation/prompt_lib/7/c1', () =>
+        HttpResponse.json({ id: 'c1', name: 'Old', is_private: true, participants: [] }),
+      ),
+      http.post('/api/v2/elitea_core/conversations/prompt_lib/7', () => HttpResponse.json({ id: 'c3', name: 'Old (copy)', is_private: true })),
+      // If duplicating a private original ever called this, that would be the defect.
+      http.put('/api/v2/elitea_core/conversation/prompt_lib/7/c3', () => {
+        editCalled = true;
+        return HttpResponse.json({ id: 'c3', name: 'Old (copy)', is_private: false });
+      }),
+    );
+    const { Wrapper, router } = makeRoutedWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current).not.toBeNull());
+
+    act(() => result.current.conversationsProps.onDuplicateConversation(conversation));
+
+    await waitFor(() => expect(result.current.conversationsProps.selectedConversationId).toBe('c3'));
+    expect(router.state.location.pathname).toBe('/chat/c3');
+    expect(editCalled).toBe(false);
+  });
+
+  it('surfaces an error message and does not navigate when the source conversation cannot be read', async () => {
+    seedProjectSeven();
+    server.use(http.get('/api/v2/elitea_core/conversation/prompt_lib/7/c1', () => HttpResponse.json({ error: 'boom' }, { status: 500 })));
+    const { Wrapper, router } = makeRoutedWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current).not.toBeNull());
+
+    act(() => result.current.conversationsProps.onDuplicateConversation(conversation));
+
+    await waitFor(() => expect(result.current.errorMessage).toBe('Failed to duplicate the conversation'));
+    expect(router.state.location.pathname).toBe('/chat');
+  });
+
+  it('does nothing when no project is selected', async () => {
+    setConfig('/app/');
+    const { Wrapper, router } = makeRoutedWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current).not.toBeNull());
+
+    act(() => result.current.conversationsProps.onDuplicateConversation(conversation));
+
+    // No project id at all — the guard returns before any network call, so
+    // neither an error nor a navigation happens.
+    expect(router.state.location.pathname).toBe('/chat');
+    expect(result.current.errorMessage).toBeUndefined();
+  });
+
+  it('falls back to the row\'s own name when the source answers a blank name, drops a non-string participant entity_name, and tolerates a participant with no entity_meta', async () => {
+    seedProjectSeven();
+    const createBodies: unknown[] = [];
+    const participantBodies: unknown[] = [];
+    server.use(
+      http.get('/api/v2/elitea_core/conversation/prompt_lib/7/c1', () =>
+        HttpResponse.json({
+          id: 'c1',
+          name: '',
+          is_private: true,
+          // `participants` omitted entirely — the `?? []` branch.
+          participants: undefined,
+        }),
+      ),
+      http.post('/api/v2/elitea_core/conversations/prompt_lib/7', async ({ request }) => {
+        createBodies.push(await request.json());
+        return HttpResponse.json({ id: 'c9', name: 'Old name (copy)', is_private: true });
+      }),
+    );
+    const { Wrapper, router } = makeRoutedWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current).not.toBeNull());
+
+    act(() => result.current.conversationsProps.onDuplicateConversation(conversation));
+
+    // `source.name` is `''` (falsy) — the row's own name is used instead.
+    await waitFor(() => expect(createBodies).toEqual([{ name: 'Old name (copy)', is_private: true }]));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/chat/c9'));
+    expect(participantBodies).toEqual([]);
+  });
+
+  it('drops a participant whose entity_name is not a string and omits entity_meta when the source lacks it', async () => {
+    seedProjectSeven();
+    const participantBodies: unknown[] = [];
+    server.use(
+      http.get('/api/v2/elitea_core/conversation/prompt_lib/7/c1', () =>
+        HttpResponse.json({
+          id: 'c1',
+          name: 'Old name',
+          is_private: true,
+          participants: [
+            { id: 'p1', entity_name: 42, entity_meta: { id: '1' } },
+            { id: 'p2', entity_name: 'user' },
+          ],
+        }),
+      ),
+      http.post('/api/v2/elitea_core/conversations/prompt_lib/7', () => HttpResponse.json({ id: 'c10', name: 'Old name (copy)', is_private: true })),
+      http.post('/api/v2/elitea_core/participants/prompt_lib/7/c10', async ({ request }) => {
+        participantBodies.push(await request.json());
+        return HttpResponse.json([]);
+      }),
+    );
+    const { Wrapper } = makeRoutedWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current).not.toBeNull());
+
+    act(() => result.current.conversationsProps.onDuplicateConversation(conversation));
+
+    // The numeric `entity_name` (p1) is filtered out; only the string-named
+    // `user` participant (with no `entity_meta` at all) is carried over.
+    await waitFor(() => expect(participantBodies).toEqual([[{ entity_name: 'user' }]]));
+  });
+});
+
+describe('useConversationSidebar — miscellaneous UI state', () => {
+  it('onDismissError clears a set error message', async () => {
+    seedProjectSeven();
+    server.use(http.get('/api/v2/elitea_core/conversation/prompt_lib/7/c1', () => HttpResponse.json({ error: 'boom' }, { status: 500 })));
+    const { Wrapper } = makeRoutedWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current).not.toBeNull());
+
+    act(() => result.current.conversationsProps.onDuplicateConversation(conversation));
+    await waitFor(() => expect(result.current.errorMessage).toBe('Failed to duplicate the conversation'));
+
+    act(() => result.current.onDismissError());
+    expect(result.current.errorMessage).toBeUndefined();
+  });
+
+  it('onCollapsed toggles the collapsed flag', async () => {
+    seedProjectSeven();
+    const { Wrapper } = makeRoutedWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current).not.toBeNull());
+
+    expect(result.current.conversationsProps.collapsed).toBe(false);
+    act(() => result.current.conversationsProps.onCollapsed());
+    expect(result.current.conversationsProps.collapsed).toBe(true);
+    act(() => result.current.conversationsProps.onCollapsed());
+    expect(result.current.conversationsProps.collapsed).toBe(false);
+  });
+
+  it('onCancelCreateConversation clears the active conversation', async () => {
+    seedProjectSeven();
+    const { Wrapper, router } = makeRoutedWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current).not.toBeNull());
+
+    act(() => result.current.conversationsProps.onSelectConversation(conversation));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/chat/c1'));
+
+    act(() => result.current.conversationsProps.onCancelCreateConversation());
+    expect(result.current.conversationsProps.selectedConversationId).toBeUndefined();
+  });
+
+  it('onSearchQueryChange is threaded down into conversationsProps', async () => {
+    seedProjectSeven();
+    const { Wrapper } = makeRoutedWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current).not.toBeNull());
+
+    act(() => result.current.conversationsProps.onSearchQueryChange?.('needle'));
+    // Re-render happened and the sidebar is still functional with a query set.
+    await waitFor(() => expect(result.current).not.toBeNull());
+  });
+});
+
+describe('useConversationSidebar — create conversation', () => {
+  it('does nothing (and posts nothing) when no project is selected', async () => {
+    setConfig('/app/');
+    const { Wrapper } = makeRoutedWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current).not.toBeNull());
+
+    const created = await result.current.conversationsProps.onCreateConversation(conversation);
+    expect(created).toBeUndefined();
+  });
+
+  it('creates a new conversation, defaulting is_private to true when omitted', async () => {
+    seedProjectSeven();
+    const createBodies: unknown[] = [];
+    server.use(
+      http.post('/api/v2/elitea_core/conversations/prompt_lib/7', async ({ request }) => {
+        createBodies.push(await request.json());
+        return HttpResponse.json({ id: 'new-1', name: 'Draft', is_private: true });
+      }),
+    );
+    const { Wrapper } = makeRoutedWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current).not.toBeNull());
+
+    const created = await result.current.conversationsProps.onCreateConversation({ id: 'draft', name: 'Draft', isPrivate: undefined as unknown as boolean });
+    expect(created).toEqual({ id: 'new-1', name: 'Draft', is_private: true });
+    expect(createBodies).toEqual([{ name: 'Draft', is_private: true }]);
+  });
+
+  it('creates a new conversation with is_private explicitly false', async () => {
+    seedProjectSeven();
+    const createBodies: unknown[] = [];
+    server.use(
+      http.post('/api/v2/elitea_core/conversations/prompt_lib/7', async ({ request }) => {
+        createBodies.push(await request.json());
+        return HttpResponse.json({ id: 'new-2', name: 'Public draft', is_private: false });
+      }),
+    );
+    const { Wrapper } = makeRoutedWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current).not.toBeNull());
+
+    const created = await result.current.conversationsProps.onCreateConversation({ id: 'draft', name: 'Public draft', isPrivate: false });
+    expect(created).toEqual({ id: 'new-2', name: 'Public draft', is_private: false });
+    expect(createBodies).toEqual([{ name: 'Public draft', is_private: false }]);
+  });
+
+  it('surfaces an error and resolves undefined when the create call fails', async () => {
+    seedProjectSeven();
+    server.use(http.post('/api/v2/elitea_core/conversations/prompt_lib/7', () => HttpResponse.json({ error: 'boom' }, { status: 500 })));
+    const { Wrapper } = makeRoutedWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current).not.toBeNull());
+
+    const created = await result.current.conversationsProps.onCreateConversation(conversation);
+    expect(created).toBeUndefined();
+    await waitFor(() => expect(result.current.errorMessage).toBe('Failed to create the conversation'));
+  });
+});
+
+describe('useConversationSidebar — delete/rename network failure', () => {
+  it('surfaces an error when the delete call fails', async () => {
+    seedProjectSeven();
+    server.use(http.delete('/api/v2/elitea_core/conversation/prompt_lib/7/c1', () => HttpResponse.json({ error: 'boom' }, { status: 500 })));
+    const { Wrapper } = makeRoutedWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current).not.toBeNull());
+
+    act(() => result.current.conversationsProps.setDateGroups([{ name: 'Today', conversations: [conversation] }]));
+    act(() => result.current.conversationsProps.onDeleteConversation(conversation));
+
+    await waitFor(() => expect(result.current.errorMessage).toBe('Failed to delete the conversation'));
+  });
+
+  it('does nothing when no project is selected', async () => {
+    setConfig('/app/');
+    const { Wrapper } = makeRoutedWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current).not.toBeNull());
+
+    expect(() => act(() => result.current.conversationsProps.onDeleteConversation(conversation))).not.toThrow();
+  });
+
+  it('surfaces an error when the rename call fails', async () => {
+    seedProjectSeven();
+    server.use(http.put('/api/v2/elitea_core/conversation/prompt_lib/7/c1', () => HttpResponse.json({ error: 'boom' }, { status: 500 })));
+    const { Wrapper, router } = makeRoutedWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current).not.toBeNull());
+
+    act(() => result.current.conversationsProps.onSelectConversation(conversation));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/chat/c1'));
+
+    act(() => result.current.conversationsProps.onChangeActiveConversationName('New name'));
+
+    await waitFor(() => expect(result.current.errorMessage).toBe('Failed to rename the conversation'));
+  });
+});
+
+describe('useConversationSidebar — edit playback / no-project branches', () => {
+  it('patches a playback conversation locally without calling the edit API', async () => {
+    seedProjectSeven();
+    let editCalled = false;
+    server.use(
+      http.put('/api/v2/elitea_core/conversation/prompt_lib/7/c1', () => {
+        editCalled = true;
+        return HttpResponse.json({ id: 'c1', name: 'Old name', is_private: true });
+      }),
+    );
+    const { Wrapper } = makeRoutedWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current).not.toBeNull());
+
+    const playback: Conversation = { ...conversation, isPlayback: true };
+    act(() => result.current.conversationsProps.setDateGroups([{ name: 'Today', conversations: [playback] }]));
+    act(() => result.current.conversationsProps.onEditConversation({ ...playback, name: 'Renamed locally' }));
+
+    await waitFor(() => expect(result.current.conversationsProps.dateGroups[0]?.conversations[0]?.name).toBe('Renamed locally'));
+    expect(editCalled).toBe(false);
+  });
+
+  it('does nothing for a non-playback edit when no project is selected', async () => {
+    setConfig('/app/');
+    const { Wrapper } = makeRoutedWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current).not.toBeNull());
+
+    expect(() => act(() => result.current.conversationsProps.onEditConversation({ ...conversation, name: 'x' }))).not.toThrow();
+  });
+
+  it('leaves a non-matching row untouched and does not clear an unrelated active conversation', async () => {
+    seedProjectSeven();
+    server.use(http.put('/api/v2/elitea_core/conversation/prompt_lib/7/c2', () => HttpResponse.json({ id: 'c2', name: 'Renamed', is_private: true })));
+    const { Wrapper, router } = makeRoutedWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current).not.toBeNull());
+
+    const other: Conversation = { id: 'c2', name: 'Other', isPrivate: true };
+    act(() => result.current.conversationsProps.setDateGroups([{ name: 'Today', conversations: [conversation, other] }]));
+    // `conversation` (c1) is the ACTIVE one; `other` (c2) is what gets edited.
+    act(() => result.current.conversationsProps.onSelectConversation(conversation));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/chat/c1'));
+
+    act(() => result.current.conversationsProps.onEditConversation({ ...other, name: 'Renamed' }));
+
+    await waitFor(() => expect(result.current.conversationsProps.dateGroups[0]?.conversations).toEqual([conversation, { ...other, name: 'Renamed' }]));
+    // The non-matching row (c1) kept its own identity, and the active
+    // conversation (also c1, not the edited c2) was left alone.
+    expect(result.current.conversationsProps.selectedConversationId).toBe('c1');
+  });
+});
+
+describe('useConversationSidebar — pin wrapper', () => {
+  it('onPinConversation forwards to the pin hook without throwing', async () => {
+    seedProjectSeven();
+    server.use(http.post('/api/v2/social/pin/prompt_lib/7/*', () => HttpResponse.json({})));
+    const { Wrapper } = makeRoutedWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current).not.toBeNull());
+
+    act(() => result.current.conversationsProps.setDateGroups([{ name: 'Today', conversations: [conversation] }]));
+    expect(() => act(() => result.current.conversationsProps.onPinConversation(conversation, true))).not.toThrow();
+  });
+});

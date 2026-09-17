@@ -367,17 +367,22 @@ const fn map_input_error(error: &InputContentError) -> ProductionBootstrapError 
 
 fn map_runtime_context_error(error: &RuntimeContextError) -> ProductionBootstrapError {
     match error {
-        RuntimeContextError::InvalidConfiguration(_) | RuntimeContextError::InvalidResponse(_) => {
-            ProductionBootstrapError::InvalidConfiguration
-        }
+        // NotFound and Rejected share this arm rather than carrying one of
+        // their own, and the sharing is the point: a resource the claim was
+        // allowed to read but that no longer exists is a stale REFERENCE, and
+        // a refused builder document is bad BYTES — different causes, same
+        // terminal verdict. Neither may re-enter the retrying bucket, because
+        // the identical request retried is the identical failure. (Two arms
+        // with identical bodies is also a clippy error, so the grouping is
+        // enforced as well as intended.)
+        RuntimeContextError::InvalidConfiguration(_)
+        | RuntimeContextError::InvalidResponse(_)
+        | RuntimeContextError::NotFound(_)
+        | RuntimeContextError::Rejected(_) => ProductionBootstrapError::InvalidConfiguration,
         RuntimeContextError::ResourceExhausted(_) => ProductionBootstrapError::ResourceExhausted,
         RuntimeContextError::AuthorizationFailed(_) => {
             ProductionBootstrapError::AuthenticationFailed
         }
-        // A resource the claim was allowed to read but that no longer exists
-        // is a stale reference, not a transient dependency failure: it must
-        // not re-enter the retrying bucket.
-        RuntimeContextError::NotFound(_) => ProductionBootstrapError::InvalidConfiguration,
         RuntimeContextError::DependencyUnavailable(_)
         | RuntimeContextError::Transport(_)
         | RuntimeContextError::Timeout(_) => ProductionBootstrapError::DependencyUnavailable,

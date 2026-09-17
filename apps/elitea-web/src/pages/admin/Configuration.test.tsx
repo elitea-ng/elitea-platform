@@ -376,6 +376,17 @@ describe('field widgets', () => {
     expect(widgetFor({ key: 'form_users', type: 'array', title: 'T' })).toBe('none');
   });
 
+  it('A1 (ELITEA-0016): routes BOTH publish-guardrail whitelist fields to the project picker, matched on suffix like `_links` is', () => {
+    expect(
+      widgetFor({ key: 'publish_whitelist_project_ids', type: 'array', items: { type: 'integer' }, title: 'T' }),
+    ).toBe('projectList');
+    expect(
+      widgetFor({ key: 'skill_publish_whitelist_project_ids', type: 'array', items: { type: 'integer' }, title: 'T' }),
+    ).toBe('projectList');
+    // A field that merely CONTAINS the phrase, or an unrelated integer array, is unaffected.
+    expect(widgetFor({ key: 'agent_categories', type: 'array', items: { type: 'string' }, title: 'T' })).toBe('list');
+  });
+
   it('honours visible_when, including the all-of array form', () => {
     const field = { key: 'k', type: 'string', title: 'T' };
     expect(isFieldVisible(field, {})).toBe(true);

@@ -30,13 +30,14 @@ import type { PipelineDraftValues, PipelineFieldChange } from '../model/types';
  * [] }` on create — a brand-new pipeline has no flow graph yet, matching
  * `useCreateApplicationInitialValues(true)`'s own seed.
  *
- * **`conversation_starters`/`welcome_message` gap, disclosed**, same as
- * `useAgentEditorCreate.ts`'s own doc comment: no live UI for either has
- * landed in this worktree (the baseline's `ConversationStarters.jsx`/
- * `AgentInput.WelcomeMessageInput` panels are `features/agents`-owned and
- * `no-sideways-features` forbids reaching them from here even if they had).
- * Both are always sent empty/unset via this path — a real, disclosed gap,
- * not a silently dropped field.
+ * **`conversation_starters`/`welcome_message` — CLOSED by #940 A12.** This
+ * comment used to record them as a disclosed gap ("no live UI for either has
+ * landed in this worktree"). There is one: `processes/chat/ui/EditorShell.tsx`'s
+ * `renderPipelineCreateForm` mounts the same `CreateAgentForm entityType=
+ * "pipeline"` the baseline mounts, at the one layer allowed to import both
+ * slices, and it renders `WelcomeMessageInput` and `ConversationStartersEditor`
+ * for a pipeline exactly as it does for an agent. `submit` now carries what
+ * they write; sending `[]` regardless is what made the panels look decorative.
  *
  * **`meta.internal_tools` default — empty, matching a fresh form.** The
  * admission gates admit the platform's whole authorable catalogue now (the
@@ -76,6 +77,60 @@ function resolveInternalTools(meta: NonNullable<PipelineDraftValues['version_det
   return DEFAULT_INTERNAL_TOOLS;
 }
 
+/**
+ * The two fields the shared create form collects and this path used to send
+ * neither of — #940 A12, the same dead-wiring fix the agent twin needed.
+ * `welcomeMessage` is SPREAD rather than assigned because the draft key is
+ * optional-without-undefined (exactOptionalPropertyTypes).
+ *
+ * Its own function for the oxlint complexity budget (12), the same reason
+ * `resolveInternalTools`/`resolveLlmSettings` above are separate.
+ */
+function optionalCreateVersionFields(versionDetails: PipelineDraftValues['version_details']) {
+  return versionDetails?.welcome_message !== undefined ? { welcomeMessage: versionDetails.welcome_message } : {};
+}
+
+/** The chat starters the shared create form collected — own function for the complexity budget, mirroring `useAgentEditorCreate`'s twin. */
+function draftConversationStarters(versionDetails: PipelineDraftValues['version_details']): readonly string[] {
+  return [...(versionDetails?.conversation_starters ?? [])];
+}
+
+/** The version's variables in write shape — own function for the same budget reason. */
+function draftVariables(
+  versionDetails: PipelineDraftValues['version_details'],
+): readonly { readonly name: string; readonly value: string }[] {
+  return (versionDetails?.variables ?? []).map((variable) => ({ name: variable.name, value: variable.value }));
+}
+
+/** `submit`'s request-body construction, extracted for the same budget reason. */
+function buildPipelineCreateDraft(values: PipelineDraftValues): ApplicationDraftInput {
+  const versionDetails = values.version_details;
+  // Read once and reused by both `step_limit` and `resolveInternalTools`
+  // below — collapses what would otherwise be two separate
+  // `versionDetails?.meta` optional-chain branches into one.
+  const meta = versionDetails?.meta;
+  return {
+    name: (values.name ?? '').trim(),
+    description: values.description ?? '',
+    type: 'interface',
+    version: {
+      name: LATEST_VERSION_NAME,
+      agentType: 'pipeline',
+      instructions: versionDetails?.instructions ?? '',
+      ...optionalCreateVersionFields(versionDetails),
+      conversationStarters: draftConversationStarters(versionDetails),
+      variables: draftVariables(versionDetails),
+      meta: { step_limit: meta?.step_limit ?? 25, internal_tools: resolveInternalTools(meta) },
+      // Same read-through as the agents twin in `useAgentEditorCreate`:
+      // absent unless the form's model picker put something there.
+      llmSettings: resolveLlmSettings(versionDetails),
+      tags: [...(versionDetails?.tags ?? [])],
+      tools: [],
+      pipelineSettings: { nodes: [], edges: [] },
+    },
+  };
+}
+
 export function usePipelineEditorCreate(projectId: string | undefined) {
   const [values, setValues] = useState<PipelineDraftValues>(EMPTY_CREATE_VALUES);
   const { create, isCreating, error } = useCreateApplicationDraft(projectId);
@@ -85,32 +140,7 @@ export function usePipelineEditorCreate(projectId: string | undefined) {
   }, []);
 
   const submit = useCallback(async (): Promise<ApplicationCreatedResponse | undefined> => {
-    const versionDetails = values.version_details;
-    // Read once and reused by both `step_limit` and `resolveInternalTools`
-    // below — keeps `submit`'s own cyclomatic complexity under this
-    // codebase's oxlint budget (12) by collapsing what would otherwise be
-    // two separate `versionDetails?.meta` optional-chain branches into one.
-    const meta = versionDetails?.meta;
-    const draft: ApplicationDraftInput = {
-      name: (values.name ?? '').trim(),
-      description: values.description ?? '',
-      type: 'interface',
-      version: {
-        name: LATEST_VERSION_NAME,
-        agentType: 'pipeline',
-        instructions: versionDetails?.instructions ?? '',
-        conversationStarters: [],
-        variables: (versionDetails?.variables ?? []).map((variable) => ({ name: variable.name, value: variable.value })),
-        meta: { step_limit: meta?.step_limit ?? 25, internal_tools: resolveInternalTools(meta) },
-        // Same read-through as the agents twin in `useAgentEditorCreate`:
-        // absent unless the form's model picker put something there.
-        llmSettings: resolveLlmSettings(versionDetails),
-        tags: [...(versionDetails?.tags ?? [])],
-        tools: [],
-        pipelineSettings: { nodes: [], edges: [] },
-      },
-    };
-    return create(draft);
+    return create(buildPipelineCreateDraft(values));
   }, [values, create]);
 
   return { values, onFieldChange, submit, isCreating, error };

@@ -24,6 +24,13 @@
  *     so the waiver records a debt to re-home them rather than hiding an
  *     un-curated barrel.
  *   useInteractiveTourController.hooks.ts: hook-deps waived (12/8)
+ *   notifications/index.ts: slice-public-api waived (21/20) — issue 940/A4
+ *     (bell popover infinite scroll) added exactly one new hook
+ *     (`useNotificationsInfiniteList`) to a barrel that was already CURATED
+ *     and sitting exactly at the 20 cap; the hook has one real external
+ *     consumer (`widgets/sidebar/ui/NotificationButton.tsx`) and no smaller
+ *     bundling was available without renaming the 5 already-shipped
+ *     individual hook exports this same barrel carries.
  *
  * Deliberately NOT implemented here (recorded, not forgotten):
  *   cyclomatic complexity 12 — oxlint native `complexity` rule (.oxlintrc.json)
@@ -51,6 +58,7 @@ export const BUDGET_WAIVERS = Object.freeze({
   'src/features/interactive-tours/index.ts': ['slice-public-api'],
   'src/features/skills/index.ts': ['slice-public-api'],
   'src/features/interactive-tours/lib/hooks/useInteractiveTourController.hooks.ts': ['hook-deps'],
+  'src/features/notifications/index.ts': ['slice-public-api'],
 });
 
 /** Check if a file has a waiver for a specific budget rule. */

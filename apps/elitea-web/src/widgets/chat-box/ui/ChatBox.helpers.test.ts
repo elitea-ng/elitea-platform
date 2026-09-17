@@ -215,6 +215,27 @@ describe('deriveChatBoxInputState', () => {
     expect(deriveChatBoxInputState({ ...base, isStreaming: true }).isInputLoading).toBe(true);
   });
 
+  /*
+   * A17. A run in flight must NOT take the composer away: the text area stays
+   * editable and the send control stays live, because what is sent there is
+   * queued ("Waiting messages") rather than put on the wire. This is the whole
+   * enabling condition of the feature — with `isStreaming` still folded into
+   * `disabledSend`, every interjection is silently dropped by `sendQuestion`'s
+   * own guard and the queue can never fill.
+   */
+  it('leaves the composer live while a turn streams, but still reports the run', () => {
+    const streaming = deriveChatBoxInputState({ ...base, isStreaming: true });
+    expect(streaming.isComposerBusy).toBe(false);
+    expect(streaming.disabledSend).toBe(false);
+    expect(streaming.isInputLoading).toBe(true);
+  });
+
+  it('still blocks the composer for reasons that are not the run', () => {
+    const uploading = deriveChatBoxInputState({ ...base, isStreaming: true, isUploadingAttachments: true });
+    expect(uploading.isComposerBusy).toBe(true);
+    expect(uploading.disabledSend).toBe(true);
+  });
+
   it('disabled when no chat input', () => {
     expect(deriveChatBoxInputState({ ...base, hasChatInput: false }).disabledSend).toBe(true);
   });

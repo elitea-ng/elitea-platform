@@ -126,7 +126,7 @@ INFRA_IMAGES=(
   docker.io/pgvector/pgvector:0.8.5-pg16
   docker.io/library/redis:7-alpine
   docker.io/rustfs/rustfs:latest
-  docker.io/minio/mc:latest
+  quay.io/minio/mc:latest
 )
 
 load_images() {
@@ -275,7 +275,7 @@ install_infra() {
   # bucket, and it is the Deployment that crash-loops, after the install
   # already looked green (values.yaml says this at length).
   kc -n "$NS" delete job rustfs-bucket-init --ignore-not-found >/dev/null
-  kc -n "$NS" create job rustfs-bucket-init --image=docker.io/minio/mc:latest \
+  kc -n "$NS" create job rustfs-bucket-init --image=quay.io/minio/mc:latest \
     --dry-run=client -o json -- sh -c \
     'mc alias set rustfs http://rustfs:9000 elitea elitea-dev-secret && mc mb --ignore-existing rustfs/elitea-artifacts' \
     | python3 -c 'import json,sys; j=json.load(sys.stdin); j["spec"]["template"]["spec"]["containers"][0]["imagePullPolicy"]="IfNotPresent"; j["spec"]["backoffLimit"]=6; print(json.dumps(j))' \

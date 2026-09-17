@@ -186,3 +186,74 @@ describe('IndexActions — indexing in progress', () => {
     expect(await screen.findByRole('button', { name: 'Stop' })).toBeInTheDocument();
   });
 });
+
+/**
+ * ELITEA-2880 / 2883 / 2887 — the Save / Save & Reindex split.
+ *
+ * The rule the cases state four different ways: a CLEAN configuration form
+ * offers "Reindex" and nothing else; a DIRTY one offers "Save" and
+ * "Save & Reindex" and withdraws "Reindex". These assert both directions,
+ * because a change that rendered all three at once would satisfy either half
+ * alone.
+ */
+describe('IndexActions — Save / Save & Reindex (ELITEA-2880, ELITEA-2883)', () => {
+  const configSave = { isDirty: false, isSaving: false, onSave: vi.fn(), onSaveAndReindex: vi.fn() };
+
+  it('offers only Reindex while the form is clean', async () => {
+    renderActions({ view: 'edit', activeView: 'configuration', configSave: { ...configSave, isDirty: false } });
+    expect(await screen.findByRole('button', { name: 'Reindex' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save & Reindex' })).not.toBeInTheDocument();
+  });
+
+  it('swaps Reindex for Save + Save & Reindex the moment the form is dirty', async () => {
+    renderActions({ view: 'edit', activeView: 'configuration', configSave: { ...configSave, isDirty: true } });
+    expect(await screen.findByRole('button', { name: 'Save' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Save & Reindex' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Reindex' })).not.toBeInTheDocument();
+  });
+
+  it('Save calls onSave and does NOT start a reindex', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    const onSaveAndReindex = vi.fn();
+    const indexData = vi.fn();
+    renderActions({
+      view: 'edit',
+      activeView: 'configuration',
+      indexData,
+      configSave: { isDirty: true, isSaving: false, onSave, onSaveAndReindex },
+    });
+    await user.click(await screen.findByRole('button', { name: 'Save' }));
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSaveAndReindex).not.toHaveBeenCalled();
+    expect(indexData).not.toHaveBeenCalled();
+  });
+
+  it('Save & Reindex calls onSaveAndReindex, never `indexData` directly — the reindex has to follow the save', async () => {
+    const user = userEvent.setup();
+    const onSaveAndReindex = vi.fn();
+    const indexData = vi.fn();
+    renderActions({
+      view: 'edit',
+      activeView: 'configuration',
+      indexData,
+      configSave: { isDirty: true, isSaving: false, onSave: vi.fn(), onSaveAndReindex },
+    });
+    await user.click(await screen.findByRole('button', { name: 'Save & Reindex' }));
+    expect(onSaveAndReindex).toHaveBeenCalledTimes(1);
+    expect(indexData).not.toHaveBeenCalled();
+  });
+
+  it('disables both buttons while the save is in flight', async () => {
+    renderActions({ view: 'edit', activeView: 'configuration', configSave: { ...configSave, isDirty: true, isSaving: true } });
+    expect(await screen.findByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save & Reindex' })).toBeDisabled();
+  });
+
+  it('keeps the pre-split behaviour for a caller that wires no save at all', async () => {
+    renderActions({ view: 'edit', activeView: 'configuration' });
+    expect(await screen.findByRole('button', { name: 'Reindex' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+  });
+});

@@ -328,6 +328,16 @@ export function UserMessage({
               ? t('features.chatMessages.typing', 'Typing...')
               : resolvedContent}
           </Typography>
+          {message.interjected === true && (
+            <Typography
+              variant="labelSmall"
+              color="text.secondary"
+              data-testid="chat-message-interjected"
+              sx={{ display: 'block', mt: 0.5 }}
+            >
+              {t('features.chatMessages.sentWhileRunning', 'Sent while running')}
+            </Typography>
+          )}
           <MessageAttachmentList
             items={attachmentItems}
             {...(onRemoveAttachment !== undefined ? { onRemoveAttachment } : {})}

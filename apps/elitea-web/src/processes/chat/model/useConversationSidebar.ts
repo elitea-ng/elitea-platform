@@ -36,6 +36,7 @@ import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
 import { useSelectedProject } from '@/widgets/app-shell';
 
 import { chatBasename, draftFolderId } from './conversationSidebar.helpers';
+import { useDuplicateConversation } from './useDuplicateConversation';
 
 /** What the component needs beyond the `Conversations` prop bundle itself. */
 export interface UseConversationSidebarResult {
@@ -301,6 +302,12 @@ export function useConversationSidebar(): UseConversationSidebarResult {
     [navigate],
   );
 
+  // Issue 940/A6 — Chat "Duplicate" action. Its own hook
+  // (`useDuplicateConversation.ts`) purely for the §3.5 400-line file
+  // budget — see that file's own module doc for the full behaviour and the
+  // ELITEA-2616..2624 case-by-case rationale.
+  const duplicateConversation = useDuplicateConversation({ projectId, toastError, setActiveConversation });
+
   /**
    * `ConversationItem` calls `onEdit` with the ALREADY-updated conversation for
    * both the rename editor's save (`ConversationItem.tsx`'s `onSave`) and the
@@ -354,6 +361,7 @@ export function useConversationSidebar(): UseConversationSidebarResult {
     // shouldPin) => void`. Wrapped so the floating promise is explicitly discarded
     // (`typescript/no-misused-promises`); the hook toasts its own errors already.
     onPinConversation: (conversation, shouldPin) => void onPinConversation(conversation, shouldPin),
+    onDuplicateConversation: (conversation) => void duplicateConversation(conversation),
     onCreateConversation: createConversation,
     onCancelCreateConversation,
     onChangeActiveConversationName: renameConversation,

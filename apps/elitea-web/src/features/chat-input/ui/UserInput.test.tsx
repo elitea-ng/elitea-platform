@@ -128,6 +128,53 @@ describe('UserInput', () => {
     expect(screen.getByTestId('send-slot')).toBeInTheDocument();
   });
 
+  /*
+   * A17 (ELITEA-2871). With `keepWhileStreaming`, Stop and Send are NOT
+   * alternatives: the host queues what is sent mid-run, so the reader needs
+   * both controls at once. The default above stays the baseline's either/or —
+   * a host with no queue that showed Send during a run would let a second turn
+   * onto a conversation the server admits one at a time.
+   */
+  it('keeps the send control beside Stop when the host queues mid-run', () => {
+    const sendControl = vi.fn(() => <div data-testid="send-slot" />);
+    renderWithTheme(
+      <UserInput
+        slots={{ sendControl }}
+        slotProps={{ sendButton: { keepWhileStreaming: true } }}
+        callbacks={{ onStop: vi.fn() }}
+        isStreaming
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Stop generating' })).toBeInTheDocument();
+    expect(screen.getByTestId('send-slot')).toBeInTheDocument();
+  });
+
+  it('still sends (to the host, which queues it) on Enter while a turn is open', () => {
+    const onSend = vi.fn();
+    renderWithTheme(
+      <UserInput
+        slots={{}}
+        slotProps={{ sendButton: { keepWhileStreaming: true } }}
+        callbacks={{ onSend }}
+        isStreaming
+      />,
+    );
+    const textarea = getTextarea();
+    // ELITEA-2872: Shift+Enter opens a new line instead of sending.
+    fireEvent.change(textarea, { target: { value: 'make it' } });
+    fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: true });
+    expect(onSend).not.toHaveBeenCalled();
+    // Enter sends — which, for a host with a queue, means "queue this".
+    fireEvent.change(textarea, { target: { value: 'make it short' } });
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+    expect(onSend).toHaveBeenCalledWith('make it short', 'make it short');
+    // ELITEA-2871: the composer clears, so a second Enter cannot re-queue the
+    // same text — the send path reads the (now empty) question and refuses.
+    expect(textarea).toHaveValue('');
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
   it('forwards pasted files (renamed with a random appendix) to onFilePaste and prevents default', () => {
     const onFilePaste = vi.fn();
     renderWithTheme(

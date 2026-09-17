@@ -11,6 +11,11 @@ import * as entity from './index';
  * Precedent: src/entities/bucket/index.test.ts.
  */
 const PUBLIC_SURFACE = [
+  'DEFAULT_ATTACHMENT_EXTENSIONS',
+  'deriveAllowedAttachmentTypes',
+  'fileExtension',
+  'normaliseExtension',
+  'useAllowedAttachmentTypes',
   'downloadAttachmentFromArtifact',
   'downloadAttachmentImage',
   'getAttachmentDisabledStatus',

@@ -7593,6 +7593,64 @@ components:
         operations whose handler body actually returns it — every other
         error path in this file keeps using ErrorResponse.
 
+    IndexConfigurationSaveRequest:
+      type: object
+      required: [index_configuration]
+      properties:
+        index_configuration:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >
+            NOTE(W2): the index's tool parameters, whose shape is the
+            `index_data` argument schema of the toolkit TYPE — per type, only
+            known at run time from the pinned SDK snapshot
+            (internal/runtimecomposition/current_toolkit_schema_snapshot.json),
+            and stored verbatim so the next reindex can replay it byte for
+            byte (internal/application/indexschedule/executor.go's
+            scheduledIndexParameters). elitea-main validates only that it is
+            one bounded JSON OBJECT
+            (internal/application/indexmeta/configuration.go:69); it never
+            interprets a field.
+      description: >
+        NOTE(W2): the request body of
+        internal/api/v2/indexing/index_meta_configuration.go's
+        currentIndexConfigurationBody. A NAMED key rather than the bare
+        configuration object, so the envelope has room for the next question
+        this route will be asked (which generation the caller believed it was
+        editing) without breaking the one it answers today.
+
+    IndexWriteAck:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+      description: >
+        NOTE(W2): the `{"ok": true}` envelope every index WRITE path answers
+        with (internal/api/v2/toolkits/index_write.go, and
+        internal/api/v2/indexing/index_meta_delete.go / _configuration.go).
+        Different from this spec's normal single-resource shape, and
+        deliberately kept: the web client reads `ok`.
+
+    IndexWriteRefusal:
+      type: object
+      required: [ok, error]
+      properties:
+        ok:
+          type: boolean
+          enum: [false]
+        error:
+          type: string
+          description: >
+            A fixed, human-readable sentence. It never carries the driver
+            error: an unwrapped pgx failure names the PgVector user,
+            database, host and port.
+      description: >
+        NOTE(W2): the refusal half of the same `{"ok": ..., "error": ...}`
+        envelope IndexWriteAck describes — the shape the index write paths
+        answer 4xx/5xx with.
+
     CreateFeedbackResponse:
       type: object
       required: [ok, id]
@@ -7704,6 +7762,18 @@ components:
             written straight to the `settings` jsonb column
             (toolkits/handler.go:565-583). Closing this would make the generated
             client reject requests the server accepts.
+        meta:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the toolkit's own `meta` jsonb column.
+            `pgRepo.CreateToolkit` has always marshalled this key straight into
+            it (toolkits/handler.go:1636-1639) — the description above, which
+            says the repository reads "exactly name, type, description and
+            settings", predates that and is corrected here. The contract never
+            described the key, so the generated client dropped it and a toolkit
+            created with the Tools section's MCP access toggle ON was stored
+            with it off (ELITEA-2541).
 
     ToolkitUpdateRequest:
       type: object
@@ -7724,6 +7794,20 @@ components:
             `pgRepo.UpdateToolkit` applies whatever keys are present and the
             per-type validation that exists only covers `github`
             (toolkits/handler.go:565-583).
+        meta:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the toolkit's own `meta` jsonb column, applied WHOLE by
+            `pgRepo.UpdateToolkit` (toolkits/handler.go:1791-1796) — it has
+            always accepted this key; the contract simply never described it,
+            so the generated client dropped it and
+            `meta.mcp_options.available_by_mcp` (the Tools section's MCP
+            access toggle) could be changed on screen and never stored
+            (ELITEA-2541). The column also holds `indexes_meta`, the index
+            schedule map, so a caller must send the meta it READ with its
+            edits applied rather than a fresh object — the write replaces the
+            column, it does not merge.
 
     ToolkitInstance:
       type: object
@@ -18353,6 +18437,89 @@ paths:
                 $ref: '#/components/schemas/ToolkitTypeSchemas'
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+
+  /elitea_core/index_meta/prompt_lib/{project_id}/{toolkit_id}/{index_name}/configuration:
+    put:
+      operationId: saveIndexConfiguration
+      summary: Save one index's configuration without reindexing
+      description: |
+        The SAVE half of the Indexes tab's "Save" / "Save & Reindex" split.
+
+        Before this route existed the ONLY writer of an index's stored
+        `index_configuration` was an indexing RUN: the configuration travels
+        as the `tool_params` of `test_toolkit_tool`, and the run records it on
+        the index metadata document on its way through. So a person who
+        changed `progress_step` could persist that change only by re-indexing
+        the whole collection, and a SCHEDULED reindex — which reads the same
+        stored field
+        (internal/runtimecomposition/index_schedule_inspector.go) — kept
+        running the configuration of the last run rather than the one the
+        editor showed.
+
+        This write replaces exactly that one field on the addressed index
+        metadata document and leaves every run-owned field (`state`,
+        `task_id`, `history`, the document counters) untouched. It starts
+        nothing: the index data is not touched and no worker is dispatched.
+
+        The `{index_name}` segment carries the index NAME
+        (`metadata.collection`), not a row id — the same asymmetry the
+        schedule PATCH on this prefix already has
+        (internal/api/v2/toolkits/index_write.go's header).
+
+        Guarded by `models.applications.index_meta.edit` in the `default`
+        permission mode: saving a configuration is not running a tool, so it
+        does not take the run permission.
+      tags: [toolkits]
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: toolkit_id
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: index_name
+          in: path
+          required: true
+          description: The index's `metadata.collection`.
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IndexConfigurationSaveRequest' }
+      responses:
+        '200':
+          description: Stored
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IndexWriteAck' }
+        '400':
+          description: |
+            `index_configuration` is not a JSON object, the toolkit is not
+            visible to the caller, or it has no PgVector configuration to
+            write into.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IndexWriteRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No index of that name exists under this toolkit.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IndexWriteRefusal' }
+        '502':
+          description: The project's PgVector store could not be written.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IndexWriteRefusal' }
+        '504':
+          description: The write did not finish inside its deadline.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IndexWriteRefusal' }
 
   # NOTE(W2): "tools" (plural), NOT "toolkits" — a different, real, mounted
   # route (internal/api/router.go:369 `r.Get("/tools/prompt_lib/{projectID}",

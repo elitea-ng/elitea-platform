@@ -17,6 +17,7 @@ import (
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
 	indexscheduleapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexschedule"
 	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/patexpiry"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/pipelineruns"
 	schedulingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/scheduling"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
@@ -1115,6 +1116,33 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct attachment object context: %w", err)
 		}
 	}
+	// entityBuilders is the WRITE half of the same argument (#940 A8): the two
+	// chat-authored builder modules — `skills_builder` and
+	// `project_context_builder` — give the model a tool that creates or
+	// updates a Skill or the Project Context from the conversation, and the
+	// native runtime has no other channel to this service's tenant data for
+	// exactly the reasons the attachment route's own comment above gives.
+	//
+	// It is built on the ADMISSION pool, the same pool the attachment reader
+	// takes, because the write must land in the same database the claimed
+	// execution_jobs row lives in.
+	var entityBuilders *storage.RuntimeEntityBuilderService
+	if config.AgentExecutionDispatchEnabled {
+		builderSink, builderErr := repos.NewCurrentRuntimeEntityBuilderRepository(
+			dependencies.AdmissionPool,
+		)
+		if builderErr != nil {
+			return nil, fmt.Errorf("construct runtime entity builder writer: %w", builderErr)
+		}
+		entityBuilders, err = storage.NewRuntimeEntityBuilderService(
+			contentRepository,
+			builderSink,
+			builderSink,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("construct runtime entity builder context: %w", err)
+		}
+	}
 	if config.IndexIngestDispatchEnabled {
 		currentIndex, err = newCurrentIndexRuntime(
 			dependencies.AdmissionPool,
@@ -1365,6 +1393,38 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 				retentionSchedule = parsedRetentionSchedule
 			}
 
+			// The personal-access-token expiry notice (#940 A3). Built here
+			// beside the retention sweep because it is the same kind of thing:
+			// a periodic producer whose whole effect is a row a user reads.
+			// A nil admission pool leaves both handler and schedule nil, and
+			// scheduledJobs then registers no job at all rather than one that
+			// cannot run.
+			var patExpiryHandler schedulingapp.Handler
+			var patExpirySchedule schedulingapp.Schedule
+			if dependencies.AdmissionPool != nil {
+				patExpiryStore, patExpiryStoreErr := repos.NewPATExpiryNotificationRepository(dependencies.AdmissionPool)
+				if patExpiryStoreErr != nil {
+					return nil, fmt.Errorf("construct personal access token expiry repository: %w", patExpiryStoreErr)
+				}
+				patExpiryNotifier, patExpiryNotifierErr := patexpiry.New(patExpiryStore)
+				if patExpiryNotifierErr != nil {
+					return nil, fmt.Errorf("construct personal access token expiry notifier: %w", patExpiryNotifierErr)
+				}
+				patExpirySweepHandler, patExpirySweepErr := newPATExpirySweep(patExpiryNotifier)
+				if patExpirySweepErr != nil {
+					return nil, fmt.Errorf("construct personal access token expiry sweep: %w", patExpirySweepErr)
+				}
+				parsedPATExpirySchedule, patExpiryScheduleErr := schedulingapp.ParseCron(patExpirySweepCadence)
+				if patExpiryScheduleErr != nil {
+					return nil, fmt.Errorf(
+						"parse personal access token expiry sweep cadence: %w",
+						patExpiryScheduleErr,
+					)
+				}
+				patExpiryHandler = patExpirySweepHandler
+				patExpirySchedule = parsedPATExpirySchedule
+			}
+
 			// One scan observes all projects and may cover the same due index
 			// occurrence as an older scan. Claiming scan occurrences in
 			// parallel only makes the product runner's overlap guard release
@@ -1380,7 +1440,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			}
 			registry, registryErr := scheduledJobRegistry(
 				schedulerConfig.LeaseDuration,
-				scheduledJobs(indexDueWork, retentionHandler, schedule, retentionSchedule)...,
+				scheduledJobs(
+					indexDueWork, retentionHandler, patExpiryHandler,
+					schedule, retentionSchedule, patExpirySchedule,
+				)...,
 			)
 			if registryErr != nil {
 				return nil, fmt.Errorf(
@@ -1451,6 +1514,12 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, err
 		}
 	}
+	// Registered once, after whichever branch above built the listener: both
+	// agent-execution branches want the builder routes and the index-only
+	// branch leaves entityBuilders nil, so the routes are ABSENT rather than
+	// present-and-refusing wherever agent execution is not dispatched.
+	contentServer = contentServer.WithRuntimeEntityBuilders(entityBuilders)
+
 	privateServers, err := runtimegrpc.NewPrivateServerSet(runtimegrpc.PrivateServerConfig{
 		ControlAddress:          config.ControlAddress,
 		OutputAddress:           config.OutputAddress,
@@ -1509,6 +1578,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		publicRoutes.IndexCancel = currentIndex.cancel
 		publicRoutes.IndexMeta = currentIndex.indexMeta
 		publicRoutes.IndexMetaDelete = currentIndex.indexDelete
+		publicRoutes.IndexConfiguration = currentIndex.indexConfig
 		if config.IndexSchedulingEnabled {
 			publicRoutes.IndexScheduleUpdate = currentIndex.scheduleUpdate
 			publicRoutes.IndexScheduleDelete = currentIndex.scheduleDelete

@@ -118,7 +118,13 @@ impl From<RuntimeContextError> for NativeAgentAssemblyError {
                 NativeAgentAssemblyErrorCode::InvalidConfiguration,
                 ASSEMBLY_FAILED,
             ),
-            RuntimeContextError::InvalidResponse(_) => {
+            // `Rejected` shares this arm. It never reaches this conversion in
+            // production — the builder tools handle a refused document
+            // themselves and answer the model with something it can act on,
+            // which is the whole reason it is a separate variant — but if a
+            // future caller does convert one, invalid INPUT is the honest
+            // verdict and it stays out of the retrying bucket.
+            RuntimeContextError::InvalidResponse(_) | RuntimeContextError::Rejected(_) => {
                 (NativeAgentAssemblyErrorCode::InvalidInput, ASSEMBLY_FAILED)
             }
             RuntimeContextError::ResourceExhausted(_) => (

@@ -220,3 +220,23 @@ describe('UserMessage caption line', () => {
     expect(actions.closest('.actionButtons')).toBeTruthy();
   });
 });
+
+/*
+ * A17 (ELITEA-2870). A question that was typed while a previous turn was still
+ * running is captioned "Sent while running", and the caption has to survive a
+ * reload — which is why the flag rides on the normalised `ChatMessage` rather
+ * than on some live send-time state. The negative case matters just as much:
+ * an ORDINARY question must not carry it, or the caption says nothing.
+ */
+describe('UserMessage interjection caption', () => {
+  it('captions a question delivered from the waiting queue', () => {
+    renderMessage({ name: 'Bob Reviewer', interjected: true });
+    expect(screen.getByTestId('chat-message-interjected')).toHaveTextContent('Sent while running');
+  });
+
+  it('leaves an ordinary question uncaptioned', () => {
+    renderMessage({ name: 'Bob Reviewer' });
+    expect(screen.queryByTestId('chat-message-interjected')).toBeNull();
+  });
+});
+

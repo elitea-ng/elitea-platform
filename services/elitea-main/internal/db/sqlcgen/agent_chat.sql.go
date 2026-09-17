@@ -248,7 +248,8 @@ WITH resolved AS MATERIALIZED (
                  -- agent_internal_tool_skipped — so a form toggle can no longer
                  -- make the resolver return zero rows and every send answer 422.
                  'ask_user', 'attachments', 'data_analysis', 'image_generation',
-                 'internal_mcp', 'lazy_tools_mode', 'planner', 'pyodide', 'swarm'
+                 'internal_mcp', 'lazy_tools_mode', 'planner', 'project_context_builder',
+                 'pyodide', 'skills_builder', 'swarm'
              )
       )
       AND COALESCE(
@@ -332,7 +333,8 @@ WITH resolved AS MATERIALIZED (
                  -- agent_internal_tool_skipped — so a form toggle can no longer
                  -- make the resolver return zero rows and every send answer 422.
                  'ask_user', 'attachments', 'data_analysis', 'image_generation',
-                 'internal_mcp', 'lazy_tools_mode', 'planner', 'pyodide', 'swarm'
+                 'internal_mcp', 'lazy_tools_mode', 'planner', 'project_context_builder',
+                 'pyodide', 'skills_builder', 'swarm'
              )
                 )
             )
@@ -653,7 +655,8 @@ WITH resolved AS MATERIALIZED (
                  -- agent_internal_tool_skipped — so a form toggle can no longer
                  -- make the resolver return zero rows and every send answer 422.
                  'ask_user', 'attachments', 'data_analysis', 'image_generation',
-                 'internal_mcp', 'lazy_tools_mode', 'planner', 'pyodide', 'swarm'
+                 'internal_mcp', 'lazy_tools_mode', 'planner', 'project_context_builder',
+                 'pyodide', 'skills_builder', 'swarm'
              )
       )
       -- Admitted by the same rule as the conversation's own list: ` + "`" + `internal_mcp` + "`" + `
@@ -688,7 +691,8 @@ WITH resolved AS MATERIALIZED (
                  -- agent_internal_tool_skipped — so a form toggle can no longer
                  -- make the resolver return zero rows and every send answer 422.
                  'ask_user', 'attachments', 'data_analysis', 'image_generation',
-                 'internal_mcp', 'lazy_tools_mode', 'planner', 'pyodide', 'swarm'
+                 'internal_mcp', 'lazy_tools_mode', 'planner', 'project_context_builder',
+                 'pyodide', 'skills_builder', 'swarm'
              )
       )
       AND COALESCE(
@@ -1147,7 +1151,8 @@ LEFT JOIN LATERAL (
                  -- agent_internal_tool_skipped — so a form toggle can no longer
                  -- make the resolver return zero rows and every send answer 422.
                  'ask_user', 'attachments', 'data_analysis', 'image_generation',
-                 'internal_mcp', 'lazy_tools_mode', 'planner', 'pyodide', 'swarm'
+                 'internal_mcp', 'lazy_tools_mode', 'planner', 'project_context_builder',
+                 'pyodide', 'skills_builder', 'swarm'
              )
           )
     ) AS current_tool
@@ -1317,7 +1322,8 @@ WHERE conversation.uuid = $5::uuid
                  -- agent_internal_tool_skipped — so a form toggle can no longer
                  -- make the resolver return zero rows and every send answer 422.
                  'ask_user', 'attachments', 'data_analysis', 'image_generation',
-                 'internal_mcp', 'lazy_tools_mode', 'planner', 'pyodide', 'swarm'
+                 'internal_mcp', 'lazy_tools_mode', 'planner', 'project_context_builder',
+                 'pyodide', 'skills_builder', 'swarm'
              )
   )
   AND COALESCE(
@@ -1401,7 +1407,8 @@ WHERE conversation.uuid = $5::uuid
                  -- agent_internal_tool_skipped — so a form toggle can no longer
                  -- make the resolver return zero rows and every send answer 422.
                  'ask_user', 'attachments', 'data_analysis', 'image_generation',
-                 'internal_mcp', 'lazy_tools_mode', 'planner', 'pyodide', 'swarm'
+                 'internal_mcp', 'lazy_tools_mode', 'planner', 'project_context_builder',
+                 'pyodide', 'skills_builder', 'swarm'
              )
             )
         )
@@ -2076,7 +2083,8 @@ WHERE conversation.uuid = $4::uuid
                  -- agent_internal_tool_skipped — so a form toggle can no longer
                  -- make the resolver return zero rows and every send answer 422.
                  'ask_user', 'attachments', 'data_analysis', 'image_generation',
-                 'internal_mcp', 'lazy_tools_mode', 'planner', 'pyodide', 'swarm'
+                 'internal_mcp', 'lazy_tools_mode', 'planner', 'project_context_builder',
+                 'pyodide', 'skills_builder', 'swarm'
              )
   )
   -- The version's own internal-tool list, admitted by the SAME rule as the
@@ -2114,7 +2122,8 @@ WHERE conversation.uuid = $4::uuid
                  -- agent_internal_tool_skipped — so a form toggle can no longer
                  -- make the resolver return zero rows and every send answer 422.
                  'ask_user', 'attachments', 'data_analysis', 'image_generation',
-                 'internal_mcp', 'lazy_tools_mode', 'planner', 'pyodide', 'swarm'
+                 'internal_mcp', 'lazy_tools_mode', 'planner', 'project_context_builder',
+                 'pyodide', 'skills_builder', 'swarm'
              )
   )
   AND COALESCE(

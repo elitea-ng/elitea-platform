@@ -4,15 +4,27 @@
  * (unit A5). Client ID / Client secret / Scope inputs plus an optional
  * "remember credentials" checkbox, shown conditionally per
  * `McpAuthModal`'s flow-detection logic.
+ *
+ * A13 (ELITEA-0725, "MCP via Chat Conversation: Secret Field Shows 'New
+ * Secret' Shortcut"): the Client Secret input is `shared/ui`'s `SecretField`
+ * (mode toggle + saved-secret picker + "Create new secret" shortcut),
+ * exactly the #441 fix `features/toolkits/ui/form/ToolBase/
+ * ToolBaseProperty.renderers.tsx`'s own `SecretFieldInput` leaf already
+ * applies elsewhere — see that component's doc comment and
+ * `useSecretFieldOptions()`'s own header for why the hook is called from
+ * THIS leaf (mounts on the secret path alone) rather than a parent. Plain
+ * `StyledInputEnhancer` remains for Client ID/Scope, which are not secrets.
  */
 import type { ReactNode } from 'react';
 
 import FormControlLabel from '@mui/material/FormControlLabel';
 import Typography from '@mui/material/Typography';
 
+import { useSecretFieldOptions } from '@/entities/secret';
 import { t } from '@/shared/i18n';
 import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import { InfoTooltip } from '@/shared/ui/InfoTooltip';
+import { SecretField } from '@/shared/ui/SecretField';
 import { StyledInputEnhancer } from '@/shared/ui/StyledInputEnhancer';
 
 export interface OAuthFormFieldsProps {
@@ -44,6 +56,8 @@ export function OAuthFormFields({
   onSaveCredentialsChange,
   showSaveCredentials = false,
 }: OAuthFormFieldsProps): ReactNode {
+  const secrets = useSecretFieldOptions();
+
   return (
     <>
       {needClientId && (
@@ -57,14 +71,12 @@ export function OAuthFormFields({
         />
       )}
       {needSecret && (
-        <StyledInputEnhancer
-          autoComplete="off"
-          label={t('mcps.oauthForm.clientSecretLabel', 'Client Secret')}
-          placeholder={t('mcps.oauthForm.clientSecretPlaceholder', 'Enter OAuth client secret')}
-          onChange={(event) => onClientSecretChange(event.target.value)}
+        <SecretField
           value={clientSecret}
-          type="password"
+          onChange={onClientSecretChange}
+          label={t('mcps.oauthForm.clientSecretLabel', 'Client Secret')}
           required
+          secrets={secrets}
         />
       )}
       <StyledInputEnhancer

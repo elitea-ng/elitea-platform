@@ -10,3 +10,11 @@ export {
 } from './model/selectors';
 export type { DownloadAttachmentFromArtifactParams } from './lib/download';
 export { downloadAttachmentFromArtifact, downloadAttachmentImage } from './lib/download';
+export type { AllowedAttachmentTypes, AllowedAttachmentTypesState } from './api/allowedTypes';
+export {
+  DEFAULT_ATTACHMENT_EXTENSIONS,
+  deriveAllowedAttachmentTypes,
+  fileExtension,
+  normaliseExtension,
+  useAllowedAttachmentTypes,
+} from './api/allowedTypes';

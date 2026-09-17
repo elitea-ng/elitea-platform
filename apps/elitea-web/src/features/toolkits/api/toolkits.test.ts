@@ -6,7 +6,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { server } from '@/test/setup';
 
 import { createTestQueryClient, renderHookWithProviders } from '../__tests__/testUtils';
-import { useToolkitDelete, useToolkitDetail, useToolkitTypes, useToolkitsList } from './toolkits';
+import { useToolkitDelete, useToolkitDetail, useToolkitEdit, useToolkitTypes, useToolkitsList } from './toolkits';
 
 beforeEach(() => {
   configureGeneratedClient({ baseUrl: '/api/v2' });
@@ -164,5 +164,59 @@ describe('useToolkitDelete', () => {
 
     expect(deletedProjectId).toBe('proj-1');
     expect(deletedToolId).toBe('42');
+  });
+});
+
+/**
+ * ELITEA-2541 / ELITEA-2693 — `meta` reaches the server.
+ *
+ * `pgRepo.UpdateToolkit` has always applied a `meta` key; the CONTRACT did
+ * not describe one, so the generated client dropped it and the Tools
+ * section's MCP access toggle (`meta.mcp_options.available_by_mcp`) could be
+ * changed on screen and read back off on the next page load. The assertion is
+ * the request BODY, because the screen keeps showing the toggle either way.
+ */
+describe('useToolkitEdit', () => {
+  it('sends meta — including the MCP access flag — alongside settings', async () => {
+    let body: unknown;
+    server.use(
+      http.put('/api/v2/elitea_core/tool/prompt_lib/:projectId/:toolId', async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ id: '7', type: 'github', name: 'tk' });
+      }),
+    );
+
+    const { result } = renderHookWithProviders(() => useToolkitEdit());
+    await result.current({
+      projectId: 'proj-1',
+      toolId: '7',
+      type: 'github',
+      settings: { selected_tools: ['get_issue'] },
+      // The meta the caller READ, with its edit applied — the schedule map
+      // travels with it, because the column is replaced rather than merged.
+      meta: { mcp_options: { available_by_mcp: true }, indexes_meta: { docs: { schedules: {} } } },
+    });
+
+    expect(body).toMatchObject({
+      type: 'github',
+      settings: { selected_tools: ['get_issue'] },
+      meta: { mcp_options: { available_by_mcp: true }, indexes_meta: { docs: { schedules: {} } } },
+    });
+  });
+
+  it('omits meta entirely when the caller has none, rather than clearing the column', async () => {
+    let body: Record<string, unknown> | undefined;
+    server.use(
+      http.put('/api/v2/elitea_core/tool/prompt_lib/:projectId/:toolId', async ({ request }) => {
+        body = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ id: '7', type: 'github', name: 'tk' });
+      }),
+    );
+
+    const { result } = renderHookWithProviders(() => useToolkitEdit());
+    await result.current({ projectId: 'proj-1', toolId: '7', type: 'github', settings: {} });
+
+    expect(body).toBeDefined();
+    expect(Object.hasOwn(body ?? {}, 'meta'), 'an absent meta must not be sent as null — the write REPLACES the column').toBe(false);
   });
 });

@@ -20,6 +20,13 @@ import { UploadProgressIndicator } from './UploadProgressIndicator';
 export interface UserInputFooterProps {
   readonly footer: ReactNode;
   readonly showStop: boolean;
+  /**
+   * A17: the send control is no longer the "else" of `showStop`. A host with a
+   * message queue shows BOTH while a turn is open — Stop ends the run, Send
+   * queues the next message (`UserInputSendButtonConfig.keepWhileStreaming`).
+   * Without a queue this is `!showStop`, which is the baseline's own either/or.
+   */
+  readonly showSend: boolean;
   readonly sendControl: UserInputSlots['sendControl'];
   readonly sendControlProps: UserInputSendControlSlotProps;
   readonly showLoading: boolean;
@@ -60,18 +67,19 @@ function StopButton({
 }
 
 export function UserInputFooter(props: UserInputFooterProps): ReactNode {
-  const { footer, showStop, sendControl, sendControlProps, showLoading, uploadProgress, onStop, stopButtonConfig, styles } = props;
+  const { footer, showStop, showSend, sendControl, sendControlProps, showLoading, uploadProgress, onStop, stopButtonConfig, styles } = props;
 
   return (
     <Box sx={styles.footer}>
       {footer}
-      {showStop ? (
+      {showStop && (
         <StopButton
           onStop={onStop}
           config={stopButtonConfig}
           styles={styles}
         />
-      ) : (
+      )}
+      {showSend && (
         <Box sx={styles.sendButtonContainer}>
           {sendControl?.(sendControlProps)}
           {showLoading && <UploadProgressIndicator progress={uploadProgress} />}

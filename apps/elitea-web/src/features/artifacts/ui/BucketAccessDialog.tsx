@@ -25,22 +25,38 @@
  *  2. Choosing "Read/write (default)" on an EXISTING row REMOVES the row
  *     rather than storing `["read","write"]`. Same reason, and the same
  *     behaviour as the reference's `isRemoval` branch.
+ *
+ * ## Bulk edit (issue 940/A10, ELITEA-2480)
+ *
+ * A header checkbox selects/deselects every VISIBLE exception row at once;
+ * each row also carries its own checkbox. With one or more selected, the
+ * pencil icon above the table opens a small modal offering the same three
+ * access options a single row's own `<Select>` does — applied to every
+ * selected user via the SAME `onSetAccess` the single-row path already
+ * calls, once per selected id. Choosing "Read/write (default)" here removes
+ * every selected row from the table (the same "isRemoval" behaviour #2
+ * above already gives a single row) — no special-cased bulk-remove path,
+ * because `onSetAccess`/`permissionsFromAccess` already treat that choice
+ * as a removal regardless of how many calls arrive.
  */
 import { useMemo, useState, type ReactNode } from 'react';
 
 import Alert from '@mui/material/Alert';
 import Autocomplete from '@mui/material/Autocomplete';
 import Box from '@mui/material/Box';
+import Checkbox from '@mui/material/Checkbox';
 import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import IconButton from '@mui/material/IconButton';
 import MenuItem from '@mui/material/MenuItem';
 import Select from '@mui/material/Select';
 import type { SxProps, Theme } from '@mui/material/styles';
 import TextField from '@mui/material/TextField';
+import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
@@ -112,6 +128,13 @@ function exceptionRows(
 export function BucketAccessDialog(props: BucketAccessDialogProps): ReactNode {
   const [pendingUser, setPendingUser] = useState<BucketAccessCandidate | null>(null);
   const [pendingAccess, setPendingAccess] = useState<BucketAccess>(BUCKET_ACCESS.read);
+  // Issue 940/A10 — bulk edit. `selectedUserIds` only ever holds ids of rows
+  // currently ON SCREEN (`toggleSelectAll`/row checkboxes both source from
+  // `rows` below); a row that leaves the table after a save is simply no
+  // longer selectable, not specially reconciled.
+  const [selectedUserIds, setSelectedUserIds] = useState<ReadonlySet<number>>(new Set());
+  const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
+  const [bulkAccess, setBulkAccess] = useState<BucketAccess>(BUCKET_ACCESS.noAccess);
 
   const rows = useMemo(
     () => exceptionRows(props.rows, props.bucket),
@@ -128,6 +151,28 @@ export function BucketAccessDialog(props: BucketAccessDialogProps): ReactNode {
     props.onSetAccess(pendingUser.id, pendingAccess);
     setPendingUser(null);
     setPendingAccess(BUCKET_ACCESS.read);
+  };
+
+  const allSelected = rows.length > 0 && rows.every((row) => selectedUserIds.has(row.userId));
+  const someSelected = rows.some((row) => selectedUserIds.has(row.userId));
+
+  const toggleSelectAll = (): void => {
+    setSelectedUserIds(allSelected ? new Set() : new Set(rows.map((row) => row.userId)));
+  };
+
+  const toggleRow = (userId: number): void => {
+    setSelectedUserIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(userId)) next.delete(userId);
+      else next.add(userId);
+      return next;
+    });
+  };
+
+  const applyBulkEdit = (): void => {
+    for (const userId of selectedUserIds) props.onSetAccess(userId, bulkAccess);
+    setSelectedUserIds(new Set());
+    setIsBulkEditOpen(false);
   };
 
   return (
@@ -147,10 +192,39 @@ export function BucketAccessDialog(props: BucketAccessDialogProps): ReactNode {
           </Alert>
         )}
 
-        <Typography variant="bodyMedium" sx={headingSx}>
-          {t('artifacts.bucketAccess.exceptions', 'Exceptions')}
-          {` – ${rows.length}`}
-        </Typography>
+        <Box sx={exceptionsHeadingRowSx}>
+          <Typography variant="bodyMedium">
+            {t('artifacts.bucketAccess.exceptions', 'Exceptions')}
+            {` – ${rows.length}`}
+          </Typography>
+          {rows.length > 0 && (
+            <Box sx={bulkHeaderControlsSx}>
+              <Checkbox
+                size="small"
+                checked={allSelected}
+                indeterminate={someSelected && !allSelected}
+                disabled={props.isSaving}
+                slotProps={{ input: { 'aria-label': 'Select all exceptions' } }}
+                data-testid="bucket-access-select-all"
+                onChange={toggleSelectAll}
+              />
+              <Tooltip title={t('artifacts.bucketAccess.bulkEdit', 'Bulk edit permissions')}>
+                <span>
+                  <IconButton
+                    size="small"
+                    color="tertiary"
+                    disabled={!someSelected || props.isSaving}
+                    aria-label={t('artifacts.bucketAccess.bulkEdit', 'Bulk edit permissions')}
+                    data-testid="bucket-access-bulk-edit-open"
+                    onClick={() => setIsBulkEditOpen(true)}
+                  >
+                    <EditOutlinedIcon fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </Box>
+          )}
+        </Box>
 
         {props.isLoading && (
           <Typography variant="bodyMedium" color="text.secondary">
@@ -166,6 +240,13 @@ export function BucketAccessDialog(props: BucketAccessDialogProps): ReactNode {
 
         {rows.map((row) => (
           <Box key={row.userId} sx={rowSx} data-testid={`bucket-access-row-${row.userId}`}>
+            <Checkbox
+              size="small"
+              checked={selectedUserIds.has(row.userId)}
+              disabled={props.isSaving}
+              slotProps={{ input: { 'aria-label': `Select ${row.name === '' ? row.userId : row.name}` } }}
+              onChange={() => toggleRow(row.userId)}
+            />
             <Typography variant="bodyMedium" sx={cellSx}>
               {row.name === '' ? `#${row.userId}` : row.name}
             </Typography>
@@ -233,6 +314,39 @@ export function BucketAccessDialog(props: BucketAccessDialogProps): ReactNode {
           {t('artifacts.bucketAccess.close', 'Close')}
         </BaseBtn>
       </DialogActions>
+
+      <Dialog open={isBulkEditOpen} onClose={() => setIsBulkEditOpen(false)}>
+        <DialogTitle>{t('artifacts.bucketAccess.bulkEdit', 'Bulk edit permissions')}</DialogTitle>
+        <DialogContent data-testid="bucket-access-bulk-edit-dialog">
+          <Typography variant="bodyMedium" sx={headingSx}>
+            {t('artifacts.bucketAccess.bulkEditCount', '{{count}} users selected', { count: selectedUserIds.size })}
+          </Typography>
+          <Select
+            fullWidth
+            size="small"
+            value={bulkAccess}
+            inputProps={{ 'aria-label': 'Bulk edit permissions value' }}
+            onChange={(event) => setBulkAccess(event.target.value)}
+          >
+            {[BUCKET_ACCESS.readWrite, BUCKET_ACCESS.read, BUCKET_ACCESS.noAccess].map((option) => (
+              <MenuItem key={option} value={option}>{accessLabel(option)}</MenuItem>
+            ))}
+          </Select>
+        </DialogContent>
+        <DialogActions>
+          <BaseBtn variant="text" onClick={() => setIsBulkEditOpen(false)}>
+            {t('artifacts.bucketAccess.cancel', 'Cancel')}
+          </BaseBtn>
+          <BaseBtn
+            variant="contained"
+            disabled={props.isSaving}
+            data-testid="bucket-access-bulk-edit-save"
+            onClick={applyBulkEdit}
+          >
+            {t('artifacts.bucketAccess.save', 'Save')}
+          </BaseBtn>
+        </DialogActions>
+      </Dialog>
     </Dialog>
   );
 }
@@ -254,3 +368,6 @@ const addRowSx: SxProps<Theme> = (theme) => ({
   marginTop: theme.spacing(2),
 });
 const pickerSx: SxProps<Theme> = { flex: 1, minWidth: '12rem' };
+/** Issue 940/A10 — the "Exceptions – N" heading's own row, now also holding the Select-All checkbox + bulk-edit icon on its trailing edge. */
+const exceptionsHeadingRowSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', justifyContent: 'space-between' };
+const bulkHeaderControlsSx: SxProps<Theme> = { display: 'flex', alignItems: 'center' };

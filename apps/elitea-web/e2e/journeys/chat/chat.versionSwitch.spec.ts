@@ -10,18 +10,20 @@
  * Ported by use case from `w1-chat-interface.md` (ELITEA-0387 (#907) (#907)).
  *
  * ELITEA-0386 ("open the LLM settings panel for the agent in chat, edit a
- * setting after a version switch, save") is NOT here — recorded NA instead.
- * `entities/participant/api/participantApi.ts`'s `updateParticipantLlmSettings`
- * is the only client function shaped for "edit an agent participant's
- * llm_settings from chat", and it has ZERO callers anywhere in `src/`
- * (grepped) — there is no LLM-settings-editing panel wired to any agent
- * participant in a chat conversation to open at all. Its own doc comment
- * additionally discloses that even a future caller would 400 outright: it
- * PATCHes a bare `{llm_settings}` object, but the route it resolves to
- * (`BatchUpdateEntitySettings`) decodes a JSON ARRAY of
- * `{participant_id, ...settings}` rows — a genuine, already-documented
- * backend/frontend contract mismatch, not something this package invented.
- * See `S/port/not-applicable.md`.
+ * setting after a version switch, save") is NOW PORTED (A14/F5) — see the
+ * test below. It was previously recorded NA: `updateParticipantLlmSettings`
+ * had zero callers anywhere in `src/`, and its own doc comment disclosed
+ * that even a future caller would 400 outright (it PATCHed a bare
+ * `{llm_settings}` object where the route it resolves to,
+ * `BatchUpdateEntitySettings`, decodes a JSON ARRAY of
+ * `{participant_id, ...settings}` rows). Both are fixed: the client now
+ * sends the array shape (spreading the participant's CURRENT entity_settings
+ * first — `BatchUpdateEntitySettings`'s repo half is a full REPLACE, not a
+ * merge, same as the single-participant PUT), and `AgentEditorPanel` grew a
+ * real trigger (`EditLlmSettingsButton`, gear-adjacent `Tune` icon) that
+ * opens `widgets/llm-model-selector`'s `LLMSettingsDialog` for the active
+ * agent participant, wired at the composition root
+ * (`widgets/chat-box/ui/ChatBoxLlmSettingsDialog.tsx`).
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * WHAT IS AND ISN'T DRIVEN THROUGH THE UI
@@ -220,6 +222,98 @@ test('ELITEA-0387: switching a not-published agent\'s version has no spurious er
     // version] as active" — the case's own literal final assertion. See this
     // test's own `test.fail()` call above for the diagnosis.
     await expect(versionButton).toHaveText('v2', { timeout: 5_000 });
+  } finally {
+    await deleteConversation(page.request, conversationId);
+    await deleteAgent(page.request, agent.id);
+  }
+});
+
+/* onetest: ELITEA-0386 — editing a not-published agent participant's LLM settings from inside a chat conversation succeeds (the batch PATCH now sends the array shape the handler decodes), with no spurious "LLM settings override" error */
+test('ELITEA-0386: editing a not-published agent participant\'s LLM settings from chat persists, with no spurious error', async ({
+  page,
+}) => {
+  // More steps than ELITEA-0387 above (agent+version create, dialog
+  // open/apply/close, a 20s PATCH wait, a 15s poll) — same
+  // `test.setTimeout` precedent `settings.users.spec.ts` already uses for
+  // multi-step journeys past the 30s default.
+  test.setTimeout(60_000);
+
+  const catalogue = await page.request.get(`${API_BASE}/configurations/models/${DEFAULT_PROJECT_ID}?include_shared=true`);
+  expect(catalogue.status()).toBe(200);
+  const models = ((await catalogue.json()) as { items?: readonly { name: string }[] }).items ?? [];
+  expect(models.length, 'this stack seeds at least one llm-section model row').toBeGreaterThan(0);
+  const modelName = models[0]!.name;
+
+  const agentName = uniqueName('llmag');
+  const agent = await createAgentWithVersion(page.request, agentName, {
+    agentType: 'openai',
+    model: { modelName },
+  });
+
+  const conversationId = await createConversation(page.request, uniqueName('llmconv'));
+  try {
+    await attachParticipants(page.request, conversationId, [
+      {
+        entity_name: 'application',
+        entity_meta: { id: agent.id, project_id: DEFAULT_PROJECT_ID, name: agentName },
+        entity_settings: { version_id: agent.versionId },
+      },
+    ]);
+
+    await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
+    await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 20_000 });
+
+    const expandParticipants = page.getByRole('button', { name: 'Expand participants' });
+    await expect(expandParticipants).toBeVisible({ timeout: 15_000 });
+    await expandParticipants.click();
+    const agentsSection = page.getByTestId('participants-section-Agents');
+    await expect(agentsSection).toBeVisible({ timeout: 15_000 });
+    await agentsSection.getByText(agentName, { exact: true }).click();
+
+    const editLlmSettings = page.getByTestId('chat-agent-editor-llm-settings-button');
+    await expect(editLlmSettings, 'the per-participant LLM-settings trigger must be offered for an agent participant this admin can edit').toBeVisible({
+      timeout: 15_000,
+    });
+    await editLlmSettings.click();
+
+    const dialog = page.getByText('Model settings');
+    await expect(dialog).toBeVisible({ timeout: 10_000 });
+    await checkA11y(page);
+
+    const patched = page.waitForResponse(
+      (r) => r.url().includes(`/entity_settings/prompt_lib/${DEFAULT_PROJECT_ID}/${conversationId}`) && r.request().method() === 'PATCH',
+      { timeout: 20_000 },
+    );
+    // Apply with no field edits — this proves the WIRE SHAPE/participant
+    // scoping succeeds (the case this test is about), not any one field's
+    // round trip; `entities/participant/api/participantApi.test.ts` already
+    // pins the exact request body shape unit-level.
+    await page.getByRole('button', { name: 'Apply' }).click();
+    const patchResponse = await patched;
+    expect(
+      patchResponse.status(),
+      `the batch PATCH must succeed, not 400 the array-vs-object mismatch this case is about: ${(await patchResponse.text()).slice(0, 300)}`,
+    ).toBe(200);
+
+    await expect(dialog).not.toBeVisible({ timeout: 10_000 });
+
+    // No spurious override error anywhere on screen after the save.
+    const texts = await toastTexts(page);
+    expect(texts.join(' | ')).not.toContain('LLM settings override is only allowed for published agents');
+
+    // The write reaches the server, not a void: re-read the participant and
+    // confirm entity_settings still carries this agent's version_id (proving
+    // the REPLACE-not-merge fix — `currentEntitySettings` spread — actually
+    // preserved it rather than wiping it out with a bare `{llm_settings}`).
+    await expect
+      .poll(
+        async () => {
+          const rows = await readParticipants(page.request, conversationId);
+          return String(rows[0]?.entity_settings?.version_id);
+        },
+        { timeout: 15_000, message: 'the LLM-settings save must not clobber the participant\'s other entity_settings fields' },
+      )
+      .toBe(String(agent.versionId));
   } finally {
     await deleteConversation(page.request, conversationId);
     await deleteAgent(page.request, agent.id);

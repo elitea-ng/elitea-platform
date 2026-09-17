@@ -286,7 +286,12 @@ adminTest('J34d: the sections the Features page owns are not offered here', asyn
   // One section editable from two pages would be two drafts of one row, and the
   // two pages would disagree about whether it is dirty. The partition is
   // server-declared (`page: "features"`); this asserts the client honours it.
-  for (const moved of ['Help Center', 'MCP Configuration', 'Agent Publishing', 'Voice Features']) {
+  //
+  // 'Help Center' ('resources') is NOT in this list — A2 (ELITEA-0032) moved
+  // it back to Configuration (`config_schemas.go`'s `resourcesSection` own
+  // doc comment has the full history); it belongs on THIS page now, asserted
+  // present by `admin.resources-help-center.spec.ts`'s own ELITEA-0032 test.
+  for (const moved of ['MCP Configuration', 'Agent Publishing', 'Voice Features']) {
     await expect(page.getByRole('button', { name: new RegExp(moved) })).toHaveCount(0);
   }
 });

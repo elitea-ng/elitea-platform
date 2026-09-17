@@ -47,6 +47,7 @@ export const ToolkitUpdateRequest = zod
     type: zod.string().optional(),
     description: zod.string().optional(),
     settings: zod.record(zod.string(), zod.unknown()).optional(),
+    meta: zod.record(zod.string(), zod.unknown()).optional(),
   })
   .describe(
     "NOTE(1c): all fields optional — `pgRepo.UpdateToolkit` applies only the keys present. Must NOT contain `has_relation`: that key makes the handler dispatch to a different operation entirely (tool↔entity relation, see the `updateToolkit` description and issue #38).\n",

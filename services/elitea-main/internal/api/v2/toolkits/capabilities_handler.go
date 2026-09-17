@@ -34,7 +34,7 @@ type internalToolCapability struct {
 // toggle catalogue apps/elitea-web/src/features/agents/lib/internalTools.ts
 // keys them by, and the Rust availability is
 // services/elitea-worker-rust/src/agents/internal_tools.rs's
-// PLATFORM_INTERNAL_TOOLS — as of #866, that list recognizes all six below
+// PLATFORM_INTERNAL_TOOLS — as of #866, that list recognizes the first six below
 // and SKIPS every one of them (agent_internal_tool_skipped), so every entry
 // here is rustAvailable: false. ask_user, the Rust worker's one real internal
 // tool, is not a user-facing Modules toggle and is intentionally not listed.
@@ -54,6 +54,17 @@ var platformInternalTools = []internalToolCapability{
 	{name: "planner", pythonAvailable: true, rustAvailable: false},
 	{name: "swarm", pythonAvailable: true, rustAvailable: false},
 	{name: "lazy_tools_mode", pythonAvailable: true, rustAvailable: false},
+	// #940 A8's two builder modules run the OTHER way round: they are
+	// implemented in the native runtime (services/elitea-worker-rust/src/
+	// agents/internal_tools.rs's SkillsBuilderTool/ProjectContextBuilderTool,
+	// which write through the claim-bound content listener) and the Python
+	// SDK worker has no port of them at all — that half is deliberately out
+	// of this programme's scope. Reporting them as python-unavailable is
+	// what makes the toggle render disabled-with-a-reason on a Python
+	// deployment instead of silently doing nothing, the exact failure #866
+	// existed to end.
+	{name: "skills_builder", pythonAvailable: false, rustAvailable: true},
+	{name: "project_context_builder", pythonAvailable: false, rustAvailable: true},
 }
 
 // RuntimeCapabilitiesResponse is RuntimeCapabilities' wire shape.
@@ -62,7 +73,7 @@ type RuntimeCapabilitiesResponse struct {
 	// "rust", or "" when the deployment never stated one (see
 	// WithWorkerImplementation).
 	Worker string `json:"worker"`
-	// InternalTools maps each of the six toggleable internal chat tools
+	// InternalTools maps each toggleable internal chat tool
 	// (apps/elitea-web's internalTools.ts catalogue) to whether the
 	// CONFIGURED worker actually runs it, rather than skipping it silently.
 	InternalTools map[string]bool `json:"internal_tools"`

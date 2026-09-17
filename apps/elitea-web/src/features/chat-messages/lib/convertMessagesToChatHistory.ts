@@ -96,6 +96,15 @@ export interface ChatMessage {
   readonly originalId?: string | number | undefined;
   /** How many persistent memories (#870) this turn's recall used — see `AssistantMessage.memoriesUsed`'s own comment. */
   readonly memoriesUsed?: number | undefined;
+  /**
+   * A17: this question was typed while a previous turn was still running and
+   * was delivered from the "Waiting messages" queue once that turn settled
+   * (ELITEA-2870). Not a wire field — the store has nowhere to put it — so it
+   * is stamped on by `widgets/chat-box`'s queue model from the question ids it
+   * recorded, which is why it survives a reload: the id is the client's own
+   * `question_id`, persisted as the question row's uuid.
+   */
+  readonly interjected?: boolean | undefined;
 }
 
 // ---------------------------------------------------------------------------

@@ -54,6 +54,9 @@ import type {
 
 import type {
   ErrorResponse,
+  IndexConfigurationSaveRequest,
+  IndexWriteAck,
+  IndexWriteRefusal,
   InternalMcpPatStatus,
   ListToolkitInstancesParams,
   McpRegisteredServer,
@@ -935,6 +938,327 @@ export function useListToolkits<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getListToolkitsQueryOptions(projectId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type saveIndexConfigurationResponse200 = {
+  data: IndexWriteAck;
+  status: 200;
+};
+
+export type saveIndexConfigurationResponse400 = {
+  data: IndexWriteRefusal;
+  status: 400;
+};
+
+export type saveIndexConfigurationResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type saveIndexConfigurationResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type saveIndexConfigurationResponse404 = {
+  data: IndexWriteRefusal;
+  status: 404;
+};
+
+export type saveIndexConfigurationResponse502 = {
+  data: IndexWriteRefusal;
+  status: 502;
+};
+
+export type saveIndexConfigurationResponse504 = {
+  data: IndexWriteRefusal;
+  status: 504;
+};
+
+export type saveIndexConfigurationResponseSuccess =
+  saveIndexConfigurationResponse200 & {
+    headers: Headers;
+  };
+export type saveIndexConfigurationResponseError = (
+  | saveIndexConfigurationResponse400
+  | saveIndexConfigurationResponse401
+  | saveIndexConfigurationResponse403
+  | saveIndexConfigurationResponse404
+  | saveIndexConfigurationResponse502
+  | saveIndexConfigurationResponse504
+) & {
+  headers: Headers;
+};
+
+export type saveIndexConfigurationResponse =
+  saveIndexConfigurationResponseSuccess | saveIndexConfigurationResponseError;
+
+export const getSaveIndexConfigurationUrl = (
+  projectId: number,
+  toolkitId: number,
+  indexName: string,
+) => {
+  return `/elitea_core/index_meta/prompt_lib/${projectId}/${toolkitId}/${indexName}/configuration`;
+};
+
+/**
+ * The SAVE half of the Indexes tab's "Save" / "Save & Reindex" split.
+ *
+ * Before this route existed the ONLY writer of an index's stored
+ * `index_configuration` was an indexing RUN: the configuration travels
+ * as the `tool_params` of `test_toolkit_tool`, and the run records it on
+ * the index metadata document on its way through. So a person who
+ * changed `progress_step` could persist that change only by re-indexing
+ * the whole collection, and a SCHEDULED reindex — which reads the same
+ * stored field
+ * (internal/runtimecomposition/index_schedule_inspector.go) — kept
+ * running the configuration of the last run rather than the one the
+ * editor showed.
+ *
+ * This write replaces exactly that one field on the addressed index
+ * metadata document and leaves every run-owned field (`state`,
+ * `task_id`, `history`, the document counters) untouched. It starts
+ * nothing: the index data is not touched and no worker is dispatched.
+ *
+ * The `{index_name}` segment carries the index NAME
+ * (`metadata.collection`), not a row id — the same asymmetry the
+ * schedule PATCH on this prefix already has
+ * (internal/api/v2/toolkits/index_write.go's header).
+ *
+ * Guarded by `models.applications.index_meta.edit` in the `default`
+ * permission mode: saving a configuration is not running a tool, so it
+ * does not take the run permission.
+ * @summary Save one index's configuration without reindexing
+ */
+export const saveIndexConfiguration = async (
+  projectId: number,
+  toolkitId: number,
+  indexName: string,
+  indexConfigurationSaveRequest: IndexConfigurationSaveRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<saveIndexConfigurationResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return eliteaFetch<saveIndexConfigurationResponse>(
+    getSaveIndexConfigurationUrl(projectId, toolkitId, indexName),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(indexConfigurationSaveRequest),
+    },
+  );
+};
+
+export const getSaveIndexConfigurationQueryKey = (
+  projectId: number,
+  toolkitId: number,
+  indexName: string,
+  indexConfigurationSaveRequest?: IndexConfigurationSaveRequest,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/index_meta/prompt_lib/${projectId}/${toolkitId}/${indexName}/configuration`,
+    indexConfigurationSaveRequest,
+  ] as const;
+};
+
+export const getSaveIndexConfigurationQueryOptions = <
+  TData = Awaited<ReturnType<typeof saveIndexConfiguration>>,
+  TError = IndexWriteRefusal | N401Response | N403Response,
+>(
+  projectId: number,
+  toolkitId: number,
+  indexName: string,
+  indexConfigurationSaveRequest: IndexConfigurationSaveRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveIndexConfiguration>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSaveIndexConfigurationQueryKey(
+      projectId,
+      toolkitId,
+      indexName,
+      indexConfigurationSaveRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof saveIndexConfiguration>>
+  > = ({ signal }) =>
+    saveIndexConfiguration(
+      projectId,
+      toolkitId,
+      indexName,
+      indexConfigurationSaveRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      toolkitId !== null &&
+      toolkitId !== undefined &&
+      indexName !== null &&
+      indexName !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof saveIndexConfiguration>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SaveIndexConfigurationQueryResult = NonNullable<
+  Awaited<ReturnType<typeof saveIndexConfiguration>>
+>;
+export type SaveIndexConfigurationQueryError =
+  IndexWriteRefusal | N401Response | N403Response;
+
+export function useSaveIndexConfiguration<
+  TData = Awaited<ReturnType<typeof saveIndexConfiguration>>,
+  TError = IndexWriteRefusal | N401Response | N403Response,
+>(
+  projectId: number,
+  toolkitId: number,
+  indexName: string,
+  indexConfigurationSaveRequest: IndexConfigurationSaveRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveIndexConfiguration>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof saveIndexConfiguration>>,
+          TError,
+          Awaited<ReturnType<typeof saveIndexConfiguration>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSaveIndexConfiguration<
+  TData = Awaited<ReturnType<typeof saveIndexConfiguration>>,
+  TError = IndexWriteRefusal | N401Response | N403Response,
+>(
+  projectId: number,
+  toolkitId: number,
+  indexName: string,
+  indexConfigurationSaveRequest: IndexConfigurationSaveRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveIndexConfiguration>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof saveIndexConfiguration>>,
+          TError,
+          Awaited<ReturnType<typeof saveIndexConfiguration>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSaveIndexConfiguration<
+  TData = Awaited<ReturnType<typeof saveIndexConfiguration>>,
+  TError = IndexWriteRefusal | N401Response | N403Response,
+>(
+  projectId: number,
+  toolkitId: number,
+  indexName: string,
+  indexConfigurationSaveRequest: IndexConfigurationSaveRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveIndexConfiguration>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Save one index's configuration without reindexing
+ */
+
+export function useSaveIndexConfiguration<
+  TData = Awaited<ReturnType<typeof saveIndexConfiguration>>,
+  TError = IndexWriteRefusal | N401Response | N403Response,
+>(
+  projectId: number,
+  toolkitId: number,
+  indexName: string,
+  indexConfigurationSaveRequest: IndexConfigurationSaveRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveIndexConfiguration>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSaveIndexConfigurationQueryOptions(
+    projectId,
+    toolkitId,
+    indexName,
+    indexConfigurationSaveRequest,
+    options,
+  );
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

@@ -58,6 +58,16 @@ export const STORAGE_STATE = {
    * every other journey off project 1 (measured, see the seeder's note).
    */
   chat: path.join(STATE_DIR, 'chat.json'),
+  /**
+   * The restricted-viewer persona (issue #940 D4/D6): holds project 1's
+   * `viewer` role with the two permissions those cases are about
+   * (`models.project_context.edit`, `configuration.secrets.secret.create`)
+   * revoked — see `scripts/e2e-stack.sh seed`'s own note on why every other
+   * persona could not stand in for this one (project 1's per-project grant
+   * rows gave `viewer` the same broad permissions as `admin`/`editor`, because
+   * nothing had ever assigned a real user that role before).
+   */
+  viewer: path.join(STATE_DIR, 'viewer.json'),
 };
 
 /**
@@ -166,14 +176,22 @@ const WIKI_QUERY_JOURNEY = /journeys\/deepwiki\/deepwiki\.wiki-query\.spec\.ts/;
 const REAL_ENGINE_JOURNEY = /journeys\/deepwiki\/deepwiki\.real-engine\.spec\.ts/;
 
 /*
- * The Support Assistant journey — the first E2E coverage of the in-app
+ * The Support Assistant journeys — the first E2E coverage of the in-app
  * widget itself (`admin/admin.features.spec.ts` only ever drove its ADMIN
- * section). A real turn is an agent execution, so it needs the FULL
- * standalone stack the same way `chat-stream` does; it runs in the
+ * section). A real turn is an agent execution, so they need the FULL
+ * standalone stack the same way `chat-stream` does; they run in the
  * `support-stack` project only, against that stack
  * (`scripts/support-e2e.sh`).
+ *
+ * Matches `support.spec.ts` (the original file) AND `support.auto-enroll.
+ * spec.ts` (issue #940 D2 — a brand-new, never-before-seen user's first
+ * contact; that "send a message" step is a real Predict call, same as
+ * `support.spec.ts`'s test 2). It does NOT match `support.entrypoints.
+ * spec.ts` or `support.widget.spec.ts`, which run in the ordinary
+ * `chromium`/`webkit` projects — see those files' own headers for why they
+ * do not need this stack.
  */
-const SUPPORT_JOURNEY = /journeys\/support\/support\.spec\.ts/;
+const SUPPORT_JOURNEY = /journeys\/support\/support\.(?:auto-enroll\.)?spec\.ts/;
 
 /*
  * The one journey that needs the shared project to hold NO toolkits: J17.1,

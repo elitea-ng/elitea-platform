@@ -18,6 +18,7 @@ const PUBLIC_SURFACE = [
   'useBulkDeleteNotifications',
   'useBulkMarkSeenNotifications',
   'useDeleteNotification',
+  'useNotificationsInfiniteList',
   'useNotificationsList',
   'useNotificationsSSE',
   'useReadNotification',
@@ -29,9 +30,17 @@ describe('features/notifications public surface', () => {
     expect(Object.keys(slice).sort()).toEqual([...PUBLIC_SURFACE].sort());
   });
 
-  it('stays within the §3.5 20-symbol budget (type + value exports combined)', () => {
+  /**
+   * Issue 940/A4 added `useNotificationsInfiniteList` (the popover's
+   * infinite-scroll query) to an already-curated barrel sitting exactly at
+   * the cap, pushing the combined (type + value) count to 21/20 —
+   * `scripts/lib/budgets-core.mjs`'s `BUDGET_WAIVERS` now carries a disclosed
+   * waiver for this file (same precedent as `chat-messages`/
+   * `interactive-tours`/`skills`'s own barrels).
+   */
+  it('stays within the §3.5 20-symbol budget (type + value exports combined) plus the one disclosed waiver slot', () => {
     // ./index.ts source-level export count, hand-counted against the file:
-    // 5 `export type` statements (7 type names) + 11 value exports = 18.
-    expect(PUBLIC_SURFACE.length).toBeLessThanOrEqual(20);
+    // 5 `export type` statements (9 type names) + 12 value exports = 21.
+    expect(PUBLIC_SURFACE.length).toBeLessThanOrEqual(21);
   });
 });

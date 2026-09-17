@@ -66,6 +66,12 @@ type Handler struct {
 	// producers (#876's second half). nil leaves Publish/Unpublish exactly
 	// as before.
 	events EventEmitter
+	// publishModelClient backs the AI step of publish validation
+	// (publish_ai_validation.go, #940 A18). nil answers
+	// `ai_validation_available: false`, which is what every deployment
+	// answered before that step existed and is still the honest answer for
+	// one with no gateway.
+	publishModelClient PublishModelClient
 }
 
 // EventEmitter is the seam to internal/events.Publisher, declared locally so
@@ -639,19 +645,79 @@ func (h *Handler) UpdateProjectContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	numericProjectID, parseErr := strconv.ParseInt(projectID, 10, 64)
+	if parseErr != nil || numericProjectID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid project id"})
+		return
+	}
+
+	// json.Marshal of a map[string]any of a string and a bool cannot fail.
 	dataBytes, _ := json.Marshal(map[string]any{"content": body.Content, "enabled": body.Enabled})
 
-	q := fmt.Sprintf(`
-		INSERT INTO %s.configuration (elitea_title, label, type, data, section, status_ok, created_at)
-		VALUES ('project_context_' || $1, 'Project Context', 'project_context', $2, 'project_context', true, NOW())
-		ON CONFLICT (elitea_title) WHERE type = 'project_context'
-		DO UPDATE SET data = $2`, s)
-	_, err := h.pool.Exec(ctx, q, projectID, dataBytes)
-	if err != nil {
-		q2 := fmt.Sprintf(`UPDATE %s.configuration SET data = $1 WHERE type = 'project_context'`, s)
-		_, _ = h.pool.Exec(ctx, q2, dataBytes) // fallback update; ignore error, best-effort
+	if err := h.writeProjectContext(ctx, s, numericProjectID, dataBytes); err != nil {
+		slog.ErrorContext(ctx, "update project context: write failed",
+			"error", err, "project_id", numericProjectID)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"error": projectContextWriteFailed,
+			"code":  "project_context_write_failed",
+		})
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"content": body.Content, "enabled": body.Enabled})
+}
+
+const projectContextWriteFailed = "failed to save project context"
+
+// writeProjectContext persists one project's context row, UPDATE-first so that
+// a row this deployment already holds is reused whatever its elitea_title is.
+//
+// Three properties are load-bearing, each of them a way the previous version
+// silently wrote nothing (#888):
+//
+//   - project_id IS NOT NULL on the tenant `configuration` table. The INSERT
+//     never named the column, so every write into a project with no prior row
+//     — that is, every project on a fresh install — died with
+//     `null value in column "project_id" ... violates not-null constraint`.
+//   - `ON CONFLICT (elitea_title) WHERE type = 'project_context'` names a
+//     PARTIAL unique index. 001_initial.sql gives elitea_title a plain,
+//     non-partial UNIQUE constraint, so no index matched the inference
+//     predicate and PostgreSQL refused the statement at plan time, on every
+//     call, row or no row. The conflict target below is the bare column, the
+//     way UpdateProjectIcon already spells it.
+//   - The UPDATE fallback matched on `type = 'project_context'` alone, which
+//     is right for an existing row and matches zero rows when there is none.
+//     It ran only on the INSERT's error and its own error was discarded, so
+//     the handler answered 200 having written nothing at all.
+//
+// The error is returned, never swallowed: the caller turns it into a typed 500.
+func (h *Handler) writeProjectContext(
+	ctx context.Context,
+	schema string,
+	projectID int64,
+	data []byte,
+) error {
+	update := fmt.Sprintf(
+		`UPDATE %s.configuration SET data = $1, updated_at = NOW() WHERE type = 'project_context'`,
+		schema)
+	tag, err := h.pool.Exec(ctx, update, data)
+	if err != nil {
+		return fmt.Errorf("update project context: %w", err)
+	}
+	if tag.RowsAffected() > 0 {
+		return nil
+	}
+
+	insert := fmt.Sprintf(`
+		INSERT INTO %s.configuration
+			(project_id, label, elitea_title, type, section, data, status_ok, created_at)
+		VALUES ($1, 'Project Context', $2, 'project_context', 'project_context', $3, true, NOW())
+		ON CONFLICT (elitea_title) DO UPDATE
+			SET data = EXCLUDED.data, updated_at = NOW()`, schema)
+	title := fmt.Sprintf("project_context_%d", projectID)
+	if _, err := h.pool.Exec(ctx, insert, projectID, title, data); err != nil {
+		return fmt.Errorf("insert project context: %w", err)
+	}
+	return nil
 }
 
 func (h *Handler) SearchOptions(w http.ResponseWriter, r *http.Request) {
@@ -1146,7 +1212,7 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 
 	// Validation gate: if no token provided, run inline validation
 	if body.ValidationToken == "" {
-		valResult, _ := h.runPublishValidation(ctx, s, versionID, body.VersionName)
+		valResult, _ := h.runPublishValidation(ctx, s, projectID, publishCallerID(r), versionID, body.VersionName)
 		if valResult != nil && valResult["status"] == "FAIL" {
 			criticals, _ := valResult["critical_issues"].([]map[string]any)
 			issues := make([]map[string]any, len(criticals))
@@ -1701,7 +1767,15 @@ func (h *Handler) Unpublish(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "deleted"})
 }
 
-func (h *Handler) runPublishValidation(ctx context.Context, s, versionID, versionName string) (map[string]any, int) {
+// runPublishValidation performs the pre-publish check for one version.
+//
+// projectID and callerID are threaded in for the AI step alone
+// (publish_ai_validation.go, #940 A18): the advisory turn is billed and
+// authorised against the CALLER asking for the validation, not against the
+// agent being validated. Every deterministic rule below is unchanged by them.
+func (h *Handler) runPublishValidation(
+	ctx context.Context, s, projectID, callerID, versionID, versionName string,
+) (map[string]any, int) {
 	criticalIssues := []map[string]any{}
 	warnings := []map[string]any{}
 	recommendations := []map[string]any{}
@@ -1977,6 +2051,17 @@ func (h *Handler) runPublishValidation(ctx context.Context, s, versionID, versio
 		}
 	}
 
+	// The AI step (#940 A18), AFTER `status` and the token are decided.
+	//
+	// That order is the rule, not an implementation detail: an advisory model
+	// pass must not be able to change the outcome of a publishing gate, nor
+	// which versions get a validation token. Its findings join
+	// `recommendations`, which no status branch reads. A model that is broken,
+	// absent or babbling answers `ai_validation_available: false` and leaves
+	// everything above exactly as it was — which is ELITEA-0146 itself.
+	aiFindings, aiAvailable := h.runPublishAIValidation(ctx, s, projectID, callerID, versionID)
+	recommendations = append(recommendations, aiFindings...)
+
 	resp := map[string]any{
 		"status":                  status,
 		"critical_issues":         criticalIssues,
@@ -1984,7 +2069,7 @@ func (h *Handler) runPublishValidation(ctx context.Context, s, versionID, versio
 		"recommendations":         recommendations,
 		"summary":                 fmt.Sprintf("Validation %s for version %s", status, versionID),
 		"counts":                  map[string]any{"critical": len(criticalIssues), "warnings": len(warnings), "suggestions": len(recommendations)},
-		"ai_validation_available": false,
+		"ai_validation_available": aiAvailable,
 		"validation_token":        token,
 	}
 
@@ -2039,7 +2124,7 @@ func (h *Handler) PublishValidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, httpStatus := h.runPublishValidation(ctx, s, versionID, body.VersionName)
+	resp, httpStatus := h.runPublishValidation(ctx, s, projectID, publishCallerID(r), versionID, body.VersionName)
 	if resp == nil {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "version not found"})
 		return

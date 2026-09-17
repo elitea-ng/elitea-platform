@@ -202,6 +202,20 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 //
 // So neither is dead weight, and dropping either to match pylon would blank a
 // control that works today.
+// Issue 940/A11 (ELITEA-3278): the version-selector dropdown's search box
+// filters by creator as well as by name, which needs the creator's
+// name/email ON the list row — not just `author_id`. `fetchVersionDetails`
+// below already joins `public.auth_core__user` for exactly this reason (its
+// own comment: "The name a user saw beside a version therefore survived
+// until the page was refreshed and then became an id"); this projection
+// gets the identical join rather than inventing a second resolution path.
+//
+// `ApplicationVersionSummary` (api/openapi/v2.yaml) does not model `author`
+// — same as `is_default` below it: adding a field to a generated schema
+// ripples through two codegens and several pinned gates, so the field rides
+// on the response ahead of the schema, and the frontend reads it off the
+// wire with a narrow cast (see `editApplicationMappers.ts`'s `readIsDefault`
+// for the established precedent this follows).
 func (h *Handler) getVersions(ctx context.Context, projectID, applicationID string) ([]map[string]any, string) {
 	s, ok := tenantSchema(projectID)
 	if !ok {
@@ -209,9 +223,11 @@ func (h *Handler) getVersions(ctx context.Context, projectID, applicationID stri
 	}
 	q := fmt.Sprintf(`SELECT v.id, v.name, v.status, v.agent_type, v.created_at,
 		COALESCE(v.instructions, ''), COALESCE(v.meta::text, '{}'),
-		COALESCE(a.meta->>'`+defaultVersionMetaKey+`', '')
+		COALESCE(a.meta->>'`+defaultVersionMetaKey+`', ''),
+		v.author_id, COALESCE(u.email, ''), COALESCE(u.name, '')
 		FROM %s.application_versions v
 		LEFT JOIN %s.applications a ON a.id = v.application_id
+		LEFT JOIN public.auth_core__user u ON u.id = v.author_id
 		WHERE v.application_id = $1 ORDER BY v.id`, s, s)
 	rows, err := h.pool.Query(ctx, q, applicationID)
 	if err != nil {
@@ -226,8 +242,11 @@ func (h *Handler) getVersions(ctx context.Context, projectID, applicationID stri
 		var name, status, agentType, instructions, rowDefaultVersionID string
 		var metaJSON []byte
 		var createdAt any
+		var authorID *int
+		var authorEmail, authorName string
 		if err := rows.Scan(&id, &name, &status, &agentType, &createdAt,
-			&instructions, &metaJSON, &rowDefaultVersionID); err != nil {
+			&instructions, &metaJSON, &rowDefaultVersionID,
+			&authorID, &authorEmail, &authorName); err != nil {
 			continue
 		}
 		// COALESCE'd above, so this is always a JSON document. A `meta` that
@@ -237,7 +256,7 @@ func (h *Handler) getVersions(ctx context.Context, projectID, applicationID stri
 		_ = json.Unmarshal(metaJSON, &meta)
 		defaultVersionID = rowDefaultVersionID
 		versionID := strconv.Itoa(id)
-		versions = append(versions, map[string]any{
+		row := map[string]any{
 			"id":         versionID,
 			"name":       name,
 			"status":     status,
@@ -255,7 +274,17 @@ func (h *Handler) getVersions(ctx context.Context, projectID, applicationID stri
 			// application with no default recorded flags no version, rather
 			// than flagging one whose id happens to stringify to "".
 			"is_default": rowDefaultVersionID != "" && rowDefaultVersionID == versionID,
-		})
+		}
+		// Absent (not present-with-nulls) when the row genuinely has no author —
+		// same convention `versionDetailsResponse` already uses for the single-
+		// version read, so "no author" and "an author the join could not
+		// resolve" (empty name/email, id still present) stay distinguishable.
+		if authorID != nil {
+			row["author"] = map[string]any{
+				"id": strconv.Itoa(*authorID), "email": authorEmail, "name": authorName,
+			}
+		}
+		versions = append(versions, row)
 	}
 	if versions == nil {
 		versions = []map[string]any{}

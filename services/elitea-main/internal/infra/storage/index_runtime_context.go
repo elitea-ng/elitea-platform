@@ -60,7 +60,10 @@ func runtimeContextUnavailableStage(err error) string {
 		runtimeContextStageNestedVersionRead,
 		runtimeContextStageNestedVersionFreeze,
 		runtimeContextStageAttachmentRead,
-		runtimeContextStageAttachmentConversation:
+		runtimeContextStageAttachmentConversation,
+		runtimeContextStageSkillWrite,
+		runtimeContextStageProjectContextRead,
+		runtimeContextStageProjectContextWrite:
 		return unavailable.stage
 	default:
 		return "unknown"

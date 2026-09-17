@@ -12,6 +12,7 @@ import {
   resolvePublicProjectId,
   resolveSelectedVersion,
   settingsTooltipTitle,
+  showEditLlmSettingsButton,
   switchEntityTooltip,
 } from './AgentEditorPanel.derive';
 
@@ -114,5 +115,15 @@ describe('resolvePublicProjectId', () => {
 
   it('falls back to "" when required config is missing', () => {
     expect(resolvePublicProjectId()).toBe('');
+  });
+});
+
+describe('showEditLlmSettingsButton (A14, ELITEA-0386)', () => {
+  it('is true only when a handler is supplied AND the caller can edit', () => {
+    const onEditLlmSettings = () => {};
+    expect(showEditLlmSettingsButton(onEditLlmSettings, true)).toBe(true);
+    expect(showEditLlmSettingsButton(onEditLlmSettings, false)).toBe(false);
+    expect(showEditLlmSettingsButton(undefined, true)).toBe(false);
+    expect(showEditLlmSettingsButton(undefined, false)).toBe(false);
   });
 });
