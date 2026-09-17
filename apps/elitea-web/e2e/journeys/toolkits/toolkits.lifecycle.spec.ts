@@ -576,3 +576,36 @@ test('J17.8: editing a toolkit’s description and pressing Save persists it', a
   // And the control settles back: a saved toolkit has nothing left to save.
   await expect(saveButton).toBeDisabled({ timeout: 20_000 });
 });
+
+/*
+ * elitea_issues: #2589 — an enhancement request: after typing a Toolkit Name
+ * that already exists in the project and leaving the field, a warning
+ * should appear below it suggesting a rename (never blocking Save — just a
+ * heads-up). Reproduced: no client-side duplicate-name check exists anywhere
+ * in `features/toolkits`/`pages/toolkits` (grepped for
+ * duplicate/already-exists/nameExists — no hits); a name collision is only
+ * ever caught by the server on Save. Building the live on-blur check is a
+ * real, if small, new feature — out of this package's fix budget.
+ */
+test('elitea_issues: #2589 — product gap: no warning is shown when a typed Toolkit Name duplicates an existing one', async ({ page }) => {
+  const existingName = toolkitName();
+  const created = await page.request.post(`${API_BASE}/elitea_core/tools/prompt_lib/${DEFAULT_PROJECT_ID}`, {
+    data: { name: existingName, type: 'custom', settings: {} },
+  });
+  expect(created.status(), await created.text()).toBe(201);
+  const existingId = String(((await created.json()) as { id?: string | number }).id ?? '');
+  createdIds.push(existingId);
+
+  await page.goto(BASE_URL + '/app/toolkits/create');
+  await expect(typeSearchBox(page)).toBeVisible({ timeout: 15_000 });
+  await page.getByRole('button', { name: 'Custom', exact: true }).click();
+
+  const nameField = page.getByRole('textbox', { name: 'Toolkit Name' });
+  await expect(nameField).toBeVisible({ timeout: 15_000 });
+  await nameField.fill(existingName);
+  // Leave the field — the shortlisted case's own trigger.
+  await page.getByRole('textbox', { name: 'Description' }).click();
+
+  test.fail(true, '#2589: product gap — no live duplicate-toolkit-name check exists; typing an existing name and blurring shows no warning at all');
+  await expect(page.getByText(/already exists|duplicate/i), 'a duplicate-name warning should appear below the field').toBeVisible({ timeout: 5_000 });
+});

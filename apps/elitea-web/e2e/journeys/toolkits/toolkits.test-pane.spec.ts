@@ -132,3 +132,70 @@ test('J17b: the toolkit editor offers a Test settings pane that runs one tool an
   // the blank-slot state this journey exists to prevent coming back.
   expect((await result.innerText()).trim().length).toBeGreaterThan(0);
 });
+
+/*
+ * elitea_issues: #4028 — the legacy bug: the Artifact toolkit's `create_file`
+ * tool declares `filedata`/`filepath` as mutually-exclusive-in-practice
+ * optional fields (`current_toolkit_schema_snapshot.json`'s
+ * `artifact.create_file` schema: both `anyOf: [{type: string}, {type: null}],
+ * default: null`), and clearing a previously-filled field used to still send
+ * it as `""`, tripping the pair's mutual-exclusivity check. DOES NOT
+ * REPRODUCE here: `ToolFormContainer`'s plain string field (unlike
+ * `ToolBaseProperty.dispatch.tsx`'s object-field, fixed for #2611 in this
+ * same package) already omits a field from `tool_params` once it is cleared
+ * back to empty — pinned by reading the actual outgoing request body.
+ */
+test('elitea_issues: #4028 — clearing a filled test-tool field does not leave it in the run request as an empty string', async ({ page }) => {
+  test.setTimeout(180_000);
+
+  const name = `${AUTOTEST_PREFIX}tp4028_${Date.now()}`;
+  const created = await page.request.post(`${API_BASE}/elitea_core/tools/prompt_lib/${DEFAULT_PROJECT_ID}`, {
+    data: { name, type: 'artifact', settings: { selected_tools: ['create_file'] } },
+  });
+  expect(created.status(), `creating the artifact toolkit answered ${created.status()}: ${(await created.text()).slice(0, 300)}`).toBe(201);
+  const toolkitId = String(((await created.json()) as { id?: string | number }).id ?? '');
+  expect(toolkitId, 'the created toolkit must carry an id').not.toBe('');
+  createdIds.push(toolkitId);
+
+  await expect
+    .poll(
+      async () => {
+        const list = await page.request.get(`${API_BASE}/elitea_core/tools/prompt_lib/${DEFAULT_PROJECT_ID}`);
+        if (!list.ok()) return false;
+        const rows = ((await list.json()) as { rows?: readonly { id?: string | number }[] }).rows ?? [];
+        return rows.some((row) => String(row.id) === toolkitId);
+      },
+      { timeout: 60_000, message: 'the created toolkit never appeared in the collection the editor reads' },
+    )
+    .toBe(true);
+
+  await page.goto(`${BASE_URL}/app/toolkits/all/${toolkitId}`, { waitUntil: 'domcontentloaded' });
+
+  const pane = page.getByTestId('edit-toolkit-test-pane-slot');
+  await expect(pane).toBeAttached({ timeout: 60_000 });
+
+  const picker = pane.getByRole('combobox').first();
+  await expect(picker).toBeVisible({ timeout: 60_000 });
+  await picker.click();
+  await page.getByRole('option', { name: /create file/i }).click();
+
+  await pane.getByLabel('Filename', { exact: true }).fill(`${name}.txt`);
+  const filedata = pane.getByLabel('Filedata', { exact: true });
+  await filedata.fill('some content');
+  await expect(filedata, 'the fill must actually register before it is cleared').toHaveValue('some content');
+  await filedata.fill('');
+  await expect(filedata).toHaveValue('');
+  await pane.getByLabel('Filepath', { exact: true }).fill(`/${name}/existing.txt`);
+
+  const runRequest = page.waitForRequest((request) => TEST_TOOL_RE.test(new URL(request.url()).pathname) && request.method() === 'POST', {
+    timeout: 60_000,
+  });
+  const runButton = pane.getByRole('button', { name: /run tool/i });
+  await expect(runButton).toBeEnabled({ timeout: 30_000 });
+  await runButton.click();
+  const request = await runRequest;
+  const body = request.postDataJSON() as { tool_params?: Readonly<Record<string, unknown>> };
+
+  expect(body.tool_params?.filedata, 'filedata was cleared by the user and must not travel in the request at all').toBeUndefined();
+  expect(body.tool_params).toMatchObject({ filepath: `/${name}/existing.txt` });
+});

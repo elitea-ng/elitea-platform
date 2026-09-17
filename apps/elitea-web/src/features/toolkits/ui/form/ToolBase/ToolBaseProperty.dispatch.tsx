@@ -226,17 +226,28 @@ function renderSecret(ctx: FieldRenderContext): ReactNode {
 }
 
 function renderObject(ctx: FieldRenderContext): ReactNode {
+  // elitea_issues: #2611 — a JSON object field (e.g. Postman's "Environment
+  // Config JSON") used to commit `{}` on blur whenever the typed text was not
+  // valid JSON, silently wiping whatever had been saved before and flipping
+  // Save on with no actual valid change. On a parse failure this now LEAVES
+  // the stored value untouched and flags the field as errored (blocking Save
+  // via `hasErrors`, same mechanism `renderOpenapiSpec`'s schema field
+  // already uses) instead of clobbering it — the user's data survives an
+  // accidental or mid-edit blur, and the error clears itself once the text
+  // parses again.
   const onChange = (rawText: string): void => {
     const textContent = rawText.trim();
     if (textContent === '') {
       ctx.editField(ctx.buildEditFieldPath(ctx.key), {});
+      ctx.setToolErrors?.((previous) => ({ ...previous, [ctx.key]: false }));
       return;
     }
     try {
       const parsedValue = JSON.parse(textContent) as Readonly<Record<string, unknown>>;
       ctx.editField(ctx.buildEditFieldPath(ctx.key), parsedValue, true);
+      ctx.setToolErrors?.((previous) => ({ ...previous, [ctx.key]: false }));
     } catch {
-      ctx.editField(ctx.buildEditFieldPath(ctx.key), {}, true);
+      ctx.setToolErrors?.((previous) => ({ ...previous, [ctx.key]: true }));
     }
   };
   return (
