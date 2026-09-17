@@ -11,6 +11,7 @@ import { ROLES } from '@/shared/lib/enums';
 
 import type { ExecutionEventData } from '@/shared/api/sse';
 
+import { settleContextProgress } from './chatStreamToolAction';
 import { nowIso, type ChatStreamContext } from './chatStreamShared';
 import type { ChatMessage } from './convertMessagesToChatHistory';
 
@@ -35,6 +36,7 @@ export function settleInFlight(history: readonly ChatMessage[], exception?: unkn
       isStreaming: false,
       isLoading: false,
       isRegenerating: false,
+      toolActions: settleContextProgress(message.toolActions),
       ...(exception !== undefined ? { exception } : {}),
     };
   });

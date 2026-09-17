@@ -71,6 +71,7 @@ function harness(initial: readonly ChatMessage[] = [pendingAssistant()]): {
   readonly history: { current: readonly ChatMessage[] };
   readonly agentEvents: unknown[];
   readonly errors: string[];
+  readonly contextRefreshes: (string | number)[];
   readonly Probe: () => null;
 } {
   const api: { current: UseChatStreamTransportResult | undefined } = {
@@ -79,6 +80,7 @@ function harness(initial: readonly ChatMessage[] = [pendingAssistant()]): {
   const history: { current: readonly ChatMessage[] } = { current: initial };
   const agentEvents: unknown[] = [];
   const errors: string[] = [];
+  const contextRefreshes: (string | number)[] = [];
 
   function Probe(): null {
     api.current = useChatStreamTransport({
@@ -88,11 +90,12 @@ function harness(initial: readonly ChatMessage[] = [pendingAssistant()]): {
       context: { name: "Agent", now: () => "2026-08-13T00:00:00.000Z" },
       onAgentEvent: (frame) => agentEvents.push(frame),
       onStreamError: (reason) => errors.push(reason),
+      onContextChanged: (projectId) => contextRefreshes.push(projectId),
     });
     return null;
   }
 
-  return { api, history, agentEvents, errors, Probe };
+  return { api, history, agentEvents, errors, contextRefreshes, Probe };
 }
 
 function nodeEvent(payload: Record<string, unknown>): string {
@@ -1371,4 +1374,18 @@ describe("the regeneration path owns its replacement stream", () => {
       ).resolves.toEqual({ started: false, reason: "no-transport" });
     });
   });
+});
+
+it('refreshes root occupancy on admission, root measurement and terminal failure', async () => {
+  okStart();
+  const { api, Probe, contextRefreshes } = harness();
+  render(<Probe />);
+  await started(api);
+  expect(contextRefreshes).toEqual([7]);
+  await act(() => registry.emit('execution.node_event', nodeEvent({type:'agent_context_status', response_metadata:{model_scope:'agent', parent_agent_call_id:'child', context_status:{version:1,phase:'compacting'}}})));
+  expect(contextRefreshes).toEqual([7]);
+  await act(() => registry.emit('execution.node_event', nodeEvent({type:'agent_context_status', response_metadata:{model_scope:'agent', context_status:{version:1,phase:'measured'}}})));
+  expect(contextRefreshes).toEqual([7,7]);
+  await act(() => registry.emit('execution.failed', JSON.stringify({safe_message:'The runtime operation failed.'})));
+  expect(contextRefreshes).toEqual([7,7,7]);
 });

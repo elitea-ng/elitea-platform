@@ -42,6 +42,8 @@ type ConversationState struct {
 	// has never had one written — the resolution rule's cue to fall through to
 	// the user's defaults.
 	Strategy []byte
+	// RuntimeContext is the latest response measurement, bound to its current execution.
+	RuntimeContext []byte
 	// Analytics is the raw `meta.context_analytics`. Nil when the runtime has
 	// recorded nothing; see AnalyticsUnavailableReason.
 	Analytics []byte
@@ -54,14 +56,15 @@ type ConversationState struct {
 // and the availability pair that keeps an absent runtime record from reading
 // as a real zero.
 type Status struct {
-	BudgetMode             BudgetMode     `json:"budget_mode,omitempty"`
-	CurrentTokens          int            `json:"current_tokens"`
-	MaxTokens              int            `json:"max_tokens"`
-	Utilization            float64        `json:"utilization"`
-	MessageGroupsInContext int            `json:"message_groups_in_context"`
-	SummaryCount           int            `json:"summary_count"`
-	StrategyName           string         `json:"strategy_name"`
-	ContextAnalytics       map[string]any `json:"context_analytics"`
+	RuntimeContext         *RuntimeContext `json:"runtime_context,omitempty"`
+	BudgetMode             BudgetMode      `json:"budget_mode,omitempty"`
+	CurrentTokens          int             `json:"current_tokens"`
+	MaxTokens              int             `json:"max_tokens"`
+	Utilization            float64         `json:"utilization"`
+	MessageGroupsInContext int             `json:"message_groups_in_context"`
+	SummaryCount           int             `json:"summary_count"`
+	StrategyName           string          `json:"strategy_name"`
+	ContextAnalytics       map[string]any  `json:"context_analytics"`
 
 	// MessageGroupsTotal is a real COUNT(*) of the conversation's message
 	// groups. It is NOT `message_groups_in_context`: a group can be present in

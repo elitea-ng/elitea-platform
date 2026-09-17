@@ -26,6 +26,7 @@ import type { MessageItemWire } from '@/entities/message/lib/wire';
 /** Every `type` the chat stream can carry. Ported verbatim from the baseline. */
 export const SocketMessageType = {
   AgentStart: 'agent_start',
+  AgentContextStatus: 'agent_context_status',
   AgentResponse: 'agent_response',
   AgentException: 'agent_exception',
   AgentToolStart: 'agent_tool_start',
@@ -77,6 +78,7 @@ export const SocketMessageType = {
 export const HANDLED_STREAM_TYPES: ReadonlySet<string> = new Set<string>([
   SocketMessageType.StartTask,
   SocketMessageType.AgentStart,
+  SocketMessageType.AgentContextStatus,
   SocketMessageType.AgentLlmStart,
   SocketMessageType.AgentLlmChunk,
   SocketMessageType.Chunk,

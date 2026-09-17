@@ -1,6 +1,6 @@
 # Context policy controls and usage presentation
 
-Status: UI component and fresh-browser verification, 2026-09-17. Live worker occupancy and compaction notifications remain open.
+Status: UI component and fresh-browser verification, 2026-09-17. Deployed worker-to-browser acceptance remains open; the component integration is recorded below.
 
 ## Functional source mapping
 
@@ -29,11 +29,13 @@ The warning uses the unrounded ratio, so rounding 89.6 percent for display does 
 Unknown runtime occupancy shows “Usage not yet measured”; it does not imply zero usage or disabled compaction.
 The root composer and the rail reuse the same status query. Nested activities do not receive separate meters.
 
-The next integration must project current worker measurements through accepted durable events, with exact execution and model scope.
-Show a brief “Compacting context…” status for a nested agent, and a detailed input/output-reservation/window breakdown for the main chat.
-Do not aggregate child occupancy into the parent, use cumulative billing counts as occupancy, or interpret a pipeline container as an LLM context.
-Status transitions must survive reconnect/recovery and settle when the execution stops or fails.
-This slice does not yet implement those worker events or claim live compaction notification acceptance.
+The [context-progress integration](context-progress-events.md) now projects root
+measurements from accepted worker events onto the response record and exposes them
+through the existing status query. Main chat shows estimated input, output
+reservation and window; nested agents receive brief scoped activity notices.
+Stream lifecycle events invalidate the query, active runs reconcile on a bounded
+interval, and stopped compaction is not displayed as completed. These components
+are tested; deployed save/reload/model-loop/recovery acceptance is still required.
 
 ## Verification and delivery
 

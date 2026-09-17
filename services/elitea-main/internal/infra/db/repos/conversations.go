@@ -1705,8 +1705,10 @@ func (r *ConversationsRepo) DeleteAttachments(ctx context.Context, projectID, co
 	return nil
 }
 
-// GetContextState reads the two `meta` documents the context routes work
-// with, plus the transcript size, in one query.
+// GetContextState reads conversation settings, analytics, transcript size,
+// and the latest active (otherwise latest updated) response measurement. The
+// existing conversation_id index limits the response lookup to this transcript;
+// it returns at most one record and never scans worker checkpoints.
 //
 // It replaces GetContextAnalytics, which assembled the whole status document
 // inside the repository AND invented the number at its centre:
@@ -1729,11 +1731,19 @@ func (r *ConversationsRepo) GetContextState(ctx context.Context, projectID, conv
 	q := fmt.Sprintf(`
 		SELECT COALESCE(c.meta, '{}'::jsonb) -> 'context_strategy',
 			COALESCE(c.meta, '{}'::jsonb) -> 'context_analytics',
-			(SELECT COUNT(*) FROM %s.chat_message_group mg WHERE mg.conversation_id = c.id)
-		FROM %s.chat_conversations c WHERE c.id = $1`, s, s)
+			(SELECT COUNT(*) FROM %s.chat_message_group mg WHERE mg.conversation_id = c.id),
+			(SELECT CASE
+				WHEN mg.meta->'runtime_context'->>'execution_id' = mg.task_id
+				 AND mg.meta->'runtime_context'->>'execution_generation' = mg.meta->>'execution_generation'
+				THEN mg.meta->'runtime_context' || jsonb_build_object('active', mg.is_streaming)
+				ELSE NULL END
+			 FROM %s.chat_message_group mg
+			 WHERE mg.conversation_id = c.id AND NULLIF(mg.task_id, '') IS NOT NULL
+			 ORDER BY mg.is_streaming DESC, COALESCE(mg.updated_at, mg.created_at) DESC, mg.id DESC LIMIT 1)
+		FROM %s.chat_conversations c WHERE c.id = $1`, s, s, s)
 
 	var state contextsettings.ConversationState
-	if err := r.pool.QueryRow(ctx, q, id).Scan(&state.Strategy, &state.Analytics, &state.MessageGroupsTotal); err != nil {
+	if err := r.pool.QueryRow(ctx, q, id).Scan(&state.Strategy, &state.Analytics, &state.MessageGroupsTotal, &state.RuntimeContext); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return contextsettings.ConversationState{}, apierr.NotFound("conversation not found")
 		}

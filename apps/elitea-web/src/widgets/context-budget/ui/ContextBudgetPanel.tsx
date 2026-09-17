@@ -23,7 +23,7 @@ import { t } from '@/shared/i18n';
 import { AttentionIcon } from '@/shared/ui/icons/attention-icon';
 import { InfoIcon } from '@/shared/ui/icons/info-icon';
 
-import type { ContextBudgetStats } from '../lib/contextStatus';
+import { formatNumberWithSpaces, type ContextBudgetStats } from '../lib/contextStatus';
 
 /** @public */
 export interface ContextBudgetPanelProps {
@@ -42,8 +42,14 @@ function visibleStatRows(stats: ContextBudgetStats): readonly { readonly key: st
     label: t('widgets.contextBudget.messages', 'Messages'),
     value: String(stats.messageGroups),
   };
-  const mode = { key: 'mode', label: t('widgets.contextBudget.mode', 'Window'), value: stats.budgetMode === 'full' ? t('contextBudget.mode.full', 'Full') : t('contextBudget.mode.balanced', 'Balanced') };
+  const mode = { key: 'mode', label: t('widgets.contextBudget.mode', 'Window'), value: stats.runtime?.legacy ? t('widgets.contextBudget.legacy', 'Existing run') : stats.budgetMode === 'full' ? t('contextBudget.mode.full', 'Full') : t('contextBudget.mode.balanced', 'Balanced') };
   if (!stats.usageAvailable) return [mode];
+  if (stats.runtime) return [
+    mode,
+    { key: 'window', label: t('widgets.contextBudget.window', 'Total window'), value: formatNumberWithSpaces(stats.runtime.totalTokens) },
+    { key: 'output', label: t('widgets.contextBudget.output', 'Reserved for output'), value: formatNumberWithSpaces(stats.runtime.reservedOutputTokens) },
+    { key: 'margin', label: t('widgets.contextBudget.margin', 'Safety margin'), value: formatNumberWithSpaces(stats.runtime.safetyMarginTokens) },
+  ];
   return [
     mode,
     messages,
@@ -135,6 +141,10 @@ export function ContextBudgetPanel({ stats, onEdit }: ContextBudgetPanelProps): 
         {stats.usageAvailable && <ProgressBar percentage={barPercentage} isHigh={stats.isHighUtilization} />}
       </Box>
 
+      {stats.runtime && <Typography variant="bodySmall2" sx={{ paddingX: 2, paddingBottom: 1 }}>
+        {t('widgets.contextBudget.estimateHelp', 'Estimated input for the latest model call, within the usable input budget. Output and the safety margin are reserved separately. Automatic compaction starts at 90%.')}
+      </Typography>}
+      <ContextPhaseNotice stats={stats} />
       {visibleStatRows(stats).map((row) => (
         <Box
           key={row.key}
@@ -248,3 +258,13 @@ function ProgressBar({ percentage, isHigh }: { readonly percentage: number; read
 
 /** The pencil sits at the end of the header row, where the reference puts it (`ContextBudgetHeader.jsx`). */
 const editButtonSx = { marginLeft: 'auto', padding: 0 };
+
+function ContextPhaseNotice({ stats }: ContextBudgetPanelProps): ReactNode {
+  const runtime = stats.runtime;
+  if (!runtime || runtime.phase === 'measured') return null;
+  const text = runtime.phase === 'compacted'
+    ? t('widgets.contextBudget.compacted', 'Context compacted. The conversation history remains available.')
+    : runtime.active ? t('widgets.contextBudget.compacting', 'Compacting context…')
+      : t('widgets.contextBudget.compactionInterrupted', 'Compaction stopped before completion.');
+  return <Typography component="output" variant="bodySmall2" sx={{ paddingX: 2, paddingBottom: 1 }}>{text}</Typography>;
+}

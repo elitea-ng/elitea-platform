@@ -2,19 +2,12 @@
 import { useCallback } from "react";
 
 import { useChatStreamTransport, type ChatMessage } from "@/features/chat-messages";
-import { conversationApi } from "@/entities/conversation";
+import { conversationApi, contextManagementApi } from "@/entities/conversation";
 import { useAddParticipantMutation } from "@/entities/participant";
 import { getExecutionTokens } from "@/features/mcps";
 import type { useUploadAttachments } from "@/entities/conversation";
 
-// Derived from the barrel-exported hook rather than deep-imported from its
-// source file. `entities/conversation/index.ts` documents a 20-slot export cap
-// and deliberately leaves the ~15 narrow param/result types out of it, telling
-// consumers to import them from the concrete file — but that advice only holds
-// WITHIN the slice. This widget is a different slice, so the deep path is a
-// no-deep-slice-import-cross-slice violation (dependency-cruiser, "Layer +
-// cycle gate"). Deriving keeps the single public entry point without spending
-// two of the cap's remaining slots on types only this call site needs.
+// Derive these types through the public entity API; avoid a cross-slice deep import.
 type UploadAttachments = ReturnType<typeof useUploadAttachments>["uploadAttachments"];
 type UploadAttachmentsParams = Parameters<UploadAttachments>[0];
 type UploadAttachmentsOutcome = Awaited<ReturnType<UploadAttachments>>;
@@ -148,7 +141,9 @@ export function useChatBoxSend(
   params: UseChatBoxSendParams,
 ): UseChatBoxSendResult {
   const { setChatHistory, projectId, projectIdString, isAgentsPage, getInternalToolsForSend } = params;
+  const onContextChanged = contextManagementApi.useRefreshStatus();
   const transport = useChatStreamTransport({
+    onContextChanged,
     setChatHistory,
     ...(params.conversationUuid !== undefined
       ? { conversationUuid: params.conversationUuid }

@@ -26,6 +26,14 @@ export function formatNumberWithSpaces(value: number): string {
 /** @public The narrowed, display-ready shape the panel renders. */
 export interface ContextBudgetStats {
   readonly budgetMode: ContextBudgetMode;
+  readonly runtime?: {
+    readonly phase: 'measured' | 'compacting' | 'compacted';
+    readonly active: boolean;
+    readonly legacy: boolean;
+    readonly totalTokens: number;
+    readonly reservedOutputTokens: number;
+    readonly safetyMarginTokens: number;
+  };
   readonly usageAvailable: boolean;
   readonly currentTokens: number;
   readonly maxTokens: number;
@@ -79,7 +87,9 @@ export function toContextBudgetStats(wire: unknown): ContextBudgetStats | undefi
     !unavailable.includes('current_tokens') && !unavailable.includes('max_tokens');
   const utilizationPercentage = usageAvailable ? deriveUtilizationPercentage(currentTokens, maxTokens) : undefined;
 
+  const runtime = readRuntime(source.runtime_context);
   return {
+    ...(runtime ? { runtime } : {}),
     budgetMode: resolveContextBudgetMode(source.budget_mode),
     usageAvailable,
     currentTokens,
@@ -90,5 +100,21 @@ export function toContextBudgetStats(wire: unknown): ContextBudgetStats | undefi
     messageGroups: readNumber(source, 'message_groups_in_context'),
     summariesGenerated: readNumber(readAnalytics(source), 'summaries_generated'),
     strategyName: readStrategyName(source),
+  };
+}
+
+/** Main serves only the latest response's admitted, fenced measurement. */
+function readRuntime(value: unknown): ContextBudgetStats['runtime'] {
+  if (!value || typeof value !== 'object') return undefined;
+  const source = value as Record<string, unknown>;
+  const m = source.measurement as Record<string, unknown> | undefined;
+  if (!m || m.version !== 1 || !['measured', 'compacting', 'compacted'].includes(String(m.phase))) return undefined;
+  return {
+    phase: m.phase as 'measured' | 'compacting' | 'compacted',
+    active: source.active === true,
+    legacy: m.budget_mode === 'legacy',
+    totalTokens: readNumber(m, 'total_tokens'),
+    reservedOutputTokens: readNumber(m, 'reserved_output_tokens'),
+    safetyMarginTokens: readNumber(m, 'safety_margin_tokens'),
   };
 }

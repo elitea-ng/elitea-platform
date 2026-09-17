@@ -1797,7 +1797,7 @@ func (h *Handler) GetContextStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	strategy := contextsettings.Resolve(state.Strategy, h.contextDefaults(r))
-	writeJSON(w, http.StatusOK, contextsettings.BuildStatus(strategy, state.Analytics, state.MessageGroupsTotal))
+	writeJSON(w, http.StatusOK, contextsettings.WithRuntimeContext(contextsettings.BuildStatus(strategy, state.Analytics, state.MessageGroupsTotal), state.RuntimeContext))
 }
 
 // GetContextStrategy serves the resolved strategy itself, so a client can show

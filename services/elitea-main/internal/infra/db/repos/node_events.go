@@ -50,11 +50,12 @@ func (p replayRetentionPolicy) validate() error {
 // NodeEventsRepository appends current-NodeEvent JSON directly to the durable
 // execution replay log. Redis is deliberately absent from this data path.
 type NodeEventsRepository struct {
-	store      sharedStore
-	retention  replayRetentionPolicy
-	activity   currentIndexActivityProjector
-	agentTrace currentAgentTraceProjector
-	agentText  currentAgentTextProjector
+	store        sharedStore
+	retention    replayRetentionPolicy
+	activity     currentIndexActivityProjector
+	agentTrace   currentAgentTraceProjector
+	agentText    currentAgentTextProjector
+	agentContext currentAgentContextProjector
 }
 
 func NewNodeEventsRepository(pool *pgxpool.Pool) (*NodeEventsRepository, error) {
@@ -69,6 +70,7 @@ func NewNodeEventsRepository(pool *pgxpool.Pool) (*NodeEventsRepository, error) 
 	repository.activity = &postgresCurrentIndexActivityProjector{}
 	repository.agentTrace = &postgresCurrentAgentTraceProjector{}
 	repository.agentText = postgresCurrentAgentTextProjector{}
+	repository.agentContext = postgresCurrentAgentContextProjector{}
 	return repository, nil
 }
 
@@ -84,11 +86,12 @@ func newNodeEventsRepositoryWithPolicy(store sharedStore, retention replayRetent
 		return nil, err
 	}
 	return &NodeEventsRepository{
-		store:      store,
-		retention:  retention,
-		activity:   noopCurrentIndexActivityProjector{},
-		agentTrace: noopCurrentAgentTraceProjector{},
-		agentText:  noopCurrentAgentTextProjector{},
+		store:        store,
+		retention:    retention,
+		activity:     noopCurrentIndexActivityProjector{},
+		agentTrace:   noopCurrentAgentTraceProjector{},
+		agentText:    noopCurrentAgentTextProjector{},
+		agentContext: noopCurrentAgentContextProjector{},
 	}, nil
 }
 
@@ -339,6 +342,9 @@ SELECT COALESCE((SELECT cursor FROM updated_state LIMIT 1), 0),
 			}
 			if capabilityID == executiondomain.AgentApplicationCapability ||
 				capabilityID == executiondomain.AgentAdhocCapability {
+				if err := r.agentContext.projectAgentContext(ctx, tx, projectionProjectID, frame); err != nil {
+					return err
+				}
 				if err := r.agentText.projectAgentTextDelta(
 					ctx,
 					tx,

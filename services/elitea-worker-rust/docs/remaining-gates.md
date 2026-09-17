@@ -115,8 +115,9 @@ The agent suite passes 350 checks, including PostgreSQL summary reload, writer t
 The [dedicated summary-model component](source-mapping/dedicated-summary-model.md) separates authorized model selection, provider binding, and output limits.
 [Main settings delivery](source-mapping/context-policy-delivery.md) now resolves presets and summary selections, and preserves admitted continuation policies.
 [UI preset controls and the composer indicator](source-mapping/context-policy-ui.md) pass 295 component tests and a fresh headed-browser check with intercepted settings writes.
-Runtime occupancy projection, live compaction notices, persisted UI acceptance, and deployed model execution remain open.
-[Rust context progress events](source-mapping/context-progress-events.md) now expose measured usage and durable compaction boundaries through the existing bounded stream; Main/UI integration remains open.
+[Context progress integration](source-mapping/context-progress-events.md) now connects Rust events to Main's response metadata and UI usage/compaction notices.
+915 Main checks, eight real-PostgreSQL checks, 386 UI checks, and a fresh browser presentation check pass.
+The browser used intercepted context status; persisted settings and deployed model-loop/recovery acceptance remain open. Durable nested activity beyond replay retention also remains open.
 Main chat shows detailed usage; nested agents show brief compaction activity text, with separate model scopes and no combined parent/child meter.
 Nested and graph-model recovery coordination, deployed settings, and browser acceptance remain open.
 The pipeline container has no separate compaction control.

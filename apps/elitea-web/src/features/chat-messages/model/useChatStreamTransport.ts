@@ -62,6 +62,7 @@ import {
   applyChatStreamFrame,
   type ChatStreamContext,
 } from "../lib/chatStreamReducer";
+import { isRootContextFrame } from "../lib/chatStreamContextFrames";
 import { isChatStreamFrame } from "../lib/chatStreamFrame";
 import { shouldForwardAgentEvent } from "../lib/agentGraphEvents";
 import { isTurnTerminalFrame } from "../lib/chatStreamTurnEnd";
@@ -99,6 +100,8 @@ export interface UseChatStreamTransportParams {
    * the baseline's `onRcvAgentEvent`, see `agentGraphEvents.ts`.
    */
   readonly onAgentEvent?: ((frame: ExecutionEventData) => void) | undefined;
+  /** Accepted progress/lifecycle changes invalidate the durable context read model. */
+  readonly onContextChanged?: ((projectId: string | number) => void) | undefined;
   /** The run itself failed server-side, or its stream dropped. */
   readonly onStreamError?: ((reason: string) => void) | undefined;
 }
@@ -146,6 +149,12 @@ export function useChatStreamTransport(
   // `useExecutionEventStream` keys its connection on the URL and the handler
   // identities, and a reconnect mid-answer would replay the run from the
   // cursor and duplicate what is already on screen.
+  const onContextChangedRef = useRef(params.onContextChanged);
+  onContextChangedRef.current = params.onContextChanged;
+  const contextProjectRef = useRef<string | number | undefined>(undefined);
+  const refreshContext = useCallback(() => {
+    if (contextProjectRef.current !== undefined) onContextChangedRef.current?.(contextProjectRef.current);
+  }, []);
   const contextRef = useRef<ChatStreamContext | undefined>(context);
   contextRef.current = context;
   const onAgentEventRef = useRef(onAgentEvent);
@@ -231,11 +240,12 @@ export function useChatStreamTransport(
       //
       // detach() never touches chat history, and it must not here: the
       // terminal frame has already settled the message through the reducer.
+      if (isRootContextFrame(identifiedFrame) || isTurnTerminalFrame(identifiedFrame)) refreshContext();
       if (isTurnTerminalFrame(identifiedFrame)) detach();
       if (shouldForwardAgentEvent(identifiedFrame.type))
         onAgentEventRef.current?.(identifiedFrame);
     },
-    [setChatHistory, detach],
+    [setChatHistory, detach, refreshContext],
   );
 
   /**
@@ -265,9 +275,10 @@ export function useChatStreamTransport(
       // dropping. A refusal can be the run's FIRST frame, so this must not
       // assume a message exists to carry it; `recordStreamFailure` appends one
       // when nothing is in flight.
+      refreshContext();
       failWith(runtimeFailureReason(frame));
     },
-    [failWith],
+    [failWith, refreshContext],
   );
 
   const connection = useChatStreamConnection({
@@ -318,6 +329,8 @@ export function useChatStreamTransport(
       const active = activeConversationRef.current;
       if (active !== undefined && active !== runConversationUuid) return true;
       ownerRef.current = runConversationUuid;
+      contextProjectRef.current = projectId;
+      refreshContext();
       questionIdRef.current = questionId;
       // `response_message_id` is what the cancel route addresses
       // (`DELETE .../task/prompt_lib/{projectID}/{responseMessageID}`). Without
@@ -330,7 +343,7 @@ export function useChatStreamTransport(
       openStream(accepted.events_url);
       return true;
     },
-    [openStream],
+    [openStream, refreshContext],
   );
 
   const starters = useChatStreamRunStarters(subscribeToRun);
@@ -350,7 +363,10 @@ export function useChatStreamTransport(
     // is not surfaced because the run is already off this user's screen and a
     // 409 ("not active or cannot be stopped") is the expected answer when the
     // turn finished between the click and the request.
-    if (target) void stopChatTask(target).catch(() => undefined);
+    if (target) {
+      const notify = onContextChangedRef.current;
+      void stopChatTask(target).catch(() => undefined).finally(() => notify?.(target.projectId));
+    }
   }, [detach, setChatHistory, ownsRun]);
 
   return useMemo(

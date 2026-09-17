@@ -137,3 +137,10 @@ it('does not report absent or explicitly unavailable analytics as measured zero'
     expect(stats?.utilizationPercentage).toBeUndefined();
   }
 });
+
+it('keeps the admitted runtime window, reservations and inactive compaction phase separate', () => {
+  const stats = toContextBudgetStats({ current_tokens:190000, max_tokens:205280, context_analytics_available:true,
+    runtime_context:{active:false, measurement:{version:1, phase:'compacting', budget_mode:'legacy', total_tokens:272000, reserved_output_tokens:64000, safety_margin_tokens:2720}} });
+  expect(stats?.utilizationPercentage).toBe(93);
+  expect(stats?.runtime).toEqual({phase:'compacting',active:false,legacy:true,totalTokens:272000,reservedOutputTokens:64000,safetyMarginTokens:2720});
+});

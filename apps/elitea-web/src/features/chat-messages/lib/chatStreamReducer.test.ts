@@ -228,7 +228,7 @@ describe('the ported boundary is explicit', () => {
     for (const type of Object.values(SocketMessageType)) {
       const next = applyChatStreamFrame(
         before,
-        frame(type, { content: 'x', references: [], uuid: 'echo-uuid', response_metadata: { tool_run_id: 'run-x' } }),
+        frame(type, { content: 'x', references: [], uuid: 'echo-uuid', response_metadata: { tool_run_id: 'run-x', context_status: { version: 1, phase: 'compacting' } } }),
         CONTEXT,
       );
       if (HANDLED_STREAM_TYPES.has(type)) {
