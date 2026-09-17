@@ -457,6 +457,59 @@ describe('EditToolkit', () => {
   });
 
   /*
+   * elitea_issues: 5722 — PRODUCT GAP. `useToolkitSaveControls.onSaveSuccess`
+   * takes no argument and only clears the dirty flag (`onSaved()`); nothing
+   * on this screen re-fetches or invalidates the `useListToolkitInstances`
+   * query `useToolkitDetail` reads `detail` from (`features/toolkits/api/
+   * toolkits.ts`'s `useToolkitEdit` is a raw `updateToolkit` PUT, not a
+   * query-client mutation with an `onSuccess` invalidation). So after a
+   * successful Save, `detail` STILL holds the pre-save server row, and
+   * `handleDiscarded`'s `toEditDetail(detail)` snapshot reverts to it —
+   * exactly the legacy bug: a second, still-unsaved edit made after a
+   * successful Save is not the only thing Discard throws away, the FIRST
+   * (already-saved) edit is lost from the screen too, until a manual reload.
+   */
+  it.fails('elitea_issues 5722: Discard after a successful Save should keep the saved edit, only undoing the edit made after it', async () => {
+    server.use(
+      http.get('/api/v2/elitea_core/tools/prompt_lib/:projectId', () => HttpResponse.json({ rows: [mockToolkitRow({ description: 'ORIGINAL DESCRIPTION' })], total: 1 })),
+      http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({ github: { metadata: { label: 'GitHub' } } })),
+    );
+    const saveToolkit = vi.fn().mockResolvedValue({ id: 'tk-1', type: 'github', name: 'My GitHub', description: 'SAVED DESCRIPTION' });
+    const user = userEvent.setup();
+
+    const { container } = renderToolkitsRoute(<EditToolkit deps={{ saveToolkit }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+
+    await screen.findByText('My GitHub');
+    const content = getCodeMirrorContent(container);
+    await waitFor(() => expect(content).toHaveTextContent('ORIGINAL DESCRIPTION'));
+
+    // First edit, saved successfully.
+    await user.click(content);
+    await user.keyboard('{Control>}a{/Control}');
+    await user.paste('{"name":"My GitHub","description":"SAVED DESCRIPTION","settings":{},"type":"github"}');
+    const saveButton = screen.getByTestId('toolkit-save-button');
+    await waitFor(() => expect(saveButton).toBeEnabled());
+    await user.click(saveButton);
+    await waitFor(() => expect(saveToolkit).toHaveBeenCalledTimes(1));
+
+    // Second edit, made after the first save succeeded — this one is
+    // discarded on purpose.
+    await user.click(content);
+    await user.keyboard('{Control>}a{/Control}');
+    await user.paste('{"name":"My GitHub","description":"SECOND UNSAVED EDIT","settings":{},"type":"github"}');
+    await waitFor(() => expect(content).toHaveTextContent('SECOND UNSAVED EDIT'));
+
+    await user.click(screen.getByTestId('toolkit-cancel-button'));
+    await user.click(await screen.findByRole('button', { name: 'Discard' }));
+
+    // Expected: the first save's own value survives. Actual: the screen
+    // reverts all the way back to the row this page fetched before either
+    // edit — the same content it started with.
+    await waitFor(() => expect(content).toHaveTextContent('SAVED DESCRIPTION'));
+    expect(content).not.toHaveTextContent('ORIGINAL DESCRIPTION');
+  });
+
+  /*
    * ── THE SAVE CONTROL ITSELF ────────────────────────────────────────────
    *
    * Measured before this change: `/app/toolkits/all/{id}` had NO save
@@ -679,5 +732,49 @@ describe('EditToolkit test pane', () => {
       params: { projectId: 'proj-1', toolkitId: 'tk-1' },
     });
     expect(screen.getByTestId('test-tool-result-payload')).toHaveTextContent('main');
+  });
+});
+
+/*
+ * elitea_issues: #6081 — switching projects while on a toolkit/MCP detail
+ * page must return to that entity's list, not keep rendering the old
+ * project's route with an id the new project's list doesn't have.
+ */
+describe('EditToolkit resets to the list when the id is not in this project', () => {
+  it('elitea_issues 6081: redirects to the toolkits list once the project\'s own list has loaded and the id is absent', async () => {
+    server.use(
+      http.get('/api/v2/elitea_core/tools/prompt_lib/:projectId', () => HttpResponse.json({ rows: [mockToolkitRow({ id: 'tk-other' })], total: 1 })),
+      http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({ github: { metadata: { label: 'GitHub' } } })),
+    );
+
+    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit: vi.fn() }} />, '/toolkits/latest/tk-1', { projectId: 'proj-2' });
+
+    // proj-2's own list came back and does not contain tk-1: the page must
+    // navigate away rather than sit on a permanently blank detail view.
+    expect(await screen.findByTestId('toolkits-list-route')).toBeInTheDocument();
+  });
+
+  it('elitea_issues 6081: does not redirect while the list is still loading, only once it has actually resolved', async () => {
+    server.use(
+      http.get('/api/v2/elitea_core/tools/prompt_lib/:projectId', () => HttpResponse.json({ rows: [mockToolkitRow()], total: 1 })),
+      http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({ github: { metadata: { label: 'GitHub' } } })),
+    );
+
+    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit: vi.fn() }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+
+    // The matching row loads normally — no redirect, the real detail renders.
+    await screen.findByText('My GitHub');
+    expect(screen.queryByTestId('toolkits-list-route')).not.toBeInTheDocument();
+  });
+
+  it('elitea_issues 6081: MCP mode redirects to the MCP list, not the toolkits list', async () => {
+    server.use(
+      http.get('/api/v2/elitea_core/tools/prompt_lib/:projectId', () => HttpResponse.json({ rows: [mockToolkitRow({ id: 'tk-other' })], total: 1 })),
+      http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({ github: { metadata: { label: 'GitHub' } } })),
+    );
+
+    renderToolkitsRoute(<EditToolkit isMCP deps={{ saveToolkit: vi.fn() }} />, '/toolkits/latest/tk-1', { projectId: 'proj-2' });
+
+    expect(await screen.findByTestId('mcps-list-route')).toBeInTheDocument();
   });
 });

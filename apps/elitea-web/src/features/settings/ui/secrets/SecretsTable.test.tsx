@@ -14,6 +14,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 import type { SecretRow } from '@/entities/secret';
@@ -142,5 +143,45 @@ describe('SecretsTable — the controls a list-only caller may use (issue 402)',
     expect(screen.queryByRole('button', { name: 'More actions' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Show' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Copy' })).not.toBeInTheDocument();
+  });
+});
+
+/*
+ * elitea_issues: 4860 — a new row always sorts to the front of the list
+ * (`sortedRows` above), so it always falls on page 1. Creating one while
+ * viewing any later page used to leave the viewer on that later page with
+ * nothing visibly different, while the new draft row sat unseen on page 1.
+ */
+describe('SecretsTable — creating a row while on a later page (elitea_issues 4860)', () => {
+  function manyExistingRows(count: number): SecretRow[] {
+    return Array.from({ length: count }, (_, i) => ({
+      id: `existing-KEY_${String(i).padStart(2, '0')}`,
+      name: `KEY_${String(i).padStart(2, '0')}`,
+      secretName: `{{secret.KEY_${String(i).padStart(2, '0')}}}`,
+      isDefault: false,
+      secretValue: `{{secret.KEY_${String(i).padStart(2, '0')}}}`,
+      isNew: false,
+    }));
+  }
+
+  it('jumps back to page 1 once a new (unsaved) row appears', async () => {
+    const user = userEvent.setup();
+    const rows = manyExistingRows(11); // DEFAULT_PAGE_SIZE is 10 — two pages.
+
+    const { rerender } = renderWithTheme(<SecretsTable {...makeProps({ rows })} />);
+
+    expect(screen.getByText('Page 1 of 2')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Go to page 2' }));
+    expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
+
+    // The "+" action (owned by the caller, above this component) prepends a
+    // new draft row — simulated here by re-rendering with one added.
+    const rowsWithDraft: SecretRow[] = [
+      { id: 'draft-1', name: '', secretName: '', isDefault: false, secretValue: '', isNew: true },
+      ...rows,
+    ];
+    rerender(<SecretsTable {...makeProps({ rows: rowsWithDraft })} />);
+
+    expect(await screen.findByText('Page 1 of 2')).toBeInTheDocument();
   });
 });
