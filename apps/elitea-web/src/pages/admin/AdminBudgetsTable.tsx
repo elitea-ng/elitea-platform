@@ -177,15 +177,22 @@ export const AdminBudgetsTable = memo(function AdminBudgetsTable({
                 <EditOutlinedIcon fontSize="small" />
               </IconButton>
             </Tooltip>
-            <Tooltip title={t('pages.admin.budgets.action.members', 'Member budgets')}>
-              <IconButton
-                size="small"
-                onClick={() => onOpenMembers(params.row)}
-                data-testid={`admin-budgets-members-${params.row.project_id}`}
-              >
-                <GroupOutlinedIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
+            {/* elitea_issues: issue 6079, issue 6008 — a personal project has exactly
+                one member, its owner, so its project budget IS that
+                member's budget; a separate per-member limit here can only
+                duplicate or silently override it (issue 6079's root cause) and
+                issue 6008 requires removing the action for personal projects. */}
+            {params.row.is_personal ? null : (
+              <Tooltip title={t('pages.admin.budgets.action.members', 'Member budgets')}>
+                <IconButton
+                  size="small"
+                  onClick={() => onOpenMembers(params.row)}
+                  data-testid={`admin-budgets-members-${params.row.project_id}`}
+                >
+                  <GroupOutlinedIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
             {/* Clearing is offered only where there is something to clear: a
                 project with no authored row is already at the default. */}
             {hasAuthoredBudget(params.row) ? (
