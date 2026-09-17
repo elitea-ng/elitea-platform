@@ -143,7 +143,10 @@ export const AddNodeMenu = memo(function AddNodeMenu({ onAddNode, disabled }: Ad
         transformOrigin={{ vertical: 'top', horizontal: 'right' }}
       >
         <Box sx={menuColumnsSx}>
-          <Box sx={menuColumnSx}>
+          <Box
+            sx={menuColumnSx}
+            data-testid="add-node-menu-column"
+          >
             {leftColumnItems.map((item) => (
               <MenuItem
                 key={item.type}
@@ -165,7 +168,10 @@ export const AddNodeMenu = memo(function AddNodeMenu({ onAddNode, disabled }: Ad
               </MenuItem>
             ))}
           </Box>
-          <Box sx={menuColumnSx}>
+          <Box
+            sx={menuColumnSx}
+            data-testid="add-node-menu-column"
+          >
             {rightColumnItems.map((item) => (
               <MenuItem
                 key={item.type}

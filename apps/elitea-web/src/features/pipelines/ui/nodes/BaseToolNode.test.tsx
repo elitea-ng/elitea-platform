@@ -11,7 +11,7 @@ import { buildFlowEditorContextValue, renderWithRouterAndProject } from '../../_
 import { FlowEditorContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
 import type { YamlPipelineDocument } from '../../lib/flow-editor/helpers/pipelineFlow.types';
 import type { PipelineToolEntry } from '../select/pipelineToolEntry.types';
-import { BaseToolNode, computeFunctionOptions, type BaseToolNodeProps } from './BaseToolNode';
+import { applyToolkitSelection, BaseToolNode, computeFunctionOptions, type BaseToolNodeProps } from './BaseToolNode';
 
 const BASE = '/api/v2';
 const PROJECT_ID = 'proj-1';
@@ -325,5 +325,32 @@ describe('BaseToolNode dynamic tool catalogue (#440)', () => {
     const { findByTestId } = renderBaseToolNode({ versionTools: dynamicVersionTools });
 
     expect(await findByTestId('tool-list-error')).toBeInTheDocument();
+  });
+});
+
+/* elitea_issues: #2432 — removing a selected Toolkit/MCP from a node must clean toolkit_name/tool/input_mapping out of the YAML together, not leave a stale toolkit_name behind that breaks the pipeline at run time. */
+describe('applyToolkitSelection', () => {
+  it('clears toolkit_name, tool, and input_mapping together when the toolkit selection is removed', () => {
+    let yamlJsonObject: YamlPipelineDocument = {
+      nodes: [{ id: 'Tool1', toolkit_name: 'GitHub', tool: 'create_issue', input_mapping: { owner: { type: 'fixed', value: 'x' } } }],
+    };
+    const setYamlJsonObject = (next: YamlPipelineDocument): void => {
+      yamlJsonObject = next;
+    };
+
+    applyToolkitSelection({
+      id: 'Tool1',
+      newToolkit: null,
+      toolkitTypes: {},
+      currentInputMapping: {},
+      yamlJsonObject,
+      setYamlJsonObject,
+      getToolkitNameFromSchema: () => '',
+    });
+
+    const node = yamlJsonObject.nodes?.find(n => n.id === 'Tool1');
+    expect(node?.toolkit_name).toBeUndefined();
+    expect(node?.tool).toBeUndefined();
+    expect(node?.input_mapping).toBeUndefined();
   });
 });

@@ -148,6 +148,7 @@ describe('IndexActions — edit view', () => {
     expect(handleDeleteIndex).toHaveBeenCalled();
   });
 
+  /* elitea_issues: #3269 — a viewer without scheduling permission must see a clear "insufficient permissions" message up front (disabled control + tooltip), not a generic error only after clicking. */
   it('schedule switch is disabled with an insufficient-permissions tooltip when the user lacks the permission', async () => {
     renderActions({ view: 'edit', activeView: 'configuration', userPermissions: [], currentProjectName: 'Acme' });
     await screen.findByText('Schedule');

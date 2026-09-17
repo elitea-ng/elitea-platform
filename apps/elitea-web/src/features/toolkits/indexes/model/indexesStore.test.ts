@@ -67,6 +67,7 @@ describe('mergeIndexesOverlay', () => {
     expect(result.map((r) => r.id)).toEqual(['new_index', '1', '2']);
   });
 
+  /* elitea_issues: #2757 — the "in progress"/indexing status must be scoped per index id, keyed patches, never a single shared/global flag that leaks onto whichever OTHER index card the user happens to click while indexing runs. */
   it('merges a patch onto the matching row metadata without touching other rows', () => {
     const result = mergeIndexesOverlay(server, [], { '1': { state: 'in_progress', task_id: 't1' } });
     expect(result[0]?.metadata).toEqual({ collection: 'a', state: 'in_progress', task_id: 't1' });

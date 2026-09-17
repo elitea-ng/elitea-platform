@@ -8,6 +8,12 @@ import type { IndexRow } from '../../model/indexesStore';
 import { IndexListItem } from './IndexListItem';
 
 describe('IndexListItem', () => {
+  /* elitea_issues: #2975 — a freshly-created index row whose `metadata` has not arrived yet (or is empty) must render the placeholder, never crash with "Cannot read properties of undefined (reading 'length')". */
+  it('does not crash when metadata is absent on a brand-new index row', () => {
+    const index = { id: 'new-1' } as unknown as IndexRow;
+    expect(() => renderWithTheme(<IndexListItem index={index} />)).not.toThrow();
+  });
+
   it('renders a loading skeleton when useMock is set', () => {
     const { getAllByTestId } = renderWithTheme(
       <IndexListItem

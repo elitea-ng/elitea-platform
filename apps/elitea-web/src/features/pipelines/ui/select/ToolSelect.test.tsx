@@ -52,6 +52,7 @@ describe('ToolSelect', () => {
     expect(onSelectTool).toHaveBeenCalledWith(tool);
   });
 
+  /* elitea_issues: #2125 — toolkit/tool single-select dropdowns must support unselecting (re-clicking the selected option clears it), not force a YAML edit to remove the reference. */
   it('calls onSelectTool(null) on clear', async () => {
     const user = userEvent.setup();
     const onSelectTool = vi.fn();

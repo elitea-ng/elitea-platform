@@ -130,7 +130,14 @@ interface ApplyToolkitSelectionArgs {
  * is never optional there) lives here too, for the same reason (matching
  * `DefaultNode.tsx`'s own `applyDefaultNodeToolkitSelection`).
  */
-function applyToolkitSelection({
+/**
+ * elitea_issues #2432 — clearing the toolkit/MCP selection on a node must
+ * wipe `toolkit_name`/`tool`/`input_mapping` from the YAML together (the
+ * legacy bug left `toolkit_name` behind while the node showed "no
+ * toolkit", breaking the pipeline at run time). Exported for direct unit
+ * coverage of that clear branch — see `BaseToolNode.test.tsx`.
+ */
+export function applyToolkitSelection({
   id,
   newToolkit,
   toolkitTypes,

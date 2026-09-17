@@ -100,6 +100,7 @@ describe('CodeNode', () => {
     expect(getByText('Interrupt after')).toBeInTheDocument();
   });
 
+  /* elitea_issues: #2665 — the Code node must never seed a placeholder value ("# Write your code here\"Hello, World!\""); a fresh node's code value is a real empty string. */
   it('defaults the code value to an empty fixed string when yamlNode.code is unset', async () => {
     const { findByText, getAllByText } = renderCodeNode();
     await findByText('Node1');

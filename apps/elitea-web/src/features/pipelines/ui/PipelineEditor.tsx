@@ -349,6 +349,7 @@ const PipelineEditorInner = (
       isSavingVersion={deps.isSavingVersion}
       deps={deps}
       onSaveSuccess={handleSaveSuccess}
+      isDirty={totalDirty}
     />
   );
 
