@@ -93,7 +93,7 @@ test('a Run History row names the version that produced it', async ({ page, requ
 
     test.fail(
       true,
-      'ELITEA-0105: product gap — RunHistoryList.secondaryOf (src/entities/run-history/ui/RunHistoryList.tsx) ' +
+      'ELITEA-0105 (#955): product gap — RunHistoryList.secondaryOf (src/entities/run-history/ui/RunHistoryList.tsx) ' +
         'renders `date · duration · N messages` only; no version name is read or shown anywhere on the row',
     );
 

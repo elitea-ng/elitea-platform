@@ -41,7 +41,7 @@ test('ELITEA-2494: PRODUCT GAP — the New Aha! Toolkit page does not pre-select
   /* onetest: ELITEA-2494 — product gap: when at least one Aha! credential already exists, opening "+ Toolkit" → Aha! should land on the create page with that credential pre-selected in the Aha Configuration dropdown ("field shows empty/placeholder state" only when NONE exists). No caller anywhere in `pages/toolkits/lib/credentialPicker.tsx`, `entities/toolkit/model/toolForm.ts` or `features/credentials` ever derives a default value for this field (grepped for `preselect`/`default*[Cc]redential`/`autoSelect` — none), so the dropdown starts empty regardless. */
   test.fail(
     true,
-    'ELITEA-2494: product gap — the Aha Configuration picker on the create-toolkit form never pre-selects an ' +
+    'ELITEA-2494 (#953): product gap — the Aha Configuration picker on the create-toolkit form never pre-selects an ' +
       'existing saved credential; no default-selection logic exists anywhere in the credential-picker/toolForm code, ' +
       'so the field always starts empty even when exactly one credential is already saved',
   );

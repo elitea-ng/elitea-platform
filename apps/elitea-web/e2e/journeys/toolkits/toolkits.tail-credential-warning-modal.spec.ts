@@ -124,7 +124,7 @@ test.describe('the Credential Configuration Change warning modal (ELITEA-1092/10
     test.setTimeout(60_000);
     test.fail(
       true,
-      'ELITEA-1092/1094/1099 (#4649 regressed silently): product gap — ConfigurationTab.tsx never passes isTeamProject ' +
+      'ELITEA-1092 (#952)/1094/1099 (#4649 regressed silently): product gap — ConfigurationTab.tsx never passes isTeamProject ' +
         'to ToolkitForm, so useCredentialWarning.checkBeforeSave (isTeamProject defaults false) never intercepts Save; ' +
         'the "Credential Configuration Change" modal cannot open on any team-project toolkit, for any user',
     );

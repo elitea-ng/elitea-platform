@@ -62,7 +62,7 @@ test('forking a master agent with a sub-agent attached copies the sub-agent too,
 
     test.fail(
       true,
-      'ELITEA-0674: product gap — POST /fork only bundles the named entity; a sub-agent reached through ' +
+      'ELITEA-0674 (#918): product gap — POST /fork only bundles the named entity; a sub-agent reached through ' +
         'application_relation is neither exported nor copied, so the forked parent carries no sub-agent at all',
     );
 

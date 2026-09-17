@@ -87,7 +87,7 @@ test('the fork target-project dropdown excludes the source project', async ({ pa
 
     test.fail(
       true,
-      'ELITEA-0676: product gap — useForkTargetProjects (src/pages/agents/lib/useForkTargetProjects.ts) never ' +
+      'ELITEA-0676 (#954): product gap — useForkTargetProjects (src/pages/agents/lib/useForkTargetProjects.ts) never ' +
         'filters the current project out of the target dropdown',
     );
 
@@ -159,7 +159,7 @@ test('"Forked from" is a working link, visible on the Agents dashboard card and 
 
     test.fail(
       true,
-      'ELITEA-0670: product gap — "Forked from" renders only inside ApplicationInformation (the entity\'s own ' +
+      'ELITEA-0670 (#915): product gap — "Forked from" renders only inside ApplicationInformation (the entity\'s own ' +
         'editor), as plain non-navigable text with no href/onClick (see that file\'s own doc comment); the ' +
         'Agents dashboard card/table view shows no such indicator at all',
     );

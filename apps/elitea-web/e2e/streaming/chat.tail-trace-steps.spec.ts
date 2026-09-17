@@ -580,7 +580,7 @@ test('the tool-call pins a turn showed are still rendered after a reload', async
   // conversation cannot see which tools ran in it.
   test.fail(
     true,
-    'ELITEA-2593: product gap — tool-call pins do not survive a reload: a reopened conversation ' +
+    'ELITEA-2593 (#951): product gap — tool-call pins do not survive a reload: a reopened conversation ' +
       'renders no thinking panel and no `chat-tool-action` rows, though the trace-step API still ' +
       'answers the same steps. See S/tail/defects.md.',
   );

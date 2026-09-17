@@ -241,7 +241,7 @@ test('Project Context reaches the system prompt of an agent’s own turn', async
   test.setTimeout(300_000);
   test.fail(
     true,
-    'ELITEA-0951: product gap (#946) — an enabled, non-empty project_context makes the admission SQL ' +
+    'ELITEA-0951 (#946): product gap (#946) — an enabled, non-empty project_context makes the admission SQL ' +
       'resolve zero rows, so EVERY turn in the project is refused with 422 and the content is never ' +
       'woven into a prompt at all. See S/tail/defects.md.',
   );
@@ -303,7 +303,7 @@ test('Project Context reaches an agent added as a Chat participant', async ({ pa
   test.setTimeout(300_000);
   test.fail(
     true,
-    'ELITEA-0948: product gap (#946) — the admission refusal applies to a chat-participant turn the ' +
+    'ELITEA-0948 (#946): product gap (#946) — the admission refusal applies to a chat-participant turn the ' +
       'same way; the context is never injected. See S/tail/defects.md.',
   );
 
@@ -355,7 +355,7 @@ test('the per-agent Ignore Project Context toggle keeps the context out of its o
   test.setTimeout(300_000);
   test.fail(
     true,
-    'ELITEA-0945: product gap (#946) — the toggle is stored but has no runtime effect to observe: ' +
+    'ELITEA-0945 (#946): product gap (#946) — the toggle is stored but has no runtime effect to observe: ' +
       'an enabled project context refuses every turn in the project, ignoring agent or not. ' +
       'See S/tail/defects.md.',
   );
@@ -421,7 +421,7 @@ test('Project Context is not passed down to a sub-agent', async ({ page }) => {
   test.setTimeout(420_000);
   test.fail(
     true,
-    'ELITEA-0952: product gap (#946) — no turn is admitted at all while a project context is ' +
+    'ELITEA-0952 (#946): product gap (#946) — no turn is admitted at all while a project context is ' +
       'enabled, so neither the master’s injection nor the child’s isolation is observable. ' +
       'See S/tail/defects.md.',
   );

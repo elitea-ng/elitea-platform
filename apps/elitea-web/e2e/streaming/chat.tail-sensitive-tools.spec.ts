@@ -598,7 +598,7 @@ test('a blocked sensitive call does not discard the non-sensitive call beside it
   if (IS_NATIVE_RUNTIME) {
     test.fail(
       true,
-      'ELITEA-1001: product gap (native runtime only) — a sensitive call declined in a multi-call ' +
+      'ELITEA-1001 (#949): product gap (native runtime only) — a sensitive call declined in a multi-call ' +
         'assistant message takes the NON-SENSITIVE calls beside it down with it: their results never ' +
         'reach the continuation, so the agent cannot incorporate work it had already been authorized ' +
         'to do. The SDK worker keeps them. See S/tail/defects.md.',
@@ -681,7 +681,7 @@ test('two sensitive tools in one turn each raise their own authorization', async
   // sensitive is disposed of without the operator ever seeing it.
   test.fail(
     true,
-    'ELITEA-1003: product gap — when one assistant message calls two sensitive tools, only the ' +
+    'ELITEA-1003 (#948): product gap — when one assistant message calls two sensitive tools, only the ' +
       'FIRST raises an authorization dialog; the second is never offered for a decision and never ' +
       'runs. See S/tail/defects.md.',
   );
@@ -907,7 +907,7 @@ test('a sensitive call can be declined without typing a comment', async ({ page 
   // had not surfaced.
   test.fail(
     true,
-    'ELITEA-1013: product gap — declining a sensitive call with the comment box left empty is ' +
+    'ELITEA-1013 (#950): product gap — declining a sensitive call with the comment box left empty is ' +
       'refused with 400 `Invalid agent execution request`, though the box is labelled optional; ' +
       'the dialog stays open with nothing said. See S/tail/defects.md.',
   );

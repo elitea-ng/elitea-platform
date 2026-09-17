@@ -311,7 +311,7 @@ test('an agent reads an 80k-character artifact back in full', async ({ page }) =
   //    claim failing for real, not a harness artefact.
   test.fail(
     true,
-    'ELITEA-0362: product gap — a file under the artifact toolkit’s 200k agent-path cap still cannot ' +
+    'ELITEA-0362 (#956): product gap — a file under the artifact toolkit’s 200k agent-path cap still cannot ' +
       'be read in full. On the native worker `artifact` is an unsupported toolkit family (#906) and ' +
       'the call is never dispatched; on the SDK worker the call runs and its 80k result is refused ' +
       'downstream with RESOURCE_EXHAUSTED "The agent event exceeds its output limit". ' +
