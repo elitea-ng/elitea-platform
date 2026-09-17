@@ -105,6 +105,11 @@ Point 4 also includes the following required work, confirmed by the user on 2026
 
 These are part of gate 4 acceptance, not optional follow-up work after compaction.
 
+The [2026-09-17 toolkit binding audit](source-mapping/toolkit-binding-drift-20260917.md)
+checks the newer SDK direct-tool fix. Rust already refuses cross-toolkit fallback;
+11 focused checks pass, including two new deterministic direct-node regressions.
+This is component evidence, not deployed acceptance of all point 4 contracts.
+
 The [model budget foundation](source-mapping/model-context-budget.md) freezes authorized limits and checks the complete provider request.
 It reserves output inside the effective window. Existing frozen inputs remain readable.
 Settings delivery, recovery integration, deployed UI verification, and the other point 4 contracts remain open.

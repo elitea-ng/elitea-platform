@@ -2752,6 +2752,7 @@ async fn pipeline_llm_node_binds_same_named_tools_to_exact_toolkit_implementatio
             .with_mcp_connector(Arc::new(CollidingPipelineMcpConnector {
                 connections: Arc::clone(&connections),
                 tool_calls: Arc::clone(&tool_calls),
+                missing_source: None,
             }));
     let request = colliding_llm_mcp_pipeline_request();
     authorized(&request)
@@ -2819,6 +2820,100 @@ async fn pipeline_llm_node_binds_same_named_tools_to_exact_toolkit_implementatio
     }));
 }
 
+fn colliding_direct_mcp_pipeline_request() -> super::request::AgentExecutionRequest {
+    let mut request = colliding_llm_mcp_pipeline_request();
+    request.payload.application["version_details"]["instructions"] = json!(
+        r"
+state:
+  release_records: dict
+  audit_records: dict
+  messages: list
+entry_point: release
+nodes:
+  - id: release
+    type: mcp
+    toolkit_name: release intelligence
+    tool: lookup_release
+    input_mapping:
+      release: {type: fixed, value: '1.2'}
+    output: [release_records]
+    transition: audit
+  - id: audit
+    type: mcp
+    toolkit_name: audit intelligence
+    tool: lookup_release
+    input_mapping:
+      release: {type: fixed, value: '1.2'}
+    output: [audit_records, messages]
+    transition: END
+"
+    );
+    request
+}
+
+#[tokio::test]
+async fn direct_mcp_nodes_keep_same_named_operations_scoped_to_each_toolkit() {
+    let connections = Arc::new(AtomicUsize::new(0));
+    let tool_calls = Arc::new(Mutex::new(Vec::new()));
+    let checkpointer = Arc::new(MemoryCheckpointer::new());
+    let assembler = PipelineNativeAgentAssembler::with_state(
+        Arc::new(InMemorySessionService::new()),
+        Arc::clone(&checkpointer) as Arc<dyn Checkpointer>,
+    )
+    .with_mcp_connector(Arc::new(CollidingPipelineMcpConnector {
+        connections: Arc::clone(&connections),
+        tool_calls: Arc::clone(&tool_calls),
+        missing_source: None,
+    }));
+    let request = colliding_direct_mcp_pipeline_request();
+    let invocation = assembler
+        .assemble(authorized(&request))
+        .await
+        .expect("same-name direct MCP nodes assemble without a model");
+    collect_pipeline_completion(invocation).await;
+    assert_eq!(connections.load(Ordering::Acquire), 2);
+    assert_eq!(
+        *tool_calls.lock().expect("scoped calls"),
+        ["release intelligence", "audit intelligence"]
+    );
+    let checkpoint = checkpointer
+        .load(&private_pipeline_session_id(&request))
+        .await
+        .expect("checkpoint read")
+        .expect("terminal direct-tool checkpoint");
+    for (key, source) in [
+        ("release_records", "release intelligence"),
+        ("audit_records", "audit intelligence"),
+    ] {
+        assert_eq!(
+            checkpoint.state.get(key),
+            Some(&json!({"release": "1.2", "source": source}))
+        );
+    }
+}
+
+#[tokio::test]
+async fn direct_mcp_nodes_never_fall_back_to_another_toolkits_operation() {
+    let connections = Arc::new(AtomicUsize::new(0));
+    let tool_calls = Arc::new(Mutex::new(Vec::new()));
+    let assembler = PipelineNativeAgentAssembler::with_state(
+        Arc::new(InMemorySessionService::new()),
+        Arc::new(MemoryCheckpointer::new()),
+    )
+    .with_mcp_connector(Arc::new(CollidingPipelineMcpConnector {
+        connections,
+        tool_calls: Arc::clone(&tool_calls),
+        missing_source: Some("audit intelligence"),
+    }));
+    let request = colliding_direct_mcp_pipeline_request();
+    let result = assembler.assemble(authorized(&request)).await;
+    assert!(
+        result.is_err(),
+        "missing scoped operation must refuse assembly"
+    );
+    assert!(tool_calls.lock().expect("scoped calls").is_empty());
+}
+
 struct PipelineMcpConnector {
     connections: Arc<AtomicUsize>,
     tool_calls: Arc<AtomicUsize>,
@@ -2828,6 +2923,7 @@ struct PipelineMcpConnector {
 struct CollidingPipelineMcpConnector {
     connections: Arc<AtomicUsize>,
     tool_calls: Arc<Mutex<Vec<String>>>,
+    missing_source: Option<&'static str>,
 }
 
 #[async_trait]
@@ -2842,6 +2938,9 @@ impl McpConnector for CollidingPipelineMcpConnector {
             "https://audit-mcp.example.invalid/v1/mcp" => "audit intelligence",
             _ => unreachable!("collision fixture received an unexpected MCP endpoint"),
         };
+        if self.missing_source == Some(source) {
+            return Ok(Arc::new(BasicToolset::new("missing_operation", vec![])));
+        }
         Ok(Arc::new(BasicToolset::new(
             "colliding_pipeline_fixture",
             vec![Arc::new(SourcedPipelineMcpTool {
