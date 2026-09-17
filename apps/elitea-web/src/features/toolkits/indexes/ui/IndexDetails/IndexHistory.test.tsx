@@ -19,6 +19,13 @@ const history: IndexHistoryItem[] = [
 ];
 
 describe('IndexHistory', () => {
+  /* elitea_issues: #6391 — Run History must auto-select the most recent run when it opens.
+   * The backend's `history` array is contract-ordered oldest-first / newest-last (see
+   * `services/elitea-main/internal/application/indexmeta/list_history_bound_test.go`'s
+   * "the view shows the newest run first" — bound keeps the trailing/newest entries), so the
+   * newest run is always the LAST element. This fixture uses non-monotonic timestamps
+   * deliberately: the assertion is about which array position is selected, matching that
+   * contract, not about re-deriving "latest" from timestamps client-side. */
   it('selects the last history item on mount and clears selection on unmount', () => {
     const { unmount } = renderWithTheme(<IndexHistory history={history} />);
     expect(useIndexesStore.getState().selectedHistoryItem).toEqual(history[2]);

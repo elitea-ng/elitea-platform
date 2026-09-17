@@ -32,6 +32,9 @@ describe('IndexListItem', () => {
   });
 
   /**
+   * elitea_issues: #6066 — the index chip must show skipped-file info
+   * consistently with the index details page: same count, same tooltip
+   * ("total skipped during indexing", see this component's `Tooltip` above).
    * The badge counts everything the run LEFT OUT (`report.totals.leftOut`),
    * not one summary key off the raw blob. The old `skipped.total_skipped`
    * read reported 0 for every row whose indexer wrote a canonical `report`.

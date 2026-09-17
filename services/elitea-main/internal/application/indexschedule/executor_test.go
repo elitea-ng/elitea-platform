@@ -314,7 +314,7 @@ func TestCurrentExecutorNeedsNoCredentialWhenToolkitHasNoMatchingConfigurationFi
 	}
 }
 
-/* elitea_issues: #6527 — a schedule's explicitly chosen credential is never silently discarded when the toolkit type's settings key does not match the naive "{type}_configuration" derivation (e.g. ado_wiki/ado_repos store theirs under a shared group key) */
+/* elitea_issues: #6527, #6472 — a schedule's explicitly chosen credential is never silently discarded when the toolkit type's settings key does not match the naive "{type}_configuration" derivation (e.g. ado_wiki/ado_repos store theirs under a shared group key). #6472 is the same root cause reported against ado_wiki/ado_repos/artifact/application specifically; one fix, one test, both issues. */
 func TestCurrentExecutorFailsRatherThanDiscardingCredentialWhenConfigurationKeyMismatches(t *testing.T) {
 	candidate := scheduledExecutorCandidate(17)
 	private := false

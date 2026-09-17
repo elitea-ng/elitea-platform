@@ -230,6 +230,7 @@ test('ELITEA-2883: the buttons follow the form — Reindex when clean, Save + Sa
 
 /* onetest: ELITEA-2880 — Save button persists configuration without triggering reindex. */
 /* onetest: ELITEA-2886 — Notifications for save operations (the success half; the refusal half is the next test). */
+/* elitea_issues: #6422 — Save Index Configuration Without Reindexing (the whole feature this file covers: Save persists without a run, Save & Reindex saves then runs, and Reindex is withdrawn while the form is dirty — see the other tests in this file). */
 test('ELITEA-2880/2886: Save stores the configuration, says so, and starts no indexing', async ({ page }) => {
   const { panel, field, fixture } = await openStoredIndexConfiguration(page);
 

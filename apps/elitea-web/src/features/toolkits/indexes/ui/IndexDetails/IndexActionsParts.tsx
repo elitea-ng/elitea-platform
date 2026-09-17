@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useCallback, useState } from 'react';
 
 import Box from '@mui/material/Box';
 import MuiButton from '@mui/material/Button';
@@ -8,6 +9,7 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 import { GearIcon } from '@/shared/ui/icons/gear-icon';
 import { BaseSwitch } from '@/shared/ui/BaseSwitch';
+import { BaseModal } from '@/shared/ui/BaseModal';
 import { DiscardButton } from '@/shared/ui/DiscardButton';
 
 import type { ScheduleEntry } from '../../model/indexesStore';
@@ -139,6 +141,69 @@ function ScheduleSwitch(props: ScheduleSwitchProps): ReactNode {
  * configuration form to save (the run/history tabs, and any caller that has
  * not wired the hook) — which is exactly when only "Reindex" is offered.
  */
+interface ReindexButtonProps {
+  readonly indexName: string;
+  readonly disabled: boolean;
+  readonly isReindexDisabled: boolean;
+  readonly onIndexData: () => void;
+}
+
+/**
+ * elitea_issues: #5984 — reindexing must be confirmed before it starts:
+ * "Reindex confirmation / Are you sure to reindex the [index name] index?
+ * This will replace all current index data and can't be undone once
+ * started." Previously `onClick` called `onIndexData` directly with no
+ * confirmation step. `shared/ui`'s `DiscardButton` covers the identical
+ * confirm-then-fire shape but hardcodes `confirmText: 'Discard'` and
+ * `alarm: true` (a destructive-action look wrong for a constructive
+ * "Reindex"), so this composes `BaseModal` directly instead of widening
+ * that shared component's API for one caller.
+ */
+function ReindexButton(props: ReindexButtonProps): ReactNode {
+  const { indexName, disabled, isReindexDisabled, onIndexData } = props;
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  const onOpenConfirm = useCallback(() => setConfirmOpen(true), []);
+  const onCloseConfirm = useCallback(() => setConfirmOpen(false), []);
+  const onConfirmReindex = useCallback(() => {
+    onCloseConfirm();
+    onIndexData();
+  }, [onCloseConfirm, onIndexData]);
+
+  return (
+    <>
+      <Tooltip title={isReindexDisabled ? t('features.toolkits.indexActions.reindexDisabled', 'Go to "Configuration" tab to reindex') : ''}>
+        <Box component="span">
+          <MuiButton
+            variant="elitea"
+            color="secondary"
+            onClick={onOpenConfirm}
+            disabled={disabled || isReindexDisabled}
+            sx={{ minWidth: '4.875rem' }}
+          >
+            {t('features.toolkits.indexActions.reindex', 'Reindex')}
+          </MuiButton>
+        </Box>
+      </Tooltip>
+      <BaseModal
+        variant="simple"
+        open={confirmOpen}
+        onClose={onCloseConfirm}
+        onConfirm={onConfirmReindex}
+        title={t('features.toolkits.indexActions.reindexConfirmTitle', 'Reindex confirmation')}
+        content={t(
+          'features.toolkits.indexActions.reindexConfirmContent',
+          "Are you sure to reindex the {{indexName}} index? This will replace all current index data and can't be undone once started.",
+          { indexName },
+        )}
+        actions={{
+          confirmText: t('features.toolkits.indexActions.reindex', 'Reindex'),
+        }}
+      />
+    </>
+  );
+}
+
 export interface IndexConfigSaveActions {
   readonly isDirty: boolean;
   readonly isSaving: boolean;
@@ -147,6 +212,7 @@ export interface IndexConfigSaveActions {
 }
 
 export interface EditModeActionsProps {
+  readonly indexName: string;
   readonly scheduleData: ScheduleEntry;
   readonly schedulingTooltipMessage: string | null;
   readonly scheduleConfigMessage: string | null;
@@ -209,6 +275,7 @@ function SaveActions(props: { readonly configSave: IndexConfigSaveActions; reado
 
 export function EditModeActions(props: EditModeActionsProps): ReactNode {
   const {
+    indexName,
     scheduleData,
     schedulingTooltipMessage,
     scheduleConfigMessage,
@@ -237,19 +304,12 @@ export function EditModeActions(props: EditModeActionsProps): ReactNode {
           isActionsDisabled={isActionsDisabled}
         />
       ) : (
-        <Tooltip title={isReindexDisabled ? t('features.toolkits.indexActions.reindexDisabled', 'Go to "Configuration" tab to reindex') : ''}>
-          <Box component="span">
-            <MuiButton
-              variant="elitea"
-              color="secondary"
-              onClick={onIndexData}
-              disabled={isActionsDisabled || isReindexDisabled}
-              sx={{ minWidth: '4.875rem' }}
-            >
-              {t('features.toolkits.indexActions.reindex', 'Reindex')}
-            </MuiButton>
-          </Box>
-        </Tooltip>
+        <ReindexButton
+          indexName={indexName}
+          disabled={isActionsDisabled}
+          isReindexDisabled={isReindexDisabled}
+          onIndexData={onIndexData}
+        />
       )}
 
       <RemoveIndexButton
