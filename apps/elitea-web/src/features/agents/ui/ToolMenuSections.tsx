@@ -124,7 +124,12 @@ export function useToolkitInstancePager(projectId: string | undefined): ToolkitI
   return { rows, isFetching: query.isFetching, hasMore: query.hasNextPage, fetchMore };
 }
 
-function buildInstanceItems(
+// elitea_issues #5296 — exported for its own direct unit test: this is the
+// ONE place that builds the Agents-page toolkit-attach dropdown's item
+// labels (`label: toolkit.name`), the same raw field the Toolkits page
+// itself renders — the two surfaces cannot disagree on spacing/formatting
+// because there is no second, slugified label anywhere in this file.
+export function buildInstanceItems(
   rows: readonly Toolkit[],
   addedToolkitIds: ReadonlySet<string | number>,
   isMcp: boolean,

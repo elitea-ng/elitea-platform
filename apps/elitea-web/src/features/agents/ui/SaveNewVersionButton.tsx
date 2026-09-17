@@ -9,6 +9,7 @@ import {
   forwardRef,
 } from 'react';
 
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlined';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import CircularProgress from '@mui/material/CircularProgress';
@@ -16,6 +17,7 @@ import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
+import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
 
 import { t } from '@/shared/i18n';
@@ -168,7 +170,20 @@ export const SaveNewVersionButton = forwardRef<SaveNewVersionButtonHandle, SaveN
           open={showInputVersion}
           onClose={onCancelShowInputVersion}
         >
-          <DialogTitle>{t('agents.saveNewVersionButton.dialogTitle', 'Create version')}</DialogTitle>
+          {/* elitea_issues: #5755 — a green checkmark next to the title, matching the create-version success affordance the baseline asked for. */}
+          <DialogTitle>
+            <Stack
+              direction="row"
+              sx={{ alignItems: 'center', gap: '0.5rem' }}
+            >
+              <CheckCircleOutlineIcon
+                color="success"
+                fontSize="small"
+                data-testid="save-new-version-dialog-check-icon"
+              />
+              {t('agents.saveNewVersionButton.dialogTitle', 'Create version')}
+            </Stack>
+          </DialogTitle>
           <DialogContent>
             <Box sx={{ minWidth: '20rem', paddingTop: '0.5rem' }}>
               <TextField

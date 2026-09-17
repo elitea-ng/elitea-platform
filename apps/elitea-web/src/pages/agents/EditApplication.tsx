@@ -57,6 +57,12 @@ function parseApplicationId(agentId: string | undefined): number | undefined {
   return Number(agentId);
 }
 
+// elitea_issues #5107/#5922/#5987 — Save used to ignore `isDirty`. Extracted
+// so this condition stays out of this file's own complexity budget.
+function canSaveApplication(isValid: boolean, isSaving: boolean, isDirty: boolean): boolean {
+  return isValid && !isSaving && isDirty;
+}
+
 /**
  * Ported from `apps/elitea-ui/src/pages/Applications/EditApplication.jsx`
  * — ROUTE-012 `/agents/:tab/:agentId` (+ optional `/:version`, ROUTE-067;
@@ -324,7 +330,7 @@ export function EditApplication(): ReactNode {
               />
               <EditApplicationSaveBar
                 onSave={handleSave}
-                canSave={form.formState.isValid && !isSaving}
+                canSave={canSaveApplication(form.formState.isValid, isSaving, isDirty)}
                 isSaving={isSaving}
                 onDiscarded={handleDiscarded}
               />

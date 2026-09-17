@@ -69,15 +69,35 @@ test('J-sidebar-version: switching between two chat agents shows each one\'s own
     await agentsSection.getByText(agentAName, { exact: true }).click();
     await expect(versionButton, 'agent A must show its OWN version').toHaveText('alpha-version', { timeout: 15_000 });
 
+    // Flaky on webkit (PR #957, passed on retry): `VersionSelector`'s button
+    // renders bare `selectedVersion?.name` with no loading state at all, so
+    // right after this click it can still show agent A's label (the
+    // `useActiveParticipantDetails` re-fetch keyed to agent B's own ids
+    // hasn't resolved yet) for longer on a slow webkit run than on chromium.
+    // Asserting straight to 'beta-version' let `toHaveText`'s poll catch a
+    // window where the button still read the STALE 'alpha-version' one poll
+    // before the real value landed, close enough to the assertion's start
+    // that a slow webkit paint occasionally pushed the whole thing past
+    // its 15s budget. Demanding the stale text is GONE first is a positive
+    // wait on that settled-state transition, not a race against the same
+    // clock the flaky assertion was already racing.
     await agentsSection.getByText(agentBName, { exact: true }).click();
+    await expect(versionButton, 'must leave agent A\'s version behind before agent B\'s resolves').not.toHaveText(
+      'alpha-version',
+      { timeout: 15_000 },
+    );
     await expect(
       versionButton,
       'agent B must show its OWN version, not agent A\'s leftover — the #6543 regression',
     ).toHaveText('beta-version', { timeout: 15_000 });
 
     // Round-trip back to A: the fetch must re-key off A's ids again, not get
-    // stuck on whatever B last resolved to.
+    // stuck on whatever B last resolved to. Same settled-state wait first.
     await agentsSection.getByText(agentAName, { exact: true }).click();
+    await expect(versionButton, 'must leave agent B\'s version behind before agent A\'s resolves again').not.toHaveText(
+      'beta-version',
+      { timeout: 15_000 },
+    );
     await expect(versionButton, 'switching back to A must not carry over B\'s version').toHaveText('alpha-version', {
       timeout: 15_000,
     });

@@ -341,12 +341,20 @@ describe('EditApplication', () => {
     renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
     const user = userEvent.setup();
 
+    // elitea_issues #5107/#5922/#5987 — Save is now gated on `isDirty` too,
+    // so an edit is required before the button is even clickable. The form
+    // renders `disabled` until the detail fetch settles (typing before then
+    // is dropped), so wait for a field the loaded response populates first.
+    await waitFor(() => expect(screen.getByTestId('agent-name-input')).toHaveValue('My Agent'));
+    await user.type(screen.getByTestId('agent-description-input'), '!');
+
     const saveButton = await screen.findByTestId('agent-save-button');
     server.use(
       http.put('*/elitea_core/version/prompt_lib/:projectId/:applicationId/:versionId', () =>
         HttpResponse.json({ error: 'boom' }, { status: 500 }),
       ),
     );
+    await waitFor(() => expect(saveButton).toBeEnabled());
     await user.click(saveButton);
 
     expect(await screen.findByText('Failed to save your changes.')).toBeInTheDocument();
@@ -696,6 +704,11 @@ describe('EditApplication', () => {
 
     await screen.findByText('GPT-4o', {}, { timeout: 5_000 });
     await waitFor(() => expect(screen.getByTestId('agent-name-input')).toHaveValue('My Agent'));
+    // elitea_issues #5107/#5922/#5987 — Save is now gated on `isDirty` too;
+    // an UNRELATED edit (never touching the model picker) is what this test
+    // is about proving llm_settings stays off the body for.
+    await user.type(screen.getByTestId('agent-description-input'), '!');
+    await waitFor(() => expect(screen.getByTestId('agent-save-button')).toBeEnabled());
     await user.click(await screen.findByTestId('agent-save-button'));
 
     await waitFor(() => expect(bodies).toHaveLength(1));

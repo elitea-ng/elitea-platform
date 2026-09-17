@@ -50,6 +50,20 @@ describe('ApplicationEditorNotes', () => {
     expect(within(dialog).queryByText('Edit content')).not.toBeInTheDocument();
   });
 
+  /* elitea_issues: #5756 — opening the full-screen view alone must not call onNotesChange (Save must not go dirty from this alone) */
+  it('does not call onNotesChange just from opening the full-screen view', () => {
+    const onNotesChange = vi.fn();
+    renderWithProviders(
+      <ApplicationEditorNotes
+        notes="Some notes"
+        onNotesChange={onNotesChange}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Full screen view' }));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(onNotesChange).not.toHaveBeenCalled();
+  });
+
   it('disables the field when disabled is true', () => {
     renderWithProviders(
       <ApplicationEditorNotes

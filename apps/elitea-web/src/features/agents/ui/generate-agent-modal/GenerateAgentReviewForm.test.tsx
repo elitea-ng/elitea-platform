@@ -33,6 +33,15 @@ describe('GenerateAgentReviewForm', () => {
     expect(screen.getByDisplayValue('Hi there')).toBeInTheDocument();
   });
 
+  /* elitea_issues: #5402 — Welcome Message is multiline/scrollable, matching Description and Instructions */
+  it('renders the Welcome Message field as a multiline textarea, not a single-line input', () => {
+    const draft: AgentDraft = { ...EMPTY_AGENT_DRAFT, welcome_message: 'Hi there' };
+    renderWithTheme(<GenerateAgentReviewForm {...baseProps({ draft })} />);
+
+    const welcomeInput = screen.getByTestId('agent-draft-welcome-message-input');
+    expect(welcomeInput.tagName).toBe('TEXTAREA');
+  });
+
   it('calls onChange with the updated name field', () => {
     const onChange = vi.fn();
     renderWithTheme(<GenerateAgentReviewForm {...baseProps({ onChange })} />);

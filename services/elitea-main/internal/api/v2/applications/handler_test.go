@@ -524,3 +524,64 @@ func TestUpdateVersion_OmittedVariablesLeavesMetaAlone(t *testing.T) {
 		t.Errorf("expected nil meta, got %v", repo.lastUpdate.Meta)
 	}
 }
+
+// elitea_issues #4933 — `conversation_starters` is a loosely-typed jsonb
+// passthrough field (api/openapi/v2.yaml's `ConversationStarters`); a caller
+// hitting the API directly (not through the web app's own editor, which only
+// ever sends strings) could previously persist a non-string entry verbatim,
+// which then crashed the agent-hub starter panel for anyone who opened that
+// agent (#4932, fixed separately in `AgentConversationStarters.tsx`). The
+// handler must accept the request (a malformed array entry is not a 400 —
+// pylon's own API never validated this either) but keep only the strings.
+func TestUpdateVersion_ConversationStartersDropsNonStringEntries(t *testing.T) {
+	repo := &recordingRepo{}
+	r := setupVersionRouter(repo)
+
+	body, _ := json.Marshal(map[string]any{
+		"conversation_starters": []any{"Hello", nil, 42, map[string]any{"bad": true}, "Hi there"},
+	})
+	req := httptest.NewRequest("PUT", "/version/prompt_lib/1/2/3", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	want := []any{"Hello", "Hi there"}
+	if len(repo.lastUpdate.ConversationStarters) != len(want) {
+		t.Fatalf("expected only the string entries to survive, got %#v", repo.lastUpdate.ConversationStarters)
+	}
+	for i, w := range want {
+		if repo.lastUpdate.ConversationStarters[i] != w {
+			t.Errorf("index %d: got %#v, want %#v", i, repo.lastUpdate.ConversationStarters[i], w)
+		}
+	}
+}
+
+// The mirror of the test above: an explicit empty array must still reach the
+// repository as an empty (non-nil) slice, not be conflated with "the caller
+// never mentioned this field" (see the conditional update in
+// infra/db/repos/applications.go).
+func TestUpdateVersion_ConversationStartersAllNonStringIsEmptyNotNil(t *testing.T) {
+	repo := &recordingRepo{}
+	r := setupVersionRouter(repo)
+
+	body, _ := json.Marshal(map[string]any{
+		"conversation_starters": []any{nil, 42},
+	})
+	req := httptest.NewRequest("PUT", "/version/prompt_lib/1/2/3", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if repo.lastUpdate.ConversationStarters == nil {
+		t.Error("an explicitly-sent array must not collapse to nil (nil means \"field omitted\")")
+	}
+	if len(repo.lastUpdate.ConversationStarters) != 0 {
+		t.Errorf("expected all-non-string entries to be dropped, got %#v", repo.lastUpdate.ConversationStarters)
+	}
+}
