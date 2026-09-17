@@ -93,10 +93,23 @@ const MAX_CHARS = 2500;
  * call). The scratch project is not the one the persona's storage state pins,
  * so this always performs a real switch on the first call and costs one
  * `textContent()` read on any later one.
+ *
+ * That first-call switch is `performProjectSwitch` (`$projectId.$.tsx`) — a
+ * genuine `window.location.replace()`, not a router `navigate()` — fired
+ * SYNCHRONOUSLY in the same tick as the Zustand `setProject` that updates the
+ * trigger's accessible name. `ensureProjectSelected` returns the instant that
+ * name changes, which is before the replace's own navigation has settled, so
+ * the very next line here used to fire ITS OWN `page.goto` while that
+ * script-initiated reload was still in flight — two main-frame navigations
+ * racing. Chromium tolerates it; webkit does not, and throws "WebKit
+ * encountered an internal error" out of the second `page.goto` (measured, CI
+ * run 35226848209). Waiting for the in-flight navigation's `load` first closes
+ * the window: a no-op when there is nothing pending, the fix when there is.
  */
 async function gotoProjectParams(page: Page, project: ScratchProject): Promise<void> {
   await page.goto(`${BASE_URL}/app/`, { waitUntil: 'domcontentloaded' });
   await ensureProjectSelected(page, project.name);
+  await page.waitForLoadState('load').catch(() => {});
   await page.goto(PROJECT_PARAMS_PAGE, { waitUntil: 'domcontentloaded' });
 }
 

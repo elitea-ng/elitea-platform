@@ -77,6 +77,13 @@ async function openApp(page: Page): Promise<void> {
 
 /* onetest: ELITEA-0634 — no launcher and no sidebar entry appear anywhere while the feature is disabled */
 test('no launcher or sidebar entry appears while the assistant is disabled', async ({ page }) => {
+  // See `support.widget.spec.ts`'s `withAssistantOn`: the platform-flag lock is
+  // GLOBAL (shared with `support.widget.spec.ts` and `admin.guardrails.spec.ts`),
+  // so a test here can queue behind a sibling file's window before its own body
+  // even starts. The default 30 s test timeout does not budget for that wait —
+  // measured hard failure (CI run 35226848209): the PUT inside the lock timed
+  // out mid-flight because most of the 30 s had already gone to acquiring it.
+  test.setTimeout(210_000);
   await withPlatformFlagLock(async () => {
     await disableSupportAssistant(page.request);
     await openApp(page);
@@ -91,6 +98,8 @@ test('no launcher or sidebar entry appears while the assistant is disabled', asy
 
 /* onetest: ELITEA-0626 — the floating launcher is visible on every main application page */
 test('the launcher is visible on every main application page', async ({ page }) => {
+  // See the timeout note on the first test above — same global lock.
+  test.setTimeout(210_000);
   await withPlatformFlagLock(async () => {
     await enableSupportAssistant(page.request, {
       projectId: SUPPORT_PROJECT_ID,
@@ -251,6 +260,8 @@ test('the session is shared across a page navigation, not scoped to one page', a
 test('the config route reports the operator strings and the live enabled state', async ({
   request,
 }) => {
+  // See the timeout note on the file's first test above — same global lock.
+  test.setTimeout(210_000);
   await withPlatformFlagLock(async () => {
     await disableSupportAssistant(request);
     const off = await request.get(`${BASE_URL}/api/v2/support_assistant/config`);
@@ -285,6 +296,8 @@ test('the config route reports the operator strings and the live enabled state',
  * chromium lane" boundary `support.widget.spec.ts`'s SUP-W4 states.
  */
 test('the Send button stays inactive while the composer is empty', async ({ page }) => {
+  // See the timeout note on the file's first test above — same global lock.
+  test.setTimeout(210_000);
   await withPlatformFlagLock(async () => {
     await enableSupportAssistant(page.request, {
       projectId: SUPPORT_PROJECT_ID,
@@ -328,6 +341,8 @@ test('the Send button stays inactive while the composer is empty', async ({ page
  * operator-configured.
  */
 test('the panel header shows the operator-configured assistant name, not a hardcoded default', async ({ page }) => {
+  // See the timeout note on the file's first test above — same global lock.
+  test.setTimeout(210_000);
   await withPlatformFlagLock(async () => {
     const CUSTOM_NAME = `${AUTOTEST_PREFIX}CustomBrand${RUN_ID}`;
     await enableSupportAssistant(page.request, {
