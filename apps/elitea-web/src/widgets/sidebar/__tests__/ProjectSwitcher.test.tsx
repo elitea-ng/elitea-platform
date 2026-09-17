@@ -477,6 +477,40 @@ describe('ProjectSwitcher', () => {
     const selectedRow = screen.getByRole('option', { name: /Acme/ });
     expect(selectedRow).toContainElement(marks[0] ?? null);
   });
+
+  /* elitea_issues: #6561 — product gap: a suspended project (`Project.suspended`,
+   * carried all the way from `centry.project.suspended` through `useProjectOptions`)
+   * renders identically to an active one here — same avatar, same enabled
+   * "option" row, same `onSelect` call when clicked. The server-side gate
+   * (`requireActiveProject`, legacyrbac/postgres.go) already refuses every
+   * action inside a suspended project, so "accessible" is false; this pins
+   * the half that is still true — "visible", unmarked, and clickable — which
+   * only reads as fixed once this component reads `project.suspended` at all. */
+  it.fails('elitea_issues 6561: a suspended project is visually marked and not offered as a normal, selectable option', async () => {
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    const withSuspended: readonly Project[] = [
+      { id: 11, name: 'Public', suspended: false },
+      { id: 2, name: 'Acme', suspended: false },
+      { id: 90002, name: 'e2e-team-suspended', suspended: true },
+    ];
+    renderWithTheme(
+      <ProjectSwitcher
+        projects={withSuspended}
+        selectedProjectId="2"
+        onSelect={onSelect}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: /Acme/ }));
+    const suspendedRow = screen.getByRole('option', { name: /e2e-team-suspended/ });
+    expect(suspendedRow, 'a suspended project must be marked as such in the switcher').toHaveTextContent(/suspend/i);
+    expect(suspendedRow, 'a suspended project must not present as a normal, enabled option').toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+    await user.click(suspendedRow);
+    expect(onSelect, 'selecting a suspended project must not behave like an ordinary switch').not.toHaveBeenCalled();
+  });
 });
 
 /**
