@@ -86,6 +86,10 @@ async function openBranding(page: Page): Promise<void> {
    J38d (package export/import) and the "Reset to defaults" coverage below. */
 adminTest('J38: a rebrand saved through the page reaches the bootstrap route', async ({ page }, testInfo) => {
   const project = testInfo.project.name;
+  // The lock's own arithmetic (see `admin.features.spec.ts`): up to STALE_MS
+  // (90 s) to take the writer, up to STALE_MS again for the readers to
+  // drain, and about 30 s of assertions after that.
+  adminTest.setTimeout(210_000);
   await withPlatformFlagLock(async () => {
     const original = await readValues(page);
     try {
@@ -154,6 +158,8 @@ adminTest('J38: a rebrand saved through the page reaches the bootstrap route', a
 
 adminTest('J38b: the server refusal lands beside the field it names', async ({ page }, testInfo) => {
   const project = testInfo.project.name;
+  // See the timeout note on J38 above — same lock arithmetic.
+  adminTest.setTimeout(210_000);
   await withPlatformFlagLock(async () => {
     const original = await readValues(page);
     try {
@@ -314,7 +320,14 @@ adminTest(
   async ({ page }, testInfo) => {
     // Seven page loads, four uploads and a zip on webkit do not fit the 30 s
     // default; a timeout here is what poisoned the retries (see restoreValues).
-    adminTest.setTimeout(150_000);
+    // That alone was measured to need 150 s, all of it assumed to go to the
+    // body — it did not budget for the lock's own arithmetic (see
+    // `admin.features.spec.ts`): up to STALE_MS (90 s) to take the writer and
+    // up to STALE_MS again for the readers to drain, ahead of any assertion.
+    // 210_000 already reserves the last 30 s of that for the body; this test
+    // needs 120_000 more than that baseline, so the two add rather than one
+    // replacing the other.
+    adminTest.setTimeout(330_000);
     const project = testInfo.project.name;
     // Distinct from J38's values, so a row either journey left behind cannot
     // satisfy the other.
@@ -393,6 +406,17 @@ adminTest(
         // A second SPA with its own `index.html` and bootstrap tag (WP4); its
         // nav header renders the same logo slot, so the pack must reach it
         // through its own document, not the app's.
+        //
+        // The shell's own `/` route (`routes/_shell/index.tsx`) throws a
+        // TanStack `redirect()` on load, and on webkit that can still be
+        // settling when this goto fires — the same "two navigations racing"
+        // shape `settings.project-context.spec.ts` documents in full.
+        // Measured hard failure (CI runs 35147649157, 34513173908, and PR
+        // #947's own 35275250527): `page.goto: Load request cancelled; maybe
+        // frame was detached?`, always at this line. Waiting for the prior
+        // navigation's own `load` first closes the window: a no-op when
+        // there is nothing pending, the fix when there is.
+        await page.waitForLoadState('load').catch(() => {});
         await page.goto(BASE_URL + '/admin/app/users', { waitUntil: 'domcontentloaded' });
         const adminMark = page.getByTestId('admin-nav').getByTestId('brand-logo-mark').first();
         await expect(adminMark).toBeVisible({ timeout: 20_000 });
