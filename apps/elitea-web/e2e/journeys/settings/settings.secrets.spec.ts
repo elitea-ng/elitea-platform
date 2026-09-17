@@ -654,26 +654,14 @@ test('J21f: existing rows stay A→Z when Create is clicked from page 2', async 
   }
 });
 
-/*
- * PRODUCT GAP. `Secrets.tsx`'s `onAdd` (both the header's `+` button and the
- * `?createSecret=1` flag) only ever does `setRows((prev) => [newRow, ...prev])`
- * — it never resets `SecretsTable.tsx`'s own `currentPage` state. That
- * component's `sortedRows` puts every new row FIRST, so on page 2
- * `paginatedRows = sortedRows.slice(pageSize, pageSize * 2)` skips index 0
- * entirely: the new row is pinned at the very front of an array whose first
- * `pageSize` entries are exactly what page 2 does NOT render. Clicking
- * Create from page 2 therefore neither shows the input on the current page
- * nor navigates to page 1 — the row is created in state but rendered
- * nowhere until the reader manually pages back to page 1.
- */
-test('J21g: the creation input is not visible when Create is clicked from page 2 — product gap', async ({
+/* elitea_issues: #4860 — a new (unsaved) row always sorts to the front of `sortedRows`, so on
+ * page 2 `paginatedRows = sortedRows.slice(pageSize, pageSize * 2)` used to skip index 0 entirely:
+ * Create from page 2 neither showed the input on the current page nor navigated to page 1. Fixed
+ * by `SecretsTable.tsx` jumping back to page 1 whenever an unsaved row exists. */
+test('J21g: the creation input is visible on page 1 when Create is clicked from page 2', async ({
   page,
   request,
 }, testInfo) => {
-  test.fail(
-    true,
-    'ELITEA-0990 (#893): product gap — onAdd never resets pagination to page 1, and page 2 slices past the pinned new row',
-  );
   test.setTimeout(30_000);
   const projectName = testInfo.project.name;
   for (let i = 0; i < 12; i++) {
@@ -688,8 +676,10 @@ test('J21g: the creation input is not visible when Create is clicked from page 2
   await expect(page.getByText('Page 2 of', { exact: false })).toBeVisible({ timeout: 10_000 });
 
   await page.getByRole('button', { name: 'Create new secret', exact: true }).click();
-  // SHOULD hold: an empty, focusable name input appears — on this page, or
-  // after an automatic hop back to page 1. Neither happens.
+
+  // The new row pins to page 1: the table hops back there automatically,
+  // and its empty, focusable name input is visible.
+  await expect(page.getByText('Page 1 of', { exact: false })).toBeVisible({ timeout: 10_000 });
   const grid = page.getByRole('grid');
   await expect(grid.getByRole('textbox').first()).toBeVisible({ timeout: 3_000 });
 });
