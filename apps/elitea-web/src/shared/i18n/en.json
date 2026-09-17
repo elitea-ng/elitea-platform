@@ -840,6 +840,8 @@
   "features.chatConversationList.conversationItem.menu.moveTo": "Move to",
   "features.chatConversationList.conversationItem.menu.pin": "Pin on top",
   "features.chatConversationList.conversationItem.menu.playback": "Playback",
+  "features.chatConversationList.conversationItem.menu.restrictAccess": "Restrict access",
+  "features.chatConversationList.conversationItem.menu.restrictAccessConfirm": "Project members who are not participants will no longer be able to open this conversation. Continue?",
   "features.chatConversationList.conversationItem.menu.share": "Share",
   "features.chatConversationList.conversationItem.menu.unpin": "Unpin",
   "features.chatConversationList.conversationItem.naming": "Naming",

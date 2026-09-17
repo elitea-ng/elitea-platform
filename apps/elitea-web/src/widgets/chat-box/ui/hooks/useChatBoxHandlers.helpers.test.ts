@@ -213,6 +213,23 @@ describe('extractCopyableContent', () => {
     const msg = { content: 'fallback text', messageItems: [] } as unknown as ChatMessage;
     expect(extractCopyableContent(msg)).toBe('fallback text');
   });
+
+  /**
+   * elitea_issues #5838 — "Add a dedicated Copy Markdown icon... Copy
+   * Markdown must copy the raw/original Markdown content rather than
+   * rendered text." This app has one Copy action, not two — `onCopy` in
+   * `ApplicationAnswerActions.tsx` wires straight to this function. That one
+   * action already satisfies the use case the issue describes: it hands the
+   * clipboard the message's own markdown SOURCE, untouched by the `marked`
+   * render pipeline (`shared/ui/Markdown`) that only runs for on-screen
+   * display. No second icon is added; this pins that the existing one
+   * already preserves headings/bold/lists/code fences verbatim.
+   */
+  it('preserves markdown source formatting verbatim', () => {
+    const markdown = ['# Heading', '', '**bold** and _em_', '', '- one', '- two', '', '```js', "console.log('x');", '```'].join('\n');
+    const msg = { content: markdown, messageItems: [] } as unknown as ChatMessage;
+    expect(extractCopyableContent(msg)).toBe(markdown);
+  });
 });
 
 describe('resolveConversationForSend', () => {

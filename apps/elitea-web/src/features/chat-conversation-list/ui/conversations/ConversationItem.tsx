@@ -160,6 +160,12 @@ export const ConversationItem = memo(function ConversationItem(props: Conversati
     if (conversation.isPrivate) onEdit({ ...conversation, isPrivate: false });
   }, [conversation, onEdit]);
 
+  // elitea_issues #6283 — symmetric revert; see ConversationItem.menu.tsx's
+  // `onRestrictAccess` doc comment for the scope cut (no participant picker).
+  const handleRestrictAccess = useCallback(() => {
+    if (!conversation.isPrivate) onEdit({ ...conversation, isPrivate: true });
+  }, [conversation, onEdit]);
+
   const handlePlayback = useCallback(() => {
     onPlayback(conversation);
   }, [conversation, onPlayback]);
@@ -194,19 +200,31 @@ export const ConversationItem = memo(function ConversationItem(props: Conversati
     [conversation, isActive, isEditingCanvas, currentUserId, moveToFoldersMenuItems, hasFolderCreatePermission, hasFolderUpdatePermission],
   );
 
+  // elitea_issues #6283 pushed the single `menuItemsHandlers` memo to 9
+  // dependencies (over the §3.5 `hook-deps` budget of 8) — split the same way
+  // `menuItemsContext` was already split out of this hook, purely to bring
+  // each `useMemo` call back under budget without weakening memoization.
+  const menuItemsVisibilityHandlers = useMemo(
+    () => ({
+      onMakePublic: handleMakePublic,
+      onRestrictAccess: handleRestrictAccess,
+      onShare: () => void handleShareConversation(),
+      onShareByLink: () => setIsShareDialogOpen(true),
+    }),
+    [handleMakePublic, handleRestrictAccess, handleShareConversation],
+  );
+
   const menuItemsHandlers = useMemo(
     () => ({
       onDelete: handleDelete,
       onEdit: handleEdit,
       onExport,
-      onMakePublic: handleMakePublic,
-      onShare: () => void handleShareConversation(),
-      onShareByLink: () => setIsShareDialogOpen(true),
+      ...menuItemsVisibilityHandlers,
       onPlayback: handlePlayback,
       onPin: handlePin,
       onDuplicate: handleDuplicate,
     }),
-    [handleDelete, handleEdit, onExport, handleMakePublic, handleShareConversation, handlePlayback, handlePin, handleDuplicate],
+    [handleDelete, handleEdit, onExport, menuItemsVisibilityHandlers, handlePlayback, handlePin, handleDuplicate],
   );
 
   const menuItems = useMemo<ControlsDropdownItem[]>(() => {
