@@ -122,9 +122,13 @@ The [dedicated summary-model component](source-mapping/dedicated-summary-model.m
 [UI preset controls and the composer indicator](source-mapping/context-policy-ui.md) pass 295 component tests and a fresh headed-browser check with intercepted settings writes.
 [Context progress integration](source-mapping/context-progress-events.md) now connects Rust events to Main's response metadata and UI usage/compaction notices.
 915 Main checks, eight real-PostgreSQL checks, 386 UI checks, and a fresh browser presentation check pass.
-The browser used intercepted context status; persisted settings and deployed model-loop/recovery acceptance remain open. Durable nested activity beyond replay retention also remains open.
+That presentation check used intercepted context status. The later
+[deployed acceptance](source-mapping/context-progress-live-20260917.md) verifies
+real profile saves, ordinary model-loop measurements, and fresh-browser reload
+without intercepted requests. Threshold compaction and recovery acceptance remain
+open, as does durable nested activity beyond replay retention.
 Main chat shows detailed usage; nested agents show brief compaction activity text, with separate model scopes and no combined parent/child meter.
-Nested and graph-model recovery coordination, deployed settings, and browser acceptance remain open.
+Nested and graph-model recovery coordination and actual compaction browser acceptance remain open.
 The pipeline container has no separate compaction control.
 Model conversations inherit a caller policy when available; otherwise saved children use explicit settings or Balanced defaults.
 Plain LLM nodes also compact their accumulated history, as confirmed on 2026-09-16.

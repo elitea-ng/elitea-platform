@@ -35,7 +35,8 @@ through the existing status query. Main chat shows estimated input, output
 reservation and window; nested agents receive brief scoped activity notices.
 Stream lifecycle events invalidate the query, active runs reconcile on a bounded
 interval, and stopped compaction is not displayed as completed. These components
-are tested; deployed save/reload/model-loop/recovery acceptance is still required.
+are tested. [Deployed settings and ordinary measured usage](context-progress-live-20260917.md)
+now pass; threshold compaction and recovery acceptance remain required.
 
 ## Verification and delivery
 
@@ -51,3 +52,8 @@ The temporary evidence prefix is `elitea-point4-context-`; browser results are i
 No application schema change or deployment occurs in this slice.
 Deploy compatible Rust, then Main and UI, before the real save/reload/model-loop/recovery acceptance.
 Tool-output editing remains separate point 4 work; its existing control is not evidence of a working Rust implementation.
+
+The later [2026-09-17 deployment](context-progress-live-20260917.md) replaces all
+three compatible services, verifies actual Full/Balanced saves and reloads, and
+checks a persisted worker measurement through fresh browsers without intercepted
+requests. The earlier intercepted-request proof remains historical evidence.

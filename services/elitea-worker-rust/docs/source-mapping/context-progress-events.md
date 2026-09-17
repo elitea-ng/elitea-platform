@@ -1,6 +1,8 @@
 # Model context progress events
 
-Status: Rust events, Main projection and UI components verified, 2026-09-17. Deployed model-loop acceptance remains open.
+Status: Rust events, Main projection and UI components verified, 2026-09-17.
+[Deployed settings and ordinary measurements](context-progress-live-20260917.md)
+also pass. Threshold compaction and recovery acceptance remain open.
 
 ## Source and ownership mapping
 
@@ -100,3 +102,7 @@ Required next work: compatible Rust/Main/UI deployment, actual model-loop
 compaction and reconnect/restart acceptance, and durable nested activity beyond
 replay retention. Do not aggregate model scopes or present estimates as exact
 provider tokenizer measurements. No rehearsal deployment occurs in this slice.
+
+The later [rehearsal deployment](context-progress-live-20260917.md) completes the
+compatible service replacement, real settings saves, measured ordinary request,
+and fresh-browser reload checks. It does not close the other proof requirements.
