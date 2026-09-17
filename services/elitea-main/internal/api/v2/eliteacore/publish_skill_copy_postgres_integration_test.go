@@ -53,6 +53,10 @@ type publishSkillFixture struct {
 // TestPublishCarriesSkillAttachments is the acceptance test #351 asks for:
 // publish an agent that HAS skills attached, then prove the copied rows exist on
 // the published version and carry the key the reader matches on.
+//
+// elitea_issues: #5803 — Skills attached to an agent must remain attached in
+// the published snapshot (treated like sub-agents), not stripped the way
+// external toolkits/MCPs/pipelines are.
 func TestPublishCarriesSkillAttachments(t *testing.T) {
 	pool := newPublishCopyPool(t)
 	assertPublishSkillKeyColumns(t, pool)

@@ -190,6 +190,10 @@ func TestSkillsRepoPostgres_CompareTwoVersionsReadsIndependentPersistedContent(t
 	}
 }
 
+/* elitea_issues: #6070 — a published skill version's name/description/tags/
+instructions cannot be saved through UpdateVersion; the write is refused
+with Conflict ("Unpublish first"), transactionally, before any column is
+touched. */
 func TestSkillsRepoPostgres_UpdateVersionPersistsAndRefusesPublished(t *testing.T) {
 	pool := newSkillsTestPool(t)
 	repo := NewSkillsRepo(pool)
