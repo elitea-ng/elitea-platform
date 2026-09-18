@@ -59,21 +59,21 @@ async function openTodayGroup(page: Page): Promise<void> {
   if ((await today.getAttribute('aria-expanded')) !== 'true') await today.click();
 }
 
+/** Same gesture-retry shape as `chat.sharing.spec.ts`'s own `openRowMenu` — the hover and the
+ * click are one retried unit so a lost `:hover` state (the row's mainBodyWidth/menuWrapper
+ * layout shifts on hover, and a single hover can be un-done by CI CPU contention before the
+ * click lands) re-hovers on the next attempt instead of retrying a click alone forever. */
 async function openRowMenu(page: Page, conversationId: string): Promise<void> {
   const row = page.getByTestId(`conversation-item-${conversationId}`);
-  await expect(row).toBeVisible({ timeout: 15_000 });
-  await row.hover();
+  await expect(row).toBeVisible({ timeout: 20_000 });
   const menu = page.getByRole('menu');
-  await expect
-    .poll(
-      async () => {
-        if ((await menu.count()) > 0) return true;
-        await row.getByRole('button', { name: 'More actions' }).click({ timeout: 5_000 });
-        return (await menu.count()) > 0;
-      },
-      { timeout: 10_000 },
-    )
-    .toBe(true);
+  await expect(async () => {
+    if ((await menu.count()) === 0) {
+      await row.hover();
+      await row.getByRole('button', { name: 'More actions' }).click({ timeout: 5_000 });
+    }
+    await expect(menu).toBeVisible({ timeout: 5_000 });
+  }).toPass({ timeout: 40_000 });
 }
 
 /* elitea_issues: #6562 — duplicating a conversation whose name is well past any legacy
