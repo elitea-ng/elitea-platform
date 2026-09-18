@@ -121,11 +121,14 @@ describe('PipelineListPanel', () => {
     expect(getByText('Load more').closest('button')).toBeDisabled();
   });
 
-  // #915 — same "Forked from" wiring as `pages/agents/ui/ApplicationListPanel`.
-  it('renders a "Forked from" link for a forked row and routes clicks through row.forkedFrom', () => {
+  // #915, updated by the a11y correction: the card's indicator is a MARKER,
+  // not a control — a focusable widget inside the card's `role="button"` root
+  // is axe's `nested-interactive`. The clickable copy is in the TABLE row;
+  // `EntityCardList.test.tsx` owns both halves directly.
+  it('renders a non-interactive "Forked from" marker for a forked row on the card view', () => {
     const onSelect = vi.fn();
     const onForkedFromClick = vi.fn();
-    const { getByRole } = renderWithTheme(
+    const { queryByRole, queryAllByText } = renderWithTheme(
       <PipelineListPanel
         {...BASE_PROPS}
         rows={[{ id: '2', name: 'Forked Pipeline', description: '', forkedFrom: { onClick: onForkedFromClick } }]}
@@ -134,8 +137,7 @@ describe('PipelineListPanel', () => {
         onSelect={onSelect}
       />,
     );
-    getByRole('link', { name: 'Forked from' }).click();
-    expect(onForkedFromClick).toHaveBeenCalledTimes(1);
-    expect(onSelect).not.toHaveBeenCalled();
+    expect(queryAllByText('Forked from').length).toBeGreaterThan(0);
+    expect(queryByRole('link', { name: 'Forked from' })).not.toBeInTheDocument();
   });
 });

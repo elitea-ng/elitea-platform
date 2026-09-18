@@ -249,6 +249,35 @@ describe('AgentVersionControls — set default version', () => {
 });
 
 const DELETE_ROUTE = '*/elitea_core/version/prompt_lib/:projectId/:applicationId/:versionId';
+/**
+ * #894 rewired this dialog: opening it now runs the in-use CHECK first, and
+ * the answer decides which dialog is shown — `VersionReplacementModal` when
+ * another agent references this version as a sub-agent, the typed-name
+ * confirm otherwise. Neither renders until the check has answered
+ * (`open={open && checked}`), so every test below has to say what the check
+ * answers; an unanswered check leaves NO dialog at all, which is what this
+ * file's own queries used to race against.
+ */
+const CHECK_ROUTE = '*/elitea_core/check_version_in_use/prompt_lib/:projectId/:applicationId/:versionId';
+
+/** The free branch: nothing references this version, so the typed-name confirm is the dialog. */
+function serveNotInUse(): void {
+  server.use(http.get(CHECK_ROUTE, () => HttpResponse.json({ items: [], in_use: false, referencing_parents: [], replacement_versions: [] })));
+}
+
+/** The in-use branch: one referencing parent, one version it could be repointed to. */
+function serveInUse(): void {
+  server.use(
+    http.get(CHECK_ROUTE, () =>
+      HttpResponse.json({
+        items: [],
+        in_use: true,
+        referencing_parents: [{ application_id: 77, version_id: 5, application_name: 'Parent Agent', version_name: 'prod' }],
+        replacement_versions: [{ id: 1, name: 'base', created_at: '2026-01-01T12:00:00Z' }],
+      }),
+    ),
+  );
+}
 
 /**
  * #147, the other half. The DELETE route, the Go handler and `useDeleteVersion`
@@ -278,6 +307,7 @@ describe('AgentVersionControls — delete version', () => {
   }
 
   it('offers a delete item inside the version menu, enabled for an ordinary version', async () => {
+    serveNotInUse();
     const { getByTestId } = renderDeletable();
 
     await userEvent.click(getByTestId('version-selector-trigger'));
@@ -309,18 +339,21 @@ describe('AgentVersionControls — delete version', () => {
     const user = userEvent.setup();
     const onVersionDeleted = vi.fn();
     const requests: string[] = [];
+    serveNotInUse();
     server.use(
       http.delete(DELETE_ROUTE, ({ request }) => {
         requests.push(new URL(request.url).pathname);
         return new HttpResponse(null, { status: 204 });
       }),
     );
-    const { getByTestId, getByRole, getAllByRole } = renderDeletable({
+    const { getByTestId, findByTestId, getByRole, getAllByRole } = renderDeletable({
       versionDelete: { onVersionDeleted },
     });
 
     await user.click(getByTestId('version-selector-trigger'));
     await user.click(getByTestId('agent-version-delete'));
+    // The check has to answer before either dialog mounts (#894).
+    await findByTestId('agent-version-delete-dialog');
 
     // The confirm button is disabled until the typed name matches. This is
     // the safeguard, not decoration: an empty field must reach nothing.
@@ -354,17 +387,19 @@ describe('AgentVersionControls — delete version', () => {
     const user = userEvent.setup();
     const onVersionDeleted = vi.fn();
     const onVersionDeleteError = vi.fn();
+    serveNotInUse();
     server.use(
       http.delete(DELETE_ROUTE, () =>
         HttpResponse.json({ error: 'Unpublish first. Cannot delete a published version.' }, { status: 400 }),
       ),
     );
-    const { getByTestId, getByRole } = renderDeletable({
+    const { getByTestId, findByTestId, getByRole } = renderDeletable({
       versionDelete: { onVersionDeleted, onVersionDeleteError },
     });
 
     await user.click(getByTestId('version-selector-trigger'));
     await user.click(getByTestId('agent-version-delete'));
+    await findByTestId('agent-version-delete-dialog');
     await user.type(getByRole('textbox'), 'v1');
     await user.click(getByRole('button', { name: /^delete$/i }));
 
@@ -378,6 +413,60 @@ describe('AgentVersionControls — delete version', () => {
     expect(getByTestId('agent-version-delete-dialog')).toBeInTheDocument();
     expect(onVersionDeleted).not.toHaveBeenCalled();
     expect(onVersionDeleteError).toHaveBeenCalledWith('Unpublish first. Cannot delete a published version.');
+  });
+
+  /*
+   * #894 — the in-use branch, which had no test at all: it was unwired until
+   * that issue (the check endpoint answered the opposite question), and the
+   * rewiring is exactly what made `open={open && checked}` a precondition of
+   * every assertion above.
+   */
+  it('shows the replacement picker instead of the confirm when another agent references the version', async () => {
+    const user = userEvent.setup();
+    serveInUse();
+    const { getByTestId, findByText, queryByRole } = renderDeletable();
+
+    await user.click(getByTestId('version-selector-trigger'));
+    await user.click(getByTestId('agent-version-delete'));
+
+    await findByText('Version in use');
+    // The referencing parent is named — the whole reason this modal exists
+    // rather than a bare refusal.
+    await findByText(/Parent Agent/);
+    // And the typed-name confirm is NOT the dialog being shown.
+    expect(queryByRole('textbox')).not.toBeInTheDocument();
+    expect(queryByRole('button', { name: /^delete$/i })).not.toBeInTheDocument();
+  });
+
+  it('"Replace & Delete" sends ONE delete carrying the chosen replacement id', async () => {
+    const user = userEvent.setup();
+    const onVersionDeleted = vi.fn();
+    const requests: { path: string; search: string }[] = [];
+    serveInUse();
+    server.use(
+      http.delete(DELETE_ROUTE, ({ request }) => {
+        const url = new URL(request.url);
+        requests.push({ path: url.pathname, search: url.search });
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    const { getByTestId, findByText, getByRole } = renderDeletable({ versionDelete: { onVersionDeleted } });
+
+    await user.click(getByTestId('version-selector-trigger'));
+    await user.click(getByTestId('agent-version-delete'));
+    await findByText('Version in use');
+
+    await user.click(getByRole('combobox', { name: /replace with version/i }));
+    await user.click(getByRole('option', { name: /base/i }));
+    await user.click(getByRole('button', { name: /replace & delete/i }));
+
+    await waitFor(() => expect(requests).toHaveLength(1));
+    // The version being deleted stays in the path; the replacement rides as
+    // `replacement_version_id` on the SAME call — not the old
+    // batch-replace-then-delete pair, which repointed the wrong rows.
+    expect(requests[0]?.path).toContain('/9/42/2');
+    expect(requests[0]?.search).toContain('replacement_version_id=1');
+    await waitFor(() => expect(onVersionDeleted).toHaveBeenCalledTimes(1));
   });
 
   it('offers no delete item to a read-only viewer, without a caller, or before the project id resolves', async () => {

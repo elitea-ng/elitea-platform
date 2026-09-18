@@ -121,12 +121,16 @@ describe('ApplicationListPanel', () => {
     expect(getByText('Load more').closest('button')).toBeDisabled();
   });
 
-  // #915 — a forked row shows a "Forked from" link that calls the row's OWN
-  // callback, not onSelect (which would open this row's own entity instead).
-  it('renders a "Forked from" link for a forked row and routes clicks through row.forkedFrom', () => {
+  // #915, updated by the a11y correction: on a CARD the indicator is a
+  // MARKER, not a control. The card root is `role="button"`, and a focusable
+  // widget nested inside one is axe's `nested-interactive` (impact
+  // "serious") — `agents.lifecycle.spec.ts`'s a11y check failed on exactly
+  // that. The clickable copy lives in the TABLE row, whose `<tr>` carries no
+  // widget role; `EntityCardList.test.tsx` owns both halves directly.
+  it('renders a non-interactive "Forked from" marker for a forked row on the card view', () => {
     const onSelect = vi.fn();
     const onForkedFromClick = vi.fn();
-    const { getByRole, queryAllByText } = renderWithTheme(
+    const { queryByRole, queryAllByText } = renderWithTheme(
       <ApplicationListPanel
         {...BASE_PROPS}
         rows={[{ id: '2', name: 'Forked Agent', description: '', forkedFrom: { onClick: onForkedFromClick } }]}
@@ -136,9 +140,7 @@ describe('ApplicationListPanel', () => {
       />,
     );
     expect(queryAllByText('Forked from').length).toBeGreaterThan(0);
-    getByRole('link', { name: 'Forked from' }).click();
-    expect(onForkedFromClick).toHaveBeenCalledTimes(1);
-    expect(onSelect).not.toHaveBeenCalled();
+    expect(queryByRole('link', { name: 'Forked from' })).not.toBeInTheDocument();
   });
 
   it('renders no "Forked from" link for a row with no forkedFrom', () => {
