@@ -208,14 +208,16 @@ test('the sidebar entry and the launcher share one session, on a close and reope
  * onetest: ELITEA-0623 — the Support Assistant's session should be shared
  * across every application page, not scoped to the page it was opened on.
  *
- * PRODUCT GAP. The draft above survives a close/reopen on the SAME page
- * (proved above), but does NOT survive a client-side navigation to a
- * DIFFERENT page: measured live, closing the widget, navigating to
- * `/app/pipelines`, and reopening from the launcher shows an EMPTY composer,
- * not the draft just typed — the widget's `useChat` state does not outlive
- * the page it was mounted under, contrary to the "global session" the
- * legacy case (and `SupportAssistantWidget.tsx`'s own module doc, "the
- * assistant widget wraps the sidebar") both describe.
+ * #935 FIXED (draft only). `AppShell` mounts PER PAGE (its own module doc),
+ * so `EliteaAssistant`/`useChat` fully unmount and remount on a client-side
+ * navigation — a real architectural gap the widget's own module doc
+ * ("the assistant widget wraps the sidebar") does not disclose. Rearchitecting
+ * the mount point to the router root is out of scope here; the composer
+ * DRAFT specifically now survives the remount via a module-scope store
+ * (`widgets/support-assistant/lib/draftPersistence.ts`, read by `useChat`'s
+ * `inputText`), which is what this case actually asserts. The rest of the
+ * session (transcript, active conversation id) still resets on navigation —
+ * not this issue's claim, and not touched.
  */
 test('the session is shared across a page navigation, not scoped to one page', async ({ page }) => {
   // See the timeout note on the file's first test above — same global lock.
@@ -250,11 +252,6 @@ test('the session is shared across a page navigation, not scoped to one page', a
     const reopened = page.locator('.elitea-assistant-window');
     await expect(reopened).toBeVisible({ timeout: 15_000 });
 
-    test.fail(
-      true,
-      'ELITEA-0623 (#935): product gap — the widget draft/session does not survive a client-side ' +
-        'navigation to a different page; it resets as if freshly mounted',
-    );
     await expect(
       reopened.locator('#elitea-assistant-message-input'),
       'the draft must survive a page navigation',

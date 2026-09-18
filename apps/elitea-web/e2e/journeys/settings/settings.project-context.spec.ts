@@ -460,20 +460,18 @@ test.describe('project-context: settings/config coverage', () => {
 
   /* ── PJC03b ───────────────────────────────────────────────────────────
    * onetest: ELITEA-0940 — a non-.md file must be rejected (filtered from
-   * the picker, or an explicit error). PRODUCT GAP: `handleFileUpload`
-   * (`src/pages/settings/ProjectContext.tsx`) reads whatever `File` object
-   * the input carries and checks only its LENGTH — never `file.name` or
-   * `file.type` — so a `.txt` file with the same valid content is silently
-   * ACCEPTED. The native file-picker's `accept=".md,text/markdown"` hint is
-   * the only filter, and Playwright's `setInputFiles` (like a changed OS
-   * filter) bypasses it, which is exactly the gap: nothing enforces the
-   * restriction once a non-`.md` file reaches the input. Independent of the
-   * persistence defect above — this is a client-side validation gap.
+   * the picker, or an explicit error). FIXED in #889: `handleFileUpload`
+   * (`src/pages/settings/ProjectContext.tsx`) now checks the file's NAME and
+   * MIME type before reading it, because the `accept=".md,text/markdown"`
+   * attribute is a hint to the native dialog and nothing more — a changed OS
+   * filter, a drag-and-drop, or `setInputFiles` (what this test does, and the
+   * reason it can measure the gap at all) puts any file on that input. A
+   * refused import keeps the editor's existing content and says why.
    * ──────────────────────────────────────────────────────────────────── */
-  test('PJC03b: a .txt file with the same content is rejected — product gap', async ({ page }) => {
-    test.fail(true, 'ELITEA-0940 (#889): product gap — handleFileUpload never checks file name/type, only length');
+  test('PJC03b: a .txt file with the same content is rejected', async ({ page }) => {
     await openEditor(page, project());
-    await typeContent(page, `${AUTOTEST_PREFIX}baseline-before-wrong-type`);
+    const baseline = `${AUTOTEST_PREFIX}baseline-before-wrong-type`;
+    await typeContent(page, baseline);
 
     await page.getByRole('button', { name: 'Import markdown file' }).click();
     await page.locator('input[type="file"]').setInputFiles({
@@ -481,23 +479,19 @@ test.describe('project-context: settings/config coverage', () => {
       mimeType: 'text/plain',
       buffer: Buffer.from('# My Project\n\nSame content, wrong extension.', 'utf-8'),
     });
-    // `FileReader.readAsText` is asynchronous, and `handleFileUpload` clears
-    // `e.target.value` synchronously right after calling it — so checking
-    // "not contain" too early passes VACUOUSLY (the read simply hasn't
-    // resolved yet), which is exactly the false-negative this rulebook warns
-    // against. A FIXED sleep here (previously 1.5s) is itself a race against
-    // `FileReader`'s real completion time: under worker contention — webkit
-    // especially, being the slower engine — the read can take longer than any
-    // fixed budget, so the "not contain" check would then pass vacuously and
-    // `test.fail()` would report "expected to fail, but passed" (observed
-    // locally, ~30% of runs under load). Waiting POSITIVELY for the leaked
-    // text to actually land — which the product gap guarantees it eventually
-    // will — proves the read settled no matter how long it takes, and turns
-    // the final assertion into a genuine, deterministic failure instead of a
-    // coin flip.
-    await expect(editorContent(page)).toContainText('Same content, wrong extension', { timeout: 10_000 });
-    // SHOULD hold: the .txt content must not reach the editor. It does.
+
+    // The POSITIVE evidence that the read path settled: the refusal toast.
+    // `handleFileUpload` clears `e.target.value` synchronously, so a bare
+    // "does not contain" check straight after `setInputFiles` would pass
+    // vacuously whether the file was refused or merely still being read —
+    // exactly the false negative this file's PJC04 already guards against for
+    // the over-long case.
+    await expect(page.getByRole('alert').filter({ hasText: /Markdown/i })).toBeVisible({ timeout: 10_000 });
     await expect(editorContent(page)).not.toContainText('Same content, wrong extension');
+    // And the buffer the user already had is untouched — a refused import
+    // that had cleared the editor first would be the same data loss with a
+    // toast on top.
+    await expect(editorContent(page)).toContainText(baseline);
   });
 
   /* ── PJC04 ────────────────────────────────────────────────────────────

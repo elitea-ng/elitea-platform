@@ -102,19 +102,10 @@ test.describe('publish validation: project-specific model (ELITEA-0158)', () => 
     }
   });
 
-  /* onetest: ELITEA-0158 — Variant B: PRODUCT GAP — a SUB-agent's project-specific model raises no
-   * finding at all. `validateSubAgents` (handler.go) only ever inspects a sub-agent's instructions/
-   * description length and name uniqueness; it never reads the sub-agent's own `llm_settings`, so a
-   * sub-agent on a private model is silently allowed through, contrary to what this case (and its own
-   * Variant A, immediately above) would lead an operator to expect. */
-  test('a sub-agent on a project-specific model is NOT caught by publish validation', async ({ request }) => {
-    test.fail(
-      true,
-      'ELITEA-0158 (#898) Variant B: product gap — runPublishValidation never inspects a sub-agent\'s own ' +
-        'llm_settings (validateSubAgents only checks instructions/description length and name ' +
-        'uniqueness), so a sub-agent on a project-specific model raises no llm_settings finding at all',
-    );
-
+  /* onetest: ELITEA-0158 — Variant B: `validateSubAgents` (handler.go) now also reads a sub-agent's own
+   * `llm_settings`, so a sub-agent on a project-specific (private) model is blocked with the same
+   * `llm_settings` critical the MAIN agent already gets for the identical condition (Variant A, above). */
+  test('a sub-agent on a project-specific model is caught by publish validation', async ({ request }) => {
     const catalogueProjectId = await resolveCatalogueProjectId(request);
     const models = await readProjectModels(request, catalogueProjectId);
     expect(models.length, 'the catalogue project serves no model').toBeGreaterThan(0);
@@ -137,12 +128,11 @@ test.describe('publish validation: project-specific model (ELITEA-0158)', () => 
       expect(attached.ok(), await attached.text()).toBe(true);
 
       const { status, body } = await validate(request, parent.versionId, uniqueName('ver'));
-      expect(status, JSON.stringify(body)).toBe(200);
+      expect(status, JSON.stringify(body)).toBe(422);
+      expect(body.status).toBe('FAIL');
       const llmFindings = [...(body.critical_issues ?? []), ...(body.warnings ?? [])].filter(
         (finding) => finding.field === 'llm_settings',
       );
-      // This is the assertion this case says SHOULD hold (a finding naming the sub-agent's private
-      // model) — it does not, which is exactly the gap `test.fail` above documents.
       expect(llmFindings.length).toBeGreaterThan(0);
     } finally {
       await deleteAgent(request, child.id);

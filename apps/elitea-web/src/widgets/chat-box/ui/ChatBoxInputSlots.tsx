@@ -14,6 +14,10 @@
  * exactly.
  */
 import type { ComponentProps, ReactNode, RefObject } from 'react';
+import { useCallback, useState } from 'react';
+
+import Alert from '@mui/material/Alert';
+import Snackbar from '@mui/material/Snackbar';
 
 import { AttachmentButton, ChatInternalToolsConfigButton, ClearChatButton, PlusChatButton, SendButton, VoiceButton } from '@/widgets/chat';
 import type { AttachmentButtonHandle, PlusChatButtonEntitySubmenus, VoiceButtonHandle, VoiceButtonInputHandle } from '@/widgets/chat';
@@ -88,6 +92,16 @@ interface ChatBoxInputSlotsClearChat {
   readonly onClear: () => void;
 }
 
+/**
+ * `VoiceButton`'s two feedback callbacks (#932/#934) — see
+ * `ChatBoxVoiceFeedback.tsx` for what the chat surface does with them. They
+ * used to be `onRecordingChange={() => {}}` and no `onError` at all.
+ */
+interface ChatBoxInputSlotsVoiceInput {
+  readonly onRecordingChange: (isRecording: boolean) => void;
+  readonly onError: (message: string) => void;
+}
+
 interface ChatBoxInputSlotsRefs {
   readonly attachmentButtonRef: RefObject<AttachmentButtonHandle | null>;
   readonly voiceButtonRef: RefObject<VoiceButtonHandle | null>;
@@ -108,6 +122,7 @@ export interface ChatBoxInputSlotsProps {
    * contract this wiring fulfils — it had no render site until this pass.
    */
   readonly voice: VoiceControlProps;
+  readonly voiceInput: ChatBoxInputSlotsVoiceInput;
   /**
    * The baseline's `fromTheChat` — true on the chat surface, false when the
    * ChatBox is embedded in the agents page. It selects WHICH left-hand
@@ -172,6 +187,8 @@ export function buildChatBoxAttachmentProps(attachments: {
 function buildSendButtonProps(props: SendControlSlotProps) {
   return {
     isSpeakingMode: props.isSpeakingMode,
+    // #932: the mic/wave control's own gate, distinct from `disabledSend`.
+    isRecording: props.isRecording,
     question: props.question,
     disabledSend: props.disabledSend,
     onSend: props.onSend,
@@ -195,6 +212,7 @@ export function buildChatBoxInputSlots({
   onCreatePipeline,
   onCreateToolkit,
   voice,
+  voiceInput,
 }: ChatBoxInputSlotsProps): ChatBoxInputSlotsResult {
   const attachmentButtonProps = {
     disableAttachments: attachments.disabled,
@@ -284,10 +302,81 @@ export function buildChatBoxInputSlots({
     // two independent voice controls sharing one footer slot (A9).
     voiceButton: (
       <>
-        <VoiceButton ref={refs.voiceButtonRef} inputRef={refs.voiceInputRef} disabled={false} onRecordingChange={() => {}} />
+        <VoiceButton ref={refs.voiceButtonRef} inputRef={refs.voiceInputRef} disabled={false} onRecordingChange={voiceInput.onRecordingChange} onError={voiceInput.onError} />
         <VoiceControlButton {...voice} />
       </>
     ),
     modelSelector: <LLMModelSelector {...modelSelectorProps} />,
   };
+}
+
+/**
+ * The composer's voice-control feedback seam (issues #932, #934).
+ *
+ * `VoiceButton` has always exposed two callbacks the chat surface never
+ * connected:
+ *
+ *  - `onRecordingChange` — wired to `() => {}` in `ChatBoxInputSlots.tsx`, so
+ *    `NewChatInput`'s `finalIsRecording = voice.isRecording ||
+ *    isSpeakingModeRecording` was driven by speaking mode alone. Starting
+ *    dictation never reached the send control, which is why the Speaking Mode
+ *    wave icon stayed live while the mic was recording and a user could
+ *    enter both modes at once (#932, ELITEA-1295).
+ *  - `onError` — passed nothing at all. `VoiceButton`'s own module doc
+ *    disclosed the gap ("no toast/snackbar primitive exists yet in
+ *    `shared/ui`... the caller decides how to surface the message until one
+ *    lands") and no caller ever decided, so a denied microphone permission
+ *    failed in complete silence (#934, ELITEA-1324).
+ *
+ * The Snackbar+Alert pair is the same shape `widgets/deepwiki`'s
+ * `WikiFileAttach.tsx` already uses for its own inline errors — MUI's `Alert`
+ * carries `role="alert"`, so the message is announced, not merely drawn.
+ */
+const VOICE_ERROR_AUTO_HIDE_MS = 6000;
+
+export interface ChatBoxVoiceFeedback {
+  /** True while `VoiceButton`'s dictation (NOT speaking mode) is capturing. */
+  readonly isRecording: boolean;
+  readonly onRecordingChange: (isRecording: boolean) => void;
+  readonly onError: (message: string) => void;
+  /** Rendered by `ChatBox` alongside its other overlays. */
+  readonly alert: ReactNode;
+}
+
+export function useChatBoxVoiceFeedback(): ChatBoxVoiceFeedback {
+  const [isRecording, setIsRecording] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const onRecordingChange = useCallback((recording: boolean) => {
+    setIsRecording(recording);
+    // A new session clears the previous session's complaint; leaving it up
+    // would outlive the state it described.
+    if (recording) setError(null);
+  }, []);
+
+  const onError = useCallback((message: string) => {
+    setError(message);
+  }, []);
+
+  const onClose = useCallback(() => {
+    setError(null);
+  }, []);
+
+  const alert = (
+    <Snackbar
+      open={error !== null}
+      autoHideDuration={VOICE_ERROR_AUTO_HIDE_MS}
+      onClose={onClose}
+    >
+      <Alert
+        severity="error"
+        onClose={onClose}
+        data-testid="chat-voice-error"
+      >
+        {error}
+      </Alert>
+    </Snackbar>
+  );
+
+  return { isRecording, onRecordingChange, onError, alert };
 }

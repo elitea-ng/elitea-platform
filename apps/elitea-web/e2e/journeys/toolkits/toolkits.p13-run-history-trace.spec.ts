@@ -121,20 +121,14 @@ test.describe('generic Run History trace: request params + thinking steps (ELITE
     await page.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => undefined);
   });
 
-  /* onetest: ELITEA-2802, ELITEA-2803, ELITEA-2805 — PRODUCT GAP, see file header: RunHistoryTrace's
-   * StepDetail never renders `tool_inputs` (the "Calling 'index_data' with parameters" JSON dump
-   * ELITEA-2802 wants) or `thinking` (the "Thought for X secs" section both 2802 and 2803 want, and
-   * the reasoning-content expand-modal 2803 wants), and the step list labels a step with the bare tool
-   * name only — never the "[Toolkit Name]: [tool_action]" format 2803 also wants. */
-  test('a tool_call trace step never shows its request parameters or thinking content', async ({ page }) => {
-    test.fail(
-      true,
-      'ELITEA-2802 (#938)/2803/2805: product gap — RunHistoryTrace.tsx\'s StepDetail reads only `text` and ' +
-        '`tool_output` off MessageTraceStepDetail; `tool_inputs` and `thinking` are fetched by the same ' +
-        'useGetMessageTrace call and then silently dropped, so a real index_data run\'s parameters and ' +
-        'reasoning are never shown, whatever the server actually sends',
-    );
-
+  /* onetest: ELITEA-2802, ELITEA-2803, ELITEA-2805 — `RunHistoryTrace`'s `StepDetail` now also renders
+   * `tool_inputs` (JSON-formatted) and `thinking`, fetched by the same `useGetMessageTrace` call `text`/
+   * `tool_output` already used. FIXED: the parameters and reasoning content. STILL A GAP, not attempted
+   * here (a separate, cosmetic concern from the data being shown at all): the step list still labels a
+   * step with the bare tool name, not the "[Toolkit Name]: [tool_action]" format 2803 also asks for, and
+   * `tool_output` is still shown verbatim rather than specially formatted per tool (2805's "not raw
+   * JSON" claim) — this test does not require either. */
+  test('a tool_call trace step shows its request parameters and thinking content', async ({ page }) => {
     const toolkitId = await createArtifactToolkit(page.request, uniqueName('runhist-trace-toolkit'));
     const conversationId = await createConversation(page.request, uniqueName('runhist-trace-convo'));
     await attachToolkitParticipant(page.request, conversationId, toolkitId);
@@ -156,8 +150,9 @@ test.describe('generic Run History trace: request params + thinking steps (ELITE
       await expect(trace).toBeVisible({ timeout: 15_000 });
       const step = page.getByTestId('run-history-trace-step');
       await expect(step).toHaveCount(1);
-      // The label the case wants ("Toolkit: action") is not what this renders.
-      await expect(step).toHaveText('index_data');
+      // The label the case wants ("Toolkit: action") is not what this renders
+      // (the row's text also carries the step's timestamp, from `secondary`).
+      await expect(step).toContainText('index_data');
       await step.click();
 
       const detail = page.getByTestId('run-history-trace-detail');

@@ -12,19 +12,15 @@ import { expect, test, type Page } from '@playwright/test';
 
 import { BASE_URL } from '../../../playwright.config';
 import { AUTOTEST_PREFIX, clickCreateButton } from '../../fixtures/api';
-import { createConfiguration, deleteConfiguration } from '../../fixtures/configurations';
+import { createConfiguration } from '../../fixtures/configurations';
 import { readsPlatformFlags } from '../../fixtures/platformFlags';
+import { ensureProjectSelected } from '../../fixtures/project';
+import { createScratchProject, deleteScratchProject, type ScratchProject } from '../../fixtures/scratchProject';
 
 readsPlatformFlags(test);
 
 const RUN_ID = String(Date.now()).slice(-6);
 const tag = (label: string): string => `${AUTOTEST_PREFIX}${label}_${RUN_ID}`;
-
-const createdCredentialIds: string[] = [];
-
-test.afterAll(async ({ request }) => {
-  for (const id of createdCredentialIds) await deleteConfiguration(request, id);
-});
 
 /** Opens the New Aha! Toolkit creation page (matches `toolkits.aha.spec.ts`'s own helper). */
 async function gotoCreateAhaToolkit(page: Page): Promise<void> {
@@ -37,32 +33,45 @@ async function gotoCreateAhaToolkit(page: Page): Promise<void> {
   await expect(page.getByRole('textbox', { name: 'Toolkit Name' })).toBeVisible({ timeout: 15_000 });
 }
 
-test('ELITEA-2494: PRODUCT GAP — the New Aha! Toolkit page does not pre-select an existing credential', async ({ page, request }) => {
-  /* onetest: ELITEA-2494 — product gap: when at least one Aha! credential already exists, opening "+ Toolkit" → Aha! should land on the create page with that credential pre-selected in the Aha Configuration dropdown ("field shows empty/placeholder state" only when NONE exists). No caller anywhere in `pages/toolkits/lib/credentialPicker.tsx`, `entities/toolkit/model/toolForm.ts` or `features/credentials` ever derives a default value for this field (grepped for `preselect`/`default*[Cc]redential`/`autoSelect` — none), so the dropdown starts empty regardless. */
-  test.fail(
-    true,
-    'ELITEA-2494 (#953): product gap — the Aha Configuration picker on the create-toolkit form never pre-selects an ' +
-      'existing saved credential; no default-selection logic exists anywhere in the credential-picker/toolForm code, ' +
-      'so the field always starts empty even when exactly one credential is already saved',
-  );
+test('ELITEA-2494: the New Aha! Toolkit page pre-selects an existing credential (#953, fixed)', async ({ page, request }) => {
+  /* onetest: ELITEA-2494 — when at least one Aha! credential already exists, opening "+ Toolkit" → Aha! lands on the create page with that credential pre-selected in the Aha Configuration dropdown: `ToolkitCredentialPicker` now sets `CredentialsSelect`'s own (previously unwired) `autoSelectFirstShared` for the `credentials` section. */
+  // A SCRATCH project, not `DEFAULT_PROJECT_ID`: `autoSelectFirstShared`
+  // selects `configurations[0]` (the FIRST saved row, matching the legacy
+  // behaviour it ports), and project 1 is a long-lived project this whole
+  // suite shares — other `aha` credentials from earlier tests (this file's
+  // own prior `--repeat-each` runs included, since a shared project's rows
+  // outlive any one test) would make "exactly one credential exists" false
+  // and could win the pre-select instead of the one this test makes. A fresh
+  // scratch project starts with none.
+  let scratch: ScratchProject | undefined;
+  try {
+    scratch = await createScratchProject(`aha2494_${test.info().project.name}_${RUN_ID}`);
+    const credentialTitle = tag('preselect');
+    await createConfiguration(
+      request,
+      'credentials',
+      {
+        title: credentialTitle,
+        type: 'aha',
+        shared: false,
+        data: { base_url: 'https://autotest-preselect.invalid.example', api_key: 'autotest-placeholder-key' },
+      },
+      scratch.id,
+    );
 
-  const credentialTitle = tag('preselect');
-  const { id } = await createConfiguration(request, 'credentials', {
-    title: credentialTitle,
-    type: 'aha',
-    shared: false,
-    data: { base_url: 'https://autotest-preselect.invalid.example', api_key: 'autotest-placeholder-key' },
-  });
-  createdCredentialIds.push(id);
+    await page.goto(`${BASE_URL}/app/`, { waitUntil: 'domcontentloaded' });
+    await ensureProjectSelected(page, scratch.name);
+    await gotoCreateAhaToolkit(page);
 
-  await gotoCreateAhaToolkit(page);
-
-  const picker = page.getByRole('combobox', { name: /Aha Configuration/i });
-  await expect(picker, 'the Aha Configuration field must be present').toBeVisible({ timeout: 15_000 });
-  await expect(
-    picker,
-    'with an existing credential saved, the create form should pre-select it rather than start empty',
-  ).toContainText(credentialTitle);
+    const picker = page.getByRole('combobox', { name: /Aha Configuration/i });
+    await expect(picker, 'the Aha Configuration field must be present').toBeVisible({ timeout: 15_000 });
+    await expect(
+      picker,
+      'with an existing credential saved, the create form should pre-select it rather than start empty',
+    ).toContainText(credentialTitle);
+  } finally {
+    await deleteScratchProject(scratch);
+  }
 });
 
 test('ELITEA-2499: the Display Name field is required and blocks Save on the Aha! credential form', async ({ page }) => {

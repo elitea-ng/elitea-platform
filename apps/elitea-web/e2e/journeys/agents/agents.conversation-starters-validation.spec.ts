@@ -7,30 +7,28 @@
  * ── What the code actually does (read before writing a single assertion) ──
  *
  * `services/elitea-main/internal/api/generated/api.gen.go`'s own doc comment
- * on the `ConversationStarters` field says it plainly: "NOTE(W2): opaque
- * jsonb array round-trip … the store/return round-trip itself is untyped."
- * The domain type is `[]any` (`internal/domain/applications/types.go:82`),
- * and neither the create nor the update handler
- * (`internal/api/v2/applications/handler.go`) rejects a non-string element —
- * it is written to the `jsonb` column and read back exactly as it arrived.
- * ELITEA-0090/0093 expect a 400 here; the server answers 201/200 instead.
- * That is a real gap, not a test-authoring one — verified by reading the
- * handler and the generated model together, not assumed from the hint
- * sheet's "NA-SUSPECT | api-unit-test" (which was about to skip it as
- * out-of-scope; the validation IS missing, which is the more useful finding
- * to record).
+ * on the `ConversationStarters` field still says "NOTE(W2): opaque jsonb
+ * array round-trip … the store/return round-trip itself is untyped" — the
+ * domain type is `[]any` (`internal/domain/applications/types.go:82`) and
+ * the STORAGE stays loosely typed. #896 closed the actual gap at the
+ * create/update handlers instead: `validateConversationStarters`
+ * (`internal/api/v2/applications/handler.go`) now rejects any
+ * `conversation_starters` array carrying a non-string element with 400,
+ * on both the create route and the version PUT, before anything is
+ * written — so ELITEA-0090/0093 get the 400 they expect and a malformed
+ * update can no longer overwrite previously-valid starters.
  *
  * The FRONTEND side is not broken by this: `ConversationStartersEditor.tsx`
  * coerces every entry through `toString()`
  * (`features/agents/lib/helpers/conversationStarters.helpers.ts`), so a
  * stored `null`/`42`/`true`/`{}` renders as `''`/`'42'`/`'true'`/
  * `'[object Object]'` rather than throwing — ELITEA-0092's UI half is
- * already true, and this file proves it against a REAL agent seeded with
- * exactly the values the case names.
+ * already true. #896 fixing the write path means this file can no longer
+ * seed a REAL agent with malformed data to prove it end-to-end (see the
+ * ELITEA-0092 note below); the coercion itself stays unit-tested.
  */
 import { test, expect } from '@playwright/test';
 
-import { BASE_URL } from '../../../playwright.config';
 import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, createAgent, deleteAgent } from '../../fixtures/api';
 
 function uniqueName(stem: string): string {
@@ -38,61 +36,27 @@ function uniqueName(stem: string): string {
 }
 
 /*
- * ELITEA-0092 — an agent seeded (directly at the store, bypassing any client
- * validation) with the exact repro payload from the case must open without a
- * full-page crash or a `s.trim is not a function` console error, and the
- * valid string among the four entries must still be visible.
+ * ELITEA-0092 — COVERED-EXISTING, not runnable as an E2E case any more.
+ *
+ * This test used to seed a malformed `conversation_starters` array through
+ * `PUT /version/...` (the same route the UI uses) to produce "pre-existing
+ * non-string data", since the runner has no direct DB access. #896 closed
+ * exactly that write path with a 400 (see the module doc above and
+ * ELITEA-0093 below) — so as of this fix there is no longer ANY route on
+ * this stack that can persist a non-string entry, and a fresh e2e stack
+ * never carries pre-#896 legacy rows. The seed line this test depended on
+ * (`putResponse.ok()`) now correctly fails, because the gap it exploited is
+ * fixed.
+ *
+ * The behaviour ELITEA-0092 actually cares about — the agent editor
+ * tolerating a non-string entry instead of crashing — is unit-tested
+ * directly and does not need a live agent to prove it:
+ *   `src/features/agents/lib/helpers/conversationStarters.helpers.test.ts`
+ *   (`toString` coerces null/42/objects the same way this case named)
+ *   `src/features/agents/ui/ConversationStartersEditor.test.tsx`
+ * Both cover the coercion this case describes; nothing here is untested,
+ * only unreachable end-to-end post-fix.
  */
-/* onetest: ELITEA-0092 — an agent with pre-existing non-string conversation_starters opens without crashing */
-test('J14c-cs: an agent with pre-existing non-string conversation_starters opens without crashing', async ({
-  page,
-  request,
-}) => {
-  const name = uniqueName('malformed');
-  const agent = await createAgent(request, name);
-  try {
-    // The malformed values are written through the SAME version-write route
-    // the UI itself uses — this is what "pre-existing before the fix, or
-    // pre-seeded directly into the database" means operationally against a
-    // stack with no direct DB access from the test runner.
-    const putResponse = await request.put(
-      `${API_BASE}/elitea_core/version/prompt_lib/${DEFAULT_PROJECT_ID}/${agent.id}/${agent.versionId}`,
-      { data: { conversation_starters: [null, 42, {}, 'valid starter e2e'] } },
-    );
-    expect(putResponse.ok(), `seeding malformed conversation_starters must itself succeed (proves the gap)`).toBe(
-      true,
-    );
-
-    const consoleErrors: string[] = [];
-    page.on('pageerror', (error) => consoleErrors.push(String(error)));
-    page.on('console', (message) => {
-      if (message.type() === 'error') consoleErrors.push(message.text());
-    });
-
-    await page.goto(`${BASE_URL}/app/agents/all/${agent.id}`);
-    const panel = page.getByTestId('edit-application-configuration-tab-panel');
-    await expect(panel, 'the page must not go blank/white-screen on malformed data').toBeVisible({
-      timeout: 20_000,
-    });
-
-    // Other sections stay interactive — the crash this case guards against
-    // is a full-page one, so the name field is the cheapest proof the rest
-    // of the form is still alive.
-    await expect(panel.getByTestId('agent-name-input')).toHaveValue(name, { timeout: 20_000 });
-
-    // The valid string among the four malformed entries must still render.
-    await expect(panel.getByTestId('agent-conversation-starter-input').last()).toHaveValue('valid starter e2e', {
-      timeout: 10_000,
-    });
-
-    expect(
-      consoleErrors.filter((text) => /\.trim is not a function|TypeError/i.test(text)),
-      `no TypeError/trim crash may reach the console: ${consoleErrors.join(' | ')}`,
-    ).toEqual([]);
-  } finally {
-    await deleteAgent(request, agent.id);
-  }
-});
 
 /*
  * ELITEA-0094 (regression) — valid, string-only conversation_starters
@@ -132,10 +96,9 @@ test('J14c-cs: the create API accepts and returns string-only conversation_start
  * comment.
  */
 /* onetest: ELITEA-0090 — the create API rejects non-string conversation_starters entries */
-test('J14c-cs: [PRODUCT GAP] the create API rejects non-string conversation_starters entries', async ({
+test('J14c-cs: the create API rejects non-string conversation_starters entries', async ({
   request,
 }) => {
-  test.fail(true, 'ELITEA-0090 (#896): product gap — conversation_starters is an untyped jsonb passthrough; no create-time type validation exists');
   const name = uniqueName('reject-create');
   const createdIds: string[] = [];
   try {
@@ -168,10 +131,9 @@ test('J14c-cs: [PRODUCT GAP] the create API rejects non-string conversation_star
  * value untouched. It is accepted and overwrites it instead.
  */
 /* onetest: ELITEA-0093 — the version-update API rejects non-string conversation_starters entries */
-test('J14c-cs: [PRODUCT GAP] the version-update API rejects non-string conversation_starters entries', async ({
+test('J14c-cs: the version-update API rejects non-string conversation_starters entries', async ({
   request,
 }) => {
-  test.fail(true, 'ELITEA-0093 (#896): product gap — the version PUT applies the same untyped jsonb passthrough as create, so a malformed update silently overwrites valid data');
   const name = uniqueName('reject-update');
   const validStarters = ['How can you help me?', 'Summarize this document', 'What are your capabilities?'];
   const agent = await createAgent(request, name);

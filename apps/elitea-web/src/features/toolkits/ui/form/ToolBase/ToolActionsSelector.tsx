@@ -210,6 +210,22 @@ export function ToolActionsSelector(props: ToolActionsSelectorProps): ReactNode 
 
   const isMcpLike = isRemoteMcp || isPreconfiguredMcp;
 
+  // #924/ELITEA-2816,2817: the header must read "Tools <enabled>/<total>" and
+  // update live as tools are toggled. "enabled" counts only VALID selections
+  // (present in `availableTools`) — a dangling reference the toolkit no
+  // longer offers (the `warningTools` chips above) is not something to count
+  // as "on". Both operands are derived straight from props, so the header
+  // re-renders with every `selectedTools`/`availableTools` change; no local
+  // state to fall out of sync.
+  const enabledToolsCount = useMemo(
+    () => selectedTools.filter((tool) => toolsOptionsValues.includes(tool)).length,
+    [selectedTools, toolsOptionsValues],
+  );
+  const toolsTitle = t('features.toolkits.toolBase.toolActionsSelector.titleWithCount', 'Tools {{enabled}}/{{total}}', {
+    enabled: enabledToolsCount,
+    total: toolsOptionsValues.length,
+  });
+
   const [query, setQuery] = useState('');
   const isGrouped = toolGroups !== undefined && Object.keys(toolGroups).length > 0;
   const { sections, noMatches } = useMemo(
@@ -276,7 +292,7 @@ export function ToolActionsSelector(props: ToolActionsSelectorProps): ReactNode 
   if (!shouldUseAccordionView) {
     return (
       <Box sx={containerSx(false)}>
-        <Typography variant="bodyMedium">{t('features.toolkits.toolBase.toolActionsSelector.title', 'Tools')}</Typography>
+        <Typography variant="bodyMedium">{toolsTitle}</Typography>
         {items}
         {trailingProperties}
         {mcpAuthModal}
@@ -289,7 +305,7 @@ export function ToolActionsSelector(props: ToolActionsSelectorProps): ReactNode 
       <BasicAccordion
         items={[
           {
-            title: t('features.toolkits.toolBase.toolActionsSelector.title', 'Tools'),
+            title: toolsTitle,
             summaryAction: isMcpLike ? (
               <LoadToolsAction
                 canLoadTools={canLoadTools}

@@ -46,6 +46,10 @@ import { VoicewaveIcon } from '@/shared/ui/icons/voicewave-icon';
  *   - `isSpeakingMode`      — show the speaking-mode strip
  *   - `question`            — current input text (controls disabled state)
  *   - `disabledSend`        — disable the send action / mic control
+ *   - `isRecording`         — a voice recording is capturing: disables the mic
+ *                             control (entering speaking mode mid-dictation
+ *                             would put the composer in two voice modes at
+ *                             once, #932) without disabling Send
  *   - `onEnterSpeakingMode` — toggle into speaking mode (mic click when idle)
  *   - `onExitSpeakingMode`  — toggle out of speaking mode (stop button)
  *   - `onSend`              — fire the send action
@@ -55,6 +59,7 @@ export interface SendButtonProps {
   isSpeakingMode?: boolean;
   question?: string;
   disabledSend?: boolean;
+  isRecording?: boolean;
   onEnterSpeakingMode?: () => void;
   onExitSpeakingMode?: () => void;
   onSend?: () => void;
@@ -164,6 +169,7 @@ export const SendButton = memo(
     isSpeakingMode = false,
     question = '',
     disabledSend = false,
+    isRecording = false,
     onEnterSpeakingMode,
     onExitSpeakingMode,
     onSend,
@@ -172,7 +178,7 @@ export const SendButton = memo(
     const voiceFlags = useVoiceFeatureFlags();
     const isEmpty = !question;
     const isDisabled = disabledSend || isEmpty;
-    const micDisabled = disabledSend || voiceFlags.temporarilyDisabled;
+    const micDisabled = disabledSend || isRecording || voiceFlags.temporarilyDisabled;
 
     const handleSend = useCallback(() => {
       onSend?.();

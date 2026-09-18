@@ -1,25 +1,17 @@
 /**
  * The agent editor page's HEADER — a name shown next to a back arrow, fixed
  * in place while the configuration below it scrolls (onetest wave-1 agents
- * package: ELITEA-0106, ELITEA-0109) — [PRODUCT GAP].
+ * package: ELITEA-0106, ELITEA-0109).
  *
  * The hint sheet marked both "COVERED | agents.editor.spec.ts". That file
  * asserts the Name FIELD's value (`agent-name-input`, inside the form), not
- * a page HEADER distinct from it. Read directly:
- *  - `grep -rn "ArrowBack" src/widgets src/pages/agents` — no match anywhere
- *    near this page; there is no back-arrow affordance at all.
- *  - `grep -rln "sticky" src/pages/agents src/widgets` — the only hits are
- *    `widgets/sidebar` and an unrelated draft-state helper; nothing in the
- *    agent editor's own tree positions anything `sticky`.
- *  - `pages/agents/EditApplication.tsx` composes `EditApplicationEditorTabs`
- *    (Configuration/Evaluation/History) directly above
- *    `EditApplicationConfigurationPanel`, inside a plain scrolling `Box`
- *    (`contentSx: { overflowY: 'auto' }`) — no header row sits above the
- *    tab strip at all.
- *
- * Written as the use case SHOULD behave — a header naming the agent, pinned
- * while the configuration scrolls — and marked failing for exactly the
- * absence measured above.
+ * a page HEADER distinct from it — this file covers the header itself:
+ * `EditApplicationHeader` (`pages/agents/ui/EditApplicationHeader.tsx`, #897)
+ * mounts a back-arrow `IconButton` beside the agent's name
+ * (`data-testid="edit-application-header"`), and the enclosing bar
+ * (`EditApplication.styles.ts`'s `tabBarSx`) is `position: sticky` so it
+ * keeps its vertical position while the configuration panel scrolls beneath
+ * it.
  */
 import { test, expect } from '@playwright/test';
 
@@ -31,19 +23,14 @@ function uniqueName(stem: string): string {
 }
 
 /*
- * ELITEA-0106 — [PRODUCT GAP]. The agent's name should be shown in a page
- * header, next to a back arrow, distinct from the editable Name field
- * further down the form.
+ * ELITEA-0106 — the agent's name is shown in a page header, next to a back
+ * arrow, distinct from the editable Name field further down the form.
  */
 /* onetest: ELITEA-0106 — the agent name is shown in a page header next to a back arrow */
-test('J-header: [PRODUCT GAP] the agent name is shown in a page header next to a back arrow', async ({
+test('J-header: the agent name is shown in a page header next to a back arrow', async ({
   page,
   request,
 }) => {
-  test.fail(
-    true,
-    'ELITEA-0106 (#897): product gap — the agent editor page has no header row and no back-arrow control; only the editable Name FIELD inside the form shows the name',
-  );
   const name = uniqueName('agent');
   const agent = await createAgent(request, name);
   try {
@@ -64,18 +51,14 @@ test('J-header: [PRODUCT GAP] the agent name is shown in a page header next to a
 });
 
 /*
- * ELITEA-0109 — [PRODUCT GAP]. That header should stay fixed at the top
- * while the configuration content below it scrolls.
+ * ELITEA-0109 — that header stays fixed at the top while the configuration
+ * content below it scrolls.
  */
 /* onetest: ELITEA-0109 — the header stays fixed at the top while the configuration scrolls */
-test('J-header: [PRODUCT GAP] the header stays fixed at the top while the configuration scrolls', async ({
+test('J-header: the header stays fixed at the top while the configuration scrolls', async ({
   page,
   request,
 }) => {
-  test.fail(
-    true,
-    'ELITEA-0109 (#897): product gap — the agent editor renders no sticky header at all; the whole page (tab strip included) scrolls as one block',
-  );
   const name = uniqueName('sticky');
   const agent = await createAgent(request, name);
   try {

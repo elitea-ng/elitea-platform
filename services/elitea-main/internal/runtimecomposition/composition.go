@@ -633,6 +633,12 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		// (agentGuardrails, agentVersions above), not RouterConfig's
 		// MemoriesRepo (main.go) — see that field's own comment.
 		agentStart = agentStart.WithMemories(repos.NewMemoriesRepo(dependencies.AdmissionPool))
+		// Project Context injection (#946). Same post-construction setter
+		// idiom, same admission pool. This is what replaced the admission
+		// gate that used to 422 every turn in a project whose Settings >
+		// Project Context was switched on — see
+		// internal/application/agentexecution/projectcontext.go's header.
+		agentStart = agentStart.WithProjectContext(repos.NewProjectContextRepo(dependencies.AdmissionPool))
 		agentDispatcher, err := agentexecutionapp.NewDispatcher(agentJobs, agentProducer)
 		if err != nil {
 			return nil, err

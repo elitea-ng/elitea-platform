@@ -62,8 +62,41 @@ export interface VoiceButtonHandle {
 export interface VoiceButtonInputHandle {
   getInputContent(): string;
   getCursorPosition(): number | null;
+  /**
+   * The caret position as of the last real EDIT (issue #933, ELITEA-1317).
+   * Optional: a host whose composer does not track it falls back to
+   * `getCursorPosition()`, which is what this component used to read
+   * unconditionally.
+   */
+  getLastEditPosition?(): number | null;
   setValue(value: string, cursorPosition: number): void;
   focus?(): void;
+}
+
+/**
+ * Where a dictation session should splice its text into `content` (#933).
+ *
+ * The LAST EDITED position wins over the live caret: a person who types a
+ * sentence, clicks somewhere in the middle of it to re-read a word, and then
+ * reaches for the mic means the dictation to continue where they were
+ * WRITING, not where the pointer happened to land. Clamped, because the
+ * recorded position can outlive an edit that shortened the text.
+ */
+export function resolveDictationInsertPoint(handle: VoiceButtonInputHandle | null | undefined, content: string): number {
+  const lastEdit = handle?.getLastEditPosition?.() ?? null;
+  const cursor = lastEdit ?? handle?.getCursorPosition() ?? content.length;
+  return Math.min(Math.max(cursor, 0), content.length);
+}
+
+/**
+ * The text before the insertion point, with a single separating space added
+ * when the transcript would otherwise be welded onto the end of a word
+ * (#933). Dictation is speech: "Hello world" + "beautiful" is three words,
+ * not "worldbeautiful".
+ */
+export function withDictationSeparator(preCursor: string): string {
+  if (preCursor === '' || /\s$/.test(preCursor)) return preCursor;
+  return `${preCursor} `;
 }
 
 export interface VoiceButtonProps {
@@ -245,8 +278,8 @@ export const VoiceButton = memo(
       const handleStartRecording = useCallback(() => {
         const handle = inputRef?.current;
         const content = handle?.getInputContent() ?? '';
-        const cursor = handle?.getCursorPosition() ?? content.length;
-        preCursorContentRef.current = content.slice(0, cursor);
+        const cursor = resolveDictationInsertPoint(handle, content);
+        preCursorContentRef.current = withDictationSeparator(content.slice(0, cursor));
         postCursorContentRef.current = content.slice(cursor);
         voiceFinalAccumulatedRef.current = '';
         lastSetValueRef.current = content;

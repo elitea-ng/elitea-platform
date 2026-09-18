@@ -400,6 +400,42 @@ describe('useSpeakingModeLoop (native-fallback path — empty ASR model list)', 
     expect(inputHandle.value).toBe('world');
   });
 
+  it('issue 930: a FINAL transcript on the browser-fallback path arms the auto-send timer on its own', async () => {
+    const { inputHandle } = await setupSpeaking();
+    await waitFor(() => expect(FakeSpeechRecognition.instances).toHaveLength(1));
+    const recognizer = FakeSpeechRecognition.instances[0];
+
+    // Fake timers BEFORE the emit: the timer this test is about is armed by
+    // the emit itself, and a timer scheduled on the real clock is not
+    // advanced by `advanceTimersByTime` (see this file's module doc).
+    vi.useFakeTimers();
+    act(() => recognizer?.emitResult(0, [finalResult('send me please')]));
+    expect(inputHandle.value).toBe('send me please');
+    // Nothing has been sent yet — the silence window has not elapsed.
+    expect(inputHandle.sendQuestion).not.toHaveBeenCalled();
+
+    void act(() => vi.advanceTimersByTime(3600));
+
+    expect(inputHandle.sendQuestion).toHaveBeenCalledOnce();
+  });
+
+  it('issue 930: a second utterance inside the silence window re-arms the timer instead of sending twice', async () => {
+    const { inputHandle } = await setupSpeaking();
+    await waitFor(() => expect(FakeSpeechRecognition.instances).toHaveLength(1));
+    const recognizer = FakeSpeechRecognition.instances[0];
+
+    vi.useFakeTimers();
+    act(() => recognizer?.emitResult(0, [finalResult('Tell me about computers.')]));
+    void act(() => vi.advanceTimersByTime(1200));
+    expect(inputHandle.sendQuestion).not.toHaveBeenCalled();
+
+    act(() => recognizer?.emitResult(0, [finalResult('And include milestones.')]));
+    void act(() => vi.advanceTimersByTime(3600));
+
+    expect(inputHandle.value).toBe('');
+    expect(inputHandle.sendQuestion).toHaveBeenCalledOnce();
+  });
+
   it('notifyManualEdit reschedules an auto-send while speaking mode is active and nothing has been sent yet', async () => {
     const { apiRef, inputHandle } = await setupSpeaking();
     await waitFor(() => expect(apiRef.current?.result.isRecording).toBe(true));

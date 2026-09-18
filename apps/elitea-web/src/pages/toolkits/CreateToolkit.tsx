@@ -210,7 +210,8 @@ export function CreateToolkit({ isMCP = false, isApplication = false, deps }: Cr
    * into this `useMemo` because the picker is hook-derived (it closes over
    * `projectId`) and both slots must travel in one object.
    */
-  const renderCredentialPicker = useToolkitCredentialPickerSlot(projectId);
+  // #953: `isCreating: true` pre-selects the only saved credential here — see `credentialPickerSlots.tsx`'s doc comment (elitea_issues#4138 is why EditToolkit.tsx must not set this).
+  const renderCredentialPicker = useToolkitCredentialPickerSlot(projectId, undefined, true);
 
   const handleSelectTool = useCallback((detail: EditToolDetail) => {
     setEditToolDetail(detail);

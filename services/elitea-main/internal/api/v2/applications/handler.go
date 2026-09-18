@@ -559,6 +559,10 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
+			if err := validateConversationStarters(vBody["conversation_starters"]); err != nil {
+				apierr.Write(w, err)
+				return
+			}
 			req.InitialVersion = versionFromBody(vBody, ownerID)
 			initialVariables, _ = vBody["variables"].([]any)
 			initialTags, _ = vBody["tags"].([]any)
@@ -699,6 +703,12 @@ const defaultStepLimit = 25
 // an explicit `[]`), matching the prior type-assertion's semantics: callers
 // downstream (`applications.go`'s conditional `ConversationStarters != nil`
 // update) distinguish "field omitted" from "field explicitly emptied".
+//
+// It is no longer reachable from the create/update handlers below — #896
+// replaced the silent filter with an upfront 400 (validateConversationStarters)
+// so a malformed entry never overwrites previously-good data — but it stays
+// exported to this file for any other caller that still wants the
+// best-effort filter.
 func stringConversationStarters(raw any) []any {
 	items, ok := raw.([]any)
 	if !ok {
@@ -711,6 +721,25 @@ func stringConversationStarters(raw any) []any {
 		}
 	}
 	return out
+}
+
+// validateConversationStarters rejects a `conversation_starters` array that
+// carries any non-string entry (#896/ELITEA-0090/ELITEA-0093). The field is
+// absent from the request or explicitly not an array (nil, so a caller can
+// still omit it) is not this function's concern — only a present array with
+// a bad element is. Returns nil when raw is absent/not an array/all-string.
+func validateConversationStarters(raw any) error {
+	items, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	for i, item := range items {
+		if _, ok := item.(string); !ok {
+			return apierr.BadRequest(fmt.Sprintf(
+				"conversation_starters[%d] must be a string", i))
+		}
+	}
+	return nil
 }
 
 // versionDetailsResponse builds the write echo. `tags` is the version's
@@ -1197,10 +1226,14 @@ func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
 		v.LLMSettings = llm
 	}
 	if _, ok := body["conversation_starters"].([]any); ok {
-		// elitea_issues #4933 — same string-only filter as the create path's
-		// `stringConversationStarters`: this loosely-typed jsonb field must
-		// not persist a non-string entry, which crashed the agent-hub
-		// starter panel (#4932) for anyone who later opened the agent.
+		// #896/elitea_issues #4933 — a non-string entry is REFUSED outright
+		// (400) rather than silently filtered: the filter used to let a
+		// malformed update overwrite previously-valid starters with no
+		// refusal, which is worse than the #4932 crash it was chasing.
+		if err := validateConversationStarters(body["conversation_starters"]); err != nil {
+			apierr.Write(w, err)
+			return
+		}
 		v.ConversationStarters = stringConversationStarters(body["conversation_starters"])
 	}
 	// `meta` on a version save is a PATCH, not the whole column.

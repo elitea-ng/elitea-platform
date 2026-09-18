@@ -525,15 +525,15 @@ func TestUpdateVersion_OmittedVariablesLeavesMetaAlone(t *testing.T) {
 	}
 }
 
-// elitea_issues #4933 — `conversation_starters` is a loosely-typed jsonb
+// #896/ELITEA-0093 — `conversation_starters` is a loosely-typed jsonb
 // passthrough field (api/openapi/v2.yaml's `ConversationStarters`); a caller
 // hitting the API directly (not through the web app's own editor, which only
-// ever sends strings) could previously persist a non-string entry verbatim,
-// which then crashed the agent-hub starter panel for anyone who opened that
-// agent (#4932, fixed separately in `AgentConversationStarters.tsx`). The
-// handler must accept the request (a malformed array entry is not a 400 —
-// pylon's own API never validated this either) but keep only the strings.
-func TestUpdateVersion_ConversationStartersDropsNonStringEntries(t *testing.T) {
+// ever sends strings) could previously persist a non-string entry verbatim
+// (crashing the agent-hub starter panel, #4932/#4933) or have it silently
+// filtered out, which let a malformed update overwrite previously-valid
+// starters with no refusal at all. The handler must now REJECT the whole
+// request with 400 and leave the stored version untouched.
+func TestUpdateVersion_ConversationStartersRejectsNonStringEntries(t *testing.T) {
 	repo := &recordingRepo{}
 	r := setupVersionRouter(repo)
 
@@ -545,25 +545,19 @@ func TestUpdateVersion_ConversationStartersDropsNonStringEntries(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
 	}
-	want := []any{"Hello", "Hi there"}
-	if len(repo.lastUpdate.ConversationStarters) != len(want) {
-		t.Fatalf("expected only the string entries to survive, got %#v", repo.lastUpdate.ConversationStarters)
-	}
-	for i, w := range want {
-		if repo.lastUpdate.ConversationStarters[i] != w {
-			t.Errorf("index %d: got %#v, want %#v", i, repo.lastUpdate.ConversationStarters[i], w)
-		}
+	if repo.lastUpdate.ConversationStarters != nil {
+		t.Errorf("a refused update must not reach the repository, got %#v", repo.lastUpdate.ConversationStarters)
 	}
 }
 
-// The mirror of the test above: an explicit empty array must still reach the
-// repository as an empty (non-nil) slice, not be conflated with "the caller
-// never mentioned this field" (see the conditional update in
-// infra/db/repos/applications.go).
-func TestUpdateVersion_ConversationStartersAllNonStringIsEmptyNotNil(t *testing.T) {
+// The mirror of the test above: an array of ONLY non-string entries is
+// refused the same way — there is no "all bad, so collapse to empty" special
+// case (see the conditional update in infra/db/repos/applications.go, which
+// this request must never reach).
+func TestUpdateVersion_ConversationStartersAllNonStringIsRejected(t *testing.T) {
 	repo := &recordingRepo{}
 	r := setupVersionRouter(repo)
 
@@ -575,13 +569,10 @@ func TestUpdateVersion_ConversationStartersAllNonStringIsEmptyNotNil(t *testing.
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
 	}
-	if repo.lastUpdate.ConversationStarters == nil {
-		t.Error("an explicitly-sent array must not collapse to nil (nil means \"field omitted\")")
-	}
-	if len(repo.lastUpdate.ConversationStarters) != 0 {
-		t.Errorf("expected all-non-string entries to be dropped, got %#v", repo.lastUpdate.ConversationStarters)
+	if repo.lastUpdate.ConversationStarters != nil {
+		t.Errorf("a refused update must not reach the repository, got %#v", repo.lastUpdate.ConversationStarters)
 	}
 }

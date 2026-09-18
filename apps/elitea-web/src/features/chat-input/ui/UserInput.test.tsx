@@ -324,3 +324,86 @@ describe('UserInput', () => {
     );
   });
 });
+
+/**
+ * #931/#932/#933 — what an ACTIVE voice recording may and may not block.
+ */
+describe('voice recording and the send path', () => {
+  it('issue 931: the imperative sendQuestion still posts while a recording is active', () => {
+    const onSend = vi.fn();
+    const ref = createRef<UserInputHandle>();
+    renderWithTheme(
+      <UserInput
+        ref={ref}
+        slots={{}}
+        voice={{ isRecording: true }}
+        callbacks={{ onSend }}
+      />,
+    );
+
+    act(() => ref.current?.setValue('spoken and scheduled'));
+    act(() => ref.current?.sendQuestion());
+
+    expect(onSend).toHaveBeenCalledWith('spoken and scheduled', 'spoken and scheduled');
+  });
+
+  it('issue 931: a real `disabledSend` still blocks the imperative send', () => {
+    const onSend = vi.fn();
+    const ref = createRef<UserInputHandle>();
+    renderWithTheme(
+      <UserInput
+        ref={ref}
+        slots={{}}
+        disabledSend
+        callbacks={{ onSend }}
+      />,
+    );
+
+    act(() => ref.current?.setValue('blocked'));
+    act(() => ref.current?.sendQuestion());
+
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('issue 932: the send control slot IS told the composer is recording, without Send being disabled', () => {
+    let seen: UserInputSendControlSlotProps | undefined;
+    renderWithTheme(
+      <UserInput
+        slots={{
+          sendControl: (props: UserInputSendControlSlotProps) => {
+            seen = props;
+            return null;
+          },
+        }}
+        voice={{ isRecording: true }}
+      />,
+    );
+
+    expect(seen?.isRecording).toBe(true);
+    expect(seen?.disabledSend).toBe(false);
+  });
+
+  it('issue 933: getLastEditPosition reports the caret of the last real edit, not a later caret move', async () => {
+    const user = userEvent.setup();
+    const ref = createRef<UserInputHandle>();
+    renderWithTheme(
+      <UserInput
+        ref={ref}
+        slots={{}}
+      />,
+    );
+
+    expect(ref.current?.getLastEditPosition()).toBeNull();
+
+    const textarea = getTextarea();
+    await user.click(textarea);
+    await user.keyboard('Hello world');
+    expect(ref.current?.getLastEditPosition()).toBe('Hello world'.length);
+
+    // Moving the caret is not an edit.
+    act(() => {
+      textarea.setSelectionRange(5, 5);
+    });
+    expect(ref.current?.getLastEditPosition()).toBe('Hello world'.length);
+  });
+});

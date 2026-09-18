@@ -74,10 +74,12 @@ export interface EditApplicationEditorTabsProps {
   readonly applicationVersionId: number | undefined;
   /** The existing configuration panel, passed in rather than rebuilt here. */
   readonly configurationPanel: ReactNode;
+  /** #955 — this agent's own versions, so the History tab can name which one produced each run. */
+  readonly versions?: readonly { readonly id: string | number; readonly name: string }[] | undefined;
 }
 
 export function EditApplicationEditorTabs(props: EditApplicationEditorTabsProps): ReactNode {
-  const { projectId, applicationId, applicationVersionId, configurationPanel } = props;
+  const { projectId, applicationId, applicationVersionId, configurationPanel, versions } = props;
   const [tab, setTab] = useState<EditorTab>(EDITOR_TABS.configuration);
 
   const handleChange = (_event: SyntheticEvent, value: EditorTab): void => setTab(value);
@@ -133,6 +135,7 @@ export function EditApplicationEditorTabs(props: EditApplicationEditorTabsProps)
             entityName="application"
             entityId={applicationId}
             onClose={() => setTab(EDITOR_TABS.configuration)}
+            {...(versions !== undefined ? { versions } : {})}
           />
         )}
       </Box>

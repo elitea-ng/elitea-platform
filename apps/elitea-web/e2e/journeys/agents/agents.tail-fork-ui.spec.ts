@@ -71,7 +71,8 @@ test('the fork dialog is titled "Fork parameters" and names the entity being for
   }
 });
 
-/* onetest: ELITEA-0676 — product gap: the fork target-project dropdown is claimed to exclude the source project; it does not — `useForkTargetProjects` maps every project `useProjectOptions` returns, unfiltered. */
+/* onetest: ELITEA-0676 — the fork target-project dropdown excludes the source project: `useForkTargetProjects`
+   (src/pages/agents/lib/useForkTargetProjects.ts) now filters the current project out of the target dropdown. */
 test('the fork target-project dropdown excludes the source project', async ({ page, request }) => {
   const name = uniqueName('forkdropdown');
   const agent = await createAgent(request, name);
@@ -84,12 +85,6 @@ test('the fork target-project dropdown excludes the source project', async ({ pa
     await page.getByTestId('fork-target-project').click();
     const options = page.getByRole('option');
     await expect(options.first()).toBeVisible({ timeout: 5_000 });
-
-    test.fail(
-      true,
-      'ELITEA-0676 (#954): product gap — useForkTargetProjects (src/pages/agents/lib/useForkTargetProjects.ts) never ' +
-        'filters the current project out of the target dropdown',
-    );
 
     // The SAME route the dropdown itself reads (`GET /projects/project/
     // default/{publicProjectId}`) — read directly, so "must be absent" is

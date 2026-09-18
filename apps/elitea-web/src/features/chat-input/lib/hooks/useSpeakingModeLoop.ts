@@ -133,6 +133,12 @@ export function useSpeakingModeLoop(params: UseSpeakingModeLoopParams): UseSpeak
   // Timestamp (Date.now()) approximating when the user last stopped
   // speaking — see handleVadFlush.
   const speechEndedAtRef = useRef<number | null>(null);
+  // #930: which ASR hook is actually driving the loop. The SERVER hook signals
+  // "the utterance is over" with its own `onTranscriptDone`; the browser
+  // fallback (`useSpeechRecognition`) has no such callback — a FINAL result is
+  // the only end-of-utterance signal it emits. Read through a ref because the
+  // hooks themselves are constructed below `handleTranscript`.
+  const usesServerAsrRef = useRef(false);
 
   const { data: asrModelsData } = useModelsList(
     { projectId, section: 'asr', includeShared: true },
@@ -221,9 +227,19 @@ export function useSpeakingModeLoop(params: UseSpeakingModeLoopParams): UseSpeak
     ({ final, interim }: TranscriptEvent) => {
       resyncCursorsOnManualEdit();
       if (interim) applyInterimTranscript(interim);
-      if (final) applyFinalTranscript(final);
+      if (final) {
+        applyFinalTranscript(final);
+        // #930 (ELITEA-1294/1298/1291): arm the silence timer on the
+        // browser-fallback path. On the server path `handleTranscriptDone`
+        // owns this (and knows the VAD/latency adjustments); doing it here
+        // too would schedule the same send twice. Without it a spoken
+        // utterance on a project with no ASR model configured sat in the
+        // composer forever — only a real keystroke (`notifyManualEdit`) ever
+        // started the timer.
+        if (!usesServerAsrRef.current) scheduleSend();
+      }
     },
-    [resyncCursorsOnManualEdit, applyInterimTranscript, applyFinalTranscript],
+    [resyncCursorsOnManualEdit, applyInterimTranscript, applyFinalTranscript, scheduleSend],
   );
 
   // Called when the backend VAD detects the start of a new speech segment.
@@ -290,6 +306,7 @@ export function useSpeakingModeLoop(params: UseSpeakingModeLoopParams): UseSpeak
 
   // Keep the ref in sync so the silence timer always calls the latest version.
   stopRecordingRef.current = stopRecording;
+  usesServerAsrRef.current = serverHook.isSupported;
 
   const beginRecording = useCallback(() => {
     preCursorRef.current = '';

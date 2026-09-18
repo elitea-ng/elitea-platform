@@ -6,38 +6,43 @@ import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 import { FormViewToggle } from './FormViewToggle';
 
 describe('FormViewToggle', () => {
-  it('renders Form and Raw Json options', () => {
-    const { getByText } = renderWithTheme(
+  // #923/ELITEA-2815: the toggle is icon-only now (`TabButtonItem` hides the
+  // visible label whenever an item carries an icon) — the label survives as
+  // the button's accessible name/tooltip, so these query by role, not text.
+  it('renders Form and Raw Json as icon-only buttons, named by their labels', () => {
+    const { getByRole, queryByText } = renderWithTheme(
       <FormViewToggle
         view="form"
         onChangeView={vi.fn()}
       />,
     );
-    expect(getByText('Form')).toBeInTheDocument();
-    expect(getByText('Raw Json')).toBeInTheDocument();
+    expect(getByRole('button', { name: 'Form' })).toBeInTheDocument();
+    expect(getByRole('button', { name: 'Raw Json' })).toBeInTheDocument();
+    expect(queryByText('Form')).not.toBeInTheDocument();
+    expect(queryByText('Raw Json')).not.toBeInTheDocument();
   });
 
   it('calls onChangeView with the newly selected view', () => {
     const onChangeView = vi.fn();
-    const { getByText } = renderWithTheme(
+    const { getByRole } = renderWithTheme(
       <FormViewToggle
         view="form"
         onChangeView={onChangeView}
       />,
     );
-    fireEvent.click(getByText('Raw Json'));
+    fireEvent.click(getByRole('button', { name: 'Raw Json' }));
     expect(onChangeView).toHaveBeenCalledWith('json');
   });
 
   it('does not call onChangeView when clicking the already-selected view', () => {
     const onChangeView = vi.fn();
-    const { getByText } = renderWithTheme(
+    const { getByRole } = renderWithTheme(
       <FormViewToggle
         view="form"
         onChangeView={onChangeView}
       />,
     );
-    fireEvent.click(getByText('Form'));
+    fireEvent.click(getByRole('button', { name: 'Form' }));
     expect(onChangeView).not.toHaveBeenCalled();
   });
 

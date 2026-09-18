@@ -21,6 +21,7 @@ function baseProps(): Parameters<typeof BucketSidebar>[0] {
     tree: [],
     expandedPaths: [],
     totalSize: '3.0 KB',
+    isTeamProject: true,
     onToggleCollapsed: vi.fn(),
     onStorageChange: vi.fn(),
     onSelect: vi.fn(),

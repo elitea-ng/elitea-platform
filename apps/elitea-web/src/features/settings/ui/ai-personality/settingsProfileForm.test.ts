@@ -129,10 +129,27 @@ describe('deserializeMemoryBlocks', () => {
         enable_summarization: true,
         summary_instructions: 'i',
         summary_model_name: 'm',
-        summary_model_project_id: '2',
+        // #929 — the wire field is an int (`MemorySummarization.summary_model_
+        // project_id` is `zod.int()`), even though `model_project_id` in form
+        // state is the string project id like everywhere else in this app.
+        summary_model_project_id: 2,
         target_summary_tokens: 256,
       },
     });
+  });
+
+  // #929 — the server rejected every autosave with 400 because this field
+  // went out as the string project id. A non-numeric/absent value is
+  // omitted (the server keeps the stored value), never sent malformed.
+  it('sends summary_model_project_id as a number, and omits it when not a numeric string', () => {
+    const values = {
+      ...serializeSettingsProfile(undefined),
+      summary_llm_settings: { instructions: '', model_name: '', model_project_id: 'not-a-number', max_tokens: '' as const },
+    };
+
+    const blocks = deserializeMemoryBlocks(values);
+
+    expect('summary_model_project_id' in blocks.default_summarization).toBe(false);
   });
 
   // A numeric input the user has emptied is `''` — not a number, and not a

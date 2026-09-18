@@ -34,6 +34,7 @@ import { useCallback, useMemo } from 'react';
 import { usePermissionList } from '@/shared/api/generated/auth/auth';
 import type { Permission } from '@/shared/api/generated/model';
 import { getConfig } from '@/shared/config';
+import { t } from '@/shared/i18n';
 import { normalizeBasename } from '@/shared/lib/basename';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 import { readPersistedProject } from '@/shared/lib/selectedProjectPersistence';
@@ -81,13 +82,40 @@ export function toSecretOptions(secrets: readonly Secret[]): SecretOption[] {
   return secrets.map((secret) => ({ label: secret.name, value: secretReference(secret.name) }));
 }
 
+/**
+ * #925/ELITEA-1069,1074: the scope-aware "Create new secret" wording, pure so
+ * it is unit-testable without mounting the hook. `undefined` means "the
+ * caller does not know the project's scope" — kept distinct from either
+ * scope so `SecretField.tsx`'s own generic fallback renders instead of a
+ * guess.
+ */
+export function secretCreateLabel(isTeamProject: boolean | undefined): string | undefined {
+  if (isTeamProject === undefined) return undefined;
+  return isTeamProject
+    ? t('entities.secret.model.createLabelProject', 'New Project Secret')
+    : t('entities.secret.model.createLabelPrivate', 'New Private Secret');
+}
+
 /** The permission names this surface reads, resolved from one permission list. */
 export function readSecretFieldGrants(list: readonly Permission[] | undefined): { canList: boolean; canCreate: boolean } {
   const granted = new Set((list ?? []).filter((entry) => entry.enabled).map((entry) => entry.name));
   return { canList: granted.has(PERMISSIONS.secrets.list), canCreate: granted.has(PERMISSIONS.secrets.create) };
 }
 
-export function useSecretFieldOptions(): SecretFieldSecretsOptions {
+export interface UseSecretFieldOptionsParams {
+  /**
+   * #925/ELITEA-1069,1074: when the caller knows the project's scope, the
+   * "Create new secret" option becomes scope-aware — "New Project Secret" /
+   * "New Private Secret" — matching the CREDENTIAL picker's own
+   * `CredentialCreateLabel`. Omitted (the default), the label stays the
+   * generic fallback `SecretField.tsx` itself renders when `createLabel` is
+   * absent — never a false claim about a scope this caller doesn't know.
+   */
+  readonly isTeamProject?: boolean;
+}
+
+export function useSecretFieldOptions(params: UseSecretFieldOptionsParams = {}): SecretFieldSecretsOptions {
+  const { isTeamProject } = params;
   const projectId = readPersistedProject()?.id ?? '';
 
   const permissionQuery = usePermissionList(projectId, { query: { enabled: projectId !== '' } });
@@ -115,8 +143,10 @@ export function useSecretFieldOptions(): SecretFieldSecretsOptions {
 
   const options = useMemo(() => toSecretOptions(listQuery.data ?? []), [listQuery.data]);
 
+  const createLabel = useMemo(() => secretCreateLabel(isTeamProject), [isTeamProject]);
+
   return useMemo(
-    () => ({ options, canCreate: grants.canCreate, onCreate, onRefresh }),
-    [options, grants.canCreate, onCreate, onRefresh],
+    () => ({ options, canCreate: grants.canCreate, onCreate, onRefresh, ...(createLabel !== undefined ? { createLabel } : {}) }),
+    [options, grants.canCreate, onCreate, onRefresh, createLabel],
   );
 }

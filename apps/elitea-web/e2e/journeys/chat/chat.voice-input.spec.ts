@@ -229,15 +229,14 @@ test('a dictated transcript and an attached file both stay on the composer', asy
  * onetest: ELITEA-1295 — Speaking Mode cannot be entered while dictation
  * (Voice Input) is active, and is available again once it stops.
  *
- * PRODUCT GAP. `ChatBoxInputSlots.tsx` wires `VoiceButton`'s
+ * Closed in #932: `ChatBoxInputSlots.tsx` used to wire `VoiceButton`'s
  * `onRecordingChange` to `() => {}` — a no-op — and `ChatBox.tsx`'s own
- * `voice={{ isSpeakingMode, onSpeakingModeToggle, isTTSPlaying }}` object
- * carries no `isRecording` field at all. `NewChatInput.tsx`'s
- * `finalIsRecording = voice.isRecording || isSpeakingModeRecording` is
- * therefore always driven by `isSpeakingModeRecording` alone: dictation
- * starting never reaches `disabledSend`, so the wave icon never disables.
- * Written as the case should pass; it fails for the reason above, not a
- * selector mistake.
+ * `voice` object carried no `isRecording` field at all, so `NewChatInput`'s
+ * `finalIsRecording = voice.isRecording || isSpeakingModeRecording` was
+ * driven by speaking mode alone and dictation never reached the send
+ * control. `ChatBoxVoiceFeedback.tsx` now holds that flag, and `UserInput`
+ * applies it to the send-control slot (which is where the wave icon lives
+ * while the composer is empty).
  */
 test('the Speaking Mode control is disabled while dictation is recording', async ({ page }) => {
   await openChat(page);
@@ -249,12 +248,6 @@ test('the Speaking Mode control is disabled while dictation is recording', async
   await mic.click();
   await expect(mic).toHaveAttribute('aria-pressed', 'true');
 
-  test.fail(
-    true,
-    'ELITEA-1295 (#932): product gap — VoiceButton.onRecordingChange is wired to a no-op ' +
-      '(ChatBoxInputSlots.tsx) and voice.isRecording is never supplied (ChatBox.tsx), ' +
-      'so the Speaking Mode wave icon never disables while dictation is recording',
-  );
   await expect(
     speakingModeButton,
     'the wave icon must be blocked while Voice Input owns the composer',
@@ -269,12 +262,13 @@ test('the Speaking Mode control is disabled while dictation is recording', async
  * onetest: ELITEA-1324 — microphone permission denied must surface a clear,
  * user-readable toast and leave typed input working.
  *
- * `VoiceButton.tsx`'s own module doc: "no toast/snackbar primitive exists yet
- * in `shared/ui`... the caller decides how to surface the message until one
- * lands." There is no caller that shows one — `onError` is wired to nothing
- * visible in `ChatBoxInputSlots.tsx` (`onRecordingChange: () => {}`, no
- * `onError` passed at all). This is written as the case should pass and
- * marked as a product gap rather than skipped.
+ * Closed in #934. `VoiceButton.tsx`'s own module doc used to end the story
+ * at "no toast/snackbar primitive exists yet in `shared/ui`... the caller
+ * decides how to surface the message until one lands", and no caller ever
+ * decided — `ChatBoxInputSlots.tsx` passed no `onError` at all. The chat
+ * surface now owns one (`ChatBoxVoiceFeedback.tsx`, a MUI Snackbar+Alert,
+ * the same pair `widgets/deepwiki`'s `WikiFileAttach.tsx` already uses), so
+ * a denied microphone permission is announced rather than swallowed.
  */
 test('a denied microphone permission surfaces a readable error toast', async ({ page }) => {
   await openChat(page);
@@ -283,8 +277,15 @@ test('a denied microphone permission surfaces a readable error toast', async ({ 
   await mic.click();
   await fireError(page, 'not-allowed');
 
-  test.fail(true, 'ELITEA-1324 (#934): product gap — no toast/snackbar surfaces a mic-permission error; VoiceButton.onError has no visible caller');
-  await expect(page.getByRole('alert')).toBeVisible({ timeout: 5_000 });
+  const alert = page.getByRole('alert');
+  await expect(alert).toBeVisible({ timeout: 5_000 });
+  await expect(alert, 'the message must name the cause, not just appear').toContainText('Microphone access denied');
+
+  // Typed input keeps working with the error on screen — the case's own
+  // second half.
+  const input = page.getByTestId('chat-message-input');
+  await input.fill('typing still works');
+  await expect(input).toHaveValue('typing still works');
 });
 
 /* onetest: ELITEA-1318 — with no ASR model configured, Chrome/Chromium still offers the mic (browser Speech API fallback), and text arrives progressively rather than as one flushed sentence */
@@ -311,12 +312,13 @@ test('with no project ASR model, the mic is still offered and transcribes progre
  * LAST EDITED position, not wherever the user last moved the visual caret
  * with a click.
  *
- * `VoiceButton.tsx`'s `handleStartRecording` captures
- * `handle.getCursorPosition()` at the moment the mic is CLICKED — whatever
- * that position is, including one reached by a plain mouse click with no
- * typing. Written as the case should behave (insert after "world", where
- * the user last EDITED); expected to fail if the click alone moved the
- * insertion point.
+ * Closed in #933. `VoiceButton.tsx`'s `handleStartRecording` used to capture
+ * `handle.getCursorPosition()` at the moment the mic was CLICKED — whatever
+ * that position was, including one reached by a plain mouse click with no
+ * typing. The composer now records the caret of every real EDIT
+ * (`UserInputHandle.getLastEditPosition`, written from the textarea's own
+ * `onChange`) and `resolveDictationInsertPoint` prefers it, falling back to
+ * the live caret for a host that does not track edits.
  */
 test('voice dictation inserts at the last edited position, not a bare click', async ({ page }) => {
   await openChat(page);
@@ -335,13 +337,6 @@ test('voice dictation inserts at the last edited position, not a bare click', as
   await fireTranscript(page, 'beautiful');
   await page.getByRole('button', { name: 'stop voice input' }).click();
 
-  test.fail(
-    true,
-    'ELITEA-1317 (#933): product gap — VoiceButton captures the cursor position at the moment ' +
-      'the mic is clicked (VoiceButton.tsx handleStartRecording), including a position ' +
-      'reached by a bare mouse click with no edit, so dictation lands mid-text instead ' +
-      'of at the last EDITED position',
-  );
   await expect(input).toHaveValue('Hello world beautiful');
 });
 

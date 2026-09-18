@@ -294,7 +294,7 @@ test('ELITEA-1189: a same-named credential of the WRONG type is not silently app
   page,
   request,
 }, testInfo) => {
-  /* onetest: ELITEA-1189 — a `jira` credential sharing its NAME with a `github` toolkit's reference is not offered by the github-scoped picker (`useCredentialRows`'s type filter), so the toolkit shows the mismatch state rather than silently accepting the wrong-typed row. */
+  /* onetest: ELITEA-1189 — a `jira` credential sharing its NAME with a `github` toolkit's reference is not offered by the github-scoped picker (`useCredentialRows`'s type filter), so the toolkit shows the mismatch state (the #927 styled `CredentialWarningBanner`, not the generic footer text — `credentialPicker.tsx` hardcodes `mismatchedPrivateCredential: true` for every mismatch as of this branch's X4) rather than silently accepting the wrong-typed row. */
   test.setTimeout(120_000);
   const tag = `${testInfo.project.name}_mismatch_${Date.now()}`;
   let jiraCredentialId: string | undefined;
@@ -323,10 +323,21 @@ test('ELITEA-1189: a same-named credential of the WRONG type is not silently app
 
     await openToolkit(page, toolkitId);
 
+    // #927 (this branch's X4) made the styled `CredentialWarningBanner` the
+    // universal mismatch surface — missing, wrong-type, or genuinely
+    // private all render it now, never the old plain "does not match any
+    // available configurations." footer (that string stays reachable only
+    // through a DIFFERENT, still-open defect covered by ELITEA-1184/1191's
+    // hardcoded-`false` case, per this file's own top-of-file doc comment).
+    // The banner's own "matching ID" clause is keyed off the credential's
+    // NAME already, so it says nothing about type — the real proof that the
+    // jira row was excluded BY TYPE, not just resolved-as-a-title-match, is
+    // the picker-options assertion right below.
     await expect(
-      page.getByText('Your configuration does not match any available configurations.'),
+      page.getByText('Credential setup required:'),
       'a github toolkit referencing a same-named JIRA credential must not resolve as if it matched',
     ).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText('This toolkit requires your own private github credentials.')).toBeVisible();
 
     // The mismatch must not silently resolve to some OTHER accepted value: no
     // option in the (github-scoped) picker carries the shared title, because

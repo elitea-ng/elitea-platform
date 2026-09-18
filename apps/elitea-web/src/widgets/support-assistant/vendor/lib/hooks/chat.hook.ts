@@ -6,6 +6,7 @@ import { useSupportStream } from './stream.hook';
 import type { TConversationListItem, TMessage, TRawConversation, TSocketMessage } from '../types';
 import type { TSupportAttachmentRef } from '../../api';
 import { applyPredictFrame, generateUUID, parseConversationMessages } from '../utils';
+import { getPersistedDraft, setPersistedDraft } from '../../../lib/draftPersistence';
 
 type TUseChatProps = {
   welcomeMessage: string;
@@ -43,7 +44,14 @@ export const useChat = (props: TUseChatProps) => {
   );
 
   const [messages, setMessages] = useState<TMessage[]>([]);
-  const [inputText, setInputText] = useState('');
+  // #935/ELITEA-0623 — seeded from the module-scope draft store so an unsent
+  // draft survives this hook remounting under a fresh AppShell/page (see
+  // `draftPersistence.ts`), and kept in sync below on every change.
+  const [inputText, setInputTextState] = useState(() => getPersistedDraft());
+  const setInputText = useCallback((value: string) => {
+    setPersistedDraft(value);
+    setInputTextState(value);
+  }, []);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [history, setHistory] = useState<TConversationListItem[]>([]);
   const [isSwitchingConversation, setIsSwitchingConversation] = useState(false);
@@ -270,7 +278,7 @@ export const useChat = (props: TUseChatProps) => {
     setCurrentConversationId(null);
     setMessages(createWelcomeMessages());
     setInputText('');
-  }, [stream, createWelcomeMessages]);
+  }, [stream, createWelcomeMessages, setInputText]);
 
   const handleSelectConversation = useCallback(
     async (conversationId: string) => {
@@ -295,7 +303,7 @@ export const useChat = (props: TUseChatProps) => {
         setIsSwitchingConversation(false);
       }
     },
-    [currentConversationId, stream, createWelcomeMessages, api],
+    [currentConversationId, stream, createWelcomeMessages, api, setInputText],
   );
 
   return {

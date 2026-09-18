@@ -43,7 +43,7 @@ import { unwrapChatBoxConversation } from './ChatBox.props';
 import type { ChatBoxHandle } from './ChatBox.types';
 import { buildChatBoxContinuationProps } from './ChatBoxContinuation';
 import { useChatBoxLlmSettingsDialog } from './ChatBoxLlmSettingsDialog';
-import { buildChatBoxAttachmentProps, buildChatBoxInputSlots } from './ChatBoxInputSlots';
+import { buildChatBoxAttachmentProps, buildChatBoxInputSlots, useChatBoxVoiceFeedback } from './ChatBoxInputSlots';
 import { ChatBoxQueuedMessages, chatBoxQueueKey, useChatBoxQueuedMessages } from './ChatBoxQueuedMessages';
 import { buildChatBoxPopupsProps, ChatBoxPopups } from './ChatBoxPopups';
 import { ChatBoxDeleteModal } from './ChatBoxDeleteModal';
@@ -126,9 +126,8 @@ const ChatBoxInner = memo(function ChatBox({
   const messages = data.messageList.messages;
 
   // Participant normalisation + details fetch
-  const { participantForEditor, normalisedParticipants, agentEditorParticipantDetails, isFetchingParticipantDetails, assistantName } = useChatBoxParticipant({
-    activeParticipant,
-    conversationParticipants,
+  const { participantForEditor, normalisedParticipants, agentEditorParticipantDetails, isFetchingParticipantDetails, assistantName, areAttachmentsGated } = useChatBoxParticipant({
+    activeParticipant, conversationParticipants, isAgentsPage,
   });
   const activeParticipantVersions = agentEditorParticipantDetails?.versions;
 
@@ -147,7 +146,7 @@ const ChatBoxInner = memo(function ChatBox({
   }));
 
   // Socket client + read-aloud (TTS)
-  const socketClient = useSocketClient();
+  const socketClient = useSocketClient(); const voiceFeedback = useChatBoxVoiceFeedback(); // #932/#934: VoiceButton's recording flag + its error messages, which had no caller at all
   const readAloud = voiceHooks.useReadAloud({
     projectId: projectIdString,
     socket: socketClient,
@@ -192,6 +191,7 @@ const ChatBoxInner = memo(function ChatBox({
   // in-flight flag while an SSE turn runs — without the transport's own flag the
   // composer never offers Stop for the turn Stop exists to cancel (#328).
   const isStreaming = [data.streaming.isStreamingNow, data.messageList.isStreamingFromHistory, isStreamedExecution].some(Boolean);
+  const areAttachmentsDisabled = [isStreaming, areAttachmentsGated].some(Boolean); // #905 + A17 — see `useChatBoxParticipant`'s `areAttachmentsGated`.
 
   // Action handlers — real socket protocol (chat_predict / chat_continue_predict),
   // real REST mutations, real conversation-creation-first send ordering.
@@ -374,22 +374,22 @@ const ChatBoxInner = memo(function ChatBox({
             onSelectVersion: (version) => { void handleSelectVersion(version); },
             editorCallbacks, onEditLlmSettings: llmSettingsDialog.onEdit,
           })}
-          attachments={buildChatBoxAttachmentProps(data.attachments, isStreaming)}
+          attachments={buildChatBoxAttachmentProps(data.attachments, areAttachmentsDisabled)}
           mentions={{ users: state.users, onMentionChange: handleMentionChange }}
-          voice={{ isSpeakingMode: state.isSpeakingMode, onSpeakingModeToggle: () => state.setIsSpeakingMode(!state.isSpeakingMode), isTTSPlaying: readAloud.isPlaying }}
+          voice={{ isSpeakingMode: state.isSpeakingMode, onSpeakingModeToggle: () => state.setIsSpeakingMode(!state.isSpeakingMode), isTTSPlaying: readAloud.isPlaying, isRecording: voiceFeedback.isRecording }}
           slots={buildChatBoxInputSlots({
-            attachments: { attachments: data.attachments.state.attachments, onAttachFiles: data.attachments.state.onAttachFiles, disabled: isStreaming },
+            attachments: { attachments: data.attachments.state.attachments, onAttachFiles: data.attachments.state.onAttachFiles, disabled: areAttachmentsDisabled },
             internalTools: { disabled: isInputLoading, tools: internalToolsButtonTools, onToolChange: handleInternalToolChange },
             model: { llmSettings, onSetLLMSettings, selectedModel: selectedLlmModel, onSelectModel: handleSelectModel, models: modelsList },
             clearChat: { disabled: shouldDisableClearChat(isStreaming, messages.length), onClear: handleClear },
-            refs: { attachmentButtonRef, voiceButtonRef, voiceInputRef: chatInputRef }, voice: readAloud.voicePlayerProps,
+            refs: { attachmentButtonRef, voiceButtonRef, voiceInputRef: chatInputRef }, voice: readAloud.voicePlayerProps, voiceInput: { onRecordingChange: voiceFeedback.onRecordingChange, onError: voiceFeedback.onError },
             isAgentsPage: !!isAgentsPage, participants: normalisedParticipants,
             entitySubmenus: { ...entitySubmenus, onSelectParticipant: entityParticipantActions.onSelectParticipant, getParticipantMenuState: entityParticipantActions.getParticipantMenuState }, ...buildCreateHandlerProps(editorCallbacks),
           })}
           refs={{ attachmentButtonRef, voiceButtonRef }}
         />
       </Box>
-      <ChatBoxDeleteModal alert={deleteAlert} />{llmSettingsDialog.dialog}
+      <ChatBoxDeleteModal alert={deleteAlert} />{llmSettingsDialog.dialog}{voiceFeedback.alert}
     </Box>
   );
 });

@@ -2,10 +2,12 @@
  * Switching a non-published agent's VERSION from inside a chat conversation
  * — the version selector persists the switch server-side, and does not
  * produce the spurious "LLM settings override is only allowed for published
- * agents from agent studio" error while doing so. `test.fail()`-marked: the
- * switch itself is correct, but the selector's own button label goes BLANK
- * instead of showing the version just switched to — see the test's own
- * `test.fail()` call for the diagnosis, and `S/port/defects.md`.
+ * agents from agent studio" error while doing so, and the selector's own
+ * button label tracks the switch with no reload. Previously `test.fail()`-
+ * marked as #907 ("label goes blank after the switch"): that turned out to be
+ * `AgentEditorPanel`'s responsive icon-only mode, entered because the test
+ * left the participants rail expanded — see the in-test comment at the
+ * `Collapse participants` click for the measurements.
  *
  * Ported by use case from `w1-chat-interface.md` (ELITEA-0387 (#907) (#907)).
  *
@@ -127,14 +129,10 @@ async function toastTexts(page: import('@playwright/test').Page): Promise<readon
   return page.getByRole('alert').allTextContents();
 }
 
-/* onetest: ELITEA-0387 — switching a not-published agent's version in chat persists server-side with no spurious "LLM settings override" error, but the version selector's OWN label goes blank instead of showing the newly-active version */
+/* onetest: ELITEA-0387 — switching a not-published agent's version in chat persists server-side with no spurious "LLM settings override" error, and the version selector's own label shows the newly-active version without a reload */
 test('ELITEA-0387: switching a not-published agent\'s version has no spurious error and persists server-side', async ({
   page,
 }) => {
-  test.fail(
-    true,
-    "ELITEA-0387 (#907): product gap — the version switch persists correctly server-side and produces no spurious override error (both verified below), but VersionSelector's own button goes BLANK instead of showing the newly-active version's name: useChatBoxVersioning.ts's mergeParticipantVersionSettings spreads a snake_case entity_settings key onto activeParticipant (already normalised to camelCase entitySettings elsewhere), so AgentEditorPanel's resolveSelectedVersion(participantDetails?.versions, participantForEditor?.entitySettings?.versionId) can no longer resolve a selected version from the corrupted local object — confirmed recoverable by a page reload, which re-fetches and re-normalises from the server's (correct) state",
-  );
 
   const catalogue = await page.request.get(`${API_BASE}/configurations/models/${DEFAULT_PROJECT_ID}?include_shared=true`);
   expect(catalogue.status()).toBe(200);
@@ -180,6 +178,21 @@ test('ELITEA-0387: switching a not-published agent\'s version has no spurious er
     await expect(agentsSection).toBeVisible({ timeout: 15_000 });
     await agentsSection.getByText(agentName, { exact: true }).click();
 
+    // Collapse the rail again once the pick has landed. `AgentEditorPanel` is
+    // responsive (`useAgentEditorPanelFit`): it measures the composer's
+    // controls ROW and drops every label — the version selector's included —
+    // for an icon-only view below 430px. An expanded participants rail takes
+    // the chat column down to ~716px and the controls row to ~352px, so the
+    // panel is legitimately icon-only for as long as the rail is open, and
+    // the selector's own button renders `VersionIcon` instead of ANY name.
+    // That — not the switch — is what the original `test.fail()` here was
+    // measuring: the label was already blank ~400ms after the panel mounted,
+    // before any version was switched (the earlier `toHaveText('base')` only
+    // passed inside the fit hook's own 100ms debounce window). Measured on
+    // this stack: rail open -> row 352px, icon; rail closed -> row 548px,
+    // label. See #907's ledger row.
+    await page.getByRole('button', { name: 'Collapse participants' }).click();
+
     const versionButton = page.getByRole('button', { name: 'version selector menu' });
     await expect(versionButton, 'the version selector must be offered for an agent with 2+ versions').toBeVisible({
       timeout: 15_000,
@@ -218,9 +231,10 @@ test('ELITEA-0387: switching a not-published agent\'s version has no spurious er
     const texts = await toastTexts(page);
     expect(texts.join(' | ')).not.toContain('LLM settings override is only allowed for published agents');
 
-    // What does NOT hold: "Version selector shows V1 [the switched-to
-    // version] as active" — the case's own literal final assertion. See this
-    // test's own `test.fail()` call above for the diagnosis.
+    // "Version selector shows V1 [the switched-to version] as active" — the
+    // case's own literal final assertion, and it holds: the selector's label
+    // tracks the switch with no reload, in the layout where the panel renders
+    // labels at all.
     await expect(versionButton).toHaveText('v2', { timeout: 5_000 });
   } finally {
     await deleteConversation(page.request, conversationId);

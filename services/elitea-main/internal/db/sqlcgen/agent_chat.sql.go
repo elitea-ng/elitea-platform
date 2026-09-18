@@ -256,13 +256,18 @@ WITH resolved AS MATERIALIZED (
           conversation.meta #>> '{context_analytics,last_summarization,summary_content}',
           ''
       ) = ''
-      AND NOT EXISTS (
-          SELECT 1
-          FROM configuration AS project_context
-          WHERE project_context.type = 'project_context'
-            AND project_context.data ->> 'enabled' = 'true'
-            AND COALESCE(project_context.data ->> 'content', '') <> ''
-      )
+      -- #946: the project_context ADMISSION GATE that used to live here is gone.
+      -- It read NOT EXISTS (SELECT 1 FROM configuration WHERE type = 'project_context'
+      -- AND enabled AND content <> ''), so a project whose Settings > Project Context
+      -- was enabled and non-empty resolved ZERO rows here and every send in it answered
+      -- 422 unsupported_agent_execution — including the send that would have edited the
+      -- context back off. It existed only because project-context INJECTION was
+      -- unimplemented, and failing closed was preferred to running a turn that silently
+      -- ignored the project's context. Injection now exists: the start path reads the
+      -- row (internal/infra/db/repos.ProjectContextRepo) and splices its content onto
+      -- the turn's instructions field — the same field memory recall rides
+      -- (internal/application/agentexecution/projectcontext.go) — so the gate has
+      -- nothing left to protect and is a refusal with no cause.
       AND NOT EXISTS (
           SELECT 1
           FROM chat_participant_mapping AS unsupported_mapping
@@ -699,13 +704,18 @@ WITH resolved AS MATERIALIZED (
           conversation.meta #>> '{context_analytics,last_summarization,summary_content}',
           ''
       ) = ''
-      AND NOT EXISTS (
-          SELECT 1
-          FROM configuration AS project_context
-          WHERE project_context.type = 'project_context'
-            AND COALESCE(project_context.data ->> 'enabled', 'true') = 'true'
-            AND COALESCE(project_context.data ->> 'content', '') <> ''
-      )
+      -- #946: the project_context ADMISSION GATE that used to live here is gone.
+      -- It read NOT EXISTS (SELECT 1 FROM configuration WHERE type = 'project_context'
+      -- AND enabled AND content <> ''), so a project whose Settings > Project Context
+      -- was enabled and non-empty resolved ZERO rows here and every send in it answered
+      -- 422 unsupported_agent_execution — including the send that would have edited the
+      -- context back off. It existed only because project-context INJECTION was
+      -- unimplemented, and failing closed was preferred to running a turn that silently
+      -- ignored the project's context. Injection now exists: the start path reads the
+      -- row (internal/infra/db/repos.ProjectContextRepo) and splices its content onto
+      -- the turn's instructions field — the same field memory recall rides
+      -- (internal/application/agentexecution/projectcontext.go) — so the gate has
+      -- nothing left to protect and is a refusal with no cause.
       AND NOT EXISTS (
           SELECT 1
           FROM chat_participant_mapping AS toolkit_mapping
@@ -1330,13 +1340,18 @@ WHERE conversation.uuid = $5::uuid
       conversation.meta #>> '{context_analytics,last_summarization,summary_content}',
       ''
   ) = ''
-  AND NOT EXISTS (
-      SELECT 1
-      FROM configuration AS project_context
-      WHERE project_context.type = 'project_context'
-        AND project_context.data ->> 'enabled' = 'true'
-        AND COALESCE(project_context.data ->> 'content', '') <> ''
-  )
+  -- #946: the project_context ADMISSION GATE that used to live here is gone.
+  -- It read NOT EXISTS (SELECT 1 FROM configuration WHERE type = 'project_context'
+  -- AND enabled AND content <> ''), so a project whose Settings > Project Context
+  -- was enabled and non-empty resolved ZERO rows here and every send in it answered
+  -- 422 unsupported_agent_execution — including the send that would have edited the
+  -- context back off. It existed only because project-context INJECTION was
+  -- unimplemented, and failing closed was preferred to running a turn that silently
+  -- ignored the project's context. Injection now exists: the start path reads the
+  -- row (internal/infra/db/repos.ProjectContextRepo) and splices its content onto
+  -- the turn's instructions field — the same field memory recall rides
+  -- (internal/application/agentexecution/projectcontext.go) — so the gate has
+  -- nothing left to protect and is a refusal with no cause.
   AND NOT EXISTS (
       SELECT 1
       FROM chat_participant_mapping AS unsupported_mapping
@@ -2130,13 +2145,18 @@ WHERE conversation.uuid = $4::uuid
       conversation.meta #>> '{context_analytics,last_summarization,summary_content}',
       ''
   ) = ''
-  AND NOT EXISTS (
-      SELECT 1
-      FROM configuration AS project_context
-      WHERE project_context.type = 'project_context'
-        AND COALESCE(project_context.data ->> 'enabled', 'true') = 'true'
-        AND COALESCE(project_context.data ->> 'content', '') <> ''
-  )
+  -- #946: the project_context ADMISSION GATE that used to live here is gone.
+  -- It read NOT EXISTS (SELECT 1 FROM configuration WHERE type = 'project_context'
+  -- AND enabled AND content <> ''), so a project whose Settings > Project Context
+  -- was enabled and non-empty resolved ZERO rows here and every send in it answered
+  -- 422 unsupported_agent_execution — including the send that would have edited the
+  -- context back off. It existed only because project-context INJECTION was
+  -- unimplemented, and failing closed was preferred to running a turn that silently
+  -- ignored the project's context. Injection now exists: the start path reads the
+  -- row (internal/infra/db/repos.ProjectContextRepo) and splices its content onto
+  -- the turn's instructions field — the same field memory recall rides
+  -- (internal/application/agentexecution/projectcontext.go) — so the gate has
+  -- nothing left to protect and is a refusal with no cause.
   AND NOT EXISTS (
       SELECT 1
       FROM chat_participant_mapping AS toolkit_mapping

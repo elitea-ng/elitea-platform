@@ -359,4 +359,56 @@ describe('CreateEntityButton', () => {
     await renderAtPath('/settings/model-configuration', <CreateEntityButton permissions={allPermissions} />);
     expect(screen.getByTestId('sidebar-create-button')).toBeDisabled();
   });
+
+  // issue #903/ELITEA-1044 — the active entity gets a checkmark, not just a background highlight.
+  it('issue #903 — marks the active entity with a checkmark icon in the dropdown, and no other item', async () => {
+    const user = userEvent.setup();
+    await renderAtPath('/agents', <CreateEntityButton permissions={allPermissions} />);
+    await user.click(screen.getByRole('button', { name: 'Choose what to create' }));
+
+    const activeOption = screen.getByRole('menuitem', { name: 'Agent' });
+    expect(activeOption.querySelector('svg[data-testid="CheckIcon"]')).not.toBeNull();
+
+    const inactiveOption = screen.getByRole('menuitem', { name: 'Chat' });
+    expect(inactiveOption.querySelector('svg[data-testid="CheckIcon"]')).toBeNull();
+  });
+
+  it('issue #903 — a permission-denied active-looking option gets no checkmark', async () => {
+    const user = userEvent.setup();
+    // /artifacts' active kind is 'bucket'. `hasMainButtonCreatePermission`
+    // bypasses the permission check for 'bucket' (see `command.ts`'s own
+    // doc comment: "if the user can access the Artifacts page, they should
+    // be able to create buckets"), so the TRIGGER stays enabled and
+    // clickable even with no bucket permission granted — while the
+    // DROPDOWN item still uses the real `hasCreatePermission` gate and
+    // renders `aria-disabled`. This is the one route where the active kind
+    // is both open-able and permission-denied at once.
+    await renderAtPath('/artifacts', <CreateEntityButton permissions={new Set()} />);
+    expect(screen.getByTestId('sidebar-create-button')).not.toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Choose what to create' }));
+    const bucketOption = screen.getByRole('menuitem', { name: 'Artifact Bucket' });
+    expect(bucketOption).toHaveAttribute('aria-disabled', 'true');
+    expect(bucketOption.querySelector('svg[data-testid="CheckIcon"]')).toBeNull();
+  });
+
+  // issue #904/ELITEA-1046 — a "Create New" tooltip on hover, collapsed or expanded.
+  it('issue #904 — the collapsed trigger carries a "Create New" tooltip', async () => {
+    const user = userEvent.setup();
+    await renderAtPath(
+      '/agents',
+      <CreateEntityButton
+        permissions={allPermissions}
+        collapsed
+      />,
+    );
+    await user.hover(screen.getByTestId('sidebar-create-button'));
+    expect(await screen.findByRole('tooltip', { name: 'Create New' })).toBeInTheDocument();
+  });
+
+  it('issue #904 — the expanded (split) trigger also carries a "Create New" tooltip', async () => {
+    const user = userEvent.setup();
+    await renderAtPath('/agents', <CreateEntityButton permissions={allPermissions} />);
+    await user.hover(screen.getByTestId('sidebar-create-button'));
+    expect(await screen.findByRole('tooltip', { name: 'Create New' })).toBeInTheDocument();
+  });
 });

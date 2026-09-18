@@ -3,12 +3,14 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 
 import { useNavigate, useRouteContext, useRouterState } from '@tanstack/react-router';
 
+import CheckIcon from '@mui/icons-material/Check';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import Box from '@mui/material/Box';
 import ClickAwayListener from '@mui/material/ClickAwayListener';
 import Paper from '@mui/material/Paper';
 import Popper from '@mui/material/Popper';
 import type { Theme } from '@mui/material/styles';
+import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
 import { useChatSessionStore } from '@/entities/conversation';
@@ -125,6 +127,17 @@ interface TriggerProps {
   onToggleMenu: () => void;
 }
 
+/**
+ * Issue #904 — every OTHER sidebar element (`SidebarNavItem`, `FooterLink`)
+ * wraps itself in a `Tooltip`; this button did not, in either layout.
+ * Collapsed, that was compound: no visible label + no tooltip meant no
+ * accessible name at all (axe `button-name`) — MUI's `Tooltip` sets the
+ * child's native `title` attribute while its popper is closed (the same
+ * fallback `SidebarNavItem` relies on), which the accessible-name
+ * computation reads, so wrapping the trigger fixes both at once.
+ */
+const CREATE_NEW_TOOLTIP = (): string => t('widgets.createButton.tooltip', 'Create New');
+
 /** The main button — a plain icon+label trigger on simple/collapsed routes, or a split button with a dropdown chevron otherwise. */
 function CreateEntityTrigger({
   isSimple,
@@ -147,38 +160,42 @@ function CreateEntityTrigger({
     // is collapsed, and fires a direct navigation against a possibly-stale
     // `activeKind` on every simple/unrecognised route.
     return (
-      <BaseBtn
-        variant="special"
-        disabled={disabled}
-        startIcon={<PlusIcon />}
-        onClick={onToggleMenu}
-        data-testid="sidebar-create-button"
-        sx={{ width: '100%', ...(collapsed ? { minWidth: '1.75rem', width: '1.75rem' } : {}) }}
-      >
-        {!collapsed ? t('widgets.createButton.label', 'Create') : null}
-      </BaseBtn>
+      <Tooltip title={CREATE_NEW_TOOLTIP()}>
+        <BaseBtn
+          variant="special"
+          disabled={disabled}
+          startIcon={<PlusIcon />}
+          onClick={onToggleMenu}
+          data-testid="sidebar-create-button"
+          sx={{ width: '100%', ...(collapsed ? { minWidth: '1.75rem', width: '1.75rem' } : {}) }}
+        >
+          {!collapsed ? t('widgets.createButton.label', 'Create') : null}
+        </BaseBtn>
+      </Tooltip>
     );
   }
 
   return (
     <>
-      <BaseBtn
-        variant="special"
-        disabled={disabled}
-        startIcon={<PlusIcon />}
-        onClick={onMainClick}
-        data-testid="sidebar-create-button"
-        // The two halves are one MERGED pill: rounded at the group's outer
-        // ends, near-square at the interior join
-        // (`CreateEntityButton.jsx`'s `mainButton`/`chevronButton`). The port
-        // had left both halves on the uniform `radiusPill`, which rendered
-        // the split button as two separate lozenges with a visible seam —
-        // the shape is not expressible as a single radius token, so the
-        // baseline's own four-corner literals are used verbatim.
-        sx={(theme: Theme) => ({ flex: '1 1 auto', borderRadius: splitRadius(theme, 'start') })}
-      >
-        {currentLabel}
-      </BaseBtn>
+      <Tooltip title={CREATE_NEW_TOOLTIP()}>
+        <BaseBtn
+          variant="special"
+          disabled={disabled}
+          startIcon={<PlusIcon />}
+          onClick={onMainClick}
+          data-testid="sidebar-create-button"
+          // The two halves are one MERGED pill: rounded at the group's outer
+          // ends, near-square at the interior join
+          // (`CreateEntityButton.jsx`'s `mainButton`/`chevronButton`). The port
+          // had left both halves on the uniform `radiusPill`, which rendered
+          // the split button as two separate lozenges with a visible seam —
+          // the shape is not expressible as a single radius token, so the
+          // baseline's own four-corner literals are used verbatim.
+          sx={(theme: Theme) => ({ flex: '1 1 auto', borderRadius: splitRadius(theme, 'start') })}
+        >
+          {currentLabel}
+        </BaseBtn>
+      </Tooltip>
       <BaseBtn
         variant="special"
         disabled={disabled}
@@ -230,6 +247,9 @@ function CreateEntityDropdown({ open, anchorEl, collapsed, options, activeKind, 
       >
         {options.map((option) => {
           const optionDisabled = !hasCreatePermission(option.kind, permissions);
+          // Issue #903: the active entity was marked by a background highlight
+          // only, with no other cue (e.g. on a high-contrast theme) — add a checkmark.
+          const isActive = activeKind === option.kind && !optionDisabled;
           return (
             <Box
               key={option.kind}
@@ -247,15 +267,20 @@ function CreateEntityDropdown({ open, anchorEl, collapsed, options, activeKind, 
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
+                gap: theme.spacing(2),
                 padding: theme.spacing(1, 2),
                 cursor: optionDisabled ? 'not-allowed' : 'pointer',
                 color: optionDisabled ? theme.vars.palette.text.default : theme.vars.palette.text.secondary,
-                ...(activeKind === option.kind && !optionDisabled
-                  ? { backgroundColor: theme.vars.palette.split.pressed }
-                  : {}),
+                ...(isActive ? { backgroundColor: theme.vars.palette.split.pressed } : {}),
               })}
             >
               <Typography variant="labelSmall">{option.label}</Typography>
+              {isActive && (
+                <CheckIcon
+                  fontSize="small"
+                  sx={{ width: '1rem', height: '1rem', color: (theme: Theme) => theme.vars.palette.icon.fill.secondary }}
+                />
+              )}
             </Box>
           );
         })}

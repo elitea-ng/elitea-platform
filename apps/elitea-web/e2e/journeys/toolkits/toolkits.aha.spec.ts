@@ -20,6 +20,8 @@
  * server's `check_connection` for type `aha` answers `unsupported_type` for
  * EVERY input — confirmed live with a direct API call — so no deployment can
  * ever make it report success or a reachability/auth-specific failure.
+ * DEFERRED (#920) — see that test's own doc comment for why a working probe
+ * was reverted rather than landed.
  *
  * Every credential/toolkit this file creates is `autotest_`-prefixed and
  * removed in `test.afterAll`/each test's own `finally`.
@@ -197,20 +199,12 @@ test('AHA-1: the Aha! credential form offers Base Url + a masked Api Key, and a 
 });
 
 /**
- * AHA-1b: the Api Key field's Secret/Password Show/Hide toggle — a product
- * gap: `CredentialSecretField` (pages/credentials/CredentialFormFields.tsx)
- * mounts `SecretManagementInput` without `passwordVisibilityToggle`, which
- * defaults to `false` (`shared/ui/SecretManagementInput/
- * SecretManagementInput.tsx`), so no Show/Hide control renders at all.
+ * AHA-1b: the Api Key field's Secret/Password Show/Hide toggle (#921,
+ * fixed) — `CredentialSecretField` (pages/credentials/CredentialFormFields.tsx)
+ * now mounts `SecretManagementInput` with `passwordVisibilityToggle`.
  */
-test('AHA-1b: the Api Key field should offer a Show/Hide toggle', async ({ page }) => {
-  /* onetest: ELITEA-2502 — product gap: the Api Key field never renders a
-     Show/Hide toggle button. */
-  test.fail(
-    true,
-    'ELITEA-2502 (#921): product gap — CredentialSecretField mounts SecretManagementInput with no ' +
-      'passwordVisibilityToggle, so the Api Key field never offers a Show/Hide control',
-  );
+test('AHA-1b: the Api Key field offers a Show/Hide toggle', async ({ page }) => {
+  /* onetest: ELITEA-2502 — the Api Key field renders a Show/Hide toggle button. */
   await gotoCreateAhaCredential(page);
   await expect(page.getByRole('button', { name: 'Show value' }), 'the Api Key field must offer a Show/Hide toggle').toBeVisible({
     timeout: 5_000,
@@ -756,6 +750,22 @@ test('AHA-9b: the MCP access setting persists after Save', async ({ page }) => {
  * format fails), and ELITEA-2558 (unreachable host times out) can never be
  * satisfied on ANY deployment of this build, not only this offline stack —
  * so none of the four is LIVE-ONLY; all four are this one gap.
+ *
+ * DEFERRED (#920): a real probe was prototyped (`toolkit_check.go`'s
+ * `toolkitCheckProbes["aha"]`, a bearer `GET {base_url}/api/v1/me`) and it
+ * worked — but it also made `aha` join every OTHER toolkit-credential type
+ * this offline stack's `ELITEA_TOOLKIT_CHECK_ALLOWLIST=elitea-main` refuses
+ * (`unreachable`, a REAL blocking refusal per `useCredentialSaveGate.ts`,
+ * unlike `unsupported_type`). `aha` was the ONE type this whole E2E suite
+ * could still successfully Save with a synthetic credential — this file's
+ * own AHA-9 (deselect-all-tools resave) and `toolkits.tool-groups.spec.ts`
+ * (its entire fixture strategy, by its own doc comment: "the `aha`
+ * credential type has no connection check at all on this stack... so it is
+ * the type whose Save button this suite can actually press") both broke the
+ * moment the probe existed. Fixing the product gap correctly is not in
+ * question; deciding how the harness gets ANY toolkit type it can Save once
+ * every real type is allowlist-refused is a call bigger than this package —
+ * left for a harness-owning package, prototype reverted.
  */
 test('AHA-10: Test connection should actually validate an Aha! connection', async ({ page }) => {
   /* onetest: ELITEA-2510, ELITEA-2511, ELITEA-2512, ELITEA-2558 — product
@@ -794,20 +804,14 @@ test('AHA-10: Test connection should actually validate an Aha! connection', asyn
 });
 
 /**
- * AHA-10b: the credential dropdown offers no search/filter at all — a
- * product gap, not a selector miss. `CredentialsSelect.tsx` is a plain MUI
- * `Select`/`MenuItem` tree with no `TextField` and no filter state anywhere
- * in it (grepped); the legacy case expects typing to narrow the option list.
+ * AHA-10b: the credential dropdown offers a search/filter field (#919,
+ * fixed) — `CredentialsSelect.tsx` renders a `TextField` inside a
+ * `ListSubheader` at the top of the popup (inert to `Select`'s own child
+ * walk, so it narrows the SAVED rows without becoming a selectable value).
  */
-test('AHA-10b: the Aha Configuration dropdown should support search/filter', async ({ page }) => {
-  /* onetest: ELITEA-2534 — product gap: CredentialsSelect renders no
-     search/filter input at all, so a saved-credential list of any size is
-     un-filterable from the dropdown. */
-  test.fail(
-    true,
-    'ELITEA-2534 (#919): product gap — CredentialsSelect.tsx (features/credentials/ui) is a plain ' +
-      'MUI Select with no search/filter TextField; a long SAVED AHA CREDENTIALS list cannot be narrowed by typing',
-  );
+test('AHA-10b: the Aha Configuration dropdown supports search/filter', async ({ page }) => {
+  /* onetest: ELITEA-2534 — the dropdown offers a search/filter input that
+     narrows the SAVED AHA CREDENTIALS list by typing. */
   const name = tag('search_probe');
   await seedAhaCredential(page.request, name, { shared: false });
   await gotoCreateAhaToolkit(page);

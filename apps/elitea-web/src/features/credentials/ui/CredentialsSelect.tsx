@@ -39,13 +39,12 @@
  * fills those slots is `pages/toolkits/lib/credentialPicker.tsx`; read that
  * file for the whole routing story.
  */
-import { useCallback, useEffect, useId, useMemo, useRef, type ReactNode, type RefObject } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 
 import Box from '@mui/material/Box';
 import FormControl from '@mui/material/FormControl';
 import FormHelperText from '@mui/material/FormHelperText';
 import InputLabel from '@mui/material/InputLabel';
-import MenuItem from '@mui/material/MenuItem';
 import Select, { type SelectChangeEvent } from '@mui/material/Select';
 import Tooltip from '@mui/material/Tooltip';
 import type { SxProps, Theme } from '@mui/material/styles';
@@ -57,43 +56,26 @@ import { BUTTON_VARIANTS, BaseBtn } from '@/shared/ui/BaseBtn';
 import {
   decodeCreateActionValue,
   decodeSavedCredentialValue,
-  encodeCreateActionValue,
   encodeSavedCredentialValue,
   isBlankEliteaTitle,
 } from '../lib/credentialSelectValue';
 
-import { CredentialCreateLabel } from './CredentialCreateLabel';
 import { CredentialMismatchFooter } from './CredentialMismatchFooter';
 import { CredentialNotFoundValue } from './CredentialNotFoundValue';
-import { CredentialOptionLabel } from './CredentialOptionLabel';
+import { CredentialsSearchField } from './CredentialsSearchField';
+import { buildSavedRowMenuItem, renderCreateMenuItems } from './credentialsSelectMenuItems';
+import type {
+  CredentialOptionRow,
+  CredentialsSelectHandlers,
+  CredentialsSelectState,
+  CredentialsSelectValue,
+} from './CredentialsSelect.types';
 
-export interface CredentialOptionRow {
-  readonly eliteaTitle: string;
-  readonly isPrivate: boolean;
-  readonly displayLabel: string;
-  readonly credentialUrl?: string;
-  readonly shared?: boolean;
-}
-
-export interface CredentialsSelectValue {
-  readonly eliteaTitle: string;
-  readonly isPrivate: boolean;
-}
-
-export interface CredentialsSelectState {
-  readonly configurations: readonly CredentialOptionRow[];
-  readonly hasFetchedData: boolean;
-  readonly isFetching: boolean;
-  readonly getStatus: (eliteaTitle: string) => 'idle' | 'checking' | 'valid' | 'invalid' | 'unsupported';
-  readonly getMessage: (eliteaTitle: string) => string;
-}
-
-export interface CredentialsSelectHandlers {
-  readonly onSelect: (value: CredentialsSelectValue | null, meta: { isAutoSelect: boolean }) => void;
-  readonly onRefresh: () => void;
-  readonly onCreate: (isPrivate: boolean) => void;
-  readonly onRevalidate: (eliteaTitle: string) => void;
-}
+// Re-exported so existing importers of these names from this file (e.g.
+// `CredentialsSelect.test.tsx`) keep working unchanged — see
+// `CredentialsSelect.types.ts`'s own doc comment for why the definitions
+// moved out of this file.
+export type { CredentialOptionRow, CredentialsSelectHandlers, CredentialsSelectState, CredentialsSelectValue } from './CredentialsSelect.types';
 
 export interface CredentialsSelectFieldProps {
   readonly label?: string;
@@ -132,14 +114,54 @@ export function CredentialsSelect({
 }: CredentialsSelectProps): ReactNode {
   const { configurations, hasFetchedData, isFetching, getStatus, getMessage } = state;
 
+  // #919/ELITEA-2534: a plain MUI `Select` with no way to narrow a long
+  // SAVED CREDENTIALS list except scrolling. The search box lives in a
+  // `ListSubheader` (not a `MenuItem`) at the top of the popup, the same
+  // technique MUI's own grouped-Select demos use, so `Select`'s child walk
+  // (which looks for `MenuItem`s only) treats it as inert — it filters the
+  // rows below, nothing else.
+  const [query, setQuery] = useState('');
+  const filteredConfigurations = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (needle === '') return configurations;
+    return configurations.filter((row) => row.displayLabel.toLowerCase().includes(needle));
+  }, [configurations, query]);
+
   const selectedRow = useMemo(
     () => configurations.find((row) => row.eliteaTitle === value?.eliteaTitle && row.isPrivate === value?.isPrivate),
     [configurations, value],
   );
 
   const hasAutoSelectedRef = useRef(false);
+  // #613/#953 interaction: `autoSelectFirstShared` (below) can select a row
+  // before the user ever touches this field. MUI's `Select` fires no
+  // `onChange` for a same-value pick, so `buildSavedRowMenuItem`'s own
+  // `onClick` escape hatch (see its doc comment) is the only signal for a
+  // click on the row that is ALREADY selected — and from that row's own
+  // vantage point, "the user re-picked the row auto-selected under them" and
+  // "the user clicked a selected row to clear it" look identical. Swallow
+  // exactly the first such call after an auto-select, so the credential the
+  // picker preselected for the user survives their first click on it; a
+  // genuine second click (this flag now cleared) still clears it normally.
+  const justAutoSelectedRef = useRef(false);
+  const guardedOnSelect = useCallback(
+    (next: CredentialsSelectValue | null, meta: { isAutoSelect: boolean }) => {
+      if (meta.isAutoSelect) {
+        justAutoSelectedRef.current = true;
+        handlers.onSelect(next, meta);
+        return;
+      }
+      if (next === null && justAutoSelectedRef.current) {
+        justAutoSelectedRef.current = false;
+        return;
+      }
+      justAutoSelectedRef.current = false;
+      handlers.onSelect(next, meta);
+    },
+    [handlers],
+  );
   useEffect(() => {
-    autoSelectFirstSharedRow({ autoSelectFirstShared, hasFetchedData, hasAutoSelectedRef, value, configurations, onSelect: handlers.onSelect });
+    autoSelectFirstSharedRow({ autoSelectFirstShared, hasFetchedData, hasAutoSelectedRef, value, configurations, onSelect: guardedOnSelect });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fires once per mount when data first arrives, matching the baseline's `hasAutoSelectedRef` guard.
   }, [autoSelectFirstShared, hasFetchedData, configurations]);
 
@@ -160,9 +182,9 @@ export function CredentialsSelect({
       const saved = decodeSavedCredentialValue(nextValue);
       if (!saved) return;
       const isSame = value?.eliteaTitle === saved.eliteaTitle && value?.isPrivate === saved.private;
-      handlers.onSelect(isSame ? null : { eliteaTitle: saved.eliteaTitle, isPrivate: saved.private }, { isAutoSelect: false });
+      guardedOnSelect(isSame ? null : { eliteaTitle: saved.eliteaTitle, isPrivate: saved.private }, { isAutoSelect: false });
     },
-    [handlers, value],
+    [handlers, value, guardedOnSelect],
   );
 
   const labelId = useId();
@@ -195,13 +217,19 @@ export function CredentialsSelect({
             renderValue={() => renderSelectedValue(selectedRow, value, hasFetchedData)}
           >
             {isCreationAllowed && renderCreateMenuItems(type)}
-            {configurations.map((row) =>
+            {configurations.length > 0 && (
+              <CredentialsSearchField
+                query={query}
+                onQueryChange={setQuery}
+              />
+            )}
+            {filteredConfigurations.map((row) =>
               buildSavedRowMenuItem({
                 row,
                 value,
                 status: getStatus(row.eliteaTitle),
                 message: getMessage(row.eliteaTitle),
-                onSelect: handlers.onSelect,
+                onSelect: guardedOnSelect,
                 onRevalidate: handlers.onRevalidate,
               }),
             )}
@@ -299,92 +327,6 @@ function renderSelectedValue(
     );
   }
   return null;
-}
-
-/**
- * The two "create new …" rows — split out of `CredentialsSelect` to keep
- * that function's cyclomatic complexity within the §3.5 budget. Returns a
- * plain array, NOT a `<>...</>` Fragment: MUI's `Select` walks
- * `props.children` directly (`Children.map`/`cloneElement` per child) to
- * find `MenuItem`s, and a Fragment wrapping them is opaque to that walk —
- * confirmed empirically (wrapping in a Fragment silently broke both
- * `onChange` selection and the create-action click in this component's own
- * tests, even though the items still rendered visually).
- */
-function renderCreateMenuItems(type: string | undefined): ReactNode[] {
-  return [
-    <MenuItem
-      key="create-private"
-      value={encodeCreateActionValue(true)}
-    >
-      <CredentialCreateLabel
-        isPrivate
-        {...(type !== undefined ? { type } : {})}
-      />
-    </MenuItem>,
-    <MenuItem
-      key="create-project"
-      value={encodeCreateActionValue(false)}
-    >
-      <CredentialCreateLabel
-        isPrivate={false}
-        {...(type !== undefined ? { type } : {})}
-      />
-    </MenuItem>,
-  ];
-}
-
-interface SavedRowMenuItemProps {
-  readonly row: CredentialOptionRow;
-  readonly value: CredentialsSelectValue | null;
-  readonly status: ReturnType<CredentialsSelectState['getStatus']>;
-  readonly message: string;
-  readonly onSelect: CredentialsSelectHandlers['onSelect'];
-  readonly onRevalidate: CredentialsSelectHandlers['onRevalidate'];
-}
-
-/**
- * One saved-credential row — split out of `CredentialsSelect` for the same
- * complexity-budget reason as `renderCreateMenuItems`. A plain function
- * that RETURNS a `<MenuItem>` (called directly inside `.map()`, never
- * rendered as `<SavedRowMenuItem />`) — NOT a React component: MUI's
- * `Select` walks `props.children` for literal `MenuItem` elements, and a
- * wrapping custom component is opaque to that walk (confirmed empirically,
- * same class of bug `renderCreateMenuItems`'s doc comment records for a
- * Fragment; a wrapping component breaks it identically since neither is a
- * `MenuItem` at the `Select`'s own children level). Owns the
- * click-to-deselect `onClick` (see its own inline comment: MUI's `Select`
- * suppresses `onChange` on a same-value reselect, so this restores the
- * baseline's explicit toggle for exactly that one case).
- */
-function buildSavedRowMenuItem({ row, value, status, message, onSelect, onRevalidate }: SavedRowMenuItemProps): ReactNode {
-  const isCurrentlySelected = value?.eliteaTitle === row.eliteaTitle && value.isPrivate === row.isPrivate;
-  return (
-    <MenuItem
-      key={`${row.eliteaTitle}-${String(row.isPrivate)}`}
-      value={encodeSavedCredentialValue({ eliteaTitle: row.eliteaTitle, isPrivate: row.isPrivate })}
-      onClick={
-        isCurrentlySelected
-          ? () => {
-              onSelect(null, { isAutoSelect: false });
-            }
-          : undefined
-      }
-    >
-      <CredentialOptionLabel
-        isPersonal={row.isPrivate}
-        label={row.displayLabel}
-        {...(row.credentialUrl !== undefined ? { credentialUrl: row.credentialUrl } : {})}
-        isInvalid={status === 'invalid'}
-        isChecking={status === 'checking'}
-        invalidMessage={message}
-        onRevalidate={(event) => {
-          event.stopPropagation();
-          onRevalidate(row.eliteaTitle);
-        }}
-      />
-    </MenuItem>
-  );
 }
 
 const containerSx: SxProps<Theme> = (theme: Theme) => ({ marginTop: theme.spacing(1), display: 'flex', flexDirection: 'column', gap: theme.spacing(1) });

@@ -43,6 +43,7 @@ const {
   ProjectContextToasts,
   hasSavedProjectContext,
   projectContextStyles,
+  readMarkdownImport,
 } = projectContextFeature;
 
 /* ── constants ─────────────────────────────────────────────────────────── */
@@ -221,22 +222,21 @@ export function ProjectContext({
   const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const result = (ev.target?.result as string) ?? '';
-      const text = String(result).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-      if (text.length > MAX_CHARS) {
-        // The reference toasts this (`ProjectContextEditor.jsx:127-146`). A
-        // console warning told the reader nothing: the import simply did
-        // not happen (issue 841).
-        setErrorMessage(t('entities.projectContext.content.fileTooLarge', 'File content exceeds 2500 characters'));
+    readMarkdownImport(file, {
+      maxChars: MAX_CHARS,
+      onText: (text) => {
+        setContent(text);
+        setIsDirty(true);
+      },
+      onError: (message) => {
+        setErrorMessage(message);
         setShowErrorToast(true);
-        return;
-      }
-      setContent(text);
-      setIsDirty(true);
-    };
-    reader.readAsText(file);
+      },
+    });
+    // AFTER the read has been started, never before: clearing `value` drops
+    // the input's own `files` list, and the async `FileReader` must already
+    // hold the blob by then. Cleared at all so picking the SAME file twice
+    // fires `change` again — including retrying after a refusal.
     e.target.value = '';
   }, []);
 

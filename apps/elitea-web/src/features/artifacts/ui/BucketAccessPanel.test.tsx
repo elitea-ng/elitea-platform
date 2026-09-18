@@ -31,6 +31,10 @@ const buckets: Bucket[] = [
 function sidebarProps(): Parameters<typeof BucketSidebar>[0] {
   return {
     projectId: '7',
+    // #901: "Manage access" is gated to Team projects — this test exercises
+    // that action, so it renders as a Team project (unrelated to the gate
+    // itself, which has its own coverage in `BucketList.test.tsx`).
+    isTeamProject: true,
     buckets,
     storageConfigurations: [],
     loading: false,

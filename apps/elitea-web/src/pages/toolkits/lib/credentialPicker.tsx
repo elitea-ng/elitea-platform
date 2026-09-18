@@ -124,10 +124,21 @@ export interface ToolkitCredentialPickerProps {
    * the form can learn the verdict — see `pages/toolkits/lib/useCredentialSaveGate.ts`.
    */
   readonly onRefusalChange?: ((refusal: SelectedCredentialRefusal | null) => void) | undefined;
+  /**
+   * #953/ELITEA-2494 vs elitea_issues#4138 — the SAME auto-select mechanism
+   * (`CredentialsSelect`'s `autoSelectFirstShared`) is right on one screen and
+   * wrong on the other: #4138 found that silently preselecting the only saved
+   * credential on the EDIT page activates Save with a choice the user never
+   * made, so `EditToolkit.tsx` must keep this `false` (its own default).
+   * #953 wants exactly that preselection on the fresh, still-unsaved CREATE
+   * page, where there is no existing choice to override and Save is not yet a
+   * live action against a stored toolkit. `CreateToolkit.tsx` passes `true`.
+   */
+  readonly isCreating?: boolean;
 }
 
 export function ToolkitCredentialPicker(props: ToolkitCredentialPickerProps): ReactNode {
-  const { projectId, section, configurationTypes, value, onChange, field, onlyPublic = false, onRefusalChange } = props;
+  const { projectId, section, configurationTypes, value, onChange, field, onlyPublic = false, onRefusalChange, isCreating = false } = props;
   const navigate = useNavigate();
   const { rows, hasFetchedData, isFetching, refresh } = useCredentialRows({ projectId, section, configurationTypes, onlyPublic });
   const validation = useCredentialValidation();
@@ -177,7 +188,21 @@ export function ToolkitCredentialPicker(props: ToolkitCredentialPickerProps): Re
       type={credentialType}
       // The baseline's own gate: a vector-storage reference is picked, never created here.
       isCreationAllowed={section !== 'vectorstorage'}
-      mismatch={{ mismatchedPrivateCredential: false, createHref: `/credentials/create-credential/${credentialType}` }}
+      // #953/ELITEA-2494, CREATE page only — see this prop's own doc comment
+      // for why EDIT (elitea_issues#4138) must stay excluded. Scoped to the
+      // `credentials` section per `autoSelectFirstShared`'s own disclosed
+      // limit (vectorstorage's auto-select-project-default is a different,
+      // out-of-scope behaviour).
+      autoSelectFirstShared={isCreating && section === CREDENTIALS_SECTION}
+      // #927/ELITEA-1088,1090,1091,1093,1097: a literal `false` here made the
+      // styled `CredentialWarningBanner` unreachable from the toolkit
+      // editor's own picker for EVERY mismatch — missing, wrong-type, or
+      // genuinely private — because `CredentialsSelect`'s only other branch
+      // is the old plain `FormHelperText`. This is the one caller of this
+      // slot, and a mismatch here always means "this toolkit's credential
+      // reference cannot be resolved", so the styled banner is always the
+      // right one, whatever the reference's own `private` flag says.
+      mismatch={{ mismatchedPrivateCredential: true, createHref: `/credentials/create-credential/${credentialType}` }}
     />
   );
 }

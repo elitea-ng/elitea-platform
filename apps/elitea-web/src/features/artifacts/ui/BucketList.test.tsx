@@ -30,6 +30,7 @@ const NOOP = {
   onDelete: vi.fn(),
   onSelectFile: vi.fn(),
   onSelectFolder: vi.fn(),
+  isTeamProject: true,
 };
 
 /* onetest: elitea_issues: #2723 — a bucket name long enough to ellipsize in the row is still
@@ -52,5 +53,42 @@ describe('BucketList — long bucket name tooltip (#2723)', () => {
     await user.hover(label);
 
     expect(await screen.findByRole('tooltip')).toHaveTextContent('a-very-long-bucket-name-that-does-not-fit-the-row');
+  });
+});
+
+/* onetest: ELITEA-2475 — "Manage access" is a Team-project-only action (#901, elitea_issues #6101/#5832) */
+describe('BucketList — "Manage access" is Team-project-only (#901)', () => {
+  it('renders "Manage access" for every row when the selected project is a Team project', () => {
+    render(
+      <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+        <BucketList
+          buckets={[bucket({ id: '1', name: 'docs' })]}
+          tree={[]}
+          expandedPaths={[]}
+          {...NOOP}
+          isTeamProject
+        />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByLabelText('Manage access to docs')).toBeInTheDocument();
+  });
+
+  it('omits "Manage access" entirely when the selected project is the caller\'s own private project', () => {
+    render(
+      <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+        <BucketList
+          buckets={[bucket({ id: '1', name: 'docs' })]}
+          tree={[]}
+          expandedPaths={[]}
+          {...NOOP}
+          isTeamProject={false}
+        />
+      </ThemeProvider>,
+    );
+
+    expect(screen.queryByLabelText('Manage access to docs')).not.toBeInTheDocument();
+    // The row's other actions stay put — only this one is project-type-gated.
+    expect(screen.getByLabelText('Edit docs')).toBeInTheDocument();
   });
 });

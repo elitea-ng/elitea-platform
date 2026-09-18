@@ -34,6 +34,16 @@ interface BucketListProps {
    * actions as icon buttons, so it takes the same icon and the same label.
    */
   readonly onManageAccess: (bucket: Bucket) => void;
+  /**
+   * elitea_issues #6101/#5832 (#901/ELITEA-2475) — bucket access exceptions
+   * are a Team-project concept only; a caller's own PRIVATE (personal)
+   * project has no other member to grant or deny. The action is rendered
+   * only when the currently selected project is a Team project — computed
+   * by the caller (`pages/artifacts/Artifacts.tsx`, `useIsTeamProject`) and
+   * threaded down through `BucketSidebar`, since this component has no
+   * router/session access of its own.
+   */
+  readonly isTeamProject: boolean;
   readonly onPin: (bucket: Bucket) => void;
   readonly onDelete: (bucket: Bucket) => void;
   readonly onSelectFile: (item: ArtifactTreeItem) => void;
@@ -101,16 +111,18 @@ export function BucketList(props: BucketListProps): ReactNode {
                   </IconButton>
                 </Tooltip>
                 {/* elitea_issues: #6111 — the visible tooltip label matches the dialog's own title ("Manage Permissions"); aria-label stays "Manage access to <bucket>" (test hook + BucketAccessPanel.test.tsx / e2e specs key off it) */}
-                <Tooltip title={t('artifacts.buckets.manageAccess', 'Manage permissions')}>
-                  <IconButton
-                    size="small"
-                    color="tertiary"
-                    aria-label={`Manage access to ${bucket.name}`}
-                    onClick={() => props.onManageAccess(bucket)}
-                  >
-                    <GroupsOutlinedIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
+                {props.isTeamProject && (
+                  <Tooltip title={t('artifacts.buckets.manageAccess', 'Manage permissions')}>
+                    <IconButton
+                      size="small"
+                      color="tertiary"
+                      aria-label={`Manage access to ${bucket.name}`}
+                      onClick={() => props.onManageAccess(bucket)}
+                    >
+                      <GroupsOutlinedIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                )}
                 <Tooltip title={t('artifacts.buckets.delete', 'Delete bucket')}>
                   <IconButton
                     size="small"

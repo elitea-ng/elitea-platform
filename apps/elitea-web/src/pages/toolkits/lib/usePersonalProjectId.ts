@@ -35,3 +35,22 @@ export function usePersonalProjectId(): string | undefined {
   const context: unknown = useRouteContext({ strict: false });
   return selectPersonalProjectId(context);
 }
+
+/**
+ * "The selected project is not my personal one" — the same derivation
+ * `routes/-lib/useCredentialFormContext.ts` already uses for its own
+ * `isTeamProject`, reused here (#952/ELITEA-1092,1094,1099) so
+ * `EditToolkit.tsx` can thread it to `ToolkitForm` without adding its own
+ * inline boolean expression (§3.5 complexity budget). Deliberately `false`
+ * while either id is unknown: this only unlocks a warning modal, never a
+ * restriction. Not exported — `useIsTeamProject` below is the only caller,
+ * and `knip` flags an unused export otherwise.
+ */
+function isTeamProject(projectId: string | undefined, personalProjectId: string | undefined): boolean {
+  return projectId !== undefined && projectId !== '' && personalProjectId !== undefined && projectId !== personalProjectId;
+}
+
+export function useIsTeamProject(projectId: string | undefined): boolean {
+  const personalProjectId = usePersonalProjectId();
+  return isTeamProject(projectId, personalProjectId);
+}
