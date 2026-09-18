@@ -34,6 +34,7 @@ pub(super) struct DurableContextCompaction {
     plan: ContextCompactionPlan,
     budget: Arc<dyn ModelRequestBudget>,
     summarizer: Arc<dyn BaseEventsSummarizer>,
+    repair_summarizer: Arc<dyn BaseEventsSummarizer>,
     definition_digest: [u8; 32],
     record: Mutex<Option<CompactionRecord>>,
 }
@@ -70,13 +71,20 @@ impl DurableContextCompaction {
         }
         let record = record.filter(|record| record.definition_digest == definition_digest);
         let summarizer = Arc::new(
-            LlmEventSummarizer::new(model)
+            LlmEventSummarizer::new(model.clone())
                 .with_prompt_template(super::context_summary::prompt(&plan.summary_instructions)),
+        );
+        let repair_summarizer = Arc::new(
+            LlmEventSummarizer::new(model).with_prompt_template(format!(
+                "{}\nThe previous candidate failed validation. Correct it using only the original source records. The final validation-feedback record contains the rejected candidate and a static failure code, not additional source evidence. Return the complete corrected record. Each evidence_refs entry must equal a references.value, not a label. Every referenced value must exist in the original source. Preserve valid facts; do not invent references to satisfy validation.",
+                super::context_summary::prompt(&plan.summary_instructions)
+            )),
         );
         Ok(Self {
             plan,
             budget,
             summarizer,
+            repair_summarizer,
             definition_digest,
             record: Mutex::new(record),
         })
@@ -237,7 +245,33 @@ impl DurableContextCompaction {
             return Err(invalid_compaction());
         };
         let source = serde_json::json!({"objective":objective,"history":contents});
-        super::context_summary::validate(text, &source)
+        match super::context_summary::validate(text, &source) {
+            Ok(validated) => Ok(validated),
+            Err(error) => {
+                // One correction attempt. Never commit rejected text or use it
+                // as evidence when validating the replacement.
+                tracing::info!(
+                    validation_code = error.code,
+                    "correcting invalid context summary"
+                );
+                let mut feedback = Event::new("context-summary-validation");
+                "validation-feedback".clone_into(&mut feedback.author);
+                feedback.set_content(Content::new("user").with_text(
+                    serde_json::json!({"validation_code": error.code, "rejected_candidate": text}).to_string(),
+                ));
+                events.push(feedback);
+                let corrected = self
+                    .repair_summarizer
+                    .summarize_events(&events)
+                    .await?
+                    .and_then(|event| event.actions.compaction)
+                    .ok_or_else(invalid_compaction)?;
+                let [Part::Text { text }] = corrected.compacted_content.parts.as_slice() else {
+                    return Err(invalid_compaction());
+                };
+                super::context_summary::validate(text, &source)
+            }
+        }
     }
 
     pub(super) fn state_value(record: Option<&CompactionRecord>) -> adk_rust::Result<Value> {

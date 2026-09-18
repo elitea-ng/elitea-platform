@@ -38,7 +38,8 @@ impl SummaryModel {
         Self {
             invocation: invocation.clone(),
             output_cap,
-            max_calls: invocation.max_model_turns,
+            // At most one initial summary and one correction per model step.
+            max_calls: invocation.max_model_turns.saturating_mul(2),
             calls: AtomicU32::new(0),
             fresh_model: Box::new(fresh_model),
         }

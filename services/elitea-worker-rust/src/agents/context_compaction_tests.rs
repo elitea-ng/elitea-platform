@@ -38,6 +38,7 @@ impl ModelRequestBudget for Budget {
 struct Summary {
     requests: Mutex<Vec<LlmRequest>>,
     fail: bool,
+    invalid_candidates: usize,
     pause: Option<Arc<tokio::sync::Notify>>,
 }
 #[async_trait]
@@ -51,7 +52,28 @@ impl Llm for Summary {
         streaming: bool,
     ) -> adk_rust::Result<LlmResponseStream> {
         assert!(!streaming);
-        self.requests.lock().unwrap().push(request);
+        let call = {
+            let mut requests = self.requests.lock().unwrap();
+            requests.push(request);
+            requests.len()
+        };
+        if call <= self.invalid_candidates {
+            let mut candidate: Value =
+                serde_json::from_str(&crate::agents::context_summary::fixture()).unwrap();
+            candidate["completed_work"] =
+                json!([{"result":"completed", "evidence_refs":["invented-reference"]}]);
+            if call == 2 {
+                // The correction must not turn its own rejected candidate
+                // into a source for invented reference values.
+                candidate["references"] =
+                    json!([{"label":"claimed evidence", "value":"invented-reference"}]);
+            }
+            return Ok(Box::pin(stream::once(async move {
+                Ok(LlmResponse::new(
+                    Content::new("model").with_text(candidate.to_string()),
+                ))
+            })));
+        }
         if let Some(pause) = &self.pause {
             pause.notified().await;
         }
@@ -773,4 +795,38 @@ async fn postgres_summary_child() {
         }));
     }
     pool.close().await;
+}
+
+#[tokio::test]
+async fn summary_correction_is_bounded_and_keeps_original_evidence() {
+    for invalid_candidates in [1, 2] {
+        let sessions = InMemorySessionService::new();
+        let session = create(&sessions).await;
+        let summary = Arc::new(Summary {
+            invalid_candidates,
+            ..Summary::default()
+        });
+        let compaction = DurableContextCompaction::new(
+            plan(),
+            Arc::new(Budget),
+            summary.clone(),
+            [7; 32],
+            session.as_ref(),
+        )
+        .unwrap();
+        let result = compaction.prepare(history(), checkpoint_ready).await;
+        assert_eq!(summary.requests.lock().unwrap().len(), 2);
+        assert!(compaction.record.lock().unwrap().is_none());
+        assert!(session.state().get(STATE_KEY).is_none());
+        if invalid_candidates == 1 {
+            let (_, record) = result.unwrap();
+            assert!(record.is_some());
+        } else {
+            assert_eq!(result.err().unwrap().code, "context_summary_reference");
+        }
+        let calls = summary.requests.lock().unwrap();
+        let corrected_prompt = serde_json::to_string(&calls[1]).unwrap();
+        assert!(corrected_prompt.contains("context_summary_evidence"));
+        assert!(corrected_prompt.contains("Original task, preserve this exactly."));
+    }
 }

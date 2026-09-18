@@ -151,3 +151,25 @@ They inspect both wire schemas and verify ordinary chat isolation.
 They reject changed or omitted schemas after invocation admission.
 Clippy passes for all targets with warnings denied.
 These checks do not replace live provider or browser acceptance.
+
+## Browser retest and bounded correction
+
+The fresh headed Playwright run uses deployed image `sha256:b74a33071fc496a4bbbbfbb8fb1326c9cdb9ba35ce2ffd00fa2fa3656d812882`.
+Synthetic chat 590 reaches 108,124 estimated input tokens on 2026-09-18.
+The response passes shape validation but fails `context_summary_evidence`.
+Execution `e9fac0084f3bff422e509f58f925e5a2` does not commit a summary.
+This is not a successful compaction acceptance run.
+
+`DurableContextCompaction` now permits one correction after local summary validation fails.
+The correction receives the original records, the rejected candidate, and the static validation code.
+The platform identifies the candidate as rejected data, not source evidence.
+Validation of the correction uses only the original source records.
+A second invalid candidate terminates preparation without replacing history.
+Transport and stream failures do not enter this correction path.
+The summary adapter permits at most two calls per admitted model step.
+Correction remains subject to the summary model's input and output limits.
+
+All 11 compaction checks and 43 provider-adapter checks pass after this correction change.
+The checks include ten compactions in one tool loop and bounded correction failure.
+All-target Clippy passes with warnings denied.
+Live acceptance of the correction remains pending.

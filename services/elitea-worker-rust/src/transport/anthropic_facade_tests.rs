@@ -952,7 +952,7 @@ async fn adk_summaries_are_complete_and_isolated_from_the_chat_binding() {
     )
     .unwrap();
     let mut invocation = invocation(MODEL, None);
-    invocation.max_model_turns = 2;
+    invocation.max_model_turns = 1;
     let bound = client
         .bind_anthropic_ordinary(
             &ClaimScopedEliteaContext::fixture(17, TOKEN),
