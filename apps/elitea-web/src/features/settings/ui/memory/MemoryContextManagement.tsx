@@ -101,7 +101,7 @@ export const MemoryContextManagement = memo(({ onAutoSaveRequested, models = [] 
                         )}
                         tooltip={t(
                           'settings.memory.contextManagement.preserveRecentMessagesTooltip',
-                          'Number of most recent messages to always keep in context',
+                          'Preferred number of recent messages to keep verbatim. Large messages may be summarized to free context. The current request and active tool exchanges remain protected.',
                         )}
                       />
                       <InputBase

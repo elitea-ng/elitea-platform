@@ -49,7 +49,7 @@ func (m Measurement) Valid() bool {
 		input > 0 && m.ReservedOutputTokens > 0 && m.SafetyMarginTokens > 0 &&
 		input+uint64(m.ReservedOutputTokens)+uint64(m.SafetyMarginTokens) <= uint64(m.TotalTokens) &&
 		m.CompactionTriggerTokens == (input*90+99)/100 &&
-		m.CompactionTargetTokens == input*70/100 &&
+		(m.CompactionTargetTokens == input*15/100 || m.CompactionTargetTokens == input*70/100) &&
 		m.EstimatedInputTokens <= 9_007_199_254_740_991 &&
 		(m.Phase == "compacting" || m.EstimatedInputTokens <= input)
 }

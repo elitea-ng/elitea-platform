@@ -140,7 +140,25 @@ impl DurableContextCompaction {
             return Ok((request, record));
         }
         let previous_len = record.as_ref().map_or(0, |value| value.replacement.len());
-        let cutoff = complete_prefix(&working, self.plan.preserve_recent_messages)?;
+        // Recent-message count is a preference. Large records can otherwise
+        // consume most of the fresh window even after a successful summary.
+        let mut cutoff = complete_prefix(&working, self.plan.preserve_recent_messages)?;
+        let summary_reservation = (super::context_summary::MAX_SUMMARY_BYTES / 4) as u64;
+        for preserve in (1..=self.plan.preserve_recent_messages.min(working.len())).rev() {
+            let candidate = complete_prefix(&working, preserve)?;
+            if candidate < cutoff {
+                continue;
+            }
+            cutoff = candidate;
+            request.contents = joined(&pinned, &working[cutoff..]);
+            let retained = self.budget.measure(&request)?;
+            if retained.estimated_input.saturating_add(summary_reservation)
+                <= before.budget.compaction_target()
+            {
+                break;
+            }
+        }
+        request.contents = joined(&pinned, &working);
         if cutoff <= previous_len {
             before.check()?;
             return Ok((request, record));
@@ -216,6 +234,57 @@ impl DurableContextCompaction {
         objective: &Content,
         contents: &[Content],
     ) -> adk_rust::Result<String> {
+        let mut remaining = super::context_summary::MAX_BATCH_ATTEMPTS;
+        self.summarize_bounded(objective, contents, &mut remaining)
+            .await
+    }
+
+    /// Admission failures split source records. Partial summaries are never committed.
+    fn summarize_bounded<'a>(
+        &'a self,
+        objective: &'a Content,
+        contents: &'a [Content],
+        remaining: &'a mut u32,
+    ) -> adk_rust::futures::future::BoxFuture<'a, adk_rust::Result<String>> {
+        Box::pin(async move {
+            *remaining = remaining.checked_sub(1).ok_or_else(summary_capacity)?;
+            match self.summarize_once(objective, contents).await {
+                Ok(summary) => Ok(summary),
+                Err(error)
+                    if matches!(
+                        error.code,
+                        "context_budget_exceeded" | "model_request_bytes_exceeded"
+                    ) =>
+                {
+                    if contents.len() < 2 {
+                        return Err(summary_capacity());
+                    }
+                    let (earlier, later) = contents.split_at(contents.len() / 2);
+                    let earlier = self
+                        .summarize_bounded(objective, earlier, remaining)
+                        .await?;
+                    let later = self.summarize_bounded(objective, later, remaining).await?;
+                    let partials = [
+                        Content::new("user").with_text(format!("Validated earlier source summary:\n{earlier}")),
+                        Content::new("user").with_text(format!("Validated later source summary. Later corrections take precedence:\n{later}")),
+                    ];
+                    let merged = self
+                        .summarize_bounded(objective, &partials, remaining)
+                        .await?;
+                    // A merge cannot promote a new value into source evidence.
+                    let source = serde_json::json!({"objective":objective,"history":contents});
+                    super::context_summary::validate(&merged, &source)
+                }
+                Err(error) => Err(error),
+            }
+        })
+    }
+
+    async fn summarize_once(
+        &self,
+        objective: &Content,
+        contents: &[Content],
+    ) -> adk_rust::Result<String> {
         let mut events = Vec::with_capacity(contents.len() + 1);
         let mut orientation = Event::new("context-summary-objective");
         "protected-original-user-request".clone_into(&mut orientation.author);
@@ -262,6 +331,8 @@ impl DurableContextCompaction {
                     let mut value = super::context_summary::evidence_correction_input(text)?;
                     value["validation_code"] = Value::String(error.code.into());
                     value
+                } else if error.code == "context_summary_reference" {
+                    super::context_summary::reference_correction_input(text, &source)?
                 } else {
                     serde_json::json!({"validation_code": error.code, "rejected_candidate": text})
                 };
@@ -284,10 +355,41 @@ impl DurableContextCompaction {
                 if evidence_only {
                     super::context_summary::apply_evidence_correction(text, corrected_text, &source)
                 } else {
-                    super::context_summary::validate(corrected_text, &source)
+                    match super::context_summary::validate(corrected_text, &source) {
+                        Err(error) if error.code == "context_summary_evidence" => {
+                            // Reference repair can leave dangling links. One final
+                            // evidence-only correction cannot rewrite accepted facts.
+                            self.correct_evidence(corrected_text, &source).await
+                        }
+                        result => result,
+                    }
                 }
             }
         }
+    }
+
+    async fn correct_evidence(&self, text: &str, source: &Value) -> adk_rust::Result<String> {
+        let mut feedback = Event::new("context-summary-evidence-validation");
+        "validation-feedback".clone_into(&mut feedback.author);
+        feedback.set_content(
+            Content::new("user")
+                .with_text(super::context_summary::evidence_correction_input(text)?.to_string()),
+        );
+        let corrected = self
+            .repair_summarizer
+            .summarize_events(&[feedback])
+            .await?
+            .and_then(|event| event.actions.compaction)
+            .ok_or_else(invalid_compaction)?;
+        let [
+            Part::Text {
+                text: corrected_text,
+            },
+        ] = corrected.compacted_content.parts.as_slice()
+        else {
+            return Err(invalid_compaction());
+        };
+        super::context_summary::apply_evidence_correction(text, corrected_text, source)
     }
 
     pub(super) fn state_value(record: Option<&CompactionRecord>) -> adk_rust::Result<Value> {
@@ -358,6 +460,15 @@ fn complete_prefix(contents: &[Content], preserve: usize) -> adk_rust::Result<us
         }
     }
     Ok(cutoff)
+}
+
+fn summary_capacity() -> AdkError {
+    AdkError::new(
+        ErrorComponent::Model,
+        ErrorCategory::InvalidInput,
+        "context_summary_capacity",
+        "The selected summarization model cannot compact these records within its capacity. Select a larger summarization model.",
+    )
 }
 
 fn invalid_compaction() -> AdkError {

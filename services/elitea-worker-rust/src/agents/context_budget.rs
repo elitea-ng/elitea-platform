@@ -96,7 +96,7 @@ impl RequestContextBudget {
     }
 
     pub(crate) fn compaction_target(self) -> u64 {
-        u64::from(self.input_limit) * 70 / 100
+        u64::from(self.input_limit) * 15 / 100
     }
 
     pub(crate) fn measure_provider_request(
@@ -323,9 +323,9 @@ mod tests {
         .unwrap();
         let child = parent.for_model(limits(128_000, 16_000), None).unwrap();
         assert_eq!(parent.compaction_trigger(), 184_752);
-        assert_eq!(parent.compaction_target(), 143_696);
+        assert_eq!(parent.compaction_target(), 30_792);
         assert_eq!(child.compaction_trigger(), 99_648);
-        assert_eq!(child.compaction_target(), 77_504);
+        assert_eq!(child.compaction_target(), 16_608);
 
         let request = RequestContextUsage {
             budget: parent,

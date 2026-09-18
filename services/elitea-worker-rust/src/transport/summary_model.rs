@@ -38,8 +38,10 @@ impl SummaryModel {
         Self {
             invocation: invocation.clone(),
             output_cap,
-            // At most one initial summary and one correction per model step.
-            max_calls: invocation.max_model_turns.saturating_mul(2),
+            // Each bounded batch permits one general and one final evidence-only correction.
+            max_calls: invocation
+                .max_model_turns
+                .saturating_mul(crate::agents::context_summary::MAX_BATCH_ATTEMPTS * 3),
             calls: AtomicU32::new(0),
             fresh_model: Box::new(fresh_model),
         }

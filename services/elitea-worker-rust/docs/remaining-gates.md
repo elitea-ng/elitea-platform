@@ -136,8 +136,11 @@ The fresh browser run compacts 108,264 estimated tokens to 12,858 and preserves 
 A second fresh browser session verifies persisted compaction status and stable answer text.
 Haiku refuses part of the synthetic continuation despite an intact summary.
 A separate GPT Balanced browser run passes all four fact checks and reload after compaction from 242,998 to 54,793 estimated tokens.
-The first GPT run with an inherited smaller Haiku summary model fails admission before provider dispatch; bounded summary batching remains open.
-Full-window capacity, smaller-summary-model batching, nested scopes, and recovery still require acceptance.
+The first GPT run with an inherited smaller Haiku summary model fails admission before provider dispatch.
+A subsequent split-and-merge implementation passes a fresh browser run with GPT and Haiku, including all four facts and reload.
+The retention target is now 15 percent of usable input, with protected-input exceptions.
+Fresh browser acceptance reaches 27,886 estimated tokens, or 11 percent, with all four facts and stable reload.
+Full-window capacity, indivisible oversized records, repeated live compactions, and nested recovery remain open.
 The same audit identifies a separate final-output frame limit and an unresolved regeneration measurement difference.
 Do not interpret either failure as proof that the model context is full.
 The [large-output correction](source-mapping/model-output-delivery-20260918.md) separates completed model answers from individual event limits.

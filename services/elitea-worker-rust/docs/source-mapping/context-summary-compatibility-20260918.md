@@ -254,3 +254,93 @@ The provider route and fixture differ from the earlier Haiku case, so it does no
 No product code, model catalogue, or database schema changed for this comparison.
 Full-window input capacity, bounded batching for smaller summary models, repeated live compactions,
 nested scopes, and crash recovery remain open.
+
+## Bounded summary batches
+
+`DurableContextCompaction::summarize_bounded` handles local input-capacity failures from the selected summary model.
+It divides ordered source records and invokes the existing ADK summarizer for each half.
+Each partial record passes the same structured contract and source-reference validation.
+The merge receives earlier and later validated records in order, with later corrections taking precedence.
+The final record passes validation against the original source before checkpoint preparation can continue.
+Provider failures and invalid summaries do not trigger source splitting.
+
+One compaction permits at most 64 batch or merge attempts, including failed admission probes.
+Each attempt permits one general correction and one final evidence-only correction.
+The summary transport reserves this bounded allowance per admitted model step.
+Exhausted attempts and indivisible oversized records fail with `context_summary_capacity`.
+No source bytes are truncated. The original objective remains present in each batch.
+
+Partial records remain local to preparation. They do not change session state or summary coverage.
+The existing checkpoint transaction commits only the final accepted summary and prepared task request.
+A crash before that transaction restarts summary preparation from unchanged source history.
+Persisted intermediate-summary reuse is not implemented by this change.
+
+Focused tests verify source coverage, ordered merging, unchanged state, attempt limits, and indivisible-record rejection.
+The compaction filter passes with isolated PostgreSQL databases available.
+The process-replacement check runs against PostgreSQL and restores the accepted summary and prepared request.
+It does not test a crash during intermediate batch generation.
+All-target Clippy passes with warnings denied.
+Live acceptance of smaller-summary-model batching is pending.
+
+The first deployed batch image is `sha256:e38104d77480e23aeb8b68c0ce710fee2cfd2cc648dd68beb7a0b26da72a9da0`.
+Chat 594 uses GPT for the task and explicitly selects Haiku for summaries.
+Execution `aa8f98c8ad8900553d4c9a4659bddec1` passes the original oversized-source boundary through splitting.
+A partial Haiku summary and its correction then fail `context_summary_reference`.
+The worker retains original history. This run is not successful live batching acceptance.
+
+`context_summary.rs::reference_correction_input` now identifies each reference value absent from the original source.
+The bounded correction receives those values, its rejected candidate, and the original source records.
+The normal validator still rejects invented references. No invalid value becomes source evidence.
+A focused test confirms that valid values remain outside the invalid-value list.
+
+The reference-feedback image is `sha256:6268e05186a0736d9735f2e7b4dcc93a0089f31cf055439c9498b691e37288b0`.
+Execution `90bf28a4bcc289f88f9ec4ec911072fb` passes in a fresh browser with GPT and the smaller Haiku summarizer.
+Estimated input falls from 242,998 to 55,056 tokens. All four required facts remain in the final answer.
+Reload preserves the answer and compacted state. The screenshot was inspected.
+This proves one live split-and-merge case, not Full-window or all-scope acceptance.
+
+## Size-aware recent history
+
+A read-only checkpoint query finds a 3,437-byte replacement and two retained 107,699-byte archive records.
+Those recent records explain most of the remaining 21-percent context use.
+`context_compaction.rs::prepare` now expands the complete source prefix when recent records exceed the soft target.
+It reserves room for the structured summary and stops when retained input fits the target.
+The current request remains exact. Pending tool-call/result groups cannot be split.
+Protected instructions, tool definitions, and execution authority are unchanged.
+An unusually large protected request can exceed the target without being truncated.
+
+`context_budget.rs` now targets 15 percent of usable input. The trigger remains 90 percent.
+`context_status.rs` and Main `contextsettings/measurement.go` accept the new target and legacy 70-percent measurements.
+The `NodeEventV1` contract documents both values. No field numbers or database schemas change.
+Profile and memory settings explain that the recent-message count is a preference.
+A regression covers bulky recent records that previously prevented effective compaction.
+
+Keep unchanged instructions and tool definitions in the stable request prefix.
+Compaction changes the historical section, so cache reuse for that section can be lost.
+Provider cache-hit and cached-token measurements remain unverified.
+Do not treat request-prefix stability as measured cache savings.
+
+Chat 595 first reaches the new target contract but fails summary evidence validation.
+Execution `a84668c98453b3f413f09e20e954de58` repairs an invalid reference but leaves a dangling evidence link.
+A final evidence-only correction now handles this specific case after the general correction.
+Only evidence arrays can change during that final correction. All other candidate fields remain exact.
+Three calls per batch are the maximum, including the initial candidate. No unbounded correction loop is introduced.
+The targeted regression verifies that the final correction omits bulk history and cannot commit partial state.
+The final lower-retention browser run passes on 2026-09-18.
+Execution `cc8ea7827c8790f072e6f7d775782264` reduces estimated input from 242,998 to 27,886 tokens, approximately 11 percent.
+GPT retains all four facts after Haiku batch summarization, including the correction and pending approval.
+The fresh headed browser records no page errors. Reload preserves the answer and context status.
+The screenshot was inspected. The earlier failed request remains visible as history.
+
+Deployed images for this acceptance:
+
+- Worker: `sha256:4f9a3d8be300657a4d230dc442aa796d9669e8c255c8c10c9e9f1a51703694a0`.
+- Main: `sha256:22c4aeb2c5f4904e4519e31b95d4cd6790d33113cff1c65f31d23e446c2d7314`.
+- Web: `sha256:d839d0f9dccbb2382748d251f7fba8a3e6ebac358c6ec597341d9870d429d05e`.
+
+Builds use committed source plus this change. Deferred HITL edits are excluded.
+All 17 focused compaction tests pass with PostgreSQL available, including the process-replacement check.
+All 34 event-projection tests and Main context-measurement tests pass. Rust all-target Clippy passes with warnings denied.
+A broader context filter passes 72 tests before the final evidence-only regression is added.
+The final focused regression set covers that correction. Web production builds pass.
+Full-window capacity, indivisible oversized records, repeated live compactions, and nested recovery remain open.

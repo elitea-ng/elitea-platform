@@ -42,6 +42,11 @@ option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elite
 // Terminal projection must verify both values before accepting success.
 // These fragments use the existing execution, generation, and message fences.
 // Consumers must deploy before producers emit these versioned members.
+// agent_context_status uses response_metadata.context_status version 1.
+// compaction_target_tokens is floor(usable_input_tokens * 15 / 100).
+// Consumers also accept the legacy 70-percent target for persisted events.
+// The target is advisory. Protected instructions and active tool groups can exceed it.
+// The trigger remains ceil(usable_input_tokens * 90 / 100).
 message NodeEventV1 {
   string type = 1;
   optional string stream_id = 2;

@@ -39,6 +39,9 @@ struct Summary {
     requests: Mutex<Vec<LlmRequest>>,
     fail: bool,
     invalid_candidates: usize,
+    input_byte_limit: Option<usize>,
+    promote_summary_label: bool,
+    repair_reference_then_links: bool,
     pause: Option<Arc<tokio::sync::Notify>>,
 }
 #[async_trait]
@@ -52,11 +55,39 @@ impl Llm for Summary {
         streaming: bool,
     ) -> adk_rust::Result<LlmResponseStream> {
         assert!(!streaming);
+        let promote_label = self.promote_summary_label
+            && serde_json::to_string(&request)
+                .unwrap()
+                .contains("Validated earlier source summary");
+        let exceeds_capacity = self
+            .input_byte_limit
+            .is_some_and(|limit| serde_json::to_vec(&request).unwrap().len() > limit);
         let call = {
             let mut requests = self.requests.lock().unwrap();
             requests.push(request);
             requests.len()
         };
+        if exceeds_capacity {
+            return Err(AdkError::new(
+                ErrorComponent::Model,
+                ErrorCategory::InvalidInput,
+                "context_budget_exceeded",
+                "Fixture summary input capacity.",
+            ));
+        }
+        if self.repair_reference_then_links && call <= 2 {
+            let mut candidate: Value =
+                serde_json::from_str(&crate::agents::context_summary::fixture()).unwrap();
+            if call == 1 {
+                candidate["references"][0]["value"] = json!("invented-reference");
+            }
+            candidate["completed_work"][0]["evidence_refs"] = json!(["invented-reference"]);
+            return Ok(Box::pin(stream::once(async move {
+                Ok(LlmResponse::new(
+                    Content::new("model").with_text(candidate.to_string()),
+                ))
+            })));
+        }
         if call <= self.invalid_candidates {
             let mut candidate: Value =
                 serde_json::from_str(&crate::agents::context_summary::fixture()).unwrap();
@@ -83,6 +114,17 @@ impl Llm for Summary {
                 "fixture_summary_interrupted",
                 "Simulated interruption during summarization.",
             ));
+        }
+        if promote_label {
+            let mut candidate: Value =
+                serde_json::from_str(&crate::agents::context_summary::fixture()).unwrap();
+            candidate["references"][0]["value"] = json!("Verified lookup");
+            candidate["completed_work"][0]["evidence_refs"] = json!(["Verified lookup"]);
+            return Ok(Box::pin(stream::once(async move {
+                Ok(LlmResponse::new(
+                    Content::new("model").with_text(candidate.to_string()),
+                ))
+            })));
         }
         Ok(Box::pin(stream::once(async {
             // Compatible providers can add prose and fences despite the prompt.
@@ -831,4 +873,214 @@ async fn summary_correction_is_bounded_and_keeps_original_evidence() {
         assert!(!corrected_prompt.contains("earlier draft"));
         assert!(corrected_prompt.len() < 8_000);
     }
+}
+
+#[tokio::test]
+async fn smaller_summary_model_splits_and_merges_without_committing_partial_records() {
+    let sessions = InMemorySessionService::new();
+    let session = create(&sessions).await;
+    let summary = Arc::new(Summary {
+        input_byte_limit: Some(16_000),
+        ..Summary::default()
+    });
+    let compaction = DurableContextCompaction::new(
+        plan(),
+        Arc::new(Budget),
+        summary.clone(),
+        [7; 32],
+        session.as_ref(),
+    )
+    .unwrap();
+    let objective = Content::new("user").with_text("Preserve evidence call-one.");
+    let records = (0..4)
+        .map(|index| {
+            Content::new("model").with_text(format!("record-{index}: {}", "x".repeat(9_000)))
+        })
+        .collect::<Vec<_>>();
+    let result = compaction.summarize(&objective, &records).await.unwrap();
+    assert!(result.contains("call-one"));
+    assert!(compaction.record.lock().unwrap().is_none());
+    assert!(session.state().get(STATE_KEY).is_none());
+    let calls = summary.requests.lock().unwrap();
+    assert_eq!(
+        calls.len(),
+        10,
+        "three failed admissions, four leaves, three merges"
+    );
+    for index in 0..4 {
+        assert!(
+            calls.iter().any(|request| {
+                let encoded = serde_json::to_string(request).unwrap();
+                encoded.len() <= 16_000 && encoded.contains(&format!("record-{index}:"))
+            }),
+            "each source record reaches an admitted leaf"
+        );
+    }
+    let last = serde_json::to_string(calls.last().unwrap()).unwrap();
+    assert!(last.contains("Validated earlier source summary"));
+    assert!(last.contains("Later corrections take precedence"));
+}
+
+#[tokio::test]
+async fn summary_batching_stops_for_indivisible_input_and_attempt_exhaustion() {
+    let sessions = InMemorySessionService::new();
+    let session = create(&sessions).await;
+    let summary = Arc::new(Summary {
+        input_byte_limit: Some(16_000),
+        ..Summary::default()
+    });
+    let compaction = DurableContextCompaction::new(
+        plan(),
+        Arc::new(Budget),
+        summary.clone(),
+        [7; 32],
+        session.as_ref(),
+    )
+    .unwrap();
+    let objective = Content::new("user").with_text("Preserve evidence call-one.");
+    let records = [Content::new("model").with_text("x".repeat(32_000))];
+    assert_eq!(
+        compaction
+            .summarize(&objective, &records)
+            .await
+            .unwrap_err()
+            .code,
+        "context_summary_capacity"
+    );
+    let mut remaining = 0;
+    assert_eq!(
+        compaction
+            .summarize_bounded(&objective, &records, &mut remaining)
+            .await
+            .unwrap_err()
+            .code,
+        "context_summary_capacity"
+    );
+    assert_eq!(summary.requests.lock().unwrap().len(), 1);
+    assert!(compaction.record.lock().unwrap().is_none());
+}
+
+#[test]
+fn reference_correction_identifies_only_values_absent_from_original_source() {
+    let mut candidate: Value =
+        serde_json::from_str(&super::super::context_summary::fixture()).unwrap();
+    candidate["references"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"label":"Fabricated", "value":"missing-evidence"}));
+    let source = json!({"tool_call":"call-one"});
+    let feedback =
+        super::super::context_summary::reference_correction_input(&candidate.to_string(), &source)
+            .unwrap();
+    assert_eq!(
+        feedback["invalid_reference_values"],
+        json!(["missing-evidence"])
+    );
+    assert_eq!(feedback["rejected_candidate"], candidate);
+    assert_eq!(
+        super::super::context_summary::validate(&candidate.to_string(), &source)
+            .unwrap_err()
+            .code,
+        "context_summary_reference"
+    );
+}
+
+#[tokio::test]
+async fn merged_summary_cannot_promote_a_generated_label_into_source_evidence() {
+    let sessions = InMemorySessionService::new();
+    let session = create(&sessions).await;
+    let summary = Arc::new(Summary {
+        input_byte_limit: Some(16_000),
+        promote_summary_label: true,
+        ..Summary::default()
+    });
+    let compaction = DurableContextCompaction::new(
+        plan(),
+        Arc::new(Budget),
+        summary.clone(),
+        [7; 32],
+        session.as_ref(),
+    )
+    .unwrap();
+    let objective = Content::new("user").with_text("Preserve evidence call-one.");
+    let records = [
+        Content::new("model").with_text("x".repeat(9_000)),
+        Content::new("model").with_text("y".repeat(9_000)),
+    ];
+    assert_eq!(
+        compaction
+            .summarize(&objective, &records)
+            .await
+            .unwrap_err()
+            .code,
+        "context_summary_reference"
+    );
+    assert_eq!(summary.requests.lock().unwrap().len(), 4);
+    assert!(compaction.record.lock().unwrap().is_none());
+}
+
+#[tokio::test]
+async fn bulky_recent_messages_are_summarized_while_the_current_request_stays_exact() {
+    let sessions = InMemorySessionService::new();
+    let session = create(&sessions).await;
+    let mut settings = plan();
+    settings.preserve_recent_messages = 5;
+    let compaction = DurableContextCompaction::new(
+        settings,
+        Arc::new(Budget),
+        Arc::new(Summary::default()),
+        [7; 32],
+        session.as_ref(),
+    )
+    .unwrap();
+    let current = Content::new("user")
+        .with_text("Continue with the corrected teal delivery; prepare the handoff note.");
+    let mut contents = vec![Content::new("user").with_text("Preserve evidence call-one.")];
+    for index in 0..4 {
+        contents.push(
+            Content::new("model").with_text(format!("archive-{index}: {}", "x".repeat(8_000))),
+        );
+    }
+    contents.push(current.clone());
+    let request: LlmRequest =
+        serde_json::from_value(json!({"model":"fixture", "contents":contents})).unwrap();
+    let (prepared, record) = compaction.prepare(request, checkpoint_ready).await.unwrap();
+    assert_eq!(record.unwrap().covered_count, 4);
+    assert_eq!(prepared.contents.last().unwrap().parts, current.parts);
+    let usage = Budget.measure(&prepared).unwrap();
+    assert!(usage.estimated_input <= usage.budget.compaction_target());
+    assert!(
+        !serde_json::to_string(&prepared)
+            .unwrap()
+            .contains("archive-")
+    );
+}
+
+#[tokio::test]
+async fn reference_repair_allows_one_final_evidence_only_correction() {
+    let sessions = InMemorySessionService::new();
+    let session = create(&sessions).await;
+    let summary = Arc::new(Summary {
+        repair_reference_then_links: true,
+        ..Summary::default()
+    });
+    let compaction = DurableContextCompaction::new(
+        plan(),
+        Arc::new(Budget),
+        summary.clone(),
+        [7; 32],
+        session.as_ref(),
+    )
+    .unwrap();
+    let objective = Content::new("user").with_text("Preserve evidence call-one.");
+    let records = [Content::new("model").with_text("bulk-original-source ".repeat(500))];
+    let result = compaction.summarize(&objective, &records).await.unwrap();
+    assert!(result.contains("call-one"));
+    assert!(!result.contains("invented-reference"));
+    let calls = summary.requests.lock().unwrap();
+    assert_eq!(calls.len(), 3);
+    let correction = serde_json::to_string(calls.last().unwrap()).unwrap();
+    assert!(correction.contains("evidence_refs_only"));
+    assert!(!correction.contains("bulk-original-source"));
+    assert!(compaction.record.lock().unwrap().is_none());
 }

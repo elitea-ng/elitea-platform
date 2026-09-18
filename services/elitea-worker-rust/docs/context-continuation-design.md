@@ -86,7 +86,11 @@ The snapshot carries no credentials, tools, or task instructions.
 User clarification on 2026-09-16 applies independent compaction to nested agents and applications.
 Each child inherits the parent's admitted context policy, including the preset, explicit limit, preservation rules, and compaction thresholds.
 Freeze that policy for the child invocation and retain it during recovery.
-The default trigger calculation uses 90 percent of usable input capacity, with a target of 70 percent after compaction.
+The default trigger uses 90 percent of usable input capacity.
+The soft target after compaction is 15 percent. Protected input can exceed this target.
+Recent-message retention is size-aware. Preserve the current request and complete active tool exchanges.
+Keep unchanged instruction and tool-definition prefixes stable for provider caching.
+Do not claim cache savings without provider usage evidence.
 Automatic triggering and durable model projection have component checks. Deployed settings and browser acceptance remain open.
 The target does not authorize dropping protected content; the complete request must still pass its final capacity check.
 

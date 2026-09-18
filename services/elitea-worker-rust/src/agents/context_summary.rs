@@ -1,9 +1,12 @@
 //! Typed model-produced continuation notes, separate from execution authority.
 
+// Includes rejected admission probes and merge requests. Corrections are separately bounded.
+pub(crate) const MAX_BATCH_ATTEMPTS: u32 = 64;
+
 use adk_rust::{AdkError, ErrorCategory, ErrorComponent};
 use serde::{Deserialize, Serialize};
 
-const MAX_SUMMARY_BYTES: usize = 32 * 1024;
+pub(super) const MAX_SUMMARY_BYTES: usize = 32 * 1024;
 const MAX_ITEMS: usize = 24;
 const MAX_TEXT_BYTES: usize = 2048;
 
@@ -156,6 +159,27 @@ pub(super) fn validate(text: &str, source: &serde_json::Value) -> adk_rust::Resu
         );
     }
     Ok(validated)
+}
+
+/// Identify rejected references without copying source history into diagnostics.
+pub(super) fn reference_correction_input(
+    text: &str,
+    source: &serde_json::Value,
+) -> adk_rust::Result<serde_json::Value> {
+    let candidate: ContinuationSummary =
+        serde_json::from_str(summary_json(text)?).map_err(|_| invalid("context_summary_schema"))?;
+    let invalid_values = candidate
+        .references
+        .iter()
+        .filter(|reference| !contains_reference(source, &reference.value))
+        .map(|reference| &reference.value)
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({
+        "validation_code": "context_summary_reference",
+        "invalid_reference_values": invalid_values,
+        "correction_instruction": "These values do not occur verbatim in the original source. Remove them and their evidence links, or replace them with exact source values. Do not invent source evidence. Preserve the facts and pending work.",
+        "rejected_candidate": candidate
+    }))
 }
 
 /// Called only after validation rejects evidence membership. All reference

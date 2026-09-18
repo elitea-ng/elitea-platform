@@ -87,7 +87,7 @@ impl ModelContextStatus {
             || input + u64::from(self.reserved_output_tokens) + u64::from(self.safety_margin_tokens)
                 > u64::from(self.total_tokens)
             || self.compaction_trigger_tokens != (input * 90).div_ceil(100)
-            || self.compaction_target_tokens != input * 70 / 100
+            || ![input * 15 / 100, input * 70 / 100].contains(&self.compaction_target_tokens)
             || self.estimated_input_tokens > 9_007_199_254_740_991
             || (self.phase != ContextPhase::Compacting && self.estimated_input_tokens > input)
         {

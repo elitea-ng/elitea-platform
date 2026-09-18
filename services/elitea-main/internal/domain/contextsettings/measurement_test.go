@@ -50,3 +50,16 @@ func TestRuntimeContextUsesAdmittedCapacityWithoutInventingOtherCounters(t *test
 		t.Fatal("invented a runtime measurement")
 	}
 }
+
+func TestMeasurementAcceptsCompactTargetAndLegacyReplay(t *testing.T) {
+	for _, target := range []string{"30792", "143696"} {
+		raw := strings.Replace(validMeasurement, `"compaction_target_tokens":143696`, `"compaction_target_tokens":`+target, 1)
+		if _, err := DecodeMeasurement([]byte(raw)); err != nil {
+			t.Fatalf("target %s: %v", target, err)
+		}
+	}
+	raw := strings.Replace(validMeasurement, `"compaction_target_tokens":143696`, `"compaction_target_tokens":30793`, 1)
+	if _, err := DecodeMeasurement([]byte(raw)); err == nil {
+		t.Fatal("accepted an unrecognized target")
+	}
+}

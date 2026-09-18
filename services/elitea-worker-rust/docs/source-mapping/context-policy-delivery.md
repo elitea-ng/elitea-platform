@@ -21,7 +21,9 @@ New execution settings use `budget_mode: balanced` or `budget_mode: full`.
 Balanced resolves against the model window, with a 272,000-token ceiling.
 Full resolves against the authoritative model window.
 Rust reserves the admitted output and margin inside either window.
-The trigger remains 90 percent of usable input; the target remains 70 percent.
+The trigger remains 90 percent of usable input. The soft target is now 15 percent.
+Main and Rust also accept the former 70-percent target when replaying saved measurements.
+The recent-message count is a preference. Large messages can enter the summary to free working context.
 
 Legacy `max_context_tokens` values remain readable in product records but do not enter the new runtime settings projection.
 This replaces the earlier plan to preserve those numbers as combined-window overrides.
