@@ -70,14 +70,13 @@ test('SB01: every main-rail icon shows its exact label as a tooltip when collaps
   await page.goto(BASE_URL + '/app/chat', { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 20_000 });
 
-  // The a11y sweep runs EXPANDED, before the collapse below. Collapsed, the
-  // sidebar's own "Create" button (`widgets/create-button`'s `isSimple`
-  // branch) renders neither a visible label nor an `aria-label` at all — a
-  // real, PRE-EXISTING axe violation (`button-name`) this test's tooltip
-  // assertions do not touch. That defect is the create-button widget's own —
-  // recorded against ELITEA-1046/1047 in `shell.create-button.spec.ts` and
-  // `S/port/defects.md`, not repeated here as a second failure of a test
-  // whose subject is the NAV ROWS' tooltips, not the create button.
+  // The a11y sweep runs EXPANDED, before the collapse below, so it does not
+  // exercise the create button's collapsed state either way. That state's
+  // own axe `button-name` gap (ELITEA-1046, issue #904) is fixed now —
+  // `CreateEntityTrigger` wraps the collapsed icon in a `Tooltip`, which
+  // supplies the accessible name — verified directly in
+  // `shell.create-button.spec.ts`'s CB11, not repeated here since this
+  // test's subject is the NAV ROWS' tooltips, not the create button.
   await checkA11y(page);
 
   const toggle = page.getByTestId('sidebar-collapse-toggle');

@@ -214,19 +214,24 @@ test('RES05: each card has a distinct background, correct in Light and Dark mode
 });
 
 /* ────────────────────────────────────────────────────────────────────────
- * onetest: ELITEA-0967 — PRODUCT GAP (environment, not code): no card ships
- * with a default link (`useResourcesConfig`'s documented baseline — every
- * card starts `enabled: true` with an EMPTY link list until an admin
- * configures one; `admin.features.spec.ts`'s J36g/J36j restore that empty
- * baseline after their own round trip). With no rendered `<a>` inside any
- * card, there is nothing to hover, so the manual case's hover-highlight
- * claim cannot hold on a stack with no configured links.
+ * onetest: ELITEA-0967 — #891 fixed: `ResourceCardConfig.ts` now ships real
+ * `defaultLinks` for the Documentation card (real embedded-docs pages, see
+ * that file's own header), so a fresh deployment renders an actual `<a>` to
+ * hover — `linkSx`'s `&:hover` rule (`HelpCenterPage.tsx`) already applied,
+ * unchanged; the fix was giving the card something to apply it to.
  * ──────────────────────────────────────────────────────────────────────── */
-test('RES06: a card link shows a hover highlight — no default link exists to hover', async ({ page }) => {
-  test.fail(true, 'ELITEA-0967 (#891): product gap — no resource card ships a default link, so none can be hovered');
+test('RES06: a card link shows a hover highlight', async ({ page }) => {
   await gotoHelpCenter(page);
   const link = card(page, 'documentation').getByRole('link').first();
   await expect(link, 'a Documentation link must be present by default').toBeVisible({ timeout: 5_000 });
+  const before = await link.evaluate((el) => getComputedStyle(el).color);
+  await link.hover();
+  await expect
+    .poll(async () => link.evaluate((el) => getComputedStyle(el).color), {
+      message: 'hovering a resource link must change its colour (linkSx\'s &:hover rule)',
+      timeout: 3_000,
+    })
+    .not.toBe(before);
 });
 
 /* ────────────────────────────────────────────────────────────────────────
@@ -253,20 +258,17 @@ test('RES07: the (i) icon lists six component versions on hover — product gap'
 });
 
 /* ────────────────────────────────────────────────────────────────────────
- * onetest: ELITEA-0972, ELITEA-0973, ELITEA-0974, ELITEA-0975 — PRODUCT GAP:
- * the manual cases assume each card ships default, named links (Documentation:
- * "Getting Started/How-To Guides/Integrations/Migration & Update"; 3 Tutorials
- * links; 4 Video Library links; Release Notes with a "Latest" badge over
- * historical entries). None of that exists: `RESOURCE_CARD_CONFIGS`
- * (`src/pages/help-center/lib/ResourceCardConfig.ts`) carries no default
- * links at all — every card's content is 100% admin-configured — and there
- * is no "Latest" badge concept anywhere in `ResourceCard.tsx`/
- * `HelpCenterPage.tsx`. A fresh stack (or any stack whose admin has not
- * configured these specific links) shows "No links configured" in every
- * card and no "More…" affordance.
+ * onetest: ELITEA-0972, ELITEA-0973, ELITEA-0975 — #891 fixed (partial): the
+ * manual cases assume each card ships default, named links. `ResourceCardConfig
+ * .ts` now ships real `defaultLinks` for Documentation, Tutorials and Release
+ * Notes, pointing at REAL pages of the embedded docs SPA (verified against
+ * `content-registry.ts`'s slug rule — no invented paths), plus the "Latest"
+ * badge concept (`ResourceLink.badge`, rendered by `HelpCenterPage.tsx`).
+ * ELITEA-0974 (Video Library, RES10 below) stays a product gap: this app
+ * hosts no video content anywhere, so there is nothing real to default a
+ * "video" link to — see `ResourceCardConfig.ts`'s own note.
  * ──────────────────────────────────────────────────────────────────────── */
-test('RES08: the Documentation card offers Getting Started/How-To Guides/Integrations/Migration & Update — product gap', async ({ page }) => {
-  test.fail(true, 'ELITEA-0972 (#891): product gap — no default Documentation links ship; every link is admin-configured');
+test('RES08: the Documentation card offers Getting Started/How-To Guides/Integrations/Migration & Update', async ({ page }) => {
   await gotoHelpCenter(page);
   const doc = card(page, 'documentation');
   for (const label of ['Getting Started', 'How-To Guides', 'Integrations', 'Migration & Update']) {
@@ -276,25 +278,26 @@ test('RES08: the Documentation card offers Getting Started/How-To Guides/Integra
   }
 });
 
-test('RES09: the Tutorials card lists 3 tutorial links and a working More… link — product gap', async ({ page }) => {
-  test.fail(true, 'ELITEA-0973 (#891): product gap — no default Tutorials links ship; every link is admin-configured');
+test('RES09: the Tutorials card lists 3 tutorial links and a working More… link', async ({ page }) => {
   await gotoHelpCenter(page);
   const tutorials = card(page, 'tutorials');
   await expect(tutorials.getByRole('link')).toHaveCount(4, { timeout: 3_000 }); // 3 entries + "More…"
+  await expect(tutorials.getByRole('link', { name: 'More…' })).toBeVisible();
 });
 
 test('RES10: the Video Library card lists 4 video links and a working More… link — product gap', async ({ page }) => {
-  test.fail(true, 'ELITEA-0974 (#891): product gap — no default Video Library links ship; every link is admin-configured');
+  test.fail(
+    true,
+    'ELITEA-0974 (#891): product gap — this app hosts no video content anywhere; every other card in this ' +
+      'issue got real default links (#891, fixed), but inventing "video" links with no video behind them ' +
+      'would misrepresent the medium, the same reasoning #892 already applied to the hardcoded plugin list.',
+  );
   await gotoHelpCenter(page);
   const videos = card(page, 'videoLibrary');
   await expect(videos.getByRole('link')).toHaveCount(5, { timeout: 3_000 }); // 4 entries + "More…"
 });
 
-test('RES11: the Release Notes card marks the latest entry "Latest" over historical releases — product gap', async ({ page }) => {
-  test.fail(
-    true,
-    'ELITEA-0975 (#891): product gap — no "Latest" badge concept exists in ResourceCard/HelpCenterPage, and no default releases ship',
-  );
+test('RES11: the Release Notes card marks the latest entry "Latest" over historical releases', async ({ page }) => {
   await gotoHelpCenter(page);
   await expect(card(page, 'releaseNotes').getByText('Latest', { exact: true })).toBeVisible({ timeout: 3_000 });
 });

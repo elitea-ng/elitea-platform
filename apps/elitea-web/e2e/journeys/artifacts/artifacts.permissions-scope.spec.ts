@@ -1,11 +1,11 @@
 /**
  * Journey: "Manage access" should be a Team-project-only action.
  *
- * `BucketList.tsx` renders the "Manage access" icon button
- * (`aria-label="Manage access to ${name}"`) unconditionally for every bucket
- * row — there is no project-type/kind check anywhere in
- * `features/artifacts` (`BucketList.tsx`, `BucketSidebar.tsx`) gating it to
- * Team projects. This is provable without any new PROJECT fixture: every
+ * #901 fixed: `BucketList.tsx` now takes an `isTeamProject` prop (computed
+ * by `pages/artifacts/Artifacts.tsx` via `useIsTeamProject`, the same
+ * personal-vs-team derivation `pages/toolkits` already uses) and renders the
+ * "Manage access" icon button (`aria-label="Manage access to ${name}"`)
+ * only when it is true. This is provable without any new PROJECT fixture: every
  * signed-in persona in this stack already owns a genuinely PRIVATE project —
  * its own personal project (`ensurePersonalProject`; `GET /social/author`'s
  * `personal_project_id`) — next to the shared "Default Project" every journey
@@ -42,17 +42,12 @@ async function ensureBucket(request: APIRequestContext, projectId: string, name:
   expect([200, 201, 409]).toContain(created.status());
 }
 
-/* onetest: ELITEA-2475 — "Manage access" must be visible only in Team projects; PRODUCT GAP: the icon renders unconditionally regardless of project type */
-/* elitea_issues: #6101, #5832 — same product gap (parent story #5832: "bucket permissions only for Team projects"; #6101: "Manage Access incorrectly available in Public projects") */
+/* onetest: ELITEA-2475 — "Manage access" is visible only in Team projects (#901, fixed) */
+/* elitea_issues: #6101, #5832 (parent story #5832: "bucket permissions only for Team projects"; #6101: "Manage Access incorrectly available in Public projects") */
 test('bucket "Manage access" is visible in the shared Team project but must be absent in the caller\'s own private project', async ({
   page,
   request,
 }) => {
-  test.fail(
-    true,
-    'ELITEA-2475 (#901): product gap — BucketList.tsx (features/artifacts/ui) renders the "Manage access" icon for every bucket row with no project-type condition; it is not restricted to Team projects.',
-  );
-
   let teamProjectId = '';
   let personalProjectId = '';
   try {

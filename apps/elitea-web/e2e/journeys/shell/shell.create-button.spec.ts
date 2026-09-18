@@ -299,40 +299,28 @@ test('CB09: expanded split button — chevron opens the full dropdown and naviga
 });
 
 /* ────────────────────────────────────────────────────────────────────────
- * onetest: ELITEA-1044 — the collapsed/expanded dropdown marks the CURRENT
- * section's entity with a checkmark. `test.fail`-marked: no checkmark glyph
- * exists anywhere in `CreateEntityDropdown`'s JSX (`ui/CreateEntityButton.
- * tsx`) — the active item gets only a highlighted background
- * (`theme.vars.palette.split.pressed`), verified live (no `svg`/icon sits
- * beside "Agent" in the open menu while on the Agents page).
+ * onetest: ELITEA-1044 — #903 fixed: the dropdown now renders a checkmark
+ * icon beside the active section's entity, in addition to the pre-existing
+ * background highlight (`CreateEntityDropdown`, `ui/CreateEntityButton.tsx`).
+ * Opens the dropdown via the CHEVRON (`CB09`'s own pattern): on a recognised,
+ * expanded route the main half of the split button navigates directly
+ * instead of opening the menu.
  * ──────────────────────────────────────────────────────────────────────── */
 test('CB10: the active entity is marked with a checkmark in the dropdown', async ({ page }) => {
-  test.fail(
-    true,
-    'ELITEA-1044 (#903): product gap — CreateEntityDropdown highlights the active item with a background ' +
-      'colour only; no checkmark icon is rendered for any menu item.',
-  );
-
   await gotoAndWaitForButton(page, '/app/agents/all');
-  await createButton(page).click();
+  await page.getByRole('button', { name: 'Choose what to create' }).click();
   const activeItem = page.getByRole('menuitem', { name: 'Agent', exact: true });
   await expect(activeItem.locator('svg, [data-testid*="check" i]')).toBeVisible({ timeout: 5_000 });
 });
 
 /* ────────────────────────────────────────────────────────────────────────
- * onetest: ELITEA-1046 — collapsed, hovering `+` shows a universal
- * "Create New" tooltip; expanded, the split button shows none. `test.fail`-
- * marked: `CreateEntityTrigger` wraps neither branch in a `Tooltip` at all —
- * verified live, `getByRole('tooltip')` stays at 0 on hover in BOTH states.
+ * onetest: ELITEA-1046 — #904 fixed: `CreateEntityTrigger` now wraps both
+ * layouts in a `Tooltip` ("Create New") — this also closes the axe
+ * `button-name` gap the collapsed state had (see `shell.sidebar.spec.ts`
+ * SB01): MUI's `Tooltip` sets the child's native `title` attribute while
+ * its popper is closed, which the accessible-name computation reads.
  * ──────────────────────────────────────────────────────────────────────── */
 test('CB11: collapsed create button shows a "Create New" tooltip on hover', async ({ page }) => {
-  test.fail(
-    true,
-    'ELITEA-1046 (#904): product gap — CreateEntityTrigger has no Tooltip wrapper in either branch; ' +
-      'hovering the collapsed "+" button shows nothing (also an axe button-name violation, since the ' +
-      'collapsed button then has no accessible name at all — see shell.sidebar.spec.ts SB01).',
-  );
-
   await gotoAndWaitForButton(page, '/app/agents/all');
   await page.getByTestId('sidebar-collapse-toggle').click();
   await createButton(page).hover();
