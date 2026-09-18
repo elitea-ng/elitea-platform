@@ -18,6 +18,7 @@ import { EXECUTION_EVENT_FAILED, EXECUTION_EVENT_NODE } from '@/shared/api/sse/e
 import { installTestEventSource, type TestEventSourceRegistry } from '@/shared/api/sse/testing';
 import { resetConfigForTests } from '@/shared/config/get-config';
 
+import { getPersistedDraft, setPersistedDraft } from '../../../lib/draftPersistence';
 import { ApiContext } from './api.hook';
 import { useChat } from './chat.hook';
 import { SupportAssistantContextValue } from './supportContext.hook';
@@ -714,5 +715,51 @@ describe('useChat — derived streaming flag', () => {
     await waitFor(() => {
       expect(result.current.isStreaming).toBe(false);
     });
+  });
+});
+
+// #935/ELITEA-0623 — `AppShell` (and everything inside it, including this
+// hook) is mounted PER PAGE, so a client-side navigation unmounts and
+// remounts `useChat` under a brand new component tree. A plain `useState('')`
+// for `inputText` would reset the draft to empty on that remount; it must
+// instead pick the draft back up from `draftPersistence`'s module-scope store.
+describe('useChat — draft persists across a remount (#935)', () => {
+  beforeEach(() => {
+    setPersistedDraft('');
+  });
+
+  it('seeds inputText from a draft left behind by a previous mount, and keeps the store in sync', () => {
+    const api = fakeApi();
+    setPersistedDraft('unsent draft from the previous page');
+
+    const { result, unmount } = renderHook(() => useChat(BASE_PROPS), { wrapper: wrapperWith(api) });
+    expect(result.current.inputText).toBe('unsent draft from the previous page');
+
+    act(() => result.current.setInputText('typed on this page'));
+    expect(getPersistedDraft()).toBe('typed on this page');
+
+    // Simulate the navigation: this mount goes away (as it does when AppShell
+    // unmounts on a route change) and a fresh one takes its place.
+    unmount();
+    const remounted = renderHook(() => useChat(BASE_PROPS), { wrapper: wrapperWith(api) });
+    expect(remounted.result.current.inputText).toBe('typed on this page');
+  });
+
+  it('clears the persisted draft once the message is sent', async () => {
+    const api = fakeApi();
+    const { result } = renderHook(() => useChat(BASE_PROPS), { wrapper: wrapperWith(api) });
+
+    act(() => result.current.setInputText('a question in progress'));
+    expect(getPersistedDraft()).toBe('a question in progress');
+
+    await act(async () => {
+      await result.current.handleSend('a question in progress');
+    });
+
+    // `MessageInput.handleSend` clears via `onTextChange('')` before calling
+    // `onSend`; this hook's own `handleNewChat`/`handleSelectConversation`
+    // clear the same way, and either path must clear the store too.
+    result.current.setInputText('');
+    expect(getPersistedDraft()).toBe('');
   });
 });

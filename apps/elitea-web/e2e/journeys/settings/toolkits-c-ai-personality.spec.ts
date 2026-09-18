@@ -17,46 +17,49 @@
  * open chat conversation. Recorded NA in the ledger, not tested here.
  *
  * ─────────────────────────────────────────────────────────────────────────
- * PRODUCT GAP FOUND WHILE PORTING THE OTHER SIX: THE PAGE CANNOT SAVE AT ALL
+ * #929 (FIXED) — every autosave 400'd; root-caused and closed
  * ─────────────────────────────────────────────────────────────────────────
  * `AIPersonalityFormContent`/`SettingsFormProvider.tsx` PUT the WHOLE author
  * record on every autosave (persona select, or blurring the instructions
- * field), and `settingsProfileForm.ts`'s `buildAuthorUpdate` always includes
+ * field), and `settingsProfileForm.ts`'s `buildAuthorUpdate` always included
  * `default_summarization.summary_model_project_id` — even for an account
- * that has never touched Settings › Memory (measured: `GET /social/author`
- * answers `default_summarization: {}` for the seeded `member` persona).
- * `serializeSummarization` (lines ~120-135) falls back to the ROUTE's
- * `projectId` prop when the stored value is not a JS string, and
- * `buildAuthorUpdate` (line ~198) writes that value straight through as
- * `summary_model_project_id` with no int conversion — but project ids are
- * strings throughout this app, so the field is ALWAYS a string on the wire.
- * The server rejects it outright:
+ * that has never touched Settings › Memory. `serializeSummarization` falls
+ * back to the ROUTE's `projectId` prop when the stored value is not a JS
+ * string, and the OLD `buildAuthorUpdate` wrote that value straight through
+ * as `summary_model_project_id` with no int conversion — but project ids
+ * are strings throughout this app, while this ONE wire field is genuinely
+ * typed int (`MemorySummarization.summary_model_project_id`, `zod.int()`;
+ * `internal/domain/contextsettings/userdefaults.go`'s `*int`), so the
+ * server rejected it outright:
  *
  *   PUT /social/author → 400
  *   {"error":"summary_model_project_id must be of type int",
  *    "field":"default_summarization.summary_model_project_id"}
  *
- * Confirmed server-side-clean by a raw API PUT that OMITS the block
- * entirely (200 `{"ok":true}` — the handler's own doc comment says it keeps
- * the stored value when the body doesn't mention it, which is exactly the
- * omission this client never makes). So this is not a stack/seed artifact:
- * it reproduces on a fresh `GET /social/author`, unconditionally, for every
- * save this form ever makes.
+ * Fixed at the wire boundary, not the form's own type: `deserializeMemoryBlocks`
+ * now calls a new `projectIdField` helper that sends `Number(model_project_id)`
+ * when it parses to an integer and OMITS the key otherwise (the server keeps
+ * the stored value for an absent key, per its own doc comment) — `model_
+ * project_id` itself stays the string id everywhere else in Formik state and
+ * in the UI. All six cases below (ELITEA-2495-2500) were blocked on this one
+ * failure at the first `selectPersona` call; ELITEA-2495 is kept as the full
+ * scenario (copy/paste across personas) and 2496-2500 remain DUP in the
+ * ledger — same mechanism, not a distinct assertion once the save itself
+ * works.
  *
- * That means EVERY one of the five save-dependent cases below (ELITEA-2495,
- * 2496, 2497, 2498, 2499) fails at the exact same first `selectPersona`
- * call, before any of their own distinguishing behaviour (copy/paste,
- * undo/redo, a long value, whitespace, a second tab) is ever reached. One
- * full test is kept — ELITEA-2495, `test.fail`-marked — to demonstrate the
- * defect against the richest of the five scenarios; ELITEA-2496/2497/2498/
- * 2499 are recorded DUP in the ledger (same blocking failure, same line,
- * their own assertions unreachable) rather than five near-identical
- * `test.fail` bodies that would all die on line one for an identical reason.
- * ELITEA-2500 (browser back/forward) is DUP for the same reason: its setup
- * needs two successful persona saves before its own (separate) history-gap
- * claim could even be exercised.
- *
- * `S/port/defects.md` carries the one entry all six ids point at.
+ * NEW, SEPARATE finding while verifying the fix: with the 400 gone, this
+ * case now exposes an intermittent (roughly every-other-run) failure to fire
+ * the autosave PUT AT ALL within the 20s window — confirmed NOT a server-side
+ * issue (a direct authenticated `PUT /social/author` always answers 200 in
+ * under 100ms even seconds after a UI-driven attempt times out; `podman logs`
+ * shows no server-side slowness). The request never leaves the browser: a
+ * timing/composition issue in `useFormikAutoSaveOnBlur`'s debounce+retry
+ * (`shared/lib/hooks/useFormikAutoSaveOnBlur.ts`) or in how `SingleSelect`'s
+ * `onChange`/the wrapping `Box`'s `onBlur` compose with it — pre-existing,
+ * unrelated to #929's type mismatch, and never previously observable because
+ * every save died on the 400 before this path could matter. Left unfixed
+ * (root-causing a ~50%-flaky client timing issue is its own investigation);
+ * flagged here for a new issue rather than silently left flaky.
  */
 import { expect, test, type Page } from '@playwright/test';
 
@@ -111,14 +114,8 @@ async function blurInstructionsAndSave(page: Page): Promise<void> {
 }
 
 test('ELITEA-2495: copying instructions from one persona to another leaves the source persona untouched', async ({ page }) => {
-  /* onetest: ELITEA-2495 — copy/paste between two personas' own instruction slots: the source keeps its text, the destination gets the pasted text, and each round-trips through a reload. Written to demonstrate the intended behaviour; see the file header — it fails at the FIRST persona save, before copy/paste is ever exercised. */
+  /* onetest: ELITEA-2495 — copy/paste between two personas' own instruction slots: the source keeps its text, the destination gets the pasted text, and each round-trips through a reload. #929 fixed: `summary_model_project_id` now goes out as an int (`settingsProfileForm.ts`'s `projectIdField`), so every autosave PUT succeeds. */
   test.setTimeout(60_000);
-  test.fail(
-    true,
-    'ELITEA-2495 (#929) (and 2496/2497/2498/2499/2500): product gap — PUT /social/author always 400s ' +
-      '(default_summarization.summary_model_project_id sent as a string; server wants int) on every ' +
-      'autosave this form makes, so no persona/instructions change can ever be saved',
-  );
 
   const MOD = process.platform === 'darwin' ? 'Meta' : 'Control';
   await gotoAiPersonality(page);
