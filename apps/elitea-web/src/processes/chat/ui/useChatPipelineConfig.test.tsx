@@ -316,6 +316,105 @@ describe('useChatPipelineConfig — onTagsChange', () => {
   });
 });
 
+describe('useChatPipelineConfig — isConfigurationDirty', () => {
+  /*
+   * `PipelineEditor.tsx`'s own `isDirty`/`isYamlDirty` never observe an edit
+   * made through THIS hook's Configuration-tab fields (neither is threaded
+   * into `PipelineEditorBody`'s `activeTab === 0` branch) — this hook's own
+   * `isConfigurationDirty` is the only signal that reaches
+   * `PipelineEditorProps.isConfigurationDirty` and, through it, the Save
+   * button's `!isDirty` gate (`elitea_issues #2223/#2664`). Without it, a
+   * Configuration-only edit in the chat-embedded editor left Save
+   * permanently disabled.
+   */
+  it('starts false once the draft has been seeded from the server', async () => {
+    server.use(
+      getGetApplicationVersionDetailMockHandler({ id: '10', application_id: '1', name: 'latest', status: 'draft' }),
+      getGetApplicationMockHandler({ id: '1', name: 'App', description: 'Desc', icon: '', owner_id: 'u1', created_at: '2026-01-01T00:00:00Z', versions: [] }),
+    );
+    const { result } = renderHook(
+      () => useChatPipelineConfig({ projectId: '7', participant: { entity_meta: { id: '1' }, entity_settings: { version_id: '10' } }, enabled: true }),
+      { wrapper },
+    );
+    await waitFor(() => expect(panelProps(result.current.renderConfigurationPanels()).values.name).toBe('App'));
+    expect(result.current.isConfigurationDirty).toBe(false);
+  });
+
+  it('turns true after onFieldChange', async () => {
+    server.use(
+      getGetApplicationVersionDetailMockHandler({ id: '10', application_id: '1', name: 'latest', status: 'draft' }),
+      getGetApplicationMockHandler({ id: '1', name: 'App', description: 'Desc', icon: '', owner_id: 'u1', created_at: '2026-01-01T00:00:00Z', versions: [] }),
+    );
+    const { result } = renderHook(
+      () => useChatPipelineConfig({ projectId: '7', participant: { entity_meta: { id: '1' }, entity_settings: { version_id: '10' } }, enabled: true }),
+      { wrapper },
+    );
+    await waitFor(() => expect(panelProps(result.current.renderConfigurationPanels()).values.name).toBe('App'));
+
+    act(() => panelProps(result.current.renderConfigurationPanels()).onFieldChange('version_details.welcome_message', 'Hello'));
+
+    expect(result.current.isConfigurationDirty).toBe(true);
+  });
+
+  it('turns true after onTagsChange', async () => {
+    server.use(
+      getGetApplicationVersionDetailMockHandler({ id: '10', application_id: '1', name: 'latest', status: 'draft' }),
+      getGetApplicationMockHandler({ id: '1', name: 'App', description: 'Desc', icon: '', owner_id: 'u1', created_at: '2026-01-01T00:00:00Z', versions: [] }),
+    );
+    const { result } = renderHook(
+      () => useChatPipelineConfig({ projectId: '7', participant: { entity_meta: { id: '1' }, entity_settings: { version_id: '10' } }, enabled: true }),
+      { wrapper },
+    );
+    await waitFor(() => expect(panelProps(result.current.renderConfigurationPanels()).values.name).toBe('App'));
+
+    act(() => panelProps(result.current.renderConfigurationPanels()).onTagsChange([{ name: 'one' }]));
+
+    expect(result.current.isConfigurationDirty).toBe(true);
+  });
+
+  it('resets to false once a real save resolves (the refetch reseeds the draft)', async () => {
+    // `getGetApplicationVersionDetailMockHandler` is also what the post-save
+    // `refetch()` re-reads: it must echo the SAVED value, not the ORIGINAL
+    // one, or TanStack Query's structural sharing treats the refetch as
+    // "nothing changed" (deep-equal to the last-read data) and reuses the
+    // OLD `data` reference — the seed effect never re-fires and this test
+    // would pass for the wrong reason (an accidental reference change) or
+    // fail for a testing artefact, not the real product behaviour.
+    let saved = false;
+    server.use(
+      getGetApplicationVersionDetailMockHandler(() => ({
+        id: '10',
+        application_id: '1',
+        name: 'latest',
+        status: 'draft',
+        welcome_message: saved ? 'Hello' : '',
+      })),
+      getGetApplicationMockHandler({ id: '1', name: 'App', description: 'Desc', icon: '', owner_id: 'u1', created_at: '2026-01-01T00:00:00Z', versions: [] }),
+      getUpdateApplicationVersionMockHandler(() => {
+        saved = true;
+        return { id: '10', application_id: '1', name: 'latest', status: 'draft' };
+      }),
+      getEditApplicationMockHandler(() => ({ id: '1', name: 'App', description: 'Desc', icon: '', owner_id: 'u1', created_at: '2026-01-01T00:00:00Z' })),
+    );
+    const { result } = renderHook(
+      () => useChatPipelineConfig({ projectId: '7', participant: { entity_meta: { id: '1' }, entity_settings: { version_id: '10' } }, enabled: true }),
+      { wrapper },
+    );
+    await waitFor(() => expect(panelProps(result.current.renderConfigurationPanels()).values.name).toBe('App'));
+
+    act(() => panelProps(result.current.renderConfigurationPanels()).onFieldChange('version_details.welcome_message', 'Hello'));
+    expect(result.current.isConfigurationDirty).toBe(true);
+
+    const onSuccess = vi.fn<(saved: unknown) => void>();
+    await act(async () => {
+      result.current.onSaveVersion?.(onSuccess);
+      await waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1));
+    });
+
+    await waitFor(() => expect(result.current.isConfigurationDirty).toBe(false));
+  });
+});
+
 describe('useChatPipelineConfig — onSaveVersion', () => {
   it('saves the draft, refetches, and reports success only after a real save', async () => {
     let updateCalls = 0;

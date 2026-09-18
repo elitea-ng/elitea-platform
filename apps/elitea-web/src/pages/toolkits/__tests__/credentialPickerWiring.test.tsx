@@ -157,6 +157,32 @@ describe('the toolkit credential picker is supplied by the real composition root
     expect(within(listbox).getByText('CI Bot Token')).toBeInTheDocument();
   });
 
+  /*
+   * elitea_issues: #4138 — a toolkit whose credential field has no value yet
+   * (e.g. after the previously-used credential was deleted) used to have the
+   * first available saved credential silently preselected, activating Save
+   * with a choice the user never made. `ToolkitCredentialPicker` never opts
+   * into `CredentialsSelect`'s `autoSelectFirstShared` flag (that mechanism
+   * is reserved for the old-app `credentials`-section behaviour it is named
+   * after), so with exactly one saved credential available and no stored
+   * value, the picker must still start empty and require an explicit pick.
+   */
+  // oxlint-disable-next-line elitea/no-raw-color -- "#4138" is an elitea_issues issue number, not a colour literal.
+  it('elitea_issues: #4138 — does not preselect the only available saved credential when the field has no stored value', async () => {
+    mockEndpoints();
+
+    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit: vi.fn() }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+
+    await screen.findByText('My GitHub');
+    const picker = await screen.findByRole('combobox', { name: /Github Configuration/i });
+
+    // Give the batch-validation/auto-select effects a tick to run before
+    // asserting their absence.
+    await waitFor(() => {
+      expect(picker).not.toHaveTextContent('CI Bot Token');
+    });
+  });
+
   it('records the picked credential in the form, so the toolkit saves with it', async () => {
     mockEndpoints();
     const user = userEvent.setup();

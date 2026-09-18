@@ -69,6 +69,7 @@ describe('StateDrawer', () => {
     expect(updatedDocument.state?.['counter']).toMatchObject({ type: 'str' });
   });
 
+  /* elitea_issues: #2662 — toggling the "input"/"messages" default state rows must persist to yamlJsonObject.state (survive Save/reload), not silently revert. */
   it('toggles the messages row off, removing it from state', () => {
     const setYamlJsonObject = vi.fn<(document: YamlPipelineDocument) => void>();
     const yamlJsonObject: YamlPipelineDocument = { state: { input: { type: 'str' }, messages: { type: 'list' } } };

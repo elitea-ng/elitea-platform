@@ -47,6 +47,14 @@ describe('SaveNewVersionButton', () => {
     expect(screen.getByText('Create version')).toBeInTheDocument();
   });
 
+  /* elitea_issues: #5755 — the Create-version dialog title carries a green checkmark */
+  it('shows a checkmark icon next to the Create-version dialog title', async () => {
+    const user = userEvent.setup();
+    renderButton();
+    await user.click(screen.getByRole('button', { name: 'Save As Version' }));
+    expect(screen.getByTestId('save-new-version-dialog-check-icon')).toBeInTheDocument();
+  });
+
   it('rejects a duplicate version name without calling the API', async () => {
     let requestCount = 0;
     server.use(

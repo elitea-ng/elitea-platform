@@ -219,3 +219,18 @@ export { agentEditorHooks } from './model/agentEditorHooks';
  * still 20/20 against the shared ≤20 budget.
  */
 export { useApplicationsStore } from './model/applicationsStore';
+
+/**
+ * `elitea_issues: #6627` addition: `AgentIconEditor` — the agent editor's
+ * `iconSlot` has stood empty at every call site since `CreateAgentForm.tsx`
+ * declared it (that file's own doc comment: "editable EntityIcon... a real
+ * gap, not a naming mismatch"). This barrel was already sitting at the 20/20
+ * cap before this symbol, with no smaller bundling available (unlike
+ * `agentEditorHooks` above, this is one component, not a hook cluster), so
+ * this is the SAME situation `notifications/index.ts`'s own waiver
+ * documents — one real external consumer
+ * (`pages/agents/ui/EditApplicationConfigurationPanel.tsx`), 20 → 21,
+ * recorded as a `scripts/lib/budgets-core.mjs` waiver rather than a
+ * curation debt (there is nothing left in this barrel to curate away).
+ */
+export { AgentIconEditor } from './ui/AgentIconEditor';

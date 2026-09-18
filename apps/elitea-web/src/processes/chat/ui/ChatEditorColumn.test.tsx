@@ -42,7 +42,7 @@ function baseProps(overrides: Partial<ChatEditorColumnProps> = {}): ChatEditorCo
       isEditing: false,
       editPipeline: { editingPipeline: undefined, isPipelineCreateMode: false, onClosePipelineEditor: vi.fn() },
       pipelineCreation: { onPipelineCreated: vi.fn() },
-      config: { renderConfigurationPanels: () => ({ tools: null }), onSaveVersion: undefined, isSavingVersion: false },
+      config: { renderConfigurationPanels: () => ({ tools: null }), onSaveVersion: undefined, isSavingVersion: false, isConfigurationDirty: false },
     },
     toolkit: {
       isEditing: false,
@@ -122,7 +122,7 @@ describe('ChatEditorColumn', () => {
           isEditing: true,
           editPipeline: { editingPipeline: undefined, isPipelineCreateMode: false, onClosePipelineEditor: vi.fn() },
           pipelineCreation: { onPipelineCreated: vi.fn() },
-          config: { renderConfigurationPanels: () => ({ tools: null }), onSaveVersion: undefined, isSavingVersion: false },
+          config: { renderConfigurationPanels: () => ({ tools: null }), onSaveVersion: undefined, isSavingVersion: false, isConfigurationDirty: false },
         },
       }),
     );
@@ -138,7 +138,7 @@ describe('ChatEditorColumn', () => {
           isEditing: true,
           editPipeline: { editingPipeline: undefined, isPipelineCreateMode: false, onClosePipelineEditor: vi.fn() },
           pipelineCreation: { onPipelineCreated: vi.fn() },
-          config: { renderConfigurationPanels: () => ({ tools: null }), onSaveVersion, isSavingVersion: true },
+          config: { renderConfigurationPanels: () => ({ tools: null }), onSaveVersion, isSavingVersion: true, isConfigurationDirty: false },
         },
       }),
     );
@@ -173,7 +173,7 @@ describe('ChatEditorColumn', () => {
           isEditing: true,
           editPipeline: { editingPipeline: undefined, isPipelineCreateMode: false, onClosePipelineEditor: vi.fn() },
           pipelineCreation: { onPipelineCreated: vi.fn() },
-          config: { renderConfigurationPanels: () => ({ tools: null }), onSaveVersion: undefined, isSavingVersion: false },
+          config: { renderConfigurationPanels: () => ({ tools: null }), onSaveVersion: undefined, isSavingVersion: false, isConfigurationDirty: false },
         },
         toolkit: {
           isEditing: true,

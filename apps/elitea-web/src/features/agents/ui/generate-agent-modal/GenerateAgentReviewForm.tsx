@@ -165,9 +165,13 @@ export function GenerateAgentReviewForm({ draft, onChange, onValidationChange, s
         >
           {t('features.agents.generateAgentModal.welcomeMessageLabel', 'Welcome Message')}
         </Typography>
+        {/* elitea_issues: #5402 — multiline/scrollable like Description and Instructions above, not a single line */}
         <TextField
           fullWidth
           size="small"
+          multiline
+          minRows={2}
+          maxRows={6}
           value={draft.welcome_message}
           onChange={(e) => handleFieldChange('welcome_message', e.target.value)}
           slotProps={{ htmlInput: { maxLength: MAX_WELCOME_MESSAGE_LENGTH, 'data-testid': 'agent-draft-welcome-message-input' } }}
@@ -193,9 +197,13 @@ export function GenerateAgentReviewForm({ draft, onChange, onValidationChange, s
                 key={index}
                 sx={starterRowSx}
               >
+                {/* elitea_issues: #5402 — multiline/scrollable, same as the other draft fields */}
                 <TextField
                   fullWidth
                   size="small"
+                  multiline
+                  minRows={1}
+                  maxRows={4}
                   value={starter}
                   onChange={(e) => handleStarterChange(index, e.target.value)}
                   slotProps={{ htmlInput: { maxLength: MAX_CONVERSATION_STARTER_LENGTH } }}

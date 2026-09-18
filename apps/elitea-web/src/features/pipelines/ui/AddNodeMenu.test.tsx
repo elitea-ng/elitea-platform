@@ -75,6 +75,18 @@ describe('AddNodeMenu', () => {
     );
   });
 
+  /* elitea_issues: #2661 — the node picker must render exactly 2 columns, not 3. */
+  it('renders the node list in exactly 2 columns', async () => {
+    const user = userEvent.setup();
+    renderWithTheme(<AddNodeMenu onAddNode={vi.fn()} />);
+
+    await user.click(screen.getByRole('button', { name: 'Add node' }));
+    const menu = await screen.findByRole('menu');
+    const columns = within(menu).getAllByTestId('add-node-menu-column');
+
+    expect(columns).toHaveLength(2);
+  });
+
   it.each([
     'Agent',
     'Decision',

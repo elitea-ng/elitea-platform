@@ -145,7 +145,12 @@ test.describe('Skills version selector', () => {
   });
 
   /* onetest: ELITEA-3291 — product gap: the default version shows a plain text " (default)" suffix inside its
-     MenuItem label, not a distinct pin icon with a "Default version" tooltip independent of selection. */
+     MenuItem label, not a distinct pin icon with a "Default version" tooltip independent of selection.
+     elitea_issues: #5650, #5663 — both describe a pin affordance for Skills (a pin button in the version
+     dropdown; a pin/unpin action-menu item reflecting pin state) that Skills has never had: there is no
+     "pin to top" concept anywhere in this app's skills feature (grep evidence: no "pin" text/icon in
+     src/pages/skills or src/features/skills besides the unrelated "(default)" suffix this gap already
+     covers). Same root cause as ELITEA-3291/3296 below, not a separate defect. */
   test('the default version shows a pin icon with a "Default version" tooltip', async ({ page, request }) => {
     test.fail(
       true,

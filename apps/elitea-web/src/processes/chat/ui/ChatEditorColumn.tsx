@@ -116,6 +116,7 @@ export function ChatEditorColumn({ agent, pipeline, toolkit }: ChatEditorColumnP
             renderConfigurationPanels: pipeline.config.renderConfigurationPanels,
             ...(pipeline.config.onSaveVersion !== undefined ? { onSaveVersion: pipeline.config.onSaveVersion } : {}),
             isSavingVersion: pipeline.config.isSavingVersion,
+            isConfigurationDirty: pipeline.config.isConfigurationDirty,
           }}
         />
       )}

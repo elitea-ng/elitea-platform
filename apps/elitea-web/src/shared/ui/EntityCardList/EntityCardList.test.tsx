@@ -36,6 +36,14 @@ describe('EntityCard', () => {
     expect(getAllByTestId('entity-card-tag-chip').map((chip) => chip.textContent)).toEqual(['tag', 'no1tag']);
   });
 
+  /* elitea_issues: #6062 — a long unbroken name wraps within the card instead of overflowing its boundary */
+  it('wraps a long unbroken name instead of letting it overflow the card', () => {
+    const { getByTestId } = renderWithTheme(
+      <EntityCard item={{ id: '1', name: 'a'.repeat(80), authors: [], tags: [] }} />,
+    );
+    expect(getByTestId('entity-card-name')).toHaveStyle({ wordBreak: 'break-word' });
+  });
+
   it('separates the author cluster from the tag strip with a divider, and drops it when there are no tags', () => {
     const withTags = renderWithTheme(
       <EntityCard item={{ id: '1', name: 'a', authors: [{ name: 'A' }], tags: [{ name: 't' }] }} />,

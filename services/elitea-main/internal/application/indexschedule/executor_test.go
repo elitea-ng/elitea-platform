@@ -314,6 +314,38 @@ func TestCurrentExecutorNeedsNoCredentialWhenToolkitHasNoMatchingConfigurationFi
 	}
 }
 
+/* elitea_issues: #6527, #6472 — a schedule's explicitly chosen credential is never silently discarded when the toolkit type's settings key does not match the naive "{type}_configuration" derivation (e.g. ado_wiki/ado_repos store theirs under a shared group key). #6472 is the same root cause reported against ado_wiki/ado_repos/artifact/application specifically; one fix, one test, both issues. */
+func TestCurrentExecutorFailsRatherThanDiscardingCredentialWhenConfigurationKeyMismatches(t *testing.T) {
+	candidate := scheduledExecutorCandidate(17)
+	private := false
+	candidate.Schedule.Credentials = &Credentials{
+		Private:     &private,
+		EliteaTitle: "team-github",
+	}
+	executor, dependencies := validCurrentExecutor(t, candidate)
+	// Simulate a toolkit type whose settings are not stored under
+	// "{type}_configuration" (the ado_wiki/ado_repos/artifact/application
+	// case from #6527) by removing the key the naive derivation looks for.
+	delete(dependencies.toolkits.toolkit.Settings, "github_configuration")
+
+	outcome, err := executor.ExecuteScheduled(
+		context.Background(),
+		candidate,
+		time.Now(),
+		"index-schedule-v1:configuration-key-mismatch",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Disposition != ExecutionInitializationFailed ||
+		outcome.SafeReason != scheduleCredentialFailureReason {
+		t.Fatalf("outcome=%+v — schedule's chosen credential must not be silently discarded", outcome)
+	}
+	if dependencies.start.calls != 0 {
+		t.Fatalf("start.calls=%d — must not run with the wrong (toolkit's own) credential", dependencies.start.calls)
+	}
+}
+
 func TestCurrentExecutorCredentialAndSystemPATFailuresAreTypedForHistory(t *testing.T) {
 	personal := scheduledExecutorCandidate(17)
 	tests := []struct {

@@ -68,6 +68,22 @@ describe('doLayout', () => {
     expect(result.nodes[0]?.measured?.height).toBe(44);
   });
 
+  /* elitea_issues: #2520 — auto-layout must space nodes by each node's ACTUAL (measured) height, not a fixed gap that ignores content — a taller upstream node must push its downstream neighbour further down, not leave an oversized (or cramped) fixed-size gap regardless of content. */
+  it('spaces a downstream node further away when its upstream neighbour is taller (real measured height, not a fixed gap)', () => {
+    const shortUpstream: FlowNode = { ...node('a'), measured: { width: 460, height: 100 } };
+    const tallUpstream: FlowNode = { ...node('a'), measured: { width: 460, height: 900 } };
+    const downstream = node('b');
+    const edges: FlowEdge[] = [{ id: 'e1', source: 'a', target: 'b' }];
+
+    const shortResult = doLayout({ nodes: [shortUpstream, downstream], edges });
+    const tallResult = doLayout({ nodes: [tallUpstream, downstream], edges });
+
+    const shortGap = (shortResult.nodes.find(n => n.id === 'b')?.position.y ?? 0) - (shortResult.nodes.find(n => n.id === 'a')?.position.y ?? 0);
+    const tallGap = (tallResult.nodes.find(n => n.id === 'b')?.position.y ?? 0) - (tallResult.nodes.find(n => n.id === 'a')?.position.y ?? 0);
+
+    expect(tallGap).toBeGreaterThan(shortGap);
+  });
+
   it('leaves `selected` undefined for an input node that never set it (baseline: `nodeData?.selected`, not `?? false`)', () => {
     const nodes = [node('a')];
     const result = doLayout({ nodes, edges: [] });

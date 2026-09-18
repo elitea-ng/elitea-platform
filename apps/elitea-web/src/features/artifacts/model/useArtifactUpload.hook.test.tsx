@@ -89,6 +89,21 @@ describe('useArtifactUpload', () => {
     await waitFor(() => expect(hook.onUploaded).toHaveBeenCalledTimes(3));
   });
 
+  /* elitea_issues: #5355 — Skip in the duplicate dialog must drop only the duplicate file(s) and still upload the rest of the batch, not cancel the whole upload */
+  it('Skip duplicates uploads the non-duplicate files from a mixed batch', async () => {
+    const hook = renderUpload();
+    const duplicate = new File(['x'], 'existing.txt');
+    const fresh = new File(['y'], 'new.txt');
+    act(() => hook.result.current.stageFiles([duplicate, fresh]));
+    act(() => hook.result.current.confirmPath(''));
+    await waitFor(() => expect(hook.result.current.duplicateDialogOpen).toBe(true));
+    expect(hook.result.current.duplicateFilenames).toEqual(['existing.txt']);
+    act(() => hook.result.current.skipDuplicates());
+    await waitFor(() => expect(hook.onUploaded).toHaveBeenCalled());
+    expect(uploadArtifactObject).toHaveBeenCalledWith(expect.objectContaining({ fileKey: 'new.txt' }));
+    expect(uploadArtifactObject).not.toHaveBeenCalledWith(expect.objectContaining({ fileKey: 'existing.txt' }));
+  });
+
   it('reports validation and transport failures', async () => {
     const hook = renderUpload([]);
     act(() => hook.result.current.stageFiles([new File(['bad'], 'bad#.txt')]));

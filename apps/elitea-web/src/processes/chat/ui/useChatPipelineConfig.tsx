@@ -106,6 +106,21 @@ export interface UseChatPipelineConfigResult {
   /** Passed straight to `PipelineEditorDeps.onSaveVersion`. */
   readonly onSaveVersion: ((onSuccess: (saved: unknown) => void) => void) | undefined;
   readonly isSavingVersion: boolean;
+  /**
+   * `true` once `draft` has actually changed from the last-seeded server
+   * snapshot. Passed straight to `PipelineEditorProps.isConfigurationDirty`.
+   *
+   * `PipelineEditor.tsx`'s own `isDirty` state only ever tracks the Flow tab
+   * (node graph) and `isYamlDirty` only the YAML tab
+   * (`PipelineEditorParts.tsx`'s `SaveButtonSlotProps.isDirty` doc comment) —
+   * neither is ever set by anything this Configuration tab renders. Since
+   * `elitea_issues #2223/#2664`'s fix gated Save on `!onSaveVersion ||
+   * !isDirty`, an edit made through THIS hook's own fields (welcome message,
+   * tags, variables, …) left the button permanently DISABLED — `isDirty`
+   * stays `false` forever, the same button that used to be permanently
+   * ENABLED before that fix, just failing the opposite way.
+   */
+  readonly isConfigurationDirty: boolean;
 }
 
 function numericId(value: string | number | undefined): number | undefined {
@@ -256,6 +271,12 @@ export function useChatPipelineConfig({
   });
 
   const [draft, setDraft] = useState<ChatPipelineDraft>(EMPTY_DRAFT);
+  // Set by every field/tag edit below, cleared by the re-seed effect right
+  // under it — the same "own state, reset on identity/version change" shape
+  // `PipelineEditor.tsx`'s `isDirty`/`onIdentityReset` already uses for the
+  // Flow tab. A successful save runs through the SAME path: `onSaveVersion`'s
+  // `refetch()` changes `version`, which re-fires the seed effect below.
+  const [isConfigurationDirty, setIsConfigurationDirty] = useState(false);
 
   /*
    * Re-seeded whenever the SERVER's version changes — which includes the
@@ -267,15 +288,18 @@ export function useChatPipelineConfig({
   useEffect(() => {
     if (!active || version === undefined) return;
     setDraft(seedDraft(version, versionId, application));
+    setIsConfigurationDirty(false);
   }, [active, version, application, versionId]);
 
   const onFieldChange = useCallback((path: string, value: unknown) => {
     setDraft((previous) => applyFieldChange(previous, path, value));
+    setIsConfigurationDirty(true);
   }, []);
 
   const onTagsChange = useCallback((next: readonly Tag[]) => {
     const names = next.map((tag) => tag.name).filter((name) => name.trim() !== '');
     setDraft((previous) => ({ ...previous, version_details: { ...previous.version_details, tags: names } }));
+    setIsConfigurationDirty(true);
   }, []);
 
   const tagValue = useMemo<readonly Tag[]>(
@@ -337,5 +361,6 @@ export function useChatPipelineConfig({
     renderConfigurationPanels,
     onSaveVersion: active ? onSaveVersion : undefined,
     isSavingVersion: isSaving,
+    isConfigurationDirty,
   };
 }

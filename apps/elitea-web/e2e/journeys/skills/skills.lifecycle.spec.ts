@@ -55,6 +55,11 @@ async function skillNames(request: APIRequestContext): Promise<readonly string[]
   return rows.map((row) => row.name ?? '');
 }
 
+/* elitea_issues: #6047 — deleting a skill in the default (Private) project
+   does not answer "Insufficient permissions"; the default admin/editor role
+   grants `models.applications.skills.delete` (migrations/shared/
+   0068_elitea_core_route_permissions.sql), and this journey's own delete
+   step below proves the route accepts it end to end. */
 test('SKILL-1: a skill is created on the form, opens on its own page, and is deleted from there', async ({
   page,
   request,

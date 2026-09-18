@@ -179,6 +179,30 @@ jobs:
       # build stopped costing 3 min it was the longest thing on a pull request.
       # `leg` names the artifacts and the job; `shard` is passed straight to
       # `playwright test --shard`.
+      #
+      # THE LAST TWO LEGS ARE NOT ENGINES, AND THEY ARE NOT SHARDED.
+      #
+      # `platform-flags` / `platform-flags-webkit` are Playwright projects that
+      # hold the seven journeys which WRITE a platform-wide flag (see
+      # `PLATFORM_FLAG_JOURNEYS` in apps/elitea-web/playwright.config.ts).
+      # Those specs are `testIgnore`d out of `chromium`/`webkit`, so nothing
+      # runs twice and the sharded legs never queue on the platform-flag mutex.
+      # Each flag project pins `workers: 1`, which is the whole point: the
+      # writers take an uncontended lock instead of four workers queueing for
+      # one — the arrangement that cost one lost test and three-to-four flaky
+      # ones per run of `E2E (webkit-1of2)` on PR #947 and #957.
+      #
+      # ONE LEG EACH, deliberately. Per-project `workers` caps a project, not
+      # the run, so naming both projects in a single `playwright test` command
+      # would give them one worker EACH and put two writers back on one lock
+      # directory (it lives in the runner's `tmpdir()`). Separate legs mean
+      # separate runners, so each leg's lock is its own and is never contended.
+      # `scripts/e2e-journey-shape.test.mjs` rule 9 asserts both legs exist.
+      #
+      # They reuse every other step of this job unchanged — the same image
+      # build, the same `e2e-stack.sh up`/`seed` stack, the same
+      # `E2E_REUSE_STACK=1` container run, the same chown/log-collection/
+      # artifact steps, which are all keyed on `matrix.leg`.
       matrix:
         include:
           - engine: chromium
@@ -190,6 +214,12 @@ jobs:
           - engine: webkit
             leg: webkit-2of2
             shard: "2/2"
+          - engine: platform-flags
+            leg: platform-flags
+            shard: ""
+          - engine: platform-flags-webkit
+            leg: platform-flags-webkit
+            shard: ""
     # E2E needs Docker + docker-compose for the stack.
     # GitHub-hosted ubuntu-latest has Docker and docker compose (v2 plugin) pre-installed.
     steps:
@@ -201,6 +231,20 @@ jobs:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
         run: npm ci
+      - name: The suite's shape still matches this workflow
+        # Three seconds, on every leg, and it is here rather than only in
+        # ci-web.yml because of what ci-web.yml does NOT fire on: its `paths`
+        # list names `.github/workflows/ci-web.yml` and not this file, so a
+        # pull request that edited ONLY this workflow — deleting the
+        # `platform-flags` legs, say — would never run the gate that asserts
+        # they exist (`scripts/e2e-journey-shape.test.mjs` rule 9). The flag
+        # journeys would simply stop running and the checks list would go
+        # green, which is the "absence reads as correctness" shape this
+        # repository keeps meeting.
+        #
+        # Run on EVERY leg on purpose: a leg that removed itself cannot check
+        # anything, and the remaining ones can.
+        run: npx vitest run --config vitest.config.ts --project scripts scripts/e2e-journey-shape.test.mjs
       - name: Pre-pull the pinned Playwright container (background)
         # Network-bound, so it overlaps the CPU-bound bake below. Started with
         # nohup and left running: the runner does not reap a step's background
@@ -278,8 +322,14 @@ jobs:
         # that has no container runtime.
         #
         # `--project` is explicit rather than `npm run e2e` so that (a) each
-        # matrix leg reports one engine's result, and (b) the `visual` project
+        # matrix leg reports one project's result, and (b) the `visual` project
         # stays out of this job — its snapshots are the `visual` job's business.
+        #
+        # `matrix.engine` names a PROJECT, not a browser: the last two legs
+        # pass `platform-flags` / `platform-flags-webkit`, whose `workers: 1`
+        # comes from the config. The project's `dependencies` bring `setup`
+        # and `toolkits-empty` with it, so every leg still mints its own
+        # storage states against the stack this job just seeded.
         #
         # E2E_TZ pins the browser's timezone, and the seed step above anchors its
         # calendar-day fixtures in the SAME zone (issue #214). UTC on both sides

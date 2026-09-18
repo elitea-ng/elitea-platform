@@ -4,7 +4,7 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
-import { useParams } from '@tanstack/react-router';
+import { useNavigate, useParams } from '@tanstack/react-router';
 
 import { ConfigurationTab, DeleteToolkitButton, ExportToolkitButton, IndexesTab, ToolkitsControls, type ToolkitEditorDeps, useToolkitEdit } from '@/features/toolkits';
 import type { ToolkitInstance } from '@/shared/api/generated/model';
@@ -226,9 +226,27 @@ export function EditToolkit({ isMCP = false, deps }: EditToolkitProps): ReactNod
   const toolkitId = params.toolkitId ?? params.mcpId ?? params.appId;
   const projectId = useSelectedProjectId();
 
-  const { detail, isFetching } = useToolkitDetail(projectId, toolkitId);
+  const { detail, isFetching, isSuccess } = useToolkitDetail(projectId, toolkitId);
   const { canExport, canDelete } = useToolkitActionPermissions(projectId);
   const copyLinkMenuItems = useCopyLinkMenuItem();
+  const navigate = useNavigate();
+
+  /*
+   * elitea_issues #6081 — switching projects (via the project switcher) from
+   * a toolkit/MCP detail page keeps this same route mounted with the OLD
+   * toolkitId. If that id doesn't exist in the NEWLY selected project's own
+   * list, `detail` resolves to `undefined` forever and the page rendered
+   * blank (or, worse, showed a same-numbered ROW FROM THE NEW PROJECT, since
+   * ids are only unique per project). `isSuccess` (not `isFetching`) is the
+   * right gate: it is false while the list is still loading OR before
+   * `projectId`/`toolkitId` have resolved, and only becomes true once THIS
+   * project's own list has genuinely been read — so this never fires on the
+   * ordinary loading path, only once we know for certain the id is absent.
+   */
+  useEffect(() => {
+    if (!isSuccess || detail !== undefined || toolkitId === undefined) return;
+    void navigate({ to: isMCP ? '/mcps/$tab' : '/toolkits/$tab', params: { tab: 'all' } });
+  }, [isSuccess, detail, toolkitId, isMCP, navigate]);
 
   const [editToolDetail, setEditToolDetail] = useState<EditToolDetail | null>(null);
   const [isToolDirty, setIsToolDirty] = useState(false);

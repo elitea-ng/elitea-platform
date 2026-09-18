@@ -198,6 +198,7 @@ async function resumeHitl(page: Page, action: 'Approve' | 'Reject'): Promise<voi
   await expect(card, 'the pipeline reached its hitl node but no pause card was rendered').toBeVisible({
     timeout: 60_000,
   });
+  /* elitea_issues: #5403 — "Pipeline HITL node does not display configured User Message" (falls back to a generic "Choose the action to proceed"): does not reproduce for the fstring mapping type — the templated message renders. */
   await expect(card, 'the card must show the templated review message').toContainText('Review:', {
     timeout: 20_000,
   });

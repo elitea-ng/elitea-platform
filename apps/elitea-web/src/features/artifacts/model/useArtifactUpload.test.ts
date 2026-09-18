@@ -44,4 +44,20 @@ describe('artifact upload planning', () => {
       'report - Copy (3).txt',
     ]);
   });
+
+  /* elitea_issues: #5358 — files sharing a base name but with different extensions must not be flagged as duplicates (full key, not basename, is compared) */
+  it('does not flag same-base-name files with different extensions as duplicates', () => {
+    const cpp = new File(['a'], 'sample.cpp');
+    const cs = new File(['b'], 'sample.cs');
+    const csv = new File(['c'], 'sample.csv');
+    const plan = buildArtifactUploadPlan(
+      [cpp, cs, csv],
+      [{ key: 'docs/sample.cpp', size: 1, lastModified: '2026-01-01T00:00:00Z', bucket: 'files' }],
+      '',
+      'docs/',
+      100,
+    );
+    expect(plan.accepted).toEqual([cpp, cs, csv]);
+    expect(plan.duplicates).toEqual(['sample.cpp']);
+  });
 });

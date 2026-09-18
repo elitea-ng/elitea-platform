@@ -19,8 +19,16 @@ export interface AgentConversationStartersProps {
 
 export const AgentConversationStarters = memo(
   ({ conversation_starters, onSelectStarter }: AgentConversationStartersProps) => {
+    // elitea_issues #4932/#4933 — the API's `conversation_starters` array is
+    // typed loosely server-side (jsonb passthrough); an agent created/edited
+    // through the raw API (or a pre-existing row from before validation
+    // existed) can carry a non-string entry (`null`, a number, an object).
+    // `s?.trim()` only guards `null`/`undefined` — a number or object still
+    // has no `.trim` and threw `TypeError: s.trim is not a function`,
+    // crashing this whole panel. `typeof s === 'string'` first makes that
+    // structurally unreachable.
     const filtered = useMemo(
-      () => conversation_starters?.filter(s => s?.trim()) || [],
+      () => (conversation_starters ?? []).filter((s): s is string => typeof s === 'string' && s.trim() !== ''),
       [conversation_starters],
     );
 

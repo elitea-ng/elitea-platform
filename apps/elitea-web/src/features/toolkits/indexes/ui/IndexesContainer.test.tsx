@@ -173,6 +173,26 @@ describe('IndexesContainer', () => {
     expect(screen.getByRole('button', { name: 'Index' })).toBeInTheDocument();
   });
 
+  /* elitea_issues: #4838 — clicking "+ Index" while a previous index is still in progress must
+   * switch the center/right panels to the NEW creation form, not keep showing the previous
+   * (in-progress) index. `handleSelectIndex` unconditionally sets `currentIndex` to the clicked
+   * row (the archiving/remount-key branches are additional bookkeeping on top, not a gate on
+   * whether the switch happens) — so this always holds, not just for the NEW_INDEX_ID case the
+   * report used as its example. */
+  it('clicking "add index" while an index is still in progress switches the panel to the new create form', async () => {
+    server.use(
+      http.get(`${BASE}/elitea_core/index_meta/prompt_lib/proj-1/tk-1`, () =>
+        HttpResponse.json([{ id: '1', metadata: { collection: 'still-going', state: 'in_progress' } }]),
+      ),
+    );
+    const user = userEvent.setup();
+    renderContainer();
+    await user.click(await screen.findByText('still-going'));
+    await user.click(screen.getByRole('button', { name: 'Add index' }));
+    expect(await screen.findAllByText('New Index')).not.toHaveLength(0);
+    expect(await screen.findByRole('button', { name: 'Index' })).toBeInTheDocument();
+  });
+
   it('selects the index named by the ?index_name= URL param, then strips it from the URL', async () => {
     server.use(
       http.get(`${BASE}/elitea_core/index_meta/prompt_lib/proj-1/tk-1`, () =>
@@ -211,6 +231,24 @@ describe('IndexesContainer', () => {
     await waitFor(() => expect(screen.getAllByText('temp-index')).toHaveLength(2));
     expect(screen.queryByText('Item no longer exists')).not.toBeInTheDocument();
     await waitFor(() => expect(window.location.search).not.toContain('index_name'));
+  });
+
+  /* elitea_issues: #6181 — an index literally named "new" must open as that index, not as the
+   * "Create New Index" form. This app never routes by name string: index selection resolves
+   * `?index_name=` against `metadata.collection` (a real index row), while "create new" is a
+   * distinct sentinel id (`NEW_INDEX_ID`, not the string "new") — so there is no keyword
+   * collision to reproduce. This pins that an index named "new" survives the URL-select path
+   * and renders as itself, never the create form's "Index" submit button. */
+  it('an index named "new" opens as that index, not the create-new-index form', async () => {
+    server.use(
+      http.get(`${BASE}/elitea_core/index_meta/prompt_lib/proj-1/tk-1`, () =>
+        HttpResponse.json([{ id: '1', metadata: { collection: 'new', state: 'completed', indexed: 3 } }]),
+      ),
+    );
+    renderContainer({}, '/?index_name=new');
+    await waitFor(() => expect(screen.getAllByText('new')).toHaveLength(2));
+    expect(screen.queryByText('Still no indexes created')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Index' })).not.toBeInTheDocument();
   });
 
   it('shows the "item no longer exists" notice when the URL names an index that is not in the list', async () => {

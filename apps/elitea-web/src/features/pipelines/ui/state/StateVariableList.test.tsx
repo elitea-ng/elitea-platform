@@ -20,6 +20,7 @@ function baseProps(overrides: Partial<StateVariableListProps> = {}): StateVariab
 }
 
 describe('StateVariableList', () => {
+  /* elitea_issues: #2657 — the "input" and "messages" default state rows must be visible in the Flow State view even before the yaml document declares them (`states` undefined). */
   it('always renders the input and messages rows', () => {
     renderWithTheme(<StateVariableList {...baseProps()} />);
     expect(screen.getByText('input')).toBeInTheDocument();

@@ -263,7 +263,22 @@ func scheduledToolkitSettings(
 ) (map[string]any, bool) {
 	settings := cloneScheduleSettings(stored)
 	configurationKey := candidate.ToolkitType + "_configuration"
-	if _, present := settings[configurationKey]; !present {
+	_, keyPresent := settings[configurationKey]
+	if !keyPresent {
+		// Some toolkit types (ado_wiki, ado_repos, artifact, application, …)
+		// store their credential under a shared *group* key instead of
+		// "{type}_configuration" — the naive derivation above never matches
+		// for those, so this settings snapshot has no field this function
+		// can override. When the schedule author picked no explicit
+		// credential there is genuinely nothing to override (fall through
+		// unchanged, as before). But when they DID pick one, silently
+		// proceeding would run with the toolkit's own saved configuration
+		// instead of the credential they chose — with no failure, no log
+		// above DEBUG, and no way to tell the two apart later. Refuse
+		// instead of masking that misconfiguration as success (#6527).
+		if candidate.Schedule.Credentials != nil {
+			return nil, false
+		}
 		return settings, true
 	}
 	if candidate.ScheduleUserID == -1 &&

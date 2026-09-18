@@ -393,12 +393,22 @@ test.describe('project-context: settings/config coverage', () => {
     await clickSave(page);
 
     const uploaded = '# My Project\n\n**Stack:** Node.js, React\n\n**Rules:**\n- Respond concisely';
+    const fileInput = page.locator('input[type="file"]');
     await page.getByRole('button', { name: 'Import markdown file' }).click();
-    await page.locator('input[type="file"]').setInputFiles({
+    await expect(fileInput).toBeAttached();
+    await fileInput.setInputFiles({
       name: 'valid.md',
       mimeType: 'text/markdown',
       buffer: Buffer.from(uploaded, 'utf-8'),
     });
+    // The upload sets REACT state (`handleFileUpload`'s `setContent`) through
+    // an async `FileReader`, the same "DOM shows it before `content` does"
+    // gap `editorContentCommitted`'s own doc states for typing — so wait for
+    // the commit positively before reading `.cm-content`, rather than let a
+    // still-stale editor retry against a DOM update that has not landed yet.
+    // Measured hard failure on webkit (CI run 35278327473): 10 s of retries
+    // against `.cm-content` still read the pre-upload baseline.
+    await editorContentCommitted(page, uploaded);
     await expect(editorContent(page)).toContainText('Respond concisely', { timeout: 10_000 });
 
     // Reload WITHOUT saving the upload — it must be lost, and the SAVED
@@ -422,11 +432,15 @@ test.describe('project-context: settings/config coverage', () => {
     // debounced `onChange` clobbering a later, faster change.
     await editorContentCommitted(page, placeholder);
     await page.getByRole('button', { name: 'Import markdown file' }).click();
-    await page.locator('input[type="file"]').setInputFiles({
+    await expect(fileInput).toBeAttached();
+    await fileInput.setInputFiles({
       name: 'empty.md',
       mimeType: 'text/markdown',
       buffer: Buffer.from('', 'utf-8'),
     });
+    // Same commit wait as the upload above — a 0-byte file still goes through
+    // the async `FileReader` path.
+    await editorContentCommitted(page, '');
     await expect(editorContent(page)).toHaveText('', { timeout: 10_000 });
     await expect(page.getByRole('alert').filter({ hasText: /fail/i })).toHaveCount(0);
   });

@@ -98,7 +98,6 @@ async function scrollToBottom(page: Page): Promise<void> {
   const area = page.getByTestId('sidebar-notification-scroll-area');
   await area.evaluate((el) => {
     el.scrollTop = el.scrollHeight;
-    el.dispatchEvent(new Event('scroll'));
   });
 }
 

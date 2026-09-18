@@ -361,6 +361,59 @@ describe('CredentialForm — create flow', () => {
     expect(screen.queryByLabelText('Oauth Discovery Endpoint')).not.toBeInTheDocument();
   });
 
+  /*
+   * elitea_issues: 4864, 5937 — PRODUCT GAP. "OAuth (Delegated)" is a real,
+   * server-served config-schema subsection (see OPENAPI_TYPE above and the
+   * test just above this one), so its FIELDS render correctly. But this
+   * generic, schema-driven `CredentialForm` has exactly one Test connection
+   * mechanism — a plain `POST check_connection/{projectId}/{configType}`,
+   * asserted identically for every mode by ACT-041 right below — and no
+   * branch anywhere in `CredentialForm.tsx`/`CredentialFormFields.tsx` for
+   * a delegated-login popup, a login/logout control, or a per-credential
+   * session. That machinery exists in this codebase ONLY for SharePoint's
+   * bespoke `SharepointOAuthStatus`/`SharepointDelegatedLoginButton`/
+   * `McpAuthModal` wiring (`features/toolkits/sharepoint/**`,
+   * `pages/toolkits/lib/sharepointAuthModals.tsx`), which this generic
+   * credential form never reaches — SharePoint's delegated login is driven
+   * from the TOOLKIT editor, not from `Credentials → OpenAPI`. So an
+   * OpenAPI credential in "OAuth (Delegated)" mode cannot actually complete
+   * a user login: clicking Test connection just posts the static field
+   * values, same as every other mode.
+   */
+  it.fails('elitea_issues 4864/5937: OAuth (Delegated) Test connection should open a login popup, unlike a real delegated flow', async () => {
+    configureGeneratedClient({ baseUrl: BASE });
+    server.use(http.get(`${BASE}/configurations/available/`, () => HttpResponse.json([OPENAPI_TYPE])));
+    let checkConnectionCalls = 0;
+    server.use(
+      http.post(`${BASE}/configurations/check_connection/7/openapi`, () => {
+        checkConnectionCalls += 1;
+        return HttpResponse.json({});
+      }),
+    );
+    const windowOpenSpy = vi.spyOn(window, 'open').mockReturnValue(null);
+
+    renderForm(
+      <CredentialForm
+        context={CONTEXT}
+        mode={{ kind: 'create', credentialType: 'openapi' }}
+        onSaved={vi.fn()}
+        onDiscarded={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole('radio', { name: 'Anonymous' });
+    fireEvent.click(screen.getByRole('radio', { name: 'OAuth (Delegated)' }));
+    fireEvent.change(screen.getByLabelText('Oauth Discovery Endpoint'), { target: { value: 'https://idp.example.com/.well-known/openid-configuration' } });
+    fireEvent.change(screen.getByLabelText('Client Id'), { target: { value: 'client-1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }));
+
+    // Expected (per #4864/#5937): Check Connection opens a browser login
+    // popup for the configured identity provider. Actual: it just posts the
+    // static field values like every other auth mode — no popup, ever.
+    await waitFor(() => expect(checkConnectionCalls).toBe(1));
+    expect(windowOpenSpy).toHaveBeenCalled();
+  });
+
   it('ACT-041: the Test connection button dispatches POST /check_connection/{projectId}/{configType}', async () => {
     configureGeneratedClient({ baseUrl: BASE });
     server.use(http.get(`${BASE}/configurations/available/`, () => HttpResponse.json([OPENAI_TYPE])));

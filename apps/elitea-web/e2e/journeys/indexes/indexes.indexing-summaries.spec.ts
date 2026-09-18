@@ -198,6 +198,7 @@ test.afterAll(async ({ browser }) => {
   await context.close();
 });
 
+/* elitea_issues: #6229 — Improve Indexing and Reindexing Summaries in Toolkit and Index History: a categorised, source-appropriate summary (indexed/skipped/unsupported) instead of a raw chunk-count JSON blob. */
 test('ELITEA-2804 + ELITEA-2806: the History tab shows a categorised summary, not raw JSON', async ({ page }) => {
   const toolkit = await createIndexCapableToolkit(page);
   await mockIndexMetaList(page, toolkit.id);

@@ -96,6 +96,22 @@ describe('IndexScheduleModal', () => {
     expect(renderCredentialsSelect).not.toHaveBeenCalled();
   });
 
+  /* elitea_issues: #3192 — a toolkit type with no credentials schema (e.g. Artifact) must be able to enable scheduled indexing without being forced through a credential picker it does not have. */
+  it('submits successfully with no credential selected when the toolkit type has no credentialsData at all', async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const { getByRole } = renderWithTheme(
+      <IndexScheduleModal
+        open
+        onClose={vi.fn()}
+        onSubmit={onSubmit}
+        cron="0 0 * * 6"
+      />,
+    );
+    await user.click(getByRole('button', { name: 'Apply' }));
+    expect(onSubmit).toHaveBeenCalled();
+  });
+
   it('renders the injected credentials slot (with the right props) when credentialsData is present, and blocks Apply until it supplies a value', async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();

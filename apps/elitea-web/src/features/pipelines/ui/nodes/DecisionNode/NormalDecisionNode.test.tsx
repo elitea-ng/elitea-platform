@@ -53,6 +53,13 @@ describe('NormalDecisionNode', () => {
     expect(container.querySelectorAll('.react-flow__handle')).toHaveLength(3);
   });
 
+  /* elitea_issues: #2685, #2526 — the Decision node's fallback-branch handle must be labelled "Default output" (consistent with Router), never the legacy "Else" wording, and no separate leftover "Else" field renders alongside it. The handle's own label text only mounts while the card is expanded, matching how a user sees it (hover-expand). */
+  it('labels the fallback-branch handle "Default output", not "Else"', () => {
+    const { getByText, queryByText } = renderNormalDecisionNode({}, { expandAll: true });
+    expect(getByText('Default output')).toBeInTheDocument();
+    expect(queryByText('Else')).not.toBeInTheDocument();
+  });
+
   it('renders one decision-output chip per configured branch', () => {
     const { getByText } = renderNormalDecisionNode({});
     expect(getByText('NodeA')).toBeInTheDocument();

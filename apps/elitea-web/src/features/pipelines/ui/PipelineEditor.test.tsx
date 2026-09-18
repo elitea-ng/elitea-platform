@@ -130,6 +130,52 @@ describe('PipelineEditor', () => {
     expect(button?.hasAttribute('disabled')).toBe(true);
   });
 
+  /*
+   * The chat-embedded editor's Configuration tab (welcome message, tags,
+   * variables, …) is rendered entirely through `deps.renderConfigurationPanels`
+   * — a caller-owned form (`processes/chat`'s `useChatPipelineConfig.tsx`)
+   * this component never sees the fields of. Neither `isDirty` (Flow tab)
+   * nor `isYamlDirty` (YAML tab) is ever set by anything under that tab, so
+   * before `deps.isConfigurationDirty` existed, editing ONLY a Configuration
+   * field left Save permanently disabled even with a real `onSaveVersion`
+   * wired — the chat-embedded-editor regression this dep closes.
+   */
+  it('edit mode: the save button stays disabled when onSaveVersion is supplied but nothing has actually changed', async () => {
+    const deps = buildDeps({ onSaveVersion: vi.fn() });
+
+    const { findByTestId } = renderWithRouterAndProject(
+      <PipelineEditor
+        pipeline={{ id: 'p1', entity_meta: { id: 'p1' }, entity_settings: { version_id: 'v1' } }}
+        isVisible={false}
+        isCreateMode={false}
+        deps={deps}
+      />,
+      'proj1',
+    );
+
+    const saveButtonSlot = await findByTestId('shell-save-button');
+    const button = saveButtonSlot.querySelector('[data-testid="pipeline-save-button"]');
+    expect(button?.hasAttribute('disabled')).toBe(true);
+  });
+
+  it('edit mode: deps.isConfigurationDirty arms the save button even though the Flow/YAML tabs were never touched', async () => {
+    const deps = buildDeps({ onSaveVersion: vi.fn(), isConfigurationDirty: true });
+
+    const { findByTestId } = renderWithRouterAndProject(
+      <PipelineEditor
+        pipeline={{ id: 'p1', entity_meta: { id: 'p1' }, entity_settings: { version_id: 'v1' } }}
+        isVisible={false}
+        isCreateMode={false}
+        deps={deps}
+      />,
+      'proj1',
+    );
+
+    const saveButtonSlot = await findByTestId('shell-save-button');
+    const button = saveButtonSlot.querySelector('[data-testid="pipeline-save-button"]');
+    expect(button?.hasAttribute('disabled')).toBe(false);
+  });
+
   it('imperative handle: onRcvAgentEvent is a no-op when activeParticipantId does not match the pipeline', () => {
     const deps = buildDeps();
     const ref = createRef<PipelineEditorHandle>();

@@ -1,6 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { renderHook } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 
-import { computeDefaultConfigValues, computeIndexConfigWrapperSx, isAnyOfEntryArray, validateToolkitForm } from './IndexDetails.helpers';
+import { EditViewTabsEnum, IndexViewsEnum } from '../../lib/constants/indexDetails.constants';
+import {
+  computeDefaultConfigValues,
+  computeIndexConfigWrapperSx,
+  isAnyOfEntryArray,
+  useIndexDetailsTabSync,
+  validateToolkitForm,
+} from './IndexDetails.helpers';
 
 describe('isAnyOfEntryArray', () => {
   it('accepts an array and rejects everything else', () => {
@@ -154,5 +162,49 @@ describe('computeIndexConfigWrapperSx', () => {
     expect(sx['flex']).toBe('0 0 25.625rem');
     expect(sx['minWidth']).toBe('25.625rem');
     expect(sx['paddingRight']).toBe('2rem');
+  });
+});
+
+/* elitea_issues: #2976 — the History-tab conversation must not leak into Run/Configuration: switching `activeEditTab` away from History must clear the active conversation, or Reindex/search stay disabled with no visible output. */
+describe('useIndexDetailsTabSync', () => {
+  function baseParams(overrides: Partial<Parameters<typeof useIndexDetailsTabSync>[0]> = {}): Parameters<typeof useIndexDetailsTabSync>[0] {
+    return {
+      indexId: 'idx-1',
+      indexState: 'ready',
+      view: IndexViewsEnum.edit,
+      selectedRunTool: 'search_index',
+      activeEditTab: EditViewTabsEnum.history,
+      defaultActiveEditTab: EditViewTabsEnum.configuration,
+      disableRunTabReason: null,
+      setActiveEditTab: vi.fn(),
+      handleClearActiveConversation: vi.fn(),
+      handleClearChat: vi.fn(),
+      initializeDefaultConfigValues: vi.fn(),
+      ...overrides,
+    };
+  }
+
+  it('clears the active conversation and chat when the active tab changes away from History', () => {
+    const handleClearActiveConversation = vi.fn();
+    const handleClearChat = vi.fn();
+    const params = baseParams({ activeEditTab: EditViewTabsEnum.history, handleClearActiveConversation, handleClearChat });
+    const { rerender } = renderHook((props) => useIndexDetailsTabSync(props), { initialProps: params });
+
+    handleClearActiveConversation.mockClear();
+    handleClearChat.mockClear();
+
+    rerender({ ...params, activeEditTab: EditViewTabsEnum.run });
+
+    expect(handleClearActiveConversation).toHaveBeenCalled();
+    expect(handleClearChat).toHaveBeenCalled();
+  });
+
+  it('also clears on the initial mount (History opened directly), so a stale conversation never lingers from a prior index', () => {
+    const handleClearActiveConversation = vi.fn();
+    const handleClearChat = vi.fn();
+    renderHook(() => useIndexDetailsTabSync(baseParams({ handleClearActiveConversation, handleClearChat })));
+
+    expect(handleClearActiveConversation).toHaveBeenCalled();
+    expect(handleClearChat).toHaveBeenCalled();
   });
 });

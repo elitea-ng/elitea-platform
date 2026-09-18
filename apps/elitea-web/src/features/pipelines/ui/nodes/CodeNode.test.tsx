@@ -100,6 +100,7 @@ describe('CodeNode', () => {
     expect(getByText('Interrupt after')).toBeInTheDocument();
   });
 
+  /* elitea_issues: #2665 — the Code node must never seed a placeholder value ("# Write your code here\"Hello, World!\""); a fresh node's code value is a real empty string. */
   it('defaults the code value to an empty fixed string when yamlNode.code is unset', async () => {
     const { findByText, getAllByText } = renderCodeNode();
     await findByText('Node1');
@@ -194,5 +195,11 @@ describe('CodeNode', () => {
     await waitFor(() => expect(container.querySelector('.react-flow')).toBeInTheDocument());
 
     expect(container.querySelector('.react-flow__handle')).not.toBeInTheDocument();
+  });
+
+  /* elitea_issues: #5203 — product gap: no `debug` toggle exists on the Code node, so there is no way to capture the assembled preamble+user code the sandbox actually ran to a `code_debug` artifact. */
+  it.fails('elitea_issues 5203: a Debug toggle exists on the Code node for artifact capture', () => {
+    const { getByRole } = renderCodeNode();
+    expect(getByRole('checkbox', { name: /debug/i })).toBeInTheDocument();
   });
 });

@@ -887,3 +887,266 @@ describe("the seeded project's X-SECRET value is a property of the stack", () =>
     expect(runtimeSecretHeaderSeeded(read(SEED_SCRIPT), setup)).toBe(false);
   });
 });
+
+/* ── rule 9 ─────────────────────────────────────────────────────────────── */
+
+/**
+ * A journey that WRITES a platform-wide flag must run in the `platform-flags`
+ * projects, and nowhere else.
+ *
+ * ## The failure
+ *
+ * `withPlatformFlagLock` (e2e/fixtures/platformFlags.ts) is a mutex over rows
+ * that are ONE row for the whole deployment. Under `fullyParallel: true` and
+ * four workers, seven spec files queued for it, and every journey added to the
+ * set lengthened the queue. Two shapes came out of that, and both were read as
+ * product defects on PR #947 and #957:
+ *
+ *  - starvation, which raising the per-test budget to the lock's documented
+ *    worst case (210 s) moved rather than removed;
+ *  - MUTUAL EXCLUSION BREAKING. Measured on run 35278339078,
+ *    `E2E (webkit-1of2)`, 44 s in: ELITEA-0017 wrote "Block Agent Publishing"
+ *    on, reloaded, and read it back OFF, from INSIDE the lock. A queue cannot
+ *    produce that — only a second writer in the window can.
+ *
+ * The correction is a project per engine with `workers: 1`, so a CI leg never
+ * has a second writer for the lock to exclude. That is a property of the
+ * SUITE, not of any screen: no journey can state it, and the next flag-writing
+ * journey will be written by someone who has never read this file. Hence a
+ * rule rather than a comment.
+ *
+ * ## The four properties
+ *
+ *  1. every spec that calls `withPlatformFlagLock(` is matched by the config's
+ *     `PLATFORM_FLAG_JOURNEYS` list — the gate SCANS for the call rather than
+ *     trusting the list, so a new writer in a sharded project fails here and
+ *     not as somebody else's flaky journey;
+ *  2. both engine projects `testIgnore` that list, so nothing runs twice and
+ *     the sharded legs carry no writer at all;
+ *  3. each flag project pins `workers: 1`. `fullyParallel: false` alone does
+ *     not cap workers — Playwright still puts each FILE on its own worker,
+ *     which is the arrangement being corrected;
+ *  4. CI RUNS THEM. A project no workflow names is the dead-wiring shape this
+ *     repository keeps meeting, and it would read as "the flaky journeys went
+ *     away" — because they would simply have stopped running.
+ *
+ * Property 4 needs this file to RUN when that workflow changes, and ci-web.yml
+ * — which owns the `scripts` vitest project — does not fire on
+ * `.github/workflows/ci-web-e2e.yml`. So ci-web-e2e.yml runs this one file
+ * itself, as a step of every `e2e` leg: a leg that deleted itself cannot check
+ * anything, and the legs that remain can. The step carries the same note.
+ *
+ * The READERS (`readsPlatformFlags`) deliberately stay in the sharded
+ * projects: the shared side never waits for another reader, and with every
+ * writer moved out there is no writer to wait for. This rule says nothing
+ * about them on purpose.
+ */
+const E2E_WORKFLOW = '../../.github/workflows/ci-web-e2e.yml';
+const PLATFORM_FLAG_PROJECTS = ['platform-flags', 'platform-flags-webkit'];
+
+/** Every journey spec whose CODE takes the writer half of the lock. */
+export function platformFlagWriters(specs) {
+  return specs
+    .filter(([, source]) =>
+      source
+        .split('\n')
+        .map((line) => line.trim())
+        // A header that explains the lock is prose, not a call — and a rule
+        // that read prose could only be satisfied by deleting the account.
+        .filter((line) => !line.startsWith('*') && !line.startsWith('//') && !line.startsWith('/*'))
+        .some((line) => line.includes('withPlatformFlagLock(')),
+    )
+    .map(([path]) => path);
+}
+
+/**
+ * The `PLATFORM_FLAG_JOURNEYS` entries, as real RegExps.
+ *
+ * Built from the literals rather than compared as text: the config states the
+ * membership as a MATCH, and a gate that compared strings would pass a list
+ * whose regex cannot match the path it was written for.
+ */
+export function platformFlagProjectPatterns(configSource) {
+  const start = configSource.indexOf('const PLATFORM_FLAG_JOURNEYS = [');
+  if (start < 0) return [];
+  const block = configSource.slice(start, configSource.indexOf('];', start));
+  return [...block.matchAll(/\/(?:[^/\\\n]|\\.)+\//g)].map(
+    (match) => new RegExp(match[0].slice(1, -1)),
+  );
+}
+
+/** The writers the config leaves in the sharded projects. */
+export function writersOutsideTheFlagProjects(configSource, writers) {
+  const patterns = platformFlagProjectPatterns(configSource);
+  return writers.filter((path) => !patterns.some((pattern) => pattern.test(path)));
+}
+
+/** The lines inside one project's own block, or `[]` when it has no block. */
+function projectBlockLines(source, name) {
+  const lines = source.split('\n');
+  const start = lines.findIndex((line) => new RegExp(`name:\\s*'${name}'`).test(line));
+  if (start === -1) return [];
+  const indent = (lines[start].match(/^\s*/) ?? [''])[0].length;
+  const body = [];
+  for (let index = start; index < lines.length; index += 1) {
+    body.push(lines[index]);
+    const closes =
+      index > start &&
+      /^\s*\},?\s*$/.test(lines[index]) &&
+      (lines[index].match(/^\s*/) ?? [''])[0].length < indent;
+    if (closes) break;
+  }
+  return body;
+}
+
+/** Does every flag project exist, run the list, and cap itself at one worker? */
+export function flagProjectsAreSerial(configSource) {
+  return PLATFORM_FLAG_PROJECTS.every((name) => {
+    const block = projectBlockLines(configSource, name).join('\n');
+    if (block === '') return false;
+    return (
+      /testMatch:\s*PLATFORM_FLAG_JOURNEYS/.test(block) &&
+      /workers:\s*1\b/.test(block) &&
+      /fullyParallel:\s*false/.test(block)
+    );
+  });
+}
+
+/** Both engine projects must spread the list into their own `testIgnore`. */
+export function bothEnginesIgnoreTheFlagJourneys(configSource) {
+  return (
+    (configSource.match(/^\s*\.\.\.PLATFORM_FLAG_JOURNEYS,$/gm) ?? []).length === 2 &&
+    ['chromium', 'webkit'].every((name) =>
+      projectBlockLines(configSource, name).join('\n').includes('...PLATFORM_FLAG_JOURNEYS,'),
+    )
+  );
+}
+
+/** Which flag projects the E2E workflow actually runs as a matrix leg. */
+export function flagProjectsWiredIntoCI(workflowSource) {
+  return PLATFORM_FLAG_PROJECTS.filter((name) =>
+    new RegExp(`^\\s*- engine:\\s*${name}\\s*$`, 'm').test(workflowSource),
+  );
+}
+
+describe('#957 — a flag-writing journey must not queue behind three others', () => {
+  it('every writer is matched by the platform-flags project list', () => {
+    const writers = platformFlagWriters(journeySpecs());
+    // A rule whose input can be empty is a rule that passes by finding
+    // nothing: the writers exist, and this is what says so.
+    expect(writers.length).toBeGreaterThan(0);
+    expect(writersOutsideTheFlagProjects(read('playwright.config.ts'), writers)).toEqual([]);
+  });
+
+  it('both engine projects ignore that list, so nothing runs twice', () => {
+    expect(bothEnginesIgnoreTheFlagJourneys(read('playwright.config.ts'))).toBe(true);
+  });
+
+  it('each flag project caps itself at one worker', () => {
+    expect(flagProjectsAreSerial(read('playwright.config.ts'))).toBe(true);
+  });
+
+  it('ci-web-e2e.yml runs both flag projects as their own legs', () => {
+    expect(flagProjectsWiredIntoCI(read(E2E_WORKFLOW))).toEqual(PLATFORM_FLAG_PROJECTS);
+  });
+
+  it('rejects a new flag-writing journey left in the sharded projects', () => {
+    const newcomer = [
+      'test(\'J99: a new platform switch\', async ({ page }) => {',
+      '  await withPlatformFlagLock(async () => {',
+      '    await page.goto(BASE_URL + \'/admin/app/features\');',
+      '  });',
+      '});',
+    ].join('\n');
+    const writers = platformFlagWriters([['e2e/journeys/admin/admin.new-switch.spec.ts', newcomer]]);
+    expect(writers).toEqual(['e2e/journeys/admin/admin.new-switch.spec.ts']);
+    expect(writersOutsideTheFlagProjects(read('playwright.config.ts'), writers)).toEqual([
+      'e2e/journeys/admin/admin.new-switch.spec.ts',
+    ]);
+  });
+
+  it('reads the fixture header that explains the lock as prose', () => {
+    const commentOnly = [
+      '/**',
+      ' * Tests call withPlatformFlagLock( to take the writer half.',
+      ' */',
+      '// withPlatformFlagLock( is the writer; readsPlatformFlags is the reader.',
+    ].join('\n');
+    expect(platformFlagWriters([['e2e/journeys/admin/admin.prose.spec.ts', commentOnly]])).toEqual(
+      [],
+    );
+  });
+
+  it('rejects the shape the suite had, with the writers in chromium and webkit', () => {
+    const before = [
+      '      name: \'chromium\',',
+      '      testIgnore: [',
+      '        FIXTURE_ISOLATION_JOURNEY,',
+      '      ],',
+      '    },',
+      '    {',
+      '      name: \'webkit\',',
+      '      testIgnore: [',
+      '        FIXTURE_ISOLATION_JOURNEY,',
+      '      ],',
+      '    },',
+    ].join('\n');
+    expect(platformFlagProjectPatterns(before)).toEqual([]);
+    expect(bothEnginesIgnoreTheFlagJourneys(before)).toBe(false);
+    expect(flagProjectsAreSerial(before)).toBe(false);
+    expect(
+      writersOutsideTheFlagProjects(before, ['e2e/journeys/admin/admin.branding.spec.ts']),
+    ).toEqual(['e2e/journeys/admin/admin.branding.spec.ts']);
+  });
+
+  it('rejects a flag project that only turns fullyParallel off', () => {
+    const before = [
+      '    {',
+      '      name: \'platform-flags\',',
+      '      testMatch: PLATFORM_FLAG_JOURNEYS,',
+      '      fullyParallel: false,',
+      '    },',
+      '    {',
+      '      name: \'platform-flags-webkit\',',
+      '      testMatch: PLATFORM_FLAG_JOURNEYS,',
+      '      workers: 1,',
+      '      fullyParallel: false,',
+      '    },',
+    ].join('\n');
+    expect(flagProjectsAreSerial(before)).toBe(false);
+  });
+
+  it('rejects a list whose regex cannot match the spec it names', () => {
+    // The literal is present, and it is wrong: `admin/admin.branding` is not
+    // how the path reads. A gate that compared text would accept this.
+    const typo = [
+      'const PLATFORM_FLAG_JOURNEYS = [',
+      '  /journeys\\/admin\\/branding\\.spec\\.ts/,',
+      '];',
+    ].join('\n');
+    expect(platformFlagProjectPatterns(typo)).toHaveLength(1);
+    expect(
+      writersOutsideTheFlagProjects(typo, ['e2e/journeys/admin/admin.branding.spec.ts']),
+    ).toEqual(['e2e/journeys/admin/admin.branding.spec.ts']);
+  });
+
+  it('rejects a workflow that defines the projects and runs neither', () => {
+    const before = [
+      '      matrix:',
+      '        include:',
+      '          - engine: chromium',
+      '            leg: chromium',
+      '          - engine: webkit',
+      '            leg: webkit-1of2',
+    ].join('\n');
+    expect(flagProjectsWiredIntoCI(before)).toEqual([]);
+  });
+
+  it('rejects a workflow that wires only one of the two engines', () => {
+    const half = [
+      '          - engine: platform-flags',
+      '            leg: platform-flags',
+    ].join('\n');
+    expect(flagProjectsWiredIntoCI(half)).toEqual(['platform-flags']);
+  });
+});

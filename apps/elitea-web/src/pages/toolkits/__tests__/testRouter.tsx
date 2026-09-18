@@ -59,7 +59,24 @@ function buildTestRouter(initialPath: string, content: ReactElement, projectId: 
     component: () => content,
   });
 
-  const routeTree = rootRoute.addChildren([createRoute_.addChildren([createTypeRoute]), editRoute]);
+  // elitea_issues #6081 — `EditToolkit`'s not-found redirect targets
+  // `/toolkits/$tab` (and, for MCP mode, `/mcps/$tab`); both need to exist
+  // in this fixture's route tree for a test to observe the navigation
+  // actually landing, not just being attempted.
+  const listRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/toolkits/$tab',
+    // eslint-disable-next-line i18next/no-literal-string -- test-fixture marker, not user-facing copy
+    component: () => <div data-testid="toolkits-list-route">toolkits list</div>,
+  });
+  const mcpListRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/mcps/$tab',
+    // eslint-disable-next-line i18next/no-literal-string -- test-fixture marker, not user-facing copy
+    component: () => <div data-testid="mcps-list-route">mcps list</div>,
+  });
+
+  const routeTree = rootRoute.addChildren([createRoute_.addChildren([createTypeRoute]), editRoute, listRoute, mcpListRoute]);
 
   return createRouter({
     routeTree,

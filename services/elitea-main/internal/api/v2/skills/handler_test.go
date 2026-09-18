@@ -311,6 +311,7 @@ func setupSkillsRouter(repo handler.Repository) *chi.Mux {
 		r.Mount("/", h.Routes())
 		r.Post("/import", h.Import)
 		r.Get("/export/{skillID}", h.Export)
+		r.Get("/export/{skillID}/{versionID}", h.Export)
 	})
 	return r
 }
@@ -820,6 +821,59 @@ func TestSkillImport_DuplicateNameReusesAndNotices(t *testing.T) {
 	}
 	if resp.Notice == "" {
 		t.Error("expected a notice explaining the skill was reused")
+	}
+}
+
+/* elitea_issues: #5414 — exporting a NAMED (non-base) skill version and
+re-importing the resulting file produces a skill with the exported
+instructions on a fresh "base" version, not the empty-instructions /
+wrong-version-name pair the legacy exporter/importer produced. The standalone
+skill_import route (unlike the agent-import-wizard's importSkill in
+eliteacore/import_skills.go) has no concept of a version name at all —
+parseSkillMarkdown reads only name/description/tags/instructions — so
+Create always writes a fresh "base" version regardless of which version the
+file was exported from. */
+func TestSkillExportOfNamedVersionThenImportProducesBaseWithInstructions(t *testing.T) {
+	repo := &mockSkillRepo{skills: []handler.Skill{
+		{
+			ID: "s-1", Name: "Reviewer Notes", Description: "Guidance for reviewers",
+			Versions: []handler.SkillVersion{
+				{ID: "v-base", Name: "base", Instructions: "base body"},
+				{ID: "v-2", Name: "v2", Instructions: "the v2 instructions body"},
+			},
+		},
+	}}
+	r := setupSkillsRouter(repo)
+
+	// Export the NAMED version, not base.
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/projects/proj-1/skills/export/s-1/v-2", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("export status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	exported := rec.Body.String()
+	if !strings.Contains(exported, "the v2 instructions body") {
+		t.Fatalf("exported file carries no instructions: %s", exported)
+	}
+
+	// Re-import the exported file into a fresh project.
+	importRepo := &mockSkillRepo{}
+	importRouter := setupSkillsRouter(importRepo)
+	body, contentType := multipartFileBody(t, "reviewer-notes.md", exported)
+	importReq := httptest.NewRequest(http.MethodPost, "/api/v2/projects/proj-2/skills/import", body)
+	importReq.Header.Set("Content-Type", contentType)
+	importRec := httptest.NewRecorder()
+	importRouter.ServeHTTP(importRec, importReq)
+	if importRec.Code != http.StatusCreated {
+		t.Fatalf("import status = %d, body = %s", importRec.Code, importRec.Body.String())
+	}
+	var imported handler.Skill
+	if err := json.NewDecoder(importRec.Body).Decode(&imported); err != nil {
+		t.Fatalf("decode imported skill: %v", err)
+	}
+	if imported.Instructions != "the v2 instructions body" {
+		t.Errorf("imported instructions = %q, want the exported v2 body", imported.Instructions)
 	}
 }
 

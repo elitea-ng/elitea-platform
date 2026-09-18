@@ -307,6 +307,49 @@ describe('what reaches the wire', () => {
   });
 });
 
+/* elitea_issues: issue 6079, issue 6008 — a personal project's sole member cannot be
+ * given a separate per-member budget: the project budget already IS that
+ * member's budget, and a second limit here can only duplicate or silently
+ * override it (issue 6079 traced a live block caused by exactly this — an
+ * inherited platform-default member limit the Usage page never showed). */
+describe('personal projects have no member-budget action (issue 6079, issue 6008)', () => {
+  it('does not offer "Member budgets" for a personal project row', async () => {
+    server.use(
+      http.get('*/elitea_core/project_budgets/administration*', () =>
+        HttpResponse.json({
+          rows: [
+            {
+              ...PROJECT_ROW,
+              project_id: 22,
+              name: 'ada-personal',
+              display_name: 'ada-personal',
+              is_personal: true,
+            },
+          ],
+          total: 1,
+          counts: { team: 0, personal: 1 },
+        }),
+      ),
+      http.get('*/admin/gateway/status', () =>
+        HttpResponse.json({ reachable: true, gateway: {} }),
+      ),
+    );
+    renderAdminRoute(<AdminBudgets />);
+
+    await screen.findByText('ada-personal');
+    expect(screen.getByTestId('admin-budgets-edit-22')).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-budgets-members-22')).toBeNull();
+  });
+
+  it('still offers "Member budgets" for a team project row', async () => {
+    useBudgetHandlers();
+    renderAdminRoute(<AdminBudgets />);
+
+    await screen.findByText('alpha-team');
+    expect(screen.getByTestId('admin-budgets-members-21')).toBeInTheDocument();
+  });
+});
+
 describe('the enforcement warning (G12)', () => {
   it('warns when a reachable gateway reports it cannot enforce', async () => {
     useBudgetHandlers({ reachable: true, rateLimitsEnforceable: false });

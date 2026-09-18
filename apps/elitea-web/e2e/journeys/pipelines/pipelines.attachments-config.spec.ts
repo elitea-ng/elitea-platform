@@ -19,6 +19,14 @@
  * The other half of `AttachmentSwitch.tsx` (a differently-named, SEPARATE
  * component) really is dead code with no mount point anywhere, agents or
  * pipelines alike — not this case's concern, and not touched here.
+ *
+ * elitea_issues: #4978, #5030 — both moot for the same reason as ELITEA-0890
+ * above: #4978 ("Allow Attachments toggle not accessible when a pipeline is
+ * opened from the Chat Participants panel") and #5030 ("Paperclip icon not
+ * updated when Allow Attachments changes on a pipeline participant") both
+ * presuppose a pipeline's config panel can be opened FROM a chat's
+ * participants panel — the surface this file's doc comment already proves
+ * has no production caller in this build.
  */
 import { expect, test, type Page } from '@playwright/test';
 

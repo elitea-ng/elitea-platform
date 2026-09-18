@@ -79,6 +79,15 @@ describe('BucketAccessDialog', () => {
     expect(screen.queryByRole('option', { name: 'Blocked Member' })).toBeNull();
   });
 
+  /* elitea_issues: #6236 — a candidate who has never logged in (empty display name) is offered by email, not as a blank entry */
+  it('offers a never-logged-in candidate by email, not a blank entry', async () => {
+    renderWithProviders(<BucketAccessDialog {...props({
+      candidates: [{ id: 99, name: '', email: 'never-logged-in@example.test' }],
+    })} />);
+    await userEvent.click(screen.getByLabelText('Users'));
+    expect(await screen.findByRole('option', { name: 'never-logged-in@example.test' })).toBeInTheDocument();
+  });
+
   it('closes on the Close button', async () => {
     const onClose = vi.fn();
     renderWithProviders(<BucketAccessDialog {...props({ onClose })} />);

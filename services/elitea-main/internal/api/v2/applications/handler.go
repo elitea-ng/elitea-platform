@@ -662,7 +662,7 @@ func versionFromBody(vBody map[string]any, authorID int64) *applications.Version
 	instructions, _ := vBody["instructions"].(string)
 	welcomeMessage, _ := vBody["welcome_message"].(string)
 	llmSettings, _ := vBody["llm_settings"].(map[string]any)
-	starters, _ := vBody["conversation_starters"].([]any)
+	starters := stringConversationStarters(vBody["conversation_starters"])
 
 	meta, _ := vBody["meta"].(map[string]any)
 	if meta == nil {
@@ -688,6 +688,30 @@ func versionFromBody(vBody map[string]any, authorID int64) *applications.Version
 }
 
 const defaultStepLimit = 25
+
+// stringConversationStarters keeps only the STRING entries of a request
+// body's `conversation_starters` array (elitea_issues #4933): the field is a
+// loosely-typed jsonb passthrough (see `ConversationStarters` in
+// api/openapi/v2.yaml), so an API caller could send `null`/a number/an
+// object alongside real strings and have it persist verbatim — which then
+// crashed the agent-hub starter panel (#4932) for anyone who opened that
+// agent. `nil` is preserved when the key is absent/not an array at all (vs.
+// an explicit `[]`), matching the prior type-assertion's semantics: callers
+// downstream (`applications.go`'s conditional `ConversationStarters != nil`
+// update) distinguish "field omitted" from "field explicitly emptied".
+func stringConversationStarters(raw any) []any {
+	items, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]any, 0, len(items))
+	for _, item := range items {
+		if s, ok := item.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
 
 // versionDetailsResponse builds the write echo. `tags` is the version's
 // STORED tag list, read back by the caller after its own write — #345: the
@@ -1172,8 +1196,12 @@ func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
 	if llm, ok := body["llm_settings"].(map[string]any); ok {
 		v.LLMSettings = llm
 	}
-	if starters, ok := body["conversation_starters"].([]any); ok {
-		v.ConversationStarters = starters
+	if _, ok := body["conversation_starters"].([]any); ok {
+		// elitea_issues #4933 — same string-only filter as the create path's
+		// `stringConversationStarters`: this loosely-typed jsonb field must
+		// not persist a non-string entry, which crashed the agent-hub
+		// starter panel (#4932) for anyone who later opened the agent.
+		v.ConversationStarters = stringConversationStarters(body["conversation_starters"])
 	}
 	// `meta` on a version save is a PATCH, not the whole column.
 	//

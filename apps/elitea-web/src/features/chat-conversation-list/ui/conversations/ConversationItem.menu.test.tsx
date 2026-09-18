@@ -37,6 +37,7 @@ function params(conversation: ConversationWithOwnerMeta, currentUserId: string |
     onDelete: vi.fn(),
     onEdit: vi.fn(),
     onMakePublic: vi.fn(),
+    onRestrictAccess: vi.fn(),
     onShare: vi.fn(),
     onShareByLink: vi.fn(),
     onPlayback: vi.fn(),
@@ -169,5 +170,47 @@ describe('buildActiveMenuItems — the Duplicate entry', () => {
   it('disables Duplicate while the canvas is actively being edited', () => {
     const items = buildActiveMenuItems({ ...params({ ...conversation, authorId: 'user-1' }, 'user-1'), isActive: true, isEditingCanvas: true });
     expect(duplicateItem(items)?.disabled).toBe(true);
+  });
+});
+
+/**
+ * elitea_issues #6283 — before this, a public conversation offered no way
+ * back: "Make public" only ever renders while `isPrivate` is true, and
+ * nothing replaced it once the conversation went public. "Restrict access"
+ * is that missing counterpart.
+ */
+describe('buildActiveMenuItems — the Restrict access entry', () => {
+  const publicConversation: ConversationWithOwnerMeta = { ...conversation, isPrivate: false };
+  const privateConversation: ConversationWithOwnerMeta = { ...conversation, isPrivate: true };
+
+  function restrictItem(items: readonly ControlsDropdownItem[]): ControlsDropdownItem | undefined {
+    return items.find((item) => item.key === 'restrict-access');
+  }
+  function makePublicItem(items: readonly ControlsDropdownItem[]): ControlsDropdownItem | undefined {
+    return items.find((item) => item.key === 'make-public');
+  }
+
+  it('offers Restrict access on a public conversation, and not Make public', () => {
+    const items = buildActiveMenuItems(params(publicConversation, 'user-1'));
+    expect(restrictItem(items)).toBeDefined();
+    expect(makePublicItem(items)).toBeUndefined();
+  });
+
+  it('offers Make public on a private conversation, and not Restrict access', () => {
+    const items = buildActiveMenuItems(params(privateConversation, 'user-1'));
+    expect(makePublicItem(items)).toBeDefined();
+    expect(restrictItem(items)).toBeUndefined();
+  });
+
+  it('never offers Restrict access on the project’s own public/personal conversations', () => {
+    const items = buildActiveMenuItems({ ...params(publicConversation, 'user-1'), isPublicOrPersonal: true });
+    expect(restrictItem(items)).toBeUndefined();
+  });
+
+  it('calls onRestrictAccess through its confirm step', () => {
+    const onRestrictAccess = vi.fn();
+    const items = buildActiveMenuItems({ ...params(publicConversation, 'user-1'), onRestrictAccess });
+    restrictItem(items)?.confirm?.onConfirm();
+    expect(onRestrictAccess).toHaveBeenCalledTimes(1);
   });
 });

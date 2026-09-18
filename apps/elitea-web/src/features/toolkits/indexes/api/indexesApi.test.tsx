@@ -96,6 +96,7 @@ describe('deleteIndexItem', () => {
 });
 
 describe('useDeleteIndexItemMutation', () => {
+  /* elitea_issues: #3251, #3244 — the client-side schedule cache is keyed by index NAME; deleting an index must clear its entry so a recreated index with the same name never inherits the old (now-nonexistent) schedule as "enabled". */
   it('on success, removes the deleted index name from the schedule store', async () => {
     useIndexesStore.getState().setToolkitScheduler({ 'my-index': { enabled: true }, other: { enabled: false } });
     server.use(http.delete(`${BASE}/elitea_core/index_meta/prompt_lib/7/tk-1/idx-1`, () => HttpResponse.json({})));

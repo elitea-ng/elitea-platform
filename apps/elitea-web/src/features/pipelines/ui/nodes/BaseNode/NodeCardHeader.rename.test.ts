@@ -15,6 +15,15 @@ describe('renameYamlNode', () => {
     expect(renameYamlNode(node, 'Old', 'New')).toMatchObject({ id: 'Other' });
   });
 
+  /* elitea_issues: #1508 — renaming a Toolkit/Tool node must never touch its own `toolkit_name`/`tool` reference (the legacy bug made the toolkit disappear on rename); the rename pass only ever rewrites id/condition/decision/transition fields. */
+  it('renaming a node id leaves its toolkit_name/tool fields untouched', () => {
+    const node: YamlPipelineNode = { id: 'Old', toolkit_name: 'GitHub', tool: 'create_issue' };
+    const result = renameYamlNode(node, 'Old', 'New');
+    expect(result.id).toBe('New');
+    expect(result.toolkit_name).toBe('GitHub');
+    expect(result.tool).toBe('create_issue');
+  });
+
   it('rewrites a legacy condition sub-object referencing the old name', () => {
     const node: YamlPipelineNode = {
       id: 'Cond1',
@@ -35,6 +44,7 @@ describe('renameYamlNode', () => {
     });
   });
 
+  /* elitea_issues: #2706 — renaming a Router node must not spread its plain-string `condition` through the legacy condition-sub-object renamer (that spread is what produced the reported "[object Object]" / character-indexed-array YAML corruption). */
   it('does not treat a Router node\'s condition as a legacy condition rename target', () => {
     const node: YamlPipelineNode = {
       id: 'Router1',
@@ -72,6 +82,7 @@ describe('renameYamlNode', () => {
     expect(result.default_output).toBe('New');
   });
 
+  /* elitea_issues: #1516 — renaming a node must update every other node's `transition` reference to it in the same pass, so a connection to/from the renamed node can still be created (the legacy bug left the YAML pointing at a name that no longer existed). */
   it('rewrites a plain transition pointing at the old name', () => {
     const node: YamlPipelineNode = { id: 'Tool1', transition: 'Old' };
     expect(renameYamlNode(node, 'Old', 'New').transition).toBe('New');

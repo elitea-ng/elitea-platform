@@ -129,6 +129,7 @@ test('J14c-fs: clicking + Starter adds a real row, and both it and the welcome m
  * no counter and no warning at all.
  */
 /* onetest: ELITEA-0059, ELITEA-0062, ELITEA-0064 — the full-screen Welcome Message editor enforces the 768-char limit and shows a counter */
+/* elitea_issues: #5104 — same product gap, filed separately: paste past the limit in full-screen mode is silently accepted with no counter */
 test('J14c-fs: [PRODUCT GAP] the full-screen Welcome Message editor enforces the 768-char limit and shows a counter', async ({
   page,
   request,

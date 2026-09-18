@@ -64,3 +64,32 @@ describe('isCanvasFileOpenSizeOk', () => {
     expect(isCanvasFileOpenSizeOk(CANVAS_FILE_OPEN_SIZE_LIMIT_BYTES + 1)).toBe(false);
   });
 });
+
+/**
+ * Issues programme, package C-chat — three CLOSED legacy canvas-file-type
+ * issues, judged against this pure function (no live conversation needed).
+ */
+describe('canvas file-type support (elitea_issues #5051, #5846, #5940, #5845)', () => {
+  /* elitea_issues: #5051 — NOT REPRODUCED: an .xml file already opens in canvas as
+   * syntax-highlighted code (present in both CODE_LANGUAGE_BY_EXTENSION and
+   * OPENABLE_TEXT_EXTENSIONS, and in canvasLanguageOptions.ts's language picker). */
+  it('#5051: an .xml file is openable in canvas (code kind, xml language)', () => {
+    expect(detectCanvasFileOpenKind('notes.xml')).toEqual({ type: 'code', language: 'xml' });
+  });
+
+  /* elitea_issues: #5846, #5940 — product gap: .mdx is not a member of
+   * CODE_LANGUAGE_BY_EXTENSION, DOCUMENT_EXTENSIONS, or OPENABLE_TEXT_EXTENSIONS at
+   * all, so it falls through every branch and canvas refuses it as unsupported —
+   * no Preview/Raw mode, and (same root cause) no thumbnail/Edit/Preview affordance
+   * for an mdx file returned in a chat result. */
+  it.fails('#5846/#5940: an .mdx file should be recognised by canvas (Preview/Raw, like markdown)', () => {
+    expect(detectCanvasFileOpenKind('report.mdx')).toBeDefined();
+  });
+
+  /* elitea_issues: #5845 — product gap: .html maps only to a plain `code` kind; there
+   * is no rendered-HTML "Preview" mode distinct from "Raw" the way markdown/prose
+   * files get the `document` kind. */
+  it.fails('#5845: an .html file should offer a rendered Preview mode, not only raw code', () => {
+    expect(detectCanvasFileOpenKind('report.html')?.type).toBe('document');
+  });
+});

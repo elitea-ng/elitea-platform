@@ -86,6 +86,19 @@ export interface MenuItemsParams {
    */
   readonly onExport?: ((format: ConversationExportFormat) => void) | undefined;
   readonly onMakePublic: () => void;
+  /**
+   * elitea_issues #6283 — the creator-only counterpart to `onMakePublic`:
+   * PUTs `is_private: true` on an already-public conversation, which is the
+   * symmetric write the server already accepted for "Make public"
+   * (`Handler.Update`, `services/elitea-main/internal/api/v2/conversations/
+   * handler.go` — `is_private` is read as a plain present-and-boolean field,
+   * no special-casing either direction). SCOPE CUT (recorded in
+   * `S/issues/gaps.md`): #6283 also asks for a participant-selection step
+   * before restricting, so the creator can choose who keeps access; that
+   * step is not built here — restricting only flips the conversation back to
+   * its existing (non-public) participant list, unchanged.
+   */
+  readonly onRestrictAccess: () => void;
   readonly onShare: () => void;
   /**
    * Opens the share-by-link dialog. Distinct from `onShare`, which copies an
@@ -274,6 +287,26 @@ export function buildActiveMenuItems(params: MenuItemsParams): ControlsDropdownI
         message: t('features.chatConversationList.conversationItem.menu.makePublicConfirm', 'Are you sure to make your conversation public?'),
         confirmLabel: t('features.chatConversationList.conversationItem.menu.makePublic', 'Make public'),
         onConfirm: params.onMakePublic,
+      },
+    });
+  }
+
+  // elitea_issues #6283 — the creator's only way back once a conversation is
+  // public: mirrors "Make public"'s own guard (never on the project's own
+  // public/personal conversations, which have no private state to return to).
+  if (!conversation.isPrivate && !isPublicOrPersonal) {
+    items.push({
+      key: 'restrict-access',
+      label: t('features.chatConversationList.conversationItem.menu.restrictAccess', 'Restrict access'),
+      icon: <OpenEyeIcon style={menuIconStyle} />,
+      disabled: isEditingActive,
+      confirm: {
+        message: t(
+          'features.chatConversationList.conversationItem.menu.restrictAccessConfirm',
+          'Project members who are not participants will no longer be able to open this conversation. Continue?',
+        ),
+        confirmLabel: t('features.chatConversationList.conversationItem.menu.restrictAccess', 'Restrict access'),
+        onConfirm: params.onRestrictAccess,
       },
     });
   }

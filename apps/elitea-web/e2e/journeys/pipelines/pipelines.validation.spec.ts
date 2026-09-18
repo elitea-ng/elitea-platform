@@ -213,6 +213,12 @@ test('J16: an output naming an undeclared state key is named in the panel and ne
   expect(after, 'the stored pipeline must be byte-identical to the last legal save').toBe(before);
 });
 
+/* elitea_issues: #3194 — NOT REPRODUCED: the issue asks for a warning when
+   enabling interruption on a child pipeline in an Agent Node, because doing so
+   "may disrupt the flow of the parent pipeline". On this platform the switch
+   cannot be enabled at all (see below) — the editor shows a stronger,
+   always-visible reason (`interrupt-withheld-reason`) explaining WHY, rather
+   than a warning that appears only after the fact. */
 test('J16: the interrupt switches are disabled, and no interrupt reaches the stored document', async ({ page }) => {
   /*
    * `compiler.rs:470-474` refuses ANY non-empty `interrupt_before`/

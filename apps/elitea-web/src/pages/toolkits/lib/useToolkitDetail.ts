@@ -44,6 +44,8 @@ export interface UseToolkitDetailResult {
   readonly detail: ToolkitInstance | undefined;
   readonly isFetching: boolean;
   readonly isError: boolean;
+  /** True once this project's list has been fetched successfully at least once — the signal `EditToolkit.tsx` needs to tell "still loading" apart from "loaded, and this id genuinely isn't in this project" (elitea_issues #6081). */
+  readonly isSuccess: boolean;
 }
 
 export function useToolkitDetail(projectId: string | undefined, toolkitId: string | undefined): UseToolkitDetailResult {
@@ -57,5 +59,5 @@ export function useToolkitDetail(projectId: string | undefined, toolkitId: strin
   const rows = useMemo(() => unwrapList<ToolkitInstance>(query.data, 'listToolkitInstances'), [query.data]);
   const detail = useMemo(() => rows.find((row) => row.id === toolkitId), [rows, toolkitId]);
 
-  return { detail, isFetching: query.isFetching, isError: query.isError };
+  return { detail, isFetching: query.isFetching, isError: query.isError, isSuccess: query.isSuccess };
 }

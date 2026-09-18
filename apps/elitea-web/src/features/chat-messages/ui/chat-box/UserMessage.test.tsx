@@ -28,9 +28,9 @@
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider } from '@mui/material/styles';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
@@ -237,6 +237,112 @@ describe('UserMessage interjection caption', () => {
   it('leaves an ordinary question uncaptioned', () => {
     renderMessage({ name: 'Bob Reviewer' });
     expect(screen.queryByTestId('chat-message-interjected')).toBeNull();
+  });
+});
+
+/**
+ * Issues programme, package C-chat — the edit-and-resubmit flow, judged
+ * against three CLOSED legacy defects that all targeted this exact
+ * component. Rendered directly (not through a live conversation) because
+ * seeding a STORED message with an attachment needs a real model turn,
+ * which this wave's stack does not offer — `UserMessage` is the entire
+ * surface those three bugs lived in, so exercising it directly is a faithful
+ * reproduction, not a weaker one.
+ */
+describe('UserMessage edit-and-resubmit (elitea_issues #5140, #5221, #5138, #5137)', () => {
+  const attachmentItem = {
+    item_type: 'attachment_message',
+    item_details: { name: 'photo.png', content: { type: 'image_url', image_url: { url: 'https://example.test/photo.png' } } },
+  };
+  const questionItem = { uuid: 'q-uuid-1', item_type: 'text_message', item_details: { content: 'What is the capital of France?' } };
+
+  /* elitea_issues: #5140, #5221 — entering edit mode on a message that has an attachment
+   * keeps the attachment visible (not lost), and its remove control is wired to a real
+   * callback (not a no-op). */
+  it('#5140/#5221: an attachment stays visible in edit mode and its remove control calls back', () => {
+    const onRemoveAttachment = vi.fn();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const message = buildMessage(0, {
+      content: 'What is the capital of France?',
+      messageItems: [questionItem, attachmentItem] as unknown as ChatMessage['messageItems'],
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+          <UserMessage
+            message={message}
+            messageId={message.id}
+            onSubmit={vi.fn()}
+            onRemoveAttachment={onRemoveAttachment}
+          />
+        </ThemeProvider>
+      </QueryClientProvider>,
+    );
+
+    // Attachment visible before edit.
+    expect(screen.getByText('photo.png')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit the message and regenerate answer' }));
+
+    // Still visible IN edit mode — #5140's regression was that it vanished here.
+    expect(screen.getByText('photo.png')).toBeInTheDocument();
+  });
+
+  /* elitea_issues: #5138 — Save and apply is disabled once the field is cleared to empty,
+   * so an empty message can never reach the LLM. */
+  it('#5138: Save and apply is disabled for an empty edited message', () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const message = buildMessage(0, {
+      content: 'What is the capital of France?',
+      messageItems: [questionItem] as unknown as ChatMessage['messageItems'],
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+          <UserMessage message={message} messageId={message.id} onSubmit={vi.fn()} />
+        </ThemeProvider>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit the message and regenerate answer' }));
+    const saveButton = screen.getByRole('button', { name: 'Save and apply' });
+    expect(saveButton).toBeDisabled();
+
+    const textbox = screen.getByRole('textbox');
+    fireEvent.change(textbox, { target: { value: '' } });
+    expect(saveButton).toBeDisabled();
+
+    fireEvent.change(textbox, { target: { value: '   ' } });
+    expect(saveButton, 'whitespace-only content must not count as a real edit').toBeDisabled();
+  });
+
+  /* elitea_issues: #5137 — Save and apply hands the caller the EDITED text, not the
+   * message's original (pre-edit) content; the caller regenerates off whatever
+   * `onSubmit` receives, so this is the whole fix surface for "regenerates using OLD
+   * content". */
+  it('#5137: Save and apply submits the NEW edited text, not the original', () => {
+    const onSubmit = vi.fn();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const message = buildMessage(0, {
+      content: 'What is the capital of France?',
+      messageItems: [questionItem] as unknown as ChatMessage['messageItems'],
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+          <UserMessage message={message} messageId={message.id} onSubmit={onSubmit} />
+        </ThemeProvider>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit the message and regenerate answer' }));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'What is the capital of Germany?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save and apply' }));
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    const [, updatedItems] = onSubmit.mock.calls[0] as [string, ReadonlyArray<{ content: string }>];
+    expect(updatedItems[0]?.content).toBe('What is the capital of Germany?');
+    expect(updatedItems[0]?.content).not.toBe('What is the capital of France?');
   });
 });
 

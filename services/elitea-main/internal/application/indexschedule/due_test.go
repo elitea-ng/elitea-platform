@@ -8,6 +8,10 @@ import (
 	"time"
 )
 
+// elitea_issues: #5142 — a schedule configured to run every hour must
+// actually become due once an hour, not silently never fire. Two cases in
+// the fixture ("hourly schedule due on the hour" / "... not yet due before
+// the hour") pin the "0 * * * *" cron specifically.
 func TestDueOccurrenceMatchesFrozenCurrentContract(t *testing.T) {
 	type dueCase struct {
 		Name       string `json:"name"`

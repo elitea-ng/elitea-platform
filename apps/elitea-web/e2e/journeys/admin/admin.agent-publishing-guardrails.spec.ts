@@ -146,6 +146,10 @@ adminTest.afterEach(async ({ request }) => {
 adminTest(
   'the Block Agent Publishing section starts OFF, with no exception list shown',
   async ({ page, request }) => {
+    // The lock's own arithmetic (see `admin.features.spec.ts`): up to
+    // STALE_MS (90 s) to take the writer, up to STALE_MS again for the
+    // readers to drain, and about 30 s of assertions after that.
+    adminTest.setTimeout(210_000);
     await withPlatformFlagLock(async () => {
       await restoreAgentPublishing(request);
       await openFeatures(page);
@@ -166,6 +170,10 @@ adminTest(
 adminTest(
   'ELITEA-0016: the exception list is searched and picked by project NAME, and still saves the plain id',
   async ({ page, request }) => {
+    // See the timeout note on the file's first test above — same lock
+    // arithmetic. Measured hard failure without it: "Test timeout of 30000ms
+    // exceeded" from inside this lock, run 35147649157 (webkit-1of2).
+    adminTest.setTimeout(210_000);
     await withPlatformFlagLock(async () => {
       try {
         await restoreAgentPublishing(request);
@@ -235,6 +243,8 @@ adminTest(
 adminTest(
   'ELITEA-0015: blocking publishing with a project exception lets that project through and refuses every other one',
   async ({ request }) => {
+    // See the timeout note on the file's first test above — same lock arithmetic.
+    adminTest.setTimeout(210_000);
     await withPlatformFlagLock(async () => {
       try {
         const saved = await putAgentPublishing(request, {
@@ -295,6 +305,8 @@ adminTest(
 adminTest(
   'ELITEA-0017: the guardrail toggle and exception list persist across a reload',
   async ({ page, request }) => {
+    // See the timeout note on the file's first test above — same lock arithmetic.
+    adminTest.setTimeout(210_000);
     await withPlatformFlagLock(async () => {
       try {
         const saved = await putAgentPublishing(request, {

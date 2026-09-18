@@ -117,6 +117,8 @@ test('the launcher is visible on every main application page', async ({ page }) 
 test('the sidebar entry is present, distinct from the nav group, and survives collapsing the sidebar', async ({
   page,
 }) => {
+  // See the timeout note on the file's first test above — same global lock.
+  test.setTimeout(210_000);
   await withPlatformFlagLock(async () => {
     await enableSupportAssistant(page.request, {
       projectId: SUPPORT_PROJECT_ID,
@@ -147,7 +149,9 @@ test('the sidebar entry is present, distinct from the nav group, and survives co
 
 /* onetest: ELITEA-0610, ELITEA-0632 — the sidebar entry and the floating launcher open the SAME session (same-page close/reopen, entry points swapped) */
 test('the sidebar entry and the launcher share one session, on a close and reopen', async ({ page }) => {
-  test.setTimeout(60_000);
+  // See the timeout note on the file's first test above — same global lock.
+  // 60 s covered only the test's own work and never budgeted for the queue.
+  test.setTimeout(210_000);
   await withPlatformFlagLock(async () => {
     await enableSupportAssistant(page.request, {
       projectId: SUPPORT_PROJECT_ID,
@@ -205,7 +209,9 @@ test('the sidebar entry and the launcher share one session, on a close and reope
  * assistant widget wraps the sidebar") both describe.
  */
 test('the session is shared across a page navigation, not scoped to one page', async ({ page }) => {
-  test.setTimeout(60_000);
+  // See the timeout note on the file's first test above — same global lock.
+  // 60 s covered only the test's own work and never budgeted for the queue.
+  test.setTimeout(210_000);
   await withPlatformFlagLock(async () => {
     await enableSupportAssistant(page.request, {
       projectId: SUPPORT_PROJECT_ID,

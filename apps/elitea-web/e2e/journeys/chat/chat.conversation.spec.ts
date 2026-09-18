@@ -268,6 +268,19 @@ test('J11: a server-side rename persists and the conversation opens at its deep 
   const originalName = uniqueMessage('j11');
   const conversation = await sendFirstMessage(page, originalName);
 
+  // `sendFirstMessage` only awaits the POST response — the app's OWN success
+  // handler (`pages/chat/index.tsx`'s `handleConversationCreated`) reacts to
+  // that same response by client-navigating to this conversation's route.
+  // That is a history push, not a real navigation (`toHaveURL`, not
+  // `waitForURL` — see `chat.navigation.spec.ts`'s own note: a history push
+  // fires no navigation lifecycle event for `waitForURL` to wait on). Letting
+  // it settle here, before the explicit hard `page.goto` to the SAME URL
+  // below, is what the webkit-only flake needs: without it, that `goto`
+  // sometimes starts while the app's own history push is still in flight and
+  // gets aborted as "interrupted by another navigation to the same URL" —
+  // the same class `admin.secrets.spec.ts` documents for its own goto.
+  await expect(page).toHaveURL(`${BASE_URL}/app/chat/${conversation.id}`, { timeout: 15_000 });
+
   // Rename from outside the tab, exactly as a server-side auto-naming pass would.
   const renamed = `${AUTOTEST_PREFIX}renamed-${Date.now()}${SUFFIX}`;
   const put = await page.request.put(`${API_BASE}${CONVERSATION_PATH}/${conversation.id}`, {

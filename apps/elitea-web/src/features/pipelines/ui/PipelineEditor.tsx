@@ -288,7 +288,7 @@ const PipelineEditorInner = (
   const handle = usePipelineEditorHandle<EditorPanelHandle>({ editorPanelRef, pipelineId, activeParticipantId, stopRunOnNodeStop });
   useImperativeHandle(ref, () => handle, [handle]);
 
-  const totalDirty = useMemo(() => isDirty || isYamlDirty, [isDirty, isYamlDirty]);
+  const totalDirty = useMemo(() => isDirty || isYamlDirty || (deps.isConfigurationDirty ?? false), [isDirty, isYamlDirty, deps.isConfigurationDirty]);
 
   const onIdentityReset = useCallback(() => {
     setActiveTab(0);
@@ -349,6 +349,7 @@ const PipelineEditorInner = (
       isSavingVersion={deps.isSavingVersion}
       deps={deps}
       onSaveSuccess={handleSaveSuccess}
+      isDirty={totalDirty}
     />
   );
 

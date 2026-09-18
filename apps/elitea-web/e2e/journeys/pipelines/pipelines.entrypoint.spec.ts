@@ -76,6 +76,19 @@ async function openEditor(page: Page, pipeline: CreatedPipeline) {
 }
 
 /*
+ * elitea_issues: #6516, #6449, #5265, #5014, #5085, #5001, #6128, #4977,
+ * #4975 — all moot for the same reason: Schedule/Webhook are never
+ * reachable in this build (`pipelineTriggers: false`, #192/#193), so a
+ * Schedule-timezone-conversion bug (#6516) and its matching enhancement
+ * (#6449), a per-version Schedule config reset (#5265), a Webhook trigger
+ * not resetting on "Save As Version" (#5014), an entrypoint trigger
+ * resetting to Chat Message after node edits (#5085 — moot in the OTHER
+ * direction: it can never be anything but Chat Message to reset FROM), a
+ * webhook secret exposed by an endpoint that 404s in this backend (#5001,
+ * same #192 gap — no `/webhook/prompt_lib/.../custom` route exists to leak
+ * from), an OAuth-toolkit trigger restriction (#6128 — moot, the dropdown
+ * already offers only Chat Message regardless of toolkit), and two
+ * trigger-type QA/QnA meta-issues (#4977, #4975) can none be exercised.
  * onetest: ELITEA-0889, ELITEA-0865, ELITEA-0867, ELITEA-0868, ELITEA-0877,
  * ELITEA-0883, ELITEA-0886 — product gap, see this file's own doc comment.
  * The Trigger dropdown IS mounted, exclusively on the Entrypoint node, and
