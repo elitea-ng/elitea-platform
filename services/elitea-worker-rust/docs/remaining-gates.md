@@ -131,6 +131,11 @@ Main chat shows detailed usage; nested agents show brief compaction activity tex
 Nested and graph-model recovery coordination and actual compaction browser acceptance remain open.
 The [compatible-provider correction](source-mapping/context-summary-compatibility-20260918.md)
 accepts one validated summary object inside presentation text and aligns input fetching with Main's existing 1 MiB contract.
+It now requests native structured output and applies bounded evidence-only correction without rewriting summary facts.
+The fresh browser run compacts 108,264 estimated tokens to 12,858 and preserves all required facts in worker state.
+A second fresh browser session verifies persisted compaction status and stable answer text.
+The model refuses part of the synthetic continuation, so the complete answer-quality assertion remains open.
+Full-window capacity, smaller-summary-model batching, nested scopes, and recovery still require acceptance.
 The same audit identifies a separate final-output frame limit and an unresolved regeneration measurement difference.
 Do not interpret either failure as proof that the model context is full.
 The [large-output correction](source-mapping/model-output-delivery-20260918.md) separates completed model answers from individual event limits.

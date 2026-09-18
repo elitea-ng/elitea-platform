@@ -1,6 +1,6 @@
 # Compatible-provider summary and input limits
 
-Status: admission and parser checks pass on 2026-09-18. Browser acceptance exposes a remaining summary-schema failure.
+Status: live compaction and reload pass on 2026-09-18. Full continuation-quality and capacity acceptance remain open.
 Gate 4 remains open.
 
 ## Source mapping
@@ -204,3 +204,23 @@ The selective merge prevents that unrelated rewrite from changing the accepted r
 All five summary parser checks and 11 compaction checks pass.
 The short correction input check also verifies that bulk historical text is absent.
 Live browser acceptance remains pending for this refinement.
+
+## Accepted compaction and separate answer-quality result
+
+The deployed image is `sha256:0fe6501aabe1ce0d6dca7a85400f9a1a3370bf0b901714c7dc897f59422ba672`.
+A fresh headed Playwright session runs synthetic chat 590 without intercepted requests.
+Execution `b73f1645e3dd155cd0fc527f3b7d3b42` completes evidence correction and commits the summary before model dispatch.
+Estimated input falls from 108,264 to 12,858 tokens.
+The UI receives `compacting` and `compacted` events and displays 12% usage.
+
+A read-only worker-state query confirms all four required facts in the accepted summary.
+These include `CEDAR-731`, the teal correction, completed archive verification, and pending handoff preparation.
+The query selects only this isolated test execution.
+A second fresh browser session confirms stable answer text and the persisted compaction status.
+
+The overall continuation-quality assertion does not pass.
+Haiku rejects the repetitive synthetic scenario and omits the handoff step from its answer.
+The persisted summary retains that step, so this failure is not evidence of compaction data loss.
+Do not count this run as complete end-to-end acceptance of the requested four-line answer.
+Use representative task history for the remaining continuation-quality and capacity checks.
+Full-mode limits, smaller-summary-model batching, nested scopes, and crash recovery remain open.
