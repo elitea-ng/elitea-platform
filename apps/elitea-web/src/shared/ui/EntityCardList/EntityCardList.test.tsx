@@ -70,6 +70,28 @@ describe('EntityCard', () => {
     fireEvent.keyDown(getByTestId('entity-card'), { key: 'Enter' });
     expect(onClick).toHaveBeenCalledTimes(2);
   });
+
+  /* #915 — the "Forked from" link fires ITS OWN handler, not the card's onClick, on both click and keyboard activation. */
+  it('renders a "Forked from" link that activates independently of the card itself', () => {
+    const onClick = vi.fn();
+    const onForkedFromClick = vi.fn();
+    const { getByTestId } = renderWithTheme(
+      <EntityCard item={{ id: '1', name: 'a', onClick, forkedFrom: { onClick: onForkedFromClick } }} />,
+    );
+    const link = getByTestId('entity-card-forked-from');
+    expect(link).toHaveTextContent('Forked from');
+    fireEvent.click(link);
+    expect(onForkedFromClick).toHaveBeenCalledTimes(1);
+    expect(onClick).not.toHaveBeenCalled();
+    fireEvent.keyDown(link, { key: 'Enter' });
+    expect(onForkedFromClick).toHaveBeenCalledTimes(2);
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it('renders no "Forked from" link for an un-forked item', () => {
+    const { queryByTestId } = renderWithTheme(<EntityCard item={{ id: '1', name: 'a' }} />);
+    expect(queryByTestId('entity-card-forked-from')).not.toBeInTheDocument();
+  });
 });
 
 describe('EntityCardList', () => {

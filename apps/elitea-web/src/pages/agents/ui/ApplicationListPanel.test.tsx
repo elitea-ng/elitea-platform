@@ -120,4 +120,36 @@ describe('ApplicationListPanel', () => {
     );
     expect(getByText('Load more').closest('button')).toBeDisabled();
   });
+
+  // #915 — a forked row shows a "Forked from" link that calls the row's OWN
+  // callback, not onSelect (which would open this row's own entity instead).
+  it('renders a "Forked from" link for a forked row and routes clicks through row.forkedFrom', () => {
+    const onSelect = vi.fn();
+    const onForkedFromClick = vi.fn();
+    const { getByRole, queryAllByText } = renderWithTheme(
+      <ApplicationListPanel
+        {...BASE_PROPS}
+        rows={[{ id: '2', name: 'Forked Agent', description: '', forkedFrom: { onClick: onForkedFromClick } }]}
+        isLoading={false}
+        isError={false}
+        onSelect={onSelect}
+      />,
+    );
+    expect(queryAllByText('Forked from').length).toBeGreaterThan(0);
+    getByRole('link', { name: 'Forked from' }).click();
+    expect(onForkedFromClick).toHaveBeenCalledTimes(1);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('renders no "Forked from" link for a row with no forkedFrom', () => {
+    const { queryByRole } = renderWithTheme(
+      <ApplicationListPanel
+        {...BASE_PROPS}
+        rows={[{ id: '2', name: 'Regular Agent', description: '' }]}
+        isLoading={false}
+        isError={false}
+      />,
+    );
+    expect(queryByRole('link', { name: 'Forked from' })).not.toBeInTheDocument();
+  });
 });

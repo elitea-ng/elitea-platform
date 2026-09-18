@@ -7,6 +7,7 @@ import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { cardGradientSx } from '@/shared/lib/cardGradient';
+import { t } from '@/shared/i18n';
 
 import { EntityCardAuthors } from './EntityCardAuthors';
 import { EntityCardTags } from './EntityCardTags';
@@ -113,6 +114,28 @@ export function EntityCard({ item, actions, onTagClick, 'data-testid': dataTestI
             {...(onTagClick === undefined ? {} : { onTagClick })}
           />
         </Box>
+        {item.forkedFrom !== undefined && (
+          <Box
+            component="span"
+            // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- an `<a>` needs a real `href` to compute the `link` role, and this is a client-side-only navigation with no URL of its own to give it (same reasoning this file's own outer card `role="button"` documents for its rule).
+            role="link"
+            tabIndex={0}
+            data-testid="entity-card-forked-from"
+            sx={forkedFromSx}
+            onClick={(event) => {
+              event.stopPropagation();
+              item.forkedFrom?.onClick();
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter' && event.key !== ' ') return;
+              event.preventDefault();
+              event.stopPropagation();
+              item.forkedFrom?.onClick();
+            }}
+          >
+            {t('shared.entityList.forkedFrom', 'Forked from')}
+          </Box>
+        )}
       </Box>
     </Box>
   );
@@ -221,3 +244,15 @@ const bottomLeftSx: SxProps<Theme> = (theme: Theme) => ({
 });
 
 const sectionDividerSx: SxProps<Theme> = { height: '0.9375rem', alignSelf: 'center' };
+
+/** #915's "Forked from" link — the bottom row's right-hand slot, unused until now (`bottomRowSx`'s `justifyContent: 'space-between'` already reserved it). */
+const forkedFromSx: SxProps<Theme> = (theme: Theme) => ({
+  flexShrink: 0,
+  alignSelf: 'center',
+  color: theme.vars.palette.text.link,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+  fontSize: theme.typography.bodySmall.fontSize,
+  '&:hover': { textDecoration: 'underline' },
+  '&:focus-visible': { outline: `0.125rem solid ${theme.vars.palette.border.lines}`, outlineOffset: '0.125rem' },
+});

@@ -120,4 +120,22 @@ describe('PipelineListPanel', () => {
     );
     expect(getByText('Load more').closest('button')).toBeDisabled();
   });
+
+  // #915 — same "Forked from" wiring as `pages/agents/ui/ApplicationListPanel`.
+  it('renders a "Forked from" link for a forked row and routes clicks through row.forkedFrom', () => {
+    const onSelect = vi.fn();
+    const onForkedFromClick = vi.fn();
+    const { getByRole } = renderWithTheme(
+      <PipelineListPanel
+        {...BASE_PROPS}
+        rows={[{ id: '2', name: 'Forked Pipeline', description: '', forkedFrom: { onClick: onForkedFromClick } }]}
+        isLoading={false}
+        isError={false}
+        onSelect={onSelect}
+      />,
+    );
+    getByRole('link', { name: 'Forked from' }).click();
+    expect(onForkedFromClick).toHaveBeenCalledTimes(1);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
 });

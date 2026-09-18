@@ -29,7 +29,23 @@ function applicationName(application: Application): string {
   return application.name.trim() !== '' ? application.name : 'Untitled';
 }
 
-function toRow(application: Application): ApplicationListRow {
+/**
+ * #915 — the SOURCE agent's id, when this row is a fork. `Application.meta`
+ * is a permissive passthrough bag (`x-elitea-passthrough`, no fixed shape);
+ * `repos/applications.go`'s `List` now merges `parent_entity_id` into it
+ * exactly when `is_forked` is true (the same pair `ApplicationInformation
+ * .tsx`'s own "Forked from" row reads off the version detail), so reading
+ * it back here needs the same duck-typed narrowing that file's own
+ * `forkOrigin` helper uses.
+ */
+function forkedFromId(application: Application): string | undefined {
+  if (!application.is_forked) return undefined;
+  const parentEntityId = application.meta?.['parent_entity_id'];
+  return typeof parentEntityId === 'string' || typeof parentEntityId === 'number' ? String(parentEntityId) : undefined;
+}
+
+function toRow(application: Application, onSelectForkedFrom: (id: string) => void): ApplicationListRow {
+  const forkedFrom = forkedFromId(application);
   return {
     id: application.id,
     name: applicationName(application),
@@ -37,6 +53,7 @@ function toRow(application: Application): ApplicationListRow {
     authors: (application.authors ?? []).map((author) => ({ id: author.id, name: author.name })),
     tags: application.tags ?? [],
     createdAt: application.created_at,
+    ...(forkedFrom === undefined ? {} : { forkedFrom: { onClick: () => onSelectForkedFrom(forkedFrom) } }),
   };
 }
 
@@ -181,7 +198,14 @@ export function PrivateAgentsList({ statuses, cardContentType }: PrivateAgentsLi
       sx={containerSx}
     >
       <ApplicationListPanel
-        rows={visibleRows.map(toRow)}
+        rows={visibleRows.map((application) =>
+          toRow(application, (id) => {
+            // #915 — always the "all" tab, matching the baseline's own fixed
+            // (old-router) target: the source agent may not appear under
+            // whichever status tab the fork's own row is showing on.
+            void navigate({ to: '/agents/$tab/$agentId', params: { tab: 'all', agentId: id } });
+          }),
+        )}
         isLoading={listQuery.isFetching && wire === undefined}
         isError={listQuery.isError}
         errorMessage={t('pages.agents.privateList.error', 'Failed to load applications.')}
