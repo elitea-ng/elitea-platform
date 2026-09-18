@@ -18,7 +18,7 @@
  *    toolbar and again in the saved view's menu); this port had neither.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { configure, screen, waitFor } from '@testing-library/react';
+import { configure, fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -228,6 +228,75 @@ describe('Settings › Project Context', () => {
    * exactly as the E2E journey's `editorContentCommitted` does, so the edit
    * is provably committed before the toggle races it.
    */
+  /**
+   * #889 (ELITEA-0940): Import is a MARKDOWN import, and nothing but the
+   * native file dialog's `accept` hint enforced that.
+   *
+   * `handleFileUpload` read whatever `File` reached the hidden input and
+   * checked only its LENGTH, so a `.txt` — reachable by switching the OS
+   * dialog to "All files", by drag-and-drop, or by automation, none of which
+   * the `accept` attribute constrains — loaded into the editor exactly as a
+   * `.md` would, with no error. The input is driven here the same way those
+   * routes drive it: a change event carrying a file the dialog would not have
+   * offered.
+   */
+  async function importFile(file: File): Promise<void> {
+    const input = await waitFor(() => {
+      const element = document.querySelector('input[type="file"]');
+      if (!(element instanceof HTMLInputElement)) throw new Error('file input not found');
+      return element;
+    });
+    // `fireEvent.change` rather than `userEvent.upload`: the input is
+    // `display: none` (the toolbar button clicks it programmatically), which
+    // userEvent's pointer-events checks refuse — and a hidden input is
+    // exactly the surface this fix has to hold for.
+    Object.defineProperty(input, 'files', { value: [file], configurable: true });
+    fireEvent.change(input);
+  }
+
+  it('refuses a non-Markdown import instead of loading it as though it were Markdown', async () => {
+    server.use(http.get(CONTEXT_PATH, () => HttpResponse.json({ content: 'Stored background', enabled: true })));
+
+    mount();
+    await screen.findByTestId('project-context-body');
+
+    await importFile(
+      new File(['# My Project\n\nSame content, wrong extension.'], 'not-markdown.txt', { type: 'text/plain' }),
+    );
+
+    expect(await screen.findByText('Only Markdown (.md) files can be imported')).toBeInTheDocument();
+    // The content must be the STORED one still: a refused import that had
+    // already replaced the buffer would be the same data loss with a toast on
+    // top.
+    await waitFor(() =>
+      expect(screen.queryByText(/Same content, wrong extension/)).toBeNull(),
+    );
+  });
+
+  it('accepts a .md file, and a Markdown file whose MIME type the OS did not name', async () => {
+    server.use(http.get(CONTEXT_PATH, () => HttpResponse.json({ content: 'Stored background', enabled: true })));
+
+    mount();
+    await screen.findByTestId('project-context-body');
+
+    await importFile(new File(['# Imported by extension'], 'notes.md', { type: '' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('project-context-char-counter')).toHaveTextContent(
+        `${String(MAX_CHARS - '# Imported by extension'.length)} characters left.`,
+      ),
+    );
+    expect(screen.queryByText('Only Markdown (.md) files can be imported')).toBeNull();
+
+    // And the other way round: the right MIME type with a name the OS gave no
+    // extension. Refusing this would break a genuine import to fix a fake one.
+    await importFile(new File(['# Imported by type'], 'clipboard-paste', { type: 'text/markdown' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('project-context-char-counter')).toHaveTextContent(
+        `${String(MAX_CHARS - '# Imported by type'.length)} characters left.`,
+      ),
+    );
+  });
+
   it('does not let the toggle-triggered background refetch clobber an unsaved edit', async () => {
     let serverContent = '';
     let serverEnabled = false;

@@ -31,11 +31,13 @@
  * 0944/0945/0946/0948/0951/0952/0954) silently assumes, asserted directly,
  * without needing a model turn.
  *
- * What is STILL not proven by this file is the injection itself — that the
- * saved content reaches a turn's system prompt (`memories.go`), and that the
- * admission-time `NOT EXISTS` gate in `agent_chat.sql.go` behaves. Those need
- * a real model turn. With the save fixed, the gate is at least REACHABLE now,
- * which it was not before.
+ * The injection itself — that the saved content reaches a turn's system prompt
+ * — is not this file's assertion; it belongs to
+ * `chat.tail-project-context.spec.ts`, which reads the journaled prompt. That
+ * injection is what #946 built to replace the admission-time `NOT EXISTS` gate
+ * in `agent_chat.sql`, which used to 422 every turn in a project whose context
+ * was enabled. The gate is gone; this file's round trip is still the
+ * precondition both of them assume.
  *
  * NOTE ON WHERE THIS RAN. This package's own stack (`chat-stream`) is not
  * available in the wave that fixed #888, so the assertion below was flipped
@@ -51,14 +53,12 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * Every other journey here cleans up an ENTITY (an agent, a toolkit, a
  * pipeline) it alone created, so a cleanup skipped by an earlier failure only
- * strands that one row. Project Context is a single PROJECT-WIDE row. Given
- * the gap this file measures, the restore is unlikely to matter in practice
- * (the enabling write never took hold to begin with) — but on a project that
- * DOES already carry a `project_context` row (the `ON CONFLICT` branch, which
- * this bug does not affect), leaving it enabled would refuse every turn every
- * OTHER `chat-stream` spec sends afterwards (the admission gate this file's
- * header describes is real, even though this project can't currently reach
- * it). So the prior state is restored in a `finally`, unconditionally.
+ * strands that one row. Project Context is a single PROJECT-WIDE row, and both
+ * halves of its history make leaving one behind expensive: before #946 an
+ * enabled row REFUSED every turn every other `chat-stream` spec sent
+ * afterwards, and since #946 it is INJECTED into every one of their system
+ * prompts instead. So the prior state is restored in a `finally`,
+ * unconditionally.
  *
  * WHY IT LIVES HERE: proving the round trip (as opposed to reading the Go
  * source) needs a real `elitea-main` instance and a real tenant schema — the

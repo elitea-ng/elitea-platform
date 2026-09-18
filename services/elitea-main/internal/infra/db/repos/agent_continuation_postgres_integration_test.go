@@ -269,6 +269,42 @@ WHERE id = 1`); err != nil {
 		t.Fatal(err)
 	}
 
+	// #946: an ENABLED, non-empty project_context row is ADMITTED. It used to
+	// be a refusal case in the table below — the resolver carried a
+	// NOT EXISTS (… type = 'project_context' …) clause, so the moment Settings >
+	// Project Context (or the project_context_builder module) wrote a context,
+	// every send in that project answered 422 unsupported_agent_execution, the
+	// send that would have turned the context back off included. The gate is
+	// gone and the content is INJECTED instead
+	// (internal/application/agentexecution/projectcontext.go), so this fixture
+	// now pins the opposite property: the row must not cost the project its chat.
+	if _, err := tx.Exec(t.Context(), "SAVEPOINT enabled_project_context"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(t.Context(), `INSERT INTO configuration (
+    id, uuid, project_id, elitea_title, type, section, data, meta,
+    shared, status_ok, source, author_id
+) VALUES (
+    2, '60000000-0000-4000-8000-000000000039', 1, 'project_context_gate',
+    'project_context', 'project',
+    '{"content":"Project instructions","enabled":true}'::jsonb,
+    '{}'::jsonb, false, true, 'user', 11
+)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.ResolveCurrentApplicationTurn(t.Context(), resolve); err != nil {
+		t.Fatalf("resolve selected application with an enabled project context: %v", err)
+	}
+	if _, err := queries.InsertCurrentApplicationTurn(t.Context(), insert); err != nil {
+		t.Fatalf("insert selected application turn with an enabled project context: %v", err)
+	}
+	if _, err := tx.Exec(t.Context(), "ROLLBACK TO SAVEPOINT enabled_project_context"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(t.Context(), "RELEASE SAVEPOINT enabled_project_context"); err != nil {
+		t.Fatal(err)
+	}
+
 	tests := []struct {
 		name    string
 		apply   string
@@ -296,18 +332,6 @@ WHERE id = 41`,
 SET meta = jsonb_set(meta, '{internal_tools}', '"planner"'::jsonb)
 WHERE id = 41`,
 			restore: `UPDATE application_versions SET meta = meta - 'internal_tools' WHERE id = 41`,
-		},
-		{
-			name: "project context",
-			apply: `INSERT INTO configuration (
-    id, uuid, project_id, elitea_title, type, section, data, meta,
-    shared, status_ok, source, author_id
-) VALUES (
-    2, '60000000-0000-4000-8000-000000000039', 1, 'project_context_gate',
-    'project_context', 'project', '{"content":"Project instructions"}'::jsonb,
-    '{}'::jsonb, false, true, 'user', 11
-)`,
-			restore: `DELETE FROM configuration WHERE elitea_title = 'project_context_gate'`,
 		},
 		{
 			name: "conversation toolkit",

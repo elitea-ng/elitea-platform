@@ -49,15 +49,16 @@
  *    The first run failed anyway, on THIS FILE: the list route answers
  *    `{items: …}` and the helper read `rows`, so a correct write read back as
  *    "no such skill".
- *  - PROJECT CONTEXT BUILDER WRITES, and that write then disables the
- *    project's chat. The second turn is refused 422
- *    `unsupported_agent_execution`, because the current-path resolver excludes
+ *  - PROJECT CONTEXT BUILDER WRITES — and that write used to DISABLE the
+ *    project's chat: the second turn was refused 422
+ *    `unsupported_agent_execution`, because the current-path resolver excluded
  *    any project carrying an ENABLED project context (project-context
- *    injection into the system prompt is unported). ELITEA-2787's update half
- *    is therefore a stated product gap below, not a passing assertion — and
- *    every Project Context test here clears the row in a `finally`, because a
- *    row left behind refuses every LATER chat-stream spec's turn in the same
- *    project.
+ *    injection into the system prompt was unported). #946 removed that gate
+ *    and implemented the injection, so ELITEA-2787's update half is a passing
+ *    assertion below rather than a stated gap. Every Project Context test here
+ *    still clears the row in a `finally`: a row left behind is now INJECTED
+ *    into every later chat-stream spec's turn in the same project instead of
+ *    refusing it, which is quieter and no less wrong.
  *
  * The pieces this file spans are also proven separately where they can be: the
  * write routes and their claim-scoped tenancy in
@@ -311,18 +312,19 @@ test('a chat turn with Skills Builder enabled creates the Skill it names, and do
  * Both Project Context tests share this: the module's ONE action is a
  * project-wide write, so a run that leaves it in place changes what every
  * other `chat-stream` spec can do. See `chat.project-context-injection.
- * spec.ts`'s header for the same rule stated from the other side — and the
- * gap below for why it is not merely tidiness here: a project carrying an
- * ENABLED context cannot run an agent turn at all on this platform.
+ * spec.ts`'s header for the same rule stated from the other side. It is not
+ * merely tidiness: since #946 a project carrying an ENABLED context has that
+ * text spliced into the system prompt of every agent turn in it.
  */
 async function clearProjectContext(page: import('@playwright/test').Page, projectId: string): Promise<void> {
   const restored = await page.request.put(projectContextUrl(projectId), {
     // EMPTY CONTENT, TOGGLE LEFT ON — and the second half is not an oversight.
     //
-    // Emptying the CONTENT is what makes the row inert: every admission clause
-    // that excludes a project for its context requires `content <> ''` as well
-    // as `enabled = 'true'` (agent_chat.sql), and an empty context injects
-    // nothing. Emptying it is therefore the whole of the cleanup.
+    // Emptying the CONTENT is what makes the row inert: the injection requires
+    // non-blank content as well as the toggle (`CurrentProjectContext.
+    // InjectableText`, services/elitea-main/internal/application/
+    // agentexecution/projectcontext.go), and an empty context injects nothing.
+    // Emptying it is therefore the whole of the cleanup.
     //
     // Writing `enabled: false` as well LOOKED tidier and quietly broke the
     // next run (measured): `WriteProjectContext` keeps a project's existing
@@ -391,48 +393,37 @@ test('a chat turn with Project Context Builder enabled writes the project contex
 });
 
 /* onetest: ELITEA-2787 — a second request UPDATES the single existing context rather than creating
-   a duplicate. Marked as a product gap below: the SECOND turn cannot run at all while the first
-   context is in effect. */
+   a duplicate. This was fail-marked until #946: the SECOND turn could not run at all while the
+   first context was in effect. */
 test('a second Project Context Builder turn updates the context in place', async ({ page }) => {
   test.skip(
     !IS_NATIVE_RUNTIME,
     'the Python SDK worker has no port of `project_context_builder`; the python leg asserts that ' +
       'absence through the capability route instead (see the last test in this file)',
   );
-  // ── MEASURED, on the standalone stack, 2026-09-16 ───────────────────────
+  // ── WHY THIS TEST WAS FAIL-MARKED, AND WHAT FIXED IT (#946) ─────────────
   //
-  // The first turn writes the context and enables it — that half is proven by
-  // the test above, and by the row this one leaves behind. The SECOND turn is
-  // then refused before it reaches the worker:
+  // Measured on the standalone stack, 2026-09-16: the first turn wrote the
+  // context and enabled it, and the SECOND turn was then refused before it
+  // reached the worker —
   //
   //   POST …/elitea_core/messages/prompt_lib/{project}/{conversation}
   //   422 {"error":"unsupported_agent_execution",
   //        "message":"This agent turn requires the current execution path."}
   //
-  // The cause is one of the ~25 conditions in the current-path resolver
+  // — by one of the ~25 conditions in the current-path resolver
   // (`services/elitea-main/internal/db/queries/agent_chat.sql`, the
-  // `NOT EXISTS (SELECT 1 FROM configuration AS project_context …
-  //  WHERE type = 'project_context' AND enabled = 'true' AND content <> '')`
-  // clause, present in every one of its resolve variants). Project-context
-  // INJECTION into a turn's system prompt is not ported, so rather than run a
-  // turn that would silently ignore the project's context, the resolver
-  // returns no rows and the route answers 422.
+  // `NOT EXISTS (SELECT 1 FROM configuration AS project_context …)` clause,
+  // present in every one of its resolve variants). Project-context INJECTION
+  // was unported, so rather than run a turn that would silently ignore the
+  // project's context, the resolver returned no rows.
   //
-  // The consequence is larger than this case: the module's own successful
-  // write makes EVERY later agent turn in that project impossible, including
-  // the one that would update it. So this is not "the update is broken" — the
-  // update route works (`chat.project-context-injection.spec.ts` proves the
-  // round trip since #888) — it is that no second TURN can be admitted to ask
-  // for it. `test.fail` rather than a skip, so the day injection lands this
-  // test starts failing-as-passing and says so.
-  test.fail(
-    true,
-    'ELITEA-2787: product gap — a project whose Project Context is enabled cannot run any agent ' +
-      'turn: the current-path resolver excludes it (agent_chat.sql\'s project_context NOT EXISTS ' +
-      'clause) and the start route answers 422 unsupported_agent_execution. The module writes a ' +
-      'context that disables the very chat that would update it; project-context injection into ' +
-      'the system prompt is unported.',
-  );
+  // The consequence was larger than this case: the module's own successful
+  // write made EVERY later agent turn in that project impossible, including
+  // the one that would update it. #946 removed the clause from all four
+  // variants and implemented the injection it was standing in for
+  // (`internal/application/agentexecution/projectcontext.go`), so a second
+  // turn is admitted and this case measures what it was written to measure.
   test.setTimeout(420_000);
 
   const stamp = Date.now() % 1_000_000;
@@ -457,8 +448,8 @@ test('a second Project Context Builder turn updates the context in place', async
       })
       .toBe(first);
 
-    // THE assertion this test exists for, and the one the gap above stops:
-    // the start below is the 422.
+    // THE assertion this test exists for. The start below was the 422 until
+    // #946; a regression of that gate fails here first.
     await sendTurn(page, `${callTool(PROJECT_CONTEXT_TOOL, { content: second })} extend it`);
     await expect
       .poll(async () => (await readProjectContext(page, projectId)).content, {
@@ -475,10 +466,10 @@ test('a second Project Context Builder turn updates the context in place', async
       'an update that did not state `enabled` must keep the project’s current value',
     ).toBe(true);
   } finally {
-    // The `test.fail` above makes this MANDATORY rather than tidy: an expected
-    // failure still unwinds through here, and the row it would otherwise leave
-    // behind refuses every subsequent chat-stream spec's turn in this project
-    // (measured — it cost most of a full-project run).
+    // Still MANDATORY rather than tidy. A context row left enabled no longer
+    // REFUSES another spec's turn (#946), but it is now INJECTED into every
+    // later turn in this project — so leaving one behind would quietly put
+    // this test's text into other specs' system prompts.
     await clearProjectContext(page, projectId);
   }
 });

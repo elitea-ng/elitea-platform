@@ -243,7 +243,13 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 		// #870: memory recall is wired on turn START only — see
 		// continue.go's call site for why regeneration deliberately does not
 		// re-run it. "" preserves this call site's pre-#870 behavior.
-		input, err := currentApplicationInput(start, resolved, suggestionPolicy, toolkitGuardrails, nil, "")
+		input, err := currentApplicationInput(start, resolved, suggestionPolicy, toolkitGuardrails, nil, "",
+			// #946: project context is NOT a per-turn recall like memories —
+			// it is standing project configuration, so a resumed or
+			// regenerated turn in the same project must carry the same
+			// context the original start carried. Read here rather than
+			// passed "" (projectcontext.go's header).
+			service.resolveCurrentProjectContextText(ctx, request.ProjectID))
 		if err != nil {
 			return nil, nil, "", err
 		}
@@ -278,7 +284,13 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 			return nil, nil, "", err
 		}
 		start.QuestionID = request.RegenerationID
-		input, err := currentAdhocInput(start, resolved, frozen, suggestionPolicy, toolkitGuardrails, nil, "") // #870: see currentApplicationInput's regeneration call site
+		input, err := currentAdhocInput(start, resolved, frozen, suggestionPolicy, toolkitGuardrails, nil, "", // #870: see currentApplicationInput's regeneration call site
+			// #946: project context is NOT a per-turn recall like memories —
+			// it is standing project configuration, so a resumed or
+			// regenerated turn in the same project must carry the same
+			// context the original start carried. Read here rather than
+			// passed "" (projectcontext.go's header).
+			service.resolveCurrentProjectContextText(ctx, request.ProjectID))
 		if err != nil {
 			return nil, nil, "", err
 		}

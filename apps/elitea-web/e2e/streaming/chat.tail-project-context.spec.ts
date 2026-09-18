@@ -5,20 +5,13 @@
  * Context" toggle keeps it out, and that a sub-agent never sees it.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * EVERY TEST IN THIS FILE IS FAIL-MARKED, AND THEY ALL FAIL AT THE SAME LINE
+ * THE GATE THESE TESTS USED TO DIE ON, AND WHAT REPLACED IT (#946)
  * ─────────────────────────────────────────────────────────────────────────────
- * Project Context is not injected anywhere in the Go path. It is read-only
- * display data whose ONLY runtime effect is an admission-time REFUSAL, and
- * elitea-main says so in its own words
- * (`internal/application/agentexecution/memories.go`):
- *
- *   THIS IS DELIBERATELY NOT THE SAME PATH AS project_context …
- *   project_context is read-only display data whose only runtime effect today
- *   is an admission-time REFUSAL gate (ResolveCurrentApplicationTurn /
- *   ResolveCurrentAdhocTurn 422 the turn outright when it is set) — it is
- *   never woven into a prompt.
- *
- * The gate is literal SQL, in `internal/db/queries/agent_chat.sql`:
+ * Every test here was fail-marked, and they all failed at the same line — the
+ * FIRST turn, not the injection assertion after it. Project Context was not
+ * injected anywhere in the Go path: it was read-only display data whose only
+ * runtime effect was an admission-time REFUSAL, spelled out in
+ * `internal/db/queries/agent_chat.sql` as
  *
  *   AND NOT EXISTS (
  *       SELECT 1 FROM configuration AS project_context
@@ -27,16 +20,20 @@
  *         AND COALESCE(project_context.data ->> 'content', '')  <> ''
  *   )
  *
- * — so a project whose context is enabled AND non-empty resolves ZERO rows for
- * every turn in it, and every send answers 422. That is #946, and it is why
- * each test below fails on its FIRST turn: not on the injection assertion that
- * follows it, but on getting a turn admitted at all.
+ * — so a project whose context was enabled AND non-empty resolved ZERO rows for
+ * every turn in it, and every send answered 422. The clause was duplicated in
+ * all four resolve/insert variants, so it was every current-path entry point,
+ * not one.
  *
- * The tests are still written the way the cases describe, end to end, because
- * that is what the rulebook asks for and because the assertions past the gate
- * are the ones that will matter when it is lifted: the phrase must appear in
- * the system prompt the model was sent, and must be ABSENT for an agent whose
- * Ignore toggle is on and for any child the agent delegates to.
+ * That clause is gone from all four, and the content is INJECTED instead. The
+ * start path reads the project's row and splices it onto the turn's
+ * `instructions` as a delimited `<project_context>` block — the same field
+ * recalled memories ride, which both workers already fold into the system
+ * prompt (`internal/application/agentexecution/projectcontext.go`, and the
+ * native runtime's `assembly.rs`). The per-agent "Ignore Project Context"
+ * toggle is consulted there, off the frozen version's own `meta`, and a child
+ * agent is never touched because a delegated child resolves its OWN version's
+ * instructions inside the worker.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * WHY THE SYSTEM PROMPT AND NOT THE ANSWER
@@ -204,9 +201,11 @@ async function openConversation(
 /**
  * Send one prompt through the composer and require the start to be ADMITTED.
  *
- * THIS is the line every test in this file fails on while #946 stands: the
- * refusal is a 422 from the admission SQL, not a later assertion about the
- * prompt, and the message says so rather than leaving a reader to guess.
+ * THIS is the line every test in this file used to fail on, and the reason the
+ * failure message still names #946: the refusal was a 422 from the admission
+ * SQL, not a later assertion about the prompt. Keeping the assertion here means
+ * a regression of the gate is reported as itself rather than as "the phrase
+ * never reached the prompt".
  */
 async function sendTurn(page: Page, prompt: string): Promise<void> {
   const send = await fillComposer(page, prompt);
@@ -217,8 +216,9 @@ async function sendTurn(page: Page, prompt: string): Promise<void> {
   const response = await started;
   expect(
     response.status(),
-    'the turn was refused while a project context was enabled (#946 — the admission SQL 422s every ' +
-      `turn in a project whose context row is enabled and non-empty): ${(await response.text()).slice(0, 300)}`,
+    'the turn was refused while a project context was enabled — the #946 admission gate is back (it ' +
+      '422d every turn in a project whose context row is enabled and non-empty): ' +
+      `${(await response.text()).slice(0, 300)}`,
   ).toBe(200);
 }
 
@@ -239,12 +239,6 @@ async function deleteAgents(page: Page, agents: readonly AgentFixture[]): Promis
  * toggle is turned OFF. */
 test('Project Context reaches the system prompt of an agent’s own turn', async ({ page }) => {
   test.setTimeout(300_000);
-  test.fail(
-    true,
-    'ELITEA-0951 (#946): product gap (#946) — an enabled, non-empty project_context makes the admission SQL ' +
-      'resolve zero rows, so EVERY turn in the project is refused with 422 and the content is never ' +
-      'woven into a prompt at all. See S/tail/defects.md.',
-  );
 
   const projectId = await readCallerPersonalProjectId(page.request);
   expect(projectId, 'this persona must work inside its own project').not.toBe('');
@@ -301,11 +295,6 @@ test('Project Context reaches the system prompt of an agent’s own turn', async
  * page conversation, both for a newly created agent and for one that already existed. */
 test('Project Context reaches an agent added as a Chat participant', async ({ page }) => {
   test.setTimeout(300_000);
-  test.fail(
-    true,
-    'ELITEA-0948 (#946): product gap (#946) — the admission refusal applies to a chat-participant turn the ' +
-      'same way; the context is never injected. See S/tail/defects.md.',
-  );
 
   const projectId = await readCallerPersonalProjectId(page.request);
   expect(projectId, 'this persona must work inside its own project').not.toBe('');
@@ -353,12 +342,6 @@ test('the per-agent Ignore Project Context toggle keeps the context out of its o
   page,
 }) => {
   test.setTimeout(300_000);
-  test.fail(
-    true,
-    'ELITEA-0945 (#946): product gap (#946) — the toggle is stored but has no runtime effect to observe: ' +
-      'an enabled project context refuses every turn in the project, ignoring agent or not. ' +
-      'See S/tail/defects.md.',
-  );
 
   const projectId = await readCallerPersonalProjectId(page.request);
   expect(projectId, 'this persona must work inside its own project').not.toBe('');
@@ -419,12 +402,6 @@ test('the per-agent Ignore Project Context toggle keeps the context out of its o
  * delegates to receives none of it. */
 test('Project Context is not passed down to a sub-agent', async ({ page }) => {
   test.setTimeout(420_000);
-  test.fail(
-    true,
-    'ELITEA-0952 (#946): product gap (#946) — no turn is admitted at all while a project context is ' +
-      'enabled, so neither the master’s injection nor the child’s isolation is observable. ' +
-      'See S/tail/defects.md.',
-  );
 
   const projectId = await readCallerPersonalProjectId(page.request);
   expect(projectId, 'this persona must work inside its own project').not.toBe('');

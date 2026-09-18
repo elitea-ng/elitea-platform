@@ -851,9 +851,18 @@ func (r *ConversationsRepo) AddParticipant(ctx context.Context, projectID, conve
 	// split above. Last write wins for a conversation carrying more than one
 	// trackable participant — no journey exercises that shape today.
 	if entityName == "application" || entityName == "toolkit" || entityName == "pipeline" {
+		// `entity_settings` (carries `version_id` for an agent/pipeline
+		// participant) rides along here too — #955: the run-history list
+		// already returns this WHOLE `meta` blob verbatim
+		// (`internal/api/v2/conversations/handler.go`'s `List`), so a client
+		// wanting "which version produced this run" needs no new column, no
+		// join and no OpenAPI change (`meta` is already a documented
+		// passthrough object) — only this stamp needs to carry the value it
+		// already has in scope.
 		singleParticipant, err := json.Marshal(map[string]any{
-			"entity_name": entityName,
-			"entity_meta": body["entity_meta"],
+			"entity_name":     entityName,
+			"entity_meta":     body["entity_meta"],
+			"entity_settings": body["entity_settings"],
 		})
 		if err != nil {
 			return fmt.Errorf("conversations: encode single_participant: %w", err)

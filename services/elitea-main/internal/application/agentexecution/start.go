@@ -145,6 +145,11 @@ type CurrentApplicationStartService struct {
 	// (#870, memories.go). A service nobody attaches it to injects no
 	// long-term memory, exactly its pre-#870 behavior.
 	memories CurrentMemoryRecallResolver
+	// projectContext is optional — attached after construction via
+	// WithProjectContext (#946, projectcontext.go). A service nobody attaches
+	// it to injects no project context, which is what every test that
+	// predates that file expects.
+	projectContext CurrentProjectContextResolver
 }
 
 func NewCurrentApplicationStartService(
@@ -230,8 +235,15 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 		ctx, request.ProjectID, request.ActorUserID,
 		currentMemoryRecallUserInputText(request.UserInput),
 	)
+	// #946: the project's own standing context, read the same way and for the
+	// same reason — it rides the turn's `instructions`, and a failed read
+	// costs this turn its project context, never the turn. This REPLACED an
+	// admission gate that refused every turn in a context-bearing project;
+	// see projectcontext.go's header.
+	projectContextText := service.resolveCurrentProjectContextText(ctx, request.ProjectID)
 	input, err := currentApplicationInput(
 		request, target, suggestionPolicy, toolkitGuardrails, attachments, memoryRecall.Text,
+		projectContextText,
 	)
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
@@ -285,6 +297,7 @@ func currentApplicationInput(
 	toolkitGuardrails json.RawMessage,
 	attachments []CurrentTurnAttachment,
 	memoryText string,
+	projectContextText string,
 ) (*runtimev1.AgentExecutionInputV1, error) {
 	skills, err := projectCurrentApplicationSkills(request.UserInput, target.VersionDetails)
 	if err != nil {
@@ -299,6 +312,12 @@ func currentApplicationInput(
 	// `[[skill:...]]` markers — see appendCurrentApplicationMemories's own
 	// comment.
 	versionDetails := appendCurrentApplicationMemories(skills.versionDetails, memoryText)
+	// #946: after memories, and after skill processing for the same reason —
+	// injected text is never itself scanned for `[[skill:...]]` markers. The
+	// per-agent "Ignore Project Context" toggle is consulted inside
+	// appendCurrentApplicationProjectContext, off the frozen version's own
+	// meta (ELITEA-0945).
+	versionDetails = appendCurrentApplicationProjectContext(versionDetails, projectContextText)
 	application, err := json.Marshal(map[string]any{
 		"id":              target.ApplicationID,
 		"version_id":      target.ApplicationVersionID,
