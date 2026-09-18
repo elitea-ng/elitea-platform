@@ -40,6 +40,7 @@ export function FormViewToggle({ view = ToolkitViewOptions.Form, onChangeView, c
         label: 'Form',
         tooltip: 'Form view',
         icon: <FormIcon />,
+        iconOnly: true,
         ...(disabled !== undefined ? { disabled } : {}),
       },
       {
@@ -47,6 +48,7 @@ export function FormViewToggle({ view = ToolkitViewOptions.Form, onChangeView, c
         label: 'Raw Json',
         tooltip: 'Raw Json view',
         icon: <JsonIcon />,
+        iconOnly: true,
         ...(disabled !== undefined ? { disabled } : {}),
       },
     ],

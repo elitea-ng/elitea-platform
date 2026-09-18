@@ -74,14 +74,17 @@ describe('ToolkitForm', () => {
   it('shows the Form/Raw Json toggle for a non-custom type once a schema object is resolved', async () => {
     mockToolkitFormEndpoints();
     const editToolDetail: ToolkitFormEditDetail = { type: 'some-other-type', name: 'x', settings: {} };
-    const { getByText } = renderWithRouterSocketAndProject(
+    // #923/ELITEA-2815: `FormViewToggle`'s buttons are icon-only (label as
+    // accessible name only, matching `FormViewToggle.test.tsx`) — query by
+    // role, not visible text.
+    const { getByText, getByRole } = renderWithRouterSocketAndProject(
       <ToolkitForm {...baseProps({ editToolDetail, formValues: editToolDetail, formInitialValues: editToolDetail })} />,
       'proj-1',
     );
 
     await waitFor(() => expect(getByText('JSON')).toBeInTheDocument());
-    expect(getByText('Form')).toBeInTheDocument();
-    expect(getByText('Raw Json')).toBeInTheDocument();
+    expect(getByRole('button', { name: 'Form' })).toBeInTheDocument();
+    expect(getByRole('button', { name: 'Raw Json' })).toBeInTheDocument();
   });
 
   it('hideOperationButtons unmounts ToolkitsOperationButtons: a ToolkitsUpdateToolkit event no longer reaches onSave', async () => {
