@@ -1,6 +1,7 @@
 use std::env;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use adk_rust::session::{
@@ -19,6 +20,7 @@ use super::postgres_session::{
 };
 
 const TEST_DATABASE_URL: &str = "ELITEA_TEST_DATABASE_URL";
+static DATABASE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const SESSION_MIGRATION: &str =
     include_str!("../../../elitea-main/migrations/agentstate/0002_agent_sessions.sql");
 
@@ -43,7 +45,11 @@ impl IsolatedPostgres {
             .duration_since(UNIX_EPOCH)
             .expect("system time")
             .as_nanos();
-        let database_name = format!("elitea_rust_session_{}_{}", std::process::id(), unique);
+        let sequence = DATABASE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let database_name = format!(
+            "elitea_rust_session_{}_{unique}_{sequence}",
+            std::process::id()
+        );
         sqlx::query(&format!("CREATE DATABASE {database_name}"))
             .execute(&admin_pool)
             .await

@@ -242,6 +242,31 @@ fn json_boundary_rejects_duplicate_escaped_duplicate_and_nonfinite_members() {
 }
 
 #[test]
+fn admitted_history_reaches_compaction_without_control_field_limits() {
+    use prost::Message;
+    let mut message = application_message();
+    message.chat_history = serde_json::to_vec(&serde_json::json!([
+        {"role": "assistant", "content": "a".repeat(430_000)}
+    ]))
+    .unwrap();
+    let decoded = parse_agent_execution_input(&message.encode_to_vec()).unwrap();
+    assert!(request_from(decoded, AgentExecutionKind::Application, binding()).is_ok());
+
+    // Other fields retain their smaller budget and strict JSON validation.
+    message.meta = message.chat_history.clone();
+    assert!(matches!(
+        request_from(message, AgentExecutionKind::Application, binding()),
+        Err(AgentProtocolError::ResourceExhausted(_))
+    ));
+    let mut message = application_message();
+    message.chat_history = br#"[{"role":"user","role":"assistant"}]"#.to_vec();
+    assert!(matches!(
+        request_from(message, AgentExecutionKind::Application, binding()),
+        Err(AgentProtocolError::InvalidInput(_))
+    ));
+}
+
+#[test]
 fn json_boundary_preserves_python_sized_integers_without_rounding() {
     let mut message = application_message();
     message.llm =

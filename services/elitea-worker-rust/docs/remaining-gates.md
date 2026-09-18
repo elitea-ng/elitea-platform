@@ -1,6 +1,6 @@
 # Rust worker remaining gates
 
-Updated: 2026-09-17. Main integration baseline: `1dee0c89`.
+Updated: 2026-09-18. Main integration baseline: `1dee0c89`.
 
 This register orders implementation work. The [testing register](testing-gaps.md) owns detailed proof requirements.
 Source mappings remain the behavioral evidence for each capability.
@@ -129,6 +129,10 @@ without intercepted requests. Threshold compaction and recovery acceptance remai
 open, as does durable nested activity beyond replay retention.
 Main chat shows detailed usage; nested agents show brief compaction activity text, with separate model scopes and no combined parent/child meter.
 Nested and graph-model recovery coordination and actual compaction browser acceptance remain open.
+The [compatible-provider correction](source-mapping/context-summary-compatibility-20260918.md)
+accepts one validated summary object inside presentation text and aligns input fetching with Main's existing 1 MiB contract.
+The same audit identifies a separate final-output frame limit and an unresolved regeneration measurement difference.
+Do not interpret either failure as proof that the model context is full.
 The pipeline container has no separate compaction control.
 Model conversations inherit a caller policy when available; otherwise saved children use explicit settings or Balanced defaults.
 Plain LLM nodes also compact their accumulated history, as confirmed on 2026-09-16.

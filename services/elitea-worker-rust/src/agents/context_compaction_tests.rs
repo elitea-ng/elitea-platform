@@ -64,9 +64,13 @@ impl Llm for Summary {
             ));
         }
         Ok(Box::pin(stream::once(async {
-            Ok(LlmResponse::new(
-                Content::new("model").with_text(crate::agents::context_summary::fixture()),
-            ))
+            // Compatible providers can add prose and fences despite the prompt.
+            // Exercise extraction through preparation, persistence, and recovery.
+            let summary = format!(
+                "Here is the continuation record:\n```json\n{}\n```",
+                crate::agents::context_summary::fixture()
+            );
+            Ok(LlmResponse::new(Content::new("model").with_text(summary)))
         })))
     }
 }

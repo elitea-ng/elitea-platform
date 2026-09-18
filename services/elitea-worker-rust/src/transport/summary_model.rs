@@ -64,7 +64,7 @@ impl Llm for SummaryModel {
             || request.contents.len() != 1
             || request.contents[0].role != "user"
         {
-            return Err(invalid_summary());
+            return Err(invalid_summary("context_summary_request"));
         }
         // ADK formats the entire transcript as one text part. Preserve every
         // byte while respecting the ordinary provider's per-part bound.
@@ -79,7 +79,7 @@ impl Llm for SummaryModel {
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 (current < self.max_calls).then_some(current + 1)
             })
-            .map_err(|_| invalid_summary())?;
+            .map_err(|_| invalid_summary("context_summary_call_limit"))?;
 
         let mut responses = (self.fresh_model)(invocation)
             .generate_content(request, true)
@@ -89,20 +89,20 @@ impl Llm for SummaryModel {
         while let Some(response) = responses.next().await {
             let response = response?;
             if terminal.is_some() {
-                return Err(invalid_summary());
+                return Err(invalid_summary("context_summary_after_terminal"));
             }
             if let Some(content) = &response.content {
                 for part in &content.parts {
                     match part {
                         Part::Text { text: delta } => {
                             if text.len().saturating_add(delta.len()) > MAX_TEXT_BYTES {
-                                return Err(invalid_summary());
+                                return Err(invalid_summary("context_summary_output_size"));
                             }
                             text.push_str(delta);
                         }
                         // Provider reasoning is not summary content.
                         Part::Thinking { .. } => {}
-                        _ => return Err(invalid_summary()),
+                        _ => return Err(invalid_summary("context_summary_output_part")),
                     }
                 }
             }
@@ -111,14 +111,15 @@ impl Llm for SummaryModel {
                     || response.finish_reason != Some(FinishReason::Stop)
                     || response.error_code.is_some()
                 {
-                    return Err(invalid_summary());
+                    return Err(invalid_summary("context_summary_finish"));
                 }
                 terminal = Some(response);
             }
         }
-        let mut response = terminal.ok_or_else(invalid_summary)?;
+        let mut response =
+            terminal.ok_or_else(|| invalid_summary("context_summary_no_terminal"))?;
         if text.trim().is_empty() {
-            return Err(invalid_summary());
+            return Err(invalid_summary("context_summary_empty"));
         }
         response.content = Some(Content::new("model").with_text(text));
         // Resolve all transport errors before returning a stream. ADK 2.2.0's
@@ -141,7 +142,7 @@ fn summary_invocation(
         Some(budget) => {
             let output = match output_cap {
                 Some(output) if output > 0 && output <= budget.limits.max_output_tokens => output,
-                Some(_) => return Err(invalid_summary()),
+                Some(_) => return Err(invalid_summary("context_summary_output_budget")),
                 None => budget.limits.max_output_tokens.min(MAX_OUTPUT_TOKENS),
             };
             invocation.context_budget = Some(
@@ -163,7 +164,7 @@ fn summary_invocation(
         None if output_cap.is_none() => source
             .max_tokens
             .map(|output| output.min(MAX_OUTPUT_TOKENS)),
-        None => return Err(invalid_summary()),
+        None => return Err(invalid_summary("context_summary_output_budget")),
     };
     Ok(invocation)
 }
@@ -172,7 +173,7 @@ fn split_text_parts(parts: &[Part]) -> adk_rust::Result<Vec<Part>> {
     let mut result = Vec::new();
     for part in parts {
         let Part::Text { text } = part else {
-            return Err(invalid_summary());
+            return Err(invalid_summary("context_summary_source_part"));
         };
         let mut remaining = text.as_str();
         while !remaining.is_empty() {
@@ -184,16 +185,16 @@ fn split_text_parts(parts: &[Part]) -> adk_rust::Result<Vec<Part>> {
         }
     }
     if result.is_empty() {
-        return Err(invalid_summary());
+        return Err(invalid_summary("context_summary_source_empty"));
     }
     Ok(result)
 }
 
-fn invalid_summary() -> AdkError {
+fn invalid_summary(code: &'static str) -> AdkError {
     AdkError::new(
         ErrorComponent::Model,
         ErrorCategory::InvalidInput,
-        "context_summary_invalid",
+        code,
         "The context summary is incomplete or outside its permitted limits.",
     )
 }

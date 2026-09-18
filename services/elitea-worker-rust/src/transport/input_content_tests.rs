@@ -244,6 +244,37 @@ async fn source_identity_and_response_digest_are_both_required() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn admitted_long_history_materializes_without_the_old_256_kib_ceiling() {
+    for length in [256 * 1024 + 1, 1024 * 1024] {
+        let body = vec![b'x'; length];
+        let digest = sha256(&body);
+        let mut response = response(&body, StatusCode::OK, Version::HTTP_2, "v/1");
+        response.headers_mut().insert(
+            "x-elitea-source-content-length",
+            HeaderValue::from_str(&length.to_string()).unwrap(),
+        );
+        response.headers_mut().insert(
+            "x-elitea-source-content-digest",
+            HeaderValue::from_str(&format!("sha-256=:{}:", STANDARD.encode(digest))).unwrap(),
+        );
+        let authority = ClaimBoundInputAuthority {
+            expected_source_length: length as u64,
+            expected_source_sha256: &digest,
+            ..reference()
+        };
+        let (client, _) = fake_client(Ok(response), Duration::from_secs(1), 1024 * 1024);
+        assert_eq!(
+            client
+                .fetch_materialized(authority)
+                .await
+                .unwrap()
+                .as_bytes(),
+            body
+        );
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn protocol_status_metadata_and_body_bounds_fail_closed() {
     let body = materialized();
     for candidate in [

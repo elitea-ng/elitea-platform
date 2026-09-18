@@ -67,11 +67,20 @@ pub(super) fn prompt(guidance: &str) -> String {
 /// Model references are descriptive evidence, never replacement tool authority.
 pub(super) fn validate(text: &str, source: &serde_json::Value) -> adk_rust::Result<String> {
     if text.len() > MAX_SUMMARY_BYTES {
-        return Err(invalid());
+        return Err(invalid("context_summary_size"));
     }
-    let summary: ContinuationSummary = serde_json::from_str(text).map_err(|_| invalid())?;
-    if summary.version != 1
-        || !valid_text(&summary.objective)
+    let json = summary_json(text)?;
+    let summary: ContinuationSummary = serde_json::from_str(json).map_err(|error| {
+        invalid(match error.classify() {
+            serde_json::error::Category::Data => "context_summary_schema",
+            serde_json::error::Category::Eof => "context_summary_incomplete_json",
+            _ => "context_summary_json",
+        })
+    })?;
+    if summary.version != 1 {
+        return Err(invalid("context_summary_version"));
+    }
+    if !valid_text(&summary.objective)
         || [
             &summary.constraints,
             &summary.decisions,
@@ -84,25 +93,71 @@ pub(super) fn validate(text: &str, source: &serde_json::Value) -> adk_rust::Resu
         .any(|items| !valid_list(items))
         || summary.completed_work.len() > MAX_ITEMS
         || summary.references.len() > MAX_ITEMS
-        || summary.references.iter().any(|reference| {
-            !valid_text(&reference.label)
-                || !valid_text(&reference.value)
-                || !contains_reference(source, &reference.value)
-        })
-        || summary.completed_work.iter().any(|work| {
-            !valid_text(&work.result)
-                || !valid_list(&work.evidence_refs)
-                || work.evidence_refs.iter().any(|reference| {
-                    !summary
-                        .references
-                        .iter()
-                        .any(|item| &item.value == reference)
-                })
-        })
+        || summary
+            .references
+            .iter()
+            .any(|reference| !valid_text(&reference.label) || !valid_text(&reference.value))
+        || summary
+            .completed_work
+            .iter()
+            .any(|work| !valid_text(&work.result) || !valid_list(&work.evidence_refs))
     {
-        return Err(invalid());
+        return Err(invalid("context_summary_limits"));
     }
-    serde_json::to_string(&summary).map_err(|_| invalid())
+    if summary
+        .references
+        .iter()
+        .any(|reference| !contains_reference(source, &reference.value))
+    {
+        return Err(invalid("context_summary_reference"));
+    }
+    if summary.completed_work.iter().any(|work| {
+        work.evidence_refs.iter().any(|reference| {
+            !summary
+                .references
+                .iter()
+                .any(|item| &item.value == reference)
+        })
+    }) {
+        return Err(invalid("context_summary_evidence"));
+    }
+    let validated = serde_json::to_string(&summary).map_err(|_| invalid("context_summary_json"))?;
+    if json != text.trim() {
+        tracing::info!(
+            event = "context_summary_wrapper_removed",
+            "accepted context summary after removing surrounding presentation text"
+        );
+    }
+    Ok(validated)
+}
+
+/// Some compatible gateways accept a schema option but still return Markdown.
+/// Parse one complete object with Serde; never repair JSON or choose between objects.
+fn summary_json(text: &str) -> adk_rust::Result<&str> {
+    let text = text.trim();
+    let start = text
+        .find('{')
+        .ok_or_else(|| invalid("context_summary_json"))?;
+    if text[..start].contains(['[', ']']) {
+        return Err(invalid("context_summary_schema"));
+    }
+    let mut values = serde_json::Deserializer::from_str(&text[start..])
+        .into_iter::<&serde_json::value::RawValue>();
+    let raw = values
+        .next()
+        .ok_or_else(|| invalid("context_summary_json"))?
+        .map_err(|error| {
+            invalid(if error.is_eof() {
+                "context_summary_incomplete_json"
+            } else {
+                "context_summary_json"
+            })
+        })?;
+    let end = start + values.byte_offset();
+    if text[end..].contains(['{', '}', '[', ']']) {
+        return Err(invalid("context_summary_ambiguous_json"));
+    }
+    Ok(raw.get())
 }
 
 fn valid_text(text: &str) -> bool {
@@ -131,11 +186,11 @@ fn valid_list(items: &[String]) -> bool {
     items.len() <= MAX_ITEMS && items.iter().all(|item| valid_text(item))
 }
 
-fn invalid() -> AdkError {
+fn invalid(code: &'static str) -> AdkError {
     AdkError::new(
         ErrorComponent::Model,
         ErrorCategory::InvalidInput,
-        "context_summary_invalid",
+        code,
         "The context summary does not satisfy the continuation record contract.",
     )
 }
@@ -170,22 +225,67 @@ mod tests {
         }
     }
     #[test]
+    fn accepts_one_wrapped_object_without_changing_its_contents() {
+        let original = fixture().replace(
+            "Continue the original task.",
+            "Keep {nested} braces and \\\"quoted\\\" facts: 🦀.",
+        );
+        let expected = validate(&original, &serde_json::json!("call-one")).unwrap();
+        for wrapped in [
+            format!("```json\n{original}\n```"),
+            format!("Here is the continuation record:\n{original}\nEnd of summary."),
+            format!("Here is the record:\n```json\n{original}\n```\nDone."),
+        ] {
+            assert_eq!(
+                validate(&wrapped, &serde_json::json!("call-one")).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn refuses_ambiguous_truncated_or_schema_invalid_wrapped_output() {
+        let original = fixture();
+        for candidate in [
+            format!("{original}\n{original}"),
+            format!("Example: {{}}\nActual: {original}"),
+            format!("[{original}]"),
+            format!("```json\n{}\n```", &original[..original.len() - 1]),
+            format!(
+                "```json\n{}\n```",
+                original.replace("call-one", "invented-handle")
+            ),
+            "Here is the result: {\"version\":1}".to_owned(),
+        ] {
+            assert!(validate(&candidate, &serde_json::json!("call-one")).is_err());
+        }
+    }
+
+    #[test]
     fn rejects_unstructured_oversized_and_invented_references() {
         let original = fixture();
         assert!(validate(&original, &serde_json::json!("call-one")).is_ok());
         assert!(validate(&original, &serde_json::json!("unrelated")).is_err());
-        for candidate in [
-            "Some plausible prose.".to_owned(),
-            format!("```json\n{original}\n```"),
-            original.replace("call-one", "invented-handle"),
-            original.replace("\"version\":1", "\"version\":2"),
-            original.replace("Continue the original task.", &"x".repeat(2049)),
+        for (candidate, code) in [
+            ("Some plausible prose.".to_owned(), "context_summary_json"),
+            (
+                original.replace("call-one", "invented-handle"),
+                "context_summary_reference",
+            ),
+            (
+                original.replace("\"version\":1", "\"version\":2"),
+                "context_summary_version",
+            ),
+            (
+                original.replace("Continue the original task.", &"x".repeat(2049)),
+                "context_summary_limits",
+            ),
         ] {
             assert_eq!(
                 validate(&candidate, &serde_json::json!("call-one"))
                     .unwrap_err()
                     .code,
-                "context_summary_invalid"
+                code
             );
         }
         let reference = "C:\\workspace\\report.json";

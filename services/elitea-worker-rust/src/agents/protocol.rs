@@ -68,10 +68,13 @@ pub fn request_from(
     validate_binding(&binding)?;
 
     let llm = json_object(&message.llm, "the agent llm must be an object")?;
-    let chat_history = json_list(
-        &message.chat_history,
-        "the agent chat history must be a list",
-    )?;
+    // History is data-plane content. Let the model context policy compact it
+    // after admission; do not apply the smaller control-field budget here.
+    let Value::Array(chat_history) = parse_history(&message.chat_history)? else {
+        return Err(AgentProtocolError::InvalidInput(
+            "the agent chat history must be a list",
+        ));
+    };
     let user_input = match parse_json_value(&message.user_input)? {
         Value::String(value) => UserInput::Text(value),
         Value::Array(value) => UserInput::ContentBlocks(value),
@@ -274,6 +277,22 @@ pub(crate) fn parse_json_value(raw: &[u8]) -> Result<Value, AgentProtocolError> 
     parse_bounded_json_value(raw, MAX_JSON_VALUE_BYTES)
 }
 
+fn parse_history(raw: &[u8]) -> Result<Value, AgentProtocolError> {
+    if raw.is_empty() || raw.len() > MAX_AGENT_INPUT_BYTES {
+        return Err(AgentProtocolError::ResourceExhausted(
+            "the agent history exceeds the input limit",
+        ));
+    }
+    let value = serde_json::from_slice(raw).map_err(|_| malformed_json())?;
+    JsonLimits {
+        raw,
+        cursor: 0,
+        max_string_bytes: MAX_AGENT_INPUT_BYTES,
+    }
+    .validate()?;
+    Ok(value)
+}
+
 pub(crate) fn parse_bounded_json_value(
     raw: &[u8],
     maximum: usize,
@@ -466,11 +485,16 @@ const fn toolkit_guardrails_error() -> AgentProtocolError {
 struct JsonLimits<'a> {
     raw: &'a [u8],
     cursor: usize,
+    max_string_bytes: usize,
 }
 
 impl<'a> JsonLimits<'a> {
     const fn new(raw: &'a [u8]) -> Self {
-        Self { raw, cursor: 0 }
+        Self {
+            raw,
+            cursor: 0,
+            max_string_bytes: MAX_JSON_STRING_BYTES,
+        }
     }
 
     fn validate(mut self) -> Result<(), AgentProtocolError> {
@@ -566,7 +590,7 @@ impl<'a> JsonLimits<'a> {
             } else if byte == b'\"' {
                 let value: String = serde_json::from_slice(&self.raw[start..self.cursor])
                     .map_err(|_| malformed_json())?;
-                if value.len() > MAX_JSON_STRING_BYTES {
+                if value.len() > self.max_string_bytes {
                     return Err(AgentProtocolError::ResourceExhausted(
                         "an agent JSON string exceeds the approved limit",
                     ));
