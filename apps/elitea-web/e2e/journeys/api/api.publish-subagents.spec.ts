@@ -69,12 +69,13 @@
 import { test, expect } from '@playwright/test';
 
 import {
-  API_BASE,
-  AUTOTEST_PREFIX,
   agentVersionBody,
+  API_BASE,
   attachSubAgent,
+  AUTOTEST_PREFIX,
   createAgentWithVersion,
   deleteAgent,
+  PUBLISHABLE_TAGS,
   readApplicationVersions,
   readVersion,
   resolveCatalogueProjectId,
@@ -121,6 +122,9 @@ async function createPublishableAgent(
         'user gives you into a short summary that names what changed and what is still open.',
       welcomeMessage: 'Send me the commits and I will draft the notes.',
       conversationStarters: ['Summarise this release.'],
+      // #913 — an untagged version is a Critical now, and the publish route
+      // refuses a FAIL inline. See `PUBLISHABLE_TAGS`.
+      tags: PUBLISHABLE_TAGS,
     },
     projectId,
   );

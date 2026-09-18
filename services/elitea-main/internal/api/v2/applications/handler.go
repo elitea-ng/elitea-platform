@@ -462,6 +462,9 @@ func (h *Handler) fetchVersionDetails(ctx context.Context, projectID, applicatio
 	// control blanked itself. The rows exist; nothing read them.
 	tags := h.versionTagsOrEmpty(ctx, s, versionID)
 
+	// #898 — `notes` is stored inside `meta` and served beside it as well.
+	notes := notesFromMeta(meta)
+
 	detail := map[string]any{
 		"id":                    strconv.Itoa(id),
 		"application_id":        strconv.Itoa(appID),
@@ -471,6 +474,7 @@ func (h *Handler) fetchVersionDetails(ctx context.Context, projectID, applicatio
 		"agent_type":            agentType,
 		"instructions":          instrVal,
 		"welcome_message":       welcomeVal,
+		"notes":                 notes,
 		"llm_settings":          llmSettings,
 		"meta":                  meta,
 		"conversation_starters": starters,
@@ -561,6 +565,11 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 			}
 			if err := validateConversationStarters(vBody["conversation_starters"]); err != nil {
 				apierr.Write(w, err)
+				return
+			}
+			// #898 — the same ceiling the save path applies, on create.
+			if _, _, notesErr := validateNotes(vBody); notesErr != nil {
+				apierr.Write(w, notesErr)
 				return
 			}
 			req.InitialVersion = versionFromBody(vBody, ownerID)
@@ -678,6 +687,14 @@ func versionFromBody(vBody map[string]any, authorID int64) *applications.Version
 	if vars, ok := vBody["variables"].([]any); ok && len(vars) > 0 {
 		meta["variables"] = vars
 	}
+	// #898 — the editor's Notes field, folded into `meta` the way pylon's own
+	// create path does (utils/create_utils.py:55-59). It runs AFTER the `meta`
+	// assignment above so a body carrying both keys cannot have its notes
+	// overwritten by its own stale `meta` copy — pylon's write path states the
+	// same ordering rule (utils/application_utils.py:193-195).
+	if notes, ok := vBody[notesMetaKey].(string); ok {
+		meta[notesMetaKey] = notes
+	}
 
 	return &applications.Version{
 		Name:                 name,
@@ -692,6 +709,64 @@ func versionFromBody(vBody map[string]any, authorID int64) *applications.Version
 }
 
 const defaultStepLimit = 25
+
+// notesMaxLength is pylon's own ceiling on the field
+// (legacy/plugins/elitea_core/models/pd/version.py:116,
+// `notes: Optional[str] = Field(default=None, max_length=1000)`), which the
+// editor's input also caps at. Enforced here so an API caller cannot store
+// what the editor can never show back.
+const notesMaxLength = 1000
+
+// notesMetaKey is where the field LIVES.
+//
+// #898 — the editor's Notes control was written and then never mounted,
+// because `version_details.notes` "has no column on application_versions".
+// Neither does it in pylon: elitea_issues #5410 chose the `meta` jsonb over a
+// dedicated column precisely to avoid a per-tenant schema migration, and
+// pylon's write path folds the top-level field into `meta['notes']`
+// (legacy/plugins/elitea_core/utils/application_utils.py:191-211,
+// utils/create_utils.py:55-59) while its read path lifts it back out
+// (models/pd/version.py:297-307, `hydrate_notes_from_meta`). This port does
+// the same, so the two stores agree and no migration is needed.
+const notesMetaKey = "notes"
+
+// notesFromMeta answers the top-level `notes` value a version detail carries.
+//
+// Pylon ALSO deletes the key from the `meta` copy it serves
+// (legacy/plugins/elitea_core/models/pd/version.py:299-306), so that the
+// predict payload and the indexer — both of which copy `meta` wholesale —
+// never carry author-only documentation. This port deliberately leaves the key
+// in place and answers it in both positions: `meta` is the store the agent
+// editor round-trips (it spreads the object it read back into every save), so
+// removing the key here would make an ordinary save of any OTHER field erase
+// the notes. Pylon has no such problem because its editor binds the top-level
+// field. Nothing in this service forwards `meta` into a model turn, so the
+// reason for pylon's deletion does not arise here.
+func notesFromMeta(meta any) string {
+	asMap, ok := meta.(map[string]any)
+	if !ok {
+		return ""
+	}
+	notes, _ := asMap[notesMetaKey].(string)
+	return notes
+}
+
+// validateNotes refuses a `notes` value the store cannot hold. A body with no
+// `notes` key at all is not an error — the field is optional everywhere.
+func validateNotes(body map[string]any) (string, bool, error) {
+	raw, present := body[notesMetaKey]
+	if !present || raw == nil {
+		return "", false, nil
+	}
+	notes, isString := raw.(string)
+	if !isString {
+		return "", false, apierr.BadRequest("notes must be a string")
+	}
+	if len([]rune(notes)) > notesMaxLength {
+		return "", false, apierr.BadRequest(fmt.Sprintf("notes must be at most %d characters", notesMaxLength))
+	}
+	return notes, true, nil
+}
 
 // stringConversationStarters keeps only the STRING entries of a request
 // body's `conversation_starters` array (elitea_issues #4933): the field is a
@@ -764,6 +839,9 @@ func versionDetailsResponse(ver applications.Version, user auth.User, userID str
 	if variables == nil {
 		variables = []any{}
 	}
+	// #898 — the write echo answers `notes` the way the read does, so the
+	// editor's own save response and its reload agree on where the field is.
+	notes := notesFromMeta(any(ver.Meta))
 	return map[string]any{
 		"id":                    ver.ID,
 		"application_id":        ver.ApplicationID,
@@ -773,6 +851,7 @@ func versionDetailsResponse(ver applications.Version, user auth.User, userID str
 		"created_at":            ver.CreatedAt,
 		"author":                map[string]any{"id": userID, "email": user.Email, "name": user.Name},
 		"meta":                  ver.Meta,
+		"notes":                 notes,
 		"is_forked":             false,
 		"is_default":            ver.IsDefault,
 		"agent_type":            ver.AgentType,
@@ -1110,6 +1189,12 @@ func (h *Handler) CreateVersion(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := strconv.FormatInt(ownerID, 10)
 
+	// #898 — the same ceiling the save path applies, on a new version.
+	if _, _, notesErr := validateNotes(body); notesErr != nil {
+		apierr.Write(w, notesErr)
+		return
+	}
+
 	ver, err := h.repo.CreateVersion(r.Context(), projectID, applicationID, *versionFromBody(body, ownerID))
 	if err != nil {
 		apierr.Write(w, err)
@@ -1288,6 +1373,20 @@ func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
 			v.Meta = map[string]any{}
 		}
 		v.Meta["variables"] = variables
+	}
+	// #898 — `notes`, the same fold, on the save path this time. Presence-based:
+	// a body with no `notes` key leaves the stored value alone, and an explicit
+	// "" clears it (the patch merge cannot delete a key, and "" is what the
+	// editor's emptied field sends). It runs after the `meta` branch above for
+	// the ordering reason stated there.
+	if notes, hasNotes, notesErr := validateNotes(body); notesErr != nil {
+		apierr.Write(w, notesErr)
+		return
+	} else if hasNotes {
+		if v.Meta == nil {
+			v.Meta = map[string]any{}
+		}
+		v.Meta[notesMetaKey] = notes
 	}
 	// Pipeline flow-graph layout. Without this the pipeline editor's Save
 	// returned 200 while silently discarding every node/edge edit (#135) —
@@ -1549,11 +1648,121 @@ func (h *Handler) DeleteVersion(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// #894 — the "Replace & Delete" half of the version-in-use flow.
+	//
+	// `replacement_version_id` has been a documented query parameter of this
+	// route since the spec was written, and the handler never read it: the
+	// delete went through regardless, leaving every parent that referenced
+	// this version as a sub-agent pointing at a row that no longer exists.
+	// Pylon refuses that delete outright and repoints the references when a
+	// replacement is named (`legacy/plugins/elitea_core/rpc/application.py:
+	// 1869-1961`). Both halves are here now.
+	if h.pool != nil {
+		s, _ := tenantSchema(projectID)
+		replacementID := strings.TrimSpace(r.URL.Query().Get("replacement_version_id"))
+		referenced, err := h.versionIsReferenced(r.Context(), s, versionID)
+		if err != nil {
+			apierr.Write(w, apierr.Internal("could not check whether the version is in use"))
+			return
+		}
+		if referenced {
+			if replacementID == "" {
+				writeJSON(w, http.StatusBadRequest, map[string]any{
+					"error": "Version is in use and no replacement version provided. " +
+						"Use check_version_in_use first to get replacement options.",
+				})
+				return
+			}
+			if err := h.repointVersionReferences(r.Context(), s, applicationID, versionID, replacementID); err != nil {
+				apierr.Write(w, err)
+				return
+			}
+		}
+	}
+
 	if err := h.repo.DeleteVersion(r.Context(), projectID, applicationID, versionID); err != nil {
 		apierr.Write(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// versionIsReferenced reports whether any OTHER version references this one as
+// a sub-agent — a row of `elitea_tools` (type='application') naming it, bound
+// to a parent version through `entity_tool_mapping`.
+//
+// The join is the rule, not a convenience: a tool row with no valid parent
+// mapping is an ORPHAN, and pylon deletes those rather than demanding a
+// replacement for them (rpc/application.py:1911-1930). `DeleteVersion` in the
+// repository already removes this version's own mapping rows, so an orphan
+// cannot outlive the delete either way.
+func (h *Handler) versionIsReferenced(ctx context.Context, schema, versionID string) (bool, error) {
+	var referenced bool
+	err := h.pool.QueryRow(ctx, fmt.Sprintf(`
+		SELECT EXISTS (
+			SELECT 1
+			FROM %s.elitea_tools AS tool
+			JOIN %s.entity_tool_mapping AS mapping ON mapping.tool_id = tool.id
+			WHERE tool.type = 'application'
+			  AND COALESCE(tool.settings->>'application_version_id', tool.settings->>'version_id') = $1
+			  AND mapping.entity_version_id <> $1::int)`, schema, schema), versionID).Scan(&referenced)
+	if err != nil {
+		slog.ErrorContext(ctx, "delete version: in-use check failed",
+			"schema", schema, "version_id", versionID, "err", err)
+		return false, err
+	}
+	return referenced, nil
+}
+
+// repointVersionReferences moves every sub-agent reference to `versionID` onto
+// `replacementID`, which must be another version of the SAME application.
+//
+// The stale `version_id` spelling is dropped rather than left beside the new
+// key: readers COALESCE `application_version_id` first, so a row carrying both
+// would resolve correctly today and disagree with itself forever after.
+func (h *Handler) repointVersionReferences(ctx context.Context, schema, applicationID, versionID, replacementID string) error {
+	if !isNumericID(replacementID) {
+		return apierr.BadRequest("replacement_version_id must be a version id")
+	}
+	if replacementID == versionID {
+		return apierr.BadRequest("the replacement version cannot be the version being deleted")
+	}
+	var sameApplication bool
+	if err := h.pool.QueryRow(ctx, fmt.Sprintf(
+		`SELECT EXISTS (SELECT 1 FROM %s.application_versions WHERE id = $1 AND application_id = $2)`, schema),
+		replacementID, applicationID).Scan(&sameApplication); err != nil {
+		slog.ErrorContext(ctx, "delete version: replacement lookup failed",
+			"schema", schema, "replacement_version_id", replacementID, "err", err)
+		return apierr.Internal("could not read the replacement version")
+	}
+	if !sameApplication {
+		return apierr.BadRequest("the replacement version must belong to the same agent")
+	}
+	if _, err := h.pool.Exec(ctx, fmt.Sprintf(`
+		UPDATE %s.elitea_tools AS tool
+		SET settings = jsonb_set(tool.settings, '{application_version_id}', to_jsonb($1::int)) - 'version_id'
+		WHERE tool.type = 'application'
+		  AND COALESCE(tool.settings->>'application_version_id', tool.settings->>'version_id') = $2`, schema),
+		replacementID, versionID); err != nil {
+		slog.ErrorContext(ctx, "delete version: repoint failed",
+			"schema", schema, "version_id", versionID, "replacement_version_id", replacementID, "err", err)
+		return apierr.Internal("could not move the references to the replacement version")
+	}
+	return nil
+}
+
+// isNumericID admits only the digits a row id is made of — the same guard the
+// repository applies before interpolating an id into a statement.
+func isNumericID(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (h *Handler) SetDefaultVersion(w http.ResponseWriter, r *http.Request) {

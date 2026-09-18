@@ -240,7 +240,10 @@ describe('useEditApplicationForm', () => {
     // `internal_tools` joined this payload with #307's Tools-panel mount —
     // the switches are saved through this same `meta` blob, and an empty
     // array is a real value (all switches off), not an omission.
-    expect(versionBody['meta']).toEqual({ category: 'support', step_limit: 40, internal_tools: [] });
+    // `notes` rides in the same blob (#898 — the field has no column, by
+    // design), and an empty string is a real value there: it is what an
+    // emptied Editor Notes box sends, and the patch merge cannot delete a key.
+    expect(versionBody['meta']).toEqual({ category: 'support', step_limit: 40, internal_tools: [], notes: '' });
   });
 
   it('sends the internal-tool switches through `meta.internal_tools` (issue 307 — the Tools panel had no save path at all)', async () => {

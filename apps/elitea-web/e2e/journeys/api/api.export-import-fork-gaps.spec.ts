@@ -13,9 +13,24 @@
  */
 import { test, expect } from '@playwright/test';
 
-import { API_BASE, DEFAULT_PROJECT_ID, resolvePublishAuthorProjectId } from '../../fixtures/api';
+import {
+  API_BASE,
+  DEFAULT_PROJECT_ID,
+  createAgentWithVersion,
+  createGithubToolkit,
+  deleteAgent,
+  deleteGithubToolkit,
+  resolvePublishAuthorProjectId,
+  type GithubToolkitFixture,
+} from '../../fixtures/api';
 import { createPipelineThroughApi, deletePipeline, parseStoredGraph, storedNodeIds } from '../../fixtures/pipelines';
-import { deleteApplicationIn, exportBundle, forkBundle, readApplicationIn } from '../../fixtures/exportImport';
+import {
+  attachToolkitToVersion,
+  deleteApplicationIn,
+  exportBundle,
+  forkBundle,
+  readApplicationIn,
+} from '../../fixtures/exportImport';
 
 function autotestName(stem: string): string {
   return `autotest_frk_${stem}_${String(Date.now()).slice(-7)}`;
@@ -96,5 +111,72 @@ test('forking a pipeline into another project sets is_forked and records the par
   } finally {
     if (copyId !== undefined) await deleteApplicationIn(request, destinationProjectId, copyId);
     if (sourceId !== undefined) await deletePipeline(request, { id: sourceId, projectId: DEFAULT_PROJECT_ID });
+  }
+});
+
+/*
+ * onetest: ELITEA-0672 (addendum) — #918. A toolkit attached to an agent's
+ * version survives a CROSS-PROJECT fork: the reference is kept (its
+ * credentials scrubbed by the export, which is ELITEA-0675's half), not
+ * dropped.
+ *
+ * The bug was one key wide in two places at once. `forkBundle`'s body carried
+ * `{applications, skills}` and no `toolkits`, and `Fork` never read a
+ * `toolkits` key or wrote a toolkit row anywhere — so the forked copy came
+ * back with an EMPTY `tools` array and the author had to rebuild every
+ * attachment by hand. The export had carried the array all along.
+ */
+test('a toolkit attached to a version survives a cross-project fork', async ({ request }) => {
+  test.setTimeout(60_000);
+  const name = autotestName('toolkit');
+  const destinationProjectId = await resolvePublishAuthorProjectId(request);
+  expect(destinationProjectId, 'the fork case needs a second project').not.toBe(DEFAULT_PROJECT_ID);
+
+  let sourceId: string | undefined;
+  let copyId: string | undefined;
+  let toolkit: GithubToolkitFixture | undefined;
+  try {
+    const agent = await createAgentWithVersion(request, name, {
+      instructions: 'Answer questions about the repository for the release notes.',
+    });
+    sourceId = agent.id;
+    toolkit = await createGithubToolkit(request, DEFAULT_PROJECT_ID, `${name}_tk`, {});
+    await attachToolkitToVersion(request, toolkit.toolkitId, {
+      applicationId: agent.id,
+      versionId: agent.versionId,
+      selectedTools: ['get_issue'],
+    });
+
+    const exported = await exportBundle(request, agent.id, { fork: true });
+    expect(
+      (exported.bundle.toolkits ?? []).some((entry) => entry.type === 'github'),
+      `the export carried no github toolkit: ${exported.text.slice(0, 400)}`,
+    ).toBe(true);
+
+    const answer = await forkBundle(request, destinationProjectId, exported.bundle);
+    expect(answer.status, `the fork answered ${answer.text.slice(0, 400)}`).toBe(201);
+    copyId = (answer.body.result?.agents ?? [])[0]?.id;
+    expect(copyId, 'the fork answered no id').toBeDefined();
+
+    // The fork's own answer names the toolkit it copied — the channel that
+    // was documented as "always empty".
+    expect(
+      (answer.body.result?.toolkits ?? []).some((entry) => entry.type === 'github'),
+      `the fork result named no toolkit: ${answer.text.slice(0, 400)}`,
+    ).toBe(true);
+
+    // And the STORED copy carries the attachment, which is what the author
+    // opens the editor to find.
+    const copy = await readApplicationIn(request, destinationProjectId, copyId ?? '');
+    const copiedVersion = copy.version_details ?? copy.versions?.[0];
+    const tools = (copiedVersion?.tools ?? []) as readonly Record<string, unknown>[];
+    expect(
+      tools.some((tool) => tool['type'] === 'github'),
+      `the forked copy carries no github-typed tool: ${JSON.stringify(tools)}`,
+    ).toBe(true);
+  } finally {
+    if (copyId !== undefined) await deleteApplicationIn(request, destinationProjectId, copyId);
+    if (sourceId !== undefined) await deleteAgent(request, sourceId);
+    await deleteGithubToolkit(request, DEFAULT_PROJECT_ID, toolkit);
   }
 });

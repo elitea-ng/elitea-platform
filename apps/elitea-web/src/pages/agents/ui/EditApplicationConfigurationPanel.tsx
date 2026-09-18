@@ -7,11 +7,12 @@
  * panel changed in the move; every comment below is the one the page carried.
  */
 import type { ReactNode } from 'react';
+import { useCallback } from 'react';
 
 import Box from '@mui/material/Box';
 
 import { AgentSkillsPanel } from '@/features/agent-skills';
-import { AgentIconEditor, AgentTagEditor, ApplicationInformation, CreateAgentForm } from '@/features/agents';
+import { AgentIconEditor, AgentTagEditor, ApplicationEditorNotes, ApplicationInformation, CreateAgentForm } from '@/features/agents';
 import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import type { ApplicationVersionDetail } from '@/shared/api/generated/model';
 import { AgentModelSettings } from '@/widgets/agent-model-settings';
@@ -100,6 +101,12 @@ export function EditApplicationConfigurationPanel(props: EditApplicationConfigur
   } = props;
   const fork = forkOrigin(activeVersion);
   const iconMeta = applicationIconMetaOf(activeVersion);
+  const onNotesChange = useCallback(
+    (value: string) => {
+      versionFields.applyFieldChange('version_details.notes', value);
+    },
+    [versionFields],
+  );
 
   return (
     <Box data-testid="edit-application-configuration-tab-panel">
@@ -170,6 +177,20 @@ export function EditApplicationConfigurationPanel(props: EditApplicationConfigur
         projectId={projectId}
         appVersionId={activeVersion?.id}
         disabled={isReadOnly}
+      />
+      {/*
+       * #898 — the EDITOR NOTES accordion. Free-text documentation for the
+       * author: never sent to the model, to chat or to execution, and stored
+       * in `meta.notes` (there is no column, by design — see the barrel's own
+       * export comment). Placed between SKILLS and INFORMATION because that is
+       * where the baseline puts it: `frontends/EliteaUI/.../
+       * ApplicationConfigurationForm.jsx:68` renders `<ApplicationEditorNotes/>`
+       * as the last child before `<ApplicationInformation/>`.
+       */}
+      <ApplicationEditorNotes
+        notes={versionFields.fields.notes}
+        onNotesChange={onNotesChange}
+        disabled={isEditorDisabled}
       />
       {/*
        * #846 — the Information accordion (agent id, version id, "Forked

@@ -5,11 +5,10 @@ import { useQueryClient } from '@tanstack/react-query';
 import { selectDefaultVersion } from '@/entities/version';
 import type { VersionSummary } from '@/entities/version';
 import {
-  getBatchReplaceVersionReferencesQueryOptions,
   getCheckVersionInUseQueryOptions,
   getDeleteApplicationVersionQueryOptions,
 } from '@/shared/api/generated/applications/applications';
-import type { ApplicationRelationList, OkResponse } from '@/shared/api/generated/model';
+import type { ApplicationRelationList } from '@/shared/api/generated/model';
 
 import { t } from '@/shared/i18n';
 
@@ -47,7 +46,9 @@ function deleteFailedFallback(): string {
  *
  * `DeleteApplicationVersionParams.replacement_version_id` IS a real,
  * documented query param on `DELETE /version/prompt_lib/.../{versionId}` —
- * but reading `DeleteVersion`
+ * and #894 made the handler READ it. What follows is what was true before
+ * that, kept because it explains why this hook used to call a different
+ * endpoint. Reading `DeleteVersion`
  * (`services/elitea-main/internal/api/v2/applications/handler.go:932-957`)
  * in full shows it is NEVER READ: the handler only checks the
  * published/embedded guard and calls `h.repo.DeleteVersion(...)`, nothing
@@ -103,6 +104,13 @@ function deleteFailedFallback(): string {
 interface CheckVersionInUseResult {
   readonly items: ApplicationRelationList['items'];
   readonly isInUse: boolean;
+  /**
+   * #894 — the parents that reference THIS version as a sub-agent, and the
+   * versions it could be replaced by. Both are new keys on the same response:
+   * see the module doc comment for what `items` answers instead.
+   */
+  readonly referencingParents: NonNullable<ApplicationRelationList['referencing_parents']>;
+  readonly replacementVersions: NonNullable<ApplicationRelationList['replacement_versions']>;
 }
 
 export interface UseDeleteVersionInput {
@@ -164,8 +172,16 @@ export function useDeleteVersion(input: UseDeleteVersionInput): UseDeleteVersion
     try {
       const options = getCheckVersionInUseQueryOptions(input.projectId, input.applicationId, input.versionId);
       const response = await queryClient.query(options);
-      const { items } = (response as { data: ApplicationRelationList }).data;
-      return { items, isInUse: items.length > 0 };
+      const body = (response as { data: ApplicationRelationList }).data;
+      return {
+        items: body.items,
+        // #894 — `in_use` from the server, NOT `items.length > 0`: those are
+        // answers to opposite questions, and the old boolean was true for
+        // essentially every non-trivial version.
+        isInUse: body.in_use === true,
+        referencingParents: body.referencing_parents ?? [],
+        replacementVersions: body.replacement_versions ?? [],
+      };
     } catch (caught) {
       setError(caught);
       return undefined;
@@ -179,18 +195,26 @@ export function useDeleteVersion(input: UseDeleteVersionInput): UseDeleteVersion
       setIsDeletingVersion(true);
       setError(undefined);
       try {
-        if (replacementVersionId !== undefined) {
-          const options = getBatchReplaceVersionReferencesQueryOptions(
-            input.projectId,
-            input.versionId,
-            replacementVersionId,
-            { delete_old: true },
-          );
-          const response = await queryClient.query(options);
-          return { ok: (response as { data: OkResponse }).data.ok, errorMessage: undefined };
-        }
+        // #894 — ONE call for both cases, and it is the delete route.
+        //
+        // The replacement branch used to go to `batch_replace_version`, which
+        // reads the relation the wrong way round: its single UPDATE moves the
+        // rows whose `entity_tool_mapping.entity_version_id` IS the old
+        // version — the tools the deleted version itself used — and never
+        // touches the PARENT references that name it
+        // (`internal/infra/db/repos/applications.go`, BatchReplaceVersion).
+        // So "Replace & Delete" through that route left every referencing
+        // agent pointing at a deleted row. `DELETE /version/...` now honours
+        // `replacement_version_id` and repoints those references itself,
+        // which is what pylon's own delete does
+        // (`legacy/plugins/elitea_core/rpc/application.py:1936-1961`).
         await queryClient.query(
-          getDeleteApplicationVersionQueryOptions(input.projectId, input.applicationId, input.versionId),
+          getDeleteApplicationVersionQueryOptions(
+            input.projectId,
+            input.applicationId,
+            input.versionId,
+            replacementVersionId === undefined ? undefined : { replacement_version_id: replacementVersionId },
+          ),
         );
         return { ok: true, errorMessage: undefined };
       } catch (caught) {

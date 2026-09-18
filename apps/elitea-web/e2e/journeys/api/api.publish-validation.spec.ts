@@ -58,6 +58,7 @@ import {
   AUTOTEST_PREFIX,
   createAgentWithVersion,
   deleteAgent,
+  PUBLISHABLE_TAGS,
   readApplicationVersions,
   resolvePublishAuthorProjectId,
 } from '../../fixtures/api';
@@ -103,6 +104,9 @@ function createQualityAgent(
       instructions: QUALITY_INSTRUCTIONS,
       welcomeMessage: 'Send me the commits and I will draft the notes.',
       conversationStarters: ['Summarise this release.', 'What is still open?'],
+      // #913 — an untagged version is a Critical now, and the publish route
+      // refuses a FAIL inline. See `PUBLISHABLE_TAGS`.
+      tags: PUBLISHABLE_TAGS,
     },
     projectId,
     QUALITY_DESCRIPTION,
@@ -121,7 +125,7 @@ function createSparseAgent(
   return createAgentWithVersion(
     request,
     name,
-    { instructions: 'Do the thing.', conversationStarters: [] },
+    { instructions: 'Do the thing.', conversationStarters: [], tags: PUBLISHABLE_TAGS },
     projectId,
     'Does things.',
   );
@@ -261,13 +265,19 @@ test('a well-formed agent passes, and the result carries every list the dialog r
     // running the check again.
     expect(typeof result.validation_token, JSON.stringify(result)).toBe('string');
 
-    // The tags suggestion is what a PASS still tells the author: an agent with
-    // fewer than three tags is publishable and hard to find, and the check
-    // says so as a RECOMMENDATION rather than as a warning.
-    const tags = (result.recommendations ?? []).find((item) => item.field === 'tags');
-    expect(tags, `no tags suggestion in ${JSON.stringify(result.recommendations)}`).toBeDefined();
-    expect(tags?.source).toBe('deterministic');
-    expect(typeof tags?.['suggestion']).toBe('string');
+    // #913 — what a PASS says about TAGS, now that the three rules pylon has
+    // are ported (`legacy/plugins/elitea_core/utils/publish_utils.py:2824-2851`).
+    // This fixture carries ONE non-generic tag, which is the quiet case: no
+    // Critical (that is the zero-tag rule), no Warning (that is the
+    // all-generic rule), and no Suggestion (that one fires ABOVE two tags,
+    // recommending 1-2 for discoverability — the opposite of the "add more
+    // tags" Recommendation this port used to raise below three).
+    const tagFindings = [
+      ...(result.critical_issues ?? []),
+      ...(result.warnings ?? []),
+      ...(result.recommendations ?? []),
+    ].filter((item) => item.field === 'tags');
+    expect(tagFindings, `unexpected tags findings: ${JSON.stringify(tagFindings)}`).toHaveLength(0);
   } finally {
     await deleteAgent(request, agent.id, projectId);
   }

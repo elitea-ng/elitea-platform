@@ -75,9 +75,11 @@ type publishValidationBody struct {
 // Everything else about the fixture exists to make the DETERMINISTIC verdict
 // PASS, so that a change in status can only have come from the AI step:
 // instructions past the 50-character floor, one conversation starter (absent
-// starters are a warning, and a warning is already not PASS), and an
-// `llm_settings` with NO `model_project_id` — naming one that is not the
-// public project is a critical issue in its own right.
+// starters are a warning, and a warning is already not PASS), one
+// non-generic tag (#913 — no tags at all is a Critical, and a tag set drawn
+// entirely from the generic list is a Warning), and an `llm_settings` naming
+// the PUBLIC project (#908 — a model_name with no model_project_id is now a
+// Critical of its own, and a project that is not the public one always was).
 const publishAIFixtureSQL = `
 INSERT INTO auth_core__user (id, email, name) VALUES (7302, 'publisher@autotest.local', 'Publisher');
 INSERT INTO %[1]s.applications (id, name, description, owner_id)
@@ -87,7 +89,9 @@ INSERT INTO %[1]s.application_versions
 VALUES (91, 81, 'draft-1', 'draft',
         'Answer payroll questions for the finance team, citing the handbook section you used each time.',
         '["How do I read my payslip?"]'::jsonb,
-        '{"model_name":"premium-model"}'::jsonb, 7302);
+        '{"model_name":"premium-model","model_project_id":1}'::jsonb, 7302);
+INSERT INTO %[1]s.tags (id, name, data) VALUES (61, 'payroll', '{}'::jsonb);
+INSERT INTO %[1]s.application_version_tag_association (version_id, tag_id) VALUES (91, 61);
 INSERT INTO %[1]s.configuration (project_id, label, elitea_title, type, section, data, status_ok, shared)
 VALUES
   (7301, 'Premium', 'model_premium_7301', 'model', 'llm',

@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { VersionSummary } from '@/entities/version';
 import {
-  getBatchReplaceVersionReferencesMockHandler,
   getCheckVersionInUseMockHandler,
   getDeleteApplicationVersionMockHandler,
 } from '@/shared/api/generated/applications/applications.msw';
@@ -55,8 +54,8 @@ describe('resolveFallbackVersionId', () => {
 });
 
 describe('useDeleteVersion', () => {
-  it('doCheckVersionInUse reports isInUse=false and empty items when nothing references the version', async () => {
-    server.use(getCheckVersionInUseMockHandler({ items: [] }));
+  it('doCheckVersionInUse reports isInUse=false when nothing references the version', async () => {
+    server.use(getCheckVersionInUseMockHandler({ items: [], in_use: false }));
     const { result } = renderHookWithProviders(() => useDeleteVersion(baseInput()));
 
     let checked;
@@ -64,12 +63,19 @@ describe('useDeleteVersion', () => {
       checked = await result.current.doCheckVersionInUse();
     });
 
-    expect(checked).toEqual({ items: [], isInUse: false });
+    expect(checked).toEqual({ items: [], isInUse: false, referencingParents: [], replacementVersions: [] });
     await waitFor(() => expect(result.current.isCheckingInUse).toBe(false));
   });
 
-  it('doCheckVersionInUse reports isInUse=true with the referencing items', async () => {
-    server.use(getCheckVersionInUseMockHandler({ items: [{ type: 'tool', id: 't1' }] }));
+  /**
+   * #894 — `isInUse` comes off the server's OWN `in_use`, never off
+   * `items.length`. The two answer opposite questions: `items` lists what
+   * this version uses, `in_use` whether anything uses IT. The body below is
+   * the shape that used to read as "in use" and must not: a tool of its own,
+   * nothing referencing it.
+   */
+  it('doCheckVersionInUse does not call a version in use because it uses a tool', async () => {
+    server.use(getCheckVersionInUseMockHandler({ items: [{ type: 'tool', id: 't1' }], in_use: false }));
     const { result } = renderHookWithProviders(() => useDeleteVersion(baseInput()));
 
     let checked;
@@ -77,7 +83,40 @@ describe('useDeleteVersion', () => {
       checked = await result.current.doCheckVersionInUse();
     });
 
-    expect(checked).toEqual({ items: [{ type: 'tool', id: 't1' }], isInUse: true });
+    expect(checked).toEqual({
+      items: [{ type: 'tool', id: 't1' }],
+      isInUse: false,
+      referencingParents: [],
+      replacementVersions: [],
+    });
+  });
+
+  it('doCheckVersionInUse carries the referencing parents and the replacement versions', async () => {
+    server.use(
+      getCheckVersionInUseMockHandler({
+        items: [],
+        in_use: true,
+        referencing_parents: [
+          { application_id: 7, application_name: 'Dependent', version_id: 70, version_name: 'base', tool_id: 5 },
+        ],
+        replacement_versions: [{ id: 11, name: 'base', created_at: '2026-01-02T03:04:05Z' }],
+      }),
+    );
+    const { result } = renderHookWithProviders(() => useDeleteVersion(baseInput()));
+
+    let checked;
+    await act(async () => {
+      checked = await result.current.doCheckVersionInUse();
+    });
+
+    expect(checked).toEqual({
+      items: [],
+      isInUse: true,
+      referencingParents: [
+        { application_id: 7, application_name: 'Dependent', version_id: 70, version_name: 'base', tool_id: 5 },
+      ],
+      replacementVersions: [{ id: 11, name: 'base', created_at: '2026-01-02T03:04:05Z' }],
+    });
   });
 
   it('doDeleteVersion without a replacement calls the plain DELETE endpoint and resolves true on 204', async () => {
@@ -93,8 +132,21 @@ describe('useDeleteVersion', () => {
     await waitFor(() => expect(result.current.isDeletingVersion).toBe(false));
   });
 
-  it('doDeleteVersion with a replacement calls batchReplaceVersionReferences(delete_old=true) instead', async () => {
-    server.use(getBatchReplaceVersionReferencesMockHandler({ ok: true }));
+  /**
+   * #894 — the replacement goes to the DELETE route as
+   * `replacement_version_id`, not to `batch_replace_version`. That other
+   * endpoint repoints the rows whose `entity_tool_mapping.entity_version_id`
+   * IS the old version — the tools the deleted version used — and leaves the
+   * parents that reference it pointing at a row that is about to disappear.
+   */
+  it('doDeleteVersion with a replacement sends replacement_version_id on the DELETE', async () => {
+    let seenUrl: string | undefined;
+    server.use(
+      http.delete('*/elitea_core/version/prompt_lib/:projectId/:applicationId/:versionId', ({ request }) => {
+        seenUrl = request.url;
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
     const { result } = renderHookWithProviders(() => useDeleteVersion(baseInput()));
 
     let deleted;
@@ -103,6 +155,7 @@ describe('useDeleteVersion', () => {
     });
 
     expect(deleted).toEqual({ ok: true, errorMessage: undefined });
+    expect(seenUrl).toContain('replacement_version_id=11');
   });
 
   /**
