@@ -55,6 +55,29 @@ test('J-sidebar-version: switching between two chat agents shows each one\'s own
       entity_settings: { version_id: agentB.versionId },
     });
 
+    // Re-judged again (PR #957): the previous webkit hardening's theory
+    // (stale label lingering) wasn't what CI hit. Both webkit AND chromium
+    // failed with the button rendering EMPTY (icon-only), not agent A's
+    // leftover name — `useAgentEditorPanelFit.hooks.ts` measures the
+    // composer's controls container against a fixed 430px breakpoint
+    // (`CHAT_CONTROLS_WIDTH_THRESHOLD`) and renders icon-only
+    // (`VersionSelector`'s `isSmallView` branch) below it. At this journey's
+    // default 1280px viewport, expanding the participants rail narrows that
+    // container to ~350px — reliably below the breakpoint once a render
+    // happens slowly enough (CI's shared runners, or any injected network
+    // latency) for `useAgentEditorPanelFit`'s hook to catch the narrowed
+    // width; a fast local run can race past it and observe the transient
+    // wide-view render instead, which is why this looked like webkit-only
+    // flakiness rather than a reliable failure. A locator-name assertion
+    // will never resolve in icon-only mode no matter how long it waits —
+    // this is a viewport/breakpoint mismatch, not a timing race to wait out.
+    // Widening the viewport keeps the composer's measured container clear of
+    // the breakpoint regardless of participants-rail state or render timing,
+    // so the version NAME assertions below test version identity, not which
+    // responsive mode happened to win a race. Proven against 3s of injected
+    // latency on the application-details fetch, on both webkit and chromium
+    // (`page.route('**/elitea_core/application/prompt_lib/**', ...)`).
+    await page.setViewportSize({ width: 1920, height: 1080 });
     await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
     await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 20_000 });
 
@@ -69,18 +92,14 @@ test('J-sidebar-version: switching between two chat agents shows each one\'s own
     await agentsSection.getByText(agentAName, { exact: true }).click();
     await expect(versionButton, 'agent A must show its OWN version').toHaveText('alpha-version', { timeout: 15_000 });
 
-    // Flaky on webkit (PR #957, passed on retry): `VersionSelector`'s button
-    // renders bare `selectedVersion?.name` with no loading state at all, so
-    // right after this click it can still show agent A's label (the
-    // `useActiveParticipantDetails` re-fetch keyed to agent B's own ids
-    // hasn't resolved yet) for longer on a slow webkit run than on chromium.
-    // Asserting straight to 'beta-version' let `toHaveText`'s poll catch a
-    // window where the button still read the STALE 'alpha-version' one poll
-    // before the real value landed, close enough to the assertion's start
-    // that a slow webkit paint occasionally pushed the whole thing past
-    // its 15s budget. Demanding the stale text is GONE first is a positive
-    // wait on that settled-state transition, not a race against the same
-    // clock the flaky assertion was already racing.
+    // `VersionSelector`'s button renders bare `selectedVersion?.name` with no
+    // loading state, so right after this click it can still show agent A's
+    // label for a poll or two before the `useActiveParticipantDetails`
+    // re-fetch (keyed to agent B's own ids) resolves. Demanding the stale
+    // text is GONE first is a positive wait on that settled-state
+    // transition, kept independent of the viewport fix above (which
+    // addresses a different failure mode — icon-only rendering — not this
+    // one).
     await agentsSection.getByText(agentBName, { exact: true }).click();
     await expect(versionButton, 'must leave agent A\'s version behind before agent B\'s resolves').not.toHaveText(
       'alpha-version',
