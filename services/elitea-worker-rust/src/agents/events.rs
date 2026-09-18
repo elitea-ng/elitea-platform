@@ -53,7 +53,7 @@ const MAX_PROJECTED_EVENTS_PER_ADK_EVENT: usize =
 const MAX_ADK_EVENT_ID_BYTES: usize = 512;
 const MAX_ADK_PARTS_PER_EVENT: usize = 256;
 const MAX_CONTEXT_TEXT_BYTES: usize = 2_048;
-const MAX_COMPLETED_CONTENT_BYTES: usize = 60 * 1_024;
+const MAX_COMPLETED_CONTENT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_TOOL_EVENT_VALUE_BYTES: usize = 40 * 1_024;
 const PIPELINE_HITL_DIGEST_DOMAIN: &[u8] = b"elitea.pipeline-hitl-interrupt.v1\0";
 const PIPELINE_TOOL_HITL_DIGEST_DOMAIN: &[u8] = b"elitea.pipeline-tool-hitl-interrupt.v1\0";
@@ -1857,8 +1857,23 @@ impl AgentEventProjector {
             batch.push(self.model_start_event(event, &timestamp)?)?;
         }
 
-        if let Some(chunk) = self.model_chunk_event(event, content_delta, thinking_delta)? {
-            batch.push(chunk)?;
+        if content_delta.len() + thinking_delta.len() <= INLINE_TEXT_CHUNK_BYTES {
+            if let Some(chunk) = self.model_chunk_event(event, content_delta, thinking_delta)? {
+                batch.push(chunk)?;
+            }
+        } else {
+            for (field, value) in [("text", content_delta), ("thinking", thinking_delta)] {
+                for (_, fragment) in text_fragments(&value) {
+                    let (text, thinking) = if field == "text" {
+                        (fragment.to_owned(), String::new())
+                    } else {
+                        (String::new(), fragment.to_owned())
+                    };
+                    if let Some(chunk) = self.model_chunk_event(event, text, thinking)? {
+                        batch.push(chunk)?;
+                    }
+                }
+            }
         }
 
         if model_event.closes_turn {
@@ -1876,28 +1891,7 @@ impl AgentEventProjector {
                     "metadata": response_tool_metadata,
                 }},
             });
-            batch.push(self.event(
-                "agent_llm_end",
-                &Value::Null,
-                None,
-                &json!({"tool_run_id": event.id, "thinking_steps": [step.clone()]}),
-                event.timestamp,
-            )?)?;
-            batch.push(self.event(
-                "partial_message",
-                &Value::Null,
-                None,
-                &json!({
-                    "project_id": self.context.project_id,
-                    "chat_project_id": self.context.chat_project_id,
-                    "thread_id": self.context.thread_id,
-                    "thinking_steps": [step],
-                    "tool_calls": {},
-                    "additional_response_meta": {},
-                    "invoked_skills": self.context.applied_skills,
-                }),
-                event.timestamp,
-            )?)?;
+            self.project_model_steps(&mut batch, event, &step)?;
             self.state = ProjectionState::Complete(CompletedModelTurn { output_limited });
             if let Some(confirmation) = self.output_limit_confirmation(event, output_limited)? {
                 batch.push(confirmation)?;
@@ -1911,6 +1905,70 @@ impl AgentEventProjector {
             });
         }
         Ok(batch)
+    }
+
+    fn project_model_steps(
+        &self,
+        batch: &mut ProjectedAgentEventBatch,
+        event: &Event,
+        step: &Value,
+    ) -> Result<(), AgentEventProjectionError> {
+        let text = step["text"].as_str().unwrap_or_default();
+        let thinking = step["thinking"].as_str().unwrap_or_default();
+        if text.len() + thinking.len() <= INLINE_TEXT_CHUNK_BYTES {
+            return self.project_model_step(batch, event, step);
+        }
+        let mut base = step.clone();
+        let object = base
+            .as_object_mut()
+            .ok_or_else(AgentEventProjectionError::invalid_state)?;
+        object.remove("text");
+        object.remove("thinking");
+        object.remove("timestamp_finish");
+        for (field, value) in [("text", text), ("thinking", thinking)] {
+            let hash = text_digest(value);
+            for (offset, fragment) in text_fragments(value) {
+                let mut part = base.clone();
+                part[field] = json!(fragment);
+                let final_field = offset + fragment.len() == value.len();
+                part[format!("{field}_chunk_v1")] = json!({"offset_bytes": offset, "total_bytes": value.len(), "sha256": hash, "final": final_field});
+                if final_field && (field == "thinking" || thinking.is_empty()) {
+                    part["timestamp_finish"] = step["timestamp_finish"].clone();
+                }
+                self.project_model_step(batch, event, &part)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn project_model_step(
+        &self,
+        batch: &mut ProjectedAgentEventBatch,
+        event: &Event,
+        step: &Value,
+    ) -> Result<(), AgentEventProjectionError> {
+        let end = self.event(
+            "agent_llm_end",
+            &Value::Null,
+            None,
+            &json!({"tool_run_id": event.id, "thinking_steps": [step]}),
+            event.timestamp,
+        )?;
+        let chunked =
+            step.get("text_chunk_v1").is_some() || step.get("thinking_chunk_v1").is_some();
+        if !chunked {
+            batch.push(end.clone())?;
+        }
+        // Main validates and persists each fragment before browser delivery.
+        batch.push(self.event("partial_message", &Value::Null, None, &json!({
+            "project_id": self.context.project_id, "chat_project_id": self.context.chat_project_id,
+            "thread_id": self.context.thread_id, "thinking_steps": [step], "tool_calls": {},
+            "additional_response_meta": {}, "invoked_skills": self.context.applied_skills,
+        }), event.timestamp)?)?;
+        if chunked {
+            batch.push(end)?;
+        }
+        Ok(())
     }
 
     fn model_chunk_event(
@@ -2256,8 +2314,30 @@ impl AgentEventProjector {
             .continuation_overlap
             .as_ref()
             .map_or(content.clone(), |overlap| overlap.completed(&content));
+        if content.len() > MAX_COMPLETED_CONTENT_BYTES {
+            return Err(AgentEventProjectionError::output(
+                ProtocolError::ResourceExhausted(
+                    "the completed agent content exceeds its approved limit",
+                ),
+            ));
+        }
         let mut batch = ProjectedAgentEventBatch::new();
-        let response = Value::String(content);
+        let (response, result_ref) =
+            if content.len() > INLINE_TEXT_CHUNK_BYTES {
+                let hash = text_digest(&content);
+                for (offset, fragment) in text_fragments(&content) {
+                    batch.push(self.event("agent_result_chunk", &json!(fragment), None, &json!({
+                    "result_chunk_v1": {"offset_bytes": offset, "total_bytes": content.len(),
+                        "sha256": hash, "final": offset + fragment.len() == content.len()},
+                }), occurred_at)?)?;
+                }
+                (
+                    Value::Null,
+                    json!({"total_bytes": content.len(), "sha256": hash}),
+                )
+            } else {
+                (Value::String(content), Value::Null)
+            };
         if execution_finished {
             batch.push(self.event(
                 "pipeline_finish",
@@ -2303,6 +2383,7 @@ impl AgentEventProjector {
                 "parallel_reconcile": self.context.parallel_reconcile,
                 "context_info": context_info,
                 "invoked_skills": self.context.applied_skills,
+                "result_ref_v1": result_ref,
             }),
             occurred_at,
         )?)?;
@@ -2324,6 +2405,16 @@ impl AgentEventProjector {
         response_metadata: &Value,
         occurred_at: DateTime<Utc>,
     ) -> Result<NodeEventV1, AgentEventProjectionError> {
+        let mut response_metadata = response_metadata.clone();
+        if response_metadata
+            .get("result_ref_v1")
+            .is_some_and(Value::is_null)
+        {
+            response_metadata
+                .as_object_mut()
+                .ok_or_else(AgentEventProjectionError::invalid_state)?
+                .remove("result_ref_v1");
+        }
         let event = NodeEventV1 {
             r#type: event_type.to_owned(),
             stream_id: Some(self.context.stream_id.clone()),
@@ -2335,7 +2426,7 @@ impl AgentEventProjector {
                 ))
             })?,
             thinking,
-            response_metadata: serde_json::to_vec(response_metadata).map_err(|_| {
+            response_metadata: serde_json::to_vec(&response_metadata).map_err(|_| {
                 AgentEventProjectionError::output(ProtocolError::InvalidInput(
                     "the projected agent event metadata is malformed",
                 ))
@@ -4532,7 +4623,7 @@ fn merge_stream_value(
     current: String,
 ) -> Result<(String, String), AgentEventProjectionError> {
     if previous.is_empty() {
-        if current.len() > MAX_CURRENT_NODE_EVENT_JSON_BYTES {
+        if current.len() > MAX_COMPLETED_CONTENT_BYTES {
             return Err(AgentEventProjectionError {
                 code: AgentEventProjectionErrorCode::ResourceExhausted,
                 protocol: None,
@@ -4591,7 +4682,7 @@ fn trim_continuation_overlap(existing_tail: &str, incoming_content: &str) -> Str
 }
 
 fn extend_bounded(target: &mut String, value: &str) -> Result<(), AgentEventProjectionError> {
-    if target.len().saturating_add(value.len()) > MAX_CURRENT_NODE_EVENT_JSON_BYTES {
+    if target.len().saturating_add(value.len()) > MAX_COMPLETED_CONTENT_BYTES {
         return Err(AgentEventProjectionError {
             code: AgentEventProjectionErrorCode::ResourceExhausted,
             protocol: None,
@@ -4599,4 +4690,31 @@ fn extend_bounded(target: &mut String, value: &str) -> Result<(), AgentEventProj
     }
     target.push_str(value);
     Ok(())
+}
+
+fn text_fragments(text: &str) -> impl Iterator<Item = (usize, &str)> {
+    let mut offset = 0;
+    std::iter::from_fn(move || {
+        if offset == text.len() {
+            return None;
+        }
+        let mut end = (offset + INLINE_TEXT_CHUNK_BYTES).min(text.len());
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        let result = (offset, &text[offset..end]);
+        offset = end;
+        Some(result)
+    })
+}
+
+fn text_digest(text: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let hash = digest::digest(&digest::SHA256, text.as_bytes());
+    let mut value = String::with_capacity(64);
+    for byte in hash.as_ref() {
+        value.push(char::from(HEX[usize::from(byte >> 4)]));
+        value.push(char::from(HEX[usize::from(byte & 15)]));
+    }
+    value
 }

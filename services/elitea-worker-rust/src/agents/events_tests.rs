@@ -569,7 +569,7 @@ fn completed_text_projection_is_independent_of_provider_chunk_count() {
 #[test]
 fn fragmented_projection_retains_byte_logical_part_and_work_bounds() {
     let oversized = vec![Part::Text {
-        text: "x".repeat(60 * 1024 + 1),
+        text: "x".repeat(4 * 1024 * 1024 + 1),
     }];
     let empty_flood = vec![
         Part::Text {
@@ -597,6 +597,70 @@ fn fragmented_projection_retains_byte_logical_part_and_work_bounds() {
         assert_eq!(
             projection_error(projector.project(&event("bounded", 1, false, true, parts))).code(),
             AgentEventProjectionErrorCode::ResourceExhausted
+        );
+    }
+}
+
+#[test]
+fn long_escaped_model_output_uses_bounded_frames_and_a_complete_result_reference() {
+    for text in ["🦀\n\"\\".repeat(12_000), "answer ".repeat(100_000)] {
+        let mut projector =
+            AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({}))).unwrap();
+        projector.start(timestamp(0)).unwrap();
+        let model = event(
+            "large-model",
+            1,
+            false,
+            true,
+            vec![Part::Text { text: text.clone() }],
+        );
+        let projected: Vec<_> = projector
+            .project(&model)
+            .unwrap()
+            .into_iter()
+            .map(|e| current(&e))
+            .collect();
+        let restored: String = projected
+            .iter()
+            .filter(|e| e["type"] == "partial_message")
+            .map(|e| {
+                e["response_metadata"]["thinking_steps"][0]["text"]
+                    .as_str()
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(restored, text);
+        let terminal: Vec<_> = projector
+            .finish_after_eos(
+                CompletedAgentBrowserOutput::ordinary(text.clone(), "thread-1".into()).unwrap(),
+                timestamp(2),
+            )
+            .unwrap()
+            .into_iter()
+            .map(|e| current(&e))
+            .collect();
+        let mut offset = 0;
+        let mut result = String::new();
+        for chunk in terminal
+            .iter()
+            .filter(|e| e["type"] == "agent_result_chunk")
+        {
+            assert_eq!(
+                chunk["response_metadata"]["result_chunk_v1"]["offset_bytes"],
+                offset
+            );
+            let value = chunk["content"].as_str().unwrap();
+            assert!(value.len() <= 8192);
+            result.push_str(value);
+            offset += value.len();
+        }
+        assert_eq!(result, text);
+        let full = terminal.last().unwrap();
+        assert_eq!(full["type"], "full_message");
+        assert!(full["content"].is_null());
+        assert_eq!(
+            full["response_metadata"]["result_ref_v1"]["total_bytes"],
+            text.len()
         );
     }
 }

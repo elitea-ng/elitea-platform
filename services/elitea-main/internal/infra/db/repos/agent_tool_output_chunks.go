@@ -20,7 +20,11 @@ type agentToolOutputChunk struct {
 }
 
 func mergeAgentToolOutputChunk(previous, incoming map[string]any) (map[string]any, error) {
-	raw, present := incoming["tool_output_chunk_v1"]
+	return mergeAgentTextChunk(previous, incoming, "tool_output", "tool_output_chunk_v1", maxAgentToolResultBytes, true)
+}
+
+func mergeAgentTextChunk(previous, incoming map[string]any, field, key string, maximum int, requireJSON bool) (map[string]any, error) {
+	raw, present := incoming[key]
 	if !present {
 		return incoming, nil
 	}
@@ -35,13 +39,13 @@ func mergeAgentToolOutputChunk(previous, incoming map[string]any) (map[string]an
 	if decoder.Decode(&chunk) != nil {
 		return nil, invalid
 	}
-	data, ok := incoming["tool_output"].(string)
+	data, ok := incoming[field].(string)
 	digest, err := hex.DecodeString(chunk.Digest)
-	if !ok || !utf8.ValidString(data) || len(data) == 0 || len(data) > 8192 || err != nil || len(digest) != sha256.Size || strings.ToLower(chunk.Digest) != chunk.Digest || chunk.Offset < 0 || chunk.Total <= 0 || chunk.Total > maxAgentToolResultBytes || chunk.Offset > chunk.Total-len(data) || chunk.Final != (chunk.Offset+len(data) == chunk.Total) {
+	if !ok || !utf8.ValidString(data) || strings.ContainsRune(data, '\x00') || len(data) == 0 || len(data) > 8192 || err != nil || len(digest) != sha256.Size || strings.ToLower(chunk.Digest) != chunk.Digest || chunk.Offset < 0 || chunk.Total <= 0 || chunk.Total > maximum || chunk.Offset > chunk.Total-len(data) || chunk.Final != (chunk.Offset+len(data) == chunk.Total) {
 		return nil, invalid
 	}
-	old, _ := previous["tool_output"].(string)
-	if prior, exists := previous["tool_output_chunk_v1"]; exists {
+	old, _ := previous[field].(string)
+	if prior, exists := previous[key]; exists {
 		b, _ := json.Marshal(prior)
 		var metadata agentToolOutputChunk
 		if json.Unmarshal(b, &metadata) != nil || metadata.Total != chunk.Total || metadata.Digest != chunk.Digest {
@@ -62,12 +66,12 @@ func mergeAgentToolOutputChunk(previous, incoming map[string]any) (map[string]an
 	combined := old + data
 	if chunk.Final {
 		actual := sha256.Sum256([]byte(combined))
-		if hex.EncodeToString(actual[:]) != chunk.Digest || !json.Valid([]byte(combined)) {
+		if hex.EncodeToString(actual[:]) != chunk.Digest || (requireJSON && !json.Valid([]byte(combined))) {
 			return nil, invalid
 		}
 	}
 	result := cloneCurrentAgentMap(incoming)
-	result["tool_output"] = combined
+	result[field] = combined
 	if _, exists := result["tool_inputs"]; !exists {
 		result["tool_inputs"] = previous["tool_inputs"]
 	}

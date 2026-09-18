@@ -180,9 +180,12 @@ func TestCurrentAgentThinkingDeltaReplacesRunAndPreservesSeparateRuns(t *testing
 		{"tool_run_id": "thinking-a", "text": "old"},
 		{"tool_run_id": "thinking-b", "text": "other"},
 	}
-	merged := mergeCurrentAgentThinkingSteps(old, []map[string]any{
+	merged, mergeErr := mergeCurrentAgentThinkingSteps(old, []map[string]any{
 		{"tool_run_id": "thinking-a", "text": "new", "thinking": "private"},
 	})
+	if mergeErr != nil {
+		t.Fatal(mergeErr)
+	}
 	if len(merged) != 2 || merged[0]["text"] != "new" || merged[1]["text"] != "other" {
 		t.Fatalf("thinking delta accumulation changed: %#v", merged)
 	}

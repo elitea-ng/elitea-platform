@@ -34,6 +34,21 @@ function frame(type: string, extra: Record<string, unknown> = {}) {
 }
 
 describe('applyChatStreamFrame', () => {
+  it('replaces intermediate output with the complete chunked result and ignores exact replay', () => {
+    const first = { offset_bytes: 0, total_bytes: 7, sha256: 'a'.repeat(64), final: false };
+    let history: readonly ChatMessage[] = [{ ...pendingAssistant(), content: 'Intermediate work.' }];
+    const part = frame(SocketMessageType.AgentResultChunk, { content: '界', response_metadata: { result_chunk_v1: first } });
+    history = applyChatStreamFrame(history, part, CONTEXT);
+    expect(history[0]?.content).toBe('界');
+    history = applyChatStreamFrame(history, part, CONTEXT);
+    expect(history[0]?.content).toBe('界');
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentResultChunk, { content: 'done', response_metadata: {
+      result_chunk_v1: { ...first, offset_bytes: 3, final: true },
+    } }), CONTEXT);
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentResponse, { content: null, response_metadata: { finish_reason: 'stop' } }), CONTEXT);
+    expect(history[0]?.content).toBe('界done');
+    expect(history[0]?.isStreaming).toBe(false);
+  });
   it('renders a real turn from the sequence a live stack emits', () => {
     // Recorded order: agent_start, agent_on_transitional_edge, agent_llm_start,
     // agent_llm_chunk ×4, agent_llm_end, agent_response, pipeline_finish.
@@ -228,7 +243,7 @@ describe('the ported boundary is explicit', () => {
     for (const type of Object.values(SocketMessageType)) {
       const next = applyChatStreamFrame(
         before,
-        frame(type, { content: 'x', references: [], uuid: 'echo-uuid', response_metadata: { tool_run_id: 'run-x', context_status: { version: 1, phase: 'compacting' } } }),
+        frame(type, { content: 'x', references: [], uuid: 'echo-uuid', response_metadata: { result_chunk_v1: { offset_bytes: 0, total_bytes: 1, sha256: 'a'.repeat(64), final: true }, tool_run_id: 'run-x', context_status: { version: 1, phase: 'compacting' } } }),
         CONTEXT,
       );
       if (HANDLED_STREAM_TYPES.has(type)) {
@@ -524,6 +539,27 @@ describe('thinking steps', () => {
   });
 
   describe('the agent_llm_end fan-out', () => {
+    it('assembles separate text and reasoning fragments without completing early or duplicating replay', () => {
+      let history = withAction();
+      const send = (step: Record<string, unknown>) => {
+        history = applyChatStreamFrame(history, frame(SocketMessageType.AgentLlmEnd, {
+          response_metadata: { thinking_steps: [{ tool_run_id: RUN, ...step }] },
+        }), CONTEXT);
+      };
+      const chunk = (offset: number, final: boolean) => ({ offset_bytes: offset, total_bytes: 6, sha256: 'a'.repeat(64), final });
+      send({ text: 'abc', text_chunk_v1: chunk(0, false) });
+      send({ text: 'abc', text_chunk_v1: chunk(0, false) });
+      expect(actionsOf(history)[0]?.content).toBe('abc');
+      expect(actionsOf(history)[0]?.status).toBe('processing');
+      send({ text: 'def', text_chunk_v1: chunk(3, true) });
+      expect(actionsOf(history)[0]?.status).toBe('processing');
+      send({ thinking: 'one', thinking_chunk_v1: chunk(0, false) });
+      send({ thinking: 'two', thinking_chunk_v1: chunk(3, true), timestamp_finish: '2026-09-18T00:00:00Z' });
+      expect(actionsOf(history)[0]?.content).toBe('abcdef');
+      expect(actionsOf(history)[0]?.thinking).toBe('onetwo');
+      expect(actionsOf(history)[0]?.status).toBe('complete');
+    });
+
     it('closes every step in one batch, not just the first', () => {
       // A pipeline with several LLM nodes reports them all in one frame.
       const history: readonly ChatMessage[] = [

@@ -74,3 +74,16 @@ func TestDecodeCurrentAgentTextDeltaRejectsInvalidCorrelationAndContent(t *testi
 		})
 	}
 }
+
+func TestDecodeCurrentAgentResultChunkRequiresDistinctTypeAndNonemptyContent(t *testing.T) {
+	for _, event := range []string{
+		`{"type":"agent_llm_chunk","content":"x","response_metadata":{"result_chunk_v1":{}}}`,
+		`{"type":"agent_result_chunk","content":"x"}`,
+		`{"type":"agent_result_chunk","content":null,"response_metadata":{"result_chunk_v1":{}}}`,
+		`{"type":"agent_result_chunk","content":"","response_metadata":{"result_chunk_v1":{}}}`,
+	} {
+		if _, _, err := decodeCurrentAgentTextDelta([]byte(event)); err == nil {
+			t.Fatal("invalid result event was accepted")
+		}
+	}
+}

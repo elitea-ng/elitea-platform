@@ -39,6 +39,7 @@ func newAgentExecutionResultsRepository(projects projectStore) (*AgentExecutionR
 type currentAgentFullMessage struct {
 	ReplacePipelineProvisional bool
 	Content                    string
+	ResultReference            bool
 	ThreadID                   string
 	References                 json.RawMessage
 	InvokedSkills              json.RawMessage
@@ -326,10 +327,12 @@ func loadCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, projectID int
 
 func decodeCurrentAgentFullMessage(contentJSON, references, responseMetadata json.RawMessage) (currentAgentFullMessage, error) {
 	var content string
-	if json.Unmarshal(contentJSON, &content) != nil {
+	resultReference := string(contentJSON) == "null"
+	if !resultReference && json.Unmarshal(contentJSON, &content) != nil {
 		return currentAgentFullMessage{}, outputapp.ErrAgentExecutionResultMismatch
 	}
 	var metadata struct {
+		ResultRef          json.RawMessage `json:"result_ref_v1"`
 		ThreadID           string          `json:"thread_id"`
 		InvokedSkills      json.RawMessage `json:"invoked_skills"`
 		OutputLimitReached bool            `json:"output_limit_reached"`
@@ -340,7 +343,7 @@ func decodeCurrentAgentFullMessage(contentJSON, references, responseMetadata jso
 			} `json:"version_details"`
 		} `json:"application_details"`
 	}
-	if json.Unmarshal(responseMetadata, &metadata) != nil || metadata.ThreadID == "" ||
+	if json.Unmarshal(responseMetadata, &metadata) != nil || resultReference != (len(metadata.ResultRef) != 0) || metadata.ThreadID == "" ||
 		len(content) > 4*1024*1024 || strings.ContainsRune(content, '\x00') {
 		return currentAgentFullMessage{}, outputapp.ErrAgentExecutionResultMismatch
 	}
@@ -351,6 +354,7 @@ func decodeCurrentAgentFullMessage(contentJSON, references, responseMetadata jso
 	return currentAgentFullMessage{
 		ReplacePipelineProvisional: metadata.ApplicationDetails.AgentType == "pipeline" || metadata.ApplicationDetails.VersionDetails.AgentType == "pipeline",
 		Content:                    content,
+		ResultReference:            resultReference,
 		ThreadID:                   metadata.ThreadID,
 		References:                 cloneJSONOrDefault(references, []byte("[]")),
 		InvokedSkills:              invokedSkills,
@@ -576,6 +580,13 @@ func persistCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, expected o
 	}
 	if terminal.FullMessage != nil && terminal.HITLPause == nil && terminal.AuthorizationPause == nil {
 		message := terminal.FullMessage
+		if message.ResultReference {
+			content, err := resolveCurrentAgentResultContent(ctx, tx, expected, message.ResponseMetadata)
+			if err != nil {
+				return err
+			}
+			message.Content = content
+		}
 		invokedSkills, err := mergeCurrentAgentInvokedSkills([]byte(existingSkills), message.InvokedSkills)
 		if err != nil {
 			return outputapp.ErrAgentExecutionResultMismatch

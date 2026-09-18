@@ -30,6 +30,18 @@ option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elite
 // Only a final chunk marks the tool complete. A failed result uses finish_reason
 // error and bounded error metadata; its complete JSON remains in tool_output.
 // Frame byte limits stay unchanged.
+// Large model text uses the same offset/digest contract with total_bytes <=
+// 4194304. A thinking_steps entry can carry text_chunk_v1 or thinking_chunk_v1
+// beside its text or thinking fragment. Consumers assemble each field separately
+// within the existing thinking-step identity. Absent fields retain prior values.
+// Only the final fragment supplies timestamp_finish.
+// agent_result_chunk carries a content fragment and response_metadata.result_chunk_v1.
+// It replaces provisional root output at offset zero and appends later fragments.
+// A subsequent full_message can use null content and result_ref_v1 metadata:
+// total_bytes and sha256 identify the complete, durably assembled root result.
+// Terminal projection must verify both values before accepting success.
+// These fragments use the existing execution, generation, and message fences.
+// Consumers must deploy before producers emit these versioned members.
 message NodeEventV1 {
   string type = 1;
   optional string stream_id = 2;

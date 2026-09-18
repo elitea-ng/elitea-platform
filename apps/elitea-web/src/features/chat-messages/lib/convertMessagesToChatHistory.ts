@@ -53,6 +53,8 @@ import type { ToolAction } from './chatStreamToolAction';
  * `convertMessagesToChatHistory` adds at the conversation level.
  */
 export interface ChatMessage {
+  readonly resultChunk?: unknown;
+  readonly assembledResult?: string | undefined;
   readonly persistedTrace?: unknown;
   readonly id: string;
   readonly role: string;

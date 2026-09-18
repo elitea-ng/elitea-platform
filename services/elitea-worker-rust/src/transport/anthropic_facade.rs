@@ -48,7 +48,7 @@ use crate::agents::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorC
 use crate::agents::session::{BoundOrdinaryAgentModel, DurableModelCompletion};
 
 const ANTHROPIC_ROUTE: &str = "/llm/v1/messages";
-const MAX_COMPLETION_BYTES: usize = 60 * 1_024;
+const MAX_COMPLETION_BYTES: usize = 4 * 1024 * 1024;
 const MAX_ANTHROPIC_TOOLS: usize = 100;
 const MAX_TOOL_CALLS_PER_TURN: usize = 16;
 const MAX_TOOL_ARGUMENT_BYTES: usize = 256 * 1_024;

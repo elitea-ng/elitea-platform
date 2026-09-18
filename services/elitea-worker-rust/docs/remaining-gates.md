@@ -133,6 +133,8 @@ The [compatible-provider correction](source-mapping/context-summary-compatibilit
 accepts one validated summary object inside presentation text and aligns input fetching with Main's existing 1 MiB contract.
 The same audit identifies a separate final-output frame limit and an unresolved regeneration measurement difference.
 Do not interpret either failure as proof that the model context is full.
+The [large-output correction](source-mapping/model-output-delivery-20260918.md) separates completed model answers from individual event limits.
+Its focused checks and deployed browser acceptance pass with one 75,629-byte answer, 450 ordered records, and stable reload.
 The pipeline container has no separate compaction control.
 Model conversations inherit a caller policy when available; otherwise saved children use explicit settings or Balanced defaults.
 Plain LLM nodes also compact their accumulated history, as confirmed on 2026-09-16.

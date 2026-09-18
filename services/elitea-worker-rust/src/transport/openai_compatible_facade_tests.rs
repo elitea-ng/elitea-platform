@@ -844,13 +844,16 @@ async fn sse_protocol_resource_and_tool_shapes_fail_closed() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn sse_completion_event_count_and_stream_size_are_bounded() {
-    let large = "x".repeat(60 * 1_024 + 1);
-    let raw = format!(
-        "data: {{\"choices\":[{{\"delta\":{{\"content\":{}}},\"finish_reason\":\"stop\"}}]}}\n\ndata: [DONE]\n\n",
+    let large = "x".repeat(64 * 1_024);
+    let fragment = format!(
+        "data: {{\"choices\":[{{\"delta\":{{\"content\":{}}},\"finish_reason\":null}}]}}\n\n",
         serde_json::to_string(&large).expect("large text JSON")
     );
+    let raw = fragment.repeat(65);
     let mut config = test_model_gateway_config();
     config.max_sse_event_bytes = 128 * 1_024;
+    config.max_stream_bytes = 8 * 1024 * 1024;
+    config.max_sse_events = 128;
     let (client, _) = test_model_gateway_client(
         vec![TestModelGatewayOutcome::Response(
             test_model_gateway_response(Body::new(Full::new(Bytes::from(raw)))),

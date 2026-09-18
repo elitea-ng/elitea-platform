@@ -566,7 +566,11 @@ func mergeCurrentAgentTraceRows(
 		}
 	}
 	toolCalls = dedupeCurrentAgentToolCalls(toolCalls)
-	thinkingSteps = mergeCurrentAgentThinkingSteps(thinkingSteps, delta.thinkingSteps)
+	var err error
+	thinkingSteps, err = mergeCurrentAgentThinkingSteps(thinkingSteps, delta.thinkingSteps)
+	if err != nil {
+		return nil, err
+	}
 
 	desired := make([]currentAgentTraceRow, 0, len(toolCalls)+len(thinkingSteps))
 	for _, toolCall := range toolCalls {
@@ -644,6 +648,11 @@ func reconstructCurrentAgentTrace(
 					entry[key] = value
 				}
 			}
+			for _, key := range []string{"text_chunk_v1", "thinking_chunk_v1"} {
+				if value, ok := row.attrs[key]; ok {
+					entry[key] = value
+				}
+			}
 			thinkingSteps = append(thinkingSteps, entry)
 		}
 	}
@@ -715,6 +724,11 @@ func currentAgentThinkingStepToRow(
 		displayMetadata["metadata"] = hierarchy
 	}
 	attrs := cloneCurrentAgentMap(hierarchy)
+	for _, key := range []string{"text_chunk_v1", "thinking_chunk_v1"} {
+		if value, ok := entry[key]; ok {
+			attrs[key] = value
+		}
+	}
 	if len(displayMetadata) != 0 {
 		attrs["response_metadata"] = displayMetadata
 	}
@@ -755,7 +769,7 @@ func currentAgentThinkingStepToRow(
 func mergeCurrentAgentThinkingSteps(
 	oldSteps,
 	newSteps []map[string]any,
-) []map[string]any {
+) ([]map[string]any, error) {
 	merged := append([]map[string]any(nil), oldSteps...)
 	positions := make(map[string]int, len(merged))
 	for index, step := range merged {
@@ -767,15 +781,23 @@ func mergeCurrentAgentThinkingSteps(
 		step := sanitizeCurrentAgentJSON(rawStep).(map[string]any)
 		identity := currentAgentThinkingIdentity(step)
 		if index, ok := positions[identity]; ok && identity != "" {
-			merged[index] = step
+			next, err := mergeAgentModelStep(merged[index], step)
+			if err != nil {
+				return nil, err
+			}
+			merged[index] = next
 			continue
 		}
 		if identity != "" {
 			positions[identity] = len(merged)
 		}
-		merged = append(merged, step)
+		next, err := mergeAgentModelStep(nil, step)
+		if err != nil {
+			return nil, err
+		}
+		merged = append(merged, next)
 	}
-	return merged
+	return merged, nil
 }
 
 func currentAgentThinkingIdentity(step map[string]any) string {

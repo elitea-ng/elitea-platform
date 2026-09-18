@@ -8,6 +8,7 @@
  * budget — that is the honest reason, and the only one; the code is the
  * original switch arms and their comments, moved unchanged.
  */
+import { appendToolOutputChunk } from './toolOutputChunks';
 import { convertJsonToString } from '@/shared/lib/json';
 import { TOOL_ACTION_TYPES, ToolActionStatus } from '@/shared/lib/chat';
 
@@ -30,6 +31,21 @@ import { SocketMessageType, type ChatStreamFrame, type ThinkingStep } from './ch
  * tell "nothing to update" from "updated to nothing".
  */
 export function applyThinkingStep(action: ToolAction, step: ThinkingStep): ToolAction {
+  let assembled = step;
+  let outputState = { ...action.toolMeta };
+  for (const field of ['text', 'thinking'] as const) {
+    const key = `${field}_chunk_v1`;
+    if (!step[key]) continue;
+    const prior = outputState[key];
+    const merged = appendToolOutputChunk(prior ? outputState[`${field}_assembled`] : '', step[field], step[key], prior, 4194304);
+    if (!merged) return action;
+    outputState = { ...outputState, [key]: merged.chunk, [`${field}_assembled`]: merged.output };
+    assembled = { ...assembled, [field]: merged.output };
+  }
+  if (step['text_chunk_v1'] || step['thinking_chunk_v1']) {
+    assembled = { ...assembled, text: outputState['text_assembled'] ?? action.content ?? '', thinking: outputState['thinking_assembled'] as string | undefined };
+  }
+  step = assembled;
   const hierarchy = normalizeExecutionHierarchy(step, step.metadata, step.message?.response_metadata?.metadata, action, action.toolMeta);
   // The backend normalises `text` for every provider. The "with inputs {...}"
   // tail is a verbose restatement of arguments the UI already shows, and the
@@ -37,7 +53,7 @@ export function applyThinkingStep(action: ToolAction, step: ThinkingStep): ToolA
   const text = convertJsonToString(step.text ?? '', true).replace(/\s+with inputs\s+\{[^}]*\}/g, '');
   const stepModelName = step.message?.response_metadata?.model_name;
   const correctToolName = step.message?.response_metadata?.tool_name;
-  const existingMeta = action.toolMeta ?? {};
+  const existingMeta = outputState;
   const modelName = existingMeta['ls_model_name'];
 
   const toolMeta: Record<string, unknown> = { ...existingMeta, ...hierarchy };

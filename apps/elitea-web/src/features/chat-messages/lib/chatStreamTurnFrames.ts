@@ -9,6 +9,7 @@
  * and §3.5 caps a file at 400 with no warning tier — that is the whole reason;
  * the cases and their comments are the originals, moved unchanged.
  */
+import { appendToolOutputChunk } from './toolOutputChunks';
 import { convertJsonToString } from '@/shared/lib/json';
 import { ToolActionStatus } from '@/shared/lib/chat';
 
@@ -49,6 +50,7 @@ const ANSWER_LIFECYCLE_FRAMES = new Set<string>([
   SocketMessageType.AgentLlmChunk,
   SocketMessageType.Chunk,
   SocketMessageType.AIMessageChunk,
+  SocketMessageType.AgentResultChunk,
   SocketMessageType.AgentResponse,
   SocketMessageType.PipelineFinish,
 ]);
@@ -74,6 +76,18 @@ export function reduceTurnFrame(
   // A child's finish reason must not settle a parent that still waits for siblings.
   if (childOutput && ANSWER_LIFECYCLE_FRAMES.has(type)) return history;
   switch (type) {
+    case SocketMessageType.AgentResultChunk: {
+      if (index === -1) return history;
+      const current = history[index];
+      if (!current) return history;
+      const result = appendToolOutputChunk(current.assembledResult, frame.content,
+        frame.response_metadata?.['result_chunk_v1'], current.resultChunk, 4194304);
+      if (!result) return history;
+      const split = splitWholeResponse(current.id, result.output, (current.toolActions ?? []) as readonly ToolAction[], frame.created_at);
+      return replaceAt(history, index, { content: split.answer, assembledResult: result.output, resultChunk: result.chunk,
+        toolActions: split.actions, isLoading: false, isStreaming: true });
+    }
+
     // The turn begins. The baseline resets content here unless it is resuming a
     // continuation, so a regenerate does not append to the previous answer.
     case SocketMessageType.StartTask:
@@ -84,6 +98,7 @@ export function reduceTurnFrame(
       const continuingOutput = frame.response_metadata?.should_continue === true;
       return replaceAt(history, index, {
         content: continuingOutput ? current.content : '',
+        resultChunk: undefined, assembledResult: undefined,
         // An interrupted reasoning scanner belongs to the replaced answer.
         // Keep tool history, but do not route recovered text into its open sink.
         ...(!continuingOutput && current.toolActions ? {
@@ -202,18 +217,19 @@ export function reduceTurnFrame(
         const target = next.find((action) => action.id === stepRunId);
         if (!target) continue;
         const updated = applyThinkingStep(target, step);
-        if (isEmptyTransition(updated)) {
+        if (isEmptyTransition(updated) && !step['text_chunk_v1'] && !step['thinking_chunk_v1']) {
           removed.add(stepRunId);
           continue;
         }
         next = next.map((action) =>
-          action.id === stepRunId ? ({ ...updated, status: ToolActionStatus.complete } as ToolAction) : action,
+          action.id === stepRunId ? ({ ...updated, status: (step['text_chunk_v1'] || step['thinking_chunk_v1']) && !step.timestamp_finish ? ToolActionStatus.processing : ToolActionStatus.complete } as ToolAction) : action,
         );
       }
 
       // The frame's own tool_run_id closes too, unless something already
       // settled it or it is waiting on the user.
-      const primaryId = frame.response_metadata?.tool_run_id;
+      const pendingChunk = steps.some((step) => (step["text_chunk_v1"] || step["thinking_chunk_v1"]) && !step.timestamp_finish);
+      const primaryId = pendingChunk ? undefined : frame.response_metadata?.tool_run_id;
       if (primaryId) {
         next = next.map((action) =>
           action.id === primaryId &&
