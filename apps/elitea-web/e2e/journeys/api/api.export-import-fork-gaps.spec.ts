@@ -22,24 +22,20 @@ function autotestName(stem: string): string {
 }
 
 /*
- * onetest: ELITEA-0673 — product gap: the fork route does NOT reject an
- * entity of an unrecognised type the way its sibling import route does.
+ * onetest: ELITEA-0673 — the fork route now rejects an entity of an
+ * unrecognised type the way its sibling import route does.
  *
  * `api.import-wizard.spec.ts`'s IMP-05 proves `POST /import_wizard/…` answers
  * 400 outright for a bundle whose only entity names a type the handler
  * cannot place (`{ entity: 'quantum_entity', ... }`) — "nothing at all was
- * imported, so there is no partial success to report". The FORK route does
- * NOT share that refusal: the identical payload here answers 201 and creates
- * a bare agent shell (`version_details: null, versions: []`) instead —
- * broken, but not refused. This is written as the case says fork SHOULD
- * behave (parity with import's 400), then `test.fail`ed against that gap.
+ * imported, so there is no partial success to report". `Fork` (handler.go)
+ * takes the identical unrecognised-type shape down its agent branch (there is
+ * no `entity`-type switch on this route at all — the same shape a version-less
+ * entry takes), and used to create a bare `version_details: null, versions: []`
+ * shell anyway; it now treats "no version content at all" as a refusal,
+ * rolls back the orphaned `applications` row, and answers 400 like `import_wizard`.
  */
 test('the fork route answers 400 on a payload naming an entity type nothing can import', async ({ request }) => {
-  test.fail(
-    true,
-    "ELITEA-0673 (#916): product gap — /fork accepts an entity of an unrecognised type and creates a broken " +
-      "empty-versions agent shell (201) instead of refusing it the way /import_wizard's IMP-05 does (400)",
-  );
   const destinationProjectId = await resolvePublishAuthorProjectId(request);
   const name = autotestName('fork-400');
   let createdId: string | undefined;

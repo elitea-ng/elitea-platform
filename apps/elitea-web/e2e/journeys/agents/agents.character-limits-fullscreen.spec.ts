@@ -118,26 +118,20 @@ test('J14c-fs: clicking + Starter adds a real row, and both it and the welcome m
 /*
  * ELITEA-0059, ELITEA-0062, ELITEA-0064 (their FULL-SCREEN halves; the
  * collapsed-mode halves of all three are already asserted by
- * `agents.editor.spec.ts`) — [PRODUCT GAP].
+ * `agents.editor.spec.ts`).
  *
- * Written as the use case SHOULD behave: opening the Welcome Message field
- * full-screen should carry the same 768-character limit and the same
- * counter the collapsed field has. It does not — `StyledInputEnhancer`'s
- * modal `InputBase` carries neither `maxLength` nor a `CharacterCounter`
- * (see this file's own module doc comment for the exact lines), so typing
- * past 768 characters in the full-screen editor is silently accepted with
- * no counter and no warning at all.
+ * `StyledInputEnhancer`'s modal `InputBase` now carries whatever
+ * `slotProps.htmlInput` the caller passed the collapsed field (so `maxLength`
+ * survives into full screen, with `aria-label` still overridden last), and a
+ * `CharacterCounter` renders beneath it whenever a `maxLength` is present —
+ * unconditionally visible there, since full screen has no adjacent "focused"
+ * cue for the collapsed field's own hover/focus-gated counter to hide behind.
  */
 /* onetest: ELITEA-0059, ELITEA-0062, ELITEA-0064 — the full-screen Welcome Message editor enforces the 768-char limit and shows a counter */
-/* elitea_issues: #5104 — same product gap, filed separately: paste past the limit in full-screen mode is silently accepted with no counter */
-test('J14c-fs: [PRODUCT GAP] the full-screen Welcome Message editor enforces the 768-char limit and shows a counter', async ({
+test('J14c-fs: the full-screen Welcome Message editor enforces the 768-char limit and shows a counter', async ({
   page,
   request,
 }) => {
-  test.fail(
-    true,
-    'ELITEA-0059 (#895)/0062/0064: product gap — StyledInputEnhancer’s full-screen modal InputBase carries no maxLength and no CharacterCounter, so the 768-char contract and its counter/warning are dropped in full-screen mode',
-  );
   const name = uniqueName('fs-gap');
   const agent = await createAgent(request, name);
   try {

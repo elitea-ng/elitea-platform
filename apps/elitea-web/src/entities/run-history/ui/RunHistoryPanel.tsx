@@ -19,7 +19,7 @@
  * faithfully — a caller wiring a real restore path later needs no change
  * here.
  */
-import { useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
 import CircularProgress from '@mui/material/CircularProgress';
@@ -45,6 +45,8 @@ export interface RunHistoryPanelProps {
   readonly entityId: string | number | undefined;
   readonly onClose: () => void;
   readonly onRestoreConversation?: (conversationId: string) => void;
+  /** #955 — this entity's own versions, for naming which one produced each run. Optional; see `RunHistoryList`'s own doc comment. */
+  readonly versions?: readonly { readonly id: string | number; readonly name: string }[] | undefined;
 }
 
 const rootSx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', gap: '0.75rem', height: '100%', width: '100%' };
@@ -61,6 +63,7 @@ interface RunHistoryPanelBodyProps {
   readonly onSelect: (row: ConversationSummary) => void;
   readonly projectId: string | undefined;
   readonly onRestoreConversation?: ((conversationId: string) => void) | undefined;
+  readonly versionNameById?: ReadonlyMap<string, string> | undefined;
 }
 
 /** The list-or-trace body — split out of `RunHistoryPanel` purely to keep that function's cyclomatic complexity under this codebase's gate (12). */
@@ -71,6 +74,7 @@ function RunHistoryPanelBody({
   onSelect,
   projectId,
   onRestoreConversation,
+  versionNameById,
 }: RunHistoryPanelBodyProps): ReactNode {
   if (isLoading) {
     return (
@@ -100,6 +104,7 @@ function RunHistoryPanelBody({
           selectedId={selected?.id}
           onSelect={onSelect}
           {...(onRestoreConversation !== undefined ? { onRestoreConversation } : {})}
+          {...(versionNameById !== undefined ? { versionNameById } : {})}
         />
       </Box>
       <Box sx={tracePaneSx}>
@@ -121,8 +126,14 @@ export function RunHistoryPanel({
   entityId,
   onClose,
   onRestoreConversation,
+  versions,
 }: RunHistoryPanelProps): ReactNode {
   const [selected, setSelected] = useState<ConversationSummary | undefined>(undefined);
+  // #955 — id -> name, built once per `versions` identity rather than per row.
+  const versionNameById = useMemo(() => {
+    if (versions === undefined) return undefined;
+    return new Map(versions.map((version) => [String(version.id), version.name]));
+  }, [versions]);
 
   const enabled = projectId !== undefined && entityId !== undefined;
   const listQuery = useListConversations(
@@ -157,6 +168,7 @@ export function RunHistoryPanel({
         onSelect={setSelected}
         projectId={projectId}
         {...(onRestoreConversation !== undefined ? { onRestoreConversation } : {})}
+        {...(versionNameById !== undefined ? { versionNameById } : {})}
       />
     </Box>
   );

@@ -88,9 +88,47 @@ function StepList({
   );
 }
 
+/** JSON-stringifies `tool_inputs` for display; a non-object value (already a string, say) is shown as-is. */
+function formatToolInputs(toolInputs: unknown): string {
+  if (typeof toolInputs === 'string') return toolInputs;
+  try {
+    return JSON.stringify(toolInputs, null, 2);
+  } catch {
+    return String(toolInputs);
+  }
+}
+
 function StepDetail({ detail }: { readonly detail: MessageTraceStepDetail }): ReactNode {
+  const hasToolInputs = detail.tool_inputs !== null && detail.tool_inputs !== undefined;
+  const hasThinking = detail.thinking !== null && detail.thinking !== undefined && detail.thinking !== '';
   return (
     <Box sx={detailBoxSx} data-testid="run-history-trace-detail">
+      {/*
+       * #938 (ELITEA-2802/2803/2805) — `tool_inputs`/`thinking` are fetched by
+       * the same `useGetMessageTrace` call `text`/`tool_output` already use;
+       * they were simply never read here. Rendered ahead of the OUTPUT, the
+       * order a "called with these parameters, thought this, produced this"
+       * trace reads naturally in.
+       */}
+      {hasThinking && (
+        <Typography
+          variant="bodySmall"
+          data-testid="run-history-trace-thinking"
+          sx={{ whiteSpace: 'pre-wrap', fontStyle: 'italic' }}
+        >
+          {detail.thinking}
+        </Typography>
+      )}
+      {hasToolInputs && (
+        <Typography
+          variant="bodySmall"
+          component="pre"
+          data-testid="run-history-trace-tool-inputs"
+          sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}
+        >
+          {formatToolInputs(detail.tool_inputs)}
+        </Typography>
+      )}
       {detail.text !== null && detail.text !== undefined && detail.text !== '' && (
         <Typography variant="bodySmall" sx={{ whiteSpace: 'pre-wrap' }}>
           {detail.text}

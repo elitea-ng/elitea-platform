@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -1767,6 +1768,73 @@ func (h *Handler) Unpublish(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "deleted"})
 }
 
+// placeholderTextMarkers are substrings (checked case-insensitively) that mark
+// a field as unfinished draft text rather than real content — #910/#911/#912.
+var placeholderTextMarkers = []string{
+	"todo", "tbd", "lorem ipsum", "placeholder", "xxx", "fixme",
+	"fill me in", "fill this in", "describe your agent", "n/a",
+}
+
+// isPlaceholderText reports whether value looks like draft/placeholder text
+// rather than real authored content.
+func isPlaceholderText(value string) bool {
+	v := strings.ToLower(strings.TrimSpace(value))
+	if v == "" {
+		return false
+	}
+	for _, marker := range placeholderTextMarkers {
+		if strings.Contains(v, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// genericSubAgentNames blocklists sub-agent names that carry no discovery
+// value on their own — #910.
+var genericSubAgentNames = map[string]bool{
+	"agent": true, "assistant": true, "bot": true, "chatbot": true,
+	"untitled": true, "new agent": true, "test agent": true, "my agent": true,
+}
+
+// secretValuePrefixes are literal prefixes (checked case-sensitively, since
+// provider key formats are case-sensitive) that reliably identify a value as
+// an API key or credential rather than ordinary configuration — #909.
+var secretValuePrefixes = []string{
+	"sk-", "sk_live_", "sk_test_", "pk_live_", "pk_test_", "rk_live_",
+	"AKIA", "ASIA", "ghp_", "gho_", "ghu_", "ghs_", "ghr_", "glpat-",
+	"xoxb-", "xoxp-", "xoxa-", "xoxr-", "ya29.", "AIza", "Bearer ",
+	"-----BEGIN",
+}
+
+// secretVariableNamePattern flags variable NAMES that suggest their value is
+// a credential, so a shorter/less-distinctive secret value under such a name
+// is still caught — #909.
+var secretVariableNamePattern = regexp.MustCompile(`(?i)(api[_-]?key|secret|password|passwd|token|credential)`)
+
+// looksLikeSecret reports whether an application variable's name/value pair
+// looks like it stores a secret or API key that should not be published in
+// plain text — #909.
+func looksLikeSecret(name, value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return false
+	}
+	for _, prefix := range secretValuePrefixes {
+		if strings.HasPrefix(trimmed, prefix) {
+			return true
+		}
+	}
+	if secretVariableNamePattern.MatchString(name) && len(trimmed) >= 8 {
+		return true
+	}
+	return false
+}
+
+// semverPattern matches a plain semantic-version-shaped string (an optional
+// leading "v", MAJOR.MINOR.PATCH) — #914.
+var semverPattern = regexp.MustCompile(`^v?\d+\.\d+\.\d+$`)
+
 // runPublishValidation performs the pre-publish check for one version.
 //
 // projectID and callerID are threaded in for the AI step alone
@@ -1803,8 +1871,47 @@ func (h *Handler) runPublishValidation(
 
 	// Check for generic version names
 	genericNames := map[string]bool{"v1": true, "v2": true, "v3": true, "latest": true, "new": true, "test": true}
-	if genericNames[strings.ToLower(versionName)] {
+	isGenericVersionName := genericNames[strings.ToLower(versionName)]
+	if isGenericVersionName {
 		warnings = append(warnings, map[string]any{"field": "version_name", "issue": fmt.Sprintf("'%s' is a generic version name — consider something more descriptive", versionName), "source": "deterministic"})
+	}
+
+	// Suggest semantic versioning for a valid, non-generic name that is not
+	// already semver-shaped — #914 (the one row ELITEA-0174 documents that had
+	// no implementation; format and uniqueness are enforced elsewhere).
+	if !isGenericVersionName && !nameExists && !semverPattern.MatchString(versionName) {
+		recommendations = append(recommendations, map[string]any{
+			"field":      "version_name",
+			"suggestion": fmt.Sprintf("consider a semantic version like 1.0.0 instead of '%s'", versionName),
+			"source":     "deterministic",
+		})
+	}
+
+	// Main agent's own Name and Description — #911. `runPublishValidation`
+	// otherwise only ever reads the VERSION row; the application row itself
+	// (name, description) was never checked at all.
+	var appName, appDescription string
+	_ = h.pool.QueryRow(ctx, fmt.Sprintf(
+		`SELECT COALESCE(name, ''), COALESCE(description, '') FROM %s.applications WHERE id = $1`, s), appID).
+		Scan(&appName, &appDescription) // failure leaves both empty, safe
+
+	// No upper-length warning here: names built from AUTOTEST_PREFIX (an
+	// operational fixture concern, not a product one) routinely run past any
+	// reasonable ceiling, and an upper bound is not what ELITEA-0169 tests for.
+	trimmedAppName := strings.TrimSpace(appName)
+	switch {
+	case isPlaceholderText(trimmedAppName):
+		criticalIssues = append(criticalIssues, map[string]any{"field": "name", "issue": "agent name looks like placeholder text and should be replaced with a descriptive name", "source": "deterministic"})
+	case len(trimmedAppName) < 3:
+		criticalIssues = append(criticalIssues, map[string]any{"field": "name", "issue": "agent name is too short (must be at least 3 characters)", "source": "deterministic"})
+	}
+
+	trimmedAppDescription := strings.TrimSpace(appDescription)
+	switch {
+	case isPlaceholderText(trimmedAppDescription):
+		criticalIssues = append(criticalIssues, map[string]any{"field": "description", "issue": "agent description looks like placeholder text and should be replaced with a real description", "source": "deterministic"})
+	case len(trimmedAppDescription) < 20:
+		warnings = append(warnings, map[string]any{"field": "description", "issue": "agent description is too short for meaningful discovery", "source": "deterministic"})
 	}
 
 	// Collect sub-agent references
@@ -1932,9 +2039,40 @@ func (h *Handler) runPublishValidation(
 		warnings = append(warnings, map[string]any{"field": "conversation_starters", "issue": "no conversation starters — users won't know how to begin", "source": "deterministic"})
 	}
 
-	// Tag discoverability recommendation
+	// Tag discoverability recommendation.
+	//
+	// #913 asks for zero tags to raise a Critical instead of this
+	// Recommendation. DEFERRED (see ledger): `createQualityAgent`/
+	// `createPublishableAgent`-shaped fixtures across api.publish-validation.spec.ts
+	// and api.publish-subagents.spec.ts set no tags at all and assert an exact
+	// `{critical: 0, warnings: 0}` PASS (and a 3-tier sub-agent chain's exact
+	// `{critical: 1, warnings: 0, suggestions: 0}` short-circuit) — a blanket
+	// zero-tags Critical breaks those today. Promoting it needs those fixtures
+	// updated too, which is a product/test-contract decision, not a same-PR fix.
 	if tagCount < 3 {
 		recommendations = append(recommendations, map[string]any{"field": "tags", "suggestion": "add more tags to improve discoverability in the marketplace", "source": "deterministic"})
+	}
+
+	// Secrets/API keys stored in application variables — #909.
+	// `runPublishValidation` never read this table at all before.
+	rows, varErr := h.pool.Query(ctx, fmt.Sprintf(
+		`SELECT name, COALESCE(value, '') FROM %s.application_variables WHERE application_version_id = $1`, s), versionID)
+	if varErr == nil {
+		for rows.Next() {
+			var varName, varValue string
+			if scanErr := rows.Scan(&varName, &varValue); scanErr != nil {
+				continue
+			}
+			if looksLikeSecret(varName, varValue) {
+				criticalIssues = append(criticalIssues, map[string]any{
+					"field":   "application_variables",
+					"issue":   fmt.Sprintf("variable '%s' appears to contain a secret or API key and should not be stored in application variables", varName),
+					"source":  "deterministic",
+					"context": fmt.Sprintf("variable: %s", varName),
+				})
+			}
+		}
+		rows.Close()
 	}
 
 	// Sub-agent validation (no cycle): check duplicates, skip pipelines, recurse
@@ -1985,7 +2123,21 @@ func (h *Handler) runPublishValidation(
 						"context": saContext,
 					})
 				}
-				if len(strings.TrimSpace(saDesc)) < 20 {
+
+				// Sub-agent Description — #912: a placeholder-text description is a
+				// Critical, worded "Sub-agent '[name]': ..." per the documented case;
+				// otherwise the existing <30-char Warning applies (raised from the
+				// prior undocumented 20-char threshold).
+				trimmedSaDesc := strings.TrimSpace(saDesc)
+				switch {
+				case isPlaceholderText(trimmedSaDesc):
+					criticalIssues = append(criticalIssues, map[string]any{
+						"field":   "description",
+						"issue":   fmt.Sprintf("Sub-agent '%s': Description contains placeholder text and must be replaced with a real description", saAppName),
+						"source":  "deterministic",
+						"context": saContext,
+					})
+				case len(trimmedSaDesc) < 30:
 					warnings = append(warnings, map[string]any{
 						"field":   "description",
 						"issue":   "sub-agent description is too short for meaningful discovery",
@@ -1993,6 +2145,42 @@ func (h *Handler) runPublishValidation(
 						"context": saContext,
 					})
 				}
+
+				// Sub-agent Name — #910: length floor, generic blocklist and
+				// placeholder text, beyond the existing duplicate-name uniqueness
+				// check above. No upper-length ceiling: AUTOTEST_PREFIX-based
+				// fixture names routinely run long for operational reasons that
+				// have nothing to do with this rule.
+				trimmedSaName := strings.TrimSpace(saAppName)
+				switch {
+				case isPlaceholderText(trimmedSaName):
+					warnings = append(warnings, map[string]any{"field": "name", "issue": "sub-agent name looks like placeholder text and should be replaced", "source": "deterministic", "context": saContext})
+				case len(trimmedSaName) < 3:
+					warnings = append(warnings, map[string]any{"field": "name", "issue": "sub-agent name is too short (must be at least 3 characters)", "source": "deterministic", "context": saContext})
+				case genericSubAgentNames[strings.ToLower(trimmedSaName)]:
+					warnings = append(warnings, map[string]any{"field": "name", "issue": fmt.Sprintf("'%s' is a generic sub-agent name — consider something more descriptive", trimmedSaName), "source": "deterministic", "context": saContext})
+				}
+
+				// Sub-agent's own model — #936: the identical private-model rule the
+				// MAIN agent already gets, applied to a sub-agent's llm_settings (the
+				// recursive walk previously never read this column at all).
+				var saLlmStr *string
+				_ = h.pool.QueryRow(ctx, fmt.Sprintf(`SELECT llm_settings::text FROM %s.application_versions WHERE id = $1`, s), ref.VersionID).Scan(&saLlmStr)
+				if saLlmStr != nil {
+					var saLlm map[string]any
+					_ = json.Unmarshal([]byte(*saLlmStr), &saLlm) // DB jsonb column; malformed means empty map
+					if mpid, ok := saLlm["model_project_id"]; ok && mpid != nil {
+						if fmt.Sprintf("%v", mpid) != publicproject.IDString() {
+							criticalIssues = append(criticalIssues, map[string]any{
+								"field":   "llm_settings",
+								"issue":   "model is not shared and cannot be used in published agents",
+								"source":  "deterministic",
+								"context": saContext,
+							})
+						}
+					}
+				}
+
 				validateSubAgents(ref.VersionID, depth+1)
 			}
 		}
@@ -4016,6 +4204,31 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 				"tags":                  respTags,
 				"tools":                 []any{},
 			}
+		}
+
+		// #916 — an entry that named no version content AT ALL (an absent or
+		// empty `versions` array — the shape an unrecognised `entity` value
+		// takes, since nothing above ever refuses the TYPE itself) used to fall
+		// through to a "successful" fork anyway: the just-inserted `applications`
+		// row survived with `version_details: null, versions: []`, a broken
+		// shell no version ever populated. `/import_wizard` refuses the
+		// identical shape outright (IMP-05) for "carrying nothing an agent can
+		// be made of"; this is that same refusal, and the orphaned row is
+		// rolled back rather than left behind for a 201/207 caller to clean up.
+		//
+		// Deliberately keyed on the SOURCE `versions` array being empty, not on
+		// `createdVersions` — a `versions` array that named real content whose
+		// insert failed already reports its OWN per-version error above, and
+		// must not also get this second, generic one (`TestForkReportsAFailedVersionInsert`).
+		if len(versions) == 0 {
+			if _, delErr := h.pool.Exec(ctx, fmt.Sprintf(`DELETE FROM %s.applications WHERE id = $1`, s), appID); delErr != nil {
+				slog.ErrorContext(ctx, "fork: rollback of a versionless application failed", "schema", s, "app_id", appID, "error", delErr)
+			}
+			errorAgents = append(errorAgents, map[string]any{
+				"index": entityIdx, "name": name,
+				"msg": "Fork function has been failed: entity carries no version content to fork",
+			})
+			continue
 		}
 
 		agentResult := map[string]any{

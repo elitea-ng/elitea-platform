@@ -74,7 +74,10 @@ test('the Run History panel is titled "Run history" and its close control closes
   }
 });
 
-/* onetest: ELITEA-0105 — product gap: the panel is claimed to show a 3-column table (Date, Version, Duration) per run; it shows neither a table nor a version name at all — only `date · duration · N messages`. */
+/* onetest: ELITEA-0105 — a Run History row names the version that produced it: `AddParticipant`
+   (internal/infra/db/repos/conversations.go) now stamps `entity_settings` (which carries `version_id`) onto
+   `meta.single_participant`, and `RunHistoryList`/`RunHistoryPanel` resolve that id against the entity's own
+   version list (threaded down from `EditApplication.tsx`) into the row's secondary text. */
 test('a Run History row names the version that produced it', async ({ page, request }) => {
   const agentName = uniqueName('runhist-version-agent');
   const agent = await createAgent(page.request, agentName);
@@ -90,12 +93,6 @@ test('a Run History row names the version that produced it', async ({ page, requ
     const panel = page.getByTestId('run-history-panel');
     const row = panel.getByTestId('run-history-row');
     await expect(row).toHaveCount(1, { timeout: 20_000 });
-
-    test.fail(
-      true,
-      'ELITEA-0105 (#955): product gap — RunHistoryList.secondaryOf (src/entities/run-history/ui/RunHistoryList.tsx) ' +
-        'renders `date · duration · N messages` only; no version name is read or shown anywhere on the row',
-    );
 
     // The version this agent's sole version is named — `base`, from
     // `createAgent`'s own fixture body.

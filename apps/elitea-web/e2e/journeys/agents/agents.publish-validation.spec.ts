@@ -225,11 +225,10 @@ test.describe('publish validation: code-based rules', () => {
     }
   });
 
-  /* onetest: ELITEA-0167 — product gap: no deterministic check ever inspects variable VALUES for secret/API-key
-     patterns. `runPublishValidation` reads instructions, welcome_message, conversation_starters, tag/tool counts
-     and llm_settings — it never reads `application_variables` at all. */
+  /* onetest: ELITEA-0167 — `runPublishValidation` now reads `application_variables` and flags a value that
+     matches a common secret/API-key shape (or a name like `api_key`/`secret`/`token` paired with a
+     non-trivial value) as a Critical. */
   test('a variable value that looks like a secret is flagged as Critical', async ({ request }) => {
-    test.fail(true, 'ELITEA-0167 (#909): product gap — publish validation never inspects variable values for secrets/API keys');
     const name = uniqueName('secretvar');
     const agent = await createAgentWithVersion(request, name, {
       instructions: PASSABLE_INSTRUCTIONS,
@@ -247,15 +246,10 @@ test.describe('publish validation: code-based rules', () => {
     }
   });
 
-  /* onetest: ELITEA-0168 — product gap: only sub-agent name UNIQUENESS is enforced (a real, working rule this
-     test does not need to prove wrong). Length (<3/>32 chars) and the generic-names blocklist are never checked
-     — there is no code path in `runPublishValidation` that reads a sub-agent's NAME at all beyond the
-     duplicate-count map. */
+  /* onetest: ELITEA-0168 — beyond the existing duplicate-name uniqueness check, `runPublishValidation` now also
+     flags a sub-agent name under 3 characters, a generic-names blocklist entry, and placeholder text, each as a
+     Warning attributed to the sub-agent. */
   test('a 2-character sub-agent name is flagged as a length Warning', async ({ request }) => {
-    test.fail(
-      true,
-      'ELITEA-0168 (#910): product gap — sub-agent name length and generic-blocklist rules do not exist (only duplicate-name uniqueness is enforced)',
-    );
     const parentName = uniqueName('shortnameparent');
     const parent = await createAgentWithVersion(request, parentName, { instructions: PASSABLE_INSTRUCTIONS });
     const child = await createAgentWithVersion(request, 'AB', { instructions: PASSABLE_INSTRUCTIONS });
@@ -273,15 +267,11 @@ test.describe('publish validation: code-based rules', () => {
     }
   });
 
-  /* onetest: ELITEA-0169, ELITEA-0170 — product gap: the main agent's own Name and Description fields are never
-     validated at all. `runPublishValidation` reads `instructions`, `welcome_message`, `conversation_starters`,
-     tag/tool counts and `llm_settings` off the version row — it never SELECTs `applications.name` or
-     `applications.description`. */
+  /* onetest: ELITEA-0169, ELITEA-0170 — `runPublishValidation` now also SELECTs `applications.name`/
+     `applications.description`: a placeholder-shaped name is a Critical `field: 'name'`, and a too-short
+     description (and separately, placeholder-shaped description text) raises a `field: 'description'` finding
+     with no `context` (the way it is attributed for the MAIN agent, as opposed to a sub-agent). */
   test('a placeholder agent name and a too-short description are both flagged', async ({ request }) => {
-    test.fail(
-      true,
-      'ELITEA-0169 (#911)/ELITEA-0170 (#911): product gap — the main agent Name and Description fields are never validated (no query reads either column)',
-    );
     const agent = await createAgentWithVersion(
       request,
       'TODO: My Agent',
@@ -302,15 +292,10 @@ test.describe('publish validation: code-based rules', () => {
     }
   });
 
-  /* onetest: ELITEA-0171 — product gap: the REAL rule is "sub-agent description under 20 characters → Warning",
-     not the documented "under 30 characters, with a placeholder-text Critical rule and a
-     'Sub-agent '[name]': Description ...' attribution format". The threshold, the placeholder check, and the
-     wording all differ from the case. */
+  /* onetest: ELITEA-0171 — the Warning threshold for a non-placeholder sub-agent description is now 30
+     characters (was 20), and a placeholder-shaped description (any length) is instead a Critical worded
+     "Sub-agent '[name]': Description ...". */
   test('a placeholder sub-agent description under 30 characters is flagged as Critical, worded per the case', async ({ request }) => {
-    test.fail(
-      true,
-      "ELITEA-0171 (#912): product gap — sub-agent description uses a 20-char threshold with no placeholder check and no \"Sub-agent '[name]':\" wording, not the documented 30-char + placeholder rule",
-    );
     const parentName = uniqueName('descparent');
     const parent = await createAgentWithVersion(request, parentName, { instructions: PASSABLE_INSTRUCTIONS });
     const child = await createAgentWithVersion(
