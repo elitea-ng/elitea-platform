@@ -23,11 +23,8 @@ const (
 	// larger than this: `RuntimeContextConfig::validate` rejects a
 	// `max_application_response_bytes` above MAX_APPLICATION_VERSION_BYTES
 	// (1 MiB, runtime_context.rs:40,94), and bootstrap.rs:212 sets exactly
-	// that constant. It coincides with MaxAgentExecutionInputBytes, which is
-	// the bound the freeze already applies to the version document itself —
-	// so a version that fits an execution input still has to fit here once
-	// the identity envelope is added, and one that does not is an error, not
-	// something to trim.
+	// that constant. This version-document bound remains 1 MiB even when an
+	// agent input permits a larger conversation history.
 	maxRuntimeApplicationVersionResponseBytes = 1024 * 1024
 
 	runtimeContextStageNestedVersionRead   = "nested_version_read"

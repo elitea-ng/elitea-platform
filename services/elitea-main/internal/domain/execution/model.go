@@ -23,7 +23,7 @@ const (
 	InputBundleManifestMediaType      = "application/x-protobuf"
 	MaxInputBundleEntries             = 16
 	MaxInputEntryContentBytes         = 256 * 1024
-	MaxAgentExecutionInputBytes       = 1024 * 1024
+	MaxAgentExecutionInputBytes       = 8 * 1024 * 1024
 	MaxToolkitExecuteReadInputBytes   = 1024 * 1024
 
 	IndexToolkitConfigurationRole     = "index.toolkit_configuration"

@@ -27,8 +27,9 @@ use zeroize::Zeroizing;
 use super::StateWriterLease;
 
 const SESSION_FAMILY: &str = "adk-session.2.0.0.v1";
-const MAX_STATE_BYTES: usize = 1024 * 1024;
-const MAX_EVENT_BYTES: usize = 2 * 1024 * 1024;
+const MAX_SHARED_STATE_BYTES: usize = 1024 * 1024;
+const MAX_STATE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_EVENT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_EVENTS: usize = 4096;
 const MAX_RETAINED_EVENT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_JSON_DEPTH: usize = 64;
@@ -1275,6 +1276,10 @@ async fn upsert_app_state(
     updated_at: DateTime<Utc>,
     limits: SessionLimits,
 ) -> Result<(), PostgresSessionError> {
+    let limits = SessionLimits {
+        max_state_bytes: limits.max_state_bytes.min(MAX_SHARED_STATE_BYTES),
+        ..limits
+    };
     if delta.is_empty() {
         return Ok(());
     }
@@ -1344,6 +1349,10 @@ async fn upsert_user_state(
     updated_at: DateTime<Utc>,
     limits: SessionLimits,
 ) -> Result<(), PostgresSessionError> {
+    let limits = SessionLimits {
+        max_state_bytes: limits.max_state_bytes.min(MAX_SHARED_STATE_BYTES),
+        ..limits
+    };
     if delta.is_empty() {
         return Ok(());
     }
@@ -1414,6 +1423,10 @@ async fn load_app_state(
     authority: &SessionWriterAuthority,
     limits: SessionLimits,
 ) -> Result<HashMap<String, Value>, PostgresSessionError> {
+    let limits = SessionLimits {
+        max_state_bytes: limits.max_state_bytes.min(MAX_SHARED_STATE_BYTES),
+        ..limits
+    };
     let state = sqlx::query_scalar::<_, String>(
         r"
 SELECT state
@@ -1449,6 +1462,10 @@ async fn load_user_state(
     authority: &SessionWriterAuthority,
     limits: SessionLimits,
 ) -> Result<HashMap<String, Value>, PostgresSessionError> {
+    let limits = SessionLimits {
+        max_state_bytes: limits.max_state_bytes.min(MAX_SHARED_STATE_BYTES),
+        ..limits
+    };
     let state = sqlx::query_scalar::<_, String>(
         r"
 SELECT state

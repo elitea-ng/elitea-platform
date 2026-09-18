@@ -40,7 +40,9 @@ message ExecutionInputEntryV1 {
 
 // ExecutionInputBundleV1 is the bounded immutable manifest returned on the
 // control plane. Bulk content is always fetched through a separate scoped data
-// plane using the references above.
+// plane using the references above. Agent execution content permits up to 8 MiB.
+// Configuration content remains 256 KiB; direct toolkit content remains 1 MiB.
+// These byte limits are transport bounds, separate from model token budgets.
 message ExecutionInputBundleV1 {
   string input_bundle_id = 1;
   string immutable_version = 2;

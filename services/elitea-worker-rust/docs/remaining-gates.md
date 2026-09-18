@@ -140,7 +140,10 @@ The first GPT run with an inherited smaller Haiku summary model fails admission 
 A subsequent split-and-merge implementation passes a fresh browser run with GPT and Haiku, including all four facts and reload.
 The retention target is now 15 percent of usable input, with protected-input exceptions.
 Fresh browser acceptance reaches 27,886 estimated tokens, or 11 percent, with all four facts and stable reload.
-Full-window capacity, indivisible oversized records, repeated live compactions, and nested recovery remain open.
+A 400k Full-window browser run now passes after compaction from 353,853 to 40,356 estimated tokens.
+All four fact checks and reload pass. Runtime capacity changes preserve application tables.
+See [Full context capacity](source-mapping/full-context-capacity-20260918.md).
+One-million-token capacity, indivisible oversized records, repeated live compactions, and nested recovery remain open.
 The same audit identifies a separate final-output frame limit and an unresolved regeneration measurement difference.
 Do not interpret either failure as proof that the model context is full.
 The [large-output correction](source-mapping/model-output-delivery-20260918.md) separates completed model answers from individual event limits.

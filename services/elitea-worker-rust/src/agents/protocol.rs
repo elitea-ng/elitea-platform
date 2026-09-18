@@ -13,7 +13,7 @@ use crate::protocol::{
 use crate::toolkits::{ToolAdmissionPolicy, ToolAdmissionPolicyErrorCode};
 
 pub const AGENT_INPUT_SCHEMA_REVISION: &str = "elitea.runtime.agent-execution-input.v1";
-const MAX_AGENT_INPUT_BYTES: usize = 1024 * 1024;
+const MAX_AGENT_INPUT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_JSON_VALUE_BYTES: usize = 256 * 1024;
 const MAX_JSON_DEPTH: usize = 64;
 const MAX_JSON_STRING_BYTES: usize = 64 * 1024;

@@ -46,7 +46,7 @@ const MAX_APPLICATION_VERSION_BYTES: usize = 1024 * 1024;
 // The attachment ENVELOPE, not the object: main caps the file at 128 KiB and
 // its JSON envelope at 1 MiB, because the content travels as a JSON string.
 const MAX_ATTACHMENT_OBJECT_BYTES: usize = 1024 * 1024;
-const MAX_MODEL_REQUEST_BYTES: usize = 1024 * 1024;
+const MAX_MODEL_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 const MAX_MODEL_SSE_EVENT_BYTES: usize = 256 * 1024;
 const MAX_MODEL_STREAM_BYTES: usize = 8 * 1024 * 1024;
 const MAX_MODEL_SSE_EVENTS: usize = 4_096;

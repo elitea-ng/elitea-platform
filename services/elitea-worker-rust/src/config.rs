@@ -28,7 +28,7 @@ const RUNTIME_REDIS_ENTRY_BYTES: usize = 64 * 1024;
 const RUNTIME_REDIS_FIELD_BYTES: usize = 48 * 1024;
 // Match Main's admitted agent bundle and the claim-bound content contract.
 // A smaller fetch limit rejects saved history before compaction can run.
-const RUNTIME_INPUT_CONTENT_BYTES: usize = 1024 * 1024;
+const RUNTIME_INPUT_CONTENT_BYTES: usize = 8 * 1024 * 1024;
 const RUNTIME_OUTPUT_FRAME_BYTES: usize = 64 * 1024;
 const RUNTIME_GRPC_REQUEST_BYTES: usize = 64 * 1024;
 const RUNTIME_GRPC_RESPONSE_BYTES: usize = 80 * 1024;
@@ -548,7 +548,7 @@ mod tests {
         assert_eq!(loaded.content_origin, "https://content.internal:9445");
         assert_eq!(loaded.limits.redis_max_entry_bytes(), 64 * 1024);
         assert_eq!(loaded.limits.redis_max_field_bytes(), 48 * 1024);
-        assert_eq!(loaded.limits.content_max_body_bytes(), 1024 * 1024);
+        assert_eq!(loaded.limits.content_max_body_bytes(), 8 * 1024 * 1024);
         assert_eq!(loaded.limits.grpc_max_request_bytes(), 64 * 1024);
         assert_eq!(loaded.limits.grpc_max_response_bytes(), 80 * 1024);
         assert_eq!(loaded.limits.output_max_frame_bytes(), 64 * 1024);

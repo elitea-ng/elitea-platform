@@ -108,6 +108,12 @@ pub(crate) async fn install_schema(pool: &PgPool) {
         .execute(pool)
         .await
         .expect("apply session migration");
+    sqlx::raw_sql(include_str!(
+        "../../../elitea-main/migrations/agentstate/0003_full_context_session_capacity.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("apply full context session capacity migration");
 }
 
 pub(crate) fn authority_for(
@@ -482,4 +488,91 @@ async fn postgres_session_component_story() {
     replacement_lease.revoke();
     let revoked = replacement.health_check().await.expect_err("revoked lease");
     assert_eq!(revoked.code, "session.writer_not_current");
+}
+
+#[tokio::test]
+async fn postgres_session_full_context_survives_writer_replacement() {
+    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+        eprintln!("skipping PostgreSQL full context test: set {TEST_DATABASE_URL}");
+        return;
+    };
+    let database = IsolatedPostgres::create(&database_url).await;
+    install_schema(&database.pool).await;
+    let service = PostgresSessionService::activate(
+        database.pool.clone(),
+        authority_for("claim-large-1", 1, 1, [0x22; 32]),
+        SessionLimits::default(),
+        Arc::new(TestStateWriterLease::current()),
+    )
+    .await
+    .expect("activate large context writer");
+    let session = service
+        .create(CreateRequest {
+            app_name: "elitea-agent-v1".to_owned(),
+            user_id: "user-1".to_owned(),
+            session_id: Some("session-1".to_owned()),
+            state: std::collections::HashMap::default(),
+        })
+        .await
+        .expect("create session");
+    let identity = session.try_identity().expect("identity");
+    let payload = json!({"request": "large model history ".repeat(220_000)});
+    let mut event = Event::with_id("large-checkpoint", "invocation-1");
+    event.author = "elitea-recovery".to_owned();
+    event
+        .actions
+        .state_delta
+        .insert("elitea.agent.recovery.v1".to_owned(), payload.clone());
+    for _ in 0..2 {
+        service
+            .append_event_for_identity(AppendEventRequest {
+                identity: identity.clone(),
+                event: event.clone(),
+            })
+            .await
+            .expect("large checkpoint and exact redelivery");
+    }
+    // Shared app/user data must retain the smaller limit and fail atomically.
+    for key in ["app:oversized", "user:oversized"] {
+        let mut invalid = Event::with_id(key, "invocation-1");
+        invalid
+            .actions
+            .state_delta
+            .insert(key.to_owned(), json!("x".repeat(1024 * 1024)));
+        assert!(
+            service
+                .append_event_for_identity(AppendEventRequest {
+                    identity: identity.clone(),
+                    event: invalid,
+                })
+                .await
+                .is_err()
+        );
+    }
+    drop(service);
+    let replacement = PostgresSessionService::activate(
+        database.pool.clone(),
+        authority_for("claim-large-2", 2, 2, [0x33; 32]),
+        SessionLimits::default(),
+        Arc::new(TestStateWriterLease::current()),
+    )
+    .await
+    .expect("replace writer");
+    let restored = replacement
+        .get(GetRequest {
+            app_name: "elitea-agent-v1".to_owned(),
+            user_id: "user-1".to_owned(),
+            session_id: "session-1".to_owned(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .expect("restore full context");
+    assert_eq!(
+        restored.state().get("elitea.agent.recovery.v1"),
+        Some(payload)
+    );
+    assert_eq!(restored.events().len(), 1);
+    assert_eq!(restored.state().get("app:oversized"), None);
+    assert_eq!(restored.state().get("user:oversized"), None);
 }

@@ -207,3 +207,20 @@ func inputBundleFactoryWithIDs(t *testing.T, ids ...string) *InputBundleFactory 
 	}
 	return factory
 }
+
+// A million-token history must reach the worker's token-budget decision.
+func TestInputBundleFactoryPreservesFullWindowHistory(t *testing.T) {
+	input := validAgentInput()
+	input.ChatHistory = []byte(`[{"role":"user","content":"` + strings.Repeat("x", 4*1024*1024) + `"}]`)
+	bundle, _, err := testInputBundleFactory(t).Build(context.Background(), input, "room", "message", "chat_predict")
+	if err != nil {
+		t.Fatalf("Build full history: %v", err)
+	}
+	decoded := &runtimev1.AgentExecutionInputV1{}
+	if err := proto.Unmarshal(bundle.Entries[0].Content, decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(input, decoded) {
+		t.Fatal("full history changed during admission")
+	}
+}

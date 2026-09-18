@@ -33,7 +33,7 @@ mod toolkit_discovery_artifact;
 
 const MAX_SAFE_TEXT_BYTES: usize = 256;
 const MAX_ORIGIN_BYTES: usize = 2048;
-const MAX_MATERIALIZED_INPUT_BYTES: usize = 1024 * 1024;
+const MAX_MATERIALIZED_INPUT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_INPUT_DEADLINE: Duration = Duration::from_mins(5);
 const CLAIM_HEADER: HeaderName = HeaderName::from_static("x-elitea-claim-id");
 const FENCE_HEADER: HeaderName = HeaderName::from_static("x-elitea-fence");

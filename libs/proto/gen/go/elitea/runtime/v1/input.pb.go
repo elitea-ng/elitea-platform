@@ -263,7 +263,9 @@ func (x *ExecutionInputEntryV1) GetContent() *ScopedContentReferenceV1 {
 
 // ExecutionInputBundleV1 is the bounded immutable manifest returned on the
 // control plane. Bulk content is always fetched through a separate scoped data
-// plane using the references above.
+// plane using the references above. Agent execution content permits up to 8 MiB.
+// Configuration content remains 256 KiB; direct toolkit content remains 1 MiB.
+// These byte limits are transport bounds, separate from model token budgets.
 type ExecutionInputBundleV1 struct {
 	state            protoimpl.MessageState   `protogen:"open.v1"`
 	InputBundleId    string                   `protobuf:"bytes,1,opt,name=input_bundle_id,json=inputBundleId,proto3" json:"input_bundle_id,omitempty"`

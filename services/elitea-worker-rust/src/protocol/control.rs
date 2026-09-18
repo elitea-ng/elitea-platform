@@ -54,7 +54,7 @@ use crate::transport::{
 
 const MAX_CONTROL_IDENTITY_BYTES: usize = 256;
 const MAX_MANIFEST_TEXT_BYTES: usize = 128;
-const MAX_AGENT_INPUT_BYTES: u64 = 1024 * 1024;
+const MAX_AGENT_INPUT_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_TOOLKIT_EXECUTE_READ_INPUT_BYTES: u64 = 1024 * 1024;
 const MAX_TOOLKIT_JSON_INPUT_BYTES: u64 = 256 * 1024;
 const AGENT_EXECUTION_REQUEST_ROLE: &str = "agent.execution_request";
