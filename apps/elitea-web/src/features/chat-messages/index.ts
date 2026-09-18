@@ -45,6 +45,9 @@ export {
   isUserMessage,
 } from './lib/convertMessagesToChatHistory';
 
+// Persisted trace steps -> transcript pins (#951) — waived, see budgets-core.mjs.
+export { useConversationTraceSteps } from './model/useConversationTraceSteps';
+
 // Socket-driven message_group sync (chat_message_sync) — waived, see budgets-core.mjs.
 export { useSyncChatMessage } from './model/useSyncChatMessage';
 

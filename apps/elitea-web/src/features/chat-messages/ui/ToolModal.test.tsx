@@ -22,6 +22,7 @@ import { installCodeMirrorTestPolyfills } from '@/shared/ui/lib/field/codeMirror
 
 import { ToolModal } from './ToolModal';
 import { resolveToolModalLanguage } from './ToolModalPane';
+import { TraceStepDetailContext } from '../model/traceStepDetail';
 
 installCodeMirrorTestPolyfills();
 
@@ -133,5 +134,53 @@ describe('resolveToolModalLanguage', () => {
     expect(resolveToolModalLanguage('auto', '{ broken')).toBe('text');
     expect(resolveToolModalLanguage('auto', 'a stack trace')).toBe('text');
     expect(resolveToolModalLanguage('auto', '')).toBe('text');
+  });
+});
+
+/**
+ * #951 — a pin rebuilt from a persisted trace row has no body of its own: the
+ * listing that rebuilt it is deliberately light. These pin the ONE request it
+ * is allowed to make, and the three cases in which it must make none.
+ */
+describe('ToolModal on a restored trace pin', () => {
+  const restored = { name: 'mock_tool_status', traceStepId: 11, traceMessageGroupId: 1121 } as const;
+
+  function renderUnderLoader(
+    load: (stepId: number, groupId: number) => Promise<{ toolInputs: unknown; output: string }>,
+    toolAction: Record<string, unknown> = restored,
+  ) {
+    return renderWithTheme(
+      <TraceStepDetailContext value={load}>
+        <ToolModal open onClose={vi.fn()} toolAction={toolAction} />
+      </TraceStepDetailContext>,
+    );
+  }
+
+  it('fetches the step body once and shows it in the OUTPUT pane', async () => {
+    const load = vi.fn().mockResolvedValue({ toolInputs: { response_search: 'a' }, output: 'tool.unavailable' });
+    renderUnderLoader(load);
+
+    expect(await screen.findByText('tool.unavailable')).toBeInTheDocument();
+    expect(load).toHaveBeenCalledExactlyOnceWith(11, 1121);
+    expect(within(screen.getByTestId('tool-modal-pane-input')).getByText(/response_search/)).toBeInTheDocument();
+  });
+
+  it('asks for nothing when the action already carries its own body', () => {
+    const load = vi.fn();
+    renderUnderLoader(load, { ...restored, toolOutputs: 'live output' });
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it('asks for nothing for a live pin, which names no trace row', () => {
+    const load = vi.fn();
+    renderUnderLoader(load, { name: 'mock_tool_status' });
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it('leaves the pin as it was when the read fails', async () => {
+    const load = vi.fn().mockRejectedValue(new Error('403'));
+    renderUnderLoader(load);
+    await vi.waitFor(() => { expect(load).toHaveBeenCalled(); });
+    expect(screen.getAllByRole('heading', { name: 'mock_tool_status' }).length).toBeGreaterThan(0);
   });
 });

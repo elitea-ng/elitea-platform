@@ -116,6 +116,29 @@ async function listTraceSteps(
 }
 
 /**
+ * One step's HEAVY fields — the detail route the pin strip's expand path uses.
+ *
+ * Paired with `message_group_id` because the route requires it: a bare step id
+ * from a conversation the caller is not reading is a 404, not a body (see
+ * `messagetraces/handler.go`'s scoping note).
+ */
+async function getTraceStep(
+  page: Page,
+  projectId: string,
+  step: TraceStepRow,
+): Promise<{ readonly tool_output: string | null; readonly text: string | null }> {
+  const response = await page.request.get(
+    `${API}/elitea_core/message_trace/prompt_lib/${projectId}/${step.id}` +
+      `?message_group_id=${step.message_group_id}`,
+  );
+  expect(
+    response.status(),
+    `the trace-step detail must answer: ${(await response.text()).slice(0, 300)}`,
+  ).toBe(200);
+  return (await response.json()) as { tool_output: string | null; text: string | null };
+}
+
+/**
  * A prompt naming `count` scripted calls, each with DISTINCT arguments.
  *
  * Distinct, because identical calls collapse. The runtime fingerprints a tool
@@ -559,7 +582,7 @@ test('a paused tool call is a trace step, and survives the resume and a return t
 
 /* onetest: ELITEA-2593 (the refresh half), ELITEA-2583 (its "tool calls are still visible in the UI"
  * half), ELITEA-2592 (its "all tool calls from before are still visible" half) — the tool-call pins
- * a settled turn showed are still there after the page is reloaded. FAIL-MARKED: they are not. */
+ * a settled turn showed are still there after the page is reloaded. */
 test('the tool-call pins a turn showed are still rendered after a reload', async ({ page }) => {
   test.setTimeout(300_000);
   test.skip(
@@ -568,22 +591,16 @@ test('the tool-call pins a turn showed are still rendered after a reload', async
       'waits out a connect timeout per call against the unreachable tool host — see `multiCallPrompt`.',
   );
 
-  // MEASURED on `STANDALONE_WORKER=rust`: a settled tool-calling turn renders
-  // its `Thought for …` panel and one `chat-tool-action` row per step on the
-  // LIVE page (asserted, passing, in the two tests above). After `page.reload()`
-  // — or after navigating away and reopening the conversation — the panel is
-  // not rendered at all, so there is no affordance that could reveal the rows
-  // and `chat-tool-action` has a count of zero. The steps themselves are
-  // durable: `/elitea_core/message_traces/…` answers the same rows before and
-  // after, which is asserted in the test above. So the data survived the
-  // migration and the RENDER of it did not — a reader who reopens a
-  // conversation cannot see which tools ran in it.
-  test.fail(
-    true,
-    'ELITEA-2593 (#951): product gap — tool-call pins do not survive a reload: a reopened conversation ' +
-      'renders no thinking panel and no `chat-tool-action` rows, though the trace-step API still ' +
-      'answers the same steps. See S/tail/defects.md.',
-  );
+  // WAS a render gap (#951), and the halves were measured separately: the
+  // steps are durable (`/elitea_core/message_traces/…` answers the same rows
+  // before and after, asserted in the test above) and the RENDER of them was
+  // not. The transcript built its pins from `meta.tool_calls`, which the
+  // trace-step migration emptied on purpose, so a reopened turn had no
+  // `toolActions` at all and `ApplicationAnswerThinking` returned `null` on
+  // `!actions.length` — no panel, and therefore no affordance that could ever
+  // reveal the rows. `useConversationTraceSteps` is the reader that was
+  // missing; `entities/message/lib/traceSteps.ts` maps the listing back onto
+  // the wire shape `buildToolActions` already consumes.
 
   let fixture: MockToolAgentFixture | undefined;
   try {
@@ -612,6 +629,26 @@ test('the tool-call pins a turn showed are still rendered after a reload', async
       await countToolPins(page, steps.length, 'after the reload'),
       'the reloaded conversation shows none of the tool-call pins it showed a moment ago',
     ).toBe(steps.length);
+
+    // ── AND THE PIN STILL OPENS ONTO ITS OWN BODY ──────────────────────────
+    //
+    // The listing a restored pin is rebuilt from is deliberately LIGHT —
+    // `tool_inputs`/`tool_output`/`text` are TOASTed and are served one row at
+    // a time — so a pin that rendered but opened onto an empty modal would be
+    // the same gap moved one click later. Compared against what the detail
+    // route itself answers for that exact step rather than against a literal:
+    // the tool host is unreachable from the worker here (see the file header)
+    // and the body is whatever transport error that produced.
+    const [first] = steps;
+    const detail = first === undefined ? undefined : await getTraceStep(page, fixture.projectId, first);
+    const body = (detail?.tool_output ?? detail?.text ?? '').trim();
+    if (body !== '') {
+      await page.getByTestId('chat-tool-action').first().click();
+      await expect(
+        page.getByTestId('tool-modal-pane-output'),
+        'the restored pin opened onto an empty modal — the step body was never fetched',
+      ).toContainText(body.split('\n')[0]?.slice(0, 60) ?? '', { timeout: 30_000 });
+    }
   } finally {
     await fixture?.dispose();
   }

@@ -161,7 +161,7 @@ export function ToolModalPane({ caption, value, paneId }: ToolModalPaneProps): R
   const copyLabel = t('chatMessages.toolModal.copyAriaLabel', 'Copy {{pane}}', { pane: caption });
 
   return (
-    <Box sx={paneStyles.root}>
+    <Box sx={paneStyles.root} data-testid={`tool-modal-pane-${paneId}`}>
       <Box sx={paneStyles.header}>
         <Box sx={paneStyles.headerLeft}>
           <Typography
