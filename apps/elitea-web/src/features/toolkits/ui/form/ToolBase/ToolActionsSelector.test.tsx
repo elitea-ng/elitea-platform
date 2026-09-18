@@ -15,7 +15,28 @@ describe('ToolActionsSelector', () => {
     );
     expect(getByText('Google')).toBeInTheDocument();
     expect(getByText('Wiki')).toBeInTheDocument();
-    expect(getByText('Tools')).toBeInTheDocument();
+    // #924/ELITEA-2816,2817: the accordion title carries an enabled/total count.
+    expect(getByText('Tools 0/2')).toBeInTheDocument();
+  });
+
+  it('counts only VALID selections in the accordion title, live as tools/selection change', () => {
+    const { getByText, rerender } = renderWithTheme(
+      <ToolActionsSelector
+        availableTools={['google', 'wiki']}
+        onChange={vi.fn()}
+        selectedTools={['google', 'stale_tool']}
+      />,
+    );
+    expect(getByText('Tools 1/2')).toBeInTheDocument();
+
+    rerender(
+      <ToolActionsSelector
+        availableTools={['google', 'wiki']}
+        onChange={vi.fn()}
+        selectedTools={['google', 'wiki']}
+      />,
+    );
+    expect(getByText('Tools 2/2')).toBeInTheDocument();
   });
 
   it('renders flat (no accordion) when shouldUseAccordionView is false', () => {

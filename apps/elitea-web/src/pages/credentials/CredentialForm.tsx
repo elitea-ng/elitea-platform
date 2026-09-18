@@ -126,6 +126,7 @@ export function CredentialForm(props: CredentialFormProps): ReactNode {
             error={c.fieldErrors[fieldKey]}
             required={c.schemaRequiredFields.includes(fieldKey)}
             projectId={context.projectId}
+            isTeamProject={context.isTeamProject}
             onChange={c.setField}
           />
         );
@@ -140,6 +141,7 @@ export function CredentialForm(props: CredentialFormProps): ReactNode {
           data={c.data}
           fieldErrors={c.fieldErrors}
           projectId={context.projectId}
+          isTeamProject={context.isTeamProject}
           onChange={c.setField}
         />
       ))}

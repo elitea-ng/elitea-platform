@@ -25,13 +25,28 @@
  * none of the three can be true while the gate never opens: there is no
  * author/non-author branch anywhere in this code for #4649 to regress
  * against, so one demonstration, on a genuine TEAM project (a scratch
- * project, never project 1) with an `aha` toolkit (its `check_connection`
- * answers `unsupported_type` unconditionally — see `toolkits.aha.spec.ts`'s
- * AHA-10 — so `useCredentialSaveGate`'s OWN gate, keyed on the platform's
- * `ELITEA_TOOLKIT_CHECK_ALLOWLIST` refusing every other placeholder
- * credential in this stack, does not confound this one), stands for all
- * three: the credential change goes straight to a successful PUT, with no
- * modal ever rendered.
+ * project, never project 1) with a `report_portal` toolkit stands for all three.
+ *
+ * `report_portal` (not `aha`, not `figma`): a real credential-check probe
+ * (`toolkit_check.go`'s `toolkitCheckProbes`) was prototyped for `aha` while
+ * investigating #920 and reverted (see `toolkits.aha.spec.ts`'s own AHA-10
+ * doc comment for the whole story: it broke this file's own harness,
+ * `toolkits.aha.spec.ts`'s AHA-9, and `toolkits.tool-groups.spec.ts` — a
+ * stray `aha`-with-a-probe here would confound the gate under test with
+ * `unreachable` blocking Save outright), so a type with no probe in that map
+ * is used instead of relying on `aha` staying gapped forever. `figma` was
+ * tried first and rejected too: its OWN settings schema requires a
+ * `pgvector_configuration` (a second, indexing-storage credential) and a
+ * `global_limit` this fixture never seeds, so the FORM itself loads invalid
+ * ("Field is required") and Save never even reaches `checkBeforeSave` at
+ * all — confounding the gate under test a second, different way. Testing
+ * types (`report_portal`, `testio`) have no such baggage: `selected_tools` +
+ * their own one `_configuration` field, nothing else required. It carries
+ * the same generic `ToolBase` credential-picker field shape
+ * (`report_portal_configuration`, plain `project`/`endpoint`/`api_key`
+ * fields — no `base_url` needed at all), and the credential change goes
+ * straight to a successful PUT once fixed, with the modal intercepting
+ * first.
  */
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
@@ -43,41 +58,47 @@ import { createScratchProject, deleteScratchProject, type ScratchProject } from 
 
 readsPlatformFlags(test);
 
-const PLACEHOLDER_BASE_URL = 'https://autotest-cwm.invalid.example';
+const PLACEHOLDER_ENDPOINT = 'https://autotest-cwm.invalid.example';
 const PLACEHOLDER_API_KEY = 'autotest-placeholder-cwm-key';
 
-interface AhaFixture {
+interface ReportPortalFixture {
   readonly toolkitId: string;
   readonly credentialId: string;
 }
 
-async function seedAhaCredential(request: APIRequestContext, projectId: string, title: string): Promise<string> {
+async function seedReportPortalCredential(request: APIRequestContext, projectId: string, title: string): Promise<string> {
   const response = await request.post(`${API_BASE}/configurations/configurations/${projectId}`, {
-    data: { type: 'aha', elitea_title: title, label: title, shared: false, data: { base_url: PLACEHOLDER_BASE_URL, api_key: PLACEHOLDER_API_KEY } },
+    data: {
+      type: 'report_portal',
+      elitea_title: title,
+      label: title,
+      shared: false,
+      data: { project: title, endpoint: PLACEHOLDER_ENDPOINT, api_key: PLACEHOLDER_API_KEY },
+    },
   });
-  expect(response.ok(), `seeding an aha credential: ${await response.text()}`).toBe(true);
+  expect(response.ok(), `seeding a report_portal credential: ${await response.text()}`).toBe(true);
   const body = (await response.json()) as { id?: string | number };
   return String(body.id ?? '');
 }
 
-/** Creates an `aha` credential, then an `aha` toolkit referencing it — the credential must exist first, or the toolkit POST answers `configuration_not_found`. */
-async function createAhaToolkit(request: APIRequestContext, projectId: string, toolkitName: string, credentialTitle: string): Promise<AhaFixture> {
-  const credentialId = await seedAhaCredential(request, projectId, credentialTitle);
+/** Creates a `report_portal` credential, then a `report_portal` toolkit referencing it — the credential must exist first, or the toolkit POST answers `configuration_not_found`. */
+async function createReportPortalToolkit(request: APIRequestContext, projectId: string, toolkitName: string, credentialTitle: string): Promise<ReportPortalFixture> {
+  const credentialId = await seedReportPortalCredential(request, projectId, credentialTitle);
   const created = await request.post(`${API_BASE}/elitea_core/tools/prompt_lib/${projectId}`, {
     data: {
       name: toolkitName,
-      type: 'aha',
-      settings: { aha_configuration: { elitea_title: credentialTitle, private: false }, selected_tools: [] },
+      type: 'report_portal',
+      settings: { report_portal_configuration: { elitea_title: credentialTitle, private: false }, selected_tools: [] },
     },
   });
-  expect(created.status(), `createAhaToolkit: ${await created.text()}`).toBe(201);
+  expect(created.status(), `createReportPortalToolkit: ${await created.text()}`).toBe(201);
   const body = (await created.json()) as { id?: string | number };
   const toolkitId = String(body.id ?? '');
-  expect(toolkitId, 'createAhaToolkit must answer an id').not.toBe('');
+  expect(toolkitId, 'createReportPortalToolkit must answer an id').not.toBe('');
   return { toolkitId, credentialId };
 }
 
-async function deleteAhaFixture(request: APIRequestContext, projectId: string, fixture: AhaFixture | undefined, secondCredentialId: string): Promise<void> {
+async function deleteReportPortalFixture(request: APIRequestContext, projectId: string, fixture: ReportPortalFixture | undefined, secondCredentialId: string): Promise<void> {
   if (fixture !== undefined) {
     await request.delete(`${API_BASE}/elitea_core/tool/prompt_lib/${projectId}/${fixture.toolkitId}`).catch(() => {});
     await request.delete(`${API_BASE}/configurations/configuration/${projectId}/${fixture.credentialId}`).catch(() => {});
@@ -94,8 +115,8 @@ async function gotoToolkit(page: Page, projectName: string, toolkitId: string): 
   await expect(page.getByRole('textbox', { name: 'Toolkit Name' })).toBeVisible({ timeout: 20_000 });
 }
 
-function ahaConfigPicker(page: Page) {
-  return page.getByRole('combobox', { name: /Aha Configuration/i });
+function reportPortalConfigPicker(page: Page) {
+  return page.getByRole('combobox', { name: /Report Portal Configuration/i });
 }
 
 test.describe('the Credential Configuration Change warning modal (ELITEA-1092/1094/1099)', () => {
@@ -116,53 +137,46 @@ test.describe('the Credential Configuration Change warning modal (ELITEA-1092/10
     return scratch;
   }
 
-  test('ELITEA-1092/1094/1099: PRODUCT GAP — changing an existing team-project toolkit\'s credential never raises the "Credential Configuration Change" modal, for anyone', async ({
+  test('ELITEA-1092/1094/1099: changing an existing team-project toolkit\'s credential raises the "Credential Configuration Change" modal, and Confirm proceeds to save', async ({
     page,
     request,
   }) => {
-    /* onetest: ELITEA-1092, ELITEA-1094, ELITEA-1099 — product gap: `ToolkitForm`'s `isTeamProject` prop (which gates the modal) defaults to `false` and neither of its two real callers, `ConfigurationTab.tsx`/`EditToolkit.tsx` or `CreateToolkit.tsx`, ever passes it — so `checkBeforeSave` never intercepts Save on ANY team-project toolkit, for its author (1094) or any other team member (1099, regression #4649), and Discard (1092) has nothing to demonstrate because the modal it would discard never opens. */
+    /* onetest: ELITEA-1092, ELITEA-1094, ELITEA-1099 — `ToolkitForm`'s `isTeamProject` prop (which gates the modal) now reaches it from both `ConfigurationTab.tsx`/`EditToolkit.tsx` (computed from `usePersonalProjectId()` vs the selected project) and is exercised here on a genuine team (scratch) project: `checkBeforeSave` intercepts Save on a credential-field change, the modal opens for the toolkit's own author (1094; a non-author's own gate branch would be the same code path, per 1099/#4649), and Confirm changes (the Discard counterpart to 1092) proceeds to the PUT. */
     test.setTimeout(60_000);
-    test.fail(
-      true,
-      'ELITEA-1092 (#952)/1094/1099 (#4649 regressed silently): product gap — ConfigurationTab.tsx never passes isTeamProject ' +
-        'to ToolkitForm, so useCredentialWarning.checkBeforeSave (isTeamProject defaults false) never intercepts Save; ' +
-        'the "Credential Configuration Change" modal cannot open on any team-project toolkit, for any user',
-    );
 
     const pid = project().id;
     const RUN_ID = String(Date.now()).slice(-6);
     const firstTitle = `${AUTOTEST_PREFIX}cwm_a_${RUN_ID}`;
     const secondTitle = `${AUTOTEST_PREFIX}cwm_b_${RUN_ID}`;
-    let fixture: AhaFixture | undefined;
+    let fixture: ReportPortalFixture | undefined;
     let secondCredentialId = '';
     try {
-      fixture = await createAhaToolkit(request, pid, `${AUTOTEST_PREFIX}cwm_toolkit_${RUN_ID}`, firstTitle);
-      secondCredentialId = await seedAhaCredential(request, pid, secondTitle);
+      fixture = await createReportPortalToolkit(request, pid, `${AUTOTEST_PREFIX}cwm_toolkit_${RUN_ID}`, firstTitle);
+      secondCredentialId = await seedReportPortalCredential(request, pid, secondTitle);
 
       await gotoToolkit(page, project().name, fixture.toolkitId);
 
-      const picker = ahaConfigPicker(page);
+      const picker = reportPortalConfigPicker(page);
       await picker.click();
       await page.getByRole('option').filter({ hasText: secondTitle }).click();
+
+      await page.getByRole('button', { name: 'Save', exact: true }).click();
+
+      const modal = page.getByRole('dialog').filter({ hasText: 'Credential Configuration Change' });
+      await expect(
+        modal,
+        'the "Credential Configuration Change" modal must intercept Save on a team-project toolkit credential change',
+      ).toBeVisible({ timeout: 10_000 });
 
       const putResponse = page.waitForResponse(
         (r) => r.request().method() === 'PUT' && /\/elitea_core\/tool\/prompt_lib\//.test(r.url()),
         { timeout: 20_000 },
       );
-      await page.getByRole('button', { name: 'Save', exact: true }).click();
-
-      // What SHOULD happen: the modal intercepts, and the PUT waits for
-      // Confirm changes. What ACTUALLY happens: the PUT fires immediately,
-      // with no modal ever rendered — this assertion is the one that fails.
-      const modal = page.getByRole('dialog').filter({ hasText: 'Credential Configuration Change' });
-      await expect(
-        modal,
-        'the "Credential Configuration Change" modal must intercept Save on a team-project toolkit credential change',
-      ).toBeVisible({ timeout: 5_000 });
-
-      await putResponse;
+      await modal.getByRole('button', { name: 'Confirm changes' }).click();
+      const put = await putResponse;
+      expect(put.ok(), `confirming the credential change answered ${put.status()}`).toBe(true);
     } finally {
-      await deleteAhaFixture(request, pid, fixture, secondCredentialId);
+      await deleteReportPortalFixture(request, pid, fixture, secondCredentialId);
     }
   });
 });

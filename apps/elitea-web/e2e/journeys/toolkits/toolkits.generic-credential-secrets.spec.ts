@@ -59,21 +59,30 @@ async function openGithubCredentialForm(page: Page, name: string): Promise<void>
   await expect(page.getByLabel('Access Token')).toBeVisible({ timeout: 10_000 });
 }
 
+// #925/ELITEA-1069,1074: the secret-create option's own label is scope-aware
+// now ("New Project Secret"/"New Private Secret"), everywhere a credential
+// form renders a secret field — `CredentialForm.tsx`'s `context.isTeamProject`
+// is always a real boolean (never `undefined`), so the generic "Create new
+// secret" fallback (`SecretField.tsx`'s own default) is never reached from
+// this route any more. This matches either wording so the helper keeps
+// working regardless of which credential form calls it.
+const CREATE_SECRET_OPTION_NAME = /^(Create new secret|New (Project|Private) Secret)$/;
+
 /** Switches the Access Token field to Secret mode and opens its saved-secret dropdown. */
 async function openSecretDropdown(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Secret', exact: true }).click();
   await page.getByRole('combobox').click();
-  await expect(page.getByRole('option', { name: 'Create new secret' })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByRole('option', { name: CREATE_SECRET_OPTION_NAME })).toBeVisible({ timeout: 10_000 });
 }
 
-test('ELITEA-1073/1070: the "Create new secret" shortcut opens Settings → Secrets in a new tab with the creation row already active', async ({ page, context }) => {
-  /* onetest: ELITEA-1073, ELITEA-1070 — new tab, correct `?createSecret=1` URL, creation row auto-open; back on the original tab the credential form is unchanged, and refreshing the dropdown surfaces the new secret. ELITEA-1071's own claim (the dropdown stays open across the shortcut) is demonstrably false here — see the PRODUCT GAP note below — so this test does not additionally assert it as passing. */
+test('ELITEA-1073/1070/1071: the "Create new secret" shortcut opens Settings → Secrets in a new tab with the creation row already active, and the dropdown stays open', async ({ page, context }) => {
+  /* onetest: ELITEA-1073, ELITEA-1070, ELITEA-1071 — new tab, correct `?createSecret=1` URL, creation row auto-open; back on the original tab the credential form is unchanged, the dropdown itself stays open (#926 fix: `SecretSelect`'s popup is now controlled and swallows the create action's own close request), and refreshing the dropdown surfaces the new secret. */
   test.setTimeout(120_000);
   const credentialName = `${AUTOTEST_PREFIX}cred_ghsecret_${RUN_ID}`;
   await openGithubCredentialForm(page, credentialName);
   await openSecretDropdown(page);
 
-  const [secretsPage] = await Promise.all([context.waitForEvent('page'), page.getByRole('option', { name: 'Create new secret' }).click()]);
+  const [secretsPage] = await Promise.all([context.waitForEvent('page'), page.getByRole('option', { name: CREATE_SECRET_OPTION_NAME }).click()]);
   await secretsPage.waitForLoadState('domcontentloaded');
   expect(secretsPage.url()).toContain('/settings/secrets');
   expect(secretsPage.url()).toContain('createSecret=1');
@@ -91,15 +100,26 @@ test('ELITEA-1073/1070: the "Create new secret" shortcut opens Settings → Secr
   await expect(secretsPage.getByText(secretName, { exact: true })).toBeVisible({ timeout: 15_000 });
   await secretsPage.close();
 
-  // Back on the original tab: the credential form is untouched (opening the
-  // new tab closed the dropdown popup itself — MUI's Popover treats the lost
-  // focus as an outside click — but the form's own data survives).
-  await expect(page.getByRole('textbox', { name: 'Name', exact: true })).toHaveValue(credentialName);
-  // ELITEA-1071: PRODUCT GAP — the dropdown should stay open; it does not.
-  await expect(page.getByRole('option', { name: 'Create new secret' })).toHaveCount(0);
+  // Back on the original tab: the dropdown itself is still open — ELITEA-1071
+  // (#926 fix). Checked FIRST, and only via the option (not the Name
+  // textbox): MUI's own Modal marks the rest of the page `aria-hidden` while
+  // its popup is open, so the underlying form is legitimately unreachable by
+  // role until the popup closes — asserting the Name field's value here,
+  // before dismissing the popup, would be asserting through an aria-hidden
+  // subtree, not proving anything about "unchanged".
+  await expect(page.getByRole('option', { name: CREATE_SECRET_OPTION_NAME })).toBeVisible();
 
-  // The refresh icon sits BESIDE the (closed) select, not inside its popup
-  // (`SecretField.tsx`'s `SecretSelect`), so it works without reopening it.
+  // Dismiss the still-open dropdown before continuing — the same Escape
+  // gesture MUI's own popup honors — so the rest of the form (the Name
+  // field, the refresh button) is reachable again rather than aria-hidden
+  // behind the popup.
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('option', { name: CREATE_SECRET_OPTION_NAME })).toHaveCount(0);
+
+  // NOW the credential form is untouched — proven after the popup that hid
+  // it from the accessibility tree is gone.
+  await expect(page.getByRole('textbox', { name: 'Name', exact: true })).toHaveValue(credentialName);
+
   await page.getByRole('button', { name: 'Refresh secrets' }).click();
 
   await page.getByRole('combobox').click();
@@ -110,13 +130,12 @@ test('ELITEA-1073/1070: the "Create new secret" shortcut opens Settings → Secr
   await expect(page.getByRole('combobox', { name: 'Access Token' })).toHaveText(secretName);
 });
 
-test('ELITEA-1069/1074: PRODUCT GAP — the secret-create option carries a generic label, not a scope-aware "New Project/Private Secret" one', async ({ page }) => {
-  /* onetest: ELITEA-1069, ELITEA-1074 — the CREATE section should read "New Project Secret" (team project) or "New Private Secret" (private project); `SecretField.tsx`'s own default, and every caller (`useSecretFieldOptions.ts`), never overrides `createLabel`, so it always reads "Create new secret" regardless of project type */
+test('ELITEA-1069/1074: the secret-create option carries a scope-aware "New Project/Private Secret" label (#925, fixed)', async ({ page }) => {
+  /* onetest: ELITEA-1069, ELITEA-1074 — the CREATE section reads "New Project Secret" (team project) or "New Private Secret" (private project): `useSecretFieldOptions` now takes `isTeamProject` and computes `createLabel`, and `CredentialFormFields.tsx`'s `CredentialSecretField` passes the credential form's own `context.isTeamProject` through. */
   test.setTimeout(90_000);
   await openGithubCredentialForm(page, `${AUTOTEST_PREFIX}cred_ghlabel_${RUN_ID}`);
   await openSecretDropdown(page);
 
-  test.fail(true, 'ELITEA-1069 (#925)/1074: product gap — SecretFieldInput (ToolBaseProperty.renderers.tsx) calls useSecretFieldOptions() with no createLabel override, so the option always reads the generic "Create new secret", never "New Project Secret"/"New Private Secret"');
   await expect(page.getByRole('option', { name: /^New (Project|Private) Secret$/ })).toBeVisible();
 });
 
@@ -153,8 +172,8 @@ async function createGithubToolkitReferencing(request: APIRequestContext, name: 
   return id;
 }
 
-test('ELITEA-1088/1090/1091/1093/1097: PRODUCT GAP — a toolkit whose credential cannot be resolved shows the old plain error text, not the styled warning banner', async ({ page }) => {
-  /* onetest: ELITEA-1088, ELITEA-1090, ELITEA-1091, ELITEA-1093, ELITEA-1097 — a mismatched private credential should draw the styled `CredentialWarningBanner` ("Credential setup required:" + a prefilled "Create a credential" link); `pages/toolkits/lib/credentialPicker.tsx`'s `ToolkitCredentialPicker` hardcodes `mismatch={{ mismatchedPrivateCredential: false, … }}`, so `CredentialsSelect` always falls through to the OLD plain `FormHelperText` branch instead */
+test('ELITEA-1088/1090/1091/1093/1097: a toolkit whose credential cannot be resolved shows the styled warning banner (#927, fixed)', async ({ page }) => {
+  /* onetest: ELITEA-1088, ELITEA-1090, ELITEA-1091, ELITEA-1093, ELITEA-1097 — a mismatched credential draws the styled `CredentialWarningBanner` ("Credential setup required:" + a prefilled "Create a credential" link), not the old plain `FormHelperText`: `pages/toolkits/lib/credentialPicker.tsx`'s `ToolkitCredentialPicker` now passes `mismatchedPrivateCredential: true` unconditionally (this is the ONE caller of that slot, and a mismatch here always means the toolkit's own credential reference cannot be resolved). */
   test.setTimeout(120_000);
   // `validateToolkitCreate` answers 400 `configuration_not_found` for a reference
   // that never resolved (so a mismatch cannot be created directly) — a real
@@ -171,11 +190,9 @@ test('ELITEA-1088/1090/1091/1093/1097: PRODUCT GAP — a toolkit whose credentia
   await page.goto(`${BASE_URL}/app/toolkits/all/${id}`, { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('edit-toolkit-test-pane-slot')).toBeAttached({ timeout: 30_000 });
 
-  // The plain, pre-existing text — real, and currently the ONLY rendered outcome.
-  await expect(page.getByText('Your configuration does not match any available configurations.')).toBeVisible({ timeout: 20_000 });
-
-  test.fail(true, 'ELITEA-1088 (#927)/1090/1091/1093/1097: product gap — ToolkitCredentialPicker.tsx hardcodes mismatchedPrivateCredential: false, so CredentialsSelect never renders CredentialWarningBanner for a toolkit picker, whatever the mismatch really is');
-  await expect(page.getByText('Credential setup required:')).toBeVisible();
+  await expect(page.getByText('Credential setup required:')).toBeVisible({ timeout: 20_000 });
+  // The old plain text is gone now that the styled banner always renders for a mismatch.
+  await expect(page.getByText('Your configuration does not match any available configurations.')).toHaveCount(0);
 });
 
 /*

@@ -1,4 +1,4 @@
-import { type ComponentProps, type ReactNode, useCallback, useEffect, useState } from 'react';
+import { type ComponentProps, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
@@ -20,6 +20,7 @@ import { useToolkitSaveControls } from './lib/useToolkitSaveControls';
 import { ToolkitSaveBar } from './ui/ToolkitSaveBar';
 import { useConfigurationTabSlots } from './lib/configurationTabSlots';
 import { useMcpLoadTools } from './lib/useMcpLoadTools';
+import { useIsTeamProject } from './lib/usePersonalProjectId';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 import { INDEXES_CHAT_UI } from './lib/indexesChatUI';
 import type { EditToolDetail } from './lib/toolkitFormTypes';
@@ -225,6 +226,9 @@ export function EditToolkit({ isMCP = false, deps }: EditToolkitProps): ReactNod
   const params = useParams({ strict: false }) as EditToolkitRouteParams;
   const toolkitId = params.toolkitId ?? params.mcpId ?? params.appId;
   const projectId = useSelectedProjectId();
+  // #952/ELITEA-1092,1094,1099: threaded to `ConfigurationTab`/`ToolkitForm`
+  // below, which gates the "Credential Configuration Change" modal on it.
+  const isTeamProject = useIsTeamProject(projectId);
 
   const { detail, isFetching, isSuccess } = useToolkitDetail(projectId, toolkitId);
   const { canExport, canDelete } = useToolkitActionPermissions(projectId);
@@ -265,6 +269,15 @@ export function EditToolkit({ isMCP = false, deps }: EditToolkitProps): ReactNod
     setEditToolDetail(toEditDetail(detail));
     setIsToolDirty(false);
   }, [detail]);
+
+  // #952/ELITEA-1092,1094,1099: the STABLE server baseline, recomputed only
+  // when `detail` itself changes (a fresh fetch or a successful save) — never
+  // on every keystroke the way `editToolDetail` does. `ConfigurationTab`'s
+  // `originalToolDetail` needs exactly this so `useCredentialWarning`'s
+  // `hasCredentialConfigChanged` has something to diff `editToolDetail`
+  // against; passing `editToolDetail` for both sides (the previous shape)
+  // made the comparison always read a value against itself.
+  const originalToolDetail = useMemo(() => toEditDetail(detail), [detail]);
 
   const handleChangeToolDetail = useCallback((updater: (prev: EditToolDetail | null) => EditToolDetail | null) => {
     setIsToolDirty(true);
@@ -359,9 +372,10 @@ export function EditToolkit({ isMCP = false, deps }: EditToolkitProps): ReactNod
             isFetching={isFetching}
             applicationId={undefined}
             toolkitId={toolkitId}
-            toolDetailState={{ editToolDetail, onChangeToolDetail: handleChangeToolDetail, isToolDirty }}
+            toolDetailState={{ editToolDetail, onChangeToolDetail: handleChangeToolDetail, isToolDirty, originalToolDetail }}
             isMCP={isMCP}
             projectId={projectId}
+            isTeamProject={isTeamProject}
             onValidationStateChange={saveControls.onValidationStateChange}
             saveHandlers={{ saveToolkit: saveToolkitMutation, onSaveSuccess: saveControls.onSaveSuccess, onSaveError: saveControls.onSaveError }}
             slots={configurationTabSlots}

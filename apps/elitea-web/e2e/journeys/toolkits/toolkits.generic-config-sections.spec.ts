@@ -156,8 +156,8 @@ test('ELITEA-2814: an unsaved edit inside Advanced Settings survives collapsing 
   await expect(page.getByLabel('Max Pages')).toHaveValue('42', { timeout: 10_000 });
 });
 
-test('ELITEA-2815: PRODUCT GAP — the Form/Raw JSON view toggle uses text labels, not icons', async ({ page }) => {
-  /* onetest: ELITEA-2815 — the toggle should be icon-only with tooltips; the real one carries visible text labels ("Form"/"Raw Json") */
+test('ELITEA-2815: the Form/Raw JSON view toggle is icon-only, named by tooltip (#923, fixed)', async ({ page }) => {
+  /* onetest: ELITEA-2815 — the toggle is icon-only, with "Form"/"Raw Json" as the accessible name/tooltip, not visible text. */
   test.setTimeout(90_000);
   const id = await createConfluenceToolkit(page.request, `${AUTOTEST_PREFIX}tkview_${RUN_ID}`);
 
@@ -167,16 +167,15 @@ test('ELITEA-2815: PRODUCT GAP — the Form/Raw JSON view toggle uses text label
   const formButton = page.getByRole('button', { name: 'Form', exact: true });
   await expect(formButton).toBeVisible({ timeout: 20_000 });
 
-  // `FormViewToggle` (`ToolkitForm/FormViewToggle.tsx`) passes `label: 'Form'`
-  // / `label: 'Raw Json'` with no `icon` — `TabButtonItem` renders the label
-  // as visible `Typography` text whenever one is supplied. This asserts the
-  // absence of an icon glyph the case expects to be the ONLY visible content.
-  test.fail(true, 'ELITEA-2815 (#923): product gap — the view toggle renders "Form"/"Raw Json" as visible text (FormViewToggle.tsx passes label, no icon), not icon-only controls');
+  // `FormViewToggle` now passes `icon` alongside `label`; `TabButtonItem`
+  // renders the icon only and moves the label to the accessible name
+  // (`aria-label`)/tooltip, per #923.
   await expect(formButton.locator('svg')).toBeVisible();
+  await expect(formButton.getByText('Form', { exact: true })).toHaveCount(0);
 });
 
-test('ELITEA-2816 (#924)/2817: PRODUCT GAP — the Tools section header carries no enabled/total count', async ({ page }) => {
-  /* onetest: ELITEA-2816, ELITEA-2817 — header should read "Tools <enabled>/<total>" and update live; the real header is the bare word "Tools" */
+test('ELITEA-2816 (#924)/2817: the Tools section header carries a live enabled/total count (fixed)', async ({ page }) => {
+  /* onetest: ELITEA-2816, ELITEA-2817 — header reads "Tools <enabled>/<total>" and updates live as tools are toggled. */
   test.setTimeout(90_000);
   const id = await createConfluenceToolkit(page.request, `${AUTOTEST_PREFIX}tktools_${RUN_ID}`, {
     selected_tools: ['create_page', 'delete_page'],
@@ -185,13 +184,14 @@ test('ELITEA-2816 (#924)/2817: PRODUCT GAP — the Tools section header carries 
   await page.goto(`${BASE_URL}/app/toolkits/all/${id}`, { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('edit-toolkit-test-pane-slot')).toBeAttached({ timeout: 30_000 });
 
-  // `ToolActionsSelector.tsx` hardcodes its accordion title to the bare
-  // string `t('...toolActionsSelector.title', 'Tools')` — there is no prop
-  // to inject a count, and no count is computed anywhere in that file.
   const toolsHeader = page.getByRole('button', { name: /^Tools/ });
   await expect(toolsHeader).toBeVisible({ timeout: 20_000 });
-  test.fail(true, 'ELITEA-2816 (#924)/2817: product gap — ToolActionsSelector.tsx titles the accordion the bare word "Tools", with no enabled/total count and nothing to update live');
   await expect(toolsHeader).toHaveText(/Tools\s*\d+\s*\/\s*\d+/);
+
+  // Live update: toggling a tool changes the enabled count without a reload.
+  const initialText = (await toolsHeader.textContent()) ?? '';
+  await page.getByRole('button', { name: 'Create page', exact: true }).click();
+  await expect(toolsHeader).not.toHaveText(initialText, { timeout: 10_000 });
 });
 
 test('ELITEA-2820/2822: the Tools accordion header opens and closes on click, and its state survives other on-page interactions', async ({ page }) => {

@@ -21,6 +21,8 @@ export interface CredentialFormSectionProps {
   readonly fieldErrors: Readonly<Record<string, string>>;
   /** Threaded to `CredentialSchemaField` for the `'configuration'` picker. */
   readonly projectId: string;
+  /** #925/ELITEA-1069,1074: threaded to `CredentialSchemaField`'s secret-kind fields — see that prop's own doc comment. A section's auth subsections (e.g. GitHub's Token/Basic/App radio group) render THIS component's own `CredentialSchemaField` calls, a second call site `CredentialForm.tsx`'s direct property loop does not cover. */
+  readonly isTeamProject?: boolean;
   readonly onChange: (fieldKey: string, value: unknown) => void;
 }
 
@@ -100,6 +102,7 @@ export function CredentialFormSection({
   data,
   fieldErrors,
   projectId,
+  isTeamProject,
   onChange,
 }: CredentialFormSectionProps): ReactNode {
   const subsections = section.subsections ?? EMPTY_SUBSECTIONS;
@@ -171,6 +174,7 @@ export function CredentialFormSection({
             error={fieldErrors[fieldKey]}
             required={required}
             projectId={projectId}
+            {...(isTeamProject === undefined ? {} : { isTeamProject })}
             onChange={onChange}
           />
         );

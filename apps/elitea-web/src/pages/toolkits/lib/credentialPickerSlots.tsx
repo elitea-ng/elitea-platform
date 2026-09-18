@@ -66,6 +66,14 @@ export function useToolkitCredentialPickerSlot(
    * refusal. See `./useCredentialSaveGate.ts`.
    */
   onRefusalChange?: (fieldKey: string, refusal: SelectedCredentialRefusal | null) => void,
+  /**
+   * #953/ELITEA-2494 vs elitea_issues#4138 — forwarded to `ToolkitCredentialPicker`'s
+   * own `isCreating` (see that prop's doc comment): `true` only from
+   * `CreateToolkit.tsx`, so the fresh CREATE form pre-selects the only saved
+   * credential while `EditToolkit.tsx` (the default, `false`) keeps #4138's
+   * fix — no silent preselection on an existing toolkit.
+   */
+  isCreating = false,
 ): (context: CredentialFieldContextLike) => ReactNode {
   return useCallback(
     (context: CredentialFieldContextLike) => {
@@ -85,11 +93,12 @@ export function useToolkitCredentialPickerSlot(
             helperText: context.helperText,
             disabled: context.disabled,
           }}
+          isCreating={isCreating}
           {...(onRefusalChange === undefined ? {} : { onRefusalChange: (refusal: SelectedCredentialRefusal | null) => onRefusalChange(fieldKey, refusal) })}
         />
       );
     },
-    [projectId, onRefusalChange],
+    [projectId, onRefusalChange, isCreating],
   );
 }
 

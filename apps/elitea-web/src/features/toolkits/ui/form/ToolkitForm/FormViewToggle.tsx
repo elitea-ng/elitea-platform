@@ -4,6 +4,8 @@ import { useCallback, useMemo } from 'react';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { ToolkitViewOptions } from '@/shared/lib/enums';
+import { FormIcon } from '@/shared/ui/icons/form-icon';
+import { JsonIcon } from '@/shared/ui/icons/json-icon';
 import { TabGroupButton } from '@/shared/ui/TabGroupButton';
 import type { TabGroupButtonItem } from '@/shared/ui/TabGroupButton';
 
@@ -33,8 +35,20 @@ export interface FormViewToggleProps {
 export function FormViewToggle({ view = ToolkitViewOptions.Form, onChangeView, containerSX, disabled }: FormViewToggleProps): ReactNode {
   const items: TabGroupButtonItem[] = useMemo(
     () => [
-      { value: ToolkitViewOptions.Form, label: 'Form', tooltip: 'Form view', ...(disabled !== undefined ? { disabled } : {}) },
-      { value: ToolkitViewOptions.Json, label: 'Raw Json', tooltip: 'Raw Json view', ...(disabled !== undefined ? { disabled } : {}) },
+      {
+        value: ToolkitViewOptions.Form,
+        label: 'Form',
+        tooltip: 'Form view',
+        icon: <FormIcon />,
+        ...(disabled !== undefined ? { disabled } : {}),
+      },
+      {
+        value: ToolkitViewOptions.Json,
+        label: 'Raw Json',
+        tooltip: 'Raw Json view',
+        icon: <JsonIcon />,
+        ...(disabled !== undefined ? { disabled } : {}),
+      },
     ],
     [disabled],
   );
