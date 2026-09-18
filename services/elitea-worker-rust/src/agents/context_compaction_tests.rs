@@ -60,8 +60,7 @@ impl Llm for Summary {
         if call <= self.invalid_candidates {
             let mut candidate: Value =
                 serde_json::from_str(&crate::agents::context_summary::fixture()).unwrap();
-            candidate["completed_work"] =
-                json!([{"result":"completed", "evidence_refs":["invented-reference"]}]);
+            candidate["completed_work"][0]["evidence_refs"] = json!(["invented-reference"]);
             if call == 2 {
                 // The correction must not turn its own rejected candidate
                 // into a source for invented reference values.
@@ -822,11 +821,14 @@ async fn summary_correction_is_bounded_and_keeps_original_evidence() {
             let (_, record) = result.unwrap();
             assert!(record.is_some());
         } else {
-            assert_eq!(result.err().unwrap().code, "context_summary_reference");
+            assert_eq!(result.err().unwrap().code, "context_summary_evidence");
         }
         let calls = summary.requests.lock().unwrap();
         let corrected_prompt = serde_json::to_string(&calls[1]).unwrap();
         assert!(corrected_prompt.contains("context_summary_evidence"));
-        assert!(corrected_prompt.contains("Original task, preserve this exactly."));
+        assert!(corrected_prompt.contains("evidence_refs_only"));
+        assert!(corrected_prompt.contains("call-one"));
+        assert!(!corrected_prompt.contains("earlier draft"));
+        assert!(corrected_prompt.len() < 8_000);
     }
 }

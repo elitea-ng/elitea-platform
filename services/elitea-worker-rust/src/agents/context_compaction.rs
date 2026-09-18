@@ -76,7 +76,7 @@ impl DurableContextCompaction {
         );
         let repair_summarizer = Arc::new(
             LlmEventSummarizer::new(model).with_prompt_template(format!(
-                "{}\nThe previous candidate failed validation. Correct it using only the original source records. The final validation-feedback record contains the rejected candidate and a static failure code, not additional source evidence. Return the complete corrected record. Each evidence_refs entry must equal a references.value, not a label. Every referenced value must exist in the original source. Preserve valid facts; do not invent references to satisfy validation.",
+                "{}\nThe previous candidate failed validation. Correct it using only the original source records. The final validation-feedback record contains the rejected candidate and a static failure code, not additional source evidence. Return the complete corrected record. Each evidence_refs entry must equal a references.value, not a label. Every referenced value must exist in the original source. Preserve valid facts; do not invent references to satisfy validation. When correction_scope is evidence_refs_only, only change completed_work evidence_refs arrays. Select exact entries from allowed_evidence_refs. Use an empty array when no allowed entry supports the result. Preserve every other field exactly. Original bulk history is omitted for this scoped correction; the platform already checked the allowed reference values.",
                 super::context_summary::prompt(&plan.summary_instructions)
             )),
         );
@@ -256,9 +256,16 @@ impl DurableContextCompaction {
                 );
                 let mut feedback = Event::new("context-summary-validation");
                 "validation-feedback".clone_into(&mut feedback.author);
-                feedback.set_content(Content::new("user").with_text(
-                    serde_json::json!({"validation_code": error.code, "rejected_candidate": text}).to_string(),
-                ));
+                let evidence_only = error.code == "context_summary_evidence";
+                let feedback_value = if evidence_only {
+                    events.clear();
+                    let mut value = super::context_summary::evidence_correction_input(text)?;
+                    value["validation_code"] = Value::String(error.code.into());
+                    value
+                } else {
+                    serde_json::json!({"validation_code": error.code, "rejected_candidate": text})
+                };
+                feedback.set_content(Content::new("user").with_text(feedback_value.to_string()));
                 events.push(feedback);
                 let corrected = self
                     .repair_summarizer
@@ -266,10 +273,19 @@ impl DurableContextCompaction {
                     .await?
                     .and_then(|event| event.actions.compaction)
                     .ok_or_else(invalid_compaction)?;
-                let [Part::Text { text }] = corrected.compacted_content.parts.as_slice() else {
+                let [
+                    Part::Text {
+                        text: corrected_text,
+                    },
+                ] = corrected.compacted_content.parts.as_slice()
+                else {
                     return Err(invalid_compaction());
                 };
-                super::context_summary::validate(text, &source)
+                if evidence_only {
+                    super::context_summary::apply_evidence_correction(text, corrected_text, &source)
+                } else {
+                    super::context_summary::validate(corrected_text, &source)
+                }
             }
         }
     }

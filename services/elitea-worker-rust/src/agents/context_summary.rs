@@ -158,6 +158,47 @@ pub(super) fn validate(text: &str, source: &serde_json::Value) -> adk_rust::Resu
     Ok(validated)
 }
 
+/// Called only after validation rejects evidence membership. All reference
+/// values have already passed source validation at that stage.
+pub(super) fn evidence_correction_input(text: &str) -> adk_rust::Result<serde_json::Value> {
+    let candidate: ContinuationSummary =
+        serde_json::from_str(summary_json(text)?).map_err(|_| invalid("context_summary_schema"))?;
+    Ok(serde_json::json!({
+        "correction_scope": "evidence_refs_only",
+        "allowed_evidence_refs": candidate.references.iter().map(|item| &item.value).collect::<Vec<_>>(),
+        "rejected_candidate": candidate
+    }))
+}
+
+/// Apply only evidence arrays to the original candidate. Model rewrites of
+/// facts or references never enter the accepted continuation record.
+pub(super) fn apply_evidence_correction(
+    original: &str,
+    corrected: &str,
+    source: &serde_json::Value,
+) -> adk_rust::Result<String> {
+    if corrected.len() > MAX_SUMMARY_BYTES {
+        return Err(invalid("context_summary_size"));
+    }
+    let parse = |text: &str| -> adk_rust::Result<ContinuationSummary> {
+        serde_json::from_str(summary_json(text)?).map_err(|_| invalid("context_summary_schema"))
+    };
+    let mut candidate = parse(original)?;
+    let correction = parse(corrected)?;
+    if candidate.completed_work.len() != correction.completed_work.len() {
+        return Err(invalid("context_summary_correction_work_count"));
+    }
+    for (work, corrected_work) in candidate
+        .completed_work
+        .iter_mut()
+        .zip(correction.completed_work)
+    {
+        work.evidence_refs = corrected_work.evidence_refs;
+    }
+    let merged = serde_json::to_string(&candidate).map_err(|_| invalid("context_summary_json"))?;
+    validate(&merged, source)
+}
+
 /// Some compatible gateways accept a schema option but still return Markdown.
 /// Parse one complete object with Serde; never repair JSON or choose between objects.
 fn summary_json(text: &str) -> adk_rust::Result<&str> {
@@ -324,5 +365,28 @@ mod tests {
             &serde_json::json!({"summary":serde_json::json!({"reference":reference}).to_string()}),
             reference
         ));
+    }
+    #[test]
+    fn evidence_correction_preserves_every_other_field() {
+        let source = serde_json::json!("call-one");
+        let mut original: serde_json::Value = serde_json::from_str(&fixture()).unwrap();
+        original["completed_work"][0]["evidence_refs"] = serde_json::json!(["invented"]);
+        let original = original.to_string();
+        assert!(apply_evidence_correction(&original, &fixture(), &source).is_ok());
+        for field in ["objective", "open_work", "completed_work", "references"] {
+            let mut changed: serde_json::Value = serde_json::from_str(&fixture()).unwrap();
+            match field {
+                "objective" => changed[field] = serde_json::json!("Different task"),
+                "completed_work" => {
+                    changed[field][0]["result"] = serde_json::json!("Different result");
+                }
+                "references" => changed[field][0]["label"] = serde_json::json!("Different label"),
+                _ => changed[field] = serde_json::json!(["Different next action"]),
+            }
+            assert_eq!(
+                apply_evidence_correction(&original, &changed.to_string(), &source).unwrap(),
+                validate(&fixture(), &source).unwrap()
+            );
+        }
     }
 }

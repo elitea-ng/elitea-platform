@@ -173,3 +173,34 @@ All 11 compaction checks and 43 provider-adapter checks pass after this correcti
 The checks include ten compactions in one tool loop and bounded correction failure.
 All-target Clippy passes with warnings denied.
 Live acceptance of the correction remains pending.
+
+The correction image is `sha256:c5d3a85f20edeed6a63d411173db4e38b7a652faed7be9291dd3ce2ec9225314`.
+A fresh browser test reaches 108,194 estimated tokens but fails evidence validation twice.
+Execution `8b046f87ee9b50574ed37dfd7b373067` preserves the original history.
+No live compaction success is claimed.
+
+A separate full-fixture probe returns invented evidence labels instead of reference values.
+For example, `Historical synthetic records 4-9 confirmation` has no matching reference entry.
+The probe uses synthetic data and 74,223 provider-reported input tokens.
+This differs from the worker's byte-based estimate and is not a measurement of the failed worker request.
+The next correction must use validated reference values and preserve all non-evidence fields.
+Resending the full source for this reference-only correction is unnecessary.
+
+## Evidence-only correction
+
+`context_summary.rs::evidence_correction_input` exposes only the candidate and its previously validated reference values.
+For evidence-membership failures, `DurableContextCompaction` omits the original bulk history from the correction request.
+Other validation failures retain the original bounded correction path.
+
+`apply_evidence_correction` copies only evidence arrays onto the original candidate.
+It checks the completed-work count and validates the merged record against the original source.
+Model rewrites of facts, objectives, decisions, references, or pending work are discarded.
+An invented reference cannot become evidence through the correction response.
+The original candidate remains uncommitted until the merged record passes validation.
+
+A synthetic provider probe reduces correction input from 74,223 to 1,246 reported tokens.
+It fixes evidence links but also rewrites one result sentence.
+The selective merge prevents that unrelated rewrite from changing the accepted record.
+All five summary parser checks and 11 compaction checks pass.
+The short correction input check also verifies that bulk historical text is absent.
+Live browser acceptance remains pending for this refinement.
