@@ -101,13 +101,26 @@ async function makeGithubToolkit(page: Page, suffix: string, selectedTools: read
  * editor refuses Save for a toolkit whose selected credential failed its
  * connection check (`pages/toolkits/lib/useCredentialSaveGate.ts`), and the
  * placeholder GitHub endpoint every fixture here uses is deliberately
- * unroutable, so a github toolkit is never saveable in this suite. The `aha`
- * credential type has no connection check at all on this stack — its own
- * `check_connection_func` answers `unsupported_type`, which the gate
- * correctly does not treat as a refusal (see `toolkits.aha.spec.ts`'s
- * AHA-10) — so it is the type whose Save button this suite can actually
- * press. It carries the same served group classification.
+ * unroutable, so a github toolkit is never saveable in this suite.
+ *
+ * The `aha` credential below is saveable because its check PASSES, not
+ * because no check exists. `aha` used to have no probe at all
+ * (`unsupported_type`, which the gate correctly does not treat as a refusal);
+ * #920 gave it one, so the credential now names the stack's stand-in
+ * provider — the `elitea-web` container, allowlisted by
+ * `ELITEA_TOOLKIT_CHECK_ALLOWLIST` in `deploy/docker-compose.e2e-standalone.
+ * yml`, whose SPA history fallback answers 200 for any `/app/**` path. The
+ * probe therefore completes a real round trip and certifies the credential.
+ * See `STANDIN_PROVIDER_BASE_URL` in `toolkits.aha.spec.ts` for the whole
+ * reasoning. `aha` carries the same served group classification either way.
  */
+/**
+ * The endpoint the `aha` credential names — see the comment above. It is a
+ * host INSIDE the compose network that answers 2xx, so the credential passes
+ * its check; no vendor is contacted.
+ */
+const STANDIN_PROVIDER_BASE_URL = 'http://elitea-web/app';
+
 const ahaToolkitIds: string[] = [];
 const ahaCredentialIds: string[] = [];
 
@@ -117,7 +130,7 @@ async function makeAhaToolkit(page: Page, suffix: string): Promise<string> {
     title,
     type: 'aha',
     shared: true,
-    data: { base_url: 'https://autotest-aha.invalid.example', api_key: 'autotest-placeholder-aha-key' },
+    data: { base_url: STANDIN_PROVIDER_BASE_URL, api_key: 'autotest-placeholder-aha-key' },
   });
   ahaCredentialIds.push(credential.id);
 

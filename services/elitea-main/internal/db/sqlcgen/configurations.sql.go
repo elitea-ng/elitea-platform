@@ -18,6 +18,19 @@ WHERE project_id = $1::integer
   AND (COALESCE(cardinality($2::text[]), 0) = 0 OR type = ANY($2::text[]))
   AND (COALESCE(cardinality($3::text[]), 0) = 0 OR section = ANY($3::text[]))
   AND ($4::text = '' OR label ILIKE ('%' || $4::text || '%'))
+  -- Visibility. A row that is not ` + "`" + `shared` + "`" + ` belongs to the member who created
+  -- it: ` + "`" + `shared` + "`" + ` is an ACL on the LIST read, not only a hint for how a later
+  -- reference resolves (#922). viewer_id = 0 means "no viewer was supplied"
+  -- and keeps the unrestricted project page for a service-internal read; a
+  -- row with no author cannot be attributed to anybody and stays visible,
+  -- which is the shape the seeds write (author_id NULL, legacy
+  -- ` + "`" + `environment_settings_seed.py` + "`" + `).
+  AND (
+      configuration.shared = true
+      OR $5::integer = 0
+      OR configuration.author_id IS NULL
+      OR configuration.author_id = $5::integer
+  )
 `
 
 type CountCurrentConfigurationsParams struct {
@@ -25,6 +38,7 @@ type CountCurrentConfigurationsParams struct {
 	Types      []string `db:"types" json:"types"`
 	Sections   []string `db:"sections" json:"sections"`
 	LabelQuery string   `db:"label_query" json:"label_query"`
+	ViewerID   int32    `db:"viewer_id" json:"viewer_id"`
 }
 
 func (q *Queries) CountCurrentConfigurations(ctx context.Context, arg CountCurrentConfigurationsParams) (int64, error) {
@@ -33,6 +47,7 @@ func (q *Queries) CountCurrentConfigurations(ctx context.Context, arg CountCurre
 		arg.Types,
 		arg.Sections,
 		arg.LabelQuery,
+		arg.ViewerID,
 	)
 	var count int64
 	err := row.Scan(&count)
@@ -567,44 +582,52 @@ WHERE configuration.project_id = $1::integer
   AND (COALESCE(cardinality($2::text[]), 0) = 0 OR configuration.type = ANY($2::text[]))
   AND (COALESCE(cardinality($3::text[]), 0) = 0 OR configuration.section = ANY($3::text[]))
   AND ($4::text = '' OR configuration.label ILIKE ('%' || $4::text || '%'))
+  -- Visibility: see CountCurrentConfigurations. The two predicates must stay
+  -- identical or the page total stops describing the page (#922).
+  AND (
+      configuration.shared = true
+      OR $5::integer = 0
+      OR configuration.author_id IS NULL
+      OR configuration.author_id = $5::integer
+  )
 ORDER BY
   (social_pins.id IS NOT NULL) DESC,
   social_pins.updated_at DESC NULLS LAST,
-  CASE WHEN $5::text = 'asc'  AND $6::text = 'id'            THEN configuration.id END ASC,
-  CASE WHEN $5::text = 'desc' AND $6::text = 'id'            THEN configuration.id END DESC,
-  CASE WHEN $5::text = 'asc'  AND $6::text = 'uuid'          THEN configuration.uuid END ASC,
-  CASE WHEN $5::text = 'desc' AND $6::text = 'uuid'          THEN configuration.uuid END DESC,
-  CASE WHEN $5::text = 'asc'  AND $6::text = 'project_id'    THEN configuration.project_id END ASC,
-  CASE WHEN $5::text = 'desc' AND $6::text = 'project_id'    THEN configuration.project_id END DESC,
-  CASE WHEN $5::text = 'asc'  AND $6::text = 'label'         THEN configuration.label END ASC NULLS LAST,
-  CASE WHEN $5::text = 'desc' AND $6::text = 'label'         THEN configuration.label END DESC NULLS LAST,
-  CASE WHEN $5::text = 'asc'  AND $6::text = 'elitea_title'  THEN configuration.elitea_title END ASC,
-  CASE WHEN $5::text = 'desc' AND $6::text = 'elitea_title'  THEN configuration.elitea_title END DESC,
-  CASE WHEN $5::text = 'asc'  AND $6::text = 'type'          THEN configuration.type END ASC,
-  CASE WHEN $5::text = 'desc' AND $6::text = 'type'          THEN configuration.type END DESC,
-  CASE WHEN $5::text = 'asc'  AND $6::text = 'section'       THEN configuration.section END ASC,
-  CASE WHEN $5::text = 'desc' AND $6::text = 'section'       THEN configuration.section END DESC,
-  CASE WHEN $5::text = 'asc'  AND $6::text = 'data'          THEN configuration.data END ASC,
-  CASE WHEN $5::text = 'desc' AND $6::text = 'data'          THEN configuration.data END DESC,
-  CASE WHEN $5::text = 'asc'  AND $6::text = 'meta'          THEN configuration.meta END ASC,
-  CASE WHEN $5::text = 'desc' AND $6::text = 'meta'          THEN configuration.meta END DESC,
-  CASE WHEN $5::text = 'asc'  AND $6::text = 'shared'        THEN configuration.shared END ASC,
-  CASE WHEN $5::text = 'desc' AND $6::text = 'shared'        THEN configuration.shared END DESC,
-  CASE WHEN $5::text = 'asc'  AND $6::text = 'status_ok'     THEN configuration.status_ok END ASC,
-  CASE WHEN $5::text = 'desc' AND $6::text = 'status_ok'     THEN configuration.status_ok END DESC,
-  CASE WHEN $5::text = 'asc'  AND $6::text = 'status_logs'   THEN configuration.status_logs END ASC NULLS LAST,
-  CASE WHEN $5::text = 'desc' AND $6::text = 'status_logs'   THEN configuration.status_logs END DESC NULLS LAST,
-  CASE WHEN $5::text = 'asc'  AND $6::text = 'source'        THEN configuration.source END ASC,
-  CASE WHEN $5::text = 'desc' AND $6::text = 'source'        THEN configuration.source END DESC,
-  CASE WHEN $5::text = 'asc'  AND $6::text = 'author_id'     THEN configuration.author_id END ASC NULLS LAST,
-  CASE WHEN $5::text = 'desc' AND $6::text = 'author_id'     THEN configuration.author_id END DESC NULLS LAST,
-  CASE WHEN $5::text = 'asc'  AND $6::text = 'created_at'    THEN configuration.created_at END ASC,
-  CASE WHEN $5::text = 'desc' AND $6::text = 'created_at'    THEN configuration.created_at END DESC,
-  CASE WHEN $5::text = 'asc'  AND $6::text = 'updated_at'    THEN configuration.updated_at END ASC NULLS LAST,
-  CASE WHEN $5::text = 'desc' AND $6::text = 'updated_at'    THEN configuration.updated_at END DESC NULLS LAST,
+  CASE WHEN $6::text = 'asc'  AND $7::text = 'id'            THEN configuration.id END ASC,
+  CASE WHEN $6::text = 'desc' AND $7::text = 'id'            THEN configuration.id END DESC,
+  CASE WHEN $6::text = 'asc'  AND $7::text = 'uuid'          THEN configuration.uuid END ASC,
+  CASE WHEN $6::text = 'desc' AND $7::text = 'uuid'          THEN configuration.uuid END DESC,
+  CASE WHEN $6::text = 'asc'  AND $7::text = 'project_id'    THEN configuration.project_id END ASC,
+  CASE WHEN $6::text = 'desc' AND $7::text = 'project_id'    THEN configuration.project_id END DESC,
+  CASE WHEN $6::text = 'asc'  AND $7::text = 'label'         THEN configuration.label END ASC NULLS LAST,
+  CASE WHEN $6::text = 'desc' AND $7::text = 'label'         THEN configuration.label END DESC NULLS LAST,
+  CASE WHEN $6::text = 'asc'  AND $7::text = 'elitea_title'  THEN configuration.elitea_title END ASC,
+  CASE WHEN $6::text = 'desc' AND $7::text = 'elitea_title'  THEN configuration.elitea_title END DESC,
+  CASE WHEN $6::text = 'asc'  AND $7::text = 'type'          THEN configuration.type END ASC,
+  CASE WHEN $6::text = 'desc' AND $7::text = 'type'          THEN configuration.type END DESC,
+  CASE WHEN $6::text = 'asc'  AND $7::text = 'section'       THEN configuration.section END ASC,
+  CASE WHEN $6::text = 'desc' AND $7::text = 'section'       THEN configuration.section END DESC,
+  CASE WHEN $6::text = 'asc'  AND $7::text = 'data'          THEN configuration.data END ASC,
+  CASE WHEN $6::text = 'desc' AND $7::text = 'data'          THEN configuration.data END DESC,
+  CASE WHEN $6::text = 'asc'  AND $7::text = 'meta'          THEN configuration.meta END ASC,
+  CASE WHEN $6::text = 'desc' AND $7::text = 'meta'          THEN configuration.meta END DESC,
+  CASE WHEN $6::text = 'asc'  AND $7::text = 'shared'        THEN configuration.shared END ASC,
+  CASE WHEN $6::text = 'desc' AND $7::text = 'shared'        THEN configuration.shared END DESC,
+  CASE WHEN $6::text = 'asc'  AND $7::text = 'status_ok'     THEN configuration.status_ok END ASC,
+  CASE WHEN $6::text = 'desc' AND $7::text = 'status_ok'     THEN configuration.status_ok END DESC,
+  CASE WHEN $6::text = 'asc'  AND $7::text = 'status_logs'   THEN configuration.status_logs END ASC NULLS LAST,
+  CASE WHEN $6::text = 'desc' AND $7::text = 'status_logs'   THEN configuration.status_logs END DESC NULLS LAST,
+  CASE WHEN $6::text = 'asc'  AND $7::text = 'source'        THEN configuration.source END ASC,
+  CASE WHEN $6::text = 'desc' AND $7::text = 'source'        THEN configuration.source END DESC,
+  CASE WHEN $6::text = 'asc'  AND $7::text = 'author_id'     THEN configuration.author_id END ASC NULLS LAST,
+  CASE WHEN $6::text = 'desc' AND $7::text = 'author_id'     THEN configuration.author_id END DESC NULLS LAST,
+  CASE WHEN $6::text = 'asc'  AND $7::text = 'created_at'    THEN configuration.created_at END ASC,
+  CASE WHEN $6::text = 'desc' AND $7::text = 'created_at'    THEN configuration.created_at END DESC,
+  CASE WHEN $6::text = 'asc'  AND $7::text = 'updated_at'    THEN configuration.updated_at END ASC NULLS LAST,
+  CASE WHEN $6::text = 'desc' AND $7::text = 'updated_at'    THEN configuration.updated_at END DESC NULLS LAST,
   configuration.id ASC
-LIMIT $8::integer
-OFFSET $7::integer
+LIMIT $9::integer
+OFFSET $8::integer
 `
 
 type ListCurrentConfigurationsParams struct {
@@ -612,6 +635,7 @@ type ListCurrentConfigurationsParams struct {
 	Types      []string `db:"types" json:"types"`
 	Sections   []string `db:"sections" json:"sections"`
 	LabelQuery string   `db:"label_query" json:"label_query"`
+	ViewerID   int32    `db:"viewer_id" json:"viewer_id"`
 	SortOrder  string   `db:"sort_order" json:"sort_order"`
 	SortBy     string   `db:"sort_by" json:"sort_by"`
 	OffsetRows int32    `db:"offset_rows" json:"offset_rows"`
@@ -644,6 +668,7 @@ func (q *Queries) ListCurrentConfigurations(ctx context.Context, arg ListCurrent
 		arg.Types,
 		arg.Sections,
 		arg.LabelQuery,
+		arg.ViewerID,
 		arg.SortOrder,
 		arg.SortBy,
 		arg.OffsetRows,

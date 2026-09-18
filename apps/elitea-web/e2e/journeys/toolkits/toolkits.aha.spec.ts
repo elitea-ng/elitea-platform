@@ -38,7 +38,32 @@ readsPlatformFlags(test);
 const RUN_ID = String(Date.now()).slice(-6);
 const tag = (label: string): string => `${AUTOTEST_PREFIX}${label}_${RUN_ID}`;
 
-const PLACEHOLDER_BASE_URL = 'https://autotest-aha.invalid.example';
+/**
+ * The endpoint every credential in this file names.
+ *
+ * WHY IT IS AN IN-NETWORK HOST AND NOT A PLACEHOLDER. Since #920 the server
+ * really probes an `aha` credential (`GET {base_url}/api/v1/me`, bearer —
+ * `internal/api/v2/configurations/toolkit_check.go`), and the toolkit editor
+ * refuses Save for a credential whose check FAILED
+ * (`pages/toolkits/lib/useCredentialSaveGate.ts`). A credential pointed at an
+ * unroutable placeholder is therefore no longer saveable, and this file's own
+ * AHA-9 (and `toolkits.tool-groups.spec.ts`) exist to press Save.
+ *
+ * `elitea-web` is the stack's stand-in provider: the compose file allowlists
+ * it (`ELITEA_TOOLKIT_CHECK_ALLOWLIST`) and its SPA history fallback answers
+ * 200 for any `/app/**` path, so the probe completes a REAL round trip and
+ * reads a 2xx — which is exactly what "the provider recognised this
+ * credential" means to the checker. No vendor is contacted, and nothing here
+ * depends on the internet.
+ */
+const STANDIN_PROVIDER_BASE_URL = 'http://elitea-web/app';
+/**
+ * A host nothing can reach, for the cases that want a REFUSAL. `.example` is
+ * reserved (RFC 2606) and the name is not in the stack's allowlist either, so
+ * the check is refused before the dial on this stack and after a dead dial on
+ * any other.
+ */
+const UNREACHABLE_BASE_URL = 'https://autotest-aha.invalid.example';
 const PLACEHOLDER_API_KEY = 'autotest-placeholder-aha-key';
 
 /** Ids created by this file, removed best-effort in `afterAll`. */
@@ -69,7 +94,7 @@ async function seedAhaCredential(
     title,
     type: 'aha',
     shared: options.shared ?? false,
-    data: options.data ?? { base_url: PLACEHOLDER_BASE_URL, api_key: PLACEHOLDER_API_KEY },
+    data: options.data ?? { base_url: STANDIN_PROVIDER_BASE_URL, api_key: PLACEHOLDER_API_KEY },
   });
   createdCredentialIds.push(id);
   return id;
@@ -105,7 +130,7 @@ async function fillAndSaveAhaCredential(
   options: { readonly shared?: boolean; readonly baseUrl?: string; readonly apiKey?: string } = {},
 ): Promise<string> {
   await page.getByRole('textbox', { name: 'Name', exact: true }).fill(name);
-  await page.getByRole('textbox', { name: 'Base Url' }).fill(options.baseUrl ?? PLACEHOLDER_BASE_URL);
+  await page.getByRole('textbox', { name: 'Base Url' }).fill(options.baseUrl ?? STANDIN_PROVIDER_BASE_URL);
   await page.getByLabel('Api Key').fill(options.apiKey ?? PLACEHOLDER_API_KEY);
 
   if (options.shared === true) {
@@ -375,23 +400,27 @@ test('AHA-4: a project credential is shared and usable by another project member
 });
 
 /**
- * AHA-4b: a "private"/personal credential is still visible to another
- * project member — a product gap. `private`/`shared` only changes how a
- * STORED REFERENCE resolves (`e2e/fixtures/configurations.ts`'s own "private
- * trap" doc comment: `private: true` resolves in the referencing CALLER's
- * personal project) — it is not an ACL on the picker's LIST read within the
- * project the credential was created in. Confirmed live: a `shared: false`
- * credential created by the `member` persona in the shared project is fully
- * visible to the `admin` persona's picker in that same project.
+ * AHA-4b: a "private"/personal credential is invisible to another project
+ * member (#922, fixed).
+ *
+ * `shared` used to change only how a stored REFERENCE resolves later
+ * (`e2e/fixtures/configurations.ts`'s own "private trap" doc comment:
+ * `private: true` resolves in the referencing CALLER's personal project) and
+ * was not an ACL on the LIST read at all, so a `shared: false` credential the
+ * `member` persona created in the shared project was fully visible, by
+ * Display Name, in the `admin` persona's own picker in that same project.
+ *
+ * The row has always carried `author_id` (the mutation path stamps it), so
+ * the fix is a predicate rather than a schema change: the project page now
+ * returns a row that is shared, or authored by nobody (the shape the seeds
+ * write), or authored by the viewer —
+ * `internal/db/queries/configurations.sql` plus the viewer the read route
+ * takes from the authenticated principal. The detail route applies the same
+ * three clauses, so the id is not left as the whole access control.
  */
-test('AHA-4b: a personal credential should be invisible to another project member', async ({ browser, page }) => {
-  /* onetest: ELITEA-2504 — product gap: a personal ("private") credential is
-     listed in another project member's Aha Configuration picker. */
-  test.fail(
-    true,
-    'ELITEA-2504 (#922): product gap — a private/personal credential is still listed for every other ' +
-      'project member; private/shared only changes how a stored REFERENCE resolves, not who can see the row',
-  );
+test('AHA-4b: a personal credential is invisible to another project member', async ({ browser, page }) => {
+  /* onetest: ELITEA-2504 — a personal ("private") credential is not listed in
+     another project member's Aha Configuration picker. */
   const personalName = tag('vis_personal');
   await seedAhaCredential(page.request, personalName, { shared: false });
 
@@ -464,7 +493,7 @@ test('AHA-6: an existing credential can be edited and deleted, and both persist'
   // route regardless of what the Name field does.
   const updated = tag('edit_updated');
   const updateResp = await page.request.put(`${API_BASE}/configurations/configuration/${DEFAULT_PROJECT_ID}/${id}`, {
-    data: { elitea_title: original, label: updated, data: { base_url: PLACEHOLDER_BASE_URL, api_key: PLACEHOLDER_API_KEY } },
+    data: { elitea_title: original, label: updated, data: { base_url: STANDIN_PROVIDER_BASE_URL, api_key: PLACEHOLDER_API_KEY } },
   });
   expect(updateResp.ok(), `updating the credential answered ${updateResp.status()}: ${(await updateResp.text()).slice(0, 300)}`).toBe(
     true,
@@ -736,71 +765,76 @@ test('AHA-9b: the MCP access setting persists after Save', async ({ page }) => {
 });
 
 /**
- * AHA-10: "Test connection" for the Aha! credential type never actually
- * checks anything — a product gap. The type descriptor advertises
- * `has_test_connection: true`/`check_connection_supported: true`, and the
- * button renders and is clickable, but the server's own
- * `check_connection_func` answers `{"success":false,"reason":
- * "unsupported_type","message":"Checking connection is not supported yet for
- * configuration type aha"}` for EVERY input — confirmed live: a malformed
- * Base URL, a well-formed unroutable one, and a real-looking one all answer
- * the same "unsupported" state, never `success` or a reachability-based
- * `failure`. That single fact is why ELITEA-2510 (valid credentials succeed),
- * ELITEA-2511 (invalid key fails with an auth message), ELITEA-2512 (bad URL
- * format fails), and ELITEA-2558 (unreachable host times out) can never be
- * satisfied on ANY deployment of this build, not only this offline stack —
- * so none of the four is LIVE-ONLY; all four are this one gap.
+ * AHA-10: "Test connection" really checks an Aha! connection (#920, fixed).
  *
- * DEFERRED (#920): a real probe was prototyped (`toolkit_check.go`'s
- * `toolkitCheckProbes["aha"]`, a bearer `GET {base_url}/api/v1/me`) and it
- * worked — but it also made `aha` join every OTHER toolkit-credential type
- * this offline stack's `ELITEA_TOOLKIT_CHECK_ALLOWLIST=elitea-main` refuses
- * (`unreachable`, a REAL blocking refusal per `useCredentialSaveGate.ts`,
- * unlike `unsupported_type`). `aha` was the ONE type this whole E2E suite
- * could still successfully Save with a synthetic credential — this file's
- * own AHA-9 (deselect-all-tools resave) and `toolkits.tool-groups.spec.ts`
- * (its entire fixture strategy, by its own doc comment: "the `aha`
- * credential type has no connection check at all on this stack... so it is
- * the type whose Save button this suite can actually press") both broke the
- * moment the probe existed. Fixing the product gap correctly is not in
- * question; deciding how the harness gets ANY toolkit type it can Save once
- * every real type is allowlist-refused is a call bigger than this package —
- * left for a harness-owning package, prototype reverted.
+ * THE GAP THIS REPLACES. The `aha` descriptor has always advertised
+ * `has_test_connection: true` and the form has always rendered the button,
+ * but no probe existed server-side: `POST
+ * /configurations/check_connection/{projectId}/aha` answered
+ * `{"success":false,"reason":"unsupported_type"}` for EVERY input — a
+ * malformed base URL, a well-formed unroutable one, and a real tenant alike —
+ * so ELITEA-2510 (a valid credential succeeds), 2511 (a refused token), 2512
+ * (a bad URL) and 2558 (an unreachable host) could not be satisfied on ANY
+ * deployment of that build.
+ *
+ * `toolkit_check.go` now carries the family: one bearer `GET
+ * {base_url}/api/v1/me`, the same call the SDK's own `check_connection` makes
+ * (`elitea_sdk/configurations/aha.py`), bounded and behind the egress
+ * allowlist.
+ *
+ * WHAT THIS TEST CAN PROVE HERE. The verdict is read off the wire, never from
+ * DOM text (an absent message reads as "count 0" whether the check has not
+ * answered yet or never will), and the two inputs are the two the hermetic
+ * stack can genuinely distinguish:
+ *
+ *   - the stand-in provider (`STANDIN_PROVIDER_BASE_URL`), which the stack
+ *     allowlists and which answers 2xx — the probe must report SUCCESS, which
+ *     is only reachable through a real round trip;
+ *   - a host the platform will not reach — the probe must report a
+ *     REACHABILITY refusal, and in particular not `unsupported_type`, which
+ *     would mean it never tried.
+ *
+ * The auth-specific half (2511: a token the vendor itself refuses) needs a
+ * real Aha! tenant and lives in the live lane (`e2e/live/`); the unit suite
+ * covers it against an httptest provider
+ * (`TestAhaCheckAnswersTheFourOutcomesItAdvertises`).
  */
-test('AHA-10: Test connection should actually validate an Aha! connection', async ({ page }) => {
-  /* onetest: ELITEA-2510, ELITEA-2511, ELITEA-2512, ELITEA-2558 — product
-     gap: Test connection for type `aha` always answers `unsupported_type`,
-     for any input, so it can never report success, an auth failure, or a
-     reachability failure. */
-  test.fail(
-    true,
-    'ELITEA-2510 (#920)/2511/2512/2558: product gap — POST /configurations/check_connection/{p}/aha ' +
-      'answers reason="unsupported_type" unconditionally; the aha credential form\'s Test connection ' +
-      'button can never report success or a reachability/auth-specific failure',
-  );
+test('AHA-10: Test connection actually validates an Aha! connection', async ({ page }) => {
+  /* onetest: ELITEA-2510, ELITEA-2512, ELITEA-2558 — Test connection reports
+     success for a credential the provider accepts, and a reachability failure
+     (never "unsupported") for one the platform cannot reach. */
   await gotoCreateAhaCredential(page);
   await page.getByRole('textbox', { name: 'Name', exact: true }).fill(tag('testconn'));
-  await page.getByRole('textbox', { name: 'Base Url' }).fill('https://mycompany.aha.io');
   await page.getByLabel('Api Key').fill(PLACEHOLDER_API_KEY);
 
   const testButton = page.getByRole('button', { name: 'Test connection' });
   await expect(testButton, 'the credential form must offer Test connection for a type with has_test_connection').toBeVisible({
     timeout: 15_000,
   });
-  // Read the SERVER'S OWN verdict off the wire — not a DOM-text poll, which
-  // races the response (an absent message reads as "count 0" whether the
-  // check hasn't answered yet or never will).
-  const [checkResponse] = await Promise.all([
-    page.waitForResponse((r) => r.request().method() === 'POST' && /\/configurations\/check_connection\//.test(r.url()), {
-      timeout: 30_000,
-    }),
-    testButton.click(),
-  ]);
-  const body = (await checkResponse.json()) as { reason?: string; success?: boolean };
+
+  const check = async (baseUrl: string): Promise<{ reason?: string; success?: boolean }> => {
+    await page.getByRole('textbox', { name: 'Base Url' }).fill(baseUrl);
+    const [response] = await Promise.all([
+      page.waitForResponse(
+        (r) => r.request().method() === 'POST' && /\/configurations\/check_connection\//.test(r.url()),
+        { timeout: 30_000 },
+      ),
+      testButton.click(),
+    ]);
+    return (await response.json()) as { reason?: string; success?: boolean };
+  };
+
+  const accepted = await check(STANDIN_PROVIDER_BASE_URL);
+  expect(accepted.reason, 'a provider that answered 2xx must certify the credential').toBe('ok');
+  expect(accepted.success, 'a certified credential must report success').toBe(true);
+
+  const refused = await check(UNREACHABLE_BASE_URL);
   expect(
-    body.reason,
+    refused.reason,
     'Test connection must not answer "unsupported_type" for a type the descriptor claims to support',
   ).not.toBe('unsupported_type');
+  expect(refused.reason, 'a host the platform cannot reach is a reachability refusal').toBe('unreachable');
+  expect(refused.success, 'an unreachable provider must not report success').toBe(false);
 });
 
 /**

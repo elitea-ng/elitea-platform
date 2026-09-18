@@ -46,6 +46,7 @@ type providerStub struct {
 	lastPath   string
 	lastAuth   string
 	lastToken  string
+	lastHeader http.Header
 	statusCode int
 }
 
@@ -56,6 +57,7 @@ func newProviderStub(t *testing.T, status int) *providerStub {
 		stub.lastPath = r.URL.Path
 		stub.lastAuth = r.Header.Get("Authorization")
 		stub.lastToken = r.Header.Get("PRIVATE-TOKEN")
+		stub.lastHeader = r.Header.Clone()
 		w.WriteHeader(stub.statusCode)
 		_, _ = w.Write([]byte(`{"account_id":"real-provider-body"}`))
 	}))
@@ -486,6 +488,28 @@ func TestToolkitProbesUseEachFamilysOwnIdentityEndpoint(t *testing.T) {
 			wantPath:   "/2.0/user",
 			wantHeader: func(stub *providerStub) string { return stub.lastAuth },
 		},
+		// #920: the three families whose descriptors advertised a check that
+		// this build did not carry. Each endpoint is the one the SDK's own
+		// check_connection uses, so a credential that works for a tool run is
+		// the credential this probe certifies.
+		{
+			configType: "aha",
+			data:       map[string]any{"api_key": "aha-token"},
+			wantPath:   "/api/v1/me",
+			wantHeader: func(stub *providerStub) string { return stub.lastAuth },
+		},
+		{
+			configType: "figma",
+			data:       map[string]any{"token": "figd-token"},
+			wantPath:   "/v1/me",
+			wantHeader: func(stub *providerStub) string { return stub.lastHeader.Get("X-Figma-Token") },
+		},
+		{
+			configType: "langfuse",
+			data:       map[string]any{"public_key": "pk", "secret_key": "sk"},
+			wantPath:   "/api/public/projects",
+			wantHeader: func(stub *providerStub) string { return stub.lastAuth },
+		},
 	}
 
 	for _, testCase := range cases {
@@ -637,5 +661,99 @@ func TestCheckConnectionRouteStillRefusesAToolkitTypeWithNoProbe(t *testing.T) {
 	}
 	if body["reason"] != handler.ToolkitCheckReasonUnsupportedType {
 		t.Fatalf("expected unsupported_type, got %v", body)
+	}
+}
+
+// TestAhaCheckAnswersTheFourOutcomesItAdvertises is #920: the `aha` descriptor
+// has always advertised has_test_connection, and the server answered
+// `unsupported_type` for EVERY input — a malformed base URL, a well-formed
+// unroutable one, and a real tenant alike — so the button could never report
+// success, an authentication failure, or a reachability failure.
+//
+// The four cases are the four ELITEA ids the manual suite pins on this type
+// (2510 success, 2511 bad token, 2512 bad URL, 2558 unreachable host).
+func TestAhaCheckAnswersTheFourOutcomesItAdvertises(t *testing.T) {
+	accepted := newProviderStub(t, http.StatusOK)
+	refused := newProviderStub(t, http.StatusUnauthorized)
+	checker := handler.NewToolkitConnectionChecker(allowAnyHost(), nil)
+
+	for name, test := range map[string]struct {
+		data       map[string]any
+		wantReason string
+	}{
+		"a credential the tenant accepts": {
+			data:       map[string]any{"base_url": accepted.server.URL, "api_key": "aha-token"},
+			wantReason: handler.ToolkitCheckReasonOK,
+		},
+		"a token the tenant refuses": {
+			data:       map[string]any{"base_url": refused.server.URL, "api_key": "wrong"},
+			wantReason: handler.ToolkitCheckReasonAuthFailed,
+		},
+		"a base URL that is not a URL at all": {
+			data:       map[string]any{"base_url": "mycompany.aha.io", "api_key": "aha-token"},
+			wantReason: handler.ToolkitCheckReasonUnsupportedType,
+		},
+		"a host nothing answers on": {
+			data:       map[string]any{"base_url": "https://autotest-aha.invalid.example", "api_key": "aha-token"},
+			wantReason: handler.ToolkitCheckReasonUnreachable,
+		},
+		"a credential that names no tenant": {
+			// There is no product-wide Aha! host to fall back on, so this is
+			// the one input that keeps the old answer — and it says which.
+			data:       map[string]any{"api_key": "aha-token"},
+			wantReason: handler.ToolkitCheckReasonUnsupportedType,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			outcome := checker.CheckToolkit(context.Background(), "aha", test.data)
+			if outcome.Reason != test.wantReason {
+				t.Fatalf("reason=%q want=%q message=%q", outcome.Reason, test.wantReason, outcome.Message)
+			}
+			if strings.Contains(outcome.Message, "aha-token") || strings.Contains(outcome.Message, "real-provider-body") {
+				t.Fatalf("the message carried the credential or the provider body: %q", outcome.Message)
+			}
+		})
+	}
+
+	if accepted.lastAuth != "Bearer aha-token" {
+		t.Fatalf("the probe presented %q, want a bearer token", accepted.lastAuth)
+	}
+	if !handler.IsToolkitCheckableType("aha") {
+		t.Fatal("aha must report as a checkable type, or the handlers keep refusing it before the probe runs")
+	}
+}
+
+// TestAhaTenantHostsAreAllowedByDefault keeps the default allowlist and the new
+// probe in step: an Aha! tenant is a company subdomain, so a deployment that
+// never sets ELITEA_TOOLKIT_CHECK_ALLOWLIST must still be able to reach one.
+func TestAhaTenantHostsAreAllowedByDefault(t *testing.T) {
+	t.Setenv(handler.ToolkitCheckAllowlistEnv, "")
+	checker := handler.NewToolkitConnectionCheckerFromEnv()
+
+	// A CANCELLED context, so this test never reaches the internet: the
+	// allowlist is applied BEFORE the request is built, and the dial that
+	// follows it fails at once. The two outcomes are still distinguishable,
+	// which is the whole assertion — an egress refusal carries the message
+	// that names the platform's configuration, a dead dial does not.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	for name, test := range map[string]struct {
+		baseURL string
+		refused bool
+	}{
+		"a tenant subdomain":              {baseURL: "https://mycompany.aha.io"},
+		"another vendor is still refused": {baseURL: "https://example.invalid", refused: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			outcome := checker.CheckToolkit(ctx, "aha", map[string]any{
+				"base_url": test.baseURL,
+				"api_key":  "aha-token",
+			})
+			egressRefused := outcome.Message == "This provider endpoint is not permitted by the platform's configuration."
+			if egressRefused != test.refused {
+				t.Fatalf("egress refusal = %v, want %v (outcome %+v)", egressRefused, test.refused, outcome)
+			}
+		})
 	}
 }
