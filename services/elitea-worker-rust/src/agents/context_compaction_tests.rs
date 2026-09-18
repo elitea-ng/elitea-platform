@@ -275,9 +275,14 @@ async fn repeated_tool_loop_compaction_does_not_pin_a_previous_summary_as_user_i
     let sessions = InMemorySessionService::new();
     let session = create(&sessions).await;
     let summary = Arc::new(Summary::default());
-    let compaction =
-        DurableContextCompaction::new(plan(), Arc::new(Budget), summary, [7; 32], session.as_ref())
-            .unwrap();
+    let compaction = DurableContextCompaction::new(
+        plan(),
+        Arc::new(Budget),
+        summary.clone(),
+        [7; 32],
+        session.as_ref(),
+    )
+    .unwrap();
     let mut original = history();
     original.contents.remove(3);
     let (_, record) = compaction
@@ -286,34 +291,39 @@ async fn repeated_tool_loop_compaction_does_not_pin_a_previous_summary_as_user_i
         .unwrap();
     assert_eq!(record.as_ref().unwrap().replacement.len(), 1);
     compaction.committed(record).unwrap();
-    original
-        .contents
-        .push(Content::new("model").with_text("new work ".repeat(3100)));
-    let mut pair = history().contents[7..].to_vec();
-    for content in &mut pair {
-        for part in &mut content.parts {
-            match part {
-                Part::FunctionCall { id, .. } | Part::FunctionResponse { id, .. } => {
-                    *id = Some("call-three".into());
+    for cycle in 1..10 {
+        original
+            .contents
+            .push(Content::new("model").with_text("new work ".repeat(3100)));
+        let mut pair = history().contents[7..].to_vec();
+        for content in &mut pair {
+            for part in &mut content.parts {
+                match part {
+                    Part::FunctionCall { id, .. } | Part::FunctionResponse { id, .. } => {
+                        *id = Some(format!("call-cycle-{cycle}"));
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
+        original.contents.extend(pair);
+        let (prepared, record) = compaction
+            .prepare(original.clone(), checkpoint_ready)
+            .await
+            .unwrap();
+        assert_eq!(record.as_ref().unwrap().replacement.len(), 1);
+        assert_eq!(
+            prepared
+                .contents
+                .iter()
+                .filter(|content| content.role == "user")
+                .count(),
+            2
+        );
+        assert_eq!(prepared.contents[0].parts, original.contents[0].parts);
+        compaction.committed(record).unwrap();
     }
-    original.contents.extend(pair);
-    let (prepared, record) = compaction
-        .prepare(original, checkpoint_ready)
-        .await
-        .unwrap();
-    assert_eq!(record.as_ref().unwrap().replacement.len(), 1);
-    assert_eq!(
-        prepared
-            .contents
-            .iter()
-            .filter(|content| content.role == "user")
-            .count(),
-        2
-    );
+    assert_eq!(summary.requests.lock().unwrap().len(), 10);
 }
 
 struct ModelAfterCheckpoint {

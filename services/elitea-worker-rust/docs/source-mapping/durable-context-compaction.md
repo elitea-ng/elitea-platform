@@ -176,6 +176,12 @@ This does not authorize replay of an unfinished tool. Automatic recovery must st
 
 ## Verification and remaining gates
 
+The context threshold can trigger many times in one continuous run.
+The tool-loop regression now covers ten compactions without a new user message.
+Each pass preserves active instructions and complete tool groups.
+The previous summary stays replaceable. It does not become a protected user request.
+This deterministic check does not replace live summarization acceptance.
+
 Verification on 2026-09-16:
 
 - Agent suite: 343 tests pass, with no failures or ignored tests.
