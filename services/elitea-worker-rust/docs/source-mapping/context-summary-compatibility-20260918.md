@@ -9,7 +9,7 @@ Gate 4 remains open.
 | --- | --- | --- |
 | Current SDK `runtime/clients/client.py::_inject_summarization` | Selects summary instructions and a separate summary model. | `transport/summary_model.rs` binds the authorized summary model and collects its complete response. |
 | ADK 2.2.0 `adk-agent/src/compaction.rs::LlmEventSummarizer` | Formats source events and invokes the supplied model without a response schema. | `agents/context_compaction.rs` supplies the platform continuation contract and structured source records. |
-| ADK `GenerateContentConfig.response_schema` | Provides a schema option for supporting adapters. | Existing Elitea adapters require capability-specific admission. A compatible endpoint alone does not prove enforcement. |
+| ADK `GenerateContentConfig.response_schema` | Provides a schema option for supporting adapters. | The summary adapter freezes the platform schema and passes it through both provider adapters. A compatible endpoint does not prove enforcement. |
 | Main `internal/application/agentexecution/input_bundle.go` and `internal/domain/execution` | Admit agent input bundles up to 1 MiB. | `protocol/control.rs`, `transport/input_content.rs`, and `config.rs` now use the same maximum. |
 | Rust `agents/context_summary.rs` | Owns typed continuation notes and evidence validation. | Extracts one complete JSON object before the existing schema, size, reference, and evidence checks. |
 | Rust `state/postgres_session.rs` and `agents/model_checkpoint.rs` | Persist worker-owned history and prepared requests under claim fencing. | Valid summaries and prepared requests still commit together before task-model dispatch. |
@@ -105,3 +105,49 @@ Recent messages stay outside the summary. Later summaries reuse the previous sum
 A smaller summary model cannot accept this prefix without bounded batches.
 The 1 MiB input envelope, provider request cap, and checkpoint limits also require large-window acceptance.
 The history admission repair does not close these gaps.
+
+## Structured-output request controls
+
+`context_summary.rs::response_schema` defines the platform continuation shape.
+`SummaryModel` supplies this schema through ADK `GenerateContentConfig.response_schema`.
+It also includes the platform contract in the system instruction.
+Optional user guidance remains subordinate to that contract.
+
+The OpenAI-compatible adapter sends `response_format` with a strict JSON schema.
+This follows ADK 2.2.0 `adk-model/src/openai_compatible.rs`.
+The native Anthropic adapter uses ADK `OutputConfig` and `OutputFormat::json_schema`.
+It preserves an existing effort setting.
+Ordinary chat calls do not request the summary schema.
+The adapter rejects a request schema that differs from the frozen invocation.
+
+Provider schemas do not replace local validation.
+Byte limits, exact references, and evidence membership remain local checks.
+Unsupported provider responses remain failures. No silent retry drops the schema.
+Live compaction acceptance is still required after deployment.
+
+## Required context acceptance matrix
+
+All rows require valid continuation facts and preserved instruction identities.
+Numerical budget tests alone do not establish these outcomes.
+
+| Scope | Required cases | Remaining evidence |
+| --- | --- | --- |
+| Window | Balanced, model-capped Balanced, Full 400k, Full 1M | End-to-end admission, summary, checkpoint, and UI proof |
+| Repeated work | Ten compactions within one tool loop | Existing regression passes; live long-run proof remains |
+| Nested execution | Independent child agents and pipeline LLM nodes | Inherited policy and isolated history proof |
+| Summary model | Same model and smaller dedicated model | Bounded source groups and validated merge |
+| Payload | Large tool results and long model output | Compaction with combined payloads |
+| Recovery | Restart during summary and after durable commit | No lost history or repeated committed effects |
+| User actions | Regenerate and switch models | Consistent history and context measurement |
+
+Current provider requests are capped at 1 MiB.
+Worker session state is capped at 1 MiB; one stored event is capped at 2 MiB.
+These caps can prevent a Full 1M request before compaction runs.
+Raise or restructure these boundaries together, with bounded memory and durable recovery checks.
+Do not report Full capacity from the model catalogue alone.
+
+The 43 provider-adapter tests pass with the structured-output change.
+They inspect both wire schemas and verify ordinary chat isolation.
+They reject changed or omitted schemas after invocation admission.
+Clippy passes for all targets with warnings denied.
+These checks do not replace live provider or browser acceptance.

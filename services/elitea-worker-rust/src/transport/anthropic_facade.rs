@@ -17,8 +17,9 @@ use adk_anthropic::{
     CacheControlEphemeral, ContentBlock, ContentBlockDelta, ContentBlockDeltaEvent,
     ContentBlockStartEvent, ContentBlockStopEvent, EffortLevel, MessageCreateParams,
     MessageDeltaEvent, MessageParam, MessageRole, MessageStartEvent, MessageStreamEvent, Model,
-    OutputConfig, StopReason, SystemPrompt, TextBlock, ThinkingConfig, ThinkingDisplay, ToolParam,
-    ToolResultBlock, ToolResultBlockContent, ToolUnionParam, ToolUseBlock,
+    OutputConfig, OutputFormat, StopReason, SystemPrompt, TextBlock, ThinkingConfig,
+    ThinkingDisplay, ToolParam, ToolResultBlock, ToolResultBlockContent, ToolUnionParam,
+    ToolUseBlock,
 };
 use adk_rust::model::anthropic::AnthropicSchemaAdapter;
 use adk_rust::{
@@ -425,6 +426,13 @@ fn encode_anthropic_body(
     params.temperature = generation.temperature;
     params.thinking = generation.thinking;
     params.output_config = generation.output_config;
+    if let Some(schema) = &invocation.response_schema {
+        let config = params.output_config.get_or_insert(OutputConfig {
+            effort: None,
+            format: None,
+        });
+        config.format = Some(OutputFormat::json_schema(schema.clone()));
+    }
     params.tools = anthropic_tools(&request.tools)?;
     params.validate().map_err(|_| invalid_anthropic_request())?;
     serde_json::to_vec(&params).map_err(|_| invalid_anthropic_request())

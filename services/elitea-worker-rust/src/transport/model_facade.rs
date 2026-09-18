@@ -99,6 +99,7 @@ impl ModelFacade {
                 context,
                 summary.model_project_id,
                 ModelInvocation {
+                    response_schema: None,
                     context_budget: Some(summary.context_budget),
                     model_name: summary.model_name.clone(),
                     system_instruction: super::summary_model::INSTRUCTION.to_owned(),

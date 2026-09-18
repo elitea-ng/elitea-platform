@@ -1269,8 +1269,20 @@ async fn adk_summaries_are_complete_and_isolated_from_the_chat_binding() {
     assert!(body.get("tools").is_none());
     assert_eq!(
         body["messages"][0]["content"],
-        super::summary_model::INSTRUCTION
+        format!(
+            "{}\n{}",
+            super::summary_model::INSTRUCTION,
+            crate::agents::context_summary::CONTRACT
+        )
     );
+    let ordinary: serde_json::Value = serde_json::from_slice(&requests[2].body).unwrap();
+    assert_eq!(body["response_format"]["type"], "json_schema");
+    assert_eq!(body["response_format"]["json_schema"]["strict"], true);
+    assert_eq!(
+        body["response_format"]["json_schema"]["schema"],
+        crate::agents::context_summary::response_schema()
+    );
+    assert!(ordinary.get("response_format").is_none());
     let parts = body["messages"][1]["content"].as_array().unwrap();
     assert!(parts.len() > 1);
     let prompt: String = parts.iter().map(|p| p["text"].as_str().unwrap()).collect();
@@ -1435,4 +1447,20 @@ async fn adk_summary_rejects_truncation_and_stream_failure_after_text() {
         );
         assert_eq!(captured.lock().unwrap().len(), 1);
     }
+}
+
+#[test]
+fn response_schema_must_match_the_frozen_invocation() {
+    use super::openai_compatible_facade::validate_llm_request;
+    let mut invocation = test_model_facade_invocation();
+    let mut request = test_model_request("Summarize the records.");
+    let schema = crate::agents::context_summary::response_schema();
+    request.config.as_mut().unwrap().response_schema = Some(schema.clone());
+    assert!(validate_llm_request(&request, true, &invocation).is_err());
+    invocation.response_schema = Some(schema);
+    assert!(validate_llm_request(&request, true, &invocation).is_ok());
+    request.config.as_mut().unwrap().response_schema = Some(serde_json::json!({"type": "string"}));
+    assert!(validate_llm_request(&request, true, &invocation).is_err());
+    request.config.as_mut().unwrap().response_schema = None;
+    assert!(validate_llm_request(&request, true, &invocation).is_err());
 }

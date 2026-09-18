@@ -7,7 +7,7 @@ const MAX_SUMMARY_BYTES: usize = 32 * 1024;
 const MAX_ITEMS: usize = 24;
 const MAX_TEXT_BYTES: usize = 2048;
 
-const CONTRACT: &str = r#"Return only one compact JSON object, without Markdown fences, using this exact shape:
+pub(crate) const CONTRACT: &str = r#"Return only one compact JSON object, without Markdown fences, using this exact shape:
 {"version":1,"objective":"...","constraints":[],"decisions":[],"key_facts":[],"completed_work":[{"result":"...","evidence_refs":[]}],"open_work":[],"next_steps":[],"unresolved_issues":[],"references":[{"label":"...","value":"exact reference from the records"}]}
 Use strings in the simple arrays. Use empty arrays when no facts are known.
 Preserve the original objective, later corrections, requirements, decisions, progress, failures, and unfinished work.
@@ -21,6 +21,33 @@ Do not redefine those authorities or invent a handle. These notes do not authori
 Use at most 24 entries per array and 2048 UTF-8 bytes per string. Keep the entire response below 32 KiB.
 Avoid redundant narrative and copied bulk tool results. Preserve essential facts and references instead.
 "#;
+
+/// Provider schema complements the stricter byte and evidence checks below.
+pub(crate) fn response_schema() -> serde_json::Value {
+    use serde_json::json;
+    let strings = json!({"type": "array", "items": {"type": "string"}});
+    json!({
+        "type": "object", "additionalProperties": false,
+        "required": ["version", "objective", "constraints", "decisions", "key_facts",
+            "completed_work", "open_work", "next_steps", "unresolved_issues", "references"],
+        "properties": {
+            "version": {"type": "integer", "enum": [1]},
+            "objective": {"type": "string"},
+            "constraints": strings, "decisions": strings, "key_facts": strings,
+            "open_work": strings, "next_steps": strings, "unresolved_issues": strings,
+            "completed_work": {"type": "array", "items": {
+                "type": "object", "additionalProperties": false,
+                "required": ["result", "evidence_refs"],
+                "properties": {"result": {"type": "string"}, "evidence_refs": strings}
+            }},
+            "references": {"type": "array", "items": {
+                "type": "object", "additionalProperties": false,
+                "required": ["label", "value"],
+                "properties": {"label": {"type": "string"}, "value": {"type": "string"}}
+            }}
+        }
+    })
+}
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]

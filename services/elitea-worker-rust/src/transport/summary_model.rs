@@ -72,6 +72,7 @@ impl Llm for SummaryModel {
         let invocation = summary_invocation(&self.invocation, self.output_cap)?;
         request.config = Some(GenerateContentConfig {
             temperature: invocation.temperature,
+            response_schema: invocation.response_schema.clone(),
             max_output_tokens: invocation.max_tokens.and_then(|v| i32::try_from(v).ok()),
             ..GenerateContentConfig::default()
         });
@@ -135,7 +136,11 @@ fn summary_invocation(
     output_cap: Option<u32>,
 ) -> adk_rust::Result<ModelFacadeInvocation> {
     let mut invocation = source.clone();
-    INSTRUCTION.clone_into(&mut invocation.system_instruction);
+    invocation.system_instruction = format!(
+        "{INSTRUCTION}\n{}",
+        crate::agents::context_summary::CONTRACT
+    );
+    invocation.response_schema = Some(crate::agents::context_summary::response_schema());
     invocation.max_model_turns = 1;
     invocation.reasoning_effort = None;
     invocation.max_tokens = match source.context_budget {

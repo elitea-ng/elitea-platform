@@ -22,6 +22,7 @@ const MODEL: &str = "claude-sonnet-4-5";
 
 fn invocation(model: &str, effort: Option<ModelReasoningEffort>) -> ModelFacadeInvocation {
     ModelFacadeInvocation {
+        response_schema: None,
         context_budget: None,
         model_name: model.to_owned(),
         system_instruction: "review carefully\nbe concise".to_owned(),
@@ -1001,7 +1002,21 @@ async fn adk_summaries_are_complete_and_isolated_from_the_chat_binding() {
     assert_eq!(body["stream"], true);
     assert_eq!(body["max_tokens"], 4_000);
     assert!(body.get("tools").is_none());
-    assert_eq!(body["system"][0]["text"], super::summary_model::INSTRUCTION);
+    assert_eq!(
+        body["system"][0]["text"],
+        format!(
+            "{}\n{}",
+            super::summary_model::INSTRUCTION,
+            crate::agents::context_summary::CONTRACT
+        )
+    );
+    let ordinary: serde_json::Value = serde_json::from_slice(&requests[2].body).unwrap();
+    assert_eq!(body["output_config"]["format"]["type"], "json_schema");
+    assert_eq!(
+        body["output_config"]["format"]["schema"],
+        crate::agents::context_summary::response_schema()
+    );
+    assert!(ordinary["output_config"].get("format").is_none());
     let parts = body["messages"][0]["content"].as_array().unwrap();
     assert!(parts.len() > 1);
     let prompt: String = parts.iter().map(|p| p["text"].as_str().unwrap()).collect();

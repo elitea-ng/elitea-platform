@@ -103,6 +103,7 @@ impl ModelGatewayConfig {
 /// Frozen generation controls admitted before the PAT reaches this module.
 #[derive(Clone)]
 pub(crate) struct ModelFacadeInvocation {
+    pub(crate) response_schema: Option<serde_json::Value>,
     pub(crate) context_budget: Option<crate::agents::context_budget::RequestContextBudget>,
     pub(crate) model_name: String,
     pub(crate) system_instruction: String,
@@ -645,6 +646,15 @@ fn encode_request_body(
             );
         }
     }
+    if let Some(schema) = &invocation.response_schema {
+        body.insert(
+            "response_format".to_owned(),
+            serde_json::json!({
+                "type": "json_schema",
+                "json_schema": {"name": "continuation_summary", "strict": true, "schema": schema}
+            }),
+        );
+    }
     body.insert("stream".to_owned(), serde_json::Value::Bool(true));
     body.insert(
         "stream_options".to_owned(),
@@ -999,7 +1009,7 @@ fn generation_config_matches(
         && config.seed.is_none()
         && config.top_logprobs.is_none()
         && config.stop_sequences.is_empty()
-        && config.response_schema.is_none()
+        && config.response_schema == invocation.response_schema
         && config.cached_content.is_none()
         && config.extensions.is_empty()
 }
@@ -2030,6 +2040,7 @@ pub(crate) fn test_model_gateway_client(
 #[cfg(test)]
 pub(super) fn test_model_facade_invocation() -> ModelFacadeInvocation {
     ModelFacadeInvocation {
+        response_schema: None,
         context_budget: None,
         model_name: "fixture-model".to_owned(),
         system_instruction: "review carefully\nbe concise".to_owned(),
