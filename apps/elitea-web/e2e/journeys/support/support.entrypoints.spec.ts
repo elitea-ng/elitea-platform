@@ -77,6 +77,13 @@ async function openApp(page: Page): Promise<void> {
 
 /* onetest: ELITEA-0634 — no launcher and no sidebar entry appear anywhere while the feature is disabled */
 test('no launcher or sidebar entry appears while the assistant is disabled', async ({ page }) => {
+  // See `support.widget.spec.ts`'s `withAssistantOn`: the platform-flag lock is
+  // GLOBAL (shared with `support.widget.spec.ts` and `admin.guardrails.spec.ts`),
+  // so a test here can queue behind a sibling file's window before its own body
+  // even starts. The default 30 s test timeout does not budget for that wait —
+  // measured hard failure (CI run 35226848209): the PUT inside the lock timed
+  // out mid-flight because most of the 30 s had already gone to acquiring it.
+  test.setTimeout(210_000);
   await withPlatformFlagLock(async () => {
     await disableSupportAssistant(page.request);
     await openApp(page);
@@ -91,6 +98,8 @@ test('no launcher or sidebar entry appears while the assistant is disabled', asy
 
 /* onetest: ELITEA-0626 — the floating launcher is visible on every main application page */
 test('the launcher is visible on every main application page', async ({ page }) => {
+  // See the timeout note on the first test above — same global lock.
+  test.setTimeout(210_000);
   await withPlatformFlagLock(async () => {
     await enableSupportAssistant(page.request, {
       projectId: SUPPORT_PROJECT_ID,
@@ -257,6 +266,8 @@ test('the session is shared across a page navigation, not scoped to one page', a
 test('the config route reports the operator strings and the live enabled state', async ({
   request,
 }) => {
+  // See the timeout note on the file's first test above — same global lock.
+  test.setTimeout(210_000);
   await withPlatformFlagLock(async () => {
     await disableSupportAssistant(request);
     const off = await request.get(`${BASE_URL}/api/v2/support_assistant/config`);
@@ -291,6 +302,8 @@ test('the config route reports the operator strings and the live enabled state',
  * chromium lane" boundary `support.widget.spec.ts`'s SUP-W4 states.
  */
 test('the Send button stays inactive while the composer is empty', async ({ page }) => {
+  // See the timeout note on the file's first test above — same global lock.
+  test.setTimeout(210_000);
   await withPlatformFlagLock(async () => {
     await enableSupportAssistant(page.request, {
       projectId: SUPPORT_PROJECT_ID,
@@ -317,5 +330,49 @@ test('the Send button stays inactive while the composer is empty', async ({ page
 
     await input.fill('');
     await expect(send).toBeDisabled();
+  });
+});
+
+/*
+ * onetest: ELITEA-0621 — the Support Assistant panel header shows the operator-configured name, not
+ * a hardcoded default, and reflects a changed config on the next open.
+ *
+ * The onetest source also asks for a configured AVATAR beside the name. This build has no such
+ * control to verify: `ChatHeader.tsx` renders only a `title` string — no icon slot at all — and the
+ * `avatar` prop this widget threads through (`EliteaAssistant.tsx`'s `avatar={user.avatar}`,
+ * `supportassistant/config.go`'s `Avatar` field) is the CALLER's own avatar for their OWN messages,
+ * not an operator-configurable assistant brand asset — there is no such setting anywhere in
+ * `supportassistant/config.go`. The launcher DOES carry a fixed icon (`ChatButton.tsx`'s
+ * `AssistantIcon`), asserted below as the closest real analogue and disclosed as static rather than
+ * operator-configured.
+ */
+test('the panel header shows the operator-configured assistant name, not a hardcoded default', async ({ page }) => {
+  // See the timeout note on the file's first test above — same global lock.
+  test.setTimeout(210_000);
+  await withPlatformFlagLock(async () => {
+    const CUSTOM_NAME = `${AUTOTEST_PREFIX}CustomBrand${RUN_ID}`;
+    await enableSupportAssistant(page.request, {
+      projectId: SUPPORT_PROJECT_ID,
+      agentId: Number(agentId),
+      name: CUSTOM_NAME,
+      welcomeMessage: WELCOME_MESSAGE,
+      placeholder: PLACEHOLDER,
+    });
+    await openApp(page);
+
+    const launcher = page.locator('.elitea-assistant-button');
+    await expect(launcher).toBeVisible({ timeout: 15_000 });
+    // The static icon this build offers in place of a configurable avatar.
+    await expect(launcher.locator('svg')).toHaveCount(1);
+    await launcher.click();
+
+    const chatWindow = page.locator('.elitea-assistant-window');
+    await expect(chatWindow).toBeVisible({ timeout: 15_000 });
+    const title = chatWindow.locator('.elitea-assistant-header-title');
+    await expect(title).toHaveText(CUSTOM_NAME);
+    // Not a generic placeholder — this deployment's own default (`helpers.ts`'s
+    // `support_assistant_name`) and the old app's hardcoded fallback are both ruled out.
+    await expect(title).not.toHaveText('ELITEA Support');
+    await expect(title).not.toHaveText('Chat Bot');
   });
 });

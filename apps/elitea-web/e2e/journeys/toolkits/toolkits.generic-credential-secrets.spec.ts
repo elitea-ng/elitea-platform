@@ -179,7 +179,7 @@ test('ELITEA-1088/1090/1091/1093/1097: PRODUCT GAP — a toolkit whose credentia
 });
 
 /*
- * ELITEA-1092/1094/1099 (Discard/Confirm on the "Credential Configuration
+ * ELITEA-1092 (#952)/1094/1099 (Discard/Confirm on the "Credential Configuration
  * Change" modal) are LIVE-ONLY on this stack, not ported here: the toolkit
  * Save button is disabled by `useCredentialSaveGate.ts` whenever ANY
  * credential-like field on the form carries an unverified reference, and

@@ -2762,6 +2762,167 @@ export async function attachToolkitThroughPicker(page: Page, toolkitName: string
   ).toBeLessThan(300);
 }
 
+/**
+ * A whole ready-to-drive tool-calling agent: an `openapi` toolkit pointing at
+ * the mock's own `/tool` API, an agent pinned to the deterministic model with
+ * that toolkit attached, and a conversation the agent participates in, opened
+ * in the browser.
+ *
+ * WHY OVER THE API RATHER THAN THROUGH THE FORMS.
+ * `createOpenApiToolkitThroughForm` + `createAgentThroughForm` +
+ * `attachToolkitThroughPicker` exist because the FORMS are what those journeys
+ * are about — the schema editor's parse, the picker's client-side paging. A
+ * journey whose subject is what happens DURING a turn does not exercise any of
+ * that, and paying for it costs minutes per test on a stack where a turn
+ * itself takes seconds. This builds the same three rows over their own routes
+ * and then READS THE ATTACH BACK, because a 200 on the relation route says the
+ * request was accepted, not that `version_details.tools[]` grew the row the
+ * runtime compiles from — and an agent with no tool answers normally, which
+ * looks exactly like a feature that did not fire.
+ *
+ * `openapi_configuration` is sent as `{}` rather than omitted: the type schema
+ * lists it as required, and the empty object is what the version freeze writes
+ * for an absent reference anyway (a JSON `null` there is what the native
+ * worker's `merged_auth_settings` refused — see `chat.toolkit-hitl.spec.ts`).
+ */
+export interface MockToolAgentFixture {
+  readonly projectId: string;
+  readonly toolkitId: string;
+  readonly toolkitName: string;
+  readonly agentId: string;
+  readonly versionId: string;
+  readonly agentName: string;
+  /** The first conversation, already open in the browser. */
+  readonly conversationId: string;
+  /** Open a FRESH conversation on the same agent, and return its id. */
+  readonly newConversation: (label: string) => Promise<string>;
+  /** Delete the agent and the toolkit. Best effort; safe to call twice. */
+  readonly dispose: () => Promise<void>;
+}
+
+export async function createMockToolAgent(page: Page, label: string): Promise<MockToolAgentFixture> {
+  const suffix = `${String(Date.now() % 1_000_000)}${label}`;
+  const toolkitName = `${AUTOTEST_PREFIX}mocktk-${suffix}`;
+  const agentName = `${AUTOTEST_PREFIX}mocktkagent-${suffix}`;
+  const modelName = process.env['E2E_MOCK_MODEL'] ?? 'vllm/E2E-MOCK-MODEL';
+
+  const spec = await fetchMockToolSpec(page);
+  const projectId = await readCallerPersonalProjectId(page.request);
+  expect(projectId, 'this persona must work inside its own project').not.toBe('');
+  const caller = await readCallerIdentity(page.request);
+
+  const toolkitCreated = await page.request.post(`${API_BASE}/elitea_core/tools/prompt_lib/${projectId}`, {
+    data: {
+      name: toolkitName,
+      type: 'openapi',
+      settings: {
+        spec: spec.text,
+        openapi_configuration: {},
+        selected_tools: [MOCK_TOOL_READ_OPERATION, MOCK_TOOL_EFFECTFUL_OPERATION],
+      },
+    },
+  });
+  expect(
+    toolkitCreated.status(),
+    `the openapi toolkit must be creatable: ${(await toolkitCreated.text()).slice(0, 300)}`,
+  ).toBe(201);
+  const toolkitId = String(((await toolkitCreated.json()) as { id?: unknown }).id ?? '');
+  expect(toolkitId, 'the created toolkit must carry an id').not.toBe('');
+
+  const agent = await createAgentWithVersion(
+    page.request,
+    agentName,
+    {
+      instructions: 'You are an autotest agent. Call the tools you are asked to call.',
+      model: { modelName },
+    },
+    projectId,
+  );
+
+  // The ONE real attach call the Tools panel's picker emits
+  // (`src/features/agents/lib/toolRelation.ts`), `selected_tools` deliberately
+  // OFF the wire — its PRESENCE, not its length, is what the handler keys on.
+  const attached = await page.request.patch(
+    `${API_BASE}/elitea_core/tool/prompt_lib/${projectId}/${toolkitId}`,
+    {
+      data: {
+        entity_version_id: Number(agent.versionId),
+        entity_id: Number(agent.id),
+        entity_type: 'agent',
+        has_relation: true,
+      },
+    },
+  );
+  expect(
+    attached.status(),
+    `the toolkit must attach to the agent version: ${(await attached.text()).slice(0, 300)}`,
+  ).toBeLessThan(300);
+
+  const storedAgent = await page.request.get(
+    `${API_BASE}/elitea_core/application/prompt_lib/${projectId}/${agent.id}`,
+  );
+  const tools =
+    ((await storedAgent.json()) as { version_details?: { tools?: readonly { name?: string }[] } })
+      .version_details?.tools ?? [];
+  expect(
+    tools.map((tool) => tool.name),
+    'the agent version carries no reference to the toolkit — the attach was a no-op',
+  ).toContain(toolkitName);
+
+  const newConversation = async (conversationLabel: string): Promise<string> => {
+    const created = await page.request.post(`${API_BASE}/elitea_core/conversations/prompt_lib/${projectId}`, {
+      data: { name: `${AUTOTEST_PREFIX}mocktkconv-${suffix}-${conversationLabel}`, is_private: true },
+    });
+    expect(
+      created.status(),
+      `the conversation must be created: ${(await created.text()).slice(0, 300)}`,
+    ).toBe(201);
+    const conversationId = String(((await created.json()) as { id?: unknown }).id ?? '');
+    expect(conversationId, 'the created conversation must carry an id').not.toBe('');
+
+    // BOTH participants, in one call. A conversation POSTed straight to the
+    // API carries neither (`Create` writes no participant row at all), and its
+    // first send 422s at admission because `ResolveCurrentAdhocTurn` returns
+    // zero rows — see `chat.pyodide-sandbox.spec.ts`'s header.
+    const participants = await page.request.post(
+      `${API_BASE}/elitea_core/participants/prompt_lib/${projectId}/${conversationId}`,
+      {
+        data: [
+          {
+            entity_name: 'application',
+            entity_meta: { id: agent.id, project_id: Number(projectId), name: agentName },
+            entity_settings: { version_id: agent.versionId },
+          },
+          { entity_name: 'user', entity_meta: { id: Number(caller.id) } },
+        ],
+      },
+    );
+    expect(
+      participants.status(),
+      `the participants must be added: ${(await participants.text()).slice(0, 300)}`,
+    ).toBe(200);
+
+    await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
+    await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 45_000 });
+    return conversationId;
+  };
+
+  return {
+    projectId,
+    toolkitId,
+    toolkitName,
+    agentId: agent.id,
+    versionId: agent.versionId,
+    agentName,
+    conversationId: await newConversation('a'),
+    newConversation,
+    dispose: async (): Promise<void> => {
+      await page.request.delete(`${API_BASE}/elitea_core/application/prompt_lib/${projectId}/${agent.id}`);
+      await page.request.delete(`${API_BASE}/elitea_core/tool/prompt_lib/${projectId}/${toolkitId}`);
+    },
+  };
+}
+
 /** The platform-wide toolkit security policy, as the admin route serves it. */
 export interface ToolkitGuardrailValues {
   readonly blocked_toolkits: readonly string[];
@@ -2832,6 +2993,19 @@ export interface StoredHitlInterrupt {
   readonly toolkit_name?: string;
   readonly toolkit_type?: string;
   readonly interrupt_id?: string;
+  /**
+   * The ARGUMENTS the paused call was about to be made with, as the card's
+   * Parameters section renders them. Read by the tail journeys that assert the
+   * dialog shows the real call rather than a placeholder — an approval taken
+   * against parameters the user never saw is the failure those cases name.
+   */
+  readonly tool_args?: unknown;
+  /** The interpolated policy sentence (`{company_name}` / `{action_name}`). */
+  readonly policy_message?: string;
+  /** The same sentence on the generic-pause branch. */
+  readonly message?: string;
+  /** `toolkit.tool`, the label the card shows in bold. */
+  readonly action_label?: string;
 }
 
 /**
@@ -2881,6 +3055,65 @@ export async function readStoredHitlInterrupt(
     )
     .toBe(true);
   return interrupt ?? {};
+}
+
+/**
+ * Every HITL interrupt on the newest stored assistant row, once there are at
+ * least `minimum` of them.
+ *
+ * The plural of `readStoredHitlInterrupt`, and it exists because a turn whose
+ * assistant message carried SEVERAL tool calls raises several pauses at once:
+ * elitea-main stores the first under `meta.hitl_interrupt` and the whole list
+ * under `meta.hitl_interrupts` (`agent_execution_results.go`), so the singular
+ * read cannot tell "two sensitive calls each paused" from "one did".
+ *
+ * `minimum` is a FLOOR that must be reached, never an equality settled early:
+ * the row is readable while it is still being written, so polling for
+ * "exactly two" would pass the instant the first of two landed if the caller
+ * happened to ask for one.
+ */
+export async function readStoredHitlInterrupts(
+  page: Page,
+  projectId: string,
+  conversationId: string | number,
+  minimum = 1,
+  timeout = 150_000,
+): Promise<readonly StoredHitlInterrupt[]> {
+  let interrupts: readonly StoredHitlInterrupt[] = [];
+  await expect
+    .poll(
+      async () => {
+        const stored = await page.request.get(
+          `${BASE_URL}/api/v2/elitea_core/messages/prompt_lib/${projectId}/${String(conversationId)}`,
+        );
+        if (!stored.ok()) return 0;
+        const body = (await stored.json()) as {
+          items?: readonly {
+            role?: string;
+            metadata?: {
+              hitl_interrupt?: StoredHitlInterrupt;
+              hitl_interrupts?: readonly StoredHitlInterrupt[];
+              is_error?: boolean;
+            };
+          }[];
+        };
+        const assistant = body.items?.find((item) => item.role === 'assistant');
+        expect(
+          assistant?.metadata?.is_error,
+          'the turn was refused instead of pausing — read the worker log for the assembly error code',
+        ).not.toBe(true);
+        const all = assistant?.metadata?.hitl_interrupts;
+        const single = assistant?.metadata?.hitl_interrupt;
+        interrupts = all ?? (single === undefined ? [] : [single]);
+        return interrupts.length;
+      },
+      {
+        timeout,
+        message: `the turn never parked on ${String(minimum)} sensitive-tool pause(s)`,
+      },
+    )
+    .toBeGreaterThanOrEqual(minimum);
+  return interrupts;
 }
 
 /**

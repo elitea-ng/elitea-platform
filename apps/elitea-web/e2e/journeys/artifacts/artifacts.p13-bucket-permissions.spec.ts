@@ -1,6 +1,9 @@
 /**
  * P13 rejudge — `artifacts/bucket-permissions` folder (ELITEA-2479, 2481,
- * 2482, 2483). See `e2e/journeys/artifacts/artifacts.bucket-access.spec.ts`
+ * 2482, 2483), extended by the wave-1 tail package T1c with the folder's
+ * four remaining cases (ELITEA-2484/2485/2486/2487 — Read & write
+ * enforcement, API-level enforcement for No-access and Read-only, and the
+ * no-exception-row default). See `e2e/journeys/artifacts/artifacts.bucket-access.spec.ts`
  * (J20h/i/j) for the core mechanics this file builds on: the exceptions
  * dialog, an authored exception reaching the server, and a stored exception
  * changing what the server allows. This file covers ground J20h/i/j do not:
@@ -155,7 +158,7 @@ async function setExceptionMerged(
   throw new Error(`setExceptionMerged: exception for bucket "${bucket}" never confirmed after retries`);
 }
 
-test.describe('bucket permission exceptions: edit/remove/enforcement (ELITEA-2479/2481/2482/2483)', () => {
+test.describe('bucket permission exceptions: edit/remove/enforcement (ELITEA-2479/2481/2482/2483/2484/2485/2486/2487)', () => {
   /* onetest: ELITEA-2479 — editing an existing exception changes its stored permission. The real
    * control is an inline per-row Select (no pencil icon, no separate Edit modal): changing it fires
    * the same write J20i already proved lands, this test just proves it also lands for an EXISTING row. */
@@ -356,5 +359,203 @@ test.describe('bucket permission exceptions: edit/remove/enforcement (ELITEA-247
     } finally {
       await setExceptionMerged(request, projectId, userId, bucket, undefined);
     }
+  });
+
+  /* onetest: ELITEA-2484 — a "Read & write" exception lets a restricted member preview, download and
+   * upload in the bucket (the positive twin of ELITEA-2483 above). The onetest source's remaining two
+   * steps, "create a new folder" and "rename the uploaded file", have nothing to drive on this build:
+   * Artifacts has no nested-folder concept inside a bucket (`BucketPanelHeader.tsx`'s `NewFolderIcon`
+   * decorates CREATE BUCKET, not a folder inside one) and neither `ArtifactTable.tsx` nor
+   * `ArtifactGridRow.tsx` offers a per-file rename control. Not asserted; the three real operations
+   * are. */
+  test('ELITEA-2484: a "Read & write" exception allows preview, download and upload', async ({
+    browser,
+    request,
+  }) => {
+    const bucket = uniqueBucket('2484');
+    const fileName = `${bucket}.txt`;
+    const adminCtx = await browser.newContext({ storageState: STORAGE_STATE.admin });
+    const adminPage = await adminCtx.newPage();
+    await openArtifacts(adminPage);
+    const projectId = await selectedProjectId(adminPage);
+    await seedBucket(request, projectId, bucket, fileName);
+    const userId = await memberUserId(request, projectId);
+    await adminCtx.close();
+
+    await setExceptionMerged(request, projectId, userId, bucket, ['read', 'write']);
+
+    try {
+      const memberCtx = await browser.newContext({ storageState: STORAGE_STATE.member });
+      const memberPage = await memberCtx.newPage();
+      await openArtifacts(memberPage);
+      // A settling assertion before the SECOND navigation — the same shape
+      // ELITEA-2482/2487 already use above. `openArtifacts` alone does not
+      // wait for the first document's own boot traffic (the OIDC session
+      // probe) to finish, and firing a second `.goto()` immediately races it:
+      // WebKit cancels the in-flight navigation and can leave the frame on
+      // the interrupted redirect target (`oidc.localhost/oauth2/authorize`)
+      // instead of the app — measured as this exact test's own failure, a
+      // `row` that never becomes visible because the frame is still on the
+      // identity provider (`artifacts.bucket-access.spec.ts`'s header
+      // documents the same WebKit boot-traffic race).
+      await expect(memberPage.getByText(bucket, { exact: true })).toBeVisible({ timeout: 15_000 });
+      await memberPage.goto(`${ARTIFACTS_URL}?bucket=${bucket}`);
+      await memberPage.waitForURL('**/artifacts**', { timeout: 15_000 });
+
+      const row = memberPage.getByRole('row').filter({ hasText: fileName });
+      await expect(row).toBeVisible({ timeout: 15_000 });
+
+      await memberPage.getByRole('button', { name: `Preview ${fileName}`, exact: true }).click();
+      await expect(memberPage.getByText(FILE_BODY)).toBeVisible({ timeout: 15_000 });
+
+      // Re-enter before Download, same sequencing ELITEA-2483 above documents.
+      await reenterArtifacts(memberPage, `${ARTIFACTS_URL}?bucket=${bucket}`);
+      await expect(row).toBeVisible({ timeout: 15_000 });
+
+      const [download] = await Promise.all([
+        memberPage.waitForEvent('download', { timeout: 15_000 }),
+        memberPage.getByRole('button', { name: `Download ${fileName}`, exact: true }).click(),
+      ]);
+      expect(download.suggestedFilename()).toBe(fileName);
+
+      const uploadName = `${bucket}-rw-upload.txt`;
+      const [chooser] = await Promise.all([
+        memberPage.waitForEvent('filechooser', { timeout: 15_000 }),
+        memberPage.getByRole('button', { name: 'Upload files' }).click(),
+      ]);
+      await chooser.setFiles({ name: uploadName, mimeType: 'text/plain', buffer: Buffer.from('rw upload ok') });
+      await memberPage.getByRole('button', { name: 'Continue', exact: true }).click();
+
+      // The positive case: the upload SUCCEEDS — a real row, no error alert.
+      await expect(memberPage.getByRole('row').filter({ hasText: uploadName })).toBeVisible({ timeout: 30_000 });
+      await expect(memberPage.getByRole('alert')).toHaveCount(0);
+
+      await memberCtx.close();
+    } finally {
+      await setExceptionMerged(request, projectId, userId, bucket, undefined);
+    }
+  });
+
+  /* onetest: ELITEA-2485 — API-level enforcement for "No access": GET, POST and DELETE all answer
+   * 403. The onetest source drives this through a second logged-in Swagger UI tab; that would be a
+   * UI test of a third-party API-doc viewer, not of this app, so the same claim is asserted directly
+   * against the routes — the same ones ELITEA-2482 above already proves GET refuses — for the two
+   * verbs that one does not cover. */
+  test('ELITEA-2485: API-level enforcement for "No access" — GET, POST and DELETE all answer 403', async ({
+    browser,
+    request,
+  }) => {
+    const bucket = uniqueBucket('2485');
+    const fileName = `${bucket}.txt`;
+    const adminCtx = await browser.newContext({ storageState: STORAGE_STATE.admin });
+    const adminPage = await adminCtx.newPage();
+    await openArtifacts(adminPage);
+    const projectId = await selectedProjectId(adminPage);
+    await seedBucket(request, projectId, bucket, fileName);
+    const userId = await memberUserId(request, projectId);
+    await adminCtx.close();
+
+    await setExceptionMerged(request, projectId, userId, bucket, []);
+
+    try {
+      const memberCtx = await browser.newContext({ storageState: STORAGE_STATE.member });
+
+      const read = await memberCtx.request.get(`/api/v2/artifacts/objects/${projectId}/${bucket}/${fileName}`);
+      expect(read.status(), await read.text()).toBe(403);
+
+      const write = await memberCtx.request.post(`/api/v2/artifacts/objects/${projectId}/${bucket}?overwrite=true`, {
+        multipart: { file: { name: 'no-access-write.txt', mimeType: 'text/plain', buffer: Buffer.from('x') } },
+      });
+      expect(write.status(), await write.text()).toBe(403);
+
+      const del = await memberCtx.request.delete(`/api/v2/artifacts/objects/${projectId}/${bucket}/${fileName}`);
+      expect(del.status(), await del.text()).toBe(403);
+
+      await memberCtx.close();
+    } finally {
+      await setExceptionMerged(request, projectId, userId, bucket, undefined);
+    }
+  });
+
+  /* onetest: ELITEA-2486 — API-level enforcement for "Read-only": GET succeeds, POST and DELETE both
+   * answer 403. Same Swagger-vs-direct-route note as ELITEA-2485 above; this is the "Read-only" twin,
+   * building on ELITEA-2483's UI-level upload refusal with the two API verbs it does not cover. */
+  test('ELITEA-2486: API-level enforcement for "Read-only" — GET succeeds, POST and DELETE answer 403', async ({
+    browser,
+    request,
+  }) => {
+    const bucket = uniqueBucket('2486');
+    const fileName = `${bucket}.txt`;
+    const adminCtx = await browser.newContext({ storageState: STORAGE_STATE.admin });
+    const adminPage = await adminCtx.newPage();
+    await openArtifacts(adminPage);
+    const projectId = await selectedProjectId(adminPage);
+    await seedBucket(request, projectId, bucket, fileName);
+    const userId = await memberUserId(request, projectId);
+    await adminCtx.close();
+
+    await setExceptionMerged(request, projectId, userId, bucket, ['read']);
+
+    try {
+      const memberCtx = await browser.newContext({ storageState: STORAGE_STATE.member });
+
+      const read = await memberCtx.request.get(`/api/v2/artifacts/objects/${projectId}/${bucket}/${fileName}`);
+      expect(read.status(), await read.text()).toBe(200);
+
+      const write = await memberCtx.request.post(`/api/v2/artifacts/objects/${projectId}/${bucket}?overwrite=true`, {
+        multipart: { file: { name: 'ro-write-attempt.txt', mimeType: 'text/plain', buffer: Buffer.from('x') } },
+      });
+      expect(write.status(), await write.text()).toBe(403);
+
+      const del = await memberCtx.request.delete(`/api/v2/artifacts/objects/${projectId}/${bucket}/${fileName}`);
+      expect(del.status(), await del.text()).toBe(403);
+
+      await memberCtx.close();
+    } finally {
+      await setExceptionMerged(request, projectId, userId, bucket, undefined);
+    }
+  });
+
+  /* onetest: ELITEA-2487 — with no exception row at all, a project member gets full default (Read &
+   * Write) access to a bucket. Ported as a direct claim on the EXISTING `e2e-member` persona rather
+   * than by first provisioning a brand-new user through Admin -> Users (heavy, admin-area setup this
+   * file's scope does not own): every OTHER test above already relies on that member's default access
+   * before it layers its own exception on top — this test states that baseline outright instead of
+   * leaving it implicit. */
+  test('ELITEA-2487: a bucket with no exception row grants the default member Read & Write access', async ({
+    browser,
+    request,
+  }) => {
+    const bucket = uniqueBucket('2487');
+    const fileName = `${bucket}.txt`;
+    const adminCtx = await browser.newContext({ storageState: STORAGE_STATE.admin });
+    const adminPage = await adminCtx.newPage();
+    await openArtifacts(adminPage);
+    const projectId = await selectedProjectId(adminPage);
+    await seedBucket(request, projectId, bucket, fileName);
+    const userId = await memberUserId(request, projectId);
+    const before = await readOwnMap(request, projectId, userId);
+    expect(before[bucket], 'a freshly created bucket must carry no prior exception for this user').toBeUndefined();
+    await adminCtx.close();
+
+    const memberCtx = await browser.newContext({ storageState: STORAGE_STATE.member });
+    const memberPage = await memberCtx.newPage();
+    await openArtifacts(memberPage);
+
+    // Visible in the sidebar — the default-access half no exception row can restrict.
+    await expect(memberPage.getByText(bucket, { exact: true })).toBeVisible({ timeout: 15_000 });
+
+    await memberPage.goto(`${ARTIFACTS_URL}?bucket=${bucket}`);
+    await memberPage.waitForURL('**/artifacts**', { timeout: 15_000 });
+    await expect(memberPage.getByRole('row').filter({ hasText: fileName })).toBeVisible({ timeout: 15_000 });
+
+    const read = await memberCtx.request.get(`/api/v2/artifacts/objects/${projectId}/${bucket}/${fileName}`);
+    expect(read.status(), await read.text()).toBe(200);
+    const write = await memberCtx.request.post(`/api/v2/artifacts/objects/${projectId}/${bucket}?overwrite=true`, {
+      multipart: { file: { name: 'default-access-write.txt', mimeType: 'text/plain', buffer: Buffer.from('x') } },
+    });
+    expect(write.status(), await write.text()).toBe(201);
+
+    await memberCtx.close();
   });
 });
