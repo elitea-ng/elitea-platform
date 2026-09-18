@@ -43,9 +43,10 @@ export function usePersonalProjectId(): string | undefined {
  * `EditToolkit.tsx` can thread it to `ToolkitForm` without adding its own
  * inline boolean expression (§3.5 complexity budget). Deliberately `false`
  * while either id is unknown: this only unlocks a warning modal, never a
- * restriction.
+ * restriction. Not exported — `useIsTeamProject` below is the only caller,
+ * and `knip` flags an unused export otherwise.
  */
-export function isTeamProject(projectId: string | undefined, personalProjectId: string | undefined): boolean {
+function isTeamProject(projectId: string | undefined, personalProjectId: string | undefined): boolean {
   return projectId !== undefined && projectId !== '' && personalProjectId !== undefined && projectId !== personalProjectId;
 }
 

@@ -14,7 +14,7 @@ import { encodeCreateActionValue, encodeSavedCredentialValue } from '../lib/cred
 
 import { CredentialCreateLabel } from './CredentialCreateLabel';
 import { CredentialOptionLabel } from './CredentialOptionLabel';
-import type { CredentialOptionRow, CredentialsSelectHandlers, CredentialsSelectState, CredentialsSelectValue } from './CredentialsSelect';
+import type { CredentialOptionRow, CredentialsSelectHandlers, CredentialsSelectState, CredentialsSelectValue } from './CredentialsSelect.types';
 
 /**
  * The two "create new …" rows — split out of `CredentialsSelect` to keep

@@ -19,34 +19,16 @@ import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import { t } from '@/shared/i18n';
 
 import { CREATE_SECRET_VALUE, SecretSelect } from './SecretSelect';
+import type { SecretFieldMode, SecretFieldSecretsOptions } from './SecretField.types';
+
+// Re-exported so existing importers of these names from this file (e.g.
+// this folder's `index.ts`) keep working unchanged — see
+// `SecretField.types.ts`'s own doc comment for why the definitions moved
+// out of this file.
+export type { SecretFieldMode, SecretOption, SecretFieldSecretsOptions } from './SecretField.types';
 
 /** @public Matches the baseline's `{{secret.NAME}}` reference syntax. Exported so a caller can detect the shape without duplicating the pattern. */
 export const SECRET_REFERENCE_RE = /^{{secret\.([A-Za-z0-9_]+)}}$/;
-
-/** @public */
-export type SecretFieldMode = 'secret' | 'password';
-
-/** @public One entry in {@link SecretFieldSecretsOptions.options}. */
-export interface SecretOption {
-  label: string;
-  value: string;
-}
-
-/** @public Everything about the "pick an existing secret" mode — omit entirely to render a plain masked text field with no mode toggle. */
-export interface SecretFieldSecretsOptions {
-  /** The caller's already-fetched secret list (replaces the baseline's internal `useSecretsListQuery`). */
-  options?: SecretOption[];
-  /** Caller may create a new secret (e.g. navigate to secret settings). Omit to hide the affordance. */
-  onCreate?: () => void;
-  /** Permission to create a secret, computed by the caller — replaces the baseline's internal `useCheckPermission(PERMISSIONS.secrets.create)` call. */
-  canCreate?: boolean;
-  createLabel?: string;
-  /** Refresh the option list (e.g. after creating one out-of-band). Omit to hide the refresh action — replaces the baseline's internal RTK-Query `refetch`. */
-  onRefresh?: () => void;
-  /** Locks the field to whichever mode `value` currently implies — hides the toggle. */
-  disableToggle?: boolean;
-  tabLabels?: { secret?: string; password?: string };
-}
 
 /** @public shared/ui component API — consumed once a features/widgets/pages caller exists (none does yet in this pass). */
 export interface SecretFieldProps {

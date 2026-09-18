@@ -52,26 +52,16 @@ export interface TabButtonItemProps {
  */
 export function TabButtonItem({ item, disableTooltip, sx }: TabButtonItemProps): ReactNode {
   const tooltipTitle = item.tooltip ?? item.label ?? item.value;
-  // An item with BOTH an icon and a label renders icon-only (#923/ELITEA-2815):
-  // the label becomes the accessible name (`aria-label`) and the tooltip's
-  // hover text, never visible `Typography`. A label with no icon keeps the
-  // original visible-text rendering unchanged.
-  const showVisibleLabel = Boolean(item.label) && !item.icon;
-  // The label, when there is one, wins over the tooltip text for the
-  // accessible name of an icon-only button — a caller's tooltip may add
-  // context ("Form view") the label doesn't ("Form"), and existing callers
-  // (and Playwright's own role queries) key off the shorter label.
-  const accessibleName = item.label ?? tooltipTitle;
 
   const button = (
     <ToggleButton
       value={item.value}
       disabled={item.disabled}
-      aria-label={showVisibleLabel ? undefined : accessibleName}
+      aria-label={item.label ? undefined : tooltipTitle}
       sx={sx}
     >
       {item.icon}
-      {showVisibleLabel && (
+      {item.label && (
         <Typography
           variant="labelSmall"
           sx={item.icon ? labelWithIconSx : undefined}

@@ -64,34 +64,18 @@ import { CredentialMismatchFooter } from './CredentialMismatchFooter';
 import { CredentialNotFoundValue } from './CredentialNotFoundValue';
 import { CredentialsSearchField } from './CredentialsSearchField';
 import { buildSavedRowMenuItem, renderCreateMenuItems } from './credentialsSelectMenuItems';
+import type {
+  CredentialOptionRow,
+  CredentialsSelectHandlers,
+  CredentialsSelectState,
+  CredentialsSelectValue,
+} from './CredentialsSelect.types';
 
-export interface CredentialOptionRow {
-  readonly eliteaTitle: string;
-  readonly isPrivate: boolean;
-  readonly displayLabel: string;
-  readonly credentialUrl?: string;
-  readonly shared?: boolean;
-}
-
-export interface CredentialsSelectValue {
-  readonly eliteaTitle: string;
-  readonly isPrivate: boolean;
-}
-
-export interface CredentialsSelectState {
-  readonly configurations: readonly CredentialOptionRow[];
-  readonly hasFetchedData: boolean;
-  readonly isFetching: boolean;
-  readonly getStatus: (eliteaTitle: string) => 'idle' | 'checking' | 'valid' | 'invalid' | 'unsupported';
-  readonly getMessage: (eliteaTitle: string) => string;
-}
-
-export interface CredentialsSelectHandlers {
-  readonly onSelect: (value: CredentialsSelectValue | null, meta: { isAutoSelect: boolean }) => void;
-  readonly onRefresh: () => void;
-  readonly onCreate: (isPrivate: boolean) => void;
-  readonly onRevalidate: (eliteaTitle: string) => void;
-}
+// Re-exported so existing importers of these names from this file (e.g.
+// `CredentialsSelect.test.tsx`) keep working unchanged — see
+// `CredentialsSelect.types.ts`'s own doc comment for why the definitions
+// moved out of this file.
+export type { CredentialOptionRow, CredentialsSelectHandlers, CredentialsSelectState, CredentialsSelectValue } from './CredentialsSelect.types';
 
 export interface CredentialsSelectFieldProps {
   readonly label?: string;
@@ -149,8 +133,35 @@ export function CredentialsSelect({
   );
 
   const hasAutoSelectedRef = useRef(false);
+  // #613/#953 interaction: `autoSelectFirstShared` (below) can select a row
+  // before the user ever touches this field. MUI's `Select` fires no
+  // `onChange` for a same-value pick, so `buildSavedRowMenuItem`'s own
+  // `onClick` escape hatch (see its doc comment) is the only signal for a
+  // click on the row that is ALREADY selected — and from that row's own
+  // vantage point, "the user re-picked the row auto-selected under them" and
+  // "the user clicked a selected row to clear it" look identical. Swallow
+  // exactly the first such call after an auto-select, so the credential the
+  // picker preselected for the user survives their first click on it; a
+  // genuine second click (this flag now cleared) still clears it normally.
+  const justAutoSelectedRef = useRef(false);
+  const guardedOnSelect = useCallback(
+    (next: CredentialsSelectValue | null, meta: { isAutoSelect: boolean }) => {
+      if (meta.isAutoSelect) {
+        justAutoSelectedRef.current = true;
+        handlers.onSelect(next, meta);
+        return;
+      }
+      if (next === null && justAutoSelectedRef.current) {
+        justAutoSelectedRef.current = false;
+        return;
+      }
+      justAutoSelectedRef.current = false;
+      handlers.onSelect(next, meta);
+    },
+    [handlers],
+  );
   useEffect(() => {
-    autoSelectFirstSharedRow({ autoSelectFirstShared, hasFetchedData, hasAutoSelectedRef, value, configurations, onSelect: handlers.onSelect });
+    autoSelectFirstSharedRow({ autoSelectFirstShared, hasFetchedData, hasAutoSelectedRef, value, configurations, onSelect: guardedOnSelect });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fires once per mount when data first arrives, matching the baseline's `hasAutoSelectedRef` guard.
   }, [autoSelectFirstShared, hasFetchedData, configurations]);
 
@@ -171,9 +182,9 @@ export function CredentialsSelect({
       const saved = decodeSavedCredentialValue(nextValue);
       if (!saved) return;
       const isSame = value?.eliteaTitle === saved.eliteaTitle && value?.isPrivate === saved.private;
-      handlers.onSelect(isSame ? null : { eliteaTitle: saved.eliteaTitle, isPrivate: saved.private }, { isAutoSelect: false });
+      guardedOnSelect(isSame ? null : { eliteaTitle: saved.eliteaTitle, isPrivate: saved.private }, { isAutoSelect: false });
     },
-    [handlers, value],
+    [handlers, value, guardedOnSelect],
   );
 
   const labelId = useId();
@@ -218,7 +229,7 @@ export function CredentialsSelect({
                 value,
                 status: getStatus(row.eliteaTitle),
                 message: getMessage(row.eliteaTitle),
-                onSelect: handlers.onSelect,
+                onSelect: guardedOnSelect,
                 onRevalidate: handlers.onRevalidate,
               }),
             )}

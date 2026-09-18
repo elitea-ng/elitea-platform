@@ -14,7 +14,7 @@ import Tooltip from '@mui/material/Tooltip';
 import { RefreshIcon } from '../icons/refresh-icon';
 import { t } from '@/shared/i18n';
 
-import type { SecretFieldSecretsOptions } from './SecretField';
+import type { SecretFieldSecretsOptions } from './SecretField.types';
 
 /**
  * The "pick an existing secret" half of `SecretField`, split into its own
