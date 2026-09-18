@@ -1084,3 +1084,83 @@ async fn reference_repair_allows_one_final_evidence_only_correction() {
     assert!(!correction.contains("bulk-original-source"));
     assert!(compaction.record.lock().unwrap().is_none());
 }
+
+struct MillionTokenBudget;
+impl ModelRequestBudget for MillionTokenBudget {
+    fn measure(&self, request: &LlmRequest) -> adk_rust::Result<RequestContextUsage> {
+        let settings = json!({"budget_mode":"full"}).as_object().unwrap().clone();
+        RequestContextBudget::resolve(
+            Some(ModelContextLimits {
+                context_window_tokens: 1_000_000,
+                max_output_tokens: 128_000,
+                context_window_fallback: false,
+                max_output_fallback: false,
+                max_input_tokens: None,
+            }),
+            &settings,
+            Some(128_000),
+        )
+        .unwrap()
+        .unwrap()
+        .measure_provider_request(&serde_json::to_vec(request).unwrap(), 8 * 1024 * 1024)
+    }
+}
+
+#[tokio::test]
+async fn million_token_window_repeated_compaction_preserves_current_authority() {
+    let sessions = InMemorySessionService::new();
+    let session = create(&sessions).await;
+    let summary = Arc::new(Summary::default());
+    let compaction = DurableContextCompaction::new(
+        ContextCompactionPlan {
+            max_context_tokens: 1_000_000,
+            ..plan()
+        },
+        Arc::new(MillionTokenBudget),
+        summary.clone(),
+        [7; 32],
+        session.as_ref(),
+    )
+    .unwrap();
+    let mut original = history();
+    let exact_authority = original.contents[0].clone();
+    let exact_correction = original.contents[3].clone();
+    for cycle in 0..3 {
+        let at = original.contents.len() - 2;
+        for index in 0..16 {
+            original.contents.insert(
+                at,
+                Content::new("model").with_text(format!(
+                    "Cycle {cycle}, record {index}: {}",
+                    "completed work ".repeat(15_000)
+                )),
+            );
+        }
+        let before = MillionTokenBudget.measure(&original).unwrap();
+        assert_eq!(before.budget.input_limit, 863_808);
+        assert_eq!(before.budget.output_reservation, 128_000);
+        assert_eq!(before.budget.margin_tokens, 8_192);
+        assert!(before.needs_compaction());
+        let (prepared, record) = compaction
+            .prepare(original.clone(), checkpoint_ready)
+            .await
+            .unwrap();
+        let after = MillionTokenBudget.measure(&prepared).unwrap();
+        assert!(after.fits());
+        assert!(after.estimated_input <= after.budget.compaction_target());
+        assert_eq!(prepared.contents[0].parts, exact_authority.parts);
+        assert!(
+            prepared
+                .contents
+                .iter()
+                .any(|content| content.parts == exact_correction.parts)
+        );
+        assert_eq!(
+            prepared.contents.last().unwrap().parts,
+            original.contents.last().unwrap().parts
+        );
+        assert!(record.is_some());
+        compaction.committed(record).unwrap();
+    }
+    assert_eq!(summary.requests.lock().unwrap().len(), 3);
+}

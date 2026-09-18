@@ -57,3 +57,18 @@ The delivery code, corrected color, completed check, and next step survive.
 The answer remains unchanged after reload. No browser page errors occur.
 The browser uses real provider calls without mocked responses.
 This proves one Full-mode compaction, not repeated compaction or process recovery.
+
+## Repeated and child component checks
+
+A deterministic test completes three compactions with a one-million-token Full policy.
+Each cycle adds sixteen model records, approximately 3.36 MB of new work.
+The output reservation is 128,000 tokens. The bounded safety margin is 8,192 tokens.
+Usable input is 863,808 tokens. Every prepared request falls below the 15% target.
+Exact pinned authority, the current user correction, and the final tool response remain intact.
+The test uses a summary fixture. It does not prove live provider quality or native token counting.
+
+The PostgreSQL compaction suite passes after the capacity migrations.
+Its recovery test starts separate write, resume, and read processes.
+The child-scope suite also passes against PostgreSQL.
+It checks sibling history isolation, independent summary reuse, and root-takeover fencing.
+These checks do not replace live nested-agent and repeated-compaction acceptance.
