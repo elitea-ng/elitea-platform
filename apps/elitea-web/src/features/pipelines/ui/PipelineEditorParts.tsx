@@ -95,6 +95,8 @@ export interface PipelineEditorDeps {
    */
   readonly onSaveVersion?: (onSuccess: (savedFormData: unknown) => void) => void;
   readonly isSavingVersion?: boolean;
+  /** `true` once the same caller-owned Configuration form has an unsaved edit — folded into `PipelineEditor.tsx`'s `totalDirty` alongside `isDirty`/`isYamlDirty`, neither of which ever sees one (`elitea_issues #2223/#2664`'s Save gate). */
+  readonly isConfigurationDirty?: boolean;
   readonly onEditorClosed?: () => void;
 }
 
