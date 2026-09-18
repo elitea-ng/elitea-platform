@@ -77,6 +77,8 @@ import { expect, test, type Page } from '@playwright/test';
 import { BASE_URL } from '../../playwright.config';
 import {
   AUTOTEST_PREFIX,
+  agentAsToolName,
+  callToolWithArgumentsPrompt,
   createAgentWithVersion,
   fillComposer,
   readCallerIdentity,
@@ -139,13 +141,14 @@ async function createAgent(
   projectId: string,
   label: string,
   ignoreProjectContext = false,
+  instructions = 'You are an autotest agent. Answer the question you are asked.',
 ): Promise<AgentFixture> {
   const name = `${AUTOTEST_PREFIX}pctx-${label}-${String(Date.now() % 1_000_000)}`;
   const agent = await createAgentWithVersion(
     page.request,
     name,
     {
-      instructions: 'You are an autotest agent. Answer the question you are asked.',
+      instructions,
       model: { modelName: MOCK_MODEL },
       // The Advanced panel's own key — `AgentVersionMeta.ignore_project_context`
       // (`src/features/agents/model/types.ts`), written through the same
@@ -413,7 +416,22 @@ test('Project Context is not passed down to a sub-agent', async ({ page }) => {
     const phrase = `${AUTOTEST_PREFIX}QA-TEST-PHRASE ${String(Date.now() % 1_000_000)}: Azure falcon rests at midnight`;
     await setProjectContext(page, projectId, { content: phrase, enabled: true });
 
-    const child = await createAgent(page, projectId, 'child');
+    // WHICH JOURNAL ENTRY IS THE CHILD'S. Both agents answer the same mock in
+    // the same turn, and the entries carry no agent id — only the system
+    // prompt the request was built from. So the child's own instructions carry
+    // a sentence nothing else in this run says, and the assertions below read
+    // the child's hop by that sentence rather than by counting hops. Counting
+    // cannot work: the parent is asked TWICE (the tool call, then the
+    // continuation that quotes the result), so "the prompt carrying the phrase
+    // appears once" would fail on a perfectly correct run.
+    const childSentinel = `${AUTOTEST_PREFIX}CHILD-AGENT-MARK-${String(Date.now() % 1_000_000)}`;
+    const child = await createAgent(
+      page,
+      projectId,
+      'child',
+      false,
+      `You are the sub-agent. ${childSentinel}. Answer the task you are given.`,
+    );
     const parent = await createAgent(page, projectId, 'parent');
     agents.push(parent, child);
 
@@ -436,7 +454,27 @@ test('Project Context is not passed down to a sub-agent', async ({ page }) => {
 
     await openConversation(page, projectId, caller.id, [parent], 'master');
     await clearMockLlmJournal(page);
-    await sendTurn(page, `${AUTOTEST_PREFIX}What is the QA-TEST-PHRASE?`);
+    // THE DELEGATION IS SCRIPTED, NOT HOPED FOR. The offline mock echoes the
+    // last user message and chooses nothing, so a plain question produces one
+    // hop and no child turn — which is exactly how this test failed on BOTH
+    // legs (python AND rust, run 35321502745: "the delegation never produced a
+    // second model hop"). `[[mock:call_tool …]]` is the repository's existing
+    // answer to that (`chat.delegation.spec.ts`'s header carries the full
+    // argument): the marker scripts the call the model emits and the runtime
+    // then does the delegating for real — resolve, compile, run the child as a
+    // turn of its own against the same mock, feed the result back. Only the
+    // parent model's DECISION is faked; the hop, and therefore the child's own
+    // system prompt, is real. The tool name is leg-aware — the native runtime
+    // binds `elitea_agent_<id>_v_<version>` and the SDK worker the agent's
+    // name — which `agentAsToolName` resolves from `E2E_WORKER`.
+    await sendTurn(
+      page,
+      callToolWithArgumentsPrompt(
+        agentAsToolName({ agentId: child.agentId, versionId: child.versionId, name: child.name }),
+        { task: `${AUTOTEST_PREFIX}What is the QA-TEST-PHRASE?` },
+        `${AUTOTEST_PREFIX}What is the QA-TEST-PHRASE? Delegate and quote the answer.`,
+      ),
+    );
 
     await expect
       .poll(async () => (await systemPrompts(page)).some((text) => text.includes(phrase)), {
@@ -445,19 +483,21 @@ test('Project Context is not passed down to a sub-agent', async ({ page }) => {
       })
       .toBe(true);
 
-    // The CHILD's own hop. Its request is the one whose system prompt carries
-    // the child's instructions, and it must not carry the phrase — a context
-    // that leaked down would appear in a SECOND journal entry, which is why
-    // the count is asserted rather than only the absence.
+    // The CHILD's own hop, identified by the child's instructions rather than
+    // by position or count: it is the only request built from them.
+    await expect
+      .poll(async () => (await systemPrompts(page)).some((text) => text.includes(childSentinel)), {
+        timeout: 180_000,
+        message:
+          'the delegation never produced the sub-agent’s own model hop, so the child’s prompt was never observed',
+      })
+      .toBe(true);
+
     const prompts = await systemPrompts(page);
     expect(
-      prompts.length,
-      'the delegation never produced a second model hop, so the child’s prompt was never observed',
-    ).toBeGreaterThan(1);
-    expect(
-      prompts.filter((text) => text.includes(phrase)).length,
-      'the project context reached more than the master agent — a sub-agent must not inherit it',
-    ).toBe(1);
+      prompts.filter((text) => text.includes(childSentinel) && text.includes(phrase)),
+      'the project context reached the sub-agent’s own prompt — a sub-agent must not inherit it',
+    ).toEqual([]);
   } finally {
     await setProjectContext(page, projectId, {
       content: prior.content ?? '',
