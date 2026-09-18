@@ -30,6 +30,16 @@ export interface UserInputHandle extends ChatInputHandle {
   reset(): void;
   getInputContent(): string;
   getCursorPosition(): number | null;
+  /**
+   * The caret position as of the last time the user actually EDITED the text
+   * (issue #933, ELITEA-1317), or `null` when they have not edited it in this
+   * composer instance. Distinct from `getCursorPosition()`, which reports
+   * wherever the caret happens to sit — including a position reached purely by
+   * a mouse click. Voice dictation inserts at the last EDITED position, so a
+   * bare click before reaching for the mic does not drop the transcript into
+   * the middle of a sentence the user had finished typing.
+   */
+  getLastEditPosition(): number | null;
   setValue(value: string, cursorPosition?: number): void;
   replaceRange(start: number, end: number, text: string): void;
   /**
@@ -71,6 +81,16 @@ export interface UserInputSendButtonConfig {
 /** Everything the real `SendButton`/stop-button (baseline: `features/chat/ui/chat-button/SendButton.jsx`, unit C6) consumed — read from that file directly to build this bag. */
 export interface UserInputSendControlSlotProps {
   readonly isSpeakingMode: boolean;
+  /**
+   * A voice recording (dictation OR the speaking-mode loop) is capturing right
+   * now (#932, ELITEA-1295). Separate from `disabledSend` on purpose: it must
+   * block the control that would put the composer into a SECOND voice mode —
+   * the speaking-mode wave icon — without blocking Send itself, which is still
+   * a legitimate way to commit dictated text, and without blocking the
+   * imperative `sendQuestion()` the speaking-mode loop's own auto-send fires
+   * while recording (#931).
+   */
+  readonly isRecording: boolean;
   readonly question: string;
   readonly disabledSend: boolean;
   readonly onEnterSpeakingMode: (() => void) | undefined;

@@ -233,7 +233,7 @@ export const NewChatInput = forwardRef(function NewChatInput(
         onExitSpeakingMode: voice.onSpeakingModeToggle,
       }}
       clearInputAfterSend={content.clearInputAfterSubmit}
-      disabledSend={state.disabledSend || finalIsRecording}
+      disabledSend={state.disabledSend}
       disabledInput={state.isLoading}
       showLoading={state.isLoading}
       isStreaming={state.isStreaming}

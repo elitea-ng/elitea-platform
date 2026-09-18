@@ -13,6 +13,7 @@ import { useActiveParticipantDetails } from '@/features/chat-participants';
 import { useParticipantName } from '@/features/chat-messages';
 
 import { toParticipant, toParticipants } from '../ChatBox.helpers';
+import { useChatBoxAttachmentsGate } from './useChatBoxAttachmentsGate';
 
 interface AgentEditorParticipantDetails {
   readonly id?: string;
@@ -23,6 +24,8 @@ interface AgentEditorParticipantDetails {
 export interface UseChatBoxParticipantParams {
   readonly activeParticipant: unknown;
   readonly conversationParticipants: unknown[] | undefined;
+  /** #905: the agent/pipeline EDITOR surface computes the attachments gate from its own (unsaved) form state — the gate below stands down there. */
+  readonly isAgentsPage: boolean | undefined;
 }
 
 export interface UseChatBoxParticipantResult {
@@ -38,11 +41,20 @@ export interface UseChatBoxParticipantResult {
    * named participant, which is the plain-model case.
    */
   readonly assistantName: string;
+  /**
+   * #905: whether the ACTIVE agent/pipeline participant's "Allow attachments"
+   * toggle is off. The caller ORs it with the in-flight-run refusal (A17,
+   * ELITEA-2867) to get the composer's one `disableAttachments` flag, which
+   * covers every way a file gets in: the "+" menu's Attach Files row, the bare
+   * paperclip, and the drop/paste bridge.
+   */
+  readonly areAttachmentsGated: boolean;
 }
 
 export function useChatBoxParticipant({
   activeParticipant,
   conversationParticipants,
+  isAgentsPage,
 }: UseChatBoxParticipantParams): UseChatBoxParticipantResult {
   const participantForEditor = useMemo(() => toParticipant(activeParticipant), [activeParticipant]);
   const assistantName = useParticipantName(activeParticipant as Parameters<typeof useParticipantName>[0]);
@@ -65,5 +77,7 @@ export function useChatBoxParticipant({
     return { ...(id !== undefined ? { id } : {}), ...(name !== undefined ? { name } : {}), ...(versions !== undefined ? { versions } : {}) };
   }, [rawParticipantDetails]);
 
-  return { participantForEditor, normalisedParticipants, agentEditorParticipantDetails, isFetchingParticipantDetails, assistantName };
+  const areAttachmentsGated = useChatBoxAttachmentsGate({ activeParticipant, participants: conversationParticipants, isAgentsPage });
+
+  return { participantForEditor, normalisedParticipants, agentEditorParticipantDetails, isFetchingParticipantDetails, assistantName, areAttachmentsGated };
 }

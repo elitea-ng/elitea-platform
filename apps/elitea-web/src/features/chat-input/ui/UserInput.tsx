@@ -112,7 +112,7 @@ export const UserInput = forwardRef(function UserInput(props: UserInputProps, re
   const highlightRanges = resolveHighlightRanges(sp.highlight);
   const sendButtonConfig = resolveSendButtonConfig(sp.sendButton);
 
-  const { inputRef, mirrorRef } = useUserInputRefs();
+  const { inputRef, mirrorRef, lastEditPositionRef } = useUserInputRefs();
   const { question, setQuestion, inputContent, setInputContent, showExpandIcon, setShowExpandIcon, rows, setRows, isFocused, setIsFocused } =
     useUserInputTextState(MAX_ROWS);
   const { onFocus, onBlur } = useUserInputFocusHandlers(setIsFocused);
@@ -147,12 +147,13 @@ export const UserInput = forwardRef(function UserInput(props: UserInputProps, re
     setQuestion,
     setShowExpandIcon,
   });
-  useUserInputImperativeHandle({ ref, inputRef, inputContent, setInputContent, setQuestion, setShowExpandIcon, sendQuestion, insertTextAtCursor });
+  useUserInputImperativeHandle({ ref, inputRef, inputContent, setInputContent, setQuestion, setShowExpandIcon, sendQuestion, insertTextAtCursor, lastEditPositionRef });
 
   const { onInputQuestion, onClickExpander } = useUserInputChangeHandlers({
     setInputContent,
     setQuestion,
     setShowExpandIcon,
+    lastEditPositionRef,
     setRows,
     onInputChange,
     maxRows: MAX_ROWS,
@@ -202,6 +203,13 @@ export const UserInput = forwardRef(function UserInput(props: UserInputProps, re
             sendControlProps={{
               isSpeakingMode,
               question,
+              // #931/#932: the recording flag travels as ITS OWN prop, never
+              // folded into `disabledSend`. `NewChatInput` used to fold it in,
+              // which made `useUserInputSendQuestion`'s guard swallow the
+              // imperative `sendQuestion()` that Speaking Mode's own auto-send
+              // fires WHILE recording — the loop's `reset()` then cleared the
+              // composer and nothing was ever posted (#931).
+              isRecording,
               disabledSend,
               onEnterSpeakingMode,
               onExitSpeakingMode,

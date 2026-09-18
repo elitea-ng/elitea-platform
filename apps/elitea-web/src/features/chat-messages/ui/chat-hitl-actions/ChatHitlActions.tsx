@@ -278,8 +278,25 @@ export function ChatHitlActions({
   const handleApprove = (): void => onHitlResume?.({ action: 'approve', toolCallId });
   const handleReject = (): void => onHitlResume?.({ action: 'reject', toolCallId });
   const handleEditSubmit = (value: string): void => onHitlResume?.({ action: 'edit', value, toolCallId });
-  const handleBlockWithComment = (comment: string): void =>
+  /**
+   * #950 (ELITEA-1013): the comment box is labelled "Add a comment
+   * (optional)...", and the route's contract is deliberate — `reject` refuses
+   * a value, `block_with_comment` REQUIRES one
+   * (`agentexecution/continue.go`'s `validCurrentHITLDecision`). Sending
+   * `block_with_comment` with an empty comment was therefore refused with
+   * `400 Invalid agent execution request` and the pause stayed open with
+   * nothing said, on the one path a user takes without thinking. A decline
+   * with no comment IS a plain reject, so the card sends the action its own
+   * input actually describes. The comment itself travels unchanged (not
+   * trimmed) whenever there is one.
+   */
+  const handleBlockWithComment = (comment: string): void => {
+    if (comment.trim() === '' && actions.includes('reject')) {
+      handleReject();
+      return;
+    }
     onHitlResume?.({ action: 'block_with_comment', value: comment, toolCallId });
+  };
 
   if (canAnswer) {
     return (

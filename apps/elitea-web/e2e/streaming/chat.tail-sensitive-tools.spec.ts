@@ -891,26 +891,29 @@ test('the guardrails configuration is stored platform-wide and reads back unchan
 
 
 /* onetest: ELITEA-1013 (the Block control itself) — clicking Block closes the dialog and blocks the
- * call. FAIL-MARKED: the decline control's comment box is labelled optional and the continuation
- * route refuses a decline that leaves it empty. */
+ * call, with the comment box left empty. */
 test('a sensitive call can be declined without typing a comment', async ({ page }) => {
   test.setTimeout(300_000);
 
-  // MEASURED: `POST …/continue_predict/…` answers 400 `{"error":"Invalid agent
-  // execution request"}` for a `block_with_comment` resume whose `hitl_value`
-  // is the empty string. The card's decline control is
-  // `BlockWithCommentControl`, whose comment box says "Add a comment
-  // (optional)..." — so the one path a user takes without thinking about it is
-  // the one the route refuses, and the card shows no error: the pause simply
-  // stays open. Every other decline in this file and in
+  // WAS MEASURED: `POST …/continue_predict/…` answered 400 `{"error":"Invalid
+  // agent execution request"}` for a `block_with_comment` resume whose
+  // `hitl_value` is the empty string, and the card showed no error — the pause
+  // simply stayed open. Every other decline in this file and in
   // `chat.toolkit-hitl.spec.ts` types a comment first, which is why the defect
   // had not surfaced.
-  test.fail(
-    true,
-    'ELITEA-1013 (#950): product gap — declining a sensitive call with the comment box left empty is ' +
-      'refused with 400 `Invalid agent execution request`, though the box is labelled optional; ' +
-      'the dialog stays open with nothing said. See S/tail/defects.md.',
-  );
+  //
+  // CLOSED in #950, and NOT by loosening the route: its contract is
+  // deliberate and unchanged — `reject` refuses a value,
+  // `block_with_comment` requires one (`agentexecution/continue.go`'s
+  // `validCurrentHITLDecision`, and the same rule again in the native
+  // runtime's `DirectHitlDecision::from_raw`). The card was sending the wrong
+  // action for what the user had actually done: `BlockWithCommentControl`'s
+  // Reject button always emitted `block_with_comment`, whatever was (not) in
+  // the box labelled "Add a comment (optional)...". `ChatHitlActions` now
+  // emits a plain `reject` when the comment is empty and the pause offers that
+  // action — which is what an empty decline IS — and `block_with_comment`
+  // with the comment verbatim when there is one. Pinned unit-level in
+  // `ChatHitlActions.decline.test.tsx`.
 
   let fixture: MockToolAgentFixture | undefined;
   try {

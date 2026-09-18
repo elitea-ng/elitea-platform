@@ -173,15 +173,18 @@ test('disabling Speaking Mode stops voice capture; typed Send keeps working', as
  * onetest: ELITEA-1294 — Speaking Mode is available in a brand-new, empty
  * chat, and its first utterance auto-sends.
  *
- * PRODUCT GAP for the second half. `useSpeakingModeLoop.ts` wires
- * `scheduleSend` from exactly two places: `handleTranscriptDone` (the
- * SERVER/streaming-ASR hook's callback — `useStreamingSpeechRecognition`)
- * and `notifyManualEdit` (a real DOM edit). The CLIENT hook
- * (`useSpeechRecognition`, the one this stack uses with no ASR model
- * configured) is given only `onTranscript`; nothing ever calls
- * `scheduleSend` for it, so a spoken utterance alone never auto-sends on
- * this path. The button IS available in a brand-new chat (asserted below,
- * and it passes); the auto-send half is written as it should behave.
+ * Closed in #930/#931. `useSpeakingModeLoop.ts` used to wire `scheduleSend`
+ * from exactly two places: `handleTranscriptDone` (the SERVER/streaming-ASR
+ * hook's callback) and `notifyManualEdit` (a real DOM edit) — the CLIENT
+ * hook (`useSpeechRecognition`, the one this stack uses with no ASR model
+ * configured) was given only `onTranscript`, so a spoken utterance alone
+ * never armed the silence timer. A FINAL result now arms it on that path
+ * (the browser fallback emits no `transcript_done` of its own). #931 was the
+ * other half: the scheduled `sendQuestion()` was swallowed because
+ * `NewChatInput` folded the recording flag into `UserInput`'s `disabledSend`
+ * PROP, which `useUserInputSendQuestion` guards on — so the loop's `reset()`
+ * cleared the composer and nothing was posted. The recording flag now
+ * disables the send CONTROL only.
  */
 test('Speaking Mode works in a brand new, empty chat and its first utterance auto-sends', async ({
   page,
@@ -199,12 +202,6 @@ test('Speaking Mode works in a brand new, empty chat and its first utterance aut
   const text = uniqueName('first');
   await fireTranscript(page, text);
 
-  test.fail(
-    true,
-    'ELITEA-1294 (#930): product gap — the browser-fallback ASR path never calls scheduleSend ' +
-      'from a transcript (useSpeakingModeLoop.ts wires it only from the server-ASR ' +
-      'onTranscriptDone and from notifyManualEdit), so a spoken utterance alone never auto-sends',
-  );
 
   const created = page.waitForResponse(
     (response) => response.url().includes(CONVERSATIONS_PATH) && response.request().method() === 'POST',
@@ -232,11 +229,6 @@ test('a message auto-sends after silence, with no click on Send', async ({ page 
     const text = uniqueName('spoken');
     await fireTranscript(page, text);
 
-    test.fail(
-      true,
-      'ELITEA-1298 (#930): product gap — the browser-fallback ASR path never calls scheduleSend ' +
-        'from a transcript alone; see ELITEA-1294\'s note in this file for the exact wiring',
-    );
     // No Send click anywhere in this test — the auto-send timer is what must
     // fire it. `SILENCE_TIMEOUT_MS` is 3000ms + a latency estimate.
     await expect(page.getByTestId('user-message').last(), 'silence must auto-send with no Send click').toContainText(
@@ -258,12 +250,9 @@ test('a message auto-sends after silence, with no click on Send', async ({ page 
  * check ARE that transcription, mid-test). Agent/Pipeline pages are not
  * independently exercised — see the ledger.
  *
- * Same root defect as ELITEA-1298/1294 in this file: the browser-fallback ASR
- * path never calls `scheduleSend` from a transcript, so nothing here ever
- * auto-sends at all — which makes "the pause did not send early" trivially
- * true for the wrong reason. Both sentences accumulating in the INPUT (no
- * send needed) is the part this stack can actually prove; the final combined
- * send is written as it should behave and is expected to fail.
+ * Both halves are real now (#930): the pause does not send early AND the
+ * full utterance sends as one message, because a FINAL transcript re-arms
+ * the silence timer rather than adding a second send.
  */
 test('a mid-sentence pause does not auto-send early; the full utterance sends as one message', async ({
   page,
@@ -285,11 +274,6 @@ test('a mid-sentence pause does not auto-send early; the full utterance sends as
     await fireTranscript(page, 'And include milestones.');
     await expect(input).toHaveValue('Tell me about computers. And include milestones.');
 
-    test.fail(
-      true,
-      'ELITEA-1291 (#930): product gap — see ELITEA-1298\'s note in this file: nothing ' +
-        'auto-sends from a transcript alone on the browser-fallback ASR path',
-    );
     await expect(page.getByTestId('user-message').last()).toContainText(
       'Tell me about computers. And include milestones.',
       { timeout: 15_000 },
@@ -305,15 +289,15 @@ test('a mid-sentence pause does not auto-send early; the full utterance sends as
  * onetest: ELITEA-1290 — manually editing the transcribed text resets the
  * auto-send timer, so the edit is not cut off.
  *
- * PRODUCT GAP, a different one from ELITEA-1298/1294's. `notifyManualEdit`
- * IS wired to every composer keystroke (`useNewChatInputInputChange`) and
- * does call `scheduleSend`, so this path is not simply absent — but the
- * imperative `sendQuestion()` that fires when the timer elapses sends
- * nothing observable: measured live, the composer clears and NO request to
- * the messages endpoint is ever made (no `user-message` row, no network
- * call), for the same edited text that a plain typed Send submits correctly
- * elsewhere in this suite (`chat.composer.spec.ts`). Written as it should
- * behave.
+ * Closed in #931, a different defect from #930's missing wiring.
+ * `notifyManualEdit` IS wired to every composer keystroke
+ * (`useNewChatInputInputChange`) and does call `scheduleSend` — but the
+ * imperative `sendQuestion()` that fired when the timer elapsed was
+ * swallowed by `useUserInputSendQuestion`'s `disabledSend` guard, which
+ * `NewChatInput` had made true for the whole of a recording. The loop's
+ * unconditional `reset()` then cleared the composer, so the edit was lost
+ * with no request ever made. `UserInput` now applies the recording flag to
+ * the send CONTROL, not to the send itself.
  */
 test('a manual edit while Speaking Mode is pending resets the auto-send timer', async ({ page }) => {
   const name = uniqueName('edit');
@@ -337,12 +321,6 @@ test('a manual edit while Speaking Mode is pending resets the auto-send timer', 
     // Must not have sent yet, immediately after the edit.
     await expect(page.getByTestId('user-message')).toHaveCount(0);
 
-    test.fail(
-      true,
-      'ELITEA-1290 (#931): product gap — Speaking Mode\'s scheduled sendQuestion() after a ' +
-        'manual edit clears the composer but never reaches the messages endpoint; ' +
-        'no user-message row is ever created',
-    );
     await expect(page.getByTestId('user-message').last()).toContainText(
       'Schedule a meeting for tomorrow afternoon at 2pm',
       { timeout: 15_000 },

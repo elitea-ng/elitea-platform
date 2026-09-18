@@ -36,7 +36,8 @@ import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/sh
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '@/test/setup';
 
-import { VoiceButton } from './VoiceButton';
+import { VoiceButton, resolveDictationInsertPoint, withDictationSeparator } from './VoiceButton';
+import type { VoiceButtonInputHandle } from './VoiceButton';
 
 /** The minimum of the Web Speech API that `useSpeechRecognition` probes for. */
 class FakeSpeechRecognition {
@@ -130,5 +131,53 @@ describe('VoiceButton honours the admin Voice Features switches', () => {
     // switch exists for. A component that collapsed the two flags into one
     // would have hidden it instead.
     expect(screen.getByRole('button', { name: /voice input/i })).toBeInTheDocument();
+  });
+});
+
+/**
+ * #933 (ELITEA-1317): dictation splices at the last EDITED position, not at
+ * a caret an incidental mouse click moved.
+ */
+describe('dictation insertion point (#933)', () => {
+  function handle(overrides: Partial<VoiceButtonInputHandle>): VoiceButtonInputHandle {
+    return {
+      getInputContent: () => '',
+      getCursorPosition: () => null,
+      setValue: () => {},
+      ...overrides,
+    };
+  }
+
+  it('prefers the last edited position over the live caret', () => {
+    const h = handle({ getCursorPosition: () => 5, getLastEditPosition: () => 11 });
+    expect(resolveDictationInsertPoint(h, 'Hello world')).toBe(11);
+  });
+
+  it('falls back to the live caret when the composer has never been edited', () => {
+    const h = handle({ getCursorPosition: () => 5, getLastEditPosition: () => null });
+    expect(resolveDictationInsertPoint(h, 'Hello world')).toBe(5);
+  });
+
+  it('falls back to the live caret for a host whose handle does not track edits at all', () => {
+    const h = handle({ getCursorPosition: () => 3 });
+    expect(resolveDictationInsertPoint(h, 'Hello world')).toBe(3);
+  });
+
+  it('falls back to the end of the text when neither is known', () => {
+    expect(resolveDictationInsertPoint(handle({}), 'Hello world')).toBe(11);
+    expect(resolveDictationInsertPoint(null, 'Hello world')).toBe(11);
+  });
+
+  it('clamps a recorded position that outlived the text it described', () => {
+    const h = handle({ getLastEditPosition: () => 99 });
+    expect(resolveDictationInsertPoint(h, 'short')).toBe(5);
+    expect(resolveDictationInsertPoint(handle({ getLastEditPosition: () => -4 }), 'short')).toBe(0);
+  });
+
+  it('separates a dictated phrase from the word it would otherwise weld onto', () => {
+    expect(withDictationSeparator('Hello world')).toBe('Hello world ');
+    expect(withDictationSeparator('Hello world ')).toBe('Hello world ');
+    expect(withDictationSeparator('Hello world\n')).toBe('Hello world\n');
+    expect(withDictationSeparator('')).toBe('');
   });
 });

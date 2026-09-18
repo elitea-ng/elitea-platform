@@ -1917,6 +1917,7 @@
   "pages.agents.createApplication.title": "New Agent",
   "pages.agents.editApplication.agentNotFound.description": "This agent no longer exists.",
   "pages.agents.editApplication.agentNotFound.title": "Agent not found",
+  "pages.agents.editApplication.back": "Back",
   "pages.agents.editApplication.chatError": "Failed to open a chat with this agent.",
   "pages.agents.editApplication.deleteError": "Failed to delete this agent.",
   "pages.agents.editApplication.error": "Failed to load this agent.",
