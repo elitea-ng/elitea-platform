@@ -3743,6 +3743,8 @@
   "credentials.list.emptyDescription": "Create your first credential to get started. Credentials hold the provider keys your agents, toolkits and models authenticate with.",
   "shared.entityList.emptyState.create": "Create",
   "shared.entityList.emptyState.guidedTour": "Start Guided Tour",
+  "shared.entityList.forkedFrom": "Forked from",
+  "shared.entityList.forkedFromTooltip": "Forked from another entity. Switch to the table view to open the original.",
   "shared.entityList.loadFailed": "Oops! Something went wrong. Please try again later!",
   "shared.entityList.pagination.next": "Next page",
   "shared.entityList.pagination.previous": "Previous page",

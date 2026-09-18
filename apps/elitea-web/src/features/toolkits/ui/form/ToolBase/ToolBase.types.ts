@@ -115,6 +115,8 @@ interface ToolBaseCoreProps {
   readonly onCredentialReload?: OnCredentialReload | undefined;
   /** Advanced/rarely-used escape hatch: a caller that already has a full `ToolBasePropertyCredentialContext` (e.g. `specifiedProjectId`/`presetOptions`) may supply it directly instead of the plain `onCredentialReload` above. */
   readonly credentialContext?: ToolBasePropertyCredentialContext | undefined;
+  /** #902: forwarded into `credentialContext.isTeamProject` — see that field. */
+  readonly isTeamProject?: boolean | undefined;
   /** Caller-supplied metadata sections (the baseline's own `useToolkitConfigurationProperties({toolType})` result) — a real, disclosed, pre-existing gap (no port of that legacy top-level hook in scope), unrelated to R1/R2/R3. */
   readonly sections?: ToolBaseSections | undefined;
   readonly slots?: ToolBaseSlots | undefined;

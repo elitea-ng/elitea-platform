@@ -5,7 +5,7 @@ import { classifySchemaField, configurationSectionsOf, initialDataForSchema } fr
 import { useCredentialWarningModal } from './model/useCredentialWarningModal';
 import { CredentialsControls } from './ui/CredentialsControls';
 import { CredentialsTabBar } from './ui/CredentialsTabBar';
-import { CredentialWarningBanner } from './ui/CredentialWarningBanner';
+import { CredentialWarningBanner } from '@/entities/credential';
 import { CredentialWarningModal } from './ui/CredentialWarningModal';
 
 import * as slice from './index';

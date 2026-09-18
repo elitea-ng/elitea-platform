@@ -43,6 +43,8 @@ export interface ToolBasePropertyCredentialContext {
   readonly specifiedProjectId?: string | number | undefined;
   readonly presetOptions?: unknown;
   readonly onCredentialReload?: OnCredentialReload | undefined;
+  /** #902/ELITEA-0726: the selected project's scope, so a secret field's "Create new secret" entry can name it ("New Project Secret" / "New Private Secret"). `undefined` means the composition root does not know the scope — the generic label then stands, never a guess. */
+  readonly isTeamProject?: boolean | undefined;
 }
 
 export interface ToolBasePropertySlots {

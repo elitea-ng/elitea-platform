@@ -18,6 +18,7 @@ import { useToolkitCredentialPickerSlot } from './lib/credentialPickerSlots';
 import { useMcpLoadTools } from './lib/useMcpLoadTools';
 import { SHAREPOINT_AUTH_MODALS } from './lib/sharepointAuthModals';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
+import { useProjectScopeIsTeam } from './lib/usePersonalProjectId';
 import type { EditToolDetail } from './lib/toolkitFormTypes';
 
 const pageSx: SxProps<Theme> = { height: '100%', display: 'flex', flexDirection: 'column' };
@@ -184,6 +185,8 @@ export function CreateToolkit({ isMCP = false, isApplication = false, deps }: Cr
   const navigate = useNavigate();
   const params = useParams({ strict: false }) as CreateToolkitRouteParams;
   const projectId = useSelectedProjectId();
+  // #902: names the secret picker's CREATE entry after the project scope.
+  const isTeamProject = useProjectScopeIsTeam(projectId);
 
   const [editToolDetail, setEditToolDetail] = useState<EditToolDetail | null>(null);
   const [formValues, setFormValues] = useState<Readonly<Record<string, unknown>>>({ type: params.toolkitType ?? '' });
@@ -351,20 +354,14 @@ export function CreateToolkit({ isMCP = false, isApplication = false, deps }: Cr
             isSaving={isCreating}
             isMCP={isMCP}
             isApplication={isApplication}
-            onSave={() => {
-              void handleSave();
-            }}
+            onSave={() => void handleSave()}
             onClearEditTool={handleClearEditTool}
           />
         )}
       </Box>
       <Box sx={editToolDetail ? contentSx : selectorContentSx}>
         {createError !== undefined && (
-          <Typography
-            role="alert"
-            variant="bodyMedium"
-            sx={errorSx}
-          >
+          <Typography role="alert" variant="bodyMedium" sx={errorSx}>
             {t('pages.toolkits.createToolkit.error', 'Failed to create the toolkit.')}
           </Typography>
         )}
@@ -376,6 +373,7 @@ export function CreateToolkit({ isMCP = false, isApplication = false, deps }: Cr
             isToolDirty={isDirty}
             hideConfigurationNameInput
             projectId={projectId}
+            {...(isTeamProject === undefined ? {} : { isTeamProject })}
             formValues={formValues}
             formInitialValues={formValues}
             onSetFormField={handleSetFormField}

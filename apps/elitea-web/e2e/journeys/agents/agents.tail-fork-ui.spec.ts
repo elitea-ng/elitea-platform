@@ -162,9 +162,22 @@ test('"Forked from" is a working link, visible on the Agents dashboard card and 
 
     await page.goto(`${BASE_URL}/app/agents/my`);
     await page.getByPlaceholder(/search/i).fill(name);
+
+    // CARD view: a marker, deliberately NOT a control. The card's own root is
+    // `role="button"`, and a focusable widget nested in one is axe's
+    // `nested-interactive` (impact "serious") — which is exactly what
+    // `agents.lifecycle.spec.ts`'s a11y check caught when this shipped as a
+    // `role="link"`. See `EntityCard.tsx`'s own comment.
     const card = page.getByText(name, { exact: true }).first().locator('..').locator('..');
-    const forkedLink = card.getByRole('link', { name: /forked from/i });
-    await expect(forkedLink, 'the card view must show a "Forked from" link').toBeVisible({ timeout: 10_000 });
+    const cardMarker = card.getByTestId('entity-card-forked-from');
+    await expect(cardMarker, 'the card view must show the "Forked from" marker').toBeVisible({ timeout: 10_000 });
+    await expect(card.getByRole('link', { name: /forked from/i }), 'and it must NOT be a nested control').toHaveCount(0);
+
+    // TABLE view: a real link to the original — a `<tr>` carries no widget
+    // role, so a link inside it nests nothing.
+    await page.getByTestId('agent-table-view-button').click();
+    const forkedLink = page.getByTestId('entity-row-forked-from').first();
+    await expect(forkedLink, 'the table view must show a "Forked from" link').toBeVisible({ timeout: 20_000 });
     await forkedLink.click();
     await expect(page).toHaveURL(new RegExp(`/agents/all/${agent.id}`));
   } finally {

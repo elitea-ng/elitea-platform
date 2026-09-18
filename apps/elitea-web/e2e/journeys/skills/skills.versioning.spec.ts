@@ -87,8 +87,11 @@ test('SKILL-2: create a version, edit it independently, compare, and restore it 
       .toEqual(['base', 'v2']);
 
     // ---- Switch to v2 and edit its instructions — base must stay untouched. ----
-    await page.getByRole('combobox').click();
-    await page.getByRole('option', { name: 'v2' }).click();
+    // #917: the version picker is `AgentPipelineVersionSelector` now (the same
+    // component Agents and Pipelines use) — a trigger box opening a
+    // `role="menu"`, not a MUI `<Select>`'s combobox/option pair.
+    await page.getByTestId('version-selector-trigger').click();
+    await page.getByRole('menu').getByRole('menuitem', { name: /v2/ }).click();
     await page.waitForURL(new RegExp(`/skills/all/${skillId}/`), { timeout: 15_000 });
 
     const instructions = page.getByTestId('skill-instructions-input');

@@ -1,10 +1,13 @@
 import type { ReactNode } from 'react';
 import { useCallback } from 'react';
 
+import { CredentialWarningBanner } from '@/entities/credential';
+
 import { useBlockedToolkitTypes } from '../api/useBlockedToolkitTypes';
 import { useDisassociateToolkit } from '../lib/hooks/useDisassociateToolkit.hooks';
 import type { ToolRemovalUpdate } from '../lib/hooks/useDisassociateToolkit.hooks';
 import { useSaveSelectedTools } from '../lib/hooks/useSaveSelectedTools.hooks';
+import { useToolkitCredentialIssue } from '../lib/hooks/useToolkitCredentialIssue';
 import type { AgentToolAssociation } from '../lib/types';
 
 import { ToolCard } from './ToolCard';
@@ -30,9 +33,15 @@ import { ToolCard } from './ToolCard';
  *    version is `useApplicationChatSwitchVersion`/`useSaveChangedTools`
  *    territory and needs a version LIST per attached sub-agent, which no
  *    endpoint on this page's fetch returns.
- *  - `validation` — this app's generated validate-version endpoint returns a
- *    plain `{valid}` with none of the per-toolkit detail the banner needs
- *    (already disclosed in `ToolCard.types.ts`).
+ *  - `validation.onRevalidate` — still omitted: this app's generated
+ *    validate-version endpoint returns a plain `{valid}` with none of the
+ *    per-toolkit detail a re-check could report (disclosed in
+ *    `ToolCard.types.ts`). **`validation.banner` IS filled now (#937)**, from
+ *    the one signal that does not need that endpoint: whether the credential
+ *    this toolkit names still exists — see `useToolkitCredentialIssue`. Until
+ *    it was, the slot had no caller anywhere, so "Credential setup required:"
+ *    could not appear on an Agent's, a Pipeline's or a Chat participant's tool
+ *    card at all.
  *  - `delegatedAuth` — `features/mcps`/`features/sharepoint`/`features/openapi`
  *    slots; `no-sideways-features` forbids reaching them from here, and a
  *    page-level composition would have to inject them.
@@ -125,6 +134,11 @@ export function AgentToolRow({ tool, index, isDuplicate, disabled, viewMode, ent
   // banner could not appear on any screen — see the hook's own header.
   const blockedToolkitTypes = useBlockedToolkitTypes();
 
+  // #937: the credential this toolkit names, checked against the project that
+  // would hold it. `null` whenever there is no reference, no verdict, or the
+  // credential resolves — the banner is a claim, not a default.
+  const credentialIssue = useToolkitCredentialIssue(tool.settings, entity.projectId);
+
   const handleDisassociate = useCallback(
     ({ isAttachmentToolkit }: { readonly isAttachmentToolkit: boolean }) => {
       void onDisassociateTool({ tool, isAttachmentToolkit });
@@ -147,6 +161,21 @@ export function AgentToolRow({ tool, index, isDuplicate, disabled, viewMode, ent
       icon={{ url: tool.icon_meta?.url }}
       disassociate={{ onDisassociateTool: handleDisassociate, isDisassociating: isLoading }}
       toolSelection={{ onSelectedToolsChange }}
+      {...(credentialIssue === null
+        ? {}
+        : {
+            validation: {
+              hasIssue: true,
+              banner: (
+                <CredentialWarningBanner
+                  credentialId={credentialIssue.reference.eliteaTitle}
+                  credentialType={credentialIssue.reference.credentialType}
+                  section="credentials"
+                  createHref={credentialIssue.createHref}
+                />
+              ),
+            },
+          })}
     />
   );
 }

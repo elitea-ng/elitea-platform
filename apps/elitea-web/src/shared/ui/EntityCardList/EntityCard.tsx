@@ -115,26 +115,34 @@ export function EntityCard({ item, actions, onTagClick, 'data-testid': dataTestI
           />
         </Box>
         {item.forkedFrom !== undefined && (
-          <Box
-            component="span"
-            // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- an `<a>` needs a real `href` to compute the `link` role, and this is a client-side-only navigation with no URL of its own to give it (same reasoning this file's own outer card `role="button"` documents for its rule).
-            role="link"
-            tabIndex={0}
-            data-testid="entity-card-forked-from"
-            sx={forkedFromSx}
-            onClick={(event) => {
-              event.stopPropagation();
-              item.forkedFrom?.onClick();
-            }}
-            onKeyDown={(event) => {
-              if (event.key !== 'Enter' && event.key !== ' ') return;
-              event.preventDefault();
-              event.stopPropagation();
-              item.forkedFrom?.onClick();
-            }}
+          /*
+           * #915, corrected: a MARKER, not a control.
+           *
+           * The card's own root is `role="button"` (see its rule comment
+           * above), and axe's `nested-interactive` — impact "serious", and a
+           * rule this app's `checkA11y` E2E fixture does NOT disable — fails
+           * any focusable widget nested inside one. The first cut made this a
+           * focusable `role="link"`, which broke `agents.lifecycle.spec.ts`'s
+           * a11y check on every dashboard that renders a forked row.
+           *
+           * The origin is still REACHABLE, as a real link, from the TABLE
+           * view (`EntityListTable.tsx`): a table row is a plain `<tr>` with
+           * an onClick, not a widget role, so a link inside it nests nothing.
+           * Here the indicator states the fact and says where to act on it.
+           */
+          <Tooltip
+            title={t('shared.entityList.forkedFromTooltip', 'Forked from another entity. Switch to the table view to open the original.')}
+            placement="top"
           >
-            {t('shared.entityList.forkedFrom', 'Forked from')}
-          </Box>
+            <Typography
+              component="span"
+              variant="bodySmall"
+              data-testid="entity-card-forked-from"
+              sx={forkedFromSx}
+            >
+              {t('shared.entityList.forkedFrom', 'Forked from')}
+            </Typography>
+          </Tooltip>
         )}
       </Box>
     </Box>
@@ -245,14 +253,10 @@ const bottomLeftSx: SxProps<Theme> = (theme: Theme) => ({
 
 const sectionDividerSx: SxProps<Theme> = { height: '0.9375rem', alignSelf: 'center' };
 
-/** #915's "Forked from" link — the bottom row's right-hand slot, unused until now (`bottomRowSx`'s `justifyContent: 'space-between'` already reserved it). */
+/** #915's "Forked from" marker — the bottom row's right-hand slot, unused until now (`bottomRowSx`'s `justifyContent: 'space-between'` already reserved it). Deliberately NOT styled as a link: it is not one here (see the JSX's own comment); the table view carries the clickable copy. */
 const forkedFromSx: SxProps<Theme> = (theme: Theme) => ({
   flexShrink: 0,
   alignSelf: 'center',
-  color: theme.vars.palette.text.link,
-  cursor: 'pointer',
+  color: theme.vars.palette.text.secondary,
   whiteSpace: 'nowrap',
-  fontSize: theme.typography.bodySmall.fontSize,
-  '&:hover': { textDecoration: 'underline' },
-  '&:focus-visible': { outline: `0.125rem solid ${theme.vars.palette.border.lines}`, outlineOffset: '0.125rem' },
 });

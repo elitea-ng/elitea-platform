@@ -71,24 +71,33 @@ describe('EntityCard', () => {
     expect(onClick).toHaveBeenCalledTimes(2);
   });
 
-  /* #915 — the "Forked from" link fires ITS OWN handler, not the card's onClick, on both click and keyboard activation. */
-  it('renders a "Forked from" link that activates independently of the card itself', () => {
+  /*
+   * #915, corrected: on a CARD the indicator is a marker, not a control.
+   *
+   * The card root is `role="button"`, and a focusable widget nested inside
+   * one is axe's `nested-interactive` (impact "serious") — it failed
+   * `agents.lifecycle.spec.ts`'s a11y check on every dashboard showing a
+   * forked row. So the card states the fact and the TABLE row (asserted
+   * separately below) carries the clickable link to the original.
+   */
+  it('renders a NON-interactive "Forked from" marker on the card', () => {
     const onClick = vi.fn();
     const onForkedFromClick = vi.fn();
-    const { getByTestId } = renderWithTheme(
+    const { getByTestId, queryByRole } = renderWithTheme(
       <EntityCard item={{ id: '1', name: 'a', onClick, forkedFrom: { onClick: onForkedFromClick } }} />,
     );
-    const link = getByTestId('entity-card-forked-from');
-    expect(link).toHaveTextContent('Forked from');
-    fireEvent.click(link);
-    expect(onForkedFromClick).toHaveBeenCalledTimes(1);
-    expect(onClick).not.toHaveBeenCalled();
-    fireEvent.keyDown(link, { key: 'Enter' });
-    expect(onForkedFromClick).toHaveBeenCalledTimes(2);
-    expect(onClick).not.toHaveBeenCalled();
+    const marker = getByTestId('entity-card-forked-from');
+    expect(marker).toHaveTextContent('Forked from');
+    // Neither a widget role nor a tab stop — the two things `nested-interactive` fails on.
+    expect(queryByRole('link')).not.toBeInTheDocument();
+    expect(marker).not.toHaveAttribute('tabindex');
+    // And a click on it does not silently do nothing DIFFERENT from the card:
+    // it falls through to the card's own activation, like any other card text.
+    fireEvent.click(marker);
+    expect(onForkedFromClick).not.toHaveBeenCalled();
   });
 
-  it('renders no "Forked from" link for an un-forked item', () => {
+  it('renders no "Forked from" marker for an un-forked item', () => {
     const { queryByTestId } = renderWithTheme(<EntityCard item={{ id: '1', name: 'a' }} />);
     expect(queryByTestId('entity-card-forked-from')).not.toBeInTheDocument();
   });

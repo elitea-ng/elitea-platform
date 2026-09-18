@@ -18,8 +18,8 @@ import {
   MaskedSecretField,
   MultilineField,
   ObjectField,
-  SecretFieldInput,
 } from './ToolBaseProperty.renderers';
+import { SecretFieldInput } from './SecretFieldInput';
 import { isCredentialLikeKind, isIntegerKind, resolveAnyOfDefault } from './ToolBaseProperty.kinds';
 import type { FieldKind } from './ToolBaseProperty.kinds';
 import type { ToolBasePropertyCredentialContext, ToolBasePropertySlots } from './ToolBaseProperty.types';
@@ -206,11 +206,7 @@ function renderArray(ctx: FieldRenderContext): ReactNode {
 function renderSecret(ctx: FieldRenderContext): ReactNode {
   if (ctx.effectiveDisabled) {
     return (
-      <MaskedSecretField
-        required={ctx.required}
-        label={ctx.label}
-        maxLength={ctx.schema.max_toolkit_length}
-      />
+      <MaskedSecretField required={ctx.required} label={ctx.label} maxLength={ctx.schema.max_toolkit_length} />
     );
   }
   return (
@@ -221,6 +217,7 @@ function renderSecret(ctx: FieldRenderContext): ReactNode {
       required={ctx.required}
       error={ctx.toastError}
       helperText={ctx.errorText}
+      isTeamProject={ctx.credentialContext?.isTeamProject}
     />
   );
 }

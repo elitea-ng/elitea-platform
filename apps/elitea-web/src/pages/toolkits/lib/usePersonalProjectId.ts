@@ -54,3 +54,19 @@ export function useIsTeamProject(projectId: string | undefined): boolean {
   const personalProjectId = usePersonalProjectId();
   return isTeamProject(projectId, personalProjectId);
 }
+
+/**
+ * #902/ELITEA-0726: the same question answered in THREE values — `undefined`
+ * while either id is still unknown. `useIsTeamProject` collapses that unknown
+ * to `false` on purpose (it only unlocks a warning modal, never a
+ * restriction); a user-visible label must not, or it claims a scope nobody
+ * established. Pure half below so it is unit-testable without a router.
+ */
+export function selectIsTeamProject(projectId: string | undefined, personalProjectId: string | undefined): boolean | undefined {
+  if (projectId === undefined || projectId === '' || personalProjectId === undefined) return undefined;
+  return projectId !== personalProjectId;
+}
+
+export function useProjectScopeIsTeam(projectId: string | undefined): boolean | undefined {
+  return selectIsTeamProject(projectId, usePersonalProjectId());
+}
