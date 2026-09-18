@@ -1,6 +1,6 @@
 # Compatible-provider summary and input limits
 
-Status: live compaction and reload pass on 2026-09-18. Full continuation-quality and capacity acceptance remain open.
+Status: live Haiku compaction and GPT Balanced continuation pass on 2026-09-18. Full-window and cross-scope acceptance remain open.
 Gate 4 remains open.
 
 ## Source mapping
@@ -224,3 +224,33 @@ The persisted summary retains that step, so this failure is not evidence of comp
 Do not count this run as complete end-to-end acceptance of the requested four-line answer.
 Use representative task history for the remaining continuation-quality and capacity checks.
 Full-mode limits, smaller-summary-model batching, nested scopes, and crash recovery remain open.
+
+## GPT Balanced continuation and smaller summary-model boundary
+
+Fresh headed Playwright runs use private project-note fixtures without intercepted requests.
+Chat 592 contains 18 fictional messages totaling 162,722 bytes.
+GPT-5.4-mini returns all four requested facts. Its 41,290-token input does not trigger compaction.
+This is a continuation baseline only. Legacy numeric limits do not enter the worker policy.
+`contextsettings.Strategy.Runtime` projects Balanced or Full, not `max_context_tokens`.
+
+Chat 593 contains 18 fictional messages totaling 965,675 bytes before the test requests.
+Its first execution, `1405ea694aba9270fb07ab610dde4f3c`, reaches 242,928 estimated tokens.
+The task model is GPT, but the inherited dedicated summary model is Haiku.
+The worker rejects the summary request with `context_budget_exceeded` before provider dispatch.
+This confirms the smaller-summary-model boundary. It is not a provider refusal.
+The UI reports a generic resource-limit error; clearer summary-capacity errors remain gate 4 work.
+
+The fixture then selects GPT-5.4-mini explicitly through the context-strategy endpoint.
+Execution `0a169d220f12b3f5f56c3ebc027f7fcb` passes on the same deployed worker image.
+Its Balanced budget is 272,000 tokens, with 8,192 reserved for output and a 2,720-token safety margin.
+Usable input is 261,088 tokens. Compaction starts at 234,980 tokens.
+Estimated input falls from 242,998 to 54,793 tokens, or 93% to 21% of usable input.
+The final answer contains the delivery code, teal correction, completed archive check, and pending handoff note.
+The browser reports no page errors. Reload preserves the answer and compacted status.
+The screenshot was inspected. The earlier failed request remains visible as history.
+
+This proves one real GPT Balanced compaction and continuation case.
+The provider route and fixture differ from the earlier Haiku case, so it does not establish the cause of Haiku's refusal.
+No product code, model catalogue, or database schema changed for this comparison.
+Full-window input capacity, bounded batching for smaller summary models, repeated live compactions,
+nested scopes, and crash recovery remain open.

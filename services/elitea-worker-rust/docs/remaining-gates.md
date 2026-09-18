@@ -134,7 +134,9 @@ accepts one validated summary object inside presentation text and aligns input f
 It now requests native structured output and applies bounded evidence-only correction without rewriting summary facts.
 The fresh browser run compacts 108,264 estimated tokens to 12,858 and preserves all required facts in worker state.
 A second fresh browser session verifies persisted compaction status and stable answer text.
-The model refuses part of the synthetic continuation, so the complete answer-quality assertion remains open.
+Haiku refuses part of the synthetic continuation despite an intact summary.
+A separate GPT Balanced browser run passes all four fact checks and reload after compaction from 242,998 to 54,793 estimated tokens.
+The first GPT run with an inherited smaller Haiku summary model fails admission before provider dispatch; bounded summary batching remains open.
 Full-window capacity, smaller-summary-model batching, nested scopes, and recovery still require acceptance.
 The same audit identifies a separate final-output frame limit and an unresolved regeneration measurement difference.
 Do not interpret either failure as proof that the model context is full.
