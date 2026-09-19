@@ -11,6 +11,7 @@ import { FlowIcon } from '@/shared/ui/icons/flow-icon';
 import { GearIcon } from '@/shared/ui/icons/gear-icon';
 
 import { EditorPanel, type EditorPanelHandle } from './EditorPanel';
+import { PipelineTriggerScopeContext, type PipelineTriggerScope } from '../lib/flow-editor/flowEditorContext';
 import { useFlowEditorVersionInputs } from '../lib/hooks/useFlowEditorVersionInputs';
 import { useValidatePipelineVersion } from '../lib/useValidatePipelineVersion';
 
@@ -282,6 +283,11 @@ export function PipelineEditorBody({
 }: PipelineEditorBodyProps): ReactNode {
   const { pipelineId, projectId, entityProjectId, validateProjectId, versionId } = identity;
   const { versionTools, llmSettings } = useFlowEditorVersionInputs(versionDetails);
+  const triggerScope: PipelineTriggerScope = {
+    projectId,
+    versionId: versionId === undefined ? undefined : Number(versionId),
+    versionInstructions: versionDetails?.instructions ?? undefined,
+  };
   return (
     <>
       <ApplicationValidator
@@ -307,15 +313,24 @@ export function PipelineEditorBody({
         />
       )}
 
+      {/*
+        #899: the Entrypoint node's Trigger surface addresses THIS project and
+        version. `identity` and `versionDetails` are both already here, and
+        nothing below this point had them — which is why `NodeCard`'s
+        `triggerProps` never had a caller. Published as a context rather than
+        threaded as a prop; see `PipelineTriggerScopeContext`'s own doc comment.
+      */}
       {!isCreateMode && activeTab === 1 && (
-        <EditorPanel
-          ref={editorPanelRef}
-          setYamlDirty={setIsYamlDirty}
-          disabled={viewMode !== 'Owner'}
-          stopRun={() => onStopRun(true)}
-          versionTools={versionTools}
-          llmSettings={llmSettings}
-        />
+        <PipelineTriggerScopeContext.Provider value={triggerScope}>
+          <EditorPanel
+            ref={editorPanelRef}
+            setYamlDirty={setIsYamlDirty}
+            disabled={viewMode !== 'Owner'}
+            stopRun={() => onStopRun(true)}
+            versionTools={versionTools}
+            llmSettings={llmSettings}
+          />
+        </PipelineTriggerScopeContext.Provider>
       )}
 
       {isCreateMode && activeTab === 1 && <Box>{t('features.pipelines.pipelineEditor.saveToAccessFlowEditor', 'Save the pipeline to access the flow editor.')}</Box>}

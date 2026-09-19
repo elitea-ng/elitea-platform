@@ -18,7 +18,9 @@ import type {
 } from '../lib/hooks/usePipelineChat.hooks';
 import { usePipelineMCPToolsStatusMonitor } from '../lib/hooks/usePipelineMCPToolsStatusMonitor';
 import type { PipelineMcpToolLike } from '../lib/hooks/usePipelineMCPToolsStatusMonitor';
+import { PipelineTriggerScopeContext } from '../lib/flow-editor/flowEditorContext';
 import { useSelectedProjectId } from '../lib/flow-editor/hooks/useSelectedProjectId';
+import { extractExistingToolkitIds, triggerScope } from './configurationTab.lib';
 import { DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE } from '../lib/flowEditorVersionInputs.helpers';
 import { useFlowEditorVersionInputs } from '../lib/hooks/useFlowEditorVersionInputs';
 import { ChatPanel } from './ChatPanel';
@@ -34,18 +36,6 @@ import type { GeneralFormPanelProps } from './GeneralFormPanel';
 const DEFAULT_REASONING_EFFORT = 'medium';
 
 const EMPTY_ARRAY: readonly never[] = [];
-
-interface ToolLike {
-  readonly type?: string;
-  readonly id?: string;
-}
-
-/** `ConfigurationTab.jsx`'s `existingToolkitIds` derivation — extracted to a pure function to keep the component's own cyclomatic complexity under this codebase's gate. */
-function extractExistingToolkitIds(tools: readonly unknown[] | undefined): readonly string[] {
-  return (tools ?? [])
-    .filter((tool): tool is ToolLike & { readonly id: string } => (tool as ToolLike)?.type === 'toolkit' && typeof (tool as ToolLike)?.id === 'string')
-    .map((tool) => tool.id);
-}
 
 interface UseConfigurationTabSettingsArgs {
   readonly chat: UsePipelineChatResult;
@@ -334,14 +324,17 @@ export function ConfigurationTab(props: ConfigurationTabProps): ReactNode {
         renderConfigurationForm={slots.renderConfigurationForm}
       />
       <Box sx={styles.splitContainer}>
-        <EditorPanel
-          ref={editorPanelRef}
-          setYamlDirty={setYamlDirty}
-          stopRun={() => chatPanelRef.current?.stopRun()}
-          sx={styles.editorPanel}
-          versionTools={versionTools}
-          llmSettings={flowEditorLlmSettings}
-        />
+        {/* #899: the Entrypoint node's Trigger surface addresses THIS project and version — see `PipelineTriggerScopeContext`. */}
+        <PipelineTriggerScopeContext.Provider value={triggerScope(projectId, versionDetails)}>
+          <EditorPanel
+            ref={editorPanelRef}
+            setYamlDirty={setYamlDirty}
+            stopRun={() => chatPanelRef.current?.stopRun()}
+            sx={styles.editorPanel}
+            versionTools={versionTools}
+            llmSettings={flowEditorLlmSettings}
+          />
+        </PipelineTriggerScopeContext.Provider>
         <ChatPanel
           ref={chatPanelRef}
           settings={settings}

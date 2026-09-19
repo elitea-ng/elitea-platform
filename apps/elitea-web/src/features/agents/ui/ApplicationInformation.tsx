@@ -5,13 +5,14 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
-import { useGetApplication, useGetPipelineInboundTrigger, useGetPipelineSchedule } from '@/shared/api/generated/applications/applications';
+import { useGetApplication } from '@/shared/api/generated/applications/applications';
 import type { ApplicationDetail } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import { CopyToClipboardButton } from '@/shared/ui/CopyToClipboardButton';
 
 import { useSelectedProjectId } from '../api/useSelectedProjectId';
+import { usePipelineTriggerType } from '../lib/usePipelineTriggerType';
 
 import { StyledShowContextModal } from './StyledShowContextModal';
 
@@ -95,46 +96,6 @@ function useForkedApplicationName({ isForked, forkedProjectId, forkedApplication
     name: (forkQuery.data?.data as ApplicationDetail | undefined)?.name,
     error: forkQuery.error,
   };
-}
-
-interface PipelineTriggerParams {
-  readonly isPipeline: boolean;
-  readonly projectId: string | undefined;
-  readonly versionId: string | undefined;
-}
-
-/**
- * Split out for the same reason as `useForkedApplicationName` above.
- *
- * NOTE(#899): was the hand-written client for pylon's deleted
- * `/elitea_core/pipeline_trigger/...` route, which answered one row carrying a
- * `type` discriminator and a schedule/webhook blob. The Go backend has no
- * trigger-type column — it serves a cron schedule and an inbound trigger
- * INDEPENDENTLY — so the type shown here is derived the same way the editor's
- * own selector derives it, and the `schedule` blob is assembled from the
- * schedule read rather than passed through. `timezone` and `webhook_type` are
- * absent because nothing stores them any more: the schedule fires on the
- * platform's clock, and the inbound route verifies ONE bearer credential
- * rather than a per-provider signature header.
- */
-function usePipelineTriggerType({ isPipeline, projectId, versionId }: PipelineTriggerParams): {
-  readonly type: string | null | undefined;
-  readonly schedule: unknown;
-} {
-  const enabled = isPipeline && projectId !== undefined && versionId !== undefined;
-  const project = Number(projectId ?? 0);
-  const version = Number(versionId ?? 0);
-  const scheduleQuery = useGetPipelineSchedule(project, version, { query: { enabled, retry: false } });
-  const triggerQuery = useGetPipelineInboundTrigger(project, version, { query: { enabled, retry: false } });
-  const schedule = scheduleQuery.data?.status === 200 ? scheduleQuery.data.data : undefined;
-  const webhook = triggerQuery.data?.status === 200 ? triggerQuery.data.data : undefined;
-  if (schedule?.configured === true) {
-    return { type: 'schedule', schedule: { cron: schedule.cron, last_run: schedule.last_run } };
-  }
-  if (webhook?.configured === true && webhook.revoked_at === undefined) {
-    return { type: 'webhook', schedule: {} };
-  }
-  return { type: undefined, schedule: undefined };
 }
 
 /** The `type === 'schedule'`-only rows, split out to keep `PipelineTriggerRows` under the §3.5 complexity budget (12). */

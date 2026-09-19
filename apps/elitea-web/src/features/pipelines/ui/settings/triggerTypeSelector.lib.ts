@@ -7,17 +7,15 @@ import { t } from '@/shared/i18n';
 import { buildErrorMessage } from '@/shared/lib/http-error';
 import type { SingleSelectOption } from '@/shared/ui/SingleSelect';
 
-import type { UsePipelineTriggerResult } from '../../api/usePipelineTrigger';
+import type { UsePipelineTriggersResult } from '../../api/usePipelineTriggers';
 import { FlowEditorConstants } from '../../lib/flow-editor/constants';
 import { pipelineErrorMessage } from '../../lib/hooks/pipelineErrorMessage';
 
 /**
  * Split out of `TriggerTypeSelector.tsx` -- constants, pure functions, and
- * the two data-mutating custom hooks it composes -- purely to keep that
- * file under the §3.5 400-line budget (the component itself, with these
- * inlined, was 419 lines). See `TriggerTypeSelector.tsx`'s own doc comment
- * for the full baseline provenance and DEVIATIONS FROM BASELINE list; not
- * repeated here.
+ * the data-mutating custom hooks it composes -- purely to keep that file
+ * under the §3.5 400-line budget. See `TriggerTypeSelector.tsx`'s own doc
+ * comment for the full provenance and for #899's redesign of this surface.
  */
 
 /** Node types requiring user interaction and thus only supporting the Chat Message trigger (baseline: `INTERACTIVE_NODE_TYPES`). */
@@ -32,18 +30,14 @@ export const TRIGGER_TYPES = {
   webhook: 'webhook',
 } as const;
 
-/** Not exported: no caller outside this module names it directly yet (R-D1, `knip --max-issues 0`) -- `WEBHOOK_TYPES.github` is only ever read as `parseTriggerSchedule`'s own default. */
-const WEBHOOK_TYPES = {
-  github: 'github',
-  gitlab: 'gitlab',
-  custom: 'custom',
-} as const;
-
 export const TRIGGER_OPTIONS: SingleSelectOption[] = [
   { label: 'Chat Message', value: TRIGGER_TYPES.chat_message },
   { label: 'Schedule', value: TRIGGER_TYPES.schedule },
   { label: 'Webhook', value: TRIGGER_TYPES.webhook },
 ];
+
+/** The cron the Schedule modal opens on when this pipeline has none yet (baseline: `PipelineScheduleModal`'s own default). */
+export const DEFAULT_PIPELINE_CRON = '0 0 * * 6';
 
 interface ParsedPipelineYaml {
   readonly nodes?: readonly { readonly type?: string }[];
@@ -67,29 +61,6 @@ export function computeHasInteractiveElements(versionInstructions: string | unde
   return hasInteractiveNodes || hasInterrupts;
 }
 
-export interface TriggerSchedule {
-  readonly cron: string;
-  readonly webhookType: string;
-  readonly webhookUrl: string;
-  readonly secretValue: string | undefined;
-  readonly secretHeader: string | undefined;
-  readonly secretInstructions: string | undefined;
-}
-
-/** One typed read of the `unknown`-typed `PipelineTrigger.schedule` jsonb column -- see `usePipelineTrigger.ts`'s own doc comment for why the generated type is `unknown`. */
-export function parseTriggerSchedule(schedule: unknown): TriggerSchedule {
-  const record = (schedule ?? {}) as Readonly<Record<string, unknown>>;
-  const asString = (key: string): string | undefined => (typeof record[key] === 'string' ? record[key] : undefined);
-  return {
-    cron: asString('cron') ?? '0 0 * * 6',
-    webhookType: asString('webhook_type') ?? WEBHOOK_TYPES.github,
-    webhookUrl: asString('webhook_url') ?? '',
-    secretValue: asString('secret_value'),
-    secretHeader: asString('secret_header'),
-    secretInstructions: asString('secret_instructions'),
-  };
-}
-
 export function buildTriggerTooltip(hasInteractiveElements: boolean): string {
   const base = t(
     'pipelines.triggerTypeSelector.tooltipBase',
@@ -102,69 +73,22 @@ export function buildTriggerTooltip(hasInteractiveElements: boolean): string {
   )}`;
 }
 
-/** The auto-reset-to-Chat-Message effect (baseline: `TriggerTypeSelector.jsx:112-143`). */
-export function useAutoResetTriggerOnInteractive(args: {
-  readonly hasInteractiveElements: boolean;
-  readonly currentTriggerType: string;
-  readonly projectId: string | undefined;
-  readonly versionId: number | undefined;
-  readonly updateTrigger: UsePipelineTriggerResult['updateTrigger'];
-  readonly onNotifySuccess: ((message: string) => void) | undefined;
-  readonly onNotifyError: ((message: string) => void) | undefined;
-}): void {
-  const { hasInteractiveElements, currentTriggerType, projectId, versionId, updateTrigger, onNotifySuccess, onNotifyError } = args;
-  const prevHasInteractiveRef = useRef(hasInteractiveElements);
-
-  useEffect(() => {
-    const becameInteractive = !prevHasInteractiveRef.current && hasInteractiveElements;
-    const hasIncompatibleTrigger = currentTriggerType === TRIGGER_TYPES.schedule || currentTriggerType === TRIGGER_TYPES.webhook;
-
-    if (becameInteractive && hasIncompatibleTrigger && projectId !== undefined && versionId !== undefined) {
-      updateTrigger({ type: TRIGGER_TYPES.chat_message })
-        .then(() => onNotifySuccess?.(t('pipelines.triggerTypeSelector.resetToChatMessage', 'Trigger reset to Chat Message (pipeline now contains interactive elements)')))
-        .catch(() => onNotifyError?.(t('pipelines.triggerTypeSelector.resetFailed', 'Failed to reset trigger')));
-    }
-
-    prevHasInteractiveRef.current = hasInteractiveElements;
-    // baseline's own deps array (`TriggerTypeSelector.jsx:135-143`).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasInteractiveElements, currentTriggerType, projectId, versionId]);
-}
-
 /**
- * **Confirmed regression fix (this cluster, A2-settings-panels, findings 3
- * & 4):** every trigger-mutation `catch` below used to report a fixed
- * generic message with no reference to the caught error at all, discarding
- * the backend's actual error text the old app surfaced
- * (`TriggerTypeSelector.jsx`'s `toastError(error?.data?.error || '...')`).
+ * **Confirmed regression fix (cluster A2-settings-panels, findings 3 & 4):**
+ * every trigger-mutation `catch` below used to report a fixed generic message
+ * with no reference to the caught error, discarding the backend's own error
+ * text the old app surfaced (`TriggerTypeSelector.jsx`'s
+ * `toastError(error?.data?.error || '...')`).
  *
- * The real Go backend's error envelope for these operations is the flat
- * `{"error": "message"}` shape (verified directly: `TriggerTypeSelector.
- * test.tsx`'s own pre-existing MSW mock, `HttpResponse.json({error: 'boom'},
- * {status: 400})`) -- `EliteaApiError.message` alone (`mutator.ts`'s
- * `describeFailure`) does NOT carry that text, only `status`/`url`, so
- * reading just `.message` (the simpler pattern `pipelineErrorMessage`/
- * `features/agents/lib/errorMessage.ts`'s `applicationErrorMessage` use for
- * every OTHER pipelines/agents call site) would still have silently dropped
- * the real backend text here. `shared/lib/http-error.ts`'s `buildErrorMessage`
- * already does exactly this envelope's `data.error`/`data.message`/
- * `data.errors` dispatch (ported for parity with the old app's own
- * `common/utils.jsx`) -- adapting `EliteaApiError.failure` into the
- * RTK-Query-shaped input it expects is the SAME established pattern
- * `features/chat-conversation-list/lib/errorMessage.ts`'s
- * `conversationListErrorMessage` and `features/notifications/lib/
- * errorMessage.ts` already use for this exact situation. Duplicated
- * (adapted locally, not imported) rather than reused from either of those
- * two -- both are a different feature slice (`no-sideways-features`/R-L3
- * forbid reaching into another feature's internals), the same established
- * precedent their own doc comments record for each other.
- *
- * Falls through to `pipelineErrorMessage(error) || fallback` for anything
- * that isn't an `EliteaApiError` with a real `data.error`/`data.message`
- * text (a non-`http` `HttpFailure` kind, a plain `Error`, or a non-`Error`/
- * non-`string` rejection) -- honest about when the fallback is actually
- * reachable, same fix `applicationErrorMessageOrFallback`'s own doc comment
- * applies for the identical `String(error)`-is-always-truthy gap.
+ * The Go backend's error envelope for these operations is the flat
+ * `{"error": "message"}` shape (`internal/api/v2/pipelinetriggers/handler.go`'s
+ * `writeError`), and `EliteaApiError.message` alone (`mutator.ts`'s
+ * `describeFailure`) does NOT carry that text, only `status`/`url` --
+ * `shared/lib/http-error.ts`'s `buildErrorMessage` does the `data.error`
+ * dispatch. Adapting `EliteaApiError.failure` into the RTK-Query-shaped input
+ * it expects is the same pattern `features/chat-conversation-list/lib/
+ * errorMessage.ts` and `features/notifications/lib/errorMessage.ts` use;
+ * duplicated rather than imported (`no-sideways-features`/R-L3).
  */
 function pipelineTriggerErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof EliteaApiError && error.failure.kind === 'http') {
@@ -174,116 +98,189 @@ function pipelineTriggerErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error || typeof error === 'string' ? pipelineErrorMessage(error) || fallback : fallback;
 }
 
+/** Which unattended entry points this pipeline version currently has. */
+export interface ConfiguredTriggerKinds {
+  readonly hasSchedule: boolean;
+  readonly hasWebhook: boolean;
+}
+
+/**
+ * What the selector shows as the CURRENT trigger.
+ *
+ * The backend has no trigger-type column: a schedule row and a trigger token
+ * are independent and a pipeline may hold both. "Chat Message" is therefore
+ * not a stored state at all -- it is the absence of both, which is exactly
+ * what it means for the user (somebody has to type something to start this).
+ * When both exist the schedule is shown, because it is the one that starts
+ * runs on its own; the webhook is still listed beside it.
+ */
+export function currentTriggerKind(kinds: ConfiguredTriggerKinds): string {
+  if (kinds.hasSchedule) return TRIGGER_TYPES.schedule;
+  if (kinds.hasWebhook) return TRIGGER_TYPES.webhook;
+  return TRIGGER_TYPES.chat_message;
+}
+
+/** A trigger row the selector lists beneath the dropdown. */
+export interface TriggerListEntry {
+  readonly kind: 'schedule' | 'webhook';
+  readonly label: string;
+  readonly detail: string;
+}
+
+export function buildTriggerList(args: {
+  readonly hasSchedule: boolean;
+  readonly cron: string | undefined;
+  readonly hasWebhook: boolean;
+  readonly webhookUrl: string | undefined;
+}): readonly TriggerListEntry[] {
+  const entries: TriggerListEntry[] = [];
+  if (args.hasSchedule) {
+    entries.push({ kind: 'schedule', label: t('pipelines.triggerTypeSelector.scheduleRow', 'Schedule'), detail: args.cron ?? '' });
+  }
+  if (args.hasWebhook) {
+    entries.push({ kind: 'webhook', label: t('pipelines.triggerTypeSelector.webhookRow', 'Webhook'), detail: args.webhookUrl ?? '' });
+  }
+  return entries;
+}
+
+/**
+ * The auto-reset-to-Chat-Message effect (baseline:
+ * `TriggerTypeSelector.jsx:112-143`). "Reset to Chat Message" now means
+ * REMOVING whichever unattended entry points exist, since that is what
+ * Chat Message is (see {@link currentTriggerKind}).
+ */
+export function useAutoResetTriggerOnInteractive(args: {
+  readonly hasInteractiveElements: boolean;
+  readonly kinds: ConfiguredTriggerKinds;
+  readonly removeAll: () => Promise<void>;
+  readonly onNotifySuccess: ((message: string) => void) | undefined;
+  readonly onNotifyError: ((message: string) => void) | undefined;
+}): void {
+  const { hasInteractiveElements, kinds, removeAll, onNotifySuccess, onNotifyError } = args;
+  const prevHasInteractiveRef = useRef(hasInteractiveElements);
+
+  useEffect(() => {
+    const becameInteractive = !prevHasInteractiveRef.current && hasInteractiveElements;
+    const hasIncompatibleTrigger = kinds.hasSchedule || kinds.hasWebhook;
+
+    if (becameInteractive && hasIncompatibleTrigger) {
+      removeAll()
+        .then(() => onNotifySuccess?.(t('pipelines.triggerTypeSelector.resetToChatMessage', 'Trigger reset to Chat Message (pipeline now contains interactive elements)')))
+        .catch(() => onNotifyError?.(t('pipelines.triggerTypeSelector.resetFailed', 'Failed to reset trigger')));
+    }
+
+    prevHasInteractiveRef.current = hasInteractiveElements;
+    // baseline's own deps array (`TriggerTypeSelector.jsx:135-143`).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasInteractiveElements, kinds.hasSchedule, kinds.hasWebhook]);
+}
+
 export interface TriggerActions {
   readonly handleTriggerTypeChange: (newType: string) => Promise<void>;
   readonly handleScheduleSubmit: (cronExpression: string) => Promise<void>;
-  readonly handleScheduleIconClick: () => void;
-  readonly handleWebhookIconClick: () => Promise<void>;
-  readonly handleWebhookSubmit: (webhookType: string, newSecretValue: string | null) => Promise<void>;
+  readonly handleDeleteKind: (kind: 'schedule' | 'webhook') => Promise<void>;
+  readonly handleRotateWebhook: () => Promise<void>;
+  readonly handleRevealWebhook: () => Promise<void>;
+  readonly removeAll: () => Promise<void>;
 }
 
-/** Every trigger-mutating handler (baseline: `TriggerTypeSelector.jsx:154-271`). */
-export function useTriggerActions(args: {
-  readonly currentTriggerType: string;
-  readonly currentWebhookType: string;
-  readonly secretValue: string | undefined;
-  readonly updateTrigger: UsePipelineTriggerResult['updateTrigger'];
+interface TriggerActionsArgs {
+  readonly triggers: UsePipelineTriggersResult;
+  readonly kinds: ConfiguredTriggerKinds;
   readonly setIsUpdating: (value: boolean) => void;
   readonly setIsScheduleModalOpen: (value: boolean) => void;
   readonly setIsWebhookModalOpen: (value: boolean) => void;
+  readonly setRevealedSecret: (value: string | undefined) => void;
   readonly onNotifySuccess: ((message: string) => void) | undefined;
   readonly onNotifyError: ((message: string) => void) | undefined;
-}): TriggerActions {
-  const { currentTriggerType, currentWebhookType, secretValue, updateTrigger, setIsUpdating, setIsScheduleModalOpen, setIsWebhookModalOpen, onNotifySuccess, onNotifyError } = args;
+}
+
+/** Every trigger-mutating handler (baseline: `TriggerTypeSelector.jsx:154-271`, re-pointed at the two Go facilities). */
+export function useTriggerActions(args: TriggerActionsArgs): TriggerActions {
+  const { triggers, kinds, setIsUpdating, setIsScheduleModalOpen, setIsWebhookModalOpen, setRevealedSecret, onNotifySuccess, onNotifyError } = args;
+
+  const run = useCallback(
+    async (action: () => Promise<void>, fallback: string): Promise<void> => {
+      try {
+        setIsUpdating(true);
+        await action();
+      } catch (error) {
+        onNotifyError?.(pipelineTriggerErrorMessage(error, fallback));
+      } finally {
+        setIsUpdating(false);
+      }
+    },
+    [setIsUpdating, onNotifyError],
+  );
+
+  const handleScheduleSubmit = useCallback(
+    (cronExpression: string) => run(async () => {
+      await triggers.saveSchedule(cronExpression);
+      onNotifySuccess?.(t('pipelines.triggerTypeSelector.scheduleConfigured', 'Schedule configured successfully'));
+    }, t('pipelines.triggerTypeSelector.scheduleConfigureFailed', 'Failed to configure schedule')),
+    [run, triggers, onNotifySuccess],
+  );
+
+  const handleRotateWebhook = useCallback(
+    () => run(async () => {
+      const rotated = await triggers.rotateWebhook();
+      setRevealedSecret(rotated.secret);
+      setIsWebhookModalOpen(true);
+      onNotifySuccess?.(t('pipelines.triggerTypeSelector.webhookConfigured', 'Webhook configured successfully'));
+    }, t('pipelines.triggerTypeSelector.webhookConfigureFailed', 'Failed to configure webhook')),
+    [run, triggers, setRevealedSecret, setIsWebhookModalOpen, onNotifySuccess],
+  );
+
+  const handleRevealWebhook = useCallback(
+    () => run(async () => {
+      const revealed = await triggers.revealWebhook();
+      setRevealedSecret(revealed.secret);
+    }, t('pipelines.triggerTypeSelector.revealFailed', 'Failed to reveal the webhook secret — rotate it to get a new one')),
+    [run, triggers, setRevealedSecret],
+  );
+
+  const handleDeleteKind = useCallback(
+    (kind: 'schedule' | 'webhook') => run(async () => {
+      if (kind === 'schedule') {
+        await triggers.removeSchedule();
+        onNotifySuccess?.(t('pipelines.triggerTypeSelector.scheduleRemoved', 'Schedule removed'));
+        return;
+      }
+      await triggers.removeWebhook();
+      setRevealedSecret(undefined);
+      setIsWebhookModalOpen(false);
+      onNotifySuccess?.(t('pipelines.triggerTypeSelector.webhookRemoved', 'Webhook revoked'));
+    }, t('pipelines.triggerTypeSelector.removeFailed', 'Failed to remove the trigger')),
+    [run, triggers, setRevealedSecret, setIsWebhookModalOpen, onNotifySuccess],
+  );
+
+  const removeAll = useCallback(async (): Promise<void> => {
+    if (kinds.hasSchedule) await triggers.removeSchedule();
+    if (kinds.hasWebhook) await triggers.removeWebhook();
+    setRevealedSecret(undefined);
+  }, [kinds.hasSchedule, kinds.hasWebhook, triggers, setRevealedSecret]);
 
   const handleTriggerTypeChange = useCallback(
-    async (newType: string) => {
-      if (newType === currentTriggerType) return;
+    async (newType: string): Promise<void> => {
       if (newType === TRIGGER_TYPES.schedule) {
         setIsScheduleModalOpen(true);
         return;
       }
       if (newType === TRIGGER_TYPES.webhook) {
-        try {
-          setIsUpdating(true);
-          await updateTrigger({ type: TRIGGER_TYPES.webhook, schedule: { webhook_type: currentWebhookType } });
+        if (kinds.hasWebhook) {
           setIsWebhookModalOpen(true);
-        } catch (error) {
-          onNotifyError?.(pipelineTriggerErrorMessage(error, t('pipelines.triggerTypeSelector.webhookConfigureFailed', 'Failed to configure webhook')));
-        } finally {
-          setIsUpdating(false);
+          return;
         }
+        await handleRotateWebhook();
         return;
       }
-      try {
-        setIsUpdating(true);
-        await updateTrigger({ type: newType });
+      await run(async () => {
+        await removeAll();
         onNotifySuccess?.(t('pipelines.triggerTypeSelector.updatedToChatMessage', 'Trigger updated to Chat Message'));
-      } catch (error) {
-        onNotifyError?.(pipelineTriggerErrorMessage(error, t('pipelines.triggerTypeSelector.updateFailed', 'Failed to update trigger')));
-      } finally {
-        setIsUpdating(false);
-      }
+      }, t('pipelines.triggerTypeSelector.updateFailed', 'Failed to update trigger'));
     },
-    [currentTriggerType, currentWebhookType, updateTrigger, setIsUpdating, setIsScheduleModalOpen, setIsWebhookModalOpen, onNotifySuccess, onNotifyError],
+    [kinds.hasWebhook, setIsScheduleModalOpen, setIsWebhookModalOpen, handleRotateWebhook, run, removeAll, onNotifySuccess],
   );
 
-  const handleScheduleSubmit = useCallback(
-    async (cronExpression: string) => {
-      try {
-        setIsUpdating(true);
-        const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-        await updateTrigger({ type: TRIGGER_TYPES.schedule, schedule: { cron: cronExpression, timezone } });
-        onNotifySuccess?.(t('pipelines.triggerTypeSelector.scheduleConfigured', 'Schedule configured successfully'));
-      } catch (error) {
-        onNotifyError?.(pipelineTriggerErrorMessage(error, t('pipelines.triggerTypeSelector.scheduleConfigureFailed', 'Failed to configure schedule')));
-      } finally {
-        setIsUpdating(false);
-      }
-    },
-    [updateTrigger, setIsUpdating, onNotifySuccess, onNotifyError],
-  );
-
-  const handleScheduleIconClick = useCallback(() => {
-    if (currentTriggerType === TRIGGER_TYPES.schedule) setIsScheduleModalOpen(true);
-  }, [currentTriggerType, setIsScheduleModalOpen]);
-
-  const handleWebhookIconClick = useCallback(async () => {
-    if (currentTriggerType !== TRIGGER_TYPES.webhook) return;
-    if (!secretValue) {
-      try {
-        setIsUpdating(true);
-        await updateTrigger({ type: TRIGGER_TYPES.webhook, schedule: { webhook_type: currentWebhookType } });
-      } catch (error) {
-        onNotifyError?.(pipelineTriggerErrorMessage(error, t('pipelines.triggerTypeSelector.loadWebhookFailed', 'Failed to load webhook settings')));
-        return;
-      } finally {
-        setIsUpdating(false);
-      }
-    }
-    setIsWebhookModalOpen(true);
-  }, [currentTriggerType, currentWebhookType, secretValue, updateTrigger, setIsUpdating, setIsWebhookModalOpen, onNotifyError]);
-
-  const handleWebhookSubmit = useCallback(
-    async (webhookType: string, newSecretValue: string | null) => {
-      try {
-        setIsUpdating(true);
-        const schedule: Record<string, unknown> = { webhook_type: webhookType };
-        if (newSecretValue) schedule['webhook_secret_value'] = newSecretValue;
-        await updateTrigger({ type: TRIGGER_TYPES.webhook, schedule });
-        onNotifySuccess?.(
-          newSecretValue
-            ? t('pipelines.triggerTypeSelector.webhookConfiguredNewSecret', 'Webhook configured with new secret')
-            : t('pipelines.triggerTypeSelector.webhookConfigured', 'Webhook configured successfully'),
-        );
-      } catch (error) {
-        onNotifyError?.(pipelineTriggerErrorMessage(error, t('pipelines.triggerTypeSelector.webhookConfigureFailed', 'Failed to configure webhook')));
-      } finally {
-        setIsUpdating(false);
-      }
-    },
-    [updateTrigger, setIsUpdating, onNotifySuccess, onNotifyError],
-  );
-
-  return { handleTriggerTypeChange, handleScheduleSubmit, handleScheduleIconClick, handleWebhookIconClick, handleWebhookSubmit };
+  return { handleTriggerTypeChange, handleScheduleSubmit, handleDeleteKind, handleRotateWebhook, handleRevealWebhook, removeAll };
 }

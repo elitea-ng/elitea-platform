@@ -2171,7 +2171,7 @@
   "pipelines.pipelineWebhookModal.hideSecret": "Hide secret",
   "pipelines.pipelineWebhookModal.newPending": "(new - click Apply to save)",
   "pipelines.pipelineWebhookModal.newSecretGenerated": "New secret generated. Click Apply to save.",
-  "pipelines.pipelineWebhookModal.payloadDescription": "Send a POST request with any body content. The raw request body will be passed directly to the pipeline as user input.",
+  "pipelines.pipelineWebhookModal.payloadDescription": "Send a POST request with an optional JSON body. Its `input` field is placed in front of the pipeline; an unparseable body is accepted as empty input.",
   "pipelines.pipelineWebhookModal.payloadFormat": "Payload Format",
   "pipelines.pipelineWebhookModal.regenerateSecret": "Regenerate secret",
   "pipelines.pipelineWebhookModal.secretCopied": "Secret copied to clipboard",
@@ -4407,5 +4407,17 @@
   "pages.admin.configuration.projectListEditor.filterPublic": "Public",
   "pages.admin.configuration.projectListEditor.filterTeam": "Team",
   "pages.admin.configuration.projectListEditor.projectById": "Project {{id}}",
-  "pages.admin.configuration.projectListEditor.searchPlaceholder": "Search by project name"
+  "pages.admin.configuration.projectListEditor.searchPlaceholder": "Search by project name",
+  "pipelines.triggerTypeSelector.scheduleRow": "Schedule",
+  "pipelines.triggerTypeSelector.webhookRow": "Webhook",
+  "pipelines.triggerTypeSelector.deleteTrigger": "Delete trigger",
+  "pipelines.triggerTypeSelector.scheduleRemoved": "Schedule removed",
+  "pipelines.triggerTypeSelector.webhookRemoved": "Webhook revoked",
+  "pipelines.triggerTypeSelector.removeFailed": "Failed to remove the trigger",
+  "pipelines.triggerTypeSelector.revealFailed": "Failed to reveal the webhook secret — rotate it to get a new one",
+  "pipelines.pipelineWebhookModal.secretHidden": "The credential is stored server-side and is never part of the ordinary read. Reveal it to copy it again, or rotate it to replace it.",
+  "pipelines.pipelineWebhookModal.reveal": "Reveal secret",
+  "pipelines.pipelineWebhookModal.rotate": "Rotate secret",
+  "pipelines.pipelineWebhookModal.revoke": "Revoke",
+  "pipelines.pipelineWebhookModal.done": "Done"
 }
