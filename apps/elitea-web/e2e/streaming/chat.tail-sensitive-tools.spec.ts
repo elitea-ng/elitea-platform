@@ -95,6 +95,14 @@ const CONTINUE_RE = /\/elitea_core\/continue_predict\/prompt_lib\/(\d+)\/[0-9a-f
 /** The structured result a denied call is replaced by (`BLOCKED_TOOL_RESULT_TYPE`). */
 const BLOCKED_RESULT_TYPE = 'sensitive_tool_blocked';
 
+/**
+ * Which runtime is answering the turns — `scripts/chat-stream-e2e.sh` is the
+ * one place that knows, and it exports this. Read for exactly ONE decision:
+ * ELITEA-1003's gap is now closed on the native runtime and still open on the
+ * SDK (see that test).
+ */
+const IS_NATIVE_RUNTIME = (process.env['E2E_WORKER'] ?? 'rust') === 'rust';
+
 /** The card's own title, verbatim — `SensitiveToolCard` in `ChatHitlActions.tsx`. */
 const CARD_TITLE = '⚠️ Sensitive Action Authorization Required';
 
@@ -620,13 +628,30 @@ test('a blocked sensitive call does not discard the non-sensitive call beside it
       answer,
       'the declined EFFECTFUL call’s own success receipt reached the model — it was executed anyway',
     ).not.toContain(MOCK_TOOL_CREATE_SENTINEL);
-    // THE assertion this case exists for, and the one that fails: blocking one
-    // call must not throw away the other one's result.
+    // THE assertion this case exists for: blocking one call must not throw
+    // away the other one's result.
+    //
+    // READ OFF THE COUNT, NOT THE TOOL NAME, and both halves of that are
+    // measured. `deploy/mock-llm/server.py` names the tool only in its
+    // SINGLE-call sentence (`tool <name> said …`); a turn with several calls is
+    // NUMBERED instead — `tool result 1 said … tool result 2 said …` — so no
+    // multi-call reply can ever carry the name. Nor can the result itself
+    // supply it: the tool's host is unreachable from the worker on this stack
+    // (see `chat.tail-trace-steps.spec.ts`'s header), so a dispatched call
+    // comes back as `{"error":"tool.unavailable…"}`, which names nothing. What
+    // IS discriminating is how many results the model was given and which of
+    // them is the blocked one — the defect dropped the sibling entirely, so it
+    // showed exactly one.
+    const quotedResults = answer.match(/tool result \d+ said /g) ?? [];
     expect(
-      answer,
+      quotedResults.length,
       'the non-sensitive call’s result was lost when the sensitive call beside it was blocked — ' +
         'a decline is about ONE invocation, not about the turn',
-    ).toMatch(/tool result .* said .*mock_tool_status|tool mock_tool_status said/);
+    ).toBe(2);
+    expect(
+      answer.split(BLOCKED_RESULT_TYPE).length - 1,
+      'every result the model was given is the blocked payload — the non-sensitive call never ran',
+    ).toBe(1);
     expect(
       (await readMockToolJournal(page)).filter((entry) => entry.method === 'POST'),
       'the declined effectful operation ran anyway',
@@ -642,11 +667,34 @@ test('two sensitive tools in one turn each raise their own authorization', async
   test.setTimeout(480_000);
 
   // Same root cause as ELITEA-1001 above, with the worse symptom: the runtime
-  // used to carry ONE decided call out of a multi-call message and discard the
+  // carried ONE decided call out of a multi-call message and discarded the
   // rest, so a tool the operator had marked sensitive was disposed of without
-  // the operator ever seeing it. Now the whole message is replayed with the
+  // the operator ever seeing it.
+  //
+  // FIXED ON THE NATIVE RUNTIME: the whole message is replayed with the
   // decisions already taken attached, so ADK's pre-check stops again at the
-  // still-undecided sensitive call and raises its own card for it.
+  // still-undecided sensitive call and raises its own card for it
+  // (`direct_hitl.rs`: `replay_calls_for` / `settled_decision`).
+  //
+  // STILL OPEN ON THE SDK, and the mark is pinned to that leg rather than
+  // removed, so the native leg keeps asserting the fixed behaviour and the SDK
+  // leg goes green the day it is fixed rather than silently staying broken.
+  // MEASURED on the python worker: the second sensitive call is never offered
+  // and the card never appears. The fix does not belong in this repository —
+  // `services/elitea-worker-python` only CONFIGURES the guard
+  // (`sdk_adapter.py`'s `security.configure_sensitive_tools`), and the
+  // interrupt itself is raised inside elitea-sdk's
+  // `runtime/middleware/sensitive_tool_guard.py`, a different repository. Not a
+  // skip: a skip would stop measuring the leg altogether.
+  if (!IS_NATIVE_RUNTIME) {
+    test.fail(
+      true,
+      'ELITEA-1003 (#948): product gap (SDK/python worker only) — when one assistant message calls two ' +
+        'sensitive tools, only the FIRST raises an authorization dialog; the second is never offered ' +
+        'for a decision and never runs. Fixed on the native runtime in `direct_hitl.rs`; the SDK half ' +
+        'lives in elitea-sdk `sensitive_tool_guard.py`.',
+    );
+  }
 
   let fixture: MockToolAgentFixture | undefined;
   try {
