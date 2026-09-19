@@ -2615,7 +2615,7 @@ components:
           description: >
             NOTE(#898): the editor's free-text "Editor Notes". It has no column
             of its own on `application_versions` and is not meant to: pylon
-            stores it inside this same jsonb (elitea_issues #5410 chose the
+            stores it inside this same jsonb (elitea_issues issue 5410 chose the
             blob over a per-tenant schema migration), folding the top-level
             `notes` write field in
             (legacy/plugins/elitea_core/utils/application_utils.py:191-211)

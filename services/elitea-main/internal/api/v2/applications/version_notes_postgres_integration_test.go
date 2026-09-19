@@ -96,10 +96,9 @@ func TestHandlerPostgres_VersionNotesRoundTripThroughMeta(t *testing.T) {
 	// a key, and "" is what the editor's emptied box sends — a save that left
 	// the old text in place would be the same silent-discard defect in
 	// reverse.
-	if _, _ = do(t, router, http.MethodPut,
+	do(t, router, http.MethodPut,
 		"/version/prompt_lib/1/"+applicationID+"/"+versionID,
-		map[string]any{"name": "base", "notes": ""}); true {
-	}
+		map[string]any{"name": "base", "notes": ""})
 	_, cleared := do(t, router, http.MethodGet, "/version/prompt_lib/1/"+applicationID+"/"+versionID, nil)
 	if got := notesOf(t, cleared); got != "" {
 		t.Errorf("clearing the field left notes %q", got)
