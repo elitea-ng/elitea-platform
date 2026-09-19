@@ -5,7 +5,6 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
-import { usePipelineTriggerQuery } from '@/entities/pipeline';
 import { useGetApplication } from '@/shared/api/generated/applications/applications';
 import type { ApplicationDetail } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
@@ -13,6 +12,7 @@ import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import { CopyToClipboardButton } from '@/shared/ui/CopyToClipboardButton';
 
 import { useSelectedProjectId } from '../api/useSelectedProjectId';
+import { usePipelineTriggerType } from '../lib/usePipelineTriggerType';
 
 import { StyledShowContextModal } from './StyledShowContextModal';
 
@@ -96,24 +96,6 @@ function useForkedApplicationName({ isForked, forkedProjectId, forkedApplication
     name: (forkQuery.data?.data as ApplicationDetail | undefined)?.name,
     error: forkQuery.error,
   };
-}
-
-interface PipelineTriggerParams {
-  readonly isPipeline: boolean;
-  readonly projectId: string | undefined;
-  readonly versionId: string | undefined;
-}
-
-/** Split out for the same reason as `useForkedApplicationName` above. */
-function usePipelineTriggerType({ isPipeline, projectId, versionId }: PipelineTriggerParams): {
-  readonly type: string | null | undefined;
-  readonly schedule: unknown;
-} {
-  // NOTE(#126): was orval's `useGetPipelineTrigger` — deleted with the prototype indexer transport (it 404'd everywhere); identical request, see #192/#193.
-  const version = versionId === undefined ? undefined : Number(versionId);
-  const triggerQuery = usePipelineTriggerQuery(projectId, version, { enabled: isPipeline });
-  const trigger = triggerQuery.data as { type?: string | null; schedule?: unknown } | undefined;
-  return { type: trigger?.type, schedule: trigger?.schedule };
 }
 
 /** The `type === 'schedule'`-only rows, split out to keep `PipelineTriggerRows` under the §3.5 complexity budget (12). */

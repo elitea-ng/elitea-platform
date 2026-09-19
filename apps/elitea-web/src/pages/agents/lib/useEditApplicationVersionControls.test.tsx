@@ -151,7 +151,9 @@ describe('useEditApplicationVersionControls', () => {
       // The create path DOES read `meta` (`versionFromBody`,
       // `applications/handler.go:504`), so the clone carries it — otherwise a
       // Save-As-Version resets `step_limit` and drops `internal_tools`.
-      meta: { internal_tools: [] },
+      // #898 — `notes` travels in the same blob; "" is the value an editor
+      // with an empty Notes box sends.
+      meta: { internal_tools: [], notes: '' },
     });
   });
 

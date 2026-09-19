@@ -252,13 +252,24 @@ services:
       # named `api.github.com` would make a CI run depend on GitHub being up
       # and on this stack having internet.
       #
-      # This value replaces that list with one name inside the compose
+      # This value replaces that list with two names inside the compose
       # network. Every tenant-authored endpoint is therefore refused BEFORE
       # the dial, deterministically, with `reason: "unreachable"` and no
       # socket opened at all — which is the verdict the credential journeys
-      # derive their expectations from. It is not a stub: nothing answers on
-      # that name for this path either.
-      ELITEA_TOOLKIT_CHECK_ALLOWLIST: "elitea-main"
+      # derive their expectations from. Nothing answers on `elitea-main` for a
+      # vendor's identity path either, so a credential pointed at it is
+      # refused after a real round trip rather than before one.
+      #
+      # `elitea-web` is the stack's STAND-IN PROVIDER, and it is here because
+      # a journey that has to press Save needs a credential the probe
+      # CERTIFIES: the toolkit editor refuses Save for a credential that
+      # failed its check (`pages/toolkits/lib/useCredentialSaveGate.ts`), and
+      # once #920 gave `aha` a real probe there was no type left on this stack
+      # whose Save button a suite could press. The web container answers 200
+      # for any `/app/**` path (the SPA's history fallback), which is all a
+      # probe needs to read as "the provider recognised this credential" — see
+      # STANDIN_PROVIDER_BASE_URL in `e2e/journeys/toolkits/toolkits.aha.spec.ts`.
+      ELITEA_TOOLKIT_CHECK_ALLOWLIST: "elitea-main, elitea-web"
       # ── The DeepWiki facade, on the OIDC-only stack (ADR-0023 H0) ────────
       # The facade takes the API group's credential set, and under OIDC-only
       # auth that carries the LocalValidator for APPLICATION_SECRET_KEY-signed

@@ -12,6 +12,13 @@ import * as entity from './index';
  * this slice ahead of its Wave-2 consumers.
  */
 const PUBLIC_SURFACE = [
+  // #937: the banner moved here from `features/credentials` so an Agent's,
+  // a Pipeline's and a Chat participant's tool card can all render it, and
+  // the toolkit-credential verdict beside it for the same reason.
+  'CredentialWarningBanner',
+  'collectCredentialTitles',
+  'isToolkitCredentialMissing',
+  'readToolkitCredentialReference',
   'credentialDisplayName',
   'credentialScope',
   'credentialUrl',

@@ -58,6 +58,10 @@ function toActionViewAction(action: SubAgentGroupable): ActionViewProps['action'
     ...(toolOutputs !== undefined ? { toolOutputs } : {}),
     ...(draft.toolMeta !== undefined ? { toolMeta: draft.toolMeta } : {}),
     ...(draft.isError !== undefined ? { isError: draft.isError } : {}),
+    // A restored pin's row identity: this mapper is an explicit WHITELIST, so
+    // a field left out here is a field the modal can never see (#951).
+    ...(draft.traceStepId !== undefined ? { traceStepId: draft.traceStepId } : {}),
+    ...(draft.traceMessageGroupId !== undefined ? { traceMessageGroupId: draft.traceMessageGroupId } : {}),
   };
 }
 

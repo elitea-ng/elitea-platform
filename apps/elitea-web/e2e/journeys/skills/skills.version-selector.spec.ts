@@ -2,14 +2,27 @@
  * Onetest port — the Skills version selector (ELITEA-3289 through ELITEA-3296).
  *
  * The hint sheet describes the RICH dropdown `AgentPipelineVersionSelector`
- * gives Agents and Pipelines (search, a checkmark on the selected row, a pin
- * icon + tooltip on the default version, "MMM DD, YYYY, hh:mm AM/PM"
- * timestamps, creator name/email). Skills does not share that component —
- * `src/pages/skills/SkillEditorHeader.tsx` is a plain MUI `<Select>` with
- * `<MenuItem>` rows reading `{version.name}{is_default ? ' (default)' : ''}`
- * — no search input, no checkmark, no pin icon, no timestamp, no creator.
- * That gap is real and is written up case by case below, each confirmed by
- * reading the component before writing the assertion that fails against it.
+ * gives Agents and Pipelines (search, a checkmark on the selected row, a
+ * default marker, "MMM DD, YYYY, hh:mm AM/PM" timestamps, creator
+ * name/email). Skills did not share that component: `pages/skills/
+ * SkillEditorHeader.tsx` drew a plain MUI `<Select>` of `<MenuItem>` rows
+ * reading `{version.name}{is_default ? ' (default)' : ''}` — one cause behind
+ * all six reported gaps.
+ *
+ * #917 fixed that cause: the header renders the SAME
+ * `AgentPipelineVersionSelector`, and `skill_versions.author_id` is now
+ * joined against `public.auth_core__user` on the read
+ * (`internal/infra/db/repos/skills.go`) so a row can name its creator at all.
+ * Every assertion below therefore drives the shared control's own vocabulary
+ * — `version-selector-trigger`, a `role="menu"` of `role="menuitem"` rows,
+ * `version-selector-search`, `agent-version-default-marker` — exactly as
+ * `pipelines.version-selector.spec.ts` already drives it for Pipelines.
+ *
+ * ONE DELIBERATE DEVIATION from the manual case, inherited from the shared
+ * component and documented in it: the default version carries a "Default"
+ * LABEL, not a pin BUTTON inside the row. A button inside a `role="menuitem"`
+ * row is axe's `nested-interactive` (impact "serious"), a rule this suite's
+ * own `checkA11y` fixture does not disable.
  *
  * Setup drives the SAME routes `skills.lifecycle.spec.ts` / `skills.
  * versioning.spec.ts` already prove (create on the form, "New version" +
@@ -22,6 +35,14 @@ import { BASE_URL } from '../../../playwright.config';
 import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID } from '../../fixtures/api';
 
 import type { Page } from '@playwright/test';
+
+/** The shared selector's trigger box, and the menu it opens. */
+async function openVersionMenu(page: Page) {
+  await page.getByTestId('version-selector-trigger').click();
+  const menu = page.getByRole('menu');
+  await expect(menu).toBeVisible({ timeout: 10_000 });
+  return menu;
+}
 
 function uniqueName(stem: string): string {
   return `${AUTOTEST_PREFIX}skillver-${stem}-${String(Date.now()).slice(-7)}`;
@@ -62,8 +83,8 @@ async function addNamedVersion(page: Page, skillId: string, versionName: string,
   await page.getByRole('button', { name: 'Confirm' }).click();
   await versionResponse;
 
-  await page.getByRole('combobox').click();
-  await page.getByRole('option', { name: versionName }).click();
+  const menu = await openVersionMenu(page);
+  await menu.getByRole('menuitem', { name: new RegExp(versionName) }).click();
   await page.waitForURL(new RegExp(`/skills/all/${skillId}/`), { timeout: 15_000 });
 
   const instructionsField = page.getByTestId('skill-instructions-input');
@@ -94,10 +115,9 @@ test.describe('Skills version selector', () => {
     try {
       await addNamedVersion(page, skillId, 'draft-v1', 'Draft version instructions.');
 
-      const select = page.getByRole('combobox');
-      await select.click();
-      await expect(page.getByRole('option', { name: /base/i })).toBeVisible();
-      await expect(page.getByRole('option', { name: /draft-v1/i })).toBeVisible();
+      const menu = await openVersionMenu(page);
+      await expect(menu.getByRole('menuitem', { name: 'base', exact: true })).toBeVisible();
+      await expect(menu.getByRole('menuitem', { name: /draft-v1/ })).toBeVisible();
       expect(consoleErrors, `unexpected console errors: ${consoleErrors.join('\n')}`).toHaveLength(0);
     } finally {
       await deleteSkill(request, skillId);
@@ -115,137 +135,144 @@ test.describe('Skills version selector', () => {
       await addNamedVersion(page, skillId, 'draft-v1', draftInstructions);
       await expect(page.getByTestId('skill-instructions-input')).toHaveValue(draftInstructions);
 
-      await page.getByRole('combobox').click();
-      await page.getByRole('option', { name: /^base$/i }).click();
+      const menu = await openVersionMenu(page);
+      await menu.getByRole('menuitem', { name: 'base', exact: true }).click();
       await expect(page.getByTestId('skill-instructions-input')).toHaveValue(baseInstructions, { timeout: 20_000 });
     } finally {
       await deleteSkill(request, skillId);
     }
   });
 
-  /* onetest: ELITEA-3290 — product gap: the Skills version dropdown draws every row as a plain MenuItem with no
-     checkmark and no distinct highlight styling for the selected version — MUI's own Select shows the CLOSED
-     value, but the open menu carries no per-row selected indicator the way the Agents/Pipelines version
-     selector's `CheckIcon` does. */
+  /* onetest: ELITEA-3290 (#917) — the selected row carries a checkmark and the selected-row styling, which is
+     `AgentPipelineVersionSelector`'s `CheckIcon`. The bare `<MenuItem>` the header used before had neither. */
   test('the selected version shows a checkmark and highlight in the open dropdown', async ({ page, request }) => {
-    test.fail(
-      true,
-      'ELITEA-3290 (#917): product gap — the Skills version dropdown has no checkmark icon or highlight on the selected row (SkillEditorHeader.tsx uses a bare MenuItem, unlike AgentPipelineVersionSelector.tsx)',
-    );
     const name = uniqueName('checkmark');
     const skillId = await createSkillViaForm(page, name, 'Base instructions.');
     try {
       await addNamedVersion(page, skillId, 'draft-v1', 'Draft instructions.');
-      await page.getByRole('combobox').click();
-      const selectedOption = page.getByRole('option', { name: /draft-v1/i });
+      const menu = await openVersionMenu(page);
+      const selectedOption = menu.getByRole('menuitem', { name: /draft-v1/ });
       await expect(selectedOption.locator('svg')).toBeVisible();
+      // The check is on the SELECTED row only — an icon on every row would
+      // pass the assertion above while marking nothing.
+      await expect(menu.getByRole('menuitem', { name: 'base', exact: true }).locator('svg')).toHaveCount(0);
     } finally {
       await deleteSkill(request, skillId);
     }
   });
 
-  /* onetest: ELITEA-3291 — product gap: the default version shows a plain text " (default)" suffix inside its
-     MenuItem label, not a distinct pin icon with a "Default version" tooltip independent of selection.
-     elitea_issues: #5650, #5663 — both describe a pin affordance for Skills (a pin button in the version
-     dropdown; a pin/unpin action-menu item reflecting pin state) that Skills has never had: there is no
-     "pin to top" concept anywhere in this app's skills feature (grep evidence: no "pin" text/icon in
-     src/pages/skills or src/features/skills besides the unrelated "(default)" suffix this gap already
-     covers). Same root cause as ELITEA-3291/3296 below, not a separate defect. */
-  test('the default version shows a pin icon with a "Default version" tooltip', async ({ page, request }) => {
-    test.fail(
-      true,
-      'ELITEA-3291 (#917): product gap — the default version has no pin icon or tooltip in Skills, only a " (default)" text suffix appended to the version name',
-    );
+  /* onetest: ELITEA-3291 (#917) — the default version is marked independently of selection. The shared
+     component marks it with a "Default" LABEL rather than a pin button inside the row; see this file's
+     header for the `nested-interactive` reason, which is a deliberate deviation, not a missing affordance.
+     elitea_issues: #5650, #5663 asked for a pin in the same place and are answered by the same marker. */
+  test('the default version is marked in the dropdown, independently of which row is selected', async ({ page, request }) => {
+    test.setTimeout(90_000);
     const name = uniqueName('pin');
     const skillId = await createSkillViaForm(page, name, 'Base instructions.');
     try {
-      await page.getByRole('combobox').click();
-      const defaultOption = page.getByRole('option', { name: /base/i });
-      const pinIcon = defaultOption.getByTestId('skill-version-default-pin');
-      await expect(pinIcon).toBeVisible();
-      await pinIcon.hover();
-      await expect(page.getByText('Default version')).toBeVisible();
+      await addNamedVersion(page, skillId, 'draft-v1', 'Draft instructions.');
+
+      // A freshly created skill names NO default version at all
+      // (`skills.meta.default_version_id` is empty, and the read only reports
+      // the flag — it does not fall back to `base`), so neither row carries
+      // the marker yet. The same starting state `pipelines.version-selector.
+      // spec.ts` documents for a fresh pipeline.
+      let menu = await openVersionMenu(page);
+      await expect(menu.getByTestId('agent-version-default-marker')).toHaveCount(0);
+      await page.keyboard.press('Escape');
+
+      // "Set default" acts on the version the editor currently has open —
+      // draft-v1, the one `addNamedVersion` left active.
+      const defaultResponse = page.waitForResponse(
+        (response) => response.request().method() === 'PATCH' && response.url().includes('/skill_default_version/'),
+      );
+      await page.getByRole('button', { name: 'Set default' }).click();
+      await defaultResponse;
+
+      menu = await openVersionMenu(page);
+      await expect(menu.getByRole('menuitem', { name: /draft-v1/ }).getByTestId('agent-version-default-marker')).toBeVisible({
+        timeout: 20_000,
+      });
+      // The marker follows the DEFAULT, not the selection: `base` never gets it.
+      await expect(menu.getByRole('menuitem', { name: 'base', exact: true }).getByTestId('agent-version-default-marker')).toHaveCount(0);
     } finally {
       await deleteSkill(request, skillId);
     }
   });
 
-  /* onetest: ELITEA-3293 — product gap: there is no search input anywhere in the Skills version dropdown. */
-  test('a search field in the version dropdown filters by name and creator', async ({ page, request }) => {
-    test.fail(true, 'ELITEA-3293 (#917): product gap — the Skills version dropdown has no search input at all');
+  /* onetest: ELITEA-3293 (#917) — the dropdown carries the shared search box, filtering by name. */
+  test('a search field in the version dropdown filters by name', async ({ page, request }) => {
+    test.setTimeout(90_000);
     const name = uniqueName('search');
     const skillId = await createSkillViaForm(page, name, 'Base instructions.');
     try {
       await addNamedVersion(page, skillId, 'Production-v1', 'Prod instructions.');
-      await page.getByRole('combobox').click();
-      const searchInput = page.getByRole('textbox', { name: /search versions/i });
+      const menu = await openVersionMenu(page);
+      const searchInput = page.getByTestId('version-selector-search');
       await expect(searchInput).toBeVisible();
       await searchInput.fill('prod');
-      await expect(page.getByRole('option', { name: /production-v1/i })).toBeVisible();
-      await expect(page.getByRole('option', { name: /^base$/i })).toBeHidden();
+      await expect(menu.getByRole('menuitem', { name: /Production-v1/ })).toBeVisible();
+      await expect(menu.getByRole('menuitem', { name: 'base', exact: true })).toHaveCount(0);
     } finally {
       await deleteSkill(request, skillId);
     }
   });
 
-  /* onetest: ELITEA-3294 — product gap: no version row in the Skills dropdown shows a creation timestamp or a
-     creator name/email at all — the row is the version name plus an optional "(default)" suffix, nothing else. */
+  /* onetest: ELITEA-3294 (#917) — each named row's secondary line carries the creator and a
+     "MMM DD, YYYY, hh:mm AM/PM" timestamp. The creator needed a backend field: `skill_versions.author_id`
+     is now joined against `public.auth_core__user` on the read, the same join application versions get. */
   test('version metadata shows a "MMM DD, YYYY, hh:mm AM/PM" timestamp and the creator', async ({ page, request }) => {
-    test.fail(
-      true,
-      'ELITEA-3294 (#917): product gap — Skills version rows show no timestamp and no creator; MenuItem renders only the version name and an optional "(default)" suffix',
-    );
     const name = uniqueName('metadata');
     const skillId = await createSkillViaForm(page, name, 'Base instructions.');
     try {
       await addNamedVersion(page, skillId, 'draft-v1', 'Draft instructions.');
-      await page.getByRole('combobox').click();
-      const row = page.getByRole('option', { name: /draft-v1/i });
-      await expect(row.getByText(/\d{1,2}:\d{2}\s?(AM|PM)/i)).toBeVisible();
-      await expect(row.getByTestId('skill-version-creator')).toBeVisible();
+      const menu = await openVersionMenu(page);
+      const rowText = (await menu.getByRole('menuitem', { name: /draft-v1/ }).innerText()).trim();
+      expect(rowText, 'the row must carry a month-name date with a time and AM/PM').toMatch(
+        /[A-Za-z]{3}\s\d{1,2},\s\d{4},\s\d{1,2}:\d{2}\s(AM|PM)/,
+      );
+      // The creator half — an e-mail or a name ahead of the timestamp's
+      // separator. A row with only a timestamp would still match above.
+      expect(rowText, `expected a creator before the timestamp in: ${rowText}`).toMatch(/\S+\s·\s[A-Za-z]{3}\s\d{1,2},/);
     } finally {
       await deleteSkill(request, skillId);
     }
   });
 
-  /* onetest: ELITEA-3295 — product gap: the version list is not demonstrably sorted at all (`versions` is
-     rendered in whatever order `skill.versions` arrives in — `useEditSkillVersionControls.ts` applies no
-     sort), so a "newest-first order maintained during search" claim has nothing to stand on; there is also no
-     search to maintain the order during (see ELITEA-3293). */
+  /* onetest: ELITEA-3295 (#917) — `toDisplayVersions` sorts `base` first and the rest newest-first, and the
+     search filter preserves that order (`.filter()` never reorders). */
   test('versions are sorted newest-first, and stay sorted while searching', async ({ page, request }) => {
-    test.fail(
-      true,
-      'ELITEA-3295 (#917): product gap — the Skills version list applies no sort at all (raw API order) and has no search to maintain a sort order during',
-    );
+    test.setTimeout(120_000);
     const name = uniqueName('sortorder');
     const skillId = await createSkillViaForm(page, name, 'Base instructions.');
     try {
       await addNamedVersion(page, skillId, 'older-named', 'v1');
       await addNamedVersion(page, skillId, 'newer-named', 'v2');
-      await page.getByRole('combobox').click();
-      const optionTexts = await page.getByRole('option').allTextContents();
+      const menu = await openVersionMenu(page);
+      const optionTexts = await menu.getByRole('menuitem').allTextContents();
       const newerIndex = optionTexts.findIndex((text) => text.includes('newer-named'));
       const olderIndex = optionTexts.findIndex((text) => text.includes('older-named'));
       expect(newerIndex, `expected newer-named before older-named in: ${optionTexts.join(' | ')}`).toBeLessThan(olderIndex);
+
+      // The same order survives a search that keeps both rows.
+      await page.getByTestId('version-selector-search').fill('named');
+      const filtered = await menu.getByRole('menuitem').allTextContents();
+      expect(filtered.findIndex((text) => text.includes('newer-named'))).toBeLessThan(
+        filtered.findIndex((text) => text.includes('older-named')),
+      );
     } finally {
       await deleteSkill(request, skillId);
     }
   });
 
-  /* onetest: ELITEA-3296 — product gap: Skills uses a materially different, simpler component
-     (`SkillEditorHeader.tsx`'s bare MUI Select) than the Agents/Pipelines version selector
-     (`AgentPipelineVersionSelector.tsx`'s custom Menu with a trigger box, refresh icon, checkmark and default
-     marker) — confirmed by reading both files, not by a styling measurement. */
+  /* onetest: ELITEA-3296 (#917) — Skills, Agents and Pipelines now use ONE component, so there is nothing
+     left to drift: the control Agents and Pipelines are driven by (`version-selector-trigger`) is the
+     control the skill editor renders. */
   test('the Skills version selector uses the same trigger control as Agents and Pipelines', async ({ page, request }) => {
-    test.fail(
-      true,
-      'ELITEA-3296 (#917): product gap — the Skills version selector (bare MUI Select) and the Agents/Pipelines one (custom Menu with trigger/checkmark/default-marker) are different components, not shared styling with drift',
-    );
     const name = uniqueName('consistency');
     const skillId = await createSkillViaForm(page, name, 'Base instructions.');
     try {
-      // The control Agents/Pipelines use for the same job.
-      await expect(page.getByTestId('version-selector-trigger')).toBeVisible({ timeout: 5_000 });
+      await expect(page.getByTestId('version-selector-trigger')).toBeVisible({ timeout: 15_000 });
     } finally {
       await deleteSkill(request, skillId);
     }

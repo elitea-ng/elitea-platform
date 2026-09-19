@@ -37,8 +37,15 @@ import { BASE_URL } from '../../../playwright.config';
 import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID } from '../../fixtures/api';
 import { readsPlatformFlags } from '../../fixtures/platformFlags';
 
-/** Real component copy (`SecretField.tsx`'s `t('shared.ui.secretField.createSecret', …)`). */
-const CREATE_ENTRY = 'Create new secret';
+/**
+ * The CREATE entry's real copy since #902: `entities/secret`'s
+ * `secretCreateLabel`, which names the project's scope. Either scope is
+ * accepted so the assertion stays true of a team project as well as this
+ * stack's private autotest ones.
+ */
+const CREATE_ENTRY = /^New (Private|Project) Secret$/;
+/** `SecretField.tsx`'s own scope-less fallback — what every project type used to get, and what MCP03 asserts is gone. */
+const GENERIC_CREATE_ENTRY = 'Create new secret';
 /** `SecretField.tsx`'s `ListSubheader` (`t('shared.ui.secretField.savedSecrets', …)`). */
 const SAVED_SECRETS_HEADER = 'Saved secrets';
 /**
@@ -173,26 +180,31 @@ test.describe('MCP config form — Client Secret "Create new secret" shortcut', 
   });
 
   /*
-   * onetest: ELITEA-0726 — the CREATE label's exact wording. Written as it
-   * SHOULD pass per the case ("New Private Secret" or "New Project Secret",
-   * matching the project type); marked failing for the documented reason —
-   * see this file's header. `Create new secret` is the real, generic string
-   * every project type gets.
+   * onetest: ELITEA-0726 (#902) — the CREATE label names the project type.
+   *
+   * `entities/secret`'s `secretCreateLabel` already produced the scope-aware
+   * wording and `SecretField` already rendered a caller-supplied
+   * `createLabel`; what was missing was the CALLER. The toolkit form's
+   * composition root (`ToolkitForm.hooks.ts`'s `toolComponentProps`) carried
+   * no project scope at all, so `SecretFieldInput` — which every schema-driven
+   * secret field, MCP's Client Secret included, renders through — had nothing
+   * to pass. The scope now travels ToolkitForm -> ToolBase ->
+   * `credentialContext.isTeamProject` -> the secret field.
+   *
+   * This stack's autotest projects are private ones, so the expected wording
+   * here is "New Private Secret"; the regex accepts either scope so the case
+   * stays true of a team project too, and the generic string must be GONE.
    */
   test('MCP03: the CREATE entry names the project type, not a generic label', async ({ page }) => {
-    test.fail(
-      true,
-      'ELITEA-0726 (#902): product gap — SecretField.tsx renders ONE generic "Create new secret" ' +
-        'entry for every project type; no caller (SecretFieldInput/useSecretFieldOptions) passes ' +
-        'a project-type-specific createLabel, though the prop (SecretFieldSecretsOptions.createLabel) exists.',
-    );
-
     await page.goto(`${BASE_URL}/app/mcps/create`, { waitUntil: 'domcontentloaded' });
     await page.getByRole('button', { name: 'Remote MCP' }).click();
-    await openClientSecretPicker(page);
 
-    await expect(
-      page.getByRole('option', { name: /^New (Private|Project) Secret$/ }),
-    ).toBeVisible({ timeout: 5_000 });
+    await page.getByRole('button', { name: 'Secret', exact: true }).click();
+    const combo = page.getByRole('combobox', { name: 'Client Secret' });
+    await expect(combo).toBeVisible({ timeout: 10_000 });
+    await combo.click();
+
+    await expect(page.getByRole('option', { name: /^New (Private|Project) Secret$/ })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole('option', { name: GENERIC_CREATE_ENTRY })).toHaveCount(0);
   });
 });

@@ -18,10 +18,11 @@ import { BASE_URL } from '../../../playwright.config';
 import {
   API_BASE,
   AUTOTEST_PREFIX,
-  DEFAULT_PROJECT_ID,
   createAgent,
   createAgentWithVersion,
+  DEFAULT_PROJECT_ID,
   deleteAgent,
+  PUBLISHABLE_TAGS,
   readAgentList,
   readApplicationVersions,
   readProjectModels,
@@ -63,6 +64,9 @@ async function createPublishableAgent(
             'You are a meeting preparation assistant. Turn the notes, transcripts and agendas the user gives you into a short briefing that names the people involved, the decisions still open and the questions worth asking.',
           welcome_message: 'Send me your notes and I will prepare a briefing.',
           conversation_starters: ['Summarise these notes.', 'What should I ask in this meeting?'],
+          // #913 — an untagged version is a Critical now, and the publish
+          // route refuses a FAIL inline. See `PUBLISHABLE_TAGS`.
+          tags: [...PUBLISHABLE_TAGS],
         },
       ],
     },
@@ -603,6 +607,9 @@ test.describe('the publish rules the wizard rests on', () => {
       welcomeMessage: 'Send me your notes.',
       conversationStarters: ['Summarise these notes.'],
       model: { modelName: model.name, modelProjectId: catalogueProjectId },
+      // #913 — an untagged version is a Critical now, and the publish route
+      // refuses a FAIL inline. See `PUBLISHABLE_TAGS`.
+      tags: PUBLISHABLE_TAGS,
     });
 
     try {

@@ -63,6 +63,14 @@ export interface MessageParticipantToolWire {
 /** A `thinking_steps[]` entry (lines 152-190). */
 export interface ThinkingStepWire {
   readonly text?: string;
+  /**
+   * Set ONLY when this step was rebuilt from a persisted
+   * `chat_message_trace_step` row (#951 — `lib/traceSteps.ts`). The heavy
+   * columns are detail-only, so a restored step carries its row identity and
+   * the modal fetches `text`/`thinking` on open. A live step never has it.
+   */
+  readonly trace_step_id?: number;
+  readonly trace_message_group_id?: number;
   readonly thinking?: unknown;
   readonly message?: {
     readonly id?: string;
@@ -76,6 +84,9 @@ export interface ThinkingStepWire {
 /** A `tool_calls` entry (lines 192-246). */
 export interface ToolCallStepWire {
   readonly tool_name?: string;
+  /** See `ThinkingStepWire.trace_step_id` — the same restored-row identity. */
+  readonly trace_step_id?: number;
+  readonly trace_message_group_id?: number;
   readonly name?: string;
   readonly toolkit_name?: string;
   readonly toolkit_type?: string;

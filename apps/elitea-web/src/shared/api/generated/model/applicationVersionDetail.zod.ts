@@ -59,6 +59,12 @@ export const ApplicationVersionDetail = zod
     agent_type: zod.string().optional(),
     instructions: zod.string().optional(),
     welcome_message: zod.string().optional(),
+    notes: zod
+      .string()
+      .optional()
+      .describe(
+        'NOTE(#898): `meta.notes`, surfaced beside `meta` as pylon\'s `hydrate_notes_from_meta` surfaces it. Always a string on the version-detail read and on the two write echoes (\"\" when the version carries no notes); absent from the other version maps (import, fork, the public catalogue detail), which do not build their response through these two helpers.\n',
+      ),
     llm_settings: LlmSettings.optional(),
     meta: zod.union([VersionMeta, zod.null()]).optional(),
     conversation_starters: ConversationStarters.optional(),

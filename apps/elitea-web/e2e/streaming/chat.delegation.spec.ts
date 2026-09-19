@@ -72,6 +72,7 @@ import { BASE_URL } from '../../playwright.config';
 import {
   AUTOTEST_PREFIX,
   MOCK_CALL_TOOL_SENTINEL,
+  PUBLISHABLE_TAGS,
   agentAsToolName,
   callToolWithArgumentsPrompt,
   clearMockLlmJournal,
@@ -115,11 +116,24 @@ function toolNameOf(agent: Agent): string {
  * The instructions are long enough to clear the pre-publish quality gate (a
  * version under 50 characters raises a CRITICAL issue and the publish is
  * refused for a reason that has nothing to do with the case), and the model is
- * pinned WITHOUT `model_project_id`: naming a project there makes the publish
- * hard-check compare it against the catalogue project and refuse with
- * `llm_not_shared`, which is a different journey's subject.
+ * `modelProjectId` is left unset for the agents that are only CHATTED with:
+ * naming the author's own project there makes the publish hard-check refuse
+ * with `llm_not_shared`, which is a different journey's subject. The agent that
+ * is PUBLISHED passes the catalogue project instead, because #908's rule reads
+ * the key two ways and both are Criticals — absent is "settings are
+ * incomplete", present-and-not-the-catalogue is "model is not shared".
+ *
+ * `tags` for the same class of reason (#913): an untagged version is a CRITICAL
+ * now and the publish route refuses a FAIL inline, so the publish below failed
+ * with `critical: tags: no tags` — again about the fixture rather than about
+ * delegation. See `PUBLISHABLE_TAGS`.
  */
-async function createAgent(page: Page, projectId: string, name: string): Promise<Agent> {
+async function createAgent(
+  page: Page,
+  projectId: string,
+  name: string,
+  modelProjectId?: string,
+): Promise<Agent> {
   const created = await createAgentWithVersion(
     page.request,
     name,
@@ -129,8 +143,9 @@ async function createAgent(page: Page, projectId: string, name: string): Promise
         'saved agent you have been attached to, and report exactly what came back.',
       welcomeMessage: 'Give me something to delegate.',
       conversationStarters: ['Delegate this task.'],
-      model: { modelName: MOCK_MODEL },
+      model: { modelName: MOCK_MODEL, ...(modelProjectId === undefined ? {} : { modelProjectId }) },
       meta: { step_limit: 25, internal_tools: [] },
+      tags: PUBLISHABLE_TAGS,
     },
     projectId,
     `${AUTOTEST_PREFIX}delegation fixture agent for the streaming suite`,
@@ -593,7 +608,7 @@ test('a published agent answers in a mixed conversation, from its own project an
 
   const stamp = Date.now() % 1_000_000;
   const privateAgent = await createAgent(page, projectId, `${AUTOTEST_PREFIX}priv-${stamp}`);
-  const authored = await createAgent(page, projectId, `${AUTOTEST_PREFIX}pub-${stamp}`);
+  const authored = await createAgent(page, projectId, `${AUTOTEST_PREFIX}pub-${stamp}`, catalogueProjectId);
   const conversation = await createConversation(page, projectId, marker('mixedconv'));
   let publishedVersionId = '';
   let catalogueAgentId = '';

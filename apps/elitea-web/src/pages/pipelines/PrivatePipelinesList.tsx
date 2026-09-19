@@ -27,7 +27,15 @@ function applicationName(application: Application): string {
   return application.name.trim() !== '' ? application.name : 'Untitled';
 }
 
-function toRow(application: Application): PipelineListRow {
+/** Same fork-provenance read as `pages/agents/PrivateAgentsList.tsx`'s own `forkedFromId` — see that file's doc comment. */
+function forkedFromId(application: Application): string | undefined {
+  if (!application.is_forked) return undefined;
+  const parentEntityId = application.meta?.['parent_entity_id'];
+  return typeof parentEntityId === 'string' || typeof parentEntityId === 'number' ? String(parentEntityId) : undefined;
+}
+
+function toRow(application: Application, onSelectForkedFrom: (id: string) => void): PipelineListRow {
+  const forkedFrom = forkedFromId(application);
   return {
     id: application.id,
     name: applicationName(application),
@@ -35,6 +43,7 @@ function toRow(application: Application): PipelineListRow {
     authors: (application.authors ?? []).map((author) => ({ id: author.id, name: author.name })),
     tags: application.tags ?? [],
     createdAt: application.created_at,
+    ...(forkedFrom === undefined ? {} : { forkedFrom: { onClick: () => onSelectForkedFrom(forkedFrom) } }),
   };
 }
 
@@ -164,7 +173,11 @@ export function PrivatePipelinesList({ cardContentType }: PrivatePipelinesListPr
       sx={containerSx}
     >
       <PipelineListPanel
-        rows={visibleRows.map(toRow)}
+        rows={visibleRows.map((application) =>
+          toRow(application, (id) => {
+            void navigate({ to: '/pipelines/$tab/$agentId', params: { tab: 'all', agentId: id } });
+          }),
+        )}
         isLoading={listQuery.isFetching && wire === undefined}
         isError={listQuery.isError}
         errorMessage={t('pages.pipelines.privateList.error', 'Failed to load pipelines.')}

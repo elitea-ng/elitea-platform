@@ -32,6 +32,15 @@ export interface ApplicationListRow {
   readonly authors?: readonly { readonly id?: string; readonly name: string; readonly avatar?: string }[];
   readonly tags?: readonly string[];
   readonly createdAt?: string;
+  /**
+   * #915 — set by the caller (which already holds the router's `navigate`)
+   * when this row is a fork, to render a "Forked from" link that opens the
+   * SOURCE entity. A callback rather than a bare id, same as `EntityListItem
+   * .onClick`/`forkedFrom` themselves — keeps this component's own prop
+   * count under the §3.5 12-prop budget, which a second top-level
+   * `onSelectForkedFrom` callback prop would have breached.
+   */
+  readonly forkedFrom?: { readonly onClick: () => void };
 }
 
 export interface ApplicationListPanelProps {
@@ -77,6 +86,7 @@ export function ApplicationListPanel({
         onClick: () => {
           onSelect(row.id);
         },
+        ...(row.forkedFrom === undefined ? {} : { forkedFrom: row.forkedFrom }),
       })),
     [rows, onSelect],
   );

@@ -15,12 +15,12 @@ const PUBLIC_SURFACE = [
   'hasSchedule',
   'isTriggerEnabled',
   'normalisePipelineTrigger',
-  // Added by #126: the hand-written pipeline-trigger client that replaced the
-  // deleted orval-generated hooks.
-  'pipelineTriggerQueryKey',
-  'putPipelineTrigger',
   'triggerTypeLabel',
-  'usePipelineTriggerQuery',
+  // REMOVED by #899: the hand-written pipeline-trigger client
+  // (`pipelineTriggerQueryKey` / `putPipelineTrigger` /
+  // `usePipelineTriggerQuery`) spoke pylon's deleted
+  // `/elitea_core/pipeline_trigger/...` route. Its two replacements are
+  // declared in v2.yaml, so callers use the GENERATED client directly.
 ] as const;
 
 describe('entities/pipeline public surface', () => {

@@ -130,7 +130,6 @@ const DEFAULT_TOOLKIT_FORM_PROPS = {
   hideNameInput: false,
   hideOperationButtons: false,
   forceCustomView: false,
-  isTeamProject: false,
 } as const satisfies Partial<ToolkitFormProps>;
 
 export type ResolvedToolkitFormProps = Omit<ToolkitFormProps, keyof typeof DEFAULT_TOOLKIT_FORM_PROPS> & typeof DEFAULT_TOOLKIT_FORM_PROPS;

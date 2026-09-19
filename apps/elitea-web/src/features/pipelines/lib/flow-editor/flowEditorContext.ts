@@ -46,9 +46,38 @@ export interface FlowEditorContextValue {
 }
 
 /**
- * `React.createContext()` in the baseline has no default value (`undefined`
- * outside a Provider) -- preserved here rather than inventing a fallback.
+ * #899: what `TriggerTypeSelector` needs to address the edited version's two
+ * unattended entry points (`/pipeline_schedules`, `/pipeline_triggers`).
  */
+export interface PipelineTriggerScope {
+  readonly projectId?: string | undefined;
+  readonly versionId?: number | undefined;
+  /** The SAVED version's YAML — an interactive graph may hold neither facility. */
+  readonly versionInstructions?: string | undefined;
+}
+
+/**
+ * #899: a SECOND context rather than three more fields on
+ * `FlowEditorContextValue`.
+ *
+ * The baseline read these off Formik (`values.version_details.{id,
+ * instructions}`) inside `TriggerTypeSelector` itself; this app has no Formik,
+ * and the alternative the ported `NodeCard` left behind — a `triggerProps`
+ * object threaded through all eleven node components — is precisely what
+ * nobody ever wired, which is #899's second half: the selector rendered with
+ * every field `undefined` forever.
+ *
+ * It is separate from `FlowEditorContext` because the one place that HAS this
+ * data (`PipelineEditorParts`'s `<EditorPanel>` call site, which holds both
+ * `identity` and `versionDetails`) sits ABOVE `EditorPanel` -> `FlowWrapper`
+ * -> `FlowEditor`, the component that owns the `FlowEditorContext.Provider`.
+ * Routing it through that provider would mean a pass-through prop on four
+ * components that have no use for it, and `FlowEditor.tsx`/`EditorPanel.tsx`
+ * are both within two lines of the §3.5 400-line budget. A provider placed at
+ * the call site skips all four.
+ */
+export const PipelineTriggerScopeContext = createContext<PipelineTriggerScope | undefined>(undefined);
+
 export const FlowEditorContext = createContext<FlowEditorContextValue | undefined>(undefined);
 
 /** `NodeCard.jsx:27` / `EndNode.jsx:17` -- the only shape ever passed to `NodeCardContext.Provider`. */

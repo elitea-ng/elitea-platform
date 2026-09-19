@@ -2,7 +2,7 @@ import { ChatParticipantType } from '@/shared/lib/chat';
 import { ROLES } from '@/shared/lib/enums';
 
 import type { AssistantMessage, UserMessage } from '../model/types';
-import { buildToolActions } from './toolActions';
+import { buildToolActions, resolveAssistantToolInputs } from './toolActions';
 import type {
   HitlInterruptRawWire,
   MessageAuthorWire,
@@ -10,6 +10,8 @@ import type {
   MessageItemWire,
   MessageParticipantWire,
 } from './wire';
+import type { PersistedTraceSteps } from './traceSteps';
+
 
 /**
  * apps/elitea-ui/src/common/convertChatConversationMessages.js:21-33
@@ -308,15 +310,6 @@ function assistantContinuationFields(
   };
 }
 
-/** `meta.thinking_steps`/`meta.tool_calls`/`meta.first_tool_timestamp_start` — `buildToolActions`' raw inputs. */
-function resolveAssistantToolInputs(meta: MessageGroupWire['meta']) {
-  return {
-    thinkingSteps: meta?.thinking_steps ?? [],
-    toolCalls: meta?.tool_calls ?? {},
-    firstToolTimestampStart: meta?.first_tool_timestamp_start,
-  };
-}
-
 /** `is_error`/`isSummarized`/`references` (lines 133-140). */
 function resolveAssistantSummaryFields(meta: MessageGroupWire['meta']) {
   return {
@@ -358,11 +351,12 @@ export function normaliseAssistantMessage(
   messageGroup: MessageGroupWire,
   messageGroups: readonly MessageGroupWire[],
   participants: readonly MessageParticipantWire[] | undefined,
+  persistedTraceSteps?: PersistedTraceSteps,
 ): AssistantMessage {
   const messageItems = messageGroup.message_items ?? [];
   const meta = messageGroup.meta;
   const { isError, isSummarized, references } = resolveAssistantSummaryFields(meta);
-  const { thinkingSteps, toolCalls, firstToolTimestampStart } = resolveAssistantToolInputs(meta);
+  const { thinkingSteps, toolCalls, firstToolTimestampStart } = resolveAssistantToolInputs(meta, persistedTraceSteps);
   // Same lookup, same two spellings — this one feeds `buildToolActions`' tools
   // fallback, so a strict === costs every tool row its `toolkit_type` (and the
   // icon that reads it) whenever the payload numbers its participant ids.

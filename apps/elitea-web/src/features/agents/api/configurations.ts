@@ -79,3 +79,37 @@ export async function testConfigurationConnection(
     headers: { 'Content-Type': 'application/json' },
   });
 }
+
+/**
+ * API-146 (`credentials.getConfigurationsList`) — the same list the toolkit
+ * form and the credential picker read, narrowed to the one question #937
+ * asks: which saved credentials does this project answer to?
+ *
+ * `include_shared=true` so a credential shared INTO this project resolves
+ * too; a toolkit that points at one is not broken, and a warning that says
+ * otherwise would be a false claim about the user's data.
+ */
+export interface ConfigurationPageWire {
+  readonly items: readonly ConfigurationWire[];
+  readonly total: number;
+  readonly shared?: { readonly items: readonly ConfigurationWire[]; readonly total: number };
+}
+
+/** The baseline's own picker page size (`useCredentialsData.hooks.js`: 500) — a resolution check reads every row, it does not paginate. */
+const CREDENTIAL_PAGE_SIZE = 500;
+
+export function buildConfigurationsListUrl(projectId: string | number, section: string): string {
+  const search = new URLSearchParams({
+    include_shared: 'true',
+    shared_offset: '0',
+    shared_limit: String(CREDENTIAL_PAGE_SIZE),
+    limit: String(CREDENTIAL_PAGE_SIZE),
+    offset: '0',
+    section,
+  });
+  return `/configurations/configurations/${projectId}?${search.toString()}`;
+}
+
+export async function getConfigurationsList(projectId: string | number, section: string, signal?: AbortSignal): Promise<ConfigurationPageWire> {
+  return fetchData<ConfigurationPageWire>(buildConfigurationsListUrl(projectId, section), signal ? { signal } : {});
+}

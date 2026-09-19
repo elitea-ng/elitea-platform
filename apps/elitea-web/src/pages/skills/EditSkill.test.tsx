@@ -159,11 +159,14 @@ describe('EditSkill', () => {
     await waitFor(() => expect(defaulted).toBe(true));
   });
 
+  /* #917: the picker is `AgentPipelineVersionSelector` now, the same component
+     Agents and Pipelines use — a trigger box opening a `role="menu"` of
+     `role="menuitem"` rows, not a MUI `<Select>`'s combobox/option pair. */
   it('navigates when another version is selected', async () => {
     const user = userEvent.setup();
     const { router } = renderSkillsRoute(<EditSkill />, '/skills/all/skill-1');
-    await user.click(await screen.findByRole('combobox'));
-    await user.click(screen.getByRole('option', { name: 'second' }));
+    await user.click(await screen.findByTestId('version-selector-trigger'));
+    await user.click(screen.getByRole('menuitem', { name: /second/ }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/skills/all/skill-1/v2'));
   });
 

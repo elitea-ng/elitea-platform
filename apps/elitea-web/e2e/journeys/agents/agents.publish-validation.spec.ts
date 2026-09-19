@@ -26,17 +26,18 @@ import { test, expect } from '@playwright/test';
 import { BASE_URL } from '../../../playwright.config';
 import {
   API_BASE,
-  AUTOTEST_PREFIX,
-  DEFAULT_PROJECT_ID,
   attachSubAgent,
+  AUTOTEST_PREFIX,
   createAgent,
   createAgentWithVersion,
+  DEFAULT_PROJECT_ID,
   deleteAgent,
-  unpublishAllVersions,
   detachSubAgent,
+  PUBLISHABLE_TAGS,
   readProjectModels,
   readVersion,
   resolveCatalogueProjectId,
+  unpublishAllVersions,
 } from '../../fixtures/api';
 
 import type { APIRequestContext, APIResponse } from '@playwright/test';
@@ -91,6 +92,9 @@ test.describe('publish validation: code-based rules', () => {
       welcomeMessage: 'Send me your notes.',
       conversationStarters: ['Summarise these notes.'],
       model: { modelName: model.name, modelProjectId: catalogueProjectId },
+      // #913 — an untagged version is a Critical now, and the publish route
+      // refuses a FAIL inline. See `PUBLISHABLE_TAGS`.
+      tags: PUBLISHABLE_TAGS,
     });
     const child = await createAgentWithVersion(request, childName, {
       instructions: PASSABLE_INSTRUCTIONS,
@@ -112,19 +116,22 @@ test.describe('publish validation: code-based rules', () => {
     }
   });
 
-  /* onetest: ELITEA-0160 — product gap: a version whose llm_settings carries no model_project_id key is silently
-     skipped by validation instead of raising the documented "missing model_project_id" critical issue
-     (runPublishValidation only checks the key when present: `if mpid, ok := llm["model_project_id"]; ok && mpid != nil`) */
+  /* onetest: ELITEA-0160 — a version whose llm_settings names a model but carries no model_project_id key raises
+     the documented "missing model_project_id" Critical. #908: validation used to read the key only as
+     `if mpid, ok := llm["model_project_id"]; ok && mpid != nil`, so an ABSENT key skipped the rule entirely and
+     the agent published with settings nothing could resolve. */
   test('publish validation flags an agent whose LLM settings carry no model_project_id', async ({ request }) => {
-    test.fail(
-      true,
-      'ELITEA-0160 (#908): product gap — publish validation never flags a missing model_project_id; the check is skipped entirely when the key is absent',
-    );
     const name = uniqueName('nomodelproj');
-    const agent = await createAgentWithVersion(request, name, { instructions: PASSABLE_INSTRUCTIONS });
-    // `createAgentWithVersion` with no `model` writes no llm_settings at all —
-    // the exact "model name present, model_project_id missing" shape an
-    // import between projects leaves behind.
+    // `model` with a name and NO `modelProjectId` writes
+    // `llm_settings: {model_name: ...}` and nothing else — the exact shape an
+    // import between projects leaves behind, and the one the case is about.
+    // (A version with no `model` at all is a DIFFERENT case: pylon raises its
+    // own "No LLM model configured" Critical for that, which this port does
+    // not have — see `incompleteModelSettings` in the Go handler.)
+    const agent = await createAgentWithVersion(request, name, {
+      instructions: PASSABLE_INSTRUCTIONS,
+      model: { modelName: 'gpt-4o-mini' },
+    });
     try {
       const { body } = await validate(request, agent.versionId, `rel${String(Date.now()).slice(-6)}`);
       const critical = body.critical_issues ?? [];
@@ -321,14 +328,11 @@ test.describe('publish validation: code-based rules', () => {
     }
   });
 
-  /* onetest: ELITEA-0173 — product gap: there is no Critical "at least 1 tag" rule and no Warning "tags are all
-     generic" rule. The only tags check in `runPublishValidation` is a Recommendation when `tagCount < 3`, which
-     is the opposite of what a zero-tags agent should raise (Critical, not Suggestion). */
+  /* onetest: ELITEA-0173 — a zero-tag agent raises a Critical, not a Recommendation. #913: the only tags rule was
+     a Recommendation when `tagCount < 3`, which said the opposite of pylon's `TagsChecker` — that raises a
+     Critical for no tags at all, a Warning when every tag is generic, and a Suggestion only ABOVE two tags
+     (legacy/plugins/elitea_core/utils/publish_utils.py:2824-2851). All three are ported now. */
   test('an agent with zero tags is flagged as Critical', async ({ request }) => {
-    test.fail(
-      true,
-      'ELITEA-0173 (#913): product gap — no critical "agent has no tags" rule and no warning "tags are all generic" rule exist; only a suggestion fires below 3 tags',
-    );
     const agent = await createAgent(request, uniqueName('notags'));
     try {
       const { body } = await validate(request, agent.versionId, `rel${String(Date.now()).slice(-6)}`);
@@ -346,7 +350,12 @@ test.describe('publish validation: code-based rules', () => {
      (Warning, e.g. "v1"/"v2") ARE all real, server-enforced checks — the ONE row this case documents that is
      NOT implemented (a semantic-versioning Suggestion) is noted separately and does not block this port. */
   test('version name format, uniqueness and the generic-name blocklist are all enforced', async ({ request }) => {
-    const agent = await createAgentWithVersion(request, uniqueName('vername'), { instructions: PASSABLE_INSTRUCTIONS });
+    const agent = await createAgentWithVersion(request, uniqueName('vername'), {
+      instructions: PASSABLE_INSTRUCTIONS,
+      // #913 — an untagged version is a Critical now, and the publish route
+      // refuses a FAIL inline. See `PUBLISHABLE_TAGS`.
+      tags: PUBLISHABLE_TAGS,
+    });
     try {
       // Format: only by API (the UI input filters keystrokes) — server 400s
       // with the regex message.
@@ -418,7 +427,12 @@ test.describe('publish validation: code-based rules', () => {
      deterministic without running it. */
   test("a published agent's catalogue twin carries no tool attachments; the author's own copy is unchanged", async ({ request }) => {
     const parentName = uniqueName('snapshotparent');
-    const parent = await createAgentWithVersion(request, parentName, { instructions: PASSABLE_INSTRUCTIONS });
+    const parent = await createAgentWithVersion(request, parentName, {
+      instructions: PASSABLE_INSTRUCTIONS,
+      // #913 — an untagged version is a Critical now, and the publish route
+      // refuses a FAIL inline. See `PUBLISHABLE_TAGS`.
+      tags: PUBLISHABLE_TAGS,
+    });
     const child = await createAgentWithVersion(request, uniqueName('snapshotchild'), { instructions: PASSABLE_INSTRUCTIONS });
     try {
       expect((await attachSubAgent(request, parent.versionId, { applicationId: child.id, versionId: child.versionId })).ok()).toBe(true);
@@ -474,7 +488,12 @@ test.describe('publish validation: code-based rules', () => {
     page,
     request,
   }) => {
-    const agent = await createAgentWithVersion(request, uniqueName('continuebtn'), { instructions: PASSABLE_INSTRUCTIONS });
+    const agent = await createAgentWithVersion(request, uniqueName('continuebtn'), {
+      instructions: PASSABLE_INSTRUCTIONS,
+      // #913 — an untagged version is a Critical now, and the publish route
+      // refuses a FAIL inline. See `PUBLISHABLE_TAGS`.
+      tags: PUBLISHABLE_TAGS,
+    });
     try {
       await page.goto(`${BASE_URL}/app/agents/all/${agent.id}`);
       await expect(page.getByTestId('edit-application-configuration-tab-panel')).toBeVisible({ timeout: 20_000 });
@@ -556,31 +575,25 @@ test.describe('publish validation: code-based rules', () => {
 
   /*
    * onetest: ELITEA-0147, ELITEA-0151, ELITEA-0153, ELITEA-0154, ELITEA-0158
-   * — product gap: the agent editor never mounts an Editor Notes control at
-   * all. `ApplicationEditorNotes` (src/features/agents/ui/
-   * ApplicationEditorNotes.tsx) is written and unit-tested, but
-   * `src/features/agents/index.ts`'s own doc comment discloses it is
-   * "deliberately NOT exported" alongside `ApplicationInformation` — `grep`
-   * for `<ApplicationEditorNotes` across `src/` turns up only its own file
-   * and its own test, no call site — because `version_details.notes` "has no
-   * column on `application_versions`, no property on `VersionWriteRequest`,
-   * and no branch in `UpdateVersion`". Every one of the five cases below (export
-   * with empty notes, import populating notes, long-notes preservation, the
-   * fork-modal layout, and the plain editable-and-saveable regression) needs
-   * a screen control that is simply not on the page in this build.
+   * — #898. `ApplicationEditorNotes` was written and unit-tested and mounted
+   * by nobody: `src/features/agents/index.ts` did not export it, because
+   * `version_details.notes` "has no column on `application_versions`, no
+   * property on `VersionWriteRequest`, and no branch in `UpdateVersion`".
+   * It never wanted a column — pylon stores the field inside
+   * `application_versions.meta` (elitea_issues #5410) — so all three halves
+   * are closed without a migration, and the editor mounts the control
+   * between SKILLS and INFORMATION, where the baseline puts it.
+   *
+   * This case asserts the control is ON the page; the save round-trip is
+   * covered by the unit tests over `toVersionSaveBody`/the version-fields
+   * hook, and by the Go handler's own tests.
    */
   test('an Editor Notes field is present on the agent editor', async ({ page, request }) => {
-    test.fail(
-      true,
-      'ELITEA-0147 (#898)/0151/0153/0154/0158: product gap — ApplicationEditorNotes is written but never mounted ' +
-        'in the agent editor (src/features/agents/index.ts, disclosed gap), and the field has no backend ' +
-        'column/write path even if it were shown',
-    );
     const agent = await createAgentWithVersion(request, uniqueName('editornotes'), { instructions: PASSABLE_INSTRUCTIONS });
     try {
       await page.goto(`${BASE_URL}/app/agents/all/${agent.id}`);
       await expect(page.getByTestId('edit-application-configuration-tab-panel')).toBeVisible({ timeout: 20_000 });
-      await expect(page.getByText('EDITOR NOTES')).toBeVisible({ timeout: 2_000 });
+      await expect(page.getByText('EDITOR NOTES')).toBeVisible({ timeout: 10_000 });
     } finally {
       await deleteAgent(request, agent.id);
     }

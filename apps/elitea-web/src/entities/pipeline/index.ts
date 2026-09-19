@@ -4,8 +4,8 @@
 export type { Pipeline, PipelineSettings, PipelineTrigger, PipelineTriggerWire } from './model/types';
 export { hasSchedule, isTriggerEnabled, triggerTypeLabel } from './model/selectors';
 export { normalisePipelineTrigger } from './lib/normalise';
-// NOTE(#126): the pipeline-trigger client moved here from orval's generated
-// `applications` module, whose `useGetPipelineTrigger` /
-// `getUpdatePipelineTriggerQueryOptions` disappeared when the routes behind
-// them were deleted. Requests are unchanged; see #192/#193 for the gaps.
-export { pipelineTriggerQueryKey, putPipelineTrigger, usePipelineTriggerQuery } from './api/pipelineTriggerApi';
+// NOTE(#899): the hand-written pipeline-trigger client that used to live here
+// spoke pylon's deleted `/elitea_core/pipeline_trigger/...` route and is gone.
+// The two facilities that replaced it (`/pipeline_schedules`,
+// `/pipeline_triggers`) are declared in v2.yaml, so callers use the GENERATED
+// client directly — `features/pipelines/api/usePipelineTriggers.ts`.

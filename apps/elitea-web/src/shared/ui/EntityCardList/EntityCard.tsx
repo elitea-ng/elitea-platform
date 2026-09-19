@@ -7,6 +7,7 @@ import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { cardGradientSx } from '@/shared/lib/cardGradient';
+import { t } from '@/shared/i18n';
 
 import { EntityCardAuthors } from './EntityCardAuthors';
 import { EntityCardTags } from './EntityCardTags';
@@ -113,6 +114,36 @@ export function EntityCard({ item, actions, onTagClick, 'data-testid': dataTestI
             {...(onTagClick === undefined ? {} : { onTagClick })}
           />
         </Box>
+        {item.forkedFrom !== undefined && (
+          /*
+           * #915, corrected: a MARKER, not a control.
+           *
+           * The card's own root is `role="button"` (see its rule comment
+           * above), and axe's `nested-interactive` — impact "serious", and a
+           * rule this app's `checkA11y` E2E fixture does NOT disable — fails
+           * any focusable widget nested inside one. The first cut made this a
+           * focusable `role="link"`, which broke `agents.lifecycle.spec.ts`'s
+           * a11y check on every dashboard that renders a forked row.
+           *
+           * The origin is still REACHABLE, as a real link, from the TABLE
+           * view (`EntityListTable.tsx`): a table row is a plain `<tr>` with
+           * an onClick, not a widget role, so a link inside it nests nothing.
+           * Here the indicator states the fact and says where to act on it.
+           */
+          <Tooltip
+            title={t('shared.entityList.forkedFromTooltip', 'Forked from another entity. Switch to the table view to open the original.')}
+            placement="top"
+          >
+            <Typography
+              component="span"
+              variant="bodySmall"
+              data-testid="entity-card-forked-from"
+              sx={forkedFromSx}
+            >
+              {t('shared.entityList.forkedFrom', 'Forked from')}
+            </Typography>
+          </Tooltip>
+        )}
       </Box>
     </Box>
   );
@@ -221,3 +252,11 @@ const bottomLeftSx: SxProps<Theme> = (theme: Theme) => ({
 });
 
 const sectionDividerSx: SxProps<Theme> = { height: '0.9375rem', alignSelf: 'center' };
+
+/** #915's "Forked from" marker — the bottom row's right-hand slot, unused until now (`bottomRowSx`'s `justifyContent: 'space-between'` already reserved it). Deliberately NOT styled as a link: it is not one here (see the JSX's own comment); the table view carries the clickable copy. */
+const forkedFromSx: SxProps<Theme> = (theme: Theme) => ({
+  flexShrink: 0,
+  alignSelf: 'center',
+  color: theme.vars.palette.text.secondary,
+  whiteSpace: 'nowrap',
+});

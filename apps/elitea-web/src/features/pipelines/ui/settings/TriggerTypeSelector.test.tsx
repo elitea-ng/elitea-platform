@@ -11,14 +11,22 @@ import { renderWithRouterAndProject } from '../../__tests__/testUtils';
 import { TriggerTypeSelector } from './TriggerTypeSelector';
 
 const BASE = '/api/v2';
-const PROJECT_ID = 'proj-1';
+const PROJECT_ID = '1';
 const VERSION_ID = 7;
-const TRIGGER_URL = `${BASE}/elitea_core/pipeline_trigger/prompt_lib/${PROJECT_ID}/pipeline/${VERSION_ID}/trigger`;
+const SCHEDULE_URL = `${BASE}/pipeline_schedules/prompt_lib/${PROJECT_ID}/${VERSION_ID}`;
+const TRIGGER_URL = `${BASE}/pipeline_triggers/prompt_lib/${PROJECT_ID}/${VERSION_ID}`;
+const REVEAL_URL = `${BASE}/pipeline_triggers/secret/prompt_lib/${PROJECT_ID}/${VERSION_ID}`;
+
+/** The "this pipeline has neither" answer both reads give — a 200, never a 404. */
+function serveNothingConfigured(): void {
+  server.use(
+    http.get(SCHEDULE_URL, () => HttpResponse.json({ configured: false, active: false })),
+    http.get(TRIGGER_URL, () => HttpResponse.json({ configured: false })),
+  );
+}
 
 beforeEach(() => {
   configureGeneratedClient({ baseUrl: BASE });
-  // Schedule and Webhook are hidden while the trigger route is unmounted —
-  // see `shared/config/backendCapabilities`.
   setBackendCapabilityForTests('pipelineTriggers', true);
 });
 
@@ -28,8 +36,28 @@ afterEach(() => {
 });
 
 describe('TriggerTypeSelector', () => {
+  /**
+   * Regression pin (#899, third root cause): without React Flow's `nopan
+   * nodrag` escape hatch on a wrapper ABOVE the select, the canvas's drag
+   * layer eats the mouse-down and the menu never opens on the real canvas —
+   * a failure no unit-level click can reproduce, because jsdom has no canvas.
+   */
+  it('shields the dropdown from the canvas drag layer', async () => {
+    serveNothingConfigured();
+    const { findByRole } = renderWithRouterAndProject(
+      <TriggerTypeSelector
+        projectId={PROJECT_ID}
+        versionId={VERSION_ID}
+      />,
+      PROJECT_ID,
+    );
+    const select = await findByRole('combobox');
+    expect(select.closest('.nodrag'), 'the Trigger select must sit inside a `nodrag` ancestor').not.toBeNull();
+    expect(select.closest('.nopan')).not.toBeNull();
+  });
+
   it('defaults to Chat Message and shows all three trigger options', async () => {
-    server.use(http.get(TRIGGER_URL, () => HttpResponse.json({ version_id: String(VERSION_ID), type: 'chat_message' })));
+    serveNothingConfigured();
 
     const { findByText } = renderWithRouterAndProject(
       <TriggerTypeSelector
@@ -40,10 +68,11 @@ describe('TriggerTypeSelector', () => {
     );
 
     expect(await findByText('Trigger')).toBeInTheDocument();
+    expect(await findByText('Chat Message')).toBeInTheDocument();
   });
 
   it('restricts to Chat Message only when the saved YAML has interactive elements', async () => {
-    server.use(http.get(TRIGGER_URL, () => HttpResponse.json({ version_id: String(VERSION_ID), type: 'chat_message' })));
+    serveNothingConfigured();
 
     const versionInstructions = 'nodes:\n  - id: HITL 1\n    type: hitl\n';
 
@@ -63,13 +92,9 @@ describe('TriggerTypeSelector', () => {
     expect(document.querySelectorAll('[data-value="webhook"]').length).toBe(0);
   });
 
-  /**
-   * The trigger route is not mounted, so a Schedule or Webhook selection can
-   * only 404. Chat Message calls no endpoint and stays — see
-   * `shared/config/backendCapabilities`.
-   */
-  it('offers Chat Message only while the trigger route is unmounted', async () => {
-    resetBackendCapabilitiesForTests();
+  /** The capability now gates only whether this BUILD serves the two facilities (#899). */
+  it('offers Chat Message only while the capability is off', async () => {
+    setBackendCapabilityForTests('pipelineTriggers', false);
     const { findByRole } = renderWithRouterAndProject(
       <TriggerTypeSelector
         projectId={PROJECT_ID}
@@ -85,7 +110,7 @@ describe('TriggerTypeSelector', () => {
   });
 
   it('opens the schedule modal when Schedule is selected', async () => {
-    server.use(http.get(TRIGGER_URL, () => HttpResponse.json({ version_id: String(VERSION_ID), type: 'chat_message' })));
+    serveNothingConfigured();
     const user = userEvent.setup();
 
     const { findByRole, getByRole, findByText } = renderWithRouterAndProject(
@@ -102,14 +127,18 @@ describe('TriggerTypeSelector', () => {
     expect(await findByText('Schedule settings')).toBeInTheDocument();
   });
 
-  it('PUTs a webhook trigger and opens the webhook modal when Webhook is selected', async () => {
+  it('creates the inbound trigger and opens the webhook modal when Webhook is selected', async () => {
+    serveNothingConfigured();
+    let rotated = false;
     server.use(
-      http.get(TRIGGER_URL, () => HttpResponse.json({ version_id: String(VERSION_ID), type: 'chat_message' })),
-      http.put(TRIGGER_URL, () => HttpResponse.json({ version_id: String(VERSION_ID), type: 'webhook', schedule: { webhook_type: 'github', webhook_url: '/hook/github', secret_value: 'abc' } })),
+      http.post(TRIGGER_URL, () => {
+        rotated = true;
+        return HttpResponse.json({ configured: true, token_id: 'tok', url: '/api/v2/pipeline_trigger/1/tok', secret: 'sec-123' });
+      }),
     );
     const user = userEvent.setup();
 
-    const { findByRole, getByRole, findByText } = renderWithRouterAndProject(
+    const { findByRole, getByRole, findByText, findByTestId } = renderWithRouterAndProject(
       <TriggerTypeSelector
         projectId={PROJECT_ID}
         versionId={VERSION_ID}
@@ -121,16 +150,88 @@ describe('TriggerTypeSelector', () => {
     await user.click(getByRole('option', { name: 'Webhook' }));
 
     expect(await findByText('Webhook settings')).toBeInTheDocument();
+    await waitFor(() => expect(rotated).toBe(true));
+    // The credential the create answered is shown, masked until revealed.
+    expect(await findByTestId('pipeline-webhook-secret')).toBeInTheDocument();
   });
 
-  it('surfaces the backend error text (not a fixed generic message) when switching to Chat Message fails', async () => {
-    // Regression coverage (confirmed finding 3): this used to always report
-    // the fixed 'Failed to update trigger' string regardless of what the
-    // backend actually returned -- discarding the real `{"error": "boom"}`
-    // envelope's message.
+  it('lists a configured schedule and a configured webhook side by side', async () => {
     server.use(
-      http.get(TRIGGER_URL, () => HttpResponse.json({ version_id: String(VERSION_ID), type: 'schedule', schedule: { cron: '0 0 * * 6' } })),
-      http.put(TRIGGER_URL, () => HttpResponse.json({ error: 'boom' }, { status: 400 })),
+      http.get(SCHEDULE_URL, () => HttpResponse.json({ configured: true, active: true, cron: '0 9 * * 1' })),
+      http.get(TRIGGER_URL, () => HttpResponse.json({ configured: true, token_id: 'tok', url: '/api/v2/pipeline_trigger/1/tok' })),
+    );
+
+    const { findByTestId } = renderWithRouterAndProject(
+      <TriggerTypeSelector
+        projectId={PROJECT_ID}
+        versionId={VERSION_ID}
+      />,
+      PROJECT_ID,
+    );
+
+    expect(await findByTestId('pipeline-trigger-row-schedule')).toHaveTextContent('0 9 * * 1');
+    expect(await findByTestId('pipeline-trigger-row-webhook')).toBeInTheDocument();
+  });
+
+  it('deletes the schedule from its own row', async () => {
+    let deleted = false;
+    server.use(
+      http.get(SCHEDULE_URL, () => HttpResponse.json({ configured: true, active: true, cron: '0 9 * * 1' })),
+      http.get(TRIGGER_URL, () => HttpResponse.json({ configured: false })),
+      http.delete(SCHEDULE_URL, () => {
+        deleted = true;
+        return HttpResponse.json({ configured: false, active: false });
+      }),
+    );
+    const user = userEvent.setup();
+
+    const { findByTestId } = renderWithRouterAndProject(
+      <TriggerTypeSelector
+        projectId={PROJECT_ID}
+        versionId={VERSION_ID}
+      />,
+      PROJECT_ID,
+    );
+
+    await user.click(await findByTestId('pipeline-trigger-delete-schedule'));
+    await waitFor(() => expect(deleted).toBe(true));
+  });
+
+  it('reveals the webhook secret through the dedicated write-permission operation', async () => {
+    server.use(
+      http.get(SCHEDULE_URL, () => HttpResponse.json({ configured: false, active: false })),
+      http.get(TRIGGER_URL, () => HttpResponse.json({ configured: true, token_id: 'tok', url: '/api/v2/pipeline_trigger/1/tok' })),
+      http.get(REVEAL_URL, () => HttpResponse.json({ configured: true, token_id: 'tok', url: '/api/v2/pipeline_trigger/1/tok', secret: 'revealed-secret' })),
+    );
+    const user = userEvent.setup();
+
+    const { findByTestId, getByTestId } = renderWithRouterAndProject(
+      <TriggerTypeSelector
+        projectId={PROJECT_ID}
+        versionId={VERSION_ID}
+      />,
+      PROJECT_ID,
+    );
+
+    await user.click(await findByTestId('pipeline-trigger-edit-webhook'));
+    // The plain read never carries the credential, so nothing is shown yet.
+    expect(document.querySelector('[data-testid="pipeline-webhook-secret"]')).toBeNull();
+
+    await user.click(getByTestId('pipeline-webhook-reveal'));
+    const secret = await findByTestId('pipeline-webhook-secret');
+    expect(secret).toBeInTheDocument();
+    // Masked until the eye is clicked — the reveal is a credential, not a label.
+    expect(secret).toHaveValue('•'.repeat('revealed-secret'.length));
+  });
+
+  it('surfaces the backend error text (not a fixed generic message) when a write fails', async () => {
+    // Regression coverage (confirmed finding 3): this used to always report
+    // the fixed 'Failed to ...' string regardless of what the backend actually
+    // returned -- discarding the real `{"error": "boom"}` envelope's message.
+    server.use(
+      http.get(SCHEDULE_URL, () => HttpResponse.json({ configured: true, active: true, cron: '0 0 * * 6' })),
+      http.get(TRIGGER_URL, () => HttpResponse.json({ configured: false })),
+      http.delete(SCHEDULE_URL, () => HttpResponse.json({ error: 'boom' }, { status: 400 })),
     );
     const user = userEvent.setup();
     const onNotifyError = vi.fn();

@@ -6,14 +6,12 @@ import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 import TextField from '@mui/material/TextField';
 
-import { useSecretFieldOptions } from '@/entities/secret';
 import { MAX_NAME_LENGTH } from '@/shared/lib/limits';
 import { t } from '@/shared/i18n';
 import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import { InfoTooltip } from '@/shared/ui/InfoTooltip';
 import { ResizableCodeMirrorEditor } from '@/shared/ui/ResizableCodeMirrorEditor';
-import { SecretManagementInput } from '@/shared/ui/SecretManagementInput';
 import { SingleSelect } from '@/shared/ui/SingleSelect';
 import type { SingleSelectOption } from '@/shared/ui/SingleSelectMenuItem';
 import { StyledInputEnhancer } from '@/shared/ui/StyledInputEnhancer';
@@ -373,28 +371,3 @@ const nameLengthMessageSx = (theme: Theme) => ({
   right: 0,
   bottom: '2.75rem',
 });
-
-export interface SecretFieldProps {
-  readonly value: string | undefined;
-  readonly onChange: (value: string) => void;
-  readonly label: string;
-  readonly required: boolean;
-  readonly error: boolean;
-  readonly helperText: string | undefined;
-}
-
-/** The editable (non-disabled) secret field — ported from `ToolBaseProperty.jsx:324-339`. `secrets` comes from `useSecretFieldOptions()` (#441 — see that hook's header): no caller supplied it before, so the mode toggle, the saved-secret picker and its "Create new secret" entry were off for every user, an administrator included. The hook queries, so it runs in this leaf, which mounts for a secret field only. */
-export function SecretFieldInput({ value, onChange, label, required, error, helperText }: SecretFieldProps): ReactNode {
-  const secrets = useSecretFieldOptions();
-  return (
-    <SecretManagementInput
-      value={value ?? ''}
-      onChange={onChange}
-      label={label}
-      required={required}
-      error={error}
-      secrets={secrets}
-      {...(helperText !== undefined ? { helperText } : {})}
-    />
-  );
-}

@@ -107,12 +107,17 @@ async function createGithubToolkitReferencing(
 }
 
 /* onetest: ELITEA-1082, ELITEA-1083, ELITEA-1084, ELITEA-1085, ELITEA-1086, ELITEA-1098, ELITEA-1100
- * — product gap, see file header: attaching a toolkit whose private credential cannot be resolved to
- * an Agent's Tools panel shows no notification of any kind (no styled banner, no plain fallback text,
- * no credential-source badge) — the credential-mismatch UI exists on only ONE surface (the toolkit's
- * own edit page, and even there it is the old plain text, per toolkits.generic-credential-secrets.spec.ts),
- * never on the Agent (1100)/Pipeline (1098)/Chat (1082/1085/1086) tool card. */
-test('ELITEA-1082/1083/1084/1085/1086/1098/1100: PRODUCT GAP — an attached toolkit with a missing private credential shows no warning on the Agent tool card', async ({
+ * (#917-adjacent; fixed in #937) — attaching a toolkit whose credential reference no longer resolves to
+ * an Agent's Tools panel now shows the styled "Credential setup required:" banner on the tool card.
+ *
+ * `ToolCard.types.ts` always declared a `validation.banner` slot for exactly this and NO caller ever
+ * filled it, so the banner was reachable from the toolkit's own edit page and nowhere else. It is filled
+ * now from `features/agents/ui/AgentToolRow.tsx`, off the toolkit's own stored `{elitea_title, private}`
+ * reference checked against the project that would hold that credential. The SAME component renders the
+ * PIPELINE tool card (`pages/pipelines/ui/EditPipelineToolsPanel.tsx` mounts the same `AgentToolsPanel`),
+ * so ELITEA-1098 is covered by construction — there is one card, not two.
+ */
+test('ELITEA-1082/1083/1085/1086/1098/1100: an attached toolkit with a missing credential warns on the Agent tool card', async ({
   page,
 }) => {
   test.setTimeout(120_000);
@@ -138,14 +143,42 @@ test('ELITEA-1082/1083/1084/1085/1086/1098/1100: PRODUCT GAP — an attached too
   await attachToolkitThroughPicker(page, `${AUTOTEST_PREFIX}p13tkmismatch_${RUN_ID}`);
 
   try {
-    test.fail(
-      true,
-      'ELITEA-1082 (#937)/1083/1084/1085/1086/1098/1100: product gap — CredentialWarningBanner never reaches ' +
-        "an Agent/Pipeline/Chat tool card (ToolCard.types.ts's validationBanner slot has no caller " +
-        'anywhere in src/features/agents or src/features/pipelines); this toolkit\'s unresolved private ' +
-        'credential is attached with zero visible warning',
-    );
-    await expect(page.getByText('Credential setup required:')).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText('Credential setup required:')).toBeVisible({ timeout: 20_000 });
+    // ELITEA-1083 — the banner names the credential the toolkit is looking
+    // for, which is the only thing that makes it actionable.
+    await expect(page.getByText(goneCredentialTitle, { exact: false })).toBeVisible();
+  } finally {
+    await deleteAgent(page.request, agent.agentId);
+  }
+});
+
+/*
+ * onetest: ELITEA-1084 — the contrast case, and the one that discriminates.
+ *
+ * The case asks for "no warning when credentials match, proving the warning logic is conditional". It was
+ * unfalsifiable while there was no warning path at all; it is the load-bearing assertion now. A broken
+ * credential READ (wrong project, wrong section, a 4xx swallowed into an empty list) makes EVERY attached
+ * toolkit look unresolved, which passes the test above for entirely the wrong reason. This one fails on it.
+ */
+test('ELITEA-1084: an attached toolkit whose credential still EXISTS shows no warning', async ({ page }) => {
+  test.setTimeout(120_000);
+
+  const liveCredentialTitle = `${AUTOTEST_PREFIX}p13cred_live_${RUN_ID}`;
+  await createGithubCredential(page.request, liveCredentialTitle);
+  await createGithubToolkitReferencing(page.request, `${AUTOTEST_PREFIX}p13tkmatch_${RUN_ID}`, liveCredentialTitle);
+
+  const agent = await createAgentThroughForm(page, `${AUTOTEST_PREFIX}p13ag_credok_${RUN_ID}`);
+  await expect(page.getByTestId('agent-toolkits-section')).toBeVisible({ timeout: 30_000 });
+
+  await attachToolkitThroughPicker(page, `${AUTOTEST_PREFIX}p13tkmatch_${RUN_ID}`);
+
+  try {
+    // The card really mounted — otherwise the absence below is vacuous.
+    await expect(page.getByTestId('agent-toolkit-card').first()).toBeVisible({ timeout: 30_000 });
+    // Give the credential read the same window the positive case gets, so
+    // "not yet fetched" cannot masquerade as "resolved".
+    await page.waitForTimeout(3_000);
+    await expect(page.getByText('Credential setup required:')).toHaveCount(0);
   } finally {
     await deleteAgent(page.request, agent.agentId);
   }

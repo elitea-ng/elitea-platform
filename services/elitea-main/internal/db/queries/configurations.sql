@@ -142,7 +142,20 @@ FROM configuration
 WHERE project_id = sqlc.arg('project_id')::integer
   AND (COALESCE(cardinality(sqlc.arg('types')::text[]), 0) = 0 OR type = ANY(sqlc.arg('types')::text[]))
   AND (COALESCE(cardinality(sqlc.arg('sections')::text[]), 0) = 0 OR section = ANY(sqlc.arg('sections')::text[]))
-  AND (sqlc.arg('label_query')::text = '' OR label ILIKE ('%' || sqlc.arg('label_query')::text || '%'));
+  AND (sqlc.arg('label_query')::text = '' OR label ILIKE ('%' || sqlc.arg('label_query')::text || '%'))
+  -- Visibility. A row that is not `shared` belongs to the member who created
+  -- it: `shared` is an ACL on the LIST read, not only a hint for how a later
+  -- reference resolves (#922). viewer_id = 0 means "no viewer was supplied"
+  -- and keeps the unrestricted project page for a service-internal read; a
+  -- row with no author cannot be attributed to anybody and stays visible,
+  -- which is the shape the seeds write (author_id NULL, legacy
+  -- `environment_settings_seed.py`).
+  AND (
+      configuration.shared = true
+      OR sqlc.arg('viewer_id')::integer = 0
+      OR configuration.author_id IS NULL
+      OR configuration.author_id = sqlc.arg('viewer_id')::integer
+  );
 
 -- name: ListCurrentConfigurations :many
 SELECT configuration.id,
@@ -171,6 +184,14 @@ WHERE configuration.project_id = sqlc.arg('project_id')::integer
   AND (COALESCE(cardinality(sqlc.arg('types')::text[]), 0) = 0 OR configuration.type = ANY(sqlc.arg('types')::text[]))
   AND (COALESCE(cardinality(sqlc.arg('sections')::text[]), 0) = 0 OR configuration.section = ANY(sqlc.arg('sections')::text[]))
   AND (sqlc.arg('label_query')::text = '' OR configuration.label ILIKE ('%' || sqlc.arg('label_query')::text || '%'))
+  -- Visibility: see CountCurrentConfigurations. The two predicates must stay
+  -- identical or the page total stops describing the page (#922).
+  AND (
+      configuration.shared = true
+      OR sqlc.arg('viewer_id')::integer = 0
+      OR configuration.author_id IS NULL
+      OR configuration.author_id = sqlc.arg('viewer_id')::integer
+  )
 ORDER BY
   (social_pins.id IS NOT NULL) DESC,
   social_pins.updated_at DESC NULLS LAST,

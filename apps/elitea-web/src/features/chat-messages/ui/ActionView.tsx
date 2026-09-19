@@ -25,6 +25,9 @@ export interface ActionViewProps {
     readonly isError?: boolean;
     readonly status?: string;
     readonly timestamp?: string;
+    /** A pin rebuilt from a persisted trace row — see `ToolModalProps` (#951). */
+    readonly traceStepId?: number;
+    readonly traceMessageGroupId?: number;
   };
   /** Called when the action is clicked. */
   readonly onClick?: (() => void) | undefined;

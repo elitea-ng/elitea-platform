@@ -582,6 +582,22 @@ export interface VersionModelInput {
  * an omitted one is omitted from the body, which is the only way to write the
  * "leave the stored value alone" half of the contract.
  */
+/**
+ * The tag every publishable fixture carries (#913).
+ *
+ * Publish validation raises a Critical for a version with NO tags, and the
+ * publish route refuses a FAIL inline — pylon's own `TagsChecker` and publish
+ * gate behave the same way (`legacy/plugins/elitea_core/utils/
+ * publish_utils.py:2824-2833`, `api/v2/publish.py:82-92`). Before that rule
+ * was ported, every publish fixture here created an untagged agent and
+ * published it, which is a state the product does not actually allow.
+ *
+ * Deliberately NOT generic: `agent`/`assistant`/`ai`/`bot`/`helper` are the
+ * set the same checker raises an all-generic WARNING for, and a fixture that
+ * used one would turn every "well-formed agent" PASS into a WARN.
+ */
+export const PUBLISHABLE_TAGS: readonly VersionTagInput[] = [{ name: 'release-notes' }];
+
 export interface AgentVersionInput {
   readonly name?: string;
   readonly agentType?: string;

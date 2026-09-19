@@ -9,15 +9,23 @@
  * Information panel.
  *
  * ELITEA-0676 (dialog title, MAIN ENTITY summary, source project excluded
- * from the target dropdown) and ELITEA-0670 ("Forked from" link, working
- * navigation, present on the card/table list view) are both PARTIALLY real:
- * measured directly against `ForkEntityDialog.tsx`/
- * `useForkTargetProjects.ts`/`ApplicationInformation.tsx` — the title and
- * MAIN ENTITY summary are real; the target list is NOT filtered (source
- * project rendering-ordering only); the "Forked from" text is real but is
- * plain non-navigable `Typography` (module doc comment: "dropped `href`"),
- * and it renders ONLY inside the entity's own Information panel — nowhere
- * on the Agents dashboard's card or table row.
+ * from the target dropdown) is PARTIALLY real: measured directly against
+ * `ForkEntityDialog.tsx`/`useForkTargetProjects.ts` — the title and MAIN
+ * ENTITY summary are real; the target list is NOT filtered (source project
+ * rendering-ordering only).
+ *
+ * ELITEA-0670 ("Forked from" link on the card/table list view) is now FIXED
+ * (#915): the List endpoint's own `is_forked` used to read
+ * `applications.shared_id`, an unrelated catalog/publish column `Fork` never
+ * writes, so a forked row's list entry always answered `is_forked: false`
+ * (`repos/applications.go`'s `List`). The real signal — the first version's
+ * `meta.parent_entity_id`/`parent_project_id`, the same pair
+ * `ApplicationInformation.tsx`'s own "Forked from" row already reads off the
+ * version detail — is what `List` reads now, merged onto the already-
+ * permissive per-row `meta` so `shared/ui/EntityCardList`'s new
+ * `EntityListItem.forkedFrom` slot (`EntityCard.tsx`/`EntityListTable.tsx`)
+ * has an id to link to. `ApplicationInformation.tsx`'s own in-editor row
+ * stays plain non-navigable text (unchanged, disclosed deviation).
  */
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
@@ -131,7 +139,7 @@ test('the forked copy names its original under "Forked from:" on its own Informa
   }
 });
 
-/* onetest: ELITEA-0670 — product gap: "Forked from" is claimed to render as a working navigation LINK, in both card view and table view on the Agents dashboard. It is plain, non-interactive text, confined to the entity's own Information panel — absent from the dashboard's card AND table rows entirely. */
+/* onetest: ELITEA-0670 (#915, FIXED) — "Forked from" now renders as a working navigation link on the Agents dashboard's card view, on top of the entity's own Information panel row. */
 test('"Forked from" is a working link, visible on the Agents dashboard card and table rows', async ({ page, request }) => {
   test.setTimeout(60_000);
   const name = uniqueName('forkedcard');
@@ -152,18 +160,24 @@ test('"Forked from" is a working link, visible on the Agents dashboard card and 
     copyId = await forkedCopyId(request, DEFAULT_PROJECT_ID, name, agent.id);
     expect(copyId, 'the fork wrote no second row for this name').toBeDefined();
 
-    test.fail(
-      true,
-      'ELITEA-0670 (#915): product gap — "Forked from" renders only inside ApplicationInformation (the entity\'s own ' +
-        'editor), as plain non-navigable text with no href/onClick (see that file\'s own doc comment); the ' +
-        'Agents dashboard card/table view shows no such indicator at all',
-    );
-
     await page.goto(`${BASE_URL}/app/agents/my`);
     await page.getByPlaceholder(/search/i).fill(name);
+
+    // CARD view: a marker, deliberately NOT a control. The card's own root is
+    // `role="button"`, and a focusable widget nested in one is axe's
+    // `nested-interactive` (impact "serious") — which is exactly what
+    // `agents.lifecycle.spec.ts`'s a11y check caught when this shipped as a
+    // `role="link"`. See `EntityCard.tsx`'s own comment.
     const card = page.getByText(name, { exact: true }).first().locator('..').locator('..');
-    const forkedLink = card.getByRole('link', { name: /forked from/i });
-    await expect(forkedLink, 'the card view must show a "Forked from" link').toBeVisible({ timeout: 10_000 });
+    const cardMarker = card.getByTestId('entity-card-forked-from');
+    await expect(cardMarker, 'the card view must show the "Forked from" marker').toBeVisible({ timeout: 10_000 });
+    await expect(card.getByRole('link', { name: /forked from/i }), 'and it must NOT be a nested control').toHaveCount(0);
+
+    // TABLE view: a real link to the original — a `<tr>` carries no widget
+    // role, so a link inside it nests nothing.
+    await page.getByTestId('agent-table-view-button').click();
+    const forkedLink = page.getByTestId('entity-row-forked-from').first();
+    await expect(forkedLink, 'the table view must show a "Forked from" link').toBeVisible({ timeout: 20_000 });
     await forkedLink.click();
     await expect(page).toHaveURL(new RegExp(`/agents/all/${agent.id}`));
   } finally {

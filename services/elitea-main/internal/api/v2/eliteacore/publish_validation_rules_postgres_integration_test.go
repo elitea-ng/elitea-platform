@@ -7,15 +7,11 @@ package eliteacore_test
 // `POST /publish_validate/prompt_lib/{project}/{version}`, the same route the
 // publish wizard's Validation step calls.
 //
-// Two issues in the same package — #908 (missing model_project_id) and #913
-// (zero tags as Critical) — are NOT implemented here: both, as literally
-// specified, break the "well-formed agent" contract several OTHER e2e suites
-// already rely on (`api.publish-validation.spec.ts`'s `createQualityAgent`
-// carries no tags and no model and asserts an exact
-// `{critical: 0, warnings: 0}` PASS; `api.publish-subagents.spec.ts`'s
-// three-tier sub-agent chain test asserts an exact
-// `{critical: 1, warnings: 0, suggestions: 0}` for an untagged, modelless
-// chain). See ledger-X3.tsv for the DEFERRED rows.
+// The Y2 fix wave added the two rules this file used to record as DEFERRED —
+// #908 (llm_settings that names a model but no model_project_id) and #913
+// (pylon's three tag rules, zero tags among them) — with the e2e fixtures
+// that had been written against their absence updated in the same change
+// (`PUBLISHABLE_TAGS` in e2e/fixtures/api.ts).
 //
 // Requires a PostgreSQL service (ELITEA_TEST_DATABASE_URL).
 
@@ -299,6 +295,177 @@ func containsFold(haystack, needle string) bool {
 
 // newPubValRulesPool opens an isolated database on the server named by
 // ELITEA_TEST_DATABASE_URL and applies the production migration chain to it.
+// seedPubValTags associates the named tags with a version, creating the tag
+// rows on demand — the same two-table shape `replaceVersionTags` writes.
+func seedPubValTags(t *testing.T, pool *pgxpool.Pool, versionID int64, names ...string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	for _, name := range names {
+		var tagID int64
+		if err := pool.QueryRow(ctx, `
+INSERT INTO p_1.tags (name, data) VALUES ($1, '{}'::jsonb) RETURNING id`, name).Scan(&tagID); err != nil {
+			t.Fatalf("seed tag %q: %v", name, err)
+		}
+		if _, err := pool.Exec(ctx, `
+INSERT INTO p_1.application_version_tag_association (version_id, tag_id) VALUES ($1, $2)`,
+			versionID, tagID); err != nil {
+			t.Fatalf("seed tag association %q: %v", name, err)
+		}
+	}
+}
+
+// setPubValLLMSettings writes a raw llm_settings document onto a version.
+func setPubValLLMSettings(t *testing.T, pool *pgxpool.Pool, versionID int64, document string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if _, err := pool.Exec(ctx, `
+UPDATE p_1.application_versions SET llm_settings = $2::jsonb WHERE id = $1`, versionID, document); err != nil {
+		t.Fatalf("seed llm_settings: %v", err)
+	}
+}
+
+// TestPublishValidationMissingModelProjectID — #908: llm_settings that names a
+// model but carries NO model_project_id key is a Critical. The rule read the
+// key as `ok && value != nil`, so an absent key skipped the whole check.
+func TestPublishValidationMissingModelProjectID(t *testing.T) {
+	pool := newPubValRulesPool(t)
+	fixture := seedPubValAgent(t, pool, "nomodelproj agent", "a fixture agent long enough to pass the floor")
+	seedPubValTags(t, pool, fixture.versionID, "release-notes")
+	setPubValLLMSettings(t, pool, fixture.versionID, `{"model_name":"gpt-4o-mini"}`)
+
+	router := pubValRouter(eliteacore.NewHandler(pool))
+	_, result := doPubValValidate(t, router, fixture.versionID, "rel-nomodelproj")
+
+	found := false
+	for _, finding := range result.CriticalIssues {
+		if finding.Field == "llm_settings" && containsFold(finding.Issue, "model_project_id") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected a missing-model_project_id critical issue, got: %+v", result.CriticalIssues)
+	}
+}
+
+// TestPublishValidationNoModelIsNotTheMissingProjectRule — #908's boundary: a
+// version that names NO model at all is a different case, and pylon's own
+// differently-worded "No LLM model configured" Critical for it is not ported.
+// Asserted so the rule cannot quietly widen into every modelless agent.
+func TestPublishValidationNoModelIsNotTheMissingProjectRule(t *testing.T) {
+	pool := newPubValRulesPool(t)
+	fixture := seedPubValAgent(t, pool, "nomodel agent", "a fixture agent long enough to pass the floor")
+	seedPubValTags(t, pool, fixture.versionID, "release-notes")
+
+	router := pubValRouter(eliteacore.NewHandler(pool))
+	_, result := doPubValValidate(t, router, fixture.versionID, "rel-nomodel")
+
+	for _, finding := range result.CriticalIssues {
+		if finding.Field == "llm_settings" {
+			t.Fatalf("a version naming no model raised an llm_settings critical issue: %+v", finding)
+		}
+	}
+}
+
+// TestPublishValidationZeroTagsIsCritical — #913, first rule: no tags at all
+// is a Critical ("No tags defined"), not the "add more tags" Recommendation
+// this port used to raise for every version under three tags.
+func TestPublishValidationZeroTagsIsCritical(t *testing.T) {
+	pool := newPubValRulesPool(t)
+	fixture := seedPubValAgent(t, pool, "notags agent", "a fixture agent long enough to pass the floor")
+
+	router := pubValRouter(eliteacore.NewHandler(pool))
+	recorder, result := doPubValValidate(t, router, fixture.versionID, "rel-notags")
+
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for a FAIL, got %d", recorder.Code)
+	}
+	found := false
+	for _, finding := range result.CriticalIssues {
+		if finding.Field == "tags" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected a no-tags critical issue, got: %+v", result.CriticalIssues)
+	}
+}
+
+// TestPublishValidationAllGenericTagsIsWarning — #913, second rule: a tag set
+// drawn entirely from pylon's GENERIC_TAG_SET is a Warning, not a refusal.
+func TestPublishValidationAllGenericTagsIsWarning(t *testing.T) {
+	pool := newPubValRulesPool(t)
+	fixture := seedPubValAgent(t, pool, "generictags agent", "a fixture agent long enough to pass the floor")
+	seedPubValTags(t, pool, fixture.versionID, "agent", "Assistant")
+
+	router := pubValRouter(eliteacore.NewHandler(pool))
+	_, result := doPubValValidate(t, router, fixture.versionID, "rel-generictags")
+
+	for _, finding := range result.CriticalIssues {
+		if finding.Field == "tags" {
+			t.Fatalf("a tagged version raised a no-tags critical issue: %+v", finding)
+		}
+	}
+	found := false
+	for _, finding := range result.Warnings {
+		if finding.Field == "tags" && containsFold(finding.Issue, "generic") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected an all-generic tags warning, got: %+v", result.Warnings)
+	}
+}
+
+// TestPublishValidationOneDomainTagIsSilent — #913, the quiet case: one
+// non-generic tag raises nothing at all. The Suggestion fires ABOVE two tags
+// (pylon recommends 1-2), which is the opposite of the rule this replaced.
+func TestPublishValidationOneDomainTagIsSilent(t *testing.T) {
+	pool := newPubValRulesPool(t)
+	fixture := seedPubValAgent(t, pool, "onetag agent", "a fixture agent long enough to pass the floor")
+	seedPubValTags(t, pool, fixture.versionID, "release-notes")
+
+	router := pubValRouter(eliteacore.NewHandler(pool))
+	_, result := doPubValValidate(t, router, fixture.versionID, "rel-onetag")
+
+	for _, finding := range result.CriticalIssues {
+		if finding.Field == "tags" {
+			t.Fatalf("one tag raised a tags critical issue: %+v", finding)
+		}
+	}
+	for _, finding := range result.Warnings {
+		if finding.Field == "tags" {
+			t.Fatalf("one tag raised a tags warning: %+v", finding)
+		}
+	}
+	for _, finding := range result.Recommendations {
+		if finding.Field == "tags" {
+			t.Fatalf("one tag raised a tags suggestion: %+v", finding)
+		}
+	}
+}
+
+// TestPublishValidationThreeTagsSuggestsFewer — #913, third rule.
+func TestPublishValidationThreeTagsSuggestsFewer(t *testing.T) {
+	pool := newPubValRulesPool(t)
+	fixture := seedPubValAgent(t, pool, "manytags agent", "a fixture agent long enough to pass the floor")
+	seedPubValTags(t, pool, fixture.versionID, "release-notes", "changelog", "reporting")
+
+	router := pubValRouter(eliteacore.NewHandler(pool))
+	_, result := doPubValValidate(t, router, fixture.versionID, "rel-manytags")
+
+	found := false
+	for _, finding := range result.Recommendations {
+		if finding.Field == "tags" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected a tags suggestion above two tags, got: %+v", result.Recommendations)
+	}
+}
+
 func newPubValRulesPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	const environment = "ELITEA_TEST_DATABASE_URL"

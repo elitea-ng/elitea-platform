@@ -31,6 +31,8 @@ import CloseIcon from '@mui/icons-material/Close';
 
 import { t } from '@/shared/i18n';
 
+import { useTraceStepDetail } from '../model/traceStepDetail';
+
 import { ToolModalPane } from './ToolModalPane';
 
 /** @public Props for `ToolModal`. */
@@ -48,6 +50,13 @@ export interface ToolModalProps {
     readonly toolMeta?: Record<string, unknown>;
     readonly content?: string;
     readonly isError?: boolean;
+    /**
+     * Set only on a pin rebuilt from a persisted `chat_message_trace_step`
+     * row (#951). The listing that rebuilt it is deliberately light, so the
+     * body below is fetched for this one row when the modal opens.
+     */
+    readonly traceStepId?: number;
+    readonly traceMessageGroupId?: number;
   };
 }
 
@@ -102,8 +111,13 @@ const styles = {
  * `INPUT` | `OUTPUT` across two read-only code editors.
  */
 export function ToolModal({ open, onClose, toolAction }: ToolModalProps): ReactNode {
-  const inputText = toEditorText(toolAction.toolInputs);
-  const outputText = toEditorText(toolAction.toolOutputs ?? toolAction.content);
+  const ownInput = toEditorText(toolAction.toolInputs);
+  const ownOutput = toEditorText(toolAction.toolOutputs ?? toolAction.content);
+  // Only a RESTORED pin with nothing of its own asks for anything: a live step
+  // carries its body and no row identity, so this never fires for one.
+  const detail = useTraceStepDetail(toolAction, open && ownInput === '' && ownOutput === '');
+  const inputText = ownInput === '' && detail !== undefined ? toEditorText(detail.toolInputs) : ownInput;
+  const outputText = ownOutput === '' && detail !== undefined ? detail.output : ownOutput;
 
   return (
     <Dialog

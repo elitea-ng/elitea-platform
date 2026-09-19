@@ -505,3 +505,368 @@ fn parallel_decision_set_is_bounded_unique_and_has_no_scalar_alias() {
         DirectHitlErrorCode::UnsupportedCapability
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A MESSAGE THAT MADE SEVERAL CALLS IS RESUMED AS A MESSAGE (#948, #949)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// ADK's confirmation pre-check (`llm_agent.rs`) breaks out of its scan at the
+// FIRST call that needs a decision and returns before any tool of that message
+// is dispatched — so a pause abandons the whole assistant message, not just the
+// sensitive call in it. The replay therefore has to re-emit the whole message.
+
+/// One model event with `calls`, then a confirmation for `confirm`.
+fn multi_call_events(calls: &[(&str, &str, Value)], confirm: usize) -> Vec<Event> {
+    let mut call = Event::with_id("call-event", "invocation-1");
+    call.author = "elitea-agent".to_owned();
+    call.llm_response.content = Some(Content {
+        role: "model".to_owned(),
+        parts: calls
+            .iter()
+            .map(|(call_id, tool_name, arguments)| Part::FunctionCall {
+                name: (*tool_name).to_owned(),
+                args: arguments.clone(),
+                id: Some((*call_id).to_owned()),
+                thought_signature: None,
+            })
+            .collect(),
+    });
+    let (call_id, tool_name, arguments) = &calls[confirm];
+    let mut confirmation = Event::with_id("confirmation-event", "invocation-1");
+    confirmation.author = "elitea-agent".to_owned();
+    confirmation.llm_response.interrupted = true;
+    confirmation.llm_response.turn_complete = true;
+    confirmation.actions.tool_confirmation = Some(ToolConfirmationRequest {
+        tool_name: (*tool_name).to_owned(),
+        function_call_id: Some((*call_id).to_owned()),
+        args: arguments.clone(),
+    });
+    vec![call, confirmation]
+}
+
+fn multi_call_payload(
+    action: &str,
+    value: &str,
+    interrupt_id: &str,
+    call_id: &str,
+) -> super::request::AgentExecutionPayload {
+    let mut payload = direct_payload(action, value, interrupt_id);
+    payload.hitl_decisions[0]["tool_call_id"] = json!(call_id);
+    payload
+}
+
+/// A catalogue naming every tool in `tool_names` sensitive.
+fn sensitive_catalog_for(tool_names: &[&str], read_only: bool) -> SensitiveToolCatalog {
+    let runtime = json!({
+        "toolkit_security": {
+            "sensitive_tools": {"fixture": tool_names},
+            "sensitive_action_company_name": "Example Org"
+        }
+    });
+    let policy = ToolAdmissionPolicy::from_runtime_config(
+        runtime.as_object().expect("runtime configuration object"),
+    )
+    .expect("runtime policy");
+    let mut catalog = SensitiveToolCatalog::default();
+    for tool_name in tool_names {
+        catalog
+            .merge(
+                SensitiveToolCatalog::fixture(
+                    tool_name,
+                    policy
+                        .sensitive_tool("fixture", "Fixture Tools", tool_name)
+                        .expect("sensitive tool policy"),
+                    read_only,
+                )
+                .expect("sensitive catalog"),
+            )
+            .expect("merged catalog");
+    }
+    catalog
+}
+
+struct NeverCalledLlm;
+
+#[async_trait::async_trait]
+impl adk_rust::Llm for NeverCalledLlm {
+    fn name(&self) -> &'static str {
+        "fixture-model"
+    }
+
+    async fn generate_content(
+        &self,
+        _request: adk_rust::LlmRequest,
+        _stream: bool,
+    ) -> adk_rust::Result<adk_rust::LlmResponseStream> {
+        Err(adk_rust::AdkError::agent(
+            "the replay must not reach the provider on its first generation",
+        ))
+    }
+}
+
+/// The request ADK hands the replay model: the paused message still pending.
+fn replay_request(calls: &[(&str, &str, Value)]) -> adk_rust::LlmRequest {
+    adk_rust::LlmRequest {
+        model: "fixture-model".to_owned(),
+        contents: vec![Content {
+            role: "model".to_owned(),
+            parts: calls
+                .iter()
+                .map(|(call_id, tool_name, arguments)| Part::FunctionCall {
+                    name: (*tool_name).to_owned(),
+                    args: arguments.clone(),
+                    id: Some((*call_id).to_owned()),
+                    thought_signature: None,
+                })
+                .collect(),
+        }],
+        config: None,
+        tools: calls
+            .iter()
+            .map(|(_, tool_name, _)| ((*tool_name).to_owned(), json!({"description": "fixture"})))
+            .collect(),
+        previous_response_id: None,
+    }
+}
+
+/// The function calls one generation of `model` emits.
+async fn emitted_calls(model: &dyn adk_rust::Llm, request: adk_rust::LlmRequest) -> Vec<String> {
+    use adk_rust::futures::StreamExt as _;
+
+    let mut stream = model
+        .generate_content(request, false)
+        .await
+        .expect("replay generation");
+    let mut emitted = Vec::new();
+    while let Some(response) = stream.next().await {
+        let response = response.expect("replay response");
+        let Some(content) = response.content else {
+            continue;
+        };
+        for part in content.parts {
+            if let Part::FunctionCall { id: Some(id), .. } = part {
+                emitted.push(id);
+            }
+        }
+    }
+    emitted
+}
+
+#[tokio::test]
+async fn blocking_one_sensitive_call_replays_the_non_sensitive_call_beside_it() {
+    // ELITEA-1001 (#949): the non-sensitive call of a two-call message was
+    // never dispatched, because the replay re-emitted ONLY the decided call.
+    let sensitive = json!({"value": 21});
+    let ordinary = json!({"topic": "status"});
+    let calls = [
+        ("call-1", "status", ordinary.clone()),
+        ("call-2", "double", sensitive.clone()),
+    ];
+    let events = multi_call_events(&calls, 1);
+    let (interrupt_id, _) = sensitive_call_identity("invocation-1", "call-2", "double", &sensitive)
+        .expect("call identity");
+    let resolved = DirectHitlDecision::from_payload(&multi_call_payload(
+        "block_with_comment",
+        "not this one",
+        &interrupt_id,
+        "call-2",
+    ))
+    .expect("decision admission")
+    .resolve(&session(events))
+    .expect("exact session call");
+
+    let replay = resolved
+        .into_direct_replay(&sensitive_catalog_for(&["double"], false))
+        .expect("blocked replay");
+    assert_eq!(replay.replay_call_ids(), vec!["call-1", "call-2"]);
+    // Only the declined call is answered locally; the other one still runs.
+    assert_eq!(replay.blocked_calls(), vec![("call-2", "not this one")]);
+    assert_eq!(replay.approved_call_ids(), vec!["call-2"]);
+
+    let prepared = replay.bind(std::sync::Arc::new(NeverCalledLlm));
+    assert_eq!(
+        emitted_calls(prepared.model().as_ref(), replay_request(&calls)).await,
+        vec!["call-1".to_owned(), "call-2".to_owned()],
+        "the replay dropped the call the user never decided about"
+    );
+}
+
+#[tokio::test]
+async fn a_second_sensitive_call_keeps_the_first_decision_and_is_offered_on_its_own() {
+    // ELITEA-1003 (#948): both calls are sensitive, so ADK pauses on the first
+    // one, and the SECOND resume must still carry the first decision — an
+    // omitted decision would raise the very same card again.
+    let first = json!({"value": 21});
+    let second = json!({"value": 42});
+    let calls = [
+        ("call-1", "double", first.clone()),
+        ("call-2", "triple", second.clone()),
+    ];
+    let mut events = multi_call_events(&calls, 0);
+    let (first_interrupt, _) = sensitive_call_identity("invocation-1", "call-1", "double", &first)
+        .expect("first call identity");
+
+    // ── Resume one: the first card is approved. ─────────────────────────────
+    let replay = DirectHitlDecision::from_payload(&multi_call_payload(
+        "approve",
+        "",
+        &first_interrupt,
+        "call-1",
+    ))
+    .expect("first decision admission")
+    .resolve(&session(events.clone()))
+    .expect("first exact session call")
+    .into_direct_replay(&sensitive_catalog_for(&["double", "triple"], true))
+    .expect("first replay");
+    assert_eq!(replay.replay_call_ids(), vec!["call-1", "call-2"]);
+    assert!(replay.blocked_calls().is_empty());
+    assert_eq!(
+        replay.approved_call_ids(),
+        vec!["call-1"],
+        "the undecided sensitive call must stay undecided so ADK raises its own card"
+    );
+
+    // ── What that resume persists: the marker, the replayed message, and the
+    //    second call's own confirmation. ─────────────────────────────────────
+    let mut marker = Event::with_id("resume-user", "invocation-2");
+    marker.author = "user".to_owned();
+    marker.llm_response.content = Some(Content::new("user").with_text(format!(
+        "[Elitea direct HITL {first_interrupt}] The pending tool call was approved. Continue the original request."
+    )));
+    events.push(marker);
+    let mut replayed = multi_call_events(&calls, 1);
+    for event in &mut replayed {
+        event.invocation_id = "invocation-2".to_owned();
+    }
+    events.extend(replayed);
+
+    // ── Resume two: the second card, decided on its own interrupt id. ───────
+    let (second_interrupt, _) =
+        sensitive_call_identity("invocation-2", "call-2", "triple", &second)
+            .expect("second call identity");
+    assert_ne!(
+        first_interrupt, second_interrupt,
+        "two pauses that share an interrupt id cannot be decided independently"
+    );
+    let replay = DirectHitlDecision::from_payload(&multi_call_payload(
+        "reject",
+        "",
+        &second_interrupt,
+        "call-2",
+    ))
+    .expect("second decision admission")
+    .resolve(&session(events))
+    .expect("second exact session call")
+    .into_direct_replay(&sensitive_catalog_for(&["double", "triple"], true))
+    .expect("second replay");
+    assert_eq!(replay.replay_call_ids(), vec!["call-1", "call-2"]);
+    assert_eq!(replay.blocked_calls(), vec![("call-2", "denied by user")]);
+    let mut approved = replay.approved_call_ids();
+    approved.sort_unstable();
+    assert_eq!(
+        approved,
+        vec!["call-1", "call-2"],
+        "the first card's approval was lost, so ADK would raise it a second time"
+    );
+
+    let prepared = replay.bind(std::sync::Arc::new(NeverCalledLlm));
+    assert_eq!(prepared.confirmed_call_ids(), vec!["call-1", "call-2"]);
+}
+
+#[test]
+fn a_repeat_of_a_decided_tool_inherits_that_decision_within_the_same_message() {
+    // ELITEA-1002: one authorization per tool per turn. The repeat carries its
+    // own call id, which ADK's pre-check keys on, so it needs the decision
+    // written out for it too.
+    let first = json!({"value": 21});
+    let second = json!({"value": 42});
+    let calls = [
+        ("call-1", "double", first.clone()),
+        ("call-2", "double", second.clone()),
+    ];
+    let events = multi_call_events(&calls, 0);
+    let (interrupt_id, _) =
+        sensitive_call_identity("invocation-1", "call-1", "double", &first).expect("call identity");
+
+    let approved = DirectHitlDecision::from_payload(&multi_call_payload(
+        "approve",
+        "",
+        &interrupt_id,
+        "call-1",
+    ))
+    .expect("decision admission")
+    .resolve(&session(events.clone()))
+    .expect("exact session call")
+    .into_direct_replay(&sensitive_catalog(true))
+    .expect("approved replay");
+    let mut ids = approved.approved_call_ids();
+    ids.sort_unstable();
+    assert_eq!(ids, vec!["call-1", "call-2"]);
+    assert!(
+        approved.blocked_calls().is_empty(),
+        "approving once must not decline the repeat"
+    );
+
+    let declined = DirectHitlDecision::from_payload(&multi_call_payload(
+        "block_with_comment",
+        "stop",
+        &interrupt_id,
+        "call-1",
+    ))
+    .expect("decision admission")
+    .resolve(&session(events))
+    .expect("exact session call")
+    .into_direct_replay(&sensitive_catalog(true))
+    .expect("declined replay");
+    assert_eq!(
+        declined.blocked_calls(),
+        vec![("call-1", "stop"), ("call-2", "stop")],
+        "a decline covers the repeat of the same tool, comment included"
+    );
+}
+
+#[test]
+fn a_denial_comment_survives_into_the_next_resume_of_the_same_message() {
+    // The marker is the only place an earlier card's comment survives, so the
+    // SECOND resume's reconstruction of the first blocked result reads it back.
+    let first = json!({"value": 21});
+    let second = json!({"value": 42});
+    let calls = [
+        ("call-1", "double", first.clone()),
+        ("call-2", "triple", second.clone()),
+    ];
+    let mut events = multi_call_events(&calls, 0);
+    let (first_interrupt, _) = sensitive_call_identity("invocation-1", "call-1", "double", &first)
+        .expect("first call identity");
+    let mut marker = Event::with_id("resume-user", "invocation-2");
+    marker.author = "user".to_owned();
+    marker.llm_response.content = Some(Content::new("user").with_text(format!(
+        "[Elitea direct HITL {first_interrupt}] The pending tool call was rejected. Continue without executing it. Reviewer comment: not on my watch"
+    )));
+    events.push(marker);
+    let mut replayed = multi_call_events(&calls, 1);
+    for event in &mut replayed {
+        event.invocation_id = "invocation-2".to_owned();
+    }
+    events.extend(replayed);
+
+    let (second_interrupt, _) =
+        sensitive_call_identity("invocation-2", "call-2", "triple", &second)
+            .expect("second call identity");
+    let replay = DirectHitlDecision::from_payload(&multi_call_payload(
+        "approve",
+        "",
+        &second_interrupt,
+        "call-2",
+    ))
+    .expect("second decision admission")
+    .resolve(&session(events))
+    .expect("second exact session call")
+    .into_direct_replay(&sensitive_catalog_for(&["double", "triple"], true))
+    .expect("second replay");
+    assert_eq!(
+        replay.blocked_calls(),
+        vec![("call-1", "not on my watch")],
+        "the first card's own words were lost on the way to the second resume"
+    );
+}

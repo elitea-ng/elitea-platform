@@ -32,6 +32,7 @@ import { ScrollableContainer } from '@/shared/ui/ScrollableContainer';
 import type { SimpleBarInstance } from '@/shared/ui/ScrollableContainer';
 
 import type { ChatMessage } from '../../lib/convertMessagesToChatHistory';
+import { TraceStepDetailProvider } from '../../model/traceStepDetail';
 import { t } from '@/shared/i18n';
 
 import type { ChatMessageListProps } from './ChatMessageList.types';
@@ -202,6 +203,7 @@ export function ChatMessageList({
   }
 
   return (
+    <TraceStepDetailProvider projectId={projectId}>
     <ScrollableContainer ref={scrollRef}>
       {/*
         * A plain `<ul>`, NOT MUI's `<List>`: `shared/brand/mui-overrides/
@@ -336,5 +338,6 @@ export function ChatMessageList({
         <Box component="li" ref={messagesEndRef} sx={{ listStyle: 'none' }} />
       </Box>
     </ScrollableContainer>
+    </TraceStepDetailProvider>
   );
 }

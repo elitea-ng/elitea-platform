@@ -109,10 +109,6 @@ test('J-verrepl: [PRODUCT GAP] deleting an in-use version opens the replacement 
   page,
   request,
 }) => {
-  test.fail(
-    true,
-    'ELITEA-0043 (#894): product gap — DeleteVersionDialog never renders VersionReplacementModal; only the plain type-to-confirm delete dialog ever opens, in-use or not',
-  );
   const { parent, dependent } = await seedInUseVersion(request, page);
   try {
     await openVersionDeleteFlow(page, parent.id, parent.versionId);
@@ -123,10 +119,21 @@ test('J-verrepl: [PRODUCT GAP] deleting an in-use version opens the replacement 
     );
 
     // Selecting a replacement version inside the modal must not close it.
+    //
+    // The assertion runs AFTER the option is chosen, not while the listbox is
+    // open: MUI's modal manager marks everything behind the open listbox
+    // `aria-hidden`, so `getByRole('dialog')` legitimately finds nothing for
+    // as long as the menu is up. Asserting there would measure the menu, not
+    // the dialog.
     await dialog.getByLabel(/replace with version/i).click();
+    await page.getByRole('option', { name: 'base' }).click();
     await expect(dialog).toBeVisible();
 
-    // Only an outside click dismisses it.
+    // Only an outside click dismisses it. The listbox has to be GONE first:
+    // its own closing overlay still covers the viewport for the length of the
+    // menu transition, and a click issued into that window is absorbed by it
+    // rather than reaching the dialog's backdrop.
+    await expect(page.getByRole('listbox')).toBeHidden();
     await page.mouse.click(10, 10);
     await expect(dialog).toBeHidden({ timeout: 5_000 });
   } finally {
@@ -146,10 +153,6 @@ test('J-verrepl: [PRODUCT GAP] Replace & Delete migrates the dependent reference
   page,
   request,
 }) => {
-  test.fail(
-    true,
-    'ELITEA-0041 (#894): product gap — no UI path reaches VersionReplacementModal, so no replacement can ever be selected or applied',
-  );
   const { parent, dependent, inUseVersionName } = await seedInUseVersion(request, page);
   try {
     await openVersionDeleteFlow(page, parent.id, parent.versionId);
@@ -159,6 +162,11 @@ test('J-verrepl: [PRODUCT GAP] Replace & Delete migrates the dependent reference
     await dialog.getByLabel(/replace with version/i).click();
     await page.getByRole('option', { name: 'base' }).click();
     await dialog.getByRole('button', { name: /replace & delete/i }).click();
+
+    // The dialog closes only when the delete has actually answered, so this
+    // is the wait for the request rather than a sleep. Reading the version
+    // list straight after the click raced it.
+    await expect(dialog).toBeHidden({ timeout: 15_000 });
 
     // The version must be gone…
     const versions = await readApplicationVersions(request, parent.id);
@@ -189,10 +197,6 @@ test('J-verrepl: [PRODUCT GAP] Cancel in the replacement modal closes it without
   page,
   request,
 }) => {
-  test.fail(
-    true,
-    'ELITEA-0042 (#894): product gap — there is no replacement modal to cancel; the only dialog reachable is the plain delete-confirm one',
-  );
   const { parent, dependent, inUseVersionName } = await seedInUseVersion(request, page);
   try {
     await openVersionDeleteFlow(page, parent.id, parent.versionId);

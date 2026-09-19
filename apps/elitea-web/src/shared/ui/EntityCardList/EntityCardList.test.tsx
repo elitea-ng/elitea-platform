@@ -70,6 +70,37 @@ describe('EntityCard', () => {
     fireEvent.keyDown(getByTestId('entity-card'), { key: 'Enter' });
     expect(onClick).toHaveBeenCalledTimes(2);
   });
+
+  /*
+   * #915, corrected: on a CARD the indicator is a marker, not a control.
+   *
+   * The card root is `role="button"`, and a focusable widget nested inside
+   * one is axe's `nested-interactive` (impact "serious") — it failed
+   * `agents.lifecycle.spec.ts`'s a11y check on every dashboard showing a
+   * forked row. So the card states the fact and the TABLE row (asserted
+   * separately below) carries the clickable link to the original.
+   */
+  it('renders a NON-interactive "Forked from" marker on the card', () => {
+    const onClick = vi.fn();
+    const onForkedFromClick = vi.fn();
+    const { getByTestId, queryByRole } = renderWithTheme(
+      <EntityCard item={{ id: '1', name: 'a', onClick, forkedFrom: { onClick: onForkedFromClick } }} />,
+    );
+    const marker = getByTestId('entity-card-forked-from');
+    expect(marker).toHaveTextContent('Forked from');
+    // Neither a widget role nor a tab stop — the two things `nested-interactive` fails on.
+    expect(queryByRole('link')).not.toBeInTheDocument();
+    expect(marker).not.toHaveAttribute('tabindex');
+    // And a click on it does not silently do nothing DIFFERENT from the card:
+    // it falls through to the card's own activation, like any other card text.
+    fireEvent.click(marker);
+    expect(onForkedFromClick).not.toHaveBeenCalled();
+  });
+
+  it('renders no "Forked from" marker for an un-forked item', () => {
+    const { queryByTestId } = renderWithTheme(<EntityCard item={{ id: '1', name: 'a' }} />);
+    expect(queryByTestId('entity-card-forked-from')).not.toBeInTheDocument();
+  });
 });
 
 describe('EntityCardList', () => {

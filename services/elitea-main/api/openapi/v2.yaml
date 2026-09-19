@@ -2610,6 +2610,21 @@ components:
           description: >
             Written by UpdateAttachmentStorage as {"toolkit_id": "..."}
             (eliteacore/handler.go:1777-1781).
+        notes:
+          type: string
+          description: >
+            NOTE(#898): the editor's free-text "Editor Notes". It has no column
+            of its own on `application_versions` and is not meant to: pylon
+            stores it inside this same jsonb (elitea_issues issue 5410 chose the
+            blob over a per-tenant schema migration), folding the top-level
+            `notes` write field in
+            (legacy/plugins/elitea_core/utils/application_utils.py:191-211)
+            and lifting it back out on read (models/pd/version.py:297-307).
+            This service does the same, and additionally leaves the key in
+            place here — the agent editor round-trips `meta` wholesale, so
+            deleting it from the read would make an ordinary save of any other
+            field erase the notes. Documentation only: never sent to the model,
+            to chat, or to execution.
         internal_tools:
           type: array
           items: { type: string }
@@ -2921,6 +2936,15 @@ components:
         agent_type: { type: string }
         instructions: { type: string }
         welcome_message: { type: string }
+        notes:
+          type: string
+          description: >
+            NOTE(#898): `meta.notes`, surfaced beside `meta` as pylon's
+            `hydrate_notes_from_meta` surfaces it. Always a string on the
+            version-detail read and on the two write echoes ("" when the
+            version carries no notes); absent from the other version maps
+            (import, fork, the public catalogue detail), which do not build
+            their response through these two helpers.
         llm_settings: { $ref: '#/components/schemas/LlmSettings' }
         meta:
           allOf: [{ $ref: '#/components/schemas/VersionMeta' }]
@@ -3152,6 +3176,18 @@ components:
             Omit the key to leave the stored text alone. An explicit empty
             string CLEARS the column, exactly as for `instructions`
             (issue 824).
+        notes:
+          type: string
+          maxLength: 1000
+          description: >
+            NOTE(#898): the editor's free-text notes, accepted at the top level
+            the way pylon accepts them and folded into `meta.notes` by every
+            write path (create, create-version and the PUT). Omit the key to
+            leave the stored value alone; an explicit empty string clears it.
+            Longer than 1000 characters is REFUSED with a 400 — pylon's own
+            ceiling (models/pd/version.py:116). The agent editor sends the
+            value inside `meta` instead, which is the same store; both spellings
+            are accepted so a pylon-shaped client keeps working.
         llm_settings: { $ref: '#/components/schemas/LlmSettings' }
         conversation_starters: { $ref: '#/components/schemas/ConversationStarters' }
         variables:
@@ -4425,6 +4461,51 @@ components:
                 type: string
                 enum: [skill, tool]
               id: { type: string }
+        in_use:
+          type: boolean
+          description: >
+            NOTE(#894): whether another version references THIS one as a
+            sub-agent. It is not `items.length > 0` — `items` answers the
+            opposite relation (what this version uses). A reference with no
+            valid parent mapping is an orphan and does not count, matching
+            pylon (legacy/plugins/elitea_core/rpc/application.py:1861-1863).
+        referencing_parents:
+          type: array
+          description: >
+            NOTE(#894): the parent versions that reference this version as a
+            sub-agent — what the "Version in use" dialog lists by name.
+          items:
+            type: object
+            properties:
+              application_id: { type: integer }
+              application_name: { type: string }
+              application_type:
+                type: string
+                description: The parent version's agent_type ("openai", "pipeline", ...).
+              version_id: { type: integer }
+              version_name: { type: string }
+              tool_id: { type: integer }
+        replacement_versions:
+          type: array
+          description: >
+            NOTE(#894): the sibling versions of the same application this one
+            could be replaced by, oldest first. Empty when the application has
+            only this version.
+          items:
+            type: object
+            properties:
+              id: { type: integer }
+              name: { type: string }
+              created_at:
+                type: string
+                format: date-time
+                nullable: true
+        version_name:
+          type: string
+          description: 'NOTE(#894): the name of the version being checked.'
+        application_id:
+          type: string
+          description: 'NOTE(#894): the application the version belongs to, serialized as a string like every other id in this spec.'
       description: >
         NOTE(W2): built by the ApplicationRelation handler,
         internal/api/v2/eliteacore/handler.go:1596-1626. The sole operation
@@ -13201,7 +13282,14 @@ paths:
         - name: replacement_version_id
           in: query
           schema: { type: integer }
-          description: Version to use as replacement when this version is the default
+          description: >
+            NOTE(#894): another version of the SAME application to move this
+            version's inbound sub-agent references onto before deleting it.
+            Required when `check_version_in_use` reports `in_use` — the delete
+            is refused with a 400 otherwise, rather than leaving every parent
+            pointing at a row that no longer exists. Ignored when nothing
+            references the version. The parameter was declared here long
+            before the handler read it; it is honoured now.
       responses:
         '204':
           description: Deleted (no content)

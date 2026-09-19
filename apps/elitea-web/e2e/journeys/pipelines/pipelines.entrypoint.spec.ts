@@ -1,44 +1,29 @@
 /**
- * The Entrypoint node's own "Trigger" dropdown (`TriggerTypeSelector`,
+ * The Entrypoint node's own "Trigger" surface (`TriggerTypeSelector`,
  * `src/features/pipelines/ui/settings/TriggerTypeSelector.tsx`), mounted by
- * `BaseNode/NodeCard.tsx` only `{isEntrypoint && <TriggerTypeSelector
- * {...triggerProps} />}`.
+ * `BaseNode/NodeCard.tsx` only `{isEntrypoint && <TriggerTypeSelector ... />}`.
  *
- * ── The root cause every "entrypoint-trigger-type" case in this package
- *    traces back to ─────────────────────────────────────────────────────
+ * ── What #899 fixed, and what these tests therefore assert ────────────────
  *
- * `NodeCard.tsx` never receives a `triggerProps` value from ANY caller
- * (`grep -rn 'triggerProps=' src/features/pipelines/` — zero hits), so the
- * selector always renders with `projectId`/`versionId`/`versionInstructions`
- * all `undefined`. That alone would only mean "the auto-reset-on-interactive
- * check never sees a real graph" — survivable, since `hasInteractiveElements`
- * then defaults `false`. What makes the WHOLE Schedule/Webhook half of this
- * feature unreachable in this build is independent of that gap:
+ * Two independent gaps made the whole Schedule/Webhook half unreachable:
  *
- *   `src/shared/config/backendCapabilities.ts`: `pipelineTriggers: false` —
- *   "the Go router registers no handler for [the pipeline-trigger endpoint]
- *   … chi answers `404 page not found` for it, in every profile" (that
- *   module's own doc comment, issues #192/#193).
+ *  1. `backendCapabilities.ts` pinned `pipelineTriggers: false`, so
+ *     `chatMessageOnly` was permanently true and the dropdown offered exactly
+ *     one option. It had been pinned against pylon's DELETED
+ *     `/elitea_core/pipeline_trigger/.../trigger` route — but the Go stack
+ *     serves two REPLACEMENT facilities, `/pipeline_schedules/...` and
+ *     `/pipeline_triggers/...` (`internal/api/v2/pipelinetriggers`), which
+ *     the SPA was simply not speaking to.
+ *  2. `NodeCard.tsx` never received a `triggerProps` value from any caller,
+ *     so `projectId`/`versionId` were always `undefined`. They now ride
+ *     `FlowEditorContext.triggerScope`, supplied by the editor — the one
+ *     place that has them.
  *
- * `TriggerTypeSelector.tsx`'s own `chatMessageOnly = hasInteractiveElements
- * || !hasBackendCapability('pipelineTriggers')` therefore evaluates to `true`
- * UNCONDITIONALLY, in every pipeline, forever — not only while a HITL/Printer
- * node is present. The dropdown always renders with exactly ONE selectable
- * option, "Chat Message". Every case that assumes a pipeline CAN be set to
- * Schedule or Webhook (auto-reset-back-to-Chat-Message on adding an
- * interactive node; Schedule/Webhook staying put across unrelated edits;
- * the Schedule modal's Default/Advanced modes; the Webhook modal's
- * Custom/GitHub/GitLab types and copy button) is unreachable through the UI
- * for the same one reason, pinned by the single test below:
- *
- *   ELITEA-0865, 0866 (only the "stays Chat Message" half is actually
- *   testable — see the second test), 0867, 0868, 0877, 0883, 0886, 0889.
- *
- * ELITEA-0871 (migration auto-assigns Chat Message) is moot for the same
- * reason and is `not-applicable.md` territory, not a bug to chase here.
- * ELITEA-0873/0879/0880/0881/0884 need an actual triggered RUN (schedule
- * firing, a real webhook POST reaching a running pipeline) — STREAM-DEFERRED,
- * tracked in the ledger, not here.
+ * The surface that replaced the baseline's single-valued trigger row is one
+ * dropdown (what to ADD) plus a LIST of what is configured, because the two
+ * Go facilities are independent and a pipeline may hold both at once. The
+ * tests below drive exactly that: create a schedule, create a webhook and
+ * reveal its secret, see both listed, delete both.
  */
 import { expect, test, type Page } from '@playwright/test';
 
@@ -72,51 +57,108 @@ async function openEditor(page: Page, pipeline: CreatedPipeline) {
   await expect(page.getByTestId('rf__wrapper')).toBeVisible({ timeout: 30_000 });
   const card = page.locator(`.react-flow__node[data-id="${PIPELINE_STARTER_ENTRY_NODE_ID}"]`);
   await expect(card).toBeVisible({ timeout: 20_000 });
-  return triggerCombobox(card);
+  const trigger = triggerCombobox(card);
+  // The selector is disabled while its two reads are in flight — deliberately,
+  // so a click cannot pick "Webhook" against a stale "no trigger yet" and
+  // ROTATE a credential somebody else is already holding. Wait it out rather
+  // than clicking into the gap (a click on a disabled MUI select is silently
+  // swallowed, which is what an un-waited test would actually be asserting).
+  await expect(trigger).not.toHaveAttribute('aria-disabled', 'true', { timeout: 20_000 });
+  return trigger;
 }
 
 /*
  * elitea_issues: #6516, #6449, #5265, #5014, #5085, #5001, #6128, #4977,
- * #4975 — all moot for the same reason: Schedule/Webhook are never
- * reachable in this build (`pipelineTriggers: false`, #192/#193), so a
- * Schedule-timezone-conversion bug (#6516) and its matching enhancement
- * (#6449), a per-version Schedule config reset (#5265), a Webhook trigger
- * not resetting on "Save As Version" (#5014), an entrypoint trigger
- * resetting to Chat Message after node edits (#5085 — moot in the OTHER
- * direction: it can never be anything but Chat Message to reset FROM), a
- * webhook secret exposed by an endpoint that 404s in this backend (#5001,
- * same #192 gap — no `/webhook/prompt_lib/.../custom` route exists to leak
- * from), an OAuth-toolkit trigger restriction (#6128 — moot, the dropdown
- * already offers only Chat Message regardless of toolkit), and two
- * trigger-type QA/QnA meta-issues (#4977, #4975) can none be exercised.
+ * #4975 — the trigger-type family. Schedule and Webhook are reachable again
+ * as of #899, so the dropdown case below is real. The narrower cases those
+ * ids name (a Schedule TIMEZONE conversion (#6516/#6449), a webhook secret
+ * leaked by a `/webhook/prompt_lib/.../custom` endpoint (#5001), a
+ * per-provider webhook type (#6128)) are moot in a different way now: the Go
+ * schedule stores no timezone (it fires on the platform's clock), the
+ * credential is minted server-side and revealed only through an operation
+ * carrying the write permission, and the inbound route verifies ONE bearer
+ * secret rather than a GitHub/GitLab/Custom signature mode.
  * onetest: ELITEA-0889, ELITEA-0865, ELITEA-0867, ELITEA-0868, ELITEA-0877,
- * ELITEA-0883, ELITEA-0886 — product gap, see this file's own doc comment.
- * The Trigger dropdown IS mounted, exclusively on the Entrypoint node, and
- * DOES default to "Chat Message" (both real, both asserted below and left
- * PASSING) — but it can never be switched to Schedule or Webhook, so every
- * behaviour gated on having done that (reset-on-interactive-node, the
- * Schedule/Webhook config UI, OAuth-disables-the-option) is unreachable.
+ * ELITEA-0883, ELITEA-0886.
  */
-test('the Trigger dropdown offers Schedule and Webhook alongside Chat Message — PRODUCT GAP', async ({ page }) => {
-  test.fail(
-    true,
-    'ELITEA-0889 (#899): product gap — backendCapabilities.ts pins pipelineTriggers:false (no Go route for the pipeline-trigger endpoint in any profile), so TriggerTypeSelector.chatMessageOnly is permanently true and the dropdown only ever offers "Chat Message"',
-  );
+test('the Trigger surface offers Schedule and Webhook, creates and lists both, and deletes them', async ({ page }) => {
+  // Six round trips to two facilities plus the editor load — past the 30s
+  // default on a cold canvas, and none of the individual waits is slow.
+  test.setTimeout(120_000);
 
   const name = `${AUTOTEST_PREFIX}trig-opts-${Date.now() % 1e9}`;
   const pipeline = await createPipelineThroughApi(page.request, name);
   created.push(pipeline);
   const trigger = await openEditor(page, pipeline);
 
-  // Real and passing: the selector is exclusive to the Entrypoint node.
+  // The selector is exclusive to the Entrypoint node.
   await expect(page.locator('.react-flow__node[data-id="END"]').getByRole('combobox')).toHaveCount(0);
-  // Real and passing: it defaults to Chat Message.
+  // "Chat Message" is the absence of both unattended facilities.
   await expect(trigger).toHaveText('Chat Message');
 
-  // Fails here: Schedule/Webhook are never offered.
+  // ── Schedule and Webhook are both offered ───────────────────────────────
   await trigger.click();
   await expect(page.getByRole('option', { name: 'Schedule' })).toBeVisible({ timeout: 5_000 });
   await expect(page.getByRole('option', { name: 'Webhook' })).toBeVisible({ timeout: 5_000 });
+
+  // ── Create a schedule ───────────────────────────────────────────────────
+  const scheduleSaved = page.waitForResponse(
+    (response) => response.request().method() === 'PUT' && response.url().includes('/pipeline_schedules/prompt_lib/') && response.status() < 400,
+    { timeout: 30_000 },
+  );
+  await page.getByRole('option', { name: 'Schedule' }).click();
+  await expect(page.getByText('Schedule settings')).toBeVisible({ timeout: 10_000 });
+  // The modal opens on a valid five-field default; Apply saves it as-is.
+  await page.getByRole('button', { name: 'Apply' }).click();
+  await scheduleSaved;
+  await expect(page.getByTestId('pipeline-trigger-row-schedule')).toBeVisible({ timeout: 15_000 });
+
+  // ── Create a webhook and reveal its secret ──────────────────────────────
+  const triggerMinted = page.waitForResponse(
+    (response) => response.request().method() === 'POST' && response.url().includes('/pipeline_triggers/prompt_lib/') && response.status() < 400,
+    { timeout: 30_000 },
+  );
+  await trigger.click();
+  await page.getByRole('option', { name: 'Webhook' }).click();
+  await triggerMinted;
+  await expect(page.getByText('Webhook settings')).toBeVisible({ timeout: 10_000 });
+  // The create answered WITH the credential — it is shown, masked.
+  const secretField = page.getByTestId('pipeline-webhook-secret');
+  await expect(secretField).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId('pipeline-webhook-url')).not.toHaveValue('');
+
+  // Reveal fetches it again through the dedicated write-permission route.
+  const revealed = page.waitForResponse(
+    (response) => response.url().includes('/pipeline_triggers/secret/prompt_lib/') && response.status() < 400,
+    { timeout: 30_000 },
+  );
+  await page.getByTestId('pipeline-webhook-reveal').click();
+  await revealed;
+  await page.getByLabel('Show secret').click();
+  await expect(secretField).not.toHaveValue(/^•+$/);
+  await page.getByRole('button', { name: 'Done' }).click();
+
+  // ── Both are listed side by side ────────────────────────────────────────
+  await expect(page.getByTestId('pipeline-trigger-row-schedule')).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId('pipeline-trigger-row-webhook')).toBeVisible({ timeout: 15_000 });
+
+  // ── Delete both ─────────────────────────────────────────────────────────
+  const webhookRevoked = page.waitForResponse(
+    (response) => response.request().method() === 'DELETE' && response.url().includes('/pipeline_triggers/prompt_lib/') && response.status() < 400,
+    { timeout: 30_000 },
+  );
+  await page.getByTestId('pipeline-trigger-delete-webhook').click();
+  await webhookRevoked;
+  await expect(page.getByTestId('pipeline-trigger-row-webhook')).toHaveCount(0, { timeout: 15_000 });
+
+  const scheduleDeleted = page.waitForResponse(
+    (response) => response.request().method() === 'DELETE' && response.url().includes('/pipeline_schedules/prompt_lib/') && response.status() < 400,
+    { timeout: 30_000 },
+  );
+  await page.getByTestId('pipeline-trigger-delete-schedule').click();
+  await scheduleDeleted;
+  await expect(page.getByTestId('pipeline-trigger-row-schedule')).toHaveCount(0, { timeout: 15_000 });
+  await expect(trigger).toHaveText('Chat Message');
 });
 
 /* onetest: ELITEA-0866 — with Chat Message selected (the only reachable state), ordinary pipeline edits do not switch the trigger to anything else. */

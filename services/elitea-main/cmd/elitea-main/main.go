@@ -1830,6 +1830,36 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		slog.Info("production runtime enabled", "control_addr", runtimeConfig.ControlAddress, "output_addr", runtimeConfig.OutputAddress, "content_addr", runtimeConfig.ContentAddress)
 	}
 
+	// CONFIGURING a pipeline's unattended entry points does not need the
+	// execution runtime, and #899 is what happens when it is treated as though
+	// it did: with `runtime.enabled` off the handler above was never built, so
+	// `/pipeline_triggers` and `/pipeline_schedules` were not mounted at all
+	// and the editor's whole Schedule/Webhook surface 404ed — the "affordance
+	// the user cannot repair" the SPA's own capability module exists to
+	// prevent.
+	//
+	// The settings half is a table and a credential; only STARTING a run needs
+	// the runner. So the handler is built either way, and the one dependency
+	// that is genuinely absent — AgentStartUseCase — is passed as an untyped
+	// nil, which NewPlatformHandler's own present() check turns into the
+	// documented honest degrade: the inbound POST and every scheduled fire
+	// answer 503 and say why, while the settings routes work. The schedule
+	// TICK is still only started inside the runtime block above; a schedule
+	// saved on a runtime-less deployment is stored and simply never fires,
+	// which is the same answer the inbound route gives.
+	if pipelineTriggers == nil {
+		pipelineTriggers = v2pipelinetriggers.NewPlatformHandler(
+			pool,
+			nil,
+			v2secrets.NewHandler(pool),
+			legacyrbac.NewPostgresResolver(pool),
+			auditRecorder,
+			logger,
+			domainEvents,
+			pipelineRunsRepo,
+		)
+	}
+
 	// BF0.9c: compose the mTLS streaming reverse proxy to elitea-llm-gateway-svc.
 	// Gated on LLM_GATEWAY_URL so the proxy is only enabled in deployments where
 	// the gateway service is reachable.

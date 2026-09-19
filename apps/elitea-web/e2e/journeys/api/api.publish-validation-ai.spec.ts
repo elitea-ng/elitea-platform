@@ -45,6 +45,7 @@ import {
   AUTOTEST_PREFIX,
   createAgentWithVersion,
   deleteAgent,
+  PUBLISHABLE_TAGS,
   resolvePublishAuthorProjectId,
 } from '../../fixtures/api';
 import { STORAGE_STATE } from '../../../playwright.config';
@@ -106,6 +107,9 @@ test('PVAI1: publish validation reports the AI step honestly and is not blocked 
       instructions: QUALITY_INSTRUCTIONS,
       welcomeMessage: 'Send me the commits and I will draft the notes.',
       conversationStarters: ['Summarise this release.', 'What is still open?'],
+      // #913 — an untagged version is a Critical now, and the publish route
+      // refuses a FAIL inline. See `PUBLISHABLE_TAGS`.
+      tags: PUBLISHABLE_TAGS,
     },
     projectId,
     'Drafts release notes from commits, tickets and review notes.',

@@ -204,16 +204,22 @@ func newHarness(t *testing.T) *harness {
 		},
 		recorder, nil, nil, nil,
 	)
+	return &harness{pool: pool, start: start, vault: vault, recorder: recorder, handler: handler, router: mountRoutes(handler)}
+}
+
+// mountRoutes mounts every route this package serves.
+//
+// The SETTINGS routes are mounted WITHOUT the project permission gate the
+// production router puts above them: those gates are pinned in
+// internal/api/router_elitea_core_project_scope_test.go, and repeating them
+// here would test the middleware twice and the handler not at all.
+//
+// The authenticated caller is injected the way the Auth middleware does it,
+// because `created_by` and `author_id` come from the CONTEXT and never from a
+// body, and a handler that read them from a body would pass a test that
+// supplied one.
+func mountRoutes(handler *pipelinetriggers.Handler) *chi.Mux {
 	router := chi.NewRouter()
-	// The SETTINGS routes are mounted WITHOUT the project permission gate the
-	// production router puts above them: those gates are pinned in
-	// internal/api/router_elitea_core_project_scope_test.go, and repeating them
-	// here would test the middleware twice and the handler not at all.
-	//
-	// The authenticated caller is injected the way the Auth middleware does it,
-	// because `created_by` and `author_id` come from the CONTEXT and never from
-	// a body, and a handler that read them from a body would pass a test that
-	// supplied one.
 	router.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			user := auth.User{
@@ -232,7 +238,26 @@ func newHarness(t *testing.T) *harness {
 	router.Put("/api/v2/pipeline_schedules/prompt_lib/{projectID}/{versionID}", handler.SaveSchedule)
 	router.Delete("/api/v2/pipeline_schedules/prompt_lib/{projectID}/{versionID}", handler.DeleteSchedule)
 	router.Post(pipelinetriggers.InboundPath, handler.Trigger)
-	return &harness{pool: pool, start: start, vault: vault, recorder: recorder, handler: handler, router: router}
+	return router
+}
+
+// newHarnessWithoutRunner is the composition a deployment with
+// `runtime.enabled` off gets: every dependency except the execution use case,
+// which arrives as an untyped nil (see TestSettingsWorkWithoutTheExecutionRuntime).
+func newHarnessWithoutRunner(t *testing.T) *harness {
+	t.Helper()
+	h := newHarness(t)
+	h.handler = pipelinetriggers.NewPlatformHandler(
+		h.pool, nil, h.vault,
+		fixedPermissions{
+			userID:      ownerUserID,
+			projectID:   homeProject,
+			permissions: []string{pipelinetriggers.RunPermission},
+		},
+		h.recorder, nil, nil, nil,
+	)
+	h.router = mountRoutes(h.handler)
+	return h
 }
 
 func (h *harness) do(t *testing.T, method, target, body string, headers map[string]string) *httptest.ResponseRecorder {
@@ -647,6 +672,49 @@ func TestAPipelineWithNoTriggerAnswers200(t *testing.T) {
 		fmt.Sprintf("/api/v2/pipeline_schedules/prompt_lib/%s/%d", homeProject, versionID), "", nil)
 	if schedule.Code != http.StatusOK || decode(t, schedule)["configured"] != false {
 		t.Fatalf("schedule read: status = %d, body = %s", schedule.Code, schedule.Body.String())
+	}
+}
+
+// TestSettingsWorkWithoutTheExecutionRuntime is #899's Go half.
+//
+// With `runtime.enabled` off the composition root used to build no handler at
+// all, so `/pipeline_triggers` and `/pipeline_schedules` were never mounted and
+// the editor's whole Schedule/Webhook surface 404ed — on the E2E stack among
+// others. CONFIGURING an entry point is a table and a credential; only STARTING
+// a run needs the runner. The handler is therefore built either way, with a nil
+// AgentStartUseCase, and this pins both halves of that: the settings routes
+// work, and the inbound POST degrades honestly with a 503 rather than a 202 it
+// cannot keep or a nil dereference.
+func TestSettingsWorkWithoutTheExecutionRuntime(t *testing.T) {
+	h := newHarnessWithoutRunner(t)
+	versionID := seedPipeline(t, h.pool, homeSchema, "Runtime-less", ownerUserID)
+
+	created := h.do(t, http.MethodPost,
+		fmt.Sprintf("/api/v2/pipeline_triggers/prompt_lib/%s/%d", homeProject, versionID), "", nil)
+	if created.Code != http.StatusOK {
+		t.Fatalf("create trigger: status = %d, body = %s", created.Code, created.Body.String())
+	}
+	body := decode(t, created)
+	secret, _ := body["secret"].(string)
+	tokenID, _ := body["token_id"].(string)
+	if secret == "" || tokenID == "" {
+		t.Fatalf("create trigger answered without a credential: %s", created.Body.String())
+	}
+
+	saved := h.do(t, http.MethodPut,
+		fmt.Sprintf("/api/v2/pipeline_schedules/prompt_lib/%s/%d", homeProject, versionID),
+		`{"cron":"0 9 * * 1","active":true}`, nil)
+	if saved.Code != http.StatusOK || decode(t, saved)["configured"] != true {
+		t.Fatalf("save schedule: status = %d, body = %s", saved.Code, saved.Body.String())
+	}
+
+	// The one thing that genuinely cannot work says so, and says it with the
+	// status a caller can act on.
+	fired := h.do(t, http.MethodPost,
+		fmt.Sprintf("/api/v2/pipeline_trigger/%s/%s", homeProject, tokenID), "",
+		map[string]string{"Authorization": "Bearer " + secret})
+	if fired.Code != http.StatusServiceUnavailable {
+		t.Fatalf("inbound trigger without a runner: status = %d, want 503; body = %s", fired.Code, fired.Body.String())
 	}
 }
 

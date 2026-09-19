@@ -98,7 +98,8 @@ const BLOCKED_RESULT_TYPE = 'sensitive_tool_blocked';
 /**
  * Which runtime is answering the turns — `scripts/chat-stream-e2e.sh` is the
  * one place that knows, and it exports this. Read for exactly ONE decision:
- * ELITEA-1001's gap is native-only (measured on both legs — see that test).
+ * ELITEA-1003's gap is now closed on the native runtime and still open on the
+ * SDK (see that test).
  */
 const IS_NATIVE_RUNTIME = (process.env['E2E_WORKER'] ?? 'rust') === 'rust';
 
@@ -570,40 +571,18 @@ test('a tool the policy does not name runs with no authorization dialog', async 
 
 /* onetest: ELITEA-1001 — after the user blocks a sensitive tool, the agent can still use the
  * non-blocked tool it called in the SAME turn, and its result is part of what the agent answers
- * with. FAIL-MARKED: measured, the non-sensitive call beside a declined one is dropped. */
+ * with. */
 test('a blocked sensitive call does not discard the non-sensitive call beside it', async ({ page }) => {
   test.setTimeout(420_000);
 
-  // A NATIVE-ONLY GAP, and the two legs were measured separately rather than
-  // assumed equal — which is the whole reason the mark is conditional.
-  //
-  // rust, measured twice: with the guardrails policy EMPTY the same two-call
-  // turn comes back carrying BOTH results —
-  //   "tool result 1 said {"error":"tool.unavailable…"} tool result 2 said
-  //    {"error":"tool.unavailable…"}"
-  // — so the mock emits two calls and the runtime dispatches two. With the
-  // SECOND call named sensitive and then declined, the continuation carries
-  // exactly ONE tool result, the blocked payload; the non-sensitive call's
-  // result is gone. The runtime's own blocked-result message tells the model
-  // the opposite in so many words ("The block is for THIS invocation only, not
-  // the tool itself… DO continue"), so what the model is told and what it is
-  // given disagree.
-  //
-  // python, measured three times: the SDK worker keeps the other call's result
-  // and this test PASSES there. The SDK's `sensitive_tool_guard.py` is the
-  // reference the native `direct_hitl.rs` was ported from, so this is a port
-  // that lost a property rather than a contract nobody implements — and the
-  // mark is therefore pinned to the leg that lost it, so the python leg would
-  // go red the day the SDK regressed too.
-  if (IS_NATIVE_RUNTIME) {
-    test.fail(
-      true,
-      'ELITEA-1001 (#949): product gap (native runtime only) — a sensitive call declined in a multi-call ' +
-        'assistant message takes the NON-SENSITIVE calls beside it down with it: their results never ' +
-        'reach the continuation, so the agent cannot incorporate work it had already been authorized ' +
-        'to do. The SDK worker keeps them. See S/tail/defects.md.',
-    );
-  }
+  // WAS a native-only gap (#949), and the two legs were measured separately
+  // rather than assumed equal. ADK's confirmation pre-check breaks out of its
+  // scan at the FIRST call that needs a decision and returns before ANY tool of
+  // the message is dispatched, so a pause abandons the whole assistant message
+  // — and `direct_hitl.rs` used to replay only the one decided call out of it,
+  // dropping every sibling. It now replays the whole message, which is what the
+  // SDK's `sensitive_tool_guard.py` (its `_PENDING_TOOL_MESSAGES` capture) has
+  // always done, so both legs assert the same thing here.
 
   let fixture: MockToolAgentFixture | undefined;
   try {
@@ -649,13 +628,30 @@ test('a blocked sensitive call does not discard the non-sensitive call beside it
       answer,
       'the declined EFFECTFUL call’s own success receipt reached the model — it was executed anyway',
     ).not.toContain(MOCK_TOOL_CREATE_SENTINEL);
-    // THE assertion this case exists for, and the one that fails: blocking one
-    // call must not throw away the other one's result.
+    // THE assertion this case exists for: blocking one call must not throw
+    // away the other one's result.
+    //
+    // READ OFF THE COUNT, NOT THE TOOL NAME, and both halves of that are
+    // measured. `deploy/mock-llm/server.py` names the tool only in its
+    // SINGLE-call sentence (`tool <name> said …`); a turn with several calls is
+    // NUMBERED instead — `tool result 1 said … tool result 2 said …` — so no
+    // multi-call reply can ever carry the name. Nor can the result itself
+    // supply it: the tool's host is unreachable from the worker on this stack
+    // (see `chat.tail-trace-steps.spec.ts`'s header), so a dispatched call
+    // comes back as `{"error":"tool.unavailable…"}`, which names nothing. What
+    // IS discriminating is how many results the model was given and which of
+    // them is the blocked one — the defect dropped the sibling entirely, so it
+    // showed exactly one.
+    const quotedResults = answer.match(/tool result \d+ said /g) ?? [];
     expect(
-      answer,
+      quotedResults.length,
       'the non-sensitive call’s result was lost when the sensitive call beside it was blocked — ' +
         'a decline is about ONE invocation, not about the turn',
-    ).toMatch(/tool result .* said .*mock_tool_status|tool mock_tool_status said/);
+    ).toBe(2);
+    expect(
+      answer.split(BLOCKED_RESULT_TYPE).length - 1,
+      'every result the model was given is the blocked payload — the non-sensitive call never ran',
+    ).toBe(1);
     expect(
       (await readMockToolJournal(page)).filter((entry) => entry.method === 'POST'),
       'the declined effectful operation ran anyway',
@@ -666,25 +662,39 @@ test('a blocked sensitive call does not discard the non-sensitive call beside it
 });
 
 /* onetest: ELITEA-1003 — two DIFFERENT sensitive tools invoked in one turn each raise their own
- * authorization dialog, decided one at a time. FAIL-MARKED: measured, only the first of them is
- * ever offered. */
+ * authorization dialog, decided one at a time. */
 test('two sensitive tools in one turn each raise their own authorization', async ({ page }) => {
   test.setTimeout(480_000);
 
-  // MEASURED on `STANDALONE_WORKER=rust`: a two-call assistant message in
-  // which BOTH calls are named sensitive stores exactly ONE
-  // `meta.hitl_interrupts` entry, and deciding it never produces a second
-  // card — the other sensitive call is dropped with no decision ever being
-  // asked for. Same root cause as ELITEA-1001 above: the runtime carries one
-  // decided call out of a multi-call message and discards the rest. Here the
-  // consequence is worse than a lost result: an action the operator marked
-  // sensitive is disposed of without the operator ever seeing it.
-  test.fail(
-    true,
-    'ELITEA-1003 (#948): product gap — when one assistant message calls two sensitive tools, only the ' +
-      'FIRST raises an authorization dialog; the second is never offered for a decision and never ' +
-      'runs. See S/tail/defects.md.',
-  );
+  // Same root cause as ELITEA-1001 above, with the worse symptom: the runtime
+  // carried ONE decided call out of a multi-call message and discarded the
+  // rest, so a tool the operator had marked sensitive was disposed of without
+  // the operator ever seeing it.
+  //
+  // FIXED ON THE NATIVE RUNTIME: the whole message is replayed with the
+  // decisions already taken attached, so ADK's pre-check stops again at the
+  // still-undecided sensitive call and raises its own card for it
+  // (`direct_hitl.rs`: `replay_calls_for` / `settled_decision`).
+  //
+  // STILL OPEN ON THE SDK, and the mark is pinned to that leg rather than
+  // removed, so the native leg keeps asserting the fixed behaviour and the SDK
+  // leg goes green the day it is fixed rather than silently staying broken.
+  // MEASURED on the python worker: the second sensitive call is never offered
+  // and the card never appears. The fix does not belong in this repository —
+  // `services/elitea-worker-python` only CONFIGURES the guard
+  // (`sdk_adapter.py`'s `security.configure_sensitive_tools`), and the
+  // interrupt itself is raised inside elitea-sdk's
+  // `runtime/middleware/sensitive_tool_guard.py`, a different repository. Not a
+  // skip: a skip would stop measuring the leg altogether.
+  if (!IS_NATIVE_RUNTIME) {
+    test.fail(
+      true,
+      'ELITEA-1003 (#948): product gap (SDK/python worker only) — when one assistant message calls two ' +
+        'sensitive tools, only the FIRST raises an authorization dialog; the second is never offered ' +
+        'for a decision and never runs. Fixed on the native runtime in `direct_hitl.rs`; the SDK half ' +
+        'lives in elitea-sdk `sensitive_tool_guard.py`.',
+    );
+  }
 
   let fixture: MockToolAgentFixture | undefined;
   try {
@@ -717,9 +727,9 @@ test('two sensitive tools in one turn each raise their own authorization', async
 
     // ── The SECOND dialog, ONE AT A TIME ───────────────────────────────────
     //
-    // This is the assertion the case is made of, and the one that fails: after
-    // the first decision the OTHER sensitive call must be offered in its own
-    // right, with its own interrupt id.
+    // This is the assertion the case is made of: after the first decision the
+    // OTHER sensitive call must be offered in its own right, with its own
+    // interrupt id.
     const secondTool =
       firstTool === MOCK_TOOL_READ_OPERATION ? MOCK_TOOL_EFFECTFUL_OPERATION : MOCK_TOOL_READ_OPERATION;
     const second = page.getByTestId('chat-hitl-actions').filter({ hasText: secondTool });
@@ -728,11 +738,19 @@ test('two sensitive tools in one turn each raise their own authorization', async
       `the second sensitive call (${secondTool}) was never offered for a decision — a tool the ` +
         'operator marked sensitive was disposed of without being shown',
     ).toBeVisible({ timeout: 120_000 });
-    const both = await readStoredHitlInterrupts(page, fixture.projectId, fixture.conversationId, 2);
+    // Read the SECOND pause's identity from the store rather than expecting
+    // both to sit in one array: `meta.hitl_interrupts` holds what is PENDING,
+    // and resuming clears it before the next pause writes its own
+    // (`agent_chat.sql`: `meta - 'hitl_interrupt' - 'hitl_interrupts'` on
+    // resume, rebuilt on the next park). The property the case is made of is
+    // that the two pauses are separately decidable, which is the interrupt id
+    // differing — a shared id would make the second card resume the first.
+    const secondInterrupt = await readStoredHitlInterrupt(page, fixture.projectId, fixture.conversationId);
+    expect(secondInterrupt.tool_name, 'the second pause is about the other sensitive call').toBe(secondTool);
     expect(
-      new Set(both.map((entry) => entry.interrupt_id)).size,
+      secondInterrupt.interrupt_id,
       'two pauses that share an interrupt id cannot be decided independently',
-    ).toBe(2);
+    ).not.toBe(firstInterrupt.interrupt_id);
     await decide(page, second.last(), secondTool === MOCK_TOOL_READ_OPERATION ? 'Approve' : 'Reject');
 
     await expectStoredAssistantAnswer(page, fixture.projectId, fixture.conversationId, {

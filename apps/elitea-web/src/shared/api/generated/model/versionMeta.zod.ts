@@ -64,6 +64,12 @@ export const VersionMeta = zod.object({
     .describe(
       'Written by UpdateAttachmentStorage as {\"toolkit_id\": \"...\"} (eliteacore\/handler.go:1777-1781).\n',
     ),
+  notes: zod
+    .string()
+    .optional()
+    .describe(
+      'NOTE(#898): the editor\'s free-text \"Editor Notes\". It has no column of its own on `application_versions` and is not meant to: pylon stores it inside this same jsonb (elitea_issues issue 5410 chose the blob over a per-tenant schema migration), folding the top-level `notes` write field in (legacy\/plugins\/elitea_core\/utils\/application_utils.py:191-211) and lifting it back out on read (models\/pd\/version.py:297-307). This service does the same, and additionally leaves the key in place here — the agent editor round-trips `meta` wholesale, so deleting it from the read would make an ordinary save of any other field erase the notes. Documentation only: never sent to the model, to chat, or to execution.\n',
+    ),
   internal_tools: zod
     .array(zod.string())
     .optional()

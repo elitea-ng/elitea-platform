@@ -1,31 +1,27 @@
 /**
  * Ported from `apps/elitea-ui/src/common/convertChatConversationMessages.js`
- * (392 lines) — the full message-group → chat-history converter used by
- * a transcript pager (injected parameter, deviation
- * #3) and by playback mode (`PlaybackChatBox` / `PlaybackToolBar`).
+ * (392 lines) — the full message-group → chat-history converter used by a
+ * transcript pager (injected parameter, deviation #3) and by playback mode
+ * (`PlaybackChatBox` / `PlaybackToolBar`).
  *
  * `entities/message/lib/normalise.ts` already ports `convertTime`,
  * `normaliseUserMessage` and `normaliseAssistantMessage` (per-message-group
- * bodies of `convertToUserQuestion` / `convertToAIAnswer`). This slice owns
- * the list-level concerns the entity normaliser explicitly left out:
- * chronological sort, parent/child-row split, swarm-child `toolActions`
- * attachment — lines 315-387 of the source.
+ * bodies of `convertToUserQuestion` / `convertToAIAnswer`). This slice owns the
+ * list-level concerns it left out: chronological sort, parent/child-row split,
+ * swarm-child `toolActions` attachment — lines 315-387 of the source.
  *
- * Also ports `convertToPlayerQuestion` (backs playback mode),
- * `isUserMessage` (helper used during conversation iteration), and
+ * Also ports `convertToPlayerQuestion` (backs playback mode), `isUserMessage`
+ * (helper used during conversation iteration), and
  * `convertConversationToChatHistory` (convenience wrapper).
  *
  * `collapseSubAgentInvocationKeys` from `entities/message/lib/subAgentGrouping`
  * is imported for the persisted-reload path; the live-streaming grouping
  * functions (`partitionActionsIntoBlocks`, etc.) are built locally in
- * `./subAgentGrouping.ts` for the streaming accordion view.
+ * `./subAgentGrouping.ts`.
  *
- * Trace-pin chips (`EL-5728`) landed after the port's baseline snapshot
- * (`useLazyMessageTracesQuery` / `buildTraceListParams` / `groupTraceStepsByGroupId`);
- * included here since the wire format already carries trace data in
- * `MessageGroupWire.meta` (the source's `toolCalls` union includes trace
- * step objects with a `type` discriminator — they flow through
- * `buildToolActions` in `entities/message/lib/toolActions` unchanged).
+ * Trace-pin chips (`EL-5728`) come either from a turn's own
+ * `MessageGroupWire.meta` or, once the trace-step migration emptied it, from
+ * `persistedTraceStepsByGroup` (#951 — `entities/message/lib/traceSteps.ts`).
  *
  * Parity notes:
  * - `isUserMessage` (lines 9-15): ported verbatim.
@@ -39,6 +35,7 @@ import { ROLES } from '@/shared/lib/enums';
 import { ChatParticipantType, TOOL_ACTION_TYPES, ToolActionStatus } from '@/shared/lib/chat';
 
 import type { MessageGroupWire, MessageItemWire, MessageParticipantWire } from '@/entities/message/lib/wire';
+import type { PersistedTraceSteps } from '@/entities/message/lib/traceSteps';
 import { convertTime, isParticipant, normaliseAssistantMessage, normaliseUserMessage } from '@/entities/message/lib/normalise';
 import type { SubAgentGroupable } from '@/entities/message/lib/subAgentGrouping';
 
@@ -299,6 +296,8 @@ export function convertMessagesToChatHistory(
   messageGroups: readonly MessageGroupWire[] = [],
   participants: readonly MessageParticipantWire[] = [],
   playerInfo?: PlayerInfo,
+  /** Persisted trace steps by message-group id — see `entities/message/lib/traceSteps.ts` (#951). */
+  persistedTraceStepsByGroup?: ReadonlyMap<string, PersistedTraceSteps>,
 ): readonly ChatMessage[] {
   const sortedMessages = [...(messageGroups ?? [])].sort((a, b) =>
     (a.created_at ?? '').toLowerCase().localeCompare((b.created_at ?? '').toLowerCase()),
@@ -359,8 +358,9 @@ export function convertMessagesToChatHistory(
     }
 
     // Convert AI answer using entities-level normaliser.
+    const persisted = persistedTraceStepsByGroup?.get(String(messageGroup.id));
     const aiMessage = splitPersistedReasoning(
-      normaliseAssistantMessage(messageGroup, sortedMessages, participants) as unknown as ChatMessage,
+      normaliseAssistantMessage(messageGroup, sortedMessages, participants, persisted) as unknown as ChatMessage,
     );
 
     // Attach child messages as SwarmChild toolActions.
