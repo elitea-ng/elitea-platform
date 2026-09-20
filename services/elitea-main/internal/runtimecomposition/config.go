@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	executionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/executions"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
 )
 
@@ -33,6 +34,11 @@ type Config struct {
 	CommandStream    string
 	MaxOutstanding   int64
 	StreamMaxEntries int64
+
+	// SSEStreamLimits bounds the execution-event SSE streams this replica
+	// serves. ConfigFromEnv parses it from ELITEA_RUNTIME_SSE_*; the defaults
+	// stay built in when the variables are unset.
+	SSEStreamLimits executionapi.SSEStreamLimits
 
 	IndexIngestDispatchEnabled     bool
 	IndexSchedulingEnabled         bool
@@ -69,6 +75,15 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 	enabledValue, _ := lookup("ELITEA_RUNTIME_ENABLED")
 	switch enabledValue {
 	case "", "false":
+		for _, name := range []string{
+			executionapi.EnvSSEMaxStreams,
+			executionapi.EnvSSEMaxStreamsPrincipal,
+			executionapi.EnvSSEMaxStreamsProject,
+		} {
+			if value, ok := lookup(name); ok && value != "" {
+				return Config{}, errors.New("runtime SSE stream limits require explicit enablement")
+			}
+		}
 		return Config{}, nil
 	case "true":
 	default:
@@ -245,6 +260,13 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 		return Config{}, err
 	}
 	if config.ContentTLS, err = loadTLSFiles("ELITEA_RUNTIME_CONTENT_TLS"); err != nil {
+		return Config{}, err
+	}
+	// The SSE stream limits are optional overrides of the built-in
+	// process-local profile. executionapi reads the three
+	// ELITEA_RUNTIME_SSE_* names itself, so they do not appear as literal
+	// lookups here.
+	if config.SSEStreamLimits, err = executionapi.SSEStreamLimitsFromEnv(lookup); err != nil {
 		return Config{}, err
 	}
 	if err := config.Validate(); err != nil {

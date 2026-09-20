@@ -836,6 +836,23 @@ question is what this release may consume WITHOUT anybody doing anything —
 {{- fail "runtime.enabled=true needs runtime.streamMaxEntries (ELITEA_RUNTIME_STREAM_MAX_ENTRIES), a positive integer no greater than 1024." -}}
 {{- end -}}
 
+{{/* The SSE stream caps. Optional: the built-in defaults (16/4/8) stay when
+     runtime.sse is absent. config.go refuses a non-canonical value and a
+     per-principal or per-project cap above the global cap at boot. */}}
+{{- $sse := $runtime.sse | default dict -}}
+{{- $sseGlobal := int (default 16 (get $sse "maxStreams")) -}}
+{{- $ssePrincipal := int (default 4 (get $sse "maxStreamsPerPrincipal")) -}}
+{{- $sseProject := int (default 8 (get $sse "maxStreamsPerProject")) -}}
+{{- if or (lt $sseGlobal 1) (lt $ssePrincipal 1) (lt $sseProject 1) -}}
+{{- fail "runtime.sse caps must be positive integers. internal/runtimecomposition/config.go refuses a non-canonical ELITEA_RUNTIME_SSE_* value at boot." -}}
+{{- end -}}
+{{- if gt $ssePrincipal $sseGlobal -}}
+{{- fail (printf "runtime.sse.maxStreamsPerPrincipal (%d) exceeds runtime.sse.maxStreams (%d). internal/runtimecomposition/config.go refuses it at boot: \"ELITEA_RUNTIME_SSE_MAX_STREAMS_PER_PRINCIPAL must not exceed ELITEA_RUNTIME_SSE_MAX_STREAMS\"." $ssePrincipal $sseGlobal) -}}
+{{- end -}}
+{{- if gt $sseProject $sseGlobal -}}
+{{- fail (printf "runtime.sse.maxStreamsPerProject (%d) exceeds runtime.sse.maxStreams (%d). internal/runtimecomposition/config.go refuses it at boot: \"ELITEA_RUNTIME_SSE_MAX_STREAMS_PER_PROJECT must not exceed ELITEA_RUNTIME_SSE_MAX_STREAMS\"." $sseProject $sseGlobal) -}}
+{{- end -}}
+
 {{/* Redis. config.go demands a rediss:// URL that carries an ACL username, no
      password, and an explicit /0 database. A redis:// URL is refused. */}}
 {{- if not $redis.url -}}
@@ -1023,10 +1040,17 @@ carries the material must use those names as its keys.
 {{- $redis := $runtime.redis | default dict -}}
 {{- $listeners := $runtime.listeners | default dict -}}
 {{- $dir := $runtime.material.mountPath | toString | trimSuffix "/" -}}
+{{- $sse := $runtime.sse | default dict -}}
 ELITEA_RUNTIME_ENABLED: "true"
 ELITEA_RUNTIME_COMMAND_STREAM: {{ $runtime.commandStream | quote }}
 ELITEA_RUNTIME_MAX_OUTSTANDING: {{ $runtime.maxOutstanding | toString | quote }}
 ELITEA_RUNTIME_STREAM_MAX_ENTRIES: {{ $runtime.streamMaxEntries | toString | quote }}
+{{/* The SSE stream caps. Optional: the built-in defaults (16/4/8) stay when
+     runtime.sse is absent. The cap is process-local, so the cluster admits
+     maxStreams x replicas streams at once. */}}
+ELITEA_RUNTIME_SSE_MAX_STREAMS: {{ $sse.maxStreams | default 16 | toString | quote }}
+ELITEA_RUNTIME_SSE_MAX_STREAMS_PER_PRINCIPAL: {{ $sse.maxStreamsPerPrincipal | default 4 | toString | quote }}
+ELITEA_RUNTIME_SSE_MAX_STREAMS_PER_PROJECT: {{ $sse.maxStreamsPerProject | default 8 | toString | quote }}
 {{- if $agent.enabled }}
 ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED: "true"
 ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM: {{ $agent.commandStream | quote }}

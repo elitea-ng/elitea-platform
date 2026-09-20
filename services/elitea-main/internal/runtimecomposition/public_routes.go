@@ -77,16 +77,18 @@ func newPublicRoutes(
 	agentStart agentexecutionapi.StartUseCase,
 	toolkitCallTool toolkitrun.UseCase,
 	replayCapacity int,
+	streamLimits executionapi.SSEStreamLimits,
 ) (PublicRoutes, error) {
 	validation, err := configurationapi.NewValidationHandler(authorizer, submitter)
 	if err != nil {
 		return PublicRoutes{}, err
 	}
-	events, err := executionapi.NewEventHandlerWithReplayCapacity(
+	events, err := executionapi.NewEventHandlerWithStreamLimits(
 		authorizer,
 		replay,
 		waiter,
 		replayCapacity,
+		streamLimits,
 	)
 	if err != nil {
 		return PublicRoutes{}, err
