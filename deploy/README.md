@@ -612,6 +612,32 @@ ingest, index scheduling and configuration validation. It is **all-or-nothing**:
 refuses to start on a partial set. The chart exposes the whole block under
 `runtime:` and refuses a partial one at render time.
 
+#### SSE stream admission caps (issue #963)
+
+The execution-events stream endpoint admits a bounded number of open SSE
+streams per main replica. The cap is process-local by design: the durable
+repository stays authoritative, and the cap only bounds how many open
+streams this process holds. The chart renders the caps from `runtime.sse`:
+
+| values key | environment variable | default |
+| --- | --- | --- |
+| `runtime.sse.maxStreams` | `ELITEA_RUNTIME_SSE_MAX_STREAMS` | 16 |
+| `runtime.sse.maxStreamsPerPrincipal` | `ELITEA_RUNTIME_SSE_MAX_STREAMS_PER_PRINCIPAL` | 4 |
+| `runtime.sse.maxStreamsPerProject` | `ELITEA_RUNTIME_SSE_MAX_STREAMS_PER_PROJECT` | 8 |
+
+The cluster admits `maxStreams x replicas` streams at once. Measured on the
+standalone stack on 2026-09-20, one replica holds 16 streams at about 2 CPU.
+A deployment that serves 1000 concurrent agent flows needs about 1000 live
+streams. At the 16 cap that is 63 replicas. Raising `maxStreams` to 32 needs
+about 32 replicas, and 1000 needs one.
+
+The other side of that math is the Postgres connection budget. Each main
+replica opens its own pools, and 63 replicas do not fit a stock
+`max_connections` of 100. That budget is the scope of issue #964.
+
+A per-principal or per-project value above `maxStreams` fails `helm
+template`, and the same check fails the process at boot.
+
 Its material — the signing key, the verification keyring, the Redis password,
 the Redis CA and the three listener keypairs — comes from a **plain Kubernetes
 Secret**. Set `runtime.material.secretName`, and give the Secret one key for

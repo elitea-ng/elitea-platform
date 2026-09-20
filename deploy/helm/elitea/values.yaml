@@ -1374,6 +1374,26 @@ main:
     maxOutstanding: 64
     streamMaxEntries: 1024
 
+    # The execution-event SSE streams this replica admits (issue #963). The
+    # cap is process-local by design: every main replica admits its own share,
+    # so the cluster admits maxStreams x replicas streams at once.
+    #
+    # 16/4/8 is the built-in default. Measured on 2026-09-20 against the
+    # standalone stack: one replica holds 16 streams, and about 2 CPU while
+    # it does. 1000 concurrent agent flows need about 1000 live streams.
+    # At the 16 cap that is 63 replicas. Raising maxStreams to 32 needs
+    # about 32 replicas, and 1000 needs one. The other side of that math
+    # is the Postgres connection budget (issue #964), which the
+    # elitea-main.validateConnectionBudget guard makes visible at render
+    # time.
+    #
+    # A per-principal or per-project value above maxStreams is refused at
+    # render time and again at boot.
+    sse:
+      maxStreams: 16
+      maxStreamsPerPrincipal: 4
+      maxStreamsPerProject: 8
+
     # The four agent turn routes — the chat send path.
     agentExecutionDispatch:
       enabled: false

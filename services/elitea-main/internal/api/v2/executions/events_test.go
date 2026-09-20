@@ -942,3 +942,276 @@ func executionEventsRequestWithoutPrincipalForExecution(
 	routeContext.URLParams.Add("executionID", executionID)
 	return request.WithContext(context.WithValue(request.Context(), chi.RouteCtxKey, routeContext))
 }
+
+func executionEventsRequestForPrincipalAndProject(
+	principalID,
+	projectID,
+	executionID string,
+) *http.Request {
+	request := executionEventsRequestWithoutPrincipalForExecution(executionID)
+	routeContext := chi.NewRouteContext()
+	routeContext.URLParams.Add("projectID", projectID)
+	routeContext.URLParams.Add("executionID", executionID)
+	request = request.WithContext(
+		context.WithValue(request.Context(), chi.RouteCtxKey, routeContext),
+	)
+	principal := auth.User{ID: principalID, UserID: principalID, AuthType: "user"}
+	return request.WithContext(auth.ContextWithAuthenticatedUser(
+		request.Context(),
+		principal,
+		auth.AuthenticationSourceSession,
+	))
+}
+
+// heldReplayWaiter parks each stream in its first Wait call. Closing the
+// per-execution channel ends that stream and releases its admission slot.
+type heldReplayWaiter struct {
+	parked chan string
+	holds  map[string]chan struct{}
+}
+
+func (w heldReplayWaiter) Wait(ctx context.Context, _, executionID string, _ uint64) (bool, error) {
+	select {
+	case w.parked <- executionID:
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+	select {
+	case <-w.holds[executionID]:
+		return false, context.Canceled
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+}
+
+func TestNewEventHandlerWithStreamLimitsBoundsGlobalStreams(t *testing.T) {
+	limits := SSEStreamLimits{MaxStreams: 2, MaxPerPrincipal: 2, MaxPerProject: 2}
+	holdFirst := make(chan struct{})
+	holdSecond := make(chan struct{})
+	holdThird := make(chan struct{})
+	waiter := &heldReplayWaiter{
+		parked: make(chan string, 3),
+		holds: map[string]chan struct{}{
+			"execution-1": holdFirst,
+			"execution-2": holdSecond,
+			"execution-3": holdThird,
+		},
+	}
+	authorizer := eventAuthorizerFunc(
+		func(context.Context, string, string) error { return nil },
+	)
+	repository := concurrentEmptyEventRepository{}
+	handler, err := NewEventHandlerWithStreamLimits(
+		authorizer,
+		repository,
+		waiter,
+		64,
+		limits,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	streams := [2]struct {
+		principal string
+		project   string
+		execution string
+	}{
+		{"1", "project-1", "execution-1"},
+		{"2", "project-2", "execution-2"},
+	}
+	dones := make([]chan struct{}, 2)
+	for index := range streams {
+		dones[index] = make(chan struct{})
+		go func(index int) {
+			defer close(dones[index])
+			handler.Stream(
+				newStreamingRecorder(),
+				executionEventsRequestForPrincipalAndProject(
+					streams[index].principal,
+					streams[index].project,
+					streams[index].execution,
+				),
+			)
+		}(index)
+	}
+	for range 2 {
+		select {
+		case <-waiter.parked:
+		case <-time.After(2 * time.Second):
+			t.Fatal("stream did not park in the replay waiter")
+		}
+	}
+
+	rejected := newStreamingRecorder()
+	handler.Stream(rejected, executionEventsRequestForPrincipalAndProject("3", "project-3", "execution-3"))
+	if rejected.Code != http.StatusTooManyRequests {
+		t.Fatalf("global stream limit was bypassed: status=%d body=%s", rejected.Code, rejected.Body.String())
+	}
+	if rejected.Body.String() != "too many active event streams\n" {
+		t.Fatalf("429 body changed: %q", rejected.Body.String())
+	}
+	if rejected.Header().Get("Retry-After") != "2" {
+		t.Fatalf("429 Retry-After = %q, want \"2\"", rejected.Header().Get("Retry-After"))
+	}
+
+	close(holdFirst)
+	select {
+	case <-dones[0]:
+	case <-time.After(2 * time.Second):
+		t.Fatal("released stream did not end")
+	}
+
+	reused := newStreamingRecorder()
+	doneThird := make(chan struct{})
+	go func() {
+		defer close(doneThird)
+		handler.Stream(reused, executionEventsRequestForPrincipalAndProject("3", "project-3", "execution-3"))
+	}()
+	select {
+	case <-waiter.parked:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("released stream capacity was not reusable: status=%d body=%s", reused.Code, reused.Body.String())
+	}
+	if reused.Code != http.StatusOK {
+		t.Fatalf("released stream capacity was not reusable: status=%d", reused.Code)
+	}
+	if !strings.Contains(reused.Body.String(), ": connected\n\n") {
+		t.Fatalf("reused stream did not open: %q", reused.Body.String())
+	}
+
+	close(holdSecond)
+	close(holdThird)
+	select {
+	case <-dones[1]:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second stream did not end")
+	}
+	select {
+	case <-doneThird:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reused stream did not end")
+	}
+}
+
+func TestNewEventHandlerWithStreamLimitsBoundsPerPrincipalStreams(t *testing.T) {
+	limits := SSEStreamLimits{MaxStreams: 4, MaxPerPrincipal: 1, MaxPerProject: 4}
+	holdFirst := make(chan struct{})
+	waiter := &heldReplayWaiter{
+		parked: make(chan string, 2),
+		holds: map[string]chan struct{}{
+			"execution-1": holdFirst,
+		},
+	}
+	authorizer := eventAuthorizerFunc(
+		func(context.Context, string, string) error { return nil },
+	)
+	repository := concurrentEmptyEventRepository{}
+	handler, err := NewEventHandlerWithStreamLimits(
+		authorizer,
+		repository,
+		waiter,
+		64,
+		limits,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handler.Stream(newStreamingRecorder(), executionEventsRequestForPrincipalAndProject("1", "project-1", "execution-1"))
+	}()
+	select {
+	case <-waiter.parked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream did not park in the replay waiter")
+	}
+
+	rejected := newStreamingRecorder()
+	handler.Stream(rejected, executionEventsRequestForPrincipalAndProject("1", "project-2", "execution-2"))
+	if rejected.Code != http.StatusTooManyRequests {
+		t.Fatalf("per-principal limit was bypassed: status=%d body=%s", rejected.Code, rejected.Body.String())
+	}
+	if rejected.Body.String() != "too many active event streams\n" {
+		t.Fatalf("429 body changed: %q", rejected.Body.String())
+	}
+
+	close(holdFirst)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream did not end")
+	}
+}
+
+func TestNewEventHandlerWithStreamLimitsBoundsPerProjectStreams(t *testing.T) {
+	limits := SSEStreamLimits{MaxStreams: 4, MaxPerPrincipal: 4, MaxPerProject: 1}
+	holdFirst := make(chan struct{})
+	waiter := &heldReplayWaiter{
+		parked: make(chan string, 2),
+		holds: map[string]chan struct{}{
+			"execution-1": holdFirst,
+		},
+	}
+	authorizer := eventAuthorizerFunc(
+		func(context.Context, string, string) error { return nil },
+	)
+	repository := concurrentEmptyEventRepository{}
+	handler, err := NewEventHandlerWithStreamLimits(
+		authorizer,
+		repository,
+		waiter,
+		64,
+		limits,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handler.Stream(newStreamingRecorder(), executionEventsRequestForPrincipalAndProject("1", "project-1", "execution-1"))
+	}()
+	select {
+	case <-waiter.parked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream did not park in the replay waiter")
+	}
+
+	rejected := newStreamingRecorder()
+	handler.Stream(rejected, executionEventsRequestForPrincipalAndProject("2", "project-1", "execution-2"))
+	if rejected.Code != http.StatusTooManyRequests {
+		t.Fatalf("per-project limit was bypassed: status=%d body=%s", rejected.Code, rejected.Body.String())
+	}
+	if rejected.Body.String() != "too many active event streams\n" {
+		t.Fatalf("429 body changed: %q", rejected.Body.String())
+	}
+
+	close(holdFirst)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream did not end")
+	}
+}
+
+func TestNewEventHandlerWithStreamLimitsDefaultsFromTheZeroValue(t *testing.T) {
+	handler, err := NewEventHandlerWithStreamLimits(
+		&eventAuthorizerStub{},
+		&eventRepositoryStub{},
+		&replayWaiterStub{},
+		64,
+		SSEStreamLimits{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handler.admission.globalLimit != 16 ||
+		handler.admission.principalLimit != 4 ||
+		handler.admission.projectLimit != 8 {
+		t.Fatalf("zero value did not keep the built-in profile: %+v", handler.admission)
+	}
+}

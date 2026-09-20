@@ -1576,6 +1576,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		agentStart,
 		toolkitCallTool,
 		int(dependencies.ReplayPool.Config().MaxConns),
+		config.SSEStreamLimits,
 	)
 	if err != nil {
 		return nil, err
