@@ -580,6 +580,7 @@ fn pipeline_runtime_from_responses_with_capture(
             max_response_bytes: 32 * 1_024,
             max_application_response_bytes: 1_024 * 1_024,
             max_attachment_response_bytes: 1_024 * 1_024,
+            max_artifact_response_bytes: 2 * 1_024 * 1_024,
         },
     )
     .expect("pipeline runtime-context fixture");
@@ -2608,6 +2609,7 @@ async fn llm_node_ask_user_resumes_the_checkpointed_call_with_the_answer_result(
             max_response_bytes: 32 * 1_024,
             max_application_response_bytes: 1_024 * 1_024,
             max_attachment_response_bytes: 1_024 * 1_024,
+            max_artifact_response_bytes: 2 * 1_024 * 1_024,
         },
     )
     .expect("ask_user runtime-context fixture");
@@ -2915,6 +2917,7 @@ fn delegated_authorization_llm_assembler(
             max_response_bytes: 32 * 1_024,
             max_application_response_bytes: 1_024 * 1_024,
             max_attachment_response_bytes: 1_024 * 1_024,
+            max_artifact_response_bytes: 2 * 1_024 * 1_024,
         },
     )
     .expect("pipeline runtime-context fixture");
@@ -3104,6 +3107,7 @@ fn sensitive_llm_node_assembler() -> (
             max_response_bytes: 32 * 1_024,
             max_application_response_bytes: 1_024 * 1_024,
             max_attachment_response_bytes: 1_024 * 1_024,
+            max_artifact_response_bytes: 2 * 1_024 * 1_024,
         },
     )
     .expect("pipeline runtime-context fixture");

@@ -63,7 +63,11 @@ func runtimeContextUnavailableStage(err error) string {
 		runtimeContextStageAttachmentConversation,
 		runtimeContextStageSkillWrite,
 		runtimeContextStageProjectContextRead,
-		runtimeContextStageProjectContextWrite:
+		runtimeContextStageProjectContextWrite,
+		runtimeContextStageArtifactList,
+		runtimeContextStageArtifactRead,
+		runtimeContextStageArtifactWrite,
+		runtimeContextStageArtifactDelete:
 		return unavailable.stage
 	default:
 		return "unknown"

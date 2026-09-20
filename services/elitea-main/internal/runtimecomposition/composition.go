@@ -1122,6 +1122,32 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct attachment object context: %w", err)
 		}
 	}
+	// runtimeArtifacts is the `artifact` toolkit family's own plane (#906).
+	// Before it, an artifact toolkit attached to an agent was skipped at
+	// assembly on the native worker (`agent_toolkit_skipped
+	// reason_code=unsupported_toolkit_family`) — the toggle did nothing, and
+	// for an agent whose only tool was that one the turn sometimes failed
+	// outright. It is built on the ADMISSION pool and the deployment's object
+	// store, and it is nil — the routes unregistered — wherever either the
+	// agent dispatch plane or that store is absent, for the reason the
+	// attachment reader's own comment above gives.
+	var runtimeArtifacts *storage.RuntimeArtifactObjectService
+	if config.AgentExecutionDispatchEnabled && dependencies.ObjectStore != nil {
+		artifactSource, artifactErr := repos.NewCurrentRuntimeArtifactRepository(
+			dependencies.AdmissionPool,
+			dependencies.ObjectStore,
+		)
+		if artifactErr != nil {
+			return nil, fmt.Errorf("construct runtime artifact plane: %w", artifactErr)
+		}
+		runtimeArtifacts, err = storage.NewRuntimeArtifactObjectService(
+			contentRepository,
+			artifactSource,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("construct runtime artifact context: %w", err)
+		}
+	}
 	// entityBuilders is the WRITE half of the same argument (#940 A8): the two
 	// chat-authored builder modules — `skills_builder` and
 	// `project_context_builder` — give the model a tool that creates or
@@ -1525,6 +1551,13 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	// branch leaves entityBuilders nil, so the routes are ABSENT rather than
 	// present-and-refusing wherever agent execution is not dispatched.
 	contentServer = contentServer.WithRuntimeEntityBuilders(entityBuilders)
+	// The `artifact` toolkit family's four routes (#906), registered the same
+	// way and nil for the same reasons: no agent dispatch, or no Go object
+	// store, leaves them ABSENT rather than present-and-failing. A mixed
+	// deployment that keeps Centry's artifacts authoritative therefore keeps
+	// the honest old behaviour — the native worker skips the toolkit — instead
+	// of gaining a family whose every call answers 503.
+	contentServer = contentServer.WithRuntimeArtifacts(runtimeArtifacts)
 
 	privateServers, err := runtimegrpc.NewPrivateServerSet(runtimegrpc.PrivateServerConfig{
 		ControlAddress:          config.ControlAddress,

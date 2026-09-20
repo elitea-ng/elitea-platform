@@ -6820,6 +6820,34 @@ components:
         :636-659 (resolve). The expiry is computed from the server's clock at
         creation, so the client sends an OFFSET and never an instant.
 
+    # ---- System info (issue 36, item 7; issue #892) -----------------------------
+    SystemInfoComponent:
+      type: object
+      required: [name, version]
+      properties:
+        name:
+          type: string
+          description: >
+            "elitea-main" (always present) or "migrations" (present only when
+            a database connection answered the migration-head read). Never a
+            plugin, worker or gateway name — see SystemInfo's description.
+        version:
+          type: string
+          description: >
+            For "elitea-main", the release version this binary was built
+            with ("dev" outside a released build). For "migrations", the
+            highest applied shared-scope migration, zero-padded to 4 digits
+            (e.g. "0125").
+
+    SystemInfo:
+      type: object
+      required: [components]
+      properties:
+        components:
+          type: array
+          items:
+            $ref: '#/components/schemas/SystemInfoComponent'
+
     # ---- Public platform configuration (issue 36, item 7) ----------------------
     PublicConfigValues:
       type: object
@@ -16366,43 +16394,51 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
 
   # ==========================================================================
-  # ADMIN — system info (issue 36, item 7)
+  # ADMIN — system info (issue 36, item 7; issue #892)
   #
-  # DESCRIBED AS A REFUSAL, deliberately. internal/api/v2/admin/handler.go:170
-  # answers 501 unconditionally, in every deployment, and the comment above it
-  # states why: in pylon this route reports the versions of six named plugins,
-  # collected from the pylons that announced themselves on the Arbiter bus in
-  # the last 60 seconds. This service loads no plugins and has no such bus, and
-  # AGENTS.md names both as things the target architecture does not preserve.
-  # The route used to invent a hardcoded elitea_core/auth version map instead.
+  # internal/api/v2/admin/handler.go:SystemInfo used to answer 501
+  # unconditionally, in every deployment: in pylon this route reports the
+  # versions of six named plugins, collected from the pylons that announced
+  # themselves on the Arbiter bus in the last 60 seconds. This service loads
+  # no plugins and has no such bus, and AGENTS.md names both as things the
+  # target architecture does not preserve. The route used to invent a
+  # hardcoded elitea_core/auth version map instead (#219) — that fleet answer
+  # is gone for good, and this document must never describe one.
   #
-  # NO FIRST-PARTY CLIENT CALLS IT, and none should while the answer can only
-  # be a refusal: apps/elitea-web's useResourcesConfig returns an empty plugin
-  # list on purpose rather than putting a 501 in the network log of every Help
-  # Center visit. It is described here so that anyone generating a client from
-  # this document gets the refusal, not an invented shape — and so the day this
-  # service has a real build version to report, the operation already exists.
+  # #892 closes the OTHER half of the old 501: this service always has at
+  # least one real, local fact to report about itself (its own build
+  # version), and a database connection lets it report a second (the highest
+  # applied shared-scope migration). Neither is a plugin, a worker or a
+  # gateway version — this service still has no fleet telemetry for any of
+  # those, and reporting one without a real source would be the #219 defect
+  # again. `components` is deliberately the same `[{name, version}]` shape
+  # pylon's `plugins` used, so apps/elitea-web's Help Center tooltip
+  # (useResourcesConfig.ts) needed no reshaping, only a real source.
   # ==========================================================================
   /admin/system_info/prompt_lib:
     get:
       operationId: getSystemInfo
-      summary: Report the platform's component versions (not available here)
+      summary: Report this service's own component versions
       description: |
-        NOTE(W2): internal/api/v2/admin/handler.go:170 (SystemInfo). It answers
-        501 and nothing else. There is no 200 to describe: this service reports
-        no per-plugin versions because it loads no plugins.
+        NOTE(W2): internal/api/v2/admin/handler.go (SystemInfo). Reports this
+        binary's own build version, always, and a `migrations` entry for the
+        highest applied shared-scope migration when a database connection is
+        available. Reports no plugin, worker or gateway versions: this
+        service has no fleet telemetry for other processes (#219), and
+        inventing one here would be that same defect again.
       tags: [admin]
       responses:
-        '401': { $ref: '#/components/responses/401' }
-        '403': { $ref: '#/components/responses/403' }
-        '501':
+        '200':
           description: >
-            System information has no equivalent in this service. The body is
-            the flat `{"error": "..."}` shape, with no `code`.
+            This service's own known component versions. `components` never
+            includes a plugin, worker or gateway entry — see the operation
+            description.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/SystemInfo'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
 
   # ==========================================================================
   # SEARCH

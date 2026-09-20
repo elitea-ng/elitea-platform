@@ -9,6 +9,7 @@ use http_body_util::{BodyExt as _, Full};
 use tonic::body::Body;
 
 use super::runtime_context::{
+    ArtifactDeleteRequest, ArtifactListRequest, ArtifactReadRequest, ArtifactWriteRequest,
     RuntimeContextClient, RuntimeContextConfig, RuntimeContextError, RuntimeContextRpc,
     RuntimeContextTransportError,
 };
@@ -84,6 +85,7 @@ fn config(deadline: Duration, max_response_bytes: usize) -> RuntimeContextConfig
         max_response_bytes,
         max_application_response_bytes: 1024 * 1024,
         max_attachment_response_bytes: 1024 * 1024,
+        max_artifact_response_bytes: 2 * 1024 * 1024,
     }
 }
 
@@ -425,6 +427,7 @@ fn configuration_bounds_and_origin_canonicalization_match_worker_policy() {
                 max_response_bytes: 32 * 1_024,
                 max_application_response_bytes: 1_024 * 1_024,
                 max_attachment_response_bytes: 1_024 * 1_024,
+                max_artifact_response_bytes: 2 * 1_024 * 1_024,
             },
         );
         assert!(matches!(
@@ -485,4 +488,197 @@ fn runtime_context_failures_preserve_terminal_taxonomy() {
         let mapped = NativeAgentAssemblyError::from(error);
         assert_eq!(mapped.code(), expected);
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The `artifact` toolkit family's four routes (#906)
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn artifact_read_body(project_id: u64, content: &str, over_limit: bool) -> String {
+    serde_json::json!({
+        "schema_version": "elitea.runtime.artifact-read.v1",
+        "project_id": project_id,
+        "bucket": "agent-artifacts",
+        "name": "reports/one.txt",
+        "media_type": "text/plain",
+        "byte_length": content.len(),
+        "char_length": if over_limit { 300_000 } else { content.chars().count() },
+        "total_lines": 4_167,
+        "max_chars": 200_000,
+        "over_limit": over_limit,
+        "content": content,
+    })
+    .to_string()
+}
+
+/// Each of the four operations is its own path segment under one claim
+/// contract, and each carries a BODY — the bucket, the key and the document
+/// do not belong in a path.
+#[tokio::test(flavor = "current_thread")]
+async fn artifact_operations_use_one_claim_bound_route_each() {
+    let raw = serde_json::json!({
+        "schema_version": "elitea.runtime.artifact-list.v1",
+        "project_id": 17,
+        "bucket": "agent-artifacts",
+        "files": [{
+            "name": "reports/one.txt",
+            "byte_length": 4,
+            "media_type": "text/plain",
+            "modified_at": "2026-09-20T10:00:00Z",
+        }],
+        "truncated": false,
+    })
+    .to_string();
+    let (client, captured) = fake_client(
+        Ok(response(&raw, StatusCode::OK, Version::HTTP_2)),
+        Duration::from_secs(1),
+        32 * 1_024,
+    );
+
+    let listed = client
+        .list_artifacts(
+            &test_runtime_context_authority(),
+            &ArtifactListRequest {
+                bucket: "agent-artifacts".to_owned(),
+                prefix: "reports/".to_owned(),
+                recursive: true,
+                limit: 200,
+            },
+        )
+        .await
+        .expect("claim-bound artifact listing");
+
+    assert_eq!(listed.files.len(), 1);
+    assert_eq!(listed.files[0].name, "reports/one.txt");
+    let captured = captured.lock().expect("captured request");
+    assert_eq!(
+        captured[0].path,
+        "/executions/execution%2Fone/generations/2/runtime-context/artifacts/list"
+    );
+    assert_eq!(captured[0].claim, "claim-1");
+    assert!(captured[0].body_length > 0);
+}
+
+/// A file over the agent-path cap comes back as a MEASUREMENT with a 200, and
+/// it must carry no content: a refusal that returned the file anyway would
+/// have capped nothing.
+#[tokio::test(flavor = "current_thread")]
+async fn an_over_cap_artifact_read_returns_the_measurement_without_content() {
+    let raw = artifact_read_body(17, "", true);
+    let (client, _captured) = fake_client(
+        Ok(response(&raw, StatusCode::OK, Version::HTTP_2)),
+        Duration::from_secs(1),
+        32 * 1_024,
+    );
+
+    let outcome = client
+        .read_artifact(
+            &test_runtime_context_authority(),
+            &ArtifactReadRequest {
+                bucket: "agent-artifacts".to_owned(),
+                name: "reports/one.txt".to_owned(),
+            },
+        )
+        .await
+        .expect("claim-bound artifact read");
+
+    assert!(outcome.over_limit);
+    assert!(outcome.content.is_empty());
+    assert_eq!(outcome.max_chars, 200_000);
+    assert_eq!(outcome.char_length, 300_000);
+}
+
+/// A response that says "served" and carries nothing — or "refused" and
+/// carries the file — is refused rather than believed: either shape would let
+/// a refusal reach the model as an empty file, which it answers from as though
+/// the file were empty.
+#[tokio::test(flavor = "current_thread")]
+async fn an_artifact_read_that_contradicts_its_own_verdict_is_refused() {
+    for (content, over_limit) in [("", false), ("data", true)] {
+        let raw = artifact_read_body(17, content, over_limit);
+        let (client, _captured) = fake_client(
+            Ok(response(&raw, StatusCode::OK, Version::HTTP_2)),
+            Duration::from_secs(1),
+            32 * 1_024,
+        );
+        let Err(error) = client
+            .read_artifact(
+                &test_runtime_context_authority(),
+                &ArtifactReadRequest {
+                    bucket: "agent-artifacts".to_owned(),
+                    name: "reports/one.txt".to_owned(),
+                },
+            )
+            .await
+        else {
+            panic!("a contradictory artifact read was accepted");
+        };
+        assert_eq!(error.code(), "runtime_context.invalid_response");
+    }
+}
+
+/// A response naming another project is an authorization failure, not a
+/// decoding quirk: two of these four routes CHANGE a bucket, so a silent
+/// mismatch would be a write into a tenant this turn never had.
+#[tokio::test(flavor = "current_thread")]
+async fn an_artifact_write_for_another_project_is_refused() {
+    let raw = serde_json::json!({
+        "schema_version": "elitea.runtime.artifact-write.v1",
+        "project_id": 18,
+        "bucket": "agent-artifacts",
+        "name": "reports/one.txt",
+        "media_type": "text/plain",
+        "byte_length": 4,
+    })
+    .to_string();
+    let (client, _captured) = fake_client(
+        Ok(response(&raw, StatusCode::OK, Version::HTTP_2)),
+        Duration::from_secs(1),
+        32 * 1_024,
+    );
+
+    let Err(error) = client
+        .write_artifact(
+            &test_runtime_context_authority(),
+            &ArtifactWriteRequest {
+                bucket: "agent-artifacts".to_owned(),
+                name: "reports/one.txt".to_owned(),
+                content: "data".to_owned(),
+            },
+        )
+        .await
+    else {
+        panic!("a foreign-project artifact write was accepted");
+    };
+    assert_eq!(error.code(), "runtime_context.authorization_failed");
+}
+
+/// 422 is the DOCUMENT's refusal and it is terminal, never retryable: the tool
+/// tells the model to write less instead of sending the identical body again.
+#[tokio::test(flavor = "current_thread")]
+async fn a_refused_artifact_document_is_terminal() {
+    let (client, _captured) = fake_client(
+        Ok(response(
+            "{}",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Version::HTTP_2,
+        )),
+        Duration::from_secs(1),
+        32 * 1_024,
+    );
+
+    let Err(error) = client
+        .delete_artifact(
+            &test_runtime_context_authority(),
+            &ArtifactDeleteRequest {
+                bucket: "agent-artifacts".to_owned(),
+                name: "reports/one.txt".to_owned(),
+            },
+        )
+        .await
+    else {
+        panic!("a refused artifact document was accepted");
+    };
+    assert_eq!(error.code(), "runtime_context.rejected");
+    assert!(!error.retryable());
 }

@@ -800,6 +800,7 @@ mod tests {
                 max_response_bytes: 32 * 1_024,
                 max_application_response_bytes: 1_024 * 1_024,
                 max_attachment_response_bytes: 1_024 * 1_024,
+                max_artifact_response_bytes: 2 * 1_024 * 1_024,
             },
         )
         .expect("attachment fixture client");

@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -126,13 +125,11 @@ func isMaxBytesError(err error) bool {
 	return errors.As(err, &maxBytesErr)
 }
 
+// mimeFromExtension is the content-type-by-extension rule, shared with the
+// claim-bound runtime artifact write (#906) so an agent-written file and a
+// person-uploaded one of the same name are served identically.
 func mimeFromExtension(key string) string {
-	if ext := path.Ext(key); ext != "" {
-		if mt := mime.TypeByExtension(ext); mt != "" {
-			return mt
-		}
-	}
-	return "application/octet-stream"
+	return storage.MediaTypeFromKey(key)
 }
 
 // requireBucket 404s (typed envelope) when the bucket doesn't exist and

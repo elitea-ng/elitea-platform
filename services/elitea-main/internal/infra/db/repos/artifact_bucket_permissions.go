@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/jackc/pgx/v5"
@@ -269,3 +270,44 @@ SELECT EXISTS (
 	}
 	return isAdmin, nil
 }
+
+// BucketAccessPermitted is legacy's check_bucket_perm_from_dict
+// (utils/utils.py:99-132), one exception at a time — the DECISION the per-bucket
+// access list encodes, separated from the HTTP route that used to own it.
+//
+// It lives here, beside the rows it reads, because there are now two callers
+// that must agree: the artifacts HTTP handlers
+// (internal/api/v2/artifacts/bucket_permissions.go, which delegates here) and
+// the claim-bound runtime artifact plane the native worker reaches
+// (runtime_artifact_object.go). A second copy of these five lines would be a
+// second answer to "may this person touch this bucket", and the copy that
+// drifted would be the one an agent turn used.
+//
+//	found=false                      -> no exception  -> ALLOW
+//	found, empty permission list     -> blocked       -> DENY
+//	found, any non-empty list        -> read          -> ALLOW
+//	found, list containing "write"   -> write         -> ALLOW
+//
+// The quirk on the last line is legacy's and is kept: ANY non-empty permission
+// list grants read, so an exception of ["write"] reads as well as it writes.
+// Narrowing it would deny a caller the reference platform allows, on data an
+// operator authored under the reference's rules.
+func BucketAccessPermitted(permissions []string, found bool, need string) bool {
+	if !found {
+		return true
+	}
+	if len(permissions) == 0 {
+		return false
+	}
+	if need == BucketAccessRead {
+		return true
+	}
+	return slices.Contains(permissions, BucketAccessWrite)
+}
+
+// The two verbs an exception can carry. They are the legacy strings and the
+// only two values api/v2/bucket_permissions.py:96-99 accepts.
+const (
+	BucketAccessRead  = "read"
+	BucketAccessWrite = "write"
+)

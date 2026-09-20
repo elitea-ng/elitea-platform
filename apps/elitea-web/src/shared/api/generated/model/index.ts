@@ -424,6 +424,8 @@ export * from "./supportConversationDetails.zod";
 export * from "./supportConversationList.zod";
 export * from "./supportPredictRequest.zod";
 export * from "./supportPredictResponse.zod";
+export * from "./systemInfo.zod";
+export * from "./systemInfoComponent.zod";
 export * from "./tag.zod";
 export * from "./tagWriteRequest.zod";
 export * from "./tagsList.zod";

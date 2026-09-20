@@ -10,22 +10,31 @@
  * at the wrong threshold, stays invisible.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * BOTH TESTS ARE FAIL-MARKED ON THE NATIVE (rust) LEG, FOR A GAP ALREADY FILED
+ * THE NATIVE LEG NOW HAS THE FAMILY (#906) — AND ONE HALF IS STILL BLOCKED
  * ─────────────────────────────────────────────────────────────────────────────
- * `artifact` is absent from the native worker's `supported_tool_types`
- * (`services/elitea-worker-rust/src/toolkits/materialize.rs`, and its own
- * capability snapshot lists every family it does have). The toolkit is skipped
- * at assembly — `agent_toolkit_skipped reason_code=unsupported_toolkit_family`
- * — and the turn then either fails outright
- * (`native_agent.invalid_configuration`) or answers with the toolkit simply
- * absent; `chat.artifacts-toolkit.spec.ts` measured both shapes and fail-marks
- * its own WRITE-path case (#906) on exactly this. Either way `read_file` is
- * never dispatched, so neither half of the size contract is observable.
+ * `artifact` used to be absent from the native worker's `supported_tool_types`:
+ * the toolkit was skipped at assembly (`agent_toolkit_skipped
+ * reason_code=unsupported_toolkit_family`) and `read_file` was never
+ * dispatched, so neither half of the size contract was observable there. #906
+ * closed that — the family lives in
+ * `services/elitea-worker-rust/src/toolkits/families/artifact/`, acts under the
+ * live execution claim against main's private content listener, and enforces
+ * the SAME 200,000-character agent-path cap with the SAME structured
+ * `content_too_large` refusal the SDK produces. So the CAP case below runs on
+ * both legs.
  *
- * THE python LEG'S CONTRACT IS THE OPPOSITE — the SDK's artifact family is a
- * real port — which is why the calls below are SCRIPTED with the SDK's own
- * argument shape (`filename`) rather than left for a model to invent: on that
- * leg every assertion here must pass for real.
+ * THE FULL-READ CASE STAYS FAIL-MARKED ON BOTH, and now for ONE shared reason
+ * rather than two different ones: an 80k-character tool RESULT exceeds the
+ * per-event output limit each runtime enforces when it projects the result
+ * (python: `MAX_CURRENT_NODE_EVENT_JSON_BYTES`, raised as `RESOURCE_EXHAUSTED:
+ * The agent event exceeds its output limit`; rust: `MAX_TOOL_EVENT_VALUE_BYTES`
+ * = 40 KiB in `agents/events.rs`, the same refusal one layer earlier). That is
+ * #956 — an agent-event size limit well below the toolkit's own advertised
+ * 200k cap — and it is a different fix in a different layer from this one.
+ *
+ * The calls below are SCRIPTED with the SDK's own argument shape (`filename`)
+ * rather than left for a model to invent; the native family mirrors those
+ * names deliberately, so one prompt drives both legs.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * WHAT IS PORTED HERE AND WHAT IS NOT
@@ -63,9 +72,6 @@ const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
 
 /** The model the standalone stack seeds; overridable for the real-model lane. */
 const MOCK_MODEL = process.env['E2E_MOCK_MODEL'] ?? 'vllm/E2E-MOCK-MODEL';
-
-/** `chat-stream-e2e.sh` exports this; the local default matches its own. */
-const IS_NATIVE_RUNTIME = (process.env['E2E_WORKER'] ?? 'rust') === 'rust';
 
 /** The SDK's artifact-toolkit tool names, as `chat.artifacts-toolkit.spec.ts` lists them. */
 const ARTIFACT_TOOL_NAMES = [
@@ -293,29 +299,23 @@ async function settledAnswer(page: Page, projectId: string, conversationId: stri
 test('an agent reads an 80k-character artifact back in full', async ({ page }) => {
   test.setTimeout(420_000);
 
-  // FAIL-MARKED ON BOTH LEGS, for two DIFFERENT measured reasons — which is
-  // why the message names both rather than picking one.
-  //
-  //  - rust: `artifact` is absent from the native worker's
-  //    `supported_tool_types`, so materialize.rs skips the toolkit
-  //    (`agent_toolkit_skipped reason_code=unsupported_toolkit_family`) and
-  //    `read_file` is never dispatched at all; the turn is stored flagged
-  //    `is_error`. The same gap `chat.artifacts-toolkit.spec.ts` fail-marks
-  //    for the WRITE path (#906).
-  //  - python: the toolkit works and the read IS dispatched — and then the
-  //    80k result is refused by a DIFFERENT limit downstream of it:
-  //    `IS_ERROR:MOCK: tool read_file said Error executing read_file:
-  //    RESOURCE_EXHAUSTED: The agent event exceeds its output limit.` So the
-  //    toolkit's own 200k cap is not the binding one on the agent path, and a
-  //    file the cap admits still cannot be read whole. That is the case's
-  //    claim failing for real, not a harness artefact.
+  // FAIL-MARKED ON BOTH LEGS, for ONE shared reason since #906 gave the native
+  // worker its own artifact family: the read is now DISPATCHED on both legs,
+  // and on both the 80k result is refused by the per-event output limit the
+  // runtime applies when it projects a tool result — python raises
+  // `IS_ERROR:MOCK: tool read_file said Error executing read_file:
+  // RESOURCE_EXHAUSTED: The agent event exceeds its output limit.`, and rust
+  // refuses the same value one layer earlier at `MAX_TOOL_EVENT_VALUE_BYTES`
+  // (40 KiB, `agents/events.rs`). So the toolkit's own 200k cap is not the
+  // binding one on the agent path, and a file the cap admits still cannot be
+  // read whole. That is the case's claim failing for real.
   test.fail(
     true,
     'ELITEA-0362 (#956): product gap — a file under the artifact toolkit’s 200k agent-path cap still cannot ' +
-      'be read in full. On the native worker `artifact` is an unsupported toolkit family (#906) and ' +
-      'the call is never dispatched; on the SDK worker the call runs and its 80k result is refused ' +
-      'downstream with RESOURCE_EXHAUSTED "The agent event exceeds its output limit". ' +
-      'See S/tail/defects.md.',
+      'be read in full. The call is dispatched on both legs now (#906 gave the native worker the ' +
+      'family), and on both the 80k tool result is refused by the agent-event output limit — ' +
+      'RESOURCE_EXHAUSTED "The agent event exceeds its output limit" on python, ' +
+      'MAX_TOOL_EVENT_VALUE_BYTES (40 KiB) on rust. See S/tail/defects.md.',
   );
 
   let fixture: ArtifactAgentFixture | undefined;
@@ -353,15 +353,6 @@ test('an agent reads an 80k-character artifact back in full', async ({ page }) =
  * size-limit error string, not as content: the cap is enforced on that path. */
 test('an agent reading a 300k-character artifact gets the size-limit error', async ({ page }) => {
   test.setTimeout(420_000);
-
-  if (IS_NATIVE_RUNTIME) {
-    test.fail(
-      true,
-      'ELITEA-0364 (#906): product gap — the same unsupported `artifact` family: the toolkit is ' +
-        'skipped before the model is reached, so the 200k cap is not observable on this leg. ' +
-        'See S/tail/defects.md.',
-    );
-  }
 
   let fixture: ArtifactAgentFixture | undefined;
   try {

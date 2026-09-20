@@ -22,8 +22,10 @@ pub(crate) use delegated_auth::{
     delegated_authorization_declined_result, delegated_authorization_requirement,
     encode_delegated_authorization_requirement,
 };
+pub(crate) use families::artifact::ArtifactToolAuthority;
 pub(crate) use materialize::{
     ToolsetMaterializationError, ToolsetMaterializationErrorCode,
+    materialize_configured_toolsets_with_artifact_authority,
     materialize_configured_toolsets_with_tokens_and_authorization,
 };
 pub(crate) use mcp::{
@@ -43,6 +45,8 @@ pub(crate) use snapshot::{
 
 #[cfg(test)]
 mod aha_tests;
+#[cfg(test)]
+mod artifact_tests;
 #[cfg(test)]
 mod azure_search_tests;
 #[cfg(test)]

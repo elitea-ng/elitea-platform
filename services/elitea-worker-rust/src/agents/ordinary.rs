@@ -34,10 +34,10 @@ use super::session::{
 use crate::protocol::control::ClaimBoundRuntimeContextAuthority;
 use crate::state::SessionLimits;
 use crate::toolkits::{
-    AdkHttpMcpConnector, AdmittedToolSnapshot, FrozenToolKind, McpConnector,
+    AdkHttpMcpConnector, AdmittedToolSnapshot, ArtifactToolAuthority, FrozenToolKind, McpConnector,
     McpMaterializationError, McpMaterializationErrorCode, ToolAdmissionPolicy,
     ToolsetMaterializationError, ToolsetMaterializationErrorCode,
-    materialize_configured_toolsets_with_tokens_and_authorization,
+    materialize_configured_toolsets_with_artifact_authority,
     materialize_mcp_toolsets_with_tokens_and_authorization,
 };
 use crate::transport::model_facade::{
@@ -209,11 +209,19 @@ impl OrdinaryNativeAgentAssembler {
             nested_application_count > 0 && nested_application_count == tool_reference_count;
         tracing::Span::current().record("tool_reference_count", tool_reference_count);
         tracing::Span::current().record("nested_application_count", nested_application_count);
+        // The claim is lent to the `artifact` family here and nowhere else
+        // (#906): this is the one assembly path whose authority outlives
+        // assembly, which is exactly what a tool the model calls mid-run
+        // needs. The same authority the two builder tools take, for the same
+        // reason — see `internal_tools::BuilderToolAuthority`.
+        let artifact_authority =
+            ArtifactToolAuthority::new(Arc::clone(&self.platform), Arc::clone(runtime_context));
         let (mut toolsets, sensitive_tools, delegated_authorization) = materialize_direct_toolsets(
             tool_snapshot,
             self.mcp_connector.as_ref(),
             tool_policy,
             mcp_tokens,
+            &artifact_authority,
         )
         .await?;
         let internal_tools = profile.internal_tools();
@@ -402,6 +410,7 @@ async fn materialize_direct_toolsets(
     connector: &dyn McpConnector,
     policy: &Arc<ToolAdmissionPolicy>,
     mcp_tokens: &serde_json::Map<String, serde_json::Value>,
+    artifacts: &ArtifactToolAuthority,
 ) -> Result<
     (
         Vec<Arc<dyn adk_rust::Toolset>>,
@@ -411,8 +420,13 @@ async fn materialize_direct_toolsets(
     NativeAgentAssemblyError,
 > {
     let (mut toolsets, mut delegated_authorization) =
-        materialize_configured_toolsets_with_tokens_and_authorization(snapshot, policy, mcp_tokens)
-            .map_err(tool_materialization_error)?;
+        materialize_configured_toolsets_with_artifact_authority(
+            snapshot,
+            policy,
+            mcp_tokens,
+            Some(artifacts),
+        )
+        .map_err(tool_materialization_error)?;
     let mut sensitive = sensitive_tools_for_kind(
         snapshot,
         FrozenToolKind::Configured,

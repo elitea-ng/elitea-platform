@@ -17,52 +17,28 @@
  * `read_artifact`/`upload_artifact`/`delete_artifact`/`index_data`/
  * `search_data` — so CREATING one, and ATTACHING it to an agent, both work.
  *
- * Materialization is the layer that does not, and the FAILURE MODE was
- * measured directly against this stack (`STANDALONE_WORKER=rust`) rather than
- * only inferred from source — the two disagree in a way worth recording. The
- * static read of `services/elitea-worker-rust/src/toolkits/materialize.rs`'s
- * capability manifest (`current_rust_worker_toolkit_capability_snapshot.json`
- * — `supported_tool_types` lists azure, azure_search, elastic, gcp, github,
- * gitlab_org, google_places, k8s, keycloak, openapi, postman, rally,
- * report_portal, salesforce, service_now, sharepoint, slack, sonar, sql,
- * yagmail, zephyr, zephyr_squad; no `artifact`, and no `artifact/` directory
- * under `.../toolkits/families/`) predicted a silent skip — the toolkit
- * omitted, the turn answering normally with zero tools. The worker's own log
- * says otherwise:
+ * Materialization was the layer that did not, and this file carried a
+ * native-leg `test.fail` for it. The measured shape (`STANDALONE_WORKER=rust`)
+ * was: the toolkit skipped — `agent_toolkit_skipped
+ * reason_code=unsupported_toolkit_family toolkit_type=artifact` — and then,
+ * NOT deterministically across otherwise-identical runs, either the whole turn
+ * refused before the model was called (`native_agent.invalid_configuration`,
+ * a stored `chat_message_group` flagged `metadata.is_error: true`) or an
+ * ordinary answer with the toolkit simply absent. Either way no upload was
+ * dispatched and the bucket never gained the file, which is what the marker
+ * was anchored to.
  *
- *   agent_toolkit_skipped reason_code=unsupported_toolkit_family
- *     toolkit_type=artifact toolkit_id=…
- *   native_agent.invalid_configuration  (agents/ordinary.rs, outcome=failed)
- *   native agent assembly failed after invocation authorization
- *     error_code=native_agent.invalid_configuration
+ * #906 CLOSED IT. The native worker now has an `artifact` family
+ * (`services/elitea-worker-rust/src/toolkits/families/artifact/`) whose
+ * authority is the live execution CLAIM rather than a credential in the frozen
+ * snapshot — there is no third-party endpoint here, only this platform's own
+ * storage — and main serves its four operations (list/read/write/delete) from
+ * the private mTLS content listener (`ContentServer.PostArtifact*`), resolving
+ * the bucket INSIDE the claimed project and applying the claim ACTOR'S own
+ * per-bucket access list. So every assertion below now runs on both legs.
  *
- * The unsupported toolkit is skipped (as the manifest implies). What happens
- * next for an agent whose only participant tool is the one just skipped was
- * measured NOT to be deterministic across runs: sometimes the assembler
- * treats the resulting toolset as inadmissible and fails the WHOLE turn
- * before the model is ever called (`native_agent.invalid_configuration`,
- * confirmed by the mock's own `__journal` gaining no entry for the turn, and
- * a stored `chat_message_group` flagged `metadata.is_error: true`,
- * `metadata.error: "The runtime operation failed."`); sometimes the turn
- * answers normally with the toolkit simply absent. Either way, no upload call
- * is ever dispatched and the bucket never gains the file — which is the
- * assertion this file's `test.fail` is anchored to, rather than to either
- * failure shape alone.
- *
- * Written as ELITEA-1334/1337/1338 assume it works (an agent turn creates a
- * file, and the REAL Artifacts bucket — read over its own API, never the
- * screen — holds it afterwards) and marked `test.fail`, per the porting
- * rulebook's "no `test.skip` for a product gap" rule. No `[[mock:call_tool]]`
- * marker is scripted on THIS leg: the model is never reached at all (see
- * above), so scripting one would prove nothing this turn does not already
- * show without it.
- *
- * THE python LEG'S CONTRACT IS THE OPPOSITE, and DOES need a scripted call —
- * the mock never calls a tool on its own, marker or not. The gap above is
- * entirely a `materialize.rs` (native rust worker) omission — the SDK-backed
- * python worker's artifact toolkit family is a real port, and on that leg the
- * upload really is dispatched and the bucket really does gain the file,
- * PROVIDED the turn actually asks the mock to call the tool the SDK exposes.
+ * THE CALL IS SCRIPTED ON BOTH LEGS — the mock never calls a tool on its own,
+ * marker or not — and it must name the tool the worker actually exposes.
  * `internal/api/v2/toolkits/handler.go`'s `toolkitTypeSchemas["artifact"]` —
  * an earlier draft of this file's `selected_tools` quoted exactly this map —
  * says of itself that "every artifact tool except index_data...name[s] no
@@ -79,12 +55,11 @@
  * `index_data` ever survived that filter, coincidentally spelled the same in
  * both lists. So even with a marker, the model would have had no upload tool
  * to call. `REAL_ARTIFACT_TOOL_NAMES` below selects the real names, and the
- * turn now scripts `[[mock:call_tool create_file {...}]]` naming that real
- * tool with its real argument shape (`filename` required, `filedata` the
- * content). `test.fail` below is gated on `IS_NATIVE_RUNTIME` (same
- * `E2E_WORKER` read `chat.toolkit-hitl.spec.ts` uses): rust leg keeps the
- * product-gap marker, python leg runs every assertion below for real and must
- * pass them.
+ * turn scripts `[[mock:call_tool create_file {...}]]` naming that real tool
+ * with its real argument shape (`filename` required, `filedata` the content).
+ * The native family mirrors those SDK tool names and argument names
+ * deliberately, for exactly this reason: a prompt written against one worker
+ * has to port to the other unchanged.
  *
  * WHY THE BUCKET/TOOLKIT/AGENT CLEANUP IS A `finally`, UNLIKE MOST FILES HERE.
  * `expectStoredAssistantAnswer`'s "best-effort, deliberately last" convention
@@ -127,15 +102,6 @@ const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
 const MOCK_MODEL = process.env['E2E_MOCK_MODEL'] ?? 'vllm/E2E-MOCK-MODEL';
 
 /**
- * Which runtime is answering the turn — `scripts/chat-stream-e2e.sh` exports
- * this; local default is the native-runtime dev stack, as elsewhere (see
- * `chat.toolkit-hitl.spec.ts`). Read once, to gate `test.fail` below: the
- * "artifact" toolkit family is a genuine rust-worker gap (see header), not a
- * gap on the python/SDK leg.
- */
-const IS_NATIVE_RUNTIME = (process.env['E2E_WORKER'] ?? 'rust') === 'rust';
-
-/**
  * The REAL tool names `elitea_sdk.runtime.tools.artifact.ArtifactWrapper.
  * get_available_tools` implements, confirmed against the pinned
  * `services/elitea-main/internal/runtimecomposition/
@@ -165,22 +131,6 @@ test('an agent with the artifact toolkit writes a file that a real bucket listin
   const toolkitName = `${AUTOTEST_PREFIX}arttk-${suffix}`;
   const agentName = `${AUTOTEST_PREFIX}arttkagent-${suffix}`;
   const fileName = `${AUTOTEST_PREFIX}upload-${suffix}.txt`;
-
-  // Rust leg only — see header's "python LEG'S CONTRACT IS THE OPPOSITE".
-  // The SDK/python worker's artifact toolkit family is a real port, so on
-  // that leg every assertion below (steps 6-7) must pass for real.
-  if (IS_NATIVE_RUNTIME) {
-    test.fail(
-      true,
-      'ELITEA-1334 (#906)/1337/1338: product gap — "artifact" is absent from the native rust worker\'s ' +
-        '`supported_tool_types`, so materialize.rs skips it (agent_toolkit_skipped, ' +
-        'reason_code=unsupported_toolkit_family). Measured non-deterministic across runs which of two ' +
-        'ways that then surfaces: sometimes assembly fails outright (native_agent.invalid_configuration, ' +
-        'an is_error row, model never called) and sometimes the turn answers normally with the toolkit ' +
-        'simply absent — but either way no upload call is ever dispatched and no file is ever written. ' +
-        'See S/port/defects.md.',
-    );
-  }
 
   // ── 0. Preconditions ─────────────────────────────────────────────────────
   await setToolkitGuardrails(EMPTY_TOOLKIT_GUARDRAILS);
