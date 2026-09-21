@@ -1150,3 +1150,165 @@ describe('#957 — a flag-writing journey must not queue behind three others', (
     expect(flagProjectsWiredIntoCI(half)).toEqual(['platform-flags']);
   });
 });
+
+/* ── rule 10 ────────────────────────────────────────────────────────────── */
+
+/**
+ * Every sharded leg in ci-web-e2e.yml must carry as many shard weights as its
+ * shard denominator.
+ *
+ * ## Why this is a rule and not a comment
+ *
+ * The lanes are sharded by wall time, not by test count: `--shard` splits a
+ * project into equal-sized ranges of TESTS, and neither the journeys nor the
+ * chat lanes have anything like a uniform per-test cost. Measured on run
+ * 35606872334 (PR #984) the two webkit legs took 383 and 382 tests and then
+ * 23.2 and 83.1 minutes. `PWTEST_SHARD_WEIGHTS` moves the cut points, and the
+ * weights in the workflow are the ones a duration-balanced split needs.
+ *
+ * Those weights are a SPEED knob. A wrong one costs minutes and no coverage:
+ * every test still runs in exactly one shard, and a Playwright that stopped
+ * reading the variable would fall back to the count split. There is exactly
+ * one way to get it wrong loudly — `filterForShard` throws when the number of
+ * weights does not equal `shard.total` — and that way is also the easy one:
+ * changing a lane from three shards to four and leaving the weights alone.
+ * Playwright refuses before it runs a test, so the whole lane reports a
+ * harness error rather than a journey result.
+ *
+ * Checking it here costs nothing (the file is already parsed for rule 9) and
+ * it runs on every `e2e` leg, which is what makes it cover an edit to the
+ * workflow itself — ci-web.yml, which owns the `scripts` vitest project, does
+ * not fire on `.github/workflows/ci-web-e2e.yml`.
+ *
+ * The rule says nothing about the weight VALUES: they are measurements, they
+ * drift as specs are added, and a gate that pinned them would have to be
+ * edited by whoever re-measures them, which is the same as not having one.
+ */
+
+/**
+ * Every `shard: "i/N"` in a workflow, paired with the weights that are in
+ * scope for it — the entry's own `weights:` when the matrix carries one, else
+ * the job-level `PWTEST_SHARD_WEIGHTS`.
+ *
+ * Read line by line rather than by parsing YAML: this file already reads the
+ * workflow as text for rule 9, and the two shapes in use are both flat (a
+ * matrix `include:` entry, and a job `env:` key).
+ */
+export function shardLegsWithWeights(workflowSource) {
+  const resolved = [];
+  let pending = [];
+  let current = null;
+  let jobWeights = '';
+  // RESOLVED AT THE END OF EACH JOB, not at the end of the file. A job's
+  // `env:` block may be written after its `strategy:` (it is, on both chat
+  // lanes), so a leg's default is not known when its `shard:` line is read —
+  // and a single pass that resolved everything at EOF would hand every job
+  // the LAST job's weights, which is the same reading mistake this whole rule
+  // exists to catch.
+  const closeJob = () => {
+    for (const leg of pending) resolved.push({ ...leg, weights: leg.weights ?? jobWeights });
+    pending = [];
+    current = null;
+    jobWeights = '';
+  };
+  for (const line of workflowSource.split('\n')) {
+    if (/^ {2}[A-Za-z0-9_-]+:\s*$/.test(line)) closeJob();
+    // A NEW MATRIX ENTRY ENDS THE PREVIOUS ONE'S CLAIM ON `weights:`. Without
+    // this, the unsharded `platform-flags` entry's `weights: ""` was read as
+    // the webkit 3/3 leg's, because that leg was simply the last one with a
+    // `shard:` — the sharded leg then looked unweighted and this rule passed
+    // it. An entry that declares no `shard:` must not be able to answer for
+    // one that does.
+    if (/^\s*- /.test(line)) current = null;
+    const body = line.replace(/^(\s*)- /, '$1');
+    const env = body.match(/^\s*PWTEST_SHARD_WEIGHTS:\s*"([^"]*)"\s*$/);
+    if (env) jobWeights = env[1];
+    const shard = body.match(/^\s*shard:\s*"(\d+)\/(\d+)"\s*$/);
+    if (shard) {
+      current = { shard: `${shard[1]}/${shard[2]}`, total: Number(shard[2]), weights: null };
+      pending.push(current);
+    }
+    const entry = body.match(/^\s*weights:\s*"([^"]*)"\s*$/);
+    if (entry && current) current.weights = entry[1];
+  }
+  closeJob();
+  return resolved;
+}
+
+/** The legs whose weight count disagrees with their shard denominator. */
+export function shardWeightMismatches(workflowSource) {
+  return shardLegsWithWeights(workflowSource)
+    .filter((leg) => leg.weights !== '')
+    .filter((leg) => leg.weights.split(':').length !== leg.total)
+    .map((leg) => `${leg.shard} has ${leg.weights.split(':').length} weight(s)`);
+}
+
+describe('a sharded lane must carry one weight per shard', () => {
+  it('every sharded leg in ci-web-e2e.yml agrees with its own denominator', () => {
+    const workflow = read(E2E_WORKFLOW);
+    // A rule whose input can be empty passes by finding nothing: the sharded
+    // legs exist, and this is what says so.
+    expect(shardLegsWithWeights(workflow).length).toBeGreaterThan(0);
+    expect(shardWeightMismatches(workflow)).toEqual([]);
+  });
+
+  it('rejects a lane that grew a shard and kept the old weights', () => {
+    const grown = [
+      '    env:',
+      '      PWTEST_SHARD_WEIGHTS: "61:16:33"',
+      '    strategy:',
+      '      matrix:',
+      '        include:',
+      '          - leg: 1of4',
+      '            shard: "1/4"',
+    ].join('\n');
+    expect(shardWeightMismatches(grown)).toEqual(['1/4 has 3 weight(s)']);
+  });
+
+  it('reads a matrix entry\'s own weights in preference to the job default', () => {
+    const perEntry = [
+      '          - engine: webkit',
+      '            shard: "1/3"',
+      '            weights: "443:164:158"',
+    ].join('\n');
+    expect(shardWeightMismatches(perEntry)).toEqual([]);
+  });
+
+  it('says nothing about an unsharded leg', () => {
+    const plain = ['          - engine: platform-flags', '            shard: ""'].join('\n');
+    expect(shardLegsWithWeights(plain)).toEqual([]);
+    expect(shardWeightMismatches(plain)).toEqual([]);
+  });
+
+  it('does not let an unsharded entry answer for the sharded one above it', () => {
+    // The real matrix shape: three webkit legs, then `platform-flags` with an
+    // empty `weights:`. A reader that attached that empty string to the last
+    // leg with a `shard:` reported webkit 3/3 as unweighted and passed it,
+    // which is this rule finding nothing and calling it correct.
+    const matrix = [
+      '          - engine: webkit',
+      '            shard: "3/3"',
+      '            weights: "443:164:158"',
+      '          - engine: platform-flags',
+      '            shard: ""',
+      '            weights: ""',
+    ].join('\n');
+    expect(shardLegsWithWeights(matrix)).toEqual([
+      { shard: '3/3', total: 3, weights: '443:164:158' },
+    ]);
+  });
+
+  it('does not carry one job\'s weights into the next job', () => {
+    const twoJobs = [
+      '  chat-stream:',
+      '    env:',
+      '      PWTEST_SHARD_WEIGHTS: "50:28:6:26"',
+      '  chat-stream-rust:',
+      '    strategy:',
+      '      matrix:',
+      '        include:',
+      '          - shard: "1/3"',
+    ].join('\n');
+    expect(shardWeightMismatches(twoJobs)).toEqual([]);
+  });
+});

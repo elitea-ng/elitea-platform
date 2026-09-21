@@ -174,11 +174,41 @@ jobs:
       # the acceptance was never checked. `fail-fast: false` keeps a webkit-only
       # regression from hiding chromium's result (and vice versa).
       fail-fast: false
-      # webkit is sharded in two: its Playwright run measured 7.6 min against
-      # chromium's 3.3 for the same suite (2026-09-02), and once the image
-      # build stopped costing 3 min it was the longest thing on a pull request.
-      # `leg` names the artifacts and the job; `shard` is passed straight to
-      # `playwright test --shard`.
+      # chromium is sharded in two and webkit in three. `leg` names the
+      # artifacts and the job; `shard` is passed straight to
+      # `playwright test --shard`, and `weights` to `PWTEST_SHARD_WEIGHTS`.
+      #
+      # WHY WEIGHTS, AND NOT `--shard` ON ITS OWN.
+      #
+      # `--shard` splits by TEST COUNT (Playwright 1.62 `filterForShard`:
+      # equal-sized contiguous ranges over the ordered test groups). The
+      # journeys' per-test cost is not remotely uniform, so equal counts are
+      # not equal time. Measured on run 35606872334 (PR #984), the two webkit
+      # legs each got ~383 tests and then took 23.2 min and 83.1 min of test
+      # time — `E2E (webkit-1of2)` finished in 10 min and `E2E (webkit-2of2)`
+      # in 26, and the job everyone waited for was the count-balanced half.
+      # Adding shards without fixing that only splits the cheap half again.
+      #
+      # `PWTEST_SHARD_WEIGHTS` (a colon-separated weight per shard, honoured
+      # by the same `filterForShard`) moves the cut points. The weights below
+      # are the exact test counts of a duration-balanced split, computed from
+      # that run's Playwright reports against a local `playwright test --list
+      # --shard=…` so the boundaries are the ones the runner will really pick
+      # — not an estimate of them. Balanced totals, in test-time:
+      #
+      #   chromium  523:242       33.2 / 33.2 min  (was 66.5 in one leg)
+      #   webkit    443:164:158   35.5 / 35.4 / 35.4 min  (was 23.2 / 83.1)
+      #
+      # Four workers run those, so divide by four for the Playwright step.
+      #
+      # THE WEIGHTS ARE A SPEED KNOB AND NEVER A CORRECTNESS ONE: every test
+      # runs in exactly one shard whatever the weights say, and a Playwright
+      # that no longer reads the variable falls back to the count split — i.e.
+      # to today's behaviour. They do drift as specs are added; re-derive them
+      # from a recent run's reports when a leg goes visibly lopsided.
+      # `scripts/e2e-journey-shape.test.mjs` rule 10 asserts each entry's
+      # weight count matches its shard denominator, because a mismatch is the
+      # one way this can fail loudly (Playwright throws before it runs a test).
       #
       # THE LAST TWO LEGS ARE NOT ENGINES, AND THEY ARE NOT SHARDED.
       #
@@ -206,20 +236,33 @@ jobs:
       matrix:
         include:
           - engine: chromium
-            leg: chromium
-            shard: ""
-          - engine: webkit
-            leg: webkit-1of2
+            leg: chromium-1of2
             shard: "1/2"
-          - engine: webkit
-            leg: webkit-2of2
+            weights: "523:242"
+          - engine: chromium
+            leg: chromium-2of2
             shard: "2/2"
+            weights: "523:242"
+          - engine: webkit
+            leg: webkit-1of3
+            shard: "1/3"
+            weights: "443:164:158"
+          - engine: webkit
+            leg: webkit-2of3
+            shard: "2/3"
+            weights: "443:164:158"
+          - engine: webkit
+            leg: webkit-3of3
+            shard: "3/3"
+            weights: "443:164:158"
           - engine: platform-flags
             leg: platform-flags
             shard: ""
+            weights: ""
           - engine: platform-flags-webkit
             leg: platform-flags-webkit
             shard: ""
+            weights: ""
     # E2E needs Docker + docker-compose for the stack.
     # GitHub-hosted ubuntu-latest has Docker and docker compose (v2 plugin) pre-installed.
     steps:
@@ -325,6 +368,15 @@ jobs:
         # matrix leg reports one project's result, and (b) the `visual` project
         # stays out of this job — its snapshots are the `visual` job's business.
         #
+        # PWTEST_SHARD_WEIGHTS is forwarded with an explicit `-e` for the same
+        # reason every other variable here is: `docker run` starts from an
+        # EMPTY environment, so a value set on the job would reach the host and
+        # silently not the container — and a silently unweighted shard is just
+        # the old count split, which looks like a successful run that happens
+        # to be slow. Empty on the unsharded legs, which Playwright reads as
+        # "no weights" (the option is only honoured when the string is
+        # non-empty); see the matrix header for where the numbers come from.
+        #
         # `matrix.engine` names a PROJECT, not a browser: the last two legs
         # pass `platform-flags` / `platform-flags-webkit`, whose `workers: 1`
         # comes from the config. The project's `dependencies` bring `setup`
@@ -345,6 +397,7 @@ jobs:
             -e E2E_PORT=8080 \
             -e PLAYWRIGHT_BASE_URL=http://localhost:8080 \
             -e E2E_TZ="${E2E_TZ:-UTC}" \
+            -e PWTEST_SHARD_WEIGHTS="${{ matrix.weights }}" \
             mcr.microsoft.com/playwright:v1.62.1-noble \
             npx playwright test --project=${{ matrix.engine }} ${{ matrix.shard && format('--shard={0}', matrix.shard) || '' }}
       - name: Give the report back to the runner user
@@ -426,7 +479,7 @@ jobs:
         run: bash scripts/e2e-stack.sh down
 
   chat-stream:
-    name: Chat definition-of-done journey (#284)
+    name: Chat definition-of-done journey (#284) (${{ matrix.leg }})
     # The product core loop, end to end through the UI: send → SSE stream →
     # rendered answer → persisted after a reload. It runs on PRs for the same
     # reason the journeys do — the 2026-08-12 audit found Send silently no-op
@@ -439,6 +492,63 @@ jobs:
     # for a reason that has nothing to do with the change under test.
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    strategy:
+      # ── SHARDED IN FOUR, AND WHY THAT IS THE ONLY LEVER ──────────────────
+      #
+      # This lane pins `--workers=1` on its `playwright test` line (see the
+      # note in apps/elitea-web/scripts/chat-stream-e2e.sh: elitea-main admits
+      # four concurrent replay streams per principal and every spec signs in
+      # as the same chat persona, so a second worker answers 429 and it reads
+      # as a broken feature). Serial is therefore not negotiable, and the
+      # project's turn time — 20.9 min of it on run 35606872334, PR #984 —
+      # was the longest thing on a pull request at 29.7 min end to end.
+      #
+      # Fewer specs per job is the only thing left. Each shard stands up its
+      # OWN standalone stack from the shared bake cache and runs its slice at
+      # one worker: nothing about the serialisation changes, there is just
+      # less of it per runner. The shards never share a host, so the fixed
+      # ports and compose project below stay as they are.
+      #
+      # `weights` is `PWTEST_SHARD_WEIGHTS`, and it is load-bearing for the
+      # SPEED of this split and for nothing else. `--shard` on its own splits
+      # by test count, and this project's per-spec cost spans 0.1 s to 5.4 min
+      # (chat.tail-sensitive-tools.spec.ts) — a count split puts 10.5 min in
+      # one half and 10.4 in the other only by accident. The numbers below are
+      # the exact test counts of a duration-balanced split, derived from that
+      # run's Playwright report replayed against `playwright test --list
+      # --shard=… ` locally, so they are the cut points the runner will really
+      # take: 5.68 / 5.64 / 5.79 / 3.80 min of turn time.
+      #
+      # They drift as specs are added, and drifting costs minutes rather than
+      # correctness — every test runs in exactly one shard whatever the
+      # weights say (verified: the four slices union to all 111 with no
+      # duplicate), and a Playwright that stops reading the variable falls
+      # back to the count split. `scripts/e2e-journey-shape.test.mjs` rule 10
+      # asserts the weight count matches the shard denominator, which is the
+      # one mismatch Playwright refuses outright. Keep every weight well clear
+      # of zero: a shard that resolves to no tests is a `playwright test` that
+      # exits non-zero for finding nothing, and this project only has 111
+      # tests to divide.
+      #
+      # `fail-fast: false`: a shard that fails must not cancel the three that
+      # would have told you whether the break is local to it.
+      fail-fast: false
+      matrix:
+        include:
+          - leg: 1of4
+            shard: "1/4"
+          - leg: 2of4
+            shard: "2/4"
+          - leg: 3of4
+            shard: "3/4"
+          - leg: 4of4
+            shard: "4/4"
+    env:
+      # One string for the whole matrix: PWTEST_SHARD_WEIGHTS must carry
+      # exactly as many weights as the shard denominator, so every leg has to
+      # pass the SAME list — only `--shard` picks the slice out of it. Kept at
+      # job level rather than repeated four times for that reason.
+      PWTEST_SHARD_WEIGHTS: "50:28:6:26"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -462,6 +572,12 @@ jobs:
         # cache mounts restored from the previous run, then asserted present.
         # Measured before this: 5.3 min (python worker) to 10.6 min (Rust
         # worker, 9.6 of it one sequential cargo chain) of every such job.
+        #
+        # Every shard pays this, and it is content-addressed: the four bakes
+        # read the same cache keys and, warm, cost 5.4 min each rather than
+        # one 5.4-min bake plus three image transfers. Sharding buys wall time
+        # with runner minutes, and this step is most of what it buys them
+        # with — 21.6 runner-minutes against 5.4 before.
         uses: ./.github/actions/build-stack-images
         with:
           compose-files: |
@@ -502,6 +618,12 @@ jobs:
           CHAT_STREAM_PORT: "8084"
           MOCK_LLM_CHUNK_DELAY_MS: "120"
           PLAYWRIGHT_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.62.1-noble
+          # The script appends `--shard=` only when this is non-empty, so the
+          # local and real-model paths through it are untouched. The weights
+          # reach the container by name from the job env above; the script
+          # forwards them explicitly because `docker run` starts from an empty
+          # environment.
+          PLAYWRIGHT_SHARD: ${{ matrix.shard }}
         run: bash apps/elitea-web/scripts/chat-stream-e2e.sh
       - name: Give the report back to the runner user
         # The container runs as root, so playwright-report/ comes back
@@ -513,13 +635,13 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: playwright-report-chat-stream
+          name: playwright-report-chat-stream-${{ matrix.leg }}
           path: apps/elitea-web/playwright-report/
           if-no-files-found: ignore
           retention-days: 14
 
   chat-stream-rust:
-    name: Chat journey on the native Rust runtime
+    name: Chat journey on the native Rust runtime (${{ matrix.leg }})
     # The SAME journeys as `chat-stream`, against the OTHER worker.
     #
     # `STANDALONE_WORKER=rust` swaps `elitea-worker` for the native Rust agent
@@ -534,9 +656,39 @@ jobs:
     #
     # A separate job rather than a matrix leg on `chat-stream`: the two stacks
     # both publish the fixed oidc-mock port 9400 and cannot share a host, and a
-    # matrix would also hide which runtime failed behind one job name.
+    # matrix would also hide which runtime failed behind one job name. The
+    # matrix this job DOES carry is over shards of the same runtime, which
+    # keeps that distinction — every leg here is the native runtime, and the
+    # job name says which slice of the suite it ran.
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      # THREE SHARDS, not four. The same `--workers=1` argument as
+      # `chat-stream` applies (same script, same persona, same four-stream
+      # admission budget), but this lane's arithmetic is different: it spends
+      # 9.1 min in the bake — the Rust worker's cargo chain — against 5.4 on
+      # the python lane, and only 13.1 min in the journeys, because the native
+      # runtime answers several of them faster. A fourth shard would take the
+      # Playwright step from 4.54 min to 3.95 and buy that with another
+      # 9.1-min bake: this lane is bake-bound, not test-bound.
+      #
+      # Its weights are its OWN and deliberately not the python lane's. The
+      # two runtimes disagree about which specs are expensive —
+      # chat.swarm-pipeline-tool-hitl is 0.4 s on python and 3.0 min here,
+      # chat.qtest-toolkit 63 s on python and nothing here — so one shared
+      # split would be balanced for at most one of them. Measured per leg from
+      # the same run (35606872334): 4.33 / 4.54 / 4.23 min of turn time.
+      fail-fast: false
+      matrix:
+        include:
+          - leg: 1of3
+            shard: "1/3"
+          - leg: 2of3
+            shard: "2/3"
+          - leg: 3of3
+            shard: "3/3"
+    env:
+      PWTEST_SHARD_WEIGHTS: "61:16:33"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -593,6 +745,7 @@ jobs:
           CHAT_STREAM_PORT: "8086"
           MOCK_LLM_CHUNK_DELAY_MS: "120"
           PLAYWRIGHT_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.62.1-noble
+          PLAYWRIGHT_SHARD: ${{ matrix.shard }}
         run: bash apps/elitea-web/scripts/chat-stream-e2e.sh
       - name: Give the report back to the runner user
         if: always()
@@ -601,7 +754,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: playwright-report-chat-stream-rust
+          name: playwright-report-chat-stream-rust-${{ matrix.leg }}
           path: apps/elitea-web/playwright-report/
           if-no-files-found: ignore
           retention-days: 14
@@ -650,6 +803,13 @@ jobs:
 
   chat-stream-real:
     name: Chat journeys against a real model
+    # DELIBERATELY UNSHARDED, unlike the two lanes above. It is 13 min end to
+    # end and it is conditional (`model-path-changes`), so it is never the job
+    # a pull request waits for; and its stack carries a real vLLM, whose
+    # warm-up and model load would be paid once per shard against a Playwright
+    # step that is a fraction of either mock lane's. Sharding it would cost
+    # runner minutes and save no wall time. It reaches chat-stream-e2e.sh with
+    # PLAYWRIGHT_SHARD unset, which is the script's untouched single-pass path.
     needs: model-path-changes
     if: needs.model-path-changes.outputs.reaches-model == 'true'
     # The structural chat journeys against a REAL model — Qwen3-0.6B under

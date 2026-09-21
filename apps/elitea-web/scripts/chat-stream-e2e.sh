@@ -243,6 +243,28 @@ cd "$WEB_DIR"
 REPEAT_ARGS=""
 [ -n "${CHAT_STREAM_REPEAT:-}" ] && REPEAT_ARGS="--repeat-each ${CHAT_STREAM_REPEAT}"
 
+# ── PLAYWRIGHT_SHARD — the only lever this lane has on its wall time ─────────
+#
+# `--workers=1` above is not negotiable (see its note: four concurrent replay
+# streams per principal, and every spec signs in as the same persona), so the
+# project's ~21 min of turn time is SERIAL inside one job and the only way to
+# shorten it is to put fewer specs in each job. Sharding across runners does
+# that: each shard brings up its own standalone stack from the shared bake
+# cache and runs its slice at one worker, exactly as before.
+#
+# Unset — every local run, and the real-model lane — is the whole project in
+# one pass, which is the behaviour this script has always had.
+#
+# PWTEST_SHARD_WEIGHTS rides along because `--shard` alone splits by TEST
+# COUNT, and this project's per-spec cost spans three orders of magnitude
+# (0.1 s to 5.4 min). Forwarded into the container by NAME for the reason the
+# LIVE_ENV_ARGS note gives: `docker run` starts from an EMPTY environment, so
+# a value exported on the host reaches the host path and silently not the
+# container path — and a silently unweighted shard is simply a slower run, not
+# a failing one, which is the shape that never gets noticed.
+SHARD_ARGS=""
+[ -n "${PLAYWRIGHT_SHARD:-}" ] && SHARD_ARGS="--shard=${PLAYWRIGHT_SHARD}"
+
 # E2E_REUSE_STACK=1 stops Playwright's own `webServer` from trying to bring up
 # the E2E stack: the stack this journey needs is already up, and that hook
 # points at a different compose file entirely.
@@ -325,7 +347,7 @@ done <<EOF
 $(env | sed -n 's/^\(E2E_LIVE_[A-Za-z0-9_]*\)=.*/\1/p')
 EOF
 
-# shellcheck disable=SC2086 -- REPEAT_ARGS is deliberately word-split
+# shellcheck disable=SC2086 -- REPEAT_ARGS and SHARD_ARGS are deliberately word-split
 if [ -n "${PLAYWRIGHT_CONTAINER_IMAGE:-}" ]; then
   "${CONTAINER_BIN:-docker}" run --rm --network host \
     -v "$WEB_DIR":/work -w /work \
@@ -335,13 +357,15 @@ if [ -n "${PLAYWRIGHT_CONTAINER_IMAGE:-}" ]; then
     -e E2E_CHAT_MODEL="${E2E_CHAT_MODEL:-}" \
     -e E2E_OIDC_PORT="${E2E_OIDC_PORT:-9400}" \
     "${LIVE_ENV_ARGS[@]+"${LIVE_ENV_ARGS[@]}"}" \
+    -e PWTEST_SHARD_WEIGHTS="${PWTEST_SHARD_WEIGHTS:-}" \
     -e PLAYWRIGHT_BASE_URL="http://localhost:${PORT}" \
     "$PLAYWRIGHT_CONTAINER_IMAGE" \
-    npx playwright test --project="$PLAYWRIGHT_PROJECT" --workers=1 $REPEAT_ARGS
+    npx playwright test --project="$PLAYWRIGHT_PROJECT" --workers=1 $SHARD_ARGS $REPEAT_ARGS
 else
   PLAYWRIGHT_BASE_URL="http://localhost:${PORT}" \
   E2E_REUSE_STACK=1 \
   E2E_WORKER="$E2E_WORKER" \
   E2E_CHAT_MODEL="${E2E_CHAT_MODEL:-}" \
-    npx playwright test --project="$PLAYWRIGHT_PROJECT" --workers=1 $REPEAT_ARGS
+  PWTEST_SHARD_WEIGHTS="${PWTEST_SHARD_WEIGHTS:-}" \
+    npx playwright test --project="$PLAYWRIGHT_PROJECT" --workers=1 $SHARD_ARGS $REPEAT_ARGS
 fi
