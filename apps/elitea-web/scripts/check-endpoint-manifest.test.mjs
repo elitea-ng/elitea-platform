@@ -653,8 +653,18 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
  * describing it let `artifacts.getArtifactContent` — a manifest entry on this
  * exact path — come OFF testdata/reverse_check_allowlist.txt, which may only
  * shrink.
+ *
+ * 268 -> 269 (#970, the inbound trigger's provider signature mode). ONE new
+ * operation, runPipelineInboundTriggerForProvider, describing
+ * `POST /pipeline_trigger/{project_id}/{token_id}/{provider}` — the URL a
+ * GitHub-preset trigger hands out, which chi cannot match against the bare
+ * inbound pattern and which is therefore a second registration of the same
+ * handler. The generated hook is a BYPRODUCT with no caller, like the two
+ * notes above: this route is spoken by a third-party webhook sender, never by
+ * the browser. The create/rotate operation grew a request body in the same
+ * change without changing this count.
  */
-const GENERATED_OPERATION_COUNT = 268;
+const GENERATED_OPERATION_COUNT = 269;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

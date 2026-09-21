@@ -682,7 +682,17 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// `models.chat.conversation.details` for reads and
 	// `models.chat.conversation.update` for writes), so it has no shared
 	// sibling.
-	require.EqualValues(t, 137, Head(tenant))
+	// 138: tenant/0138_pipeline_trigger_auth_mode.sql, the provider SIGNATURE
+	// mode an inbound pipeline trigger had no way to express (#970). 0133
+	// gives a trigger one credential shape — a bearer secret compared against
+	// `token_hash` — and a GitHub repository webhook cannot send one: it signs
+	// the raw body and sends `X-Hub-Signature-256`. Three columns rather than
+	// a jsonb blob (the table has none, and all three are read on the inbound
+	// path), each with a DEFAULT that keeps every existing row on the bearer
+	// mode, and a CHECK on each vocabulary so an unknown value cannot fall
+	// through to the weaker branch. It introduces NO permission and no table,
+	// so it has no shared sibling.
+	require.EqualValues(t, 138, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

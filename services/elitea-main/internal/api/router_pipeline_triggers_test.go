@@ -57,6 +57,28 @@ func TestInboundPipelineTriggerIsReachableWithoutASession(t *testing.T) {
 	}
 }
 
+// TestProviderSuffixedInboundTriggerIsReachableWithoutASession — the URL a
+// GitHub-preset trigger hands out (#970) is a SECOND registration of the same
+// handler, so it is a second thing that can be mounted in the wrong place. A
+// suffixed URL that answered 401 would be a webhook nobody could configure,
+// which is the defect #970 exists to fix arriving by another route.
+func TestProviderSuffixedInboundTriggerIsReachableWithoutASession(t *testing.T) {
+	router := pipelineTriggerRouter()
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost,
+		"/api/v2/pipeline_trigger/7/abcdef/github", strings.NewReader(""))
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code == http.StatusUnauthorized {
+		t.Fatal("the provider-suffixed inbound trigger answered 401 to a request with no session")
+	}
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 from the handler itself (no pool in this composition); body = %s",
+			recorder.Code, recorder.Body.String())
+	}
+}
+
 // TestPipelineTriggerSettingsRoutesRequireASession is the other direction.
 func TestPipelineTriggerSettingsRoutesRequireASession(t *testing.T) {
 	router := pipelineTriggerRouter()

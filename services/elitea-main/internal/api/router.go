@@ -1173,6 +1173,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// an external system was given stable.
 	if cfg.PipelineTriggers != nil {
 		r.Post(v2pipelinetriggers.InboundPath, cfg.PipelineTriggers.Trigger)
+		// The same handler at the provider-suffixed URL a preset mints
+		// (#970). Registered rather than matched with a wildcard so that only
+		// the suffixes this service hands out resolve here; see
+		// InboundProviderPath for why the segment decides nothing.
+		r.Post(v2pipelinetriggers.InboundProviderPath, cfg.PipelineTriggers.Trigger)
 	}
 
 	// Served API docs (S251): the legacy shared plugin's openapi/swagger-ui

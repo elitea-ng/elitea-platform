@@ -306,6 +306,7 @@ export * from "./permissionMatrixRow.zod";
 export * from "./personalAccessToken.zod";
 export * from "./personalAccessTokenCreateRequest.zod";
 export * from "./pipelineInboundTrigger.zod";
+export * from "./pipelineInboundTriggerModeRequest.zod";
 export * from "./pipelineInboundTriggerRunAccepted.zod";
 export * from "./pipelineInboundTriggerRunRequest.zod";
 export * from "./pipelineSchedule.zod";

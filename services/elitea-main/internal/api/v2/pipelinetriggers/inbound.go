@@ -38,6 +38,23 @@ import (
 // same string the audit row records, rather than two copies that can drift.
 const InboundPath = "/api/v2/pipeline_trigger/{projectID}/{tokenID}"
 
+// InboundProviderPath is the same route with the provider SUFFIX a preset
+// mints (#970) — `/github` today.
+//
+// It exists because a sender's configuration screen is given ONE url and must
+// be able to keep it: GitHub's webhook form takes a payload URL, and the URL
+// this service hands out for a GitHub-preset trigger ends in `/github`. chi
+// will not match that against the bare pattern, so it is a second
+// registration of the same handler rather than a wildcard — a wildcard would
+// also match `/anything`, and a URL that is not the one we minted must not
+// quietly work.
+//
+// The segment is DECORATION. It never selects the validation: the stored
+// `auth_mode` does. What the handler does with it is check it against the
+// stored provider, so a `/github` suffix on a bearer trigger is refused
+// instead of being ignored.
+const InboundProviderPath = InboundPath + "/{provider}"
+
 // TriggerTokenHeader is the preferred way to present the secret.
 //
 // Three carriers are accepted, in this order: `Authorization: Bearer`, this
@@ -104,19 +121,27 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	presented := presentedSecret(r)
-	if presented == "" {
-		record(http.StatusUnauthorized, projectID, 0, 0, "no credential presented")
-		writeError(w, http.StatusUnauthorized, refusal)
-		return
-	}
-
-	body, err := readInboundBody(r)
+	// THE RAW BODY IS READ ONCE, FIRST, AND KEPT.
+	//
+	// A signature is computed over the bytes the sender signed, so the body
+	// cannot be decoded and then re-read: `http.Request.Body` is a stream and
+	// a second read of it yields nothing, which would make every signature
+	// verify against an empty body — the one failure that would make a wrong
+	// signature LOOK right for an empty payload. Reading it once, keeping the
+	// bytes, and decoding the same bytes afterwards is what makes the check
+	// replay-safe.
+	//
+	// It also moved AHEAD of the credential read, which #970 changed
+	// deliberately: a signing trigger presents no bearer secret at all, so the
+	// old "no credential presented" early refusal would have refused every
+	// GitHub call before the row that says so was even looked up.
+	raw, err := readInboundRaw(r)
 	if err != nil {
 		record(http.StatusRequestEntityTooLarge, projectID, 0, 0, "body too large")
 		writeError(w, http.StatusRequestEntityTooLarge, "the request body is too large")
 		return
 	}
+	body := decodeInboundBody(raw)
 
 	trigger, err := h.triggerByTokenID(r.Context(), schema, tokenID)
 	switch {
@@ -136,11 +161,36 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// CONSTANT TIME, on two fixed-width digests. The revoked check comes AFTER
-	// it deliberately: checking revocation first would answer a caller holding
-	// a wrong secret faster for a revoked trigger than for a live one.
-	matches := subtle.ConstantTimeCompare(secretDigest(presented), trigger.TokenHash) == 1
-	if !matches {
+	// The URL SUFFIX, checked against the stored provider (#970). A suffix the
+	// row does not carry is refused rather than ignored: the sender was given
+	// one URL, and a second shape that also works is a second thing to get
+	// wrong. It is checked before the credential for the same reason the
+	// project id is — it says WHERE, not WHO — and it is no oracle, because a
+	// caller already holds the whole URL it is comparing against.
+	if provider := chi.URLParam(r, "provider"); provider != "" && provider != trigger.Provider {
+		record(http.StatusUnauthorized, projectID, trigger.CreatedBy, trigger.VersionID,
+			"the URL does not match this trigger's provider")
+		writeError(w, http.StatusUnauthorized, refusal)
+		return
+	}
+
+	// EITHER a constant-time digest compare of the bearer secret, or a
+	// constant-time HMAC compare over the raw body — whichever the STORED row
+	// says. Both are one refusal, and neither runs the other's path: a signing
+	// trigger does not accept the bearer secret, for the reason authmode.go
+	// states.
+	//
+	// The revoked check comes AFTER it deliberately: checking revocation first
+	// would answer a caller holding a wrong secret faster for a revoked
+	// trigger than for a live one.
+	authorized, unavailable := h.inboundCredentialAccepted(r, trigger, raw)
+	if unavailable != "" {
+		h.log().Error("pipelinetriggers: inbound credential check failed", "reason", unavailable)
+		record(http.StatusServiceUnavailable, projectID, trigger.CreatedBy, trigger.VersionID, unavailable)
+		writeError(w, http.StatusServiceUnavailable, "this trigger could not be checked")
+		return
+	}
+	if !authorized {
 		record(http.StatusUnauthorized, projectID, trigger.CreatedBy, trigger.VersionID, "wrong secret")
 		writeError(w, http.StatusUnauthorized, refusal)
 		return
@@ -224,31 +274,81 @@ func presentedSecret(r *http.Request) string {
 	return strings.TrimSpace(r.URL.Query().Get(TriggerTokenQueryParam))
 }
 
-// readInboundBody reads at most maxInboundBody bytes.
+// inboundCredentialAccepted answers whether THIS request may use THIS trigger.
+//
+// It reports two things, because they are two different answers: `accepted` is
+// the credential verdict, and `unavailable` is a non-empty reason this
+// deployment could not reach one. A vault that will not open must not be
+// reported as a wrong secret — that would tell a sender to change a credential
+// that is correct, and would hide an outage behind a 401.
+func (h *Handler) inboundCredentialAccepted(
+	r *http.Request, trigger triggerRow, raw []byte,
+) (accepted bool, unavailable string) {
+	if trigger.AuthMode != AuthModeHMACSHA256 {
+		presented := presentedSecret(r)
+		if presented == "" {
+			return false, ""
+		}
+		return subtle.ConstantTimeCompare(secretDigest(presented), trigger.TokenHash) == 1, ""
+	}
+
+	// A SIGNATURE CANNOT BE CHECKED AGAINST A DIGEST, so this is the one
+	// inbound path that opens the hidden vault. 0133's header says the inbound
+	// path never does; 0138's says that sentence is now true of the `token`
+	// mode only, and this is where the exception lives.
+	if h.vault == nil {
+		return false, "the credential store is not available on this deployment"
+	}
+	header := trigger.SignatureHeader
+	if header == "" {
+		// Unstorable since 0138's CHECK, so a row like this predates the mode
+		// or was written around the route. It is a configuration fault, not a
+		// sender's mistake.
+		return false, "this trigger has a signature mode and no signature header"
+	}
+	presented := r.Header.Get(header)
+	if strings.TrimSpace(presented) == "" {
+		return false, ""
+	}
+	secret, err := h.vault.LookupAdminHiddenSecret(r.Context(), trigger.SecretName)
+	if err != nil {
+		return false, "the stored credential for this trigger could not be read"
+	}
+	return signatureMatches(presented, raw, secret), ""
+}
+
+// readInboundRaw reads at most maxInboundBody bytes and returns them.
+//
+// The BYTES are what the caller signed, so they are what a signature is
+// verified over. Everything this handler needs from the body is derived from
+// this one read; see the call site for why a second read would be a defect
+// rather than an inefficiency.
+func readInboundRaw(r *http.Request) ([]byte, error) {
+	if r.Body == nil {
+		return nil, nil
+	}
+	limited := http.MaxBytesReader(nil, r.Body, maxInboundBody)
+	return io.ReadAll(limited)
+}
+
+// decodeInboundBody reads the accepted fields out of the raw bytes.
 //
 // An EMPTY body is valid and common: a webhook that only says "something
 // happened" carries nothing this service should require. An unparseable body is
 // also accepted, as an empty input, because the sender's payload format is not
 // this service's contract — refusing it would break integrations over a field
-// the pipeline never reads.
-func readInboundBody(r *http.Request) (inboundBody, error) {
-	if r.Body == nil {
-		return inboundBody{}, nil
-	}
-	limited := http.MaxBytesReader(nil, r.Body, maxInboundBody)
-	raw, err := io.ReadAll(limited)
-	if err != nil {
-		return inboundBody{}, err
-	}
+// the pipeline never reads. A GitHub push payload is exactly that case: it is
+// valid JSON with no `input` key at all.
+func decodeInboundBody(raw []byte) inboundBody {
 	var body inboundBody
 	if len(raw) == 0 {
-		return body, nil
+		return body
 	}
 	_ = json.Unmarshal(raw, &body)
 	if len(body.Input) > maxRunInput {
 		body.Input = body.Input[:maxRunInput]
 	}
-	return body, nil
+	return body
 }
 
 // recordInbound writes the `centry.audit_events` row for one inbound call.

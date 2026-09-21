@@ -27,11 +27,12 @@
  * the run-history half of ELITEA-0881/0884/0873 belongs (those cases need a
  * turn to actually happen and are tracked as streaming work under #939).
  *
- * ── THE SCHEME IS A BEARER SECRET ───────────────────────────────────────
+ * ── TWO SCHEMES, AND A TRIGGER IS IN ONE OF THEM ────────────────────────
  *
- * There is no HMAC and no per-provider mode anywhere in
- * `internal/api/v2/pipelinetriggers`. The last test in this file is the
- * GitHub case written as it should pass, marked against #970.
+ * A `token` trigger takes the bearer secret in three carriers; an
+ * `hmac_sha256` trigger takes a signature over the raw body and NONE of the
+ * three (#970). The last test in this file is the GitHub case, sent the way a
+ * repository webhook sends it.
  */
 import { createHmac } from 'node:crypto';
 
@@ -49,7 +50,9 @@ import {
   readPipelineSchedule,
   revokeInboundTrigger,
   savePipelineSchedule,
+  sendSignedWebhook,
   sendWebhook,
+  GITHUB_SIGNATURE_HEADER,
   TRIGGER_REFUSAL,
   TRIGGER_TOKEN_HEADER,
   webhookSender,
@@ -261,50 +264,72 @@ test('a revoked trigger refuses the credential it used to accept', async ({ page
 
 /*
  * onetest: ELITEA-0879 — a GitHub-type webhook trigger, signed the way GitHub
- * signs: `X-Hub-Signature-256: sha256=<HMAC-SHA256(secret, body)>`, at a URL
- * ending in `/github`, with a tampered signature and a missing header both
- * refused.
+ * signs: `X-Hub-Signature-256: sha256=<HMAC-SHA256(secret, body)>`, at the URL
+ * ending in `/github` this service hands out, with a tampered signature and a
+ * missing header both refused.
  *
- * NONE of that exists. `internal/api/v2/pipelinetriggers` authenticates one
- * bearer secret against a stored SHA-256 digest and mints exactly one URL
- * shape; nothing reads `X-Hub-Signature-256`, nothing computes an HMAC over
- * the body, and the create route ignores a `type` in its body. A GitHub
- * repository webhook cannot be configured to send an `Authorization` header,
- * so today it cannot reach a pipeline at all.
+ * The SIGNATURE is computed in this test and never asked of the server, and
+ * the body is signed and sent as the same string — a re-serialised payload
+ * would be signed over bytes the server never receives, and the case would
+ * pass or fail for a reason that has nothing to do with the route.
+ *
+ * The accepted call is asserted with the same `expectCredentialAccepted` every
+ * other case in this file uses, for the reason the file header states: this
+ * stack composes no worker, so an accepted credential answers 503 with the
+ * RUNTIME's sentence rather than 202. A bare `status < 300` here would fail on
+ * a correct implementation and pass on none.
  */
 test('a GitHub-type webhook trigger validates an X-Hub-Signature-256 HMAC', async ({ page }) => {
-  test.fail(true, '#970: product gap — the inbound pipeline trigger has no provider signature mode, so a GitHub sender\'s X-Hub-Signature-256 can never authenticate');
   test.setTimeout(90_000);
   const name = `${AUTOTEST_PREFIX}wh-github-${Date.now() % 1e9}-${Math.floor(Math.random() * 1e4)}`;
   const pipeline = await createPipelineThroughApi(page.request, name);
   created.push(pipeline);
   const scope = { projectId: pipeline.projectId, versionId: pipeline.versionId };
-  // The create asks for the GitHub mode. Today the body is ignored.
   const trigger = await createInboundTrigger(page.request, scope, { type: 'github' });
   expect(trigger.url, 'a GitHub-type trigger is exposed at a /github URL').toMatch(/\/github$/);
+  expect(trigger.authMode, 'the stored row carries the signature mode').toBe('hmac_sha256');
+  expect(trigger.signatureHeader, 'the row names the header the sender must sign into').toBe(GITHUB_SIGNATURE_HEADER);
 
   const body = '{"ref": "refs/heads/main", "commits": []}';
-  const digest = createHmac('sha256', trigger.secret).update(body).digest('hex');
 
   const sender = await webhookSender();
   try {
-    const signed = await sender.post(`${trigger.url}`, {
-      headers: { 'content-type': 'application/json', 'X-Hub-Signature-256': `sha256=${digest}` },
-      data: body,
-    });
-    expect(signed.status(), 'a correctly signed GitHub webhook is accepted').toBeLessThan(300);
+    await expectCredentialAccepted(
+      await sendSignedWebhook(sender, trigger, { secret: trigger.secret, body }),
+      'a correctly signed GitHub webhook',
+    );
 
-    const tampered = await sender.post(`${trigger.url}`, {
-      headers: { 'content-type': 'application/json', 'X-Hub-Signature-256': 'sha256=aaabbbcccddd000' },
-      data: body,
-    });
-    expect([401, 403], 'a tampered signature is refused').toContain(tampered.status());
+    await expectCredentialRefused(
+      await sendSignedWebhook(sender, trigger, { secret: trigger.secret, body, signature: 'sha256=aaabbbcccddd000' }),
+      'a tampered signature',
+    );
 
-    const unsigned = await sender.post(`${trigger.url}`, {
-      headers: { 'content-type': 'application/json' },
-      data: body,
-    });
-    expect([401, 403], 'a webhook with no signature header is refused').toContain(unsigned.status());
+    // The signature is the trigger's OWN and the body is not the one it was
+    // computed over — the case a digest comparison cannot catch, and the
+    // reason the handler keeps the raw bytes.
+    await expectCredentialRefused(
+      await sender.post(`${trigger.url}`, {
+        headers: {
+          'content-type': 'application/json',
+          [GITHUB_SIGNATURE_HEADER]: `sha256=${createHmac('sha256', trigger.secret).update(body).digest('hex')}`,
+        },
+        data: '{"ref": "refs/heads/main", "commits": [], "tampered": true}',
+      }),
+      'the right signature over a tampered body',
+    );
+
+    await expectCredentialRefused(
+      await sender.post(`${trigger.url}`, { headers: { 'content-type': 'application/json' }, data: body }),
+      'a webhook with no signature header',
+    );
+
+    // The mode is not decorative: the bearer secret, which is the same string,
+    // must not be a second way in. Otherwise a URL in a proxy log plus the
+    // secret pasted into the provider's form would still start runs.
+    await expectCredentialRefused(
+      await sendWebhook(sender, trigger, { secret: trigger.secret, body }),
+      'the bearer secret against a signing trigger',
+    );
   } finally {
     await sender.dispose();
   }

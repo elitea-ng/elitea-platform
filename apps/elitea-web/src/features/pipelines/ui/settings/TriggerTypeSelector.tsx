@@ -225,12 +225,14 @@ export function TriggerTypeSelector(props: TriggerTypeSelectorProps): ReactNode 
         onClose={surface.closeWebhookModal}
         webhookUrl={surface.webhookUrl}
         secretValue={surface.revealedSecret}
+        authMode={surface.webhookAuthMode}
+        signatureHeader={surface.webhookSignatureHeader}
         isLoading={surface.isUpdating}
         onReveal={() => {
           void surface.actions.handleRevealWebhook();
         }}
-        onRotate={() => {
-          void surface.actions.handleRotateWebhook();
+        onRotate={mode => {
+          void surface.actions.handleRotateWebhook(mode);
         }}
         onRevoke={() => {
           void surface.actions.handleDeleteKind('webhook');

@@ -23,6 +23,9 @@ package pipelinetriggers_test
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -53,11 +56,16 @@ const (
 	otherSchema  = "p_2"
 
 	ownerUserID = int64(41)
-	// tenantMigration is applied as the SHIPPED FILE, not as a copy of its DDL,
-	// so a change to the migration that these tests do not expect fails here
-	// rather than passing against a stale duplicate.
-	tenantMigration = "tenant/0133_pipeline_triggers_and_schedules.sql"
 )
+
+// tenantMigrations are applied as the SHIPPED FILES, not as a copy of their
+// DDL, so a change to one that these tests do not expect fails here rather
+// than passing against a stale duplicate. In ledger order, which is the order
+// a real deployment applies them in: 0138 ALTERs the table 0133 creates.
+var tenantMigrations = []string{
+	"tenant/0133_pipeline_triggers_and_schedules.sql",
+	"tenant/0138_pipeline_trigger_auth_mode.sql",
+}
 
 /* ── doubles ───────────────────────────────────────────────────────────── */
 
@@ -238,6 +246,10 @@ func mountRoutes(handler *pipelinetriggers.Handler) *chi.Mux {
 	router.Put("/api/v2/pipeline_schedules/prompt_lib/{projectID}/{versionID}", handler.SaveSchedule)
 	router.Delete("/api/v2/pipeline_schedules/prompt_lib/{projectID}/{versionID}", handler.DeleteSchedule)
 	router.Post(pipelinetriggers.InboundPath, handler.Trigger)
+	// Both inbound registrations, exactly as internal/api/router.go makes
+	// them: the provider-suffixed url is the ONE a preset hands a sender, so a
+	// harness without it would test a url nobody is given (#970).
+	router.Post(pipelinetriggers.InboundProviderPath, handler.Trigger)
 	return router
 }
 
@@ -1042,15 +1054,17 @@ func newPool(t *testing.T) *pgxpool.Pool {
 	// The SHIPPED migration file, applied with the search_path the real runner
 	// pins (internal/infra/db/migrate/runner.go), because its table names are
 	// unqualified.
-	migration, err := platformmigrations.Files.ReadFile(tenantMigration)
-	if err != nil {
-		t.Fatalf("read %s: %v", tenantMigration, err)
-	}
-	for _, schema := range []string{homeSchema, otherSchema} {
-		if _, err := pool.Exec(ctx,
-			fmt.Sprintf("SET search_path TO %s; %s", pgx.Identifier{schema}.Sanitize(), string(migration)),
-		); err != nil {
-			t.Fatalf("apply %s to %s: %v", tenantMigration, schema, err)
+	for _, name := range tenantMigrations {
+		migration, err := platformmigrations.Files.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		for _, schema := range []string{homeSchema, otherSchema} {
+			if _, err := pool.Exec(ctx,
+				fmt.Sprintf("SET search_path TO %s; %s", pgx.Identifier{schema}.Sanitize(), string(migration)),
+			); err != nil {
+				t.Fatalf("apply %s to %s: %v", name, schema, err)
+			}
 		}
 	}
 	return pool
@@ -1104,5 +1118,317 @@ INSERT INTO centry.platform_config (section, key, value)
 VALUES ('maintenance', 'maintenance_enabled', $1::jsonb)
 ON CONFLICT (section, key) DO UPDATE SET value = EXCLUDED.value`, value); err != nil {
 		t.Fatalf("write the maintenance switch: %v", err)
+	}
+}
+
+/* ── #970: the provider signature mode ─────────────────────────────────── */
+
+// mintSignedTrigger creates a pipeline and a GitHub-preset trigger, and
+// returns the version id, the token id, the secret shown once, and the url the
+// settings route handed out — which is the ONE url a sender is given.
+func (h *harness) mintSignedTrigger(
+	t *testing.T, project, schema, name string, owner int64, body string,
+) (int64, string, string, string) {
+	t.Helper()
+	versionID := seedPipeline(t, h.pool, schema, name, owner)
+	response := h.do(t, http.MethodPost,
+		fmt.Sprintf("/api/v2/pipeline_triggers/prompt_lib/%s/%d", project, versionID), body, nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("mint signed trigger: status = %d, body = %s", response.Code, response.Body.String())
+	}
+	decoded := decode(t, response)
+	secret, _ := decoded["secret"].(string)
+	tokenID, _ := decoded["token_id"].(string)
+	url, _ := decoded["url"].(string)
+	if secret == "" || tokenID == "" || url == "" {
+		t.Fatalf("mint signed trigger returned no usable trigger: %v", decoded)
+	}
+	return versionID, tokenID, secret, url
+}
+
+// githubSignature is what a GitHub sender puts in `X-Hub-Signature-256`.
+func githubSignature(secret, body string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(body))
+	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+}
+
+// TestGitHubTriggerAcceptsItsOwnSignature is #970's acceptance: the call a
+// GitHub repository webhook really makes — no `Authorization` header, a signed
+// raw body, and the `/github` url this service handed out — starts the run.
+func TestGitHubTriggerAcceptsItsOwnSignature(t *testing.T) {
+	h := newHarness(t)
+	versionID, _, secret, url := h.mintSignedTrigger(
+		t, homeProject, homeSchema, "Repository webhook", ownerUserID, `{"type":"github"}`)
+
+	if !strings.HasSuffix(url, "/github") {
+		t.Fatalf("url = %q, want the /github suffix a GitHub webhook form is configured with", url)
+	}
+
+	// A real push payload: valid JSON with no `input` key at all. The run must
+	// be admitted on an EMPTY input rather than refused for the shape of a
+	// sender's own payload.
+	body := `{"ref":"refs/heads/main","commits":[],"repository":{"full_name":"acme/widgets"}}`
+	response := h.do(t, http.MethodPost, url, body,
+		map[string]string{pipelinetriggers.GitHubSignatureHeader: githubSignature(secret, body)})
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body = %s", response.Code, response.Body.String())
+	}
+	if h.start.count() != 1 {
+		t.Fatalf("dispatches = %d, want 1", h.start.count())
+	}
+	request, _ := h.start.last()
+	if request.UserInput != "" {
+		t.Fatalf("UserInput = %q, want empty — a push payload carries no `input`", request.UserInput)
+	}
+
+	// The stored row says what the settings tab renders, and the plain read
+	// carries it: which header the sender must be configured with.
+	read := h.do(t, http.MethodGet,
+		fmt.Sprintf("/api/v2/pipeline_triggers/prompt_lib/%s/%d", homeProject, versionID), "", nil)
+	stored := decode(t, read)
+	if stored["auth_mode"] != pipelinetriggers.AuthModeHMACSHA256 {
+		t.Fatalf("auth_mode = %v, want %q", stored["auth_mode"], pipelinetriggers.AuthModeHMACSHA256)
+	}
+	if stored["signature_header"] != pipelinetriggers.GitHubSignatureHeader {
+		t.Fatalf("signature_header = %v, want %q", stored["signature_header"], pipelinetriggers.GitHubSignatureHeader)
+	}
+	if stored["provider"] != pipelinetriggers.ProviderGitHub {
+		t.Fatalf("provider = %v, want %q", stored["provider"], pipelinetriggers.ProviderGitHub)
+	}
+	// A signing trigger gets no `secret_url`: the query carrier is a way to
+	// present the BEARER secret, which this trigger does not accept.
+	if _, present := stored["secret_url"]; present {
+		t.Fatalf("a signing trigger answered a secret_url: %v", stored)
+	}
+}
+
+// TestGitHubTriggerRefusesEverySignatureThatIsNotItsOwn is the other half, and
+// the one that decides whether the mode is worth having. Each row must be 401
+// with the SAME body, and none may dispatch.
+func TestGitHubTriggerRefusesEverySignatureThatIsNotItsOwn(t *testing.T) {
+	h := newHarness(t)
+	_, tokenID, secret, url := h.mintSignedTrigger(
+		t, homeProject, homeSchema, "Repository webhook", ownerUserID, `{"type":"github"}`)
+	body := `{"ref":"refs/heads/main"}`
+	valid := githubSignature(secret, body)
+
+	for _, test := range []struct {
+		name   string
+		target string
+		body   string
+		header map[string]string
+	}{
+		{
+			name:   "no signature header at all",
+			target: url,
+			body:   body,
+			header: nil,
+		},
+		{
+			name:   "a signature computed under another secret",
+			target: url,
+			body:   body,
+			header: map[string]string{pipelinetriggers.GitHubSignatureHeader: githubSignature("not-the-secret", body)},
+		},
+		{
+			// The signature is the trigger's own and the BODY is not the one
+			// it was computed over. This is the case a digest comparison
+			// cannot catch and the reason the raw bytes are kept.
+			name:   "the right signature over a tampered body",
+			target: url,
+			body:   `{"ref":"refs/heads/main","tampered":true}`,
+			header: map[string]string{pipelinetriggers.GitHubSignatureHeader: valid},
+		},
+		{
+			name:   "a well-formed signature in the wrong header",
+			target: url,
+			body:   body,
+			header: map[string]string{"X-Gitlab-Token": valid},
+		},
+		{
+			name:   "the malformed value a misconfigured sender sends",
+			target: url,
+			body:   body,
+			header: map[string]string{pipelinetriggers.GitHubSignatureHeader: "sha256=not-hex"},
+		},
+		{
+			// The mode is not decorative: the BEARER secret, which is the same
+			// string, must not be accepted by a signing trigger. Otherwise a
+			// url in a proxy log plus the secret in the provider's form would
+			// still start runs.
+			name:   "the bearer secret this trigger no longer accepts",
+			target: url,
+			body:   body,
+			header: map[string]string{"Authorization": "Bearer " + secret},
+		},
+		{
+			// The suffix is checked against the stored provider, so a shape
+			// this service never minted does not quietly work.
+			name:   "a provider suffix the row does not carry",
+			target: inboundTarget(homeProject, tokenID) + "/gitlab",
+			body:   body,
+			header: map[string]string{pipelinetriggers.GitHubSignatureHeader: valid},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := h.do(t, http.MethodPost, test.target, test.body, test.header)
+			if response.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want 401; body = %s", response.Code, response.Body.String())
+			}
+			if !strings.Contains(response.Body.String(), "this trigger cannot be used") {
+				t.Fatalf("body = %s, want the ONE refusal every credential failure shares", response.Body.String())
+			}
+		})
+	}
+	if h.start.count() != 0 {
+		t.Fatalf("dispatches = %d, want 0 — no refusal may start a run", h.start.count())
+	}
+}
+
+// TestBearerTriggerIsUnchangedByTheSignatureMode. Every existing trigger is a
+// `token` one, and the mode must not have moved the ground under it: the three
+// carriers still work, the /github url does NOT, and a signature header is
+// simply not read.
+func TestBearerTriggerIsUnchangedByTheSignatureMode(t *testing.T) {
+	h := newHarness(t)
+	versionID, tokenID, secret := h.mintTrigger(t, homeProject, homeSchema, "Nightly report", ownerUserID)
+
+	read := h.do(t, http.MethodGet,
+		fmt.Sprintf("/api/v2/pipeline_triggers/prompt_lib/%s/%d", homeProject, versionID), "", nil)
+	stored := decode(t, read)
+	if stored["auth_mode"] != pipelinetriggers.AuthModeToken {
+		t.Fatalf("auth_mode = %v, want %q for a create with no body", stored["auth_mode"], pipelinetriggers.AuthModeToken)
+	}
+	if url, _ := stored["url"].(string); strings.HasSuffix(url, "/github") {
+		t.Fatalf("url = %q — a bearer trigger must keep the bare inbound url", url)
+	}
+	if _, present := stored["signature_header"]; present {
+		t.Fatalf("a bearer trigger answered a signature_header: %v", stored)
+	}
+
+	body := `{"input":"run it"}`
+	accepted := h.do(t, http.MethodPost, inboundTarget(homeProject, tokenID), body,
+		map[string]string{"Authorization": "Bearer " + secret})
+	if accepted.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body = %s", accepted.Code, accepted.Body.String())
+	}
+
+	// A signature against a bearer trigger is not a second way in.
+	signed := h.do(t, http.MethodPost, inboundTarget(homeProject, tokenID), body,
+		map[string]string{pipelinetriggers.GitHubSignatureHeader: githubSignature(secret, body)})
+	if signed.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 for a signature against a bearer trigger; body = %s",
+			signed.Code, signed.Body.String())
+	}
+
+	// And the /github url is refused for it, because the row says `custom`.
+	suffixed := h.do(t, http.MethodPost, inboundTarget(homeProject, tokenID)+"/github", body,
+		map[string]string{"Authorization": "Bearer " + secret})
+	if suffixed.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 for a provider url on a bearer trigger; body = %s",
+			suffixed.Code, suffixed.Body.String())
+	}
+}
+
+// TestRotatingATriggerRewritesItsMode. Rotation is the only way the settings
+// dialog changes the mode, so a rotation that kept the old one would leave a
+// trigger verifying signatures the user has just switched off — and the
+// reverse, which is worse.
+func TestRotatingATriggerRewritesItsMode(t *testing.T) {
+	h := newHarness(t)
+	versionID, _, secret, url := h.mintSignedTrigger(
+		t, homeProject, homeSchema, "Repository webhook", ownerUserID, `{"type":"github"}`)
+	body := `{"ref":"refs/heads/main"}`
+	if response := h.do(t, http.MethodPost, url, body,
+		map[string]string{pipelinetriggers.GitHubSignatureHeader: githubSignature(secret, body)},
+	); response.Code != http.StatusAccepted {
+		t.Fatalf("the signed trigger did not work before the rotation: %d %s", response.Code, response.Body.String())
+	}
+
+	rotated := h.do(t, http.MethodPost,
+		fmt.Sprintf("/api/v2/pipeline_triggers/prompt_lib/%s/%d", homeProject, versionID), `{"type":"custom"}`, nil)
+	if rotated.Code != http.StatusOK {
+		t.Fatalf("rotate: status = %d, body = %s", rotated.Code, rotated.Body.String())
+	}
+	after := decode(t, rotated)
+	if after["auth_mode"] != pipelinetriggers.AuthModeToken {
+		t.Fatalf("auth_mode after the rotation = %v, want %q", after["auth_mode"], pipelinetriggers.AuthModeToken)
+	}
+	newSecret, _ := after["secret"].(string)
+	newURL, _ := after["url"].(string)
+	if strings.HasSuffix(newURL, "/github") {
+		t.Fatalf("url after the rotation = %q, want the bare inbound url", newURL)
+	}
+	if response := h.do(t, http.MethodPost, newURL, body,
+		map[string]string{"Authorization": "Bearer " + newSecret},
+	); response.Code != http.StatusAccepted {
+		t.Fatalf("the rotated bearer trigger was refused: %d %s", response.Code, response.Body.String())
+	}
+}
+
+// TestSignatureModeRefusesAModeThisServiceDoesNotImplement. The settings route
+// says what is wrong, unlike the inbound one: its caller is an authenticated
+// person configuring their own pipeline, and a silent fallback to the weaker
+// mode is the failure being avoided.
+func TestSignatureModeRefusesAModeThisServiceDoesNotImplement(t *testing.T) {
+	h := newHarness(t)
+	versionID := seedPipeline(t, h.pool, homeSchema, "Repository webhook", ownerUserID)
+	target := fmt.Sprintf("/api/v2/pipeline_triggers/prompt_lib/%s/%d", homeProject, versionID)
+
+	for _, body := range []string{
+		`{"type":"gitlab"}`,
+		`{"auth_mode":"hmac_sha512","signature_header":"X-Sig"}`,
+		`{"auth_mode":"hmac_sha256"}`,
+		`{"type":"github","auth_mode":"token"}`,
+		`{"auth_mode":"hmac_sha256","signature_header":"X Sig"}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			response := h.do(t, http.MethodPost, target, body, nil)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body = %s", response.Code, response.Body.String())
+			}
+		})
+	}
+	// Nothing was stored by any of them: a refused create leaves no trigger.
+	read := h.do(t, http.MethodGet, target, "", nil)
+	if decode(t, read)["configured"] == true {
+		t.Fatal("a refused create left a trigger behind")
+	}
+	if h.vault.size() != 0 {
+		t.Fatalf("vault entries = %d, want 0 — a refused create must mint nothing", h.vault.size())
+	}
+}
+
+// TestSignedTriggerReportsAnUnreadableVaultAsAnOutage. An HMAC cannot be
+// verified from a digest, so this is the one inbound path that opens the
+// vault. A vault that will not open is a deployment fault: reporting it as the
+// credential refusal would tell a sender to change a secret that is correct.
+func TestSignedTriggerReportsAnUnreadableVaultAsAnOutage(t *testing.T) {
+	h := newHarness(t)
+	_, _, secret, url := h.mintSignedTrigger(
+		t, homeProject, homeSchema, "Repository webhook", ownerUserID, `{"type":"github"}`)
+	body := `{"ref":"refs/heads/main"}`
+	signature := githubSignature(secret, body)
+
+	// The row stays and the plaintext goes, which is exactly what an unopenable
+	// Fernet vault looks like to this path.
+	for name := range h.vault.entries {
+		if err := h.vault.DeleteAdminHiddenSecret(context.Background(), name); err != nil {
+			t.Fatalf("empty the vault: %v", err)
+		}
+	}
+
+	response := h.do(t, http.MethodPost, url, body,
+		map[string]string{pipelinetriggers.GitHubSignatureHeader: signature})
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 for an unreadable credential store; body = %s",
+			response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "this trigger cannot be used") {
+		t.Fatalf("an outage was reported as a credential refusal: %s", response.Body.String())
+	}
+	if h.start.count() != 0 {
+		t.Fatalf("dispatches = %d, want 0", h.start.count())
 	}
 }

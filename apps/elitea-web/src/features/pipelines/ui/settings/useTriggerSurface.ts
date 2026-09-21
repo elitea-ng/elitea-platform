@@ -48,6 +48,9 @@ export interface TriggerSurface {
   readonly actions: TriggerActions;
   readonly cron: string;
   readonly webhookUrl: string | undefined;
+  /** The stored authentication mode and signature header (#970) — what the dialog shows and seeds its selector from. */
+  readonly webhookAuthMode: string | undefined;
+  readonly webhookSignatureHeader: string | undefined;
   readonly revealedSecret: string | undefined;
   readonly isScheduleModalOpen: boolean;
   readonly isWebhookModalOpen: boolean;
@@ -117,6 +120,8 @@ export function useTriggerSurface(input: TriggerSurfaceInput): TriggerSurface {
     actions,
     cron: triggers.schedule?.cron ?? DEFAULT_PIPELINE_CRON,
     webhookUrl: triggers.webhook?.url,
+    webhookAuthMode: triggers.webhook?.auth_mode,
+    webhookSignatureHeader: triggers.webhook?.signature_header,
     revealedSecret,
     isScheduleModalOpen,
     isWebhookModalOpen,

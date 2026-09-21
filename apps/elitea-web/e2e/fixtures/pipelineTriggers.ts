@@ -20,15 +20,24 @@
  * `storageState` — and every probe below goes through it. That is the whole
  * reason this module exists rather than a few inline `page.request` calls.
  *
- * ## THE AUTHENTICATION SCHEME IS A BEARER SECRET, NOT AN HMAC
+ * ## TWO AUTHENTICATION MODES, AND A TRIGGER IS IN ONE OF THEM
  *
- * Three carriers are accepted, in this order (`inbound.go::presentedSecret`):
+ * A `token` trigger — the default, and every trigger before #970 — accepts the
+ * secret in three carriers, in this order (`inbound.go::presentedSecret`):
  * `Authorization: Bearer <secret>`, `X-Elitea-Trigger-Token: <secret>`, then
  * `?token=<secret>`. The stored side is a SHA-256 digest compared in constant
- * time; there is no signature over the body, no per-provider mode and no
- * `/github` URL suffix. {@link WebhookCarrier} names exactly those three, and
- * the absence of a fourth is asserted by `pipelines.webhook-trigger.spec.ts`
- * rather than assumed here.
+ * time. {@link WebhookCarrier} names exactly those three, and the absence of a
+ * fourth is asserted by `pipelines.webhook-trigger.spec.ts` rather than
+ * assumed here.
+ *
+ * An `hmac_sha256` trigger — what `{"type":"github"}` mints — accepts NONE of
+ * them. The sender signs the RAW body with the same secret and sends the hex
+ * digest in the trigger's `signature_header` (`X-Hub-Signature-256` for the
+ * GitHub preset), which is what a repository webhook does: it sends no
+ * `Authorization` header and cannot be configured to. {@link sendSignedWebhook}
+ * is that sender, and it signs the EXACT bytes it puts on the wire — a signer
+ * that re-serialised the body would prove nothing about the route, because the
+ * digest would be over a payload the server never saw.
  *
  * ## WHAT AN ACCEPTED CREDENTIAL LOOKS LIKE ON A RUNTIME-LESS STACK
  *
@@ -43,6 +52,8 @@
  * that distinction, and accepts the 202 the full stack answers instead, so
  * the same helper is correct in both lanes and is never vacuous in either.
  */
+import { createHmac } from 'node:crypto';
+
 import { expect, request as apiRequest, type APIRequestContext, type APIResponse } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
@@ -90,6 +101,10 @@ export interface InboundTrigger {
    * usable" would be asserting the opposite of what the column means.
    */
   readonly revokedAt: string | undefined;
+  /** `token` or `hmac_sha256` (#970). Absent on a row written before the mode existed. */
+  readonly authMode: string | undefined;
+  /** The header a signing trigger reads the digest from. Absent for a bearer trigger. */
+  readonly signatureHeader: string | undefined;
 }
 
 interface TriggerScope {
@@ -110,6 +125,8 @@ function triggerFrom(raw: Record<string, unknown>): InboundTrigger {
     secretUrl: typeof raw['secret_url'] === 'string' ? raw['secret_url'] : '',
     lastUsedAt: typeof raw['last_used_at'] === 'string' ? raw['last_used_at'] : undefined,
     revokedAt: typeof raw['revoked_at'] === 'string' ? raw['revoked_at'] : undefined,
+    authMode: typeof raw['auth_mode'] === 'string' ? raw['auth_mode'] : undefined,
+    signatureHeader: typeof raw['signature_header'] === 'string' ? raw['signature_header'] : undefined,
   };
 }
 
@@ -286,6 +303,45 @@ export async function sendWebhook(
     default:
       return sender.post(url, options);
   }
+}
+
+/** The header the GitHub preset signs into (`authmode.go::GitHubSignatureHeader`). */
+export const GITHUB_SIGNATURE_HEADER = 'X-Hub-Signature-256';
+
+/** Options for {@link sendSignedWebhook}. */
+export interface SignedWebhookProbe {
+  /** The secret the trigger was minted with — the HMAC key. */
+  readonly secret: string;
+  /** The raw body. Signed and sent VERBATIM; nothing re-serialises it. */
+  readonly body: string;
+  /** Defaults to the GitHub header. */
+  readonly header?: string;
+  /**
+   * Send this instead of the computed digest. For the tampered-signature case;
+   * leave it out to send a correct one.
+   */
+  readonly signature?: string;
+}
+
+/**
+ * Send one request the way a GitHub repository webhook sends it: no
+ * `Authorization` header at all, the raw body, and
+ * `X-Hub-Signature-256: sha256=<hex>` over exactly those bytes.
+ *
+ * The digest is computed HERE rather than asked of the server, which is the
+ * whole point: a signature the server produced would prove nothing about
+ * whether it verifies one.
+ */
+export async function sendSignedWebhook(
+  sender: APIRequestContext,
+  trigger: Pick<InboundTrigger, 'url'>,
+  probe: SignedWebhookProbe,
+): Promise<APIResponse> {
+  const digest = probe.signature ?? `sha256=${createHmac('sha256', probe.secret).update(probe.body).digest('hex')}`;
+  return sender.post(`${BASE_URL}${trigger.url}`, {
+    headers: { 'content-type': 'application/json', [probe.header ?? GITHUB_SIGNATURE_HEADER]: digest },
+    data: probe.body,
+  });
 }
 
 /**

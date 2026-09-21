@@ -51,32 +51,55 @@ const (
 // tell an absent secret from an empty one and render a copy button that copies
 // nothing.
 type triggerView struct {
-	Configured bool       `json:"configured"`
-	TokenID    string     `json:"token_id,omitempty"`
-	URL        string     `json:"url,omitempty"`
-	Secret     string     `json:"secret,omitempty"`
-	SecretURL  string     `json:"secret_url,omitempty"`
-	CreatedBy  int64      `json:"created_by,omitempty"`
-	CreatedAt  *time.Time `json:"created_at,omitempty"`
-	RotatedAt  *time.Time `json:"rotated_at,omitempty"`
-	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
-	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	Configured bool   `json:"configured"`
+	TokenID    string `json:"token_id,omitempty"`
+	URL        string `json:"url,omitempty"`
+	Secret     string `json:"secret,omitempty"`
+	SecretURL  string `json:"secret_url,omitempty"`
+	// AuthMode, SignatureHeader and Provider are #970's. They are on the
+	// PLAIN read as well as on the credential-bearing ones: the settings
+	// dialog has to show which header the sender must be configured with
+	// every time it opens, and none of the three is a secret — the header
+	// name is public by construction, since the sender sets it.
+	AuthMode        string     `json:"auth_mode,omitempty"`
+	SignatureHeader string     `json:"signature_header,omitempty"`
+	Provider        string     `json:"provider,omitempty"`
+	CreatedBy       int64      `json:"created_by,omitempty"`
+	CreatedAt       *time.Time `json:"created_at,omitempty"`
+	RotatedAt       *time.Time `json:"rotated_at,omitempty"`
+	RevokedAt       *time.Time `json:"revoked_at,omitempty"`
+	LastUsedAt      *time.Time `json:"last_used_at,omitempty"`
 }
 
-func triggerURL(projectID int64, tokenID string) string {
-	return "/api/v2/pipeline_trigger/" + strconv.FormatInt(projectID, 10) + "/" + tokenID
+// triggerURL is the inbound path, plus the provider SUFFIX for a preset that
+// has one (#970).
+//
+// The suffix is for the sender's configuration screen — a GitHub webhook form
+// is happier with a URL that says what it is — and for nothing else. It is not
+// what selects the validation: the stored `auth_mode` is, and the inbound path
+// checks any suffix it is given AGAINST the stored provider rather than
+// reading a mode out of it.
+func triggerURL(projectID int64, tokenID, provider string) string {
+	url := "/api/v2/pipeline_trigger/" + strconv.FormatInt(projectID, 10) + "/" + tokenID
+	if provider != "" && provider != ProviderCustom {
+		url += "/" + provider
+	}
+	return url
 }
 
 func viewOf(projectID int64, trigger triggerRow) triggerView {
 	view := triggerView{
-		Configured: true,
-		TokenID:    trigger.TokenID,
-		URL:        triggerURL(projectID, trigger.TokenID),
-		CreatedBy:  trigger.CreatedBy,
-		CreatedAt:  &trigger.CreatedAt,
-		RotatedAt:  trigger.RotatedAt,
-		RevokedAt:  trigger.RevokedAt,
-		LastUsedAt: trigger.LastUsedAt,
+		Configured:      true,
+		TokenID:         trigger.TokenID,
+		URL:             triggerURL(projectID, trigger.TokenID, trigger.Provider),
+		AuthMode:        trigger.AuthMode,
+		SignatureHeader: trigger.SignatureHeader,
+		Provider:        trigger.Provider,
+		CreatedBy:       trigger.CreatedBy,
+		CreatedAt:       &trigger.CreatedAt,
+		RotatedAt:       trigger.RotatedAt,
+		RevokedAt:       trigger.RevokedAt,
+		LastUsedAt:      trigger.LastUsedAt,
 	}
 	return view
 }
@@ -86,6 +109,13 @@ func viewOf(projectID int64, trigger triggerRow) triggerView {
 // header form the tab also shows.
 func withSecret(view triggerView, secret string) triggerView {
 	view.Secret = secret
+	// A SIGNING trigger gets no `secret_url`. The query carrier is a way to
+	// PRESENT the bearer secret, and a signing trigger does not accept it —
+	// handing one back would be a copy button for a URL that answers 401, and
+	// a credential written into proxy logs for nothing.
+	if view.AuthMode == AuthModeHMACSHA256 {
+		return view
+	}
 	view.SecretURL = view.URL + "?" + TriggerTokenQueryParam + "=" + secret
 	return view
 }
@@ -173,6 +203,20 @@ func (h *Handler) CreateOrRotateTrigger(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
+	// #970: the mode the caller asked for, read BEFORE anything is minted or
+	// stored, so a body naming a mode this service does not implement costs
+	// nothing and changes nothing.
+	raw, err := readSettingsBody(r)
+	if err != nil {
+		writeError(w, http.StatusRequestEntityTooLarge, "the request body is too large")
+		return
+	}
+	mode, err := parseAuthMode(raw)
+	if err != nil {
+		writeError(w, http.StatusBadRequest,
+			"this trigger type is not supported; use `github`, or `auth_mode: hmac_sha256` with the header the sender signs into")
+		return
+	}
 	target, err := h.resolveRunTarget(r.Context(), schema, versionID)
 	switch {
 	case errors.Is(err, ErrVersionNotRunnable):
@@ -198,7 +242,7 @@ func (h *Handler) CreateOrRotateTrigger(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	trigger, err := h.upsertTrigger(r.Context(), schema,
-		target.ApplicationID, versionID, actorID, tokenID, hash, secretName)
+		target.ApplicationID, versionID, actorID, tokenID, hash, secretName, mode)
 	if err != nil {
 		h.log().Error("pipelinetriggers: write trigger", "err", err)
 		writeError(w, http.StatusInternalServerError, "the trigger could not be saved")

@@ -45,7 +45,7 @@ import {
   useGetPipelineInboundTrigger,
   useGetPipelineSchedule,
 } from '@/shared/api/generated/applications/applications';
-import type { PipelineInboundTrigger, PipelineSchedule } from '@/shared/api/generated/model';
+import type { PipelineInboundTrigger, PipelineInboundTriggerModeRequest, PipelineSchedule } from '@/shared/api/generated/model';
 
 export interface UsePipelineTriggersResult {
   /** The cron schedule, or `undefined` while the read has not answered. */
@@ -56,8 +56,15 @@ export interface UsePipelineTriggersResult {
   /** Create or replace the schedule. The caller becomes its author. */
   readonly saveSchedule: (cron: string) => Promise<void>;
   readonly removeSchedule: () => Promise<void>;
-  /** Create the trigger, or rotate an existing one. Answers WITH the new credential. */
-  readonly rotateWebhook: () => Promise<PipelineInboundTrigger>;
+  /**
+   * Create the trigger, or rotate an existing one. Answers WITH the new
+   * credential.
+   *
+   * The mode is passed on EVERY call, including a rotation, because a
+   * rotation rewrites it server-side (#970): omitting it on a rotate would
+   * silently move a signing trigger back to the bearer mode.
+   */
+  readonly rotateWebhook: (mode?: PipelineInboundTriggerModeRequest) => Promise<PipelineInboundTrigger>;
   /** Hand back the live credential of an existing trigger. */
   readonly revealWebhook: () => Promise<PipelineInboundTrigger>;
   readonly removeWebhook: () => Promise<void>;
@@ -136,9 +143,9 @@ export function usePipelineTriggers(projectId: string | undefined, versionId: nu
   );
 
   const rotateWebhook = useCallback(
-    async (): Promise<PipelineInboundTrigger> => {
+    async (mode?: PipelineInboundTriggerModeRequest): Promise<PipelineInboundTrigger> => {
       const target = requireScope();
-      const answer = await rotatePipelineInboundTrigger(target.projectId, target.versionId);
+      const answer = await rotatePipelineInboundTrigger(target.projectId, target.versionId, mode);
       await invalidate(target, 'webhook');
       return requireTrigger(answer);
     },
