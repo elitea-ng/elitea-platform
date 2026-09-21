@@ -85,11 +85,18 @@ async function readStoredTimes(page: Page, projectId: string, conversationId: st
   );
   expect(response.ok(), `the transcript read answered ${String(response.status())}`).toBe(true);
   const body = (await response.json()) as {
-    items?: readonly { role?: string; created_at?: string; content?: string }[];
+    items?: readonly { role?: string; created_at?: string; updated_at?: string; content?: string }[];
   };
   return (body.items ?? []).map((item) => ({
     role: item.role ?? '',
-    createdAt: String(item.created_at ?? ''),
+    // THE TIME THE TEXT IS FROM, which is what a transcript shows and what
+    // these cases are about: `updated_at` when the row has been rewritten,
+    // `created_at` otherwise — the same preference the renderer applies
+    // (`ApplicationAnswer`'s `displayTime`) and the reference SPA's own
+    // `updated_at || created_at`. A regeneration rewrites the row in place, so
+    // reading `created_at` alone can only ever report when the REPLACED text
+    // arrived.
+    createdAt: String(item.updated_at ?? item.created_at ?? ''),
     content: String(item.content ?? ''),
   }));
 }
@@ -233,17 +240,15 @@ test('a successful regeneration raises no error toast and leaves the question’
  * regenerated, so the transcript stops claiming the new text is as old as the
  * text it replaced.
  *
- * IT DOES NOT. The regeneration rewrites the answer row in place and leaves
+ * IT DID NOT. The regeneration rewrites the answer row in place and leaves
  * `created_at` exactly as it was — measured: the same millisecond, before and
- * after — and the route serves no `updated_at` at all, so there is no other
- * field a renderer could be reading. The person sees fresh text under the old
- * timestamp. See #975.
+ * after — and the route served no `updated_at` at all, so there was no other
+ * field a renderer could read: the person saw fresh text under the old
+ * timestamp. Fixed in #975 — every finalize already stamped `updated_at`, the
+ * messages route now serves it, and both this reader and `ApplicationAnswer`
+ * prefer it.
  */
 test('a regenerated answer carries the time it was regenerated', async ({ page }) => {
-  test.fail(
-    true,
-    '#975: product gap — regeneration rewrites the answer row without touching `created_at`, and the messages route serves no `updated_at`, so a regenerated answer keeps the original time',
-  );
   test.setTimeout(420_000);
 
   const { projectId, conversationId, before } = await turnThenRegenerate(page, 'rgs');

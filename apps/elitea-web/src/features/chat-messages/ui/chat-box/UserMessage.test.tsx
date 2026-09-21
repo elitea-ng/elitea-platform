@@ -306,7 +306,10 @@ describe('UserMessage edit-and-resubmit (elitea_issues #5140, #5221, #5138, #513
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit the message and regenerate answer' }));
     const saveButton = screen.getByRole('button', { name: 'Save and apply' });
-    expect(saveButton).toBeDisabled();
+    // UNCHANGED IS ENABLED (issue 980): this test used to assert the opposite here,
+    // which is the behaviour that made the retry onetest ELITEA-0540 describes
+    // unreachable. What #5138 is about is the EMPTY field, asserted below.
+    expect(saveButton).toBeEnabled();
 
     const textbox = screen.getByRole('textbox');
     fireEvent.change(textbox, { target: { value: '' } });
@@ -344,5 +347,66 @@ describe('UserMessage edit-and-resubmit (elitea_issues #5140, #5221, #5138, #513
     expect(updatedItems[0]?.content).toBe('What is the capital of Germany?');
     expect(updatedItems[0]?.content).not.toBe('What is the capital of France?');
   });
-});
+  /* onetest: ELITEA-0540, issue 980 — "Save and apply" on an UNCHANGED question is a
+   * retry, and must reach the caller. It was disabled on `value ===
+   * resolvedContent`, so re-running a question after a bad answer could not be
+   * done from the editor at all. */
+  it('issue 980: an unchanged question can still be saved, and submits its text', () => {
+    const onSubmit = vi.fn();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const message = buildMessage(0, {
+      content: 'What is the capital of France?',
+      messageItems: [questionItem] as unknown as ChatMessage['messageItems'],
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+          <UserMessage message={message} messageId={message.id} onSubmit={onSubmit} />
+        </ThemeProvider>
+      </QueryClientProvider>,
+    );
 
+    fireEvent.click(screen.getByRole('button', { name: 'Edit the message and regenerate answer' }));
+    const saveButton = screen.getByRole('button', { name: 'Save and apply' });
+    expect(saveButton, 'a retry of the same question must be reachable').toBeEnabled();
+    fireEvent.click(saveButton);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    const [, updatedItems] = onSubmit.mock.calls[0] as [string, ReadonlyArray<{ content: string }>];
+    expect(updatedItems[0]?.content).toBe('What is the capital of France?');
+  });
+
+  /* onetest: ELITEA-0545, issue 980 — a message with NO stored `text_message` item
+   * (the ordinary shape of a question the browser is still holding from the
+   * send that created it) must still submit its edited text. It used to submit
+   * an EMPTY array, which `handleSubmitEditedMessage` drops silently: the
+   * editor closed, the bubble updated locally, and no request was made. */
+  it('issue 980: a message with no stored question item still submits its edited text', () => {
+    const onSubmit = vi.fn();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const message = buildMessage(0, { content: 'What is the capital of France?' });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+          <UserMessage message={message} messageId={message.id} onSubmit={onSubmit} />
+        </ThemeProvider>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit the message and regenerate answer' }));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'What is the capital of Spain?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save and apply' }));
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    const [, updatedItems] = onSubmit.mock.calls[0] as [
+      string,
+      ReadonlyArray<{ content: string; item_type: string; uuid?: string }>,
+    ];
+    expect(updatedItems, 'the caller must be given something to send').toHaveLength(1);
+    expect(updatedItems[0]?.content).toBe('What is the capital of Spain?');
+    expect(updatedItems[0]?.item_type).toBe('text_message');
+    // No `uuid` is invented for an item that does not exist: the field names
+    // WHICH stored row to rewrite.
+    expect(updatedItems[0]?.uuid).toBeUndefined();
+  });
+});

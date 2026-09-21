@@ -24,6 +24,12 @@ import type { VersionSummary } from '@/entities/version';
 import { chatInputCompositionHooks, mentionHooks } from '@/features/chat-input';
 import type { ChatInputHandle } from '@/features/chat-input';
 
+/**
+ * The substring a withdrawal stamps into the reverted clone's name. The
+ * server's own marker — see `isActiveParticipantWithdrawn`.
+ */
+const WITHDRAWN_VERSION_MARKER = '-withdrawn-';
+
 /** Mirrors old-app `common/constants:PUBLIC_PROJECT_ID` — not re-exported from `features/chat-participants`'s barrel (§3.5 cap), same env-var read that barrel's own `model/constants.ts` does. */
 const PUBLIC_PROJECT_ID = (import.meta.env['VITE_PUBLIC_PROJECT_ID'] as string | undefined) || '0';
 
@@ -106,6 +112,8 @@ export interface UseChatBoxStateResult {
   readonly hasOtherUsers: boolean;
   /** baseline: `isActiveParticipantBroken` (`ChatBox.jsx:2035-2041`) — a public-project participant whose current version isn't in its own version list. */
   readonly isActiveParticipantBroken: boolean;
+  /** #972 — the agent this conversation uses was published and has since been withdrawn. */
+  readonly isActiveParticipantWithdrawn: boolean;
   /** baseline: `isActiveParticipantVersionMissing` (`ChatBox.jsx:2043-2050`). */
   readonly isActiveParticipantVersionMissing: boolean;
   /** The "@"/"#" trigger-detection state machine (`chatInputCompositionHooks.useNewInputKeyDownHandler`). */
@@ -234,6 +242,42 @@ export function useChatBoxState(params: UseChatBoxStateParams): UseChatBoxStateR
     return !activeParticipantVersions.some((v) => v.id === String(versionId));
   }, [activeParticipant, activeParticipantVersions]);
 
+  /**
+   * The conversation's agent was PUBLISHED and has since been WITHDRAWN
+   * (#972).
+   *
+   * Nothing in the chat surface used to read a participant's published state
+   * at all, so a conversation whose agent left the catalogue looked entirely
+   * live: no notice, an editable composer, an enabled Send. The holder could
+   * only find out by sending.
+   *
+   * THE SIGNAL, and why it is this one. A withdrawal does not delete the
+   * published clone — it REVERTS it to a draft and RENAMES it, stamping
+   * `-withdrawn-` into the name (the server's own marker, pinned by
+   * `agents.publishing.spec.ts`'s "after a withdrawal the same version name is
+   * free again"). So the bound version still resolves, which is why
+   * `isActiveParticipantBroken` above — written for a version that is GONE —
+   * never fires for this case.
+   *
+   * Status alone is not enough: an ordinary private agent's version is a draft
+   * too, and treating every draft as withdrawn would put this notice on most
+   * conversations in the product. Both halves together are specific to a
+   * version that WAS published and no longer is.
+   *
+   * A server-side `withdrawn_at` on the version row would be a better signal
+   * than a name substring, and is the right long-term fix; this reads the
+   * marker the product already writes rather than inventing a field the API
+   * does not serve.
+   */
+  const isActiveParticipantWithdrawn = useMemo(() => {
+    if (!activeParticipant || !activeParticipantVersions?.length) return false;
+    const versionId = activeParticipant.entitySettings?.versionId;
+    if (versionId === undefined) return false;
+    const bound = activeParticipantVersions.find((version) => version.id === String(versionId));
+    if (bound === undefined) return false;
+    return bound.status !== 'published' && bound.name.includes(WITHDRAWN_VERSION_MARKER);
+  }, [activeParticipant, activeParticipantVersions]);
+
   const isActiveParticipantVersionMissing = useMemo(() => {
     if (!activeParticipant) return false;
     if (!activeParticipantVersions?.length) return false;
@@ -263,6 +307,7 @@ export function useChatBoxState(params: UseChatBoxStateParams): UseChatBoxStateR
     users,
     hasOtherUsers,
     isActiveParticipantBroken,
+    isActiveParticipantWithdrawn,
     isActiveParticipantVersionMissing,
     keyDown,
     slash,

@@ -4420,5 +4420,6 @@
   "pipelines.pipelineWebhookModal.reveal": "Reveal secret",
   "pipelines.pipelineWebhookModal.rotate": "Rotate secret",
   "pipelines.pipelineWebhookModal.revoke": "Revoke",
-  "pipelines.pipelineWebhookModal.done": "Done"
+  "pipelines.pipelineWebhookModal.done": "Done",
+  "widgets.chatBox.participantWithdrawn": "This agent has been unpublished and is no longer available. You can still read this conversation."
 }

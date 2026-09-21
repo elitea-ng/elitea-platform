@@ -67,6 +67,10 @@ export function useChatBoxActions({
       state.setIsMentioningEveryone(false);
       state.setSelectedUsers([]);
       state.slash.resetSlash();
+      // issue 974: a new question ends the previous answer's read-out, exactly as
+      // the reference SPA's `onSendMessage` does. Otherwise the old answer is
+      // still being spoken while the new one streams in.
+      readAloudStop();
       chatInputRef.current?.reset?.();
       const pendingAttachments = data.attachments.state.attachments;
       data.attachments.state.onClearAttachments();
@@ -78,7 +82,15 @@ export function useChatBoxActions({
         if (result.createdConversation) onConversationCreated?.(result.createdConversation);
       });
     },
-    [data.hasPendingHitlInterrupt, data.attachments.state, handlers, state, chatInputRef, onConversationCreated],
+    [
+      data.hasPendingHitlInterrupt,
+      data.attachments.state,
+      handlers,
+      state,
+      chatInputRef,
+      onConversationCreated,
+      readAloudStop,
+    ],
   );
 
   const handleSendStarter = useCallback(
@@ -91,8 +103,16 @@ export function useChatBoxActions({
   );
 
   const handleRegenerate = useCallback(
-    (messageId: string) => { void handlers.regenerateAnswer(messageId); },
-    [handlers],
+    (messageId: string) => {
+      // issue 974: the old answer stops being read the moment it stops being the
+      // answer. Without this the voice went on reading text the transcript had
+      // already replaced, over the top of the new turn — upstream bug
+      // EliteaAI/elitea_issues#4995, and what the reference SPA stops in
+      // `onRegenerateAnswer`.
+      readAloudStop();
+      void handlers.regenerateAnswer(messageId);
+    },
+    [handlers, readAloudStop],
   );
 
   const handleCopy = useCallback(
@@ -101,18 +121,34 @@ export function useChatBoxActions({
   );
 
   const handleDeleteAnswer = useCallback(
-    (messageId: string) => { deleteAlert.openDialog(messageId); },
-    [deleteAlert],
+    (messageId: string) => {
+      // issue 974: same rule as regenerate — an answer that is being deleted must
+      // not keep speaking. Stopped when the dialog OPENS rather than on
+      // confirm, which is also what `handleClear` does: the read is over
+      // either way, and a voice still reading a message the user is being
+      // asked about deleting is the defect.
+      readAloudStop();
+      deleteAlert.openDialog(messageId);
+    },
+    [deleteAlert, readAloudStop],
   );
 
   const handleSubmitEditedMessage = useCallback(
     (messageId: string, updatedItems: readonly { uuid?: string | undefined; content: string; item_type: string }[]) => {
       const newContent = updatedItems.find((item) => item.item_type === 'text_message')?.content ?? '';
       if (!newContent.trim()) return;
+      // Was anything actually CHANGED? A save that changed nothing is a RETRY
+      // of the same question (onetest ELITEA-0540, issue 980), and a retry is an
+      // ordinary regeneration: sending `updated_items` for it would ask the
+      // platform to rewrite a question into the text it already holds, which
+      // the regeneration contract refuses outright
+      // (`!emptyJSONArray(body.UpdatedItems)`, api/v2/agentexecution/route.go)
+      // — so the retry would 400 for asking for a rewrite nobody wanted.
+      const unchanged = messages.find((item) => item.id === messageId)?.content === newContent;
       data.setChatHistory((prev) => prev.map((item) => (item.id !== messageId ? item : { ...item, content: newContent })));
       const answer = messages.find((item) => item.questionId === messageId);
       if (answer) {
-        void handlers.regenerateAnswer(answer.id, updatedItems);
+        void handlers.regenerateAnswer(answer.id, ...(unchanged ? [] : [updatedItems]));
       } else {
         void handlers.sendQuestion({ question: newContent });
       }

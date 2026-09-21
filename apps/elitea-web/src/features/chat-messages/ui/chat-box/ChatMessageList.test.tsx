@@ -351,3 +351,51 @@ describe('ChatMessageList: canvas-from-selection on the LAST message', () => {
     expect(screen.queryByTestId('answer-text-item')).not.toBeInTheDocument();
   });
 });
+
+/**
+ * issue 974: speaking mode has to REACH the answers.
+ *
+ * `ApplicationAnswer` carries the auto-read effect — "when this is the last
+ * message and it has finished streaming, read it out" — and this list declared
+ * `tts.autoSpeak` on its own prop group and destructured it nowhere, so the
+ * flag stopped at the composer. The mode captured the user's voice, sent the
+ * question, and then answered in silence.
+ */
+describe('ChatMessageList speaking mode', () => {
+  const chatHistory = [
+    { id: 'q1', role: 'user', name: 'Reader', content: 'read this back', createdAt: '2026-09-09T10:00:00Z' },
+    { id: 'a1', role: 'assistant', name: 'agent', content: 'The answer to read.', createdAt: '2026-09-09T10:00:01Z' },
+  ] as unknown as readonly ChatMessage[];
+
+  function renderList(autoSpeak: boolean, onAutoSpeak: (text: string, messageId: string) => void) {
+    Element.prototype.scrollIntoView = vi.fn();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+          <ChatMessageList
+            chatHistory={chatHistory}
+            projectId="90106"
+            userId="6"
+            tts={{ autoSpeak, onAutoSpeak }}
+          />
+        </ThemeProvider>
+      </QueryClientProvider>,
+    );
+  }
+
+  it('reads the last answer back when speaking mode is on', () => {
+    const onAutoSpeak = vi.fn<(text: string, messageId: string) => void>();
+    renderList(true, onAutoSpeak);
+
+    expect(onAutoSpeak, 'speaking mode must reach the answer row').toHaveBeenCalledTimes(1);
+    expect(onAutoSpeak.mock.calls[0]?.[0]).toBe('The answer to read.');
+  });
+
+  it('reads nothing back when it is off', () => {
+    const onAutoSpeak = vi.fn<(text: string, messageId: string) => void>();
+    renderList(false, onAutoSpeak);
+
+    expect(onAutoSpeak).not.toHaveBeenCalled();
+  });
+});

@@ -2086,7 +2086,7 @@ func (r *ConversationsRepo) ListMessages(ctx context.Context, projectID, convers
 
 	q := fmt.Sprintf(`
 		SELECT mg.id, mg.conversation_id, COALESCE(mg.uuid::text, ''),
-			p.entity_name, mg.meta, mg.created_at,
+			p.entity_name, mg.meta, mg.created_at, mg.updated_at,
 			mg.author_participant_id, mg.sent_to_id, mg.reply_to_id,
 			COALESCE((
 				SELECT string_agg(mt.content, E'\n' ORDER BY mi.order_index)
@@ -2120,8 +2120,11 @@ func (r *ConversationsRepo) ListMessages(ctx context.Context, projectID, convers
 		var groupID int
 		// A scan failure used to `continue`, so an unreadable row silently
 		// dropped a message out of the transcript.
+		// `updated_at` is nullable, so it is scanned into the pointer the wire
+		// field is: a group that has never been rewritten states no update
+		// time rather than claiming one.
 		if err := rows.Scan(&groupID, &m.ConversationID, &m.UUID, &entityName, &meta, &m.CreatedAt,
-			&m.AuthorParticipantID, &m.SentToID, &m.ReplyToID, &m.Content); err != nil {
+			&m.UpdatedAt, &m.AuthorParticipantID, &m.SentToID, &m.ReplyToID, &m.Content); err != nil {
 			return conversations.MessagesListResponse{}, fmt.Errorf("conversations: scan message: %w", err)
 		}
 		m.ID = strconv.Itoa(groupID)

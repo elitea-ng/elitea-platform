@@ -194,6 +194,17 @@ describe('buildTtsProps', () => {
     });
     expect(result.speakingMessageId).toBe('42');
   });
+
+  /* issue 974: `autoSpeak` carries SPEAKING MODE to the answers. It was a hardcoded
+   * `false`, which made `ApplicationAnswer`'s auto-read effect unreachable. */
+  it('issue 974: autoSpeak follows speaking mode', () => {
+    const readAloud = {
+      onAutoSpeak: () => {}, speakingMessageId: null, speakingSegments: null, spokenRange: null,
+    };
+    expect(buildTtsProps(readAloud, true).autoSpeak, 'speaking mode must reach the answers').toBe(true);
+    expect(buildTtsProps(readAloud, false).autoSpeak).toBe(false);
+    expect(buildTtsProps(readAloud).autoSpeak, 'a caller that says nothing means mode off').toBe(false);
+  });
 });
 
 describe('deriveChatBoxInputState', () => {

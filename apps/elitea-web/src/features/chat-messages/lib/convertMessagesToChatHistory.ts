@@ -59,6 +59,7 @@ export interface ChatMessage {
   readonly avatar?: string | undefined;
   readonly content: string;
   readonly createdAt: string;
+  /** When the row was last REWRITTEN, present only when it has been (issue 975): a regeneration rewrites the answer in place and keeps `createdAt`, so this — preferred by the renderer, `createdAt` as the fallback — is when the text on screen actually arrived. */ readonly updatedAt?: string | undefined;
   readonly messageItems?: readonly MessageItemWire[] | undefined;
   readonly userId?: string | undefined;
   readonly participantId?: string | undefined;
@@ -213,9 +214,7 @@ export function convertToPlayerQuestion(
   };
 }
 
-// ---------------------------------------------------------------------------
-// SwarmChild tool action (source: convertChatConversationMessages.js:351-381)
-// ---------------------------------------------------------------------------
+// --- SwarmChild tool action (source: convertChatConversationMessages.js:351-381)
 
 /**
  * A swarm-child tool action embedded in an AI answer's `toolActions[]`.

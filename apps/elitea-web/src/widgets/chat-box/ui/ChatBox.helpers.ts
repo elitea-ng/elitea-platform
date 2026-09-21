@@ -157,15 +157,15 @@ export interface ChatBoxTtsProps {
   readonly spokenRange?: { readonly start: number; readonly end: number } | undefined;
 }
 
-/** Builds `ChatMessageList`'s `tts` prop group from a `voiceHooks.useReadAloud()` result — extracted to keep `ChatBox`'s complexity down. */
+/** Builds `ChatMessageList`'s `tts` prop group from a `voiceHooks.useReadAloud()` result. `isSpeakingMode` is a PARAMETER, not the hardcoded `autoSpeak: false` it used to be (issue 974): with that constant — and `ChatMessageList` not forwarding the flag either — `ApplicationAnswer`'s auto-read effect could never fire, so speaking mode captured the user's voice and then answered in silence. */
 export function buildTtsProps(readAloud: {
   readonly onAutoSpeak: (text: string, messageId: string) => void;
   readonly speakingMessageId: string | number | null | undefined;
   readonly speakingSegments: readonly unknown[] | null | undefined;
   readonly spokenRange: { readonly start: number; readonly end: number } | null | undefined;
-}): ChatBoxTtsProps {
+}, isSpeakingMode = false): ChatBoxTtsProps {
   return {
-    autoSpeak: false,
+    autoSpeak: isSpeakingMode,
     onAutoSpeak: readAloud.onAutoSpeak,
     speakingMessageId: readAloud.speakingMessageId != null ? String(readAloud.speakingMessageId) : undefined,
     speakingSegments: readAloud.speakingSegments ?? undefined,
@@ -184,7 +184,7 @@ export function deriveChatBoxInputState(flags: {
   readonly hasChatInput: boolean;
   readonly isProcessingSymbols: boolean;
   readonly hasPendingHitlInterrupt: boolean;
-  readonly isActiveParticipantBroken: boolean;
+  readonly isActiveParticipantBroken: boolean; readonly isActiveParticipantWithdrawn?: boolean; // #972
 }): { readonly isInputLoading: boolean; readonly isComposerBusy: boolean; readonly disabledSend: boolean } {
   const isComposerBusy =
     Boolean(flags.isLoadingConversation) ||
@@ -197,7 +197,7 @@ export function deriveChatBoxInputState(flags: {
     isComposerBusy ||
     flags.isProcessingSymbols ||
     flags.hasPendingHitlInterrupt ||
-    flags.isActiveParticipantBroken;
+    flags.isActiveParticipantBroken || Boolean(flags.isActiveParticipantWithdrawn);
   return { isInputLoading: isComposerBusy || flags.isStreaming, isComposerBusy, disabledSend };
 }
 

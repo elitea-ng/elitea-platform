@@ -180,6 +180,18 @@ export function ApplicationAnswer({
     onContinueTokenLimitExecution?.(messageId);
   }, [onContinueTokenLimitExecution, messageId]);
 
+  /**
+   * The time this answer's TEXT is from — `updated_at` when the row has been
+   * rewritten, `created_at` otherwise (issue 975, and the reference SPA's own
+   * `displayTime = updated_at || created_at`).
+   *
+   * A regeneration rewrites the answer row in place and keeps `created_at`, so
+   * showing that field alone captioned brand-new text with the time the text
+   * it REPLACED had arrived. The store stamps `updated_at` on every finalize;
+   * this is the half that shows it.
+   */
+  const displayTime = answer.updatedAt || answer.createdAt;
+
   const handleAutoSpeak = useCallback(() => {
     onAutoSpeak?.(answer.content, messageId);
   }, [onAutoSpeak, answer.content, messageId]);
@@ -229,7 +241,7 @@ export function ApplicationAnswer({
           name={participantName ?? ''}
           sentToName={t('features.chatMessages.replyTo', 'Message')}
           sentToInteractive
-          createdAt={answer.createdAt}
+          createdAt={displayTime}
           memoriesUsed={answer.memoriesUsed}
         />
       )}

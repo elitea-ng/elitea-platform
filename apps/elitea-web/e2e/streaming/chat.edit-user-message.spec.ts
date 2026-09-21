@@ -208,10 +208,6 @@ test('the edit control belongs to the last user message alone, and follows it', 
  * retry the case describes does not exist. See #980.
  */
 test('saving an edited question without changing it re-runs the turn', async ({ page }) => {
-  test.fail(
-    true,
-    '#980: product gap — "Save and apply" is disabled while the text equals the original (`value === resolvedContent`), so the unchanged-save retry the case describes cannot be performed at all',
-  );
   test.setTimeout(420_000);
 
   const projectId = await readCallerPersonalProjectId(page.request);
@@ -255,17 +251,24 @@ test('saving an edited question without changing it re-runs the turn', async ({ 
  * special characters round-trips into the STORED question and re-runs the
  * turn.
  *
- * IT DOES NOT LEAVE THE BROWSER. Measured: the editor opens, accepts the text,
- * the button enables, the submit closes the editor — and ZERO requests are
- * made. The bubble updates locally and the stored question is unchanged, so
- * the edit is gone on reload, with no error anywhere. See #980, which also
- * carries the likely mechanism (an empty `updatedItems` for a message with no
- * question item, and `handleSubmitEditedMessage`'s silent `return`).
+ * IT USED NOT TO LEAVE THE BROWSER at all: the editor opened, accepted the
+ * text, the submit closed it, and ZERO requests were made — `handleSubmit`
+ * built an EMPTY `updatedItems` for a message carrying no stored question item
+ * and `handleSubmitEditedMessage` returned silently. That half is fixed (issue
+ * 980): the edit is dispatched now.
+ *
+ * WHAT IS LEFT IS SERVER-SIDE, and is why this case stays marked. The
+ * regeneration contract refuses a non-empty `updated_items` outright
+ * (`!emptyJSONArray(body.UpdatedItems)`, internal/api/v2/agentexecution/
+ * route.go) and nothing on the server rewrites the stored question's text, so
+ * an edited question 400s instead of re-running. Accepting the field, writing
+ * the new text onto the question group inside the admission transaction, and
+ * running the turn from it is a feature, not a wiring fix.
  */
 test('an edited question is stored as written and re-runs the turn', async ({ page }) => {
   test.fail(
     true,
-    '#980: product gap — the edit submit dispatches no request at all, so the edited question never reaches the store and is lost on reload',
+    'issue 980 (deferred half): the client now dispatches the edit, but the REGENERATION CONTRACT refuses it — `!emptyJSONArray(body.UpdatedItems)` in internal/api/v2/agentexecution/route.go answers 400 for any non-empty `updated_items`, and nothing on the server rewrites the stored question. Server-side feature, not a wiring bug.',
   );
   test.setTimeout(480_000);
 

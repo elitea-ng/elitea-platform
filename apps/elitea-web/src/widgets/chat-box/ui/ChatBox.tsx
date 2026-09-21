@@ -45,7 +45,9 @@ import { buildChatBoxContinuationProps } from './ChatBoxContinuation';
 import { useChatBoxLlmSettingsDialog } from './ChatBoxLlmSettingsDialog';
 import { buildChatBoxAttachmentProps, buildChatBoxInputSlots, useChatBoxVoiceFeedback } from './ChatBoxInputSlots';
 import { ChatBoxQueuedMessages, chatBoxQueueKey, useChatBoxQueuedMessages } from './ChatBoxQueuedMessages';
+import { ChatBoxVoicePlayer } from './ChatBoxVoicePlayer';
 import { buildChatBoxPopupsProps, ChatBoxPopups } from './ChatBoxPopups';
+import { ChatBoxWithdrawnNotice } from './ChatBoxWithdrawnNotice';
 import { ChatBoxDeleteModal } from './ChatBoxDeleteModal';
 import { ChatEmptyGreeting } from './ChatEmptyGreeting';
 import { chatColumnSx, chatShellSx } from './ChatBox.layout';
@@ -147,10 +149,7 @@ const ChatBoxInner = memo(function ChatBox({
 
   // Socket client + read-aloud (TTS)
   const socketClient = useSocketClient(); const voiceFeedback = useChatBoxVoiceFeedback(); // #932/#934: VoiceButton's recording flag + its error messages, which had no caller at all
-  const readAloud = voiceHooks.useReadAloud({
-    projectId: projectIdString,
-    socket: socketClient,
-  });
+  const readAloud = voiceHooks.useReadAloud({ projectId: projectIdString, socket: socketClient });
   const lifecycle = data.lifecycle;
 
   // Mirror the live, socket-synced history out to the parent's own mirror, when one
@@ -273,11 +272,11 @@ const ChatBoxInner = memo(function ChatBox({
     isProcessingSymbols: state.keyDown.isProcessingSymbols,
     hasPendingHitlInterrupt: data.hasPendingHitlInterrupt,
     isActiveParticipantBroken: state.isActiveParticipantBroken,
+    isActiveParticipantWithdrawn: state.isActiveParticipantWithdrawn,
   });
 
   // Action callbacks (send, regenerate, copy, delete, edit-resubmit, HITL resume, MCP/token-limit continue, clear chat, starter send)
-  const readAloudRef = useStableRef(readAloud);
-  const readAloudStop = useCallback(() => { readAloudRef.current.stop(); }, [readAloudRef]);
+  const readAloudRef = useStableRef(readAloud); const readAloudStop = useCallback(() => { readAloudRef.current.stop(); }, [readAloudRef]);
   const {
     handleSend,
     handleSendStarter,
@@ -338,7 +337,7 @@ const ChatBoxInner = memo(function ChatBox({
             onSubmitEditedMessage: handleSubmitEditedMessage,
           }}
           continuation={buildChatBoxContinuationProps({ onHitlResume: handleHitlResume, onContinueMcpExecution: handleContinueMcpExecution, onContinueTokenLimitExecution: handleContinueTokenLimit }, projectIdString)}
-          tts={buildTtsProps(readAloud)} canvas={buildCanvasProps(editorCallbacks)}
+          tts={buildTtsProps(readAloud, state.isSpeakingMode)} canvas={buildCanvasProps(editorCallbacks)}
         />
         {state.shouldShowStarters && (
           <ChatConversationStarters
@@ -348,6 +347,7 @@ const ChatBoxInner = memo(function ChatBox({
         )}
       </Box>
       <Box sx={{ p: 1 }}>
+        <ChatBoxVoicePlayer showPlayer={readAloud.showPlayer} voicePlayerProps={readAloud.voicePlayerProps} />
         <ChatBoxQueuedMessages queue={queued} />
         <ChatBoxPopups
           {...buildChatBoxPopupsProps({
@@ -389,7 +389,7 @@ const ChatBoxInner = memo(function ChatBox({
           refs={{ attachmentButtonRef, voiceButtonRef }}
         />
       </Box>
-      <ChatBoxDeleteModal alert={deleteAlert} />{llmSettingsDialog.dialog}{voiceFeedback.alert}
+      <ChatBoxWithdrawnNotice withdrawn={state.isActiveParticipantWithdrawn} /><ChatBoxDeleteModal alert={deleteAlert} />{llmSettingsDialog.dialog}{voiceFeedback.alert}
     </Box>
   );
 });

@@ -198,3 +198,67 @@ func TestConversationReadsAcceptTheConversationUUID(t *testing.T) {
 		t.Errorf("conversation with no runtime record carries analytics: %s", state.Analytics)
 	}
 }
+
+// #975: a REWRITTEN group must serve the time it was rewritten, and one that
+// was never rewritten must state no update time at all.
+//
+// The column is already stamped by every finalize path
+// (`FinalizeCurrentAgentFullMessage`, `ResetCurrentAgentResponse`, and the two
+// pause finalizes — internal/db/queries/agent_chat.sql); what was missing was
+// the read. Until this, a regenerated answer came back carrying only
+// `created_at` — the time the text it REPLACED had arrived — so the transcript
+// showed fresh words under a stale timestamp and no other field existed to
+// read instead.
+func TestListMessagesServesTheUpdateTimeOfARewrittenGroup(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	repo := NewConversationsRepo(pool)
+	ctx := context.Background()
+	numericID, _ := seedTranscript(t, repo)
+
+	before, err := repo.ListMessages(ctx, "1", numericID, wholeTranscript())
+	if err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	for _, message := range before.Items {
+		if message.UpdatedAt != nil {
+			t.Fatalf("a group that was never rewritten must state no update time, got %v", *message.UpdatedAt)
+		}
+	}
+
+	// Exactly what a regeneration's finalize does to the answer row.
+	if _, err := repo.pool.Exec(ctx, `
+UPDATE p_1.chat_message_group
+SET updated_at = clock_timestamp()
+WHERE conversation_id = $1::int
+  AND author_participant_id IN (
+      SELECT id FROM p_1.chat_participants WHERE entity_name <> 'user'
+  )`, numericID); err != nil {
+		t.Fatalf("stamp the rewritten group: %v", err)
+	}
+
+	after, err := repo.ListMessages(ctx, "1", numericID, wholeTranscript())
+	if err != nil {
+		t.Fatalf("list messages after the rewrite: %v", err)
+	}
+	stamped := 0
+	for _, message := range after.Items {
+		if message.Role == "user" {
+			if message.UpdatedAt != nil {
+				t.Fatalf("the question was not rewritten and must keep stating no update time")
+			}
+			continue
+		}
+		if message.UpdatedAt == nil {
+			t.Fatalf("the rewritten answer must serve its update time")
+		}
+		// The point of the field: it is LATER than the row's creation, so a
+		// renderer preferring it shows when the text actually arrived.
+		if !message.UpdatedAt.After(message.CreatedAt) {
+			t.Fatalf("update time %v must be after the creation time %v", *message.UpdatedAt, message.CreatedAt)
+		}
+		stamped++
+	}
+	if stamped != 1 {
+		t.Fatalf("exactly one group was rewritten, %d came back stamped", stamped)
+	}
+}

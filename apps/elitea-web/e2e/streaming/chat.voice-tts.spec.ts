@@ -32,18 +32,20 @@
  * helper several areas need.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * THE TWO-STEP, AND WHAT IS FAIL-MARKED (#974)
+ * WHAT #974 CHANGED UNDER THESE CASES
  * ─────────────────────────────────────────────────────────────────────────────
- * `Read out` does NOT start the voice in this app. `onAutoSpeak` only ARMS the
- * text (`setSpeakableText` + `setShowPlayer(true)`), and `showPlayer` is
- * destructured nowhere — the baseline's `{showPlayer && <VoiceMiniPlayer/>}`
- * has no counterpart here. What does speak is `VoiceControlButton`, mounted
- * permanently in the composer by `ChatBoxInputSlots`: its play control speaks
- * whatever the last `Read out` armed. The cases that only need playback to
- * HAPPEN drive that two-step (`startPlayback`) and pass; the three claims that
- * are genuinely unbuilt — read-out starting playback, speaking-mode auto-read,
- * and stopping the voice on delete/regenerate — are `test.fail`-marked against
- * issue #974, which records each against its baseline call site.
+ * `Read out` used to ARM the text and nothing else (`setSpeakableText` +
+ * `setShowPlayer(true)`), with `showPlayer` destructured nowhere — so the
+ * baseline's `{showPlayer && <VoiceMiniPlayer/>}` had no counterpart, nothing
+ * spoke, and the only control that could play or stop the voice was one parked
+ * permanently in the composer. Speaking mode never read an answer back either
+ * (`buildTtsProps` hardcoded `autoSpeak: false`), and the voice kept reading a
+ * message that had just been deleted, regenerated or superseded.
+ *
+ * Now `onAutoSpeak` speaks, the player is mounted above the composer while a
+ * read-out is live, `autoSpeak` carries speaking mode to the answers, and
+ * `useChatBoxActions` stops the voice on send/regenerate/delete as well as
+ * clear. Every case below asserts the fixed behaviour; none is fail-marked.
  */
 import type { Page } from '@playwright/test';
 import { expect, test } from '@playwright/test';
@@ -244,32 +246,40 @@ async function answerOneTurn(page: Page, prompt: string): Promise<string> {
 }
 
 /**
- * The control that actually speaks — `VoiceControlButton`'s play/stop, mounted
- * in the composer. The SAME element becomes Stop while the voice runs (the app
- * swaps `onPlay`/`onStop` and the icon on `isPlaying`), which is what the stop
- * assertions below click.
+ * The play/stop control of the player a live read-out shows (#974). The SAME
+ * element becomes Stop while the voice runs — the app swaps `onPlay`/`onStop`
+ * and the icon on `isPlaying` — which is what the stop assertions below click.
+ *
+ * SCOPED TO THE PLAYER. `VoiceControlButton` is also mounted permanently in
+ * the composer (for its voice-settings gear), so an unscoped locator would
+ * find that one whether or not the player exists — and "the player appeared"
+ * is exactly what the assertions below are about.
  */
-const playControl = (page: Page) => page.getByTestId('chat-voice-play-stop-button');
+const playControl = (page: Page) =>
+  page.getByTestId('chat-voice-mini-player').getByTestId('chat-voice-play-stop-button');
 
 /**
- * Arms the answer and starts the voice — the app's real two-step (see the
- * header, and #974 for why the first click alone is not enough). Returns how
- * many utterances had been spoken before, so a caller can assert on the new
- * one without assuming it is the first.
+ * Read one answer aloud and wait until the voice has actually started.
+ *
+ * ONE CLICK. `Read out` starts playback itself since #974; the player it
+ * surfaces exists to stop it. Returns how many utterances had been spoken
+ * before, so a caller can assert on the new one without assuming it is the
+ * first.
  */
 async function startPlayback(page: Page): Promise<number> {
   const before = (await ttsState(page)).spoken.length;
   const button = readOutButton(page);
   await expect(button, 'the answer action bar must offer Read out').toBeVisible({ timeout: 30_000 });
   await button.click();
-  await expect(playControl(page), 'arming an answer must leave a play control to press').toBeVisible({ timeout: 15_000 });
-  await playControl(page).click();
   await expect
     .poll(async () => (await ttsState(page)).spoken.length, {
       timeout: 15_000,
-      message: 'the play control spoke nothing',
+      message: 'Read out spoke nothing',
     })
     .toBeGreaterThan(before);
+  await expect(playControl(page), 'a live read-out must show the player it is stopped from').toBeVisible({
+    timeout: 15_000,
+  });
   return before;
 }
 
@@ -298,11 +308,10 @@ test.beforeEach(async ({ page }) => {
 });
 
 /* onetest: ELITEA-1311 — the core claim of the TTS smoke: the Read-out control on an answer's action bar
- * STARTS playback. It does not: `onAutoSpeak` arms the text and the player that would play it
- * (`showPlayer` → `VoiceMiniPlayer`) is rendered nowhere. */
+ * STARTS playback. It used to only ARM the text, with the player that would play it (`showPlayer` →
+ * `VoiceMiniPlayer`) rendered nowhere; fixed in #974 — `onAutoSpeak` speaks, and the player is mounted. */
 test('clicking Read out starts playback of the answer', async ({ page }) => {
   test.setTimeout(240_000);
-  test.fail(true, '#974: product gap — Read out only arms the text; `showPlayer`/`VoiceMiniPlayer` has no render site, so nothing speaks until the composer play control is pressed');
   await answerOneTurn(page, `autotest tts arm ${String(Date.now() % 1_000_000)}`);
 
   const button = readOutButton(page);
@@ -367,14 +376,11 @@ test('read-out restarts from the beginning after a stop, and works from the keyb
     .toBeGreaterThan(cancelsBefore);
   await expect(readOutButton(page)).toBeEnabled({ timeout: 15_000 });
 
-  // KEYBOARD, not a click: the case's own accessibility claim, on both halves
-  // of the two-step.
+  // KEYBOARD, not a click: the case's own accessibility claim. One press of
+  // the focused control is the whole interaction since #974.
   await readOutButton(page).focus();
   await expect(readOutButton(page)).toBeFocused();
   await page.keyboard.press('Enter');
-  await playControl(page).focus();
-  await expect(playControl(page)).toBeFocused();
-  await page.keyboard.press('Space');
   await expect
     .poll(async () => (await ttsState(page)).spoken.length, {
       timeout: 15_000,
@@ -433,7 +439,6 @@ test('clearing the chat stops playback and leaves speaking mode on', async ({ pa
  * `useChatBoxActions` stops read-aloud on Clear only; the baseline also stops it from the delete dialog. */
 test('deleting the answer being read stops playback', async ({ page }) => {
   test.setTimeout(240_000);
-  test.fail(true, '#974: product gap — only `handleClear` calls `readAloudStop()`; delete leaves the old voice running (baseline: `useDeleteMessageAlert({ onStopTTS })`)');
   await answerOneTurn(page, `autotest tts delete ${String(Date.now() % 1_000_000)}`);
 
   await startPlayback(page);
@@ -456,7 +461,6 @@ test('deleting the answer being read stops playback', async ({ page }) => {
  * stop the old voice before the new turn starts, so the two never overlap. */
 test('regenerating the answer being read stops the old playback', async ({ page }) => {
   test.setTimeout(240_000);
-  test.fail(true, '#974: product gap — `handleRegenerate` never calls `readAloudStop()` (baseline stops TTS in `onRegenerateAnswer`), so the old answer keeps speaking over the new turn');
   await answerOneTurn(page, `autotest tts regen ${String(Date.now() % 1_000_000)}`);
 
   await startPlayback(page);
@@ -510,7 +514,6 @@ test('speaking mode releases the microphone during playback and resumes when it 
  * `isSpeakingMode`. */
 test('speaking mode reads a new answer back automatically', async ({ page }) => {
   test.setTimeout(240_000);
-  test.fail(true, '#974: product gap — `buildTtsProps` hardcodes `autoSpeak: false` and `ChatMessageList` never forwards `isSpeakingMode` to `ApplicationAnswer`, so the auto-read effect can never fire');
   await answerOneTurn(page, `autotest tts auto ${String(Date.now() % 1_000_000)}`);
 
   await enterSpeakingMode(page);
@@ -600,9 +603,6 @@ test('the pipeline editor test chat offers a working Read out on its answer', as
     const readOut = pane.getByRole('button', { name: 'Read out' }).last();
     await expect(readOut, 'the pipeline answer must offer Read out').toBeVisible({ timeout: 60_000 });
     await readOut.click();
-    const play = pane.getByTestId('chat-voice-play-stop-button');
-    await expect(play).toBeVisible({ timeout: 15_000 });
-    await play.click();
     await expect
       .poll(async () => (await ttsState(page)).spoken.length, {
         timeout: 15_000,
@@ -610,8 +610,13 @@ test('the pipeline editor test chat offers a working Read out on its answer', as
       })
       .toBeGreaterThan(0);
 
+    // The player this surface shows while it reads — scoped to the pane's own
+    // mini player, because the composer mounts a `VoiceControlButton` of its
+    // own for the voice-settings gear.
+    const stop = pane.getByTestId('chat-voice-mini-player').getByTestId('chat-voice-play-stop-button');
+    await expect(stop, 'a live read-out must show the player it is stopped from').toBeVisible({ timeout: 15_000 });
     const cancelsBefore = (await ttsState(page)).cancels;
-    await play.click();
+    await stop.click();
     await expect
       .poll(async () => (await ttsState(page)).cancels, { timeout: 15_000, message: 'Stop left the voice running' })
       .toBeGreaterThan(cancelsBefore);
