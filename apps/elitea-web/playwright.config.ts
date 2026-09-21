@@ -189,15 +189,23 @@ const REAL_ENGINE_JOURNEY = /journeys\/deepwiki\/deepwiki\.real-engine\.spec\.ts
  * `support-stack` project only, against that stack
  * (`scripts/support-e2e.sh`).
  *
- * Matches `support.spec.ts` (the original file) AND `support.auto-enroll.
+ * Matches `support.spec.ts` (the original file), `support.auto-enroll.
  * spec.ts` (issue #940 D2 — a brand-new, never-before-seen user's first
  * contact; that "send a message" step is a real Predict call, same as
- * `support.spec.ts`'s test 2). It does NOT match `support.entrypoints.
- * spec.ts` or `support.widget.spec.ts`, which run in the ordinary
- * `chromium`/`webkit` projects — see those files' own headers for why they
- * do not need this stack.
+ * `support.spec.ts`'s test 2), and the two #939 group-7 files —
+ * `support.conversation.spec.ts` (a real turn: which agent answered, what the
+ * client sent, what the composer does while it waits) and
+ * `support.api-scoping.spec.ts` (no turn, but every route it calls is refused
+ * unless the assistant is READY, which is the platform-wide switch this stack
+ * owns for the length of a run).
+ *
+ * It does NOT match `support.entrypoints.spec.ts` or
+ * `support.widget.spec.ts`, which run in the ordinary `chromium`/`webkit`
+ * projects — see those files' own headers for why they do not need this
+ * stack.
  */
-const SUPPORT_JOURNEY = /journeys\/support\/support\.(?:auto-enroll\.)?spec\.ts/;
+const SUPPORT_JOURNEY =
+  /journeys\/support\/support\.(?:auto-enroll\.|conversation\.|api-scoping\.)?spec\.ts/;
 
 /*
  * The one journey that needs the shared project to hold NO toolkits: J17.1,
@@ -307,6 +315,7 @@ const PLATFORM_FLAG_JOURNEYS = [
   /journeys\/admin\/admin\.features\.spec\.ts/,
   /journeys\/admin\/admin\.guardrails\.spec\.ts/,
   /journeys\/admin\/admin\.resources-help-center\.spec\.ts/,
+  /journeys\/shell\/shell\.resources-version-info\.spec\.ts/,
   /journeys\/support\/support\.entrypoints\.spec\.ts/,
   /journeys\/support\/support\.widget\.spec\.ts/,
 ];
@@ -576,7 +585,7 @@ export default defineConfig({
      * property `scripts/e2e-journey-shape.test.mjs` rule 1 exists to hold.
      *
      * `storageState` is the member state, the same default the engine
-     * projects carry: six of the seven files call `.use({ storageState:
+     * projects carry: seven of the eight files call `.use({ storageState:
      * STORAGE_STATE.admin })` themselves, and `admin.guardrails.spec.ts`
      * drives the API as the project default. Changing the default here would
      * silently re-authenticate that one file.
