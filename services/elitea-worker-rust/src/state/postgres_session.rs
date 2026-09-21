@@ -674,7 +674,7 @@ WHERE tenant_id = $1
         let fetch_limit =
             i64::try_from(fetch_limit).map_err(|_| PostgresSessionError::ResourceExhausted)?;
         let query = format!(
-            "{} SELECT event_payload, event_timestamp FROM active_events ORDER BY event_ordinal DESC LIMIT $11",
+            "{} SELECT event_payload, event_timestamp FROM active_events ORDER BY event_ordinal DESC LIMIT $13",
             include_str!("postgres_session_active_events.sql")
         );
         let rows = sqlx::query(&query)
@@ -688,6 +688,8 @@ WHERE tenant_id = $1
             .bind(&self.authority.app_name)
             .bind(&self.authority.user_id)
             .bind(&self.authority.session_id)
+            .bind(Option::<&str>::None)
+            .bind(false)
             .bind(fetch_limit)
             .fetch_all(&mut **transaction)
             .await
@@ -832,7 +834,9 @@ WHERE tenant_id = $1
     ) -> Result<(), PostgresSessionError> {
         let query = format!(
             "{} SELECT count(*), COALESCE(sum(payload_bytes), 0)::bigint FROM active_events \
-             WHERE NOT ($11 AND recovery_marker AND branch = $12)",
+             WHERE NOT ($13 AND recovery_marker AND branch = $14 \
+               AND ($11::text IS NOT NULL AND NOT has_branches \
+                    OR latest_snapshot IS NULL OR event_ordinal <> latest_snapshot))",
             include_str!("postgres_session_active_events.sql")
         );
         let (count, bytes) = sqlx::query_as::<_, (i64, i64)>(&query)
@@ -846,6 +850,8 @@ WHERE tenant_id = $1
             .bind(&self.authority.app_name)
             .bind(&self.authority.user_id)
             .bind(&self.authority.session_id)
+            .bind(history_snapshot_agent(candidate))
+            .bind(!candidate.branch.is_empty())
             .bind(is_recovery_marker(candidate))
             .bind(&candidate.branch)
             .fetch_one(&mut **transaction)
@@ -1694,9 +1700,30 @@ fn is_recovery_marker(event: &Event) -> bool {
         && event.actions.artifact_delta.is_empty()
         && event.actions.transfer_to_agent.is_none()
         && !event.actions.escalate
+        && !event.actions.skip_summarization
         && event.actions.tool_confirmation.is_none()
         && event.actions.tool_confirmation_decision.is_none()
         && event.actions.compaction.is_none()
         && event.actions.route.is_none()
         && event.long_running_tool_ids.is_empty()
+}
+
+fn history_snapshot_agent(event: &Event) -> Option<&str> {
+    if !is_recovery_marker(event) || !event.branch.is_empty() {
+        return None;
+    }
+    let descriptor = event
+        .actions
+        .state_delta
+        .get("elitea.agent.history_snapshot.v1")?;
+    let checkpoint = event.actions.state_delta.get("elitea.agent.recovery.v1")?;
+    if descriptor["version"] != 1
+        || checkpoint["phase"] != "model_pending"
+        || !checkpoint["model"]["request"]["contents"].is_array()
+    {
+        return None;
+    }
+    descriptor["agent_name"]
+        .as_str()
+        .filter(|name| !name.is_empty())
 }

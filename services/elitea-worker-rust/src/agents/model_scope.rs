@@ -149,11 +149,13 @@ impl ScopedModelCheckpoint {
         let writer = self
             .writer
             .get_or_try_init(|| async {
-                let sessions: Arc<dyn SessionService> =
-                    Arc::new(super::session::RunnerSessionService::new(
+                let sessions: Arc<dyn SessionService> = Arc::new(
+                    super::session::RunnerSessionService::new(
                         self.storage.sessions.open(&identity).await?,
                         self.completion.clone(),
-                    ));
+                    )
+                    .with_history_scope(self.storage.definition_digest, context.agent_name()),
+                );
                 let session = match sessions
                     .get(GetRequest {
                         app_name: identity.app_name.to_string(),
@@ -275,7 +277,12 @@ impl ScopedModelCheckpoint {
         };
         writer
             .checkpoint
-            .before_model(writer.identity.clone(), context.invocation_id(), request)
+            .before_model(
+                writer.identity.clone(),
+                context.invocation_id(),
+                context.agent_name(),
+                request,
+            )
             .await
     }
 

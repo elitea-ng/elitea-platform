@@ -1111,6 +1111,7 @@ pub(super) struct RunnerSessionService {
     inner: Arc<dyn SessionService>,
     completion: Option<Arc<dyn DurableModelCompletion>>,
     omit_empty_user_input: bool,
+    compaction_view: Option<([u8; 32], String)>,
 }
 
 impl RunnerSessionService {
@@ -1122,7 +1123,13 @@ impl RunnerSessionService {
             inner,
             completion,
             omit_empty_user_input: false,
+            compaction_view: None,
         }
+    }
+
+    pub(super) fn with_history_scope(mut self, definition: [u8; 32], agent_name: &str) -> Self {
+        self.compaction_view = Some((definition, agent_name.to_owned()));
+        self
     }
 
     fn with_recovery(mut self, enabled: bool) -> Self {
@@ -1189,10 +1196,13 @@ impl SessionService for RunnerSessionService {
     }
 
     async fn get(&self, req: GetRequest) -> adk_rust::Result<Box<dyn Session>> {
-        self.inner
-            .get(req)
-            .await
-            .map(super::runner_history::project)
+        let session = self.inner.get(req).await?;
+        super::runner_history::project(
+            session,
+            self.compaction_view
+                .as_ref()
+                .map(|(digest, agent)| (*digest, agent.as_str())),
+        )
     }
 
     async fn list(&self, req: ListRequest) -> adk_rust::Result<Vec<Box<dyn Session>>> {
@@ -1782,7 +1792,9 @@ where
         projector.mark_checkpoint_recovery();
     }
     let runner_sessions = Arc::new(
-        RunnerSessionService::new(sessions, model.durable_completion()).with_recovery(recovering),
+        RunnerSessionService::new(sessions, model.durable_completion())
+            .with_recovery(recovering)
+            .with_history_scope(definition_digest, ROOT_AGENT_NAME),
     );
     let mut runner_builder = adk_rust::runner::Runner::builder()
         .app_name(APP_NAME)
@@ -2104,7 +2116,7 @@ where
         chat_history: _,
         context_management,
         capability_id: _,
-        definition_digest: _,
+        definition_digest,
         tenant_id: _,
         resource_project_id: _,
         projection_project_id: _,
@@ -2139,10 +2151,10 @@ where
     let mut runner_builder = adk_rust::runner::Runner::builder()
         .app_name(APP_NAME)
         .agent(agent)
-        .session_service(Arc::new(RunnerSessionService::new(
-            sessions,
-            model.durable_completion(),
-        )));
+        .session_service(Arc::new(
+            RunnerSessionService::new(sessions, model.durable_completion())
+                .with_history_scope(definition_digest, ROOT_AGENT_NAME),
+        ));
     if let Some(compaction) = context_compaction {
         runner_builder = runner_builder.context_compaction(compaction);
     }

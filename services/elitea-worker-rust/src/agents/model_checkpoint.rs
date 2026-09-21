@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub(super) const CHECKPOINT_KEY: &str = "elitea.agent.recovery.v1";
+pub(super) const HISTORY_SNAPSHOT_KEY: &str = "elitea.agent.history_snapshot.v1";
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -39,6 +40,43 @@ struct Checkpoint {
 struct ModelSnapshot {
     request: LlmRequest,
     tools: HashMap<String, Value>,
+}
+
+/// Read model history without granting permission to replay an operation.
+pub(super) fn history_contents(
+    event: &Event,
+    definition: [u8; 32],
+    agent_name: &str,
+) -> adk_rust::Result<Vec<adk_rust::Content>> {
+    let descriptor = event.actions.state_delta.get(HISTORY_SNAPSHOT_KEY);
+    let checkpoint = event
+        .actions
+        .state_delta
+        .get(CHECKPOINT_KEY)
+        .ok_or_else(invalid_checkpoint)?;
+    let checkpoint: Checkpoint =
+        serde_json::from_value(checkpoint.clone()).map_err(|_| invalid_checkpoint())?;
+    if descriptor.is_none_or(|value| {
+        value["version"] != 1 || value["agent_name"].as_str() != Some(agent_name)
+    }) || checkpoint.version != 1
+        || checkpoint.definition_digest != definition
+        || checkpoint.invocation_id != event.invocation_id
+        || !matches!(checkpoint.phase, Phase::ModelPending)
+    {
+        return Err(invalid_checkpoint());
+    }
+    let model = checkpoint.model.ok_or_else(invalid_checkpoint)?;
+    if model.request.contents.is_empty() {
+        return Err(invalid_checkpoint());
+    }
+    // Current instructions are bound separately. A saved request cannot restore
+    // obsolete system instructions through the conversation-history channel.
+    Ok(model
+        .request
+        .contents
+        .into_iter()
+        .filter(|content| content.role != "system")
+        .collect())
 }
 
 /// Opaque evidence produced only after durable checkpoint validation.
@@ -298,7 +336,12 @@ impl ModelCheckpointWriter {
                 let writer = model.clone();
                 Box::pin(async move {
                     writer
-                        .before_model(context.try_identity()?, context.invocation_id(), request)
+                        .before_model(
+                            context.try_identity()?,
+                            context.invocation_id(),
+                            context.agent_name(),
+                            request,
+                        )
                         .await
                 })
             }))
@@ -317,6 +360,7 @@ impl ModelCheckpointWriter {
         &self,
         identity: AdkIdentity,
         invocation_id: &str,
+        agent_name: &str,
         request: LlmRequest,
     ) -> adk_rust::Result<BeforeModelResult> {
         let request = self.prepare_request(request)?;
@@ -333,6 +377,7 @@ impl ModelCheckpointWriter {
                         invocation_id,
                         Phase::ContextPending,
                         Some(&source),
+                        None,
                         None,
                     )
                     .await?;
@@ -365,6 +410,7 @@ impl ModelCheckpointWriter {
                     )
                 })
                 .transpose()?,
+            self.context_compaction.as_ref().map(|_| agent_name),
         )
         .await?;
         if let Some(compaction) = &self.context_compaction {
@@ -396,6 +442,7 @@ impl ModelCheckpointWriter {
             Phase::ToolMayHaveStarted,
             None,
             None,
+            None,
         )
         .await
     }
@@ -407,6 +454,7 @@ impl ModelCheckpointWriter {
         phase: Phase,
         request: Option<&LlmRequest>,
         context_state: Option<Value>,
+        history_agent: Option<&str>,
     ) -> adk_rust::Result<()> {
         let mut event = Event::new(invocation_id);
         "elitea-recovery".clone_into(&mut event.author);
@@ -426,6 +474,12 @@ impl ModelCheckpointWriter {
             .actions
             .state_delta
             .insert(CHECKPOINT_KEY.to_owned(), checkpoint);
+        if let Some(agent_name) = history_agent {
+            event.actions.state_delta.insert(
+                HISTORY_SNAPSHOT_KEY.to_owned(),
+                json!({"version": 1, "agent_name": agent_name}),
+            );
+        }
         if let Some(value) = context_state {
             event
                 .actions
@@ -488,6 +542,7 @@ mod tests {
                     "invocation",
                     Phase::ModelPending,
                     Some(&saved),
+                    None,
                     None,
                 )
                 .await
@@ -799,6 +854,7 @@ mod tests {
         }
     }
     #[tokio::test]
+    #[allow(clippy::too_many_lines)] // One ordered story checks replay permission across lifecycle transitions.
     async fn recovery_rejects_foreign_generation_definition_tools_and_completed_steps() {
         let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
         let session = sessions
@@ -825,6 +881,7 @@ mod tests {
                 "inv-1",
                 Phase::ModelPending,
                 Some(&request),
+                None,
                 None,
             )
             .await
@@ -889,7 +946,14 @@ mod tests {
                 .is_err()
         );
         writer
-            .persist(identity, "inv-1", Phase::ToolMayHaveStarted, None, None)
+            .persist(
+                identity,
+                "inv-1",
+                Phase::ToolMayHaveStarted,
+                None,
+                None,
+                None,
+            )
             .await
             .expect("tool marker");
         assert!(

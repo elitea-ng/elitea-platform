@@ -128,7 +128,12 @@ async fn prepare(scope: &ScopedModelCheckpoint, context: &Context) -> LlmRequest
     );
     let BeforeModelResult::Continue(request) = writer
         .checkpoint
-        .before_model(writer.identity.clone(), context.invocation_id(), history())
+        .before_model(
+            writer.identity.clone(),
+            context.invocation_id(),
+            context.agent_name(),
+            history(),
+        )
         .await
         .unwrap()
     else {
@@ -328,6 +333,7 @@ async fn append_streamed_terminal(scope: &ScopedModelCheckpoint, child: &Context
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // One ordered story verifies parent takeover and child history recovery.
 async fn postgres_child_scope_is_fenced_by_root_takeover_and_reuses_its_own_summary() {
     use crate::state::postgres_session_tests::{IsolatedPostgres, authority_for, install_schema};
     let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
@@ -414,17 +420,22 @@ async fn postgres_child_scope_is_fenced_by_root_takeover_and_reuses_its_own_summ
         serde_json::to_value(prepared).unwrap()
     );
     assert_eq!(summary.0.load(Ordering::SeqCst), 1);
+    let retained: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM elitea_runtime.agent_session_events WHERE strpos(event_payload, $1) > 0)",
+    ).bind("Durable child result").fetch_one(&database.pool).await.unwrap();
     assert!(
-        stored(&reloaded, &child)
-            .await
-            .events()
-            .all()
+        retained,
+        "the immutable ledger retains the completed child result"
+    );
+    let active = stored(&reloaded, &child).await.events().all();
+    assert!(
+        active
             .iter()
-            .any(|event| {
-                serde_json::to_string(event)
-                    .unwrap()
-                    .contains("Durable child result")
-            })
+            .filter_map(|event| event.llm_response.content.as_ref())
+            .any(|content| serde_json::to_string(content)
+                .unwrap()
+                .contains("Child task")),
+        "the child restores model history from its prepared request snapshot"
     );
     database.pool.close().await;
 }

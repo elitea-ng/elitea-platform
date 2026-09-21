@@ -106,7 +106,9 @@ Point 4 also includes the following required work, confirmed by the user on 2026
 These are part of gate 4 acceptance, not optional follow-up work after compaction.
 
 The [checkpoint retention investigation](source-mapping/context-event-retention-20260921.md) separates active recovery markers from immutable replay evidence.
-Ordinary-event retention across repeated compactions remains open.
+The [prepared-request history projection](source-mapping/context-runner-history-projection-20260921.md) verifies six storage retirement cycles and browser recovery after abrupt worker loss.
+Chat 606 uses two claims and retains its answer after reload.
+Repeated live compaction, nested browser recovery, and in-process history bounds remain open.
 The [summary work-order correction](source-mapping/context-summary-work-order-20260921.md) passes deployed compaction and fresh-browser reload in chat 604.
 
 The [2026-09-17 toolkit binding audit](source-mapping/toolkit-binding-drift-20260917.md)

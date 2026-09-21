@@ -842,12 +842,13 @@ async fn postgres_summary_child() {
                 vec!["fixture_after_checkpoint".into()]
             )
         );
-        let stored = sessions.get(load_request()).await.unwrap();
-        assert!(stored.events().all().iter().any(|event| {
-            serde_json::to_string(event)
-                .unwrap()
-                .contains(&"earlier draft ".repeat(30))
-        }));
+        let retained: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM elitea_runtime.agent_session_events WHERE strpos(event_payload, $1) > 0)",
+        ).bind("earlier draft ".repeat(30)).fetch_one(&pool).await.unwrap();
+        assert!(
+            retained,
+            "the immutable ledger retains original summary evidence"
+        );
     }
     pool.close().await;
 }
@@ -1209,4 +1210,143 @@ async fn million_token_window_repeated_compaction_preserves_current_authority() 
         compaction.committed(record).unwrap();
     }
     assert_eq!(summary.requests.lock().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn runner_history_projects_exact_summary_without_rewriting_control_or_durable_events() {
+    let service = InMemorySessionService::new();
+    let definition = [7; 32];
+    let anchor = Content::new("user").with_text("Prepare the handoff; send nothing externally.");
+    let earlier = Content::new("model").with_text("Verified archive. ".repeat(400));
+    let recent = Content::new("user").with_text("Use teal in the handoff.");
+    let summary = Content::new("user").with_text("Archive verified. Handoff pending.");
+    let record = CompactionRecord {
+        version: 1,
+        definition_digest: definition,
+        anchor: extend_digest([0; 32], std::slice::from_ref(&anchor)).unwrap(),
+        covered_count: 1,
+        covered_digest: extend_digest([0; 32], std::slice::from_ref(&earlier)).unwrap(),
+        replacement: vec![summary.clone()],
+    };
+    let session = service
+        .create(CreateRequest {
+            app_name: "projection-test".into(),
+            user_id: "user-1".into(),
+            session_id: Some("session-1".into()),
+            state: [(STATE_KEY.to_owned(), serde_json::to_value(&record).unwrap())].into(),
+        })
+        .await
+        .unwrap();
+    let identity = session.try_identity().unwrap();
+    for (id, author, content) in [
+        ("anchor", "user", anchor.clone()),
+        ("covered", "elitea-agent", earlier.clone()),
+        ("recent", "user", recent.clone()),
+    ] {
+        let mut event = Event::with_id(id, "invocation-1");
+        event.author = author.into();
+        event.set_content(content);
+        if id == "covered" {
+            event.actions.transfer_to_agent = Some("child-agent".into());
+        }
+        service
+            .append_event_for_identity(AppendEventRequest {
+                identity: identity.clone(),
+                event,
+            })
+            .await
+            .unwrap();
+    }
+    let request = GetRequest {
+        app_name: "projection-test".into(),
+        user_id: "user-1".into(),
+        session_id: "session-1".into(),
+        num_recent_events: None,
+        after: None,
+    };
+    let projected = crate::agents::runner_history::project(
+        service.get(request.clone()).await.unwrap(),
+        Some((definition, "elitea-agent")),
+    )
+    .unwrap();
+    let projected =
+        crate::agents::runner_history::project(projected, Some((definition, "elitea-agent")))
+            .unwrap();
+    let events = projected.events().all();
+    let native = adk_rust::runner::MutableSession::new(Arc::from(projected));
+    let history = native.conversation_history_for_agent_impl(Some("elitea-agent"), "");
+    assert_eq!(
+        serde_json::to_value(history).unwrap(),
+        serde_json::to_value(vec![anchor.clone(), summary, recent]).unwrap()
+    );
+    let control = events.iter().find(|event| event.id == "covered").unwrap();
+    assert_eq!(
+        control.actions.transfer_to_agent.as_deref(),
+        Some("child-agent")
+    );
+    assert!(control.llm_response.content.is_none());
+    let original = service.get(request.clone()).await.unwrap();
+    assert_eq!(original.events().len(), 3);
+    assert_original_covered_event(original.as_ref(), &earlier);
+    let foreign = crate::agents::runner_history::project(
+        service.get(request.clone()).await.unwrap(),
+        Some(([8; 32], "elitea-agent")),
+    )
+    .unwrap();
+    assert_original_covered_event(foreign.as_ref(), &earlier);
+    assert_branch_projection_refused(&service, request, identity, definition, &earlier).await;
+    let changed = vec![anchor, Content::new("model").with_text("Changed evidence")];
+    assert!(
+        history_replacement(serde_json::to_value(&record).unwrap(), definition, &changed)
+            .unwrap()
+            .is_none()
+    );
+}
+
+fn assert_original_covered_event(session: &dyn Session, expected: &Content) {
+    assert_eq!(session.events().len(), 3);
+    let content = session
+        .events()
+        .at(1)
+        .unwrap()
+        .llm_response
+        .content
+        .as_ref()
+        .unwrap();
+    assert_eq!(content.parts, expected.parts);
+}
+
+async fn assert_branch_projection_refused(
+    service: &InMemorySessionService,
+    request: GetRequest,
+    identity: adk_rust::AdkIdentity,
+    definition: [u8; 32],
+    earlier: &Content,
+) {
+    let mut event = Event::with_id("sibling", "invocation-1");
+    event.author = "sibling-agent".into();
+    event.branch = "sibling".into();
+    event.set_content(Content::new("model").with_text("Sibling result stays separate."));
+    service
+        .append_event_for_identity(AppendEventRequest { identity, event })
+        .await
+        .unwrap();
+    let view = crate::agents::runner_history::project(
+        service.get(request).await.unwrap(),
+        Some((definition, "elitea-agent")),
+    )
+    .unwrap();
+    assert_eq!(view.events().len(), 4);
+    assert_eq!(
+        view.events()
+            .at(1)
+            .unwrap()
+            .llm_response
+            .content
+            .as_ref()
+            .unwrap()
+            .parts,
+        earlier.parts
+    );
+    assert_eq!(view.events().at(3).unwrap().branch, "sibling");
 }

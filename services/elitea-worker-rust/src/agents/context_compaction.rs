@@ -30,6 +30,44 @@ pub(super) struct CompactionRecord {
     replacement: Vec<Content>,
 }
 
+/// A model-only projection is valid only for the exact committed source prefix.
+pub(super) fn history_replacement(
+    state: Value,
+    definition_digest: [u8; 32],
+    contents: &[Content],
+) -> adk_rust::Result<Option<(usize, Vec<Content>)>> {
+    let record: CompactionRecord =
+        serde_json::from_value(state).map_err(|_| invalid_compaction())?;
+    if record.definition_digest != definition_digest || record.version != 1 {
+        return Ok(None);
+    }
+    if record.covered_count == 0
+        || record.replacement.is_empty()
+        || record.replacement.len() > 2
+        || record.replacement.iter().any(|content| {
+            content.role != "user"
+                || content.parts.is_empty()
+                || content
+                    .parts
+                    .iter()
+                    .any(|part| !matches!(part, Part::Text { text } if !text.trim().is_empty()))
+        })
+    {
+        return Err(invalid_compaction());
+    }
+    let Some((anchor, working)) = contents.split_first() else {
+        return Ok(None);
+    };
+    if anchor.role != "user"
+        || record.covered_count > working.len()
+        || extend_digest([0; 32], std::slice::from_ref(anchor))? != record.anchor
+        || extend_digest([0; 32], &working[..record.covered_count])? != record.covered_digest
+    {
+        return Ok(None);
+    }
+    Ok(Some((record.covered_count, record.replacement)))
+}
+
 /// This instance belongs to one ordinary root Runner. Child scopes bind separately.
 pub(super) struct DurableContextCompaction {
     plan: ContextCompactionPlan,
