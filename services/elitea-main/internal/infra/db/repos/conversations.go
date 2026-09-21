@@ -285,8 +285,138 @@ func (r *ConversationsRepo) ListParticipants(ctx context.Context, projectID, con
 		items = []conversations.Participant{}
 	}
 	r.enrichAgentParticipantTools(ctx, s, items)
+	r.enrichAgentParticipantPublication(ctx, s, items)
 	return items, nil
 }
+
+// enrichAgentParticipantPublication answers, for each agent participant,
+// whether the version this conversation is bound to has been WITHDRAWN from the
+// catalogue (#972).
+//
+// # WHY THE SERVER HAS TO SAY IT
+//
+// The chat surface used to derive this itself, from the agent's version LIST:
+// a withdrawal does not delete the published clone, it reverts it to a draft
+// and renames it with a `-withdrawn-` marker, so `status != 'published' && name
+// contains the marker` is a correct reading of what the server writes.
+//
+// It is correct and it is unreachable. The version list arrives only from
+// `useActiveParticipantDetails`, which fires only once a participant has been
+// SELECTED in the chat box — and opening a conversation selects nothing: the
+// active participant is restored from localStorage, so a conversation opened in
+// a fresh browser (or created through the API, as the journey does) has none.
+// The guard therefore short-circuited on `activeParticipantVersions === undefined`
+// and a conversation whose agent was withdrawn looked entirely live: no notice,
+// an editable composer, an enabled Send. Worse, for a participant bound into
+// the PUBLIC project the list never arrives at all — the public-application read
+// serves `version_details` and no `versions` array — so the client-side
+// derivation could not be made to work there by arming the fetch either.
+//
+// The conversation read already returns the participant. Saying it HERE makes
+// the notice a property of the conversation, which is what it is, instead of a
+// property of a selection the reader has not made yet.
+//
+// # THE SIGNAL
+//
+// `meta.version_withdrawn` is the boolean a reader acts on, and
+// `meta.version_status` is the raw status beside it so a client can tell
+// "withdrawn" from "this agent was never published" without a second read.
+// Both halves of the marker are required, exactly as the client's derivation
+// required them: an ordinary private agent's version is a draft too, and
+// treating every draft as withdrawn would put this notice on most conversations
+// in the product.
+//
+// EVERY FAILURE DEGRADES THE PARTICIPANT, NEVER THE CONVERSATION, on the same
+// terms as the tool enrichment above: a missing version, a tenant without the
+// table, a scan that fails — each leaves the participant as read. The key is
+// then ABSENT rather than `false`, so a client can distinguish "not resolved"
+// from "resolved, and not withdrawn"; announcing `false` on a failed read is
+// how a withdrawn agent would go on looking live.
+func (r *ConversationsRepo) enrichAgentParticipantPublication(
+	ctx context.Context,
+	s string,
+	items []conversations.Participant,
+) {
+	byVersion := map[int32][]int{}
+	for i := range items {
+		if items[i].EntityName != participantEntityApplication {
+			continue
+		}
+		versionID, ok := participantVersionID(items[i].EntitySettings)
+		if !ok {
+			continue
+		}
+		byVersion[versionID] = append(byVersion[versionID], i)
+	}
+	if len(byVersion) == 0 {
+		return
+	}
+	versionIDs := make([]int32, 0, len(byVersion))
+	for versionID := range byVersion {
+		versionIDs = append(versionIDs, versionID)
+	}
+
+	// `meta->>'withdrawn_from_name'` is written by the same UPDATE that renames
+	// the version (api/v2/eliteacore/unpublish_name_release.go), and it is the
+	// UNAMBIGUOUS half: the rename is best-effort and can collide its way to a
+	// name the marker never reached, while the meta key is written or the whole
+	// statement is not. The name marker stays as the fallback for versions
+	// withdrawn before that key existed.
+	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
+		SELECT av.id, COALESCE(av.status, ''), COALESCE(av.name, ''),
+		       COALESCE(av.meta->>'withdrawn_from_name', '')
+		FROM %s.application_versions av
+		WHERE av.id = ANY($1::int[])`, s), versionIDs)
+	if err != nil {
+		return // no application_versions on this tenant: participants stand as read
+	}
+	defer rows.Close()
+
+	type publication struct {
+		status    string
+		withdrawn bool
+	}
+	resolved := map[int32]publication{}
+	for rows.Next() {
+		var versionID int32
+		var status, name, withdrawnFrom string
+		if err := rows.Scan(&versionID, &status, &name, &withdrawnFrom); err != nil {
+			continue
+		}
+		resolved[versionID] = publication{
+			status: status,
+			withdrawn: status != applicationVersionStatusPublished &&
+				(withdrawnFrom != "" || strings.Contains(name, withdrawnVersionNameMarker)),
+		}
+	}
+	if rows.Err() != nil {
+		return
+	}
+
+	for versionID, indexes := range byVersion {
+		state, ok := resolved[versionID]
+		if !ok {
+			// The version is GONE, which is a different state with its own
+			// reader (`isActiveParticipantVersionMissing`). Claiming
+			// "withdrawn" here would put the wrong sentence on it.
+			continue
+		}
+		for _, i := range indexes {
+			items[i].Meta["version_status"] = state.status
+			items[i].Meta["version_withdrawn"] = state.withdrawn
+		}
+	}
+}
+
+// applicationVersionStatusPublished is the status a version in the catalogue
+// carries; a withdrawal reverts it to `draft`.
+const applicationVersionStatusPublished = "published"
+
+// withdrawnVersionNameMarker mirrors `api/v2/eliteacore.withdrawnNameMarker`.
+// It is repeated rather than imported because that constant is unexported in a
+// package this one must not depend on; the two are pinned together by
+// `TestWithdrawnVersionNameMarkerMatchesTheWriter`.
+const withdrawnVersionNameMarker = "-withdrawn-"
 
 // enrichAgentParticipantTools resolves each agent participant's toolkits at
 // READ time and writes them to `meta.tools`.

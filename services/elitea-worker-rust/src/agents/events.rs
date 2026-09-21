@@ -41,7 +41,7 @@ use crate::protocol::node_event::{
 };
 use crate::toolkits::{
     DELEGATED_AUTHORIZATION_METADATA_KEY, DelegatedAuthorizationCatalog,
-    decode_delegated_authorization_requirement,
+    DelegatedAuthorizationRequirement, decode_delegated_authorization_requirement,
 };
 
 const MAX_TOOL_CALLS_PER_MODEL_TURN: usize = 16;
@@ -1736,6 +1736,30 @@ impl AgentEventProjector {
         Ok(batch)
     }
 
+    /// The authorization notice for THIS turn (#982).
+    ///
+    /// Built here rather than from the lifecycle's own copy of the identity so
+    /// the projector's context stays private: the notice must be stamped with
+    /// exactly the identity every other event in this turn carries, or it will
+    /// not join the conversation it belongs to.
+    pub(crate) fn delegated_authorization_notice(
+        &self,
+        requirement: &DelegatedAuthorizationRequirement,
+        occurred_at: DateTime<Utc>,
+    ) -> Result<NodeEventV1, AgentEventProjectionError> {
+        delegated_authorization_assembly_notice(
+            &AssemblyNoticeIdentity {
+                stream_id: &self.context.stream_id,
+                message_id: &self.context.message_id,
+                sio_event: &self.context.sio_event,
+                execution_generation: &self.context.execution_generation,
+                thread_id: &self.context.thread_id,
+            },
+            requirement,
+            occurred_at,
+        )
+    }
+
     #[must_use]
     pub(crate) fn is_paused(&self) -> bool {
         matches!(self.state, ProjectionState::Paused)
@@ -2242,6 +2266,92 @@ impl AgentEventProjector {
         encode_current_node_event_json(&event).map_err(AgentEventProjectionError::output)?;
         Ok(event)
     }
+}
+
+/// The exact browser identity one assembly-time notice must be stamped with.
+///
+/// It is the same identity `AgentEventProjectionContext` carries, but the
+/// projector cannot be built when assembly itself failed, so the lifecycle
+/// passes the four bound fields straight from the verified command.
+pub(crate) struct AssemblyNoticeIdentity<'a> {
+    pub(crate) stream_id: &'a str,
+    pub(crate) message_id: &'a str,
+    pub(crate) sio_event: &'a str,
+    pub(crate) execution_generation: &'a str,
+    pub(crate) thread_id: &'a str,
+}
+
+/// The terminal `full_message` that NAMES the MCP connection demanding
+/// authorization (#982).
+///
+/// An MCP server that answers the assembly dial with a `401` used to end the
+/// turn as an anonymous runtime failure: the person saw "The runtime operation
+/// failed." and, with several connections attached, had nothing to act on. The
+/// requirement the toolkit already built is sanitized (no token, no provider
+/// body), so the honest terminal is an ANSWER that says which connection is
+/// asking and what to do — not a failure code.
+///
+/// The structured block rides in `response_metadata` under the same key the
+/// pause path uses for its own requirement, so a browser that wants to render
+/// an affordance rather than the sentence can read it from the live node event.
+pub(crate) fn delegated_authorization_assembly_notice(
+    identity: &AssemblyNoticeIdentity<'_>,
+    requirement: &DelegatedAuthorizationRequirement,
+    occurred_at: DateTime<Utc>,
+) -> Result<NodeEventV1, AgentEventProjectionError> {
+    let fields = [
+        identity.stream_id,
+        identity.message_id,
+        identity.sio_event,
+        identity.execution_generation,
+        identity.thread_id,
+    ];
+    if fields.iter().any(|value| {
+        value.is_empty()
+            || value.len() > MAX_CONTEXT_TEXT_BYTES
+            || value
+                .bytes()
+                .any(|byte| matches!(byte, b'\0' | b'\r' | b'\n'))
+    }) {
+        return Err(AgentEventProjectionError::invalid_state());
+    }
+    let message = requirement.assembly_notice_message();
+    let metadata = json!({
+        "thread_id": identity.thread_id,
+        "invoked_skills": [],
+        "mcp_authorization_required": {
+            "toolkit_name": requirement.toolkit_name(),
+            "toolkit_type": requirement.toolkit_type(),
+            "server_url": requirement.server_url(),
+            "resource_metadata_url": requirement.resource_metadata_url(),
+            "raised_during": "assembly",
+        },
+    });
+    let event = NodeEventV1 {
+        r#type: "full_message".to_owned(),
+        stream_id: Some(identity.stream_id.to_owned()),
+        message_id: Some(identity.message_id.to_owned()),
+        question_id: None,
+        content: serde_json::to_vec(&Value::String(message)).map_err(|_| {
+            AgentEventProjectionError::output(ProtocolError::InvalidInput(
+                "the authorization notice content is malformed",
+            ))
+        })?,
+        thinking: None,
+        response_metadata: serde_json::to_vec(&metadata).map_err(|_| {
+            AgentEventProjectionError::output(ProtocolError::InvalidInput(
+                "the authorization notice metadata is malformed",
+            ))
+        })?,
+        references: b"[]".to_vec(),
+        sio_event: Some(identity.sio_event.to_owned()),
+        created_at: Some(occurred_at.to_rfc3339_opts(SecondsFormat::AutoSi, false)),
+        parent_message_id: None,
+        agent_name: None,
+        execution_generation: Some(identity.execution_generation.to_owned()),
+    };
+    encode_current_node_event_json(&event).map_err(AgentEventProjectionError::output)?;
+    Ok(event)
 }
 
 fn validate_context(

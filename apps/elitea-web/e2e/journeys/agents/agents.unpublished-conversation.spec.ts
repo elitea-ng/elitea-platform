@@ -12,7 +12,7 @@
  *  2. it is DISABLED — a notice says the agent is no longer available, and the
  *     composer cannot be used.
  *
- * Half 1 holds. Half 2 is still marked — see the note on that test.
+ * Both halves hold; see the note on the second test for what it took.
  *
  * WHAT THIS STACK CANNOT SAY, stated rather than quietly dropped: the case's
  * "all prior messages are visible and content is intact" needs a transcript,
@@ -164,32 +164,32 @@ test('a conversation survives the withdrawal of the agent it uses', async ({ pag
  * onetest: ELITEA-0199 (the DISABLED half) — the conversation must tell its
  * holder that the agent is gone, and must not let them send into it.
  *
- * PARTLY FIXED (#972) — and the part that is missing is the SIGNAL, not the
- * rendering. `useChatBoxState` now derives `isActiveParticipantWithdrawn`
- * from the bound version's own state — a withdrawal REVERTS the published
- * clone to a draft and stamps `-withdrawn-` into its name, so both halves
- * together are specific to a version that WAS published and no longer is.
- * `ChatBoxWithdrawnNotice` renders the notice as a `role="alert"`, and
- * `deriveChatBoxInputState` folds the same flag into `disabledSend`.
+ * FIXED (#972), in two stages, and the second one is why this test passes.
  *
- * MEASURED after the change: the notice still does not appear in this flow.
- * The renderer and the composer gate are unit-tested and correct; what does
- * not fire is the flag, because the chat page either does not carry the
- * participant's VERSION LIST here or the withdrawn clone is not renamed with
- * the `-withdrawn-` marker on this path. A server-side `withdrawn_at` on the
- * version row — or the published state on the participant projection — would
- * settle it; reading a name substring was the cheapest signal available and
- * is evidently not available here.
+ * The rendering came first: `ChatBoxWithdrawnNotice` renders a `role="alert"`
+ * and `deriveChatBoxInputState` folds the flag into both `disabledSend` and
+ * the composer's own busy state. The FLAG did not fire. `useChatBoxState`
+ * derived it from the bound version's own state — a withdrawal reverts the
+ * published clone to a draft and stamps `-withdrawn-` into its name — which is
+ * a correct reading of what the server writes and was, here, unreachable: the
+ * version list arrives only from `useActiveParticipantDetails`, which fires
+ * only once a participant has been SELECTED, and opening a conversation
+ * selects nothing (the active participant is restored from localStorage). For
+ * a participant bound into the PUBLIC project the list never arrives at all.
+ *
+ * So the SERVER answers it now, on the participant projection itself:
+ * `ConversationsRepo.enrichAgentParticipantPublication` joins
+ * `application_versions` on the conversation read and writes
+ * `meta.version_withdrawn` / `meta.version_status`. That makes the state a
+ * property of the CONVERSATION — which is what it is — rather than of a
+ * selection the reader has not made. The version-list derivation stays as the
+ * fallback.
  *
  * Before the change the conversation looked entirely live: no notice, an
  * editable composer, an enabled Send, and the only way to find out was to
  * send.
  */
 test('a conversation whose agent was withdrawn says so and refuses new messages', async ({ page }) => {
-  test.fail(
-    true,
-    '#972: the notice and the disabled composer are implemented (ChatBoxWithdrawnNotice + isActiveParticipantWithdrawn, unit-tested) but the flag does not yet fire in this flow — the chat page either does not carry the participant VERSION LIST here, or the withdrawn clone is not renamed with the `-withdrawn-` marker on this path. Needs the signal re-derived from data the chat page really has.',
-  );
   test.setTimeout(120_000);
   const { agent, conversationId } = await conversationWithWithdrawnAgent(page);
 

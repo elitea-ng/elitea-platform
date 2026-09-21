@@ -264,19 +264,45 @@ export function useChatBoxState(params: UseChatBoxStateParams): UseChatBoxStateR
    * conversations in the product. Both halves together are specific to a
    * version that WAS published and no longer is.
    *
-   * A server-side `withdrawn_at` on the version row would be a better signal
-   * than a name substring, and is the right long-term fix; this reads the
-   * marker the product already writes rather than inventing a field the API
-   * does not serve.
+   * ── WHY THE VERSION-LIST DERIVATION BELOW IS NOW THE FALLBACK ──────────
+   *
+   * That reading is correct about what the server writes and was, on the chat
+   * page, UNREACHABLE. `activeParticipantVersions` comes from
+   * `useActiveParticipantDetails`, which fires only once a participant has
+   * been SELECTED — and opening a conversation selects nothing: the active
+   * participant is restored from localStorage, so a conversation opened in a
+   * fresh browser has none, and the guard short-circuited on an undefined
+   * version list. For a participant bound into the PUBLIC project it could not
+   * be made to work at all: the public-application read serves `version_details`
+   * and no `versions` array.
+   *
+   * So the SERVER now answers it, on the participant itself
+   * (`meta.version_withdrawn`, written by
+   * `repos.ConversationsRepo.enrichAgentParticipantPublication`). That makes
+   * the state a property of the CONVERSATION, which is what it is, rather than
+   * of a selection the reader has not made — which is why the server flag is
+   * read across the conversation's agent participants when none is active.
+   *
+   * The version-list derivation is kept as the fallback for a server that has
+   * not been rebuilt yet, and only for the participant that IS active, where
+   * it was already proven correct.
    */
   const isActiveParticipantWithdrawn = useMemo(() => {
+    // THE SERVER FIRST. `undefined` is "not resolved" and must fall through;
+    // only an explicit boolean settles it.
+    const agents = activeParticipant
+      ? [activeParticipant]
+      : (participants ?? []).filter((candidate) => candidate.entityName === 'application');
+    const resolved = agents.filter((agent) => typeof agent.meta?.versionWithdrawn === 'boolean');
+    if (resolved.length > 0) return resolved.some((agent) => agent.meta?.versionWithdrawn === true);
+
     if (!activeParticipant || !activeParticipantVersions?.length) return false;
     const versionId = activeParticipant.entitySettings?.versionId;
     if (versionId === undefined) return false;
     const bound = activeParticipantVersions.find((version) => version.id === String(versionId));
     if (bound === undefined) return false;
     return bound.status !== 'published' && bound.name.includes(WITHDRAWN_VERSION_MARKER);
-  }, [activeParticipant, activeParticipantVersions]);
+  }, [activeParticipant, activeParticipantVersions, participants]);
 
   const isActiveParticipantVersionMissing = useMemo(() => {
     if (!activeParticipant) return false;

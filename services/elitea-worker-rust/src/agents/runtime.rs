@@ -37,7 +37,10 @@ use super::request::AgentExecutionRequest;
 use super::session::{AuthorizedNativeCommandBinding, OrdinaryNativeAgentPlan};
 use crate::protocol::control::{ClaimBoundRuntimeContextAuthority, ClaimBoundSessionAuthority};
 use crate::state::StateWriterLease;
-use crate::toolkits::{AdmittedToolSnapshot, FrozenToolSnapshot, ToolAdmissionPolicy};
+use crate::toolkits::{
+    AdmittedToolSnapshot, DelegatedAuthorizationRequirement, FrozenToolSnapshot,
+    ToolAdmissionPolicy,
+};
 use crate::transport::platform_client::PlatformClient;
 use crate::transport::runtime_context::{ClaimScopedEliteaContext, RuntimeContextError};
 
@@ -68,15 +71,45 @@ impl NativeAgentAssemblyErrorCode {
     }
 }
 
-/// Data-free failure before or after one native ADK stream.
+/// Failure before or after one native ADK stream.
+///
+/// The message and code remain data-free. The ONE exception is a delegated
+/// authorization requirement (#982): when a remote MCP server answers the
+/// assembly dial with a `401` challenge, the sanitized
+/// [`DelegatedAuthorizationRequirement`] the toolkit built — toolkit name,
+/// endpoint and the resource-metadata URL, never a token or a response body —
+/// travels with the error so the lifecycle can tell the person WHICH of their
+/// connections is asking to be authorized. Discarding it left every challenge
+/// indistinguishable from any other runtime failure.
 pub(crate) struct NativeAgentAssemblyError {
     code: NativeAgentAssemblyErrorCode,
     message: &'static str,
+    authorization: Option<Box<DelegatedAuthorizationRequirement>>,
 }
 
 impl NativeAgentAssemblyError {
     pub(crate) const fn new(code: NativeAgentAssemblyErrorCode, message: &'static str) -> Self {
-        Self { code, message }
+        Self {
+            code,
+            message,
+            authorization: None,
+        }
+    }
+
+    /// Attach the sanitized delegated-authorization requirement, when the
+    /// failure is one.
+    #[must_use]
+    pub(crate) fn with_authorization(
+        mut self,
+        authorization: Option<DelegatedAuthorizationRequirement>,
+    ) -> Self {
+        self.authorization = authorization.map(Box::new);
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn authorization(&self) -> Option<&DelegatedAuthorizationRequirement> {
+        self.authorization.as_deref()
     }
 
     #[must_use]
@@ -744,19 +777,21 @@ impl NativeAgentRuntimeErrorCode {
 
 /// Redacted ADK execution failure.
 ///
-/// The upstream value is retained for future typed classification but is not
-/// exposed through `Debug`, `Display`, or `Error::source`: provider, tool, and
-/// request data can occur inside an ADK error chain.
+/// The upstream value is retained and is not exposed through `Debug`,
+/// `Display`, or `Error::source`: provider, tool, and request data can occur
+/// inside an ADK error chain. Exactly ONE thing is read out of it —
+/// [`Self::delegated_authorization`] (#982) — and what that returns is a
+/// structure the toolkit BUILT and validated, never a fragment of the chain.
 pub(crate) struct NativeAgentRuntimeError {
     code: NativeAgentRuntimeErrorCode,
-    _upstream: Option<Box<AdkError>>,
+    upstream: Option<Box<AdkError>>,
 }
 
 impl NativeAgentRuntimeError {
     fn invalid_state() -> Self {
         Self {
             code: NativeAgentRuntimeErrorCode::InvalidState,
-            _upstream: None,
+            upstream: None,
         }
     }
 
@@ -767,27 +802,47 @@ impl NativeAgentRuntimeError {
     fn start_failed(error: AdkError) -> Self {
         Self {
             code: NativeAgentRuntimeErrorCode::StartFailed,
-            _upstream: Some(Box::new(error)),
+            upstream: Some(Box::new(error)),
         }
     }
 
     fn start_deferred() -> Self {
         Self {
             code: NativeAgentRuntimeErrorCode::StartFailed,
-            _upstream: None,
+            upstream: None,
         }
     }
 
     fn event_failed(error: AdkError) -> Self {
         Self {
             code: NativeAgentRuntimeErrorCode::EventFailed,
-            _upstream: Some(Box::new(error)),
+            upstream: Some(Box::new(error)),
         }
     }
 
     #[must_use]
     pub(crate) const fn code(&self) -> NativeAgentRuntimeErrorCode {
         self.code
+    }
+
+    /// The sanitized delegated-authorization requirement this failure carries,
+    /// when it is a remote server's `401` challenge rather than a fault (#982).
+    ///
+    /// THE ONE THING READ OUT OF `upstream`, and why it is safe to read.
+    /// The field is deliberately opaque — an ADK error chain can carry
+    /// provider, tool and request data, which is why it reaches neither
+    /// `Debug` nor `Display`. The requirement is not part of that chain: it is
+    /// a structure the toolkit BUILT (toolkit name, endpoint,
+    /// resource-metadata URL) and validated before attaching, with no token
+    /// and no response body in it. Extracting it is what lets the turn say
+    /// WHICH connection is asking instead of ending as an anonymous failure.
+    ///
+    /// The MCP toolset is dialled LAZILY, so a challenge arrives here — on the
+    /// event stream — and not at assembly, which completes normally. Measured
+    /// on the standalone stack: `agent_native_assembly_completed` followed
+    /// 51ms later by `native agent event stream failed`.
+    pub(crate) fn delegated_authorization(&self) -> Option<DelegatedAuthorizationRequirement> {
+        crate::toolkits::delegated_authorization_requirement(self.upstream.as_deref()?)
     }
 }
 

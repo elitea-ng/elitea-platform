@@ -129,6 +129,48 @@ describe('optField', () => {
   });
 });
 
+/*
+ * #972 — the server's publication answer has to SURVIVE the wire normaliser.
+ *
+ * `meta.version_withdrawn` is the whole signal: the client cannot compute it
+ * (the version list is not fetched on the chat page, and for a public-project
+ * participant it does not exist). A normaliser that silently dropped the key
+ * would leave the enrichment writing into a void, with every layer passing its
+ * own tests — the "invisible data" shape this app keeps paying for.
+ */
+describe('toParticipant publication state (#972)', () => {
+  it('carries the server’s withdrawn answer and the raw status', () => {
+    const p = toParticipant({
+      id: '1',
+      entity_name: 'application',
+      meta: { name: 'Support', version_withdrawn: true, version_status: 'draft' },
+    });
+    expect(p?.meta?.versionWithdrawn).toBe(true);
+    expect(p?.meta?.versionStatus).toBe('draft');
+  });
+
+  it('carries an explicit “not withdrawn” as false, not as absent', () => {
+    const p = toParticipant({
+      id: '1',
+      entity_name: 'application',
+      meta: { version_withdrawn: false, version_status: 'published' },
+    });
+    expect(p?.meta?.versionWithdrawn).toBe(false);
+  });
+
+  /*
+   * ABSENT stays ABSENT. The server omits both keys when it could not resolve
+   * the version at all (the version is gone — a different state with its own
+   * reader). Folding that to `false` would say "resolved, still published"
+   * about a version that does not exist.
+   */
+  it('leaves an unresolved version undefined rather than false', () => {
+    const p = toParticipant({ id: '1', entity_name: 'application', meta: { name: 'Support' } });
+    expect(p?.meta?.versionWithdrawn).toBeUndefined();
+    expect(p?.meta && 'versionWithdrawn' in p.meta).toBe(false);
+  });
+});
+
 describe('toParticipant', () => {
   it('returns undefined for non-object or missing id', () => {
     expect(toParticipant(null)).toBeUndefined();
@@ -224,6 +266,31 @@ describe('deriveChatBoxInputState', () => {
 
   it('loading when streaming', () => {
     expect(deriveChatBoxInputState({ ...base, isStreaming: true }).isInputLoading).toBe(true);
+  });
+
+  /*
+   * #972. A withdrawn agent closes the COMPOSER, not only Send.
+   *
+   * The first version of the gate folded the flag into `disabledSend` alone,
+   * which left the text area editable: the reader could type a whole message
+   * into a conversation that can never send one, with a greyed button and no
+   * statement of why. This asserts both, because either alone reads as the
+   * other being an oversight.
+   */
+  it('closes the composer, not only Send, when the agent was withdrawn', () => {
+    const withdrawn = deriveChatBoxInputState({ ...base, isActiveParticipantWithdrawn: true });
+    expect(withdrawn.isComposerBusy).toBe(true);
+    expect(withdrawn.disabledSend).toBe(true);
+  });
+
+  /*
+   * And the flag is OPTIONAL: every existing caller that omits it — and the
+   * server that has not been rebuilt with the enrichment — must leave the
+   * composer exactly as it was.
+   */
+  it('leaves the composer alone when nothing says the agent was withdrawn', () => {
+    expect(deriveChatBoxInputState({ ...base, isActiveParticipantWithdrawn: false }).isComposerBusy).toBe(false);
+    expect(deriveChatBoxInputState(base).isComposerBusy).toBe(false);
   });
 
   /*

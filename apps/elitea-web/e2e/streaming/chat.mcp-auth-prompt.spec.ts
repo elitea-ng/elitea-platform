@@ -35,11 +35,42 @@
  *
  * ── WHAT IT MEASURED ─────────────────────────────────────────────────────
  *
- * The challenge is reached — the mock logs `401 authorization required on
- * /mcp-auth` — and the turn then fails with the GENERIC
+ * ORIGINALLY: the challenge was reached — the mock logs `401 authorization
+ * required on /mcp-auth` — and the turn then failed with the GENERIC
  * `{"error":"The runtime operation failed.","is_error":true}`: no prompt, no
- * affordance, no toolkit name. Everything the runtime assembled is discarded
- * before the transcript. See #982; the test is written as it should pass.
+ * affordance, no toolkit name. Everything the runtime assembled was discarded
+ * before the transcript.
+ *
+ * PARTLY FIXED (#982), and the REMAINING half is not the one this header
+ * originally named. Recorded in full because two plausible diagnoses were
+ * measured and both were wrong.
+ *
+ * WHAT IS DONE. The runtime now carries the sanitized
+ * `DelegatedAuthorizationRequirement` to the transcript on BOTH paths a
+ * challenge can take: `NativeAgentAssemblyError::authorization` for a toolkit
+ * that fails materialization, and `NativeAgentRuntimeError::delegated_authorization`
+ * for one that fails the event stream. Either publishes a `full_message` that
+ * NAMES the connection, with the structured block in
+ * `response_metadata.mcp_authorization_required`, and settles the turn as an
+ * answer rather than as "The runtime operation failed.". Unit-tested in
+ * `agents/events_tests.rs`.
+ *
+ * WHY THIS STILL FAILS, measured on the standalone stack (rust worker, images
+ * rebuilt from this branch):
+ *
+ *   - assembly does NOT fail — the worker logs
+ *     `agent_native_assembly_completed`, then `native agent event stream
+ *     failed error_code="native_agent.event_failed"` half a second later;
+ *   - and that stream error carries no requirement, because the challenge was
+ *     never reached: `deploy/mock-mcp`'s log for the whole run shows only
+ *     `GET /healthz`. NOTHING EVER DIALLED `/mcp-auth`.
+ *
+ * So the turn fails for a reason that is not an authorization challenge at
+ * all, and the notice has nothing to publish. The open question is why the two
+ * attached MCP connections are not materialized for this turn even though the
+ * test reads the agent back and asserts both are on the version it runs — an
+ * admission/materialization gap, not a message-plumbing one. Until that is
+ * answered this case cannot measure what it is about.
  *
  * RUST leg: `toolkits/mcp.rs` is the native runtime's family.
  */
@@ -106,7 +137,7 @@ async function turnText(page: Page, projectId: string, conversationId: string): 
 test('an MCP server that demands authorization is named by its toolkit in the agent’s message', async ({ page }) => {
   test.fail(
     true,
-    '#982: product gap — an MCP authorization challenge fails the turn with the generic "The runtime operation failed."; the DelegatedAuthorizationRequirement the runtime builds (carrying the toolkit name, endpoint and resource_metadata) never reaches the conversation',
+    '#982: the runtime now carries the requirement to the transcript on both the assembly and the event-stream paths, but this turn never dials the MCP server at all — mock-mcp logs only /healthz for the whole run, assembly completes, and the stream then fails for an unrelated reason. The gap left is materialization/admission of the attached MCP connections, not the notice.',
   );
   test.setTimeout(420_000);
 

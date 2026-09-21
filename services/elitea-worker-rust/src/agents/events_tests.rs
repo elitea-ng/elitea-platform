@@ -1597,3 +1597,128 @@ fn a_tool_result_that_fits_is_not_chunked() {
     );
     assert!(projected[0]["response_metadata"]["tool_output_chunks"].is_null());
 }
+
+/// The assembly-time authorization notice NAMES the connection that challenged
+/// (#982).
+///
+/// The regression this pins is not a wording choice: before the change, an MCP
+/// server answering the assembly dial with a `401` ended the turn as the
+/// generic "The runtime operation failed.", so a person with several MCP
+/// connections attached had nothing to act on. Both halves are asserted — the
+/// sentence a reader sees, and the structured block a browser can render an
+/// affordance from — because the sentence alone would let the metadata rot
+/// unnoticed, and the metadata alone renders as a blank assistant row.
+#[test]
+fn an_assembly_authorization_notice_names_the_challenging_connection() {
+    let requirement = crate::toolkits::DelegatedAuthorizationRequirement::new(
+        "Customer Support".to_owned(),
+        "mcp".to_owned(),
+        "https://mcp.example.invalid/v1/mcp".to_owned(),
+        Some("https://mcp.example.invalid/.well-known/oauth-protected-resource".to_owned()),
+        Some("Bearer realm=\"mcp\"".to_owned()),
+    )
+    .expect("a well-formed requirement");
+
+    let event = super::events::delegated_authorization_assembly_notice(
+        &super::events::AssemblyNoticeIdentity {
+            stream_id: "conversation-1",
+            message_id: "message-1",
+            sio_event: "chat_predict",
+            execution_generation: "generation-1",
+            thread_id: "thread-1",
+        },
+        &requirement,
+        timestamp(3),
+    )
+    .expect("the notice must project");
+
+    // An ANSWER, not a failure: the turn settles as completed on this path, so
+    // a partial/error frame here would contradict the terminal it precedes.
+    assert_eq!(event.r#type, "full_message");
+
+    let projected = current(&event);
+    let said = projected["content"].as_str().expect("notice content");
+    assert!(
+        said.contains("Customer Support"),
+        "the notice must name the toolkit that challenged: {said}"
+    );
+    assert!(
+        said.contains("https://mcp.example.invalid/v1/mcp"),
+        "the notice must name the endpoint that challenged: {said}"
+    );
+
+    let block = &projected["response_metadata"]["mcp_authorization_required"];
+    assert_eq!(block["toolkit_name"], "Customer Support");
+    assert_eq!(block["toolkit_type"], "mcp");
+    assert_eq!(block["server_url"], "https://mcp.example.invalid/v1/mcp");
+    assert_eq!(block["raised_during"], "assembly");
+    assert_eq!(projected["response_metadata"]["thread_id"], "thread-1");
+    // NOTHING SECRET. The requirement carries a `www_authenticate` header
+    // value; a notice that echoed it would put a provider's challenge — and
+    // whatever a server chose to put in it — into a stored transcript.
+    assert!(
+        !projected.to_string().contains("Bearer realm"),
+        "the challenge header must not reach the transcript: {projected}"
+    );
+}
+
+/// A notice cannot be stamped with an identity the browser could not route.
+///
+/// Every one of the five bound fields is load-bearing — a blank `stream_id` or
+/// a newline in `thread_id` would be written into a document the projector
+/// itself refuses elsewhere — so the guard is asserted field by field rather
+/// than on one representative.
+#[test]
+fn an_assembly_authorization_notice_refuses_an_unroutable_identity() {
+    let requirement = crate::toolkits::DelegatedAuthorizationRequirement::new(
+        "Customer Support".to_owned(),
+        "mcp".to_owned(),
+        "https://mcp.example.invalid/v1/mcp".to_owned(),
+        None,
+        None,
+    )
+    .expect("a well-formed requirement");
+
+    for (label, identity) in [
+        (
+            "empty stream id",
+            super::events::AssemblyNoticeIdentity {
+                stream_id: "",
+                message_id: "message-1",
+                sio_event: "chat_predict",
+                execution_generation: "generation-1",
+                thread_id: "thread-1",
+            },
+        ),
+        (
+            "empty thread id",
+            super::events::AssemblyNoticeIdentity {
+                stream_id: "conversation-1",
+                message_id: "message-1",
+                sio_event: "chat_predict",
+                execution_generation: "generation-1",
+                thread_id: "",
+            },
+        ),
+        (
+            "newline in the message id",
+            super::events::AssemblyNoticeIdentity {
+                stream_id: "conversation-1",
+                message_id: "message\n1",
+                sio_event: "chat_predict",
+                execution_generation: "generation-1",
+                thread_id: "thread-1",
+            },
+        ),
+    ] {
+        assert!(
+            super::events::delegated_authorization_assembly_notice(
+                &identity,
+                &requirement,
+                timestamp(3),
+            )
+            .is_err(),
+            "{label} must be refused"
+        );
+    }
+}

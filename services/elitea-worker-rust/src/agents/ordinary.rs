@@ -533,5 +533,8 @@ fn mcp_materialization_error(error: &McpMaterializationError) -> NativeAgentAsse
             NativeAgentAssemblyErrorCode::DependencyUnavailable
         }
     };
+    // #982: the requirement travels with the error so the lifecycle can name
+    // the toolkit that challenged instead of failing the turn anonymously.
     NativeAgentAssemblyError::new(code, "the native MCP toolsets could not be materialized")
+        .with_authorization(error.authorization().cloned())
 }

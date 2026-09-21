@@ -103,6 +103,8 @@ function buildMeta(metaWire: Record<string, unknown> | null | undefined): Partic
     ...optField('userName', readStr(metaWire, 'user_name')),
     ...optField('userAvatar', readStr(metaWire, 'user_avatar')),
     ...optField('isContainer', typeof metaWire['is_container'] === 'boolean' ? metaWire['is_container'] : undefined), ...optField('mcp', typeof metaWire['mcp'] === 'boolean' ? metaWire['mcp'] : undefined),
+    // #972 — the server's publication answer; `optField` keeps an absent key absent rather than folding it to `false`, because "not resolved" and "resolved, not withdrawn" are different states and only the second may silence the notice.
+    ...optField('versionWithdrawn', typeof metaWire['version_withdrawn'] === 'boolean' ? metaWire['version_withdrawn'] : undefined), ...optField('versionStatus', readStr(metaWire, 'version_status')),
   };
 }
 
@@ -186,12 +188,11 @@ export function deriveChatBoxInputState(flags: {
   readonly hasPendingHitlInterrupt: boolean;
   readonly isActiveParticipantBroken: boolean; readonly isActiveParticipantWithdrawn?: boolean; // #972
 }): { readonly isInputLoading: boolean; readonly isComposerBusy: boolean; readonly disabledSend: boolean } {
-  const isComposerBusy =
+  const isComposerBusy = // #972 — a withdrawn agent closes the COMPOSER, not only Send: an editable text area invites a message that can never be sent, and a greyed button alone does not say why.
     Boolean(flags.isLoadingConversation) ||
     flags.isFetchingParticipantDetails ||
-    flags.isUploadingAttachments ||
-    flags.isUpdatingInternalToolsConfig ||
-    Boolean(flags.isConversationSending);
+    flags.isUploadingAttachments || flags.isUpdatingInternalToolsConfig ||
+    Boolean(flags.isActiveParticipantWithdrawn) || Boolean(flags.isConversationSending);
   const disabledSend =
     !flags.hasChatInput ||
     isComposerBusy ||

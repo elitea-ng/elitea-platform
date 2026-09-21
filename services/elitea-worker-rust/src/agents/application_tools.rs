@@ -2738,7 +2738,10 @@ fn mcp_toolset_error(error: &crate::toolkits::McpMaterializationError) -> Native
             NativeAgentAssemblyErrorCode::DependencyUnavailable
         }
     };
+    // #982: the requirement travels with the error so the lifecycle can name
+    // the toolkit that challenged instead of failing the turn anonymously.
     NativeAgentAssemblyError::new(code, "the nested application MCP toolsets are unavailable")
+        .with_authorization(error.authorization().cloned())
 }
 
 fn invalid_configuration() -> NativeAgentAssemblyError {

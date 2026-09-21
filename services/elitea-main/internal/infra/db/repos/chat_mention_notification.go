@@ -74,9 +74,21 @@ func (repo *ChatMentionNotificationRepo) WriteChatMentionNotifications(
 		metas = append(metas, string(encoded))
 	}
 
+	// THE UUID IS SUPPLIED, NOT ASSUMED. `centry.notifications.uuid` is
+	// `NOT NULL`, and only the shape `internal/infra/db/migrations/001_initial.sql`
+	// creates carries `DEFAULT gen_random_uuid()`. On a database where the
+	// table came from pylon instead — which is every migrated deployment, and
+	// the integration harness's fresh Postgres — the column has no default and
+	// an INSERT that omits it dies with
+	//
+	//     null value in column "uuid" of relation "notifications"
+	//
+	// The index-ingest producer (`queries/runtime_index_ingest.sql`) already
+	// supplies its own for exactly this reason; the PAT-expiry sweep's omission
+	// is a latent instance of the same defect, not a pattern to copy.
 	if _, err := repo.pool.Exec(ctx, `
-INSERT INTO centry.notifications (is_seen, project_id, user_id, meta, event_type)
-SELECT FALSE, source.project_id, source.user_id, source.meta::jsonb, $4
+INSERT INTO centry.notifications (uuid, is_seen, project_id, user_id, meta, event_type)
+SELECT gen_random_uuid(), FALSE, source.project_id, source.user_id, source.meta::jsonb, $4
 FROM unnest($1::bigint[], $2::bigint[], $3::text[]) AS source(project_id, user_id, meta)`,
 		projectIDs, userIDs, metas, agentexecutionapp.ChatMentionNotificationEventType,
 	); err != nil {

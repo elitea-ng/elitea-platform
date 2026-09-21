@@ -35,7 +35,7 @@ import type { ToolAction } from './chatStreamToolAction';
 import type { ChatStreamFrame } from './chatStreamFrame';
 
 /** The event type one chunk rides on. */
-export const TOOL_OUTPUT_CHUNK_TYPE = 'agent_tool_output_chunk';
+const TOOL_OUTPUT_CHUNK_TYPE = 'agent_tool_output_chunk';
 
 /** Where a partially assembled output lives on the action while it arrives. */
 export const TOOL_OUTPUT_CHUNKS_KEY = 'toolOutputChunks';
