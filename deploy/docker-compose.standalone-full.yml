@@ -639,6 +639,40 @@ services:
       start_period: 3s
     restart: unless-stopped
 
+  # ── Fake qTest backend (issue #939, group 4) ────────────────────────────────
+  # The qTest toolkit's write surface (record a manual execution status, attach
+  # a file from an artifact bucket) had nowhere to run: qTest has no e2e/live
+  # lane in this repo and the mock LLM has no qTest-shaped API. This serves the
+  # four routes the SDK's wrapper actually calls, with the shapes its parsers
+  # read, and journals every request so a test can prove server-side what the
+  # toolkit did. Standard-library Python, built from deploy/qtest-mock.
+  #
+  # The toolkit reaches it at `http://qtest-mock:8096` on the compose network
+  # (a `qtest` CONFIGURATION's base_url); the published port below exists for
+  # the journal and state reads a test makes from the host, the same reason
+  # llm-mock publishes one.
+  qtest-mock:
+    image: ghcr.io/eliteaai/elitea-mock-qtest:standalone
+    build:
+      context: ./qtest-mock
+      dockerfile: Containerfile
+    environment:
+      QTEST_MOCK_PORT: "8096"
+      # The bearer every /api/v3 route demands. A test seeds the SAME value as
+      # the configuration's qtest_api_token, so a 401 in the journal means the
+      # credential did not reach the toolkit rather than that the mock is down.
+      QTEST_MOCK_TOKEN: "${STANDALONE_QTEST_TOKEN:-e2e-qtest-token}"
+    ports:
+      - "${STANDALONE_QTEST_PORT:-8096}:8096"
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8096/healthz').read()"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+    restart: unless-stopped
+
   # ── Real model upstream — the `real-llm` profile ─────────────────────────
   # A tiny REAL model next to the mock, never instead of it: llama.cpp in
   # router mode serving Qwen3-0.6B (chat, SSE, OpenAI tool calls; thinking off,
