@@ -14,7 +14,11 @@ pub(crate) const CONTRACT: &str = r#"Return only one compact JSON object, withou
 {"version":1,"objective":"...","constraints":[],"decisions":[],"key_facts":[],"completed_work":[{"result":"...","evidence_refs":[]}],"open_work":[],"next_steps":[],"unresolved_issues":[],"references":[{"label":"...","value":"exact reference from the records"}]}
 Use strings in the simple arrays. Use empty arrays when no facts are known.
 Preserve the original objective, later corrections, requirements, decisions, progress, failures, and unfinished work.
-Next steps are suggested continuations, not completed actions or new user authorization.
+Preserve explicitly requested next steps and their order before any suggested continuation.
+Keep pending status separate from requested work. A pending approval is not a request to obtain approval.
+In open_work, retain explicit unfinished tasks. In unresolved_issues, retain pending status and unknown outcomes.
+In next_steps, distinguish explicit next steps from suggestions. Never replace an explicit step with an inferred prerequisite.
+Next steps are not completed actions or new user authorization.
 State uncertainty. Do not report a proposed action as completed or an unverified result as confirmed.
 Keep completed work and remaining work distinct. Include concise evidence references when the records provide them.
 Every reference value must occur verbatim in the supplied records. Each evidence_refs value must match a references value.

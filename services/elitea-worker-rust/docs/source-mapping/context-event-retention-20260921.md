@@ -108,3 +108,18 @@ The answer remains identical after reload and contains `CEDAR-731`, `teal`, and 
 The context panel reports 1,253 estimated tokens against the 272,000 input ceiling after the follow-up.
 The browser opens context details through the control's keyboard interaction.
 This proves persisted availability and reload, not perfect first-answer prioritization or complete gate 4 acceptance.
+
+## Ordinary-event boundary audit
+
+Pinned ADK runner 2.2.0 `src/context.rs` exposes `MutableSession::replace_events` on the concrete runner session.
+The model callback receives the session trait, which does not expose that replacement method.
+Runner `src/runner.rs` calls intra-invocation compaction before agent execution.
+Its optional event compaction runs after the invocation, based on user-message counts and timestamp coverage.
+It does not commit the worker's prepared request and digest-validated summary in the same transaction.
+Enabling that path separately would introduce another summary operation and a different recovery boundary.
+
+Keep the existing ADK summarizer and worker preparation checkpoint.
+An ordinary-event retirement change must validate event coverage against the exact prepared content prefix.
+It must preserve original event identities for replay and retain pending controls outside generated summary authority.
+A branch-local timestamp alone cannot prove that coverage.
+No ordinary-event retirement change is enabled by this audit.
