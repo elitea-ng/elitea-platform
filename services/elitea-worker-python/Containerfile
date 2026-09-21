@@ -165,7 +165,20 @@ RUN python -m pip install \
 # see scripts/install_pinned_deno.py for why this is a direct GitHub release
 # download rather than an apt/pip package, and how the checksum gate keeps
 # that an admitted download rather than an unpinned one.
-ARG TARGETARCH=amd64
+#
+# NO DEFAULT VALUE HERE. TARGETARCH is one of buildx's automatic platform
+# ARGs: it is injected into global scope for free, but a stage only sees it
+# if the stage re-declares `ARG TARGETARCH` — and per Docker's own docs,
+# assigning a default in that re-declaration (`ARG TARGETARCH=amd64`)
+# overrides the injected value instead of merely falling back to it. That is
+# exactly what broke linux/arm64 publishes: every arch resolved to the
+# hardcoded "amd64" default, so this stage always installed the amd64 deno
+# binary and the arm64 image's `/usr/local/bin/deno --version` died with
+# `Exec format error`. Bare `ARG TARGETARCH` lets buildx's real value through;
+# a plain non-buildx `docker build` (no platform injection at all) then gets
+# an empty string, which install_pinned_deno.py's `--target-arch` choices
+# check rejects loudly instead of silently shipping the wrong architecture.
+ARG TARGETARCH
 COPY services/elitea-worker-python/scripts/install_pinned_deno.py /tmp/install_pinned_deno.py
 RUN python3 /tmp/install_pinned_deno.py --target-arch "${TARGETARCH}" --dest /usr/local/bin/deno \
     && rm -f /tmp/install_pinned_deno.py \
