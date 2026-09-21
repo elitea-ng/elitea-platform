@@ -92,6 +92,7 @@ import {
   callToolWithArgumentsPrompt,
   createMcpConnection,
   deleteAgent,
+  deleteToolkit,
   fillComposer,
   MOCK_CALL_TOOL_SENTINEL,
   readStoredTranscript,
@@ -170,18 +171,23 @@ test('an MCP server that demands authorization is named by its toolkit in the ag
   const openName = `${AUTOTEST_PREFIX}openmcp${stamp}`;
 
   const { projectId, agentId } = await createAgentThroughForm(page, agentName);
+  // Declared OUTSIDE the try so the cleanup can see whatever was created
+  // before a failure, rather than only what a fully successful run made.
+  const createdConnectionIds: string[] = [];
 
   try {
     const challenging = await createMcpConnection(page, projectId, challengingName, {
       url: AUTH_MCP_URL,
       selected_tools: [MOCK_MCP_TOOL],
     });
+    createdConnectionIds.push(challenging.id);
     // The second connection is the control for ELITEA-2736: with two attached,
     // the message must name the one that challenged and not simply "an MCP".
     const open = await createMcpConnection(page, projectId, openName, {
       url: OPEN_MCP_URL,
       selected_tools: [MOCK_MCP_OTHER_TOOL],
     });
+    createdConnectionIds.push(open.id);
 
     // ATTACHED, over the same relation write the picker performs. The first
     // draft of this test only READ the agent back and never attached anything,
@@ -272,6 +278,21 @@ test('an MCP server that demands authorization is named by its toolkit in the ag
     // would send the reader to authorize a server that never asked.
     expect(said, 'the connection that did not challenge must not be named').not.toContain(openName);
   } finally {
+    // THE CONNECTIONS TOO, not only the agent.
+    //
+    // Deleting the agent leaves its two MCP rows in the project, and they are
+    // not inert there: every later journey that enumerates the project's
+    // toolkits sees them, and one of them points at an endpoint that answers
+    // `401` to everything. A run that left them behind accumulated eighteen
+    // such rows in the shared project (measured), which is exactly the kind of
+    // residue the `autotest_` sweep exists to catch rather than to depend on.
+    //
+    // After the agent, so the relation rows go with it first, and each guarded
+    // on its own: a connection that was never created (an early failure) must
+    // not turn this block into a second failure that hides the first.
     await deleteAgent(page.request, agentId).catch(() => undefined);
+    for (const toolkitId of createdConnectionIds) {
+      await deleteToolkit(page, projectId, toolkitId).catch(() => undefined);
+    }
   }
 });
