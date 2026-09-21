@@ -147,6 +147,45 @@ func appendCurrentApplicationMemories(versionDetails json.RawMessage, memoryText
 	if memoryText == "" || len(versionDetails) == 0 {
 		return versionDetails
 	}
+	// A PIPELINE'S `instructions` IS NOT PROSE — IT IS THE GRAPH (#971).
+	//
+	// For a direct agent, `instructions` is the free text both workers fold
+	// into the system prompt, and appending a block to it is the whole design
+	// of this function. For a pipeline it is the YAML DOCUMENT the runtime
+	// compiles: services/elitea-worker-rust/src/agents/pipeline.rs calls
+	// `PipelineDefinition::from_yaml(shell.instructions())` on exactly this
+	// string. Appending anything to it produces a document that is no longer
+	// the graph, and the run dies at assembly with
+	// `native_agent.invalid_input` — after admission, so the turn is stored as
+	// an assistant row flagged `is_error` with EMPTY content and the user is
+	// shown a failed run with nothing to read.
+	//
+	// MEASURED, on the standalone stack and on BOTH worker legs: a project
+	// with an enabled, non-empty Project Context could not run ANY pipeline,
+	// and emptying the context made the same pipeline pass. That is the same
+	// shape #946 was created to end — a project setting that silently disables
+	// the project's own execution — reappearing through #946's own injection.
+	//
+	// So the splice is SKIPPED for a pipeline rather than attempted. The rule
+	// lives in this one primitive, and not at the three call sites, because it
+	// is a property of the FIELD: every caller that appends to `instructions`
+	// needs it, including `appendCurrentApplicationProjectContext`, which
+	// delegates here precisely so there is one splice and not two.
+	//
+	// `skills.go` already draws the same line for the same reason — its
+	// instruction-marker pass runs only `if version["agent_type"] !=
+	// "pipeline"` — so this is the established rule, not a new exception.
+	//
+	// WHAT A PIPELINE THEREFORE DOES NOT GET, stated rather than hidden: the
+	// project's context does not reach a pipeline run at all. Giving it one
+	// would mean writing the text into the graph's LLM nodes, which means
+	// re-deriving the pipeline grammar in Go beside the compiler that owns it —
+	// a second copy that would be wrong the first time either side changed.
+	// The runtime has no per-run context slot to put it in today; #971 records
+	// that as the limit, and a real fix belongs in the runtime's own input.
+	if currentApplicationInstructionsAreAGraph(versionDetails) {
+		return versionDetails
+	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(versionDetails, &fields); err != nil {
 		return versionDetails
@@ -175,3 +214,39 @@ func appendCurrentApplicationMemories(versionDetails json.RawMessage, memoryText
 func currentMemoryRecallUserInputText(userInput string) string {
 	return strings.TrimSpace(userInput)
 }
+
+// currentApplicationInstructionsAreAGraph reports whether this frozen version's
+// `instructions` field holds a pipeline DOCUMENT rather than prose — i.e.
+// whether `agent_type` is `pipeline`.
+//
+// Read off the version document the turn is actually running, the way
+// `currentProjectContextIgnored` reads its own flag, so a version edited
+// mid-conversation is judged by what this turn carries.
+//
+// A document that cannot be decoded, or that names no `agent_type`, answers
+// FALSE: the splice callers already return such a document untouched, and
+// answering true here would quietly strip memories and project context from
+// every agent whose stored version this function could not read.
+func currentApplicationInstructionsAreAGraph(versionDetails json.RawMessage) bool {
+	if len(versionDetails) == 0 {
+		return false
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(versionDetails, &fields); err != nil {
+		return false
+	}
+	raw, found := fields["agent_type"]
+	if !found {
+		return false
+	}
+	var agentType string
+	if err := json.Unmarshal(raw, &agentType); err != nil {
+		return false
+	}
+	return agentType == currentApplicationPipelineAgentType
+}
+
+// currentApplicationPipelineAgentType is the one `agent_type` whose
+// `instructions` is a compiled document. It is the same literal
+// `skills.go` tests for and the same one the runtime names.
+const currentApplicationPipelineAgentType = "pipeline"

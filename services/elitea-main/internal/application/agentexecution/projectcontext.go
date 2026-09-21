@@ -217,6 +217,14 @@ func currentProjectContextIgnored(versionDetails json.RawMessage) bool {
 // returns the document untouched rather than turning a malformed stored agent
 // into a new turn failure. Two copies of that would be two chances to get the
 // re-encode discipline wrong.
+// A PIPELINE gets no project context, and the reason is in
+// appendCurrentApplicationMemories: a pipeline's `instructions` is the YAML
+// graph the runtime compiles, so splicing a block onto it produces a document
+// that is not the graph and the run dies at assembly (#971). The guard lives in
+// that one primitive — this function's whole point is that there is ONE splice
+// — and is restated here only so a reader of this file is not left believing
+// every project gets its context into every kind of run. It does not: a
+// pipeline run carries none, and #971 records that limit.
 func appendCurrentApplicationProjectContext(
 	versionDetails json.RawMessage,
 	projectContextText string,

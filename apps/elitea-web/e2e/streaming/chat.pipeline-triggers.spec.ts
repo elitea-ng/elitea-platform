@@ -384,22 +384,30 @@ test('a pipeline runs from a webhook, from its schedule and from chat, and each 
  * effect — an ordinary product setting, injected into every turn in the
  * project since #946.
  *
- * IT DOES NOT, ON EITHER RUNTIME. Measured on this stack: four consecutive
- * failures with a context set and two consecutive passes with it emptied, same
- * fixture, native leg; then the same failure on the PYTHON leg, so this is not
- * a native-runtime gap. The turn is admitted, the native worker refuses
- * assembly with `native_agent.invalid_input`, and the transcript stores an
- * `is_error` assistant row with EMPTY content — the user is shown a failed turn
- * with nothing to read. Chat and agent turns in the same project are
- * unaffected; only pipelines are.
+ * IT DID NOT, ON EITHER RUNTIME, AND #971 IS WHY. A pipeline's `instructions`
+ * field is not prose: it is the YAML graph the runtime compiles
+ * (`PipelineDefinition::from_yaml(shell.instructions())`,
+ * services/elitea-worker-rust/src/agents/pipeline.rs). #946's injection spliced
+ * the `<project_context>` block onto that field, so the document the worker
+ * compiled was no longer a graph and assembly failed with
+ * `native_agent.invalid_input` — after admission, so the turn was stored as an
+ * assistant row flagged `is_error` with EMPTY content and the user saw a failed
+ * run with nothing to read. Measured four consecutive failures with a context
+ * set and two consecutive passes with it emptied, same fixture, on the native
+ * leg, and the same failure on the python leg.
  *
- * This is also the trap that found it: `chat.builders.spec.ts` clears its
- * context in a `finally`, which a killed run skips, and every later pipeline
- * journey in that project then fails for a reason that has nothing to do with
- * pipelines.
+ * The fix is in `appendCurrentApplicationMemories`
+ * (services/elitea-main/internal/application/agentexecution/memories.go), the
+ * package's ONE splice primitive: a version whose `agent_type` is `pipeline`
+ * comes back untouched, which covers the project-context injector that
+ * delegates to it and #870's memory injector that is it. The documented limit
+ * that remains: a pipeline run carries no project context at all, because the
+ * runtime has no per-run slot to put one in.
+ *
+ * So this asserts the FIXED behaviour: the context is set, the pipeline runs
+ * anyway, and its answer is this run's own.
  */
 test('a pipeline still runs in a project that has a Project Context in effect', async ({ page }) => {
-  test.fail(true, '#971: product gap — an enabled, non-empty Project Context makes every pipeline run in that project fail with native_agent.invalid_input and an empty is_error row');
   test.setTimeout(420_000);
 
   const projectId = await runProjectId(page.request);
@@ -430,7 +438,7 @@ test('a pipeline still runs in a project that has a Project Context in effect', 
     await expectStoredAssistantAnswer(page, projectId, conversationId, {
       timeout: 180_000,
       contains: contextMarker,
-      message: 'the pipeline run failed because the project carries a context — see #971',
+      message: 'the pipeline run failed while the project carries a context — #971 has regressed',
     });
   } finally {
     // MANDATORY, not tidy: a context left in effect here fails every later
