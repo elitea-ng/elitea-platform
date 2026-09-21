@@ -62,8 +62,17 @@ target "mcp-mock" {
 target "mcp-mock-trust" {
   cache-from = ["type=gha,scope=elitea-mock-mcp"]
 }
+// Same image, third consumer: `worker-trust` builds the python worker's
+// runtime-CA + mcp-mock-CA bundle and runs the mock's own image to reach the
+// certificate (#983).
+target "worker-trust" {
+  cache-from = ["type=gha,scope=elitea-mock-mcp"]
+}
 target "qtest-mock" {
   cache-from = ["type=gha,scope=elitea-mock-qtest"]
+}
+target "ado-mock" {
+  cache-from = ["type=gha,scope=elitea-mock-ado"]
 }
 
 // deploy/docker-compose.e2e-standalone.yml
@@ -77,6 +86,7 @@ group "standalone" {
     "elitea-migrate", "elitea-agentstate-migrate", "elitea-main",
     "elitea-llm-gateway", "llm-mock", "elitea-deepwiki", "elitea-deepwiki-engine",
     "elitea-inventory", "elitea-inventory-engine",
-    "elitea-web", "elitea-worker", "mcp-mock", "mcp-mock-trust", "qtest-mock",
+    "elitea-web", "elitea-worker", "mcp-mock", "mcp-mock-trust", "worker-trust", "qtest-mock",
+    "ado-mock",
   ]
 }

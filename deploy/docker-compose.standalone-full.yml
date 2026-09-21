@@ -126,6 +126,8 @@
 #   15433 postgres                  STANDALONE_PG_PORT
 #   16380 redis                     STANDALONE_REDIS_PORT
 #   8090  llm-mock journal          STANDALONE_MOCK_PORT — see the llm-mock comment
+#   8096  qtest-mock journal        STANDALONE_QTEST_PORT
+#   8097  ado-mock journal          STANDALONE_ADO_PORT — see the ado-mock comment
 #   (llm-real, the `real-llm` profile, publishes nothing — see its comment)
 #   9400  oidc-provider-mock        E2E_OIDC_PORT — see the oidc-mock comment
 #
@@ -667,6 +669,49 @@ services:
     healthcheck:
       test: ["CMD", "python3", "-c",
              "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8096/healthz').read()"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+    restart: unless-stopped
+
+  # ── Fake Azure DevOps (wave 4, package W1) ──────────────────────────────────
+  # Nineteen `toolkits-credentials` onetest cases (ELITEA-2590..2596,
+  # 2599..2610) are about the ADO toolkits' IMAGE pipeline — download an
+  # attachment, hand it to a vision model, cache the description — and wave 3
+  # had to ledger every one of them LIVE-ONLY because there was no ADO-shaped
+  # backend anywhere in this repo. This is it: the routes the `azure-devops`
+  # python client actually addresses (it asks by location GUID, so the mock's
+  # `OPTIONS /_apis` catalogue IS the route contract), seeded work items,
+  # comments, wiki pages, repositories and test plans, real image bytes in four
+  # formats plus the broken/oversized/forbidden ones the error cases need, and
+  # a journal of every request. Standard-library Python, built from
+  # deploy/ado-mock.
+  #
+  # The toolkit reaches it at `http://ado-mock:8097` on the compose network (an
+  # `ado` CONFIGURATION's organization_url), which is also what
+  # ADO_MOCK_PUBLIC_URL embeds in the seeded attachment URLs — a published-port
+  # URL there would resolve from the test runner and not from the worker. The
+  # published port below exists for the journal and state reads a test makes
+  # from the host, the same reason llm-mock and qtest-mock publish one.
+  ado-mock:
+    image: ghcr.io/eliteaai/elitea-mock-ado:standalone
+    build:
+      context: ./ado-mock
+      dockerfile: Containerfile
+    environment:
+      ADO_MOCK_PORT: "8097"
+      # The PAT every /_apis route demands, as Basic or Bearer. A test seeds the
+      # SAME value as the configuration's `token`, so a 401 in the journal means
+      # the credential did not reach the toolkit rather than that the mock is down.
+      ADO_MOCK_PAT: "${STANDALONE_ADO_PAT:-e2e-ado-pat}"
+      ADO_MOCK_PUBLIC_URL: "http://ado-mock:8097"
+      ADO_MOCK_PROJECT: "E2E"
+    ports:
+      - "${STANDALONE_ADO_PORT:-8097}:8097"
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8097/healthz').read()"]
       interval: 3s
       timeout: 3s
       retries: 10
@@ -1464,9 +1509,31 @@ services:
       # roots: every destination the worker dials — control, output, content,
       # platform_origin — is signed by that CA, and model traffic egresses
       # through elitea-main's /llm proxy rather than directly to a provider.
+      #
+      # THE BUNDLE, NOT THE RUNTIME CA ALONE (#983 trust half). A remote MCP
+      # server is the one destination on this stack that is NOT signed by the
+      # runtime CA: mcp-mock serves HTTPS with a certificate minted into its own
+      # image. Pointed at the runtime CA alone, the python leg cannot complete
+      # a TLS handshake with it at all — measured, before any MCP request:
+      # `mcp_adapter.py _preflight_auth_check` →
+      # `ClientConnectorCertificateError: self-signed certificate in
+      # certificate chain`, after which the toolkit has no tools and the turn
+      # answers a plain echo naming nothing. The native worker was given the
+      # same bundle for the same reason
+      # (deploy/docker-compose.standalone-rust-agent.yml).
+      #
+      # `worker-trust` below concatenates runtime CA + mcp-mock CA and NOTHING
+      # ELSE. Public roots are deliberately still absent, and the paragraph
+      # above this one says why they were absent before: every internal
+      # destination — control, output, content, platform_origin — is signed by
+      # the runtime CA, and model traffic egresses through elitea-main's /llm
+      # proxy rather than to a provider. No toolkit on this stack dials a
+      # publicly signed endpoint; a lane that adds one adds its own root here
+      # and says which tool needs it. These variables REPLACE the trust store
+      # rather than add to it, so every addition is a real widening.
       ELITEA_DISABLE_SYSTEM_CA: "1"
-      REQUESTS_CA_BUNDLE: /run/elitea-runtime/runtime-ca.crt
-      SSL_CERT_FILE: /run/elitea-runtime/runtime-ca.crt
+      REQUESTS_CA_BUNDLE: /run/elitea-worker-trust/worker-ca-bundle.pem
+      SSL_CERT_FILE: /run/elitea-worker-trust/worker-ca-bundle.pem
       # The one environment variable the worker itself reads. Mirrors the
       # hybrid's fail-safe snapshot: broader than the current
       # `artifact.delete_file` rule so metadata drift cannot bypass approval.
@@ -1474,6 +1541,9 @@ services:
     volumes:
       - ./runtime/worker-runtime.json:/run/elitea/runtime.json:ro
       - standalone_runtime_worker:/run/elitea-runtime:ro
+      # The combined bundle the two variables above name. Read-only: the worker
+      # consumes it, `worker-trust` is what writes it.
+      - standalone_worker_trust:/run/elitea-worker-trust:ro
       # 0700 and owned by uid 10001 — the worker contract requires a private
       # spool root. A fresh named volume starts 0755 owned by root, so it is
       # prepared by the init service rather than assumed.
@@ -1493,6 +1563,13 @@ services:
         condition: service_healthy
       platform-edge:
         condition: service_started
+      # The bundle both trust variables name must exist before the worker's
+      # first TLS dial — of ANY destination, not only the MCP one, because it
+      # is now the whole trust store. A late file would break only the runs
+      # that raced it, so the one-shot is waited on rather than hoped for
+      # (the same rule the native overlay applies to mcp-mock-trust).
+      worker-trust:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   worker-spool-init:
@@ -1567,6 +1644,46 @@ services:
       - standalone_mcp_mock_trust:/trust
     restart: "no"
 
+  # The trust store the PYTHON worker runs on: runtime CA + mcp-mock CA (#983).
+  #
+  # A SECOND one-shot beside mcp-mock-trust, not a second file written by it,
+  # because the two bundles have different INPUTS and different owners.
+  # mcp-mock-trust concatenates the mock's certificate onto the image's public
+  # roots for a consumer (the native worker) whose internal destinations are
+  # trusted in code and whose other clients verify against public roots. The
+  # python worker is the opposite case: it has no code-level CA, every internal
+  # destination is signed by the runtime CA, and it must NOT gain public roots
+  # by accident. So this bundle is built from the runtime material the stack
+  # mints, which mcp-mock-trust does not mount and must not have to wait for.
+  #
+  # It runs the MOCK's image because that is where the mock's CA lives, as
+  # root because a fresh named volume starts 0755 root-owned and the worker
+  # runs non-root — the same reason worker-spool-init and mcp-mock-trust exist.
+  #
+  # The `-s` guard is the point of failing here rather than later: an empty or
+  # missing runtime CA would otherwise produce a syntactically valid bundle
+  # that trusts only the mock, and the worker would then fail every INTERNAL
+  # dial with a certificate error that reads like a platform outage.
+  worker-trust:
+    image: ghcr.io/eliteaai/elitea-mock-mcp:standalone
+    build:
+      context: ./mock-mcp
+      dockerfile: Containerfile
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - test -s /run/elitea-runtime/runtime-ca.crt
+        && cat /run/elitea-runtime/runtime-ca.crt /opt/mock-mcp/tls/ca.crt
+        > /trust/worker-ca-bundle.pem
+        && chmod 0644 /trust/worker-ca-bundle.pem
+    volumes:
+      - standalone_runtime_worker:/run/elitea-runtime:ro
+      - standalone_worker_trust:/trust
+    depends_on:
+      runtime-material:
+        condition: service_completed_successfully
+    restart: "no"
+
   # ── Traefik: routes /app → elitea-web, /api → elitea-main ──────────────────
   traefik:
     image: traefik:v3.4
@@ -1603,3 +1720,6 @@ volumes:
   # The trust bundle the native worker uses to verify mcp-mock's certificate.
   # Written by mcp-mock-trust; mounted read-only by whoever dials the mock.
   standalone_mcp_mock_trust:
+  # The PYTHON worker's whole trust store — runtime CA + mcp-mock CA, no public
+  # roots. Written by worker-trust; mounted read-only by the worker (#983).
+  standalone_worker_trust:
