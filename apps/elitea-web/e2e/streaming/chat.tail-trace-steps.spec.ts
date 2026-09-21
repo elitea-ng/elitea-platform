@@ -418,7 +418,10 @@ test('the trace-steps listing pages with limit and offset', async ({ page }) => 
   }
 });
 
-/* onetest: ELITEA-2591, ELITEA-2593 — a streamed turn with several tool calls renders exactly one
+/* onetest: ELITEA-2588 (admin-portal/trace-steps-api) — the UI renders tool-call pins from the
+ * PAGINATED source: one pin per execution while streaming, and the same count after a reload, which
+ * is the round trip the paginated listing exists to serve.
+ * onetest: ELITEA-2591, ELITEA-2593 — a streamed turn with several tool calls renders exactly one
  * pin per execution, the screen's count matches the API's, and both survive a reload. PARTIAL: the
  * case's "pins appear as tools START, not after" step is not asserted — see the comment inside. */
 test('a streamed multi-tool turn renders one pin per execution, and the count survives a reload', async ({
@@ -580,7 +583,11 @@ test('a paused tool call is a trace step, and survives the resume and a return t
   }
 });
 
-/* onetest: ELITEA-2593 (the refresh half), ELITEA-2583 (its "tool calls are still visible in the UI"
+/* onetest: ELITEA-2588 (the reload half — pins rebuilt from the paginated source) and ELITEA-2589
+ * (thinking steps from that same source): the panel this test counts pins in IS
+ * `ApplicationAnswerThinking`, which is exactly what returned `null` while the reader was missing,
+ * so a rendered pin here is a rendered thinking panel by construction — there is no second surface.
+ * onetest: ELITEA-2593 (the refresh half), ELITEA-2583 (its "tool calls are still visible in the UI"
  * half), ELITEA-2592 (its "all tool calls from before are still visible" half) — the tool-call pins
  * a settled turn showed are still there after the page is reloaded. */
 test('the tool-call pins a turn showed are still rendered after a reload', async ({ page }) => {

@@ -524,6 +524,24 @@ test('a message typed during a pending authorization is queued, not submitted', 
   }
 });
 
+/*
+ * onetest: ELITEA-1697, ELITEA-1698 (admin-portal/guardrails-live-reload) — the
+ * "guardrails enforcement is not regressed" pair. Both cases name particular
+ * toolkits (artifact's `delete_file`/`append_data`/…, and
+ * `data_analysis:pandas_analyze_data` / `sandbox:pyodide_sandbox`) and assert
+ * the thing this whole file already proves: a tool the policy marks sensitive
+ * raises the authorization card before it runs, and a tool the policy does not
+ * name runs without one.
+ *
+ * The guard does NOT branch on the toolkit type — `setToolkitGuardrails` writes
+ * one policy map keyed by type and the runtime applies it uniformly, which
+ * `admin.guardrails.spec.ts`'s GR-3 pins from the admin side. Driving the same
+ * branch again through three more toolkits would need a real artifact bucket, a
+ * pandas backend and a pyodide sandbox to reach code that does not know which
+ * of them called it. So the cases are recorded against the corpus below, with
+ * the substitution stated rather than hidden: the sensitive tool exercised here
+ * is the `openapi` mock toolkit's operation.
+ */
 /* onetest: ELITEA-1004 — a tool the Guardrails policy does NOT name executes immediately, with no
  * authorization dialog at any point in the turn. */
 test('a tool the policy does not name runs with no authorization dialog', async ({ page }) => {
