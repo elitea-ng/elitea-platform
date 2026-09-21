@@ -105,6 +105,9 @@ Point 4 also includes the following required work, confirmed by the user on 2026
 
 These are part of gate 4 acceptance, not optional follow-up work after compaction.
 
+The [checkpoint retention investigation](source-mapping/context-event-retention-20260921.md) separates active recovery markers from immutable replay evidence.
+Ordinary-event retention across repeated compactions remains open.
+
 The [2026-09-17 toolkit binding audit](source-mapping/toolkit-binding-drift-20260917.md)
 checks the newer SDK direct-tool fix. Rust already refuses cross-toolkit fallback;
 11 focused checks pass, including two new deterministic direct-node regressions.
