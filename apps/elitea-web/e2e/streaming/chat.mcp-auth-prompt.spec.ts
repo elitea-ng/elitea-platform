@@ -98,6 +98,9 @@ import {
   readStoredTranscript,
 } from '../fixtures/api';
 
+/** Which worker the stack under test is running. */
+const IS_NATIVE_RUNTIME = (process.env['E2E_WORKER'] ?? 'rust') === 'rust';
+
 const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
 
 /** The authorization-demanding endpoint the mock now serves. */
@@ -160,6 +163,31 @@ async function turnText(page: Page, projectId: string, conversationId: string): 
  * re-driven four times.
  */
 test('an MCP server that demands authorization is named by its toolkit in the agent’s message', async ({ page }) => {
+  // THE SAME GATE `chat.mcp.spec.ts` CARRIES, for the same reason.
+  //
+  // The mcp-mock trust bundle is wired onto the NATIVE worker only
+  // (`deploy/docker-compose.standalone-rust-agent.yml` sets `SSL_CERT_FILE` to
+  // `/run/elitea-mcp-trust/mcp-mock-ca-bundle.pem`). The python worker's
+  // `SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE` are pinned to the runtime CA alone
+  // (`docker-compose.standalone-full.yml`), and a bundle REPLACES the trust
+  // store rather than adding to it — so on the python leg the worker cannot
+  // complete a TLS handshake with mcp-mock at all.
+  //
+  // MEASURED on a python-leg standalone stack, before any authorization is
+  // reached: `mcp_adapter.py:345 _preflight_auth_check` →
+  // `ClientConnectorCertificateError: … self-signed certificate in certificate
+  // chain`, and the toolkit then has no tools. The turn therefore answers with
+  // a plain echo and names nothing — which is NOT the product gap this case is
+  // about, and `test.fail` would have recorded it as one and gone green for a
+  // certificate error.
+  //
+  // A skip rather than a silent pass: wiring the python worker a bundle of
+  // public roots + runtime CA + the mock's CA would let this leg run, and is
+  // the change that would retire this gate for both MCP specs at once.
+  test.skip(
+    !IS_NATIVE_RUNTIME,
+    'the mcp-mock trust bundle is wired onto the native worker only — see the note above this line',
+  );
   test.setTimeout(420_000);
 
   const stamp = String(Date.now()).slice(-7);
