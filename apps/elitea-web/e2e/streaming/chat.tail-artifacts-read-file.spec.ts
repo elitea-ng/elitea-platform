@@ -10,22 +10,34 @@
  * at the wrong threshold, stays invisible.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * BOTH TESTS ARE FAIL-MARKED ON THE NATIVE (rust) LEG, FOR A GAP ALREADY FILED
+ * THE NATIVE LEG NOW HAS THE FAMILY (#906) — AND ONE HALF IS STILL BLOCKED
  * ─────────────────────────────────────────────────────────────────────────────
- * `artifact` is absent from the native worker's `supported_tool_types`
- * (`services/elitea-worker-rust/src/toolkits/materialize.rs`, and its own
- * capability snapshot lists every family it does have). The toolkit is skipped
- * at assembly — `agent_toolkit_skipped reason_code=unsupported_toolkit_family`
- * — and the turn then either fails outright
- * (`native_agent.invalid_configuration`) or answers with the toolkit simply
- * absent; `chat.artifacts-toolkit.spec.ts` measured both shapes and fail-marks
- * its own WRITE-path case (#906) on exactly this. Either way `read_file` is
- * never dispatched, so neither half of the size contract is observable.
+ * `artifact` used to be absent from the native worker's `supported_tool_types`:
+ * the toolkit was skipped at assembly (`agent_toolkit_skipped
+ * reason_code=unsupported_toolkit_family`) and `read_file` was never
+ * dispatched, so neither half of the size contract was observable there. #906
+ * closed that — the family lives in
+ * `services/elitea-worker-rust/src/toolkits/families/artifact/`, acts under the
+ * live execution claim against main's private content listener, and enforces
+ * the SAME 200,000-character agent-path cap with the SAME structured
+ * `content_too_large` refusal the SDK produces. So the CAP case below runs on
+ * both legs.
  *
- * THE python LEG'S CONTRACT IS THE OPPOSITE — the SDK's artifact family is a
- * real port — which is why the calls below are SCRIPTED with the SDK's own
- * argument shape (`filename`) rather than left for a model to invent: on that
- * leg every assertion here must pass for real.
+ * THE FULL-READ CASE WAS BLOCKED ONE LAYER DOWN, and #956 closed that too. An
+ * 80k-character tool RESULT does not fit one output frame, and both runtimes
+ * used to REFUSE it there (python raised `RESOURCE_EXHAUSTED: The agent event
+ * exceeds its output limit` at `MAX_CURRENT_NODE_EVENT_JSON_BYTES`; rust
+ * refused the same value one layer earlier at `MAX_TOOL_EVENT_VALUE_BYTES`).
+ * The frame bound is unchanged — it is the runtime limits conformance
+ * document's `max_output_frame_bytes`, under the Redis field bound — and an
+ * oversized result is now emitted as an ordered sequence of chunk events that
+ * elitea-main reassembles onto the stored tool call
+ * (`internal/transport/runtimegrpc/nodeevent/tool_output_chunk.go`). So BOTH
+ * cases below now run for real on both legs.
+ *
+ * The calls below are SCRIPTED with the SDK's own argument shape (`filename`)
+ * rather than left for a model to invent; the native family mirrors those
+ * names deliberately, so one prompt drives both legs.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * WHAT IS PORTED HERE AND WHAT IS NOT
@@ -63,9 +75,6 @@ const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
 
 /** The model the standalone stack seeds; overridable for the real-model lane. */
 const MOCK_MODEL = process.env['E2E_MOCK_MODEL'] ?? 'vllm/E2E-MOCK-MODEL';
-
-/** `chat-stream-e2e.sh` exports this; the local default matches its own. */
-const IS_NATIVE_RUNTIME = (process.env['E2E_WORKER'] ?? 'rust') === 'rust';
 
 /** The SDK's artifact-toolkit tool names, as `chat.artifacts-toolkit.spec.ts` lists them. */
 const ARTIFACT_TOOL_NAMES = [
@@ -271,7 +280,14 @@ async function sendTurn(page: Page, prompt: string): Promise<void> {
   expect(response.status(), `the turn was refused: ${(await response.text()).slice(0, 300)}`).toBe(200);
 }
 
-/** The newest stored assistant reply, once the mock's END sentinel has arrived. */
+/**
+ * The newest stored assistant reply, once the mock's END sentinel has arrived.
+ *
+ * Used by the OVER-CAP case alone. The refusal it waits for is a few hundred
+ * characters, so that reply settles in seconds; the under-cap case cannot use
+ * this at all — see the comment in that test for what an 80,000-character
+ * verbatim echo does to a settle, and what it asserts instead.
+ */
 async function settledAnswer(page: Page, projectId: string, conversationId: string): Promise<string> {
   await expectStoredAssistantAnswer(page, projectId, conversationId, {
     timeout: 180_000,
@@ -287,36 +303,62 @@ async function settledAnswer(page: Page, projectId: string, conversationId: stri
   );
 }
 
+/**
+ * The LIVE tool pin's text, with the thinking panels that hold the rows opened.
+ *
+ * Read from the ROW rather than from the modal: the modal's OUTPUT pane is a
+ * CodeMirror editor that renders only the visible lines, so an 80,000-character
+ * result is in the DOM there only a screenful at a time and a length assertion
+ * against it would measure the viewport. The row's preview is clamped by CSS
+ * (`-webkit-line-clamp`) and carries the WHOLE string in the node, which is
+ * exactly what has to be proven present before any reload.
+ */
+async function liveToolPinText(page: Page, toolName: string, minimumLength: number): Promise<string> {
+  const summaries = page.getByTestId('chat-answer-thought-accordion').getByRole('button', { name: /Thought for/ });
+  await expect(
+    summaries.last(),
+    'the turn ran a tool but rendered no thinking panel to hold its row',
+  ).toBeVisible({ timeout: 60_000 });
+  const pin = page
+    .locator(`[data-testid="chat-tool-action"][data-tool-action-name="${toolName}"]`)
+    .first();
+  let text = '';
+  await expect
+    .poll(
+      async () => {
+        for (const summary of await summaries.all()) {
+          try {
+            if ((await summary.getAttribute('aria-expanded')) !== 'true') {
+              await summary.click({ timeout: 5_000 });
+            }
+          } catch {
+            // A re-render between the read and the click detaches the node; the
+            // next tick addresses its replacement.
+          }
+        }
+        text = (await pin.count()) > 0 ? ((await pin.textContent()) ?? '') : '';
+        return text.length;
+      },
+      {
+        timeout: 90_000,
+        // Polled to the FULL length, not to "not empty": a chunked output
+        // grows as its slices arrive, so a poll that settled on the first
+        // chunk would make the length assertion below a race rather than a
+        // measurement.
+        message:
+          `the ${toolName} tool row never carried its whole output in the live transcript ` +
+          `(wanted at least ${String(minimumLength)} characters)`,
+      },
+    )
+    .toBeGreaterThanOrEqual(minimumLength);
+  return text;
+}
+
 /* onetest: ELITEA-0362, ELITEA-0354, ELITEA-0350, ELITEA-0355 — a file between 60k and 200k
  * characters, uploaded through the Artifacts API, is read back IN FULL by an agent using the
  * Artifact toolkit: no size-limit error, and the content the file actually holds. */
 test('an agent reads an 80k-character artifact back in full', async ({ page }) => {
   test.setTimeout(420_000);
-
-  // FAIL-MARKED ON BOTH LEGS, for two DIFFERENT measured reasons — which is
-  // why the message names both rather than picking one.
-  //
-  //  - rust: `artifact` is absent from the native worker's
-  //    `supported_tool_types`, so materialize.rs skips the toolkit
-  //    (`agent_toolkit_skipped reason_code=unsupported_toolkit_family`) and
-  //    `read_file` is never dispatched at all; the turn is stored flagged
-  //    `is_error`. The same gap `chat.artifacts-toolkit.spec.ts` fail-marks
-  //    for the WRITE path (#906).
-  //  - python: the toolkit works and the read IS dispatched — and then the
-  //    80k result is refused by a DIFFERENT limit downstream of it:
-  //    `IS_ERROR:MOCK: tool read_file said Error executing read_file:
-  //    RESOURCE_EXHAUSTED: The agent event exceeds its output limit.` So the
-  //    toolkit's own 200k cap is not the binding one on the agent path, and a
-  //    file the cap admits still cannot be read whole. That is the case's
-  //    claim failing for real, not a harness artefact.
-  test.fail(
-    true,
-    'ELITEA-0362 (#956): product gap — a file under the artifact toolkit’s 200k agent-path cap still cannot ' +
-      'be read in full. On the native worker `artifact` is an unsupported toolkit family (#906) and ' +
-      'the call is never dispatched; on the SDK worker the call runs and its 80k result is refused ' +
-      'downstream with RESOURCE_EXHAUSTED "The agent event exceeds its output limit". ' +
-      'See S/tail/defects.md.',
-  );
 
   let fixture: ArtifactAgentFixture | undefined;
   try {
@@ -335,15 +377,62 @@ test('an agent reads an 80k-character artifact back in full', async ({ page }) =
       callToolWithArgumentsPrompt('read_file', { filename: fileName }, `read the full content of ${fileName}`),
     );
 
-    const answer = await settledAnswer(page, fixture.projectId, fixture.conversationId);
-    expect(
-      answer,
-      'a file under the 200k agent-path cap must not be refused for its size — the old 60k limit is gone',
-    ).not.toMatch(SIZE_LIMIT_MARK);
-    expect(
+    // ASSERTED ON THE LIVE TRANSCRIPT, NOT ON THE STORED ROW. Measured twice
+    // on the rust leg with the whole read delivered: the mock quotes a tool
+    // result VERBATIM (`deploy/mock-llm/server.py`, "Resume: quote the tool
+    // results verbatim") and this lane streams with a per-chunk delay, so an
+    // 80,000-character result becomes an 80,000-character reply arriving at a
+    // few characters a second — the stored row was still growing minutes after
+    // a three-minute settle gave up, and the transcript API answers EMPTY for a
+    // row that is still streaming. Waiting for that row to settle is waiting
+    // for something this lane cannot deliver, and it says nothing about the
+    // read: the claim is that the file's content reached the model, which the
+    // live answer and the tool pin below both show while the turn is still
+    // going.
+    const answer = page.getByTestId('chat-message-list').getByTestId('application-answer').first();
+    await expect(
       answer,
       'the reply must quote the file’s real content, not a summary of it or an empty result',
+    ).toContainText(token, { timeout: 120_000 });
+    await expect(
+      answer,
+      'a file under the 200k agent-path cap must not be refused for its size — the old 60k limit is gone',
+    ).not.toContainText(SIZE_LIMIT_MARK);
+
+    // THE LIVE PIN, BEFORE ANY RELOAD (#956). The result is far past one output
+    // frame, so it reaches the browser as a sequence of
+    // `agent_tool_output_chunk` events that the stream reducer reassembles
+    // (`features/chat-messages/lib/chatStreamToolOutputChunks.ts`). Asserting
+    // the STORED trace alone would pass on a browser that showed nothing and
+    // only filled in after a refresh — which is precisely the half this test
+    // exists to hold.
+    const pinText = await liveToolPinText(page, 'read_file', content.length);
+    expect(
+      pinText,
+      'the live tool row must hold the whole 80k result, not the prefix one frame could carry',
     ).toContain(token);
+    expect(
+      pinText.length,
+      'the live tool row is shorter than the file, so the chunks were not reassembled in the browser',
+    ).toBeGreaterThanOrEqual(content.length);
+    // …and it must not be flagged partial: a hole or a digest mismatch would
+    // mean the row is a prefix that merely looks complete.
+    await expect(
+      page.getByTestId('chat-tool-action-partial-output'),
+      'the reassembled output was reported partial',
+    ).toHaveCount(0);
+
+    // STOP THE TURN once the proof is in. The mock is still re-streaming the
+    // 80,000-character result at this point and will go on doing so for the
+    // better part of an hour; measured, two such leftovers saturated the
+    // worker and made the NEXT test in this very file time out on a reply that
+    // normally settles in twenty seconds. Stopping is a product action (the
+    // composer's own control, which DELETEs the task), so it also leaves the
+    // lane as a user would.
+    const stopButton = page.getByRole('button', { name: 'Stop generating' });
+    if (await stopButton.count()) {
+      await stopButton.first().click({ timeout: 10_000 }).catch(() => undefined);
+    }
   } finally {
     await fixture?.dispose();
   }
@@ -353,15 +442,6 @@ test('an agent reads an 80k-character artifact back in full', async ({ page }) =
  * size-limit error string, not as content: the cap is enforced on that path. */
 test('an agent reading a 300k-character artifact gets the size-limit error', async ({ page }) => {
   test.setTimeout(420_000);
-
-  if (IS_NATIVE_RUNTIME) {
-    test.fail(
-      true,
-      'ELITEA-0364 (#906): product gap — the same unsupported `artifact` family: the toolkit is ' +
-        'skipped before the model is reached, so the 200k cap is not observable on this leg. ' +
-        'See S/tail/defects.md.',
-    );
-  }
 
   let fixture: ArtifactAgentFixture | undefined;
   try {

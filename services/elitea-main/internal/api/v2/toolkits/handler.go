@@ -1047,9 +1047,14 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	// save persists nothing. validateToolkitCreate above only checks that a
 	// github body NAMES a `github_configuration` key; this is the only thing on
 	// the write path that resolves what that key points at.
-	if settings, ok := body["settings"].(map[string]any); ok &&
-		h.refuseUnresolvableToolkitSettings(w, r, "create_toolkit", projectID, createdType, settings) {
-		return
+	if settings, ok := body["settings"].(map[string]any); ok {
+		// Before the validator, so it resolves the map that will actually be
+		// stored: a defaulted key is part of the saved settings, not an
+		// afterthought applied behind the check (#978).
+		h.applyCatalogueSettingsDefaults(r, "create_toolkit", createdType, settings)
+		if h.refuseUnresolvableToolkitSettings(w, r, "create_toolkit", projectID, createdType, settings) {
+			return
+		}
 	}
 	body["_author_id"] = userID
 	item, err := h.repo.CreateToolkit(r.Context(), projectID, body)
@@ -1130,6 +1135,11 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		if updatedType == "" {
 			updatedType = h.storedToolkitType(r.Context(), projectID, toolkitID)
 		}
+		// UpdateToolkit REPLACES the settings column with this map, so a key
+		// the body omits is a key the stored row loses — the same absence
+		// that dies at materialization on create (#978). Defaulted here for
+		// that reason, and only for keys the body does not mention at all.
+		h.applyCatalogueSettingsDefaults(r, "update_toolkit", updatedType, settings)
 		if h.refuseUnresolvableToolkitSettings(w, r, "update_toolkit", projectID, updatedType, settings) {
 			return
 		}

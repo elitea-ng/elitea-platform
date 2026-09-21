@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
@@ -171,3 +172,35 @@ func (repository *CurrentAttachmentObjectRepository) ReadAttachmentObject(
 }
 
 var _ storage.AttachmentObjectSource = (*CurrentAttachmentObjectRepository)(nil)
+
+// ReadCurrentAttachmentImage is the ADMISSION path's read (#979): the bytes of
+// one attached image, so `attachmentContentScaffold` can embed them as an
+// `image_url` chunk instead of naming the file and hoping.
+//
+// It is `ReadAttachmentObject` with the record dropped, deliberately and not
+// for brevity. The four guarantees that read enforces — the bucket is this
+// project's, it is the RESERVED system bucket the chat upload path owns, a
+// metadata row exists, and the row's length matches the object's — are exactly
+// the ones an admission-time read needs, and having one implementation means
+// the two paths cannot come to disagree about what a chat attachment is. The
+// media type is NOT carried over: the application layer derives it from the
+// extension, because the recorded one is whatever the browser sent.
+//
+// `storage.ErrContentRejected` (over the cap, or a length disagreement) and
+// `storage.ErrContentNotFound` both reach the caller as an error, which it
+// treats as "no bytes, announce the file" — the pre-#979 behaviour.
+func (repository *CurrentAttachmentObjectRepository) ReadCurrentAttachmentImage(
+	ctx context.Context,
+	projectID int64,
+	bucket string,
+	name string,
+	maxBytes int64,
+) ([]byte, error) {
+	record, err := repository.ReadAttachmentObject(ctx, projectID, bucket, name, maxBytes)
+	if err != nil {
+		return nil, err
+	}
+	return record.Content, nil
+}
+
+var _ agentexecution.CurrentAttachmentImageReader = (*CurrentAttachmentObjectRepository)(nil)

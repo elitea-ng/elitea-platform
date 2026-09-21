@@ -103,6 +103,8 @@ function buildMeta(metaWire: Record<string, unknown> | null | undefined): Partic
     ...optField('userName', readStr(metaWire, 'user_name')),
     ...optField('userAvatar', readStr(metaWire, 'user_avatar')),
     ...optField('isContainer', typeof metaWire['is_container'] === 'boolean' ? metaWire['is_container'] : undefined), ...optField('mcp', typeof metaWire['mcp'] === 'boolean' ? metaWire['mcp'] : undefined),
+    // #972 — the server's publication answer; `optField` keeps an absent key absent rather than folding it to `false`, because "not resolved" and "resolved, not withdrawn" are different states and only the second may silence the notice.
+    ...optField('versionWithdrawn', typeof metaWire['version_withdrawn'] === 'boolean' ? metaWire['version_withdrawn'] : undefined), ...optField('versionStatus', readStr(metaWire, 'version_status')),
   };
 }
 
@@ -157,15 +159,15 @@ export interface ChatBoxTtsProps {
   readonly spokenRange?: { readonly start: number; readonly end: number } | undefined;
 }
 
-/** Builds `ChatMessageList`'s `tts` prop group from a `voiceHooks.useReadAloud()` result — extracted to keep `ChatBox`'s complexity down. */
+/** Builds `ChatMessageList`'s `tts` prop group from a `voiceHooks.useReadAloud()` result. `isSpeakingMode` is a PARAMETER, not the hardcoded `autoSpeak: false` it used to be (issue 974): with that constant — and `ChatMessageList` not forwarding the flag either — `ApplicationAnswer`'s auto-read effect could never fire, so speaking mode captured the user's voice and then answered in silence. */
 export function buildTtsProps(readAloud: {
   readonly onAutoSpeak: (text: string, messageId: string) => void;
   readonly speakingMessageId: string | number | null | undefined;
   readonly speakingSegments: readonly unknown[] | null | undefined;
   readonly spokenRange: { readonly start: number; readonly end: number } | null | undefined;
-}): ChatBoxTtsProps {
+}, isSpeakingMode = false): ChatBoxTtsProps {
   return {
-    autoSpeak: false,
+    autoSpeak: isSpeakingMode,
     onAutoSpeak: readAloud.onAutoSpeak,
     speakingMessageId: readAloud.speakingMessageId != null ? String(readAloud.speakingMessageId) : undefined,
     speakingSegments: readAloud.speakingSegments ?? undefined,
@@ -184,20 +186,19 @@ export function deriveChatBoxInputState(flags: {
   readonly hasChatInput: boolean;
   readonly isProcessingSymbols: boolean;
   readonly hasPendingHitlInterrupt: boolean;
-  readonly isActiveParticipantBroken: boolean;
+  readonly isActiveParticipantBroken: boolean; readonly isActiveParticipantWithdrawn?: boolean; // #972
 }): { readonly isInputLoading: boolean; readonly isComposerBusy: boolean; readonly disabledSend: boolean } {
-  const isComposerBusy =
+  const isComposerBusy = // #972 — a withdrawn agent closes the COMPOSER, not only Send: an editable text area invites a message that can never be sent, and a greyed button alone does not say why.
     Boolean(flags.isLoadingConversation) ||
     flags.isFetchingParticipantDetails ||
-    flags.isUploadingAttachments ||
-    flags.isUpdatingInternalToolsConfig ||
-    Boolean(flags.isConversationSending);
+    flags.isUploadingAttachments || flags.isUpdatingInternalToolsConfig ||
+    Boolean(flags.isActiveParticipantWithdrawn) || Boolean(flags.isConversationSending);
   const disabledSend =
     !flags.hasChatInput ||
     isComposerBusy ||
     flags.isProcessingSymbols ||
     flags.hasPendingHitlInterrupt ||
-    flags.isActiveParticipantBroken;
+    flags.isActiveParticipantBroken || Boolean(flags.isActiveParticipantWithdrawn);
   return { isInputLoading: isComposerBusy || flags.isStreaming, isComposerBusy, disabledSend };
 }
 

@@ -366,3 +366,131 @@ func TestProjectContextThatWouldNotFitIsSkippedRatherThanBreakingTheTurn(t *test
 		t.Error("a context well inside the budget was skipped")
 	}
 }
+
+// #971 — a PIPELINE's `instructions` is the YAML graph the runtime compiles
+// (services/elitea-worker-rust/src/agents/pipeline.rs:
+// `PipelineDefinition::from_yaml(shell.instructions())`), so no injection may
+// touch it. Before this guard, an enabled Project Context made every pipeline
+// run in the project die at assembly with `native_agent.invalid_input`, stored
+// as an empty `is_error` assistant row.
+//
+// The graph below is the starter template the pipelines create page stores, so
+// a regression is visible as "this exact document came back with an XML block
+// welded onto it".
+const currentPipelineGraphForInjectionTest = "state:\n  input:\n    type: str\n" +
+	"entry_point: LLM_1\nnodes:\n  - id: LLM_1\n    type: llm\n    transition: END\n"
+
+func TestCurrentProjectContextIsNeverSplicedOntoAPipelineGraph(t *testing.T) {
+	t.Parallel()
+
+	version, err := json.Marshal(map[string]any{
+		"id":           7,
+		"agent_type":   "pipeline",
+		"instructions": currentPipelineGraphForInjectionTest,
+		"meta":         map[string]any{"step_limit": 25},
+	})
+	if err != nil {
+		t.Fatalf("marshal pipeline version: %v", err)
+	}
+
+	got := appendCurrentApplicationProjectContext(version, "House style: terse.")
+	if string(got) != string(version) {
+		t.Fatalf("a pipeline version must come back byte-identical; got %s", got)
+	}
+
+	// The graph the runtime would compile is still exactly the stored graph —
+	// asserted through the field rather than through the whole document, so a
+	// future change that re-encodes other keys still fails if it touches this
+	// one.
+	if instructions := currentApplicationInstructionsText(got); instructions != currentPipelineGraphForInjectionTest {
+		t.Fatalf("the pipeline graph was modified:\n got: %q\nwant: %q", instructions, currentPipelineGraphForInjectionTest)
+	}
+	// Read the DECODED field, not the raw JSON: `<` is escaped to `\u003c` in
+	// the encoded document, so a raw `strings.Contains` for the block tag
+	// answers "absent" even when the block is there — a check that could only
+	// ever pass.
+	if strings.Contains(currentApplicationInstructionsText(got), currentProjectContextBlockOpen) {
+		t.Fatalf("the project-context block reached a pipeline document: %s", got)
+	}
+}
+
+func TestCurrentMemoriesAreNeverSplicedOntoAPipelineGraph(t *testing.T) {
+	t.Parallel()
+
+	// The SAME field, the same corruption, a different injector (#870). The
+	// guard lives in the one splice primitive so both are covered; this pins
+	// that it really is both.
+	version, err := json.Marshal(map[string]any{
+		"agent_type":   "pipeline",
+		"instructions": currentPipelineGraphForInjectionTest,
+	})
+	if err != nil {
+		t.Fatalf("marshal pipeline version: %v", err)
+	}
+	if got := appendCurrentApplicationMemories(version, "Remembers: likes Go."); string(got) != string(version) {
+		t.Fatalf("a pipeline version must come back byte-identical; got %s", got)
+	}
+}
+
+// The guard must be exactly as wide as the defect and no wider: a DIRECT agent
+// — including one whose stored document names no `agent_type` at all — still
+// gets its project context, which is what #946 exists to deliver.
+func TestCurrentProjectContextStillReachesEveryNonPipelineVersion(t *testing.T) {
+	t.Parallel()
+
+	for name, agentType := range map[string]any{
+		"openai":          "openai",
+		"absent":          nil,
+		"unknown to main": "some-future-type",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			fields := map[string]any{"instructions": "Be helpful."}
+			if agentType != nil {
+				fields["agent_type"] = agentType
+			}
+			version, err := json.Marshal(fields)
+			if err != nil {
+				t.Fatalf("marshal version: %v", err)
+			}
+			got := appendCurrentApplicationProjectContext(version, "House style: terse.")
+			instructions := currentApplicationInstructionsText(got)
+			if !strings.Contains(instructions, currentProjectContextBlockOpen) {
+				t.Fatalf("a non-pipeline version must still receive its project context; got %s", got)
+			}
+			if !strings.Contains(instructions, "House style: terse.") {
+				t.Fatalf("the injected block must carry the context text; got %s", got)
+			}
+			if !strings.Contains(instructions, "Be helpful.") {
+				t.Fatalf("the agent's own instructions must survive the splice; got %s", got)
+			}
+		})
+	}
+}
+
+// A document this package cannot decode answers "not a graph": the splice
+// callers return such a document untouched anyway, and answering the other way
+// would quietly strip context from every agent whose version failed to parse.
+func TestCurrentApplicationInstructionsAreAGraph(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		version json.RawMessage
+		want    bool
+	}{
+		"pipeline":            {json.RawMessage(`{"agent_type":"pipeline"}`), true},
+		"direct agent":        {json.RawMessage(`{"agent_type":"openai"}`), false},
+		"no agent_type":       {json.RawMessage(`{"instructions":"hi"}`), false},
+		"agent_type not text": {json.RawMessage(`{"agent_type":7}`), false},
+		"undecodable":         {json.RawMessage(`{`), false},
+		"empty":               {nil, false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := currentApplicationInstructionsAreAGraph(tc.version); got != tc.want {
+				t.Fatalf("currentApplicationInstructionsAreAGraph(%s) = %v, want %v", tc.version, got, tc.want)
+			}
+		})
+	}
+}

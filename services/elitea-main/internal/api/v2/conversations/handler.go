@@ -103,6 +103,24 @@ type Message struct {
 	// message claim an items list it does not have.
 	MessageItems []map[string]any `json:"message_items,omitempty"`
 	CreatedAt    time.Time        `json:"created_at"`
+	// When this group was last REWRITTEN, which for an assistant row is the
+	// moment its text was finalized — including the finalize of a
+	// REGENERATION, which rewrites the row in place
+	// (`ResetCurrentAgentResponse` then `FinalizeCurrentAgentFullMessage`,
+	// internal/db/queries/agent_chat.sql, both of which already stamp the
+	// column).
+	//
+	// It is served because `created_at` alone made a regenerated answer claim
+	// to be as old as the text it replaced: the row keeps the time the ORIGINAL
+	// answer arrived, so a person watched fresh text appear under a stale
+	// timestamp and had no field to read instead. A renderer prefers this one
+	// when it is present — the same `updated_at || created_at` the reference
+	// SPA showed.
+	//
+	// A POINTER with omitempty: the column is nullable and a group that has
+	// never been rewritten has no update time. Zero-valued `time.Time` would
+	// serialize as year 1 and read, to every client, as a real timestamp.
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 }
 
 type ListResponse struct {

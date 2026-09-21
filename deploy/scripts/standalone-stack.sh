@@ -82,10 +82,17 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # Overridable so a second, disposable stack can be brought up for verification
-# without touching a running one. Note that the oidc-mock port is fixed at 9400
-# and cannot be remapped, so two stacks can only coexist if the second one drops
-# that port publication with an override file.
+# without touching a running one. The oidc-mock port cannot be REMAPPED (the
+# issuer is derived from the Host header, so published and container port must
+# match) but it can be MOVED: `E2E_OIDC_PORT` sets both at once, and it is the
+# same variable the E2E stack, its seeder and `e2e/auth.setup.ts` already read.
+# Unset it is 9400 and nothing changes.
 PROJECT="${STANDALONE_PROJECT:-elitea-standalone}"
+# Exported, not merely read: compose interpolates it out of the ENVIRONMENT,
+# and the seed step below hands it to apps/elitea-web/scripts/e2e-stack.sh,
+# which reads the very same name.
+export E2E_OIDC_PORT="${E2E_OIDC_PORT:-9400}"
+OIDC_PORT="${E2E_OIDC_PORT}"
 COMPOSE_F="-p ${PROJECT} -f ${REPO_ROOT}/deploy/docker-compose.standalone-full.yml"
 
 # Overlay files, applied after the base in the order given. Every subcommand
@@ -790,18 +797,24 @@ case "${1:-}" in
       exit 1
     fi
     # oidc-mock's published port must equal its container port (the issuer is
-    # derived from the Host header), so 9400 cannot be remapped and the E2E
-    # stack cannot be up at the same time. Detect that here: the raw failure is
-    # an opaque "proxy already running" from the podman machine.
+    # derived from the Host header), so the port cannot be REMAPPED — but it
+    # can be MOVED, on both sides at once, and `E2E_OIDC_PORT` does exactly
+    # that (see the oidc-mock service in the compose file). Unset, it is 9400
+    # and this stack cannot be up at the same time as the E2E stack; set to a
+    # free port, the two coexist. Detect the collision here either way: the raw
+    # failure is an opaque "proxy already running" from the podman machine.
     #
     # Only a conflict if the listener is NOT this project's own oidc-mock:
     # `compose up -d --wait` is meant to be safely re-runnable, and without
     # this exemption a second `up` against an already-healthy standalone stack
-    # would find its own container on 9400 and misreport it as the E2E stack.
+    # would find its own container on the port and misreport it as the E2E
+    # stack.
     if ! $COMPOSE_BIN $COMPOSE_F ps --format '{{.Names}}' 2>/dev/null | grep -q 'oidc-mock' \
-       && command -v lsof &>/dev/null && lsof -nP -iTCP:9400 -sTCP:LISTEN &>/dev/null; then
-      echo "ERROR: port 9400 (oidc-mock) is already in use." >&2
-      echo "       The E2E stack cannot run alongside this one. Stop it with:" >&2
+       && command -v lsof &>/dev/null && lsof -nP -iTCP:"${OIDC_PORT}" -sTCP:LISTEN &>/dev/null; then
+      echo "ERROR: port ${OIDC_PORT} (oidc-mock) is already in use." >&2
+      echo "       Another stack holds it. Stop that one, or bring this stack up" >&2
+      echo "       on a free port with E2E_OIDC_PORT=<port> (both stacks read the" >&2
+      echo "       same variable). The E2E stack stops with:" >&2
       echo "         apps/elitea-web/scripts/e2e-stack.sh down" >&2
       exit 1
     fi
@@ -832,7 +845,7 @@ case "${1:-}" in
     echo "     docs          http://localhost:${PORT}/docs/"
     echo "     admin console http://localhost:${PORT}/admin/app/"
     echo "     API           http://localhost:${PORT}/api/v2"
-    echo "     OIDC provider http://localhost:9400"
+    echo "     OIDC provider http://localhost:${OIDC_PORT}"
     echo "     gateway       https://localhost:${STANDALONE_GATEWAY_PORT:-8085} (mTLS)"
     echo "   Next: $0 seed && $0 seed-runtime && $0 seed-llm && $0 check"
     ;;

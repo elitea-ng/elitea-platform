@@ -24,6 +24,12 @@ import type { VersionSummary } from '@/entities/version';
 import { chatInputCompositionHooks, mentionHooks } from '@/features/chat-input';
 import type { ChatInputHandle } from '@/features/chat-input';
 
+/**
+ * The substring a withdrawal stamps into the reverted clone's name. The
+ * server's own marker — see `isActiveParticipantWithdrawn`.
+ */
+const WITHDRAWN_VERSION_MARKER = '-withdrawn-';
+
 /** Mirrors old-app `common/constants:PUBLIC_PROJECT_ID` — not re-exported from `features/chat-participants`'s barrel (§3.5 cap), same env-var read that barrel's own `model/constants.ts` does. */
 const PUBLIC_PROJECT_ID = (import.meta.env['VITE_PUBLIC_PROJECT_ID'] as string | undefined) || '0';
 
@@ -31,10 +37,25 @@ const PUBLIC_PROJECT_ID = (import.meta.env['VITE_PUBLIC_PROJECT_ID'] as string |
 /*  Shared shapes                                                       */
 /* ------------------------------------------------------------------ */
 
-/** A user participant resolved from conversation participants. Carries an index signature so it structurally satisfies `features/chat-input`'s `MentionCandidate` (`@`-detection's own candidate shape) without a mapping step. */
+/**
+ * A user participant resolved from conversation participants. Carries an index
+ * signature so it structurally satisfies `features/chat-input`'s
+ * `MentionCandidate` (`@`-detection's own candidate shape) without a mapping
+ * step.
+ *
+ * `id` IS THE PARTICIPANT ROW ID, not the user's. That is what the mention
+ * picker and the highlighter address (everything else in the composer is keyed
+ * by participant), and it is the WRONG number to put on the wire: the start
+ * route's `user_ids` names USERS (`centry.notifications.user_id`), and sending
+ * a participant id there notifies whoever happens to own that user id — or,
+ * more often, nobody at all. `userId` is the other one, carried alongside so
+ * that neither consumer has to re-derive it from the participant blob.
+ */
 export interface ResolvedUserMention {
   readonly id: string;
   readonly name: string;
+  /** The mentioned person's USER id (`entity_meta.id`), for the wire. */
+  readonly userId?: string;
   readonly participant: unknown;
   readonly [key: string]: unknown;
 }
@@ -106,6 +127,8 @@ export interface UseChatBoxStateResult {
   readonly hasOtherUsers: boolean;
   /** baseline: `isActiveParticipantBroken` (`ChatBox.jsx:2035-2041`) — a public-project participant whose current version isn't in its own version list. */
   readonly isActiveParticipantBroken: boolean;
+  /** #972 — the agent this conversation uses was published and has since been withdrawn. */
+  readonly isActiveParticipantWithdrawn: boolean;
   /** baseline: `isActiveParticipantVersionMissing` (`ChatBox.jsx:2043-2050`). */
   readonly isActiveParticipantVersionMissing: boolean;
   /** The "@"/"#" trigger-detection state machine (`chatInputCompositionHooks.useNewInputKeyDownHandler`). */
@@ -160,7 +183,7 @@ export function useChatBoxState(params: UseChatBoxStateParams): UseChatBoxStateR
     for (const p of participants ?? []) {
       const metaUserName = p.meta?.userName;
       if (p.entityName === 'user' && p.entityMeta?.id && metaUserName && p.entityMeta.id !== userId) {
-        result.push({ id: p.id, name: metaUserName, participant: p });
+        result.push({ id: p.id, name: metaUserName, userId: p.entityMeta.id, participant: p });
       }
     }
     result.push({ id: '@everyone', name: 'Everyone', participant: 'All users' });
@@ -234,6 +257,68 @@ export function useChatBoxState(params: UseChatBoxStateParams): UseChatBoxStateR
     return !activeParticipantVersions.some((v) => v.id === String(versionId));
   }, [activeParticipant, activeParticipantVersions]);
 
+  /**
+   * The conversation's agent was PUBLISHED and has since been WITHDRAWN
+   * (#972).
+   *
+   * Nothing in the chat surface used to read a participant's published state
+   * at all, so a conversation whose agent left the catalogue looked entirely
+   * live: no notice, an editable composer, an enabled Send. The holder could
+   * only find out by sending.
+   *
+   * THE SIGNAL, and why it is this one. A withdrawal does not delete the
+   * published clone — it REVERTS it to a draft and RENAMES it, stamping
+   * `-withdrawn-` into the name (the server's own marker, pinned by
+   * `agents.publishing.spec.ts`'s "after a withdrawal the same version name is
+   * free again"). So the bound version still resolves, which is why
+   * `isActiveParticipantBroken` above — written for a version that is GONE —
+   * never fires for this case.
+   *
+   * Status alone is not enough: an ordinary private agent's version is a draft
+   * too, and treating every draft as withdrawn would put this notice on most
+   * conversations in the product. Both halves together are specific to a
+   * version that WAS published and no longer is.
+   *
+   * ── WHY THE VERSION-LIST DERIVATION BELOW IS NOW THE FALLBACK ──────────
+   *
+   * That reading is correct about what the server writes and was, on the chat
+   * page, UNREACHABLE. `activeParticipantVersions` comes from
+   * `useActiveParticipantDetails`, which fires only once a participant has
+   * been SELECTED — and opening a conversation selects nothing: the active
+   * participant is restored from localStorage, so a conversation opened in a
+   * fresh browser has none, and the guard short-circuited on an undefined
+   * version list. For a participant bound into the PUBLIC project it could not
+   * be made to work at all: the public-application read serves `version_details`
+   * and no `versions` array.
+   *
+   * So the SERVER now answers it, on the participant itself
+   * (`meta.version_withdrawn`, written by
+   * `repos.ConversationsRepo.enrichAgentParticipantPublication`). That makes
+   * the state a property of the CONVERSATION, which is what it is, rather than
+   * of a selection the reader has not made — which is why the server flag is
+   * read across the conversation's agent participants when none is active.
+   *
+   * The version-list derivation is kept as the fallback for a server that has
+   * not been rebuilt yet, and only for the participant that IS active, where
+   * it was already proven correct.
+   */
+  const isActiveParticipantWithdrawn = useMemo(() => {
+    // THE SERVER FIRST. `undefined` is "not resolved" and must fall through;
+    // only an explicit boolean settles it.
+    const agents = activeParticipant
+      ? [activeParticipant]
+      : (participants ?? []).filter((candidate) => candidate.entityName === 'application');
+    const resolved = agents.filter((agent) => typeof agent.meta?.versionWithdrawn === 'boolean');
+    if (resolved.length > 0) return resolved.some((agent) => agent.meta?.versionWithdrawn === true);
+
+    if (!activeParticipant || !activeParticipantVersions?.length) return false;
+    const versionId = activeParticipant.entitySettings?.versionId;
+    if (versionId === undefined) return false;
+    const bound = activeParticipantVersions.find((version) => version.id === String(versionId));
+    if (bound === undefined) return false;
+    return bound.status !== 'published' && bound.name.includes(WITHDRAWN_VERSION_MARKER);
+  }, [activeParticipant, activeParticipantVersions, participants]);
+
   const isActiveParticipantVersionMissing = useMemo(() => {
     if (!activeParticipant) return false;
     if (!activeParticipantVersions?.length) return false;
@@ -263,6 +348,7 @@ export function useChatBoxState(params: UseChatBoxStateParams): UseChatBoxStateR
     users,
     hasOtherUsers,
     isActiveParticipantBroken,
+    isActiveParticipantWithdrawn,
     isActiveParticipantVersionMissing,
     keyDown,
     slash,

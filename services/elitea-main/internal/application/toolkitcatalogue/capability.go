@@ -117,8 +117,14 @@ var pythonVerifiedImportKeys = []string{
 // materialises natively, spelled as that worker spells them.
 //
 // Transcribed from `src/toolkits/materialize.rs`: the match arms of
-// `materialize_a_to_k` and `materialize_p_to_z`, plus the two types dispatched
-// by direct comparison (`openapi`, `sharepoint`).
+// `materialize_a_to_k` and `materialize_p_to_z`, plus the three types
+// dispatched by direct comparison (`artifact`, `openapi`, `sharepoint`).
+//
+// `artifact` (#906) is the odd one: it materialises only where the live
+// execution claim is in scope (the ordinary agent path), because its authority
+// is that claim rather than a credential in the frozen snapshot. It is listed
+// as supported because that is the position a user's agent runs in; a pipeline
+// node still skips it, the way it skipped every artifact toolkit before.
 //
 // `aha` is NOT here although the family is complete in that tree: no dispatch
 // reaches it, so the worker skips an `aha` toolkit like any unsupported type.
@@ -126,6 +132,7 @@ var pythonVerifiedImportKeys = []string{
 // runtime does not give — which is the same "wired nowhere" defect this
 // repository keeps finding.
 var rustNativeToolTypes = []string{
+	"artifact",
 	"azure",
 	"azure_search",
 	"elastic",

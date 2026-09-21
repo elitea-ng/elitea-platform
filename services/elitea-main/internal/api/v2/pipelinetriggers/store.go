@@ -48,11 +48,18 @@ type triggerRow struct {
 	TokenID       string
 	TokenHash     []byte
 	SecretName    string
-	CreatedBy     int64
-	CreatedAt     time.Time
-	RotatedAt     *time.Time
-	RevokedAt     *time.Time
-	LastUsedAt    *time.Time
+	// AuthMode, SignatureHeader and Provider are 0138's columns — how the
+	// inbound call is authenticated, which header carries the signature, and
+	// the URL suffix the sender was given. See that migration for why each is
+	// a column of its own.
+	AuthMode        string
+	SignatureHeader string
+	Provider        string
+	CreatedBy       int64
+	CreatedAt       time.Time
+	RotatedAt       *time.Time
+	RevokedAt       *time.Time
+	LastUsedAt      *time.Time
 }
 
 // scheduleRow is one `pipeline_schedules` row.
@@ -132,13 +139,16 @@ func vaultSecretName(tokenID string) string {
 }
 
 const triggerColumns = `id, application_id, version_id, token_id, token_hash, secret_name,
+	auth_mode, signature_header, provider,
 	created_by, created_at, rotated_at, revoked_at, last_used_at`
 
 func scanTrigger(row pgx.Row) (triggerRow, error) {
 	var trigger triggerRow
 	if err := row.Scan(
 		&trigger.ID, &trigger.ApplicationID, &trigger.VersionID, &trigger.TokenID,
-		&trigger.TokenHash, &trigger.SecretName, &trigger.CreatedBy, &trigger.CreatedAt,
+		&trigger.TokenHash, &trigger.SecretName,
+		&trigger.AuthMode, &trigger.SignatureHeader, &trigger.Provider,
+		&trigger.CreatedBy, &trigger.CreatedAt,
 		&trigger.RotatedAt, &trigger.RevokedAt, &trigger.LastUsedAt,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -165,30 +175,39 @@ func (h *Handler) triggerByTokenID(ctx context.Context, schema, tokenID string) 
 		`SELECT %s FROM %s.pipeline_triggers WHERE token_id = $1`, triggerColumns, schema), tokenID))
 }
 
-// upsertTrigger creates the row or rotates the existing one.
-//
 // ON CONFLICT names the COLUMN and not the constraint: a ledgered tenant
 // database carries a different generated constraint name from the bootstrap
 // schema, and naming it answered 500 on every real deployment the last time
 // this repository tried (repos/conversations.go).
+// upsertTrigger creates the row or rotates the existing one.
+//
+// The three 0138 columns are written on BOTH arms. A rotation that left them
+// alone would keep a mode the caller has just replaced — "rotate this trigger
+// as a plain token one" would silently keep verifying signatures — and the
+// settings dialog offers exactly that change through this one route.
 func (h *Handler) upsertTrigger(
 	ctx context.Context, schema string, applicationID, versionID, actorID int64,
-	tokenID string, hash []byte, secretName string,
+	tokenID string, hash []byte, secretName string, mode triggerAuthMode,
 ) (triggerRow, error) {
 	return scanTrigger(h.pool.QueryRow(ctx, fmt.Sprintf(`
 INSERT INTO %s.pipeline_triggers
-	(application_id, version_id, token_id, token_hash, secret_name, created_by)
-VALUES ($1, $2, $3, $4, $5, $6)
+	(application_id, version_id, token_id, token_hash, secret_name, created_by,
+	 auth_mode, signature_header, provider)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (version_id) DO UPDATE SET
 	token_id = EXCLUDED.token_id,
 	token_hash = EXCLUDED.token_hash,
 	secret_name = EXCLUDED.secret_name,
 	application_id = EXCLUDED.application_id,
+	auth_mode = EXCLUDED.auth_mode,
+	signature_header = EXCLUDED.signature_header,
+	provider = EXCLUDED.provider,
 	rotated_at = now(),
 	revoked_at = NULL,
 	revoked_by = NULL
 RETURNING %s`, schema, triggerColumns),
-		applicationID, versionID, tokenID, hash, secretName, actorID))
+		applicationID, versionID, tokenID, hash, secretName, actorID,
+		mode.AuthMode, mode.SignatureHeader, mode.Provider))
 }
 
 // revokeTrigger stamps the row rather than deleting it. It is idempotent: a

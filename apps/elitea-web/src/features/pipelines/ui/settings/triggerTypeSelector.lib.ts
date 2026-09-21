@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 
 import { load } from 'js-yaml';
 
+import type { PipelineInboundTriggerModeRequest } from '@/shared/api/generated/model';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
 import { t } from '@/shared/i18n';
 import { buildErrorMessage } from '@/shared/lib/http-error';
@@ -179,7 +180,12 @@ export interface TriggerActions {
   readonly handleTriggerTypeChange: (newType: string) => Promise<void>;
   readonly handleScheduleSubmit: (cronExpression: string) => Promise<void>;
   readonly handleDeleteKind: (kind: 'schedule' | 'webhook') => Promise<void>;
-  readonly handleRotateWebhook: () => Promise<void>;
+  /**
+   * Rotate (or create) the inbound trigger. The MODE travels with it because
+   * the backend writes it on this route and nowhere else (#970): a rotate
+   * without one moves a signing trigger back to the bearer mode.
+   */
+  readonly handleRotateWebhook: (mode?: PipelineInboundTriggerModeRequest['type']) => Promise<void>;
   readonly handleRevealWebhook: () => Promise<void>;
   readonly removeAll: () => Promise<void>;
 }
@@ -222,8 +228,8 @@ export function useTriggerActions(args: TriggerActionsArgs): TriggerActions {
   );
 
   const handleRotateWebhook = useCallback(
-    () => run(async () => {
-      const rotated = await triggers.rotateWebhook();
+    (mode?: PipelineInboundTriggerModeRequest['type']) => run(async () => {
+      const rotated = await triggers.rotateWebhook(mode === undefined ? undefined : { type: mode });
       setRevealedSecret(rotated.secret);
       setIsWebhookModalOpen(true);
       onNotifySuccess?.(t('pipelines.triggerTypeSelector.webhookConfigured', 'Webhook configured successfully'));

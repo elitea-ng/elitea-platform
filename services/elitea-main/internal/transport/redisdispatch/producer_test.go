@@ -207,7 +207,7 @@ func TestLimitsFromProtoMatchesCheckedConformanceProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if limits.Revision != "elitea.runtime.limits.conformance.v1" || limits.MaxWorkerCommandBytes != 32768 || limits.MaxSignedEnvelopeBytes != 49152 || limits.MaxRedisFieldBytes != 49152 || limits.MaxRedisEntryBytes != 65536 || limits.MaxStringBytes != 256 {
+	if limits.Revision != "elitea.runtime.limits.conformance.v2" || limits.MaxWorkerCommandBytes != 32768 || limits.MaxSignedEnvelopeBytes != 49152 || limits.MaxRedisFieldBytes != 49152 || limits.MaxRedisEntryBytes != 65536 || limits.MaxStringBytes != 256 {
 		t.Fatalf("Go Redis limits drifted from checked protocol profile: %+v", limits)
 	}
 }

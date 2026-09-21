@@ -37,6 +37,29 @@ const APPLICATION_VERSION_SCHEMA: &str = "elitea.runtime.application-version.v1"
 const ATTACHMENT_OBJECT_SCHEMA: &str = "elitea.runtime.attachment-object.v1";
 const SKILL_WRITE_SCHEMA: &str = "elitea.runtime.skill-write.v1";
 const PROJECT_CONTEXT_WRITE_SCHEMA: &str = "elitea.runtime.project-context-write.v1";
+/// The `artifact` toolkit family's four schemas (#906).
+const ARTIFACT_LIST_SCHEMA: &str = "elitea.runtime.artifact-list.v1";
+const ARTIFACT_READ_SCHEMA: &str = "elitea.runtime.artifact-read.v1";
+const ARTIFACT_WRITE_SCHEMA: &str = "elitea.runtime.artifact-write.v1";
+const ARTIFACT_DELETE_SCHEMA: &str = "elitea.runtime.artifact-delete.v1";
+/// The artifact REQUEST ceiling, enforced here before a request is sent.
+///
+/// Main refuses a larger body with 413 and an over-cap document with 422
+/// (`maxRuntimeArtifactRequestBytes` / `maxRuntimeArtifactWriteChars`,
+/// `services/elitea-main/internal/infra/storage/runtime_artifact_object.go`).
+/// Checking here is not redundant for the reason `MAX_BUILDER_REQUEST_BYTES`
+/// gives: a request that cannot be accepted should not spend the turn's
+/// deadline crossing the network to be told so.
+const MAX_ARTIFACT_REQUEST_BYTES: usize = 512 * 1_024;
+/// The artifact ENVELOPE's ceiling, which is not the file's.
+///
+/// Main serves at most `200_000` CHARACTERS of file content and caps the JSON
+/// envelope at 2 MiB (`maxRuntimeArtifactReadChars` /
+/// `maxRuntimeArtifactResponseBytes`), because the content travels as a JSON
+/// string and a control-character-dense file escapes to six characters per
+/// byte. This side has to admit the envelope main is willing to send, so it is
+/// the larger of the two numbers that appears here.
+const MAX_ARTIFACT_OBJECT_BYTES: usize = 2 * 1_024 * 1_024;
 /// The two builder WRITE bodies' own ceiling, enforced on this side before a
 /// request is sent.
 ///
@@ -106,6 +129,12 @@ pub(crate) struct RuntimeContextConfig {
     pub(crate) max_response_bytes: usize,
     pub(crate) max_application_response_bytes: usize,
     pub(crate) max_attachment_response_bytes: usize,
+    /// The artifact family's own envelope ceiling. It is a separate field
+    /// rather than a reuse of the attachment one because the two carry
+    /// different documents with different caps, and one number that covered
+    /// both would be the larger of them applied to the smaller — which is a
+    /// cap that no longer bounds what it was written for.
+    pub(crate) max_artifact_response_bytes: usize,
 }
 
 impl RuntimeContextConfig {
@@ -119,6 +148,8 @@ impl RuntimeContextConfig {
             || self.max_application_response_bytes > MAX_APPLICATION_VERSION_BYTES
             || self.max_attachment_response_bytes == 0
             || self.max_attachment_response_bytes > MAX_ATTACHMENT_OBJECT_BYTES
+            || self.max_artifact_response_bytes == 0
+            || self.max_artifact_response_bytes > MAX_ARTIFACT_OBJECT_BYTES
         {
             return Err(RuntimeContextError::InvalidConfiguration(
                 "the runtime context configuration is malformed",
@@ -503,6 +534,92 @@ impl RuntimeContextClient {
             .map_err(|_| RuntimeContextError::Timeout("the skill write request timed out"))?
     }
 
+    /// List one artifact bucket through the same live claim (#906).
+    ///
+    /// The four artifact methods below are the `artifact` toolkit family's
+    /// whole transport. They keep every property the reads above have — one
+    /// bounded attempt, one origin, the claim and fence as the only authority
+    /// — and the project is still main's to decide: nothing in these requests
+    /// names one. What main adds that the other routes do not need is the
+    /// per-bucket ACCESS LIST, applied to the claim's own actor, so a bucket
+    /// the person who started the turn may not touch is refused there rather
+    /// than trusted here.
+    pub(crate) async fn list_artifacts(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        request: &ArtifactListRequest,
+    ) -> Result<ArtifactListOutcome, RuntimeContextError> {
+        let binding = authority.redemption_binding();
+        validate_binding(&binding)?;
+        let http_request =
+            build_artifact_request(&binding, "list", encode_artifact_body(request)?)?;
+        let operation =
+            artifact_list_response(self.rpc.as_ref(), http_request, &binding, &self.config);
+        timeout(self.config.deadline, operation)
+            .await
+            .map_err(|_| RuntimeContextError::Timeout("the artifact listing timed out"))?
+    }
+
+    /// Read one artifact's TEXT through the same live claim.
+    ///
+    /// An over-cap file is NOT an error on this route: main answers 200 with
+    /// `over_limit` and the measurement, because the tool's answer to the model
+    /// has to name the cap and the actual size. A 422 here would mean the file
+    /// is not text at all.
+    pub(crate) async fn read_artifact(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        request: &ArtifactReadRequest,
+    ) -> Result<ArtifactReadOutcome, RuntimeContextError> {
+        let binding = authority.redemption_binding();
+        validate_binding(&binding)?;
+        let http_request =
+            build_artifact_request(&binding, "read", encode_artifact_body(request)?)?;
+        let operation =
+            artifact_read_response(self.rpc.as_ref(), http_request, &binding, &self.config);
+        timeout(self.config.deadline, operation)
+            .await
+            .map_err(|_| RuntimeContextError::Timeout("the artifact read timed out"))?
+    }
+
+    /// Create or replace one artifact through the same live claim.
+    ///
+    /// Not retried on a transport failure, for the reason `write_skill` gives:
+    /// a retried write whose first attempt actually landed would overwrite a
+    /// file a concurrent turn may already have changed.
+    pub(crate) async fn write_artifact(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        request: &ArtifactWriteRequest,
+    ) -> Result<ArtifactWriteOutcome, RuntimeContextError> {
+        let binding = authority.redemption_binding();
+        validate_binding(&binding)?;
+        let http_request =
+            build_artifact_request(&binding, "write", encode_artifact_body(request)?)?;
+        let operation =
+            artifact_write_response(self.rpc.as_ref(), http_request, &binding, &self.config);
+        timeout(self.config.deadline, operation)
+            .await
+            .map_err(|_| RuntimeContextError::Timeout("the artifact write timed out"))?
+    }
+
+    /// Delete one artifact through the same live claim.
+    pub(crate) async fn delete_artifact(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        request: &ArtifactDeleteRequest,
+    ) -> Result<ArtifactDeleteOutcome, RuntimeContextError> {
+        let binding = authority.redemption_binding();
+        validate_binding(&binding)?;
+        let http_request =
+            build_artifact_request(&binding, "delete", encode_artifact_body(request)?)?;
+        let operation =
+            artifact_delete_response(self.rpc.as_ref(), http_request, &binding, &self.config);
+        timeout(self.config.deadline, operation)
+            .await
+            .map_err(|_| RuntimeContextError::Timeout("the artifact delete timed out"))?
+    }
+
     /// Write the claimed project's Project Context through the same live claim.
     pub(crate) async fn write_project_context(
         &self,
@@ -550,6 +667,96 @@ pub(crate) struct ProjectContextWriteRequest {
     pub(crate) content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) enabled: Option<bool>,
+}
+
+/// The four `artifact` request bodies (#906). Field names are main's
+/// (`RuntimeArtifact*Request`), and main decodes with
+/// `DisallowUnknownFields`, so a key added on one side and not the other fails
+/// the call loudly instead of being silently ignored.
+///
+/// Every one of them carries a `bucket`, and none of them carries a project:
+/// the bucket is resolved INSIDE the claim's project, so naming it widens
+/// nothing.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+pub(crate) struct ArtifactListRequest {
+    pub(crate) bucket: String,
+    pub(crate) prefix: String,
+    pub(crate) recursive: bool,
+    pub(crate) limit: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+pub(crate) struct ArtifactReadRequest {
+    pub(crate) bucket: String,
+    pub(crate) name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+pub(crate) struct ArtifactWriteRequest {
+    pub(crate) bucket: String,
+    pub(crate) name: String,
+    pub(crate) content: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+pub(crate) struct ArtifactDeleteRequest {
+    pub(crate) bucket: String,
+    pub(crate) name: String,
+}
+
+/// One listed artifact.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ArtifactFile {
+    pub(crate) name: String,
+    pub(crate) byte_length: u64,
+    pub(crate) media_type: String,
+    pub(crate) modified_at: String,
+}
+
+/// One bucket listing, already proven to belong to the claimed execution's own
+/// project.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ArtifactListOutcome {
+    pub(crate) bucket: String,
+    pub(crate) files: Vec<ArtifactFile>,
+    pub(crate) truncated: bool,
+}
+
+/// One artifact read.
+///
+/// `over_limit` is the agent-path cap's refusal and it is NOT an error: the
+/// content is empty, `char_length` and `byte_length` say how big the file
+/// actually is, and `max_chars` says what was allowed. The tool turns the
+/// three into the structured `content_too_large` result the SDK worker
+/// produces for the same file, so a caller can choose a slice that fits.
+///
+/// It is deliberately not `Clone`: the bytes are tenant document content and
+/// belong in exactly one place, the prompt this turn is building.
+pub(crate) struct ArtifactReadOutcome {
+    pub(crate) name: String,
+    pub(crate) media_type: String,
+    pub(crate) byte_length: u64,
+    pub(crate) char_length: u64,
+    pub(crate) total_lines: u64,
+    pub(crate) max_chars: u64,
+    pub(crate) over_limit: bool,
+    pub(crate) content: String,
+}
+
+/// One written artifact.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ArtifactWriteOutcome {
+    pub(crate) bucket: String,
+    pub(crate) name: String,
+    pub(crate) media_type: String,
+    pub(crate) byte_length: u64,
+}
+
+/// One deleted artifact.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ArtifactDeleteOutcome {
+    pub(crate) name: String,
+    pub(crate) deleted: bool,
 }
 
 /// One written skill, already proven by main to belong to the claimed
@@ -863,6 +1070,208 @@ async fn write_project_context_response(
         content_bytes: decoded.content_bytes,
         enabled: decoded.enabled,
         created: decoded.created,
+    })
+}
+
+fn encode_artifact_body<T: serde::Serialize>(request: &T) -> Result<Vec<u8>, RuntimeContextError> {
+    let body = serde_json::to_vec(request).map_err(|_| {
+        RuntimeContextError::InvalidConfiguration("the artifact request is not encodable")
+    })?;
+    if body.len() > MAX_ARTIFACT_REQUEST_BYTES {
+        return Err(RuntimeContextError::ResourceExhausted(
+            "the artifact request exceeds the approved limit",
+        ));
+    }
+    Ok(body)
+}
+
+fn build_artifact_request(
+    binding: &RuntimeContextRedemptionBinding<'_>,
+    operation: &str,
+    body: Vec<u8>,
+) -> Result<Request<Body>, RuntimeContextError> {
+    let execution = utf8_percent_encode(binding.execution_id, PATH_SEGMENT);
+    let path = format!(
+        "/executions/{execution}/generations/{}/runtime-context/artifacts/{operation}",
+        binding.generation
+    );
+    let length = body.len();
+    let mut request = Request::builder()
+        .method(Method::POST)
+        .uri(path)
+        .header(CONTENT_TYPE, "application/json")
+        .header(CONTENT_LENGTH, length)
+        .body(Body::new(http_body_util::Full::new(bytes::Bytes::from(
+            body,
+        ))))
+        .map_err(|_| {
+            RuntimeContextError::AuthorizationFailed("the artifact request authority is malformed")
+        })?;
+    insert_claim_headers(&mut request, binding)?;
+    Ok(request)
+}
+
+/// 422 on an artifact route means the DOCUMENT is refused, not the claim — a
+/// file that is not text, or one the model wrote that main will not store. It
+/// is checked before the shared head validation for the reason
+/// `builder_rejection` gives: that function maps every non-success status onto
+/// the retryable dependency branch, which here would turn "write less" into
+/// "send the identical body again".
+fn artifact_rejection(response: &Response<Body>) -> Option<RuntimeContextError> {
+    (response.status() == StatusCode::UNPROCESSABLE_ENTITY).then_some(
+        RuntimeContextError::Rejected("the artifact cannot be served or stored as written"),
+    )
+}
+
+/// Reads one artifact response body after the shared head validation, and
+/// proves it belongs to the ACCEPTED execution.
+///
+/// The project is re-checked the way every route on this channel re-checks it:
+/// main derives it from the claim, so a response naming a different project
+/// means the two ends disagree about what was authorized — and two of these
+/// four routes CHANGE a bucket, so a silent mismatch would be a write into a
+/// tenant this turn never had.
+async fn artifact_response_body(
+    rpc: &dyn RuntimeContextRpc,
+    request: Request<Body>,
+    config: &RuntimeContextConfig,
+) -> Result<Zeroizing<Vec<u8>>, RuntimeContextError> {
+    let response = rpc
+        .post(request)
+        .await
+        .map_err(RuntimeContextError::Transport)?;
+    if let Some(rejected) = artifact_rejection(&response) {
+        return Err(rejected);
+    }
+    let declared =
+        validate_response_head_with_limit(&response, config.max_artifact_response_bytes)?;
+    collect_body(response, declared, config.max_artifact_response_bytes).await
+}
+
+fn artifact_identity_failure() -> RuntimeContextError {
+    RuntimeContextError::AuthorizationFailed(
+        "the artifact response does not match the accepted execution",
+    )
+}
+
+async fn artifact_list_response(
+    rpc: &dyn RuntimeContextRpc,
+    request: Request<Body>,
+    binding: &RuntimeContextRedemptionBinding<'_>,
+    config: &RuntimeContextConfig,
+) -> Result<ArtifactListOutcome, RuntimeContextError> {
+    let body = artifact_response_body(rpc, request, config).await?;
+    let decoded: ArtifactListResponse = serde_json::from_slice(&body)
+        .map_err(|_| RuntimeContextError::InvalidResponse("the artifact listing is malformed"))?;
+    if decoded.schema_version != ARTIFACT_LIST_SCHEMA
+        || decoded.project_id == 0
+        || decoded.project_id.to_string() != binding.resource_project_id
+        || decoded.bucket.is_empty()
+    {
+        return Err(artifact_identity_failure());
+    }
+    Ok(ArtifactListOutcome {
+        bucket: decoded.bucket,
+        files: decoded
+            .files
+            .into_iter()
+            .map(|file| ArtifactFile {
+                name: file.name,
+                byte_length: file.byte_length,
+                media_type: file.media_type,
+                modified_at: file.modified_at,
+            })
+            .collect(),
+        truncated: decoded.truncated,
+    })
+}
+
+async fn artifact_read_response(
+    rpc: &dyn RuntimeContextRpc,
+    request: Request<Body>,
+    binding: &RuntimeContextRedemptionBinding<'_>,
+    config: &RuntimeContextConfig,
+) -> Result<ArtifactReadOutcome, RuntimeContextError> {
+    let body = artifact_response_body(rpc, request, config).await?;
+    let decoded: ArtifactReadResponse = serde_json::from_slice(&body).map_err(|_| {
+        RuntimeContextError::InvalidResponse("the artifact read response is malformed")
+    })?;
+    if decoded.schema_version != ARTIFACT_READ_SCHEMA
+        || decoded.project_id == 0
+        || decoded.project_id.to_string() != binding.resource_project_id
+        || decoded.bucket.is_empty()
+        || decoded.name.is_empty()
+        || decoded.max_chars == 0
+    {
+        return Err(artifact_identity_failure());
+    }
+    // A served read must carry content and a refused one must not. Either
+    // half alone would let a refusal read as an empty file — which a model
+    // answers from as though the file were empty.
+    if decoded.over_limit != decoded.content.is_empty() {
+        return Err(RuntimeContextError::InvalidResponse(
+            "the artifact read response contradicts its own size verdict",
+        ));
+    }
+    Ok(ArtifactReadOutcome {
+        name: decoded.name,
+        media_type: decoded.media_type,
+        byte_length: decoded.byte_length,
+        char_length: decoded.char_length,
+        total_lines: decoded.total_lines,
+        max_chars: decoded.max_chars,
+        over_limit: decoded.over_limit,
+        content: decoded.content,
+    })
+}
+
+async fn artifact_write_response(
+    rpc: &dyn RuntimeContextRpc,
+    request: Request<Body>,
+    binding: &RuntimeContextRedemptionBinding<'_>,
+    config: &RuntimeContextConfig,
+) -> Result<ArtifactWriteOutcome, RuntimeContextError> {
+    let body = artifact_response_body(rpc, request, config).await?;
+    let decoded: ArtifactWriteResponse = serde_json::from_slice(&body).map_err(|_| {
+        RuntimeContextError::InvalidResponse("the artifact write response is malformed")
+    })?;
+    if decoded.schema_version != ARTIFACT_WRITE_SCHEMA
+        || decoded.project_id == 0
+        || decoded.project_id.to_string() != binding.resource_project_id
+        || decoded.bucket.is_empty()
+        || decoded.name.is_empty()
+    {
+        return Err(artifact_identity_failure());
+    }
+    Ok(ArtifactWriteOutcome {
+        bucket: decoded.bucket,
+        name: decoded.name,
+        media_type: decoded.media_type,
+        byte_length: decoded.byte_length,
+    })
+}
+
+async fn artifact_delete_response(
+    rpc: &dyn RuntimeContextRpc,
+    request: Request<Body>,
+    binding: &RuntimeContextRedemptionBinding<'_>,
+    config: &RuntimeContextConfig,
+) -> Result<ArtifactDeleteOutcome, RuntimeContextError> {
+    let body = artifact_response_body(rpc, request, config).await?;
+    let decoded: ArtifactDeleteResponse = serde_json::from_slice(&body).map_err(|_| {
+        RuntimeContextError::InvalidResponse("the artifact delete response is malformed")
+    })?;
+    if decoded.schema_version != ARTIFACT_DELETE_SCHEMA
+        || decoded.project_id == 0
+        || decoded.project_id.to_string() != binding.resource_project_id
+        || decoded.bucket.is_empty()
+        || decoded.name.is_empty()
+    {
+        return Err(artifact_identity_failure());
+    }
+    Ok(ArtifactDeleteOutcome {
+        name: decoded.name,
+        deleted: decoded.deleted,
     })
 }
 
@@ -1261,6 +1670,62 @@ struct ProjectContextWriteResponse {
     content_bytes: u64,
     enabled: bool,
     created: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ArtifactListResponse {
+    schema_version: String,
+    project_id: u64,
+    bucket: String,
+    files: Vec<ArtifactFileResponse>,
+    truncated: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ArtifactFileResponse {
+    name: String,
+    byte_length: u64,
+    media_type: String,
+    modified_at: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ArtifactReadResponse {
+    schema_version: String,
+    project_id: u64,
+    bucket: String,
+    name: String,
+    media_type: String,
+    byte_length: u64,
+    char_length: u64,
+    total_lines: u64,
+    max_chars: u64,
+    over_limit: bool,
+    content: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ArtifactWriteResponse {
+    schema_version: String,
+    project_id: u64,
+    bucket: String,
+    name: String,
+    media_type: String,
+    byte_length: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ArtifactDeleteResponse {
+    schema_version: String,
+    project_id: u64,
+    bucket: String,
+    name: String,
+    deleted: bool,
 }
 
 #[derive(Deserialize)]

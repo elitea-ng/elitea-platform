@@ -746,6 +746,34 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 			r.With(view).Head("/objects/{projectID}/{bucket}/*", statObject)
 			r.With(del).Delete("/objects/{projectID}/{bucket}/*", deleteObject)
 
+			// The SDK's by-filepath object read (#978), an ALIAS of the
+			// download above and nothing else: same handler, same `view`
+			// tier, same per-bucket access list, same content type by
+			// extension.
+			//
+			// The SDK builds this URL itself —
+			// `{base}/api/v2/artifacts/artifact/default/{project_id}` +
+			// `/{bucket}/{key}` (elitea-sdk runtime/clients/client.py:126,
+			// :1235) — and it is the ONLY way a toolkit turns a
+			// `/{bucket}/{filename}` tool argument into bytes
+			// (`download_artifact_by_filepath` →
+			// `ArtifactClient.get_raw_content_by_filepath`). Nothing served
+			// it here, so every qTest `upload_attachment_to_test_run` and
+			// `add_file_to_test_case` answered "Resource not found" for a
+			// valid path as loudly as for a typo.
+			//
+			// `default` is the pylon MODE segment the SDK still sends. It is
+			// a literal here for the reason the bucket-permission routes give
+			// above: this surface resolves PermissionModeDefault
+			// unconditionally, so the segment names nothing the router reads
+			// — but it is in the URL the SDK sends, so it has to be matched.
+			//
+			// The response is raw bytes: `download_artifact` returns
+			// `data.content` and every caller treats it as the file, so a
+			// JSON envelope here would reach the toolkit as the file's
+			// contents.
+			r.With(view).Get("/artifact/default/{projectID}/{bucket}/*", downloadObject)
+
 			// Transfer grants — S15. create for both: grant creation is
 			// explicitly create per S11; commit is the write half of the same
 			// grant lifecycle and the plan does not distinguish it.
@@ -1145,6 +1173,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// an external system was given stable.
 	if cfg.PipelineTriggers != nil {
 		r.Post(v2pipelinetriggers.InboundPath, cfg.PipelineTriggers.Trigger)
+		// The same handler at the provider-suffixed URL a preset mints
+		// (#970). Registered rather than matched with a wildcard so that only
+		// the suffixes this service hands out resolve here; see
+		// InboundProviderPath for why the segment decides nothing.
+		r.Post(v2pipelinetriggers.InboundProviderPath, cfg.PipelineTriggers.Trigger)
 	}
 
 	// Served API docs (S251): the legacy shared plugin's openapi/swagger-ui

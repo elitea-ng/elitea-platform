@@ -640,8 +640,31 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
  * record below. The operation is in the spec because
  * testdata/reverse_check_allowlist.txt may only shrink: a NEW hand-written
  * endpoint has to be described, not allowlisted.
+ *
+ * 267 -> 268 (#978, the SDK's by-filepath artifact read). ONE new operation,
+ * downloadArtifactByPath, describing
+ * `GET /artifacts/artifact/default/{projectID}/{bucket}/{key}` — the url
+ * `elitea-sdk`'s `download_artifact` builds and elitea-main did not serve, so
+ * every toolkit that turns a `/{bucket}/{filename}` argument into bytes
+ * answered "Resource not found". The generated hook is a BYPRODUCT with no
+ * caller, the same as saveIndexConfiguration above: this route is spoken by
+ * the SDK worker, not by the browser, and the web's own downloads go through
+ * the `/artifacts/objects/...` plane (#138). It is in the spec because
+ * describing it let `artifacts.getArtifactContent` — a manifest entry on this
+ * exact path — come OFF testdata/reverse_check_allowlist.txt, which may only
+ * shrink.
+ *
+ * 268 -> 269 (#970, the inbound trigger's provider signature mode). ONE new
+ * operation, runPipelineInboundTriggerForProvider, describing
+ * `POST /pipeline_trigger/{project_id}/{token_id}/{provider}` — the URL a
+ * GitHub-preset trigger hands out, which chi cannot match against the bare
+ * inbound pattern and which is therefore a second registration of the same
+ * handler. The generated hook is a BYPRODUCT with no caller, like the two
+ * notes above: this route is spoken by a third-party webhook sender, never by
+ * the browser. The create/rotate operation grew a request body in the same
+ * change without changing this count.
  */
-const GENERATED_OPERATION_COUNT = 267;
+const GENERATED_OPERATION_COUNT = 269;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

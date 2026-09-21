@@ -133,6 +133,20 @@ export function useReadAloud(params: UseReadAloudParams): UseReadAloudResult {
     },
   });
 
+  /**
+   * Read one answer aloud: arm the player AND start speaking (issue 974).
+   *
+   * It used to arm only — `setSpeakableText` + `setShowPlayer(true)` — leaving
+   * playback to a separate press on the player's play control. That is what
+   * "Read out" DOES on this product: the control sits on the answer and says
+   * it will read it out, and a person who presses it and hears nothing has no
+   * way to know a second, unrelated-looking control in the composer is the one
+   * that speaks. The speaking-mode auto-read has the same requirement and no
+   * control at all to press.
+   *
+   * The player still appears, because stopping needs a control and the spoken
+   * word range needs somewhere to live.
+   */
   const onAutoSpeak = useCallback(
     (text: string, msgId?: string | number | null) => {
       if (!text) return;
@@ -142,8 +156,9 @@ export function useReadAloud(params: UseReadAloudParams): UseReadAloudResult {
       setSpeakingSegments(segments);
       setSpeakableText(convertedText);
       setShowPlayer(true);
+      speak(convertedText);
     },
-    [setShowPlayer, setSpeakableText],
+    [setShowPlayer, setSpeakableText, speak],
   );
 
   const onPlay = useCallback(() => {

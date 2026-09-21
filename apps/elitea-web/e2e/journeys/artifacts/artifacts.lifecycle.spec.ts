@@ -116,6 +116,34 @@ async function reenterArtifacts(page: Page, url: string): Promise<void> {
   await page.waitForURL('**/artifacts**', { timeout: 15_000 });
 }
 
+/**
+ * The footer total AS THE SERVER REPORTS IT, formatted by the same rule the
+ * app applies (`formatArtifactSize`, entities/artifact/model/selectors.ts:11 —
+ * 1024-based, one decimal above bytes).
+ *
+ * J20g's last assertion used to compare the post-reload footer against a
+ * STRING CAPTURED BEFORE THE RELOAD. That total is PROJECT-WIDE — it sums
+ * `size_bytes` over every bucket in the project — and six other artifacts
+ * specs create and delete buckets in this same project, on four parallel
+ * workers. So any bucket another file created or removed inside that window
+ * changed the total legitimately and failed this test for a fact it does not
+ * own (observed on both engines in CI). Anchoring on the server's own sum AT
+ * THE MOMENT OF THE CHECK keeps exactly the claim the test is for — what the
+ * user sees is what the server already said — without asserting that no other
+ * test may touch the project.
+ */
+async function serverTotalSize(request: APIRequestContext, projectId: string): Promise<string> {
+  const response = await request.get(`/api/v2/artifacts/buckets/${projectId}`);
+  expect(response.ok(), await response.text()).toBeTruthy();
+  const body = (await response.json()) as { buckets?: readonly { size_bytes?: number }[] };
+  const bytes = (body.buckets ?? []).reduce((sum, bucket) => sum + (bucket.size_bytes ?? 0), 0);
+  if (bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'] as const;
+  const unitIndex = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const size = bytes / Math.pow(1024, unitIndex);
+  return `${size.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
 /** Drain a Playwright download into a Buffer. */
 async function readDownload(download: { createReadStream: () => Promise<NodeJS.ReadableStream> }): Promise<Buffer> {
   const stream = await download.createReadStream();
@@ -587,21 +615,36 @@ test.describe('J20 artifacts lifecycle', () => {
 
     await expect(page.getByRole('row').filter({ hasText: extraName })).toBeVisible({ timeout: 30_000 });
 
-    // No reload between here and the upload.
-    await expect.poll(async () => (await footerSize.textContent())?.trim(), { timeout: 20_000 }).not.toBe(sizeBefore);
-    const sizeAfter = (await footerSize.textContent())?.trim();
+    // Housekeeping is a `finally`, not a tail: J20e asserts the ZIP holds
+    // EXACTLY the two seeded objects, and this bucket's name is FIXED and
+    // reused across runs and across the serial group's own retries. When this
+    // object survived a failure here, every later attempt of J20e unzipped
+    // THREE entries and failed on a mess this test left behind — which is how
+    // one flake here turned into two red tests.
+    try {
+      // No reload between here and the upload.
+      await expect.poll(async () => (await footerSize.textContent())?.trim(), { timeout: 20_000 }).not.toBe(sizeBefore);
 
-    // …and the value shown was the RIGHT one, not merely a different one.
-    await page.reload();
-    await expect(page.getByRole('row').filter({ hasText: extraName })).toBeVisible({ timeout: 30_000 });
-    await expect(footerSize).toHaveText(sizeAfter as string);
+      // …and the value shown is the one the SERVER reports, not merely a
+      // different one. Re-read per poll (see `serverTotalSize`): the total is
+      // project-wide, so a bucket another spec creates or drops in this window
+      // moves it for a reason that has nothing to do with this upload.
+      await expect
+        .poll(async () => (await footerSize.textContent())?.trim(), { timeout: 20_000 })
+        .toBe(await serverTotalSize(request, projectId));
 
-    // Housekeeping: J20e asserts the ZIP holds EXACTLY the two seeded objects.
-    const removed = await request.post(
-      `/api/v2/artifacts/objects/${projectId}/${READ_BUCKET}:batchDelete`,
-      { data: { keys: [extraName] } },
-    );
-    expect(removed.status(), await removed.text()).toBe(200);
+      await page.reload();
+      await expect(page.getByRole('row').filter({ hasText: extraName })).toBeVisible({ timeout: 30_000 });
+      await expect
+        .poll(async () => (await footerSize.textContent())?.trim(), { timeout: 20_000 })
+        .toBe(await serverTotalSize(request, projectId));
+    } finally {
+      const removed = await request.post(
+        `/api/v2/artifacts/objects/${projectId}/${READ_BUCKET}:batchDelete`,
+        { data: { keys: [extraName] } },
+      );
+      expect(removed.status(), await removed.text()).toBe(200);
+    }
   });
 });
 

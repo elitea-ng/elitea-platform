@@ -16,6 +16,16 @@ import { t } from '@/shared/i18n';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { BaseModal } from '@/shared/ui/BaseModal';
 import { InputBase } from '@/shared/ui/InputBase';
+import { SingleSelect } from '@/shared/ui/SingleSelect';
+
+import {
+  DEFAULT_SIGNATURE_HEADER,
+  MODE_OPTIONS,
+  WEBHOOK_MODES,
+  buildExampleRequest,
+  webhookModeFromAuthMode,
+  type WebhookMode,
+} from './pipelineWebhookModal.lib';
 
 /**
  * The inbound trigger's settings dialog (baseline:
@@ -23,15 +33,29 @@ import { InputBase } from '@/shared/ui/InputBase';
  * PipelineWebhookModal.jsx`, unit A2h), rebuilt on the Go inbound route by
  * #899.
  *
- * WHAT WENT, AND WHY. The baseline offered GitHub / GitLab / Custom webhook
- * "types", each naming a different signature header
- * (`x-hub-signature-256`, `x-gitlab-token`, `X-Webhook-Token`), because
- * pylon's endpoint verified all three. `POST /pipeline_trigger/{project}/
- * {token}` verifies ONE credential, presented as `Authorization: Bearer`, as
- * `X-Elitea-Trigger-Token`, or as a `token` query parameter, compared in
- * constant time against a stored SHA-256 (`internal/api/v2/pipelinetriggers/
- * inbound.go`). There is no per-type signature mode to choose, so the radio
- * group is gone rather than left selecting something the backend ignores.
+ * THE TYPE SELECTOR IS BACK, WITH TWO ENTRIES AND NOT THREE (#970). The
+ * baseline offered GitHub / GitLab / Custom, each naming a different
+ * signature header, because pylon's endpoint verified all three. When this
+ * dialog was rebuilt the Go route verified ONE credential — a bearer secret
+ * in one of three carriers — so the group was removed rather than left
+ * selecting something the backend ignored. The route now carries a per-trigger
+ * MODE, so the choice exists again and means something:
+ *
+ *   - Custom keeps the bearer secret and the three carriers;
+ *   - GitHub verifies `HMAC-SHA256(secret, raw body)` out of
+ *     `X-Hub-Signature-256`, which is what a repository webhook sends — it
+ *     sends no `Authorization` header and cannot be made to.
+ *
+ * GitLab is NOT offered: `X-Gitlab-Token` is a shared token sent verbatim
+ * rather than a signature, so it is the Custom mode with a different header
+ * name, and listing it would imply a verification this service does not
+ * perform.
+ *
+ * CHANGING THE MODE ROTATES THE CREDENTIAL, because the backend writes the
+ * mode on the create/rotate route and nowhere else. That is stated in the
+ * dialog rather than done quietly: the previous secret stops working the
+ * moment the mode changes, and whoever configured the sender has to paste the
+ * new one.
  *
  * The secret is likewise no longer generated in the browser. The backend
  * mints it, returns it exactly once on create/rotate, stores only its digest
@@ -49,9 +73,14 @@ export interface PipelineWebhookModalProps {
   readonly webhookUrl?: string | undefined;
   /** The live credential, present only after a create/rotate or a reveal. */
   readonly secretValue?: string | undefined;
+  /** The stored `auth_mode` — `hmac_sha256` selects the GitHub entry. */
+  readonly authMode?: string | undefined;
+  /** The header the sender must sign into, for a signing trigger. */
+  readonly signatureHeader?: string | undefined;
   readonly isLoading?: boolean | undefined;
   readonly onReveal: () => void;
-  readonly onRotate: () => void;
+  /** Rotates the credential. The mode is passed because the rotate route is where the backend writes it. */
+  readonly onRotate: (mode?: WebhookMode) => void;
   readonly onRevoke: () => void;
   /** Fires with a short confirmation message on copy actions (baseline: `toastSuccess`). See `TriggerTypeSelector.tsx`'s doc comment for the "no global toast hook" convention this replaces. */
   readonly onNotify?: ((message: string) => void) | undefined;
@@ -70,13 +99,6 @@ function codeBlockSx(theme: Theme) {
 }
 function codeTextSx(theme: Theme) {
   return { fontFamily: 'monospace', fontSize: theme.typography.bodySmall2.fontSize, color: theme.vars.palette.text.secondary, whiteSpace: 'pre-wrap' as const, wordBreak: 'break-all' as const, margin: 0 };
-}
-
-/** The header form is what the backend's own documentation shows first: a URL is written to proxy logs, and a credential in one outlives the request. */
-function buildExampleRequest(url: string, secret: string | undefined, showSecret: boolean): string | null {
-  if (!url) return null;
-  const displaySecret = showSecret && secret !== undefined ? secret : '<your_secret>';
-  return `curl -X POST "${url}" \\\n  -H "Content-Type: application/json" \\\n  -H "Authorization: Bearer ${displaySecret}" \\\n  -d '{"input": "Your message or data here"}'`;
 }
 
 interface ValueRowProps {
@@ -115,14 +137,98 @@ function ValueRow({ label, value, testId, copyTooltip, onCopy, extra }: ValueRow
   );
 }
 
+interface WebhookModeSectionProps {
+  readonly selectedMode: WebhookMode;
+  readonly storedMode: WebhookMode;
+  readonly signatureHeader: string | undefined;
+  readonly isLoading: boolean;
+  readonly onSelect: (mode: WebhookMode) => void;
+  readonly onApply: () => void;
+}
+
+/**
+ * The type selector, its one-sentence explanation, and the "applying this
+ * rotates the credential" confirmation.
+ *
+ * Its own component because the dialog function is at the §3.5 complexity
+ * budget (12) and this section carries three branches of its own — not because
+ * anything here is reusable.
+ */
+function WebhookModeSection({ selectedMode, storedMode, signatureHeader, isLoading, onSelect, onApply }: WebhookModeSectionProps): ReactNode {
+  const hint =
+    selectedMode === WEBHOOK_MODES.github
+      ? t(
+          'pipelines.pipelineWebhookModal.modeGithubHint',
+          'GitHub signs the request body with the secret and sends the digest in {{header}}. Configure that secret in the repository\u2019s webhook settings; no Authorization header is sent or accepted.',
+          { header: signatureHeader ?? DEFAULT_SIGNATURE_HEADER },
+        )
+      : t(
+          'pipelines.pipelineWebhookModal.modeCustomHint',
+          'The sender presents the secret itself, as an Authorization: Bearer header, as X-Elitea-Trigger-Token, or as a token query parameter.',
+        );
+  return (
+    <Box sx={sectionSx}>
+      <Typography variant="labelMedium">{t('pipelines.pipelineWebhookModal.modeLabel', 'Webhook type')}</Typography>
+      <SingleSelect
+        value={selectedMode}
+        options={MODE_OPTIONS}
+        onChange={value => onSelect(value === WEBHOOK_MODES.github ? WEBHOOK_MODES.github : WEBHOOK_MODES.custom)}
+        disabled={isLoading}
+        id="pipeline-webhook-mode"
+      />
+      <Typography
+        variant="bodySmall"
+        sx={descriptionSx}
+        data-testid="pipeline-webhook-mode-hint"
+      >
+        {hint}
+      </Typography>
+      {selectedMode !== storedMode && (
+        <Box sx={rowSx}>
+          <Typography
+            variant="bodySmall"
+            sx={descriptionSx}
+            data-testid="pipeline-webhook-mode-pending"
+          >
+            {t(
+              'pipelines.pipelineWebhookModal.modePending',
+              'Applying this type rotates the credential: the current secret stops working and the sender has to be given the new one.',
+            )}
+          </Typography>
+          <BaseBtn
+            variant="secondary"
+            onClick={onApply}
+            disabled={isLoading}
+            data-testid="pipeline-webhook-apply-mode"
+          >
+            {t('pipelines.pipelineWebhookModal.applyMode', 'Apply and rotate')}
+          </BaseBtn>
+        </Box>
+      )}
+    </Box>
+  );
+}
+
 export function PipelineWebhookModal(props: PipelineWebhookModalProps): ReactNode {
-  const { open, onClose, webhookUrl, secretValue, isLoading = false, onReveal, onRotate, onRevoke, onNotify } = props;
+  const { open, onClose, webhookUrl, secretValue, authMode, signatureHeader, isLoading = false, onReveal, onRotate, onRevoke, onNotify } = props;
 
   const [showSecret, setShowSecret] = useState(false);
+  const storedMode: WebhookMode = webhookModeFromAuthMode(authMode);
+  // The SELECTED mode is local until the rotate that writes it: the backend
+  // has no way to change a trigger's mode without minting a new credential, so
+  // the dialog must be able to show the pending choice beside the warning that
+  // applying it replaces the secret.
+  const [selectedMode, setSelectedMode] = useState<WebhookMode>(storedMode);
 
   useEffect(() => {
-    if (open) setShowSecret(false);
-  }, [open]);
+    if (open) {
+      setShowSecret(false);
+      setSelectedMode(storedMode);
+    }
+    // `storedMode` is derived from a prop that can change while the dialog is
+    // open (a rotate answers with the new mode); re-seeding the selection on
+    // every open is what makes "what is stored" the starting point each time.
+  }, [open, storedMode]);
 
   const copyToClipboard = useCallback(
     (value: string | undefined, message: string) => {
@@ -134,7 +240,11 @@ export function PipelineWebhookModal(props: PipelineWebhookModalProps): ReactNod
   );
 
   const fullWebhookUrl = useMemo(() => (webhookUrl ? new URL(webhookUrl, window.location.origin).toString() : ''), [webhookUrl]);
-  const exampleRequest = useMemo(() => buildExampleRequest(fullWebhookUrl, secretValue, showSecret), [fullWebhookUrl, secretValue, showSecret]);
+  const storedSignatureHeader = storedMode === WEBHOOK_MODES.github ? (signatureHeader ?? DEFAULT_SIGNATURE_HEADER) : undefined;
+  const exampleRequest = useMemo(
+    () => buildExampleRequest({ url: fullWebhookUrl, secret: secretValue, showSecret, signatureHeader: storedSignatureHeader }),
+    [fullWebhookUrl, secretValue, showSecret, storedSignatureHeader],
+  );
 
   return (
     <BaseModal
@@ -143,6 +253,25 @@ export function PipelineWebhookModal(props: PipelineWebhookModalProps): ReactNod
       title={t('pipelines.pipelineWebhookModal.title', 'Webhook settings')}
       content={
         <Box sx={contentWrapperSx}>
+          <WebhookModeSection
+            selectedMode={selectedMode}
+            storedMode={storedMode}
+            signatureHeader={signatureHeader}
+            isLoading={isLoading}
+            onSelect={setSelectedMode}
+            onApply={() => onRotate(selectedMode)}
+          />
+
+          {storedSignatureHeader !== undefined && (
+            <ValueRow
+              label={t('pipelines.pipelineWebhookModal.signatureHeader', 'Signature header')}
+              value={storedSignatureHeader}
+              testId="pipeline-webhook-signature-header"
+              copyTooltip={t('pipelines.pipelineWebhookModal.copyHeader', 'Copy header name')}
+              onCopy={() => copyToClipboard(storedSignatureHeader, t('pipelines.pipelineWebhookModal.headerCopied', 'Signature header copied to clipboard'))}
+            />
+          )}
+
           {fullWebhookUrl && (
             <ValueRow
               label={t('pipelines.pipelineWebhookModal.webhookUrl', 'Webhook URL')}
@@ -198,7 +327,7 @@ export function PipelineWebhookModal(props: PipelineWebhookModalProps): ReactNod
             </BaseBtn>
             <BaseBtn
               variant="secondary"
-              onClick={onRotate}
+              onClick={() => onRotate(storedMode)}
               disabled={isLoading}
               data-testid="pipeline-webhook-rotate"
               startIcon={<RefreshIcon fontSize="small" />}

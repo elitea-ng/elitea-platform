@@ -71,7 +71,7 @@ def test_bulk_settings_and_result_stay_out_of_control_and_output_frames() -> Non
         isolation_class="shared",
         priority=1,
         deadline_unix_millis=1,
-        limits_revision="elitea.runtime.limits.conformance.v1",
+        limits_revision="elitea.runtime.limits.conformance.v2",
         toolkit_available_tools={
             "toolkit_type": "openapi",
             "settings_entry_id": "settings",

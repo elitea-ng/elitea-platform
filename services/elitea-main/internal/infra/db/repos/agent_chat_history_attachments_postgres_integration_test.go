@@ -16,6 +16,7 @@ package repos
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
@@ -47,7 +48,8 @@ func TestPostgresChatHistoryExtendsAPriorTurnsAttachmentChunksInItemOrder(t *tes
 	// enumerates them from 1 — rpc/chat_all.py:303). Their payloads are the
 	// four states real data is in: a scaffold the worker has already extended
 	// with a second chunk, a NULL, the `'{}'::json` pylon default, and an
-	// image chunk.
+	// image chunk — which is now WITHHELD from history (#984, and
+	// `TestPostgresChatHistoryDoesNotCarryAnEmbeddedImageIntoALaterTurn`).
 	attachPostgresChunksToGroup(t, tx, questionID, 1, `[
         {"type":"text","text":"Bucket: chat-attachments","elitea_attachment":{"needs_content_extraction":true,"name":"conv/report.pdf"}},
         {"type":"text","text":"EXTRACTED TEXT"}
@@ -68,16 +70,16 @@ func TestPostgresChatHistoryExtendsAPriorTurnsAttachmentChunksInItemOrder(t *tes
 		t.Fatalf("history=%+v", history)
 	}
 	content := history[0].Content
-	if len(content) != 4 {
+	if len(content) != 3 {
 		t.Fatalf("user content=%+v", content)
 	}
 	// The question's own text stays first (order_index 0), then the
 	// attachment's chunks in the order they are stored, flattened -- not
-	// nested, not one entry per file.
+	// nested, not one entry per file. The fourth item's `image_url` chunk is
+	// not among them: it belongs to the turn it was attached on.
 	if content[0]["type"] != "text" || content[0]["text"] != "what does this say?" ||
 		content[1]["text"] != "Bucket: chat-attachments" ||
-		content[2]["text"] != "EXTRACTED TEXT" ||
-		content[3]["type"] != "image_url" {
+		content[2]["text"] != "EXTRACTED TEXT" {
 		t.Fatalf("user content=%+v", content)
 	}
 	// The extraction marker survives the json -> jsonb round trip the
@@ -90,6 +92,74 @@ func TestPostgresChatHistoryExtendsAPriorTurnsAttachmentChunksInItemOrder(t *tes
 	}
 	if len(history[1].Content) != 1 || history[1].Content[0]["text"] != "it is a report" {
 		t.Fatalf("assistant content=%+v", history[1].Content)
+	}
+}
+
+// #984: A SECOND TURN DOES NOT CARRY THE FIRST TURN'S DATA URL.
+//
+// #979 appends an `image_url` chunk carrying the picture's base64 bytes to the
+// attachment's stored `content`. That chunk belongs to the turn it was
+// attached on: admission splices it into `input_attachments` from memory
+// (`currentTurnInputAttachments`) and never reads it back from here.
+//
+// Riding this projection put the data URL into EVERY later turn of the
+// conversation. An image is a third again of its raw size once base64'd, so a
+// handful of them alone exceed the 256 KiB ceiling BOTH workers fetch the
+// input bundle under — and the conversation becomes unrecoverable, because
+// history only grows. That is the #607 shape the "four newest attachments"
+// bound was added to prevent, reopened by a chunk type it did not know about.
+//
+// What the model still gets is the file's HEADER chunk: the picture is named,
+// and a file-reading tool is offered. That is the pre-#979 behaviour, and it
+// is the right thing to degrade to.
+func TestPostgresChatHistoryDoesNotCarryAnEmbeddedImageIntoALaterTurn(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedCurrentAgentContinuationSchema(t, pool)
+	tx := beginCurrentAgentAttachmentTx(t, pool)
+	queries := sqlcgen.New(tx)
+
+	conversationID := mustCurrentPGUUID(t, "10000000-0000-4000-8000-000000000031")
+	questionID := "20000000-0000-4000-8000-000000000031"
+	response := insertPostgresCurrentApplicationTurn(
+		t, queries, conversationID, questionID,
+		"30000000-0000-4000-8000-000000000031",
+		"40000000-0000-4000-8000-000000000031",
+		"what is in this picture?", "execution-history-attach-image",
+	)
+	// Exactly what `attachmentContentScaffold` writes for an EMBEDDED image:
+	// the header chunk, then the data URL. No extraction marker on this one —
+	// an embedded image has been read.
+	const dataURL = "data:image/png;base64,QVVUT1RFU1RNRUQtSU1BR0UtQllURVM="
+	attachPostgresChunksToGroup(t, tx, questionID, 1, `[
+        {"type":"text","text":"Bucket: chat-attachments / Filename: conv/shot.png"},
+        {"type":"image_url","image_url":{"url":"`+dataURL+`"}}
+    ]`)
+	completePostgresCurrentApplicationTurn(t, tx, response, "a cat")
+
+	history := resolvePostgresApplicationChatHistory(
+		t, queries, conversationID, "50000000-0000-4000-8000-000000000031",
+	)
+	if len(history) != 2 || history[0].Role != "user" {
+		t.Fatalf("history=%+v", history)
+	}
+	content := history[0].Content
+	// The question and the file's header survive; the bytes do not.
+	if len(content) != 2 ||
+		content[0]["text"] != "what is in this picture?" ||
+		content[1]["type"] != "text" {
+		t.Fatalf("user content=%+v", content)
+	}
+	if text, _ := content[1]["text"].(string); !strings.Contains(text, "conv/shot.png") {
+		t.Fatalf("the file must still be NAMED to the model: %+v", content[1])
+	}
+	// The assertion that decides the defect: the base64 is nowhere in the
+	// projected history at all, under any key or nesting.
+	projected, err := json.Marshal(history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(projected), "base64") || strings.Contains(string(projected), dataURL) {
+		t.Fatalf("a prior turn's data URL reached the next turn's history: %s", projected)
 	}
 }
 

@@ -61,7 +61,7 @@ func TestRedisStreamServiceBackedControlPlane(t *testing.T) {
 	}
 
 	limits, err := LimitsFromProto(&runtimev1.ProtocolLimitsV1{
-		LimitsRevision:         "elitea.runtime.limits.conformance.v1",
+		LimitsRevision:         "elitea.runtime.limits.conformance.v2",
 		MaxWorkerCommandBytes:  32 * 1024,
 		MaxSignedEnvelopeBytes: 48 * 1024,
 		MaxRedisFieldBytes:     48 * 1024,

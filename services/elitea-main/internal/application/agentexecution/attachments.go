@@ -18,10 +18,14 @@ package agentexecution
 
 import (
 	"bytes"
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"path"
 	"strconv"
 	"strings"
+
+	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 const (
@@ -214,6 +218,196 @@ var attachmentImageExtensions = map[string]struct{}{
 	".avif": {}, ".ico": {},
 }
 
+// ── #979: an attached IMAGE reaches the model as BYTES, not as a filename ────
+//
+// Before this, both ends of the image contract were built and each expected the
+// other to fill it in. This scaffold wrote ONE text chunk for an image and set
+// the extraction marker for documents only — "producing the image_url chunk
+// requires reading the object, so an image gets the same single text chunk
+// here" — while the worker's own contract says "the key is absent on image
+// chunks, so absent means nothing to do" (elitea_worker/agents/attachments.py,
+// and the identical sentence in services/elitea-worker-rust/src/agents/
+// attachments.rs). Both workers VALIDATE an `image_url` chunk (`text` and
+// `image_url` are the two admitted shapes on both legs). Nobody produced one,
+// so a user attached a picture, watched it render in the transcript, and got an
+// answer about a filename.
+//
+// The producer is here, because this is the only place that knows the item's
+// identity and writes its `content`, and because the alternative — teaching the
+// worker to fetch images — would have to be built twice (the SDK worker reads
+// through the artifact toolkit, the native one through the claim-bound
+// attachment route) and would put the bytes on a second network hop for every
+// turn that re-sends the same conversation.
+//
+// THE READ IS OPTIONAL AND FAILS OPEN. A deployment with no object store
+// attaches no reader (composition.go leaves the attachment routes unregistered
+// there for the same reason), and a read that errors costs this attachment its
+// bytes, never the turn: the file is still announced by name, which is exactly
+// the behaviour this code had before.
+
+const (
+	// maxInlineAttachmentImageTurnBytes bounds what ALL of one turn's images
+	// contribute, measured in the ENCODED (base64) bytes they actually add.
+	//
+	// THE CEILING IS THE WORKER'S, NOT THIS SERVICE'S. These two constants
+	// were first sized against `MaxAgentExecutionInputBytes` (1 MiB), which is
+	// the frame admission refuses — but both workers fetch the bundle under
+	// `MaxWorkerInputBundleBytes` (256 KiB), hard-coded on each leg, and a
+	// bundle over THAT is refused at the fetch. The turn then failed at the
+	// worker although this side had admitted it: one ~256 KiB PNG is ~341 KiB
+	// of base64, over the worker's whole budget on its own.
+	//
+	// A quarter of the worker's ceiling is this turn's share; see the sum on
+	// `MaxWorkerInputBundleBytes` for where the other three quarters go. The
+	// number is DERIVED rather than restated so that the two cannot drift: a
+	// worker that raises its fetch ceiling raises this with it.
+	maxInlineAttachmentImageTurnBytes = executiondomain.MaxWorkerInputBundleBytes / 4
+
+	// maxInlineAttachmentImageBytes bounds ONE image's RAW bytes.
+	//
+	// Base64 costs 4 bytes per 3, so the raw cap is three quarters of the
+	// encoded turn budget: an image at exactly this size encodes to exactly
+	// the turn's allowance and nothing else is embedded beside it. That is a
+	// deliberate change from the original "four at the cap fill the turn" —
+	// the turn's allowance is now a quarter of what it was, and a cap that
+	// admitted four images would admit none of them at a useful size.
+	//
+	// A larger picture is NOT a failed turn: it is announced by name with the
+	// refusal sentence below, and its contents stay reachable through a
+	// file-reading tool. That is the whole point of this file.
+	maxInlineAttachmentImageBytes = maxInlineAttachmentImageTurnBytes / 4 * 3
+)
+
+// inlineAttachmentImageMediaTypes is the set of image types that are handed to
+// a model AS AN IMAGE, and the media type each is sent with.
+//
+// Narrower than `attachmentImageExtensions` on purpose. That table answers
+// "is this file an image" for classification; this one answers "will a provider
+// take these bytes", and the answer is the four formats every multimodal
+// provider documents — the same four the SDK's own `image_loaders_map` lists as
+// directly LLM-supported (elitea-sdk runtime/langchain/document_loaders/
+// constants.py). A `.bmp`/`.tiff`/`.heic`/`.avif`/`.ico` is still an image
+// here; it simply is not one that can be embedded without a converter this
+// service does not have, so it takes the extraction path below instead.
+//
+// The media type comes from the EXTENSION, never from the upload's recorded
+// `media_type`: that value is whatever the browser put in the multipart part
+// (a .png arrives as application/octet-stream from some clients), and a data
+// URL that lies about its type is worse than one that is absent.
+var inlineAttachmentImageMediaTypes = map[string]string{
+	".png":  "image/png",
+	".jpg":  "image/jpeg",
+	".jpeg": "image/jpeg",
+	".gif":  "image/gif",
+	".webp": "image/webp",
+}
+
+// CurrentAttachmentImageReader reads one stored chat attachment's bytes at
+// ADMISSION time, inside the project the turn was authorized for.
+//
+// Implemented by internal/infra/db/repos.CurrentAttachmentObjectRepository —
+// the same reader the native runtime's attachment route uses, which is what
+// makes the two paths agree about what a chat attachment is: the bucket must be
+// the reserved system one, there must be a metadata row, and the row's length
+// must match the object's. A caller may not pass a project from the request;
+// the admission path passes the one it resolved.
+type CurrentAttachmentImageReader interface {
+	ReadCurrentAttachmentImage(
+		ctx context.Context,
+		projectID int64,
+		bucket string,
+		name string,
+		maxBytes int64,
+	) ([]byte, error)
+}
+
+// inlineAttachmentImage is what one image attachment contributes beyond its
+// header chunk: either a data URL to embed, or a sentence saying why there is
+// none plus a request that the worker read the file instead.
+type inlineAttachmentImage struct {
+	// dataURL is `data:<media type>;base64,<bytes>` — empty when nothing is
+	// embedded.
+	dataURL string
+	// refusal is appended to the header chunk's own text. A model that is told
+	// "a picture is attached" and shown nothing answers as though it had seen
+	// it; a model told the picture could not be embedded does not.
+	refusal string
+	// extract asks for the DOCUMENT extraction marker on the header chunk, so
+	// the worker reads the file the way it reads a PDF. For an image that
+	// yields the SDK loader's own description on the python leg, and the
+	// honest "this runtime cannot serve it as text" on the native one — either
+	// is better than a filename alone.
+	extract bool
+}
+
+// inlineAttachmentImageFor reads one image attachment and decides what it
+// contributes. `budget` is the turn's remaining encoded allowance and is spent
+// here.
+func inlineAttachmentImageFor(
+	ctx context.Context,
+	reader CurrentAttachmentImageReader,
+	projectID int64,
+	ref CurrentTurnAttachmentRef,
+	budget *int,
+) inlineAttachmentImage {
+	if reader == nil || projectID <= 0 {
+		// No reader attached: exactly the behaviour this path had before
+		// #979 — the file is announced and nothing claims it was seen.
+		return inlineAttachmentImage{}
+	}
+	mediaType, inlineable := inlineAttachmentImageMediaTypes[strings.ToLower(path.Ext(ref.Name))]
+	if !inlineable {
+		return inlineAttachmentImage{
+			refusal: "NOTE: this image is in a format that cannot be sent to the model directly " +
+				"(only PNG, JPEG, GIF and WebP are). Its contents may be read with a file-reading tool.",
+			extract: true,
+		}
+	}
+	content, err := reader.ReadCurrentAttachmentImage(
+		ctx, projectID, ref.Bucket, ref.Name, int64(maxInlineAttachmentImageBytes),
+	)
+	if err != nil || len(content) == 0 {
+		// Over the reader's own cap, absent, or a store that is having a bad
+		// minute. All three are the same to the turn: no bytes, no claim, no
+		// failure. The size case says so out loud, because "the model did not
+		// see my screenshot" is otherwise indistinguishable from a bug.
+		return inlineAttachmentImage{
+			refusal: "NOTE: this image could not be embedded for the model (it is larger than " +
+				strconv.Itoa(maxInlineAttachmentImageBytes/1024) +
+				" KiB, or its bytes could not be read). Its contents may be read with a file-reading tool.",
+			extract: true,
+		}
+	}
+	encoded := base64.StdEncoding.EncodeToString(content)
+	cost := len(encoded)
+	if budget != nil {
+		if cost > *budget {
+			return inlineAttachmentImage{
+				refusal: "NOTE: this image was not embedded because the turn's other attachments " +
+					"already use the space available for images. Its contents may be read with a " +
+					"file-reading tool.",
+				extract: true,
+			}
+		}
+		*budget -= cost
+	}
+	return inlineAttachmentImage{dataURL: "data:" + mediaType + ";base64," + encoded}
+}
+
+// attachmentImageChunk is the `{"type":"image_url"}` chunk both workers already
+// admit (`_ADMITTED_CHUNK_TYPES` / the `image_url` arm of
+// `validate_input_attachments`), in pylon's own ImageToModelProcessor shape
+// (utils/attachments.py:183-225).
+//
+// It carries NO marker: the marker means "this file still needs reading", and
+// an embedded image has been read.
+func attachmentImageChunk(dataURL string) map[string]any {
+	return map[string]any{
+		"type":      "image_url",
+		"image_url": map[string]any{"url": dataURL},
+	}
+}
+
 // attachmentContentScaffold is the creation-time `content` chunk, in pylon's
 // shape (utils/attachments.py:288-320, DocumentToModelProcessor.process): a
 // JSON ARRAY of chunks, of which exactly one exists at creation time, naming
@@ -239,9 +433,13 @@ var attachmentImageExtensions = map[string]struct{}{
 // when it has computed the content and found none; this is a partial payload
 // that names where the file lives, and a later extraction step appending to it
 // is exactly what pylon does.
-func attachmentContentScaffold(ref CurrentTurnAttachmentRef, kind, itemID string) json.RawMessage {
+func attachmentContentScaffold(
+	ref CurrentTurnAttachmentRef,
+	kind, itemID string,
+	image inlineAttachmentImage,
+) json.RawMessage {
 	filepath := "/" + ref.Bucket + "/" + ref.Name
-	text := strings.Join([]string{
+	lines := []string{
 		"Bucket: " + ref.Bucket,
 		"Filename: " + ref.Name,
 		"filepath: " + filepath,
@@ -249,9 +447,21 @@ func attachmentContentScaffold(ref CurrentTurnAttachmentRef, kind, itemID string
 		"NOTE: File content may be EMBEDDED in the next message chunk.",
 		"If embedded content is provided below, please review it first - the full text is already included.",
 		"File reading tools are available if needed for specific operations (search, partial access), but prefer embedded content when available.",
-	}, "\n")
-	chunk := map[string]any{"type": "text", "text": text}
-	if kind == AttachmentKindDocument {
+	}
+	// An image that could NOT be embedded says so here. Without this line the
+	// model is told a picture is attached, shown nothing, and answers as
+	// though it had seen it (#979).
+	if image.refusal != "" {
+		lines = append(lines, "", image.refusal)
+	}
+	chunk := map[string]any{"type": "text", "text": strings.Join(lines, "\n")}
+	// The marker rides a document's header chunk, and an IMAGE that could not
+	// be embedded takes the same path deliberately: "read this file for me" is
+	// exactly what the worker's extraction step does, and for an image that is
+	// the SDK loader's own description rather than nothing at all. An EMBEDDED
+	// image never carries it — the marker means "still needs reading", and it
+	// has been read.
+	if kind == AttachmentKindDocument || image.extract {
 		chunk[attachmentExtractionMarkerKey] = map[string]any{
 			"needs_content_extraction": true,
 			"bucket":                   ref.Bucket,
@@ -266,7 +476,11 @@ func attachmentContentScaffold(ref CurrentTurnAttachmentRef, kind, itemID string
 			"item_id": itemID,
 		}
 	}
-	encoded, err := json.Marshal([]map[string]any{chunk})
+	chunks := []map[string]any{chunk}
+	if image.dataURL != "" {
+		chunks = append(chunks, attachmentImageChunk(image.dataURL))
+	}
+	encoded, err := json.Marshal(chunks)
 	if err != nil {
 		// Unreachable: the value is a map of finite strings and bools.
 		return json.RawMessage(`[]`)
@@ -304,9 +518,25 @@ func currentTurnAttachments(
 	conversationUUID string,
 	refs []CurrentTurnAttachmentRef,
 ) ([]CurrentTurnAttachment, error) {
+	return currentTurnAttachmentsWithImages(context.Background(), 0, nil, questionID, conversationUUID, refs)
+}
+
+// currentTurnAttachmentsWithImages is the same builder with the image reader
+// attached (#979). The three-argument form above is what the callers that have
+// no reader — and every test that predates this — keep using, and it produces
+// exactly what it always did: a header chunk per file and nothing embedded.
+func currentTurnAttachmentsWithImages(
+	ctx context.Context,
+	projectID int64,
+	images CurrentAttachmentImageReader,
+	questionID string,
+	conversationUUID string,
+	refs []CurrentTurnAttachmentRef,
+) ([]CurrentTurnAttachment, error) {
 	if len(refs) == 0 {
 		return nil, nil
 	}
+	imageBudget := maxInlineAttachmentImageTurnBytes
 	if len(refs) > maxCurrentTurnAttachments {
 		return nil, ErrInvalidCurrentAgentStart
 	}
@@ -330,12 +560,16 @@ func currentTurnAttachments(
 		}
 		kind := AttachmentKind(ref.Name)
 		itemID := currentTurnUUID(questionID, "attachment-item-"+strconv.Itoa(index+1))
+		var image inlineAttachmentImage
+		if kind == AttachmentKindImage {
+			image = inlineAttachmentImageFor(ctx, images, projectID, ref, &imageBudget)
+		}
 		attachments = append(attachments, CurrentTurnAttachment{
 			ItemID:         itemID,
 			Name:           ref.Name,
 			Bucket:         ref.Bucket,
 			AttachmentType: kind,
-			Content:        attachmentContentScaffold(ref, kind, itemID),
+			Content:        attachmentContentScaffold(ref, kind, itemID, image),
 		})
 	}
 	return attachments, nil

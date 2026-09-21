@@ -113,6 +113,18 @@ type CurrentApplicationStartRequest struct {
 	// files the composer uploaded before sending, already split into
 	// (bucket, name) by the route. #606.
 	Attachments []CurrentTurnAttachmentRef
+	// MentionedUserIDs are the people this message TAGS (#977) — already
+	// deduplicated and bounded by the route. Empty for an ordinary message.
+	//
+	// They do NOT reach the model: a mention is a notification, not context,
+	// and the runtime input is unchanged by one. What they reach is
+	// `notifyMentionedUsers`, after admission.
+	MentionedUserIDs []int64
+	// MentionsEveryone is the composer's `@everyone`. The ids it sends
+	// alongside are the CLIENT's view of who that is; membership is
+	// re-resolved server-side, so a stale or tampered client cannot notify
+	// somebody who is not in the project.
+	MentionsEveryone bool
 }
 
 func (request CurrentApplicationStartRequest) Validate() error {
@@ -150,6 +162,28 @@ type CurrentApplicationStartService struct {
 	// it to injects no project context, which is what every test that
 	// predates that file expects.
 	projectContext CurrentProjectContextResolver
+	// mentions is optional — attached after construction via
+	// WithMentionNotifications (#977, mentions.go). A service nobody attaches
+	// it to writes no mention rows, which is the behaviour every test that
+	// predates that file expects.
+	mentions MentionNotificationWriter
+	// attachmentImages is optional — attached after construction via
+	// WithAttachmentImages (#979, attachments.go). A service nobody attaches
+	// it to embeds no image, which is the behaviour every test that predates
+	// it expects and the honest answer on a deployment with no object store.
+	attachmentImages CurrentAttachmentImageReader
+}
+
+// WithAttachmentImages attaches the reader that lets an attached IMAGE reach
+// the model as bytes (#979), in the same after-construction idiom WithMemories
+// and WithProjectContext use and for the same reason: every existing
+// constructor call site keeps working, and a service without it behaves
+// exactly as this package did before.
+func (service *CurrentApplicationStartService) WithAttachmentImages(
+	images CurrentAttachmentImageReader,
+) *CurrentApplicationStartService {
+	service.attachmentImages = images
+	return service
 }
 
 func NewCurrentApplicationStartService(
@@ -213,7 +247,14 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	if request.InteractionUUID != "" {
 		questionMeta, _ = json.Marshal(map[string]string{"interaction_uuid": request.InteractionUUID})
 	}
-	attachments, err := currentTurnAttachments(request.QuestionID, request.ConversationUUID, request.Attachments)
+	attachments, err := currentTurnAttachmentsWithImages(
+		ctx,
+		int64(request.ProjectID),
+		service.attachmentImages,
+		request.QuestionID,
+		request.ConversationUUID,
+		request.Attachments,
+	)
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
 	}
@@ -278,6 +319,12 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	// Best-effort, AFTER admission — see recordCurrentMemoryUsage's own
 	// comment for why this never affects the turn's outcome.
 	service.recordCurrentMemoryUsage(ctx, request.ProjectID, responseMessageID, memoryRecall)
+	// #977, and best-effort for the same reason: a notification that could not
+	// be written must cost the mention, never the turn. The message is already
+	// sent and stored by the time this runs, so a failure here leaves a
+	// conversation that is correct and a colleague who was not told — which is
+	// the pre-#977 behaviour, not a new failure mode.
+	service.notifyMentionedUsers(ctx, request)
 	return CurrentApplicationStartOutcome{
 		ExecutionID: outcome.ExecutionID, CommandID: outcome.CommandID,
 		ResponseMessageID: responseMessageID, Created: outcome.Created,

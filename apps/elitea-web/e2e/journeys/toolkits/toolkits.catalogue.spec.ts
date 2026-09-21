@@ -38,7 +38,12 @@ import type { APIRequestContext, Page } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL } from '../../../playwright.config';
-import { AUTOTEST_PREFIX, API_BASE, DEFAULT_PROJECT_ID } from '../../fixtures/api';
+import {
+  API_BASE,
+  AUTOTEST_PREFIX,
+  DEFAULT_PROJECT_ID,
+  gotoAppRoute,
+} from '../../fixtures/api';
 import { readsPlatformFlags } from '../../fixtures/platformFlags';
 
 /*
@@ -347,7 +352,11 @@ test.describe('JRNY-017C: the served toolkit catalogue', () => {
       }
 
       // ── read it back through a FULL reload, so the list cache cannot answer
-      await page.goto(`${BASE_URL}/app/toolkits/all`);
+      //
+      // `gotoAppRoute`, not `page.goto`: saving routes the app to the new
+      // toolkit, and a plain `goto` issued while that is in flight is aborted
+      // by it — the webkit flake this test showed under `--repeat-each=4`.
+      await gotoAppRoute(page, `${BASE_URL}/app/toolkits/all`);
       const card = page
         .getByTestId('toolkits-list-panel')
         .getByTestId('toolkit-card')

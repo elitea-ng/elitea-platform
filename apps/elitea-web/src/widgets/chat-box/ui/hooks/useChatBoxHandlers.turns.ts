@@ -101,7 +101,7 @@ async function deliverTurn(
 export function createSendQuestion(
   deps: ChatBoxHandlerDeps,
 ): (params: SendQuestionParams) => Promise<SendResult> {
-  return async ({ question, attachments, isSendingToUser, userIds }) => {
+  return async ({ question, attachments, isSendingToUser, userIds, isMentioningEveryone }) => {
     if (!question.trim()) return { success: false };
     const lastMessage = deps.chatHistory[deps.chatHistory.length - 1];
     const pendingAuth = findActionRequiredToolAction(lastMessage);
@@ -142,6 +142,7 @@ export function createSendQuestion(
       attachmentList,
       isSendingToUser,
       userIds,
+      isMentioningEveryone,
     });
     deps.setChatHistory((prev) => [
       ...prev,

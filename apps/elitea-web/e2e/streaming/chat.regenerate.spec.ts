@@ -57,18 +57,17 @@
  *     regenerate answer". This spec asserts that VISIBILITY at the end — a
  *     UI-visibility check on the reloaded, server-authored question, nothing
  *     more.
- *  2. THE SERVER STILL REFUSES AN EDITED QUESTION — by design. The regeneration
- *     route rejects any body whose `updated_items` is non-empty
- *     (`route.go`: `!emptyJSONArray(body.UpdatedItems)` → 422
- *     `unsupported_agent_execution`), and the client mirrors that refusal —
- *     `buildRegenerateBody` returns `undefined` when `updatedItems` is
- *     non-empty, so an edited question would fall back to the pre-#93 REST
- *     call, which this route answers 400 for want of an `execution_contract`.
- *     That refusal is asserted below rather than described, because it is the
- *     reason this spec drives the ANSWER'S "Regenerate" for the round trip and
- *     only asserts the QUESTION'S edit affordance is VISIBLE: on the current
- *     contract a regeneration re-runs the question as stored, and changing the
- *     question is a different turn the backend does not support.
+ *  2. AN EDITED QUESTION IS NOW ACCEPTED (#980). The route used to refuse any
+ *     body whose `updated_items` was non-empty (`!emptyJSONArray(body.
+ *     UpdatedItems)` → 422 `unsupported_agent_execution`); it now parses
+ *     exactly one `text_message` entry, REWRITES the stored question to that
+ *     text (and stamps its `updated_at`) inside the same admission transaction
+ *     that resets the answer, and runs the turn from the new text. The answer
+ *     is still REWRITTEN IN PLACE, which is what this file is for — so the
+ *     edited regeneration is asserted below on the same terms as the plain one:
+ *     accepted, same answer uid, question now reading the edited text, and no
+ *     extra row on either side. `buildRegenerateBody` no longer withholds the
+ *     field, so the browser reaches the same contract this assertion posts.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * THE PRECONDITION THE PRODUCT DOES NOT STATE
@@ -362,9 +361,10 @@ test('regenerating rewrites the SAME answer row rather than appending a second o
     'with the same identities',
   ).toEqual([`user:${questionBefore?.uid ?? ''}`, `assistant:${answerBefore?.uid ?? ''}`]);
 
-  // The question is untouched. On this contract a regeneration re-runs the
-  // question AS STORED (an edited question is refused — see the header), so a
-  // regeneration that rewrote it would be rewriting history.
+  // The question is untouched. A PLAIN regeneration (no `updated_items`) re-runs
+  // the question as stored, so one that rewrote it would be rewriting history.
+  // The EDITED case — where rewriting it is the point — is asserted further
+  // down, against the same answer row.
   expect(after[0]?.content, 'regenerating must not alter the question').toBe(questionBefore?.content);
 
   const answerAfter = after[1];
@@ -397,45 +397,94 @@ test('regenerating rewrites the SAME answer row rather than appending a second o
     'regenerating must go through the regeneration route, never through a fresh turn start',
   ).toHaveLength(1);
 
-  // ── The refusal that makes "edit and regenerate" a different turn ───────
+  // ── An EDITED question: accepted, and applied to the SAME rows (#980) ───
   // Posted with the SAME shape the browser just used, changed in exactly one
-  // field: a non-empty `updated_items`. The route refuses it
-  // (`!emptyJSONArray(body.UpdatedItems)` → 422 `unsupported_agent_execution`),
-  // and that refusal is the contract, not an accident: a regeneration re-runs
-  // the question the conversation already holds. It is asserted here so that
-  // wiring an edited question into this route can never land silently — it
-  // would turn this assertion red and force the shape to be decided rather
-  // than discovered in production.
-  const withEditedQuestion = await page.request.post(
-    `${BASE_URL}/api/v2/elitea_core/regenerate/prompt_lib/${projectId}/${answerBefore?.uid ?? ''}` +
-    '?execution_contract=agent.regenerate.v1',
-    {
-      headers: { 'Content-Type': 'application/json' },
-      data: {
-        ...sentBody,
-        regeneration_id: randomUUID(),
-        updated_items: [{ uuid: questionBefore?.uid ?? '', content: `${prompt} edited`, item_type: 'text_message' }],
+  // field: a non-empty `updated_items`. This used to be refused with 422
+  // `unsupported_agent_execution`; the contract now is that the route parses
+  // the single `text_message` entry, rewrites the stored question to that text
+  // (and stamps its `updated_at`) inside the admission transaction that resets
+  // the answer, and re-runs the turn from the NEW text. Asserted here, on the
+  // same conversation, so that the file's whole claim — replacement, never
+  // append — is proven for the edited path too, not only the plain one.
+  const editedPrompt = `${prompt} edited`;
+  const editedRegenerationId = randomUUID();
+  // 409 `agent_regeneration_pending` is a RETRYABLE refusal by contract (the
+  // route sets `Retry-After: 1` and `"retryable": true`): the run that just
+  // finished is still being finalized for a moment after its row has settled,
+  // and a client is expected to come back rather than treat it as a failure.
+  // Retried here for the same reason, so this assertion measures the EDITED
+  // contract and not that lag; anything else fails on the first answer.
+  let editedStatus = 0;
+  let editedResponseBody = '';
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const response = await page.request.post(
+      `${BASE_URL}/api/v2/elitea_core/regenerate/prompt_lib/${projectId}/${answerBefore?.uid ?? ''}` +
+      '?execution_contract=agent.regenerate.v1',
+      {
+        headers: { 'Content-Type': 'application/json' },
+        data: {
+          ...sentBody,
+          regeneration_id: editedRegenerationId,
+          // No `uuid`: the route then rewrites the question's OWN current text
+          // item, which is the branch a message with no stored item id takes.
+          // The browser sends the item's uuid (`questionItem.uuid` in
+          // `UserMessage.tsx`, NOT the message uid — a message uid here names
+          // no item and is refused 400, which is the contract working), and
+          // that path is driven end to end by `chat.edit-user-message.spec.ts`
+          // (ELITEA-0545). This file's subject is the ROW IDENTITY either way.
+          updated_items: [{ content: editedPrompt, item_type: 'text_message' }],
+        },
       },
-    },
-  );
+    );
+    editedStatus = response.status();
+    editedResponseBody = await response.text();
+    if (editedStatus !== 409 || !editedResponseBody.includes('agent_regeneration_pending')) break;
+    await page.waitForTimeout(1_000);
+  }
   expect(
-    withEditedQuestion.status(),
-    'a regeneration carrying an edited question must be refused, not silently run against the stored one',
-  ).toBe(422);
+    editedStatus,
+    `a regeneration carrying an edited question must be accepted and run from the new text: ${editedResponseBody}`,
+  ).toBe(200);
+  const editedBody = JSON.parse(editedResponseBody) as { response_message_id?: string };
   expect(
-    ((await withEditedQuestion.json()) as { error?: string }).error,
-    'the refusal must name the unsupported execution, so a client can tell it from a validation error',
-  ).toBe('unsupported_agent_execution');
+    editedBody.response_message_id,
+    'an edited regeneration must rewrite the answer it names, not create a second one',
+  ).toBe(answerBefore?.uid);
 
-  // And the refusal changed nothing.
-  const afterRefusal = await readStoredTranscript(page, projectId, conversationId);
+  // The rewrite is part of the admission transaction, so the stored question
+  // carries the new text as soon as the request has been answered — polled
+  // only because the read is a separate round trip.
+  await expect
+    .poll(
+      async () => (await readStoredTranscript(page, projectId, conversationId))[0]?.content,
+      { timeout: 30_000, message: 'the stored question was never rewritten to the edited text' },
+    )
+    .toBe(editedPrompt);
+
+  // …on the SAME rows: one question, one answer, both keeping their identities.
+  const afterEdit = await readStoredTranscript(page, projectId, conversationId);
   expect(
-    afterRefusal.map((row) => `${row.role}:${row.uid}`),
-    'a refused regeneration must leave the transcript exactly as it was',
+    afterEdit.map((row) => `${row.role}:${row.uid}`),
+    'an edited regeneration must rewrite the question and the answer in place, adding no row',
   ).toEqual([`user:${questionBefore?.uid ?? ''}`, `assistant:${answerBefore?.uid ?? ''}`]);
-  expect(afterRefusal[0]?.content, 'a refused regeneration must not apply the edit it carried').toBe(
-    questionBefore?.content,
-  );
+
+  // And it really ran: the answer row settles carrying THIS regeneration's
+  // stamp. Without this the test would leave a turn in flight under the reload
+  // below, and "accepted" would prove only that the route said 200.
+  await expect
+    .poll(
+      async () => {
+        const rows = await readStoredTranscript(page, projectId, conversationId);
+        const answer = rows.find((row) => row.uid === answerBefore?.uid);
+        if (answer === undefined || answer.content.trim() === '') return '';
+        return String(answer.metadata['execution_generation'] ?? '');
+      },
+      {
+        timeout: 180_000,
+        message: 'the edited regeneration never finished: the answer row is still empty or still carries the old stamp',
+      },
+    )
+    .toBe(editedRegenerationId);
 
   // ── The question's edit affordance is now REACHABLE on reload ────────────
   // Header point 1: this used to read "the UI does not offer it" — a
@@ -449,14 +498,19 @@ test('regenerating rewrites the SAME answer row rather than appending a second o
   // this asserts against the PERSISTED, server-authored question, not the
   // optimistic bubble the send path stamped the user onto (the only reason J9
   // could ever reach this control). This is a UI-VISIBILITY assertion only —
-  // driving the edit through to a regenerate is NOT done, because the route
-  // refuses an edited question (the 422 asserted just above), so an
-  // edited-regenerate round trip is a different, unsupported turn.
+  // the edited-regenerate ROUND TRIP is driven over the route just above, and
+  // the browser's own edit-and-save path is `chat.edit-user-message.spec.ts`'s
+  // subject (ELITEA-0545), so it is not duplicated here.
+  //
+  // The bubble is matched on the EDITED text: the accepted regeneration above
+  // rewrote the stored question, so after this reload that is what the server
+  // serves — matching on the original text would be asserting the rewrite did
+  // not happen.
   await page.reload();
   await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 120_000 });
   const ownQuestion = page
     .getByTestId('user-message')
-    .filter({ hasText: questionBefore?.content ?? '' })
+    .filter({ hasText: editedPrompt })
     .first();
   await expect(
     ownQuestion,

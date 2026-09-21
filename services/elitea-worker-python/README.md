@@ -109,7 +109,7 @@ The current `elitea.runtime-deploy.v1` shape is:
 ```json
 {
   "schema_version": "elitea.runtime-deploy.v1",
-  "limits_revision": "elitea.runtime.limits.conformance.v1",
+  "limits_revision": "elitea.runtime.limits.conformance.v2",
   "workload_session_id": "session-issued-by-elitea-main",
   "producer_id": "python-worker-pod-1",
   "consumer_id": "python-worker-pod-1-consumer",

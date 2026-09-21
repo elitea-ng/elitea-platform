@@ -382,7 +382,7 @@ func prepareIndexBindingCrossProcessEnvelope(
 			EnvelopeSchemaRevision: "elitea.runtime.signed-worker-command.v1",
 			CapabilityVersion:      capabilityVersion,
 			Limits: redisdispatch.Limits{
-				Revision:               "elitea.runtime.limits.conformance.v1",
+				Revision:               "elitea.runtime.limits.conformance.v2",
 				MaxWorkerCommandBytes:  32 * 1024,
 				MaxSignedEnvelopeBytes: 48 * 1024,
 				MaxRedisFieldBytes:     48 * 1024,
@@ -417,7 +417,7 @@ func prepareIndexBindingCrossProcessEnvelope(
 		IsolationClass:              "shared",
 		Priority:                    1,
 		Deadline:                    time.Date(2026, time.July, 28, 0, 0, 0, 0, time.UTC),
-		LimitsRevision:              "elitea.runtime.limits.conformance.v1",
+		LimitsRevision:              "elitea.runtime.limits.conformance.v2",
 		ToolkitConfigurationEntryID: binding.ToolkitConfigurationEntryID,
 		ToolParametersEntryID:       binding.ToolParametersEntryID,
 		EmbeddingBindingEntryID:     binding.EmbeddingBindingEntryID,

@@ -389,6 +389,24 @@ LEFT JOIN LATERAL (
                          ELSE '[]'::jsonb
                      END
                  ) WITH ORDINALITY AS attachment_chunk(value, ordinality)
+            -- AN EMBEDDED IMAGE IS NOT CARRIED FORWARD.
+            --
+            -- #979 appends an `image_url` chunk carrying the picture's base64
+            -- bytes to the attachment's stored `content`. That chunk belongs
+            -- to the turn it was attached on — admission splices it into
+            -- `input_attachments` from memory (currentTurnInputAttachments)
+            -- and never reads it back from here.
+            --
+            -- Letting it ride this projection put a data URL into EVERY later
+            -- turn of the conversation. The bound above withholds a fourth
+            -- older attachment's text, which is 32 KiB; an image is up to a
+            -- third again of its raw cap once base64'd, so four of them alone
+            -- exceed the worker's whole 256 KiB fetch ceiling and the
+            -- conversation becomes unrecoverable — history only grows. It is
+            -- also the one chunk type whose omission costs nothing the model
+            -- can act on: the file's HEADER chunk still says a picture was
+            -- attached, names it, and says a file-reading tool can open it.
+            WHERE attachment_chunk.value ->> 'type' IS DISTINCT FROM 'image_url'
         ) AS item_chunk
         WHERE message_group.conversation_id = conversation.id
           AND message_group.created_at < COALESCE(
@@ -1183,6 +1201,24 @@ LEFT JOIN LATERAL (
                          ELSE '[]'::jsonb
                      END
                  ) WITH ORDINALITY AS attachment_chunk(value, ordinality)
+            -- AN EMBEDDED IMAGE IS NOT CARRIED FORWARD.
+            --
+            -- #979 appends an `image_url` chunk carrying the picture's base64
+            -- bytes to the attachment's stored `content`. That chunk belongs
+            -- to the turn it was attached on — admission splices it into
+            -- `input_attachments` from memory (currentTurnInputAttachments)
+            -- and never reads it back from here.
+            --
+            -- Letting it ride this projection put a data URL into EVERY later
+            -- turn of the conversation. The bound above withholds a fourth
+            -- older attachment's text, which is 32 KiB; an image is up to a
+            -- third again of its raw cap once base64'd, so four of them alone
+            -- exceed the worker's whole 256 KiB fetch ceiling and the
+            -- conversation becomes unrecoverable — history only grows. It is
+            -- also the one chunk type whose omission costs nothing the model
+            -- can act on: the file's HEADER chunk still says a picture was
+            -- attached, names it, and says a file-reading tool can open it.
+            WHERE attachment_chunk.value ->> 'type' IS DISTINCT FROM 'image_url'
         ) AS item_chunk
         WHERE message_group.conversation_id = conversation.id
           AND message_group.created_at < COALESCE(
@@ -2125,6 +2161,73 @@ WITH resolved AS MATERIALIZED (
 SELECT updated.id AS response_message_group_id,
        updated.uuid AS response_message_id
 FROM updated;
+
+-- name: RewriteCurrentAgentQuestionText :one
+--
+-- Rewrite the text of a question that is being regenerated (issue 980), inside
+-- the SAME admission transaction that resets its answer.
+--
+-- WHY IT IS A SEPARATE STATEMENT rather than another CTE on
+-- `ResetCurrentAgentResponse`: the reset is what every regeneration performs
+-- and this is what only an EDITED one performs. Folding an optional write into
+-- the statement that owns the mandatory one would make the ordinary retry pay
+-- for — and be refusable by — a clause it never uses.
+--
+-- The ownership gate is the reset's own, restated: the conversation must be
+-- the one named, the question must be that conversation's, its author must be
+-- a user, and the ACTOR must either own the conversation or be the question's
+-- author. A caller that can regenerate a turn can rewrite the question it is
+-- regenerating, and nothing else.
+--
+-- WHICH ITEM. `item_uuid` is the item the browser is editing. When it names
+-- one, that item must belong to THIS question group — a uuid from another
+-- message matches nothing and the caller is refused rather than silently
+-- rewriting the wrong row. When it is the zero uuid ("the message carries no
+-- stored item", the ordinary shape of a question the browser is still holding
+-- from the send that created it), the group's FIRST text item is rewritten,
+-- which is the one `ListMessages` renders as the question.
+WITH resolved AS MATERIALIZED (
+    SELECT question.id
+    FROM chat_message_group AS question
+    JOIN chat_conversations AS conversation
+      ON conversation.id = question.conversation_id
+    JOIN chat_participants AS question_author
+      ON question_author.id = question.author_participant_id
+     AND question_author.entity_name = 'user'
+    WHERE conversation.uuid = sqlc.arg(conversation_uuid)::uuid
+      AND question.uuid = sqlc.arg(question_id)::uuid
+      AND (
+          conversation.author_id = sqlc.arg(actor_user_id)::bigint
+          OR (question_author.entity_meta ->> 'id')::bigint = sqlc.arg(actor_user_id)::bigint
+      )
+    FOR UPDATE OF question
+), target AS (
+    SELECT item.id
+    FROM chat_message_items AS item
+    JOIN resolved ON resolved.id = item.message_group_id
+    WHERE item.item_type = 'text_message'
+      AND (
+          sqlc.arg(item_uuid)::uuid = '00000000-0000-0000-0000-000000000000'::uuid
+          OR item.uuid = sqlc.arg(item_uuid)::uuid
+      )
+    ORDER BY item.order_index, item.id
+    LIMIT 1
+), rewritten AS (
+    UPDATE chat_messages_text AS text_item
+    SET content = sqlc.arg(content)::text
+    FROM target
+    WHERE text_item.id = target.id
+    RETURNING text_item.id
+), stamped AS (
+    UPDATE chat_message_group AS question
+    SET updated_at = clock_timestamp()
+    FROM resolved
+    WHERE question.id = resolved.id
+      AND (SELECT count(*) FROM rewritten) = 1
+    RETURNING question.id
+)
+SELECT rewritten.id AS question_item_id
+FROM rewritten;
 
 -- name: ResetCurrentAgentResponse :one
 WITH resolved AS MATERIALIZED (

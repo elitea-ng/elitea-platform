@@ -44,6 +44,10 @@ const MAX_APPLICATION_VERSION_BYTES: usize = 1024 * 1024;
 // The attachment ENVELOPE, not the object: main caps the file at 128 KiB and
 // its JSON envelope at 1 MiB, because the content travels as a JSON string.
 const MAX_ATTACHMENT_OBJECT_BYTES: usize = 1024 * 1024;
+// The artifact ENVELOPE, likewise: main serves at most 200_000 CHARACTERS of
+// file content and caps the envelope at 2 MiB, because a control-character-
+// dense file escapes to six characters per byte inside a JSON string.
+const MAX_ARTIFACT_OBJECT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_MODEL_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_MODEL_SSE_EVENT_BYTES: usize = 256 * 1024;
 const MAX_MODEL_STREAM_BYTES: usize = 8 * 1024 * 1024;
@@ -214,6 +218,7 @@ impl ProductionProfiles {
                 max_response_bytes: MAX_RUNTIME_CONTEXT_BYTES,
                 max_application_response_bytes: MAX_APPLICATION_VERSION_BYTES,
                 max_attachment_response_bytes: MAX_ATTACHMENT_OBJECT_BYTES,
+                max_artifact_response_bytes: MAX_ARTIFACT_OBJECT_BYTES,
             },
             model: ModelGatewayConfig {
                 origin: deployment.platform_origin.clone(),

@@ -99,16 +99,17 @@ type ContentMaterializer interface {
 }
 
 type ContentServer struct {
-	authorizer      ContentAuthorizer
-	store           ContentStore
-	materializer    ContentMaterializer
-	runtimeToken    *EliteaClientTokenService
-	runtimeVersions *RuntimeApplicationVersionService
-	runtimeObjects  *RuntimeAttachmentObjectService
-	runtimeBuilders *RuntimeEntityBuilderService
-	maxBytes        int64
-	requests        chan struct{}
-	logger          *slog.Logger
+	authorizer       ContentAuthorizer
+	store            ContentStore
+	materializer     ContentMaterializer
+	runtimeToken     *EliteaClientTokenService
+	runtimeVersions  *RuntimeApplicationVersionService
+	runtimeObjects   *RuntimeAttachmentObjectService
+	runtimeBuilders  *RuntimeEntityBuilderService
+	runtimeArtifacts *RuntimeArtifactObjectService
+	maxBytes         int64
+	requests         chan struct{}
+	logger           *slog.Logger
 }
 
 func NewContentServer(authorizer ContentAuthorizer, store ContentStore, maxBytes int64) (*ContentServer, error) {
@@ -310,6 +311,26 @@ func (s *ContentServer) WithRuntimeEntityBuilders(builders *RuntimeEntityBuilder
 	return s
 }
 
+// WithRuntimeArtifacts enables the four claim-scoped `artifact` toolkit routes
+// (#906) on this listener: list, read, write and delete, inside the claimed
+// project and under the claimed actor's own per-bucket access list.
+//
+// Same shape and same reason as WithRuntimeEntityBuilders above: a nil service
+// leaves all four routes UNREGISTERED rather than serving a route that answers
+// 503 forever. That is not a detail here — this service runs in deployments
+// with no Go object store at all (mixed deployments keep Centry's artifacts
+// authoritative), and there the honest answer is that the native runtime skips
+// the toolkit, not that it has one that always fails.
+//
+// It must be called before Routes(), which both composition sites do.
+func (s *ContentServer) WithRuntimeArtifacts(artifacts *RuntimeArtifactObjectService) *ContentServer {
+	if s == nil {
+		return nil
+	}
+	s.runtimeArtifacts = artifacts
+	return s
+}
+
 // Routes exposes only the internal, claim-bound input data plane.
 func (s *ContentServer) Routes() http.Handler {
 	r := chi.NewRouter()
@@ -348,6 +369,30 @@ func (s *ContentServer) Routes() http.Handler {
 		r.Post(
 			"/executions/{executionID}/generations/{generation}/runtime-context/project-context",
 			s.PostProjectContextWrite,
+		)
+	}
+	if s.runtimeArtifacts != nil {
+		// The `artifact` toolkit family's four operations (#906). They carry
+		// a BODY like the two builder writes above, and for the same reason:
+		// a bucket name, a key and — for the write — the document itself do
+		// not belong in a path, and one of them is the payload rather than a
+		// selection. The operation is the last path segment so the four share
+		// one prefix and one claim contract.
+		r.Post(
+			"/executions/{executionID}/generations/{generation}/runtime-context/artifacts/list",
+			s.PostArtifactList,
+		)
+		r.Post(
+			"/executions/{executionID}/generations/{generation}/runtime-context/artifacts/read",
+			s.PostArtifactRead,
+		)
+		r.Post(
+			"/executions/{executionID}/generations/{generation}/runtime-context/artifacts/write",
+			s.PostArtifactWrite,
+		)
+		r.Post(
+			"/executions/{executionID}/generations/{generation}/runtime-context/artifacts/delete",
+			s.PostArtifactDelete,
 		)
 	}
 	return r
@@ -716,6 +761,116 @@ func (s *ContentServer) PostProjectContextWrite(w http.ResponseWriter, r *http.R
 	s.writeBuilderResponse(w, r, value, "project context write response failed")
 }
 
+// PostArtifactList, PostArtifactRead, PostArtifactWrite and PostArtifactDelete
+// are the `artifact` toolkit family's four operations (#906).
+//
+// They are twins of PostSkillWrite above in every respect that authorizes
+// anything — same claim parsing, same concurrency gate, same private no-cache
+// headers, same bounded body refused rather than truncated, same error
+// taxonomy — and differ only in the document each carries. The symmetry is the
+// point: one mTLS channel, one authority, and no route on it that authorizes
+// differently from its neighbours.
+func (s *ContentServer) PostArtifactList(w http.ResponseWriter, r *http.Request) {
+	setPrivateNoCacheHeaders(w.Header())
+	if !s.acquire(w) {
+		return
+	}
+	defer s.release()
+	var request RuntimeArtifactListRequest
+	claim, ok := s.artifactRequest(w, r, &request)
+	if !ok {
+		return
+	}
+	value, err := s.runtimeArtifacts.List(r.Context(), claim, request)
+	if err != nil {
+		s.writeBuilderError(w, r, err, "artifact listing unavailable")
+		return
+	}
+	s.writeRuntimeResponse(w, r, value, maxRuntimeArtifactResponseBytes, "artifact listing response failed")
+}
+
+func (s *ContentServer) PostArtifactRead(w http.ResponseWriter, r *http.Request) {
+	setPrivateNoCacheHeaders(w.Header())
+	if !s.acquire(w) {
+		return
+	}
+	defer s.release()
+	var request RuntimeArtifactReadRequest
+	claim, ok := s.artifactRequest(w, r, &request)
+	if !ok {
+		return
+	}
+	value, err := s.runtimeArtifacts.Read(r.Context(), claim, request)
+	if err != nil {
+		s.writeBuilderError(w, r, err, "artifact read unavailable")
+		return
+	}
+	s.writeRuntimeResponse(w, r, value, maxRuntimeArtifactResponseBytes, "artifact read response failed")
+}
+
+func (s *ContentServer) PostArtifactWrite(w http.ResponseWriter, r *http.Request) {
+	setPrivateNoCacheHeaders(w.Header())
+	if !s.acquire(w) {
+		return
+	}
+	defer s.release()
+	var request RuntimeArtifactWriteRequest
+	claim, ok := s.artifactRequest(w, r, &request)
+	if !ok {
+		return
+	}
+	value, err := s.runtimeArtifacts.Write(r.Context(), claim, request)
+	if err != nil {
+		s.writeBuilderError(w, r, err, "artifact write unavailable")
+		return
+	}
+	s.writeRuntimeResponse(w, r, value, maxRuntimeArtifactResponseBytes, "artifact write response failed")
+}
+
+func (s *ContentServer) PostArtifactDelete(w http.ResponseWriter, r *http.Request) {
+	setPrivateNoCacheHeaders(w.Header())
+	if !s.acquire(w) {
+		return
+	}
+	defer s.release()
+	var request RuntimeArtifactDeleteRequest
+	claim, ok := s.artifactRequest(w, r, &request)
+	if !ok {
+		return
+	}
+	value, err := s.runtimeArtifacts.Delete(r.Context(), claim, request)
+	if err != nil {
+		s.writeBuilderError(w, r, err, "artifact delete unavailable")
+		return
+	}
+	s.writeRuntimeResponse(w, r, value, maxRuntimeArtifactResponseBytes, "artifact delete response failed")
+}
+
+// artifactRequest is the claim-and-body half all four artifact routes share.
+//
+// Four copies of it would be four places for one to drift out of step with the
+// others, and the thing that would drift is the authorization. It writes the
+// refusal itself and returns ok=false; the caller returns immediately.
+func (s *ContentServer) artifactRequest(
+	w http.ResponseWriter,
+	r *http.Request,
+	target any,
+) (ContentClaim, bool) {
+	if s.runtimeArtifacts == nil {
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return ContentClaim{}, false
+	}
+	claim, err := parseExecutionClaim(r)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		return ContentClaim{}, false
+	}
+	if !decodeRuntimeRequest(w, r, target, maxRuntimeArtifactRequestBytes) {
+		return ContentClaim{}, false
+	}
+	return claim, true
+}
+
 // decodeBuilderRequest reads one bounded JSON body, refusing unknown keys.
 //
 // DisallowUnknownFields is the mirror of the worker”'s own
@@ -723,11 +878,18 @@ func (s *ContentServer) PostProjectContextWrite(w http.ResponseWriter, r *http.R
 // carrying a field the other side does not know, so a version skew fails
 // loudly at the edge instead of half-applying a write.
 func decodeBuilderRequest(w http.ResponseWriter, r *http.Request, target any) bool {
-	if r.ContentLength > maxRuntimeBuilderRequestBytes {
+	return decodeRuntimeRequest(w, r, target, maxRuntimeBuilderRequestBytes)
+}
+
+// decodeRuntimeRequest is decodeBuilderRequest with the cap named by the
+// caller: the two builder writes carry prompt-sized documents, the artifact
+// write carries a file, and one number could not honestly bound both.
+func decodeRuntimeRequest(w http.ResponseWriter, r *http.Request, target any, maxBytes int64) bool {
+	if r.ContentLength > maxBytes {
 		http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
 		return false
 	}
-	decoder := json.NewDecoder(io.LimitReader(r.Body, maxRuntimeBuilderRequestBytes+1))
+	decoder := json.NewDecoder(io.LimitReader(r.Body, maxBytes+1))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
@@ -757,8 +919,23 @@ func (s *ContentServer) writeBuilderError(w http.ResponseWriter, r *http.Request
 }
 
 func (s *ContentServer) writeBuilderResponse(w http.ResponseWriter, r *http.Request, value any, message string) {
+	s.writeRuntimeResponse(w, r, value, maxRuntimeBuilderResponseBytes, message)
+}
+
+// writeRuntimeResponse is writeBuilderResponse with the envelope ceiling named
+// by the caller. An over-cap body is REFUSED rather than trimmed, for the
+// reason PostApplicationVersion states: the document is indivisible, and a
+// truncated one either fails the client's decode or — worse — parses into
+// something that looks complete.
+func (s *ContentServer) writeRuntimeResponse(
+	w http.ResponseWriter,
+	r *http.Request,
+	value any,
+	maxBytes int,
+	message string,
+) {
 	encoded, err := json.Marshal(value)
-	if err != nil || len(encoded) == 0 || len(encoded) > maxRuntimeBuilderResponseBytes {
+	if err != nil || len(encoded) == 0 || len(encoded) > maxBytes {
 		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
 		return
 	}

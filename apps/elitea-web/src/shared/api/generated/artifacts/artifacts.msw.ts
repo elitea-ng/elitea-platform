@@ -223,6 +223,9 @@ export const getDownloadObjectResponseMock = (): ArrayBuffer =>
     new ArrayBuffer(faker.number.int({ min: 1, max: 64 })),
   ]);
 
+export const getDownloadArtifactByPathResponseMock = (): ArrayBuffer =>
+  new ArrayBuffer(faker.number.int({ min: 1, max: 64 }));
+
 export const getCreateTransferGrantResponseMock = (
   overrideResponse: Partial<Extract<TransferGrantResponse, object>> = {},
 ): TransferGrantResponse => ({
@@ -600,6 +603,37 @@ export const getDeleteObjectMockHandler = (
   );
 };
 
+export const getDownloadArtifactByPathMockHandler = (
+  overrideResponse?:
+    | ArrayBuffer
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ArrayBuffer> | ArrayBuffer),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/artifacts/artifact/default/:projectID/:bucket/:key",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      const binaryBody =
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getDownloadArtifactByPathResponseMock();
+      return HttpResponse.arrayBuffer(
+        binaryBody instanceof ArrayBuffer ? binaryBody : new ArrayBuffer(0),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/octet-stream" },
+        },
+      );
+    },
+    options,
+  );
+};
+
 export const getCreateTransferGrantMockHandler = (
   overrideResponse?:
     | TransferGrantResponse
@@ -812,6 +846,7 @@ export const getArtifactsMock = () => [
   getDownloadObjectMockHandler(),
   getStatObjectMockHandler(),
   getDeleteObjectMockHandler(),
+  getDownloadArtifactByPathMockHandler(),
   getCreateTransferGrantMockHandler(),
   getCommitTransferGrantMockHandler(),
   getPresignUploadPartMockHandler(),

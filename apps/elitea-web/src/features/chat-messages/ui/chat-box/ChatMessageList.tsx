@@ -122,7 +122,7 @@ export function ChatMessageList({
   projectId,
   messageActions: { onCopyToClipboard, onDeleteAnswer, onRegenerateAnswer, onSubmitEditedMessage } = {},
   canvas: { onEdit: onEditCanvas, selected: selectedCodeBlockInfo, onCreateFromSelection: onCreateCanvasFromSelection, onOpenFile: onOpenFileInCanvas } = {},
-  tts: { onAutoSpeak, speakingMessageId, speakingSegments, spokenRange } = {},
+  tts: { autoSpeak = false, onAutoSpeak, speakingMessageId, speakingSegments, spokenRange } = {},
   continuation: {
     onContinueMcpExecution,
     onContinueTokenLimitExecution,
@@ -296,6 +296,12 @@ export function ChatMessageList({
                   answer={message}
                   messageId={messageId}
                   isLastMessage={isLastMessage}
+                  // issue 974: the flag that lets this row's auto-read effect fire.
+                  // It was declared on the `tts` prop group and destructured
+                  // nowhere, so speaking mode reached the composer and never
+                  // the answers — the mode's whole point (reading the reply
+                  // back) could not happen.
+                  isSpeakingMode={autoSpeak}
                   author={{ participantName: assistantName }}
                   toolActions={message.toolActions}
                   status={{ isLoading: Boolean(message.isLoading), isStreaming: messageIsStreaming }}

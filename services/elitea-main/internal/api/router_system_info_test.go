@@ -46,15 +46,21 @@ func TestSystemInfoRoutesStayRegistered(t *testing.T) {
 // for the defect itself, taken through the route an operator's browser uses.
 //
 // The caller is authenticated and holds no permissions, so the gated `{mode}`
-// route answers 403 and the ungated `prompt_lib` route reaches the handler. The
-// assertion is on the BODY, not on the status: a 200 whose body invents a plugin
-// list is what this issue is about, and every status-only check passes against
-// it.
+// route answers 403 and the ungated `prompt_lib` route reaches the handler.
+//
+// #892 gave this route a real 200 — this binary's own build version, always,
+// plus a `migrations` entry when a database answered (there is none in this
+// router-level harness, so only `elitea-main` is expected here; the DB-backed
+// half is covered by internal/api/v2/admin's postgres-integration test). The
+// assertion stays on the BODY, not the status: #219's defect was a 200 whose
+// body invented a plugin list, and the fix must not reintroduce that under a
+// different field name. `components` must carry no plugin, worker or gateway
+// name — only the two this service can honestly report about itself.
 func TestSystemInfoReportsNoFabricatedPluginsOverTheRouter(t *testing.T) {
 	recorder := serveResponse(t, newSystemInfoTestRouter(t), http.MethodGet, "/api/v2/admin/system_info/prompt_lib")
 
-	if recorder.Code != http.StatusNotImplemented {
-		t.Fatalf("status = %d, want %d (body %q)", recorder.Code, http.StatusNotImplemented, recorder.Body.String())
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body %q)", recorder.Code, http.StatusOK, recorder.Body.String())
 	}
 
 	var body map[string]any
@@ -62,10 +68,26 @@ func TestSystemInfoReportsNoFabricatedPluginsOverTheRouter(t *testing.T) {
 		t.Fatalf("the response is not a JSON object: %v (%q)", err, recorder.Body.String())
 	}
 	if _, present := body["plugins"]; present {
-		t.Errorf("the route still reports a plugin inventory: %v", body["plugins"])
+		t.Errorf("the route still reports a plugin inventory under the old key: %v", body["plugins"])
 	}
-	if reason, _ := body["error"].(string); reason == "" {
-		t.Errorf("the refusal carries no reason: %v", body)
+	components, ok := body["components"].([]any)
+	if !ok {
+		t.Fatalf("the response carries no components array: %v", body)
+	}
+	for _, entry := range components {
+		row, ok := entry.(map[string]any)
+		if !ok {
+			t.Fatalf("a components entry is not an object: %v", entry)
+		}
+		name, _ := row["name"].(string)
+		switch name {
+		case "elitea_core", "admin", "notifications", "configurations", "sdk_plugin", "indexer_worker":
+			t.Errorf("the route reports a fabricated plugin fleet component %q (#219)", name)
+		case "elitea-main", "migrations":
+			// This service's own real, local facts — the only names it may report.
+		default:
+			t.Errorf("the route reports an unexpected component %q with no known source", name)
+		}
 	}
 }
 

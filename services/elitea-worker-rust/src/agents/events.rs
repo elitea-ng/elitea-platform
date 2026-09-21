@@ -41,11 +41,38 @@ use crate::protocol::node_event::{
 };
 use crate::toolkits::{
     DELEGATED_AUTHORIZATION_METADATA_KEY, DelegatedAuthorizationCatalog,
-    decode_delegated_authorization_requirement,
+    DelegatedAuthorizationRequirement, decode_delegated_authorization_requirement,
 };
 
 const MAX_TOOL_CALLS_PER_MODEL_TURN: usize = 16;
-const MAX_PROJECTED_EVENTS_PER_ADK_EVENT: usize = 3 + 2 * MAX_TOOL_CALLS_PER_MODEL_TURN;
+/// CHUNKED TOOL OUTPUT (#956).
+///
+/// A tool result larger than one output frame used to be REFUSED here — the
+/// projection failed with `ResourceExhausted` and the user saw a failed tool
+/// call for a file the toolkit's own 200,000-character cap admits. The frame
+/// bound is not this module's to raise (it is `max_output_frame_bytes` in the
+/// runtime limits conformance document, itself under the Redis field bound),
+/// so an oversized result is instead emitted as an ORDERED SEQUENCE of
+/// ordinary node events that main reassembles onto the stored tool call
+/// (`services/elitea-main/internal/transport/runtimegrpc/nodeevent/
+/// tool_output_chunk.go` states the whole contract, and
+/// `internal/infra/db/repos/agent_trace.go` is the reassembly half).
+///
+/// The budget is on the ENCODED size, not the raw one: the text becomes a JSON
+/// string, so a chunk of quotes or control characters doubles or sextuples on
+/// the way out, and a fixed raw offset would produce a chunk that fits for
+/// ASCII and violates the frame for the same number of emoji.
+const TOOL_OUTPUT_CHUNK_EVENT: &str = "agent_tool_output_chunk";
+const MAX_TOOL_OUTPUT_CHUNK_BUDGET_BYTES: usize = MAX_CURRENT_NODE_EVENT_JSON_BYTES / 2;
+const MAX_TOOL_OUTPUT_CHUNKS: usize = 64;
+/// One ADK event may complete several tool calls at once, so the chunk budget
+/// is per BATCH rather than per call: 64 chunk events is ~1.9 MiB of tool
+/// output in one model turn, far past anything a toolkit returns, and it is
+/// the ceiling that keeps one hostile result from becoming an unbounded event
+/// stream.
+const MAX_TOOL_OUTPUT_CHUNK_EVENTS_PER_ADK_EVENT: usize = MAX_TOOL_OUTPUT_CHUNKS;
+const MAX_PROJECTED_EVENTS_PER_ADK_EVENT: usize =
+    3 + 2 * MAX_TOOL_CALLS_PER_MODEL_TURN + MAX_TOOL_OUTPUT_CHUNK_EVENTS_PER_ADK_EVENT;
 const MAX_ADK_EVENT_ID_BYTES: usize = 512;
 const MAX_ADK_PARTS_PER_EVENT: usize = 256;
 const MAX_CONTEXT_TEXT_BYTES: usize = 2_048;
@@ -541,6 +568,16 @@ struct ActiveModelTurn {
 
 struct CompletedModelTurn {
     output_limited: bool,
+}
+
+/// What one COMPLETED tool call projects to: the entry, the chunks its output
+/// must ride as when it does not fit a frame, and the two values the caller
+/// still needs to name the event and hash the whole output.
+struct CompletedToolProjection<'result> {
+    entry: Value,
+    chunks: Option<Vec<String>>,
+    output: Option<String>,
+    error: Option<&'result str>,
 }
 
 #[derive(Clone)]
@@ -1709,6 +1746,30 @@ impl AgentEventProjector {
         Ok(batch)
     }
 
+    /// The authorization notice for THIS turn (#982).
+    ///
+    /// Built here rather than from the lifecycle's own copy of the identity so
+    /// the projector's context stays private: the notice must be stamped with
+    /// exactly the identity every other event in this turn carries, or it will
+    /// not join the conversation it belongs to.
+    pub(crate) fn delegated_authorization_notice(
+        &self,
+        requirement: &DelegatedAuthorizationRequirement,
+        occurred_at: DateTime<Utc>,
+    ) -> Result<NodeEventV1, AgentEventProjectionError> {
+        delegated_authorization_assembly_notice(
+            &AssemblyNoticeIdentity {
+                stream_id: &self.context.stream_id,
+                message_id: &self.context.message_id,
+                sio_event: &self.context.sio_event,
+                execution_generation: &self.context.execution_generation,
+                thread_id: &self.context.thread_id,
+            },
+            requirement,
+            occurred_at,
+        )
+    }
+
     #[must_use]
     pub(crate) fn is_paused(&self) -> bool {
         matches!(self.state, ProjectionState::Paused)
@@ -1945,6 +2006,7 @@ impl AgentEventProjector {
         let mut completed = Vec::with_capacity(results.len());
         let mut ids = HashSet::with_capacity(results.len());
         let mut batch = ProjectedAgentEventBatch::new();
+        let mut emitted_chunk_events = 0usize;
         for result in results {
             let id = result
                 .call_id
@@ -1958,26 +2020,30 @@ impl AgentEventProjector {
                 .get(id)
                 .filter(|active| active.name == result.name)
                 .ok_or_else(AgentEventProjectionError::invalid_state)?;
-            validate_tool_event_value(result.response)?;
-            let error = result
-                .response
-                .as_object()
-                .and_then(|value| value.get("error"))
-                .and_then(Value::as_str);
-            let output = error
-                .is_none()
-                .then(|| serde_json::to_string(result.response))
-                .transpose()
-                .map_err(|_| AgentEventProjectionError::invalid_state())?;
-            let finish_reason = if error.is_some() { "error" } else { "stop" };
-            let entry = tool_entry(
-                id,
-                active,
-                Some(timestamp_finish.as_str()),
-                Some(finish_reason),
-                output.as_deref(),
+            let CompletedToolProjection {
+                mut entry,
+                chunks,
+                output,
                 error,
-            );
+            } = self.completed_tool_entry(id, active, event, &timestamp_finish, result)?;
+            if let Some(chunks) = chunks.as_ref() {
+                emitted_chunk_events = emitted_chunk_events.saturating_add(chunks.len());
+                if emitted_chunk_events > MAX_TOOL_OUTPUT_CHUNK_EVENTS_PER_ADK_EVENT {
+                    return Err(resource_exhausted_projection());
+                }
+                let digest = tool_output_digest(output.as_deref().unwrap_or_default());
+                annotate_chunked_tool_output(&mut entry, chunks.len(), &digest);
+                for (index, text) in chunks.iter().enumerate() {
+                    batch.push(self.tool_output_chunk_event(
+                        id,
+                        index,
+                        chunks.len(),
+                        &digest,
+                        text,
+                        event.timestamp,
+                    )?)?;
+                }
+            }
             batch.push(self.event(
                 if error.is_some() {
                     "agent_tool_error"
@@ -1996,6 +2062,102 @@ impl AgentEventProjector {
             self.active_tools.remove(&id);
         }
         Ok(batch)
+    }
+
+    /// The completed call's entry, and the chunks its output must ride as.
+    ///
+    /// AN OVERSIZED RESULT IS CHUNKED, NOT REFUSED (#956) — but only a
+    /// successful one. An `error` rides as a short diagnostic string by
+    /// construction, and an oversized one is a malformed result rather than a
+    /// large document, so it keeps the refusal it always had.
+    ///
+    /// THE DECISION IS MADE ON THE RENDERED EVENT, not on the response value
+    /// alone. The entry this result becomes also carries the call's INPUTS
+    /// (`tool_inputs`) and its hierarchy, each bounded separately at
+    /// `MAX_TOOL_EVENT_VALUE_BYTES` — so a response that fit that bound
+    /// comfortably still produced an event over the 60 KiB frame once ~25 KiB
+    /// of arguments rode along with it, and `encode_current_node_event_json`
+    /// refused the whole projection: a failed tool call for a tool that had
+    /// worked. Measuring what is actually emitted is what python does
+    /// (`_chunk_tool_output`, in `handlers/agent_events.py`) and it is the only
+    /// measurement that can answer the question being asked.
+    ///
+    /// BOTH emitted shapes are measured, because `tool_partial_event` wraps
+    /// the same entry in a `tool_calls` map and is therefore the larger of the
+    /// two: deciding on the smaller one would leave the partial to fail on its
+    /// own.
+    fn completed_tool_entry<'result>(
+        &self,
+        id: &str,
+        active: &ActiveToolCall,
+        event: &Event,
+        timestamp_finish: &str,
+        result: &adk_rust::ToolResultView<'result>,
+    ) -> Result<CompletedToolProjection<'result>, AgentEventProjectionError> {
+        let error = result
+            .response
+            .as_object()
+            .and_then(|value| value.get("error"))
+            .and_then(Value::as_str);
+        let output = error
+            .is_none()
+            .then(|| serde_json::to_string(result.response))
+            .transpose()
+            .map_err(|_| AgentEventProjectionError::invalid_state())?;
+        let finish_reason = if error.is_some() { "error" } else { "stop" };
+        let inline_entry = tool_entry(
+            id,
+            active,
+            Some(timestamp_finish),
+            Some(finish_reason),
+            output.as_deref(),
+            error,
+        );
+        let chunks = match output.as_deref() {
+            Some(text) if !self.tool_events_fit(id, &inline_entry, event.timestamp) => {
+                Some(split_tool_output(text)?)
+            }
+            _ => {
+                validate_tool_event_value(result.response)?;
+                return Ok(CompletedToolProjection {
+                    entry: inline_entry,
+                    chunks: None,
+                    output,
+                    error,
+                });
+            }
+        };
+        // A chunked result's entry carries NO inline text: it could not (that
+        // is why it was chunked). Main keeps what the chunks delivered and
+        // uses the count and digest to tell a whole reassembly from a short
+        // one.
+        let entry = tool_entry(
+            id,
+            active,
+            Some(timestamp_finish),
+            Some(finish_reason),
+            Some(""),
+            error,
+        );
+        Ok(CompletedToolProjection {
+            entry,
+            chunks,
+            output,
+            error,
+        })
+    }
+
+    /// Whether the two events one COMPLETED tool call emits both fit an
+    /// output frame with the result inline.
+    ///
+    /// Built rather than estimated: `self.event` encodes the frame it would
+    /// send and refuses an oversized one, so constructing both is the same
+    /// measurement the transport will make. The cost is two throwaway
+    /// encodings per tool result, paid once at completion.
+    fn tool_events_fit(&self, id: &str, entry: &Value, occurred_at: DateTime<Utc>) -> bool {
+        self.event("agent_tool_end", &Value::Null, None, entry, occurred_at)
+            .is_ok()
+            && self.tool_partial_event(id, entry, occurred_at).is_ok()
     }
 
     fn tool_partial_event(
@@ -2176,6 +2338,92 @@ impl AgentEventProjector {
         encode_current_node_event_json(&event).map_err(AgentEventProjectionError::output)?;
         Ok(event)
     }
+}
+
+/// The exact browser identity one assembly-time notice must be stamped with.
+///
+/// It is the same identity `AgentEventProjectionContext` carries, but the
+/// projector cannot be built when assembly itself failed, so the lifecycle
+/// passes the four bound fields straight from the verified command.
+pub(crate) struct AssemblyNoticeIdentity<'a> {
+    pub(crate) stream_id: &'a str,
+    pub(crate) message_id: &'a str,
+    pub(crate) sio_event: &'a str,
+    pub(crate) execution_generation: &'a str,
+    pub(crate) thread_id: &'a str,
+}
+
+/// The terminal `full_message` that NAMES the MCP connection demanding
+/// authorization (#982).
+///
+/// An MCP server that answers the assembly dial with a `401` used to end the
+/// turn as an anonymous runtime failure: the person saw "The runtime operation
+/// failed." and, with several connections attached, had nothing to act on. The
+/// requirement the toolkit already built is sanitized (no token, no provider
+/// body), so the honest terminal is an ANSWER that says which connection is
+/// asking and what to do — not a failure code.
+///
+/// The structured block rides in `response_metadata` under the same key the
+/// pause path uses for its own requirement, so a browser that wants to render
+/// an affordance rather than the sentence can read it from the live node event.
+pub(crate) fn delegated_authorization_assembly_notice(
+    identity: &AssemblyNoticeIdentity<'_>,
+    requirement: &DelegatedAuthorizationRequirement,
+    occurred_at: DateTime<Utc>,
+) -> Result<NodeEventV1, AgentEventProjectionError> {
+    let fields = [
+        identity.stream_id,
+        identity.message_id,
+        identity.sio_event,
+        identity.execution_generation,
+        identity.thread_id,
+    ];
+    if fields.iter().any(|value| {
+        value.is_empty()
+            || value.len() > MAX_CONTEXT_TEXT_BYTES
+            || value
+                .bytes()
+                .any(|byte| matches!(byte, b'\0' | b'\r' | b'\n'))
+    }) {
+        return Err(AgentEventProjectionError::invalid_state());
+    }
+    let message = requirement.assembly_notice_message();
+    let metadata = json!({
+        "thread_id": identity.thread_id,
+        "invoked_skills": [],
+        "mcp_authorization_required": {
+            "toolkit_name": requirement.toolkit_name(),
+            "toolkit_type": requirement.toolkit_type(),
+            "server_url": requirement.server_url(),
+            "resource_metadata_url": requirement.resource_metadata_url(),
+            "raised_during": "assembly",
+        },
+    });
+    let event = NodeEventV1 {
+        r#type: "full_message".to_owned(),
+        stream_id: Some(identity.stream_id.to_owned()),
+        message_id: Some(identity.message_id.to_owned()),
+        question_id: None,
+        content: serde_json::to_vec(&Value::String(message)).map_err(|_| {
+            AgentEventProjectionError::output(ProtocolError::InvalidInput(
+                "the authorization notice content is malformed",
+            ))
+        })?,
+        thinking: None,
+        response_metadata: serde_json::to_vec(&metadata).map_err(|_| {
+            AgentEventProjectionError::output(ProtocolError::InvalidInput(
+                "the authorization notice metadata is malformed",
+            ))
+        })?,
+        references: b"[]".to_vec(),
+        sio_event: Some(identity.sio_event.to_owned()),
+        created_at: Some(occurred_at.to_rfc3339_opts(SecondsFormat::AutoSi, false)),
+        parent_message_id: None,
+        agent_name: None,
+        execution_generation: Some(identity.execution_generation.to_owned()),
+    };
+    encode_current_node_event_json(&event).map_err(AgentEventProjectionError::output)?;
+    Ok(event)
 }
 
 fn validate_context(
@@ -4271,6 +4519,122 @@ fn pipeline_application_call_node(call_id: &str) -> Option<&str> {
         && !step.is_empty()
         && step.bytes().all(|byte| byte.is_ascii_digit()))
     .then_some(node_name)
+}
+
+/// The chunk event one slice of an oversized tool result rides on.
+///
+/// It is a distinct event TYPE rather than a flag on `partial_message` so a
+/// consumer that does not reassemble (an older browser bundle, a log tailer)
+/// ignores it instead of rendering a fragment as though it were the whole
+/// result. Its correlation fields are the ones every event here carries, so
+/// main binds it to the same turn as the tool call it belongs to.
+impl AgentEventProjector {
+    fn tool_output_chunk_event(
+        &self,
+        call_id: &str,
+        index: usize,
+        total: usize,
+        digest: &str,
+        text: &str,
+        occurred_at: DateTime<Utc>,
+    ) -> Result<NodeEventV1, AgentEventProjectionError> {
+        let metadata = json!({
+            "tool_output_chunk": {
+                "tool_call_id": call_id,
+                "index": index,
+                "total": total,
+                "tool_output_sha256": digest,
+            }
+        });
+        self.event(
+            TOOL_OUTPUT_CHUNK_EVENT,
+            &Value::String(text.to_owned()),
+            None,
+            &metadata,
+            occurred_at,
+        )
+    }
+}
+
+/// Marks a completed tool call whose output was chunked.
+///
+/// The count and the digest are what let main tell a WHOLE reassembly from a
+/// short one: without them a lost chunk would leave a row holding a prefix
+/// that reads exactly like a complete small result.
+fn annotate_chunked_tool_output(entry: &mut Value, total: usize, digest: &str) {
+    let Value::Object(object) = entry else {
+        return;
+    };
+    object.insert(
+        "tool_output_chunks".to_owned(),
+        json!({"total": total, "tool_output_sha256": digest}),
+    );
+}
+
+fn tool_output_digest(output: &str) -> String {
+    let mut context = digest::Context::new(&digest::SHA256);
+    context.update(output.as_bytes());
+    hex(context.finish().as_ref())
+}
+
+/// Cuts one oversized tool result into frame-sized chunks.
+///
+/// Two properties matter and both are easy to get wrong. The cut is on the
+/// ENCODED size, because the text becomes a JSON string and the encoder is
+/// what has to fit the frame. And the cut is on a CHARACTER boundary, so every
+/// chunk is independently valid UTF-8 — main validates encoding on the way in,
+/// and half a code point would be refused at the edge with no way to tell
+/// which of sixty chunks was malformed.
+fn split_tool_output(output: &str) -> Result<Vec<String>, AgentEventProjectionError> {
+    if output.is_empty() {
+        return Err(AgentEventProjectionError::invalid_state());
+    }
+    let mut chunks = Vec::new();
+    let mut used = 0usize;
+    let mut start = 0usize;
+    for (offset, character) in output.char_indices() {
+        let cost = encoded_character_cost(character);
+        if used + cost > MAX_TOOL_OUTPUT_CHUNK_BUDGET_BYTES {
+            if offset == start {
+                // One character alone past the budget cannot happen (a
+                // character escapes to at most 12 bytes and the budget is
+                // kilobytes), and a zero-length cut would loop forever.
+                return Err(AgentEventProjectionError::invalid_state());
+            }
+            chunks.push(output[start..offset].to_owned());
+            if chunks.len() >= MAX_TOOL_OUTPUT_CHUNKS {
+                return Err(resource_exhausted_projection());
+            }
+            start = offset;
+            used = 0;
+        }
+        used += cost;
+    }
+    if start < output.len() {
+        chunks.push(output[start..].to_owned());
+    }
+    if chunks.is_empty() || chunks.len() > MAX_TOOL_OUTPUT_CHUNKS {
+        return Err(resource_exhausted_projection());
+    }
+    Ok(chunks)
+}
+
+/// What one character costs inside a JSON string, matching what
+/// `serde_json` actually emits: its two-character escapes, `\u00XX` for the
+/// other control characters, and the UTF-8 length otherwise.
+const fn encoded_character_cost(character: char) -> usize {
+    match character {
+        '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
+        character if (character as u32) < 0x20 => 6,
+        character => character.len_utf8(),
+    }
+}
+
+fn resource_exhausted_projection() -> AgentEventProjectionError {
+    AgentEventProjectionError {
+        code: AgentEventProjectionErrorCode::ResourceExhausted,
+        protocol: None,
+    }
 }
 
 fn validate_tool_event_value(value: &Value) -> Result<(), AgentEventProjectionError> {

@@ -67,8 +67,10 @@ func TestPinnedWorkerToolkitCapabilityLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load rust capability: %v", err)
 	}
-	if rust.Implementation() != "rust" || len(rust.SupportedNames()) != 22 {
-		t.Errorf("rust implementation=%q supported=%d, want rust and 22",
+	// 23 since #906 added the `artifact` family, whose authority is the live
+	// execution claim rather than a credential in the frozen snapshot.
+	if rust.Implementation() != "rust" || len(rust.SupportedNames()) != 23 {
+		t.Errorf("rust implementation=%q supported=%d, want rust and 23",
 			rust.Implementation(), len(rust.SupportedNames()))
 	}
 	if rust.UnsupportedNames() != nil {

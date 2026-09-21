@@ -11,6 +11,7 @@ import (
 	"mime"
 	"net/http"
 	"strconv"
+	"strings"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
@@ -156,7 +157,27 @@ type currentApplicationStartBody struct {
 	AttachmentsInfo  json.RawMessage `json:"attachments_info"`
 	LLMSettings      json.RawMessage `json:"llm_settings"`
 	MCPTokens        json.RawMessage `json:"mcp_tokens"`
-	UserIDs          json.RawMessage `json:"user_ids"`
+	// The people this message TAGS (#977). Two spellings, and both are read:
+	// the platform's own wire is snake_case, but the composer builds its
+	// payload with `userIds` (`buildDefaultMessagePayload`,
+	// `widgets/chat-box/ui/hooks/useChatBoxHandlers.helpers.ts`). While only
+	// the snake_case field existed, the camelCase one the client actually
+	// sends was not bound at all, so a mention was silently dropped rather
+	// than refused — the user saw the tag render and nobody was told.
+	//
+	// Binding both here rather than renaming the client's key: the field is
+	// read by one decoder and written by one builder today, but a released
+	// client is not upgradable in step with a server, and a server that
+	// accepts only the spelling of its own generation loses every mention
+	// sent by the other one. `mentionedUserIDs` merges them.
+	UserIDs      json.RawMessage `json:"user_ids"`
+	UserIDsCamel json.RawMessage `json:"userIds"`
+	// `true` when the composer resolved `@everyone` rather than named
+	// individuals. The ids it sends alongside are then every member it could
+	// see, which is a CLIENT's view of the project; the producer re-resolves
+	// membership server-side instead (see `mentionAudience`).
+	SendingToUser     bool `json:"isSendingToUser"`
+	SendingToEveryone bool `json:"is_mentioning_everyone"`
 }
 
 type currentRegenerationBody struct {
@@ -237,8 +258,18 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 	}
 	if body.ProjectID != projectID || body.ConversationUUID != conversationID ||
 		body.Payload.UserInput == "" || !emptyJSONArray(body.AttachmentsInfo) ||
-		!emptyJSONObject(body.MCPTokens) || !absentJSON(body.UserIDs) {
+		!emptyJSONObject(body.MCPTokens) {
 		writeUnsupported(writer)
+		return
+	}
+	// `user_ids` is no longer a parity gate: it is the mention list, and it is
+	// PARSED rather than refused (#977). A malformed one is a 400 — the same
+	// choice `parseStartAttachments` makes below and for the same reason: a
+	// silently dropped mention produces an admitted turn whose sender believes
+	// somebody was told.
+	mentioned, ok := parseMentionedUserIDs(body.UserIDs, body.UserIDsCamel)
+	if !ok {
+		writeError(writer, http.StatusBadRequest, "Invalid agent execution request")
 		return
 	}
 	// A filepath that does not split into a non-empty bucket and a non-empty
@@ -266,8 +297,10 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 				ProjectID: projectID, ActorUserID: actorUserID,
 				ConversationUUID: conversationID, TargetParticipantID: body.ParticipantID,
 				QuestionID: body.QuestionID, UserInput: body.Payload.UserInput,
-				InteractionUUID: body.InteractionUUID,
-				Attachments:     attachments,
+				InteractionUUID:  body.InteractionUUID,
+				Attachments:      attachments,
+				MentionedUserIDs: mentioned,
+				MentionsEveryone: body.SendingToEveryone,
 			},
 		)
 	case CurrentAdhocStartContract:
@@ -342,9 +375,18 @@ func (handler *currentApplicationStartHandler) Regenerate(writer http.ResponseWr
 		writeError(writer, http.StatusBadRequest, "Invalid agent regeneration request")
 		return
 	}
+	// `updated_items` is the EDITED question this regeneration runs from (issue
+	// 980). `parseRegenerationEdit` is the whole of that contract — kept in one
+	// function, beside the shape it parses, so this handler's own gate stays
+	// the single boolean it has always been.
+	edit, editOK := parseRegenerationEdit(body.UpdatedItems)
+	if !editOK {
+		writeUnsupported(writer)
+		return
+	}
 	if body.ProjectID != projectID || body.ParticipantID < 0 ||
 		body.MessageID != responseMessageID || body.StreamID != responseMessageID ||
-		body.Payload.UserInput == "" || !emptyJSONArray(body.UpdatedItems) ||
+		body.Payload.UserInput == "" ||
 		!emptyJSONArray(body.Payload.AttachmentsInfo) ||
 		!emptyJSONObject(body.Payload.MCPTokens) || !absentJSON(body.Payload.UserIDs) ||
 		(!absentJSON(body.Payload.LLMSettings) && !currentJSONObject(body.Payload.LLMSettings)) {
@@ -363,6 +405,7 @@ func (handler *currentApplicationStartHandler) Regenerate(writer http.ResponseWr
 			ResponseMessageID: responseMessageID, RegenerationID: body.RegenerationID,
 			RequestedParticipantID: body.ParticipantID,
 			LLMSettings:            bytes.Clone(llmSettings),
+			EditedQuestion:         edit,
 		},
 	)
 	if err != nil {
@@ -558,6 +601,102 @@ func writeUnsupported(writer http.ResponseWriter) {
 		"message": "This agent turn requires the current execution path.",
 	})
 }
+
+// parseMentionedUserIDs merges the two spellings of the mention list into one
+// deduplicated, bounded slice.
+//
+// ABSENT on both is an ordinary message with no mentions, not an error. A
+// present value must be a JSON array of positive integers: anything else is a
+// client that thinks it tagged somebody and did not, which is worth a 400
+// rather than a quietly empty audience.
+//
+// `maxMentionedUsers` bounds it because the list is attacker-influenced (it is
+// whatever the composer put on the wire) and every entry becomes a row: an
+// unbounded one turns a single message into an unbounded write.
+func parseMentionedUserIDs(snake, camel json.RawMessage) ([]int64, bool) {
+	ids := make([]int64, 0, 4)
+	seen := make(map[int64]struct{}, 4)
+	for _, raw := range []json.RawMessage{snake, camel} {
+		if absentJSON(raw) {
+			continue
+		}
+		var parsed []int64
+		if err := json.Unmarshal(raw, &parsed); err != nil {
+			return nil, false
+		}
+		for _, id := range parsed {
+			if id <= 0 {
+				return nil, false
+			}
+			if _, duplicate := seen[id]; duplicate {
+				continue
+			}
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) > maxMentionedUsers {
+		return nil, false
+	}
+	return ids, true
+}
+
+// maxMentionedUsers is the ceiling on one message's named audience. It is
+// generous for a human-written message and small enough that no single send
+// can write an unbounded number of notification rows.
+const maxMentionedUsers = 64
+
+// regenerationUpdatedItem is one entry of `updated_items`, in the shape the
+// browser sends (`UserMessage`'s `handleSubmit`: the edited text, the item's
+// own uuid when the message carries a stored one, and the item type).
+type regenerationUpdatedItem struct {
+	UUID     string `json:"uuid"`
+	Content  string `json:"content"`
+	ItemType string `json:"item_type"`
+}
+
+// parseRegenerationEdit reads `updated_items` into the edit a regeneration
+// runs from, or reports the body unsupported (issue 980).
+//
+// It used to be one clause of the handler's gate — `!emptyJSONArray(body.
+// UpdatedItems)` — which refused every non-empty value outright: the field was
+// carried on the wire, unported, and rejected rather than ignored. So a user
+// could open a question, rewrite it, press Save and apply, and collect a 400
+// for asking the platform to do the thing the control exists to do.
+//
+// WHAT IS ADMITTED, and why it is this narrow: exactly one `text_message`
+// entry, with non-blank text. The regeneration replaces ONE question with ONE
+// rewritten question; a body carrying two text items, an attachment item, or a
+// type this server does not write is not an edit of that question but a
+// different feature, and admitting it would mean guessing which entry the user
+// meant. The length bound is the application layer's
+// (`CurrentRegenerationEdit.Validate`), so the two cannot drift.
+//
+// An ABSENT or empty array is the ordinary retry and yields the zero edit —
+// the behaviour every regeneration had before this.
+func parseRegenerationEdit(raw json.RawMessage) (agentexecutionapp.CurrentRegenerationEdit, bool) {
+	if emptyJSONArray(raw) {
+		return agentexecutionapp.CurrentRegenerationEdit{}, true
+	}
+	var items []regenerationUpdatedItem
+	if err := json.Unmarshal(raw, &items); err != nil || len(items) != 1 {
+		return agentexecutionapp.CurrentRegenerationEdit{}, false
+	}
+	item := items[0]
+	if item.ItemType != currentTextMessageItemType || strings.TrimSpace(item.Content) == "" {
+		return agentexecutionapp.CurrentRegenerationEdit{}, false
+	}
+	edit := agentexecutionapp.CurrentRegenerationEdit{Text: item.Content, ItemUUID: item.UUID}
+	if err := edit.Validate(); err != nil {
+		return agentexecutionapp.CurrentRegenerationEdit{}, false
+	}
+	return edit, true
+}
+
+// currentTextMessageItemType is the only `item_type` an edited question may
+// name — the same value the admission path writes for a question's text
+// (`chat_message_items.item_type`).
+const currentTextMessageItemType = "text_message"
 
 func emptyJSONArray(raw json.RawMessage) bool {
 	return absentJSON(raw) || bytes.Equal(bytes.TrimSpace(raw), []byte("[]"))

@@ -141,6 +141,7 @@ fn runtime_context_client_from(
             max_response_bytes: 32 * 1_024,
             max_application_response_bytes: 1_024 * 1_024,
             max_attachment_response_bytes: 1_024 * 1_024,
+            max_artifact_response_bytes: 2 * 1_024 * 1_024,
         },
     )
     .expect("runtime-context fixture client")
@@ -2706,4 +2707,153 @@ async fn direct_resume_requires_restorable_sessions_before_pat_redemption() {
     );
     assert_eq!(context_calls.load(Ordering::Acquire), 0);
     assert!(captured.lock().expect("captured model requests").is_empty());
+}
+
+/* ── #973: an attached child this worker cannot build ─────────────────── */
+
+/// The reference the agent editor's tool picker writes when a PIPELINE is
+/// picked: the same `type: "application"` entry a sub-agent produces, with
+/// `agent_type: "pipeline"`.
+fn stored_pipeline_reference(
+    tool_id: u64,
+    application_id: u64,
+    version_id: u64,
+    name: &str,
+) -> serde_json::Value {
+    let mut reference = stored_application_reference(tool_id, application_id, version_id, name);
+    reference["agent_type"] = serde_json::json!("pipeline");
+    reference["description"] = serde_json::json!("Reviews a change and pauses for approval.");
+    reference
+}
+
+/// THE DEFECT #973 REPORTS: one attached pipeline used to end the whole
+/// assembly with `native_agent.unsupported_capability`, before any model call,
+/// so EVERY turn of that agent died — including the turns that never mentioned
+/// the pipeline. The picker offers pipelines and the relation route stores
+/// them, so a supported UI action bricked the agent.
+///
+/// The turn now runs. The pipeline binds no tool (this worker compiles nested
+/// `LlmAgent` children only), and the run is expected to SAY so — the notice
+/// is asserted in `session_tests.rs`, where the session that carries it is
+/// observable.
+///
+/// The runtime-context client answers ONE redemption and nothing else: a
+/// version resolution for the skipped child would drain an empty queue and
+/// fail the test, which is how "skipped" is told apart from "resolved and then
+/// discarded".
+#[tokio::test(flavor = "current_thread")]
+async fn an_attached_pipeline_is_skipped_and_the_agent_still_answers() {
+    let mut request = ordinary_request(AgentExecutionKind::Application);
+    attach_application_tools(
+        &mut request,
+        vec![stored_pipeline_reference(44, 31, 41, "review-pipeline")],
+    );
+    let (runtime_context, context_calls) = runtime_context_client();
+    let (model_gateway, captured) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(text_response(
+            "root answer",
+        ))],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway fixture client");
+    let assembler = OrdinaryNativeAgentAssembler::new(
+        platform_client(runtime_context),
+        Arc::new(ModelFacade::from_gateway(model_gateway)),
+        empty_tool_policy(),
+    );
+    let assembly = AuthorizedNativeAssembly::new(
+        &request,
+        test_runtime_context_authority(),
+        AuthorizedNativeCommandBinding::fixture(),
+    );
+
+    let mut invocation = assembler
+        .assemble(assembly)
+        .await
+        .expect("an attached pipeline must not end the assembly");
+    let _ = invocation
+        .project_start(chrono::Utc::now())
+        .expect("agent start");
+    let (mut native, mut projector, completion) = invocation.start().expect("native start");
+    while let Some(event) = native.next_event().await.expect("native event") {
+        let _ = projector.project(&event).expect("projected event");
+    }
+    let completed = completion.select().await.expect("selected completion");
+    let _ = projector
+        .finish_after_eos(completed, chrono::Utc::now())
+        .expect("finished browser output");
+
+    assert_eq!(
+        context_calls.load(Ordering::Acquire),
+        1,
+        "the skipped child must not be resolved through the platform"
+    );
+    let captured = captured.lock().expect("captured model request");
+    assert_eq!(captured.len(), 1, "the model was never called");
+    let body: serde_json::Value =
+        serde_json::from_slice(&captured[0].body).expect("model request JSON");
+    assert!(
+        body["tools"].as_array().is_none_or(Vec::is_empty),
+        "the pipeline was offered to the model as a tool: {}",
+        body["tools"]
+    );
+}
+
+/// The skip is per CHILD, not per agent: a pipeline beside a sub-agent must
+/// not take the sub-agent's tool down with it.
+#[tokio::test(flavor = "current_thread")]
+async fn an_attached_pipeline_leaves_the_agent_children_beside_it_bound() {
+    let mut request = ordinary_request(AgentExecutionKind::Application);
+    attach_application_tools(
+        &mut request,
+        vec![
+            stored_pipeline_reference(45, 32, 42, "review-pipeline"),
+            stored_application_reference(44, 31, 41, "release-risk-agent"),
+        ],
+    );
+    let (runtime_context, context_calls, _) = runtime_context_with_child();
+    let (model_gateway, captured) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(text_response(
+            "root answer",
+        ))],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway fixture client");
+    let assembler = OrdinaryNativeAgentAssembler::new(
+        platform_client(runtime_context),
+        Arc::new(ModelFacade::from_gateway(model_gateway)),
+        empty_tool_policy(),
+    );
+    let assembly = AuthorizedNativeAssembly::new(
+        &request,
+        test_runtime_context_authority(),
+        AuthorizedNativeCommandBinding::fixture(),
+    );
+
+    let mut invocation = assembler
+        .assemble(assembly)
+        .await
+        .expect("mixed nested children must assemble");
+    let _ = invocation
+        .project_start(chrono::Utc::now())
+        .expect("agent start");
+    let (mut native, mut projector, completion) = invocation.start().expect("native start");
+    while let Some(event) = native.next_event().await.expect("native event") {
+        let _ = projector.project(&event).expect("projected event");
+    }
+    let completed = completion.select().await.expect("selected completion");
+    let _ = projector
+        .finish_after_eos(completed, chrono::Utc::now())
+        .expect("finished browser output");
+
+    assert_eq!(
+        context_calls.load(Ordering::Acquire),
+        2,
+        "exactly one child version — the agent's — must be resolved"
+    );
+    let captured = captured.lock().expect("captured model request");
+    let body: serde_json::Value =
+        serde_json::from_slice(&captured[0].body).expect("model request JSON");
+    assert_eq!(body["tools"].as_array().map(Vec::len), Some(1));
+    assert_eq!(body["tools"][0]["function"]["name"], "elitea_agent_31_v_41");
 }

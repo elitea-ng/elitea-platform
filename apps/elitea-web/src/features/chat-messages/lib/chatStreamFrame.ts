@@ -31,6 +31,12 @@ export const SocketMessageType = {
   AgentToolStart: 'agent_tool_start',
   AgentToolEnd: 'agent_tool_end',
   AgentToolError: 'agent_tool_error',
+  /**
+   * One slice of a tool result too large for a single output frame (#956).
+   * See `chatStreamToolOutputChunks.ts`; the completed call that follows
+   * carries `tool_output_chunks` instead of the text.
+   */
+  AgentToolOutputChunk: 'agent_tool_output_chunk',
   AgentRequiresConfirmation: 'agent_requires_confirmation',
   AgentHitlInterrupt: 'agent_hitl_interrupt',
   McpAuthorizationRequired: 'mcp_authorization_required',
@@ -91,6 +97,7 @@ export const HANDLED_STREAM_TYPES: ReadonlySet<string> = new Set<string>([
   SocketMessageType.AgentToolStart,
   SocketMessageType.AgentToolEnd,
   SocketMessageType.AgentToolError,
+  SocketMessageType.AgentToolOutputChunk,
   SocketMessageType.AgentThinkingStep,
   SocketMessageType.AgentThinkingStepUpdate,
   SocketMessageType.AgentHitlInterrupt,
@@ -116,6 +123,10 @@ interface StreamResponseMetadata {
   readonly tool_inputs?: unknown;
   readonly tool_outputs?: unknown;
   readonly tool_output?: unknown;
+  /** One chunk's position, on an `agent_tool_output_chunk` frame (#956). */
+  readonly tool_output_chunk?: unknown;
+  /** `{total, tool_output_sha256}` on a completed call whose output was chunked. */
+  readonly tool_output_chunks?: unknown;
   readonly tool_meta?:
     | {
         readonly name?: string | undefined;

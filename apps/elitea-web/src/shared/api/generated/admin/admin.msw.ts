@@ -63,6 +63,7 @@ import type {
   PublishedAgentsListing,
   Role,
   SendBrandingTestEmail200,
+  SystemInfo,
   UserInviteResult,
   UserListResponse,
   UserProjectPermissionsResult,
@@ -952,6 +953,19 @@ export const getListAdminPublishedAgentsResponseMock = (
   ...overrideResponse,
 });
 
+export const getGetSystemInfoResponseMock = (
+  overrideResponse: Partial<Extract<SystemInfo, object>> = {},
+): SystemInfo => ({
+  components: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    version: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  })),
+  ...overrideResponse,
+});
+
 export const getUserListMockHandler = (
   overrideResponse?:
     | UserListResponse
@@ -1718,21 +1732,25 @@ export const getListAdminPublishedAgentsMockHandler = (
 
 export const getGetSystemInfoMockHandler = (
   overrideResponse?:
-    | unknown
+    | SystemInfo
     | ((
         info: Parameters<Parameters<typeof http.get>[1]>[0],
-      ) => Promise<unknown> | unknown),
+      ) => Promise<SystemInfo> | SystemInfo),
   options?: RequestHandlerOptions,
 ) => {
   return http.get(
     "*/admin/system_info/prompt_lib",
     async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
       await delay(0);
-      if (typeof overrideResponse === "function") {
-        await overrideResponse(info);
-      }
 
-      return new HttpResponse(null, { status: 200 });
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetSystemInfoResponseMock(),
+        { status: 200 },
+      );
     },
     options,
   );

@@ -24,7 +24,7 @@ data:
     {{- $material := "/run/elitea-runtime" }}
     {{ toJson (dict
       "schema_version" "elitea.runtime-deploy.v1"
-      "limits_revision" "elitea.runtime.limits.conformance.v1"
+      "limits_revision" "elitea.runtime.limits.conformance.v2"
       "workload_session_id" $r.workloadSessionId
       "producer_id" $r.producerId
       "consumer_id" (printf "%s-__ELITEA_POD_NAME__" $r.consumerId)

@@ -12,6 +12,9 @@ import type { APIRequestContext, APIResponse, Locator, Page } from '@playwright/
 import { expect, request as playwrightRequest } from '@playwright/test';
 
 import { BASE_URL, STORAGE_STATE } from '../../playwright.config';
+// The journal-scope rule lives in `scripts/lib` so it can be unit-tested
+// without Playwright, a browser or a running stack — `scripts/mock-journal-scope.test.mjs`.
+import { mockLlmJournalScopeFailure } from '../../scripts/lib/mock-journal-scope.mjs';
 
 export const AUTOTEST_PREFIX = 'autotest_';
 
@@ -2500,6 +2503,15 @@ export interface MockToolJournalEntry {
 export interface MockLlmJournalEntry {
   readonly path: string;
   readonly mode: string | null;
+  /**
+   * A LABEL for the credential that reached the mock, never a secret — a
+   * seeded key is recorded verbatim (`mock-key-project-<id>`) because it is
+   * public, anything else as a digest prefix (`_credential_label`,
+   * `deploy/mock-llm/server.py`). It NAMES the project whose catalogue
+   * credential resolved, which is what lets a reader tell its own stack's
+   * journal from another one's.
+   */
+  readonly credential?: string;
   /** The function names this request offered the model. */
   readonly tools: readonly string[];
   /**
@@ -2511,6 +2523,19 @@ export interface MockLlmJournalEntry {
    * Read by `chat.variables.spec.ts`.
    */
   readonly instructions: string;
+  /**
+   * The CONVERSATION this request carried, system prompt excluded — one
+   * `{role, text}` per message, each text truncated by the mock
+   * (`_history_digest`, `deploy/mock-llm/server.py`).
+   *
+   * The only observable for what the model was GIVEN, as opposed to what it
+   * was told to be. Two claims need it and nothing else can answer either:
+   * that a follow-up turn carries the earlier exchange (the reply is an echo
+   * of the LAST user message, so the answer never shows it), and that a
+   * sub-agent call does NOT carry the parent's `chat_history` — a statement
+   * about the absence of exactly these rows.
+   */
+  readonly history: readonly { readonly role: string; readonly text: string }[];
 }
 
 async function readMockJournal<T>(page: Page, url: string): Promise<readonly T[]> {
@@ -2546,9 +2571,27 @@ export async function clearMockToolJournal(page: Page): Promise<void> {
   await clearMockJournal(page, `${MOCK_HOST}/tool/__journal`);
 }
 
-/** The MODEL requests the mock has served, newest last. */
-export async function readMockLlmJournal(page: Page): Promise<readonly MockLlmJournalEntry[]> {
-  return readMockJournal<MockLlmJournalEntry>(page, `${MOCK_HOST}/__journal`);
+/**
+ * The MODEL requests the mock has served, newest last.
+ *
+ * PASS `projectId` whenever the caller is about to assert on traffic it
+ * believes this run produced. It then refuses a journal that holds no request
+ * for that project — which is what a read against ANOTHER stack's mock looks
+ * like, and the failure otherwise reads as an accusation against the product
+ * rather than against the invocation. See `scripts/lib/mock-journal-scope.mjs`
+ * for the three journeys that were misread this way.
+ *
+ * Omitting it keeps the previous behaviour exactly, for the readers that
+ * assert about absence or do not know a project.
+ */
+export async function readMockLlmJournal(
+  page: Page,
+  projectId?: string | number,
+): Promise<readonly MockLlmJournalEntry[]> {
+  const entries = await readMockJournal<MockLlmJournalEntry>(page, `${MOCK_HOST}/__journal`);
+  const failure = mockLlmJournalScopeFailure({ entries, projectId, host: MOCK_HOST });
+  if (failure !== undefined) throw new Error(failure);
+  return entries;
 }
 
 /** Empty the MODEL journal. */
@@ -3165,4 +3208,52 @@ export async function fillComposer(scope: Page | Locator, prompt: string) {
     await expect(sendButton).toBeEnabled({ timeout: 2_000 });
   }).toPass({ timeout: 30_000 });
   return sendButton;
+}
+
+/**
+ * `page.goto` for an `/app/*` route, retried when the SPA's OWN navigation
+ * aborts it.
+ *
+ * THE RACE, MEASURED (`--repeat-each=4 --workers=4`, journeys stack, webkit):
+ *
+ *   page.goto: Navigation to "/app/toolkits/all" is interrupted by another
+ *   navigation to "/app/toolkits/all/122"
+ *   page.goto: Frame load interrupted
+ *   page.goto: Navigation to "/app/toolkits/all/1" is interrupted by another
+ *   navigation to "/app/chat"
+ *
+ * Saving a toolkit routes the app to the new toolkit; landing on `/app/`
+ * routes it to the default screen. Both are correct product behaviour and
+ * both take a moment, so a `goto` issued while one is in flight is aborted by
+ * it — on webkit far more often than on chromium, which is why this reads as
+ * a cross-browser flake that retries away.
+ *
+ * WAITING IT OUT IS NOT ENOUGH, and that was the first attempt: the app
+ * navigates more than once (list, then detail), so a wait for "some /app
+ * route" returns on the first hop and the `goto` races the second. What is
+ * deterministic is the CONTRACT — "end up on this url" — and an interrupted
+ * `goto` means the app has just navigated, so the retry runs with the app
+ * already settled. Only the two interruption messages are retried; every
+ * other navigation failure is raised unchanged.
+ */
+export async function gotoAppRoute(
+  page: Page,
+  url: string,
+  options: { readonly waitUntil?: 'load' | 'domcontentloaded' | 'commit' } = {},
+): Promise<void> {
+  const attempts = 3;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await page.goto(url, options);
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const interrupted =
+        message.includes('interrupted by another navigation') || message.includes('Frame load interrupted');
+      if (!interrupted || attempt === attempts) throw error;
+      // The interrupting navigation is in flight; let it commit before asking
+      // for this one again.
+      await page.waitForLoadState('domcontentloaded').catch(() => {});
+    }
+  }
 }

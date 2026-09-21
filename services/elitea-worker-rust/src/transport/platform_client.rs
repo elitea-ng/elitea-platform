@@ -10,6 +10,8 @@ use std::sync::Arc;
 use crate::protocol::control::ClaimBoundRuntimeContextAuthority;
 
 use super::runtime_context::{
+    ArtifactDeleteOutcome, ArtifactDeleteRequest, ArtifactListOutcome, ArtifactListRequest,
+    ArtifactReadOutcome, ArtifactReadRequest, ArtifactWriteOutcome, ArtifactWriteRequest,
     ClaimScopedEliteaContext, ProjectContextWriteOutcome, ProjectContextWriteRequest,
     RuntimeApplicationVersion, RuntimeAttachmentObject, RuntimeContextClient, RuntimeContextError,
     SkillWriteOutcome, SkillWriteRequest,
@@ -109,6 +111,55 @@ impl PlatformClient {
     ) -> Result<ProjectContextWriteOutcome, RuntimeContextError> {
         self.runtime_context
             .write_project_context(authority, request)
+            .await
+    }
+
+    /// The `artifact` toolkit family's four operations (#906) — the artifact
+    /// read/write grants this facade's own header called for from the start.
+    ///
+    /// They are exactly as narrow as everything above: the authority stays
+    /// non-cloneable and separate, the project is main's to resolve from the
+    /// claim, the per-bucket access list is main's to apply to the claim's
+    /// actor, and this facade adds no scope of its own.
+    ///
+    /// A failure is NOT a failure of the turn. The family's tools turn every
+    /// error into a tool RESULT the model reads and can act on, the same rule
+    /// the builder writes follow.
+    pub(crate) async fn list_artifacts(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        request: &ArtifactListRequest,
+    ) -> Result<ArtifactListOutcome, RuntimeContextError> {
+        self.runtime_context
+            .list_artifacts(authority, request)
+            .await
+    }
+
+    pub(crate) async fn read_artifact(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        request: &ArtifactReadRequest,
+    ) -> Result<ArtifactReadOutcome, RuntimeContextError> {
+        self.runtime_context.read_artifact(authority, request).await
+    }
+
+    pub(crate) async fn write_artifact(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        request: &ArtifactWriteRequest,
+    ) -> Result<ArtifactWriteOutcome, RuntimeContextError> {
+        self.runtime_context
+            .write_artifact(authority, request)
+            .await
+    }
+
+    pub(crate) async fn delete_artifact(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        request: &ArtifactDeleteRequest,
+    ) -> Result<ArtifactDeleteOutcome, RuntimeContextError> {
+        self.runtime_context
+            .delete_artifact(authority, request)
             .await
     }
 }
