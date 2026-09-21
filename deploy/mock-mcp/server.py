@@ -72,6 +72,20 @@ KNOWN_PROTOCOL_VERSIONS = frozenset(
 # performs on every subsequent POST.
 SESSION_ID = "elitea-mock-mcp-session"
 
+# The authorization-demanding twin of `/mcp`. A toolkit pointed here gets a 401
+# with a `WWW-Authenticate` challenge on every request; a toolkit pointed at
+# `/mcp` is unaffected. See `_send_auth_challenge`.
+AUTH_PATH = "/mcp-auth"
+
+# The `resource_metadata` the challenge advertises. The worker parses it out of
+# the header and carries it in the delegated authorization requirement, so it
+# has to be a well-formed absolute URL on this server's own origin — a relative
+# or malformed value is dropped and the requirement loses the field.
+RESOURCE_METADATA_URL = os.environ.get(
+    "MOCK_MCP_RESOURCE_METADATA_URL",
+    "https://mcp-mock:8443/.well-known/oauth-protected-resource",
+)
+
 ECHO_TOOL = {
     "name": "echo",
     "description": (
@@ -188,7 +202,41 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Mcp-Session-Id", SESSION_ID)
         self.end_headers()
 
+    def _send_auth_challenge(self) -> None:
+        """Refuse with the 401 an OAuth-protected MCP server sends.
+
+        THE POINT OF THE PATH. `AUTH_PATH` is a SECOND endpoint on the same
+        server rather than a mode switch on `/mcp`, so a toolkit chooses the
+        behaviour by the URL it is configured with and no global state can
+        leak from one journey into another running beside it. `/mcp` keeps
+        answering exactly as it did.
+
+        THE HEADER IS THE CONTRACT, not the status. The worker's client reports
+        `is_authorization_required()` for a 401 carrying a `WWW-Authenticate`
+        challenge, and `toolkits/mcp.rs::authorization_required` then parses
+        `resource_metadata` out of that challenge to build the delegated
+        authorization requirement the agent surfaces — carrying the TOOLKIT
+        NAME. A bare 401 with no header is just a failed dial.
+        """
+        body = json.dumps(
+            {"error": "unauthorized", "error_description": "this MCP server requires authorization"}
+        ).encode("utf-8")
+        self.send_response(401)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header(
+            "WWW-Authenticate",
+            'Bearer realm="mock-mcp", '
+            f'resource_metadata="{RESOURCE_METADATA_URL}"',
+        )
+        self.end_headers()
+        self.wfile.write(body)
+        self.log_message("%s", "401 authorization required on " + AUTH_PATH)
+
     def do_GET(self) -> None:  # noqa: N802 - stdlib name
+        if self.path.split("?", 1)[0] == AUTH_PATH:
+            self._send_auth_challenge()
+            return
         if self.path.split("?", 1)[0] == "/healthz":
             self._send_json(200, {"ok": True})
             return
@@ -204,6 +252,13 @@ class Handler(BaseHTTPRequestHandler):
         self._send_empty(405)
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib name
+        if self.path.split("?", 1)[0] == AUTH_PATH:
+            # Refused BEFORE the body is read: an OAuth-protected server does
+            # not need to see the request to know the caller has no token, and
+            # answering at the same point for `initialize` and for a later call
+            # keeps the challenge independent of how far the session got.
+            self._send_auth_challenge()
+            return
         if self.path.split("?", 1)[0] != "/mcp":
             self._send_empty(404)
             return
