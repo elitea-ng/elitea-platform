@@ -2091,3 +2091,126 @@ INSERT INTO p_1.chat_participant_mapping (
 		t.Fatal(err)
 	}
 }
+
+// issue 980: an EDITED regeneration rewrites the question's stored text inside
+// the same transaction that resets the answer.
+//
+// Three claims, because three different things could go wrong and each looks
+// the same from the transcript: the text is really rewritten (not merely
+// accepted), the question's `updated_at` is stamped (so the row states when it
+// changed, the way #975 made the answer do), and an item that belongs to a
+// DIFFERENT question matches nothing — a client naming the wrong item must be
+// refused, never applied to whatever row the uuid happens to hit.
+func TestPostgresCurrentRegenerationRewritesTheEditedQuestion(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedCurrentAgentContinuationSchema(t, pool)
+
+	tx, err := pool.BeginTx(t.Context(), pgx.TxOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if err := tenant.BindProject(t.Context(), tx, tenant.Project{ID: 1}); err != nil {
+		t.Fatal(err)
+	}
+	queries := sqlcgen.New(tx)
+	// The one conversation this schema seeds (`seedCurrentAgentContinuationSchema`).
+	conversationID := mustCurrentPGUUID(t, "10000000-0000-4000-8000-000000000031")
+	questionID := "20000000-0000-4000-8000-000000000041"
+	responseID := "40000000-0000-4000-8000-000000000041"
+	insertPostgresCurrentApplicationTurn(
+		t, queries, conversationID, questionID,
+		"30000000-0000-4000-8000-000000000041", responseID,
+		"the original question", "execution-original",
+	)
+
+	readQuestion := func() (string, bool) {
+		t.Helper()
+		var content string
+		var stamped bool
+		if err := tx.QueryRow(t.Context(), `
+SELECT text_item.content, question.updated_at IS NOT NULL
+FROM chat_message_group AS question
+JOIN chat_message_items AS item ON item.message_group_id = question.id AND item.item_type = 'text_message'
+JOIN chat_messages_text AS text_item ON text_item.id = item.id
+WHERE question.uuid = $1`, mustCurrentPGUUID(t, questionID)).Scan(&content, &stamped); err != nil {
+			t.Fatal(err)
+		}
+		return content, stamped
+	}
+
+	if content, stamped := readQuestion(); content != "the original question" || stamped {
+		t.Fatalf("seeded question content=%q stamped=%v", content, stamped)
+	}
+
+	// The item the question really carries — the ordinary edit.
+	var itemUUID pgtype.UUID
+	if err := tx.QueryRow(t.Context(), `
+SELECT item.uuid
+FROM chat_message_group AS question
+JOIN chat_message_items AS item ON item.message_group_id = question.id AND item.item_type = 'text_message'
+WHERE question.uuid = $1`, mustCurrentPGUUID(t, questionID)).Scan(&itemUUID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := queries.RewriteCurrentAgentQuestionText(
+		t.Context(),
+		sqlcgen.RewriteCurrentAgentQuestionTextParams{
+			ConversationUuid: conversationID, QuestionID: mustCurrentPGUUID(t, questionID),
+			ActorUserID: 11, ItemUuid: itemUUID, Content: "the rewritten question",
+		},
+	); err != nil {
+		t.Fatalf("rewrite by item id: %v", err)
+	}
+	if content, stamped := readQuestion(); content != "the rewritten question" || !stamped {
+		t.Fatalf("after the rewrite content=%q stamped=%v", content, stamped)
+	}
+
+	// No item named: the question's own first text item is the target, which is
+	// the shape a question the browser is still holding produces.
+	zeroUUID := pgtype.UUID{Valid: true}
+	if _, err := queries.RewriteCurrentAgentQuestionText(
+		t.Context(),
+		sqlcgen.RewriteCurrentAgentQuestionTextParams{
+			ConversationUuid: conversationID, QuestionID: mustCurrentPGUUID(t, questionID),
+			ActorUserID: 11, ItemUuid: zeroUUID, Content: "rewritten without an item id",
+		},
+	); err != nil {
+		t.Fatalf("rewrite without an item id: %v", err)
+	}
+	if content, _ := readQuestion(); content != "rewritten without an item id" {
+		t.Fatalf("content=%q", content)
+	}
+
+	// An item id that is not this question's matches nothing, and the question
+	// is left exactly as it was. `pgx.ErrNoRows` is what the repository turns
+	// into the invalid-request error the route renders as 400.
+	foreignItem := mustCurrentPGUUID(t, "60000000-0000-4000-8000-000000000041")
+	if _, err := queries.RewriteCurrentAgentQuestionText(
+		t.Context(),
+		sqlcgen.RewriteCurrentAgentQuestionTextParams{
+			ConversationUuid: conversationID, QuestionID: mustCurrentPGUUID(t, questionID),
+			ActorUserID: 11, ItemUuid: foreignItem, Content: "must not be written",
+		},
+	); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("a foreign item must match nothing, got %v", err)
+	}
+	if content, _ := readQuestion(); content != "rewritten without an item id" {
+		t.Fatalf("a refused rewrite must leave the question alone, got %q", content)
+	}
+
+	// Another user cannot rewrite this question either — the same ownership
+	// gate the reset applies.
+	if _, err := queries.RewriteCurrentAgentQuestionText(
+		t.Context(),
+		sqlcgen.RewriteCurrentAgentQuestionTextParams{
+			ConversationUuid: conversationID, QuestionID: mustCurrentPGUUID(t, questionID),
+			ActorUserID: 12, ItemUuid: zeroUUID, Content: "must not be written",
+		},
+	); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("cross-user rewrite error=%v", err)
+	}
+	if content, _ := readQuestion(); content != "rewritten without an item id" {
+		t.Fatalf("content=%q", content)
+	}
+}

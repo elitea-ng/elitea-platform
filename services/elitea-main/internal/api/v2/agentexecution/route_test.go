@@ -462,26 +462,103 @@ func TestCurrentContinuationRouteRejectsAmbiguousParallelAndMCPResumeShapes(t *t
 	}
 }
 
-func TestCurrentRegenerationRouteRejectsEditedItemsBeforeUseCase(t *testing.T) {
+// issue 980: `updated_items` carries the EDITED question a regeneration runs
+// from. This route used to refuse every non-empty value outright, so pressing
+// "Save and apply" on a rewritten question collected a 422 for asking the
+// platform to do the thing the control exists to do.
+func TestCurrentRegenerationRouteAdmitsOneEditedQuestionItem(t *testing.T) {
 	useCase := &currentStartUseCaseStub{}
-	route := newCurrentStartRoute(t, useCase, currentStartPermissionResolverFunc(func(
+	route := newCurrentStartRoute(t, useCase, regenerationOnlyPermission())
+	body := strings.Replace(
+		validCurrentRegenerationBody(),
+		`"updated_items":[]`,
+		`"updated_items":[{"uuid":"1c0f6f4e-9f4a-4a61-9c9a-2fd3a4d7b0aa","content":"the rewritten question","item_type":"text_message"}]`,
+		1,
+	)
+	response := httptest.NewRecorder()
+	route.ServeHTTP(response, currentRegenerationRequest(body))
+	if response.Code != http.StatusOK || useCase.regenerationCalls != 1 {
+		t.Fatalf("status=%d calls=%d body=%s", response.Code, useCase.regenerationCalls, response.Body.String())
+	}
+	edit := useCase.regenerationRequest.EditedQuestion
+	if edit.Text != "the rewritten question" ||
+		edit.ItemUUID != "1c0f6f4e-9f4a-4a61-9c9a-2fd3a4d7b0aa" {
+		t.Fatalf("edit=%+v", edit)
+	}
+}
+
+// The item a question carries no stored row for — the ordinary shape of a
+// question the browser is still holding from the send that created it. The
+// edit is admitted with no item id, and the admission rewrites the question's
+// first text item.
+func TestCurrentRegenerationRouteAdmitsAnEditWithNoItemIdentity(t *testing.T) {
+	useCase := &currentStartUseCaseStub{}
+	route := newCurrentStartRoute(t, useCase, regenerationOnlyPermission())
+	body := strings.Replace(
+		validCurrentRegenerationBody(),
+		`"updated_items":[]`,
+		`"updated_items":[{"content":"the rewritten question","item_type":"text_message"}]`,
+		1,
+	)
+	response := httptest.NewRecorder()
+	route.ServeHTTP(response, currentRegenerationRequest(body))
+	if response.Code != http.StatusOK || useCase.regenerationCalls != 1 {
+		t.Fatalf("status=%d calls=%d body=%s", response.Code, useCase.regenerationCalls, response.Body.String())
+	}
+	edit := useCase.regenerationRequest.EditedQuestion
+	if edit.Text != "the rewritten question" || edit.ItemUUID != "" {
+		t.Fatalf("edit=%+v", edit)
+	}
+}
+
+// An ORDINARY retry still carries no edit, and the use case must be able to
+// tell the two apart — that distinction is what keeps a retry from asking the
+// admission to rewrite a question into the text it already holds.
+func TestCurrentRegenerationRouteLeavesARetryUnedited(t *testing.T) {
+	useCase := &currentStartUseCaseStub{}
+	route := newCurrentStartRoute(t, useCase, regenerationOnlyPermission())
+	response := httptest.NewRecorder()
+	route.ServeHTTP(response, currentRegenerationRequest(validCurrentRegenerationBody()))
+	if response.Code != http.StatusOK || useCase.regenerationCalls != 1 {
+		t.Fatalf("status=%d calls=%d body=%s", response.Code, useCase.regenerationCalls, response.Body.String())
+	}
+	if useCase.regenerationRequest.EditedQuestion.Requested() {
+		t.Fatalf("a retry must carry no edit: %+v", useCase.regenerationRequest.EditedQuestion)
+	}
+}
+
+// What is still refused, BEFORE the use case runs. Each of these is a body
+// this server cannot act on without guessing what the user meant.
+func TestCurrentRegenerationRouteRejectsMalformedEditsBeforeUseCase(t *testing.T) {
+	for name, items := range map[string]string{
+		"no item type":          `[{"uuid":"1c0f6f4e-9f4a-4a61-9c9a-2fd3a4d7b0aa","content":"edited"}]`,
+		"unknown item type":     `[{"content":"edited","item_type":"attachment_message"}]`,
+		"blank content":         `[{"content":"   ","item_type":"text_message"}]`,
+		"two items":             `[{"content":"a","item_type":"text_message"},{"content":"b","item_type":"text_message"}]`,
+		"item id is not a uuid": `[{"uuid":"item","content":"edited","item_type":"text_message"}]`,
+		"not an array":          `{"content":"edited","item_type":"text_message"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			useCase := &currentStartUseCaseStub{}
+			route := newCurrentStartRoute(t, useCase, regenerationOnlyPermission())
+			body := strings.Replace(validCurrentRegenerationBody(), `"updated_items":[]`, `"updated_items":`+items, 1)
+			response := httptest.NewRecorder()
+			route.ServeHTTP(response, currentRegenerationRequest(body))
+			if response.Code != http.StatusUnprocessableEntity || useCase.regenerationCalls != 0 {
+				t.Fatalf("status=%d calls=%d body=%s", response.Code, useCase.regenerationCalls, response.Body.String())
+			}
+		})
+	}
+}
+
+func regenerationOnlyPermission() currentStartPermissionResolverFunc {
+	return currentStartPermissionResolverFunc(func(
 		context.Context, auth.User, string, string,
 	) (auth.PermissionResolution, error) {
 		return auth.PermissionResolution{
 			UserID: 11, Permissions: []string{CurrentRegenerationPermission},
 		}, nil
-	}))
-	body := strings.Replace(
-		validCurrentRegenerationBody(),
-		`"updated_items":[]`,
-		`"updated_items":[{"uuid":"item","content":"edited"}]`,
-		1,
-	)
-	response := httptest.NewRecorder()
-	route.ServeHTTP(response, currentRegenerationRequest(body))
-	if response.Code != http.StatusUnprocessableEntity || useCase.regenerationCalls != 0 {
-		t.Fatalf("status=%d calls=%d body=%s", response.Code, useCase.regenerationCalls, response.Body.String())
-	}
+	})
 }
 
 func TestCurrentRegenerationRouteReportsFinalizingResponseAsRetryable(t *testing.T) {

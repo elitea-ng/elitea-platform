@@ -243,3 +243,42 @@ func mustMarshal(t *testing.T, value any) []byte {
 	require.NoError(t, err)
 	return raw
 }
+
+// An event that is NOT a chunk is not this decoder's business, whatever shape
+// the rest of its document has.
+//
+// The regression this pins: the chunk shape types `content` as a string, and
+// the decoder used to unmarshal the WHOLE document before looking at `type` —
+// so an ordinary `agent_index_data_status` event (content is an object) came
+// back as a malformed chunk and took the entire trace projection down with it.
+func TestDecodeToolOutputChunkIgnoresEventsThatAreNotChunks(t *testing.T) {
+	for name, raw := range map[string]string{
+		"object content": `{"type":"agent_index_data_status","stream_id":"s","content":{"state":"in_progress"},"response_metadata":{}}`,
+		"null content":   `{"type":"partial_message","stream_id":"s","content":null,"response_metadata":{}}`,
+		"array content":  `{"type":"agent_tool_start","stream_id":"s","content":[{"a":1}],"response_metadata":{}}`,
+		"no content":     `{"type":"agent_tool_end","stream_id":"s","response_metadata":{}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			chunk, ok, err := nodeevent.DecodeToolOutputChunk([]byte(raw))
+			if ok || err != nil {
+				t.Fatalf("chunk=%+v ok=%v err=%v", chunk, ok, err)
+			}
+		})
+	}
+}
+
+// A document that claims to BE a chunk and is malformed is still an error —
+// skipping it would reassemble a value with a hole in it.
+func TestDecodeToolOutputChunkStillRefusesAMalformedChunk(t *testing.T) {
+	for name, raw := range map[string]string{
+		"content is not a string": `{"type":"agent_tool_output_chunk","content":{"text":"x"},"response_metadata":{"tool_output_chunks":{"tool_call_id":"c","index":0,"total":1,"tool_output_sha256":"` + strings.Repeat("a", 64) + `"}}}`,
+		"no chunk metadata":       `{"type":"agent_tool_output_chunk","content":"x","response_metadata":{}}`,
+		"empty content":           `{"type":"agent_tool_output_chunk","content":"","response_metadata":{"tool_output_chunks":{"tool_call_id":"c","index":0,"total":1,"tool_output_sha256":"` + strings.Repeat("a", 64) + `"}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, ok, err := nodeevent.DecodeToolOutputChunk([]byte(raw)); ok || err == nil {
+				t.Fatalf("ok=%v err=%v", ok, err)
+			}
+		})
+	}
+}

@@ -108,3 +108,126 @@ func validCurrentRegenerationRequest() CurrentRegenerationRequest {
 		LLMSettings:            json.RawMessage(`{}`),
 	}
 }
+
+// issue 980: an EDITED regeneration runs from the rewritten question, and
+// carries that text into the admission transaction so the stored question and
+// the turn that answers it commit together.
+//
+// The two halves are asserted separately on purpose. The INPUT is what the
+// model is given; the TURN is what the database is told to write. A fix that
+// moved only the first would answer the new question and leave the transcript
+// showing the old one — which is the shape of the defect this closes.
+func TestCurrentApplicationRegenerationRunsFromTheEditedQuestion(t *testing.T) {
+	resolver := &currentApplicationResolverStub{
+		regenerationTarget: CurrentRegenerationTarget{
+			Kind:                CurrentRegenerationApplication,
+			ConversationUUID:    "8bc66e50-46c4-4e2c-94ec-daec6c596ac0",
+			TargetParticipantID: 21,
+			QuestionID:          "ee92ccbd-3312-4c72-b20b-fddf224e7c0e",
+			UserInput:           "authoritative original question",
+		},
+		target: CurrentApplicationTarget{
+			ApplicationID: 31, ApplicationVersionID: 41,
+			Variables: json.RawMessage(`[]`),
+			VersionDetails: json.RawMessage(`{
+  "id":41,"application_id":31,"agent_type":"agent","instructions":"Be concise",
+  "llm_settings":{"model_name":"test","model_project_id":7,"openai_compatible":false},
+  "meta":{},"tools":[]
+}`),
+			ChatHistory: json.RawMessage(`[]`),
+		},
+	}
+	admissions := &currentApplicationAdmissionStub{outcome: executionapp.AdmissionOutcome{
+		ExecutionID: "execution-edit", CommandID: "command-edit", Created: true,
+	}}
+	service, err := NewCurrentApplicationStartService(
+		resolver, resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{},
+		&currentApplicationVersionFreezerStub{}, admissions,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := validCurrentRegenerationRequest()
+	request.EditedQuestion = CurrentRegenerationEdit{
+		Text:     "the rewritten question",
+		ItemUUID: "1c0f6f4e-9f4a-4a61-9c9a-2fd3a4d7b0aa",
+	}
+
+	if _, err := service.RegenerateCurrentAgent(context.Background(), request); err != nil {
+		t.Fatalf("RegenerateCurrentAgent() error = %v", err)
+	}
+	if len(admissions.requests) != 1 {
+		t.Fatalf("admissions=%d", len(admissions.requests))
+	}
+	admission := admissions.requests[0]
+	if string(admission.Input.UserInput) != `"the rewritten question"` {
+		t.Fatalf("the turn must run from the EDITED text, got %s", admission.Input.UserInput)
+	}
+	turn := admission.CurrentRegenerateTurn
+	if turn == nil || turn.EditedQuestion.Text != "the rewritten question" ||
+		turn.EditedQuestion.ItemUUID != "1c0f6f4e-9f4a-4a61-9c9a-2fd3a4d7b0aa" {
+		t.Fatalf("the admission must carry the edit: %+v", turn)
+	}
+}
+
+// A retry is unchanged by all of this: no edit, and the stored question is
+// what the turn runs from.
+func TestCurrentApplicationRegenerationWithoutAnEditRunsFromTheStoredQuestion(t *testing.T) {
+	resolver := &currentApplicationResolverStub{
+		regenerationTarget: CurrentRegenerationTarget{
+			Kind:                CurrentRegenerationApplication,
+			ConversationUUID:    "8bc66e50-46c4-4e2c-94ec-daec6c596ac0",
+			TargetParticipantID: 21,
+			QuestionID:          "ee92ccbd-3312-4c72-b20b-fddf224e7c0e",
+			UserInput:           "authoritative original question",
+		},
+		target: CurrentApplicationTarget{
+			ApplicationID: 31, ApplicationVersionID: 41,
+			Variables: json.RawMessage(`[]`),
+			VersionDetails: json.RawMessage(`{
+  "id":41,"application_id":31,"agent_type":"agent","instructions":"Be concise",
+  "llm_settings":{"model_name":"test","model_project_id":7,"openai_compatible":false},
+  "meta":{},"tools":[]
+}`),
+			ChatHistory: json.RawMessage(`[]`),
+		},
+	}
+	admissions := &currentApplicationAdmissionStub{outcome: executionapp.AdmissionOutcome{
+		ExecutionID: "execution-retry", CommandID: "command-retry", Created: true,
+	}}
+	service, err := NewCurrentApplicationStartService(
+		resolver, resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{},
+		&currentApplicationVersionFreezerStub{}, admissions,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RegenerateCurrentAgent(context.Background(), validCurrentRegenerationRequest()); err != nil {
+		t.Fatalf("RegenerateCurrentAgent() error = %v", err)
+	}
+	admission := admissions.requests[0]
+	if string(admission.Input.UserInput) != `"authoritative original question"` ||
+		admission.CurrentRegenerateTurn.EditedQuestion.Requested() {
+		t.Fatalf("a retry must carry no edit: input=%s turn=%+v",
+			admission.Input.UserInput, admission.CurrentRegenerateTurn)
+	}
+}
+
+// A malformed edit is refused BEFORE the resolver is asked anything: an item
+// id with no text is not a rewrite of nothing, and text past the user-input
+// bound is not a question.
+func TestCurrentRegenerationRefusesAMalformedEdit(t *testing.T) {
+	for name, edit := range map[string]CurrentRegenerationEdit{
+		"item id with no text":  {ItemUUID: "1c0f6f4e-9f4a-4a61-9c9a-2fd3a4d7b0aa"},
+		"item id is not a uuid": {Text: "the rewritten question", ItemUUID: "item"},
+		"text past the bound":   {Text: string(make([]byte, maxCurrentAgentUserInputBytes+1))},
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := validCurrentRegenerationRequest()
+			request.EditedQuestion = edit
+			if err := request.Validate(); err == nil {
+				t.Fatalf("a malformed edit must be refused: %+v", edit)
+			}
+		})
+	}
+}

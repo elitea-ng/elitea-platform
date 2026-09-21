@@ -249,12 +249,26 @@ func EncodeToolOutputChunkMetadata(chunk ToolOutputChunk) (json.RawMessage, erro
 // chunk and is malformed IS an error: a consumer that skipped it would go on to
 // reassemble a value with a hole in it.
 func DecodeToolOutputChunk(browserData json.RawMessage) (ToolOutputChunk, bool, error) {
+	// THE TYPE FIRST, on its own. Every browser event reaches this function —
+	// the trace projector calls it on each one — and the chunk shape types
+	// `content` as a STRING, which an `agent_index_data_status` event (whose
+	// content is an object) does not satisfy. Decoding the full shape before
+	// the type check therefore reported a perfectly ordinary event as a
+	// MALFORMED CHUNK and failed the whole projection with it. The type is
+	// what decides whether the rest of the document is this function's
+	// business at all.
+	var probe struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(browserData, &probe); err != nil {
+		return ToolOutputChunk{}, false, ErrInvalidCurrentNodeEvent
+	}
+	if probe.Type != ToolOutputChunkEventType {
+		return ToolOutputChunk{}, false, nil
+	}
 	var event chunkEventJSON
 	if err := json.Unmarshal(browserData, &event); err != nil {
 		return ToolOutputChunk{}, false, ErrInvalidCurrentNodeEvent
-	}
-	if event.Type != ToolOutputChunkEventType {
-		return ToolOutputChunk{}, false, nil
 	}
 	var metadata chunkResponseMetadataJSON
 	if len(bytes.TrimSpace(event.ResponseMetadata)) == 0 ||

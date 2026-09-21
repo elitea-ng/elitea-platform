@@ -257,19 +257,15 @@ test('saving an edited question without changing it re-runs the turn', async ({ 
  * and `handleSubmitEditedMessage` returned silently. That half is fixed (issue
  * 980): the edit is dispatched now.
  *
- * WHAT IS LEFT IS SERVER-SIDE, and is why this case stays marked. The
- * regeneration contract refuses a non-empty `updated_items` outright
- * (`!emptyJSONArray(body.UpdatedItems)`, internal/api/v2/agentexecution/
- * route.go) and nothing on the server rewrites the stored question's text, so
- * an edited question 400s instead of re-running. Accepting the field, writing
- * the new text onto the question group inside the admission transaction, and
- * running the turn from it is a feature, not a wiring fix.
+ * THE SERVER HALF IS BUILT TOO (issue 980). The regeneration route used to
+ * refuse a non-empty `updated_items` outright; it now parses exactly one
+ * `text_message` entry, the turn RUNS from that text, and the admission
+ * transaction that resets the answer also rewrites the question's stored item
+ * (`RewriteCurrentAgentQuestionText`) and stamps its `updated_at`. An item id
+ * that is not that question's matches nothing and the request is refused —
+ * which is why this case asserts the STORE, not the bubble.
  */
 test('an edited question is stored as written and re-runs the turn', async ({ page }) => {
-  test.fail(
-    true,
-    'issue 980 (deferred half): the client now dispatches the edit, but the REGENERATION CONTRACT refuses it — `!emptyJSONArray(body.UpdatedItems)` in internal/api/v2/agentexecution/route.go answers 400 for any non-empty `updated_items`, and nothing on the server rewrites the stored question. Server-side feature, not a wiring bug.',
-  );
   test.setTimeout(480_000);
 
   const projectId = await readCallerPersonalProjectId(page.request);

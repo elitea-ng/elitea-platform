@@ -3540,6 +3540,94 @@ func (q *Queries) ResumeCurrentAgentOutputLimit(ctx context.Context, arg ResumeC
 	return i, err
 }
 
+const rewriteCurrentAgentQuestionText = `-- name: RewriteCurrentAgentQuestionText :one
+WITH resolved AS MATERIALIZED (
+    SELECT question.id
+    FROM chat_message_group AS question
+    JOIN chat_conversations AS conversation
+      ON conversation.id = question.conversation_id
+    JOIN chat_participants AS question_author
+      ON question_author.id = question.author_participant_id
+     AND question_author.entity_name = 'user'
+    WHERE conversation.uuid = $1::uuid
+      AND question.uuid = $2::uuid
+      AND (
+          conversation.author_id = $3::bigint
+          OR (question_author.entity_meta ->> 'id')::bigint = $3::bigint
+      )
+    FOR UPDATE OF question
+), target AS (
+    SELECT item.id
+    FROM chat_message_items AS item
+    JOIN resolved ON resolved.id = item.message_group_id
+    WHERE item.item_type = 'text_message'
+      AND (
+          $4::uuid = '00000000-0000-0000-0000-000000000000'::uuid
+          OR item.uuid = $4::uuid
+      )
+    ORDER BY item.order_index, item.id
+    LIMIT 1
+), rewritten AS (
+    UPDATE chat_messages_text AS text_item
+    SET content = $5::text
+    FROM target
+    WHERE text_item.id = target.id
+    RETURNING text_item.id
+), stamped AS (
+    UPDATE chat_message_group AS question
+    SET updated_at = clock_timestamp()
+    FROM resolved
+    WHERE question.id = resolved.id
+      AND (SELECT count(*) FROM rewritten) = 1
+    RETURNING question.id
+)
+SELECT rewritten.id AS question_item_id
+FROM rewritten
+`
+
+type RewriteCurrentAgentQuestionTextParams struct {
+	ConversationUuid pgtype.UUID `db:"conversation_uuid" json:"conversation_uuid"`
+	QuestionID       pgtype.UUID `db:"question_id" json:"question_id"`
+	ActorUserID      int64       `db:"actor_user_id" json:"actor_user_id"`
+	ItemUuid         pgtype.UUID `db:"item_uuid" json:"item_uuid"`
+	Content          string      `db:"content" json:"content"`
+}
+
+// Rewrite the text of a question that is being regenerated (issue 980), inside
+// the SAME admission transaction that resets its answer.
+//
+// WHY IT IS A SEPARATE STATEMENT rather than another CTE on
+// `ResetCurrentAgentResponse`: the reset is what every regeneration performs
+// and this is what only an EDITED one performs. Folding an optional write into
+// the statement that owns the mandatory one would make the ordinary retry pay
+// for — and be refusable by — a clause it never uses.
+//
+// The ownership gate is the reset's own, restated: the conversation must be
+// the one named, the question must be that conversation's, its author must be
+// a user, and the ACTOR must either own the conversation or be the question's
+// author. A caller that can regenerate a turn can rewrite the question it is
+// regenerating, and nothing else.
+//
+// WHICH ITEM. `item_uuid` is the item the browser is editing. When it names
+// one, that item must belong to THIS question group — a uuid from another
+// message matches nothing and the caller is refused rather than silently
+// rewriting the wrong row. When it is the zero uuid ("the message carries no
+// stored item", the ordinary shape of a question the browser is still holding
+// from the send that created it), the group's FIRST text item is rewritten,
+// which is the one `ListMessages` renders as the question.
+func (q *Queries) RewriteCurrentAgentQuestionText(ctx context.Context, arg RewriteCurrentAgentQuestionTextParams) (int32, error) {
+	row := q.db.QueryRow(ctx, rewriteCurrentAgentQuestionText,
+		arg.ConversationUuid,
+		arg.QuestionID,
+		arg.ActorUserID,
+		arg.ItemUuid,
+		arg.Content,
+	)
+	var question_item_id int32
+	err := row.Scan(&question_item_id)
+	return question_item_id, err
+}
+
 const updateCurrentAgentAttachmentContent = `-- name: UpdateCurrentAgentAttachmentContent :execrows
 UPDATE chat_messages_attachment AS attachment
 SET content = $1::json

@@ -67,6 +67,46 @@ type CurrentRegenerationRequest struct {
 	RegenerationID         string
 	RequestedParticipantID int64
 	LLMSettings            json.RawMessage
+	// EditedQuestion is the rewritten question this regeneration runs from
+	// (issue 980), or the zero value for the ordinary retry. Its presence is
+	// what makes a regeneration an EDIT: the turn runs from `Text` instead of
+	// the stored question, and the admission transaction writes that text onto
+	// the question row so the transcript and the run agree.
+	EditedQuestion CurrentRegenerationEdit
+}
+
+// CurrentRegenerationEdit is one rewritten question item, in the shape the
+// browser sends it (`updated_items`, one `text_message` entry).
+//
+// ItemUUID is OPTIONAL and is the item being edited. A question the browser is
+// still holding from the send that created it carries no stored item, so the
+// client cannot name one — the admission then rewrites the question's first
+// text item. When the client DOES name one, it must belong to the question
+// being regenerated; anything else is refused rather than applied to whatever
+// row the uuid happens to hit.
+type CurrentRegenerationEdit struct {
+	Text     string
+	ItemUUID string
+}
+
+// Requested is true when this regeneration carries a rewritten question.
+func (edit CurrentRegenerationEdit) Requested() bool { return edit.Text != "" }
+
+func (edit CurrentRegenerationEdit) Validate() error {
+	if !edit.Requested() {
+		// An absent edit is the ordinary retry. It must not carry an item id
+		// either: a uuid with no text is a malformed request, not a rewrite of
+		// nothing.
+		if edit.ItemUUID != "" {
+			return ErrInvalidCurrentAgentStart
+		}
+		return nil
+	}
+	if !validCurrentAgentText(edit.Text, maxCurrentAgentUserInputBytes) ||
+		(edit.ItemUUID != "" && !validUUID(edit.ItemUUID)) {
+		return ErrInvalidCurrentAgentStart
+	}
+	return nil
 }
 
 func (request CurrentRegenerationRequest) Validate() error {
@@ -77,7 +117,7 @@ func (request CurrentRegenerationRequest) Validate() error {
 		!validJSONObject(request.LLMSettings) {
 		return ErrInvalidCurrentAgentStart
 	}
-	return nil
+	return request.EditedQuestion.Validate()
 }
 
 // CurrentRegenerateTurn is the immutable current-schema replacement side of a
@@ -95,6 +135,11 @@ type CurrentRegenerateTurn struct {
 	QuestionID           string
 	ResponseMessageID    string
 	ExecutionGeneration  string
+	// EditedQuestion (issue 980) is written onto the question row by the same
+	// transaction that resets the answer, so an edited question and the run
+	// that answers it commit together or not at all. Zero for a retry, and the
+	// admission then touches no question text.
+	EditedQuestion CurrentRegenerationEdit
 }
 
 func (turn CurrentRegenerateTurn) Validate() error {
@@ -102,6 +147,9 @@ func (turn CurrentRegenerateTurn) Validate() error {
 		!validUUID(turn.ConversationUUID) || !validUUID(turn.QuestionID) ||
 		!validUUID(turn.ResponseMessageID) || !validUUID(turn.ExecutionGeneration) {
 		return ErrInvalidCurrentAgentStart
+	}
+	if err := turn.EditedQuestion.Validate(); err != nil {
+		return err
 	}
 	switch turn.Kind {
 	case CurrentRegenerationApplication:
@@ -201,6 +249,15 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 		TargetParticipantID: target.TargetParticipantID, Kind: target.Kind,
 		QuestionID: target.QuestionID, ResponseMessageID: request.ResponseMessageID,
 		ExecutionGeneration: request.RegenerationID,
+		EditedQuestion:      request.EditedQuestion,
+	}
+	// THE TEXT THE TURN RUNS FROM (issue 980). An edit answers the question as
+	// rewritten; a retry answers the question as stored. Taken here, once, so
+	// both arms of the switch below — application and adhoc — cannot come to
+	// disagree about which text this regeneration is about.
+	userInput := target.UserInput
+	if request.EditedQuestion.Requested() {
+		userInput = request.EditedQuestion.Text
 	}
 	suggestionPolicy := service.resolveNextInputSuggestionPolicy(
 		ctx,
@@ -222,7 +279,7 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 			ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
 			ConversationUUID:    target.ConversationUUID,
 			TargetParticipantID: target.TargetParticipantID,
-			QuestionID:          target.QuestionID, UserInput: target.UserInput,
+			QuestionID:          target.QuestionID, UserInput: userInput,
 		}
 		resolved, err := service.resolver.ResolveCurrentApplication(ctx, start)
 		if err != nil {
@@ -262,7 +319,7 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 			ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
 			ConversationUUID:    target.ConversationUUID,
 			TargetParticipantID: target.TargetParticipantID,
-			QuestionID:          target.QuestionID, UserInput: target.UserInput,
+			QuestionID:          target.QuestionID, UserInput: userInput,
 			LLMSettings: request.LLMSettings,
 		}
 		resolved, err := service.adhocResolver.ResolveCurrentAdhoc(ctx, start)

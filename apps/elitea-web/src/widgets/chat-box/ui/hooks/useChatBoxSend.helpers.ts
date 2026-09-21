@@ -136,13 +136,21 @@ export function buildRegenerateBody(params: {
   readonly participantId: number | undefined;
   readonly updatedItems?: readonly unknown[] | undefined;
 }): Record<string, unknown> | undefined {
-  if (params.question === '' || params.questionId === '' || params.responseMessageId === '') return undefined;
-  if ((params.updatedItems?.length ?? 0) > 0) return undefined;
+  // THE TEXT THIS REGENERATION RUNS FROM. An edited question runs from the
+  // text the user just typed, not from the question the transcript still
+  // holds (issue 980); a retry runs from the stored one. Reading it off the
+  // item rather than off `question` keeps the body's `user_input` and its
+  // `updated_items` describing the SAME question — the server validates the
+  // first and rewrites the second, so a mismatch would answer one question
+  // and store another.
+  const edited = editedQuestionText(params.updatedItems);
+  const userInput = edited ?? params.question;
+  if (userInput === '' || params.questionId === '' || params.responseMessageId === '') return undefined;
   const numericProjectID = Number(params.projectId);
   if (!Number.isFinite(numericProjectID)) return undefined;
   return {
     payload: {
-      user_input: params.question,
+      user_input: userInput,
       attachments_info: [],
       mcp_tokens: {},
       ...(!params.isApplicationTurn
@@ -162,8 +170,28 @@ export function buildRegenerateBody(params: {
     message_id: params.responseMessageId,
     stream_id: params.responseMessageId,
     regeneration_id: crypto.randomUUID(),
-    updated_items: [],
+    // The edit itself, in the shape the regenerate route parses (one
+    // `text_message` entry, its `uuid` only when the message carries a stored
+    // item). Empty for a retry, which is what every regeneration sent before
+    // the route learned to accept one.
+    updated_items: params.updatedItems ?? [],
   };
+}
+
+/**
+ * The text of the one `text_message` entry in `updated_items`, or `undefined`
+ * when this regeneration carries no edit.
+ *
+ * Narrow on purpose: the route admits exactly one such entry, so anything else
+ * here is a body this client should not be building.
+ */
+function editedQuestionText(updatedItems: readonly unknown[] | undefined): string | undefined {
+  if (updatedItems === undefined || updatedItems.length !== 1) return undefined;
+  const item = updatedItems[0];
+  if (typeof item !== 'object' || item === null) return undefined;
+  const record = item as { readonly item_type?: unknown; readonly content?: unknown };
+  if (record.item_type !== 'text_message' || typeof record.content !== 'string') return undefined;
+  return record.content.trim() === '' ? undefined : record.content;
 }
 
 export function adhocParticipants(input: {

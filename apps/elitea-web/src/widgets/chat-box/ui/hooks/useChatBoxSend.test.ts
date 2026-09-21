@@ -151,12 +151,49 @@ describe('buildRegenerateBody', () => {
     expect(Object.hasOwn((body?.['payload'] as object | undefined) ?? {}, 'llm_settings')).toBe(false);
   });
 
-  it('does not claim current-route support for edited message items', () => {
-    expect(buildRegenerateBody({
+  /* issue 980: an EDITED question regenerates through this same route. The body
+   * used to be refused here (`return undefined`) because the server refused the
+   * field; both ends accept it now, and the body must carry the edit AND run
+   * from it — `user_input` and `updated_items` describing two different
+   * questions would answer one and store the other. */
+  it('carries an edited question and runs from its text', () => {
+    const updatedItems = [
+      { uuid: '00000000-0000-4000-8000-00000000000a', content: 'the rewritten question', item_type: 'text_message' },
+    ];
+    const body = buildRegenerateBody({
       ...commonRegeneration,
-      isApplicationTurn: false,
-      participantId: undefined,
-      updatedItems: [{ content: 'edited' }],
-    })).toBeUndefined();
+      isApplicationTurn: true,
+      participantId: 42,
+      updatedItems,
+    });
+
+    expect(body).toMatchObject({
+      updated_items: updatedItems,
+      payload: { user_input: 'the rewritten question' },
+    });
+  });
+
+  it('runs a retry from the stored question, with no items', () => {
+    const body = buildRegenerateBody({
+      ...commonRegeneration,
+      isApplicationTurn: true,
+      participantId: 42,
+    });
+
+    expect(body).toMatchObject({ updated_items: [], payload: { user_input: 'try again' } });
+  });
+
+  /* A shape this client should not be building — the route admits exactly one
+   * `text_message` entry — falls back to the stored question rather than
+   * silently sending half an edit. */
+  it('ignores an items array it cannot read as one edited question', () => {
+    const body = buildRegenerateBody({
+      ...commonRegeneration,
+      isApplicationTurn: true,
+      participantId: 42,
+      updatedItems: [{ content: 'edited' }, { content: 'also edited' }],
+    });
+
+    expect(body).toMatchObject({ payload: { user_input: 'try again' } });
   });
 });
