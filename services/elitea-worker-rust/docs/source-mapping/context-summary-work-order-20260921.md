@@ -33,4 +33,18 @@ The response lists only the handoff task under open work and explicit next steps
 Approval remains an unresolved status, with no inferred request to obtain approval.
 This is one provider contract check, not complete repeated-compaction or browser acceptance.
 Nine structured-summary tests and the Rust formatting check pass.
-The contract change is not yet deployed.
+The contract change is deployed to rehearsal.
+
+## Deployed browser verification
+
+Worker image `sha256:a3303ba6acec197d923d049b14db6914e5331a4824653ed3474db9fb5cef5456` includes the fix.
+A fresh headed Playwright browser submits the synthetic history in chat 604 without intercepted requests.
+Execution `413364997198a4cc30bf51f7949e89c4` compacts 353,853 estimated input tokens to 875.
+The route has a 400,000 combined window, an 8,192 output reserve, and a 272,000 input ceiling.
+Luna uses its separately configured summary-model budget.
+
+The first answer reports `CEDAR-731`, `Teal`, `Archive verification complete`, and `Prepare the handoff note`.
+The answer remains identical after reload, and the browser reports no page errors.
+The context panel reports the compacted state and provider input ceiling.
+This verifies the observed work-order regression with real providers.
+It does not prove perfect summary quality for all histories or close the other gate 4 requirements.

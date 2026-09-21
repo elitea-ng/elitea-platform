@@ -107,6 +107,7 @@ These are part of gate 4 acceptance, not optional follow-up work after compactio
 
 The [checkpoint retention investigation](source-mapping/context-event-retention-20260921.md) separates active recovery markers from immutable replay evidence.
 Ordinary-event retention across repeated compactions remains open.
+The [summary work-order correction](source-mapping/context-summary-work-order-20260921.md) passes deployed compaction and fresh-browser reload in chat 604.
 
 The [2026-09-17 toolkit binding audit](source-mapping/toolkit-binding-drift-20260917.md)
 checks the newer SDK direct-tool fix. Rust already refuses cross-toolkit fallback;
