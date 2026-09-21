@@ -2511,6 +2511,19 @@ export interface MockLlmJournalEntry {
    * Read by `chat.variables.spec.ts`.
    */
   readonly instructions: string;
+  /**
+   * The CONVERSATION this request carried, system prompt excluded — one
+   * `{role, text}` per message, each text truncated by the mock
+   * (`_history_digest`, `deploy/mock-llm/server.py`).
+   *
+   * The only observable for what the model was GIVEN, as opposed to what it
+   * was told to be. Two claims need it and nothing else can answer either:
+   * that a follow-up turn carries the earlier exchange (the reply is an echo
+   * of the LAST user message, so the answer never shows it), and that a
+   * sub-agent call does NOT carry the parent's `chat_history` — a statement
+   * about the absence of exactly these rows.
+   */
+  readonly history: readonly { readonly role: string; readonly text: string }[];
 }
 
 async function readMockJournal<T>(page: Page, url: string): Promise<readonly T[]> {

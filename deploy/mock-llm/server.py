@@ -96,6 +96,7 @@ stops a tenant steering the gateway into the cluster.
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import json
 import math
@@ -361,6 +362,43 @@ def _system_text(messages: list[dict]) -> str:
         for message in messages or []
         if message.get("role") in ("system", "developer")
     ).strip()
+
+
+# The per-entry cap on one journaled history message. Long enough that a test
+# marker and the sentence around it survive, short enough that a conversation
+# with a large transcript cannot turn one journal entry into a megabyte — the
+# journal is held in memory and capped by COUNT, not by size.
+MAX_JOURNAL_HISTORY_TEXT = 512
+
+
+def _history_digest(messages: list[dict]) -> list[dict]:
+    """The CONVERSATION this request carried, minus the system prompt.
+
+    The journal already records the system text (`_system_text`) and the tool
+    names, and that was enough while every journey asserted about one turn. It
+    is not enough for the two claims that are about what the model was GIVEN:
+
+      * a follow-up turn must carry the earlier exchange, or the agent cannot
+        answer "what did you just tell me" — and the reply is an echo of the
+        LAST user message, so the answer text can never show it;
+      * a sub-agent call must NOT carry the parent's `chat_history`, which is a
+        statement about the absence of exactly these rows.
+
+    Neither is observable from the reply, the system prompt or the tool list,
+    so both were unassertable before this field existed.
+
+    Roles are kept verbatim and text is truncated per message rather than
+    dropped: a test asks "does the second request contain the first answer",
+    and a digest that hashed or elided the text could not answer it.
+    """
+    digest: list[dict] = []
+    for message in messages or []:
+        role = message.get("role")
+        if role in ("system", "developer"):
+            continue
+        text = _message_text(message)
+        digest.append({"role": role, "text": text[:MAX_JOURNAL_HISTORY_TEXT]})
+    return digest
 
 
 def _last_user_text(messages: list[dict]) -> str | None:
@@ -730,6 +768,114 @@ def _offered_tool_names(request: dict) -> list[str]:
     return names
 
 
+# ── VISION: the mock can SEE an image, deterministically ──────────────────────
+#
+# The reply everywhere else in this file is an echo of the last user message,
+# which says nothing about an IMAGE the request carried — so every case that
+# needs the model to look at a picture (read an artifact image, caption an ADO
+# attachment, tell JPEG from PNG) had no mock to run against and no lane short
+# of a real multimodal provider.
+#
+# What this adds is the smallest thing those cases actually assert: that the
+# bytes reached the model, WHICH bytes they were, and what format they are in.
+# The description is derived from the bytes — a short MD5 prefix and the format
+# read out of the magic number — so it is deterministic, attributable, and
+# REPEATABLE: the same image always produces the same sentence, which is what
+# makes a caching claim ("the second read did not ask the model again")
+# provable from the journal rather than from a screenshot.
+#
+# It is not a vision model and does not pretend to be. A case that needs real
+# perception ("does the chart show a downward trend") belongs in an env-gated
+# live lane, exactly as `e2e/live/README.md` prescribes.
+_IMAGE_SIGNATURES = (
+    (b"\x89PNG\r\n\x1a\n", "PNG"),
+    (b"\xff\xd8\xff", "JPEG"),
+    (b"GIF87a", "GIF"),
+    (b"GIF89a", "GIF"),
+    (b"II*\x00", "TIFF"),
+    (b"MM\x00*", "TIFF"),
+    (b"BM", "BMP"),
+)
+
+
+def _image_format(raw: bytes) -> str:
+    """The image's format, read from its magic number rather than its name.
+
+    A file extension is what a caller SAYS the bytes are; these cases are about
+    what they ARE (one of them renames a text file to `.png` on purpose), so the
+    answer has to come from the content.
+    """
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return "WEBP"
+    for signature, name in _IMAGE_SIGNATURES:
+        if raw.startswith(signature):
+            return name
+    return "UNKNOWN"
+
+
+def _decode_image_part(part: dict) -> bytes | None:
+    """The bytes of one multimodal image part, or None when it carries none.
+
+    Both shapes in the wild are accepted: OpenAI's `image_url` (a `data:` URL
+    or a remote one) and Anthropic's `source.data`. A remote URL is NOT
+    fetched — the mock has no egress and the tests that matter attach bytes.
+    """
+    if part.get("type") == "image_url":
+        url = part.get("image_url")
+        if isinstance(url, dict):
+            url = url.get("url")
+        if isinstance(url, str) and url.startswith("data:"):
+            _, _, payload = url.partition(",")
+            try:
+                return base64.b64decode(payload, validate=False)
+            except (ValueError, binascii.Error):
+                return b""
+        return b"" if isinstance(url, str) else None
+    if part.get("type") == "image":
+        source = part.get("source")
+        if isinstance(source, dict) and isinstance(source.get("data"), str):
+            try:
+                return base64.b64decode(source["data"], validate=False)
+            except (ValueError, binascii.Error):
+                return b""
+    return None
+
+
+def _request_images(messages: list[dict]) -> list[dict]:
+    """Every image this request carries, newest message last.
+
+    Returned as `{md5, format, bytes}` records — the journal keeps them so a
+    test can assert WHAT the model was shown and how often, which is the whole
+    of the caching and dedup claims.
+    """
+    images: list[dict] = []
+    for message in messages or []:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            raw = _decode_image_part(part)
+            if raw is None:
+                continue
+            images.append({
+                "md5": hashlib.md5(raw).hexdigest(),
+                "format": _image_format(raw),
+                "bytes": len(raw),
+            })
+    return images
+
+
+def _vision_reply(images: list[dict]) -> str:
+    """One sentence per image, derived from the bytes and nothing else."""
+    described = " ".join(
+        f"image {index + 1} is {image['format']} md5 {image['md5'][:12]} ({image['bytes']} bytes)"
+        for index, image in enumerate(images)
+    )
+    return f"{PREFIX} looked at {len(images)} image(s): {described}".strip()
+
+
 def _script_for(messages: list[dict]) -> _ChatScript:
     """Choose this request's behaviour from the prompt it carries.
 
@@ -788,6 +934,15 @@ def _script_for(messages: list[dict]) -> _ChatScript:
 
     if SLOW_MARKER in prompt:
         return _ChatScript(_slow_reply(prompt), None, SLOW_CHUNK_DELAY_SECONDS, "slow")
+
+    # AN IMAGE IN THE REQUEST ANSWERS ITSELF. No marker: the paths that carry
+    # one (an artifact read with `is_capture_image`, a chat attachment, a
+    # toolkit captioning an attachment) compose their own prompt and cannot be
+    # asked to add one. The echo would have answered about the surrounding
+    # text and said nothing about the picture.
+    images = _request_images(messages)
+    if images:
+        return _ChatScript(_vision_reply(images), None, CHUNK_DELAY_SECONDS, "vision")
 
     return _ChatScript(_reply_for(messages), None, CHUNK_DELAY_SECONDS, "echo")
 
@@ -1027,6 +1182,15 @@ class Handler(BaseHTTPRequestHandler):
             # The SYSTEM prompt this request carried, verbatim. Empty for
             # /v1/embeddings, which has no messages. See `_system_text`.
             "instructions": _system_text(request.get("messages") or []),
+            # THE CONVERSATION THIS REQUEST CARRIED (see `_history_digest`):
+            # what the model was GIVEN, as opposed to what it was told to be.
+            # Empty for /v1/embeddings, which has no messages.
+            "history": _history_digest(request.get("messages") or []),
+            # THE IMAGES THIS REQUEST CARRIED, by content digest. It is how a
+            # test proves the model was shown the picture at all, and — because
+            # the digest is of the BYTES — how it proves a cached description
+            # did NOT come back to the model a second time.
+            "images": _request_images(request.get("messages") or []),
             "at": time.time(),
         })
 
