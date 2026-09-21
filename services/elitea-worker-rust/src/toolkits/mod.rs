@@ -30,7 +30,7 @@ pub(crate) use materialize::{
 };
 pub(crate) use mcp::{
     AdkHttpMcpConnector, McpConnector, McpMaterializationError, McpMaterializationErrorCode,
-    materialize_mcp_toolsets_with_tokens_and_authorization,
+    materialize_mcp_toolsets_by_toolset, materialize_mcp_toolsets_with_tokens_and_authorization,
 };
 #[cfg(test)]
 pub(crate) use mcp::{RemoteMcpConfig, mcp_authorization_required_fixture};

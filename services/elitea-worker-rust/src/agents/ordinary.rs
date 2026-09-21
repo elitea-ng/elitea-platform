@@ -24,7 +24,7 @@ use super::runtime::{
     RedeemedOrdinaryNativeAssembly,
 };
 use super::sensitive_tools::{
-    SensitiveToolCatalog, policy_for_guardrails, sensitive_tools_for_kind,
+    SensitiveToolCatalog, policy_for_guardrails, sensitive_tools_for_kind_with_renames,
 };
 use super::session::{
     ApplicationRuntimeProjection, NativeSessionBackend, NativeToolExecutionMode,
@@ -33,14 +33,14 @@ use super::session::{
     assemble_direct_hitl_resume_with_sessions_and_applications,
     assemble_ordinary_native_with_sessions_and_runtime_catalogs,
 };
+use super::tool_namespacing::{RenamedTool, apply_tool_namespacing, plan_tool_namespacing};
 use crate::protocol::control::ClaimBoundRuntimeContextAuthority;
 use crate::state::SessionLimits;
 use crate::toolkits::{
     AdkHttpMcpConnector, AdmittedToolSnapshot, ArtifactToolAuthority, FrozenToolKind, McpConnector,
     McpMaterializationError, McpMaterializationErrorCode, ToolAdmissionPolicy,
     ToolsetMaterializationError, ToolsetMaterializationErrorCode,
-    materialize_configured_toolsets_with_artifact_authority,
-    materialize_mcp_toolsets_with_tokens_and_authorization,
+    materialize_configured_toolsets_with_artifact_authority, materialize_mcp_toolsets_by_toolset,
 };
 use crate::transport::model_facade::{
     BoundModelFacade, ModelAdapterKind, ModelFacade, ModelFacadeError, ModelInvocation,
@@ -218,7 +218,12 @@ impl OrdinaryNativeAgentAssembler {
         // reason — see `internal_tools::BuilderToolAuthority`.
         let artifact_authority =
             ArtifactToolAuthority::new(Arc::clone(&self.platform), Arc::clone(runtime_context));
-        let (mut toolsets, sensitive_tools, delegated_authorization) = materialize_direct_toolsets(
+        let DirectToolsets {
+            mut toolsets,
+            sensitive: sensitive_tools,
+            delegated_authorization,
+            renamed_tools,
+        } = materialize_direct_toolsets(
             tool_snapshot,
             self.mcp_connector.as_ref(),
             tool_policy,
@@ -284,7 +289,8 @@ impl OrdinaryNativeAgentAssembler {
                 application_runtime,
             )
             .with_internal_tools(internal_tools)
-            .with_skipped_application_children(skipped_applications),
+            .with_skipped_application_children(skipped_applications)
+            .with_renamed_tools(renamed_tools),
             fresh_execution_mode,
         ))
     }
@@ -419,21 +425,35 @@ fn assembly_span(assembly: &AuthorizedNativeAssembly<'_>, session_backend: &str)
     )
 }
 
+/// Everything one agent's configured and MCP toolkits contribute to the run.
+struct DirectToolsets {
+    toolsets: Vec<Arc<dyn adk_rust::Toolset>>,
+    sensitive: SensitiveToolCatalog,
+    delegated_authorization: crate::toolkits::DelegatedAuthorizationCatalog,
+    /// #983: the tools two toolsets both published, and what each is called
+    /// now. Empty for every agent with no collision.
+    renamed_tools: Vec<RenamedTool>,
+}
+
+/// Materialize the configured and MCP toolkits, then decide what the model is
+/// allowed to CALL each tool.
+///
+/// The naming pass sits between materialization and every catalog built from
+/// it, and that order is the whole point (#983). ADK hands the model one flat
+/// list of function names and refuses the invocation when two toolsets
+/// contribute the same one — after assembly has already reported success, as
+/// an anonymous `native_agent.event_failed`. Planning the exposed names first
+/// and building the sensitive-tool and delegated-authorization catalogs from
+/// THOSE names keeps the three in agreement; building either catalog from the
+/// published name would leave a renamed tool silently unguarded.
 async fn materialize_direct_toolsets(
     snapshot: &AdmittedToolSnapshot<'_>,
     connector: &dyn McpConnector,
     policy: &Arc<ToolAdmissionPolicy>,
     mcp_tokens: &serde_json::Map<String, serde_json::Value>,
     artifacts: &ArtifactToolAuthority,
-) -> Result<
-    (
-        Vec<Arc<dyn adk_rust::Toolset>>,
-        SensitiveToolCatalog,
-        crate::toolkits::DelegatedAuthorizationCatalog,
-    ),
-    NativeAgentAssemblyError,
-> {
-    let (mut toolsets, mut delegated_authorization) =
+) -> Result<DirectToolsets, NativeAgentAssemblyError> {
+    let (configured_toolsets, configured_authorization) =
         materialize_configured_toolsets_with_artifact_authority(
             snapshot,
             policy,
@@ -441,33 +461,62 @@ async fn materialize_direct_toolsets(
             Some(artifacts),
         )
         .map_err(tool_materialization_error)?;
-    let mut sensitive = sensitive_tools_for_kind(
+    let (mcp_toolsets, mcp_authorization) =
+        materialize_mcp_toolsets_by_toolset(snapshot, connector, policy, mcp_tokens)
+            .await
+            .map_err(|error| mcp_materialization_error(&error))?;
+
+    let configured_count = configured_toolsets.len();
+    let mut toolsets = configured_toolsets;
+    toolsets.extend(mcp_toolsets.iter().map(Arc::clone));
+    let plan = plan_tool_namespacing(&toolsets).await?;
+    if !plan.is_empty() {
+        tracing::warn!(
+            renamed = plan.renamed().len(),
+            "two toolsets published the same tool name; each is exposed under its own toolkit"
+        );
+    }
+    let total = toolsets.len();
+
+    let mut sensitive = sensitive_tools_for_kind_with_renames(
         snapshot,
         FrozenToolKind::Configured,
-        &toolsets,
+        &toolsets[..configured_count],
         policy.as_ref(),
+        plan.renames_slice(0, configured_count),
     )
     .await?;
-    let (mut mcp_toolsets, mcp_delegated_authorization) =
-        materialize_mcp_toolsets_with_tokens_and_authorization(
-            snapshot, connector, policy, mcp_tokens,
-        )
-        .await
-        .map_err(|error| mcp_materialization_error(&error))?;
-    delegated_authorization
-        .merge(mcp_delegated_authorization)
-        .map_err(|()| invalid_tool_authorization_catalog())?;
     sensitive.merge(
-        sensitive_tools_for_kind(
+        sensitive_tools_for_kind_with_renames(
             snapshot,
             FrozenToolKind::Mcp,
-            &mcp_toolsets,
+            &toolsets[configured_count..],
             policy.as_ref(),
+            plan.renames_slice(configured_count, total),
         )
         .await?,
     )?;
-    toolsets.append(&mut mcp_toolsets);
-    Ok((toolsets, sensitive, delegated_authorization))
+
+    let mut delegated_authorization = configured_authorization;
+    for (offset, catalog) in mcp_authorization.into_iter().enumerate() {
+        let renamed = match plan.renames_for(configured_count + offset) {
+            Some(renames) => catalog
+                .renamed(renames)
+                .map_err(|()| invalid_tool_authorization_catalog())?,
+            None => catalog,
+        };
+        delegated_authorization
+            .merge(renamed)
+            .map_err(|()| invalid_tool_authorization_catalog())?;
+    }
+
+    let renamed_tools = plan.renamed().to_vec();
+    Ok(DirectToolsets {
+        toolsets: apply_tool_namespacing(&plan, toolsets),
+        sensitive,
+        delegated_authorization,
+        renamed_tools,
+    })
 }
 
 fn invalid_tool_authorization_catalog() -> NativeAgentAssemblyError {

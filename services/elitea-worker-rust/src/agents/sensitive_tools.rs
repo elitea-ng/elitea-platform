@@ -136,17 +136,39 @@ pub(crate) async fn sensitive_tools_for_kind(
     toolsets: &[Arc<dyn Toolset>],
     policy: &ToolAdmissionPolicy,
 ) -> Result<SensitiveToolCatalog, NativeAgentAssemblyError> {
+    sensitive_tools_for_kind_with_renames(snapshot, kind, toolsets, policy, &[]).await
+}
+
+/// The same, told which tools this invocation EXPOSES under another name (#983).
+///
+/// The policy is keyed by the name the toolkit publishes; ADK's confirmation
+/// and the browser's projection are keyed by the name the model is offered.
+/// When a collision renamed one of them the two are no longer the same string,
+/// so a catalog built from the published name alone would silently stop
+/// guarding a sensitive tool the moment a second connection published its name
+/// — a security-relevant absence with no error anywhere. `renames` is
+/// positional with `toolsets` (empty means "nothing was renamed", which is
+/// every agent that did not collide).
+pub(crate) async fn sensitive_tools_for_kind_with_renames(
+    snapshot: &AdmittedToolSnapshot<'_>,
+    kind: FrozenToolKind,
+    toolsets: &[Arc<dyn Toolset>],
+    policy: &ToolAdmissionPolicy,
+    renames: &[BTreeMap<Box<str>, Box<str>>],
+) -> Result<SensitiveToolCatalog, NativeAgentAssemblyError> {
     let references = snapshot
         .iter()
         .filter(|reference| reference.kind() == kind)
         .collect::<Vec<_>>();
-    if references.len() != toolsets.len() {
+    if references.len() != toolsets.len()
+        || (!renames.is_empty() && renames.len() != toolsets.len())
+    {
         return Err(invalid_configuration());
     }
     let context: Arc<dyn ReadonlyContext> =
         Arc::new(SimpleToolContext::new("elitea_sensitive_policy"));
     let mut catalog = SensitiveToolCatalog::default();
-    for (reference, toolset) in references.into_iter().zip(toolsets) {
+    for (index, (reference, toolset)) in references.into_iter().zip(toolsets).enumerate() {
         let tools = tokio::time::timeout(
             TOOL_ENUMERATION_TIMEOUT,
             toolset.tools(Arc::clone(&context)),
@@ -163,10 +185,14 @@ pub(crate) async fn sensitive_tools_for_kind(
             else {
                 continue;
             };
+            let exposed = renames
+                .get(index)
+                .and_then(|map| map.get(tool.name()))
+                .map_or(tool.name(), AsRef::as_ref);
             if catalog
                 .entries
                 .insert(
-                    tool.name().into(),
+                    exposed.into(),
                     SensitiveToolEntry {
                         policy: sensitive,
                         read_only: tool.is_read_only(),

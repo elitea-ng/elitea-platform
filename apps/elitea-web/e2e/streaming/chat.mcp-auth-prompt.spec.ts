@@ -81,7 +81,9 @@
  * the requirement onto it, and the projector renders an authorization prompt
  * that NAMES the challenging connection and not the other one.
  *
- * RUST leg: `toolkits/mcp.rs` is the native runtime's family.
+ * RUST leg: `toolkits/mcp.rs` is the native runtime's family. The gate inside
+ * the test says why the python leg is still skipped, and — since the trust
+ * bundle landed — why that reason is no longer the one it used to be.
  */
 import { expect, test, type Page } from '@playwright/test';
 
@@ -163,30 +165,35 @@ async function turnText(page: Page, projectId: string, conversationId: string): 
  * re-driven four times.
  */
 test('an MCP server that demands authorization is named by its toolkit in the agent’s message', async ({ page }) => {
-  // THE SAME GATE `chat.mcp.spec.ts` CARRIES, for the same reason.
+  // STILL NATIVE-ONLY — but for a DIFFERENT reason than the one this gate
+  // originally carried, and the swap is the whole point of writing it down.
   //
-  // The mcp-mock trust bundle is wired onto the NATIVE worker only
-  // (`deploy/docker-compose.standalone-rust-agent.yml` sets `SSL_CERT_FILE` to
-  // `/run/elitea-mcp-trust/mcp-mock-ca-bundle.pem`). The python worker's
-  // `SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE` are pinned to the runtime CA alone
-  // (`docker-compose.standalone-full.yml`), and a bundle REPLACES the trust
-  // store rather than adding to it — so on the python leg the worker cannot
-  // complete a TLS handshake with mcp-mock at all.
+  // THE OLD REASON (retired). The mcp-mock trust bundle was wired onto the
+  // NATIVE worker only, while the python worker's
+  // `SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE` held the runtime CA alone — and a
+  // bundle REPLACES the trust store rather than adding to it, so the python
+  // worker could not complete a TLS handshake with mcp-mock at all
+  // (`mcp_adapter.py _preflight_auth_check` → `ClientConnectorCertificateError`).
+  // `docker-compose.standalone-full.yml`'s `worker-trust` one-shot now builds
+  // that worker a runtime-CA + mcp-mock-CA bundle, and the python leg does
+  // reach the server: measured on a python-leg stack, mcp-mock logs
+  // `POST /mcp-auth HTTP/1.1" 401` and `401 authorization required on
+  // /mcp-auth` for this case's own connection. `chat.mcp.spec.ts`'s discovery
+  // case is un-gated as a result and passes on both legs.
   //
-  // MEASURED on a python-leg standalone stack, before any authorization is
-  // reached: `mcp_adapter.py:345 _preflight_auth_check` →
-  // `ClientConnectorCertificateError: … self-signed certificate in certificate
-  // chain`, and the toolkit then has no tools. The turn therefore answers with
-  // a plain echo and names nothing — which is NOT the product gap this case is
-  // about, and `test.fail` would have recorded it as one and gone green for a
-  // certificate error.
-  //
-  // A skip rather than a silent pass: wiring the python worker a bundle of
-  // public roots + runtime CA + the mock's CA would let this leg run, and is
-  // the change that would retire this gate for both MCP specs at once.
+  // THE REASON IT IS STILL GATED. Reaching the challenge is not answering it.
+  // On the python leg the challenged toolkit contributes NO tools — the SDK
+  // has no equivalent of the native runtime's `McpAuthorizationRequiredTool`
+  // placeholder, so there is nothing for the turn to pause on. MEASURED with
+  // the bundle in place: the turn completes with
+  // `MOCK: tool echo said Tool 'echo' not available`, `is_error:false`, and
+  // names no connection at all. That is the SDK's own contract, not the
+  // product gap #982 closed in the native runtime; asserting it here would
+  // record a runtime-shaped difference as a platform defect. If the SDK grows
+  // the placeholder, delete this skip — the assertions below need no change.
   test.skip(
     !IS_NATIVE_RUNTIME,
-    'the mcp-mock trust bundle is wired onto the native worker only — see the note above this line',
+    'the SDK leg reaches the 401 but installs no authorization placeholder — see the note above',
   );
   test.setTimeout(420_000);
 

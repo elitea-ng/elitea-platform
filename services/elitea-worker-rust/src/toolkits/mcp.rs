@@ -287,6 +287,32 @@ pub(crate) async fn materialize_mcp_toolsets_with_tokens_and_authorization(
     policy: &Arc<ToolAdmissionPolicy>,
     mcp_tokens: &Map<String, Value>,
 ) -> Result<(Vec<Arc<dyn Toolset>>, DelegatedAuthorizationCatalog), McpMaterializationError> {
+    let (toolsets, per_toolset) =
+        materialize_mcp_toolsets_by_toolset(snapshot, connector, policy, mcp_tokens).await?;
+    let mut authorization = DelegatedAuthorizationCatalog::default();
+    for catalog in per_toolset {
+        authorization
+            .merge(catalog)
+            .map_err(|()| invalid_configuration())?;
+    }
+    Ok((toolsets, authorization))
+}
+
+/// The same materialization, with the authorization requirements kept SPLIT
+/// per toolset instead of merged into one catalog.
+///
+/// #983 renames a tool name two toolsets both publish, and the rename is
+/// per-toolset by construction. A catalog already merged across servers has
+/// lost which server each key came from, so the rename could not be applied
+/// to it without guessing. The ordinary agent path therefore takes the split
+/// form, renames each half, and merges afterwards; every other caller keeps
+/// the merged shape it already had.
+pub(crate) async fn materialize_mcp_toolsets_by_toolset(
+    snapshot: &AdmittedToolSnapshot<'_>,
+    connector: &dyn McpConnector,
+    policy: &Arc<ToolAdmissionPolicy>,
+    mcp_tokens: &Map<String, Value>,
+) -> Result<(Vec<Arc<dyn Toolset>>, Vec<DelegatedAuthorizationCatalog>), McpMaterializationError> {
     let references = snapshot
         .iter()
         .filter(|reference| reference.kind() == FrozenToolKind::Mcp)
@@ -296,8 +322,9 @@ pub(crate) async fn materialize_mcp_toolsets_with_tokens_and_authorization(
     }
 
     let mut toolsets = Vec::with_capacity(references.len());
-    let mut authorization = DelegatedAuthorizationCatalog::default();
+    let mut per_toolset = Vec::with_capacity(references.len());
     for reference in references {
+        let mut authorization = DelegatedAuthorizationCatalog::default();
         let config = RemoteMcpConfig::parse(reference, mcp_tokens)?;
         let discovered = match connector.connect(&config).await {
             Ok(discovered) => discovered,
@@ -341,6 +368,7 @@ pub(crate) async fn materialize_mcp_toolsets_with_tokens_and_authorization(
                     }
                 })?;
                 toolsets.push(Arc::new(admitted) as Arc<dyn Toolset>);
+                per_toolset.push(authorization);
                 continue;
             }
             Err(error) => return Err(error),
@@ -377,8 +405,9 @@ pub(crate) async fn materialize_mcp_toolsets_with_tokens_and_authorization(
             }
         })?;
         toolsets.push(Arc::new(admitted) as Arc<dyn Toolset>);
+        per_toolset.push(authorization);
     }
-    Ok((toolsets, authorization))
+    Ok((toolsets, per_toolset))
 }
 
 fn select_tools(

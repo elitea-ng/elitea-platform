@@ -48,6 +48,28 @@ impl DelegatedAuthorizationCatalog {
         }
     }
 
+    /// Re-key every entry this invocation exposes under another function name.
+    ///
+    /// #983 renames a tool two toolsets both publish. This catalog is keyed by
+    /// the model-visible function name — `require_tool_confirmation` and the
+    /// projector both look it up by that string — so a catalog left keyed by
+    /// the PUBLISHED name after a rename would stop pausing on an MCP tool
+    /// whose server demanded authorization, with no error anywhere. `renames`
+    /// is one toolset's map; an empty one returns the catalog unchanged.
+    pub(crate) fn renamed(self, renames: &BTreeMap<Box<str>, Box<str>>) -> Result<Self, ()> {
+        if renames.is_empty() {
+            return Ok(self);
+        }
+        let mut exposed = Self::default();
+        for (name, requirement) in self.requirements {
+            let name = renames
+                .get(name.as_str())
+                .map_or(name.as_str(), AsRef::as_ref);
+            exposed.insert(name, requirement)?;
+        }
+        Ok(exposed)
+    }
+
     pub(crate) fn requirement_for(
         &self,
         tool_name: &str,
