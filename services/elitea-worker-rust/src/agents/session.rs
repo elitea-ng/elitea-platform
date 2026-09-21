@@ -33,7 +33,8 @@ use sqlx::PgPool;
 
 use super::application_tools::{
     ApplicationEventReceiver, ApplicationEventStreamingAgent, ApplicationResumeCoordinator,
-    install_nested_application_resume, prepare_nested_application_resume,
+    SkippedApplicationChild, install_nested_application_resume, prepare_nested_application_resume,
+    skipped_application_children_notice_text,
 };
 use super::assembly::OrdinaryNoToolProfile;
 use super::attachments;
@@ -193,6 +194,10 @@ pub(crate) struct OrdinaryRuntimeBindings {
     sensitive_tools: SensitiveToolCatalog,
     delegated_authorization: DelegatedAuthorizationCatalog,
     internal_tools: InternalToolCatalog,
+    /// Attached application children this worker cannot build (#973). They
+    /// bind no tool and are named in the session's opening notice, beside the
+    /// skipped internal tools.
+    skipped_application_children: Vec<SkippedApplicationChild>,
     application_runtime: ApplicationRuntimeProjection,
 }
 
@@ -209,6 +214,7 @@ impl OrdinaryRuntimeBindings {
             sensitive_tools,
             delegated_authorization,
             internal_tools: InternalToolCatalog::empty(),
+            skipped_application_children: Vec::new(),
             application_runtime,
         }
     }
@@ -216,6 +222,15 @@ impl OrdinaryRuntimeBindings {
     #[must_use]
     pub(crate) const fn with_internal_tools(mut self, internal_tools: InternalToolCatalog) -> Self {
         self.internal_tools = internal_tools;
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn with_skipped_application_children(
+        mut self,
+        skipped: Vec<SkippedApplicationChild>,
+    ) -> Self {
+        self.skipped_application_children = skipped;
         self
     }
 
@@ -1461,12 +1476,14 @@ where
     if parallel && runtime.has_confirmation_guards() {
         return Err(invalid_configuration());
     }
-    // Copied out before `runtime` moves into `build_runtime_agent` below —
-    // `InternalToolCatalog` is `Copy` for exactly this (see its own doc
-    // comment). #866: this is what lets a skipped internal tool become a
-    // notice IN THE RUN, not only the `agent_internal_tool_skipped` log line
-    // `InternalToolCatalog::from_values` already writes.
+    // Both copied out before `runtime` moves into `build_runtime_agent` below
+    // — `InternalToolCatalog` is `Copy` for exactly this (see its own doc
+    // comment), and the skipped-child list is a handful of short strings.
+    // #866/#973: this is what lets a skipped internal tool, or an attached
+    // child this worker cannot build, become a notice IN THE RUN rather than
+    // only a log line no user reads.
     let internal_tools = runtime.internal_tools;
+    let skipped = runtime.skipped_application_children.clone();
     let (agent, projector) = build_runtime_agent(
         model.adk_model(),
         generation_config,
@@ -1491,12 +1508,12 @@ where
             definition_digest,
         )
         .await?;
-        // #866: a fresh session is exactly where `seed_frozen_history` seeds
-        // the frozen prior transcript, so it is also the one place to seed
-        // ONE notice per skipped internal tool without repeating it on every
-        // later turn of the same conversation — the same "once, at session
-        // creation" shape the frozen-history seed itself uses.
-        seed_skipped_internal_tools_notice(sessions.as_ref(), &identity, internal_tools).await?;
+        // #866/#973: a fresh session is exactly where `seed_frozen_history`
+        // seeds the frozen prior transcript, so it is also the one place to
+        // seed the "could not honour" notices once, without repeating them on
+        // every later turn of the same conversation — the same "once, at
+        // session creation" shape the frozen-history seed itself uses.
+        seed_fresh_session_notices(sessions.as_ref(), &identity, internal_tools, &skipped).await?;
     }
     tracing::Span::current().record(
         "session_bootstrap",
@@ -1556,6 +1573,8 @@ fn build_runtime_agent(
         sensitive_tools,
         delegated_authorization,
         internal_tools,
+        // Reported by the session seed, never by the agent graph (#973).
+        skipped_application_children: _,
         application_runtime,
     } = runtime;
     let mut builder = LlmAgentBuilder::new(ROOT_AGENT_NAME)
@@ -1707,6 +1726,8 @@ async fn prepare_direct_resume(
         sensitive_tools,
         delegated_authorization,
         internal_tools,
+        // Reported by the session seed, never by the agent graph (#973).
+        skipped_application_children: _,
         application_runtime,
     } = runtime;
     let resolved = match start {
@@ -1983,6 +2004,51 @@ async fn seed_skipped_internal_tools_notice(
         return Ok(());
     };
     let mut event = Event::new("elitea-skipped-internal-tools");
+    "system".clone_into(&mut event.author);
+    event.set_content(Content {
+        role: "tool".to_owned(),
+        parts: vec![adk_rust::Part::Text { text: notice }],
+    });
+    sessions
+        .append_event_for_identity(AppendEventRequest {
+            identity: identity.clone(),
+            event,
+        })
+        .await
+        .map_err(|_| dependency_unavailable())
+}
+
+/// The two "what this run could not honour" notices, seeded together at the
+/// one point a session is created — see each of them for what it reports and
+/// why. They are one call so the caller keeps saying `if created { seed … }`
+/// once rather than growing a list.
+async fn seed_fresh_session_notices(
+    sessions: &dyn SessionService,
+    identity: &AdkIdentity,
+    internal_tools: InternalToolCatalog,
+    skipped_application_children: &[SkippedApplicationChild],
+) -> Result<(), NativeAgentAssemblyError> {
+    seed_skipped_internal_tools_notice(sessions, identity, internal_tools).await?;
+    seed_skipped_application_children_notice(sessions, identity, skipped_application_children).await
+}
+
+/// #973: append ONE role-`"tool"` event naming every attached application
+/// child this worker skipped, in the same place and the same shape
+/// `seed_skipped_internal_tools_notice` uses one function up — see its comment
+/// for why the role is `"tool"` and why a synthesized call/response pair would
+/// be worse.
+///
+/// A no-op when nothing was skipped, which is every run that attaches only
+/// agents.
+async fn seed_skipped_application_children_notice(
+    sessions: &dyn SessionService,
+    identity: &AdkIdentity,
+    skipped: &[SkippedApplicationChild],
+) -> Result<(), NativeAgentAssemblyError> {
+    let Some(notice) = skipped_application_children_notice_text(skipped) else {
+        return Ok(());
+    };
+    let mut event = Event::new("elitea-skipped-application-children");
     "system".clone_into(&mut event.author);
     event.set_content(Content {
         role: "tool".to_owned(),

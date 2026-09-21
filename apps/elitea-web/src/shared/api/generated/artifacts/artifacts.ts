@@ -2534,6 +2534,251 @@ export function useDeleteObject<
   return withQueryKey(query, queryOptions.queryKey);
 }
 
+export type downloadArtifactByPathResponse200 = {
+  data: Blob;
+  status: 200;
+};
+
+export type downloadArtifactByPathResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type downloadArtifactByPathResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type downloadArtifactByPathResponse404 = {
+  data: Error;
+  status: 404;
+};
+
+export type downloadArtifactByPathResponseSuccess =
+  downloadArtifactByPathResponse200 & {
+    headers: Headers;
+  };
+export type downloadArtifactByPathResponseError = (
+  | downloadArtifactByPathResponse401
+  | downloadArtifactByPathResponse403
+  | downloadArtifactByPathResponse404
+) & {
+  headers: Headers;
+};
+
+export type downloadArtifactByPathResponse =
+  downloadArtifactByPathResponseSuccess | downloadArtifactByPathResponseError;
+
+export const getDownloadArtifactByPathUrl = (
+  projectID: number,
+  bucket: string,
+  key: string,
+) => {
+  return `/artifacts/artifact/default/${projectID}/${bucket}/${key}`;
+};
+
+/**
+ * Alias of `downloadObject` on the URL the SDK's `download_artifact` builds. Same `view` permission, same per-bucket access list, same raw body — the SDK returns the response content as the file's bytes.
+ * @summary Download an object by the SDK's artifact filepath
+ */
+export const downloadArtifactByPath = async (
+  projectID: number,
+  bucket: string,
+  key: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<downloadArtifactByPathResponse> => {
+  return eliteaFetch<downloadArtifactByPathResponse>(
+    getDownloadArtifactByPathUrl(projectID, bucket, key),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getDownloadArtifactByPathQueryKey = (
+  projectID: number,
+  bucket: string,
+  key: string,
+) => {
+  return [`/artifacts/artifact/default/${projectID}/${bucket}/${key}`] as const;
+};
+
+export const getDownloadArtifactByPathQueryOptions = <
+  TData = Awaited<ReturnType<typeof downloadArtifactByPath>>,
+  TError = N401Response | N403Response | Error,
+>(
+  projectID: number,
+  bucket: string,
+  key: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof downloadArtifactByPath>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getDownloadArtifactByPathQueryKey(projectID, bucket, key);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof downloadArtifactByPath>>
+  > = ({ signal }) =>
+    downloadArtifactByPath(projectID, bucket, key, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectID !== null &&
+      projectID !== undefined &&
+      bucket !== null &&
+      bucket !== undefined &&
+      key !== null &&
+      key !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof downloadArtifactByPath>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DownloadArtifactByPathQueryResult = NonNullable<
+  Awaited<ReturnType<typeof downloadArtifactByPath>>
+>;
+export type DownloadArtifactByPathQueryError =
+  N401Response | N403Response | Error;
+
+export function useDownloadArtifactByPath<
+  TData = Awaited<ReturnType<typeof downloadArtifactByPath>>,
+  TError = N401Response | N403Response | Error,
+>(
+  projectID: number,
+  bucket: string,
+  key: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof downloadArtifactByPath>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof downloadArtifactByPath>>,
+          TError,
+          Awaited<ReturnType<typeof downloadArtifactByPath>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDownloadArtifactByPath<
+  TData = Awaited<ReturnType<typeof downloadArtifactByPath>>,
+  TError = N401Response | N403Response | Error,
+>(
+  projectID: number,
+  bucket: string,
+  key: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof downloadArtifactByPath>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof downloadArtifactByPath>>,
+          TError,
+          Awaited<ReturnType<typeof downloadArtifactByPath>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDownloadArtifactByPath<
+  TData = Awaited<ReturnType<typeof downloadArtifactByPath>>,
+  TError = N401Response | N403Response | Error,
+>(
+  projectID: number,
+  bucket: string,
+  key: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof downloadArtifactByPath>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Download an object by the SDK's artifact filepath
+ */
+
+export function useDownloadArtifactByPath<
+  TData = Awaited<ReturnType<typeof downloadArtifactByPath>>,
+  TError = N401Response | N403Response | Error,
+>(
+  projectID: number,
+  bucket: string,
+  key: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof downloadArtifactByPath>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDownloadArtifactByPathQueryOptions(
+    projectID,
+    bucket,
+    key,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
 export type createTransferGrantResponse200 = {
   data: TransferGrantResponse;
   status: 200;

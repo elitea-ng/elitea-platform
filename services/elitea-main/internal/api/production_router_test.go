@@ -1806,6 +1806,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/admin/user_project_permissions/administration",
 		"GET /api/v2/admin/users/administration/{projectID}",
 		"GET /api/v2/admin/users/{mode}/{projectID}",
+		"GET /api/v2/artifacts/artifact/default/{projectID}/{bucket}/*",
 		"GET /api/v2/artifacts/bucket_permissions/{projectID}",
 		"GET /api/v2/artifacts/buckets/{projectID}",
 		"GET /api/v2/artifacts/buckets/{projectID}/{bucket}",

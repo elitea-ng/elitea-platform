@@ -52,6 +52,13 @@ func TestArtifactStubRoutesReturn501WithTypedEnvelope(t *testing.T) {
 		{http.MethodGet, "/api/v2/artifacts/objects/1/reports/a/b/c.png", artifactPermissionView},
 		{http.MethodHead, "/api/v2/artifacts/objects/1/reports/a/b/c.png", artifactPermissionView},
 		{http.MethodDelete, "/api/v2/artifacts/objects/1/reports/a/b/c.png", artifactPermissionDelete},
+		// The SDK's by-filepath alias of the object download (#978). Listed
+		// here rather than in a file of its own because the one thing that
+		// can go wrong with an alias is that it resolves somewhere else:
+		// a missing registration answers 404 and a mis-tiered one 403, and
+		// both are indistinguishable from the absent route the SDK used to
+		// meet.
+		{http.MethodGet, "/api/v2/artifacts/artifact/default/1/reports/a/b/c.png", artifactPermissionView},
 		{http.MethodPost, "/api/v2/artifacts/grants/1/reports", artifactPermissionCreate},
 		{http.MethodPost, "/api/v2/artifacts/grants/1/abc123:commit", artifactPermissionCreate},
 	}
@@ -236,6 +243,7 @@ func TestArtifactObjectRoutesWireToRealHandlerWhenConfigured(t *testing.T) {
 		{http.MethodGet, "/api/v2/artifacts/objects/1/reports/a/b/c.png"},
 		{http.MethodHead, "/api/v2/artifacts/objects/1/reports/a/b/c.png"},
 		{http.MethodDelete, "/api/v2/artifacts/objects/1/reports/a/b/c.png"},
+		{http.MethodGet, "/api/v2/artifacts/artifact/default/1/reports/a/b/c.png"},
 	}
 
 	for _, tc := range cases {

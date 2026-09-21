@@ -13,7 +13,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tracing::Instrument as _;
 
-use super::application_tools::{ApplicationToolDependencies, materialize_application_toolset};
+use super::application_tools::{
+    ApplicationToolDependencies, materialize_application_toolset, skipped_application_children,
+};
 use super::assembly::{OrdinaryModelProvider, OrdinaryNoToolProfile, ReasoningEffort};
 use super::internal_tools::BuilderToolAuthority;
 use super::runtime::{
@@ -230,6 +232,17 @@ impl OrdinaryNativeAgentAssembler {
             Arc::clone(runtime_context),
         ))));
         let mut application_runtime = ApplicationRuntimeProjection::default();
+        // #973: read BEFORE materialization, off the same snapshot it reads.
+        // An attached pipeline is not built here and no longer fails the
+        // assembly; the run says so instead, once, the way a skipped internal
+        // tool does.
+        let skipped_applications = skipped_application_children(tool_snapshot, None);
+        if !skipped_applications.is_empty() {
+            tracing::warn!(
+                skipped = skipped_applications.len(),
+                "attached application children this worker cannot build were skipped"
+            );
+        }
         if let Some(materialized) = materialize_application_toolset(
             tool_snapshot,
             self.platform.as_ref(),
@@ -270,7 +283,8 @@ impl OrdinaryNativeAgentAssembler {
                 delegated_authorization,
                 application_runtime,
             )
-            .with_internal_tools(internal_tools),
+            .with_internal_tools(internal_tools)
+            .with_skipped_application_children(skipped_applications),
             fresh_execution_mode,
         ))
     }

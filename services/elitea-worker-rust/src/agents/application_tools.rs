@@ -55,6 +55,12 @@ use crate::transport::platform_client::PlatformClient;
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 
 const MAX_APPLICATION_HOPS: usize = 25;
+/// The one child `agent_type` this worker compiles as a nested `LlmAgent`.
+const SUPPORTED_APPLICATION_AGENT_TYPE: &str = "agent";
+/// Upper bound on the children one notice names, so a version with a hundred
+/// unsupported references cannot write a hundred lines into the transcript.
+const MAX_SKIPPED_APPLICATION_CHILDREN: usize = 8;
+const MAX_SKIPPED_APPLICATION_LABEL_CHARS: usize = 96;
 const MAX_AGENT_TIERS: usize = 3;
 const MAX_APPLICATION_TASK_BYTES: usize = 240 * 1_024;
 const MAX_AGENT_DESCRIPTION_BYTES: usize = 4 * 1_024;
@@ -1040,7 +1046,12 @@ impl ApplicationAssemblyState<'_> {
                 if self.hops > MAX_APPLICATION_HOPS || tier > MAX_AGENT_TIERS {
                     return Err(resource_exhausted());
                 }
-                if reference.agent_type != "agent" {
+                // Unreachable from `application_references`, which filters
+                // these out and reports them as skipped (#973). Kept as the
+                // invariant for any other caller: this module compiles a
+                // nested `LlmAgent`, and a stored pipeline is a graph the
+                // pipeline assembler owns.
+                if reference.agent_type != SUPPORTED_APPLICATION_AGENT_TYPE {
                     return Err(unsupported_capability());
                 }
                 if reference.project_id.is_some_and(|project_id| {
@@ -1250,6 +1261,108 @@ struct ApplicationReference {
     project_id: Option<u64>,
 }
 
+/// One attached application child this worker cannot build, kept so the run
+/// can SAY so (#973).
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) struct SkippedApplicationChild {
+    /// The child's own `agent_type` — `pipeline` in every case measured, and
+    /// `predict` for the other shape the picker can reach.
+    pub(crate) agent_type: String,
+    /// The alias the parent stores, which is the name the user picked.
+    pub(crate) name: String,
+}
+
+/// The attached application children whose `agent_type` this worker does not
+/// execute, in a stable (type, name) order.
+///
+/// #973: the agent editor's tool picker OFFERS pipelines — it runs a second
+/// listing with `agents_type: 'pipeline'` — and the relation route stores the
+/// reference on the parent version. This worker builds only `agent` children
+/// (a stored pipeline is a graph the pipeline assembler owns, not an
+/// `LlmAgent` this module can compile), and it used to REFUSE the whole
+/// assembly over one: the refusal landed during assembly, before any model
+/// call, so a single attached pipeline killed EVERY turn of that agent,
+/// including the turns that never mentioned it. Nothing told the user what
+/// they had broken.
+///
+/// The child is now skipped and reported, which is the same honest degrade
+/// `swarm` and the other recognized-and-unimplemented internal tools already
+/// take (#866, `InternalToolCatalog::skipped_platform_tools`): the agent keeps
+/// working, the tool it cannot build is simply not offered to the model, and
+/// the run carries one notice naming it. The capability itself — compiling a
+/// pipeline child as a sub-graph tool whose HITL node surfaces through the
+/// parent — remains #973's open half.
+///
+/// The python (SDK) worker builds these children, so the attachment is NOT
+/// refused upstream: `elitea_sdk`'s application toolkit takes an `agent_type`
+/// of `agent`, `pipeline` or `predict` (runtime/toolkits/application.py), and
+/// the assistant's own "non-pipeline agents cannot have pipelines as toolkits"
+/// check is commented out (runtime/langchain/assistant.py). Refusing the
+/// relation write or hiding pipelines in the picker would therefore take a
+/// working capability away from every SDK-worker deployment.
+pub(crate) fn skipped_application_children(
+    snapshot: &AdmittedToolSnapshot<'_>,
+    selected_aliases: Option<&BTreeSet<String>>,
+) -> Vec<SkippedApplicationChild> {
+    let mut skipped = BTreeSet::new();
+    for reference in snapshot
+        .iter()
+        .filter(|reference| reference.kind() == FrozenToolKind::Application)
+        .filter(|reference| {
+            selected_aliases.is_none_or(|aliases| aliases.contains(reference.toolkit_name()))
+        })
+    {
+        let Some(agent_type) = reference.application_agent_type() else {
+            continue;
+        };
+        if agent_type == SUPPORTED_APPLICATION_AGENT_TYPE {
+            continue;
+        }
+        if skipped.len() >= MAX_SKIPPED_APPLICATION_CHILDREN {
+            break;
+        }
+        skipped.insert(SkippedApplicationChild {
+            agent_type: bounded_skipped_label(agent_type),
+            name: bounded_skipped_label(reference.toolkit_name()),
+        });
+    }
+    skipped.into_iter().collect()
+}
+
+/// One deterministic line per skipped child, in the same shape
+/// `InternalToolCatalog::skipped_tools_notice_text` writes: the set decides the
+/// text, never the order the version listed them in, so two otherwise
+/// identical turns cannot produce two different notices.
+pub(crate) fn skipped_application_children_notice_text(
+    skipped: &[SkippedApplicationChild],
+) -> Option<String> {
+    if skipped.is_empty() {
+        return None;
+    }
+    let mut lines = skipped
+        .iter()
+        .map(|child| {
+            format!(
+                "attached {} '{}' is not available on this worker",
+                child.agent_type, child.name
+            )
+        })
+        .collect::<Vec<_>>();
+    lines.sort_unstable();
+    lines.dedup();
+    Some(lines.join("\n"))
+}
+
+/// Truncate a name or type before it reaches a notice the model reads. Both
+/// come from stored rows, and neither has a length the runtime enforces.
+fn bounded_skipped_label(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(MAX_SKIPPED_APPLICATION_LABEL_CHARS)
+        .collect()
+}
+
 fn application_references(
     snapshot: &AdmittedToolSnapshot<'_>,
     selected_aliases: Option<&BTreeSet<String>>,
@@ -1261,6 +1374,14 @@ fn application_references(
         .filter(|reference| reference.kind() == FrozenToolKind::Application)
         .filter(|reference| {
             selected_aliases.is_none_or(|aliases| aliases.contains(reference.toolkit_name()))
+        })
+        // #973: a child this worker cannot build is SKIPPED here rather than
+        // failing the assembly below. `skipped_application_children` reports
+        // the same set to the run's notice; the `agent_type` guard in
+        // `ApplicationAssemblyState::build` stays as the invariant for any
+        // other caller.
+        .filter(|reference| {
+            reference.application_agent_type() == Some(SUPPORTED_APPLICATION_AGENT_TYPE)
         })
     {
         let identity = reference

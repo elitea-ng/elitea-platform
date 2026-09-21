@@ -27,7 +27,6 @@ applications.getPipelineTrigger
 applications.updatePipelineTrigger
 artifacts.artifactList
 artifacts.bucketList
-artifacts.getArtifactContent
 artifacts.listBucketMetadata
 artifacts.putArtifactToS3
 canvas.canvasDetails

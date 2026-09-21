@@ -15,6 +15,7 @@ use chrono::Utc;
 use serde_json::{Value, json};
 use tokio::sync::Barrier;
 
+use super::application_tools::SkippedApplicationChild;
 use super::assembly::OrdinaryNoToolProfile;
 use super::assembly_tests::{current_text_history, ordinary_request};
 use super::direct_hitl::{DirectHitlDecision, DirectHitlDecisionSet};
@@ -2130,4 +2131,149 @@ fn invalid_completed_content_never_becomes_a_browser_terminal() {
         panic!("empty model result was accepted");
     };
     assert_eq!(error.code(), AgentEventProjectionErrorCode::InvalidOutput);
+}
+
+/// #973: an attached application child this worker cannot build — a PIPELINE,
+/// which the agent editor's tool picker offers — binds no tool, and the run
+/// says which one. Before this, the child ended the whole assembly with
+/// `native_agent.unsupported_capability` and the user was told nothing about
+/// the attachment that had just broken every turn of their agent.
+///
+/// The same seeding point and the same role-`"tool"` shape as the skipped
+/// internal tools one function above, and asserted the same way: assembly
+/// alone triggers it, so the session is read straight back.
+#[tokio::test]
+async fn a_fresh_session_is_seeded_with_a_notice_for_every_skipped_application_child() {
+    let request = ordinary_request(AgentExecutionKind::Adhoc);
+    let profile = OrdinaryNoToolProfile::validate(&request).expect("skipped-child profile");
+    let plan = OrdinaryNativeAgentPlan::from_authorized(
+        &request,
+        &profile,
+        &AuthorizedNativeCommandBinding::fixture(),
+        &request.payload.input_attachments,
+    )
+    .expect("skipped-child native plan");
+    let user_id = plan.user_id().to_owned();
+    let session_id = plan.session_id().to_owned();
+    let sessions = Arc::new(InMemorySessionService::new());
+    let injected_sessions: Arc<dyn SessionService> = sessions.clone();
+    // Listed out of alphabetical order on purpose: the notice is built from
+    // the SET, so the text must not depend on the order the version stored
+    // the references in.
+    let runtime = OrdinaryRuntimeBindings::new(
+        Vec::new(),
+        SensitiveToolCatalog::default(),
+        DelegatedAuthorizationCatalog::default(),
+        ApplicationRuntimeProjection::default(),
+    )
+    .with_skipped_application_children(vec![
+        SkippedApplicationChild {
+            agent_type: "pipeline".to_owned(),
+            name: "review-pipeline".to_owned(),
+        },
+        SkippedApplicationChild {
+            agent_type: "predict".to_owned(),
+            name: "classifier".to_owned(),
+        },
+    ]);
+    let assembled = assemble_ordinary_native_with_sessions_and_runtime_catalogs(
+        bound_model("unused — assembly alone is under test"),
+        plan,
+        runtime,
+        NativeToolExecutionMode::Sequential,
+        injected_sessions,
+    )
+    .await
+    .expect("skipped-child assembly");
+    drop(assembled);
+
+    let session = sessions
+        .get(GetRequest {
+            app_name: "elitea-agent-v1".to_owned(),
+            user_id,
+            session_id,
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .expect("skipped-child session");
+
+    let notice_texts = session
+        .events()
+        .all()
+        .iter()
+        .filter_map(|event| {
+            let content = event.content()?;
+            if content.role != "tool" {
+                return None;
+            }
+            content.parts.iter().find_map(|part| match part {
+                Part::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        notice_texts,
+        [
+            "attached pipeline 'review-pipeline' is not available on this worker\n\
+          attached predict 'classifier' is not available on this worker"
+        ],
+        "expected exactly one role=\"tool\" notice event naming both skipped children"
+    );
+}
+
+/// The companion negative case: an agent whose children are all agents gets no
+/// notice — the fix must add nothing to the common path.
+#[tokio::test]
+async fn a_fresh_session_with_no_skipped_application_children_gets_no_notice() {
+    let request = ordinary_request(AgentExecutionKind::Adhoc);
+    let profile = OrdinaryNoToolProfile::validate(&request).expect("no-skip profile");
+    let plan = OrdinaryNativeAgentPlan::from_authorized(
+        &request,
+        &profile,
+        &AuthorizedNativeCommandBinding::fixture(),
+        &request.payload.input_attachments,
+    )
+    .expect("no-skip native plan");
+    let user_id = plan.user_id().to_owned();
+    let session_id = plan.session_id().to_owned();
+    let sessions = Arc::new(InMemorySessionService::new());
+    let injected_sessions: Arc<dyn SessionService> = sessions.clone();
+    let assembled = assemble_ordinary_native_with_sessions_and_runtime_catalogs(
+        bound_model("unused — assembly alone is under test"),
+        plan,
+        OrdinaryRuntimeBindings::new(
+            Vec::new(),
+            SensitiveToolCatalog::default(),
+            DelegatedAuthorizationCatalog::default(),
+            ApplicationRuntimeProjection::default(),
+        ),
+        NativeToolExecutionMode::Sequential,
+        injected_sessions,
+    )
+    .await
+    .expect("no-skip assembly");
+    drop(assembled);
+
+    let session = sessions
+        .get(GetRequest {
+            app_name: "elitea-agent-v1".to_owned(),
+            user_id,
+            session_id,
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .expect("no-skip session");
+    assert!(
+        session
+            .events()
+            .all()
+            .iter()
+            .filter_map(adk_rust::Event::content)
+            .all(|content| content.role != "tool"),
+        "a run with nothing skipped seeded a notice"
+    );
 }

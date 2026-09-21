@@ -12,27 +12,33 @@
  * IT DOES NOT, AND NEITHER HALF OF THE PREMISE IS IMPLEMENTED
  * ─────────────────────────────────────────────────────────────────────────
  *
- * 1. THE PIPELINE CANNOT BE INVOKED AS A TOOL. The native runtime's
- *    Application-tool resolver admits exactly one kind of child:
+ * 1. THE PIPELINE CANNOT BE INVOKED AS A TOOL. The native runtime compiles
+ *    exactly one kind of Application child — a nested `LlmAgent` — and a
+ *    stored pipeline is a graph the pipeline assembler owns
+ *    (`services/elitea-worker-rust/src/agents/application_tools.rs`).
  *
- *      if reference.agent_type != "agent" { return Err(unsupported_capability()); }
- *      — services/elitea-worker-rust/src/agents/application_tools.rs
- *
- *    A `pipeline` reference is refused there, and MEASURED on this stack the
- *    refusal lands during ASSEMBLY, not at call time:
+ *    The BLAST RADIUS half of that is fixed (#973, fix wave 3): the refusal
+ *    used to land during ASSEMBLY —
  *
  *      agent.assemble:agent.nested_application.assemble …
  *      WARN native agent assembly failed after invocation authorization
  *           error_code="native_agent.unsupported_capability"
  *
- *    so the blast radius is the whole agent: once a pipeline is attached,
- *    EVERY turn of that agent dies before any model call, including turns
- *    that never mention the pipeline. This is not a hidden corner either —
- *    the agent's own tool picker OFFERS pipelines (`ToolMenu.tsx` runs a
- *    second listing with `agents_type: 'pipeline'` beside the `classic` one)
- *    and the attach route stores the reference happily. The product lets a
- *    user brick an agent with a supported action, which is what makes this a
- *    defect rather than an absent feature.
+ *    — so one attached pipeline killed EVERY turn of that agent, including
+ *    the turns that never mentioned it, while the agent's own tool picker
+ *    went on offering pipelines (`ToolMenu.tsx` runs a second listing with
+ *    `agents_type: 'pipeline'` beside the `classic` one). The child is now
+ *    SKIPPED instead: the agent answers, the pipeline binds no tool, and the
+ *    run carries one `attached pipeline '<name>' is not available on this
+ *    worker` notice — the same honest degrade `swarm` takes below (#866).
+ *
+ *    The CAPABILITY half is still open, and is what keeps this test marked:
+ *    compiling the child as a sub-graph tool over a durable checkpoint, and
+ *    surfacing its `hitl` node through the parent's interrupt/resume path,
+ *    is a runtime feature this wave did not build. Note the attachment is
+ *    NOT refused upstream, and must not be: the SDK (python) worker builds
+ *    pipeline children through its application toolkit, so hiding them in
+ *    the picker would take a working capability away from those deployments.
  *
  * 2. SWARM MODE IS A NO-OP ON THIS RUNTIME. `swarm` is in
  *    `PLATFORM_INTERNAL_TOOLS` — the list of names the native runtime
@@ -43,10 +49,10 @@
  *    something.
  *
  * The test below is written as the cases say it should pass and is marked
- * against #973. The fixture it builds — attach a pipeline to an agent as a
- * tool and read the reference back off the PARENT version — is the capability
- * #939 group 3 asked for, and it stays useful the moment the runtime admits a
- * pipeline child: only the `test.fail` has to go.
+ * against #973's remaining half. The fixture it builds — attach a pipeline to
+ * an agent as a tool and read the reference back off the PARENT version — is
+ * the capability #939 group 3 asked for, and it stays useful the moment the
+ * runtime admits a pipeline child: only the `test.fail` has to go.
  *
  * RUST ONLY, like its sibling: the `hitl` node family is native-runtime graph
  * territory with no SDK-worker equivalent measured here.
@@ -220,7 +226,7 @@ async function openAgentChat(page: Page, agentId: string): Promise<string> {
 test('a Swarm-mode agent can invoke an attached pipeline, and its HITL prompt reaches the chat', async ({ page }) => {
   test.fail(
     true,
-    '#973: product gap — the agent tool picker offers pipelines and the attach route stores the reference, but the native runtime refuses any Application-tool child whose agent_type is not `agent`; the refusal lands at ASSEMBLY, so an attached pipeline breaks every turn of the agent and its HITL node can never surface',
+    '#973 (remaining half): the native runtime no longer dies at assembly over an attached pipeline — it skips the child and says so — but it still compiles no pipeline child, so the model is offered no tool for it and the pipeline’s HITL node cannot surface through the parent',
   );
   test.setTimeout(420_000);
 

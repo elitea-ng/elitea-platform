@@ -168,13 +168,14 @@ async function createQtestAgent(page: Page, label: string): Promise<QtestAgent> 
         // `configuration_not_found` for a row that plainly exists.
         qtest_configuration: { elitea_title: credentialTitle, private: false },
         qtest_project_id: QTEST_PROJECT_ID,
-        // Sent explicitly although the catalogue declares `default: 10`: the
-        // create route stores the key as JSON `null` when a body omits it, and
-        // `QtestApiWrapper` types it `int` — so a toolkit without it dies at
-        // materialization with `1 validation error … Input should be a valid
-        // integer`, which reaches the user as an empty is_error turn. Measured
-        // on this stack before the field was added.
-        no_of_tests_shown_in_dql_search: 10,
+        // `no_of_tests_shown_in_dql_search` is DELIBERATELY NOT SENT. The
+        // catalogue declares `default: 10` and `QtestApiWrapper` types the
+        // field `int`, so a body that omitted it used to reach the worker as
+        // null and die at materialization with `1 validation error … Input
+        // should be a valid integer` — an empty errored turn with no field to
+        // point at. The create route applies catalogue defaults now (#978),
+        // and leaving the key out here is what keeps that proven: put it back
+        // and this file stops covering it.
         selected_tools: ['update_test_run_status', 'upload_attachment_to_test_run'],
       },
     },
@@ -436,7 +437,6 @@ test('an unknown status is refused with the list of the ones the project defines
  * backend after the session that uploaded it is gone. */
 test('a file from an artifacts bucket is attached to the test run and persists', async ({ page }) => {
   test.setTimeout(420_000);
-  test.fail(true, '#978: product gap — the SDK reads a filepath through GET /api/v2/artifacts/artifact/default/{project}/{bucket}/{key}, a route elitea-main does not serve, so every attach answers "Resource not found" whatever the path');
   const agent = await createQtestAgent(page, 'attach');
   // Hyphens, never the `autotest_` prefix's underscore: a bucket name is an
   // object-store name and the create route refuses one with 400.

@@ -15538,6 +15538,53 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
 
+  /artifacts/artifact/default/{projectID}/{bucket}/{key}:
+    # The SDK's by-filepath object read. Registered on the same trailing chi
+    # `/*` wildcard the object-plane download uses, for the same reason its
+    # comment gives: a key may contain `/`.
+    #
+    # `default` is the pylon MODE segment the SDK's client still sends
+    # (elitea-sdk runtime/clients/client.py builds this URL and appends
+    # `/{bucket}/{artifact_name}`). The router resolves PermissionModeDefault
+    # unconditionally here, so the segment selects nothing — it is matched
+    # because it is in the URL, not because it decides anything.
+    parameters:
+      - name: projectID
+        in: path
+        required: true
+        schema: { type: integer }
+      - name: bucket
+        in: path
+        required: true
+        schema: { type: string }
+      - name: key
+        in: path
+        required: true
+        schema: { type: string }
+        description: May itself contain `/` characters.
+
+    get:
+      operationId: downloadArtifactByPath
+      summary: Download an object by the SDK's artifact filepath
+      description: >
+        Alias of `downloadObject` on the URL the SDK's `download_artifact`
+        builds. Same `view` permission, same per-bucket access list, same raw
+        body — the SDK returns the response content as the file's bytes.
+      tags: [artifacts]
+      responses:
+        '200':
+          description: Full object
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
   /artifacts/grants/{projectID}/{bucket}:
     parameters:
       - name: projectID
