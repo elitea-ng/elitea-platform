@@ -35,12 +35,20 @@ impl ModelRequestBudget for Budget {
 }
 
 #[derive(Default)]
+enum ReferencePromotion {
+    #[default]
+    Never,
+    Always,
+    UntilCorrection,
+}
+
+#[derive(Default)]
 struct Summary {
     requests: Mutex<Vec<LlmRequest>>,
     fail: bool,
     invalid_candidates: usize,
     input_byte_limit: Option<usize>,
-    promote_summary_label: bool,
+    reference_promotion: ReferencePromotion,
     repair_reference_then_links: bool,
     pause: Option<Arc<tokio::sync::Notify>>,
 }
@@ -55,10 +63,16 @@ impl Llm for Summary {
         streaming: bool,
     ) -> adk_rust::Result<LlmResponseStream> {
         assert!(!streaming);
-        let promote_label = self.promote_summary_label
-            && serde_json::to_string(&request)
-                .unwrap()
-                .contains("Validated earlier source summary");
+        let is_correction = serde_json::to_string(&request)
+            .unwrap()
+            .contains("invalid_reference_values");
+        let promote_label = match self.reference_promotion {
+            ReferencePromotion::Never => false,
+            ReferencePromotion::Always => true,
+            ReferencePromotion::UntilCorrection => !is_correction,
+        } && serde_json::to_string(&request)
+            .unwrap()
+            .contains("Validated earlier source summary");
         let exceeds_capacity = self
             .input_byte_limit
             .is_some_and(|limit| serde_json::to_vec(&request).unwrap().len() > limit);
@@ -950,7 +964,7 @@ async fn summary_batching_stops_for_indivisible_input_and_attempt_exhaustion() {
     let mut remaining = 0;
     assert_eq!(
         compaction
-            .summarize_bounded(&objective, &records, &mut remaining)
+            .summarize_bounded(&objective, &records, &mut remaining, None)
             .await
             .unwrap_err()
             .code,
@@ -991,7 +1005,7 @@ async fn merged_summary_cannot_promote_a_generated_label_into_source_evidence() 
     let session = create(&sessions).await;
     let summary = Arc::new(Summary {
         input_byte_limit: Some(16_000),
-        promote_summary_label: true,
+        reference_promotion: ReferencePromotion::Always,
         ..Summary::default()
     });
     let compaction = DurableContextCompaction::new(
@@ -1015,7 +1029,39 @@ async fn merged_summary_cannot_promote_a_generated_label_into_source_evidence() 
             .code,
         "context_summary_reference"
     );
-    assert_eq!(summary.requests.lock().unwrap().len(), 4);
+    assert_eq!(summary.requests.lock().unwrap().len(), 5);
+    assert!(compaction.record.lock().unwrap().is_none());
+}
+
+#[tokio::test]
+async fn merged_summary_repairs_references_against_original_records() {
+    let sessions = InMemorySessionService::new();
+    let session = create(&sessions).await;
+    let summary = Arc::new(Summary {
+        input_byte_limit: Some(16_000),
+        reference_promotion: ReferencePromotion::UntilCorrection,
+        ..Summary::default()
+    });
+    let compaction = DurableContextCompaction::new(
+        plan(),
+        Arc::new(Budget),
+        summary.clone(),
+        [7; 32],
+        session.as_ref(),
+    )
+    .unwrap();
+    let objective = Content::new("user").with_text("Preserve evidence call-one.");
+    let records = [
+        Content::new("model").with_text("x".repeat(9_000)),
+        Content::new("model").with_text("y".repeat(9_000)),
+    ];
+    let result = compaction.summarize(&objective, &records).await.unwrap();
+    assert!(result.contains("call-one"));
+    let requests = summary.requests.lock().unwrap();
+    let repair = serde_json::to_string(requests.last().unwrap()).unwrap();
+    assert!(repair.contains("invalid_reference_values"));
+    drop(requests);
+    assert_eq!(summary.requests.lock().unwrap().len(), 5);
     assert!(compaction.record.lock().unwrap().is_none());
 }
 

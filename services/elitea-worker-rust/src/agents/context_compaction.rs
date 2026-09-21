@@ -238,7 +238,7 @@ impl DurableContextCompaction {
         contents: &[Content],
     ) -> adk_rust::Result<String> {
         let mut remaining = super::context_summary::MAX_BATCH_ATTEMPTS;
-        self.summarize_bounded(objective, contents, &mut remaining)
+        self.summarize_bounded(objective, contents, &mut remaining, None)
             .await
     }
 
@@ -248,10 +248,14 @@ impl DurableContextCompaction {
         objective: &'a Content,
         contents: &'a [Content],
         remaining: &'a mut u32,
+        original_source: Option<&'a Value>,
     ) -> adk_rust::futures::future::BoxFuture<'a, adk_rust::Result<String>> {
         Box::pin(async move {
             *remaining = remaining.checked_sub(1).ok_or_else(summary_capacity)?;
-            match self.summarize_once(objective, contents).await {
+            match self
+                .summarize_once(objective, contents, original_source)
+                .await
+            {
                 Ok(summary) => Ok(summary),
                 Err(error)
                     if matches!(
@@ -264,19 +268,25 @@ impl DurableContextCompaction {
                     }
                     let (earlier, later) = contents.split_at(contents.len() / 2);
                     let earlier = self
-                        .summarize_bounded(objective, earlier, remaining)
+                        .summarize_bounded(objective, earlier, remaining, original_source)
                         .await?;
-                    let later = self.summarize_bounded(objective, later, remaining).await?;
+                    let later = self
+                        .summarize_bounded(objective, later, remaining, original_source)
+                        .await?;
                     let partials = [
                         Content::new("user").with_text(format!("Validated earlier source summary:\n{earlier}")),
                         Content::new("user").with_text(format!("Validated later source summary. Later corrections take precedence:\n{later}")),
                     ];
-                    let merged = self
-                        .summarize_bounded(objective, &partials, remaining)
-                        .await?;
-                    // A merge cannot promote a new value into source evidence.
+                    // Validate merges against original records during repair, not
+                    // only after the correction opportunity has already passed.
                     let source = serde_json::json!({"objective":objective,"history":contents});
-                    super::context_summary::validate(&merged, &source)
+                    self.summarize_bounded(
+                        objective,
+                        &partials,
+                        remaining,
+                        Some(original_source.unwrap_or(&source)),
+                    )
+                    .await
                 }
                 Err(error) => Err(error),
             }
@@ -287,6 +297,7 @@ impl DurableContextCompaction {
         &self,
         objective: &Content,
         contents: &[Content],
+        original_source: Option<&Value>,
     ) -> adk_rust::Result<String> {
         let mut events = Vec::with_capacity(contents.len() + 1);
         let mut orientation = Event::new("context-summary-objective");
@@ -317,7 +328,8 @@ impl DurableContextCompaction {
             return Err(invalid_compaction());
         };
         let source = serde_json::json!({"objective":objective,"history":contents});
-        match super::context_summary::validate(text, &source) {
+        let source = original_source.unwrap_or(&source);
+        match super::context_summary::validate(text, source) {
             Ok(validated) => Ok(validated),
             Err(error) => {
                 // One correction attempt. Never commit rejected text or use it
@@ -330,10 +342,10 @@ impl DurableContextCompaction {
                 "validation-feedback".clone_into(&mut feedback.author);
                 let evidence_only = error.code == "context_summary_evidence";
                 if evidence_only {
-                    return self.correct_evidence(text, &source).await;
+                    return self.correct_evidence(text, source).await;
                 }
                 let feedback_value = if error.code == "context_summary_reference" {
-                    super::context_summary::reference_correction_input(text, &source)?
+                    super::context_summary::reference_correction_input(text, source)?
                 } else {
                     serde_json::json!({"validation_code": error.code, "rejected_candidate": text})
                 };
@@ -353,11 +365,11 @@ impl DurableContextCompaction {
                 else {
                     return Err(invalid_compaction());
                 };
-                match super::context_summary::validate(corrected_text, &source) {
+                match super::context_summary::validate(corrected_text, source) {
                     Err(error) if error.code == "context_summary_evidence" => {
                         // Reference repair can leave dangling links. One final
                         // evidence-only correction cannot rewrite accepted facts.
-                        self.correct_evidence(corrected_text, &source).await
+                        self.correct_evidence(corrected_text, source).await
                     }
                     result => result,
                 }
