@@ -4,11 +4,19 @@ FROM rust:1.97.1-bookworm AS builder
 
 WORKDIR /src
 
-COPY libs/proto ./libs/proto
-COPY services/elitea-worker-rust ./services/elitea-worker-rust
-
-WORKDIR /src/services/elitea-worker-rust
-
+# ── cargo-auditable IS INSTALLED BEFORE ANY SOURCE IS COPIED ────────────────
+#
+# It needs nothing from this repository — it is a pinned tool built from
+# crates.io — so the only thing that may invalidate it is the base image.
+# It used to sit BELOW the two COPY lines, which put it downstream of every
+# byte of `services/elitea-worker-rust` and `libs/proto`: a one-line change to
+# a spec in src/ rebuilt the tool as well as the crate. MEASURED on run
+# 35606872334, `[elitea-worker builder 6/7]`: 44.0 s, on a pull request that
+# had touched src/ and nothing else about this tool.
+#
+# Moving it above the COPYs costs nothing and makes that layer a function of
+# the base image alone.
+#
 # `cargo auditable`, not plain `cargo`, and it is a SCAN requirement rather than
 # a preference.
 #
@@ -27,6 +35,23 @@ WORKDIR /src/services/elitea-worker-rust
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     cargo install cargo-auditable --locked --version 0.7.5
+
+COPY libs/proto ./libs/proto
+COPY services/elitea-worker-rust ./services/elitea-worker-rust
+
+WORKDIR /src/services/elitea-worker-rust
+
+# The dependency build lives in the THREE CACHE MOUNTS below, not in a layer,
+# and that is deliberate: a cargo-chef style `target/` inside the image would
+# be a multi-gigabyte builder layer in the `elitea-worker-rust-linux-amd64`
+# GHA scope, and this repository's Actions cache was measured at 10.7 GB
+# against a 10 GB cap (see .github/actions/build-stack-images) — the layer
+# would evict the scopes it depends on. The mounts are the right home for it.
+#
+# They were simply not working: see the 391 KB restore recorded in that
+# action's policy step. With the mount entry real, a pull request that touches
+# only src/ recompiles this crate and relinks it, instead of building all 418
+# crates from an empty registry.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cargo-target \

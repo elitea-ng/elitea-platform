@@ -65,28 +65,32 @@
  * pages only — no spec had ever attached an MCP to an agent, let alone taken a
  * turn with one.
  *
- * ── WHY BOTH TESTS ARE PINNED TO THE NATIVE LEG ────────────────────────────
+ * ── WHY ONE TEST IS PINNED TO THE NATIVE LEG AND THE OTHER IS NOT ──────────
  *
  * `E2E_WORKER` comes from `scripts/chat-stream-e2e.sh`, the one place that
- * knows which worker the stack runs. Both assertions below are native-runtime
- * contracts and neither can be honestly asserted against the SDK worker from
- * this stack:
+ * knows which worker the stack runs. The two assertions below used to share a
+ * gate; they no longer do, because only one of the two reasons was ever about
+ * the stack rather than about the product:
  *
- *   * the trust bundle that makes `mcp-mock`'s certificate verifiable is wired
- *     onto the RUST worker only (`deploy/docker-compose.standalone-rust-agent.yml`);
- *     the Python worker's `SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE` deliberately
- *     hold the runtime CA and nothing else (`docker-compose.standalone-full.yml`,
- *     the elitea-worker block), so on that leg the mock is untrusted and the
- *     first test would fail for a reason that is about deployment, not MCP;
- *   * the SDK leg reaches MCP servers through the Python SDK with pylon's
- *     rules, which accept shapes `RemoteMcpConfig::parse` refuses — `http`
- *     endpoints and static headers among them — so the second test pins a
- *     disagreement, not a shared contract.
- *
- * Skipping is the honest answer for a leg this stack cannot exercise. If the
- * Python worker is ever given the same bundle, the first test should be
- * un-skipped for it and the second should assert the SDK's own outcome, the
- * way `chat.variables.spec.ts` asserts a per-leg contract.
+ *   * DISCOVERY (the first test) ran on the native leg alone because the trust
+ *     bundle that makes `mcp-mock`'s certificate verifiable was wired onto the
+ *     RUST worker only, while the Python worker's
+ *     `SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE` held the runtime CA and nothing
+ *     else — so the mock was untrusted there and the test would have failed
+ *     for a DEPLOYMENT reason. That is now fixed at the deployment: the
+ *     `worker-trust` one-shot in `docker-compose.standalone-full.yml` builds
+ *     the python worker a runtime-CA + mcp-mock-CA bundle (no public roots,
+ *     deliberately), so BOTH legs can dial the mock and this test runs on
+ *     both. MCP discovery is a product capability of each runtime, not a
+ *     native-only contract, and it should be asserted on whichever one the
+ *     stack is running.
+ *   * THE ENDPOINT RULE (the second test) stays pinned, and no bundle changes
+ *     it: the SDK leg reaches MCP servers with pylon's rules, which accept
+ *     shapes `RemoteMcpConfig::parse` refuses — `http` endpoints and static
+ *     headers among them — so that test pins a disagreement, not a shared
+ *     contract. Skipping is still the honest answer there; asserting the SDK's
+ *     own outcome for that leg would be a second test, the way
+ *     `chat.variables.spec.ts` asserts a per-leg contract.
  *
  * ── WHERE THIS LIVES ───────────────────────────────────────────────────────
  *
@@ -275,11 +279,10 @@ async function cleanUp(
   await deleteToolkit(page, projectId, toolkitId);
 }
 
+// BOTH LEGS. The trust bundle that used to make this native-only is now built
+// for the python worker too (`worker-trust`, docker-compose.standalone-full.yml)
+// — see this file's header.
 test('an MCP connection attached through the picker is discovered, and the agent answers', async ({ page }) => {
-  test.skip(
-    !IS_NATIVE_RUNTIME,
-    'the mcp-mock trust bundle is wired onto the native worker only — see this file’s header',
-  );
   test.setTimeout(240_000);
 
   const suffix = Date.now() % 1_000_000;

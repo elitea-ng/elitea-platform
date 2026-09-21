@@ -64,6 +64,7 @@ use super::runtime::{
     NativeAgentCompletionSelector, NativeAgentInvocation, PipelineNativeStart,
 };
 use super::sensitive_tools::SensitiveToolCatalog;
+use super::tool_namespacing::{RenamedTool, renamed_tools_notice_text};
 use crate::protocol::command::VerifiedAgentCommand;
 use crate::protocol::control::{ClaimBoundSessionAuthority, SessionWriterClaimBinding};
 use crate::protocol::elitea::runtime::v1::{AgentExecutionCommandV1, worker_command_v1};
@@ -198,6 +199,9 @@ pub(crate) struct OrdinaryRuntimeBindings {
     /// bind no tool and are named in the session's opening notice, beside the
     /// skipped internal tools.
     skipped_application_children: Vec<SkippedApplicationChild>,
+    /// Tools two toolsets both published, and what each is called now (#983).
+    /// Named in the session's opening notice beside the two above.
+    renamed_tools: Vec<RenamedTool>,
     application_runtime: ApplicationRuntimeProjection,
 }
 
@@ -215,6 +219,7 @@ impl OrdinaryRuntimeBindings {
             delegated_authorization,
             internal_tools: InternalToolCatalog::empty(),
             skipped_application_children: Vec::new(),
+            renamed_tools: Vec::new(),
             application_runtime,
         }
     }
@@ -231,6 +236,12 @@ impl OrdinaryRuntimeBindings {
         skipped: Vec<SkippedApplicationChild>,
     ) -> Self {
         self.skipped_application_children = skipped;
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn with_renamed_tools(mut self, renamed: Vec<RenamedTool>) -> Self {
+        self.renamed_tools = renamed;
         self
     }
 
@@ -1483,7 +1494,7 @@ where
     // child this worker cannot build, become a notice IN THE RUN rather than
     // only a log line no user reads.
     let internal_tools = runtime.internal_tools;
-    let skipped = runtime.skipped_application_children.clone();
+    let notices = FreshSessionNotices::from_runtime(&runtime);
     let (agent, projector) = build_runtime_agent(
         model.adk_model(),
         generation_config,
@@ -1513,7 +1524,7 @@ where
         // seed the "could not honour" notices once, without repeating them on
         // every later turn of the same conversation — the same "once, at
         // session creation" shape the frozen-history seed itself uses.
-        seed_fresh_session_notices(sessions.as_ref(), &identity, internal_tools, &skipped).await?;
+        seed_fresh_session_notices(sessions.as_ref(), &identity, internal_tools, &notices).await?;
     }
     tracing::Span::current().record(
         "session_bootstrap",
@@ -1573,8 +1584,9 @@ fn build_runtime_agent(
         sensitive_tools,
         delegated_authorization,
         internal_tools,
-        // Reported by the session seed, never by the agent graph (#973).
+        // Reported by the session seed, never by the agent graph (#973/#983).
         skipped_application_children: _,
+        renamed_tools: _,
         application_runtime,
     } = runtime;
     let mut builder = LlmAgentBuilder::new(ROOT_AGENT_NAME)
@@ -1726,8 +1738,9 @@ async fn prepare_direct_resume(
         sensitive_tools,
         delegated_authorization,
         internal_tools,
-        // Reported by the session seed, never by the agent graph (#973).
+        // Reported by the session seed, never by the agent graph (#973/#983).
         skipped_application_children: _,
+        renamed_tools: _,
         application_runtime,
     } = runtime;
     let resolved = match start {
@@ -2018,7 +2031,27 @@ async fn seed_skipped_internal_tools_notice(
         .map_err(|_| dependency_unavailable())
 }
 
-/// The two "what this run could not honour" notices, seeded together at the
+/// The non-`Copy` half of what a fresh session's notices are built from,
+/// copied out before `runtime` moves into `build_runtime_agent`.
+///
+/// One value rather than one binding per notice: the list has grown twice
+/// (#973, #983) and each growth otherwise adds a line to the caller AND an
+/// argument to the callee, for data that is always read together.
+struct FreshSessionNotices {
+    skipped_application_children: Vec<SkippedApplicationChild>,
+    renamed_tools: Vec<RenamedTool>,
+}
+
+impl FreshSessionNotices {
+    fn from_runtime(runtime: &OrdinaryRuntimeBindings) -> Self {
+        Self {
+            skipped_application_children: runtime.skipped_application_children.clone(),
+            renamed_tools: runtime.renamed_tools.clone(),
+        }
+    }
+}
+
+/// The three "what this run could not honour" notices, seeded together at the
 /// one point a session is created — see each of them for what it reports and
 /// why. They are one call so the caller keeps saying `if created { seed … }`
 /// once rather than growing a list.
@@ -2026,10 +2059,49 @@ async fn seed_fresh_session_notices(
     sessions: &dyn SessionService,
     identity: &AdkIdentity,
     internal_tools: InternalToolCatalog,
-    skipped_application_children: &[SkippedApplicationChild],
+    notices: &FreshSessionNotices,
 ) -> Result<(), NativeAgentAssemblyError> {
     seed_skipped_internal_tools_notice(sessions, identity, internal_tools).await?;
-    seed_skipped_application_children_notice(sessions, identity, skipped_application_children).await
+    seed_skipped_application_children_notice(
+        sessions,
+        identity,
+        &notices.skipped_application_children,
+    )
+    .await?;
+    seed_renamed_tools_notice(sessions, identity, &notices.renamed_tools).await
+}
+
+/// #983: append ONE role-`"tool"` event naming every tool this invocation had
+/// to rename, and the connection each renamed name belongs to.
+///
+/// Same place, same shape and the same reasons as the two notices above it.
+/// This one carries more than an operator's record: an agent's instructions
+/// were written against the name the server publishes (`echo`), and after a
+/// collision the model is offered `conn_a__echo` instead. Without this line the
+/// model reads an instruction naming a function it cannot see, and the run
+/// ends in an apology rather than a call. A no-op for every agent whose
+/// toolsets publish distinct names, which is nearly all of them.
+async fn seed_renamed_tools_notice(
+    sessions: &dyn SessionService,
+    identity: &AdkIdentity,
+    renamed: &[RenamedTool],
+) -> Result<(), NativeAgentAssemblyError> {
+    let Some(notice) = renamed_tools_notice_text(renamed) else {
+        return Ok(());
+    };
+    let mut event = Event::new("elitea-renamed-tools");
+    "system".clone_into(&mut event.author);
+    event.set_content(Content {
+        role: "tool".to_owned(),
+        parts: vec![adk_rust::Part::Text { text: notice }],
+    });
+    sessions
+        .append_event_for_identity(AppendEventRequest {
+            identity: identity.clone(),
+            event,
+        })
+        .await
+        .map_err(|_| dependency_unavailable())
 }
 
 /// #973: append ONE role-`"tool"` event naming every attached application

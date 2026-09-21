@@ -207,5 +207,31 @@ RUN /usr/local/bin/deno cache --node-modules-dir=auto /opt/elitea/sandbox/main.t
     && chown -R 10001:10001 /opt/elitea/sandbox \
     && chmod -R go-w /opt/elitea/sandbox
 
+# THE ON-DISK CACHES THE BUILD LEAVES BEHIND AS ROOT, HANDED TO THE RUNTIME UID.
+#
+# Two libraries in this image cache to a fixed path under /tmp and both create
+# it at IMPORT time, as root, while the build is still running:
+#   * `azure-devops` — AZURE_DEVOPS_CACHE_DIR above; `_file_cache.get_cache_dir()`
+#     runs at module import, so the directory is baked into the image owned by
+#     root and mode 0755.
+#   * `tiktoken` — /tmp/data-gym-cache, the same way.
+# The container then runs as 10001 and cannot write either.
+#
+# For tiktoken that is a silent re-download. For azure-devops it is a FAILED
+# TOOL CALL: `Client._get_resource_locations` writes the OPTIONS catalogue to
+# the cache with `OPTIONS_FILE_CACHE[url] = …`, and `FileCache.save_with_retry`
+# lets the PermissionError out — so the FIRST ado_boards/ado_wiki/ado_repos/
+# ado_plans toolkit built in a fresh worker process dies inside its pydantic
+# model validator with an opaque ValidationError and the turn ends `INTERNAL`.
+# Every LATER build in the same process succeeds, because the failed write
+# still populated the cache's in-memory dict — which is why this reads as a
+# once-per-pod flake rather than as a broken feature.
+#
+# Creating both directories with the runtime's ownership is the whole fix; the
+# paths are the libraries' own and are pinned by the ENV above.
+RUN mkdir -p /tmp/.azure-devops /tmp/data-gym-cache \
+    && chown 10001:10001 /tmp/.azure-devops /tmp/data-gym-cache \
+    && chmod 0700 /tmp/.azure-devops /tmp/data-gym-cache
+
 USER 10001:10001
 ENTRYPOINT ["elitea-worker"]
