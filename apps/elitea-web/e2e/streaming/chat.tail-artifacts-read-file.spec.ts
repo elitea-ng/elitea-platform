@@ -280,7 +280,14 @@ async function sendTurn(page: Page, prompt: string): Promise<void> {
   expect(response.status(), `the turn was refused: ${(await response.text()).slice(0, 300)}`).toBe(200);
 }
 
-/** The newest stored assistant reply, once the mock's END sentinel has arrived. */
+/**
+ * The newest stored assistant reply, once the mock's END sentinel has arrived.
+ *
+ * Used by the OVER-CAP case alone. The refusal it waits for is a few hundred
+ * characters, so that reply settles in seconds; the under-cap case cannot use
+ * this at all — see the comment in that test for what an 80,000-character
+ * verbatim echo does to a settle, and what it asserts instead.
+ */
 async function settledAnswer(page: Page, projectId: string, conversationId: string): Promise<string> {
   await expectStoredAssistantAnswer(page, projectId, conversationId, {
     timeout: 180_000,
@@ -370,15 +377,27 @@ test('an agent reads an 80k-character artifact back in full', async ({ page }) =
       callToolWithArgumentsPrompt('read_file', { filename: fileName }, `read the full content of ${fileName}`),
     );
 
-    const answer = await settledAnswer(page, fixture.projectId, fixture.conversationId);
-    expect(
-      answer,
-      'a file under the 200k agent-path cap must not be refused for its size — the old 60k limit is gone',
-    ).not.toMatch(SIZE_LIMIT_MARK);
-    expect(
+    // ASSERTED ON THE LIVE TRANSCRIPT, NOT ON THE STORED ROW. Measured twice
+    // on the rust leg with the whole read delivered: the mock quotes a tool
+    // result VERBATIM (`deploy/mock-llm/server.py`, "Resume: quote the tool
+    // results verbatim") and this lane streams with a per-chunk delay, so an
+    // 80,000-character result becomes an 80,000-character reply arriving at a
+    // few characters a second — the stored row was still growing minutes after
+    // a three-minute settle gave up, and the transcript API answers EMPTY for a
+    // row that is still streaming. Waiting for that row to settle is waiting
+    // for something this lane cannot deliver, and it says nothing about the
+    // read: the claim is that the file's content reached the model, which the
+    // live answer and the tool pin below both show while the turn is still
+    // going.
+    const answer = page.getByTestId('chat-message-list').getByTestId('application-answer').first();
+    await expect(
       answer,
       'the reply must quote the file’s real content, not a summary of it or an empty result',
-    ).toContain(token);
+    ).toContainText(token, { timeout: 120_000 });
+    await expect(
+      answer,
+      'a file under the 200k agent-path cap must not be refused for its size — the old 60k limit is gone',
+    ).not.toContainText(SIZE_LIMIT_MARK);
 
     // THE LIVE PIN, BEFORE ANY RELOAD (#956). The result is far past one output
     // frame, so it reaches the browser as a sequence of
@@ -402,6 +421,18 @@ test('an agent reads an 80k-character artifact back in full', async ({ page }) =
       page.getByTestId('chat-tool-action-partial-output'),
       'the reassembled output was reported partial',
     ).toHaveCount(0);
+
+    // STOP THE TURN once the proof is in. The mock is still re-streaming the
+    // 80,000-character result at this point and will go on doing so for the
+    // better part of an hour; measured, two such leftovers saturated the
+    // worker and made the NEXT test in this very file time out on a reply that
+    // normally settles in twenty seconds. Stopping is a product action (the
+    // composer's own control, which DELETEs the task), so it also leaves the
+    // lane as a user would.
+    const stopButton = page.getByRole('button', { name: 'Stop generating' });
+    if (await stopButton.count()) {
+      await stopButton.first().click({ timeout: 10_000 }).catch(() => undefined);
+    }
   } finally {
     await fixture?.dispose();
   }
