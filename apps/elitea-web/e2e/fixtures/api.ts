@@ -12,6 +12,9 @@ import type { APIRequestContext, APIResponse, Locator, Page } from '@playwright/
 import { expect, request as playwrightRequest } from '@playwright/test';
 
 import { BASE_URL, STORAGE_STATE } from '../../playwright.config';
+// The journal-scope rule lives in `scripts/lib` so it can be unit-tested
+// without Playwright, a browser or a running stack — `scripts/mock-journal-scope.test.mjs`.
+import { mockLlmJournalScopeFailure } from '../../scripts/lib/mock-journal-scope.mjs';
 
 export const AUTOTEST_PREFIX = 'autotest_';
 
@@ -2500,6 +2503,15 @@ export interface MockToolJournalEntry {
 export interface MockLlmJournalEntry {
   readonly path: string;
   readonly mode: string | null;
+  /**
+   * A LABEL for the credential that reached the mock, never a secret — a
+   * seeded key is recorded verbatim (`mock-key-project-<id>`) because it is
+   * public, anything else as a digest prefix (`_credential_label`,
+   * `deploy/mock-llm/server.py`). It NAMES the project whose catalogue
+   * credential resolved, which is what lets a reader tell its own stack's
+   * journal from another one's.
+   */
+  readonly credential?: string;
   /** The function names this request offered the model. */
   readonly tools: readonly string[];
   /**
@@ -2559,9 +2571,27 @@ export async function clearMockToolJournal(page: Page): Promise<void> {
   await clearMockJournal(page, `${MOCK_HOST}/tool/__journal`);
 }
 
-/** The MODEL requests the mock has served, newest last. */
-export async function readMockLlmJournal(page: Page): Promise<readonly MockLlmJournalEntry[]> {
-  return readMockJournal<MockLlmJournalEntry>(page, `${MOCK_HOST}/__journal`);
+/**
+ * The MODEL requests the mock has served, newest last.
+ *
+ * PASS `projectId` whenever the caller is about to assert on traffic it
+ * believes this run produced. It then refuses a journal that holds no request
+ * for that project — which is what a read against ANOTHER stack's mock looks
+ * like, and the failure otherwise reads as an accusation against the product
+ * rather than against the invocation. See `scripts/lib/mock-journal-scope.mjs`
+ * for the three journeys that were misread this way.
+ *
+ * Omitting it keeps the previous behaviour exactly, for the readers that
+ * assert about absence or do not know a project.
+ */
+export async function readMockLlmJournal(
+  page: Page,
+  projectId?: string | number,
+): Promise<readonly MockLlmJournalEntry[]> {
+  const entries = await readMockJournal<MockLlmJournalEntry>(page, `${MOCK_HOST}/__journal`);
+  const failure = mockLlmJournalScopeFailure({ entries, projectId, host: MOCK_HOST });
+  if (failure !== undefined) throw new Error(failure);
+  return entries;
 }
 
 /** Empty the MODEL journal. */

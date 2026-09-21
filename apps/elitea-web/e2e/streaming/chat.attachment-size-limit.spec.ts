@@ -134,8 +134,13 @@ test('a 300k-character attachment is not handed to the model in full', async ({ 
   }
 
   // ── THE ASSERTION ─────────────────────────────────────────────────────
-  const requests = await readMockLlmJournal(page);
-  // NON-VACUITY FIRST. "The tail never reached the model" is trivially true of
+  // SCOPED TO THIS PROJECT. The journal host comes from STANDALONE_MOCK_PORT on
+  // the Playwright process, not from the stack under test, so a run against a
+  // second stack that forgets it reads ANOTHER mock — and every assertion below
+  // then reports a product failure that is really an invocation one. Naming the
+  // project makes the reader refuse that journal by its credentials instead.
+  const requests = await readMockLlmJournal(page, projectId);
+  // NON-VACUITY NEXT. "The tail never reached the model" is trivially true of
   // a turn that never reached the model at all, so the request must be shown to
   // exist and to carry THIS turn's prompt before its absence means anything.
   expect(requests.length, 'the turn made no model request at all, so nothing here is a measurement').toBeGreaterThan(0);
