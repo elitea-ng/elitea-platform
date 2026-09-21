@@ -22,8 +22,11 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
 
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 )
@@ -120,11 +123,54 @@ func TestChatMentionNotificationsWriteNothingForAnEmptyAudience(t *testing.T) {
 	}
 }
 
+// newMembershipTestPool answers a private database carrying the LEGACY auth
+// tables `ProjectMemberUserIDs` reads.
+//
+// NOT the migrated template the rest of this file uses. That template replays
+// the shared/tenant migration CORPUS, which never creates
+// `public.auth_core__user` or `public.auth_core__project_user_role` — they are
+// pylon-owned in a migrated deployment, and on continuous integration's
+// Postgres they simply do not exist. Seeding them there failed with
+// `relation "public.auth_core__user" does not exist`, and the first version of
+// this test answered that with `t.Skipf`, which the skip ledger (#423) refuses
+// for exactly the right reason: a skip is an assertion that stopped running,
+// and this one would have stopped running on the only machine that matters.
+//
+// `db.RunMigrations` over an EMPTY database is how every other test that needs
+// a user row gets one — the skills author join
+// (`newSkillsTestPool`, skills_postgres_integration_test.go) and the
+// applications `getVersions` author cases both do it, and both pass on CI. It
+// replays `internal/infra/db/migrations/001_initial.sql`, which declares the
+// two auth tables (:956, :1028) and `centry.notifications` alongside them.
+func newMembershipTestPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	pool := newPostgresIntegrationPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := db.RunMigrations(ctx, pool); err != nil {
+		t.Fatalf("run baseline migrations: %v", err)
+	}
+	return pool
+}
+
 func TestProjectMemberUserIDsExcludesSystemAccounts(t *testing.T) {
-	repo, pool := newMentionNotificationRepo(t)
+	pool := newMembershipTestPool(t)
+	repo := NewChatMentionNotificationRepo(pool)
 	ctx := context.Background()
 
 	const projectID = int64(910_978)
+	// The membership row's `role_id` is a FOREIGN KEY into
+	// `auth_core__project_role`, and 001_initial seeds no project roles — so
+	// the role has to exist before any member can hold it.
+	var roleID int64
+	if err := pool.QueryRow(ctx, `
+INSERT INTO public.auth_core__project_role (project_id, name)
+VALUES ($1, 'member')
+ON CONFLICT (project_id, name) DO UPDATE SET name = EXCLUDED.name
+RETURNING id`, projectID).Scan(&roleID); err != nil {
+		t.Fatalf("seed project role: %v", err)
+	}
+
 	// Two real accounts and one platform system user. `@everyone` that
 	// notified the system user would write a row nobody can see or clear.
 	var humanA, humanB, system int64
@@ -141,20 +187,17 @@ INSERT INTO public.auth_core__user (email, name)
 VALUES ($1, $1)
 ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name
 RETURNING id`, seed.email).Scan(seed.into); err != nil {
-			t.Skipf("this deployment's auth_core__user does not accept the seed shape: %v", err)
+			t.Fatalf("seed user %s: %v", seed.email, err)
 		}
 	}
 	for _, userID := range []int64{humanA, humanB, system} {
 		if _, err := pool.Exec(ctx, `
 INSERT INTO public.auth_core__project_user_role (project_id, user_id, role_id)
-VALUES ($1, $2, 1)
-ON CONFLICT DO NOTHING`, projectID, userID); err != nil {
-			t.Skipf("this deployment's membership table does not accept the seed shape: %v", err)
+VALUES ($1, $2, $3)
+ON CONFLICT DO NOTHING`, projectID, userID, roleID); err != nil {
+			t.Fatalf("seed membership for user %d: %v", userID, err)
 		}
 	}
-	t.Cleanup(func() {
-		_, _ = pool.Exec(ctx, `DELETE FROM public.auth_core__project_user_role WHERE project_id = $1`, projectID)
-	})
 
 	members, err := repo.ProjectMemberUserIDs(ctx, projectID)
 	if err != nil {
