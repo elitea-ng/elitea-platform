@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use adk_rust::agent::LlmEventSummarizer;
+use adk_rust::futures::StreamExt as _;
 use adk_rust::session::Session;
 use adk_rust::{
     AdkError, BaseEventsSummarizer, Content, ErrorCategory, ErrorComponent, Event, Llm, LlmRequest,
@@ -35,6 +36,7 @@ pub(super) struct DurableContextCompaction {
     budget: Arc<dyn ModelRequestBudget>,
     summarizer: Arc<dyn BaseEventsSummarizer>,
     repair_summarizer: Arc<dyn BaseEventsSummarizer>,
+    model: Arc<dyn Llm>,
     definition_digest: [u8; 32],
     record: Mutex<Option<CompactionRecord>>,
 }
@@ -75,7 +77,7 @@ impl DurableContextCompaction {
                 .with_prompt_template(super::context_summary::prompt(&plan.summary_instructions)),
         );
         let repair_summarizer = Arc::new(
-            LlmEventSummarizer::new(model).with_prompt_template(format!(
+            LlmEventSummarizer::new(model.clone()).with_prompt_template(format!(
                 "{}\nThe previous candidate failed validation. Correct it using only the original source records. The final validation-feedback record contains the rejected candidate and a static failure code, not additional source evidence. Return the complete corrected record. Each evidence_refs entry must equal a references.value, not a label. Every referenced value must exist in the original source. Preserve valid facts; do not invent references to satisfy validation. When correction_scope is evidence_refs_only, only change completed_work evidence_refs arrays. Select exact entries from allowed_evidence_refs. Use an empty array when no allowed entry supports the result. Preserve every other field exactly. Original bulk history is omitted for this scoped correction; the platform already checked the allowed reference values.",
                 super::context_summary::prompt(&plan.summary_instructions)
             )),
@@ -85,6 +87,7 @@ impl DurableContextCompaction {
             budget,
             summarizer,
             repair_summarizer,
+            model,
             definition_digest,
             record: Mutex::new(record),
         })
@@ -326,12 +329,10 @@ impl DurableContextCompaction {
                 let mut feedback = Event::new("context-summary-validation");
                 "validation-feedback".clone_into(&mut feedback.author);
                 let evidence_only = error.code == "context_summary_evidence";
-                let feedback_value = if evidence_only {
-                    events.clear();
-                    let mut value = super::context_summary::evidence_correction_input(text)?;
-                    value["validation_code"] = Value::String(error.code.into());
-                    value
-                } else if error.code == "context_summary_reference" {
+                if evidence_only {
+                    return self.correct_evidence(text, &source).await;
+                }
+                let feedback_value = if error.code == "context_summary_reference" {
                     super::context_summary::reference_correction_input(text, &source)?
                 } else {
                     serde_json::json!({"validation_code": error.code, "rejected_candidate": text})
@@ -352,40 +353,42 @@ impl DurableContextCompaction {
                 else {
                     return Err(invalid_compaction());
                 };
-                if evidence_only {
-                    super::context_summary::apply_evidence_correction(text, corrected_text, &source)
-                } else {
-                    match super::context_summary::validate(corrected_text, &source) {
-                        Err(error) if error.code == "context_summary_evidence" => {
-                            // Reference repair can leave dangling links. One final
-                            // evidence-only correction cannot rewrite accepted facts.
-                            self.correct_evidence(corrected_text, &source).await
-                        }
-                        result => result,
+                match super::context_summary::validate(corrected_text, &source) {
+                    Err(error) if error.code == "context_summary_evidence" => {
+                        // Reference repair can leave dangling links. One final
+                        // evidence-only correction cannot rewrite accepted facts.
+                        self.correct_evidence(corrected_text, &source).await
                     }
+                    result => result,
                 }
             }
         }
     }
 
     async fn correct_evidence(&self, text: &str, source: &Value) -> adk_rust::Result<String> {
-        let mut feedback = Event::new("context-summary-evidence-validation");
-        "validation-feedback".clone_into(&mut feedback.author);
-        feedback.set_content(
-            Content::new("user")
-                .with_text(super::context_summary::evidence_correction_input(text)?.to_string()),
-        );
-        let corrected = self
-            .repair_summarizer
-            .summarize_events(&[feedback])
-            .await?
-            .and_then(|event| event.actions.compaction)
-            .ok_or_else(invalid_compaction)?;
+        let feedback = super::context_summary::evidence_correction_input(text)?;
+        let request = LlmRequest {
+            model: self.model.name().to_owned(),
+            contents: vec![Content::new("user").with_text(format!(
+                "Repair only completed_work evidence_refs. Select exact allowed_evidence_refs values, or use an empty array. Preserve all other fields and work order. Return the complete corrected record.\n{feedback}"
+            ))],
+            config: Some(adk_rust::GenerateContentConfig {
+                response_schema: Some(super::context_summary::evidence_response_schema(text)?),
+                ..adk_rust::GenerateContentConfig::default()
+            }),
+            ..LlmRequest::new(self.model.name(), Vec::new())
+        };
+        let mut responses = self.model.generate_content(request, false).await?;
+        let response = responses.next().await.ok_or_else(invalid_compaction)??;
+        if responses.next().await.is_some() {
+            return Err(invalid_compaction());
+        }
+        let content = response.content.ok_or_else(invalid_compaction)?;
         let [
             Part::Text {
                 text: corrected_text,
             },
-        ] = corrected.compacted_content.parts.as_slice()
+        ] = content.parts.as_slice()
         else {
             return Err(invalid_compaction());
         };

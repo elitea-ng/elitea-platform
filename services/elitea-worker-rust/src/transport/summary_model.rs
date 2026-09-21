@@ -61,7 +61,6 @@ impl Llm for SummaryModel {
     ) -> adk_rust::Result<LlmResponseStream> {
         if streaming
             || request.model != self.invocation.model_name
-            || request.config.is_some()
             || !request.tools.is_empty()
             || request.previous_response_id.is_some()
             || request.contents.len() != 1
@@ -69,10 +68,33 @@ impl Llm for SummaryModel {
         {
             return Err(invalid_summary("context_summary_request"));
         }
+        let correction_schema = match request.config.take() {
+            None => None,
+            Some(config) => {
+                let schema = config
+                    .response_schema
+                    .as_ref()
+                    .filter(|schema| {
+                        crate::agents::context_summary::is_evidence_response_schema(schema)
+                    })
+                    .ok_or_else(|| invalid_summary("context_summary_request"))?;
+                let expected = GenerateContentConfig {
+                    response_schema: Some(schema.clone()),
+                    ..GenerateContentConfig::default()
+                };
+                if serde_json::to_value(&config).ok() != serde_json::to_value(expected).ok() {
+                    return Err(invalid_summary("context_summary_request"));
+                }
+                Some(schema.clone())
+            }
+        };
         // ADK formats the entire transcript as one text part. Preserve every
         // byte while respecting the ordinary provider's per-part bound.
         request.contents[0].parts = split_text_parts(&request.contents[0].parts)?;
-        let invocation = summary_invocation(&self.invocation, self.output_cap)?;
+        let mut invocation = summary_invocation(&self.invocation, self.output_cap)?;
+        if let Some(schema) = correction_schema {
+            invocation.response_schema = Some(schema);
+        }
         request.config = Some(GenerateContentConfig {
             temperature: invocation.temperature,
             response_schema: invocation.response_schema.clone(),

@@ -1464,3 +1464,47 @@ fn response_schema_must_match_the_frozen_invocation() {
     request.config.as_mut().unwrap().response_schema = None;
     assert!(validate_llm_request(&request, true, &invocation).is_err());
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn summary_evidence_repair_uses_native_enum_and_rejects_other_overrides() {
+    let (client, captured) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(
+            test_model_gateway_response(Body::new(Full::new(Bytes::from(ordinary_sse())))),
+        )],
+        test_model_gateway_config(),
+    )
+    .unwrap();
+    let invocation = test_model_facade_invocation();
+    let model_name = invocation.model_name.clone();
+    let bound = client
+        .bind_ordinary(
+            &ClaimScopedEliteaContext::fixture(17, TOKEN),
+            17,
+            invocation,
+        )
+        .unwrap();
+    let summary = bound.summarization_model().unwrap();
+    let mut schema = crate::agents::context_summary::response_schema();
+    schema["properties"]["completed_work"]["items"]["properties"]["evidence_refs"]["items"]["enum"] =
+        serde_json::json!(["call-one"]);
+    let mut request = LlmRequest::new(
+        model_name,
+        vec![Content::new("user").with_text("Repair supplied evidence links.")],
+    );
+    request.config = Some(GenerateContentConfig {
+        response_schema: Some(schema.clone()),
+        ..GenerateContentConfig::default()
+    });
+    let mut invalid = request.clone();
+    invalid.config.as_mut().unwrap().temperature = Some(0.99);
+    assert!(summary.generate_content(invalid, false).await.is_err());
+    assert!(captured.lock().unwrap().is_empty());
+    drain(summary.generate_content(request, false).await.unwrap())
+        .await
+        .unwrap();
+    let requests = captured.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(body["response_format"]["json_schema"]["schema"], schema);
+    assert_eq!(body["response_format"]["json_schema"]["strict"], true);
+}

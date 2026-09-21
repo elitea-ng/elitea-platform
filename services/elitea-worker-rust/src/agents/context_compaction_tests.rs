@@ -1,5 +1,5 @@
 use super::*;
-use adk_rust::futures::{StreamExt as _, stream};
+use adk_rust::futures::stream;
 use adk_rust::session::{
     AppendEventRequest, CreateRequest, DeleteRequest, GetRequest, InMemorySessionService,
     ListRequest, SessionService,

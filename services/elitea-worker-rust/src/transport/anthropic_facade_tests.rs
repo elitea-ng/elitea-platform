@@ -1188,3 +1188,47 @@ async fn adk_summary_rejects_truncation_and_stream_failure_after_text() {
         assert_eq!(captured.lock().unwrap().len(), 1);
     }
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn native_summary_evidence_repair_uses_constrained_schema() {
+    let (client, captured) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(
+            test_model_gateway_response(Body::new(Full::new(Bytes::from(native_sse(MODEL))))),
+        )],
+        test_model_gateway_config(),
+    )
+    .unwrap();
+    let bound = client
+        .bind_anthropic_ordinary(
+            &ClaimScopedEliteaContext::fixture(17, TOKEN),
+            17,
+            invocation(MODEL, None),
+        )
+        .unwrap();
+    let mut schema = crate::agents::context_summary::response_schema();
+    schema["properties"]["completed_work"]["items"]["properties"]["evidence_refs"]["items"]["enum"] =
+        serde_json::json!(["call-one"]);
+    let mut repair = LlmRequest::new(
+        MODEL,
+        vec![Content::new("user").with_text("Repair supplied evidence links.")],
+    );
+    repair.config = Some(GenerateContentConfig {
+        response_schema: Some(schema.clone()),
+        ..GenerateContentConfig::default()
+    });
+    drain(
+        bound
+            .summarization_model()
+            .unwrap()
+            .generate_content(repair, false)
+            .await
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    let requests = captured.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(body["output_config"]["format"]["schema"], schema);
+    assert_eq!(body["output_config"]["format"]["type"], "json_schema");
+}
