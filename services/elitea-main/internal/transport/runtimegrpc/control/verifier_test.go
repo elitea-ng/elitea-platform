@@ -138,7 +138,7 @@ func newTestVerifier(t *testing.T) *ConformanceCommandVerifier {
 		EnvelopeSchemaRevision: "elitea.runtime.signed-worker-command.v1",
 		ProtocolRevision:       "elitea.runtime.v1",
 		CapabilityVersion:      "1",
-		LimitsRevision:         "elitea.runtime.limits.conformance.v1",
+		LimitsRevision:         "elitea.runtime.limits.conformance.v2",
 		KeyID:                  "elitea-runtime-v1-conformance-hmac",
 		HMACKey:                conformanceTestKey,
 		MaxWorkerCommandBytes:  32 * 1024,
@@ -179,7 +179,7 @@ func validRawWorkerCommand(t *testing.T) []byte {
 		IsolationClass:     "credential-free",
 		Priority:           1,
 		DeadlineUnixMillis: time.Date(2026, time.July, 16, 12, 1, 0, 0, time.UTC).UnixMilli(),
-		LimitsRevision:     "elitea.runtime.limits.conformance.v1",
+		LimitsRevision:     "elitea.runtime.limits.conformance.v2",
 		CapabilityCommand: &runtimev1.WorkerCommandV1_ConfigurationValidation{
 			ConfigurationValidation: &runtimev1.ConfigurationValidationCommandV1{
 				ConfigurationRevisionId: "revision-1",

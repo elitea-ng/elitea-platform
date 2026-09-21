@@ -46,7 +46,7 @@ const (
 	capabilityVersion      = "1"
 	indexCapabilityVersion = "2"
 	agentCapabilityVersion = "1"
-	limitsRevision         = "elitea.runtime.limits.conformance.v1"
+	limitsRevision         = "elitea.runtime.limits.conformance.v2"
 
 	resourceClass          = "validation-small"
 	isolationClass         = "shared-claim-scoped-authority"

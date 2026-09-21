@@ -213,7 +213,7 @@ func newRecoveryVerifier(t *testing.T) *controltransport.ConformanceCommandVerif
 		EnvelopeSchemaRevision: "elitea.runtime.signed-worker-command.v1",
 		ProtocolRevision:       "elitea.runtime.v1",
 		CapabilityVersion:      "1",
-		LimitsRevision:         "elitea.runtime.limits.conformance.v1",
+		LimitsRevision:         "elitea.runtime.limits.conformance.v2",
 		KeyID:                  "elitea-runtime-v1-conformance-hmac",
 		HMACKey:                []byte("ELITEA_RUNTIME_V1_TEST_ONLY_NOT_A_SECRET"),
 		MaxWorkerCommandBytes:  32 * 1024,

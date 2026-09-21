@@ -10,7 +10,9 @@ use super::events::{
 };
 use super::graph::pipeline_result_event;
 use crate::protocol::elitea::runtime::v1::NodeEventV1;
-use crate::protocol::node_event::encode_current_node_event_json;
+use crate::protocol::node_event::{
+    MAX_CURRENT_NODE_EVENT_JSON_BYTES, encode_current_node_event_json,
+};
 
 fn timestamp(second: u32) -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 8, 14, 12, 0, second)
@@ -1436,4 +1438,162 @@ fn malformed_graph_hitl_never_becomes_an_approval_card() {
         let error = projection_error(projector.project(&pipeline_hitl_event(invalid)));
         assert_eq!(error.code(), AgentEventProjectionErrorCode::InvalidState);
     }
+}
+
+/// CHUNKED TOOL OUTPUT (#956), the emit half.
+///
+/// An 80,000-character tool result — well inside the SDK artifact toolkit's own
+/// 200,000-character agent-path cap — used to fail projection outright
+/// (`MAX_TOOL_EVENT_VALUE_BYTES`), which reached the user as a failed tool call
+/// for a file that had been read perfectly well. It must now ride as an ordered
+/// sequence of frame-sized chunk events that reassemble BYTE FOR BYTE, with the
+/// completed call naming the count and the digest instead of carrying text it
+/// could not carry.
+#[test]
+fn an_oversized_tool_result_is_chunked_rather_than_refused() {
+    let mut projector = AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({})))
+        .expect("projector");
+    projector.start(timestamp(0)).expect("start");
+    let tool = event(
+        "llm-tool",
+        1,
+        false,
+        true,
+        vec![Part::FunctionCall {
+            name: "read_file".to_owned(),
+            args: json!({"filename": "big.txt"}),
+            id: Some("call-1".to_owned()),
+            thought_signature: None,
+        }],
+    );
+    projector.project(&tool).expect("tool start");
+
+    let payload =
+        "AUTOTESTMED the quick brown fox jumps over the lazy dog 0123456789\n".repeat(1_213);
+    assert!(payload.len() > 80_000, "this case needs an 80k result");
+    let response = json!(payload.clone());
+    let mut result = Event::with_id("tool-result", "invocation-1");
+    result.timestamp = timestamp(2);
+    result.author = "root-agent".to_owned();
+    result.llm_response.content = Some(Content {
+        role: "function".to_owned(),
+        parts: vec![Part::FunctionResponse {
+            function_response: adk_rust::FunctionResponseData::new("read_file", response.clone()),
+            id: Some("call-1".to_owned()),
+            annotations: None,
+        }],
+    });
+    let projected = projector
+        .project(&result)
+        .expect("an oversized tool result must project, not fail")
+        .into_iter()
+        .map(|event| current(&event))
+        .collect::<Vec<_>>();
+
+    let chunks = projected
+        .iter()
+        .filter(|event| event["type"] == "agent_tool_output_chunk")
+        .collect::<Vec<_>>();
+    assert!(chunks.len() > 1, "an 80k result must span frames");
+    // Every chunk is one ordinary output frame. This is the property the whole
+    // mechanism exists for, so it is asserted on the ENCODED event.
+    for chunk in &chunks {
+        let encoded = serde_json::to_vec(chunk).expect("encoded chunk event");
+        assert!(
+            encoded.len() <= MAX_CURRENT_NODE_EVENT_JSON_BYTES,
+            "a chunk event of {} bytes exceeds the output frame",
+            encoded.len()
+        );
+    }
+    // The chunks precede the completed call, so main has the whole value by
+    // the time it sees the entry that names its digest.
+    let first_chunk = projected
+        .iter()
+        .position(|event| event["type"] == "agent_tool_output_chunk")
+        .expect("a chunk event");
+    let tool_end = projected
+        .iter()
+        .position(|event| event["type"] == "agent_tool_end")
+        .expect("a tool end event");
+    assert!(first_chunk < tool_end);
+
+    let mut reassembled = String::new();
+    for (index, chunk) in chunks.iter().enumerate() {
+        let metadata = &chunk["response_metadata"]["tool_output_chunk"];
+        assert_eq!(metadata["tool_call_id"], "call-1");
+        assert_eq!(metadata["index"], index);
+        assert_eq!(metadata["total"], chunks.len());
+        reassembled.push_str(chunk["content"].as_str().expect("chunk text"));
+    }
+    let expected = serde_json::to_string(&response).expect("encoded tool result");
+    assert_eq!(reassembled, expected, "the chunks must reassemble exactly");
+
+    // The completed call carries the count and the digest and NO inline text.
+    let entry = &projected[tool_end]["response_metadata"];
+    assert_eq!(entry["tool_output"], "");
+    assert_eq!(entry["tool_output_chunks"]["total"], chunks.len());
+    let digest = entry["tool_output_chunks"]["tool_output_sha256"]
+        .as_str()
+        .expect("the completed call names the digest");
+    assert_eq!(digest.len(), 64);
+    assert_eq!(
+        digest,
+        chunks[0]["response_metadata"]["tool_output_chunk"]["tool_output_sha256"]
+            .as_str()
+            .expect("the chunk names the same digest")
+    );
+}
+
+/// A result that already fits is untouched: no chunk events, the text inline.
+/// Chunking a small result would change every existing consumer's shape for no
+/// reason.
+#[test]
+fn a_tool_result_that_fits_is_not_chunked() {
+    let mut projector = AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({})))
+        .expect("projector");
+    projector.start(timestamp(0)).expect("start");
+    projector
+        .project(&event(
+            "llm-tool",
+            1,
+            false,
+            true,
+            vec![Part::FunctionCall {
+                name: "read_file".to_owned(),
+                args: json!({"filename": "small.txt"}),
+                id: Some("call-1".to_owned()),
+                thought_signature: None,
+            }],
+        ))
+        .expect("tool start");
+    let mut result = Event::with_id("tool-result", "invocation-1");
+    result.timestamp = timestamp(2);
+    result.author = "root-agent".to_owned();
+    result.llm_response.content = Some(Content {
+        role: "function".to_owned(),
+        parts: vec![Part::FunctionResponse {
+            function_response: adk_rust::FunctionResponseData::new(
+                "read_file",
+                json!({"title": "Bounded result"}),
+            ),
+            id: Some("call-1".to_owned()),
+            annotations: None,
+        }],
+    });
+    let projected = projector
+        .project(&result)
+        .expect("tool result")
+        .into_iter()
+        .map(|event| current(&event))
+        .collect::<Vec<_>>();
+    assert!(
+        projected
+            .iter()
+            .all(|event| event["type"] != "agent_tool_output_chunk")
+    );
+    assert_eq!(
+        projected[0]["response_metadata"]["tool_output"],
+        "{\"title\":\"Bounded result\"}"
+    );
+    assert!(projected[0]["response_metadata"]["tool_output_chunks"].is_null());
 }
