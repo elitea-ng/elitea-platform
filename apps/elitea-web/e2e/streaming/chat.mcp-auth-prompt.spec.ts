@@ -41,36 +41,45 @@
  * affordance, no toolkit name. Everything the runtime assembled was discarded
  * before the transcript.
  *
- * PARTLY FIXED (#982), and the REMAINING half is not the one this header
- * originally named. Recorded in full because two plausible diagnoses were
- * measured and both were wrong.
+ * FIXED (#982). Two diagnoses were measured and discarded on the way, and both
+ * are recorded because each one read as obviously right.
  *
- * WHAT IS DONE. The runtime now carries the sanitized
- * `DelegatedAuthorizationRequirement` to the transcript on BOTH paths a
- * challenge can take: `NativeAgentAssemblyError::authorization` for a toolkit
- * that fails materialization, and `NativeAgentRuntimeError::delegated_authorization`
- * for one that fails the event stream. Either publishes a `full_message` that
- * NAMES the connection, with the structured block in
- * `response_metadata.mcp_authorization_required`, and settles the turn as an
- * answer rather than as "The runtime operation failed.". Unit-tested in
- * `agents/events_tests.rs`.
+ * WRONG #1: "the challenge aborts ASSEMBLY". It does not. A `401` is answered
+ * by `materialize_mcp_toolsets_with_tokens_and_authorization`
+ * (`toolkits/mcp.rs`) installing an `McpAuthorizationRequiredTool` placeholder
+ * per selected tool and recording the requirement in the
+ * `DelegatedAuthorizationCatalog`, so the turn can PAUSE and ask rather than
+ * die. Assembly completes on purpose.
  *
- * WHY THIS STILL FAILS, measured on the standalone stack (rust worker, images
- * rebuilt from this branch):
+ * WRONG #2: "nothing ever dials /mcp-auth" — read off a truncated `podman
+ * logs` window in which health checks crowded out the real traffic. Restart
+ * mcp-mock to clear its log and the dial is there every run:
  *
- *   - assembly does NOT fail — the worker logs
- *     `agent_native_assembly_completed`, then `native agent event stream
- *     failed error_code="native_agent.event_failed"` half a second later;
- *   - and that stream error carries no requirement, because the challenge was
- *     never reached: `deploy/mock-mcp`'s log for the whole run shows only
- *     `GET /healthz`. NOTHING EVER DIALLED `/mcp-auth`.
+ *     mock-mcp "POST /mcp-auth HTTP/1.1" 401 -
+ *     mock-mcp 401 authorization required on /mcp-auth
  *
- * So the turn fails for a reason that is not an authorization challenge at
- * all, and the notice has nothing to publish. The open question is why the two
- * attached MCP connections are not materialized for this turn even though the
- * test reads the agent back and asserts both are on the version it runs — an
- * admission/materialization gap, not a message-plumbing one. Until that is
- * answered this case cannot measure what it is about.
+ * WHAT WAS ACTUALLY BROKEN was this case's own setup, in two ways.
+ *
+ *  1. TWO CONNECTIONS, ONE TOOL NAME. An agent exposes its tools to the model
+ *     as one flat list of function names, and mcp-mock published exactly one
+ *     tool, so both connections contributed `echo` and the turn died before
+ *     any model round trip. Measured control with no `401` anywhere in it: two
+ *     PLAIN `/mcp` connections fail identically
+ *     (`agent_native_assembly_completed`, then `native agent event stream
+ *     failed error_code="native_agent.event_failed"` ~75ms later); one
+ *     connection alone completes normally. The mock now publishes `reverse`
+ *     beside `echo` so the control connection can be attached without
+ *     colliding. The collision itself is a real defect — today it ends the
+ *     turn anonymously — and it belongs to its own case, not to this one.
+ *  2. NOBODY CALLED THE TOOL. Asking in prose gets prose back; the challenged
+ *     placeholder is never reached and the turn ends with an ordinary answer
+ *     that names nothing, which reads exactly like the gap this case is about.
+ *     The `[[mock:call_tool …]]` marker scripts the call.
+ *
+ * With both corrected the turn reaches the placeholder, ADK raises the tool
+ * confirmation that `require_tool_confirmation` asked for, `session.rs` stamps
+ * the requirement onto it, and the projector renders an authorization prompt
+ * that NAMES the challenging connection and not the other one.
  *
  * RUST leg: `toolkits/mcp.rs` is the native runtime's family.
  */
@@ -80,9 +89,11 @@ import { BASE_URL } from '../../playwright.config';
 import {
   AUTOTEST_PREFIX,
   createAgentThroughForm,
+  callToolWithArgumentsPrompt,
   createMcpConnection,
   deleteAgent,
   fillComposer,
+  MOCK_CALL_TOOL_SENTINEL,
   readStoredTranscript,
 } from '../fixtures/api';
 
@@ -94,8 +105,21 @@ const AUTH_MCP_URL = 'https://mcp-mock:8443/mcp-auth';
 /** The open endpoint, for the connection that must NOT be the one named. */
 const OPEN_MCP_URL = 'https://mcp-mock:8443/mcp';
 
-/** The one tool the mock's catalogue offers. */
+/** The tool the CHALLENGING connection selects — the one the turn will call. */
 const MOCK_MCP_TOOL = 'echo';
+
+/**
+ * The tool the OPEN connection selects.
+ *
+ * DIFFERENT ON PURPOSE, and the reason is the whole shape of this case. An
+ * agent exposes its tools to the model as one flat list of function names, so
+ * two connections that both select `echo` hand it two functions with one name
+ * and the turn dies before any model round trip — measured with two PLAIN
+ * `/mcp` connections and no `401` anywhere in the run, so it is not this
+ * case's subject. `deploy/mock-mcp` publishes `reverse` beside `echo` so the
+ * control connection can be genuinely attached without colliding.
+ */
+const MOCK_MCP_OTHER_TOOL = 'reverse';
 
 async function openAgentChat(page: Page, agentId: string): Promise<string> {
   await page.goto(`${BASE_URL}/app/agents/all/${agentId}`);
@@ -135,10 +159,6 @@ async function turnText(page: Page, projectId: string, conversationId: string): 
  * re-driven four times.
  */
 test('an MCP server that demands authorization is named by its toolkit in the agent’s message', async ({ page }) => {
-  test.fail(
-    true,
-    '#982: the runtime now carries the requirement to the transcript on both the assembly and the event-stream paths, but this turn never dials the MCP server at all — mock-mcp logs only /healthz for the whole run, assembly completes, and the stream then fails for an unrelated reason. The gap left is materialization/admission of the attached MCP connections, not the notice.',
-  );
   test.setTimeout(420_000);
 
   const stamp = String(Date.now()).slice(-7);
@@ -160,7 +180,7 @@ test('an MCP server that demands authorization is named by its toolkit in the ag
     // the message must name the one that challenged and not simply "an MCP".
     const open = await createMcpConnection(page, projectId, openName, {
       url: OPEN_MCP_URL,
-      selected_tools: [MOCK_MCP_TOOL],
+      selected_tools: [MOCK_MCP_OTHER_TOOL],
     });
 
     // ATTACHED, over the same relation write the picker performs. The first
@@ -208,7 +228,16 @@ test('an MCP server that demands authorization is named by its toolkit in the ag
     ).toEqual(expect.arrayContaining([challengingName, openName]));
 
     const conversationId = await openAgentChat(page, agentId);
-    const sendButton = await fillComposer(page, `Use the ${MOCK_MCP_TOOL} tool please`);
+    // THE MODEL MUST ACTUALLY CALL THE TOOL. Asking in prose does not do it:
+    // the mock answers prose with prose, the challenged tool is never reached,
+    // and the turn then ends with an ordinary answer that names nothing —
+    // which reads exactly like the gap this case is about. The marker scripts
+    // the call, and `echo` is the CHALLENGING connection's selection, so the
+    // call lands on its authorization placeholder.
+    const sendButton = await fillComposer(
+      page,
+      callToolWithArgumentsPrompt(MOCK_MCP_TOOL, { text: 'mcp auth probe' }, MOCK_CALL_TOOL_SENTINEL),
+    );
     const started = page.waitForResponse((r) => START_RE.test(r.url()) && r.request().method() === 'POST', {
       timeout: 60_000,
     });
@@ -239,6 +268,9 @@ test('an MCP server that demands authorization is named by its toolkit in the ag
       'the authorization message must NAME the toolkit that challenged — a person with several MCP ' +
         'connections cannot act on "an MCP server needs authorization"',
     ).toContain(challengingName);
+    // ELITEA-2736: the OTHER connection answered every request, so naming it
+    // would send the reader to authorize a server that never asked.
+    expect(said, 'the connection that did not challenge must not be named').not.toContain(openName);
   } finally {
     await deleteAgent(page.request, agentId).catch(() => undefined);
   }

@@ -102,7 +102,34 @@ ECHO_TOOL = {
     },
 }
 
-TOOLS = [ECHO_TOOL]
+# A SECOND tool name, so two connections to this server can be attached to one
+# agent without colliding.
+#
+# An agent exposes its tools to the model as one flat list of function names,
+# so two MCP connections that both publish `echo` give it two functions with
+# one name — which ends the turn before any model round trip. That collision is
+# a real defect in its own right, and it is NOT what the authorization journey
+# is about: `chat.mcp-auth-prompt.spec.ts` needs a SECOND connection only as
+# the control that the message names the one that actually challenged. Giving
+# this server a second tool lets that control exist without the case measuring
+# the collision by accident.
+REVERSE_TOOL = {
+    "name": "reverse",
+    "description": (
+        "Return the text passed in, reversed. Exists so a second connection to "
+        "this server contributes a DIFFERENT function name than `echo`."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "text": {"type": "string", "description": "The text to reverse."}
+        },
+        "required": ["text"],
+        "additionalProperties": False,
+    },
+}
+
+TOOLS = [ECHO_TOOL, REVERSE_TOOL]
 
 
 def _result(request_id, result: dict) -> dict:
@@ -132,12 +159,14 @@ def _initialize(params: dict) -> dict:
 
 def _tools_call(params: dict, request_id):
     name = params.get("name")
-    if name != ECHO_TOOL["name"]:
+    if name not in (ECHO_TOOL["name"], REVERSE_TOOL["name"]):
         return _error(request_id, -32602, "unknown tool")
     arguments = params.get("arguments")
     arguments = arguments if isinstance(arguments, dict) else {}
     text = arguments.get("text")
     text = text if isinstance(text, str) else json.dumps(arguments, sort_keys=True)
+    if name == REVERSE_TOOL["name"]:
+        text = text[::-1]
     return _result(
         request_id,
         {"content": [{"type": "text", "text": text}], "isError": False},
