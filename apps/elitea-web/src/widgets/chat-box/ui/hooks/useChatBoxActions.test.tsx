@@ -9,6 +9,7 @@ type OnConversationCreated = NonNullable<UseChatBoxActionsParams['onConversation
 function renderActions(
   sendQuestion: ReturnType<typeof vi.fn>,
   onConversationCreated: OnConversationCreated,
+  mentionState: Record<string, unknown> = {},
 ) {
   return renderHook(() =>
     useChatBoxActions({
@@ -25,6 +26,7 @@ function renderActions(
         setIsMentioningEveryone: vi.fn(),
         setSelectedUsers: vi.fn(),
         slash: { resetSlash: vi.fn() },
+        ...mentionState,
       } as never,
       handlers: { sendQuestion } as never,
       deleteAlert: {} as never,
@@ -228,5 +230,64 @@ describe('issue 980: an unchanged save retries rather than rewrites', () => {
     expect(regenerateAnswer.mock.calls[0]?.[1], 'a real edit must carry its new text').toEqual([
       { content: 'a different question', item_type: 'text_message' },
     ]);
+  });
+});
+
+/*
+ * #984: A MENTION IS SENT AS THE USER'S ID, NOT THE PARTICIPANT'S.
+ *
+ * `ResolvedUserMention.id` is the chat PARTICIPANT row id — what the picker
+ * and the highlighter are keyed by — and `entity_meta.id` is the user's. The
+ * start route parses `user_ids` as `centry.notifications.user_id`, so sending
+ * the participant id there notifies a different person or nobody at all.
+ */
+describe('useChatBoxActions @mention routing', () => {
+  it('sends the mentioned participants USER ids', async () => {
+    const sendQuestion = vi.fn().mockResolvedValue({ success: true });
+    const { result } = renderActions(sendQuestion, vi.fn<OnConversationCreated>(), {
+      selectedUsers: [
+        { id: '901', name: 'Alice', userId: '11', participant: {} },
+        { id: '902', name: 'Bob', userId: '12', participant: {} },
+      ],
+    });
+
+    act(() => result.current.handleSend('@alice @bob hi'));
+
+    await waitFor(() => expect(sendQuestion).toHaveBeenCalledTimes(1));
+    expect(sendQuestion.mock.calls[0]?.[0]).toMatchObject({
+      isSendingToUser: true,
+      userIds: ['11', '12'],
+    });
+  });
+
+  it('drops a mention that carries no user id rather than sending a participant id', async () => {
+    const sendQuestion = vi.fn().mockResolvedValue({ success: true });
+    const { result } = renderActions(sendQuestion, vi.fn<OnConversationCreated>(), {
+      selectedUsers: [{ id: '903', name: 'Ghost', participant: {} }],
+    });
+
+    act(() => result.current.handleSend('@ghost hi'));
+
+    await waitFor(() => expect(sendQuestion).toHaveBeenCalledTimes(1));
+    expect(sendQuestion.mock.calls[0]?.[0]).toMatchObject({ userIds: [] });
+  });
+
+  it('flags @everyone so the server resolves the project membership itself', async () => {
+    const sendQuestion = vi.fn().mockResolvedValue({ success: true });
+    const { result } = renderActions(sendQuestion, vi.fn<OnConversationCreated>(), {
+      isMentioningEveryone: true,
+      users: [
+        { id: '901', name: 'Alice', userId: '11', participant: {} },
+        { id: '@everyone', name: 'Everyone', participant: 'All users' },
+      ],
+    });
+
+    act(() => result.current.handleSend('@everyone hi'));
+
+    await waitFor(() => expect(sendQuestion).toHaveBeenCalledTimes(1));
+    expect(sendQuestion.mock.calls[0]?.[0]).toMatchObject({
+      isMentioningEveryone: true,
+      userIds: ['11'],
+    });
   });
 });

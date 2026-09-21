@@ -238,10 +238,42 @@ fn target_bucket(arguments: &Value, configured: &str) -> String {
     optional_string(arguments, "bucket_name").unwrap_or_else(|| configured.to_owned())
 }
 
-/// Strips the `/{bucket}/{filename}` form the SDK's tools accept, and the
-/// leading slash a model tends to add. Returns the key main addresses.
+/// Strips the leading slash a model tends to add. Returns the key main
+/// addresses.
+///
+/// It does NOT split a bucket off the front, and must not: this is what the
+/// SDK does to a plain `filename` (`filename.lstrip('/')`, in
+/// `elitea_sdk/runtime/tools/artifact.py`), and a folder-qualified name like
+/// `/reports/q3.md` is an
+/// ordinary key with a folder in it. The bucket-qualified form is a SEPARATE
+/// argument — see `parse_filepath`.
 fn normalized_key(name: &str) -> String {
     name.trim().trim_start_matches('/').to_owned()
+}
+
+/// Splits the SDK's `/{bucket}/{filename}` form into the bucket and the key.
+///
+/// THIS IS THE FORM THE ATTACHMENT HEADER HANDS THE MODEL. Admission renders
+/// `filepath: /{bucket}/{name}` on every attached file (elitea-main's
+/// `internal/application/agentexecution/attachments.go`) and tells the model a
+/// file-reading tool can open it. The native `read_file` used to take only
+/// `filename`, and trimming the slash off that value turned
+/// `/chat-attachments/<uuid>/report.pdf` into the key
+/// `chat-attachments/<uuid>/report.pdf` INSIDE the toolkit's own bucket — a
+/// 404 for a file that was right there. The SDK never had that problem because
+/// it exposes `filepath` as its own parameter and parses it (`parse_filepath`,
+/// in `elitea_sdk/tools/utils/text_operations.py`); this is that function, rule for
+/// rule: strip the leading slashes, split ONCE, and everything after the first
+/// segment is the key, folders included.
+///
+/// `None` for anything that is not that form — no second segment, or an empty
+/// half — so the caller can answer the model with a sentence instead of
+/// addressing a bucket the model did not name.
+fn parse_filepath(filepath: &str) -> Option<(String, String)> {
+    let path = filepath.trim().trim_start_matches('/');
+    let (bucket, key) = path.split_once('/')?;
+    let key = key.trim();
+    (!bucket.is_empty() && !key.is_empty()).then(|| (bucket.to_owned(), key.to_owned()))
 }
 
 struct ListFilesTool {
@@ -369,10 +401,10 @@ impl Tool for ReadFileTool {
         Some(json!({
             "type": "object",
             "properties": {
-                "filename": {"type": "string", "minLength": 1, "maxLength": MAX_FILENAME_BYTES, "description": "Name of the file to read, as list_files reports it."},
-                "bucket_name": {"type": "string", "maxLength": 63, "description": "Bucket to read from. Defaults to the toolkit's own bucket."}
+                "filename": {"type": "string", "minLength": 1, "maxLength": MAX_FILENAME_BYTES, "description": "Name of the file to read, as list_files reports it. Not needed when filepath is given."},
+                "bucket_name": {"type": "string", "maxLength": 63, "description": "Bucket to read from. Defaults to the toolkit's own bucket. Ignored when filepath is given."},
+                "filepath": {"type": "string", "minLength": 1, "maxLength": MAX_FILENAME_BYTES, "description": "Full path in /{bucket}/{filename} format, as an attached file's header reports it. An alternative to filename plus bucket_name."}
             },
-            "required": ["filename"],
             "additionalProperties": false
         }))
     }
@@ -382,15 +414,40 @@ impl Tool for ReadFileTool {
         _context: Arc<dyn ToolContext>,
         arguments: Value,
     ) -> adk_rust::Result<Value> {
-        let Some(filename) = string_argument(&arguments, "filename") else {
+        // `filepath` FIRST, and it settles the bucket as well as the key: the
+        // SDK's own precedence (`if filepath: ... bucket_name = extracted`),
+        // and the reason it exists is that the value the model was handed
+        // names a bucket that is usually NOT this toolkit's.
+        let target = match optional_string(&arguments, "filepath") {
+            Some(filepath) => match parse_filepath(&filepath) {
+                Some(target) => target,
+                None => {
+                    return Ok(Value::String(
+                        "Could not read the file: filepath must be in /{bucket}/{filename} form."
+                            .to_owned(),
+                    ));
+                }
+            },
+            None => match string_argument(&arguments, "filename") {
+                Some(filename) => (
+                    target_bucket(&arguments, &self.bucket),
+                    normalized_key(&filename),
+                ),
+                None => {
+                    return Ok(Value::String(
+                        "Could not read the file: a non-empty filename or filepath is required."
+                            .to_owned(),
+                    ));
+                }
+            },
+        };
+        let (bucket, name) = target;
+        if name.len() > MAX_FILENAME_BYTES {
             return Ok(Value::String(
-                "Could not read the file: a non-empty filename is required.".to_owned(),
+                "Could not read the file: the file name is too long.".to_owned(),
             ));
-        };
-        let request = ArtifactReadRequest {
-            bucket: target_bucket(&arguments, &self.bucket),
-            name: normalized_key(&filename),
-        };
+        }
+        let request = ArtifactReadRequest { bucket, name };
         match self
             .authority
             .platform()

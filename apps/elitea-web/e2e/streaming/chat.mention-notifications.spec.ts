@@ -38,6 +38,21 @@
  * (0398's "the non-mentioned participant is not notified", 0399's "the
  * sender is not notified") are pinned by the audience unit tests in
  * `mentions_test.go`, which can state them without a second login.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * AND THE COMPOSER NEVER SENT IT (#984)
+ * ─────────────────────────────────────────────────────────────────────────
+ *
+ * The paragraph above says the composer "puts both on the outgoing message",
+ * and that was true of the SOCKET payload only. The REST start body is built
+ * by `buildStartBody`, which emitted `user_input` and `attachments` and
+ * dropped everything else — so with the route half fixed, a mention typed
+ * into the app still notified nobody.
+ *
+ * The first test below could not have caught it: it REPLAYS the app's own
+ * captured POST with `user_ids` injected by hand, which exercises the route
+ * and not the composer that is supposed to produce the field. The second test
+ * drives the composer, and it is the one that fails on the defect.
  */
 import { randomUUID } from 'node:crypto';
 
@@ -120,6 +135,12 @@ test('a chat message carrying a mention is accepted by the start route', async (
 
     // ── The app's OWN start request, captured and replayed with a mention ──
     //
+    // THIS IS THE ROUTE'S HALF, and it is deliberately still a replay: a
+    // NAMED list needs a second person in the conversation to mention, and
+    // this lane has one persona. The COMPOSER's half is the test below, which
+    // drives `@everyone` — the one mention candidate that exists in a
+    // conversation of one.
+    //
     // A hand-built start body is refused by the current-path resolver for
     // reasons that have nothing to do with mentions (measured twice: once
     // here, once in `chat.pipeline-triggers.spec.ts`), so a mention sent that
@@ -186,6 +207,102 @@ test('a chat message carrying a mention is accepted by the start route', async (
     // `chat_mention_notification_postgres_integration_test.go` (the rows land
     // in `centry.notifications` with the event type and the snake_case meta
     // keys the web resolves).
+  } finally {
+    if (conversationId !== '') await deleteConversation(page.request, conversationId, projectId).catch(() => undefined);
+    if (agentId !== '') await deleteAgent(page.request, agentId).catch(() => undefined);
+  }
+});
+
+/*
+ * #984: THE COMPOSER'S OWN REQUEST CARRIES THE MENTION.
+ *
+ * `buildStartBody` emitted `user_input`/`attachments` and nothing else, so
+ * `isSendingToUser`/`userIds`/`isMentioningEveryone` — which the composer
+ * computes and puts on its payload — never reached the start route. A person
+ * typed a mention, watched it render, and the server was told about an
+ * ordinary message.
+ *
+ * `@Everyone` rather than a person's name, because the mention candidates are
+ * the conversation's OTHER user participants and this lane has exactly one
+ * persona: `useChatBoxState` always appends an `@everyone` candidate and never
+ * the caller themselves, so it is the only mention this lane can type. It is
+ * also the stricter assertion of the two: the flag is what asks the server to
+ * resolve the project's membership itself, and it was dropped by the same
+ * line that dropped the ids.
+ */
+test('a mention typed into the composer reaches the start route', async ({ page }) => {
+  test.setTimeout(240_000);
+
+  const projectId = await readCallerPersonalProjectId(page.request);
+  expect(projectId, 'the chat persona must own a personal project (#290)').not.toBe('');
+
+  const stamp = String(Date.now()).slice(-7);
+  let agentId = '';
+  let conversationId = '';
+
+  try {
+    const agent = await createAgentWithVersion(
+      page.request,
+      `${AUTOTEST_PREFIX}mention-ui-${stamp}`,
+      {
+        instructions: 'You are a mention fixture. Answer briefly.',
+        welcomeMessage: 'Say something.',
+        conversationStarters: ['Hello.'],
+        model: { modelName: MOCK_MODEL },
+        meta: { step_limit: 25, internal_tools: [] },
+      },
+      projectId,
+      `${AUTOTEST_PREFIX}mention ui fixture`,
+    );
+    agentId = agent.id;
+
+    await page.goto(`${BASE_URL}/app/agents/all/${agentId}`);
+    const conversationCreated = page.waitForResponse(
+      (r) =>
+        /\/elitea_core\/conversations\/prompt_lib\/\d+$/.test(new URL(r.url()).pathname) &&
+        r.request().method() === 'POST',
+      { timeout: 60_000 },
+    );
+    await page.getByTestId('chat-with-agent-button').click();
+    const conversation = (await (await conversationCreated).json()) as { id?: unknown };
+    conversationId = String(conversation.id ?? '');
+    expect(conversationId, 'the Chat button must create a conversation').not.toBe('');
+    await page.waitForURL(new RegExp(`/app/chat/${conversationId}(?:[/?#]|$)`), { timeout: 45_000 });
+
+    // The body the APP sends, not one this test assembles.
+    let sentBody = '';
+    page.on('request', (request) => {
+      if (request.method() !== 'POST') return;
+      if (!START_RE.test(new URL(request.url()).pathname)) return;
+      sentBody = request.postData() ?? '';
+    });
+
+    const started = page.waitForResponse((r) => START_RE.test(r.url()) && r.request().method() === 'POST', {
+      timeout: 60_000,
+    });
+    const sendButton = await fillComposer(page, '@Everyone please take a look at this.');
+    await sendButton.click();
+    expect((await started).status(), 'a turn carrying a composed mention must be admitted').toBe(200);
+
+    expect(sentBody, 'the app must have POSTed a start body').not.toBe('');
+    const sent = JSON.parse(sentBody) as Record<string, unknown>;
+    // THE ASSERTION THAT FAILS ON THE DEFECT. Before #984 this key was absent
+    // from every body the composer built, whatever the user typed.
+    expect(
+      sent['is_mentioning_everyone'],
+      `the composed @everyone must reach the route: ${sentBody.slice(0, 400)}`,
+    ).toBe(true);
+    // And whatever ids ride along are NUMBERS: `parseMentionedUserIDs`
+    // unmarshals into []int64 and answers 400 for the composer's own strings,
+    // so a mention forwarded verbatim would have cost the whole turn.
+    for (const id of (sent['user_ids'] as readonly unknown[] | undefined) ?? []) {
+      expect(typeof id, `user_ids must be numeric: ${sentBody.slice(0, 400)}`).toBe('number');
+    }
+
+    await expectStoredAssistantAnswer(page, projectId, conversationId, {
+      timeout: 180_000,
+      message: 'the turn carrying a composed mention produced no answer',
+    });
   } finally {
     if (conversationId !== '') await deleteConversation(page.request, conversationId, projectId).catch(() => undefined);
     if (agentId !== '') await deleteAgent(page.request, agentId).catch(() => undefined);

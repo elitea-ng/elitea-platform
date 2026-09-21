@@ -1497,7 +1497,46 @@ const (
 	currentAgentChunkReceivedKey = "received"
 	currentAgentChunkTotalKey    = "total"
 	currentAgentChunkCompleteKey = "complete"
+	// currentAgentChunkSanitizedKey records that a NUL was stripped out of at
+	// least one chunk — see `sanitizedCurrentAgentChunkText`.
+	currentAgentChunkSanitizedKey = "sanitized"
 )
+
+// sanitizedCurrentAgentChunkText removes the one byte a Postgres TEXT column
+// cannot hold, and says whether it had to.
+//
+// EVERY OTHER PATH ALREADY DOES THIS. An inline tool output arrives inside
+// `incoming.entry` and goes through `sanitizeCurrentAgentJSON` before anything
+// touches the row. A CHUNK does not: `DecodeToolOutputChunk` checks only that
+// the text is valid UTF-8, and `\x00` is valid UTF-8. A python tool that
+// returns a large result containing a NUL — a binary sniff, a grep over a
+// mixed file — therefore reached the UPDATE as-is, Postgres answered `invalid
+// byte sequence for encoding "UTF8": 0x00`, the node event was rejected
+// NON-RETRYABLY, and every replay of that event was rejected the same way. The
+// turn was unrecoverable over one byte nobody could see.
+//
+// The DIGEST is the cost, and it is recorded rather than hidden. The producer
+// hashed the text it sent, NUL included, so the assembled text can no longer
+// hash to what the entry declares. Completeness therefore falls back to the
+// chunk arithmetic (all `total` chunks applied in order) whenever this flag is
+// set, and the flag is kept in the progress object so a reader can tell a
+// genuine byte-for-byte reassembly from this one.
+func sanitizedCurrentAgentChunkText(text string) (string, bool) {
+	if !strings.Contains(text, "\x00") {
+		return text, false
+	}
+	return strings.ReplaceAll(text, "\x00", ""), true
+}
+
+// currentAgentChunksSanitized reports whether this row has already had a NUL
+// stripped out of an earlier chunk.
+func currentAgentChunksSanitized(progress map[string]any) bool {
+	if progress == nil {
+		return false
+	}
+	sanitized, _ := progress[currentAgentChunkSanitizedKey].(bool)
+	return sanitized
+}
 
 // applyCurrentAgentOutputChunk appends one chunk to the tool call it belongs
 // to.
@@ -1545,13 +1584,17 @@ func applyCurrentAgentOutputChunk(
 		return nil
 	}
 	text := currentAgentString(entry["tool_output"])
-	entry["tool_output"] = text + chunk.Text
+	chunkText, stripped := sanitizedCurrentAgentChunkText(chunk.Text)
+	sanitized := stripped || currentAgentChunksSanitized(progress)
+	assembled := text + chunkText
+	entry["tool_output"] = assembled
 	entry[currentAgentChunkProgressKey] = map[string]any{
-		currentAgentChunkReceivedKey: int64(chunk.Index + 1),
-		currentAgentChunkTotalKey:    int64(chunk.Total),
-		currentAgentChunkDigestKey:   chunk.Digest,
+		currentAgentChunkReceivedKey:  int64(chunk.Index + 1),
+		currentAgentChunkTotalKey:     int64(chunk.Total),
+		currentAgentChunkDigestKey:    chunk.Digest,
+		currentAgentChunkSanitizedKey: sanitized,
 		currentAgentChunkCompleteKey: chunk.Index+1 == chunk.Total &&
-			nodeevent.ToolOutputDigest(text+chunk.Text) == chunk.Digest,
+			(sanitized || nodeevent.ToolOutputDigest(assembled) == chunk.Digest),
 	}
 	return nil
 }
@@ -1578,6 +1621,10 @@ func carryCurrentAgentChunkedOutput(existing, incoming map[string]any) {
 	if accumulated == "" {
 		return
 	}
+	// Stripped here too, not only on the append. The accumulated text is the
+	// row's own and is already clean, but the completed entry may carry inline
+	// text of its own and this value is written straight into `tool_output`.
+	accumulated, strippedHere := sanitizedCurrentAgentChunkText(accumulated)
 	if currentAgentString(incoming["tool_output"]) == "" {
 		incoming["tool_output"] = accumulated
 	}
@@ -1602,12 +1649,16 @@ func carryCurrentAgentChunkedOutput(existing, incoming map[string]any) {
 			received = value
 		}
 	}
+	sanitized := strippedHere || currentAgentChunksSanitized(progress) ||
+		currentAgentChunksSanitized(declared)
 	incoming[currentAgentChunkProgressKey] = map[string]any{
-		currentAgentChunkReceivedKey: received,
-		currentAgentChunkTotalKey:    total,
-		currentAgentChunkDigestKey:   digest,
+		currentAgentChunkReceivedKey:  received,
+		currentAgentChunkTotalKey:     total,
+		currentAgentChunkDigestKey:    digest,
+		currentAgentChunkSanitizedKey: sanitized,
 		currentAgentChunkCompleteKey: total > 0 && received == total && digest != "" &&
-			nodeevent.ToolOutputDigest(currentAgentString(incoming["tool_output"])) == digest,
+			(sanitized ||
+				nodeevent.ToolOutputDigest(currentAgentString(incoming["tool_output"])) == digest),
 	}
 }
 
@@ -1651,5 +1702,9 @@ func currentAgentChunkProgressAttrs(entry map[string]any) map[string]any {
 		currentAgentChunkTotalKey:    total,
 		currentAgentChunkDigestKey:   digest,
 		currentAgentChunkCompleteKey: complete,
+		// Carried onto the row so "complete, but the digest was not the test"
+		// is readable afterwards rather than inferable — see
+		// `sanitizedCurrentAgentChunkText`.
+		currentAgentChunkSanitizedKey: currentAgentChunksSanitized(progress),
 	}
 }

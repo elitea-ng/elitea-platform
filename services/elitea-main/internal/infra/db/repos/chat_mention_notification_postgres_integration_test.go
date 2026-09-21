@@ -214,3 +214,78 @@ ON CONFLICT DO NOTHING`, projectID, userID, roleID); err != nil {
 		t.Fatalf("@everyone must not reach the project's system account; got %v", members)
 	}
 }
+
+// #984: THE MEMBERSHIP ANSWER IS THE GATE FOR A NAMED LIST TOO.
+//
+// `user_ids` used to reach the writer unfiltered — `ProjectMemberUserIDs` was
+// consulted only for `@everyone` — so any member of any project could POST an
+// arbitrary list and write a `centry.notifications` row, carrying this
+// conversation, this project and this sender, onto a stranger's bell in
+// another tenant. `mentionAudience` now intersects with this answer, which
+// makes THIS query the thing that decides, and this test is what says it
+// answers the project asked about rather than the deployment.
+//
+// A real user who is a member of ANOTHER project is the shape that matters: a
+// row that exists, that an attacker can name, and that must not come back.
+func TestProjectMemberUserIDsExcludesAMemberOfAnotherProject(t *testing.T) {
+	pool := newMembershipTestPool(t)
+	repo := NewChatMentionNotificationRepo(pool)
+	ctx := context.Background()
+
+	const homeProject = int64(910_984)
+	const otherProject = int64(910_985)
+	roleOf := func(projectID int64) int64 {
+		var roleID int64
+		if err := pool.QueryRow(ctx, `
+INSERT INTO public.auth_core__project_role (project_id, name)
+VALUES ($1, 'member')
+ON CONFLICT (project_id, name) DO UPDATE SET name = EXCLUDED.name
+RETURNING id`, projectID).Scan(&roleID); err != nil {
+			t.Fatalf("seed project role for %d: %v", projectID, err)
+		}
+		return roleID
+	}
+	userOf := func(email string) int64 {
+		var userID int64
+		if err := pool.QueryRow(ctx, `
+INSERT INTO public.auth_core__user (email, name)
+VALUES ($1, $1)
+ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name
+RETURNING id`, email).Scan(&userID); err != nil {
+			t.Fatalf("seed user %s: %v", email, err)
+		}
+		return userID
+	}
+
+	insider := userOf("mention-insider@example.test")
+	outsider := userOf("mention-outsider@example.test")
+	for _, seed := range []struct {
+		projectID int64
+		userID    int64
+	}{
+		{homeProject, insider},
+		{otherProject, outsider},
+	} {
+		if _, err := pool.Exec(ctx, `
+INSERT INTO public.auth_core__project_user_role (project_id, user_id, role_id)
+VALUES ($1, $2, $3)
+ON CONFLICT DO NOTHING`, seed.projectID, seed.userID, roleOf(seed.projectID)); err != nil {
+			t.Fatalf("seed membership: %v", err)
+		}
+	}
+
+	members, err := repo.ProjectMemberUserIDs(ctx, homeProject)
+	if err != nil {
+		t.Fatalf("resolve membership: %v", err)
+	}
+	found := map[int64]bool{}
+	for _, id := range members {
+		found[id] = true
+	}
+	if !found[insider] {
+		t.Fatalf("the project's own member is missing from %v", members)
+	}
+	if found[outsider] {
+		t.Fatalf("a member of another project came back as a member of this one: %v", members)
+	}
+}

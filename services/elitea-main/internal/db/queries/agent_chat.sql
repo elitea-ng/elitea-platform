@@ -389,6 +389,24 @@ LEFT JOIN LATERAL (
                          ELSE '[]'::jsonb
                      END
                  ) WITH ORDINALITY AS attachment_chunk(value, ordinality)
+            -- AN EMBEDDED IMAGE IS NOT CARRIED FORWARD.
+            --
+            -- #979 appends an `image_url` chunk carrying the picture's base64
+            -- bytes to the attachment's stored `content`. That chunk belongs
+            -- to the turn it was attached on — admission splices it into
+            -- `input_attachments` from memory (currentTurnInputAttachments)
+            -- and never reads it back from here.
+            --
+            -- Letting it ride this projection put a data URL into EVERY later
+            -- turn of the conversation. The bound above withholds a fourth
+            -- older attachment's text, which is 32 KiB; an image is up to a
+            -- third again of its raw cap once base64'd, so four of them alone
+            -- exceed the worker's whole 256 KiB fetch ceiling and the
+            -- conversation becomes unrecoverable — history only grows. It is
+            -- also the one chunk type whose omission costs nothing the model
+            -- can act on: the file's HEADER chunk still says a picture was
+            -- attached, names it, and says a file-reading tool can open it.
+            WHERE attachment_chunk.value ->> 'type' IS DISTINCT FROM 'image_url'
         ) AS item_chunk
         WHERE message_group.conversation_id = conversation.id
           AND message_group.created_at < COALESCE(
@@ -1183,6 +1201,24 @@ LEFT JOIN LATERAL (
                          ELSE '[]'::jsonb
                      END
                  ) WITH ORDINALITY AS attachment_chunk(value, ordinality)
+            -- AN EMBEDDED IMAGE IS NOT CARRIED FORWARD.
+            --
+            -- #979 appends an `image_url` chunk carrying the picture's base64
+            -- bytes to the attachment's stored `content`. That chunk belongs
+            -- to the turn it was attached on — admission splices it into
+            -- `input_attachments` from memory (currentTurnInputAttachments)
+            -- and never reads it back from here.
+            --
+            -- Letting it ride this projection put a data URL into EVERY later
+            -- turn of the conversation. The bound above withholds a fourth
+            -- older attachment's text, which is 32 KiB; an image is up to a
+            -- third again of its raw cap once base64'd, so four of them alone
+            -- exceed the worker's whole 256 KiB fetch ceiling and the
+            -- conversation becomes unrecoverable — history only grows. It is
+            -- also the one chunk type whose omission costs nothing the model
+            -- can act on: the file's HEADER chunk still says a picture was
+            -- attached, names it, and says a file-reading tool can open it.
+            WHERE attachment_chunk.value ->> 'type' IS DISTINCT FROM 'image_url'
         ) AS item_chunk
         WHERE message_group.conversation_id = conversation.id
           AND message_group.created_at < COALESCE(

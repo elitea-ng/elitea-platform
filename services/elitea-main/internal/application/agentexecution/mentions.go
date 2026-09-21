@@ -34,12 +34,26 @@ import (
 //   - never the SENDER. Tagging yourself is a normal thing to do in a sentence
 //     addressed to a group, and a notification about your own message is
 //     noise the reader cannot act on (ELITEA-0399);
-//   - for `@everyone`, every member of the project as the SERVER resolves it —
-//     not the id list the client sent alongside. That list is a client's view
-//     of the membership; trusting it would let a stale or tampered client
-//     notify somebody who is not in the project, which is the same class as
-//     rule 1 of the pipeline-trigger auth story: nothing the caller sends
-//     selects who is affected.
+//   - only PROJECT MEMBERS, for every shape of mention. `@everyone` is every
+//     member of the project as the SERVER resolves it, and a NAMED list is
+//     intersected with that same membership. The list on the wire is a
+//     client's view: an id in it is a request, never an authorization. Reading
+//     it as one meant any member of any project could POST an arbitrary
+//     `user_ids` array and write a `centry.notifications` row — carrying the
+//     conversation, the project and the sender — onto the bell of a stranger
+//     in another tenant, which is cross-tenant spam and an id oracle in one.
+//     This is rule 1 of the pipeline-trigger auth story: nothing the caller
+//     sends selects who is affected.
+//
+//     A non-member id is dropped SILENTLY rather than refused with a 400. Two
+//     reasons, and they point the same way. The membership answer is racy by
+//     construction — a colleague removed from the project between the composer
+//     rendering its picker and the send arriving is an ordinary event, not a
+//     malformed request — and a 400 here would fail a MESSAGE that is
+//     otherwise perfectly good over a secondary row, which is exactly what the
+//     best-effort rule below exists to prevent. The sender is not told,
+//     because the pre-#977 behaviour they are used to told them nothing
+//     either; what changes is that a stranger is no longer told.
 //
 // # WHY IT IS BEST EFFORT
 //
@@ -73,10 +87,12 @@ type MentionNotification struct {
 // same insert shape the PAT-expiry sweep uses.
 type MentionNotificationWriter interface {
 	WriteChatMentionNotifications(ctx context.Context, rows []MentionNotification) error
-	// ProjectMemberUserIDs answers `@everyone` from the SERVER's view of the
-	// project. Separate from the write so the resolution can be asserted on
-	// its own, and so a deployment without it simply notifies nobody for
-	// `@everyone` rather than notifying the client's list.
+	// ProjectMemberUserIDs answers WHO THIS PROJECT CONTAINS, from the
+	// SERVER's view. It resolves `@everyone` and it is also the set a named
+	// mention list is intersected with — every audience this file produces is
+	// a subset of it. Separate from the write so the resolution can be
+	// asserted on its own, and so a deployment without it notifies nobody
+	// rather than notifying the client's list.
 	ProjectMemberUserIDs(ctx context.Context, projectID int64) ([]int64, error)
 }
 
@@ -103,12 +119,26 @@ func mentionAudience(
 ) []int64 {
 	named := request.MentionedUserIDs
 	if request.MentionsEveryone {
+		// Already the server's own set; intersecting it with itself below is
+		// a no-op, and naming it here keeps the two shapes on one path.
 		named = projectMembers
+	}
+	// THE MEMBERSHIP GATE. `projectMembers` is the server's answer and the
+	// only thing that admits an id. An EMPTY set therefore notifies nobody,
+	// which is the right degradation: it means either a project with one
+	// member (the sender, removed below anyway) or a membership read this
+	// function was not given, and both should tell a stranger nothing.
+	members := make(map[int64]struct{}, len(projectMembers))
+	for _, id := range projectMembers {
+		members[id] = struct{}{}
 	}
 	audience := make([]int64, 0, len(named))
 	seen := make(map[int64]struct{}, len(named))
 	for _, id := range named {
 		if id <= 0 || id == request.ActorUserID {
+			continue
+		}
+		if _, member := members[id]; !member {
 			continue
 		}
 		if _, duplicate := seen[id]; duplicate {
@@ -133,15 +163,15 @@ func (service *CurrentApplicationStartService) notifyMentionedUsers(
 		return
 	}
 
-	members := []int64(nil)
-	if request.MentionsEveryone {
-		resolved, err := service.mentions.ProjectMemberUserIDs(ctx, request.ProjectID)
-		if err != nil {
-			slog.Error("agentexecution: resolve @everyone membership",
-				"project_id", request.ProjectID, "err", err)
-			return
-		}
-		members = resolved
+	// ALWAYS resolved, for a named list as much as for `@everyone`: it is the
+	// gate, not just the `@everyone` expansion. A failed read notifies nobody
+	// rather than falling back to the client's list — the fallback is the
+	// defect.
+	members, err := service.mentions.ProjectMemberUserIDs(ctx, request.ProjectID)
+	if err != nil {
+		slog.Error("agentexecution: resolve project membership for mentions",
+			"project_id", request.ProjectID, "err", err)
+		return
 	}
 
 	audience := mentionAudience(request, members)

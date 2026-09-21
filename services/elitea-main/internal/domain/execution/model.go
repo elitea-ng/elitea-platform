@@ -22,6 +22,35 @@ const (
 	MaxInputBundleEntries             = 16
 	MaxInputEntryContentBytes         = 256 * 1024
 	MaxAgentExecutionInputBytes       = 1024 * 1024
+	// MaxWorkerInputBundleBytes is the ceiling BOTH workers apply to the
+	// input-bundle body they fetch, and it is the number that actually decides
+	// whether a turn runs.
+	//
+	// It is not this service's choice. It is hard-coded on both legs —
+	// `RUNTIME_INPUT_CONTENT_BYTES` (services/elitea-worker-rust/src/config.rs)
+	// and `_V1_INPUT_CONTENT_BYTES` (services/elitea-worker-python/src/
+	// elitea_worker/config.py) — and a bundle over it is refused at the FETCH,
+	// before the agent runs: the turn fails at the worker although admission
+	// here accepted it, which is the one failure shape a user cannot act on.
+	//
+	// `MaxAgentExecutionInputBytes` above is deliberately NOT lowered to it:
+	// that bound is the protobuf frame the admission path refuses outright,
+	// and it predates this one by a release. What this constant exists for is
+	// the budgets admission itself CHOOSES — everything elitea-main decides to
+	// put in the bundle must add up under it:
+	//
+	//   256 KiB  =  128 KiB  prior turns' attachment text
+	//                        (4 newest x 32 KiB, internal/db/queries/
+	//                         agent_chat.sql)
+	//           +   64 KiB  this turn's inline images
+	//                        (maxInlineAttachmentImageTurnBytes, internal/
+	//                         application/agentexecution/attachments.go)
+	//           +   64 KiB  instructions, the frozen version, the transcript
+	//                        text, the user's own input and framing
+	//
+	// A budget added here without a place in that sum is a budget that fails
+	// somebody else's turn.
+	MaxWorkerInputBundleBytes = 256 * 1024
 
 	IndexToolkitConfigurationRole = "index.toolkit_configuration"
 	IndexToolParametersRole       = "index.tool_parameters"

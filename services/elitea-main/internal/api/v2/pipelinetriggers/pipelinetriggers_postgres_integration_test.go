@@ -1432,3 +1432,135 @@ func TestSignedTriggerReportsAnUnreadableVaultAsAnOutage(t *testing.T) {
 		t.Fatalf("dispatches = %d, want 0", h.start.count())
 	}
 }
+
+// #984: A BODYLESS ROTATE KEEPS THE TRIGGER IT ROTATES.
+//
+// Create and rotate are one route, and the rotate button on the EditPipeline
+// card sends NO BODY (`usePipelineTriggerSettings.ts`). `parseAuthMode` mapped
+// an absent body to the CREATE default (bearer/custom) and `upsertTrigger`
+// writes all three 0138 columns on the conflict arm, so rotating a GitHub
+// trigger silently turned it into a token one: the url lost its `/github`
+// suffix, the row stopped verifying signatures, and GitHub's next delivery was
+// refused — with nothing in the product saying anything but the secret had
+// changed.
+//
+// `TestRotatingATriggerRewritesItsMode` is the other half and must keep
+// passing: a body that NAMES a mode still replaces it.
+func TestABodylessRotateKeepsTheStoredSignatureMode(t *testing.T) {
+	h := newHarness(t)
+	versionID, _, secret, url := h.mintSignedTrigger(
+		t, homeProject, homeSchema, "Repository webhook", ownerUserID, `{"type":"github"}`)
+	body := `{"ref":"refs/heads/main","commits":[]}`
+	if response := h.do(t, http.MethodPost, url, body,
+		map[string]string{pipelinetriggers.GitHubSignatureHeader: githubSignature(secret, body)},
+	); response.Code != http.StatusAccepted {
+		t.Fatalf("the signed trigger did not work before the rotation: %d %s",
+			response.Code, response.Body.String())
+	}
+
+	// THE ROTATION THE PRODUCT ACTUALLY SENDS: no body at all.
+	rotated := h.do(t, http.MethodPost,
+		fmt.Sprintf("/api/v2/pipeline_triggers/prompt_lib/%s/%d", homeProject, versionID), "", nil)
+	if rotated.Code != http.StatusOK {
+		t.Fatalf("rotate: status = %d, body = %s", rotated.Code, rotated.Body.String())
+	}
+	after := decode(t, rotated)
+	if after["auth_mode"] != pipelinetriggers.AuthModeHMACSHA256 {
+		t.Fatalf("auth_mode after a bodyless rotate = %v, want the stored %q",
+			after["auth_mode"], pipelinetriggers.AuthModeHMACSHA256)
+	}
+	if after["signature_header"] != pipelinetriggers.GitHubSignatureHeader {
+		t.Fatalf("signature_header after a bodyless rotate = %v, want %q",
+			after["signature_header"], pipelinetriggers.GitHubSignatureHeader)
+	}
+	if after["provider"] != pipelinetriggers.ProviderGitHub {
+		t.Fatalf("provider after a bodyless rotate = %v, want %q",
+			after["provider"], pipelinetriggers.ProviderGitHub)
+	}
+	newURL, _ := after["url"].(string)
+	if !strings.HasSuffix(newURL, "/github") {
+		t.Fatalf("url after a bodyless rotate = %q, want the /github suffix kept", newURL)
+	}
+
+	// And the thing that matters to the person who pressed the button: the new
+	// secret verifies the next signed delivery, on the same webhook form.
+	newSecret, _ := after["secret"].(string)
+	if newSecret == "" || newSecret == secret {
+		t.Fatalf("the rotation did not mint a new secret: %v", after)
+	}
+	if response := h.do(t, http.MethodPost, newURL, body,
+		map[string]string{pipelinetriggers.GitHubSignatureHeader: githubSignature(newSecret, body)},
+	); response.Code != http.StatusAccepted {
+		t.Fatalf("the rotated signed trigger was refused: %d %s",
+			response.Code, response.Body.String())
+	}
+}
+
+// #984: A SIGNED DELIVERY LARGER THAN 64 KiB MUST BE ABLE TO START A RUN.
+//
+// `readInboundRaw` capped EVERY inbound body at 64 KiB and answered 413 before
+// the trigger row was looked up. A signing sender's body is not ours to shape
+// — GitHub documents 25 MB as its maximum, and an ordinary push with many
+// commits or a pull_request with a long description passes 64 KiB without
+// being unusual — so those deliveries could never run: GitHub marked them
+// failed and the pipeline never fired.
+//
+// The bearer cap is unchanged and now applied AFTER the row says which mode it
+// is, which the second half of this test pins: the larger read is for signing
+// triggers, not a relaxation for everybody.
+func TestASignedDeliveryLargerThanTheBearerCapStartsARun(t *testing.T) {
+	h := newHarness(t)
+	_, _, secret, url := h.mintSignedTrigger(
+		t, homeProject, homeSchema, "Repository webhook", ownerUserID, `{"type":"github"}`)
+
+	// A push payload just over 64 KiB, built the way a real one grows: many
+	// commit messages, not one enormous string.
+	commits := make([]string, 0, 700)
+	for index := range 700 {
+		commits = append(commits, fmt.Sprintf(
+			`{"id":"%040d","message":"AUTOTESTMED commit %d — %s"}`,
+			index, index, strings.Repeat("detail ", 12)))
+	}
+	body := `{"ref":"refs/heads/main","commits":[` + strings.Join(commits, ",") + `]}`
+	if len(body) <= 64*1024 {
+		t.Fatalf("this case needs a body over the bearer cap; got %d bytes", len(body))
+	}
+
+	response := h.do(t, http.MethodPost, url, body,
+		map[string]string{pipelinetriggers.GitHubSignatureHeader: githubSignature(secret, body)})
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 for a %d-byte signed delivery; body = %s",
+			response.Code, len(body), response.Body.String())
+	}
+	if h.start.count() != 1 {
+		t.Fatalf("dispatches = %d, want 1", h.start.count())
+	}
+
+	// The signature is still verified over the WHOLE body: a large payload is
+	// not a way past the check.
+	tampered := body[:len(body)-1] + " }"
+	refused := h.do(t, http.MethodPost, url, tampered,
+		map[string]string{pipelinetriggers.GitHubSignatureHeader: githubSignature(secret, body)})
+	if refused.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 for a large body whose signature does not cover it",
+			refused.Code)
+	}
+}
+
+// The other side of the same pair: a BEARER trigger keeps the 64 KiB cap, and
+// the refusal is still a 413.
+func TestABearerDeliveryOverTheCapIsStillRefused(t *testing.T) {
+	h := newHarness(t)
+	_, tokenID, secret := h.mintTrigger(t, homeProject, homeSchema, "Nightly report", ownerUserID)
+
+	body := `{"input":"` + strings.Repeat("A", 70*1024) + `"}`
+	response := h.do(t, http.MethodPost, inboundTarget(homeProject, tokenID), body,
+		map[string]string{"Authorization": "Bearer " + secret})
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413 for a %d-byte bearer body; body = %s",
+			response.Code, len(body), response.Body.String())
+	}
+	if h.start.count() != 0 {
+		t.Fatalf("dispatches = %d, want 0", h.start.count())
+	}
+}

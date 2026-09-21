@@ -90,6 +90,26 @@ export function resolveStartContract(target: unknown): string {
   return isApplicationParticipant(target) ? conversationApi.contracts.application : conversationApi.contracts.adhoc;
 }
 
+/**
+ * The mention list the start route parses, as NUMBERS.
+ *
+ * `route.go`'s `parseMentionedUserIDs` unmarshals `user_ids` into `[]int64`
+ * and answers 400 for anything else, so a list of strings — which is what the
+ * composer's payload holds, `ResolvedUserMention.userId` being a string —
+ * would refuse the whole turn rather than the mention. Anything that is not a
+ * positive integer is dropped HERE: it cannot name a user, and including it
+ * would trade a lost notification for a lost message.
+ */
+function mentionedUserIDs(raw: unknown): number[] {
+  if (!Array.isArray(raw)) return [];
+  const ids: number[] = [];
+  for (const value of raw) {
+    const numeric = Number(value);
+    if (Number.isInteger(numeric) && numeric > 0 && !ids.includes(numeric)) ids.push(numeric);
+  }
+  return ids;
+}
+
 export function buildStartBody(params: {
   readonly conversationUuid: string;
   readonly projectId: string | undefined;
@@ -102,11 +122,31 @@ export function buildStartBody(params: {
   const { payload } = params;
   const question = typeof payload['question'] === 'string' ? payload['question'] : '';
   const numericProjectID = Number(params.projectId);
+  // THE @MENTIONS, which used to stop here.
+  //
+  // The composer resolves an `@` into `isSendingToUser`/`userIds` and puts
+  // them on its `chat_predict` payload; this builder emitted `user_input` and
+  // `attachments` alone, so every mention made through the UI reached the
+  // start route as an ordinary message and notified nobody. The server half
+  // (#977) was complete the whole time — it parses `user_ids`/`userIds` at the
+  // TOP level of the body and `is_mentioning_everyone` beside it — and the E2E
+  // that covered it replayed a captured POST with the field injected, so CI
+  // never exercised the composer that is supposed to produce it.
+  const mentioned = mentionedUserIDs(payload['userIds']);
+  const mentionsEveryone = payload['isMentioningEveryone'] === true;
+  const mentions = {
+    ...(mentioned.length > 0 ? { user_ids: mentioned } : {}),
+    // Sent only when true. `@everyone` is re-resolved from the project's
+    // membership server-side, so the ids above are a hint the server may
+    // ignore for it — but the FLAG is the only thing that asks it to.
+    ...(mentionsEveryone ? { is_mentioning_everyone: true } : {}),
+  };
   const base = {
     project_id: Number.isFinite(numericProjectID) ? numericProjectID : params.projectId,
     conversation_uuid: params.conversationUuid,
     question_id: payload['question_id'],
     interaction_uuid: crypto.randomUUID(),
+    ...mentions,
     payload: { user_input: question, ...(payload['attachments'] ? { attachments: payload['attachments'] } : {}) },
   };
   if (params.isApplicationTurn) {

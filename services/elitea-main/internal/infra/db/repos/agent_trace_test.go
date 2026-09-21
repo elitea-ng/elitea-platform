@@ -2,6 +2,7 @@ package repos
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -387,4 +388,93 @@ func stringOrEmpty(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+// #984: A NUL IN A CHUNK MUST NOT POISON THE ROW.
+//
+// Every inline tool output goes through `sanitizeCurrentAgentJSON` on its way
+// in. A CHUNK does not: `DecodeToolOutputChunk` checks only that the text is
+// valid UTF-8, and `\x00` is. A python tool that returned a large result
+// containing one therefore reached the `UPDATE ... SET tool_output` as-is,
+// Postgres answered `invalid byte sequence for encoding "UTF8": 0x00`, and the
+// node event was rejected NON-RETRYABLY — so every replay was rejected the
+// same way and the turn could not be recovered, over one invisible byte.
+//
+// The text is stripped instead, and the row SAYS so: the producer hashed the
+// bytes it sent, NUL included, so the digest can no longer be the completeness
+// test and the chunk arithmetic takes over.
+func TestCurrentAgentTraceStripsANULFromAChunkedToolOutput(t *testing.T) {
+	const withNUL = "before\x00after"
+	chunk := nodeevent.ToolOutputChunk{
+		ToolCallID: "tool-run",
+		Index:      0,
+		Total:      1,
+		Digest:     nodeevent.ToolOutputDigest(withNUL),
+		Text:       withNUL,
+	}
+	delta, recognized, err := decodeCurrentAgentTraceDelta(chunkedToolOutputEvent(t, chunk))
+	if err != nil || !recognized {
+		t.Fatalf("recognized=%t err=%v", recognized, err)
+	}
+
+	started := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	empty := ""
+	rows := []currentAgentTraceRow{{
+		id: 71, messageGroupID: 9, kind: "tool_call", runID: "tool-run",
+		startedAt: &started, hasVisibleContent: true, toolName: "read_file",
+		toolOutput: &empty,
+	}}
+	desired, err := mergeCurrentAgentTraceRows(9, rows, delta)
+	if err != nil {
+		t.Fatalf("merge chunk: %v", err)
+	}
+	got := stringOrEmpty(desired[0].toolOutput)
+	if strings.Contains(got, "\x00") {
+		t.Fatalf("the NUL reached the row: %q", got)
+	}
+	if got != "beforeafter" {
+		t.Fatalf("tool_output = %q, want the text with the NUL removed", got)
+	}
+	progress := currentAgentMap(desired[0].attrs, "tool_output_chunks")
+	if sanitized, _ := progress["sanitized"].(bool); !sanitized {
+		t.Fatalf("the row must record that the text was sanitized: %#v", progress)
+	}
+	// Every chunk arrived, so the output is whole — the digest cannot say so
+	// any more, and reporting it INCOMPLETE would be a second defect standing
+	// in for the first.
+	if complete, _ := progress["complete"].(bool); !complete {
+		t.Fatalf("a fully delivered sanitized output must still be complete: %#v", progress)
+	}
+
+	// THE CARRY HALF. The completed call carries no text of its own, so the
+	// row's accumulated value is moved onto it — and must arrive there clean.
+	completion := currentAgentTraceDelta{
+		streamID:            "10000000-0000-4000-8000-000000000001",
+		messageID:           "20000000-0000-4000-8000-000000000001",
+		executionGeneration: "30000000-0000-4000-8000-000000000001",
+		sioEvent:            "chat_predict",
+		toolCalls: []currentAgentToolCall{{
+			key: "tool-run",
+			entry: map[string]any{
+				"tool_name": "read_file", "tool_run_id": "tool-run", "run_id": "tool-run",
+				"tool_output":      "",
+				"finish_reason":    "stop",
+				"timestamp_start":  started.Format(time.RFC3339Nano),
+				"timestamp_finish": started.Add(time.Second).Format(time.RFC3339Nano),
+				"tool_output_chunks": map[string]any{
+					"total":              int64(1),
+					"tool_output_sha256": chunk.Digest,
+				},
+			},
+		}},
+	}
+	carried := []currentAgentTraceRow{desired[0]}
+	carried[0].id = 71
+	after, err := mergeCurrentAgentTraceRows(9, carried, completion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := stringOrEmpty(after[0].toolOutput); strings.Contains(out, "\x00") || out != "beforeafter" {
+		t.Fatalf("the completed call's output = %q, want the sanitized text", out)
+	}
 }

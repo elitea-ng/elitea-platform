@@ -68,8 +68,32 @@ const TriggerTokenHeader = "X-Elitea-Trigger-Token" //nolint:gosec // header NAM
 // TriggerTokenQueryParam is the last-resort carrier.
 const TriggerTokenQueryParam = "token" //nolint:gosec // parameter NAME, not a credential
 
-// maxInboundBody bounds what this route will read before deciding anything.
+// maxInboundBody bounds a BEARER call's body, and every settings body.
+//
+// 64 KiB is generous for what this route reads out of a body: one `input`
+// string the pipeline sees. A bearer sender is writing to an endpoint of ours
+// with a secret we minted, so the body is decorative — there is no reason for
+// it to be large and a cap that says so is one less thing to pay for.
 const maxInboundBody = int64(64 * 1024)
+
+// maxSignedInboundBody bounds a SIGNED call's body, and it has to be bigger
+// because the body is not ours to shape.
+//
+// A signing sender signs its own payload and we verify over the raw bytes, so
+// "the body the sender chose to send" IS the request. GitHub documents 25 MB
+// as its delivery maximum, and an ordinary push with many commits, or a
+// pull_request event carrying a long description, passes 64 KiB without being
+// unusual at all. Under the old single cap those deliveries were answered 413
+// BEFORE the trigger row was even looked up: GitHub marked the delivery
+// failed, and the pipeline could never run.
+//
+// 1 MiB rather than GitHub's own 25 MB. This is read into memory by an
+// UNAUTHENTICATED caller — the credential check needs the bytes, so the read
+// necessarily comes first — and the value is a bound on that exposure, not an
+// attempt to accept everything a sender might produce. It covers the events a
+// pipeline trigger is actually wired to; a 25 MB delivery is still refused,
+// and refused with a 413 that says the body is too large.
+const maxSignedInboundBody = int64(1024 * 1024)
 
 // refusal is the ONE answer to every unusable credential.
 //
@@ -171,6 +195,17 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		record(http.StatusUnauthorized, projectID, trigger.CreatedBy, trigger.VersionID,
 			"the URL does not match this trigger's provider")
 		writeError(w, http.StatusUnauthorized, refusal)
+		return
+	}
+
+	// THE BEARER CAP, now that the row says which mode this is. See
+	// `maxSignedInboundBody`: the read above is deliberately larger than a
+	// bearer call is allowed, so the refusal moves here rather than
+	// disappearing.
+	if !inboundBodyWithinCap(trigger, raw) {
+		record(http.StatusRequestEntityTooLarge, projectID, trigger.CreatedBy, trigger.VersionID,
+			"body too large")
+		writeError(w, http.StatusRequestEntityTooLarge, "the request body is too large")
 		return
 	}
 
@@ -317,18 +352,37 @@ func (h *Handler) inboundCredentialAccepted(
 	return signatureMatches(presented, raw, secret), ""
 }
 
-// readInboundRaw reads at most maxInboundBody bytes and returns them.
+// readInboundRaw reads at most maxSignedInboundBody bytes and returns them.
 //
 // The BYTES are what the caller signed, so they are what a signature is
 // verified over. Everything this handler needs from the body is derived from
 // this one read; see the call site for why a second read would be a defect
 // rather than an inefficiency.
+//
+// IT READS TO THE LARGER CAP because the mode is not known yet — the trigger
+// row that says which one this is has not been looked up, and it cannot be:
+// the lookup is keyed by a token id, and refusing before it would refuse every
+// signed delivery, which is the defect this pair of caps closes. The bearer
+// cap is applied AFTER the row is read (`inboundBodyWithinCap`), so a bearer
+// caller gains nothing from the larger read but the same 413 one step later.
 func readInboundRaw(r *http.Request) ([]byte, error) {
 	if r.Body == nil {
 		return nil, nil
 	}
-	limited := http.MaxBytesReader(nil, r.Body, maxInboundBody)
+	limited := http.MaxBytesReader(nil, r.Body, maxSignedInboundBody)
 	return io.ReadAll(limited)
+}
+
+// inboundBodyWithinCap applies the cap the STORED row's mode calls for.
+//
+// Signing triggers keep everything `readInboundRaw` was willing to read;
+// everything else is held to the 64 KiB a decorative body has no reason to
+// exceed.
+func inboundBodyWithinCap(trigger triggerRow, raw []byte) bool {
+	if trigger.AuthMode == AuthModeHMACSHA256 {
+		return true
+	}
+	return int64(len(raw)) <= maxInboundBody
 }
 
 // decodeInboundBody reads the accepted fields out of the raw bytes.

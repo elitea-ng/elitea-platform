@@ -61,9 +61,18 @@ export function useChatBoxActions({
     (question: string) => {
       if (!question.trim() || data.hasPendingHitlInterrupt || state.isActiveParticipantBroken) return;
       const isSendingToUser = state.isMentioningEveryone || state.selectedUsers.length > 0;
-      const userIds = state.isMentioningEveryone
-        ? state.users.filter((u) => u.id !== '@everyone').map((u) => u.id)
-        : state.selectedUsers.map((u) => u.id);
+      // USER ids, not the participant ids the picker is keyed by. The start
+      // route parses `user_ids` as `centry.notifications.user_id`; a
+      // participant id there names a different person or nobody. A mention
+      // whose participant carries no `entity_meta.id` is dropped rather than
+      // sent as a participant id — the server would take it at face value.
+      const userIds = (state.isMentioningEveryone
+        ? state.users.filter((u) => u.id !== '@everyone')
+        : state.selectedUsers
+      )
+        .map((u) => u.userId)
+        .filter((id): id is string => typeof id === 'string' && id !== '');
+      const isMentioningEveryone = state.isMentioningEveryone;
       state.setIsMentioningEveryone(false);
       state.setSelectedUsers([]);
       state.slash.resetSlash();
@@ -74,7 +83,7 @@ export function useChatBoxActions({
       chatInputRef.current?.reset?.();
       const pendingAttachments = data.attachments.state.attachments;
       data.attachments.state.onClearAttachments();
-      void handlers.sendQuestion({ question, attachments: pendingAttachments, isSendingToUser, userIds }).then((result) => {
+      void handlers.sendQuestion({ question, attachments: pendingAttachments, isSendingToUser, userIds, isMentioningEveryone }).then((result) => {
         // Announced on `result.createdConversation` alone, NOT on `success`:
         // the row is committed before any transport is tried, so a turn that
         // then fails still leaves a conversation the route and the rail have

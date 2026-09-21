@@ -7,7 +7,7 @@ use adk_rust::{ReadonlyContext, Tool, Toolset};
 use async_trait::async_trait;
 use bytes::Bytes;
 use http::{Request, Response, StatusCode, Version};
-use http_body_util::Full;
+use http_body_util::{BodyExt, Full};
 use serde_json::{Map, Value, json};
 use tonic::body::Body;
 
@@ -37,6 +37,10 @@ const SDK_TOOL_NAMES: &[&str] = &[
 struct FixtureRpc {
     body: Mutex<String>,
     paths: Mutex<Vec<String>>,
+    /// The request bodies the tools actually sent. The bucket and the key are
+    /// IN the body, not in the path, so a test about which object a call
+    /// addresses has nothing to assert without them.
+    requests: Mutex<Vec<Value>>,
 }
 
 #[async_trait]
@@ -49,6 +53,15 @@ impl RuntimeContextRpc for FixtureRpc {
             .lock()
             .expect("fixture paths")
             .push(request.uri().path().to_owned());
+        let sent = request
+            .into_body()
+            .collect()
+            .await
+            .map(http_body_util::Collected::to_bytes)
+            .unwrap_or_default();
+        if let Ok(parsed) = serde_json::from_slice::<Value>(&sent) {
+            self.requests.lock().expect("fixture requests").push(parsed);
+        }
         let raw = self.body.lock().expect("fixture body").clone();
         Ok(Response::builder()
             .status(StatusCode::OK)
@@ -66,6 +79,7 @@ fn authority(body: &str) -> (ArtifactToolAuthority, Arc<FixtureRpc>) {
     let rpc = Arc::new(FixtureRpc {
         body: Mutex::new(body.to_owned()),
         paths: Mutex::new(Vec::new()),
+        requests: Mutex::new(Vec::new()),
     });
     let client = RuntimeContextClient::with_rpc(
         FixtureRpcHandle(Arc::clone(&rpc)),
@@ -343,4 +357,152 @@ fn the_configuration_is_bounded_and_the_bucket_addressable() {
         panic!("an oversized bucket name must not parse");
     };
     assert_eq!(error.code(), ArtifactConfigErrorCode::ResourceExhausted);
+}
+
+/* ── #984: the SDK's `/{bucket}/{filename}` form ───────────────────────── */
+
+/// The read body a fixture answers with, for a file under `name`.
+fn read_body(bucket: &str, name: &str) -> String {
+    json!({
+        "schema_version": "elitea.runtime.artifact-read.v1",
+        "project_id": 17,
+        "bucket": bucket,
+        "name": name,
+        "media_type": "application/pdf",
+        "byte_length": 11,
+        "char_length": 11,
+        "total_lines": 1,
+        "max_chars": 200_000,
+        "over_limit": false,
+        "content": "TOKEN-VALUE",
+    })
+    .to_string()
+}
+
+fn sent_request(rpc: &FixtureRpc) -> Value {
+    rpc.requests
+        .lock()
+        .expect("fixture requests")
+        .first()
+        .cloned()
+        .expect("the tool must have sent a request")
+}
+
+/// AN ATTACHED FILE IS READ FROM THE BUCKET THE HEADER NAMED.
+///
+/// Admission renders `filepath: /{bucket}/{name}` on every attachment and
+/// tells the model a file-reading tool can open it (elitea-main
+/// internal/application/agentexecution/attachments.go). The native `read_file`
+/// took only `filename` and merely trimmed the leading slash, so that value
+/// became the key `chat-attachments/<uuid>/report.pdf` INSIDE the toolkit's
+/// own bucket — a 404 for a file that was right there, while the python SDK
+/// read it perfectly well through its own `filepath` parameter.
+#[tokio::test]
+async fn a_bucket_qualified_filepath_reads_from_that_bucket() {
+    let (tools, rpc) = tools_of(
+        &read_body("chat-attachments", "conv-9/report.pdf"),
+        &["read_file"],
+    )
+    .await;
+
+    let answer = tools[0]
+        .execute(
+            context(),
+            json!({"filepath": "/chat-attachments/conv-9/report.pdf"}),
+        )
+        .await
+        .expect("artifact read");
+
+    assert_eq!(answer, json!("TOKEN-VALUE"));
+    let sent = sent_request(&rpc);
+    assert_eq!(
+        sent["bucket"],
+        json!("chat-attachments"),
+        "the filepath's FIRST segment is the bucket, not part of the key"
+    );
+    assert_eq!(
+        sent["name"],
+        json!("conv-9/report.pdf"),
+        "everything after the first segment is the key, folders included"
+    );
+}
+
+/// `filepath` OUTRANKS `bucket_name`, exactly as the SDK's own precedence does
+/// (`if filepath: ... bucket_name = extracted`): the path names a bucket, so a
+/// stale override beside it must not redirect the read.
+#[tokio::test]
+async fn a_filepath_outranks_a_bucket_name_argument() {
+    let (tools, rpc) = tools_of(&read_body("chat-attachments", "a.pdf"), &["read_file"]).await;
+
+    tools[0]
+        .execute(
+            context(),
+            json!({"filepath": "/chat-attachments/a.pdf", "bucket_name": "somewhere-else"}),
+        )
+        .await
+        .expect("artifact read");
+
+    assert_eq!(sent_request(&rpc)["bucket"], json!("chat-attachments"));
+}
+
+/// A PLAIN `filename` KEEPS ITS FOLDERS. This is the half that must NOT change:
+/// the SDK does `filename.lstrip('/')` and nothing more, so `/reports/q3.md` is
+/// an ordinary key with a folder in it and splitting a "bucket" off its front
+/// would send the read somewhere the model never named.
+#[tokio::test]
+async fn a_plain_filename_is_a_key_in_the_configured_bucket() {
+    let (tools, rpc) = tools_of(
+        &read_body("agent-artifacts", "reports/q3.md"),
+        &["read_file"],
+    )
+    .await;
+
+    tools[0]
+        .execute(context(), json!({"filename": "/reports/q3.md"}))
+        .await
+        .expect("artifact read");
+
+    let sent = sent_request(&rpc);
+    assert_eq!(sent["bucket"], json!("agent-artifacts"));
+    assert_eq!(sent["name"], json!("reports/q3.md"));
+}
+
+/// A `filepath` with no second segment names no file. Answered to the model,
+/// never raised, and it must not reach the claim-bound route with a guessed
+/// bucket.
+#[tokio::test]
+async fn a_filepath_without_a_key_is_answered_rather_than_guessed() {
+    let (tools, rpc) = tools_of(&read_body("agent-artifacts", "x"), &["read_file"]).await;
+
+    let answer = tools[0]
+        .execute(context(), json!({"filepath": "/chat-attachments/"}))
+        .await
+        .expect("a malformed filepath must not fail the turn");
+
+    assert!(
+        answer
+            .as_str()
+            .is_some_and(|text| text.contains("filepath")),
+        "the refusal must name the argument it refused: {answer:?}"
+    );
+    assert!(
+        rpc.paths.lock().expect("fixture paths").is_empty(),
+        "a malformed call must not reach the claim-bound route"
+    );
+}
+
+/// `read_file` ADVERTISES `filepath`, because a parameter the model is never
+/// shown is a parameter it never sends — which is how the SDK's own tool
+/// descriptions get the form right and this one did not.
+#[tokio::test]
+async fn read_file_advertises_the_sdks_filepath_argument() {
+    let (tools, _rpc) = tools_of("{}", &["read_file"]).await;
+    let schema = tools[0]
+        .parameters_schema()
+        .expect("read_file has an argument schema");
+    let properties = schema["properties"]
+        .as_object()
+        .expect("argument schema properties");
+    assert!(properties.contains_key("filepath"));
+    assert!(properties.contains_key("filename"));
 }

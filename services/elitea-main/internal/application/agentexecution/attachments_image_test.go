@@ -7,6 +7,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 // #979: an attached IMAGE must reach the model as an `image_url` chunk, not as
@@ -174,9 +176,10 @@ func TestAnUnreadableImageAnnouncesItselfAndAsksForAText(t *testing.T) {
 }
 
 func TestTheTurnsImageBudgetIsSpentOnceAndThenRefused(t *testing.T) {
-	// Two images, each half the per-turn budget after encoding, plus a third:
-	// the first two embed, the third is announced. The budget bounds the TURN,
-	// which is what keeps the runtime input under its own 1 MiB cap.
+	// Three images at the per-image cap: the first embeds, the rest are
+	// announced. The budget bounds the TURN, which is what keeps the bundle
+	// under the ceiling the WORKERS fetch it with — see
+	// `TestTheImageBudgetsFitTheWorkersFetchCeiling`.
 	big := make([]byte, maxInlineAttachmentImageBytes)
 	for index := range big {
 		big[index] = byte(index % 251)
@@ -257,5 +260,40 @@ func TestEmbeddedImageChunksTravelToTheWorkerInOrder(t *testing.T) {
 	header, _ := flat[1]["text"].(string)
 	if !strings.Contains(header, "shot.png") {
 		t.Fatalf("the image's own header must precede it: %q", header)
+	}
+}
+
+/* ── #984: the budgets are the WORKER's, not this service's ────────────── */
+
+// The image caps were first sized against `MaxAgentExecutionInputBytes`
+// (1 MiB), which is the frame ADMISSION refuses. Both workers fetch the bundle
+// under `MaxWorkerInputBundleBytes` (256 KiB) — `RUNTIME_INPUT_CONTENT_BYTES`
+// in the native worker's config.rs, `_V1_INPUT_CONTENT_BYTES` in the python
+// worker's config.py — and a bundle over THAT is refused at the fetch, so the
+// turn failed at the worker although this side had admitted it. One 256 KiB
+// PNG is ~341 KiB of base64: over the worker's whole budget by itself.
+//
+// This test is the arithmetic, stated once. It fails if either cap is raised
+// past what the worker will take, which is the drift that produced the defect.
+func TestTheImageBudgetsFitTheWorkersFetchCeiling(t *testing.T) {
+	t.Parallel()
+
+	// base64 is 4 bytes per 3: one image at the raw cap must not encode past
+	// the whole TURN's allowance.
+	encodedAtCap := base64.StdEncoding.EncodedLen(maxInlineAttachmentImageBytes)
+	if encodedAtCap > maxInlineAttachmentImageTurnBytes {
+		t.Fatalf("one image at the raw cap encodes to %d bytes, over the turn's %d",
+			encodedAtCap, maxInlineAttachmentImageTurnBytes)
+	}
+	// And the turn's allowance must leave room for everything else the bundle
+	// carries: the four newest attachments' text is 4 x 32 KiB on its own
+	// (internal/db/queries/agent_chat.sql), and the instructions, the frozen
+	// version, the transcript and the user's input come after that.
+	const historyAttachmentBytes = 4 * 32 * 1024
+	if maxInlineAttachmentImageTurnBytes+historyAttachmentBytes >=
+		executiondomain.MaxWorkerInputBundleBytes {
+		t.Fatalf("images (%d) plus history attachments (%d) leave nothing under the worker's %d",
+			maxInlineAttachmentImageTurnBytes, historyAttachmentBytes,
+			executiondomain.MaxWorkerInputBundleBytes)
 	}
 }

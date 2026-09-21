@@ -105,7 +105,8 @@ type createTriggerBody struct {
 	SignatureHeader string `json:"signature_header"`
 }
 
-// parseAuthMode reads the create body into the three stored facts.
+// parseAuthMode reads the create body into the three stored facts, and says
+// whether the BODY NAMED THEM.
 //
 // An unreadable body is NOT an error: the route accepted any body at all
 // before #970, and a caller that sends something unrelated must keep getting
@@ -113,15 +114,31 @@ type createTriggerBody struct {
 // something this service does not implement IS an error — silently storing a
 // weaker mode than the one asked for is the failure this refusal exists to
 // prevent.
-func parseAuthMode(raw []byte) (triggerAuthMode, error) {
+//
+// THE SECOND RETURN IS WHY THIS FUNCTION IS NOT ENOUGH ON ITS OWN. The mode it
+// answers for a body that names nothing is the DEFAULT — the bearer trigger a
+// first creation gets — and the create/rotate route is one operation for both
+// acts. A rotation therefore arrived here with no body (the EditPipeline card
+// sends none: `usePipelineTriggerSettings.ts`), took the default, and the
+// upsert wrote it over the stored columns: a GitHub trigger came back as
+// token/custom and the next signed delivery was refused. `named` is false in
+// exactly that case, and the caller keeps the stored mode instead. A body that
+// DOES name a mode still replaces it — "rotate this as a plain token trigger"
+// is a change the settings dialog offers through this same route.
+func parseAuthMode(raw []byte) (triggerAuthMode, bool, error) {
 	mode := defaultAuthMode()
 	if len(raw) == 0 {
-		return mode, nil
+		return mode, false, nil
 	}
 	var body createTriggerBody
 	if err := json.Unmarshal(raw, &body); err != nil {
-		return mode, nil
+		return mode, false, nil
 	}
+	// Whitespace is not a name. `firstNonEmpty` and the trims below read the
+	// same fields the same way, so a body of `{"type":"  "}` asks for nothing
+	// here and nothing there.
+	named := strings.TrimSpace(body.Type) != "" || strings.TrimSpace(body.Provider) != "" ||
+		strings.TrimSpace(body.AuthMode) != "" || strings.TrimSpace(body.SignatureHeader) != ""
 
 	preset := strings.ToLower(strings.TrimSpace(firstNonEmpty(body.Type, body.Provider)))
 	switch preset {
@@ -134,7 +151,7 @@ func parseAuthMode(raw []byte) (triggerAuthMode, error) {
 			Provider:        ProviderGitHub,
 		}
 	default:
-		return triggerAuthMode{}, errInvalidAuthMode
+		return triggerAuthMode{}, named, errInvalidAuthMode
 	}
 
 	if requested := strings.ToLower(strings.TrimSpace(body.AuthMode)); requested != "" {
@@ -144,19 +161,19 @@ func parseAuthMode(raw []byte) (triggerAuthMode, error) {
 			// and the one direction that must not be resolved silently: it
 			// would turn the stricter request into the weaker setting.
 			if mode.signs() {
-				return triggerAuthMode{}, errInvalidAuthMode
+				return triggerAuthMode{}, named, errInvalidAuthMode
 			}
 			mode.AuthMode = AuthModeToken
 		case AuthModeHMACSHA256:
 			mode.AuthMode = AuthModeHMACSHA256
 		default:
-			return triggerAuthMode{}, errInvalidAuthMode
+			return triggerAuthMode{}, named, errInvalidAuthMode
 		}
 	}
 
 	if header := strings.TrimSpace(body.SignatureHeader); header != "" {
 		if !validHeaderName(header) {
-			return triggerAuthMode{}, errInvalidAuthMode
+			return triggerAuthMode{}, named, errInvalidAuthMode
 		}
 		mode.SignatureHeader = header
 	}
@@ -166,7 +183,7 @@ func parseAuthMode(raw []byte) (triggerAuthMode, error) {
 		// path would have nothing to look at and would refuse every call. The
 		// database refuses this too (0138's CHECK); saying so here names the
 		// field instead.
-		return triggerAuthMode{}, errInvalidAuthMode
+		return triggerAuthMode{}, named, errInvalidAuthMode
 	}
 	if !mode.signs() {
 		// A header on a bearer trigger would be stored and never read, and
@@ -174,7 +191,25 @@ func parseAuthMode(raw []byte) (triggerAuthMode, error) {
 		// sender should make. Dropped rather than kept.
 		mode.SignatureHeader = ""
 	}
-	return mode, nil
+	return mode, named, nil
+}
+
+// storedAuthMode is the mode a row already carries, for a rotation whose body
+// names none.
+//
+// A row from before 0138's backfill, or one whose columns a migration left
+// blank, falls back to the default rather than writing an empty `auth_mode`
+// the CHECK constraint would refuse: the failure to preserve is worth less
+// than the failure to rotate.
+func storedAuthMode(previous triggerRow) triggerAuthMode {
+	if strings.TrimSpace(previous.AuthMode) == "" {
+		return defaultAuthMode()
+	}
+	return triggerAuthMode{
+		AuthMode:        previous.AuthMode,
+		SignatureHeader: previous.SignatureHeader,
+		Provider:        previous.Provider,
+	}
 }
 
 // readSettingsBody reads a bounded settings-route body.

@@ -211,7 +211,7 @@ func (h *Handler) CreateOrRotateTrigger(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusRequestEntityTooLarge, "the request body is too large")
 		return
 	}
-	mode, err := parseAuthMode(raw)
+	mode, modeNamed, err := parseAuthMode(raw)
 	if err != nil {
 		writeError(w, http.StatusBadRequest,
 			"this trigger type is not supported; use `github`, or `auth_mode: hmac_sha256` with the header the sender signs into")
@@ -229,6 +229,22 @@ func (h *Handler) CreateOrRotateTrigger(w http.ResponseWriter, r *http.Request) 
 	}
 
 	previous, previousErr := h.triggerByVersion(r.Context(), schema, versionID)
+	// A ROTATION THAT NAMES NO MODE KEEPS THE ONE THAT IS STORED.
+	//
+	// This route is one operation for create and rotate, and the rotate button
+	// sends no body at all. Without this line the absent body took the create
+	// default (bearer/custom), the upsert below wrote all three 0138 columns
+	// unconditionally, and a GitHub trigger silently became a token one — the
+	// next signed delivery from GitHub was refused, with nothing in the
+	// product saying the rotation had changed anything but the secret.
+	//
+	// Only the body speaks for a change: `modeNamed` is true the moment it
+	// carries `type`, `provider`, `auth_mode` or `signature_header`, so the
+	// settings dialog can still convert a trigger from one mode to the other
+	// through this same route.
+	if !modeNamed && previousErr == nil {
+		mode = storedAuthMode(previous)
+	}
 	tokenID, secret, hash, err := newCredential()
 	if err != nil {
 		h.log().Error("pipelinetriggers: mint credential", "err", err)

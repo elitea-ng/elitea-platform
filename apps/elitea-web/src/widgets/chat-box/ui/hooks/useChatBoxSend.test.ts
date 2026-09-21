@@ -102,6 +102,58 @@ describe('buildStartBody', () => {
     expect(body?.['project_id']).toBe(1);
     expect(body?.['participant_id']).toBe(7);
   });
+
+  /*
+   * #984: THE @MENTIONS USED TO STOP HERE.
+   *
+   * The composer resolves an `@` into `isSendingToUser`/`userIds` and puts
+   * them on its payload; this builder emitted `user_input` and `attachments`
+   * alone, so every mention made through the UI reached the start route as an
+   * ordinary message and notified nobody. The server half has parsed
+   * `user_ids` at the TOP level of the body since #977.
+   */
+  it('carries the composer @mentions as top-level numeric user_ids', () => {
+    const body = buildStartBody({
+      ...commonBody,
+      payload: { question: 'hi', question_id: 'q-1', isSendingToUser: true, userIds: ['11', '12'] },
+      isApplicationTurn: true,
+      participantId: 42,
+    });
+    // NUMBERS: `parseMentionedUserIDs` unmarshals into []int64 and answers 400
+    // for a list of strings, so forwarding the composer's own spelling would
+    // have cost the whole turn rather than the mention.
+    expect(body?.['user_ids']).toEqual([11, 12]);
+    expect(body?.['is_mentioning_everyone']).toBeUndefined();
+  });
+
+  it('asks the server to resolve @everyone rather than sending its own list as the answer', () => {
+    const body = buildStartBody({
+      ...commonBody,
+      payload: {
+        question: 'hi', question_id: 'q-1',
+        isSendingToUser: true, userIds: ['11'], isMentioningEveryone: true,
+      },
+      isApplicationTurn: true,
+      participantId: 42,
+    });
+    expect(body?.['is_mentioning_everyone']).toBe(true);
+  });
+
+  it('drops an id that cannot name a user rather than failing the turn with it', () => {
+    const body = buildStartBody({
+      ...commonBody,
+      payload: { question: 'hi', question_id: 'q-1', isSendingToUser: true, userIds: ['0', 'abc', '11', '11'] },
+      isApplicationTurn: true,
+      participantId: 42,
+    });
+    expect(body?.['user_ids']).toEqual([11]);
+  });
+
+  it('emits no mention keys for an ordinary message', () => {
+    const body = buildStartBody({ ...commonBody, isApplicationTurn: true, participantId: 42 });
+    expect(Object.hasOwn(body ?? {}, 'user_ids')).toBe(false);
+    expect(Object.hasOwn(body ?? {}, 'is_mentioning_everyone')).toBe(false);
+  });
 });
 
 describe('buildRegenerateBody', () => {

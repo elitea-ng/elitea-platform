@@ -570,6 +570,16 @@ struct CompletedModelTurn {
     output_limited: bool,
 }
 
+/// What one COMPLETED tool call projects to: the entry, the chunks its output
+/// must ride as when it does not fit a frame, and the two values the caller
+/// still needs to name the event and hash the whole output.
+struct CompletedToolProjection<'result> {
+    entry: Value,
+    chunks: Option<Vec<String>>,
+    output: Option<String>,
+    error: Option<&'result str>,
+}
+
 #[derive(Clone)]
 struct ActiveToolCall {
     name: String,
@@ -2010,46 +2020,12 @@ impl AgentEventProjector {
                 .get(id)
                 .filter(|active| active.name == result.name)
                 .ok_or_else(AgentEventProjectionError::invalid_state)?;
-            let error = result
-                .response
-                .as_object()
-                .and_then(|value| value.get("error"))
-                .and_then(Value::as_str);
-            let output = error
-                .is_none()
-                .then(|| serde_json::to_string(result.response))
-                .transpose()
-                .map_err(|_| AgentEventProjectionError::invalid_state())?;
-            // AN OVERSIZED RESULT IS CHUNKED, NOT REFUSED (#956) — but only a
-            // successful one. An `error` rides as a short diagnostic string by
-            // construction, and an oversized one is a malformed result rather
-            // than a large document, so it keeps the refusal it always had.
-            let chunks = match output.as_deref() {
-                Some(text) if !fits_tool_event_value(result.response) => {
-                    Some(split_tool_output(text)?)
-                }
-                _ => {
-                    validate_tool_event_value(result.response)?;
-                    None
-                }
-            };
-            let finish_reason = if error.is_some() { "error" } else { "stop" };
-            let mut entry = tool_entry(
-                id,
-                active,
-                Some(timestamp_finish.as_str()),
-                Some(finish_reason),
-                // A chunked result's entry carries NO inline text: it could
-                // not (that is why it was chunked). Main keeps what the chunks
-                // delivered and uses the count and digest below to tell a
-                // whole reassembly from a short one.
-                if chunks.is_some() {
-                    Some("")
-                } else {
-                    output.as_deref()
-                },
+            let CompletedToolProjection {
+                mut entry,
+                chunks,
+                output,
                 error,
-            );
+            } = self.completed_tool_entry(id, active, event, &timestamp_finish, result)?;
             if let Some(chunks) = chunks.as_ref() {
                 emitted_chunk_events = emitted_chunk_events.saturating_add(chunks.len());
                 if emitted_chunk_events > MAX_TOOL_OUTPUT_CHUNK_EVENTS_PER_ADK_EVENT {
@@ -2086,6 +2062,102 @@ impl AgentEventProjector {
             self.active_tools.remove(&id);
         }
         Ok(batch)
+    }
+
+    /// The completed call's entry, and the chunks its output must ride as.
+    ///
+    /// AN OVERSIZED RESULT IS CHUNKED, NOT REFUSED (#956) — but only a
+    /// successful one. An `error` rides as a short diagnostic string by
+    /// construction, and an oversized one is a malformed result rather than a
+    /// large document, so it keeps the refusal it always had.
+    ///
+    /// THE DECISION IS MADE ON THE RENDERED EVENT, not on the response value
+    /// alone. The entry this result becomes also carries the call's INPUTS
+    /// (`tool_inputs`) and its hierarchy, each bounded separately at
+    /// `MAX_TOOL_EVENT_VALUE_BYTES` — so a response that fit that bound
+    /// comfortably still produced an event over the 60 KiB frame once ~25 KiB
+    /// of arguments rode along with it, and `encode_current_node_event_json`
+    /// refused the whole projection: a failed tool call for a tool that had
+    /// worked. Measuring what is actually emitted is what python does
+    /// (`_chunk_tool_output`, in `handlers/agent_events.py`) and it is the only
+    /// measurement that can answer the question being asked.
+    ///
+    /// BOTH emitted shapes are measured, because `tool_partial_event` wraps
+    /// the same entry in a `tool_calls` map and is therefore the larger of the
+    /// two: deciding on the smaller one would leave the partial to fail on its
+    /// own.
+    fn completed_tool_entry<'result>(
+        &self,
+        id: &str,
+        active: &ActiveToolCall,
+        event: &Event,
+        timestamp_finish: &str,
+        result: &adk_rust::ToolResultView<'result>,
+    ) -> Result<CompletedToolProjection<'result>, AgentEventProjectionError> {
+        let error = result
+            .response
+            .as_object()
+            .and_then(|value| value.get("error"))
+            .and_then(Value::as_str);
+        let output = error
+            .is_none()
+            .then(|| serde_json::to_string(result.response))
+            .transpose()
+            .map_err(|_| AgentEventProjectionError::invalid_state())?;
+        let finish_reason = if error.is_some() { "error" } else { "stop" };
+        let inline_entry = tool_entry(
+            id,
+            active,
+            Some(timestamp_finish),
+            Some(finish_reason),
+            output.as_deref(),
+            error,
+        );
+        let chunks = match output.as_deref() {
+            Some(text) if !self.tool_events_fit(id, &inline_entry, event.timestamp) => {
+                Some(split_tool_output(text)?)
+            }
+            _ => {
+                validate_tool_event_value(result.response)?;
+                return Ok(CompletedToolProjection {
+                    entry: inline_entry,
+                    chunks: None,
+                    output,
+                    error,
+                });
+            }
+        };
+        // A chunked result's entry carries NO inline text: it could not (that
+        // is why it was chunked). Main keeps what the chunks delivered and
+        // uses the count and digest to tell a whole reassembly from a short
+        // one.
+        let entry = tool_entry(
+            id,
+            active,
+            Some(timestamp_finish),
+            Some(finish_reason),
+            Some(""),
+            error,
+        );
+        Ok(CompletedToolProjection {
+            entry,
+            chunks,
+            output,
+            error,
+        })
+    }
+
+    /// Whether the two events one COMPLETED tool call emits both fit an
+    /// output frame with the result inline.
+    ///
+    /// Built rather than estimated: `self.event` encodes the frame it would
+    /// send and refuses an oversized one, so constructing both is the same
+    /// measurement the transport will make. The cost is two throwaway
+    /// encodings per tool result, paid once at completion.
+    fn tool_events_fit(&self, id: &str, entry: &Value, occurred_at: DateTime<Utc>) -> bool {
+        self.event("agent_tool_end", &Value::Null, None, entry, occurred_at)
+            .is_ok()
+            && self.tool_partial_event(id, entry, occurred_at).is_ok()
     }
 
     fn tool_partial_event(
@@ -4563,14 +4635,6 @@ fn resource_exhausted_projection() -> AgentEventProjectionError {
         code: AgentEventProjectionErrorCode::ResourceExhausted,
         protocol: None,
     }
-}
-
-/// Whether one tool value fits a single event, which is the question
-/// `validate_tool_event_value` answers as a refusal. It is separate because an
-/// oversized OUTPUT is now chunked rather than refused, and the two callers
-/// want opposite things from the same measurement.
-fn fits_tool_event_value(value: &Value) -> bool {
-    serde_json::to_vec(value).is_ok_and(|encoded| encoded.len() <= MAX_TOOL_EVENT_VALUE_BYTES)
 }
 
 fn validate_tool_event_value(value: &Value) -> Result<(), AgentEventProjectionError> {

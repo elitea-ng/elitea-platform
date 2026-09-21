@@ -1722,3 +1722,102 @@ fn an_assembly_authorization_notice_refuses_an_unroutable_identity() {
         );
     }
 }
+
+/// #984: THE CHUNK DECISION IS MADE ON THE EVENT THAT IS ACTUALLY EMITTED.
+///
+/// The decision used to measure the RESPONSE alone against
+/// `MAX_TOOL_EVENT_VALUE_BYTES` (40 KiB). The entry the projector then built
+/// from it also carries `tool_inputs` — bounded separately, at that same
+/// 40 KiB — so a 38 KiB result that "fits" rode out beside ~25 KiB of
+/// arguments as a ~63 KiB frame, and `encode_current_node_event_json` (60 KiB)
+/// refused the whole projection: the person saw a FAILED tool call for a tool
+/// that had done its job. Python has always decided on the rendered entry
+/// (`_chunk_tool_output`, in `handlers/agent_events.py`) and this is that rule.
+///
+/// The assertion is deliberately about the FRAMES rather than about chunk
+/// counts: how many chunks it takes is an implementation detail, and "every
+/// event this projection emits fits an output frame" is the property the whole
+/// mechanism exists for.
+#[test]
+fn large_arguments_beside_a_fitting_result_still_chunk() {
+    let mut projector = AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({})))
+        .expect("projector");
+    projector.start(timestamp(0)).expect("start");
+
+    // 25 KiB of arguments and a 38 KiB result: each is comfortably inside the
+    // per-value bound, and together they are not.
+    let args = json!({"query": "Q".repeat(25 * 1_024)});
+    let payload = "R".repeat(38 * 1_024);
+    assert!(
+        serde_json::to_vec(&args).expect("encoded args").len() < 40 * 1_024,
+        "the arguments must be under the per-value bound for this case to mean anything"
+    );
+    assert!(
+        serde_json::to_vec(&json!(payload.clone()))
+            .expect("encoded result")
+            .len()
+            < 40 * 1_024,
+        "the result must be under the per-value bound for this case to mean anything"
+    );
+
+    let tool = event(
+        "llm-tool",
+        1,
+        false,
+        true,
+        vec![Part::FunctionCall {
+            name: "search".to_owned(),
+            args: args.clone(),
+            id: Some("call-1".to_owned()),
+            thought_signature: None,
+        }],
+    );
+    projector.project(&tool).expect("tool start");
+
+    let response = json!(payload);
+    let mut result = Event::with_id("tool-result", "invocation-1");
+    result.timestamp = timestamp(2);
+    result.author = "root-agent".to_owned();
+    result.llm_response.content = Some(Content {
+        role: "function".to_owned(),
+        parts: vec![Part::FunctionResponse {
+            function_response: adk_rust::FunctionResponseData::new("search", response.clone()),
+            id: Some("call-1".to_owned()),
+            annotations: None,
+        }],
+    });
+
+    let projected = projector
+        .project(&result)
+        .expect("a fitting result with large arguments must project, not fail");
+
+    let emitted = projected.into_iter().collect::<Vec<_>>();
+    for event in &emitted {
+        let encoded = encode_current_node_event_json(event).expect("every emitted event encodes");
+        assert!(
+            encoded.len() <= MAX_CURRENT_NODE_EVENT_JSON_BYTES,
+            "an emitted event of {} bytes exceeds the output frame",
+            encoded.len()
+        );
+    }
+
+    // And the value is not lost to the chunking: it reassembles exactly, which
+    // is what makes this a size fix rather than a truncation.
+    let projected = emitted.iter().map(current).collect::<Vec<_>>();
+    let chunks = projected
+        .iter()
+        .filter(|event| event["type"] == "agent_tool_output_chunk")
+        .collect::<Vec<_>>();
+    assert!(
+        !chunks.is_empty(),
+        "the rendered entry does not fit a frame, so it must be chunked"
+    );
+    let mut reassembled = String::new();
+    for chunk in &chunks {
+        reassembled.push_str(chunk["content"].as_str().expect("chunk text"));
+    }
+    assert_eq!(
+        reassembled,
+        serde_json::to_string(&response).expect("encoded tool result")
+    );
+}

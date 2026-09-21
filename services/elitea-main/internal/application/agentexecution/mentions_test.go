@@ -19,7 +19,7 @@ func TestMentionAudienceNamesEveryoneTaggedExactlyOnce(t *testing.T) {
 	got := mentionAudience(CurrentApplicationStartRequest{
 		ActorUserID:      7,
 		MentionedUserIDs: []int64{11, 11, 12},
-	}, nil)
+	}, []int64{7, 11, 12})
 	if len(got) != 2 || got[0] != 11 || got[1] != 12 {
 		t.Fatalf("mentionAudience = %v, want [11 12]", got)
 	}
@@ -33,7 +33,7 @@ func TestMentionAudienceNeverNotifiesTheSender(t *testing.T) {
 	got := mentionAudience(CurrentApplicationStartRequest{
 		ActorUserID:      7,
 		MentionedUserIDs: []int64{7},
-	}, nil)
+	}, []int64{7, 11})
 	if len(got) != 0 {
 		t.Fatalf("the sender must never be notified of their own mention; got %v", got)
 	}
@@ -61,7 +61,7 @@ func TestMentionAudienceDropsNonPositiveIDs(t *testing.T) {
 	got := mentionAudience(CurrentApplicationStartRequest{
 		ActorUserID:      7,
 		MentionedUserIDs: []int64{0, -3, 11},
-	}, nil)
+	}, []int64{7, 11})
 	if len(got) != 1 || got[0] != 11 {
 		t.Fatalf("mentionAudience = %v, want [11]", got)
 	}
@@ -97,7 +97,7 @@ func (writer *recordingMentionWriter) ProjectMemberUserIDs(_ context.Context, _ 
 func TestNotifyMentionedUsersWritesOneRowPerRecipient(t *testing.T) {
 	t.Parallel()
 
-	writer := &recordingMentionWriter{}
+	writer := &recordingMentionWriter{members: []int64{7, 11, 12}}
 	service := (&CurrentApplicationStartService{}).WithMentionNotifications(writer)
 	service.notifyMentionedUsers(context.Background(), CurrentApplicationStartRequest{
 		ProjectID:        42,
@@ -144,7 +144,7 @@ func TestNotifyMentionedUsersSurvivesAFailedWrite(t *testing.T) {
 	// BEST EFFORT, and the assertion is that this returns at all: the message
 	// is already admitted and stored by the time this runs, so a notification
 	// that cannot be written must cost the mention and never the turn.
-	writer := &recordingMentionWriter{writeErr: errors.New("nope")}
+	writer := &recordingMentionWriter{members: []int64{7, 11}, writeErr: errors.New("nope")}
 	service := (&CurrentApplicationStartService{}).WithMentionNotifications(writer)
 	service.notifyMentionedUsers(context.Background(), CurrentApplicationStartRequest{
 		ProjectID: 42, ActorUserID: 7, MentionedUserIDs: []int64{11},
@@ -154,9 +154,9 @@ func TestNotifyMentionedUsersSurvivesAFailedWrite(t *testing.T) {
 func TestNotifyMentionedUsersWritesNothingWhenMembershipCannotBeResolved(t *testing.T) {
 	t.Parallel()
 
-	// An `@everyone` whose membership read failed must notify NOBODY rather
-	// than fall back to the client's list — the fallback is exactly the
-	// tampering this design refuses.
+	// A mention whose membership read failed must notify NOBODY rather than
+	// fall back to the client's list — the fallback is exactly the tampering
+	// this design refuses.
 	writer := &recordingMentionWriter{memberErr: errors.New("nope")}
 	service := (&CurrentApplicationStartService{}).WithMentionNotifications(writer)
 	service.notifyMentionedUsers(context.Background(), CurrentApplicationStartRequest{
@@ -177,4 +177,80 @@ func TestNotifyMentionedUsersIsInertWithoutAWriter(t *testing.T) {
 	service.notifyMentionedUsers(context.Background(), CurrentApplicationStartRequest{
 		ProjectID: 42, ActorUserID: 7, MentionedUserIDs: []int64{11},
 	})
+}
+
+/* ── #984: the membership gate applies to a NAMED list too ─────────────── */
+
+func TestMentionAudienceDropsAnIDThatIsNotAProjectMember(t *testing.T) {
+	t.Parallel()
+
+	// THE CROSS-TENANT SHAPE. `user_ids` is whatever the caller put on the
+	// wire: `maxMentionedUsers` bounds how MANY ids one message may carry and
+	// nothing bounded WHICH. A member of project 42 could therefore name any
+	// user id in the deployment and write a `centry.notifications` row —
+	// carrying this conversation, this project and this sender — onto a
+	// stranger's bell in another tenant.
+	//
+	// 99 is that stranger. It is not in the server's membership answer, so it
+	// is not in the audience, and the mention of a real member beside it still
+	// lands: the id is dropped, never the message.
+	got := mentionAudience(CurrentApplicationStartRequest{
+		ActorUserID:      7,
+		MentionedUserIDs: []int64{11, 99},
+	}, []int64{7, 11, 12})
+	if len(got) != 1 || got[0] != 11 {
+		t.Fatalf("mentionAudience = %v, want only the member [11]", got)
+	}
+}
+
+func TestMentionAudienceNotifiesNobodyWhenMembershipIsUnknown(t *testing.T) {
+	t.Parallel()
+
+	// An empty membership answer admits NOBODY. It means either a project the
+	// sender is alone in or a membership this function was not given, and both
+	// must tell a stranger nothing — a named list is a request, never an
+	// authorization.
+	got := mentionAudience(CurrentApplicationStartRequest{
+		ActorUserID:      7,
+		MentionedUserIDs: []int64{11, 12},
+	}, nil)
+	if len(got) != 0 {
+		t.Fatalf("mentionAudience with no membership = %v, want none", got)
+	}
+}
+
+func TestNotifyMentionedUsersResolvesMembershipForANamedList(t *testing.T) {
+	t.Parallel()
+
+	// The producer half of the same rule: `ProjectMemberUserIDs` used to be
+	// consulted ONLY under `@everyone`, so a named list reached the writer
+	// unfiltered. Here 99 is named and is not a member; exactly one row is
+	// written, for the member.
+	writer := &recordingMentionWriter{members: []int64{7, 11}}
+	service := (&CurrentApplicationStartService{}).WithMentionNotifications(writer)
+	service.notifyMentionedUsers(context.Background(), CurrentApplicationStartRequest{
+		ProjectID:        42,
+		ActorUserID:      7,
+		ConversationUUID: "11111111-1111-1111-1111-111111111111",
+		QuestionID:       "22222222-2222-2222-2222-222222222222",
+		MentionedUserIDs: []int64{11, 99},
+	})
+	if len(writer.rows) != 1 || writer.rows[0].UserID != 11 {
+		t.Fatalf("rows = %+v, want one row for the member 11", writer.rows)
+	}
+}
+
+func TestNotifyMentionedUsersWritesNothingWhenANamedListsMembershipFails(t *testing.T) {
+	t.Parallel()
+
+	// A failed membership read is not a licence to trust the wire. It notifies
+	// nobody, and — as everywhere in this file — it does not fail the turn.
+	writer := &recordingMentionWriter{memberErr: errors.New("nope")}
+	service := (&CurrentApplicationStartService{}).WithMentionNotifications(writer)
+	service.notifyMentionedUsers(context.Background(), CurrentApplicationStartRequest{
+		ProjectID: 42, ActorUserID: 7, MentionedUserIDs: []int64{11},
+	})
+	if writer.writes != 0 {
+		t.Fatalf("a failed membership read must write nothing; got %d writes", writer.writes)
+	}
 }

@@ -37,10 +37,25 @@ const PUBLIC_PROJECT_ID = (import.meta.env['VITE_PUBLIC_PROJECT_ID'] as string |
 /*  Shared shapes                                                       */
 /* ------------------------------------------------------------------ */
 
-/** A user participant resolved from conversation participants. Carries an index signature so it structurally satisfies `features/chat-input`'s `MentionCandidate` (`@`-detection's own candidate shape) without a mapping step. */
+/**
+ * A user participant resolved from conversation participants. Carries an index
+ * signature so it structurally satisfies `features/chat-input`'s
+ * `MentionCandidate` (`@`-detection's own candidate shape) without a mapping
+ * step.
+ *
+ * `id` IS THE PARTICIPANT ROW ID, not the user's. That is what the mention
+ * picker and the highlighter address (everything else in the composer is keyed
+ * by participant), and it is the WRONG number to put on the wire: the start
+ * route's `user_ids` names USERS (`centry.notifications.user_id`), and sending
+ * a participant id there notifies whoever happens to own that user id — or,
+ * more often, nobody at all. `userId` is the other one, carried alongside so
+ * that neither consumer has to re-derive it from the participant blob.
+ */
 export interface ResolvedUserMention {
   readonly id: string;
   readonly name: string;
+  /** The mentioned person's USER id (`entity_meta.id`), for the wire. */
+  readonly userId?: string;
   readonly participant: unknown;
   readonly [key: string]: unknown;
 }
@@ -168,7 +183,7 @@ export function useChatBoxState(params: UseChatBoxStateParams): UseChatBoxStateR
     for (const p of participants ?? []) {
       const metaUserName = p.meta?.userName;
       if (p.entityName === 'user' && p.entityMeta?.id && metaUserName && p.entityMeta.id !== userId) {
-        result.push({ id: p.id, name: metaUserName, participant: p });
+        result.push({ id: p.id, name: metaUserName, userId: p.entityMeta.id, participant: p });
       }
     }
     result.push({ id: '@everyone', name: 'Everyone', participant: 'All users' });

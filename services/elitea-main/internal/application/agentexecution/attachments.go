@@ -24,6 +24,8 @@ import (
 	"path"
 	"strconv"
 	"strings"
+
+	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 const (
@@ -244,27 +246,36 @@ var attachmentImageExtensions = map[string]struct{}{
 // the behaviour this code had before.
 
 const (
+	// maxInlineAttachmentImageTurnBytes bounds what ALL of one turn's images
+	// contribute, measured in the ENCODED (base64) bytes they actually add.
+	//
+	// THE CEILING IS THE WORKER'S, NOT THIS SERVICE'S. These two constants
+	// were first sized against `MaxAgentExecutionInputBytes` (1 MiB), which is
+	// the frame admission refuses — but both workers fetch the bundle under
+	// `MaxWorkerInputBundleBytes` (256 KiB), hard-coded on each leg, and a
+	// bundle over THAT is refused at the fetch. The turn then failed at the
+	// worker although this side had admitted it: one ~256 KiB PNG is ~341 KiB
+	// of base64, over the worker's whole budget on its own.
+	//
+	// A quarter of the worker's ceiling is this turn's share; see the sum on
+	// `MaxWorkerInputBundleBytes` for where the other three quarters go. The
+	// number is DERIVED rather than restated so that the two cannot drift: a
+	// worker that raises its fetch ceiling raises this with it.
+	maxInlineAttachmentImageTurnBytes = executiondomain.MaxWorkerInputBundleBytes / 4
+
 	// maxInlineAttachmentImageBytes bounds ONE image's RAW bytes.
 	//
-	// The ceiling that matters is the runtime input as a whole:
-	// `MaxAgentExecutionInputBytes` is 1 MiB (internal/domain/execution/
-	// model.go) and the input also carries the instructions, the frozen
-	// version and the chat history. Base64 costs 4 bytes per 3, so 256 KiB of
-	// image is ~341 KiB on the wire — one such picture fits comfortably; a
-	// 1 MiB one would not, and would fail the turn rather than the file, which
-	// is the failure mode this whole file exists to avoid.
+	// Base64 costs 4 bytes per 3, so the raw cap is three quarters of the
+	// encoded turn budget: an image at exactly this size encodes to exactly
+	// the turn's allowance and nothing else is embedded beside it. That is a
+	// deliberate change from the original "four at the cap fill the turn" —
+	// the turn's allowance is now a quarter of what it was, and a cap that
+	// admitted four images would admit none of them at a useful size.
 	//
-	// It is also well under the 150 MiB an upload accepts: a photo straight
-	// from a phone is not something to put in a prompt, and the model provider
-	// would refuse it separately.
-	maxInlineAttachmentImageBytes = 256 * 1024
-
-	// maxInlineAttachmentImageTurnBytes bounds what ALL of one turn's images
-	// contribute, measured in the encoded (base64) bytes they actually add.
-	// One attachment at the per-image cap cannot exhaust it; four can, and the
-	// fifth is then announced rather than embedded — a bound on the turn, not
-	// on the user's file.
-	maxInlineAttachmentImageTurnBytes = 512 * 1024
+	// A larger picture is NOT a failed turn: it is announced by name with the
+	// refusal sentence below, and its contents stay reachable through a
+	// file-reading tool. That is the whole point of this file.
+	maxInlineAttachmentImageBytes = maxInlineAttachmentImageTurnBytes / 4 * 3
 )
 
 // inlineAttachmentImageMediaTypes is the set of image types that are handed to
