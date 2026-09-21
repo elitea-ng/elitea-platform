@@ -12,7 +12,11 @@
  * end-to-end already by `admin.features.spec.ts`'s "Help Center round trip"
  * (J36g/h/j) — not repeated here (COVERED-EXISTING, see the ledger). This
  * file does not write that shared `resources` admin-config section at all,
- * so it cannot race those tests.
+ * so it cannot race those tests. The version-info tooltip (ELITEA-0971,
+ * RES07) is the one Help Center case that DOES need a write — it lives in
+ * its own file, `shell.resources-version-info.spec.ts`, precisely so it can
+ * be its own `PLATFORM_FLAG_JOURNEYS` entry without dragging every read-only
+ * case here into that single-worker project too.
  *
  * See `S/port/ledger-P3-settings.tsv` for the full per-case disposition and
  * `S/port/defects.md` for the product gaps the FAIL-MARKED tests below pin.
@@ -235,27 +239,12 @@ test('RES06: a card link shows a hover highlight', async ({ page }) => {
 });
 
 /* ────────────────────────────────────────────────────────────────────────
- * onetest: ELITEA-0971 (#892) — PRODUCT GAP: the version tooltip is DESIGNED to
- * always be empty. `useResourcesConfig.ts` hardcodes `plugins: []` (issue
- * #219 — `GET /admin/system_info/prompt_lib` has no consumer here since this
- * service has no plugin bus to report on), and `hasVersion` gates the whole
- * (i) icon on an admin-configured version label that this stack does not
- * set by default. So the icon does not even render, let alone list six
- * component versions.
+ * onetest: ELITEA-0971 — #892 fixed. See `shell.resources-version-info.spec.ts`
+ * (RES07) for the acceptance test — moved to its own file because it is the
+ * one Help Center case that writes the shared platform-wide `resources`
+ * config section, which belongs in the serial `platform-flags` project, not
+ * here alongside ten read-only cases.
  * ──────────────────────────────────────────────────────────────────────── */
-test('RES07: the (i) icon lists six component versions on hover — product gap', async ({ page }) => {
-  test.fail(
-    true,
-    'ELITEA-0971 (#892): product gap — plugins is hardcoded to [] (issue #219) and no version is configured by default',
-  );
-  await gotoHelpCenter(page);
-  const icon = page.getByTestId('resource-version-info-icon');
-  await expect(icon, 'the version info icon must be visible').toBeVisible({ timeout: 5_000 });
-  await icon.hover();
-  for (const name of ['elitea_core', 'admin', 'notifications', 'configurations', 'sdk_plugin', 'indexer_worker']) {
-    await expect(page.getByText(new RegExp(name))).toBeVisible({ timeout: 2_000 });
-  }
-});
 
 /* ────────────────────────────────────────────────────────────────────────
  * onetest: ELITEA-0972, ELITEA-0973, ELITEA-0975 — #891 fixed (partial): the

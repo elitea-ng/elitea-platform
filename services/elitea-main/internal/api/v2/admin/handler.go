@@ -1,14 +1,18 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	v2branding "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/branding"
+	"log/slog"
 	"net/http"
 	"strconv"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/buildinfo"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
 )
@@ -114,66 +118,88 @@ func NewHandler(pool *pgxpool.Pool, options ...Option) *Handler {
 	return handler
 }
 
-// systemInfoUnavailable is what `/admin/system_info/{mode}` and its ungated
-// `/admin/system_info/prompt_lib` sibling answer, and why.
+// SystemInfo answers `GET /admin/system_info/{mode}` and its ungated
+// `GET /admin/system_info/prompt_lib` sibling (issue #892, option (a) of the
+// two the issue named).
+//
+// # Why this used to be a permanent 501
 //
 // pylon's `system_info` reports the versions of six NAMED plugins —
 // elitea_core, admin, notifications, configurations, sdk_plugin and
 // indexer_worker — read out of `self.module.remote_runtimes`, the registry of
 // pylons that announced themselves on the Arbiter bus in the last 60 seconds
 // (legacy/plugins/admin/api/v2/system_info.py). It is a FLEET inventory: the
-// answer names other processes, not the process that serves the request.
+// answer names other processes, not the process that serves the request. That
+// is the same registry `RuntimeRemote` above reads, and `RuntimeRemote`
+// answers 501 for the same reason. AGENTS.md names Pylon plugin loading and
+// Arbiter transport as things the target architecture does not preserve, so
+// this service loads no plugins and has no such fleet to ask — that part of
+// pylon's answer has no equivalent here and never will, and this handler must
+// not invent one (#219: it once answered 200 with a hardcoded `elitea_core`/
+// `auth` map at a literal "2.0.0", in the wrong shape besides — pylon returns
+// `plugins` as an ARRAY, not an object — so it rendered as nothing and nobody
+// noticed).
 //
-// That is the same registry `RuntimeRemote` above reads, and `RuntimeRemote`
-// already answers 501 for the same reason. AGENTS.md names Pylon plugin loading
-// and Arbiter transport as things the target architecture does not preserve, so
-// this service loads no plugins and has no fleet to ask.
+// # What changed
 //
-// Until this change the handler answered 200 with a HARDCODED map: `elitea_core`
-// and `auth`, both "active" at version "2.0.0", under a top-level `version`
-// "2.0.0" and a `build` "elitea-main-go". Every one of those values was invented.
-// `auth` is not even one of the six names pylon reports. The shape was wrong as
-// well: pylon returns `plugins` as an ARRAY of `{name, version}`, and both
-// clients index it as an array, so the fabricated map rendered as nothing. That
-// is luck, not safety — the next person to correct the shape would have made an
-// admin screen start to display invented version numbers, which an operator uses
-// to decide whether a fix is deployed (#219).
+// The 501 was never really about the fleet question; it was that this route
+// answered NOTHING, because this service ALSO had no build-version plumbing
+// for the one thing it genuinely can report about itself. That gap is closed:
+// `internal/buildinfo` carries a `Version` set at build time by `-ldflags -X`
+// (see services/elitea-main/Containerfile, which used to declare
+// `ARG VERSION=dev` and never use it), and `elitea_runtime.schema_migrations`
+// (internal/infra/db/migrate/ledger.go) already records the highest applied
+// shared-scope migration version — a fact this process's own database
+// connection can read directly, no fleet bus required.
 //
-// # The three answers that were rejected
+// So the route now reports two REAL, LOCAL facts — this binary's own release
+// version and the schema version its database is running — as `components`,
+// in the same `[{name, version}]` shape pylon used, so the existing Help
+// Center tooltip rendering needs no reshaping. It still reports NOTHING about
+// plugins, workers or the gateway: this service has no fleet telemetry for
+// any of those, and a `components` entry that named one without a real
+// source would be exactly the #219 defect again in new clothes. That remains
+// open (tracked in #892's follow-up), not faked here.
 //
-// An EMPTY list. `{"plugins": []}` reads as "this deployment runs no plugins",
-// which is a different statement from "this platform has no plugin concept". The
-// `Tasks` and `RuntimeRemote` comments in this file condemn exactly that
-// conflation.
-//
-// The RUNNING BINARY instead. Both clients render plain `name: version` rows, so
-// the shape would fit, but this service has no version to read. No `-ldflags -X`
-// exists in services/elitea-main/Containerfile, .github/workflows/ci-go.yml or
-// docker-bake.hcl; the Containerfile declares `ARG VERSION=dev` and never uses
-// it; and the build copies `services/elitea-main/` without a `.git` directory, so
-// `debug.ReadBuildInfo` reports `Main.Version` as "(devel)" and records no
-// `vcs.revision`. Reporting "(devel)" to an operator who asks which build is
-// deployed is the same failure in new clothes. Build-version plumbing is a
-// separate change, and this route can report a real version once it exists.
-//
-// REMOVING the field. A shipped screen renders it, so it cannot simply vanish.
-//
-// # What the clients do with a 501
-//
-// apps/elitea-ui reads `GET /admin/system_info/prompt_lib` and holds
-// `systemInfo?.plugins ?? []`, so the Help Center version tooltip stays closed —
-// the state it is in today. The "Version: X (date)" label beside it comes from
-// `/admin/plugin_config_values/prompt_lib/resources`, which is real and
-// administrator-owned, so the bar keeps its true content. apps/elitea-web does
-// not call this route at all; its `useResourcesConfig` returns an empty plugin
-// list on purpose. The legacy admin_ui Information card reads
-// `/admin/system_info/administration` the same defensive way and simply lists no
-// extra rows.
-const systemInfoUnavailable = "plugin version reporting reads the Pylon fleet's Arbiter runtime announcements, " +
-	"which have no equivalent in this service; see AGENTS.md architecture boundaries"
+// The migration read degrades openly rather than failing the whole request:
+// if the pool is nil (unit tests) or the query errors (a database blip), the
+// response still carries `elitea-main`'s own version and simply omits the
+// `migrations` entry — the same fail-open choice `RuntimeRemote`'s siblings
+// make elsewhere in this file, applied to an informational tooltip rather
+// than a security check.
+func (h *Handler) SystemInfo(w http.ResponseWriter, r *http.Request) {
+	components := []map[string]any{
+		{"name": "elitea-main", "version": buildinfo.Version},
+	}
+	if head, ok := h.migrationHead(r.Context()); ok {
+		components = append(components, map[string]any{
+			"name":    "migrations",
+			"version": fmt.Sprintf("%04d", head),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"components": components})
+}
 
-func (h *Handler) SystemInfo(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusNotImplemented, map[string]any{"error": systemInfoUnavailable})
+// migrationHead reads the highest applied shared-scope migration version out
+// of elitea_runtime.schema_migrations. It reports (0, false) rather than an
+// error when the pool is nil or the query fails: SystemInfo is an
+// informational tooltip, not a health check, and a database blip here must
+// not turn into a 500 on a page load.
+func (h *Handler) migrationHead(ctx context.Context) (int64, bool) {
+	if h.pool == nil {
+		return 0, false
+	}
+	var head int64
+	if err := h.pool.QueryRow(ctx,
+		`SELECT COALESCE(MAX(version), 0) FROM elitea_runtime.schema_migrations WHERE target_kind = 'shared'`,
+	).Scan(&head); err != nil {
+		slog.Warn("system_info: read migration head", "err", err)
+		return 0, false
+	}
+	if head == 0 {
+		return 0, false
+	}
+	return head, true
 }
 
 // ResourcesConfig, PluginConfigValues and PluginConfigValuesSave are implemented

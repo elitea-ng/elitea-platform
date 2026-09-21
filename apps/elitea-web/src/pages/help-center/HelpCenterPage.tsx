@@ -4,9 +4,9 @@
  * Ported from `apps/elitea-ui/src/[fsd]/pages/resources/index.jsx`.
  *
  * Admin-configured data (per-card enabled flags + links, version label,
- * plugin list) comes from `useResourcesConfig()` — see that hook's module
- * doc for the backend API gap (issue #26 Key Decision #2) that currently
- * keeps every card's links and the version bar empty.
+ * component version list) comes from `useResourcesConfig()` — see that
+ * hook's module doc for the resources-section read (issue #26 Key Decision
+ * #2, fixed) and the system-info read (issue #892, fixed).
  */
 import { memo, useMemo, type ReactNode } from 'react';
 
@@ -156,7 +156,7 @@ const badgeSx: SxProps<Theme> = (t: Theme): SystemStyleObject<Theme> => ({
  * a responsive grid of ResourceCard components.
  */
 const HelpCenterPage = memo((): ReactNode => {
-  const { configValues, versionLabel, plugins } = useResourcesConfig();
+  const { configValues, versionLabel, components } = useResourcesConfig();
 
   const visibleCards = useMemo(
     () =>
@@ -173,7 +173,7 @@ const HelpCenterPage = memo((): ReactNode => {
     >
       <ResourceVersionInfo
         versionLabel={versionLabel}
-        plugins={plugins}
+        components={components}
       />
 
       <Box
