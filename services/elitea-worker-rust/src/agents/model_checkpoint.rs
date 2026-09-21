@@ -332,6 +332,7 @@ impl ModelCheckpointWriter {
     pub(super) fn bind(self, builder: LlmAgentBuilder) -> LlmAgentBuilder {
         let model = self.clone();
         builder
+            .retain_prepared_history(self.context_compaction.is_some())
             .before_model_callback(Box::new(move |context, request| {
                 let writer = model.clone();
                 Box::pin(async move {

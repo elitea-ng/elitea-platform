@@ -77,3 +77,8 @@ lto = "thin"
 codegen-units = 1
 panic = "abort"
 incremental = false
+
+# Pinned ADK 2.2.0 history-retention extensions. See vendor/README.md.
+[patch.crates-io]
+adk-agent = { path = "vendor/adk-agent" }
+adk-runner = { path = "vendor/adk-runner" }

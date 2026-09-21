@@ -5,8 +5,6 @@ version = 4
 [[package]]
 name = "adk-agent"
 version = "2.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e150b28775ad28d4a4d0a49267a64298052346b8faf6f93ce075d025faecdcb8"
 dependencies = [
  "adk-core",
  "adk-telemetry",
@@ -107,8 +105,6 @@ dependencies = [
 [[package]]
 name = "adk-runner"
 version = "2.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31262e6bb997df8daa5bed8cc54bdefb3d92c84014c8715b937eb51731446bb0"
 dependencies = [
  "adk-core",
  "adk-session",

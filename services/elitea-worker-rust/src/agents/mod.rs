@@ -57,3 +57,6 @@ pub use result::{
     AGENT_RESULT_CLASSIFICATION, AGENT_RESULT_MEDIA_TYPE, AgentResultArtifact, AgentTerminalState,
     BoundAgentExecutionResult, bind_result_artifact,
 };
+
+#[cfg(test)]
+mod native_history_tests;

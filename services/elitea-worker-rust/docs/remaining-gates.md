@@ -109,6 +109,10 @@ The [checkpoint retention investigation](source-mapping/context-event-retention-
 The [prepared-request history projection](source-mapping/context-runner-history-projection-20260921.md) verifies six storage retirement cycles and browser recovery after abrupt worker loss.
 Chat 606 uses two claims and retains its answer after reload.
 Repeated live compaction, nested browser recovery, and in-process history bounds remain open.
+The [native history retention candidate](source-mapping/context-native-history-retention-20260921.md) passes 374 agent tests with PostgreSQL.
+It retains prepared model history and avoids accumulating partial stream events.
+Clippy and formatting checks pass. Chat 607 passes deployed compaction and fresh-browser reload.
+Repeated live compaction and comparative process memory measurements remain open.
 The [summary work-order correction](source-mapping/context-summary-work-order-20260921.md) passes deployed compaction and fresh-browser reload in chat 604.
 
 The [2026-09-17 toolkit binding audit](source-mapping/toolkit-binding-drift-20260917.md)

@@ -289,6 +289,7 @@ impl ScopedModelCheckpoint {
     pub(super) fn bind(self: Arc<Self>, builder: LlmAgentBuilder) -> LlmAgentBuilder {
         let model = self.clone();
         builder
+            .retain_prepared_history(true)
             .before_model_callback(Box::new(move |context, request| {
                 let scope = model.clone();
                 Box::pin(async move { scope.before_model(context.as_ref(), request).await })
