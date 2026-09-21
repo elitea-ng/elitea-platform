@@ -104,15 +104,6 @@ const (
 	runtimeContextStageArtifactDelete = "artifact_delete"
 )
 
-// The two access verbs, spelled as `elitea_storage.bucket_permissions` stores
-// them. They are the same strings internal/api/v2/artifacts uses, and the
-// decision itself is shared rather than re-derived — see
-// repos.BucketAccessPermitted.
-const (
-	runtimeArtifactAccessRead  = "read"
-	runtimeArtifactAccessWrite = "write"
-)
-
 // RuntimeArtifactListRequest is the wire body for `list_files`.
 //
 // `Bucket` is optional: the toolkit is configured with one bucket and the
