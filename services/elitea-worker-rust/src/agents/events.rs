@@ -99,6 +99,12 @@ pub(crate) const DESCENDANT_CONTAINER_INVOCATION_KEY: &str =
     "elitea.descendant.container_invocation_id";
 pub(crate) const DESCENDANT_PARENT_CALL_KEY: &str = "elitea.descendant.parent_call_id";
 pub(crate) const DESCENDANT_CHECKPOINT_THREAD_KEY: &str = "elitea.descendant.checkpoint_thread_id";
+/// The pipeline child's own pending graph checkpoint (#973).
+///
+/// Private runtime state, carried on the PERSISTED descendant interrupt event
+/// only. It is stripped before projection, so it never reaches a browser card
+/// or a stored trace step; `application_pipeline` owns its encoding.
+pub(crate) const PIPELINE_TOOL_PENDING_METADATA_KEY: &str = "elitea.pipeline_tool.pending.v1";
 
 /// Stable, low-cardinality event projection failures.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -996,6 +1002,7 @@ impl AgentEventProjector {
             event,
             &application,
             self.context.graph_checkpoint_thread_id.as_deref(),
+            &self.context.thread_id,
             parent_call_id,
         )?;
         if !self.descendants.contains_key(parent_call_id) {
@@ -1040,6 +1047,15 @@ impl AgentEventProjector {
         child_event
             .provider_metadata
             .remove(DESCENDANT_CHECKPOINT_THREAD_KEY);
+        // #973: the pipeline child's own pending checkpoint rides the PERSISTED
+        // event so the resume can re-enter the child graph, and it is private
+        // runtime state — it must not reach the browser card or the stored
+        // trace step. Removing it here is also what keeps the strict
+        // `provider_metadata.len() == 1` check in
+        // `validate_graph_interrupt_event` true for the pause below.
+        child_event
+            .provider_metadata
+            .remove(PIPELINE_TOOL_PENDING_METADATA_KEY);
         let batch = descendant.projector.project(&child_event)?;
         overlay_batch_hierarchy(batch, std::slice::from_ref(&descendant.tier))
     }
@@ -4485,10 +4501,23 @@ fn valid_tool_identity(value: &str) -> bool {
         && !value.chars().any(char::is_control)
 }
 
+/// The checkpoint thread a pipeline descendant's own graph pauses on.
+///
+/// Two parents can own a pipeline child, and the thread is derived — never
+/// taken on the child's word — in both:
+///
+/// * a PIPELINE parent reaches it through an `agent` node, so the call id is
+///   `pipeline:<node>:<step>` and the thread is the parent graph's own thread
+///   namespaced by that node (ADK `SubgraphNode` semantics);
+/// * an ORDINARY parent (#973) has no graph and no graph thread, so the thread
+///   is the CONVERSATION thread namespaced by the model's function-call id.
+///   That id is stable across the pause because the parent's resume replays
+///   the identical call, which is what lets the pause be re-entered at all.
 fn descendant_checkpoint_thread(
     event: &Event,
     application: &ApplicationToolPresentation,
     parent_thread_id: Option<&str>,
+    conversation_thread_id: &str,
     parent_call_id: &str,
 ) -> Result<Option<String>, AgentEventProjectionError> {
     let marker = event
@@ -4504,10 +4533,15 @@ fn descendant_checkpoint_thread(
     let checkpoint_thread_id = marker
         .filter(|value| valid_tool_identity(value))
         .ok_or_else(AgentEventProjectionError::invalid_state)?;
-    let parent_thread_id = parent_thread_id.ok_or_else(AgentEventProjectionError::invalid_state)?;
-    let node_name = pipeline_application_call_node(parent_call_id)
-        .ok_or_else(AgentEventProjectionError::invalid_state)?;
-    if checkpoint_thread_id != &format!("{parent_thread_id}/{node_name}") {
+    let expected = match parent_thread_id {
+        Some(parent_thread_id) => {
+            let node_name = pipeline_application_call_node(parent_call_id)
+                .ok_or_else(AgentEventProjectionError::invalid_state)?;
+            format!("{parent_thread_id}/{node_name}")
+        }
+        None => format!("{conversation_thread_id}/{parent_call_id}"),
+    };
+    if checkpoint_thread_id != &expected {
         return Err(AgentEventProjectionError::invalid_state());
     }
     Ok(Some(checkpoint_thread_id.clone()))

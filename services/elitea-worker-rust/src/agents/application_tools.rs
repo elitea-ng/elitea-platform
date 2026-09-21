@@ -29,13 +29,20 @@ use serde_json::{Map, Value, json};
 use tokio::sync::{Mutex, mpsc};
 use tracing::Instrument as _;
 
+use super::application_pipeline::{
+    ApplicationPipelineTool, PipelineToolParentBinding, PipelineToolResume,
+    pipeline_child_references, pipeline_pause_identity, pipeline_tool_description,
+};
 use super::assembly::{OrdinaryModelProvider, OrdinaryNoToolProfile, ReasoningEffort};
 use super::direct_hitl::{ResolvedDirectHitlDecision, sensitive_call_identity};
 use super::events::{
     APPLICATION_BRANCH_ROOT, ApplicationToolGuardCatalogs, ApplicationToolPresentationCatalog,
-    DESCENDANT_CONTAINER_INVOCATION_KEY, DESCENDANT_PARENT_CALL_KEY,
+    DESCENDANT_CHECKPOINT_THREAD_KEY, DESCENDANT_CONTAINER_INVOCATION_KEY,
+    DESCENDANT_PARENT_CALL_KEY,
 };
+use super::graph::pipeline_node_event_channel;
 use super::internal_tools::{ASK_USER_TOOL_NAME, InternalToolCatalog};
+use super::pipeline::materialize_saved_pipeline_tool;
 use super::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
 use super::sensitive_tools::{SensitiveToolCatalog, sensitive_tools_for_kind};
 use super::session::{
@@ -57,12 +64,14 @@ use crate::transport::runtime_context::ClaimScopedEliteaContext;
 const MAX_APPLICATION_HOPS: usize = 25;
 /// The one child `agent_type` this worker compiles as a nested `LlmAgent`.
 const SUPPORTED_APPLICATION_AGENT_TYPE: &str = "agent";
+/// The child `agent_type` compiled as a checkpointed graph tool (#973).
+pub(crate) const PIPELINE_APPLICATION_AGENT_TYPE: &str = "pipeline";
 /// Upper bound on the children one notice names, so a version with a hundred
 /// unsupported references cannot write a hundred lines into the transcript.
 const MAX_SKIPPED_APPLICATION_CHILDREN: usize = 8;
 const MAX_SKIPPED_APPLICATION_LABEL_CHARS: usize = 96;
 const MAX_AGENT_TIERS: usize = 3;
-const MAX_APPLICATION_TASK_BYTES: usize = 240 * 1_024;
+pub(super) const MAX_APPLICATION_TASK_BYTES: usize = 240 * 1_024;
 const MAX_AGENT_DESCRIPTION_BYTES: usize = 4 * 1_024;
 const MAX_DESCRIPTION_CAPABILITIES: usize = 16;
 const APPLICATION_EVENT_CHANNEL_CAPACITY: usize = 64;
@@ -78,20 +87,23 @@ type ApplicationFuture<'a> = Pin<
     Box<dyn Future<Output = Result<Arc<BuiltApplication>, NativeAgentAssemblyError>> + Send + 'a>,
 >;
 
-type ApplicationEventSender = mpsc::Sender<ApplicationEventSignal>;
+pub(super) type ApplicationEventSender = mpsc::Sender<ApplicationEventSignal>;
 
-enum ApplicationEventSignal {
+pub(super) enum ApplicationEventSignal {
     ContainerEvent(Box<Event>),
     Event {
         container_invocation_id: String,
         parent_call_id: String,
+        /// Set only for a saved PIPELINE child (#973): the thread its own graph
+        /// pauses on, which the projector re-derives rather than trusts.
+        checkpoint_thread_id: Option<String>,
         event: Box<Event>,
     },
     Fatal(ApplicationEventFailure),
 }
 
 #[derive(Clone, Copy)]
-enum ApplicationEventFailure {
+pub(super) enum ApplicationEventFailure {
     ChildExecution,
 }
 
@@ -111,7 +123,7 @@ struct ApplicationResumeState {
     by_parent_invocation: HashMap<String, HashMap<String, ChildApplicationResume>>,
 }
 
-struct ChildApplicationResume {
+pub(super) struct ChildApplicationResume {
     tool_name: String,
     arguments: Value,
     ordinal: usize,
@@ -119,9 +131,30 @@ struct ChildApplicationResume {
     action: ChildApplicationResumeAction,
 }
 
-enum ChildApplicationResumeAction {
+impl ChildApplicationResume {
+    /// Take the pipeline continuation this resume carries, proving first that
+    /// it names the same tool and the same arguments the replay re-emitted.
+    pub(super) fn into_pipeline(
+        self,
+        tool_name: &str,
+        arguments: &Value,
+    ) -> adk_rust::Result<Box<PipelineToolResume>> {
+        if self.tool_name != tool_name || &self.arguments != arguments {
+            return Err(tool_input_error());
+        }
+        match self.action {
+            ChildApplicationResumeAction::Pipeline(resume) => Ok(resume),
+            _ => Err(tool_input_error()),
+        }
+    }
+}
+
+pub(super) enum ChildApplicationResumeAction {
     Direct(Box<ResolvedDirectHitlDecision>),
     Nested(HashMap<String, ChildApplicationResume>),
+    /// #973: a saved PIPELINE child re-enters its own graph at the node that
+    /// paused, from the checkpoint its pause persisted on the parent's event.
+    Pipeline(Box<PipelineToolResume>),
 }
 
 impl ApplicationResumeCoordinator {
@@ -154,7 +187,7 @@ impl ApplicationResumeCoordinator {
         Ok(())
     }
 
-    async fn take(
+    pub(super) async fn take(
         &self,
         parent_invocation_id: &str,
         call_id: &str,
@@ -218,6 +251,9 @@ struct ChildApplicationResumeBuilder {
     history: Vec<Content>,
     decision: Option<ResolvedDirectHitlDecision>,
     children: HashMap<String, ChildApplicationResumeBuilder>,
+    /// #973: set for a child PIPELINE, which has no history to replay and one
+    /// checkpoint to re-enter instead.
+    pipeline: Option<Box<PipelineToolResume>>,
 }
 
 pub(crate) async fn prepare_nested_application_resume(
@@ -263,6 +299,22 @@ fn build_nested_application_resume(
     let mut root_event_id = None;
     let mut submitted_interrupt_ids = HashSet::with_capacity(decisions.len());
     for decision in decisions {
+        if decision.is_pipeline_node() {
+            let root_event_id_of_call = insert_pipeline_resume(
+                &mut builders,
+                events,
+                &mut submitted_interrupt_ids,
+                decision,
+            )?;
+            if root_event_id
+                .get_or_insert_with(|| root_event_id_of_call.clone())
+                .as_str()
+                != root_event_id_of_call
+            {
+                return Err(unsupported_capability());
+            }
+            continue;
+        }
         let chain = application_call_chain(events, &decision)?;
         let root_call = chain.last().ok_or_else(invalid_configuration)?;
         if root_event_id
@@ -439,6 +491,7 @@ fn insert_resume_decision(
                 history: history.clone(),
                 decision: None,
                 children: HashMap::new(),
+                pipeline: None,
             });
         if builder.tool_name != hop.tool_name
             || builder.arguments != hop.arguments
@@ -461,6 +514,7 @@ fn insert_resume_decision(
                     .is_some()
             };
             if !leaf_is_admitted
+                || builder.pipeline.is_some()
                 || builder.decision.replace(decision).is_some()
                 || !builder.children.is_empty()
             {
@@ -468,7 +522,7 @@ fn insert_resume_decision(
             }
             return Ok(());
         }
-        if builder.decision.is_some() {
+        if builder.decision.is_some() || builder.pipeline.is_some() {
             return Err(unsupported_capability());
         }
         current_builders = &mut builder.children;
@@ -477,7 +531,72 @@ fn insert_resume_decision(
     Err(invalid_configuration())
 }
 
-fn application_task(arguments: &Value) -> Result<&str, NativeAgentAssemblyError> {
+/// Build the single-hop resume of one paused child PIPELINE (#973).
+///
+/// Depth is deliberately one. A pipeline child of a nested AGENT would need the
+/// branch-walked chain above, and it carries no branch precisely because its
+/// pause is a graph interrupt projected as the root of its own descendant
+/// projector — so the two contracts are kept apart rather than blended.
+/// Returns the id of the event carrying the parent's tool call, which is what
+/// scopes the completeness check.
+fn insert_pipeline_resume(
+    builders: &mut HashMap<String, ChildApplicationResumeBuilder>,
+    events: &[Event],
+    submitted_interrupt_ids: &mut HashSet<String>,
+    decision: ResolvedDirectHitlDecision,
+) -> Result<String, NativeAgentAssemblyError> {
+    let route = decision
+        .application_route()
+        .ok_or_else(invalid_configuration)?
+        .clone();
+    if !route.branch().is_empty() {
+        return Err(unsupported_capability());
+    }
+    if !submitted_interrupt_ids.insert(decision.interrupt_id().to_owned()) {
+        return Err(unsupported_capability());
+    }
+    let (event, call, ordinal) = exact_application_call(
+        events,
+        route.container_invocation_id(),
+        route.parent_call_id(),
+    )?;
+    if event
+        .provider_metadata
+        .contains_key(DESCENDANT_CONTAINER_INVOCATION_KEY)
+        || event
+            .provider_metadata
+            .contains_key(DESCENDANT_PARENT_CALL_KEY)
+    {
+        return Err(unsupported_capability());
+    }
+    let root_event_id = event.id.clone();
+    let tool_name = call.name.to_owned();
+    let arguments = call.args.clone();
+    let pipeline = decision
+        .into_pipeline_resume()
+        .ok_or_else(invalid_configuration)?;
+    let builder = builders
+        .entry(route.parent_call_id().to_owned())
+        .or_insert_with(|| ChildApplicationResumeBuilder {
+            tool_name,
+            arguments,
+            ordinal,
+            owned_invocation_id: String::new(),
+            history: Vec::new(),
+            decision: None,
+            children: HashMap::new(),
+            pipeline: None,
+        });
+    if builder.decision.is_some()
+        || !builder.children.is_empty()
+        || builder.pipeline.replace(pipeline).is_some()
+    {
+        return Err(unsupported_capability());
+    }
+    Ok(root_event_id)
+}
+
+pub(super) fn application_task(arguments: &Value) -> Result<&str, NativeAgentAssemblyError> {
     arguments
         .as_object()
         .filter(|object| object.len() == 1)
@@ -495,9 +614,16 @@ fn finish_resume_builders(
     builders
         .into_iter()
         .map(|(call_id, builder)| {
-            let action = match (builder.decision, builder.children.is_empty()) {
-                (Some(decision), true) => ChildApplicationResumeAction::Direct(Box::new(decision)),
-                (None, false) => {
+            let action = match (
+                builder.decision,
+                builder.pipeline,
+                builder.children.is_empty(),
+            ) {
+                (Some(decision), None, true) => {
+                    ChildApplicationResumeAction::Direct(Box::new(decision))
+                }
+                (None, Some(pipeline), true) => ChildApplicationResumeAction::Pipeline(pipeline),
+                (None, None, false) => {
                     ChildApplicationResumeAction::Nested(finish_resume_builders(builder.children)?)
                 }
                 _ => return Err(unsupported_capability()),
@@ -556,6 +682,11 @@ fn resume_interrupt_ids(
                 ChildApplicationResumeAction::Nested(children) => {
                     collect(children, interrupt_ids)?;
                 }
+                ChildApplicationResumeAction::Pipeline(resume) => {
+                    if !interrupt_ids.insert(resume.interrupt_id().to_owned()) {
+                        return Err(invalid_configuration());
+                    }
+                }
             }
         }
         Ok(())
@@ -612,6 +743,27 @@ fn validate_complete_nested_decision_set(
         )
         .map_err(|_| invalid_configuration())?;
         if !pending.insert(interrupt_id) {
+            return Err(invalid_configuration());
+        }
+    }
+    // #973: a child PIPELINE's card is a graph interrupt, so it carries no
+    // `tool_confirmation` and the scan above cannot see it. Counting it here is
+    // what keeps "every card of this pause must be answered" true when one of
+    // them belongs to a pipeline child.
+    for event in events {
+        let Some(pause) = pipeline_pause_identity(event).map_err(|_| invalid_configuration())?
+        else {
+            continue;
+        };
+        let (call_event, _, _) = exact_application_call(
+            events,
+            &pause.container_invocation_id,
+            &pause.parent_call_id,
+        )?;
+        if call_event.id != root_event_id {
+            continue;
+        }
+        if !pending.insert(pause.interrupt_id) {
             return Err(invalid_configuration());
         }
     }
@@ -806,6 +958,11 @@ pub(crate) struct ApplicationToolDependencies<'a> {
     mcp_tokens: &'a Map<String, Value>,
     event_sender: Option<ApplicationEventSender>,
     resume: Option<ApplicationResumeCoordinator>,
+    /// #973: the CONVERSATION thread a saved pipeline child namespaces its own
+    /// checkpoint thread under. A caller that does not supply one gets no
+    /// pipeline children — the pipeline PARENT is exactly that caller, because
+    /// it owns its pipeline participants itself through its graph.
+    conversation_thread_id: Option<String>,
 }
 
 impl<'a> ApplicationToolDependencies<'a> {
@@ -823,7 +980,16 @@ impl<'a> ApplicationToolDependencies<'a> {
             mcp_tokens,
             event_sender: None,
             resume: None,
+            conversation_thread_id: None,
         }
+    }
+
+    /// Admit saved PIPELINE children, namespaced under this conversation's
+    /// durable thread (#973).
+    #[must_use]
+    pub(crate) fn with_conversation_thread(mut self, thread_id: String) -> Self {
+        self.conversation_thread_id = Some(thread_id);
+        self
     }
 }
 
@@ -917,7 +1083,19 @@ pub(crate) async fn materialize_application_runtime(
     let resume = ApplicationResumeCoordinator::default();
     dependencies.event_sender = Some(event_sender);
     dependencies.resume = Some(resume.clone());
-    let materialized = materialize_application_tools(
+    // #973: read before the dependencies are consumed below. A caller that
+    // declared no conversation thread gets no pipeline children.
+    let pipeline_children = materialize_pipeline_children(
+        snapshot,
+        platform,
+        runtime_context,
+        Arc::clone(&elitea_context),
+        fallback_profile,
+        &dependencies,
+        selected_aliases,
+    )
+    .await?;
+    let mut materialized = materialize_application_tools(
         snapshot,
         platform,
         runtime_context,
@@ -927,6 +1105,7 @@ pub(crate) async fn materialize_application_runtime(
         selected_aliases,
     )
     .await?;
+    materialized.extend(pipeline_children);
     if materialized.is_empty() {
         return Ok(None);
     }
@@ -955,6 +1134,71 @@ pub(crate) async fn materialize_application_runtime(
         },
         resume,
     }))
+}
+
+/// Compile every attached saved PIPELINE child into one callable tool (#973).
+///
+/// The per-child node-event channel is created here and owned by the tool: the
+/// tool forwards what it drains onto the parent's descendant channel, so a
+/// pipeline child's `llm` and `tool` node progress shows up in the parent's
+/// transcript the same way a nested agent's does.
+async fn materialize_pipeline_children(
+    snapshot: &AdmittedToolSnapshot<'_>,
+    platform: &PlatformClient,
+    runtime_context: &ClaimBoundRuntimeContextAuthority,
+    elitea_context: Arc<ClaimScopedEliteaContext>,
+    fallback_profile: &OrdinaryNoToolProfile,
+    dependencies: &ApplicationToolDependencies<'_>,
+    selected_aliases: Option<&BTreeSet<String>>,
+) -> Result<Vec<MaterializedApplicationTool>, NativeAgentAssemblyError> {
+    let Some(conversation_thread_id) = dependencies.conversation_thread_id.clone() else {
+        return Ok(Vec::new());
+    };
+    let references = pipeline_child_references(snapshot, selected_aliases);
+    let mut tools = Vec::with_capacity(references.len());
+    for reference in references {
+        let (node_events_sender, node_events_receiver) = pipeline_node_event_channel();
+        let (definition, runtimes) = materialize_saved_pipeline_tool(
+            platform,
+            runtime_context,
+            Arc::clone(&elitea_context),
+            Arc::clone(&dependencies.model_facade),
+            dependencies.mcp_connector.as_ref(),
+            dependencies.mcp_tokens,
+            Arc::clone(&dependencies.policy),
+            fallback_profile,
+            node_events_sender,
+            reference.identity,
+            reference.project_id,
+        )
+        .await?;
+        let name = application_tool_name(reference.identity);
+        let tool = Arc::new(ApplicationPipelineTool::new(
+            name,
+            pipeline_tool_description(&reference.alias, reference.description.as_deref()),
+            definition,
+            runtimes,
+            node_events_receiver,
+            PipelineToolParentBinding {
+                conversation_thread_id: conversation_thread_id.clone(),
+                event_sender: dependencies.event_sender.clone(),
+                resume: dependencies.resume.clone(),
+            },
+        ));
+        tools.push(MaterializedApplicationTool {
+            alias: reference.alias,
+            agent_type: "pipeline".to_owned(),
+            // The child graph owns its own per-node models; the presentation
+            // label names what the parent delegated to, not one model.
+            model_name: "pipeline".to_owned(),
+            child_tools: ApplicationToolPresentationCatalog::default(),
+            sensitive_tools: SensitiveToolCatalog::default(),
+            delegated_authorization: DelegatedAuthorizationCatalog::default(),
+            internal_tools: InternalToolCatalog::default(),
+            tool,
+        });
+    }
+    Ok(tools)
 }
 
 /// Resolve exact frozen saved applications without changing their graph alias.
@@ -1303,6 +1547,7 @@ pub(crate) struct SkippedApplicationChild {
 pub(crate) fn skipped_application_children(
     snapshot: &AdmittedToolSnapshot<'_>,
     selected_aliases: Option<&BTreeSet<String>>,
+    pipelines_admitted: bool,
 ) -> Vec<SkippedApplicationChild> {
     let mut skipped = BTreeSet::new();
     for reference in snapshot
@@ -1315,7 +1560,9 @@ pub(crate) fn skipped_application_children(
         let Some(agent_type) = reference.application_agent_type() else {
             continue;
         };
-        if agent_type == SUPPORTED_APPLICATION_AGENT_TYPE {
+        if agent_type == SUPPORTED_APPLICATION_AGENT_TYPE
+            || (pipelines_admitted && agent_type == PIPELINE_APPLICATION_AGENT_TYPE)
+        {
             continue;
         }
         if skipped.len() >= MAX_SKIPPED_APPLICATION_CHILDREN {
@@ -1584,6 +1831,10 @@ impl LazyNestedAgent {
         sensitive_tools: &SensitiveToolCatalog,
     ) -> adk_rust::Result<PreparedChildApplicationResume> {
         match action {
+            // A pipeline continuation cannot reach an AGENT child: the two are
+            // built by different materializers and keyed by different tools, so
+            // arriving here means the resume was routed to the wrong child.
+            ChildApplicationResumeAction::Pipeline(_) => Err(application_event_channel_error()),
             ChildApplicationResumeAction::Direct(decision) => {
                 let replay = if decision.is_delegated_authorization() {
                     (*decision).into_delegated_authorization_replay(&self.delegated_authorization)
@@ -1898,6 +2149,7 @@ impl ApplicationAgentTool {
             .send(ApplicationEventSignal::Event {
                 container_invocation_id: ctx.invocation_id().to_owned(),
                 parent_call_id: ctx.function_call_id().to_owned(),
+                checkpoint_thread_id: None,
                 event: Box::new(event),
             })
             .await
@@ -2060,7 +2312,7 @@ fn confirmation_interrupt_ids(event: &Event) -> adk_rust::Result<BTreeSet<String
     Ok(BTreeSet::from([interrupt_id]))
 }
 
-fn nested_interrupt_result(interrupt_ids: &BTreeSet<String>) -> Value {
+pub(super) fn nested_interrupt_result(interrupt_ids: &BTreeSet<String>) -> Value {
     json!({NESTED_INTERRUPT_RESULT_KEY: interrupt_ids})
 }
 
@@ -2321,7 +2573,7 @@ impl InvocationContext for ApplicationRootInvocationContext {
     }
 }
 
-fn application_signal_event(signal: ApplicationEventSignal) -> adk_rust::Result<Event> {
+pub(super) fn application_signal_event(signal: ApplicationEventSignal) -> adk_rust::Result<Event> {
     match signal {
         ApplicationEventSignal::ContainerEvent(event) => {
             let event = *event;
@@ -2339,6 +2591,7 @@ fn application_signal_event(signal: ApplicationEventSignal) -> adk_rust::Result<
         ApplicationEventSignal::Event {
             container_invocation_id,
             parent_call_id,
+            checkpoint_thread_id,
             event,
         } => {
             let mut event = *event;
@@ -2348,6 +2601,9 @@ fn application_signal_event(signal: ApplicationEventSignal) -> adk_rust::Result<
                 || event
                     .provider_metadata
                     .contains_key(DESCENDANT_PARENT_CALL_KEY)
+                || event
+                    .provider_metadata
+                    .contains_key(DESCENDANT_CHECKPOINT_THREAD_KEY)
             {
                 return Err(application_event_channel_error());
             }
@@ -2358,6 +2614,12 @@ fn application_signal_event(signal: ApplicationEventSignal) -> adk_rust::Result<
             event
                 .provider_metadata
                 .insert(DESCENDANT_PARENT_CALL_KEY.to_owned(), parent_call_id);
+            if let Some(checkpoint_thread_id) = checkpoint_thread_id {
+                event.provider_metadata.insert(
+                    DESCENDANT_CHECKPOINT_THREAD_KEY.to_owned(),
+                    checkpoint_thread_id,
+                );
+            }
             Ok(event)
         }
         ApplicationEventSignal::Fatal(ApplicationEventFailure::ChildExecution) => {
@@ -2398,7 +2660,7 @@ fn pipeline_application_event(ctx: &dyn ToolContext) -> Event {
     event
 }
 
-struct ApplicationToolInvocationContext {
+pub(super) struct ApplicationToolInvocationContext {
     parent_ctx: Arc<dyn ToolContext>,
     agent: Arc<dyn Agent>,
     user_content: Content,
@@ -2409,7 +2671,7 @@ struct ApplicationToolInvocationContext {
     session: ApplicationToolSession,
 }
 
-fn application_run_config() -> RunConfig {
+pub(super) fn application_run_config() -> RunConfig {
     RunConfig::builder()
         .streaming_mode(StreamingMode::None)
         .tool_concurrency(ToolConcurrencyConfig {
@@ -2428,6 +2690,41 @@ impl ApplicationToolInvocationContext {
             application_run_config(),
             Vec::new(),
         )
+    }
+
+    /// One child context for a saved PIPELINE participant (#973).
+    ///
+    /// Two fields differ from an agent child and both are load-bearing. The
+    /// invocation id is DERIVED from the parent's function-call id rather than
+    /// drawn from a process counter, because the pause's public interrupt
+    /// identity is digested from it and the resume must recompute the same id
+    /// in a later process. The session id IS the child graph's checkpoint
+    /// thread, because ADK's `GraphAgent::run` builds its `ExecutionConfig`
+    /// from `ctx.session_id()` and that thread is what the pause is bound to.
+    /// The branch stays empty: a graph interrupt event is projected as the
+    /// root of its own descendant projector, not as a nested application tier.
+    pub(super) fn for_pipeline(
+        parent_ctx: Arc<dyn ToolContext>,
+        agent: Arc<dyn Agent>,
+        user_content: Content,
+        invocation_id: String,
+        checkpoint_thread_id: String,
+    ) -> Self {
+        Self {
+            session: ApplicationToolSession::new(
+                checkpoint_thread_id,
+                parent_ctx.app_name().to_owned(),
+                parent_ctx.user_id().to_owned(),
+                Vec::new(),
+            ),
+            parent_ctx,
+            agent,
+            user_content,
+            invocation_id,
+            branch: String::new(),
+            run_config: application_run_config(),
+            ended: AtomicBool::new(false),
+        }
     }
 
     fn with_resume(
@@ -2650,7 +2947,7 @@ fn agent_configuration_error() -> AdkError {
     )
 }
 
-fn tool_input_error() -> AdkError {
+pub(super) fn tool_input_error() -> AdkError {
     AdkError::new(
         ErrorComponent::Tool,
         ErrorCategory::InvalidInput,
@@ -2659,7 +2956,7 @@ fn tool_input_error() -> AdkError {
     )
 }
 
-fn application_event_channel_error() -> AdkError {
+pub(super) fn application_event_channel_error() -> AdkError {
     AdkError::new(
         ErrorComponent::Agent,
         ErrorCategory::Internal,
@@ -2668,7 +2965,7 @@ fn application_event_channel_error() -> AdkError {
     )
 }
 
-fn child_execution_error() -> AdkError {
+pub(super) fn child_execution_error() -> AdkError {
     AdkError::new(
         ErrorComponent::Agent,
         ErrorCategory::Unavailable,

@@ -2726,29 +2726,65 @@ fn stored_pipeline_reference(
     reference
 }
 
+/// One `hitl` gate, compiled by the child's own graph. No `llm` node, so the
+/// child needs no model of its own.
+const CHILD_PIPELINE_YAML: &str = "state:\n  input:\n    type: str\n  messages:\n    type: list\n  verdict:\n    type: str\nentry_point: review\nnodes:\n  - id: review\n    type: hitl\n    input:\n      - input\n    user_message:\n      type: fixed\n      value: Approve?\n    routes:\n      approve: approved\n  - id: approved\n    type: state_modifier\n    template: APPROVED\n    input: [input]\n    output: [verdict]\n    transition: END\n";
+
+fn runtime_context_with_pipeline_child() -> (RuntimeContextClient, Arc<AtomicUsize>) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let paths = Arc::new(Mutex::new(Vec::new()));
+    let token = runtime_context_response(&serde_json::json!({
+        "schema_version": "elitea.runtime.elitea-client-token.v1",
+        "project_id": 17,
+        "token": TOKEN,
+    }));
+    let child = application_version_response(
+        31,
+        41,
+        serde_json::json!({
+            "agent_type": "pipeline",
+            "instructions": CHILD_PIPELINE_YAML,
+            "meta": {},
+            "variables": [],
+            "tools": [],
+            "llm_settings": {
+                "model_name": "child-model",
+                "model_project_id": 23,
+                "max_tokens": 2048,
+                "reasoning_effort": null,
+                "temperature": 0.2,
+                "openai_compatible": true
+            }
+        }),
+    );
+    let client = runtime_context_client_from(
+        VecDeque::from([token, child]),
+        Arc::clone(&calls),
+        Arc::clone(&paths),
+    );
+    (client, calls)
+}
+
 /// THE DEFECT #973 REPORTS: one attached pipeline used to end the whole
 /// assembly with `native_agent.unsupported_capability`, before any model call,
 /// so EVERY turn of that agent died — including the turns that never mentioned
 /// the pipeline. The picker offers pipelines and the relation route stores
 /// them, so a supported UI action bricked the agent.
 ///
-/// The turn now runs. The pipeline binds no tool (this worker compiles nested
-/// `LlmAgent` children only), and the run is expected to SAY so — the notice
-/// is asserted in `session_tests.rs`, where the session that carries it is
-/// observable.
-///
-/// The runtime-context client answers ONE redemption and nothing else: a
-/// version resolution for the skipped child would drain an empty queue and
-/// fail the test, which is how "skipped" is told apart from "resolved and then
-/// discarded".
+/// Wave 3 stopped the bricking by SKIPPING the child. The capability half is
+/// now closed too: the child is resolved through the claim-bound platform
+/// boundary, compiled as its own checkpointed graph, and offered to the model
+/// as one `task` tool — so the two calls here (the runtime-context redemption
+/// and the child's version) are both expected, and the model's request carries
+/// the tool.
 #[tokio::test(flavor = "current_thread")]
-async fn an_attached_pipeline_is_skipped_and_the_agent_still_answers() {
+async fn an_attached_pipeline_is_compiled_and_offered_to_the_model() {
     let mut request = ordinary_request(AgentExecutionKind::Application);
     attach_application_tools(
         &mut request,
         vec![stored_pipeline_reference(44, 31, 41, "review-pipeline")],
     );
-    let (runtime_context, context_calls) = runtime_context_client();
+    let (runtime_context, context_calls) = runtime_context_with_pipeline_child();
     let (model_gateway, captured) = test_model_gateway_client(
         vec![TestModelGatewayOutcome::Response(text_response(
             "root answer",
@@ -2785,22 +2821,91 @@ async fn an_attached_pipeline_is_skipped_and_the_agent_still_answers() {
 
     assert_eq!(
         context_calls.load(Ordering::Acquire),
-        1,
-        "the skipped child must not be resolved through the platform"
+        2,
+        "the child pipeline must be resolved through the claim-bound boundary"
     );
     let captured = captured.lock().expect("captured model request");
     assert_eq!(captured.len(), 1, "the model was never called");
     let body: serde_json::Value =
         serde_json::from_slice(&captured[0].body).expect("model request JSON");
-    assert!(
-        body["tools"].as_array().is_none_or(Vec::is_empty),
-        "the pipeline was offered to the model as a tool: {}",
+    let tools = body["tools"].as_array().cloned().unwrap_or_default();
+    let names = tools
+        .iter()
+        .filter_map(|tool| tool["function"]["name"].as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        vec!["elitea_agent_31_v_41"],
+        "the attached pipeline must be offered as one callable tool: {}",
         body["tools"]
+    );
+    let schema = &tools[0]["function"]["parameters"];
+    assert_eq!(
+        schema["required"],
+        serde_json::json!(["task"]),
+        "the pipeline tool takes one self-contained task: {schema}"
     );
 }
 
-/// The skip is per CHILD, not per agent: a pipeline beside a sub-agent must
-/// not take the sub-agent's tool down with it.
+fn runtime_context_with_pipeline_and_agent_children() -> (RuntimeContextClient, Arc<AtomicUsize>) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let paths = Arc::new(Mutex::new(Vec::new()));
+    let token = runtime_context_response(&serde_json::json!({
+        "schema_version": "elitea.runtime.elitea-client-token.v1",
+        "project_id": 17,
+        "token": TOKEN,
+    }));
+    // The pipeline child is materialized before the agent children, so its
+    // version is the first one asked for.
+    let pipeline = application_version_response(
+        32,
+        42,
+        serde_json::json!({
+            "agent_type": "pipeline",
+            "instructions": CHILD_PIPELINE_YAML,
+            "meta": {},
+            "variables": [],
+            "tools": [],
+            "llm_settings": {
+                "model_name": "child-model",
+                "model_project_id": 23,
+                "max_tokens": 2048,
+                "reasoning_effort": null,
+                "temperature": 0.2,
+                "openai_compatible": true
+            }
+        }),
+    );
+    let agent = application_version_response(
+        31,
+        41,
+        serde_json::json!({
+            "agent_type": "agent",
+            "instructions": "Answer only the delegated task.",
+            "meta": {},
+            "variables": [],
+            "tools": [],
+            "llm_settings": {
+                "model_name": "child-model",
+                "model_project_id": 23,
+                "max_tokens": 2048,
+                "reasoning_effort": null,
+                "temperature": 0.2,
+                "openai_compatible": true
+            }
+        }),
+    );
+    let client = runtime_context_client_from(
+        VecDeque::from([token, pipeline, agent]),
+        Arc::clone(&calls),
+        Arc::clone(&paths),
+    );
+    (client, calls)
+}
+
+/// Admission is per CHILD, not per agent: a pipeline and a sub-agent attached
+/// to the same parent are each compiled by their own materializer and both
+/// reach the model.
 #[tokio::test(flavor = "current_thread")]
 async fn an_attached_pipeline_leaves_the_agent_children_beside_it_bound() {
     let mut request = ordinary_request(AgentExecutionKind::Application);
@@ -2811,7 +2916,7 @@ async fn an_attached_pipeline_leaves_the_agent_children_beside_it_bound() {
             stored_application_reference(44, 31, 41, "release-risk-agent"),
         ],
     );
-    let (runtime_context, context_calls, _) = runtime_context_with_child();
+    let (runtime_context, context_calls) = runtime_context_with_pipeline_and_agent_children();
     let (model_gateway, captured) = test_model_gateway_client(
         vec![TestModelGatewayOutcome::Response(text_response(
             "root answer",
@@ -2848,12 +2953,27 @@ async fn an_attached_pipeline_leaves_the_agent_children_beside_it_bound() {
 
     assert_eq!(
         context_calls.load(Ordering::Acquire),
-        2,
-        "exactly one child version — the agent's — must be resolved"
+        3,
+        "both children's versions must be resolved"
     );
     let captured = captured.lock().expect("captured model request");
     let body: serde_json::Value =
         serde_json::from_slice(&captured[0].body).expect("model request JSON");
-    assert_eq!(body["tools"].as_array().map(Vec::len), Some(1));
-    assert_eq!(body["tools"][0]["function"]["name"], "elitea_agent_31_v_41");
+    let mut names = body["tools"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|tool| tool["function"]["name"].as_str().map(ToOwned::to_owned))
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        vec![
+            "elitea_agent_31_v_41".to_owned(),
+            "elitea_agent_32_v_42".to_owned()
+        ],
+        "both the sub-agent and the pipeline must reach the model: {}",
+        body["tools"]
+    );
 }

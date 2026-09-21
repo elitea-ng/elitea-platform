@@ -34,7 +34,11 @@ use ring::digest;
 use serde::Deserialize;
 use serde_json::Value;
 
+use super::application_pipeline::{
+    PipelinePauseError, PipelinePauseIdentity, PipelineToolResume, pipeline_pause_identity,
+};
 use super::events::{DESCENDANT_CONTAINER_INVOCATION_KEY, DESCENDANT_PARENT_CALL_KEY};
+use super::graph::resume::pipeline_hitl_graph_action;
 use super::internal_tools::{ASK_USER_METADATA_KEY, AskUserRequest, decode_ask_user_request};
 use super::request::AgentExecutionPayload;
 use super::sensitive_tools::SensitiveToolCatalog;
@@ -47,6 +51,9 @@ use crate::toolkits::{
 const MAX_IDENTITY_BYTES: usize = 512;
 const MAX_COMMENT_BYTES: usize = 2_000;
 const MAX_ANSWER_BYTES: usize = 16 * 1_024;
+/// The edit a child pipeline's `hitl` node writes onto its own state key,
+/// bounded exactly as `graph::resume` bounds the same value (#973).
+const MAX_EDIT_BYTES: usize = 64 * 1_024;
 const MAX_CALL_VALUE_BYTES: usize = 40 * 1_024;
 const MAX_JSON_DEPTH: usize = 64;
 const MAX_DIRECT_HITL_DECISIONS: usize = 16;
@@ -125,6 +132,9 @@ impl std::error::Error for DirectHitlError {}
 enum DirectHitlAction {
     Approve,
     Reject,
+    /// #973: only a child PIPELINE's own `hitl` node offers this. It is
+    /// refused for every confirmation guardrail by `resolved_guardrail_decision`.
+    Edit,
     BlockWithComment,
     Authorize,
     Skip,
@@ -137,6 +147,10 @@ enum DirectGuardrailType {
     SensitiveTool,
     McpAuth,
     ClarifyingQuestion,
+    /// A child pipeline's own graph `hitl` node (#973). It is never a
+    /// `ToolConfirmationRequest`, so it is resolved before the confirmation
+    /// scan rather than through `resolved_guardrail_decision`.
+    PipelineHitl,
 }
 
 #[derive(Deserialize)]
@@ -348,6 +362,7 @@ impl DirectDelegatedAuthorizationContinuation {
             application_route: None,
             delegated_authorization: Some(requirement),
             clarifying_question: None,
+            pipeline: None,
         })
     }
 }
@@ -462,6 +477,15 @@ impl DirectHitlDecisionSet {
         let events = session.events().all();
         let mut resolved = Vec::with_capacity(self.decisions.len());
         for decision in self.decisions {
+            // #973: a child PIPELINE's pause is a graph interrupt, not a
+            // `ToolConfirmationRequest`, so it is looked for first. Only an
+            // event this worker itself wrote carries the pending marker, so
+            // this cannot shadow a sensitive-tool card.
+            if let Some((index, pause)) = matching_pipeline_pause(&events, &decision.interrupt_id)?
+            {
+                resolved.push(decision.resolve_pipeline_at(&events, index, pause)?);
+                continue;
+            }
             let index = matching_confirmation_index(&events, &decision.interrupt_id)?;
             let nested = application_route(&events[index])?.is_some();
             resolved.push(decision.resolve_at(&events, index, nested)?);
@@ -564,12 +588,12 @@ impl DirectHitlDecision {
         }
         let value = if matches!(
             raw.action,
-            DirectHitlAction::BlockWithComment | DirectHitlAction::Answer
+            DirectHitlAction::BlockWithComment | DirectHitlAction::Answer | DirectHitlAction::Edit
         ) {
-            let maximum = if matches!(raw.action, DirectHitlAction::Answer) {
-                MAX_ANSWER_BYTES
-            } else {
-                MAX_COMMENT_BYTES
+            let maximum = match raw.action {
+                DirectHitlAction::Answer => MAX_ANSWER_BYTES,
+                DirectHitlAction::Edit => MAX_EDIT_BYTES,
+                _ => MAX_COMMENT_BYTES,
             };
             if raw.value.is_empty() || raw.value.len() > maximum || raw.value.contains('\0') {
                 return Err(DirectHitlError::new(DirectHitlErrorCode::InvalidInput));
@@ -709,6 +733,84 @@ impl DirectHitlDecision {
             application_route,
             delegated_authorization,
             clarifying_question,
+            pipeline: None,
+        })
+    }
+
+    /// Bind one decision to a child PIPELINE's persisted graph pause (#973).
+    ///
+    /// Nothing here replays: the decision is proven against the card the
+    /// browser saw (recomputed by the projection's own binding) and against the
+    /// pending checkpoint that pause persisted, and what comes out is the state
+    /// the child graph re-enters with. The route is built from the event's
+    /// descendant metadata directly rather than through `application_route`,
+    /// which requires the non-empty branch an AGENT child carries; a graph
+    /// interrupt is projected as the root of its own descendant projector and
+    /// deliberately carries none.
+    fn resolve_pipeline_at(
+        self,
+        events: &[Event],
+        index: usize,
+        pause: PipelinePauseIdentity,
+    ) -> Result<ResolvedDirectHitlDecision, DirectHitlError> {
+        if self.tool_call_id.is_some()
+            || self
+                .guardrail_type
+                .is_some_and(|guardrail| guardrail != DirectGuardrailType::PipelineHitl)
+        {
+            return Err(DirectHitlError::new(DirectHitlErrorCode::StaleDecision));
+        }
+        let event = events
+            .get(index)
+            .ok_or_else(|| DirectHitlError::new(DirectHitlErrorCode::CorruptSession))?;
+        // A pause that a later event already advanced past is not resumable.
+        if index + 1 != events.len() {
+            return Err(DirectHitlError::new(DirectHitlErrorCode::StaleDecision));
+        }
+        let graph_action = pipeline_hitl_graph_action(self.action.as_str())
+            .ok_or_else(|| DirectHitlError::new(DirectHitlErrorCode::StaleDecision))?;
+        let decision = if graph_action == "reject" {
+            ToolConfirmationDecision::Deny
+        } else {
+            ToolConfirmationDecision::Approve
+        };
+        let interrupt_id = pause.interrupt_id.clone();
+        let call_id = pause.parent_call_id.clone();
+        let tool_name = pause.tool_name.clone();
+        let route = DirectHitlApplicationRoute {
+            container_invocation_id: pause.container_invocation_id.clone(),
+            parent_call_id: pause.parent_call_id.clone(),
+            branch: String::new(),
+        };
+        let resume =
+            pause
+                .into_resume(graph_action, self.raw_value())
+                .map_err(|error| match error {
+                    PipelinePauseError::Stale => {
+                        DirectHitlError::new(DirectHitlErrorCode::StaleDecision)
+                    }
+                    PipelinePauseError::Corrupt => {
+                        DirectHitlError::new(DirectHitlErrorCode::CorruptSession)
+                    }
+                })?;
+        Ok(ResolvedDirectHitlDecision {
+            invocation_id: event.invocation_id.clone(),
+            interrupt_id,
+            call_digest: String::new(),
+            call_id,
+            tool_name,
+            arguments: Value::Null,
+            fingerprint: String::new(),
+            decision,
+            decision_value: self.value,
+            user_content: Content::new("user"),
+            resume_mode: ReplayResumeMode::ExecuteCall,
+            persisted_result: None,
+            replay_calls: Vec::new(),
+            application_route: Some(route),
+            delegated_authorization: None,
+            clarifying_question: None,
+            pipeline: Some(Box::new(resume)),
         })
     }
 }
@@ -818,12 +920,35 @@ impl DirectHitlAction {
         match self {
             Self::Approve => "approve",
             Self::Reject => "reject",
+            Self::Edit => "edit",
             Self::BlockWithComment => "block_with_comment",
             Self::Authorize => "authorize",
             Self::Skip => "skip",
             Self::Answer => "answer",
         }
     }
+}
+
+/// The persisted child-pipeline pause one submitted interrupt id names.
+///
+/// Scans from the end because only the LATEST pause is resumable, and stops at
+/// the first match: a pause identity is a digest of the event's own invocation
+/// id and card data, so two events cannot legitimately carry the same one.
+fn matching_pipeline_pause(
+    events: &[Event],
+    submitted_interrupt_id: &str,
+) -> Result<Option<(usize, PipelinePauseIdentity)>, DirectHitlError> {
+    for (index, event) in events.iter().enumerate().rev() {
+        let pause = match pipeline_pause_identity(event) {
+            Ok(Some(pause)) => pause,
+            Ok(None) => continue,
+            Err(_) => return Err(DirectHitlError::new(DirectHitlErrorCode::CorruptSession)),
+        };
+        if pause.interrupt_id == submitted_interrupt_id {
+            return Ok(Some((index, pause)));
+        }
+    }
+    Ok(None)
 }
 
 fn matching_confirmation_index(
@@ -946,6 +1071,10 @@ pub(crate) struct ResolvedDirectHitlDecision {
     application_route: Option<DirectHitlApplicationRoute>,
     delegated_authorization: Option<DelegatedAuthorizationRequirement>,
     clarifying_question: Option<AskUserRequest>,
+    /// #973: set only when this decision answers a child PIPELINE's graph
+    /// pause. Every replay path below refuses it, because a graph is re-entered
+    /// from its checkpoint and never replayed.
+    pipeline: Option<Box<PipelineToolResume>>,
 }
 
 pub(crate) enum ResolvedDirectHitlStart {
@@ -1004,6 +1133,25 @@ impl ResolvedDirectHitlDecision {
         self.clarifying_question.is_some()
     }
 
+    /// Whether this decision answers a child pipeline's own graph pause (#973).
+    pub(crate) const fn is_pipeline_node(&self) -> bool {
+        self.pipeline.is_some()
+    }
+
+    /// Whether this decision belongs to a guardrail the sensitive-tool replay
+    /// does not serve — authorization, a clarifying question, or a child
+    /// pipeline's graph pause, each of which has its own continuation.
+    const fn is_other_guardrail(&self) -> bool {
+        self.delegated_authorization.is_some()
+            || self.clarifying_question.is_some()
+            || self.pipeline.is_some()
+    }
+
+    /// Take the child-graph continuation this decision carries.
+    pub(crate) fn into_pipeline_resume(self) -> Option<Box<PipelineToolResume>> {
+        self.pipeline
+    }
+
     /// Narrow one resolved decision to the safe direct replay boundary.
     ///
     /// Approved calls must be read-only until durable effect ownership exists.
@@ -1013,7 +1161,7 @@ impl ResolvedDirectHitlDecision {
         self,
         sensitive_tools: &SensitiveToolCatalog,
     ) -> Result<DirectHitlReplay, DirectHitlError> {
-        if self.delegated_authorization.is_some() || self.clarifying_question.is_some() {
+        if self.is_other_guardrail() {
             return Err(DirectHitlError::new(DirectHitlErrorCode::CorruptSession));
         }
         let policy = sensitive_tools

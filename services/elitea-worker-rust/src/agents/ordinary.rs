@@ -141,6 +141,7 @@ impl OrdinaryNativeAgentAssembler {
                 context.clone(),
                 &profile,
                 &tool_policy,
+                plan.thread_id().to_owned(),
             )
             .await?;
         let output_continuation = matches!(&start, AdmittedNativeStart::OutputContinuation);
@@ -193,6 +194,11 @@ impl OrdinaryNativeAgentAssembler {
         }
     }
 
+    // One more owner than the pedantic bound allows: the conversation thread is
+    // a per-TURN identity a pipeline child namespaces its checkpoint under
+    // (#973), and folding it into one of the frozen inputs beside it would hide
+    // that it comes from the plan rather than from the agent's version.
+    #[allow(clippy::too_many_arguments)]
     async fn materialize_runtime(
         &self,
         tool_snapshot: &AdmittedToolSnapshot<'_>,
@@ -201,6 +207,7 @@ impl OrdinaryNativeAgentAssembler {
         context: Arc<ClaimScopedEliteaContext>,
         profile: &OrdinaryNoToolProfile,
         tool_policy: &Arc<ToolAdmissionPolicy>,
+        conversation_thread_id: String,
     ) -> Result<(OrdinaryRuntimeBindings, NativeToolExecutionMode), NativeAgentAssemblyError> {
         let tool_reference_count = tool_snapshot.iter().count();
         let nested_application_count = tool_snapshot
@@ -238,10 +245,10 @@ impl OrdinaryNativeAgentAssembler {
         ))));
         let mut application_runtime = ApplicationRuntimeProjection::default();
         // #973: read BEFORE materialization, off the same snapshot it reads.
-        // An attached pipeline is not built here and no longer fails the
-        // assembly; the run says so instead, once, the way a skipped internal
-        // tool does.
-        let skipped_applications = skipped_application_children(tool_snapshot, None);
+        // A saved PIPELINE child IS built here now, so only the child types
+        // this worker still cannot execute — `predict` — are skipped, and the
+        // run says so once, the way a skipped internal tool does.
+        let skipped_applications = skipped_application_children(tool_snapshot, None, true);
         if !skipped_applications.is_empty() {
             tracing::warn!(
                 skipped = skipped_applications.len(),
@@ -259,7 +266,8 @@ impl OrdinaryNativeAgentAssembler {
                 Arc::clone(tool_policy),
                 self.mcp_connector.clone(),
                 mcp_tokens,
-            ),
+            )
+            .with_conversation_thread(conversation_thread_id),
         )
         .await?
         {

@@ -136,7 +136,7 @@ impl PipelineExecutionProfile {
         })
     }
 
-    fn from_nested_version(
+    pub(super) fn from_nested_version(
         version: &serde_json::Map<String, serde_json::Value>,
         fallback: &OrdinaryNoToolProfile,
     ) -> Result<Self, NativeAgentAssemblyError> {
@@ -1051,6 +1051,125 @@ impl Toolset for StrictNodeToolset {
             })
             .collect()
     }
+}
+
+/// Materialize one saved pipeline as a participant an ORDINARY agent can call
+/// as a tool (#973).
+///
+/// This is the same admission the pipeline parent performs for an `agent`
+/// node's pipeline participant — resolve the exact frozen version, admit its
+/// node/tool scope against the live policy, refuse a child that itself has
+/// Application nodes (depth stays one, exactly as it does there), and bind the
+/// invocation-owned LLM/direct-tool runtimes. What differs is only the caller:
+/// there the compiled graph becomes an ADK `SubgraphNode` of the parent graph,
+/// here it becomes the body of one `Tool` the parent model may call.
+// Every owner is an explicit authority boundary — the claim, the project
+// scope, the model facade, the tool policy and the child's own identity —
+// and bundling them would hide which of them the admission below checks.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn materialize_saved_pipeline_tool(
+    platform: &PlatformClient,
+    runtime_context: &ClaimBoundRuntimeContextAuthority,
+    context: Arc<ClaimScopedEliteaContext>,
+    model_facade: Arc<ModelFacade>,
+    mcp_connector: &dyn McpConnector,
+    mcp_tokens: &Map<String, Value>,
+    tool_policy: Arc<ToolAdmissionPolicy>,
+    fallback: &OrdinaryNoToolProfile,
+    node_events: PipelineNodeEventSender,
+    identity: (u64, u64),
+    project_id: Option<u64>,
+) -> Result<(PipelineDefinition, PipelineNodeRuntimes), NativeAgentAssemblyError> {
+    if project_id.is_some_and(|project_id| project_id != context.resource_project_id()) {
+        return Err(invalid_pipeline_tool_scope());
+    }
+    let loaded = platform
+        .resolve_application_version(runtime_context, identity.0, identity.1)
+        .await
+        .map_err(NativeAgentAssemblyError::from)?;
+    let version = loaded.into_version_details();
+    let mut child = PipelineExecutionProfile::from_nested_version(&version, fallback)?;
+    let frozen = FrozenToolSnapshot::from_version_details(&version)
+        .map_err(|_| invalid_pipeline_tool_scope())?;
+    child.validate_tool_snapshot(&frozen, tool_policy.as_ref())?;
+    if child.definition().has_application_nodes() {
+        return Err(unsupported_pipeline_runtime());
+    }
+    let admitted = frozen.apply_policy(tool_policy.as_ref());
+    let runtime = PipelineApplicationRuntime {
+        context,
+        model_facade,
+        node_events,
+        mcp_tokens,
+        tool_policy,
+    };
+    let runtimes = bind_saved_pipeline_runtimes(&child, admitted, &runtime, mcp_connector).await?;
+    Ok((child.into_definition(), runtimes))
+}
+
+/// Bind the invocation-owned node runtimes of one saved pipeline participant.
+///
+/// Extracted from `PipelineNativeAgentAssembler::bind_nested_pipeline_runtimes`
+/// so the pipeline parent and the ordinary parent (#973) cannot drift about
+/// what a nested pipeline is allowed to run: same alias retention, same
+/// `None` for the builder tools, same direct-tool read-only gate.
+async fn bind_saved_pipeline_runtimes(
+    profile: &PipelineExecutionProfile,
+    snapshot: AdmittedToolSnapshot<'_>,
+    runtime: &PipelineApplicationRuntime<'_>,
+    mcp_connector: &dyn McpConnector,
+) -> Result<PipelineNodeRuntimes, NativeAgentAssemblyError> {
+    let aliases = profile.definition().runtime_toolkit_aliases();
+    let selected = snapshot.retain_toolkit_names(&aliases);
+    let (mut materialized, mut delegated_authorization) =
+        materialize_configured_toolsets_with_tokens_and_authorization(
+            &selected,
+            &runtime.tool_policy,
+            runtime.mcp_tokens,
+        )
+        .map_err(|_| unsupported_pipeline_runtime())?;
+    let (mut mcp, mcp_delegated_authorization) =
+        materialize_mcp_toolsets_with_tokens_and_authorization(
+            &selected,
+            mcp_connector,
+            &runtime.tool_policy,
+            runtime.mcp_tokens,
+        )
+        .await
+        .map_err(|_| unsupported_pipeline_runtime())?;
+    delegated_authorization
+        .merge(mcp_delegated_authorization)
+        .map_err(|()| unsupported_pipeline_runtime())?;
+    materialized.append(&mut mcp);
+    let mut toolsets = toolsets_by_alias(materialized)?;
+    // `None`, for the reason `bind_nested_pipeline_runtimes` states: a nested
+    // pipeline's shell carries no conversation the user toggled anything on for.
+    for toolset in profile.shell().internal_tools().toolsets(None) {
+        if toolsets
+            .insert(toolset.name().to_owned(), toolset)
+            .is_some()
+        {
+            return Err(invalid_pipeline_tool_scope());
+        }
+    }
+    let direct_tool_resolver = build_direct_tool_resolver(profile, &toolsets).await?;
+    let llm_factory = profile.definition().has_llm_nodes().then(|| {
+        Arc::new(NativePipelineLlmAgentFactory {
+            profile: profile.shell().clone(),
+            context: Arc::clone(&runtime.context),
+            model_facade: Arc::clone(&runtime.model_facade),
+            toolsets,
+            sensitive_tools: profile.sensitive_llm_tools(),
+            delegated_authorization,
+            ask_user_enabled: profile.shell().internal_tools().ask_user_enabled(),
+            node_events: runtime.node_events.clone(),
+        }) as Arc<dyn PipelineLlmAgentFactory>
+    });
+    Ok(PipelineNodeRuntimes::new(
+        llm_factory,
+        direct_tool_resolver,
+        None,
+    ))
 }
 
 fn toolsets_by_alias(

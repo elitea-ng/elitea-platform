@@ -2133,11 +2133,15 @@ fn invalid_completed_content_never_becomes_a_browser_terminal() {
     assert_eq!(error.code(), AgentEventProjectionErrorCode::InvalidOutput);
 }
 
-/// #973: an attached application child this worker cannot build — a PIPELINE,
-/// which the agent editor's tool picker offers — binds no tool, and the run
-/// says which one. Before this, the child ended the whole assembly with
-/// `native_agent.unsupported_capability` and the user was told nothing about
-/// the attachment that had just broken every turn of their agent.
+/// #973: an attached application child this worker cannot build binds no tool,
+/// and the run says which one. Before this, the child ended the whole assembly
+/// with `native_agent.unsupported_capability` and the user was told nothing
+/// about the attachment that had just broken every turn of their agent.
+///
+/// A PIPELINE is no longer one of them — `application_pipeline` compiles it
+/// and offers it as a tool — so the children named here are the ones the
+/// ordinary assembler still skips: `predict`, and any `agent_type` a future
+/// version invents that this worker does not execute.
 ///
 /// The same seeding point and the same role-`"tool"` shape as the skipped
 /// internal tools one function above, and asserted the same way: assembly
@@ -2168,12 +2172,12 @@ async fn a_fresh_session_is_seeded_with_a_notice_for_every_skipped_application_c
     )
     .with_skipped_application_children(vec![
         SkippedApplicationChild {
-            agent_type: "pipeline".to_owned(),
-            name: "review-pipeline".to_owned(),
-        },
-        SkippedApplicationChild {
             agent_type: "predict".to_owned(),
             name: "classifier".to_owned(),
+        },
+        SkippedApplicationChild {
+            agent_type: "future_type".to_owned(),
+            name: "something-new".to_owned(),
         },
     ]);
     let assembled = assemble_ordinary_native_with_sessions_and_runtime_catalogs(
@@ -2217,7 +2221,7 @@ async fn a_fresh_session_is_seeded_with_a_notice_for_every_skipped_application_c
     assert_eq!(
         notice_texts,
         [
-            "attached pipeline 'review-pipeline' is not available on this worker\n\
+            "attached future_type 'something-new' is not available on this worker\n\
           attached predict 'classifier' is not available on this worker"
         ],
         "expected exactly one role=\"tool\" notice event naming both skipped children"

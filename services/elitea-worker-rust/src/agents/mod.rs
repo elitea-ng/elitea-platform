@@ -1,5 +1,6 @@
 //! Language-neutral agent execution contracts.
 
+pub(crate) mod application_pipeline;
 pub(crate) mod application_tools;
 pub(crate) mod assembly;
 pub(crate) mod attachments;
@@ -20,6 +21,8 @@ pub(crate) mod session;
 pub(crate) mod tool_namespacing;
 pub(crate) mod variables;
 
+#[cfg(test)]
+mod application_pipeline_tests;
 #[cfg(test)]
 mod assembly_tests;
 #[cfg(test)]
