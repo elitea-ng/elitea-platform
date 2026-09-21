@@ -503,6 +503,7 @@
   "chatInput.versionSelector.refresh": "Refresh versions",
   "chatInput.versionSelector.tooltip": "Version selector",
   "chatInput.versionSelector.versions": "Versions",
+  "chatMessages.actionView.partialOutput": "Partial output — some of this result did not arrive.",
   "chatMessages.deleteMessageAlert.allMessagesCopy": "The deleted messages can't be restored. Are you sure to delete all the messages?",
   "chatMessages.deleteMessageAlert.singleMessageCopy": "This also removes the question it answers, and neither can be restored. Are you sure you want to delete this message?",
   "chatMessages.hitlAnswer.back": "Back",

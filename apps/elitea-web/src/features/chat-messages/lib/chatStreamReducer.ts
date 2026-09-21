@@ -54,6 +54,7 @@
 import { findTarget, type ChatStreamContext } from './chatStreamShared';
 import { reduceTurnFrame } from './chatStreamTurnFrames';
 import { reduceToolFrame } from './chatStreamToolFrames';
+import { reduceToolOutputChunkFrame } from './chatStreamToolOutputChunks';
 import { reduceThinkingFrame } from './chatStreamThinkingFrames';
 import { reduceInterruptFrame } from './chatStreamInterruptFrames';
 import { reduceSwarmFrame } from './chatStreamSwarmFrames';
@@ -91,6 +92,7 @@ export function applyChatStreamFrame(
   return (
     reduceTurnFrame(history, frame, type, context, index) ??
     reduceToolFrame(history, frame, type, index) ??
+    reduceToolOutputChunkFrame(history, frame, type, index) ??
     reduceThinkingFrame(history, frame, type, index) ??
     reduceInterruptFrame(history, frame, type, context, index) ??
     reduceSwarmFrame(history, frame, type, context) ??

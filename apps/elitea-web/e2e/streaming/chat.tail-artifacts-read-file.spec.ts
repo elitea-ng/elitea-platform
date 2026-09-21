@@ -296,6 +296,57 @@ async function settledAnswer(page: Page, projectId: string, conversationId: stri
   );
 }
 
+/**
+ * The LIVE tool pin's text, with the thinking panels that hold the rows opened.
+ *
+ * Read from the ROW rather than from the modal: the modal's OUTPUT pane is a
+ * CodeMirror editor that renders only the visible lines, so an 80,000-character
+ * result is in the DOM there only a screenful at a time and a length assertion
+ * against it would measure the viewport. The row's preview is clamped by CSS
+ * (`-webkit-line-clamp`) and carries the WHOLE string in the node, which is
+ * exactly what has to be proven present before any reload.
+ */
+async function liveToolPinText(page: Page, toolName: string, minimumLength: number): Promise<string> {
+  const summaries = page.getByTestId('chat-answer-thought-accordion').getByRole('button', { name: /Thought for/ });
+  await expect(
+    summaries.last(),
+    'the turn ran a tool but rendered no thinking panel to hold its row',
+  ).toBeVisible({ timeout: 60_000 });
+  const pin = page
+    .locator(`[data-testid="chat-tool-action"][data-tool-action-name="${toolName}"]`)
+    .first();
+  let text = '';
+  await expect
+    .poll(
+      async () => {
+        for (const summary of await summaries.all()) {
+          try {
+            if ((await summary.getAttribute('aria-expanded')) !== 'true') {
+              await summary.click({ timeout: 5_000 });
+            }
+          } catch {
+            // A re-render between the read and the click detaches the node; the
+            // next tick addresses its replacement.
+          }
+        }
+        text = (await pin.count()) > 0 ? ((await pin.textContent()) ?? '') : '';
+        return text.length;
+      },
+      {
+        timeout: 90_000,
+        // Polled to the FULL length, not to "not empty": a chunked output
+        // grows as its slices arrive, so a poll that settled on the first
+        // chunk would make the length assertion below a race rather than a
+        // measurement.
+        message:
+          `the ${toolName} tool row never carried its whole output in the live transcript ` +
+          `(wanted at least ${String(minimumLength)} characters)`,
+      },
+    )
+    .toBeGreaterThanOrEqual(minimumLength);
+  return text;
+}
+
 /* onetest: ELITEA-0362, ELITEA-0354, ELITEA-0350, ELITEA-0355 — a file between 60k and 200k
  * characters, uploaded through the Artifacts API, is read back IN FULL by an agent using the
  * Artifact toolkit: no size-limit error, and the content the file actually holds. */
@@ -328,6 +379,29 @@ test('an agent reads an 80k-character artifact back in full', async ({ page }) =
       answer,
       'the reply must quote the file’s real content, not a summary of it or an empty result',
     ).toContain(token);
+
+    // THE LIVE PIN, BEFORE ANY RELOAD (#956). The result is far past one output
+    // frame, so it reaches the browser as a sequence of
+    // `agent_tool_output_chunk` events that the stream reducer reassembles
+    // (`features/chat-messages/lib/chatStreamToolOutputChunks.ts`). Asserting
+    // the STORED trace alone would pass on a browser that showed nothing and
+    // only filled in after a refresh — which is precisely the half this test
+    // exists to hold.
+    const pinText = await liveToolPinText(page, 'read_file', content.length);
+    expect(
+      pinText,
+      'the live tool row must hold the whole 80k result, not the prefix one frame could carry',
+    ).toContain(token);
+    expect(
+      pinText.length,
+      'the live tool row is shorter than the file, so the chunks were not reassembled in the browser',
+    ).toBeGreaterThanOrEqual(content.length);
+    // …and it must not be flagged partial: a hole or a digest mismatch would
+    // mean the row is a prefix that merely looks complete.
+    await expect(
+      page.getByTestId('chat-tool-action-partial-output'),
+      'the reassembled output was reported partial',
+    ).toHaveCount(0);
   } finally {
     await fixture?.dispose();
   }
