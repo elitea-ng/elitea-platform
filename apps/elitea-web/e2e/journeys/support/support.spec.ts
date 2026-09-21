@@ -31,7 +31,13 @@ import type { Page } from '@playwright/test';
 import { expect, test } from '@playwright/test';
 
 import { BASE_URL, STORAGE_STATE } from '../../../playwright.config';
-import { API_BASE, AUTOTEST_PREFIX, createAgent, deleteAgent, DEFAULT_PROJECT_ID } from '../../fixtures/api';
+import {
+  API_BASE,
+  AUTOTEST_PREFIX,
+  createAgentWithVersion,
+  deleteAgent,
+  DEFAULT_PROJECT_ID,
+} from '../../fixtures/api';
 import {
   disableSupportAssistant,
   enableSupportAssistant,
@@ -48,6 +54,19 @@ test.use({ storageState: STORAGE_STATE.admin });
 const SUPPORT_PROJECT_ID = Number(DEFAULT_PROJECT_ID);
 const RUN_ID = Date.now();
 const AGENT_NAME = `${AUTOTEST_PREFIX}support_agent_${RUN_ID}`;
+/**
+ * The model this file's agent is PINNED to.
+ *
+ * Pinned, not inherited. `createAgent` leaves the version without one, and the
+ * turn then falls back to the project default — which on a FRESH standalone
+ * stack is the bare `E2E-MOCK-MODEL`. The gateway refuses that with "could not
+ * auto resolve a provider for the request, please specify a provider
+ * explicitly", the widget paints an error bubble, and test 2 fails on the
+ * model rather than on the widget it is about (measured on a fresh
+ * `support-e2e.sh` stack). `vllm/` is the prefix every streaming spec pins for
+ * the same reason.
+ */
+const MOCK_MODEL = process.env['E2E_MOCK_MODEL'] ?? 'vllm/E2E-MOCK-MODEL';
 const ASSISTANT_NAME = `${AUTOTEST_PREFIX}Support ${RUN_ID}`;
 const WELCOME_MESSAGE = `${AUTOTEST_PREFIX}Welcome. Ask me about ELITEA.`;
 const PLACEHOLDER = `${AUTOTEST_PREFIX}Type your question...`;
@@ -121,7 +140,10 @@ test.describe('the support assistant widget, off then on', () => {
     // repository's own `chat-stream-real` waits.
     test.setTimeout(600_000);
 
-    const agent = await createAgent(page.request, AGENT_NAME);
+    const agent = await createAgentWithVersion(page.request, AGENT_NAME, {
+      instructions: 'You are a helpful assistant.',
+      model: { modelName: MOCK_MODEL },
+    });
     agentId = agent.id;
 
     await enableSupportAssistant(page.request, {
