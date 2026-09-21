@@ -4234,6 +4234,8 @@
   "entities.runHistory.trace.empty": "This conversation has no recorded tool calls or thinking steps.",
   "entities.runHistory.trace.emptyTitle": "No trace steps",
   "entities.runHistory.trace.errorChip": "Error",
+  "entities.runHistory.trace.partialOutput": "Partial output — some of this result did not arrive ({{received}}/{{total}} chunks).",
+  "entities.runHistory.trace.timing": "Started {{startedAt}} · {{duration}}",
   "pages.agents.editApplication.tabs.history": "History",
   "artifacts.canvas.tooLarge": "{{name}} is too large to open in canvas.",
   "artifacts.canvas.unsupportedOrFailed": "Could not open {{name}} in canvas.",
