@@ -195,6 +195,7 @@ test.afterEach(async () => {
   await setToolkitGuardrails(EMPTY_TOOLKIT_GUARDRAILS).catch(() => {});
 });
 
+/* onetest: ELITEA-1694 (admin-portal/guardrails-live-reload) — Blocked Toolkit: live-reload and case-insensitive matching. The case's own step 9 (the blocked tool refusing inside a chat turn) needs a model turn and rides the chat-stream lane; the policy half — it takes effect on the NEXT READ, with no reload, whatever case it was typed in — is this test. */
 test('GR-1: blocking a toolkit type takes effect on the next read, whatever case it was typed in (legacy test_blocked_toolkit_live_reload_case_insensitive)', async ({
   page,
 }) => {
@@ -334,6 +335,7 @@ test('GR-1: blocking a toolkit type takes effect on the next read, whatever case
   }
 });
 
+/* onetest: ELITEA-1695 (admin-portal/guardrails-live-reload) — Blocked Tool: live-reload and case-insensitive matching, same split as GR-1 above. */
 test('GR-2: blocking one tool removes just that tool from its type, whatever case it was typed in (legacy test_blocked_tool_live_reload_case_insensitive)', async ({
   page,
 }) => {
@@ -408,6 +410,7 @@ test('GR-2: blocking one tool removes just that tool from its type, whatever cas
   });
 });
 
+/* onetest: ELITEA-1696 (admin-portal/guardrails-live-reload) — Sensitive Tool: live-reload and case-insensitive matching, same split as GR-1 above. */
 test('GR-3: a sensitive tool is stored and applied as sensitive, not as blocked (legacy test_sensitive_tool_live_reload_case_insensitive)', async ({
   page,
 }) => {
