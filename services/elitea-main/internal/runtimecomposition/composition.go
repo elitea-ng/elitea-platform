@@ -639,6 +639,23 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		// Project Context was switched on — see
 		// internal/application/agentexecution/projectcontext.go's header.
 		agentStart = agentStart.WithProjectContext(repos.NewProjectContextRepo(dependencies.AdmissionPool))
+		// An attached IMAGE reaches the model as bytes (#979). Same setter
+		// idiom; the reader is the SAME repository the native runtime's
+		// attachment route uses, so both paths agree about what a chat
+		// attachment is (the reserved system bucket, a metadata row, matching
+		// lengths). Wired only where there IS an object store: without one
+		// the honest behaviour is the pre-#979 one — the file is announced by
+		// name — and that is what a nil reader produces.
+		if dependencies.ObjectStore != nil {
+			attachmentImages, attachmentImagesErr := repos.NewCurrentAttachmentObjectRepository(
+				dependencies.AdmissionPool,
+				dependencies.ObjectStore,
+			)
+			if attachmentImagesErr != nil {
+				return nil, fmt.Errorf("construct attachment image reader: %w", attachmentImagesErr)
+			}
+			agentStart = agentStart.WithAttachmentImages(attachmentImages)
+		}
 		agentDispatcher, err := agentexecutionapp.NewDispatcher(agentJobs, agentProducer)
 		if err != nil {
 			return nil, err

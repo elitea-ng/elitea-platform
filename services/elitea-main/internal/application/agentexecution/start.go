@@ -150,6 +150,23 @@ type CurrentApplicationStartService struct {
 	// it to injects no project context, which is what every test that
 	// predates that file expects.
 	projectContext CurrentProjectContextResolver
+	// attachmentImages is optional — attached after construction via
+	// WithAttachmentImages (#979, attachments.go). A service nobody attaches
+	// it to embeds no image, which is the behaviour every test that predates
+	// it expects and the honest answer on a deployment with no object store.
+	attachmentImages CurrentAttachmentImageReader
+}
+
+// WithAttachmentImages attaches the reader that lets an attached IMAGE reach
+// the model as bytes (#979), in the same after-construction idiom WithMemories
+// and WithProjectContext use and for the same reason: every existing
+// constructor call site keeps working, and a service without it behaves
+// exactly as this package did before.
+func (service *CurrentApplicationStartService) WithAttachmentImages(
+	images CurrentAttachmentImageReader,
+) *CurrentApplicationStartService {
+	service.attachmentImages = images
+	return service
 }
 
 func NewCurrentApplicationStartService(
@@ -213,7 +230,14 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	if request.InteractionUUID != "" {
 		questionMeta, _ = json.Marshal(map[string]string{"interaction_uuid": request.InteractionUUID})
 	}
-	attachments, err := currentTurnAttachments(request.QuestionID, request.ConversationUUID, request.Attachments)
+	attachments, err := currentTurnAttachmentsWithImages(
+		ctx,
+		int64(request.ProjectID),
+		service.attachmentImages,
+		request.QuestionID,
+		request.ConversationUUID,
+		request.Attachments,
+	)
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
 	}

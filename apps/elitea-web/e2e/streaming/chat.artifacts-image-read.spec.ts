@@ -397,7 +397,6 @@ test('the named image is the one read, in a bucket holding several', async ({ pa
  * the bytes reach the model as an image part, for every extension the composer accepts. */
 test('an image attached in the composer is analysed by the model', async ({ page }) => {
   test.setTimeout(420_000);
-  test.fail(true, '#979: product gap — an attached image is stored and classified `image` but no one ever builds its `image_url` chunk: elitea-main writes a text-only scaffold and marks only DOCUMENTS for extraction, and the worker acts only on that marker, so the model is given the filename and never the bytes');
   const stamp = String(Date.now() % 1_000_000);
   const directory = mkdtempSync(join(tmpdir(), 'autotest-img-'));
   const file = join(directory, `attached-${stamp}.png`);

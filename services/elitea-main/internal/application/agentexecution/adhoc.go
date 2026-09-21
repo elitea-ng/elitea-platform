@@ -142,7 +142,14 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
 	}
-	attachments, err := currentTurnAttachments(request.QuestionID, request.ConversationUUID, request.Attachments)
+	attachments, err := currentTurnAttachmentsWithImages(
+		ctx,
+		int64(request.ProjectID),
+		service.attachmentImages,
+		request.QuestionID,
+		request.ConversationUUID,
+		request.Attachments,
+	)
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
 	}
