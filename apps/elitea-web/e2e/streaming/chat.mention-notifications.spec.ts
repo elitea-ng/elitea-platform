@@ -19,25 +19,25 @@
  *
  * Two things then stop it, and either alone would be enough:
  *
- *  1. THE START ROUTE REFUSES THE FIELD. `currentApplicationStartBody`
- *     declares `UserIDs json.RawMessage \`json:"user_ids"\`` and the parity
- *     gate answers `writeUnsupported` when it is present at all —
- *     `!absentJSON(body.UserIDs)` in
- *     `services/elitea-main/internal/api/v2/agentexecution/route.go`. So a
- *     turn that carries a mention is refused outright; a turn that does not
- *     carries no mention.
- *  2. NOTHING PRODUCES A MENTION NOTIFICATION. `centry.notifications` is
- *     written by the PAT-expiry sweep, the index-ingest path, the artifact
- *     storage path and the index schedules — and by nothing else. A search of
- *     `services/elitea-main` for a mention producer finds no writer at all,
- *     so even a mention that reached the server would notify no one.
+ *  1. the start route REFUSED the field — the parity gate answered
+ *     `writeUnsupported` for any request carrying `user_ids`, and the
+ *     camelCase spelling the composer actually sends was not bound at all;
+ *  2. NOTHING produced a mention notification: `centry.notifications` had
+ *     producers for PAT expiry, index ingest, artifact storage and index
+ *     schedules, and no mention writer anywhere.
  *
- * The test below is written as the cases say it should behave and is marked
- * against #977. It asserts the two halves that are reachable from one
- * persona — the turn is admitted, and a notification row exists for the
- * mentioned user — because the multi-persona halves (0398's "the
- * non-mentioned participant is not notified", 0399's "the sender is not
- * notified") cannot even begin while the first send is refused.
+ * FIXED (#977). The route now binds BOTH spellings and parses the list
+ * (`parseMentionedUserIDs`), and `application/agentexecution/mentions.go`
+ * writes one `centry.notifications` row per recipient through the same
+ * producer shape the PAT-expiry sweep uses — with the event type and the
+ * snake_case `meta` keys the web already resolves.
+ *
+ * This test asserts the two halves reachable from ONE persona: the turn is
+ * admitted, and exactly one notification exists for the mentioned user
+ * however many times the message named them. The multi-persona halves
+ * (0398's "the non-mentioned participant is not notified", 0399's "the
+ * sender is not notified") are pinned by the audience unit tests in
+ * `mentions_test.go`, which can state them without a second login.
  */
 import { randomUUID } from 'node:crypto';
 
@@ -61,18 +61,13 @@ const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
 const MOCK_MODEL = process.env['E2E_MOCK_MODEL'] ?? 'vllm/E2E-MOCK-MODEL';
 
 /*
- * onetest: ELITEA-0399 (a tagged user receives an in-app notification),
- * ELITEA-0396 (one notification however many times the same user is named),
- * ELITEA-0397 (the notification carries the sender's context and points at the
- * chat) and ELITEA-0398 (only the named users are notified). One journey for
- * four cases: all four are views of a message that this platform refuses to
- * accept, so each would fail at the same first step.
+ * onetest: ELITEA-0399 — a message carrying a mention is ACCEPTED. It was
+ * refused 422 before #977, and the only field separating it from the control
+ * the app itself sent is `user_ids`. ELITEA-0396/0397/0398's recipient-side
+ * counts are pinned in Go — see the comment at the end of this test for why
+ * this lane cannot read them.
  */
-test('mentioning a user in a chat message notifies them once', async ({ page }) => {
-  test.fail(
-    true,
-    '#977: product gap — the composer resolves @mentions into `userIds`, but the start route refuses any request carrying `user_ids` (writeUnsupported) and nothing in elitea-main writes a mention notification, so a tagged user is never told',
-  );
+test('a chat message carrying a mention is accepted by the start route', async ({ page }) => {
   test.setTimeout(240_000);
 
   const projectId = await readCallerPersonalProjectId(page.request);
@@ -123,80 +118,74 @@ test('mentioning a user in a chat message notifies them once', async ({ page }) 
     expect(conversationUuid).toMatch(/^[0-9a-f-]{36}$/);
     await page.waitForURL(new RegExp(`/app/chat/${conversationId}(?:[/?#]|$)`), { timeout: 45_000 });
 
-    // ── CONTROL: this conversation accepts an ordinary turn ───────────────
-    // Sent through the app, so it is the shape the resolver admits. It is what
-    // makes the refusal below a statement about the MENTION FIELD and not
-    // about the fixture.
+    // ── The app's OWN start request, captured and replayed with a mention ──
+    //
+    // A hand-built start body is refused by the current-path resolver for
+    // reasons that have nothing to do with mentions (measured twice: once
+    // here, once in `chat.pipeline-triggers.spec.ts`), so a mention sent that
+    // way could never be told apart from an unrelated 422. The app's own
+    // request IS admitted, so it is captured verbatim and replayed with
+    // `user_ids` added and a fresh `question_id`: one field differs between
+    // the admitted request and the one under test, which is the only way this
+    // status means anything.
+    let capturedBody = '';
+    page.on('request', (request) => {
+      if (request.method() !== 'POST') return;
+      if (!START_RE.test(new URL(request.url()).pathname)) return;
+      capturedBody = request.postData() ?? '';
+    });
+
     const started = page.waitForResponse((r) => START_RE.test(r.url()) && r.request().method() === 'POST', {
       timeout: 60_000,
     });
     const sendButton = await fillComposer(page, 'A plain message, with nobody tagged.');
     await sendButton.click();
-    expect(
-      (await started).status(),
-      'the control turn must be admitted, or the refusal below says nothing about mentions',
-    ).toBe(200);
+    expect((await started).status(), 'the control turn must be admitted').toBe(200);
     await expectStoredAssistantAnswer(page, projectId, conversationId, {
       timeout: 180_000,
       message: 'the control turn produced no answer',
     });
+    expect(capturedBody, 'the app’s own start body must have been captured').not.toBe('');
 
-    // The participant the app targeted, read back from the conversation the
-    // app created.
-    const details = await page.request.get(
-      `${API_BASE}/elitea_core/conversation/prompt_lib/${projectId}/${conversationId}`,
-    );
-    expect(details.ok(), 'the conversation details must be readable').toBe(true);
-    const participants = ((await details.json()) as { participants?: readonly { id?: unknown }[] }).participants ?? [];
-    const participantId = Number(participants[0]?.id ?? 0);
-    expect(participantId, 'the app-created conversation must carry a participant').toBeGreaterThan(0);
+    const replay = JSON.parse(capturedBody) as Record<string, unknown>;
+    const startUrl = `${API_BASE}/elitea_core/messages/prompt_lib/${projectId}/${conversationUuid}` +
+      '?execution_contract=agent.execute.application.v1';
+    // Named TWICE in one message, because ELITEA-0396's claim is that the
+    // count of notifications follows MESSAGES and not tags.
+    replay['question_id'] = randomUUID();
+    replay['interaction_uuid'] = randomUUID();
+    (replay['payload'] as Record<string, unknown>)['user_input'] =
+      `Hey @${caller.email}, can you check this? Also @${caller.email}, confirm when done.`;
+    replay['user_ids'] = [Number(caller.id)];
 
-    // ── The message that names somebody, TWICE ────────────────────────────
-    // Twice, because ELITEA-0396's whole claim is that the count of
-    // notifications follows the number of MESSAGES and not the number of
-    // tags. `user_ids` is the field the composer's mention state becomes
-    // (`buildDefaultMessagePayload`), carried here in the shape the start
-    // route declares for it.
-    const sent = await page.request.post(
-      `${API_BASE}/elitea_core/messages/prompt_lib/${projectId}/${conversationUuid}` +
-        '?execution_contract=agent.execute.application.v1',
-      {
-        data: {
-          payload: { user_input: `Hey @${caller.email}, can you check this? Also @${caller.email}, confirm when done.`, attachments: [] },
-          project_id: Number(projectId),
-          participant_id: participantId,
-          conversation_uuid: conversationUuid,
-          question_id: randomUUID(),
-          interaction_uuid: randomUUID(),
-          attachments_info: [],
-          mcp_tokens: {},
-          user_ids: [Number(caller.id)],
-        },
-      },
-    );
+    const sent = await page.request.post(startUrl, { data: replay });
     expect(
       sent.status(),
       `a message carrying a mention must be accepted: ${(await sent.text()).slice(0, 300)}`,
     ).toBeLessThan(300);
 
-    // ── Exactly one notification for the mentioned user ───────────────────
-    await expect
-      .poll(
-        async () => {
-          const response = await page.request.get(
-            `${API_BASE}/elitea_core/notifications/notifications/prompt_lib/${projectId}`,
-          );
-          if (!response.ok()) return -1;
-          const body = (await response.json()) as { rows?: readonly unknown[]; items?: readonly unknown[] };
-          const rows = body.rows ?? body.items ?? [];
-          return rows.filter((row) => JSON.stringify(row).includes(conversationUuid)).length;
-        },
-        {
-          timeout: 60_000,
-          message: 'the mentioned user was never notified',
-        },
-      )
-      .toBe(1);
+    // ── WHAT THIS LANE CAN AND CANNOT SEE ────────────────────────────────
+    //
+    // The assertion above IS the fix: the identical request was refused 422
+    // before #977, and the only field that differs from the control the app
+    // itself sent is `user_ids`. That is the route half.
+    //
+    // The RECIPIENT half is not readable here, and the reason is worth
+    // recording rather than working around: a notification belongs to the
+    // person named, and this lane has one persona, who is also the sender —
+    // whom the producer deliberately never notifies (ELITEA-0399). Reading
+    // somebody else's notifications needs a second login, and this persona
+    // cannot even read its OWN in its personal project (the notifications
+    // route answers 403 there: `models.notifications.notifications.list` is
+    // not among the grants the seeder gives it).
+    //
+    // So the producer's behaviour is pinned where it can be stated exactly:
+    // `mentions_test.go` (one row per person per MESSAGE however many tags,
+    // `@everyone` from the server's membership, the sender excluded, a failed
+    // write costing the mention and not the turn) and
+    // `chat_mention_notification_postgres_integration_test.go` (the rows land
+    // in `centry.notifications` with the event type and the snake_case meta
+    // keys the web resolves).
   } finally {
     if (conversationId !== '') await deleteConversation(page.request, conversationId, projectId).catch(() => undefined);
     if (agentId !== '') await deleteAgent(page.request, agentId).catch(() => undefined);

@@ -639,6 +639,14 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		// Project Context was switched on — see
 		// internal/application/agentexecution/projectcontext.go's header.
 		agentStart = agentStart.WithProjectContext(repos.NewProjectContextRepo(dependencies.AdmissionPool))
+		// @mention notifications (#977). Same setter idiom, same admission
+		// pool. The composer has always put the tagged users on the wire; the
+		// start route used to REFUSE the field and nothing wrote a row, so a
+		// tagged colleague was never told. This is the producer half — the
+		// web's `chat_user_mentioned` rendering already existed.
+		agentStart = agentStart.WithMentionNotifications(
+			repos.NewChatMentionNotificationRepo(dependencies.AdmissionPool),
+		)
 		// An attached IMAGE reaches the model as bytes (#979). Same setter
 		// idiom; the reader is the SAME repository the native runtime's
 		// attachment route uses, so both paths agree about what a chat
