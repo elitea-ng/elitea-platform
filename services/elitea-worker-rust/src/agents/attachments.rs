@@ -78,7 +78,9 @@
 
 use std::collections::BTreeMap;
 
-use adk_rust::Content;
+use adk_rust::{Content, Part};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use serde_json::{Map, Value};
 
 use super::assembly::invalid_profile;
@@ -103,6 +105,64 @@ const MAX_INPUT_ATTACHMENT_CHUNKS: usize = 128;
 /// refuses anything longer (`maxAttachmentFieldBytes`). A worker that admitted
 /// more would be admitting a reference the platform cannot have stored.
 const MAX_ATTACHMENT_FIELD_BYTES: usize = 256;
+
+/// The decoded size of ONE attachment image this runtime will put in front of
+/// the model, and the encoded budget for a whole turn's images (#981).
+///
+/// Both numbers are elitea-main's, not this runtime's: `attachments.go` embeds
+/// at most `maxInlineAttachmentImageBytes` (256 KiB) of raw bytes per image and
+/// `maxInlineAttachmentImageTurnBytes` (512 KiB) of base64 per turn, so a chunk
+/// larger than these did not come from the admission path this runtime is
+/// deployed against. Re-checking them here is not distrust of that path: the
+/// command is signed but its CONTENT is a document, and the cost of a wrong
+/// number is a provider request too large to bill, after the turn was admitted.
+const MAX_RENDERED_ATTACHMENT_IMAGE_BYTES: usize = 256 * 1024;
+const MAX_RENDERED_ATTACHMENT_IMAGE_TURN_BYTES: usize = 512 * 1024;
+
+/// The media types a provider is handed as an image, and the only ones this
+/// runtime renders. It is the same four elitea-main embeds (`inlineAttachment
+/// ImageMediaTypes`), which is the same four the Anthropic block type accepts
+/// (`ImageMediaType`) and every OpenAI-compatible provider documents. A chunk
+/// naming anything else is counted unavailable rather than forwarded: a media
+/// type the provider rejects fails the turn INSIDE the provider call, which is
+/// exactly the failure mode this module refuses to create.
+const RENDERABLE_ATTACHMENT_IMAGE_TYPES: [&str; 4] =
+    ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+/// What one rendered image costs the turn's budget: its base64 length, which is
+/// the quantity elitea-main bounded when it chose to embed it.
+const fn encoded_image_cost(decoded_len: usize) -> usize {
+    decoded_len.div_ceil(3) * 4
+}
+
+/// Decode one `image_url` chunk's data URL into the part a model client can
+/// send, or `None` when it is not something this runtime will render.
+///
+/// `None` is never an error: the chunk stays out of the prompt, the file's own
+/// header chunk still names it to the model, and the caller counts it. The
+/// cases are a non-`data:` URL (an http one would make the provider fetch a
+/// tenant URL — this runtime does not forward those), an unsupported or absent
+/// media type, a payload that is not base64, an empty image, and one past the
+/// per-image cap.
+fn decode_attachment_image(url: &str) -> Option<(String, Vec<u8>)> {
+    let payload = url.strip_prefix("data:")?;
+    let (media_type, encoded) = payload.split_once(";base64,")?;
+    let media_type = media_type.trim().to_ascii_lowercase();
+    if !RENDERABLE_ATTACHMENT_IMAGE_TYPES.contains(&media_type.as_str()) {
+        return None;
+    }
+    // Bounded BEFORE decoding: base64 is 4 characters per 3 bytes, so a payload
+    // past this cannot decode to anything this runtime would send, and
+    // measuring first keeps a hostile document from allocating for the answer.
+    if encoded.len() > MAX_RENDERED_ATTACHMENT_IMAGE_BYTES * 4 / 3 + 4 {
+        return None;
+    }
+    let data = BASE64_STANDARD.decode(encoded).ok()?;
+    if data.is_empty() || data.len() > MAX_RENDERED_ATTACHMENT_IMAGE_BYTES {
+        return None;
+    }
+    Some((media_type, data))
+}
 
 /// Admit only the chunks this runtime can put in front of a model.
 ///
@@ -155,9 +215,16 @@ pub(super) fn validate_input_attachments(
 /// no already-extracted text beside it, contributes only its header part and is
 /// counted as an unavailable read; after [`resolved_attachment_chunks`] has
 /// run, that means a file elitea-main would not serve as text, not a file
-/// nobody tried to read. An `image_url` chunk is counted as an unavailable part
-/// for its own honest reason — the native model path renders no image parts yet
-/// — while the file's own header chunk still names it to the model.
+/// nobody tried to read.
+///
+/// An `image_url` chunk becomes a real image part (#981): its data URL is
+/// decoded into `Part::InlineData`, which both model clients then render —
+/// `image_url` on the OpenAI-compatible path, a base64 `ImageBlock` on the
+/// Anthropic one. A chunk this runtime will not render (a media type no
+/// provider takes, a payload that is not base64, one past the per-image cap, or
+/// one that would take the turn past its image budget) is counted as an
+/// unavailable part instead, and the file's own header chunk still names it to
+/// the model — the behaviour every image had before #981.
 #[must_use]
 pub(super) fn append_attachment_parts(
     mut content: Content,
@@ -168,6 +235,9 @@ pub(super) fn append_attachment_parts(
     }
     let mut unreadable_documents = 0_usize;
     let mut unrendered_images = 0_usize;
+    // The turn's image budget, spent in ENCODED bytes so it is the same
+    // quantity elitea-main spent when it decided what to embed.
+    let mut image_budget = MAX_RENDERED_ATTACHMENT_IMAGE_TURN_BYTES;
     for (index, chunk) in input_attachments.iter().enumerate() {
         let Some(object) = chunk.as_object() else {
             // Unreachable after `validate_input_attachments`; skipping keeps a
@@ -182,7 +252,36 @@ pub(super) fn append_attachment_parts(
                     content = content.with_text(text);
                 }
             }
-            Some("image_url") => unrendered_images += 1,
+            Some("image_url") => {
+                match object
+                    .get("image_url")
+                    .and_then(Value::as_object)
+                    .and_then(|image| image.get("url"))
+                    .and_then(Value::as_str)
+                    .and_then(decode_attachment_image)
+                {
+                    // The budget is charged in the units the URL carries, and
+                    // ONLY for an image that is actually rendered — a
+                    // malformed one must not push the next good one off the
+                    // end of the turn.
+                    Some((media_type, data)) if encoded_image_cost(data.len()) <= image_budget => {
+                        image_budget -= encoded_image_cost(data.len());
+                        // Constructed directly rather than through
+                        // `Content::with_inline_data`, which PANICS past its
+                        // own 10 MB ceiling. Nothing can reach that after
+                        // `decode_attachment_image`, and a panic inside an
+                        // assembly step would take the worker down rather than
+                        // the turn.
+                        content.parts.push(Part::InlineData {
+                            mime_type: media_type,
+                            data,
+                            uri: None,
+                            annotations: None,
+                        });
+                    }
+                    _ => unrendered_images += 1,
+                }
+            }
             _ => {}
         }
         if needs_unavailable_read(input_attachments, index, object) {
@@ -204,8 +303,9 @@ pub(super) fn append_attachment_parts(
         tracing::info!(
             event = "agent_input_attachment_image_unavailable",
             count = unrendered_images,
-            "attachment image parts are not rendered on the native runtime; \
-             the file's header still names it to the model"
+            "an attachment image could not be rendered as a model image part \
+             (unsupported media type, malformed data URL, or the turn's image \
+             budget); the file's header still names it to the model"
         );
     }
     content
@@ -576,16 +676,126 @@ mod tests {
         );
     }
 
+    fn image_parts(content: &Content) -> Vec<(String, Vec<u8>)> {
+        content
+            .parts
+            .iter()
+            .filter_map(|part| match part {
+                Part::InlineData {
+                    mime_type, data, ..
+                } => Some((mime_type.clone(), data.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn data_url(media_type: &str, bytes: &[u8]) -> String {
+        format!("data:{media_type};base64,{}", BASE64_STANDARD.encode(bytes))
+    }
+
     #[test]
-    fn an_image_url_chunk_is_admitted_but_not_rendered() {
-        let attachments = vec![json!({
-            "type": "image_url",
-            "image_url": {"url": "https://example.invalid/pic.png"}
-        })];
+    fn an_attached_image_becomes_a_model_image_part() {
+        // #981. The bytes the admission path embedded reach the model as an
+        // image part, after the file's own header text and in the order the
+        // chunks arrived.
+        let bytes = b"\x89PNG\r\n\x1a\nautotest".to_vec();
+        let attachments = vec![
+            json!({"type": "text", "text": "Filename: conv/shot.png"}),
+            json!({"type": "image_url", "image_url": {"url": data_url("image/png", &bytes)}}),
+        ];
         let content = append_attachment_parts(user_message(), &attachments);
-        // No image part is placed; the user's own text is all that remains.
-        assert_eq!(text_parts(&content), vec!["the question".to_owned()]);
-        assert_eq!(content.parts.len(), 1);
+        assert_eq!(
+            text_parts(&content),
+            vec![
+                "the question".to_owned(),
+                "Filename: conv/shot.png".to_owned()
+            ]
+        );
+        assert_eq!(image_parts(&content), vec![("image/png".to_owned(), bytes)]);
+        // Header first, image after it: a picture with no idea which file it is
+        // is worse than one the model can name.
+        assert!(matches!(content.parts[2], Part::InlineData { .. }));
+    }
+
+    #[test]
+    fn every_renderable_media_type_reaches_the_model_as_itself() {
+        for media_type in ["image/png", "image/jpeg", "image/gif", "image/webp"] {
+            let attachments = vec![
+                json!({"type": "image_url", "image_url": {"url": data_url(media_type, b"bytes")}}),
+            ];
+            let content = append_attachment_parts(user_message(), &attachments);
+            assert_eq!(
+                image_parts(&content),
+                vec![(media_type.to_owned(), b"bytes".to_vec())],
+                "{media_type} must render as itself"
+            );
+        }
+    }
+
+    #[test]
+    fn an_image_this_runtime_will_not_render_is_counted_not_forwarded() {
+        // Every shape that must NOT reach a provider: a remote URL (which would
+        // make the provider fetch a tenant address), a media type no provider
+        // takes, a payload that is not base64, an empty image, and one past the
+        // per-image cap. Each leaves the user's own text alone.
+        let oversized = data_url(
+            "image/png",
+            &vec![7_u8; MAX_RENDERED_ATTACHMENT_IMAGE_BYTES + 1],
+        );
+        for url in [
+            "https://example.invalid/pic.png".to_owned(),
+            data_url("image/bmp", b"bytes"),
+            "data:image/png;base64,not base64!!".to_owned(),
+            data_url("image/png", b""),
+            oversized,
+        ] {
+            let attachments = vec![json!({"type": "image_url", "image_url": {"url": url}})];
+            let content = append_attachment_parts(user_message(), &attachments);
+            assert_eq!(text_parts(&content), vec!["the question".to_owned()]);
+            assert!(
+                image_parts(&content).is_empty(),
+                "nothing may be forwarded for a chunk this runtime will not render"
+            );
+            assert_eq!(content.parts.len(), 1);
+        }
+    }
+
+    #[test]
+    fn the_turns_image_budget_bounds_what_is_rendered() {
+        // Three images at the per-image cap: the turn's budget admits the ones
+        // that fit and counts the rest, so a provider request cannot grow past
+        // what elitea-main bounded when it embedded them.
+        let big = vec![3_u8; MAX_RENDERED_ATTACHMENT_IMAGE_BYTES];
+        let attachments: Vec<Value> = (0..3)
+            .map(
+                |_| json!({"type": "image_url", "image_url": {"url": data_url("image/png", &big)}}),
+            )
+            .collect();
+        let content = append_attachment_parts(user_message(), &attachments);
+        let rendered = image_parts(&content).len();
+        let per_image = encoded_image_cost(big.len());
+        assert_eq!(
+            rendered,
+            MAX_RENDERED_ATTACHMENT_IMAGE_TURN_BYTES / per_image,
+            "the budget is spent in encoded bytes, once per rendered image"
+        );
+        assert!(
+            rendered < 3,
+            "the budget must actually bound something here"
+        );
+    }
+
+    #[test]
+    fn a_refused_image_does_not_spend_the_budget_a_good_one_needs() {
+        // The malformed one is counted, not charged: otherwise one bad chunk
+        // could push a perfectly good picture off the end of the turn.
+        let big = vec![3_u8; MAX_RENDERED_ATTACHMENT_IMAGE_BYTES];
+        let attachments = vec![
+            json!({"type": "image_url", "image_url": {"url": "data:image/png;base64,!!!!"}}),
+            json!({"type": "image_url", "image_url": {"url": data_url("image/png", &big)}}),
+        ];
+        let content = append_attachment_parts(user_message(), &attachments);
+        assert_eq!(image_parts(&content).len(), 1);
     }
 
     fn err_code(input_attachments: &[Value]) -> NativeAgentAssemblyErrorCode {

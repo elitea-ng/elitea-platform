@@ -10,6 +10,7 @@ use http_body_util::Full;
 use tokio_stream::StreamExt as _;
 use tonic::body::Body;
 
+use super::anthropic_gateway::anthropic_message_for_test;
 use super::model_gateway::{
     ModelGatewayInvocation, ModelReasoningEffort, TestModelGatewayOutcome,
     test_model_gateway_client, test_model_gateway_config, test_model_gateway_response,
@@ -592,5 +593,57 @@ async fn native_credential_and_completion_are_single_use() {
     assert_eq!(
         bound.take_completion_for_test().expect("completion once"),
         "native response"
+    );
+}
+
+/// #981: the Anthropic leg of the same contract — an attached image becomes a
+/// base64 image block with its media type, not a refused request.
+#[test]
+fn an_attached_image_becomes_an_anthropic_image_block() {
+    let bytes = b"\x89PNG\r\n\x1a\nautotest".to_vec();
+    let content = Content {
+        role: "user".to_owned(),
+        parts: vec![
+            Part::Text {
+                text: "describe this".to_owned(),
+            },
+            Part::InlineData {
+                mime_type: "image/png".to_owned(),
+                data: bytes.clone(),
+                uri: None,
+                annotations: None,
+            },
+        ],
+    };
+    let message = anthropic_message_for_test(&content, true).expect("an image message");
+    let rendered = serde_json::to_value(&message).expect("serializable message");
+    let blocks = rendered["content"].as_array().expect("block array");
+    assert_eq!(blocks[0]["type"], "text");
+    assert_eq!(blocks[1]["type"], "image");
+    assert_eq!(blocks[1]["source"]["type"], "base64");
+    assert_eq!(blocks[1]["source"]["media_type"], "image/png");
+    // RAW base64, never a data URL: the media type is its own field here, and a
+    // provider handed `data:image/png;base64,…` decodes garbage.
+    let encoded = {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(&bytes)
+    };
+    assert_eq!(blocks[1]["source"]["data"], serde_json::json!(encoded));
+}
+
+#[test]
+fn an_image_media_type_anthropic_does_not_take_refuses_the_message() {
+    let content = Content {
+        role: "user".to_owned(),
+        parts: vec![Part::InlineData {
+            mime_type: "image/bmp".to_owned(),
+            data: b"bytes".to_vec(),
+            uri: None,
+            annotations: None,
+        }],
+    };
+    assert!(
+        anthropic_message_for_test(&content, true).is_err(),
+        "a media type this block type cannot express must be refused, not guessed at"
     );
 }

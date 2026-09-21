@@ -54,10 +54,26 @@ import {
 const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
 const MOCK_MODEL = process.env['E2E_MOCK_MODEL'] ?? 'vllm/E2E-MOCK-MODEL';
 
-test.skip(
-  (process.env['E2E_WORKER'] ?? 'rust') !== 'python',
-  'the artifact image path is the SDK loader stack — the native worker has no image loader',
-);
+/**
+ * The BUCKET cases need the SDK's loader stack: `read_file` fails to decode the
+ * object as text, `parse_file_content` picks `EliteAImageLoader` by extension,
+ * and THAT calls the model with the image part. The native worker's `artifact`
+ * family (#906) returns text or a `content_too_large` object and has no loader,
+ * so on the rust leg those cases would assert the absence of a feature.
+ *
+ * The COMPOSER-ATTACHMENT case is not one of them and is deliberately not
+ * gated: since #979 the platform embeds the bytes and since #981 the native
+ * worker renders them, so "an attached image is analysed" is a claim both legs
+ * now answer — and the only place a regression in either half would show.
+ */
+const PYTHON_LOADER_LEG = (process.env['E2E_WORKER'] ?? 'rust') === 'python';
+
+function requiresSdkImageLoader(): void {
+  test.skip(
+    !PYTHON_LOADER_LEG,
+    'reading an image OUT OF A BUCKET is the SDK loader stack — the native artifact family has no loader',
+  );
+}
 
 /** Every test owns the whole journal window: an image another test showed the model is not this one's. */
 test.beforeEach(async ({ page }) => {
@@ -273,6 +289,7 @@ async function shownImages(page: Page): Promise<readonly { md5: string; format: 
  * case: nothing in the path is Claude-specific.) */
 test('an image in a bucket is read in chat and the model is shown its bytes', async ({ page }) => {
   test.setTimeout(300_000);
+  requiresSdkImageLoader();
   const agent = await createArtifactAgent(page, 'read');
   try {
     const fileName = `sunset-${String(Date.now() % 1_000_000)}.png`;
@@ -300,6 +317,7 @@ test('an image in a bucket is read in chat and the model is shown its bytes', as
  * loader cannot open does not arrive at all. */
 test('every supported image format is read and reaches the model as itself', async ({ page }) => {
   test.setTimeout(420_000);
+  requiresSdkImageLoader();
   const agent = await createArtifactAgent(page, 'formats');
   try {
     const formats: readonly ImageFormat[] = ['png', 'jpeg', 'gif', 'webp'];
@@ -340,6 +358,7 @@ test('every supported image format is read and reaches the model as itself', asy
  * one. Reading a non-image file is unaffected by the image path. */
 test('a text file and an image read in one session stay on their own paths', async ({ page }) => {
   test.setTimeout(420_000);
+  requiresSdkImageLoader();
   const agent = await createArtifactAgent(page, 'mixed');
   try {
     const stamp = String(Date.now() % 1_000_000);
@@ -370,6 +389,7 @@ test('a text file and an image read in one session stay on their own paths', asy
  * listing happens to return first. */
 test('the named image is the one read, in a bucket holding several', async ({ page }) => {
   test.setTimeout(420_000);
+  requiresSdkImageLoader();
   const agent = await createArtifactAgent(page, 'several');
   try {
     const stamp = String(Date.now() % 1_000_000);
@@ -449,6 +469,7 @@ test('an image attached in the composer is analysed by the model', async ({ page
  * to a pipeline's LLM node puts the bytes on the wire the same way. */
 test('a pipeline run reads an image from a bucket', async ({ page }) => {
   test.setTimeout(420_000);
+  requiresSdkImageLoader();
   const suffix = String(Date.now() % 1_000_000);
   const bucket = `autotest-pipeimg-${suffix}`;
   const toolkitName = `${AUTOTEST_PREFIX}pipeimgtk-${suffix}`;
