@@ -4421,5 +4421,13 @@
   "pipelines.pipelineWebhookModal.rotate": "Rotate secret",
   "pipelines.pipelineWebhookModal.revoke": "Revoke",
   "pipelines.pipelineWebhookModal.done": "Done",
-  "widgets.chatBox.participantWithdrawn": "This agent has been unpublished and is no longer available. You can still read this conversation."
+  "widgets.chatBox.participantWithdrawn": "This agent has been unpublished and is no longer available. You can still read this conversation.",
+  "pipelines.pipelineWebhookModal.modeLabel": "Webhook type",
+  "pipelines.pipelineWebhookModal.modeCustomHint": "The sender presents the secret itself, as an Authorization: Bearer header, as X-Elitea-Trigger-Token, or as a token query parameter.",
+  "pipelines.pipelineWebhookModal.modeGithubHint": "GitHub signs the request body with the secret and sends the digest in {{header}}. Configure that secret in the repository’s webhook settings; no Authorization header is sent or accepted.",
+  "pipelines.pipelineWebhookModal.modePending": "Applying this type rotates the credential: the current secret stops working and the sender has to be given the new one.",
+  "pipelines.pipelineWebhookModal.applyMode": "Apply and rotate",
+  "pipelines.pipelineWebhookModal.signatureHeader": "Signature header",
+  "pipelines.pipelineWebhookModal.copyHeader": "Copy header name",
+  "pipelines.pipelineWebhookModal.headerCopied": "Signature header copied to clipboard"
 }

@@ -6,8 +6,14 @@
  */
 import type { SingleSelectOption } from '@/shared/ui/SingleSelect';
 
-/** The stored `auth_mode` a signing trigger carries (`authmode.go`). */
-export const HMAC_AUTH_MODE = 'hmac_sha256';
+/**
+ * The stored `auth_mode` a signing trigger carries (`authmode.go`).
+ *
+ * Module-private: {@link webhookModeFromAuthMode} is the only reader, and an
+ * exported constant nothing imports is a public API with no consumer — which
+ * is what `check-dead-code` refuses.
+ */
+const HMAC_AUTH_MODE = 'hmac_sha256';
 
 /** What the GitHub preset signs into, and what the dialog shows before the row answers. */
 export const DEFAULT_SIGNATURE_HEADER = 'X-Hub-Signature-256';
