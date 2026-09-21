@@ -25,9 +25,14 @@
 # inherits. It is written down here because the journeys are the only thing
 # that can tell the two runtimes apart: the same UI drives both, and a change
 # that admits one and refuses the other passes every unit suite. Use a distinct
-# CHAT_STREAM_PROJECT and CHAT_STREAM_PORT when running both on one host — the
-# oidc-mock port is fixed at 9400 and cannot be shared, so they cannot be up at
-# the same time.
+# CHAT_STREAM_PROJECT and CHAT_STREAM_PORT when running both on one host, and a
+# distinct E2E_OIDC_PORT with them: oidc-mock's published port must EQUAL its
+# container port (its issuer comes from the Host header), so the port cannot be
+# remapped — but it can be moved on both sides at once, which is what that
+# variable does. It defaults to 9400, so continuous integration, which sets
+# nothing, is unchanged; the same name is what the E2E stack's compose file,
+# apps/elitea-web/scripts/e2e-stack.sh, e2e/auth.setup.ts and
+# e2e/fixtures/session.ts already read.
 #
 # Why not the E2E stack: `docker-compose.e2e-standalone.yml` has no runtime
 # plane, no worker and no model backend, so the journey would fail there for a
@@ -328,6 +333,7 @@ if [ -n "${PLAYWRIGHT_CONTAINER_IMAGE:-}" ]; then
     -e E2E_REUSE_STACK=1 \
     -e E2E_WORKER="$E2E_WORKER" \
     -e E2E_CHAT_MODEL="${E2E_CHAT_MODEL:-}" \
+    -e E2E_OIDC_PORT="${E2E_OIDC_PORT:-9400}" \
     "${LIVE_ENV_ARGS[@]+"${LIVE_ENV_ARGS[@]}"}" \
     -e PLAYWRIGHT_BASE_URL="http://localhost:${PORT}" \
     "$PLAYWRIGHT_CONTAINER_IMAGE" \

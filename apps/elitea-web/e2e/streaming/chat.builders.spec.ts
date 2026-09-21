@@ -71,7 +71,7 @@ import { expect, test } from '@playwright/test';
 import type { APIRequestContext } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
-import { AUTOTEST_PREFIX, createAgentThroughForm } from '../fixtures/api';
+import { AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, createAgentThroughForm } from '../fixtures/api';
 
 /** Matched WITHOUT a project id: the chat persona works inside its own personal project (#290). */
 const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
@@ -114,6 +114,15 @@ const MOCK_MODEL = process.env['E2E_MOCK_MODEL'] ?? 'vllm/E2E-MOCK-MODEL';
  * `test.describe` the leg skips past.
  */
 const IS_NATIVE_RUNTIME = (process.env['E2E_WORKER'] ?? 'rust') === 'rust';
+
+/**
+ * The SECOND project the isolation assertions at the end of this file read.
+ *
+ * The seeded shared project, which the chat persona can READ (it holds
+ * `models.project_context.view` there) and whose rows no builder turn in its
+ * own personal project may touch.
+ */
+const OTHER_PROJECT_ID = DEFAULT_PROJECT_ID;
 
 interface PreparedAgent {
   readonly projectId: string;
@@ -512,4 +521,143 @@ test('the deployment reports whether the builder modules are served by its worke
       ? '`project_context_builder` must be reported AVAILABLE on the native runtime'
       : '`project_context_builder` must be reported UNAVAILABLE on the python worker',
   ).toBe(IS_NATIVE_RUNTIME);
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * CROSS-PROJECT ISOLATION (#939 group 2)
+ *
+ * ELITEA-3304/3305 were written against the legacy mechanism: a
+ * `runtime_context` XML blob carrying `<user_id>`/`<project_id>`, injected into
+ * the builder tool so the model would not have to be told which project to
+ * write into. THAT MECHANISM DOES NOT EXIST HERE, and the cases' own
+ * pass criteria are what survive the difference:
+ *
+ *   - "created without asking for project_id or user_id" — the tools' own
+ *     `parameters_schema` (`services/elitea-worker-rust/src/agents/
+ *     internal_tools.rs`) carries neither field, so the model CANNOT name a
+ *     project even if it tried. The project comes from
+ *     `ClaimBoundRuntimeContextAuthority` and is re-resolved by main on the
+ *     claim-bound listener (`internal/infra/storage/content_server.go`);
+ *   - "the context appears only in the current project" and "other projects are
+ *     unaffected" — that is a claim about two projects, and it is what the two
+ *     tests below measure. The tests above prove the write LANDS in the
+ *     conversation's project; nothing yet proved it landed NOWHERE ELSE.
+ *
+ * ELITEA-3308 (the XML's exact shape) is therefore not portable and not a
+ * defect: there is no wire format to assert, and the claim binding it stood in
+ * for is a stronger guarantee than the blob was. ELITEA-3306/3307/3311/3312 ask
+ * the same of an "Agent & Pipeline Builder" chat module, which this platform
+ * does not have — `internal_mcp` is in the catalogue and is SKIPPED by the
+ * native runtime, and the Settings switch of that name is the per-USER
+ * `default_internal_mcp_enabled` flag, not a builder.
+ *
+ * THE SECOND PROJECT is the seeded shared project (`1`). The chat persona holds
+ * `models.project_context.view` there (`scripts/e2e-stack.sh`), so it can READ
+ * it — which is exactly the shape the assertion needs: a project the caller can
+ * see and the tool must not have touched. Snapshot-and-compare rather than
+ * expect-empty, because other specs write there too.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** Names of the skills project `projectId` holds. */
+async function skillNamesIn(request: APIRequestContext, projectId: string): Promise<readonly string[]> {
+  const response = await request.get(`${BASE_URL}/api/v2/elitea_core/skills/prompt_lib/${projectId}`);
+  if (!response.ok()) return [];
+  const body = (await response.json()) as { items?: readonly SkillRow[] };
+  return (body.items ?? []).map((row) => String(row.name ?? ''));
+}
+
+/* onetest: ELITEA-3305 — Skill Builder creates the skill in the CURRENT project
+   only: the model names no project, the row appears in the conversation's
+   project, and the other project the caller can see is untouched. */
+test('Skills Builder writes into the conversation’s own project and nowhere else', async ({ page }) => {
+  test.skip(
+    !IS_NATIVE_RUNTIME,
+    'the Python SDK worker has no port of `skills_builder`; the python leg asserts that absence ' +
+      'through the capability route instead',
+  );
+  test.setTimeout(360_000);
+
+  const stamp = Date.now() % 1_000_000;
+  const agentName = `${AUTOTEST_PREFIX}sbiso-${stamp}`;
+  const skillName = `${AUTOTEST_PREFIX}skiso-${stamp}`;
+
+  const { projectId } = await prepareAgentWithModule(page, agentName, SKILLS_BUILDER);
+  expect(
+    projectId,
+    'this assertion needs two DIFFERENT projects — the chat persona must own a personal project (#290)',
+  ).not.toBe(OTHER_PROJECT_ID);
+  const otherBefore = await skillNamesIn(page.request, OTHER_PROJECT_ID);
+
+  // The request names NO project and NO user. It cannot: the tool's schema has
+  // no such argument, which is the platform's answer to "was the user asked to
+  // specify project_id?" — they were never able to be.
+  await sendTurn(
+    page,
+    `${callTool(SKILL_TOOL, {
+      name: skillName,
+      instructions: 'Summarize the thread in three bullets.',
+    })} make me that skill`,
+  );
+
+  await expect
+    .poll(async () => (await findSkillByName(page.request, projectId, skillName))?.name, {
+      timeout: 180_000,
+      message: 'the Skills Builder tool ran but no skill row exists in the conversation’s project',
+    })
+    .toBe(skillName);
+
+  // THE ISOLATION ASSERTION. Read AFTER the row is known to exist in the right
+  // project, so "absent from the other one" cannot be "not written yet".
+  const otherAfter = await skillNamesIn(page.request, OTHER_PROJECT_ID);
+  expect(otherAfter, 'the skill must not appear in a project the conversation is not in').not.toContain(skillName);
+  expect(
+    otherAfter.filter((name) => !otherBefore.includes(name)),
+    'the other project gained no skill from this turn',
+  ).toEqual([]);
+});
+
+/* onetest: ELITEA-3304 — Project Context Builder creates the context in the
+   CURRENT project only; the other project's context is unchanged. */
+test('Project Context Builder writes the conversation’s own project context and leaves another project’s alone', async ({
+  page,
+}) => {
+  test.skip(
+    !IS_NATIVE_RUNTIME,
+    'the Python SDK worker has no port of `project_context_builder`; the python leg asserts that ' +
+      'absence through the capability route instead',
+  );
+  test.setTimeout(360_000);
+
+  const stamp = Date.now() % 1_000_000;
+  const agentName = `${AUTOTEST_PREFIX}pcbiso-${stamp}`;
+  const content = `${AUTOTEST_PREFIX}Isolation probe ${stamp}: this text belongs to one project only.`;
+
+  const { projectId } = await prepareAgentWithModule(page, agentName, PROJECT_CONTEXT_BUILDER);
+  expect(projectId, 'this assertion needs two DIFFERENT projects').not.toBe(OTHER_PROJECT_ID);
+  await clearProjectContext(page, projectId);
+  // Snapshot rather than expect-empty: other specs write to project 1 too, and
+  // this test must not own that row.
+  const otherBefore = await readProjectContext(page, OTHER_PROJECT_ID);
+
+  try {
+    await sendTurn(page, `${callTool(PROJECT_CONTEXT_TOOL, { content })} write that down`);
+    await expect
+      .poll(async () => (await readProjectContext(page, projectId)).content, {
+        timeout: 180_000,
+        message: 'the Project Context Builder tool ran but the project context was not written',
+      })
+      .toBe(content);
+
+    const otherAfter = await readProjectContext(page, OTHER_PROJECT_ID);
+    expect(otherAfter.content ?? '', 'the other project’s context must not carry this turn’s text').not.toContain(
+      content,
+    );
+    expect(
+      otherAfter.content ?? '',
+      'the other project’s context must be exactly what it was before this turn',
+    ).toBe(otherBefore.content ?? '');
+    expect(otherAfter.enabled, 'the other project’s toggle must not have moved').toBe(otherBefore.enabled);
+  } finally {
+    await clearProjectContext(page, projectId);
+  }
 });

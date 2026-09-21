@@ -127,7 +127,7 @@
 #   16380 redis                     STANDALONE_REDIS_PORT
 #   8090  llm-mock journal          STANDALONE_MOCK_PORT — see the llm-mock comment
 #   (llm-real, the `real-llm` profile, publishes nothing — see its comment)
-#   9400  oidc-provider-mock        FIXED — see the oidc-mock comment
+#   9400  oidc-provider-mock        E2E_OIDC_PORT — see the oidc-mock comment
 #
 #   The runtime plane is NOT published to the host. runtime-redis:6380 and
 #   elitea-main:9443/9444/9445 are reachable only on the compose network, which
@@ -395,10 +395,25 @@ services:
       default:
         aliases:
           - oidc.localhost
+    # The PORT moves, the published-equals-container rule does not: both sides
+    # read one variable, so the issuer this mock derives from the Host header is
+    # reachable under the same `oidc.localhost:<port>` inside the compose
+    # network and from the host browser.
+    #
+    # `E2E_OIDC_PORT` and not a name of this stack's own, because it is already
+    # the variable the E2E stack's compose file, its seeder
+    # (apps/elitea-web/scripts/e2e-stack.sh), `e2e/auth.setup.ts` and
+    # `e2e/fixtures/session.ts` all read. Two names for one port is how a stack
+    # comes up on 9402 while the browser waits for a redirect to 9400.
+    #
+    # DEFAULT 9400 — unset, this stack behaves exactly as it always has, and CI
+    # (which sets nothing) is unchanged. Set it only to run this stack beside
+    # another one, together with STANDALONE_PORT/PG/REDIS/MOCK.
+    command: ["--port", "${E2E_OIDC_PORT:-9400}"]
     ports:
-      - "9400:9400"
+      - "${E2E_OIDC_PORT:-9400}:${E2E_OIDC_PORT:-9400}"
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:9400/.well-known/openid-configuration')\""]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:${E2E_OIDC_PORT:-9400}/.well-known/openid-configuration')\""]
       interval: 2s
       timeout: 5s
       retries: 20
@@ -708,7 +723,7 @@ services:
       REDIS_URL: "redis:6379"
       ADMIN_UI_STATIC_DIR: "/data/admin_ui/static/dist"
       APPLICATION_SECRET_KEY: "changeme-standalone"
-      OIDC_ISSUER_URL: "http://oidc.localhost:9400"
+      OIDC_ISSUER_URL: "http://oidc.localhost:${E2E_OIDC_PORT:-9400}"
       OIDC_CLIENT_ID: "elitea-standalone-client"
       OIDC_CLIENT_SECRET: "elitea-standalone-secret"
       OIDC_REDIRECT_URI: "http://localhost:${STANDALONE_PORT:-8084}/forward-auth/auth_oidc/callback"
