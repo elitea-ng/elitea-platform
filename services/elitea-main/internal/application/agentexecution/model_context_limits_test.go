@@ -129,3 +129,25 @@ func TestCurrentModelContextFallbackSurvivesCatalogueNormalization(t *testing.T)
 		t.Fatalf("normalization lost fallback provenance: %v, %v", limits, err)
 	}
 }
+
+func TestCurrentModelContextLimitsPreserveExplicitInputCeiling(t *testing.T) {
+	for _, input := range []int{272000, 0, -1} {
+		version := map[string]any{}
+		err := freezeCurrentModelContextLimits(version, configurationapp.CurrentModelCatalogItem{
+			ContextWindow: ptrModelLimit(400000), MaxOutputTokens: ptrModelLimit(128000), MaxInputTokens: &input,
+		})
+		if input <= 0 {
+			if err == nil {
+				t.Fatal("invalid input ceiling accepted")
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		limits, err := currentFrozenModelContextLimits(version)
+		if err != nil || limits.MaxInputTokens == nil || *limits.MaxInputTokens != 272000 {
+			t.Fatalf("input ceiling lost: %v, %v", limits, err)
+		}
+	}
+}

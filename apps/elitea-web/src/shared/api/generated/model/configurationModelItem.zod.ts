@@ -81,6 +81,13 @@ export const ConfigurationModelItem = zod
       .describe("`compat` only. A copy of `name`."),
     context_window: zod.int().nullish().describe("`reviewed` only."),
     max_output_tokens: zod.int().nullish().describe("`reviewed` only."),
+    max_input_tokens: zod
+      .int()
+      .min(1)
+      .nullish()
+      .describe(
+        "Optional provider input-only ceiling, inside the combined context window.",
+      ),
     supports_reasoning: zod.boolean().nullish().describe("`reviewed` only."),
     supports_vision: zod.boolean().nullish().describe("`reviewed` only."),
     low_tier: zod.boolean().nullish().describe("`reviewed` only."),

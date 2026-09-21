@@ -17,7 +17,7 @@ func summaryFreezer(t *testing.T) (*CurrentApplicationToolSnapshotService, *curr
 	compatible, reasoning := false, false
 	models.response.Items = append(models.response.Items, configurationapp.CurrentModelCatalogItem{
 		Name: "claude-summary", ProjectID: 1, OpenAICompatible: &compatible, SupportsReasoning: &reasoning,
-		ContextWindow: ptrModelLimit(32000), MaxOutputTokens: ptrModelLimit(4000),
+		ContextWindow: ptrModelLimit(32000), MaxOutputTokens: ptrModelLimit(4000), MaxInputTokens: ptrModelLimit(28000),
 	})
 	service, err := NewCurrentApplicationToolSnapshotService(
 		&currentAgentSettingsResolverStub{}, &currentAgentNameResolverStub{}, models,
@@ -62,6 +62,9 @@ func TestSummaryModelFreezesAuthorizedCatalogueAndReachesBothInputBuilders(t *te
 	}
 	if summary.ModelContextLimits.ContextWindowTokens != 32000 || summary.ModelContextLimits.MaxOutputTokens != 4000 || summary.ModelContextLimits.ContextWindowFallback {
 		t.Fatalf("summary limits lost catalogue authority: %v", summary.ModelContextLimits)
+	}
+	if summary.ModelContextLimits.GetMaxInputTokens() != 28000 {
+		t.Fatal("summary model lost its separate input ceiling")
 	}
 	for _, query := range models.queries {
 		if query.ProjectID != 7 || query.PublicProjectID != 1 || !query.IncludeShared {

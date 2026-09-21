@@ -32,6 +32,7 @@ type CurrentModelCatalogItem struct {
 	Shared          bool    `json:"shared"`
 	ContextWindow   *int    `json:"context_window,omitempty"`
 	MaxOutputTokens *int    `json:"max_output_tokens,omitempty"`
+	MaxInputTokens  *int    `json:"max_input_tokens,omitempty"`
 	// These flags retain the provenance of catalogue read-time defaults.
 	ContextWindowFallback bool  `json:"-"`
 	MaxOutputFallback     bool  `json:"-"`
@@ -219,6 +220,7 @@ func normalizeCurrentModelItem(section CurrentModelSection, item CurrentModelCat
 
 	item.ContextWindow = nil
 	item.MaxOutputTokens = nil
+	item.MaxInputTokens = nil
 	item.SupportsReasoning = nil
 	item.SupportsVision = nil
 	item.LowTier = nil

@@ -87,7 +87,14 @@ type currentAvailableSnapshotEntry struct {
 // schemas generated from the pinned current Configurations, LiteLLM,
 // Artifacts, EliteA SDK, indexer worker, and elitea_core revisions.
 func LoadPinnedCurrentAvailableCatalog() (*CurrentAvailableCatalog, error) {
-	return LoadCurrentAvailableCatalog([]byte(pinnedCurrentAvailableSnapshot))
+	catalog, err := LoadCurrentAvailableCatalog([]byte(pinnedCurrentAvailableSnapshot))
+	if err != nil {
+		return nil, err
+	}
+	if err := catalog.addModelInputLimitSchema(); err != nil {
+		return nil, err
+	}
+	return catalog, nil
 }
 
 // LoadCurrentAvailableCatalog is exported for deterministic fixture and

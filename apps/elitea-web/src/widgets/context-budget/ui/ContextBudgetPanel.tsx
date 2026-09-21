@@ -49,6 +49,9 @@ function visibleStatRows(stats: ContextBudgetStats): readonly { readonly key: st
     { key: 'window', label: t('widgets.contextBudget.window', 'Total window'), value: formatNumberWithSpaces(stats.runtime.totalTokens) },
     { key: 'output', label: t('widgets.contextBudget.output', 'Reserved for output'), value: formatNumberWithSpaces(stats.runtime.reservedOutputTokens) },
     { key: 'margin', label: t('widgets.contextBudget.margin', 'Safety margin'), value: formatNumberWithSpaces(stats.runtime.safetyMarginTokens) },
+    ...(stats.maxTokens < stats.runtime.totalTokens - stats.runtime.reservedOutputTokens - stats.runtime.safetyMarginTokens
+      ? [{ key: 'input-limit', label: t('widgets.contextBudget.inputLimit', 'Provider input limit'), value: formatNumberWithSpaces(stats.maxTokens) }]
+      : []),
   ];
   return [
     mode,

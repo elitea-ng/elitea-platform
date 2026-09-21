@@ -22,6 +22,17 @@ function statsFrom(overrides: Readonly<Record<string, unknown>> = {}): ContextBu
 }
 
 describe('ContextBudgetPanel', () => {
+  it('explains a provider input ceiling below the combined window allocation', () => {
+    const stats: ContextBudgetStats = {
+      ...statsFrom({ max_tokens: 272000 }),
+      runtime: { phase: 'measured', active: false, legacy: false, totalTokens: 400000, reservedOutputTokens: 8192, safetyMarginTokens: 4000 },
+    };
+    const { getByTestId, rerender, queryByTestId } = renderWithTheme(<ContextBudgetPanel stats={stats} />);
+    expect(getByTestId('context-budget-stat-input-limit').textContent).toBe(`Provider input limit:272${NBSP}000`);
+    rerender(<ContextBudgetPanel stats={{ ...stats, maxTokens: 387808 }} />);
+    expect(queryByTestId('context-budget-stat-input-limit')).toBeNull();
+  });
+
   it('renders the grouped token counts, the percentage and the three stat rows', () => {
     const { getByTestId } = renderWithTheme(<ContextBudgetPanel stats={statsFrom()} />);
 

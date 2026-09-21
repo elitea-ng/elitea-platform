@@ -5503,6 +5503,11 @@ components:
           type: integer
           nullable: true
           description: '`reviewed` only.'
+        max_input_tokens:
+          type: integer
+          nullable: true
+          minimum: 1
+          description: 'Optional provider input-only ceiling, inside the combined context window.'
         supports_reasoning:
           type: boolean
           nullable: true

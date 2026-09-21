@@ -30,6 +30,13 @@ func freezeCurrentModelContextLimits(version map[string]any, model configuration
 	if err != nil {
 		return err
 	}
+	if model.MaxInputTokens != nil {
+		input, readErr := read(model.MaxInputTokens, 0)
+		if readErr != nil {
+			return readErr
+		}
+		limits.MaxInputTokens = &input
+	}
 	limits.ContextWindowFallback = model.ContextWindowFallback || model.ContextWindow == nil
 	limits.MaxOutputFallback = model.MaxOutputFallback || model.MaxOutputTokens == nil
 	if limits.MaxOutputTokens >= limits.ContextWindowTokens {
@@ -50,7 +57,8 @@ func currentFrozenModelContextLimits(version map[string]any) (*runtimev1.ModelCo
 	}
 	var limits runtimev1.ModelContextLimitsV1
 	if json.Unmarshal(raw, &limits) != nil || limits.ContextWindowTokens == 0 ||
-		limits.MaxOutputTokens == 0 || limits.MaxOutputTokens >= limits.ContextWindowTokens {
+		limits.MaxOutputTokens == 0 || limits.MaxOutputTokens >= limits.ContextWindowTokens ||
+		(limits.MaxInputTokens != nil && *limits.MaxInputTokens == 0) {
 		return nil, ErrUnsupportedCurrentAgentStart
 	}
 	return &limits, nil

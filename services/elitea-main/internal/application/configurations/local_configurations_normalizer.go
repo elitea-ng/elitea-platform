@@ -87,6 +87,14 @@ func normalizeCurrentLocalAIModel(typeName string, data map[string]any) (map[str
 		}
 		normalized["context_window"] = contextWindow
 		normalized["max_output_tokens"] = maxOutputTokens
+		if raw, present := data["max_input_tokens"]; present && raw != nil {
+			value, ok := currentLocalPydanticInteger(raw)
+			input, integer := value.(int64)
+			if !ok || !integer || input <= 0 || input > math.MaxUint32 {
+				return nil, currentLocalConfigurationFieldError("data.max_input_tokens")
+			}
+			normalized["max_input_tokens"] = input
+		}
 
 		for _, field := range [...]struct {
 			name         string
