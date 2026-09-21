@@ -47,7 +47,13 @@ import type { Page } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL } from '../../../playwright.config';
-import { AUTOTEST_PREFIX, API_BASE, DEFAULT_PROJECT_ID, clickCreateButton } from '../../fixtures/api';
+import {
+  API_BASE,
+  AUTOTEST_PREFIX,
+  clickCreateButton,
+  DEFAULT_PROJECT_ID,
+  gotoAppRoute,
+} from '../../fixtures/api';
 import { readsPlatformFlags } from '../../fixtures/platformFlags';
 
 /** Unique to THIS file so concurrent journeys never collide on a name. */
@@ -245,7 +251,11 @@ test('J17.3: create a toolkit, persist it, and reopen it from the list', async (
   await checkA11y(page);
 
   // ── Persistence: a FULL reload, so the 30 s-stale list cache cannot answer.
-  await page.goto(BASE_URL + '/app/toolkits/all');
+  //
+  // `gotoAppRoute`, not `page.goto`: saving routes the app to the new toolkit,
+  // and a plain `goto` issued while that is in flight is aborted by it — the
+  // webkit flake this test showed under `--repeat-each=4`. See the helper.
+  await gotoAppRoute(page, BASE_URL + '/app/toolkits/all');
   const card = page
     .getByTestId('toolkits-list-panel')
     .getByTestId('toolkit-card')

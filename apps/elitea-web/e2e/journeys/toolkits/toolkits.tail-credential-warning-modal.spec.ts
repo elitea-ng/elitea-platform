@@ -51,7 +51,11 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
 import { BASE_URL } from '../../../playwright.config';
-import { API_BASE, AUTOTEST_PREFIX } from '../../fixtures/api';
+import {
+  API_BASE,
+  AUTOTEST_PREFIX,
+  gotoAppRoute,
+} from '../../fixtures/api';
 import { ensureProjectSelected } from '../../fixtures/project';
 import { readsPlatformFlags } from '../../fixtures/platformFlags';
 import { createScratchProject, deleteScratchProject, type ScratchProject } from '../../fixtures/scratchProject';
@@ -109,9 +113,13 @@ async function deleteReportPortalFixture(request: APIRequestContext, projectId: 
 }
 
 async function gotoToolkit(page: Page, projectName: string, toolkitId: string): Promise<void> {
-  await page.goto(`${BASE_URL}/app/`, { waitUntil: 'domcontentloaded' });
+  // `gotoAppRoute`, not `page.goto`: landing on `/app/` routes the app on to
+  // its default screen, and the second navigation below is aborted by that one
+  // when it lands late — `Navigation to "/app/toolkits/all/1" is interrupted
+  // by another navigation to "/app/chat"`, measured on webkit. See the helper.
+  await gotoAppRoute(page, `${BASE_URL}/app/`, { waitUntil: 'domcontentloaded' });
   await ensureProjectSelected(page, projectName);
-  await page.goto(`${BASE_URL}/app/toolkits/all/${toolkitId}`, { waitUntil: 'domcontentloaded' });
+  await gotoAppRoute(page, `${BASE_URL}/app/toolkits/all/${toolkitId}`, { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('textbox', { name: 'Toolkit Name' })).toBeVisible({ timeout: 20_000 });
 }
 

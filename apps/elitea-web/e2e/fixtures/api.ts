@@ -3209,3 +3209,51 @@ export async function fillComposer(scope: Page | Locator, prompt: string) {
   }).toPass({ timeout: 30_000 });
   return sendButton;
 }
+
+/**
+ * `page.goto` for an `/app/*` route, retried when the SPA's OWN navigation
+ * aborts it.
+ *
+ * THE RACE, MEASURED (`--repeat-each=4 --workers=4`, journeys stack, webkit):
+ *
+ *   page.goto: Navigation to "/app/toolkits/all" is interrupted by another
+ *   navigation to "/app/toolkits/all/122"
+ *   page.goto: Frame load interrupted
+ *   page.goto: Navigation to "/app/toolkits/all/1" is interrupted by another
+ *   navigation to "/app/chat"
+ *
+ * Saving a toolkit routes the app to the new toolkit; landing on `/app/`
+ * routes it to the default screen. Both are correct product behaviour and
+ * both take a moment, so a `goto` issued while one is in flight is aborted by
+ * it — on webkit far more often than on chromium, which is why this reads as
+ * a cross-browser flake that retries away.
+ *
+ * WAITING IT OUT IS NOT ENOUGH, and that was the first attempt: the app
+ * navigates more than once (list, then detail), so a wait for "some /app
+ * route" returns on the first hop and the `goto` races the second. What is
+ * deterministic is the CONTRACT — "end up on this url" — and an interrupted
+ * `goto` means the app has just navigated, so the retry runs with the app
+ * already settled. Only the two interruption messages are retried; every
+ * other navigation failure is raised unchanged.
+ */
+export async function gotoAppRoute(
+  page: Page,
+  url: string,
+  options: { readonly waitUntil?: 'load' | 'domcontentloaded' | 'commit' } = {},
+): Promise<void> {
+  const attempts = 3;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await page.goto(url, options);
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const interrupted =
+        message.includes('interrupted by another navigation') || message.includes('Frame load interrupted');
+      if (!interrupted || attempt === attempts) throw error;
+      // The interrupting navigation is in flight; let it commit before asking
+      // for this one again.
+      await page.waitForLoadState('domcontentloaded').catch(() => {});
+    }
+  }
+}
