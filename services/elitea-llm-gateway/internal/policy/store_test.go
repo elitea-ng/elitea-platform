@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // fakeRows is a minimal pgx.Rows over a fixed set of governance rows.
@@ -27,6 +28,12 @@ func (f *fakeRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
 func (f *fakeRows) Values() ([]any, error)                       { return nil, nil }
 func (f *fakeRows) RawValues() [][]byte                          { return nil }
 func (f *fakeRows) Conn() *pgx.Conn                              { return nil }
+
+// TypeMap joined the pgx.Rows interface in pgx v5.11.0. A fake that omits it
+// no longer compiles; nil is correct here because nothing in this package
+// decodes through the type map — Scan below writes the fixture values
+// directly.
+func (f *fakeRows) TypeMap() *pgtype.Map { return nil }
 
 func (f *fakeRows) Scan(dest ...any) error {
 	if f.scanErr != nil {
