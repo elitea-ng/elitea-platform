@@ -371,11 +371,55 @@ fn contains_reference(source: &serde_json::Value, reference: &str) -> bool {
         serde_json::Value::Array(items) => {
             items.iter().any(|item| contains_reference(item, reference))
         }
-        serde_json::Value::Object(items) => items
-            .values()
-            .any(|item| contains_reference(item, reference)),
+        serde_json::Value::Object(items) => {
+            items
+                .values()
+                .any(|item| contains_reference(item, reference))
+                || (items.get("role").is_some_and(serde_json::Value::is_string)
+                    && items
+                        .get("parts")
+                        .and_then(serde_json::Value::as_array)
+                        .is_some_and(|parts| contains_streamed_text_reference(parts, reference)))
+        }
         _ => false,
     }
+}
+
+/// Adjacent text parts form one message. Keep only a reference-sized suffix,
+/// not another copy of the complete source history for each candidate reference.
+fn contains_streamed_text_reference(parts: &[serde_json::Value], reference: &str) -> bool {
+    if reference.is_empty() {
+        return false;
+    }
+    let retained = reference.len() - 1;
+    let mut tail = String::new();
+    for part in parts {
+        let Some(text) = part
+            .as_object()
+            .filter(|part| part.len() == 1)
+            .and_then(|part| part.get("text"))
+            .and_then(serde_json::Value::as_str)
+        else {
+            // Tool calls, tool responses, and reasoning are separate evidence.
+            tail.clear();
+            continue;
+        };
+        if text.contains(reference) {
+            return true;
+        }
+        tail.push_str(&text[..text.floor_char_boundary(retained.min(text.len()))]);
+        if tail.contains(reference) {
+            return true;
+        }
+        if text.len() > retained {
+            tail.clear();
+            tail.push_str(&text[text.ceil_char_boundary(text.len() - retained)..]);
+        } else {
+            let start = tail.ceil_char_boundary(tail.len().saturating_sub(retained));
+            tail.drain(..start);
+        }
+    }
+    false
 }
 
 fn valid_list(items: &[String]) -> bool {
@@ -454,6 +498,52 @@ mod tests {
             "Here is the result: {\"version\":1}".to_owned(),
         ] {
             assert!(validate(&candidate, &serde_json::json!("call-one")).is_err());
+        }
+    }
+
+    #[test]
+    fn references_match_contiguous_streamed_text_within_one_message() {
+        let source = serde_json::json!({"history": [{"role":"model", "parts":[
+            {"text":" each pass. Let me start with"},
+            {"text":" Pass 1.\n\n**"},
+            {"text":"Pass 1: Reading"},
+            {"text":" indexes 1-12**"}
+        ]}]});
+        let summary = fixture().replace("call-one", "Pass 1: Reading indexes 1-12");
+        assert!(validate(&summary, &source).is_ok());
+        let feedback = reference_correction_input(&summary, &source).unwrap();
+        assert_eq!(feedback["invalid_reference_values"], serde_json::json!([]));
+        for split in 0..="αβ🌲teal".len() {
+            let text = "αβ🌲teal";
+            if text.is_char_boundary(split) {
+                let source = serde_json::json!({"role":"model", "parts":[
+                    {"text":format!("{}{}", "x".repeat(10_000), &text[..split])},
+                    {"text":""}, {"text":&text[split..]}, {"text":"z".repeat(10_000)}
+                ]});
+                assert!(contains_reference(&source, text), "split {split}");
+            }
+        }
+    }
+
+    #[test]
+    fn reference_matching_does_not_join_messages_tools_or_unrelated_values() {
+        for source in [
+            serde_json::json!({"history":[
+                {"role":"model", "parts":[{"text":"call-"}]},
+                {"role":"model", "parts":[{"text":"one"}]}
+            ]}),
+            serde_json::json!({"role":"model", "parts":[
+                {"text":"call-"}, {"name":"tool", "args":{}}, {"text":"one"}
+            ]}),
+            serde_json::json!({"role":"model", "parts":[
+                {"text":"call-"}, {"thinking":"private"}, {"text":"one"}
+            ]}),
+            serde_json::json!({"values":["call-", "one"]}),
+        ] {
+            assert_eq!(
+                validate(&fixture(), &source).unwrap_err().code,
+                "context_summary_reference"
+            );
         }
     }
 

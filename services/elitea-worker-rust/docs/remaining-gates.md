@@ -17,7 +17,8 @@ Current-platform code defines business behavior, not a requirement to copy its i
 - [Terminal answer snapshots](source-mapping/terminal-answer-snapshot-20260922.md) records the successful 24-call, two-compaction run and stable browser reload.
 - [Nested compaction acceptance](source-mapping/nested-compaction-live-20260922.md) verifies two child compactions, parent isolation, and stable answer reload.
 - Its worker-loss follow-up now passes in chat 616: the replacement worker resumes the child and completes the waiting parent.
-- Concurrent siblings, deeper delegation, graph recovery, and deployed completed-child race injection remain unverified.
+- Chat 619 verifies concurrent siblings, a delegated grandchild, and completed-sibling reuse after worker loss.
+- Graph recovery and additional crash boundaries remain unverified.
 - The [point 3 audit](source-mapping/point3-audit-20260913.md) records the completed acceptance cases and their limits.
 - Production Rust capability registration remains disabled.
 
@@ -115,11 +116,13 @@ The [checkpoint retention investigation](source-mapping/context-event-retention-
 The [prepared-request history projection](source-mapping/context-runner-history-projection-20260921.md) verifies six storage retirement cycles and browser recovery after abrupt worker loss.
 Chat 606 uses two claims and retains its answer after reload.
 Later chat 616 verifies repeated child compaction and nested browser recovery after whole-worker loss.
-Concurrent sibling recovery, graph recovery, and broader in-process history bounds remain open.
+Chat 619 also verifies concurrent sibling and grandchild recovery with completed-sibling reuse.
+Graph recovery and broader in-process history bounds remain open.
 The [native history retention candidate](source-mapping/context-native-history-retention-20260921.md) passes 374 agent tests with PostgreSQL.
 It retains prepared model history and avoids accumulating partial stream events.
 Clippy and formatting checks pass. Chat 607 passes deployed compaction and fresh-browser reload.
-Repeated live compaction and comparative process memory measurements remain open.
+Repeated live compaction passes in the later ordinary and nested runs linked above.
+Comparative process memory measurements remain open.
 The [summary work-order correction](source-mapping/context-summary-work-order-20260921.md) passes deployed compaction and fresh-browser reload in chat 604.
 
 The [2026-09-17 toolkit binding audit](source-mapping/toolkit-binding-drift-20260917.md)

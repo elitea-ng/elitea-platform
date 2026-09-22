@@ -223,3 +223,84 @@ The new scoped ADK Runner test interrupts a child while its own delegated call w
 Recovery emits the same call, retains the child's prepared history, and requests only the final provider response.
 The PostgreSQL-enabled agent suite passes 386 tests; strict Clippy passes.
 These checks do not replace the pending deployed deeper-chain and concurrent-sibling crash test.
+
+## Deeper-chain verification blocked before crash injection
+
+Fresh headed Playwright chat 617 uses a parent with concurrent saved-agent children:
+a short report child and a child that delegates to the compaction fixture agent.
+The deployed worker image is `sha256:9f1417a046c2d0063ea525438fb5e96e7cc004409dd48e3dac66023b86df26bd`;
+its source matches `0878db6e`.
+Execution `e4a3f98da2f33f7279e3e043c6792300` fails before the planned worker kill.
+The short child has a durable completion receipt, both waiting ancestors have
+`delegation_pending` checkpoints, and the leaf has a `context_pending` checkpoint.
+
+The leaf reports estimated input of 151486 tokens at its first compaction.
+The worker logs `context_summary_reference` at summary validation, attempts one
+correction, and exits with the same code. This validation rejects a reference
+value that cannot be matched to source records. The exact rejected value is not
+present in the inspected diagnostics; its cause remains unconfirmed.
+No completed compaction or worker restart occurs in this run.
+This is not evidence of successful deeper-chain or concurrent-sibling recovery.
+The earlier chat 616 parent-and-child crash proof remains valid.
+
+Evidence uses the local `elitea-deep-recovery` prefix: browser result, screenshots,
+execution metadata, checkpoint query, and worker log. The next acceptance run
+must retain this failed evidence and verify both completed-child reuse and the
+unfinished grandchild after an actual worker interruption.
+
+## Streamed source reference correction
+
+Chat 618 repeats the pre-crash failure with execution `9b53e75bcdbe02828f137da95613e5ba`.
+Worker diagnostics confirm that the grandchild inherits Luna for summarization and uses Haiku for task execution.
+The summary and its correction again fail source-reference validation.
+No worker interruption occurs in this run.
+
+A separate streaming provider probe reproduces a source-matching defect using verified fictional records from chat 617.
+All twelve tool outputs contain only fixture fields and repeated fictional evidence text.
+The probe returns `Pass 1: Reading indexes 1-12` as a reference.
+That text spans adjacent model text parts: `Pass 1: Reading` and ` indexes 1-12**`.
+The previous validator searches each string separately and rejects the contiguous displayed text.
+The original failed summaries are not retained, so this probe does not identify their exact rejected values.
+
+`src/agents/context_summary.rs::contains_reference` now recognizes adjacent text parts within one content message.
+The matcher retains a reference-sized suffix instead of copying the full source for each reference.
+Tool, reasoning, and message boundaries remain separate. Invented or paraphrased references remain invalid.
+Focused tests cover the reproduced text, Unicode splits, and prohibited cross-boundary combinations.
+The existing [context summary mapping](context-summary-compatibility-20260918.md) provides current-platform and ADK source references.
+This correction changes only Rust summary validation. It changes no schema, execution authority, or checkpoint ownership.
+The PostgreSQL-enabled agent suite passes 388 tests with no skips. Strict Clippy and formatting checks pass.
+The deployed acceptance below verifies this correction with nested worker recovery.
+
+## Concurrent sibling and grandchild recovery acceptance
+
+Fresh headed Playwright chat 619 runs against worker image `sha256:f216f359c9318c5dc93dc914f35189ef3c1b30fe29b9e52c675417b87eea8272`.
+The image contains `0878db6e` and the streamed-reference correction above.
+Execution `fc4b014836d598bece46efaf0928606d` starts both root children in the same parallel batch.
+The short child completes while its sibling waits for a grandchild's tool work.
+The test captures checkpoint phases and completion receipts, then kills the worker after the first grandchild compaction.
+
+| Observation | Estimated input tokens |
+| --- | ---: |
+| First grandchild compaction, before | 151467 |
+| First grandchild compaction, after | 1341 |
+| First grandchild measurement after recovery | 1341 |
+| Second grandchild compaction, before | 152405 |
+| Second grandchild compaction, after | 1328 |
+| Waiting child final measurement | 787 |
+| Root final measurement | 985 |
+
+The execution settles as `SUCCEEDED` after claim 1 expires and claim 2 settles.
+The short child's completion receipt remains byte-for-byte identical across recovery.
+Its receipt event is `elitea-child-2_llm_1790097752086520092`.
+Each of the three delegated agents has one logical tool record and no error.
+The tool ledger contains 24 successful `read_compaction_record` calls.
+The fixture server independently records exactly 24 physical calls, with each index requested twice.
+The final answer includes `SHORT-CEDAR-OK`, CEDAR-731, teal, archive verification, the handoff step, and the 24-read count.
+The browser records no page errors and retains the exact answer after reload.
+Visual inspection confirms one complete result without a failure banner or duplicated answer.
+
+This run proves completed-sibling reuse and two-level delegated recovery after whole-worker loss.
+Each unfinished ancestor resumes its saved delegation instead of making another provider selection.
+It does not prove graph recovery, arbitrary external-effect reconciliation, or every possible crash boundary.
+Local evidence uses the `elitea-stream-reference-recovery` prefix.
+The image source manifest uses `elitea-stream-reference-build-source`.
