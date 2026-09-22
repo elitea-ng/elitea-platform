@@ -46,9 +46,14 @@ spec:
             - -c
             - |
               set -e
+              # pgbouncer's auth file quotes each field with double quotes and
+              # represents an embedded double quote as two double quotes; a
+              # raw password containing one would either truncate the
+              # credential or fail the file parse while the pod reports Ready.
+              quote() { sed 's/"/""/g'; }
               printf '"%s" "%s"\n' \
-                "$(cat /material/user)" \
-                "$(cat /material/password)" > /etc/pgbouncer-userlist/userlist.txt
+                "$(quote < /material/user)" \
+                "$(quote < /material/password)" > /etc/pgbouncer-userlist/userlist.txt
               chmod 600 /etc/pgbouncer-userlist/userlist.txt
           securityContext:
             allowPrivilegeEscalation: false
@@ -111,9 +116,15 @@ spec:
         - name: material
           secret:
             secretName: {{ .Values.pgbouncer.credentialsSecretName }}
-            # 0440 with the pod's fsGroup: the image's entrypoint drops to the
-            # postgres user, so the read bit has to survive that.
-            defaultMode: 0440
+            # The kubelet owns these files as root, and the image runs as its
+            # own nonroot postgres user (USER postgres in the edoburu
+            # Dockerfile), so without a pod fsGroup the other-read bit is the
+            # only one that reaches the init container; 0440 would fail its
+            # `cat /material/user` on every start. The bits are scoped to this
+            # pod's own mount namespace, and the userlist the pooler reads is
+            # rewritten owner-only (0600) into the tmpfs above. Same reasoning
+            # as main's runtime-material-source mount.
+            defaultMode: 0444
         - name: userlist
           emptyDir:
             medium: Memory

@@ -223,11 +223,8 @@ func TestASkippedReplicaReportsWhyRatherThanReportingNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Ended after the pass under test returns, while holder is still pinned.
-	rolledBack := false
 	defer func() {
-		if !rolledBack {
-			_ = holderTx.Rollback(context.Background())
-		}
+		_ = holderTx.Rollback(context.Background())
 		holder.Release()
 	}()
 	var acquired bool

@@ -207,12 +207,14 @@ services:
     # read plane stops pinning Postgres at max_connections as main replicas
     # grow. The connection math is in deploy/README.md.
     #
-    # It is safe here only because elitea-main's two multi-statement
+    # It is safe here only because elitea-main's three multi-statement
     # serialisation locks are transaction-scoped locks held in a transaction
     # the pooler keeps pinned to one backend (the secrets backfill,
     # internal/api/v2/secrets; personal project provisioning,
-    # internal/application/personalproject). A session lock would stop
-    # serialising; the 2026-09-01 measurement is recorded in
+    # internal/application/personalproject; the support-assistant bootstrap,
+    # internal/api/v2/supportassistant). A session lock would stop
+    # serialising, and in transaction mode nothing resets the backend it
+    # leaks onto; the 2026-09-01 measurement is recorded in
     # deploy/helm/elitea/values.yaml.
     #
     # The config is committed at deploy/runtime/pgbouncer.ini (the redis.conf

@@ -45,9 +45,11 @@ data:
     ; so a backend reassignment re-prepares instead of answering 42P05.
     max_prepared_statements = {{ .Values.pgbouncer.maxPreparedStatements }}
 
-    ; A server connection returns to the pool between transactions. Drop
-    ; whatever session state the previous client left on it: settings,
-    ; prepared statements, temp tables.
+    ; Not run in transaction mode (server_reset_query_always is off; the
+    ; reset query runs only in session-pooling pools). Kept for an operator
+    ; measuring in session mode, not as a safety net: nothing resets a
+    ; backend a client left session state on, so elitea-main holds none —
+    ; no session advisory locks, no SET outside a transaction.
     server_reset_query = DISCARD ALL
 
     ; Recycle server connections so no idle backend holds a slot forever.

@@ -51,9 +51,15 @@ guards in this chart.
 {{- fail "pgbouncer.enabled=true needs pgbouncer.credentialsSecretName, a Kubernetes Secret with two keys: user and password. The init container builds the pgbouncer userlist from them. It must carry the PASSWORD, not a SCRAM verifier: pgbouncer checks the clients against the userlist and also logs in to Postgres with it, and a verifier cannot do the second half." }}
 {{- end }}
 
-{{- $pool := int (default 48 $pb.poolSize) }}
-{{- $reserve := int (default 4 $pb.reservePoolSize) }}
-{{- $min := int (default 8 $pb.minPoolSize) }}
+{{/*
+  The raw values, on purpose: sprig's `default` treats 0 as unset, so
+  `default 48 .poolSize` would let the validator see 48 while configmap.yaml
+  renders the operator's literal 0 — the exact value the checks below exist
+  to refuse. values.yaml always carries these keys.
+*/}}
+{{- $pool := int $pb.poolSize }}
+{{- $reserve := int $pb.reservePoolSize }}
+{{- $min := int $pb.minPoolSize }}
 {{- if lt $pool 1 }}
 {{- fail (printf "pgbouncer.poolSize is %d. It must be at least 1: it is the steady number of server connections every elitea-main replica shares, and 0 is a pooler that queues everything." $pool) }}
 {{- end }}
@@ -63,11 +69,11 @@ guards in this chart.
 {{- if gt $min $pool }}
 {{- fail (printf "pgbouncer.minPoolSize (%d) exceeds pgbouncer.poolSize (%d). pgbouncer keeps minPoolSize server connections open at all times, so it cannot ask for more idle connections than the pool holds." $min $pool) }}
 {{- end }}
-{{- $client := int (default 1024 $pb.maxClientConn) }}
+{{- $client := int $pb.maxClientConn }}
 {{- if lt $client 1 }}
 {{- fail (printf "pgbouncer.maxClientConn is %d. It is the ceiling on elitea-main's client connections and must be at least 1." $client) }}
 {{- end }}
-{{- $prepared := int (default 1000 $pb.maxPreparedStatements) }}
+{{- $prepared := int $pb.maxPreparedStatements }}
 {{- if lt $prepared 1 }}
 {{- fail (printf "pgbouncer.maxPreparedStatements is %d. elitea-main's pgx driver caches named prepared statements per client connection, and 0 disables pgbouncer's tracking of them: every backend reassignment would then answer 42P05 'prepared statement already exists', measured 2026-09-01. It must be at least 1." $prepared) }}
 {{- end }}

@@ -163,6 +163,15 @@ else
   note "refused: 400 = 100 x 4, against 300"
 fi
 
+echo "== a literal 0 reaches the validator (sprig default would mask it) =="
+if output="$(render "${PB[@]}" --set pgbouncer.maxPreparedStatements=0 2>&1)"; then
+  fail "maxPreparedStatements=0 rendered: the validator saw a default instead of the 0 the ConfigMap emits"
+elif [[ "$output" != *"pgbouncer.maxPreparedStatements is 0"* ]]; then
+  fail "refused for the wrong reason: $output"
+else
+  note "refused: the validator and the ConfigMap read the same 0"
+fi
+
 # The client-side refusal must not have been the server-side one: 48 + 4 = 52
 # is inside 175, so only the client term can have fired.
 if render "${PB[@]}" --set main.env.ELITEA_DATABASE_MAX_CONNS=4 >/dev/null 2>&1; then

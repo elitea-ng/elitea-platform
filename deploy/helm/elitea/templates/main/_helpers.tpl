@@ -775,7 +775,7 @@ and the term that actually moves is the one this counts.
   so this term is exact, not a ceiling. It does not depend on
   ELITEA_DATABASE_MAX_CONNS, so it runs even when that is unset.
 */}}
-{{- $poolServer := add (int (default 48 $pb.poolSize)) (int (default 4 $pb.reservePoolSize)) -}}
+{{- $poolServer := add (int $pb.poolSize) (int $pb.reservePoolSize) -}}
 {{- $poolAvailable := sub (int (default 100 $pg.maxConnections)) (int (default 25 $pg.reservedConnections)) -}}
 {{- if gt $poolServer $poolAvailable -}}
 {{- fail (printf "pgbouncer.poolSize + pgbouncer.reservePoolSize is %d server-side connections for the whole cluster, but only %d are available (postgresql.maxConnections %d minus reservedConnections %d). The pooler cannot open more than poolSize + reserve (its max_db_connections is their sum), so raising it does not help: lower pgbouncer.poolSize, raise postgresql.maxConnections to match the server you actually run, or reserve fewer connections for the direct consumers." $poolServer $poolAvailable (int (default 100 $pg.maxConnections)) (int (default 25 $pg.reservedConnections))) -}}
@@ -810,7 +810,7 @@ and the term that actually moves is the one this counts.
   'no more connections allowed'.
 */}}
 {{- $client := mul $perReplica $replicas -}}
-{{- $clientCap := int (default 1024 $pb.maxClientConn) -}}
+{{- $clientCap := int $pb.maxClientConn -}}
 {{- if gt $client $clientCap -}}
 {{- fail (printf "this release's elitea-main pools can open %d client connections (%d per replica x %d replicas), but pgbouncer.maxClientConn allows %d. The pooler refuses the excess and main loses its own database: lower main.env.ELITEA_DATABASE_MAX_CONNS or the ELITEA_RUNTIME_DB_*_MAX_CONNS pools, lower autoscaling.maxReplicas, or raise pgbouncer.maxClientConn." $client $perReplica $replicas $clientCap) -}}
 {{- end -}}

@@ -133,9 +133,10 @@ postgresql:
   #   * the 42P05s: pgbouncer max_prepared_statements = 1000 tracks pgx's
   #     named statements and re-prepares them on backend reassignment instead
   #     of answering 42P05.
-  #   * the session-scoped locks: the two elitea-main serialisation locks
+  #   * the session-scoped locks: the three elitea-main serialisation locks
   #     (the secrets backfill, internal/api/v2/secrets; personal project
-  #     provisioning, internal/application/personalproject) and the dbtest
+  #     provisioning, internal/application/personalproject; the
+  #     support-assistant bootstrap, internal/api/v2/supportassistant) and the dbtest
   #     template-build lock (internal/infra/db/dbtest/template.go) now take
   #     transaction-scoped advisory locks in an open transaction, which a
   #     transaction-mode pooler pins to one backend for the lock's life. A
