@@ -1147,3 +1147,31 @@ async fn child_output_stops_before_exceeding_its_admitted_turn_limit() {
     );
     assert_eq!(model.requests.lock().unwrap().len(), 2);
 }
+
+#[tokio::test]
+async fn child_output_accepts_verified_suffix_without_changing_accepted_prefix() {
+    use adk_rust::FinishReason::{MaxTokens, Stop};
+    let storage = storage(ModelScopeBackend::Local(Arc::new(
+        InMemorySessionService::new(),
+    )));
+    let child = Context::child("verified-output-suffix");
+    let scope = checkpoint(&storage, Arc::new(Summary::default()));
+    let request = simple_request(&scope, &child).await;
+    let first = "First accepted record.\nRECORD 081: Cedar archive verification remains complete.";
+    let model = OutputModel::new(vec![
+        (first, MaxTokens),
+        (
+            "RECORD 081: Cedar archive verification remains complete.\nRECORD 082: final",
+            Stop,
+        ),
+    ]);
+    let output = scope
+        .delegation_model(model, 25)
+        .generate_content(request, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        collect_output(output).await.unwrap(),
+        format!("{first}\nRECORD 082: final")
+    );
+}

@@ -254,3 +254,24 @@ It requires exact copying before any new text.
 Mismatch diagnostics report byte counts, never provider text or the accepted anchor.
 Anchor derivation and checkpoint interpretation remain unchanged for in-flight recovery.
 Browser acceptance, boundary repair, and interruption testing remain open.
+
+## Exact suffix validation
+
+Commit `e333b49e` deploys as image `sha256:33b4603ac90ea227343662ee9986412e2c7eea5979808bbeb064e0cc16caa9de`.
+Chat 629, execution `60a2198537a36cb60af2fa821f502dde`, still rejects a later boundary.
+The safe diagnostic reports zero matched bytes for the 256-byte anchor when a three-byte chunk arrives.
+The stronger instruction alone does not establish acceptance.
+
+SDK `_merge_anchored_continuation` permits exact suffix overlap and an exact final-line overlap.
+Rust now verifies this behavior before releasing the initial continuation bytes.
+It prefers the longest exact overlap and rejects incoming preambles or changed boundary text.
+Longer suffix matches must start at a word boundary. The final-line fallback requires four alphanumeric characters.
+The validator never modifies the accepted prefix or normalizes whitespace.
+It buffers the initial response until the anchor length is available, or until the response ends.
+Later chunks pass through without an additional copy.
+Existing checkpoint fields and anchor derivation remain unchanged.
+Tests cover split chunks, repeated anchors, suffix-only responses, invalid edits, and preservation of the full accepted prefix.
+Live acceptance and bounded repair of responses without an exact overlap remain open.
+
+The final candidate passes all 405 agent tests with PostgreSQL enabled. Strict Clippy and formatting checks pass.
+This is component proof. The candidate still requires a new image and fresh browser acceptance.
