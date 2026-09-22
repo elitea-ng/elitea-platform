@@ -2765,6 +2765,112 @@ fn runtime_context_with_pipeline_child() -> (RuntimeContextClient, Arc<AtomicUsi
     (client, calls)
 }
 
+/// A child this worker cannot build: its own graph delegates to a further
+/// saved participant, and depth stays one.
+const UNBUILDABLE_CHILD_PIPELINE_YAML: &str = "state:\n  answer:\n    type: str\n  messages:\n    type: list\nentry_point: delegate\nnodes:\n  - id: delegate\n    type: agent\n    tool: \"inner\"\n    input_mapping:\n      task: {type: fixed, value: 'Summarize'}\n    output: [answer, messages]\n    transition: END\n";
+
+fn runtime_context_with_unbuildable_pipeline_child() -> (RuntimeContextClient, Arc<AtomicUsize>) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let paths = Arc::new(Mutex::new(Vec::new()));
+    let token = runtime_context_response(&serde_json::json!({
+        "schema_version": "elitea.runtime.elitea-client-token.v1",
+        "project_id": 17,
+        "token": TOKEN,
+    }));
+    let child = application_version_response(
+        31,
+        41,
+        serde_json::json!({
+            "agent_type": "pipeline",
+            "instructions": UNBUILDABLE_CHILD_PIPELINE_YAML,
+            "meta": {},
+            "variables": [],
+            "tools": [],
+            "llm_settings": {
+                "model_name": "child-model",
+                "model_project_id": 23,
+                "max_tokens": 2048,
+                "reasoning_effort": null,
+                "temperature": 0.2,
+                "openai_compatible": true
+            }
+        }),
+    );
+    let client = runtime_context_client_from(
+        VecDeque::from([token, child]),
+        Arc::clone(&calls),
+        Arc::clone(&paths),
+    );
+    (client, calls)
+}
+
+/// #990 review 4 — THE WAVE-3 DEGRADE, RESTORED.
+///
+/// Admitting the pipeline children this worker CAN build must not make one it
+/// cannot build fail the whole turn again: that was the original shape of
+/// #973, where a single attached pipeline killed every turn of the agent
+/// including the turns that never mentioned it. The child is skipped, the
+/// agent answers, the model is offered no tool for it, and the run carries the
+/// notice naming it (asserted in `session_tests.rs`, where the session that
+/// carries it is observable).
+#[tokio::test(flavor = "current_thread")]
+async fn an_unbuildable_attached_pipeline_is_skipped_and_the_agent_still_answers() {
+    let mut request = ordinary_request(AgentExecutionKind::Application);
+    attach_application_tools(
+        &mut request,
+        vec![stored_pipeline_reference(44, 31, 41, "review-pipeline")],
+    );
+    let (runtime_context, context_calls) = runtime_context_with_unbuildable_pipeline_child();
+    let (model_gateway, captured) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(text_response(
+            "root answer",
+        ))],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway fixture client");
+    let assembler = OrdinaryNativeAgentAssembler::new(
+        platform_client(runtime_context),
+        Arc::new(ModelFacade::from_gateway(model_gateway)),
+        empty_tool_policy(),
+    );
+    let assembly = AuthorizedNativeAssembly::new(
+        &request,
+        test_runtime_context_authority(),
+        AuthorizedNativeCommandBinding::fixture(),
+    );
+
+    let mut invocation = assembler
+        .assemble(assembly)
+        .await
+        .expect("an unbuildable pipeline child must not end the assembly");
+    let _ = invocation
+        .project_start(chrono::Utc::now())
+        .expect("agent start");
+    let (mut native, mut projector, completion) = invocation.start().expect("native start");
+    while let Some(event) = native.next_event().await.expect("native event") {
+        let _ = projector.project(&event).expect("projected event");
+    }
+    let completed = completion.select().await.expect("selected completion");
+    let _ = projector
+        .finish_after_eos(completed, chrono::Utc::now())
+        .expect("finished browser output");
+
+    assert_eq!(
+        context_calls.load(Ordering::Acquire),
+        2,
+        "the child's version is still resolved — the refusal happens after it is read"
+    );
+    let captured = captured.lock().expect("captured model request");
+    assert_eq!(captured.len(), 1, "the model was never called");
+    let body: serde_json::Value =
+        serde_json::from_slice(&captured[0].body).expect("model request JSON");
+    assert!(
+        body["tools"].as_array().is_none_or(Vec::is_empty),
+        "a child that could not be built was still offered to the model: {}",
+        body["tools"]
+    );
+}
+
 /// THE DEFECT #973 REPORTS: one attached pipeline used to end the whole
 /// assembly with `native_agent.unsupported_capability`, before any model call,
 /// so EVERY turn of that agent died — including the turns that never mentioned

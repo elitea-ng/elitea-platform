@@ -245,17 +245,12 @@ impl OrdinaryNativeAgentAssembler {
         ))));
         let mut application_runtime = ApplicationRuntimeProjection::default();
         // #973: read BEFORE materialization, off the same snapshot it reads.
-        // A saved PIPELINE child IS built here now, so only the child types
-        // this worker still cannot execute — `predict` — are skipped, and the
-        // run says so once, the way a skipped internal tool does.
-        let skipped_applications = skipped_application_children(tool_snapshot, None, true);
-        if !skipped_applications.is_empty() {
-            tracing::warn!(
-                skipped = skipped_applications.len(),
-                "attached application children this worker cannot build were skipped"
-            );
-        }
-        if let Some(materialized) = materialize_application_toolset(
+        // A saved PIPELINE child IS built here now, so the reference scan only
+        // reports the child TYPES this worker never executes — `predict`. A
+        // pipeline whose own build fails is added below from the materializer's
+        // own outcome (#990 review 4), because only the build knows that.
+        let mut skipped_applications = skipped_application_children(tool_snapshot, None, true);
+        let (materialized, skipped_pipelines) = materialize_application_toolset(
             tool_snapshot,
             self.platform.as_ref(),
             runtime_context.as_ref(),
@@ -269,14 +264,25 @@ impl OrdinaryNativeAgentAssembler {
             )
             .with_conversation_thread(conversation_thread_id),
         )
-        .await?
-        {
+        .await?;
+        // #990 review 4: named whether or not a single child survived — an
+        // agent whose ONLY attached pipeline could not be built binds no
+        // application toolset at all, and that is exactly the case the notice
+        // exists for.
+        skipped_applications.extend(skipped_pipelines);
+        if let Some(materialized) = materialized {
             validate_nested_application_hitl_scope(application_only, &materialized.presentations)?;
             toolsets.push(materialized.toolset);
             application_runtime = ApplicationRuntimeProjection::streaming(
                 materialized.presentations,
                 materialized.events,
                 materialized.resume,
+            );
+        }
+        if !skipped_applications.is_empty() {
+            tracing::warn!(
+                skipped = skipped_applications.len(),
+                "attached application children this worker cannot build were skipped"
             );
         }
         tracing::Span::current().record("materialized_toolset_count", toolsets.len());

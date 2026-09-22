@@ -310,6 +310,38 @@ test('a Swarm-mode agent can invoke an attached pipeline, and its HITL prompt re
       contains: review,
       message: 'the rejected pipeline produced no answer through its agent',
     });
+
+    // ── THE SECOND TURN — what the child left behind (#990 review 1) ───────
+    //
+    // The child pipeline's own events are persisted in the SAME claim-fenced
+    // session the parent's next turn reads back. ADK treats an event with no
+    // branch as visible to every branch, so a child whose events carried none
+    // would put its monologue — and a `tool_use` with no matching result — into
+    // the PARENT's history here. An Anthropic-shaped provider refuses such a
+    // turn outright; others answer as though the child's words were the
+    // agent's own. Either way the follow-up is the only place it shows.
+    //
+    // Asserted as a plain follow-up question with its own marker, because that
+    // is exactly the shape a user's next message takes.
+    const followUp = marker('followup');
+    const followUpButton = await fillComposer(page, `Say ${followUp} and nothing else.`);
+    const followUpStarted = page.waitForResponse(
+      (r) => START_RE.test(r.url()) && r.request().method() === 'POST',
+      { timeout: 60_000 },
+    );
+    await followUpButton.click();
+    expect(
+      (await followUpStarted).status(),
+      'the turn AFTER a pipeline-tool call must still be admitted — a child event leaking ' +
+        'into the parent history is refused by the provider, not by us',
+    ).toBe(200);
+    await expectStoredAssistantAnswer(page, projectId, conversationId, {
+      timeout: 240_000,
+      contains: followUp,
+      message:
+        'the follow-up turn produced no answer — the child pipeline’s events most likely ' +
+        'leaked into the parent’s history',
+    });
   } finally {
     if (pipeline !== undefined) await deletePipeline(page.request, pipeline);
   }

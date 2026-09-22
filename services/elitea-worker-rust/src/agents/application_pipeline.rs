@@ -41,7 +41,7 @@ use std::sync::Arc;
 use adk_rust::futures::StreamExt as _;
 use adk_rust::graph::interrupt::{GraphInterruptPayload, INTERRUPT_METADATA_KEY};
 use adk_rust::graph::{Checkpoint, Checkpointer, MemoryCheckpointer, State};
-use adk_rust::{Agent, Content, Event, Part, Tool, ToolContext};
+use adk_rust::{Agent, Content, Event, Part, ReadonlyContext as _, Tool, ToolContext};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -56,6 +56,7 @@ use super::application_tools::{ApplicationResumeCoordinator, PIPELINE_APPLICATIO
 use super::events::{
     DESCENDANT_CHECKPOINT_THREAD_KEY, DESCENDANT_CONTAINER_INVOCATION_KEY,
     DESCENDANT_PARENT_CALL_KEY, PIPELINE_TOOL_PENDING_METADATA_KEY, pipeline_hitl_event_binding,
+    strip_descendant_private_metadata,
 };
 use super::graph::compiler::{PipelineDefinition, PipelineNodeRuntimes};
 use super::graph::resume::{PipelineResume, pipeline_hitl_resume_state};
@@ -229,18 +230,11 @@ pub(crate) fn pipeline_pause_identity(
     // The card's own identity, recomputed by the projection's parser off a
     // COPY without the private keys — the same event the browser saw.
     let mut projected = event.clone();
-    projected
-        .provider_metadata
-        .remove(PIPELINE_TOOL_PENDING_METADATA_KEY);
-    projected
-        .provider_metadata
-        .remove(DESCENDANT_CONTAINER_INVOCATION_KEY);
-    projected
-        .provider_metadata
-        .remove(DESCENDANT_PARENT_CALL_KEY);
-    projected
-        .provider_metadata
-        .remove(DESCENDANT_CHECKPOINT_THREAD_KEY);
+    strip_descendant_private_metadata(&mut projected);
+    // The projector clears the child's tier before the descendant projector
+    // sees a graph interrupt; the binding below applies the same rule, so the
+    // event this reads is byte-for-byte the one the browser was shown.
+    projected.branch.clear();
     let binding = pipeline_hitl_event_binding(&projected, &event.author, &checkpoint_thread_id)
         .map_err(|_| PipelinePauseError::Corrupt)?;
     Ok(Some(PipelinePauseIdentity {
@@ -258,6 +252,18 @@ pub(crate) fn pipeline_pause_identity(
             .collect(),
         pending,
     }))
+}
+
+/// Who the child is, for the one call being drained.
+///
+/// Three strings that always travel together and are each derived from the
+/// parent's call: passing them as one value keeps `drain_child`'s owner count
+/// honest and stops a caller supplying a branch from one call beside an
+/// invocation id from another.
+struct ChildIdentity<'call> {
+    invocation_id: &'call str,
+    branch: &'call str,
+    thread_id: &'call str,
 }
 
 /// One saved pipeline exposed to the parent model as a `task` tool.
@@ -454,12 +460,16 @@ impl ApplicationPipelineTool {
             invocation_id.clone(),
             thread_id.clone(),
         ));
+        let branch = child_context.branch().to_owned();
         self.drain_child(
             ctx.as_ref(),
             agent,
             child_context,
-            &invocation_id,
-            &thread_id,
+            ChildIdentity {
+                invocation_id: &invocation_id,
+                branch: &branch,
+                thread_id: &thread_id,
+            },
             checkpointer.as_ref(),
         )
         .await
@@ -470,11 +480,34 @@ impl ApplicationPipelineTool {
         ctx: &dyn ToolContext,
         agent: Arc<dyn Agent>,
         child_context: Arc<ApplicationToolInvocationContext>,
-        invocation_id: &str,
-        thread_id: &str,
+        child: ChildIdentity<'_>,
         checkpointer: &dyn Checkpointer,
     ) -> adk_rust::Result<Value> {
-        let mut node_events = self.node_events.drain(invocation_id, &self.name).await?;
+        let ChildIdentity {
+            invocation_id,
+            branch,
+            thread_id,
+        } = child;
+        let mut node_events = self
+            .node_events
+            .drain(invocation_id, &self.name, branch)
+            .await?;
+        // #990 review 5: anything still queued belongs to an EARLIER call of
+        // this same tool that returned on a pause. Forwarding it now would
+        // stamp it with THIS call's identity, so it is dropped with a warning
+        // rather than misattributed. The pause path below drains what it owns
+        // before it returns, so this is a guard and not the normal path.
+        let mut stale = 0_usize;
+        while node_events.try_recv().is_some() {
+            stale += 1;
+        }
+        if stale > 0 {
+            tracing::warn!(
+                tool_name = %self.name,
+                dropped = stale,
+                "discarded node events left over from an earlier call of this pipeline tool"
+            );
+        }
         let mut stream = agent.run(child_context).await?;
         let mut node_events_open = true;
         let mut result_text = None;
@@ -494,8 +527,18 @@ impl ApplicationPipelineTool {
                     next?
                 }
             };
-            event.branch.clear();
+            // The child's own tier, NOT empty: an empty branch is visible to
+            // every branch, so the parent would re-read the child's events as
+            // its own on the next turn (#990 review 1).
+            branch.clone_into(&mut event.branch);
             if event.provider_metadata.contains_key(INTERRUPT_METADATA_KEY) {
+                // #990 review 5: the node events this child already emitted
+                // belong to THIS call and are its visible progress; draining
+                // them before the pause returns is what keeps them from being
+                // dropped or replayed under a later call's identity.
+                while let Some(queued) = node_events.try_recv() {
+                    self.forward(ctx, thread_id, queued?).await?;
+                }
                 return self.pause(ctx, thread_id, event, checkpointer).await;
             }
             if event
@@ -551,8 +594,28 @@ impl ApplicationPipelineTool {
             return Err(child_execution_error());
         }
         let node_name = checkpoint.pending_nodes[0].clone();
-        let binding = pipeline_hitl_event_binding(&event, &self.name, thread_id)
-            .map_err(|_| child_execution_error())?;
+        // #990 review 3: the ONLY pause kind this parent resumes is the child's
+        // own `hitl` node. Admission refuses a child that could raise any
+        // other kind (sensitive-tool approval, a clarifying question, an MCP
+        // authorization challenge), so reaching this arm with one means the
+        // admission and the runtime disagree — fail closed and say which kind
+        // arrived rather than show an unanswerable card.
+        // Bound against the event AS THE BROWSER WILL SEE IT: the projector
+        // clears the child's branch before the descendant projector reads a
+        // graph interrupt, and `validate_graph_interrupt_event` admits only an
+        // empty or root branch — so the identity is computed on that same
+        // shape while the PERSISTED event keeps the branch that hides it from
+        // the parent's next turn (#990 review 1).
+        let mut projected = event.clone();
+        projected.branch.clear();
+        let binding =
+            pipeline_hitl_event_binding(&projected, &self.name, thread_id).map_err(|_| {
+                tracing::error!(
+                    tool_name = %self.name,
+                    "a pipeline child raised a pause this parent cannot resume"
+                );
+                child_execution_error()
+            })?;
         let pending = PipelineToolPending {
             schema_revision: PIPELINE_TOOL_PENDING_SCHEMA.to_owned(),
             thread_id: thread_id.to_owned(),

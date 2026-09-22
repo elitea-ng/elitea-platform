@@ -147,6 +147,9 @@ nodes:
     transition: END
 "#;
 
+const SECOND_TOOL_NAME: &str = "elitea_agent_32_v_42";
+const SECOND_CALL_ID: &str = "call-2";
+
 struct FixtureToolContext {
     /// Every TURN is a fresh invocation, and that is load-bearing rather than
     /// decorative: the resume's completeness check scopes itself by the event
@@ -155,14 +158,20 @@ struct FixtureToolContext {
     /// turn before — which is what stops an already-answered pause being
     /// demanded again.
     invocation_id: &'static str,
+    call_id: &'static str,
     user_content: Content,
     actions: std::sync::Mutex<EventActions>,
 }
 
 impl FixtureToolContext {
     fn new(invocation_id: &'static str) -> Self {
+        Self::for_call(invocation_id, CALL_ID)
+    }
+
+    fn for_call(invocation_id: &'static str, call_id: &'static str) -> Self {
         Self {
             invocation_id,
+            call_id,
             user_content: Content::new("user"),
             actions: std::sync::Mutex::new(EventActions::default()),
         }
@@ -209,8 +218,8 @@ impl CallbackContext for FixtureToolContext {
 
 #[async_trait::async_trait]
 impl ToolContext for FixtureToolContext {
-    fn function_call_id(&self) -> &'static str {
-        CALL_ID
+    fn function_call_id(&self) -> &str {
+        self.call_id
     }
 
     fn actions(&self) -> EventActions {
@@ -292,17 +301,22 @@ struct Harness {
     tool: ApplicationPipelineTool,
     events: mpsc::Receiver<ApplicationEventSignal>,
     resume: ApplicationResumeCoordinator,
-    /// Kept alive so the node-event channel does not close under the tool.
-    _node_events: super::graph::PipelineNodeEventSender,
+    /// Also the way a test puts a node event on the child's channel — the
+    /// real producer is the child's `llm` node factory.
+    node_events: super::graph::PipelineNodeEventSender,
 }
 
 fn harness(yaml: &str) -> Harness {
+    harness_named(yaml, TOOL_NAME)
+}
+
+fn harness_named(yaml: &str, tool_name: &str) -> Harness {
     let definition = PipelineDefinition::from_yaml(yaml).expect("pipeline definition");
     let (node_sender, node_receiver) = pipeline_node_event_channel();
     let (sender, events) = mpsc::channel(64);
     let resume = ApplicationResumeCoordinator::default();
     let tool = ApplicationPipelineTool::new(
-        TOOL_NAME.to_owned(),
+        tool_name.to_owned(),
         pipeline_tool_description("review-pipeline", Some("Reviews a change.")),
         definition,
         PipelineNodeRuntimes::default(),
@@ -317,7 +331,7 @@ fn harness(yaml: &str) -> Harness {
         tool,
         events,
         resume,
-        _node_events: node_sender,
+        node_events: node_sender,
     }
 }
 
@@ -327,6 +341,55 @@ fn context() -> Arc<dyn ToolContext> {
 
 fn turn_context(invocation_id: &'static str) -> Arc<dyn ToolContext> {
     Arc::new(FixtureToolContext::new(invocation_id))
+}
+
+/// The SECOND pipeline call of one assistant message — same invocation, its
+/// own call id, which is what makes the two children's threads and identities
+/// distinct.
+fn second_call_context() -> Arc<dyn ToolContext> {
+    Arc::new(FixtureToolContext::for_call(INVOCATION_ID, SECOND_CALL_ID))
+}
+
+/// One assistant message calling TWO different saved pipelines.
+fn two_pipeline_call_event() -> Event {
+    let mut event = turn_root_call_event("root-call", INVOCATION_ID);
+    if let Some(content) = event.llm_response.content.as_mut() {
+        content.parts.push(Part::FunctionCall {
+            name: SECOND_TOOL_NAME.to_owned(),
+            args: json!({"task": "ship it"}),
+            id: Some(SECOND_CALL_ID.to_owned()),
+            thought_signature: None,
+        });
+    }
+    event
+}
+
+fn two_pipeline_presentations() -> ApplicationToolPresentationCatalog {
+    let mut applications = presentations();
+    applications
+        .insert_runtime(
+            SECOND_TOOL_NAME.to_owned(),
+            "second-pipeline".to_owned(),
+            "pipeline".to_owned(),
+            "pipeline".to_owned(),
+            ApplicationToolPresentationCatalog::default(),
+            ApplicationToolGuardCatalogs::default(),
+        )
+        .expect("second pipeline presentation");
+    applications
+}
+
+/// Both cards of one pause, answered together — the shape Main sends when a
+/// message raised more than one.
+fn two_decision_payload(first: &str, second: &str) -> AgentExecutionPayload {
+    let mut request = ordinary_request(AgentExecutionKind::Application);
+    request.payload.should_continue = true;
+    request.payload.hitl_resume = true;
+    request.payload.hitl_decisions = vec![
+        json!({"interrupt_id": first, "action": "approve"}),
+        json!({"interrupt_id": second, "action": "reject"}),
+    ];
+    request.payload
 }
 
 /// The parent model's own message: the call the pause and the resume are both
@@ -384,6 +447,44 @@ fn presentations() -> ApplicationToolPresentationCatalog {
         )
         .expect("pipeline presentation");
     applications
+}
+
+/// One assistant message carrying the pipeline call AND one ordinary tool
+/// call beside it, as the model really emits them.
+fn root_call_event_with_sibling(event_id: &str, invocation_id: &'static str) -> Event {
+    let mut event = turn_root_call_event(event_id, invocation_id);
+    if let Some(content) = event.llm_response.content.as_mut() {
+        content.parts.insert(
+            0,
+            Part::FunctionCall {
+                name: "some_tool".to_owned(),
+                args: json!({"q": "anything"}),
+                id: Some("call-0".to_owned()),
+                thought_signature: None,
+            },
+        );
+    }
+    event
+}
+
+/// The response event ADK persists once every call of a message has finished
+/// — it lands AFTER the forwarded pause, which is exactly what a "the pause
+/// must be the last event" rule would have choked on (#990 review 2).
+fn sibling_response_event(event_id: &str, invocation_id: &'static str) -> Event {
+    let mut event = Event::with_id(event_id, invocation_id);
+    event.author = "root-agent".to_owned();
+    event.llm_response.content = Some(Content {
+        role: "function".to_owned(),
+        parts: vec![Part::FunctionResponse {
+            function_response: adk_rust::FunctionResponseData::new(
+                "some_tool",
+                json!({"ok": true}),
+            ),
+            id: Some("call-0".to_owned()),
+            annotations: None,
+        }],
+    });
+    event
 }
 
 fn decision_payload(interrupt_id: &str, action: &str, value: &str) -> AgentExecutionPayload {
@@ -841,5 +942,240 @@ fn a_pause_marker_is_the_only_thing_that_makes_an_event_a_pause() {
             .expect("an ordinary event is not a pause")
             .is_none(),
         "only an event this worker wrote may be read as a child-pipeline pause"
+    );
+}
+
+/// #990 review 1 — THE HISTORY LEAK.
+///
+/// ADK's `event_belongs_to_branch` treats an EMPTY branch as visible to every
+/// branch, so a child event persisted without one is re-read into the ORDINARY
+/// parent's own conversation on its next turn: the child's monologue becomes
+/// the parent's, and a `tool_use` with no matching `tool_result` in the
+/// parent's own history makes an Anthropic-shaped provider refuse the turn.
+/// The child's events must therefore sit on a strictly deeper branch, exactly
+/// as an agent child's do — and the assertion is made against ADK's own
+/// visibility function rather than against the branch STRING, because the
+/// string is not the contract.
+#[tokio::test(flavor = "current_thread")]
+async fn the_childs_events_are_invisible_to_the_parents_next_turn() {
+    let mut harness = harness(REVIEW_PIPELINE);
+    let _paused = harness
+        .tool
+        .execute(context(), json!({"task": "ship it"}))
+        .await
+        .expect("paused child");
+    let forwarded = persisted(&mut harness.events);
+    assert!(
+        !forwarded.is_empty(),
+        "the child forwarded nothing, so this proves nothing"
+    );
+    for event in &forwarded {
+        assert!(
+            !event.branch.is_empty(),
+            "a child event carried no branch, which ADK treats as visible everywhere: {:?}",
+            event.id
+        );
+        assert!(
+            !adk_rust::event_belongs_to_branch(
+                super::events::APPLICATION_BRANCH_ROOT,
+                &event.branch
+            ),
+            "the parent's own turn can still see the child event {:?} on branch {:?}",
+            event.id,
+            event.branch
+        );
+        // …and the child's own run still sees it, or the child could not read
+        // its own transcript.
+        assert!(adk_rust::event_belongs_to_branch(
+            &event.branch,
+            &event.branch
+        ));
+    }
+}
+
+/// #990 review 2 — a pipeline call with ANOTHER call beside it in the same
+/// assistant message. ADK persists that tool's response after the forwarded
+/// pause, so a "the pause must be the last event" rule made the card
+/// permanently unanswerable.
+#[tokio::test(flavor = "current_thread")]
+async fn a_pause_is_answerable_with_another_call_beside_it() {
+    let mut harness = harness(REVIEW_PIPELINE);
+    let paused = harness
+        .tool
+        .execute(context(), json!({"task": "ship it"}))
+        .await
+        .expect("paused child");
+    let interrupt_id = nested_application_interrupt_ids(&paused)
+        .expect("pause")
+        .iter()
+        .next()
+        .expect("interrupt id")
+        .clone();
+
+    let mut events = vec![root_call_event_with_sibling("root-call", INVOCATION_ID)];
+    events.extend(persisted(&mut harness.events));
+    // The sibling's result lands AFTER the pause, which is the whole point.
+    events.push(sibling_response_event("sibling-response", INVOCATION_ID));
+
+    answer(&harness, &events, &interrupt_id, "reject", "").await;
+    let resumed = harness
+        .tool
+        .execute(context(), json!({"task": "ship it"}))
+        .await
+        .expect("the answered pause must resume despite the sibling's later result");
+    assert_eq!(resumed, json!({"response": "REJECTED ship it"}));
+}
+
+/// #990 review 2 — TWO pipeline calls in one message. Both cards must be
+/// answerable, and the completeness rule demands both be answered together.
+#[tokio::test(flavor = "current_thread")]
+async fn two_pipeline_calls_in_one_message_are_both_answerable() {
+    let mut first = harness(REVIEW_PIPELINE);
+    let mut second = harness_named(REVIEW_PIPELINE, SECOND_TOOL_NAME);
+    let first_paused = first
+        .tool
+        .execute(turn_context(INVOCATION_ID), json!({"task": "ship it"}))
+        .await
+        .expect("first pipeline paused");
+    let second_paused = second
+        .tool
+        .execute(second_call_context(), json!({"task": "ship it"}))
+        .await
+        .expect("second pipeline paused");
+    let first_id = only_interrupt_id(&first_paused);
+    let second_id = only_interrupt_id(&second_paused);
+    assert_ne!(first_id, second_id);
+
+    let mut events = vec![two_pipeline_call_event()];
+    events.extend(persisted(&mut first.events));
+    events.extend(persisted(&mut second.events));
+
+    let session = FixtureSession {
+        events: events.clone(),
+    };
+    let start = DirectHitlDecisionSet::from_payload(&two_decision_payload(&first_id, &second_id))
+        .expect("both decisions admitted")
+        .resolve(&session)
+        .expect("both decisions resolved");
+    let super::direct_hitl::ResolvedDirectHitlStart::Nested(decisions) = start else {
+        panic!("two pipeline pauses must resolve as a nested continuation");
+    };
+    assert_eq!(decisions.len(), 2);
+    install_nested_application_resume(
+        &events,
+        decisions,
+        &two_pipeline_presentations(),
+        &first.resume,
+    )
+    .await
+    .expect("installed both continuations");
+}
+
+fn only_interrupt_id(result: &Value) -> String {
+    nested_application_interrupt_ids(result)
+        .expect("a pause")
+        .iter()
+        .next()
+        .expect("interrupt id")
+        .clone()
+}
+
+/// One node event, the shape a child's `llm` node puts on the channel.
+fn node_event(text: &str) -> Event {
+    let mut event = Event::new("child-node");
+    event.set_content(Content::new("assistant").with_text(text));
+    event
+}
+
+/// #990 review 5 — no node event is ever attributed to the WRONG call.
+///
+/// The channel belongs to the tool, not to one call, and `drain_child` returns
+/// as soon as an interrupt arrives. Two rules keep that safe and this pins the
+/// first: whatever is already queued when a call STARTS belongs to an earlier
+/// call that paused, so it is discarded rather than stamped with this call's
+/// invocation and function-call ids. The second rule — the pause forwards what
+/// its OWN run produced before it returns — is the `try_recv` sweep on the
+/// interrupt path, and the test below proves its consequence: nothing an
+/// earlier call left behind ever reappears.
+#[tokio::test(flavor = "current_thread")]
+async fn a_node_event_queued_before_a_call_is_never_attributed_to_it() {
+    let mut harness = harness(REVIEW_PIPELINE);
+    harness
+        .node_events
+        .send("review", None, node_event("an earlier call's progress"))
+        .await
+        .expect("queued node event");
+
+    let paused = harness
+        .tool
+        .execute(context(), json!({"task": "ship it"}))
+        .await
+        .expect("paused child");
+    assert!(nested_application_interrupt_ids(&paused).is_some());
+
+    let forwarded = persisted(&mut harness.events);
+    assert!(
+        !forwarded
+            .iter()
+            .any(|event| event
+                .content()
+                .is_some_and(|content| content.parts.iter().any(|part| matches!(
+                    part,
+                    Part::Text { text } if text == "an earlier call's progress"
+                )))),
+        "a call forwarded a node event that was queued before it started"
+    );
+    // The pause itself still reached the parent — the discard is a filter on
+    // stale progress, not on the card.
+    assert!(
+        forwarded
+            .iter()
+            .any(|event| event.provider_metadata.contains_key(INTERRUPT_METADATA_KEY)),
+        "discarding stale progress must not swallow the pause"
+    );
+}
+
+/// The other half: what one call did NOT drain must not be attributed to the
+/// next call of the same tool.
+#[tokio::test(flavor = "current_thread")]
+async fn a_later_call_never_replays_an_earlier_calls_node_events() {
+    let mut harness = harness(PLAIN_PIPELINE);
+    // Queued but never claimed — the sender outlives any one call, which is
+    // exactly the hazard.
+    harness
+        .node_events
+        .send("decide", None, node_event("stale progress"))
+        .await
+        .expect("queued node event");
+    // A call that consumes it, and a SECOND call that must not see it again.
+    let _first = harness
+        .tool
+        .execute(context(), json!({"task": "ship it"}))
+        .await
+        .expect("first call");
+    let _drained = persisted(&mut harness.events);
+
+    harness
+        .node_events
+        .send("decide", None, node_event("stale progress"))
+        .await
+        .expect("queued node event");
+    // The second call starts by discarding whatever the first left behind.
+    let _second = harness
+        .tool
+        .execute(second_call_context(), json!({"task": "ship it"}))
+        .await
+        .expect("second call");
+    let forwarded = persisted(&mut harness.events);
+    assert!(
+        !forwarded
+            .iter()
+            .any(|event| event
+                .content()
+                .is_some_and(|content| content.parts.iter().any(|part| matches!(
+                    part,
+                    Part::Text { text } if text == "stale progress"
+                )))),
+        "a later call replayed an earlier call's node event under its own identity"
     );
 }

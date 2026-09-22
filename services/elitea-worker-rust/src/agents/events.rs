@@ -106,6 +106,25 @@ pub(crate) const DESCENDANT_CHECKPOINT_THREAD_KEY: &str = "elitea.descendant.che
 /// or a stored trace step; `application_pipeline` owns its encoding.
 pub(crate) const PIPELINE_TOOL_PENDING_METADATA_KEY: &str = "elitea.pipeline_tool.pending.v1";
 
+/// Remove every PRIVATE routing/state key a descendant event carries.
+///
+/// One list, used by both readers of a persisted descendant event: the
+/// projector before it hands the event to the descendant projector, and the
+/// resume before it recomputes the card's identity. They must agree exactly —
+/// `validate_graph_interrupt_event` requires `provider_metadata.len() == 1`,
+/// so a key added to one list and not the other would make every pipeline
+/// pause resolve as corrupt while the browser still saw its card.
+pub(crate) fn strip_descendant_private_metadata(event: &mut Event) {
+    for key in [
+        DESCENDANT_CONTAINER_INVOCATION_KEY,
+        DESCENDANT_PARENT_CALL_KEY,
+        DESCENDANT_CHECKPOINT_THREAD_KEY,
+        PIPELINE_TOOL_PENDING_METADATA_KEY,
+    ] {
+        event.provider_metadata.remove(key);
+    }
+}
+
 /// Stable, low-cardinality event projection failures.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AgentEventProjectionErrorCode {
@@ -1038,24 +1057,23 @@ impl AgentEventProjector {
             return Err(AgentEventProjectionError::invalid_state());
         }
         let mut child_event = event.clone();
-        child_event
-            .provider_metadata
-            .remove(DESCENDANT_CONTAINER_INVOCATION_KEY);
-        child_event
-            .provider_metadata
-            .remove(DESCENDANT_PARENT_CALL_KEY);
-        child_event
-            .provider_metadata
-            .remove(DESCENDANT_CHECKPOINT_THREAD_KEY);
-        // #973: the pipeline child's own pending checkpoint rides the PERSISTED
-        // event so the resume can re-enter the child graph, and it is private
-        // runtime state — it must not reach the browser card or the stored
-        // trace step. Removing it here is also what keeps the strict
-        // `provider_metadata.len() == 1` check in
-        // `validate_graph_interrupt_event` true for the pause below.
-        child_event
-            .provider_metadata
-            .remove(PIPELINE_TOOL_PENDING_METADATA_KEY);
+        // #973: this also drops the pipeline child's own pending checkpoint,
+        // which rides the PERSISTED event so a later turn can re-enter the
+        // child graph and is private runtime state — it must not reach the
+        // browser card or the stored trace step.
+        strip_descendant_private_metadata(&mut child_event);
+        if checkpoint_thread_id.is_some() {
+            // #973: a pipeline child's events carry a BRANCH so the parent's
+            // own next turn cannot re-read the child's monologue as its own
+            // (ADK treats an empty branch as visible to every branch). That
+            // branch is a parent-side routing fact; the child's graph
+            // interrupt is projected as the root of its own descendant
+            // projector, whose `validate_graph_interrupt_event` admits only an
+            // empty or root branch. The same clear
+            // `nested_pipeline_interrupt_child_event` performs for the
+            // pipeline-parent case, for the same reason.
+            child_event.branch.clear();
+        }
         let batch = descendant.projector.project(&child_event)?;
         overlay_batch_hierarchy(batch, std::slice::from_ref(&descendant.tier))
     }

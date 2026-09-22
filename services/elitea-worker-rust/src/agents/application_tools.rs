@@ -438,6 +438,25 @@ fn persisted_parent_route(
     }
 }
 
+/// One fresh nested-application branch beneath `parent_branch`.
+///
+/// The ordinal is per process and display-free — its only job is to make the
+/// child's branch a STRICT descendant of the parent's, which is what hides the
+/// child's events from the parent's own next turn (ADK
+/// `event_belongs_to_branch`). Shared by the agent-child and pipeline-child
+/// contexts so the two cannot drift about what a child branch looks like, and
+/// so `valid_application_branch` keeps admitting both.
+fn nested_application_branch(parent_branch: &str) -> String {
+    static NEXT_BRANCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let ordinal = NEXT_BRANCH.fetch_add(1, Ordering::Relaxed);
+    let parent_branch = if parent_branch.is_empty() {
+        APPLICATION_BRANCH_ROOT
+    } else {
+        parent_branch
+    };
+    format!("{parent_branch}.application_{ordinal}")
+}
+
 fn application_branch_depth(branch: &str) -> Option<usize> {
     let suffix = branch
         .strip_prefix(APPLICATION_BRANCH_ROOT)?
@@ -549,7 +568,10 @@ fn insert_pipeline_resume(
         .application_route()
         .ok_or_else(invalid_configuration)?
         .clone();
-    if !route.branch().is_empty() {
+    // ONE nesting level, checked on the branch the child's own events carry.
+    // A pipeline child of a nested AGENT would need the branch-walked chain
+    // `application_call_chain` performs, so the two contracts stay apart.
+    if application_branch_depth(route.branch()) != Some(1) {
         return Err(unsupported_capability());
     }
     if !submitted_interrupt_ids.insert(decision.interrupt_id().to_owned()) {
@@ -1038,8 +1060,14 @@ pub(crate) async fn materialize_application_toolset(
     elitea_context: Arc<ClaimScopedEliteaContext>,
     fallback_profile: &OrdinaryNoToolProfile,
     dependencies: ApplicationToolDependencies<'_>,
-) -> Result<Option<MaterializedApplicationToolset>, NativeAgentAssemblyError> {
-    let Some(runtime) = materialize_application_runtime(
+) -> Result<
+    (
+        Option<MaterializedApplicationToolset>,
+        Vec<SkippedApplicationChild>,
+    ),
+    NativeAgentAssemblyError,
+> {
+    let (runtime, skipped) = materialize_application_runtime(
         snapshot,
         platform,
         runtime_context,
@@ -1048,25 +1076,28 @@ pub(crate) async fn materialize_application_toolset(
         dependencies,
         None,
     )
-    .await?
-    else {
-        return Ok(None);
-    };
-    let MaterializedApplicationRuntime {
+    .await?;
+    let Some(MaterializedApplicationRuntime {
         tools,
         presentations,
         events,
         resume,
-    } = runtime;
-    Ok(Some(MaterializedApplicationToolset {
-        toolset: Arc::new(BasicToolset::new(
-            "elitea_nested_applications",
-            tools.into_iter().map(|entry| entry.tool).collect(),
-        )),
-        presentations,
-        events,
-        resume,
-    }))
+    }) = runtime
+    else {
+        return Ok((None, skipped));
+    };
+    Ok((
+        Some(MaterializedApplicationToolset {
+            toolset: Arc::new(BasicToolset::new(
+                "elitea_nested_applications",
+                tools.into_iter().map(|entry| entry.tool).collect(),
+            )),
+            presentations,
+            events,
+            resume,
+        }),
+        skipped,
+    ))
 }
 
 /// Resolve selected saved agents with one typed descendant-event runtime.
@@ -1078,14 +1109,23 @@ pub(crate) async fn materialize_application_runtime(
     fallback_profile: &OrdinaryNoToolProfile,
     mut dependencies: ApplicationToolDependencies<'_>,
     selected_aliases: Option<&BTreeSet<String>>,
-) -> Result<Option<MaterializedApplicationRuntime>, NativeAgentAssemblyError> {
+) -> Result<
+    (
+        Option<MaterializedApplicationRuntime>,
+        Vec<SkippedApplicationChild>,
+    ),
+    NativeAgentAssemblyError,
+> {
     let (event_sender, event_receiver) = mpsc::channel(APPLICATION_EVENT_CHANNEL_CAPACITY);
     let resume = ApplicationResumeCoordinator::default();
     dependencies.event_sender = Some(event_sender);
     dependencies.resume = Some(resume.clone());
     // #973: read before the dependencies are consumed below. A caller that
     // declared no conversation thread gets no pipeline children.
-    let pipeline_children = materialize_pipeline_children(
+    let MaterializedPipelineChildren {
+        tools: pipeline_children,
+        skipped: skipped_pipeline_children,
+    } = materialize_pipeline_children(
         snapshot,
         platform,
         runtime_context,
@@ -1106,8 +1146,13 @@ pub(crate) async fn materialize_application_runtime(
     )
     .await?;
     materialized.extend(pipeline_children);
+    // No TOOL means no descendant channel: `ApplicationEventStreamingAgent`
+    // selects on a receiver whose only senders live in the tools, so installing
+    // it with none would leave it selecting on a closed channel forever. The
+    // skipped list still travels — it is the whole point of the degrade — but
+    // it travels beside the runtime rather than inside it.
     if materialized.is_empty() {
-        return Ok(None);
+        return Ok((None, skipped_pipeline_children));
     }
     let mut presentations = ApplicationToolPresentationCatalog::default();
     for entry in &materialized {
@@ -1126,14 +1171,17 @@ pub(crate) async fn materialize_application_runtime(
             )
             .map_err(|_| invalid_configuration())?;
     }
-    Ok(Some(MaterializedApplicationRuntime {
-        tools: materialized,
-        presentations,
-        events: ApplicationEventReceiver {
-            inner: Arc::new(Mutex::new(Some(event_receiver))),
-        },
-        resume,
-    }))
+    Ok((
+        Some(MaterializedApplicationRuntime {
+            tools: materialized,
+            presentations,
+            events: ApplicationEventReceiver {
+                inner: Arc::new(Mutex::new(Some(event_receiver))),
+            },
+            resume,
+        }),
+        skipped_pipeline_children,
+    ))
 }
 
 /// Compile every attached saved PIPELINE child into one callable tool (#973).
@@ -1150,15 +1198,24 @@ async fn materialize_pipeline_children(
     fallback_profile: &OrdinaryNoToolProfile,
     dependencies: &ApplicationToolDependencies<'_>,
     selected_aliases: Option<&BTreeSet<String>>,
-) -> Result<Vec<MaterializedApplicationTool>, NativeAgentAssemblyError> {
+) -> Result<MaterializedPipelineChildren, NativeAgentAssemblyError> {
     let Some(conversation_thread_id) = dependencies.conversation_thread_id.clone() else {
-        return Ok(Vec::new());
+        return Ok(MaterializedPipelineChildren::default());
     };
     let references = pipeline_child_references(snapshot, selected_aliases);
     let mut tools = Vec::with_capacity(references.len());
+    let mut skipped = Vec::new();
     for reference in references {
         let (node_events_sender, node_events_receiver) = pipeline_node_event_channel();
-        let (definition, runtimes) = materialize_saved_pipeline_tool(
+        // #990 review 4: one child this worker cannot build must not fail the
+        // WHOLE turn. That was the original shape of #973 — an attached
+        // pipeline bricked every turn of the agent, including the turns that
+        // never mentioned it — and admitting the buildable ones must not
+        // reintroduce it for the unbuildable rest (an `agent` node inside the
+        // child, a stale tool snapshot, a deleted frozen version, a pause kind
+        // this parent cannot resume). The child is skipped and NAMED instead,
+        // the same honest degrade a skipped internal tool takes.
+        let built = materialize_saved_pipeline_tool(
             platform,
             runtime_context,
             Arc::clone(&elitea_context),
@@ -1171,7 +1228,25 @@ async fn materialize_pipeline_children(
             reference.identity,
             reference.project_id,
         )
-        .await?;
+        .await;
+        let (definition, runtimes) = match built {
+            Ok(built) => built,
+            Err(error) => {
+                tracing::warn!(
+                    application_id = reference.identity.0,
+                    version_id = reference.identity.1,
+                    error_code = error.code().as_str(),
+                    "an attached pipeline child could not be built and was skipped"
+                );
+                if skipped.len() < MAX_SKIPPED_APPLICATION_CHILDREN {
+                    skipped.push(SkippedApplicationChild {
+                        agent_type: PIPELINE_APPLICATION_AGENT_TYPE.to_owned(),
+                        name: bounded_skipped_label(&reference.alias),
+                    });
+                }
+                continue;
+            }
+        };
         let name = application_tool_name(reference.identity);
         let tool = Arc::new(ApplicationPipelineTool::new(
             name,
@@ -1198,7 +1273,15 @@ async fn materialize_pipeline_children(
             tool,
         });
     }
-    Ok(tools)
+    Ok(MaterializedPipelineChildren { tools, skipped })
+}
+
+/// What one snapshot's pipeline children became: the ones this parent can run,
+/// and the ones it must SAY it could not.
+#[derive(Default)]
+pub(crate) struct MaterializedPipelineChildren {
+    tools: Vec<MaterializedApplicationTool>,
+    skipped: Vec<SkippedApplicationChild>,
 }
 
 /// Resolve exact frozen saved applications without changing their graph alias.
@@ -2701,8 +2784,17 @@ impl ApplicationToolInvocationContext {
     /// in a later process. The session id IS the child graph's checkpoint
     /// thread, because ADK's `GraphAgent::run` builds its `ExecutionConfig`
     /// from `ctx.session_id()` and that thread is what the pause is bound to.
-    /// The branch stays empty: a graph interrupt event is projected as the
-    /// root of its own descendant projector, not as a nested application tier.
+    /// The branch is the SAME nested-application tier an agent child gets, and
+    /// it is load-bearing rather than cosmetic (#990 review 1): ADK's
+    /// `event_belongs_to_branch` treats an EMPTY branch as visible to every
+    /// branch, so a child event persisted without one is re-read into the
+    /// ORDINARY parent's own conversation on its next turn — the child's
+    /// monologue becomes the parent's, and an unmatched `tool_use` makes an
+    /// Anthropic-shaped provider refuse the turn outright. The root agent runs
+    /// on `APPLICATION_BRANCH_ROOT`, which does not see a deeper tier, so the
+    /// child is filtered out exactly as an agent child is. The PROJECTOR
+    /// clears it again before the descendant projector sees the event, because
+    /// a graph interrupt is projected as the root of its own projector.
     pub(super) fn for_pipeline(
         parent_ctx: Arc<dyn ToolContext>,
         agent: Arc<dyn Agent>,
@@ -2710,6 +2802,7 @@ impl ApplicationToolInvocationContext {
         invocation_id: String,
         checkpoint_thread_id: String,
     ) -> Self {
+        let branch = nested_application_branch(parent_ctx.branch());
         Self {
             session: ApplicationToolSession::new(
                 checkpoint_thread_id,
@@ -2721,7 +2814,7 @@ impl ApplicationToolInvocationContext {
             agent,
             user_content,
             invocation_id,
-            branch: String::new(),
+            branch,
             run_config: application_run_config(),
             ended: AtomicBool::new(false),
         }
@@ -2737,12 +2830,7 @@ impl ApplicationToolInvocationContext {
         static NEXT_INVOCATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let ordinal = NEXT_INVOCATION.fetch_add(1, Ordering::Relaxed);
         let invocation_id = format!("elitea-child-{ordinal}");
-        let parent_branch = if parent_ctx.branch().is_empty() {
-            APPLICATION_BRANCH_ROOT
-        } else {
-            parent_ctx.branch()
-        };
-        let branch = format!("{parent_branch}.application_{ordinal}");
+        let branch = nested_application_branch(parent_ctx.branch());
         Self {
             session: ApplicationToolSession::new(
                 invocation_id.clone(),

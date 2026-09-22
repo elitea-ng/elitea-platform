@@ -345,6 +345,10 @@ pub(crate) struct PipelineNodeEventDrain<'receiver> {
     guard: tokio::sync::MutexGuard<'receiver, Option<mpsc::Receiver<PipelineNodeEventSignal>>>,
     invocation_id: String,
     author: String,
+    /// The child's own nested-application tier. NOT empty: ADK treats an empty
+    /// branch as visible to every branch, so a node event without one is
+    /// re-read into the parent's own next turn (#990 review 1).
+    branch: String,
 }
 
 impl PipelineNodeEventReceiver {
@@ -353,6 +357,7 @@ impl PipelineNodeEventReceiver {
         &self,
         invocation_id: &str,
         author: &str,
+        branch: &str,
     ) -> adk_rust::Result<PipelineNodeEventDrain<'_>> {
         let guard = self.inner.lock().await;
         if guard.is_none() {
@@ -362,6 +367,7 @@ impl PipelineNodeEventReceiver {
             guard,
             invocation_id: invocation_id.to_owned(),
             author: author.to_owned(),
+            branch: branch.to_owned(),
         })
     }
 }
@@ -380,7 +386,7 @@ impl PipelineNodeEventDrain<'_> {
     }
 
     fn event(&self, signal: PipelineNodeEventSignal) -> adk_rust::Result<Event> {
-        pipeline_node_signal_event(signal, &self.invocation_id, &self.author, "")
+        pipeline_node_signal_event(signal, &self.invocation_id, &self.author, &self.branch)
     }
 }
 

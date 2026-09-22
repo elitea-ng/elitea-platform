@@ -30,6 +30,7 @@ import type { Theme } from '@mui/material/styles';
 import CloseIcon from '@mui/icons-material/Close';
 
 import { t } from '@/shared/i18n';
+import { toolPayloadText } from '@/shared/lib/toolPayloadText';
 
 import { useTraceStepDetail } from '../model/traceStepDetail';
 
@@ -58,13 +59,6 @@ export interface ToolModalProps {
     readonly traceStepId?: number;
     readonly traceMessageGroupId?: number;
   };
-}
-
-/** Strings pass through untouched; everything else is pretty-printed JSON (the baseline's own `input`/`output` shape). */
-function toEditorText(value: unknown): string {
-  if (value === undefined || value === null) return '';
-  if (typeof value === 'string') return value;
-  return JSON.stringify(value, null, 2);
 }
 
 /**
@@ -111,12 +105,12 @@ const styles = {
  * `INPUT` | `OUTPUT` across two read-only code editors.
  */
 export function ToolModal({ open, onClose, toolAction }: ToolModalProps): ReactNode {
-  const ownInput = toEditorText(toolAction.toolInputs);
-  const ownOutput = toEditorText(toolAction.toolOutputs ?? toolAction.content);
+  const ownInput = toolPayloadText(toolAction.toolInputs);
+  const ownOutput = toolPayloadText(toolAction.toolOutputs ?? toolAction.content);
   // Only a RESTORED pin with nothing of its own asks for anything: a live step
   // carries its body and no row identity, so this never fires for one.
   const detail = useTraceStepDetail(toolAction, open && ownInput === '' && ownOutput === '');
-  const inputText = ownInput === '' && detail !== undefined ? toEditorText(detail.toolInputs) : ownInput;
+  const inputText = ownInput === '' && detail !== undefined ? toolPayloadText(detail.toolInputs) : ownInput;
   const outputText = ownOutput === '' && detail !== undefined ? detail.output : ownOutput;
 
   return (

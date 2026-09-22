@@ -743,10 +743,11 @@ impl DirectHitlDecision {
     /// browser saw (recomputed by the projection's own binding) and against the
     /// pending checkpoint that pause persisted, and what comes out is the state
     /// the child graph re-enters with. The route is built from the event's
-    /// descendant metadata directly rather than through `application_route`,
-    /// which requires the non-empty branch an AGENT child carries; a graph
-    /// interrupt is projected as the root of its own descendant projector and
-    /// deliberately carries none.
+    /// descendant metadata directly rather than through `application_route`
+    /// because the pause identity is already proven by
+    /// `pipeline_pause_identity`; the branch is the child's own tier, which is
+    /// what hides its events from the parent's next turn and what bounds the
+    /// resume to one nesting level.
     fn resolve_pipeline_at(
         self,
         events: &[Event],
@@ -763,10 +764,16 @@ impl DirectHitlDecision {
         let event = events
             .get(index)
             .ok_or_else(|| DirectHitlError::new(DirectHitlErrorCode::CorruptSession))?;
-        // A pause that a later event already advanced past is not resumable.
-        if index + 1 != events.len() {
-            return Err(DirectHitlError::new(DirectHitlErrorCode::StaleDecision));
-        }
+        // A pause the CHILD already advanced past is not resumable — bound by
+        // the child's own invocation id, exactly as the agent-child path binds
+        // its confirmation (#990 review 2). It cannot be "the pause must be
+        // the last event": one assistant message may call another tool beside
+        // the pipeline, and ADK persists that tool's response AFTER the
+        // forwarded pause, so a last-event rule makes such a card permanently
+        // unanswerable. The child's invocation id is derived from the parent's
+        // call id, so a second gate of the SAME call still supersedes the
+        // first, which is the staleness this rule exists to catch.
+        validate_unadvanced_nested_confirmation(&events[index + 1..], event)?;
         let graph_action = pipeline_hitl_graph_action(self.action.as_str())
             .ok_or_else(|| DirectHitlError::new(DirectHitlErrorCode::StaleDecision))?;
         let decision = if graph_action == "reject" {
@@ -780,7 +787,7 @@ impl DirectHitlDecision {
         let route = DirectHitlApplicationRoute {
             container_invocation_id: pause.container_invocation_id.clone(),
             parent_call_id: pause.parent_call_id.clone(),
-            branch: String::new(),
+            branch: event.branch.clone(),
         };
         let resume =
             pause

@@ -23,6 +23,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { useGetMessageTrace, useListMessageTraces } from '@/shared/api/generated/chat/chat';
 import type { MessageTraceStep, MessageTraceStepDetail } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
+import { toolPayloadText } from '@/shared/lib/toolPayloadText';
 import { NoResultsMessage } from '@/shared/ui/NoResultsMessage';
 
 import { formatRunDuration } from '../lib/formatRunDuration';
@@ -95,15 +96,6 @@ function chunkProgress(attrs: unknown): ChunkProgress | undefined {
   const complete = progress['complete'];
   if (typeof received !== 'number' || typeof total !== 'number' || typeof complete !== 'boolean') return undefined;
   return { received, total, complete };
-}
-
-/** Pretty-prints a JSON `tool_output` rather than showing the raw single-line dump (#938/ELITEA-2805); a non-JSON output passes through as-is. */
-function formatToolOutput(toolOutput: string): string {
-  try {
-    return JSON.stringify(JSON.parse(toolOutput), null, 2);
-  } catch {
-    return toolOutput;
-  }
 }
 
 /** The step list + selected step's detail — split out of `RunHistoryTrace` purely to keep that function's cyclomatic complexity under this codebase's gate (12). */
@@ -259,7 +251,7 @@ function StepToolOutput({
         data-testid="run-history-trace-tool-output"
         sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}
       >
-        {formatToolOutput(value)}
+        {toolPayloadText(value)}
       </Typography>
     </>
   );
