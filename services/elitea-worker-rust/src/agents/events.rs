@@ -2474,10 +2474,9 @@ fn validate_context(
         .graph_checkpoint_thread_id
         .as_deref()
         .is_some_and(|value| validate_public_text(value).is_err())
-        || context
-            .continuation_prefix
-            .as_deref()
-            .is_some_and(|value| value.len() > 64 * 1_024 || value.contains('\0'))
+        || context.continuation_prefix.as_deref().is_some_and(|value| {
+            value.len() > super::request::MAX_OUTPUT_CONTINUATION_BYTES || value.contains('\0')
+        })
     {
         return Err(AgentEventProjectionError::invalid_state());
     }

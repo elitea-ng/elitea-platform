@@ -1,3 +1,6 @@
+// Match completed-answer capacity; the full encoded request has its own bound.
+pub(super) const MAX_OUTPUT_CONTINUATION_BYTES: usize = 4 * 1_024 * 1_024;
+
 use serde_json::{Map, Value};
 
 /// Selects one of the two current agent assembly semantics.

@@ -376,7 +376,7 @@ fn output_continuation_profile_requires_one_clean_explicit_partial() {
         match mutation {
             0 => request.payload.truncated_content = None,
             1 => request.payload.truncated_content = Some("invalid\0partial".to_owned()),
-            2 => request.payload.truncated_content = Some("x".repeat(64 * 1_024 + 1)),
+            2 => request.payload.truncated_content = Some("x".repeat(4 * 1_024 * 1_024 + 1)),
             3 => request.payload.hitl_resume = true,
             4 => request.payload.hitl_action = Some("approve".to_owned()),
             _ => unreachable!("bounded mutation corpus"),
@@ -1452,4 +1452,15 @@ fn supported_chat_personas_preserve_instructions_and_change_response_style() {
     let mut unknown = ordinary_request(AgentExecutionKind::Adhoc);
     unknown.payload.persona = "unknown-persona".to_owned();
     assert!(OrdinaryNoToolProfile::validate(&unknown).is_err());
+}
+
+#[test]
+fn output_continuation_accepts_large_visible_partial() {
+    for size in [65_537, 4 * 1_024 * 1_024] {
+        let mut request = ordinary_request(AgentExecutionKind::Adhoc);
+        request.payload.should_continue = true;
+        request.payload.truncated_content = Some("x".repeat(size));
+        OrdinaryNoToolProfile::validate_output_continuation(&request)
+            .expect("a supported model answer remains eligible for continuation");
+    }
 }

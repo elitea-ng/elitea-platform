@@ -1858,7 +1858,11 @@ fn checkpoint_only_pipeline_completion_keeps_result_without_new_model_step() {
 
 #[test]
 fn recovered_output_continuation_replaces_attempt_with_exact_bounded_prefix() {
-    for prefix in ["Saved answer.".to_owned(), "🦀\n\"".repeat(8000)] {
+    for prefix in [
+        "Saved answer.".to_owned(),
+        "🦀\n\"".repeat(100_000),
+        "x".repeat(4 * 1024 * 1024),
+    ] {
         let mut projector = AgentEventProjector::new(
             AgentEventProjectionContext::output_continuation_fixture(json!({}), &prefix),
         )

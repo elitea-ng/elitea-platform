@@ -20,7 +20,7 @@ import (
 const (
 	maxCurrentHITLValueBytes          = 256 * 1024
 	maxCurrentHITLDecisions           = 16
-	maxCurrentOutputContinuationBytes = 64 * 1024
+	maxCurrentOutputContinuationBytes = 4 * 1024 * 1024
 )
 
 var (

@@ -177,7 +177,7 @@ fn protobuf_boundary_rejects_noncanonical_unknown_and_oversize_inputs() {
         Err(AgentProtocolError::ResourceExhausted(_))
     ));
     assert!(matches!(
-        parse_agent_execution_input(&vec![0; 1024 * 1024 + 1]),
+        parse_agent_execution_input(&vec![0; 8 * 1024 * 1024 + 1]),
         Err(AgentProtocolError::ResourceExhausted(_))
     ));
 }
@@ -560,4 +560,32 @@ fn assert_invalid(message: AgentExecutionInputV1, kind: AgentExecutionKind, expe
         error.to_string().contains(expected),
         "expected {expected:?}, got {error}"
     );
+}
+
+#[test]
+fn large_output_continuation_survives_wire_and_rejects_oversized_text() {
+    use prost::Message;
+    for text in [
+        "x".repeat(65_537),
+        "é\n".repeat(100_000),
+        "x".repeat(4 * 1024 * 1024),
+    ] {
+        let mut message = application_message();
+        message.truncated_content = serde_json::to_vec(&text).unwrap();
+        let decoded = parse_agent_execution_input(&message.encode_to_vec()).unwrap();
+        let request = request_from(decoded, AgentExecutionKind::Application, binding()).unwrap();
+        assert_eq!(
+            request.payload.truncated_content.as_deref(),
+            Some(text.as_str())
+        );
+    }
+    for text in [
+        "x".repeat(4 * 1024 * 1024 + 1),
+        "é".repeat(2 * 1024 * 1024) + "x",
+    ] {
+        let mut message = application_message();
+        message.truncated_content = serde_json::to_vec(&text).unwrap();
+        let decoded = parse_agent_execution_input(&message.encode_to_vec()).unwrap();
+        assert!(request_from(decoded, AgentExecutionKind::Application, binding()).is_err());
+    }
 }

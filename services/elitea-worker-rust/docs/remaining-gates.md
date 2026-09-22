@@ -19,6 +19,7 @@ Current-platform code defines business behavior, not a requirement to copy its i
 - Its worker-loss follow-up now passes in chat 616: the replacement worker resumes the child and completes the waiting parent.
 - Chat 619 verifies concurrent siblings, a delegated grandchild, and completed-sibling reuse after worker loss.
 - [Pipeline LLM-node acceptance](source-mapping/pipeline-model-compaction-live-20260922.md) verifies two compactions, 24 reads, exact graph state, and stable reload in chat 621.
+- [Output continuation capacity](source-mapping/output-continuation-capacity-20260922.md) removes the obsolete 64 KiB partial-answer limit; deployed acceptance remains open.
 - Graph recovery and additional crash boundaries remain unverified.
 - The [point 3 audit](source-mapping/point3-audit-20260913.md) records the completed acceptance cases and their limits.
 - Production Rust capability registration remains disabled.

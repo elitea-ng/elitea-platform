@@ -140,7 +140,7 @@ pub fn request_from(
     )?;
     let next_input_suggestion = next_input_suggestion_policy(&message.next_input_suggestion)?;
     let toolkit_guardrails = toolkit_guardrails_policy(&message.toolkit_guardrails)?;
-    let truncated_content = optional_json_string(
+    let truncated_content = optional_continuation_text(
         &message.truncated_content,
         "the truncated agent content must be text",
     )?;
@@ -329,17 +329,27 @@ fn optional_json_object(
     }
 }
 
-fn optional_json_string(
+fn optional_continuation_text(
     raw: &[u8],
     shape_error: &'static str,
 ) -> Result<Option<String>, AgentProtocolError> {
     if raw.is_empty() {
         return Ok(None);
     }
-    match parse_json_value(raw)? {
-        Value::String(value) => Ok(Some(value)),
-        _ => Err(AgentProtocolError::InvalidInput(shape_error)),
+    if raw.len() > MAX_AGENT_INPUT_BYTES {
+        return Err(AgentProtocolError::ResourceExhausted(
+            "the continuation input exceeds the approved limit",
+        ));
     }
+    // Decode a scalar directly, without allocating arbitrary nested JSON values.
+    let value: String =
+        serde_json::from_slice(raw).map_err(|_| AgentProtocolError::InvalidInput(shape_error))?;
+    if value.len() > super::request::MAX_OUTPUT_CONTINUATION_BYTES {
+        return Err(AgentProtocolError::ResourceExhausted(
+            "the continuation text exceeds the approved limit",
+        ));
+    }
+    Ok(Some(value))
 }
 
 fn json_list(raw: &[u8], shape_error: &'static str) -> Result<Vec<Value>, AgentProtocolError> {

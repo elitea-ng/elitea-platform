@@ -14,7 +14,9 @@ use std::sync::Arc;
 use super::attachments;
 use super::context_management::ContextManagementPlan;
 use super::internal_tools::{InternalToolCatalog, InternalToolError};
-use super::request::{AgentExecutionKind, AgentExecutionRequest, UserInput};
+use super::request::{
+    AgentExecutionKind, AgentExecutionRequest, MAX_OUTPUT_CONTINUATION_BYTES, UserInput,
+};
 use super::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
 use super::variables::{self, AgentVariables};
 
@@ -538,7 +540,7 @@ fn validate_common_profile(
     let valid_truncated_content = payload
         .truncated_content
         .as_deref()
-        .is_some_and(|value| value.len() <= 64 * 1_024 && !value.contains('\0'));
+        .is_some_and(|value| value.len() <= MAX_OUTPUT_CONTINUATION_BYTES && !value.contains('\0'));
     if (!allows_session_tokens && !payload.mcp_tokens.is_empty())
         || (!allows_mcp_authority
             && (!payload.ignored_mcp_servers.is_empty()
