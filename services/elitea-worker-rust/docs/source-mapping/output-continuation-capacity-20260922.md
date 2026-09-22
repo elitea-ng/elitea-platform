@@ -166,3 +166,44 @@ Only the completed answer becomes the parent tool result and child completion re
 Verify interruption before checkpoint commit, after checkpoint commit, and after final completion before parent delivery.
 Verify both visible truncation and reasoning-only output exhaustion.
 Deployed browser acceptance and worker-loss verification remain required.
+
+## Automatic child continuation candidate
+
+`agents/model_scope_output.rs` wraps the already authorized child model through ADK's `Llm` interface.
+It intercepts output exhaustion before ADK returns the child result.
+Ordinary tool-call completion markers remain intact.
+Only accepted continuation text extends the final child answer.
+The next response must repeat a bounded exact tail before adding text.
+The validator handles UTF-8 and tails split across streamed chunks.
+A mismatched tail, missing terminal response, or no visible progress fails explicitly.
+Reasoning-only exhaustion receives a bounded request for visible output.
+
+`agents/model_checkpoint/output.rs::OutputContinuation` stores the accepted prefix and continuation round.
+`ModelCheckpointWriter` includes this optional field with the next prepared request in the existing checkpoint event.
+Ordinary checkpoints omit the field, preserving their previous serialized shape.
+Older workers reject checkpoints with this new field. Do not roll back an active continuation to an older reader.
+No table or protobuf change is required.
+The normal context preparation path still applies budgeting, compaction, and claim fencing before every request.
+Recovery restores the exact pending request and accepted prefix before provider dispatch.
+The parent receives only the completed child answer.
+
+The continuation uses the child's admitted model-turn allowance.
+It does not impose the SDK's separate four-continuation ceiling or a cumulative 64,000-output-token cap.
+The existing four-MiB completed-answer and durable-storage bounds remain enforced.
+The provider facade also retains its admitted request-count limit.
+
+The private durable-completion adapter now exposes the combined answer to scope persistence.
+This matters because ADK reconstructs streamed text after the scope's persistence hook.
+The provider's own snapshot contains only the latest segment.
+Do not repeat the full answer on the live terminal chunk to repair persistence.
+
+Component verification covers ordinary delegation, repeated continuation, exact seams, reasoning-only exhaustion, and admitted turn limits.
+A PostgreSQL test replaces the root claim after the continuation checkpoint commits.
+The old writer is rejected. The replacement calls the model once for the pending continuation.
+The ADK test returns one completed answer after multiple continuations and verifies its durable receipt content.
+All 401 agent tests pass with PostgreSQL enabled.
+
+This candidate is not yet deployed or accepted through the browser.
+Live provider seam behavior, worker loss during a continuation request, and parent delivery still require rehearsal verification.
+The current composition attaches this wrapper through `ScopedModelCheckpoint`.
+Explicitly disabled legacy context plans bypass that scope; their automatic continuation remains an open composition check.

@@ -16,6 +16,7 @@ pub(super) const CHECKPOINT_KEY: &str = "elitea.agent.recovery.v1";
 pub(super) const HISTORY_SNAPSHOT_KEY: &str = "elitea.agent.history_snapshot.v1";
 
 mod delegation;
+pub(super) mod output;
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -38,6 +39,8 @@ struct Checkpoint {
     model: Option<ModelSnapshot>,
     #[serde(default)]
     delegation: Option<adk_rust::Content>,
+    #[serde(default)]
+    output_continuation: Option<output::OutputContinuation>,
 }
 
 #[derive(Deserialize)]
@@ -131,6 +134,7 @@ pub(super) struct ModelCheckpointWriter {
     context_events: Option<super::graph::PipelineNodeEventSender>,
     application_tools: Arc<HashSet<String>>,
     replay_delegation: Option<Arc<Mutex<Option<adk_rust::Content>>>>,
+    output_continuation: Arc<Mutex<Option<output::OutputContinuation>>>,
 }
 
 impl ModelCheckpointWriter {
@@ -152,6 +156,7 @@ impl ModelCheckpointWriter {
             context_events: None,
             application_tools: Arc::default(),
             replay_delegation: None,
+            output_continuation: Arc::default(),
         }
     }
 
@@ -279,6 +284,13 @@ impl ModelCheckpointWriter {
             self.replay_delegation = Some(Arc::new(Mutex::new(Some(content))));
         } else if checkpoint.delegation.is_some() {
             return Err(invalid_checkpoint());
+        }
+        if let Some(output) = checkpoint.output_continuation {
+            output.validate()?;
+            if matches!(checkpoint.phase, Phase::DelegationPending) {
+                return Err(invalid_checkpoint());
+            }
+            self.output_continuation = Arc::new(Mutex::new(Some(output)));
         }
         let encoded = serde_json::to_vec(&value).map_err(|_| invalid_checkpoint())?;
         self.validated_digest = Some(
@@ -486,7 +498,7 @@ impl ModelCheckpointWriter {
         // ADK deliberately omits `tools` from LlmRequest serialization.
         // Preserve declarations explicitly so a recovered request retains them.
         let model = request.map(|request| json!({"request": request, "tools": request.tools}));
-        let checkpoint: Value = json!({
+        let mut checkpoint: Value = json!({
             "version": 1,
             "execution_id": self.execution_id,
             "generation": self.generation,
@@ -495,6 +507,10 @@ impl ModelCheckpointWriter {
             "phase": phase,
             "model": model,
         });
+        if let Some(output) = self.output_continuation()? {
+            checkpoint["output_continuation"] =
+                serde_json::to_value(output).map_err(|_| invalid_checkpoint())?;
+        }
         event
             .actions
             .state_delta

@@ -51,7 +51,7 @@ fn scoped_runner(
         None,
         None,
     );
-    let model = scope.clone().delegation_model(probe.clone());
+    let model = scope.clone().delegation_model(probe.clone(), 25);
     let agent = scope
         .clone()
         .bind(LlmAgentBuilder::new("parent").model(model).tool(probe))

@@ -745,3 +745,405 @@ async fn output_limited_child_does_not_receive_a_completion_receipt() {
             .is_none()
     );
 }
+
+struct OutputModel {
+    requests: std::sync::Mutex<Vec<LlmRequest>>,
+    replies: std::sync::Mutex<std::collections::VecDeque<(&'static str, adk_rust::FinishReason)>>,
+}
+impl OutputModel {
+    fn new(replies: Vec<(&'static str, adk_rust::FinishReason)>) -> Arc<Self> {
+        Arc::new(Self {
+            requests: std::sync::Mutex::new(Vec::new()),
+            replies: std::sync::Mutex::new(replies.into()),
+        })
+    }
+}
+#[async_trait]
+impl Llm for OutputModel {
+    fn name(&self) -> &'static str {
+        "output-fixture"
+    }
+    async fn generate_content(
+        &self,
+        request: LlmRequest,
+        _: bool,
+    ) -> adk_rust::Result<LlmResponseStream> {
+        self.requests.lock().unwrap().push(request);
+        let (text, finish_reason) = self
+            .replies
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("unexpected model request");
+        Ok(Box::pin(stream::iter(vec![
+            Ok(LlmResponse {
+                content: Some(Content::new("model").with_text(text)),
+                partial: true,
+                ..LlmResponse::default()
+            }),
+            Ok(LlmResponse {
+                finish_reason: Some(finish_reason),
+                turn_complete: true,
+                ..LlmResponse::default()
+            }),
+        ])))
+    }
+}
+async fn simple_request(scope: &ScopedModelCheckpoint, child: &Context) -> LlmRequest {
+    let request = LlmRequest::new("output-fixture", vec![child.input.clone()]);
+    let BeforeModelResult::Continue(request) = scope.before_model(child, request).await.unwrap()
+    else {
+        panic!("request")
+    };
+    request
+}
+async fn collect_output(mut output: LlmResponseStream) -> adk_rust::Result<String> {
+    let mut text = String::new();
+    let mut complete = false;
+    while let Some(chunk) = output.next().await {
+        let chunk = chunk?;
+        if let Some(content) = chunk.content {
+            for part in content.parts {
+                if let adk_rust::Part::Text { text: value } = part {
+                    text.push_str(&value);
+                }
+            }
+        }
+        complete |=
+            chunk.turn_complete && chunk.finish_reason == Some(adk_rust::FinishReason::Stop);
+    }
+    assert!(complete, "child must finish before returning to parent");
+    Ok(text)
+}
+
+#[tokio::test]
+async fn child_output_continues_without_repeating_the_anchor() {
+    use adk_rust::FinishReason::{MaxTokens, Stop};
+    let storage = storage(ModelScopeBackend::Local(Arc::new(
+        InMemorySessionService::new(),
+    )));
+    let child = Context::child("output-call");
+    let scope = checkpoint(&storage, Arc::new(Summary::default()));
+    let request = simple_request(&scope, &child).await;
+    let model = OutputModel::new(vec![
+        ("First part", MaxTokens),
+        ("First part and ending", Stop),
+    ]);
+    let output = scope
+        .clone()
+        .delegation_model(model.clone(), 25)
+        .generate_content(request, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        collect_output(output).await.unwrap(),
+        "First part and ending"
+    );
+    let requests = model.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        serde_json::to_string(&requests[1])
+            .unwrap()
+            .contains("First part")
+    );
+}
+
+#[tokio::test]
+async fn child_output_recovery_restores_prefix_and_exact_pending_request() {
+    use adk_rust::FinishReason::{MaxTokens, Stop};
+    let storage = storage(ModelScopeBackend::Local(Arc::new(
+        InMemorySessionService::new(),
+    )));
+    let child = Context::child("output-recovery");
+    let summary = Arc::new(Summary::default());
+    let first = checkpoint(&storage, summary.clone());
+    let request = simple_request(&first, &child).await;
+    let first_model = OutputModel::new(vec![("First part", MaxTokens)]);
+    let mut output = first
+        .clone()
+        .delegation_model(first_model.clone(), 25)
+        .generate_content(request, true)
+        .await
+        .unwrap();
+    output.next().await.unwrap().unwrap();
+    // The next item is emitted only after the continuation checkpoint commits.
+    output.next().await.unwrap().unwrap();
+    drop(output);
+    assert_eq!(first_model.requests.lock().unwrap().len(), 1);
+    let saved = stored(&first, &child)
+        .await
+        .state()
+        .get(CHECKPOINT_KEY)
+        .unwrap();
+    assert_eq!(saved["output_continuation"]["prefix"], "First part");
+    assert_eq!(saved["output_continuation"]["round"], 1);
+    let replacement = checkpoint(&storage.with_pending_model_recovery(), summary);
+    let request = simple_request(&replacement, &child).await;
+    assert_eq!(
+        serde_json::to_value(&request).unwrap(),
+        saved["model"]["request"]
+    );
+    let model = OutputModel::new(vec![("First part and ending", Stop)]);
+    let output = replacement
+        .delegation_model(model.clone(), 25)
+        .generate_content(request, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        collect_output(output).await.unwrap(),
+        "First part and ending"
+    );
+    assert_eq!(model.requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn child_output_refuses_an_unverified_continuation_seam() {
+    use adk_rust::FinishReason::{MaxTokens, Stop};
+    let storage = storage(ModelScopeBackend::Local(Arc::new(
+        InMemorySessionService::new(),
+    )));
+    let child = Context::child("invalid-output-seam");
+    let scope = checkpoint(&storage, Arc::new(Summary::default()));
+    let request = simple_request(&scope, &child).await;
+    let model = OutputModel::new(vec![("First part", MaxTokens), ("Different answer", Stop)]);
+    let output = scope
+        .clone()
+        .delegation_model(model, 25)
+        .generate_content(request, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        collect_output(output).await.unwrap_err().code,
+        "model.output_continuation_failed"
+    );
+    assert!(
+        stored(&scope, &child)
+            .await
+            .state()
+            .get(COMPLETION_KEY)
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn child_output_reasoning_only_exhaustion_retries_for_visible_answer() {
+    use adk_rust::FinishReason::{MaxTokens, Stop};
+    let storage = storage(ModelScopeBackend::Local(Arc::new(
+        InMemorySessionService::new(),
+    )));
+    let child = Context::child("reasoning-output");
+    let scope = checkpoint(&storage, Arc::new(Summary::default()));
+    let request = simple_request(&scope, &child).await;
+    let model = OutputModel::new(vec![("", MaxTokens), ("Complete answer", Stop)]);
+    let output = scope
+        .delegation_model(model, 25)
+        .generate_content(request, true)
+        .await
+        .unwrap();
+    assert_eq!(collect_output(output).await.unwrap(), "Complete answer");
+}
+
+#[tokio::test]
+async fn adk_child_returns_one_complete_answer_after_multiple_output_continuations() {
+    use adk_rust::FinishReason::{MaxTokens, Stop};
+    let sessions = Arc::new(InMemorySessionService::new());
+    let storage = storage(ModelScopeBackend::Local(sessions.clone()));
+    let child = Context::child("adk-output");
+    let scope = checkpoint(&storage, Arc::new(Summary::default()));
+    let model = OutputModel::new(vec![
+        ("First", MaxTokens),
+        ("First second", MaxTokens),
+        ("First second final", Stop),
+    ]);
+    let agent = scope
+        .clone()
+        .bind(
+            LlmAgentBuilder::new(child.agent_name())
+                .model(scope.clone().delegation_model(model.clone(), 25)),
+        )
+        .build()
+        .unwrap();
+    sessions
+        .create(CreateRequest {
+            app_name: child.app_name().into(),
+            user_id: child.user_id().into(),
+            session_id: Some(child.session_id().into()),
+            state: std::collections::HashMap::new(),
+        })
+        .await
+        .unwrap();
+    let runner = adk_rust::runner::Runner::builder()
+        .app_name(child.app_name())
+        .agent(scope.clone().wrap(Arc::new(agent)))
+        .session_service(sessions)
+        .build()
+        .unwrap();
+    let mut invocation = crate::agents::runtime::NativeAgentInvocation::new(
+        runner,
+        child.user_id().try_into().unwrap(),
+        child.session_id().try_into().unwrap(),
+        child.input.clone(),
+    )
+    .start()
+    .unwrap();
+    let mut finals = Vec::new();
+    while let Some(event) = invocation.next_event().await.unwrap() {
+        if event.is_final_response() && event.llm_response.turn_complete {
+            finals.push(event.llm_response.content.unwrap());
+        }
+    }
+    assert_eq!(finals.len(), 1);
+    let text: String = finals[0]
+        .parts
+        .iter()
+        .map(|part| match part {
+            adk_rust::Part::Text { text } => text.as_str(),
+            _ => panic!("unexpected non-text result"),
+        })
+        .collect();
+    assert_eq!(text, "First second final");
+    assert_eq!(model.requests.lock().unwrap().len(), 3);
+    let writer = scope.writer.get().unwrap();
+    let saved = writer
+        .sessions
+        .get(GetRequest {
+            app_name: writer.identity.app_name.to_string(),
+            user_id: writer.identity.user_id.to_string(),
+            session_id: writer.identity.session_id.to_string(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .unwrap();
+    let completed = scope
+        .completed_content(saved.as_ref(), child.agent_name())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(completed).unwrap(),
+        serde_json::to_value(Content::new("model").with_text("First second final")).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn postgres_child_output_continuation_survives_claim_takeover() {
+    use crate::state::postgres_session_tests::{IsolatedPostgres, authority_for, install_schema};
+    use adk_rust::FinishReason::{MaxTokens, Stop};
+    let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("skipping output continuation PostgreSQL test: set ELITEA_TEST_DATABASE_URL");
+        return;
+    };
+    let database = IsolatedPostgres::create(&url).await;
+    install_schema(&database.pool).await;
+    let root = Arc::new(
+        PostgresSessionService::activate(
+            database.pool.clone(),
+            authority_for("claim-1", 1, 1, [1; 32]),
+            SessionLimits::default(),
+            Arc::new(TestStateWriterLease::current()),
+        )
+        .await
+        .unwrap(),
+    );
+    let first_storage = storage(ModelScopeBackend::Postgres(root));
+    let child = Context::child("postgres-output");
+    let summary = Arc::new(Summary::default());
+    let first = checkpoint(&first_storage, summary.clone());
+    let request = simple_request(&first, &child).await;
+    let model = OutputModel::new(vec![("Accepted prefix", MaxTokens)]);
+    let mut output = first
+        .clone()
+        .delegation_model(model, 25)
+        .generate_content(request, true)
+        .await
+        .unwrap();
+    output.next().await.unwrap().unwrap();
+    output.next().await.unwrap().unwrap();
+    drop(output);
+    let replacement_root = Arc::new(
+        PostgresSessionService::activate(
+            database.pool.clone(),
+            authority_for("claim-2", 2, 2, [2; 32]),
+            SessionLimits::default(),
+            Arc::new(TestStateWriterLease::current()),
+        )
+        .await
+        .unwrap(),
+    );
+    let old_writer = first.writer.get().unwrap();
+    let error = old_writer
+        .checkpoint
+        .before_model(
+            old_writer.identity.clone(),
+            &old_writer.invocation_id,
+            &old_writer.agent_name,
+            LlmRequest::new("output-fixture", vec![child.input.clone()]),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "session.writer_not_current");
+    let replacement_storage =
+        storage(ModelScopeBackend::Postgres(replacement_root)).with_pending_model_recovery();
+    let replacement = checkpoint(&replacement_storage, summary);
+    let request = simple_request(&replacement, &child).await;
+    let model = OutputModel::new(vec![("Accepted prefix and complete ending", Stop)]);
+    let output = replacement
+        .delegation_model(model.clone(), 25)
+        .generate_content(request, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        collect_output(output).await.unwrap(),
+        "Accepted prefix and complete ending"
+    );
+    assert_eq!(model.requests.lock().unwrap().len(), 1);
+    database.pool.close().await;
+}
+
+#[tokio::test]
+async fn child_output_uses_admitted_turn_limit_instead_of_a_four_retry_cap() {
+    use adk_rust::FinishReason::{MaxTokens, Stop};
+    let storage = storage(ModelScopeBackend::Local(Arc::new(
+        InMemorySessionService::new(),
+    )));
+    let child = Context::child("long-output");
+    let scope = checkpoint(&storage, Arc::new(Summary::default()));
+    let request = simple_request(&scope, &child).await;
+    let model = OutputModel::new(vec![
+        ("a", MaxTokens),
+        ("ab", MaxTokens),
+        ("abc", MaxTokens),
+        ("abcd", MaxTokens),
+        ("abcde", MaxTokens),
+        ("abcdef", Stop),
+    ]);
+    let output = scope
+        .delegation_model(model.clone(), 6)
+        .generate_content(request, true)
+        .await
+        .unwrap();
+    assert_eq!(collect_output(output).await.unwrap(), "abcdef");
+    assert_eq!(model.requests.lock().unwrap().len(), 6);
+}
+
+#[tokio::test]
+async fn child_output_stops_before_exceeding_its_admitted_turn_limit() {
+    use adk_rust::FinishReason::MaxTokens;
+    let storage = storage(ModelScopeBackend::Local(Arc::new(
+        InMemorySessionService::new(),
+    )));
+    let child = Context::child("bounded-output");
+    let scope = checkpoint(&storage, Arc::new(Summary::default()));
+    let request = simple_request(&scope, &child).await;
+    let model = OutputModel::new(vec![("a", MaxTokens), ("ab", MaxTokens)]);
+    let output = scope
+        .delegation_model(model.clone(), 2)
+        .generate_content(request, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        collect_output(output).await.unwrap_err().code,
+        "model.output_continuation_failed"
+    );
+    assert_eq!(model.requests.lock().unwrap().len(), 2);
+}

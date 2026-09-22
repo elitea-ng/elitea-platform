@@ -1,8 +1,8 @@
 //! Reuse the claim-fenced session service for independent child model histories.
 
 use std::collections::HashSet;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use adk_rust::agent::LlmAgentBuilder;
 use adk_rust::futures::StreamExt as _;
@@ -19,6 +19,9 @@ use super::context_budget::ModelRequestBudget;
 use super::context_compaction::DurableContextCompaction;
 use super::context_management::ContextCompactionPlan;
 use super::model_checkpoint::ModelCheckpointWriter;
+
+#[path = "model_scope_output.rs"]
+mod output;
 
 const COMPLETION_KEY: &str = "elitea.model.completion.v1";
 
@@ -169,6 +172,7 @@ impl ModelScopeSessions {
             skip_replay_model: AtomicBool::new(replay_marker.is_some()),
             replay_marker,
             completion,
+            output_completion: Arc::default(),
             context_events,
             context_receiver,
         })
@@ -185,6 +189,7 @@ pub(super) struct ScopedModelCheckpoint {
     skip_replay_model: AtomicBool,
     replay_marker: Option<Content>,
     completion: Option<Arc<dyn super::session::DurableModelCompletion>>,
+    output_completion: Arc<Mutex<Option<String>>>,
     context_events: super::graph::PipelineNodeEventSender,
     context_receiver: super::graph::PipelineNodeEventReceiver,
 }
@@ -194,6 +199,8 @@ struct ScopedWriter {
     sessions: Arc<dyn SessionService>,
     checkpoint: ModelCheckpointWriter,
     completed: Option<Content>,
+    invocation_id: String,
+    agent_name: String,
 }
 
 impl ScopedModelCheckpoint {
@@ -277,7 +284,10 @@ impl ScopedModelCheckpoint {
                 let sessions: Arc<dyn SessionService> = Arc::new(
                     super::session::RunnerSessionService::new(
                         self.storage.sessions.open(&identity).await?,
-                        self.completion.clone(),
+                        Some(Arc::new(output::Completion {
+                            provider: self.completion.clone(),
+                            output: self.output_completion.clone(),
+                        })),
                     )
                     .with_history_scope(self.storage.definition_digest, context.agent_name()),
                 );
@@ -353,6 +363,8 @@ impl ScopedModelCheckpoint {
                     sessions,
                     checkpoint,
                     completed,
+                    invocation_id: context.invocation_id().to_owned(),
+                    agent_name: context.agent_name().to_owned(),
                 })
             })
             .await?;
@@ -414,13 +426,15 @@ impl ScopedModelCheckpoint {
         })
     }
 
-    pub(super) fn delegation_model(self: Arc<Self>, inner: Arc<dyn Llm>) -> Arc<dyn Llm> {
-        if self.storage.application_tools.is_empty() {
-            return inner;
-        }
+    pub(super) fn delegation_model(
+        self: Arc<Self>,
+        inner: Arc<dyn Llm>,
+        max_model_turns: u32,
+    ) -> Arc<dyn Llm> {
         Arc::new(ScopedDelegationModel {
             checkpoint: self,
             inner,
+            max_model_turns,
         })
     }
 
@@ -476,6 +490,7 @@ impl ScopedModelCheckpoint {
 struct ScopedDelegationModel {
     checkpoint: Arc<ScopedModelCheckpoint>,
     inner: Arc<dyn Llm>,
+    max_model_turns: u32,
 }
 
 #[async_trait]
@@ -494,12 +509,13 @@ impl Llm for ScopedDelegationModel {
         request: LlmRequest,
         stream: bool,
     ) -> adk_rust::Result<adk_rust::LlmResponseStream> {
-        let writer = self.checkpoint.writer.get().ok_or_else(invalid_scope)?;
-        writer
-            .checkpoint
-            .delegation_model(self.inner.clone())
-            .generate_content(request, stream)
-            .await
+        output::generate(
+            self.checkpoint.clone(),
+            self.inner.clone(),
+            request,
+            stream,
+            self.max_model_turns,
+        )
     }
 }
 

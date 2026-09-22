@@ -1492,7 +1492,11 @@ impl LazyNestedAgent {
             crate::toolkits::bind_authorization_model_tools(model, toolsets, &mut authorization)?;
         let model = checkpoint.as_ref().map_or_else(
             || model.clone(),
-            |checkpoint| checkpoint.clone().delegation_model(model.clone()),
+            |checkpoint| {
+                checkpoint
+                    .clone()
+                    .delegation_model(model.clone(), self.profile.step_limit())
+            },
         );
         let mut builder = LlmAgentBuilder::new(self.name.clone())
             .description(self.description.clone())
