@@ -334,12 +334,23 @@ func TestAzureAPIVersionReachesTheProvider(t *testing.T) {
 	}
 }
 
-// TestAzureWithoutAPIVersionUsesTheBifrostDefault is the control for the test
-// above and the #456 proof for api_version. The sentinel means "no value", so
-// no override is attached and bifrost applies its own default. Seeing a
-// DIFFERENT value here is what proves the sibling test measures the credential
-// rather than the harness.
-func TestAzureWithoutAPIVersionUsesTheBifrostDefault(t *testing.T) {
+// TestAzureWithoutAPIVersionSendsNone is the control for the test above and the
+// #456 proof for api_version. The sentinel means "no value", so no override is
+// attached and the request carries whatever bifrost decides on its own. Seeing
+// something OTHER than the credential's 2026-01-01 is what proves the sibling
+// test measures the credential rather than the harness.
+//
+// What bifrost decides changed in core v1.7.15. Until v1.7.3 the Responses
+// route was built as `openai/v1/responses?api-version=<preview default>`, so an
+// override-free request still carried a version. v1.7.15 attaches the parameter
+// only when one was resolved ("the versionless v1 API omits api-version by
+// default — Azure OpenAI v1"); the classic `/openai/deployments/` routes still
+// inject their default, and that path is covered by the llmproxy tests against
+// defaultAzureAPIVersion. So the control now asserts the ABSENCE of the
+// parameter. That is the stronger of the two statements: absent credential ⇒ no
+// api-version at all, present credential ⇒ exactly its value, and no way for
+// one case to borrow the other's.
+func TestAzureWithoutAPIVersionSendsNone(t *testing.T) {
 	for name, stored := range map[string]any{
 		"absent":   nil,
 		"sentinel": "-",
@@ -367,13 +378,18 @@ func TestAzureWithoutAPIVersionUsesTheBifrostDefault(t *testing.T) {
 			if bErr != nil {
 				t.Fatalf("ResponsesRequest: %+v", bErr)
 			}
-			got := upstream.lastQuery().Get("api-version")
-			if got == "" {
-				t.Fatal("no api-version was sent at all")
+			q := upstream.lastQuery()
+			if !q.Has("api-version") {
+				return // the versionless v1 route: nothing to borrow.
 			}
+			got := q.Get("api-version")
 			if got == "2026-01-01" {
 				t.Fatalf("api-version = %q; a credential with no version must not "+
 					"pick up another one", got)
+			}
+			if got == "" {
+				t.Fatal("an empty api-version was sent; the parameter must be " +
+					"omitted entirely, not sent blank")
 			}
 		})
 	}
