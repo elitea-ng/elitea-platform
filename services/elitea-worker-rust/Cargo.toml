@@ -22,9 +22,9 @@ hyper-rustls = { version = "=0.27.9", default-features = false, features = ["htt
 hyper-util = { version = "=0.1.20", default-features = false, features = ["client-legacy", "http1", "http2", "tokio"] }
 md-5 = "=0.11.0"
 minijinja = { version = "=2.24.0", default-features = false, features = ["builtins", "fuel", "serde"] }
-opentelemetry = { version = "=0.33.0", default-features = false, features = ["trace"] }
-opentelemetry-otlp = { version = "=0.33.0", default-features = false, features = ["http-proto", "reqwest-client", "reqwest-rustls", "trace"] }
-opentelemetry_sdk = { version = "=0.33.0", default-features = false, features = ["trace", "rt-tokio", "experimental_trace_batch_span_processor_with_async_runtime"] }
+opentelemetry = { version = "=0.32.0", default-features = false, features = ["trace"] }
+opentelemetry-otlp = { version = "=0.32.0", default-features = false, features = ["http-proto", "reqwest-client", "reqwest-rustls", "trace"] }
+opentelemetry_sdk = { version = "=0.32.1", default-features = false, features = ["trace", "rt-tokio", "experimental_trace_batch_span_processor_with_async_runtime"] }
 percent-encoding = "=2.3.2"
 prost = "=0.14.4"
 redis = { version = "=1.7.0", default-features = false, features = ["streams", "tokio-comp"] }
