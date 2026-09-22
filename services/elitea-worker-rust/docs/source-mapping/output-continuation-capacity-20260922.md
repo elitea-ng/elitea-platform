@@ -43,3 +43,42 @@ They cover large partial admission, byte limits, malformed text, Unicode, wire r
 The wire suite's obsolete 1 MiB assertion now uses the existing 8 MiB input contract.
 The correction requires deployment and fresh browser verification of Continue, appended output, and reload.
 This record does not claim deployed acceptance or completion of point 4.
+
+## Rehearsal deployment
+
+The corrected Main image is `sha256:9bfea8353ac09b53a6a9cb6bbd670789f826339aae3c7f86cd88cc997615c3c8`.
+The corrected Rust image is `sha256:8c11be66261e0e7e0885a13335cd5483a56316693dd28c85c1e76234358f7031`.
+Main retains its deployed source baseline with only the continuation-capacity change.
+Rust uses commit `9012713f` through the auditable release build.
+The replacement preserves environment, mounts, networks, and resource limits.
+No execution holds an active claim during either replacement.
+
+Initial synthetic chats 622 and 623 fail admission because the fixture selects temperature zero.
+The current Main admission contract requires a positive temperature.
+These requests do not execute a model or test continuation.
+The corrected fixture uses temperature 0.2 and starts chat 624.
+The real Haiku route produces an 81,472-byte partial answer and requests Continue.
+Fresh browser reload preserves that partial answer exactly.
+Continue returns HTTP 422 before another model execution.
+This is failed end-to-end acceptance, despite passing capacity component checks.
+
+Read-only database inspection finds Haiku and 16,000 output tokens on the user participant.
+The assistant participant has no saved model settings.
+`ResolveCurrentAdhocTurn` reads `target_mapping.entity_settings`, which refers to that assistant participant.
+The initial request supplies model settings explicitly; `currentContinuationInput` supplies an empty settings object.
+`currentAdhocSnapshot` then rejects the missing model name.
+The current context-policy restoration occurs later and restores only context settings and the summary model.
+The repair must recover the admitted task-model selection and reauthorize it before continuation assembly.
+Do not populate the assistant settings merely to bypass this reproduction.
+Reuse chat 624 for the corrected Continue check instead of regenerating its partial answer.
+
+The original execution is `bda319ba17e5e73ef47f6882f5e1f9da`.
+Browser evidence uses the local `elitea-continuation-live` prefix.
+The failure screenshot is inspected visually.
+
+## Separate nested-output audit
+
+Rust `application_tools.rs::drain_child` selects final child text without inspecting the output-limit finish reason.
+`model_scope.rs::successful_terminal` also lacks an explicit output-limit exclusion.
+The current SDK's nested continuation behavior requires a dedicated reproduction and durable implementation review.
+Do not treat the child compaction and crash-recovery proofs as proof of output-exhaustion continuation.
