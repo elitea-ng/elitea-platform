@@ -62,9 +62,49 @@ runs:
     - uses: docker/setup-buildx-action@v4
       id: buildx
       with:
+        # v0.37.1: v0.37.0 derives the docker-container driver's readiness
+        # wait from the builder container's StartedAt instead of the request
+        # time (docker/buildx#4050, fixed in #4058-era v0.37.1). A client
+        # request arriving late in that fixed window inherits only
+        # milliseconds of wait and fails with `DeadlineExceeded: context
+        # deadline exceeded while waiting for connections to become ready`
+        # even though the builder is healthy — exactly the failure on run
+        # 35673640989: buildkit-cache-dance's 6th sequential inject build
+        # (pip), ~16-20s after the container started, got the tail end of
+        # the window while the first 5 didn't. Pin past the bug rather than
+        # paper over it with retries.
+        version: v0.37.1
         # The builder image from the org's own mirror (mirror-buildkit.yml), by
         # digest: no anonymous Docker Hub pull per job.
         driver-opts: image=ghcr.io/elitea-ng/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+
+    # Belt-and-suspenders for the same class of race: `setup-buildx-action`
+    # already runs `buildx inspect --bootstrap` once, but the cache-dance step
+    # below makes several MORE `docker buildx build` calls against this same
+    # builder in quick succession (one per cache-mount entry), and none of
+    # them re-check readiness first. Confirm the builder answers before that
+    # step starts, with a bounded retry, so a slow-to-settle container never
+    # reaches the dance at all instead of failing partway through it.
+    - name: Wait for the builder to be ready
+      shell: bash
+      env:
+        BUILDER: ${{ steps.buildx.outputs.name }}
+      run: |
+        set -uo pipefail
+        deadline=$((SECONDS + 60))
+        attempt=0
+        until docker buildx inspect --bootstrap --builder "$BUILDER" >/tmp/buildx-inspect.log 2>&1; do
+          attempt=$((attempt + 1))
+          if [ "$SECONDS" -ge "$deadline" ]; then
+            echo "::error::builder $BUILDER did not become ready within 60s (attempt $attempt)"
+            cat /tmp/buildx-inspect.log
+            exit 1
+          fi
+          echo "builder $BUILDER not ready yet (attempt $attempt), retrying..."
+          cat /tmp/buildx-inspect.log
+          sleep 3
+        done
+        echo "builder $BUILDER is ready after $attempt retr$([ "$attempt" = 1 ] && echo y || echo ies)"
 
     # ── What a run may write, and why (the 10 GB cap) ─────────────────────
     #
