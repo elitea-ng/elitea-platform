@@ -118,6 +118,18 @@ updates:
       # client and the checkpointer are written against (0.9 broke both, #661).
       - dependency-name: sqlx
         update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      # The OpenTelemetry crates move as a set WITH tracing-opentelemetry,
+      # which is the bridge src/diagnostics.rs actually builds its layer from.
+      # tracing-opentelemetry 0.33.0 is the newest release and it requires
+      # opentelemetry ^0.32.0, so a bump of the three crates below does not
+      # fail to resolve — cargo keeps BOTH majors in the lock, compiles the
+      # bridge against 0.32 and our code against 0.33, and the build dies on
+      # `SdkTracer: Tracer is not satisfied` plus two `Context` type mismatches
+      # (#992). The set moves when tracing-opentelemetry ships a release that
+      # takes the new major, not one crate at a time.
+      - dependency-name: opentelemetry
+      - dependency-name: opentelemetry-otlp
+      - dependency-name: opentelemetry_sdk
 
   # The DeepWiki and Inventory packages carry byte-frozen copies of their
   # analysis engines (COPY_MANIFEST.json), each resolved against a pinned
