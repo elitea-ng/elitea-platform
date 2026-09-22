@@ -119,18 +119,22 @@ func bucketNamed(t *testing.T, buckets []pagedBucket, name string) pagedBucket {
 // them: newest first.
 //
 // The handler's "Today" boundary (handler.go groupByDate) is midnight in
-// time.Now().Location() at request time — not a fixed offset from "now". A
-// seed base of "now minus 2 hours" used to assume the clock was always at
-// least 2 hours past local midnight, which is false for the first two hours
-// of the day (00:00-02:00 UTC in CI, where the process runs in UTC): the
-// whole 13-minute spread of seeded rows then landed before midnight, in
-// "Yesterday", and no "Today" bucket was ever returned. Anchoring to
-// midnight itself keeps every seeded row on the bucket's own side of the
-// boundary at any hour.
+// time.Now().Location() at request time. The fixture's created_at is a plain
+// timestamp: PostgreSQL stores the seed's own wall clock and hands it back
+// tagged with the server's zone (UTC). A seed in the host's local zone is
+// shifted by the host's UTC offset on that round trip and lands in
+// "Yesterday" on any host that is not UTC; a seed in UTC round-trips to the
+// same instant.
+//
+// So anchor at local noon, the middle of the local "Today" window, expressed
+// in UTC, and spread the rows up to n minutes before it. Every row stays
+// inside "Today" at any hour, on any host zone.
 func seedTodayConversations(t *testing.T, pool *pgxpool.Pool, prefix string, n int) []int {
 	t.Helper()
 	now := time.Now()
-	base := time.Date(now.Year(), now.Month(), now.Day(), 0, 1, 0, 0, now.Location())
+	localMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	anchor := localMidnight.Add(12 * time.Hour).UTC()
+	base := anchor.Add(-time.Duration(n) * time.Minute)
 	ids := make([]int, 0, n)
 	for i := range n {
 		id := seedPinnedListingConversationAt(t, pool, fmt.Sprintf("%s_%02d", prefix, i), base.Add(time.Duration(i)*time.Minute), nil)
