@@ -168,3 +168,43 @@ It verifies one original provider selection and one final provider response.
 Batch validation rejects duplicate IDs and mixed ordinary tools.
 The PostgreSQL-enabled agent suite passes 385 tests; strict Clippy passes.
 Fresh worker-crash browser acceptance remains required.
+
+## Successful worker-loss continuation
+
+Fresh headed Playwright opens chat 616 after the rehearsal worker replacement.
+The worker image is `sha256:62314f31dc934d2c3a090801f914ecf84d2407d85fe7137d19b0e0f4ac985d56`.
+Its Rust source matches commit `8d92e672`; the build retains auditable release metadata.
+Main and UI images remain unchanged.
+The deployment preserves worker secrets, five mounts, networks, and resource limits.
+The test sends real browser requests without interception.
+
+Execution `83190c68ced8e968dbd089b778eb3807` delegates to child call `tooluse_q3O5V2d3ip5CQoKVYqhlxo`.
+After the first child compaction completes, the test kills the worker with SIGKILL and starts it again.
+The replacement worker resumes the same execution and child identity.
+
+| Observation | Estimated input tokens |
+| --- | ---: |
+| First child compaction, before | 151459 |
+| First child compaction, after | 1051 |
+| First child measurement after worker recovery | 1051 |
+| Second child compaction, before | 152123 |
+| Second child compaction, after | 1323 |
+| Parent final measurement | 780 |
+
+The execution settles as `SUCCEEDED`.
+Claim attempt 1, lease epoch 1, ends with `LEASE_EXPIRED`.
+Claim attempt 2, lease epoch 2, ends with `SETTLED`.
+The durable tool ledger contains one logical `elitea_agent_40_v_47` call and 24 `read_compaction_record` calls.
+All records have `is_error = false`.
+The final answer retains CEDAR-731, teal, archive verification, the handoff step, and the 24-read count.
+Playwright records no page errors and confirms exact answer equality after reload.
+The final screenshot shows one complete answer and no failure banner.
+
+Local evidence files use the `elitea-child-recovery-crash` prefix.
+The build manifest uses the `elitea-child-recovery-build-source` prefix.
+The read-only claim and tool-count query uses `elitea-child-recovery-check.sql`.
+
+This run closes the observed waiting-parent recovery failure from chat 615 for one saved child agent.
+It proves continued child work, repeated compaction, parent completion, and browser reload after whole-worker loss.
+It does not prove concurrent sibling recovery, deeper delegated recovery, graph recovery, or external-effect reconciliation.
+The completed-child delivery race has component and PostgreSQL evidence, but no separate deployed failure-injection case yet.

@@ -16,7 +16,8 @@ Current-platform code defines business behavior, not a requirement to copy its i
 - [Model transport timeouts](source-mapping/model-transport-timeouts-20260922.md) records the separate model-wait limits and repeated live compaction.
 - [Terminal answer snapshots](source-mapping/terminal-answer-snapshot-20260922.md) records the successful 24-call, two-compaction run and stable browser reload.
 - [Nested compaction acceptance](source-mapping/nested-compaction-live-20260922.md) verifies two child compactions, parent isolation, and stable answer reload.
-- Its worker-loss follow-up exposes a parent tool-boundary recovery gap while the child retains a resumable model checkpoint.
+- Its worker-loss follow-up now passes in chat 616: the replacement worker resumes the child and completes the waiting parent.
+- Concurrent siblings, deeper delegation, graph recovery, and deployed completed-child race injection remain unverified.
 - The [point 3 audit](source-mapping/point3-audit-20260913.md) records the completed acceptance cases and their limits.
 - Production Rust capability registration remains disabled.
 
@@ -113,7 +114,8 @@ These are part of gate 4 acceptance, not optional follow-up work after compactio
 The [checkpoint retention investigation](source-mapping/context-event-retention-20260921.md) separates active recovery markers from immutable replay evidence.
 The [prepared-request history projection](source-mapping/context-runner-history-projection-20260921.md) verifies six storage retirement cycles and browser recovery after abrupt worker loss.
 Chat 606 uses two claims and retains its answer after reload.
-Repeated live compaction, nested browser recovery, and in-process history bounds remain open.
+Later chat 616 verifies repeated child compaction and nested browser recovery after whole-worker loss.
+Concurrent sibling recovery, graph recovery, and broader in-process history bounds remain open.
 The [native history retention candidate](source-mapping/context-native-history-retention-20260921.md) passes 374 agent tests with PostgreSQL.
 It retains prepared model history and avoids accumulating partial stream events.
 Clippy and formatting checks pass. Chat 607 passes deployed compaction and fresh-browser reload.
