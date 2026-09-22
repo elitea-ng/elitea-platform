@@ -45,6 +45,7 @@ pub(super) struct ModelScopeSessions {
     generation: u64,
     definition_digest: [u8; 32],
     node_scope: Option<String>,
+    recover_pending_models: bool,
 }
 
 impl ModelScopeSessions {
@@ -60,7 +61,14 @@ impl ModelScopeSessions {
             generation,
             definition_digest,
             node_scope: None,
+            recover_pending_models: false,
         }
+    }
+
+    /// Enable restoration only after root checkpoint recovery is authorized.
+    pub(super) fn with_pending_model_recovery(mut self) -> Self {
+        self.recover_pending_models = true;
+        self
     }
 
     pub(super) fn for_node(&self, identity: &str) -> Self {
@@ -156,7 +164,7 @@ impl ScopedModelCheckpoint {
                     )
                     .with_history_scope(self.storage.definition_digest, context.agent_name()),
                 );
-                let session = match sessions
+                let (session, existing) = match sessions
                     .get(GetRequest {
                         app_name: identity.app_name.to_string(),
                         user_id: identity.user_id.to_string(),
@@ -166,7 +174,7 @@ impl ScopedModelCheckpoint {
                     })
                     .await
                 {
-                    Ok(session) => session,
+                    Ok(session) => (session, true),
                     Err(error) if error.code == "session.not_found" => {
                         let state = context.state().map_or_else(Default::default, |state| {
                             super::instruction_authority::state_for_child(
@@ -180,14 +188,15 @@ impl ScopedModelCheckpoint {
                         {
                             return Err(invalid_scope());
                         }
-                        sessions
+                        let session = sessions
                             .create(CreateRequest {
                                 app_name: identity.app_name.to_string(),
                                 user_id: identity.user_id.to_string(),
                                 session_id: Some(identity.session_id.to_string()),
                                 state,
                             })
-                            .await?
+                            .await?;
+                        (session, false)
                     }
                     Err(error) => return Err(error),
                 };
@@ -209,6 +218,14 @@ impl ScopedModelCheckpoint {
                 .with_request_budget(Some(self.budget.clone()))
                 .with_context_events(self.context_events.clone())
                 .with_context_compaction(Some(compaction));
+                let checkpoint = if existing
+                    && self.storage.recover_pending_models
+                    && self.replay_marker.is_none()
+                {
+                    checkpoint.restore(session.as_ref())?
+                } else {
+                    checkpoint
+                };
                 Ok(ScopedWriter {
                     identity: identity.clone(),
                     sessions,

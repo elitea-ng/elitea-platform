@@ -130,7 +130,9 @@ impl OrdinaryNativeAgentAssembler {
             mode: fresh_execution_mode,
             sessions,
             start,
-        } = self.prepare_runner_inputs(redeemed, tool_policy).await?;
+        } = self
+            .prepare_runner_inputs(redeemed, tool_policy, false)
+            .await?;
         match start {
             AdmittedNativeStart::Fresh
             | AdmittedNativeStart::Regenerate
@@ -177,6 +179,7 @@ impl OrdinaryNativeAgentAssembler {
         &self,
         redeemed: RedeemedOrdinaryNativeAssembly<'_>,
         tool_policy: Arc<ToolAdmissionPolicy>,
+        checkpoint_recovery: bool,
     ) -> Result<OrdinaryRunnerInputs, NativeAgentAssemblyError> {
         let RedeemedOrdinaryNativeAssembly {
             profile,
@@ -193,6 +196,11 @@ impl OrdinaryNativeAgentAssembler {
             .sessions
             .open_with_model_scopes(session_authority, state_writer_lease, &plan)
             .await?;
+        let model_scopes = if checkpoint_recovery {
+            model_scopes.with_pending_model_recovery()
+        } else {
+            model_scopes
+        };
         let context = Arc::new(claim_context);
         tracing::Span::current().record("stage", "toolsets");
         let (runtime, fresh_execution_mode) = self
@@ -431,7 +439,9 @@ impl NativeAgentAssembler for OrdinaryNativeAgentAssembler {
             mode,
             sessions,
             ..
-        } = self.prepare_runner_inputs(redeemed, tool_policy).await?;
+        } = self
+            .prepare_runner_inputs(redeemed, tool_policy, true)
+            .await?;
         super::session::assemble_ordinary_native_from_checkpoint(
             model, plan, runtime, mode, sessions,
         )

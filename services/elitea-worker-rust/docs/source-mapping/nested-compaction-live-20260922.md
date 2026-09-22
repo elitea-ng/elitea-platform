@@ -90,3 +90,22 @@ Keep pending side-effect tool boundaries closed unless their own durable receipt
 Verify completed-child delivery, interrupted-child continuation, stale writers, and unchanged sibling calls.
 Then repeat the fresh browser crash test and inspect the durable tool ledger for duplicate reads.
 Local failure evidence uses the `elitea-nested-crash` prefix.
+
+## Child request restoration foundation
+
+The first repair separates authorized crash recovery from ordinary scope loading.
+`src/agents/ordinary.rs::prepare_runner_inputs` enables pending-model restoration only for the checkpoint-recovery assembly path.
+Fresh calls, regeneration, and human-approval resumes do not enable it.
+`ModelScopeSessions` carries this mode through the existing child-scope factory.
+For an existing scope without a guard-replay marker, `ScopedModelCheckpoint::writer` restores the validated model checkpoint.
+The next model preparation uses the saved request, including its compacted history and exact tool declarations.
+It persists the replacement invocation marker before provider dispatch.
+Unfinished ordinary tool boundaries remain rejected.
+New child scopes still start normally; scope loading alone does not grant recovery permission.
+
+Two focused tests verify exact request restoration without another summary call and refusal of unfinished tools.
+The ordinary scope-reload and guard-replay tests remain unchanged.
+The PostgreSQL-enabled agent suite passes 378 tests, with no failures or ignored tests.
+Strict Clippy passes.
+This foundation does not admit the parent's unfinished delegation boundary.
+Parent/child coordination and repeated browser crash acceptance remain required before deployment acceptance.

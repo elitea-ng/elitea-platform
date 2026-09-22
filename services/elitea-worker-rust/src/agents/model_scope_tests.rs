@@ -211,6 +211,60 @@ async fn scope_reloads_summary_without_sharing_sibling_history_or_retry_permissi
 }
 
 #[tokio::test]
+async fn authorized_child_recovery_restores_exact_pending_request_without_resummarizing() {
+    let sessions = Arc::new(InMemorySessionService::new());
+    let storage = storage(ModelScopeBackend::Local(sessions));
+    let child = Context::child("parent-call-recovery");
+    let summary = Arc::new(Summary::default());
+    let first = checkpoint(&storage, summary.clone());
+    let prepared = prepare(&first, &child).await;
+    assert_eq!(summary.0.load(Ordering::SeqCst), 1);
+    let replacement = checkpoint(&storage.with_pending_model_recovery(), summary.clone());
+    let mut context = Context::child("parent-call-recovery");
+    context.invocation = "replacement-attempt";
+    let mut fresh = history();
+    fresh.contents = vec![Content::new("user").with_text("Child task")];
+    let BeforeModelResult::Continue(restored) =
+        replacement.before_model(&context, fresh).await.unwrap()
+    else {
+        panic!("restored provider request")
+    };
+    assert_eq!(
+        serde_json::to_value(restored).unwrap(),
+        serde_json::to_value(prepared).unwrap()
+    );
+    assert_eq!(summary.0.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        stored(&replacement, &context)
+            .await
+            .state()
+            .get(CHECKPOINT_KEY)
+            .unwrap()["invocation_id"],
+        "replacement-attempt"
+    );
+}
+
+#[tokio::test]
+async fn authorized_child_recovery_still_refuses_an_unfinished_tool() {
+    let storage = storage(ModelScopeBackend::Local(Arc::new(
+        InMemorySessionService::new(),
+    )));
+    let child = Context::child("parent-call-tool-boundary");
+    let summary = Arc::new(Summary::default());
+    let first = checkpoint(&storage, summary.clone());
+    prepare(&first, &child).await;
+    let writer = first.writer(&child).await.unwrap();
+    writer
+        .checkpoint
+        .before_tool(writer.identity.clone(), child.invocation_id())
+        .await
+        .unwrap();
+    let replacement = checkpoint(&storage.with_pending_model_recovery(), summary.clone());
+    assert!(replacement.before_model(&child, history()).await.is_err());
+    assert_eq!(summary.0.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn replay_control_input_stays_outside_compaction_and_pending_provider_request() {
     let storage = storage(ModelScopeBackend::Local(Arc::new(
         InMemorySessionService::new(),
