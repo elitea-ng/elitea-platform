@@ -152,6 +152,13 @@ impl Seam {
         let remaining = &self.anchor.as_bytes()[self.matched..];
         let count = remaining.len().min(text.len());
         if remaining[..count] != text.as_bytes()[..count] {
+            tracing::warn!(
+                event = "nested_output_anchor_mismatch",
+                matched_bytes = self.matched,
+                anchor_bytes = self.anchor.len(),
+                incoming_bytes = text.len(),
+                "The child continuation did not preserve its accepted boundary"
+            );
             return Err(exhausted());
         }
         self.matched += count;

@@ -237,3 +237,20 @@ All 47 provider-facade tests pass after the transport correction.
 The suite also corrects two stale summary tests that assumed the retired two-call summary ceiling.
 They now verify three independent summaries without consuming the ordinary chat model allowance.
 Strict Clippy passes for the transport correction. Browser rerun remains pending.
+
+## Boundary verification follow-up
+
+Commit `4772fa43` deploys as worker image `sha256:e1848e8f9380d1fe4d5afb78733e28106ff4a7bdd13813d6ab1b9b83906e3671`.
+Fresh headed Playwright runs chat 628 with the same saved parent and child.
+Execution `23c7cacc903b8dee27679ab1c3fb25d9` passes the previous provider snapshot failure.
+Its child persists continuation round two and accepted records through 81.
+The subsequent response fails with `model.output_continuation_failed`.
+No final child receipt or successful parent answer is claimed.
+The rejected provider text is not persisted, so its exact boundary mismatch remains unconfirmed.
+
+The SDK reference uses an explicit anchor-copy instruction and bounded boundary repair.
+The Rust instruction now states that an anchor can start or end inside a word.
+It requires exact copying before any new text.
+Mismatch diagnostics report byte counts, never provider text or the accepted anchor.
+Anchor derivation and checkpoint interpretation remain unchanged for in-flight recovery.
+Browser acceptance, boundary repair, and interruption testing remain open.

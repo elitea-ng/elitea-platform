@@ -44,7 +44,7 @@ impl OutputContinuation {
             "The previous response exhausted its output allowance before producing visible text. Complete the original task now. Return the answer without referring to this retry.".to_owned()
         } else {
             format!(
-                "The answer reached its output allowance. Finish the original task without restarting it. Begin with this exact JSON-encoded tail, decoded as text, then continue after its final character. Preserve whitespace. Do not add a preamble or a new tool call. Tail: {}",
+                "The previous answer reached its output allowance. Complete only the missing portion of the original task. Return only the exact anchor below followed immediately by new text. Copy the anchor character-for-character, decoded from JSON, before continuing. The anchor can start or end inside a word; do not complete, skip, revise, or explain the anchor. Preserve whitespace. Do not add a preamble or a new tool call. Exact anchor: {}",
                 serde_json::json!(self.anchor())
             )
         };
