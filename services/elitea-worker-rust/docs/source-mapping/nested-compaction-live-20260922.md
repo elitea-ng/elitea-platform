@@ -134,3 +134,37 @@ The PostgreSQL test also checks completion delivery after writer takeover and re
 The PostgreSQL-enabled agent suite passes 383 tests, with no failures or ignored tests.
 Strict Clippy, formatting, and whitespace checks pass.
 These component checks do not close the parent delegation recovery boundary or replace the browser crash gate.
+
+## Waiting parent recovery
+
+`src/agents/model_checkpoint/delegation.rs` adds a private `delegation_pending` checkpoint phase.
+Before saved-agent dispatch, it stores the exact parent request and the model's complete call batch.
+The batch retains call IDs, arguments, and tool declarations.
+Only batches containing admitted saved-agent calls receive this recovery permission.
+Mixed ordinary-tool batches keep the existing unfinished-tool boundary.
+Pipeline delegation still requires its graph recovery path.
+
+`src/agents/events.rs::agent_tool_names` obtains eligible tools from the runtime application catalog.
+`src/agents/session.rs::build_runtime_agent` binds these names after fresh runtime authorization.
+Recovery validates the stored execution, generation, definition, event marker, tool schemas, and current catalog membership.
+It writes the replacement delegation marker before dispatch.
+A one-shot model adapter emits the original call batch through normal ADK tool execution.
+The adapter follows the existing direct-approval replay pattern in `src/agents/direct_hitl.rs`.
+It does not ask the provider to select another child.
+ADK retains the restored parent request before it processes the child result.
+
+The child call ID selects the same child model scope.
+An unfinished child restores its model request; a completed child returns its validated completion receipt.
+The parent requests its final answer after the child result returns.
+The existing claim fence controls these writes; Main does not own the checkpoints.
+
+The current-platform reference remains `projects/elitea-sdk/elitea_sdk/runtime/tools/application.py`.
+Its delegated task and final-result contract remains the behavioral reference.
+Worker-loss continuation extends that behavior using the existing ADK and PostgreSQL boundaries.
+
+An ADK Runner test interrupts a waiting parent and checks the exact replayed call ID and arguments.
+It rejects removed agent bindings and changed tool declarations before resumed dispatch.
+It verifies one original provider selection and one final provider response.
+Batch validation rejects duplicate IDs and mixed ordinary tools.
+The PostgreSQL-enabled agent suite passes 385 tests; strict Clippy passes.
+Fresh worker-crash browser acceptance remains required.

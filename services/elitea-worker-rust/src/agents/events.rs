@@ -327,6 +327,11 @@ impl ApplicationToolPresentation {
 }
 
 impl ApplicationToolPresentationCatalog {
+    pub(super) fn agent_tool_names(&self) -> impl Iterator<Item = &str> {
+        self.by_tool_name
+            .iter()
+            .filter_map(|(name, entry)| (entry.agent_type == "agent").then_some(name.as_str()))
+    }
     pub(crate) fn insert(
         &mut self,
         tool_name: String,

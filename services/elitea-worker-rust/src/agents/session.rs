@@ -1851,6 +1851,13 @@ fn build_runtime_agent(
         &mut delegated_authorization,
     )
     .map_err(|_| invalid_configuration())?;
+    let checkpoint = checkpoint.map(|checkpoint| {
+        checkpoint.with_application_tools(application_runtime.presentations.agent_tool_names())
+    });
+    let model = checkpoint.as_ref().map_or_else(
+        || model.clone(),
+        |checkpoint| checkpoint.delegation_model(model.clone()),
+    );
     let mut builder = LlmAgentBuilder::new(ROOT_AGENT_NAME)
         .model(model)
         .generate_content_config(generation_config)

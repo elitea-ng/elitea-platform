@@ -1,6 +1,6 @@
 //! Persist the model/tool boundary before ADK starts the corresponding operation.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use adk_rust::agent::LlmAgentBuilder;
@@ -15,12 +15,15 @@ use serde_json::{Value, json};
 pub(super) const CHECKPOINT_KEY: &str = "elitea.agent.recovery.v1";
 pub(super) const HISTORY_SNAPSHOT_KEY: &str = "elitea.agent.history_snapshot.v1";
 
+mod delegation;
+
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum Phase {
     ContextPending,
     ModelPending,
     ToolMayHaveStarted,
+    DelegationPending,
 }
 
 #[derive(Deserialize)]
@@ -33,6 +36,8 @@ struct Checkpoint {
     invocation_id: String,
     phase: Phase,
     model: Option<ModelSnapshot>,
+    #[serde(default)]
+    delegation: Option<adk_rust::Content>,
 }
 
 #[derive(Deserialize)]
@@ -124,6 +129,8 @@ pub(super) struct ModelCheckpointWriter {
     request_budget: Option<Arc<dyn super::context_budget::ModelRequestBudget>>,
     context_compaction: Option<Arc<super::context_compaction::DurableContextCompaction>>,
     context_events: Option<super::graph::PipelineNodeEventSender>,
+    application_tools: Arc<HashSet<String>>,
+    replay_delegation: Option<Arc<Mutex<Option<adk_rust::Content>>>>,
 }
 
 impl ModelCheckpointWriter {
@@ -143,6 +150,8 @@ impl ModelCheckpointWriter {
             request_budget: None,
             context_compaction: None,
             context_events: None,
+            application_tools: Arc::default(),
+            replay_delegation: None,
         }
     }
 
@@ -229,7 +238,7 @@ impl ModelCheckpointWriter {
         }
         if !matches!(
             checkpoint.phase,
-            Phase::ModelPending | Phase::ContextPending
+            Phase::ModelPending | Phase::ContextPending | Phase::DelegationPending
         ) || matches!(checkpoint.phase, Phase::ContextPending) && !allow_context_preparation
         {
             return Err(invalid_checkpoint());
@@ -245,21 +254,30 @@ impl ModelCheckpointWriter {
                     && event.actions.state_delta.get(CHECKPOINT_KEY) == Some(&value)
             })
             .ok_or_else(invalid_checkpoint)?;
-        if events[marker + 1..].iter().any(|event| {
-            event.invocation_id == checkpoint.invocation_id
-                && !event.llm_response.partial
-                && event
-                    .llm_response
-                    .content
-                    .as_ref()
-                    .is_some_and(|content| !content.parts.is_empty())
-        }) {
+        if !matches!(checkpoint.phase, Phase::DelegationPending)
+            && events[marker + 1..].iter().any(|event| {
+                event.invocation_id == checkpoint.invocation_id
+                    && !event.llm_response.partial
+                    && event
+                        .llm_response
+                        .content
+                        .as_ref()
+                        .is_some_and(|content| !content.parts.is_empty())
+            })
+        {
             return Err(invalid_checkpoint());
         }
         let Some(mut model) = checkpoint.model else {
             return Err(invalid_checkpoint());
         };
         if model.request.contents.is_empty() {
+            return Err(invalid_checkpoint());
+        }
+        if matches!(checkpoint.phase, Phase::DelegationPending) {
+            let content = checkpoint.delegation.ok_or_else(invalid_checkpoint)?;
+            delegation::validate_calls(&content, |name| model.tools.contains_key(name))?;
+            self.replay_delegation = Some(Arc::new(Mutex::new(Some(content))));
+        } else if checkpoint.delegation.is_some() {
             return Err(invalid_checkpoint());
         }
         let encoded = serde_json::to_vec(&value).map_err(|_| invalid_checkpoint())?;
@@ -332,7 +350,9 @@ impl ModelCheckpointWriter {
     pub(super) fn bind(self, builder: LlmAgentBuilder) -> LlmAgentBuilder {
         let model = self.clone();
         builder
-            .retain_prepared_history(self.context_compaction.is_some())
+            .retain_prepared_history(
+                self.context_compaction.is_some() || self.replay_delegation.is_some(),
+            )
             .before_model_callback(Box::new(move |context, request| {
                 let writer = model.clone();
                 Box::pin(async move {
@@ -349,9 +369,7 @@ impl ModelCheckpointWriter {
             .before_tool_callback(Box::new(move |context| {
                 let writer = self.clone();
                 Box::pin(async move {
-                    writer
-                        .before_tool(context.try_identity()?, context.invocation_id())
-                        .await?;
+                    writer.before_application_or_tool(context.as_ref()).await?;
                     Ok(None)
                 })
             }))
@@ -365,6 +383,12 @@ impl ModelCheckpointWriter {
         request: LlmRequest,
     ) -> adk_rust::Result<BeforeModelResult> {
         let request = self.prepare_request(request)?;
+        if let Some(content) = self.pending_delegation()? {
+            delegation::validate_calls(&content, |name| self.application_tools.contains(name))?;
+            self.persist_delegation(identity, invocation_id, &request, &content)
+                .await?;
+            return Ok(BeforeModelResult::Continue(request));
+        }
         let mut compacted = false;
         let (request, record) = if let Some(compaction) = &self.context_compaction {
             let request = super::replay_history::model_history(request)?;
