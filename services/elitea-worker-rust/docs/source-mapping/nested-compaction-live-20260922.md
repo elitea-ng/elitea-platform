@@ -57,3 +57,36 @@ An earlier chat 613 selected the child directly and did not test nesting.
 It is not counted as nested acceptance.
 This run proves one nested child, repeated compaction, parent isolation, and stable final-answer reload.
 It does not prove sibling concurrency, nested worker replacement, pipeline-model recovery, or a million-token provider route.
+
+## Worker-loss follow-up
+
+Fresh chat 615 tests worker loss after the first completed child compaction.
+Execution `93f16e11a8683e19b5cfca6aa9d36de7` uses the same saved parent and child.
+The browser observes child input fall from 151,482 to 1,077 estimated tokens.
+The test sends SIGKILL to the rehearsal worker and starts that container again.
+Redis redelivers the original command after the recovery interval.
+The replacement worker emits `execution.failed` with code `INTERNAL`; the browser displays that failure.
+This is a failed recovery test, not successful continuation.
+
+Read-only inspection of the agentstate database confirms both persisted boundaries:
+
+- The parent checkpoint phase is `tool_may_have_started`.
+- The child model-scope checkpoint phase is `model_pending`.
+- Both sessions retain their compaction-state key.
+
+`src/agents/model_checkpoint.rs::before_tool` writes the parent boundary before delegation.
+`restore_validated` admits only `ModelPending` or admitted `ContextPending` states.
+`src/agents/session.rs::inspect_model_checkpoint` therefore rejects the parent before runtime reconstruction.
+`src/execution/checkpoint_recovery.rs` converts that inspection failure into terminal output.
+The worker log records `agent_delivery.authorization_terminal_retired` for the redelivery.
+This corrects the initial suspicion that Main terminated the execution before worker recovery.
+
+The repair requires coordinated parent and child recovery evidence.
+Persist the exact delegated call identity and its child model scope before child execution.
+On recovery, validate that evidence under the replacement root claim and current authorization.
+Resume the existing child checkpoint, then deliver its result to the waiting parent call.
+Do not restart the child from its original task or replay arbitrary unfinished tools.
+Keep pending side-effect tool boundaries closed unless their own durable receipts permit recovery.
+Verify completed-child delivery, interrupted-child continuation, stale writers, and unchanged sibling calls.
+Then repeat the fresh browser crash test and inspect the durable tool ledger for duplicate reads.
+Local failure evidence uses the `elitea-nested-crash` prefix.

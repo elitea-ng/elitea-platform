@@ -16,6 +16,7 @@ Current-platform code defines business behavior, not a requirement to copy its i
 - [Model transport timeouts](source-mapping/model-transport-timeouts-20260922.md) records the separate model-wait limits and repeated live compaction.
 - [Terminal answer snapshots](source-mapping/terminal-answer-snapshot-20260922.md) records the successful 24-call, two-compaction run and stable browser reload.
 - [Nested compaction acceptance](source-mapping/nested-compaction-live-20260922.md) verifies two child compactions, parent isolation, and stable answer reload.
+- Its worker-loss follow-up exposes a parent tool-boundary recovery gap while the child retains a resumable model checkpoint.
 - The [point 3 audit](source-mapping/point3-audit-20260913.md) records the completed acceptance cases and their limits.
 - Production Rust capability registration remains disabled.
 
