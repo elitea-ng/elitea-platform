@@ -48,17 +48,17 @@ export const ForkRequest = zod
     applications: zod
       .array(ForkApplicationInput)
       .describe(
-        "Required. A body with no `applications` key, or one whose value is not an array, is refused with 400 (internal\/api\/v2\/eliteacore\/handler.go:2970-2973). An array that IS present and IS empty takes the fast path and answers 201 with the empty envelope (:2975-2980).\n",
+        "Required. A body with no `applications` key, or one whose value is not an array, is refused with 400 (internal/api/v2/eliteacore/handler.go:2970-2973). An array that IS present and IS empty takes the fast path and answers 201 with the empty envelope (:2975-2980).\n",
       ),
     skills: zod
       .array(SkillForkInput)
       .optional()
       .describe(
-        "The content of every skill the forked versions are attached to. The fork reads this array and not the source project, because a skill id belongs to the project the file came from and `entity_skill_mapping.skill_id` has a foreign key into the SAME schema's `skills` table (internal\/api\/v2\/eliteacore\/handler.go:3042-3045). The key is optional. A version that references a skill while the body carries no `skills` key at all is reported on `errors.skills`, and the answer is then 207 (:3306-3315).\n",
+        "The content of every skill the forked versions are attached to. The fork reads this array and not the source project, because a skill id belongs to the project the file came from and `entity_skill_mapping.skill_id` has a foreign key into the SAME schema's `skills` table (internal/api/v2/eliteacore/handler.go:3042-3045). The key is optional. A version that references a skill while the body carries no `skills` key at all is reported on `errors.skills`, and the answer is then 207 (:3306-3315).\n",
       ),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go:2960-3045 — the body is decoded into map[string]any and only `applications` and `skills` are read.\n",
+    "NOTE(W2): internal/api/v2/eliteacore/handler.go:2960-3045 — the body is decoded into map[string]any and only `applications` and `skills` are read.\n",
   );
 
 export type ForkRequest = zod.input<typeof ForkRequest>;

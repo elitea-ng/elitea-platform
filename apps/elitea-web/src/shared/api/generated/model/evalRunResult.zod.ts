@@ -55,7 +55,7 @@ export const EvalRunResult = zod
       .record(zod.string(), zod.unknown())
       .optional()
       .describe(
-        '`{score, reason}` on success; `{error, raw}` when the judge did not answer in schema. The RAW model text is kept because a judge failure is a prompt problem, and a prompt problem cannot be diagnosed from the word \"error\".\n',
+        '`{score, reason}` on success; `{error, raw}` when the judge did not answer in schema. The RAW model text is kept because a judge failure is a prompt problem, and a prompt problem cannot be diagnosed from the word "error".\n',
       ),
     evidence: zod
       .record(zod.string(), zod.unknown())

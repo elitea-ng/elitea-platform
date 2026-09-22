@@ -48,7 +48,7 @@ export const PipelineScheduleUpdate = zod
     input: zod.string().optional(),
   })
   .describe(
-    "The accepted schedule write (schedules.go scheduleBody, :126-130). There is deliberately no `author_id` and no `last_\*` field: the author is the authenticated caller, and the outcome columns belong to the runner.\n",
+    "The accepted schedule write (schedules.go scheduleBody, :126-130). There is deliberately no `author_id` and no `last_*` field: the author is the authenticated caller, and the outcome columns belong to the runner.\n",
   );
 
 export type PipelineScheduleUpdate = zod.input<typeof PipelineScheduleUpdate>;

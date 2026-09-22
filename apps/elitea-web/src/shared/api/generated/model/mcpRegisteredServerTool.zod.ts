@@ -50,7 +50,7 @@ export const McpRegisteredServerTool = zod
       .describe("JSON Schema of the tool's arguments."),
   })
   .describe(
-    "NOTE(W2): internal\/mcpregistry\/registry.go:41-45 — the Tool struct, as `tools_list` serialises it. `inputSchema` keeps pylon's camelCase spelling. That spelling is the wire contract the Python SDK reads (elitea_sdk toolkits\/tools.py, _init_single_mcp_tool), so do not rename it.\n",
+    "NOTE(W2): internal/mcpregistry/registry.go:41-45 — the Tool struct, as `tools_list` serialises it. `inputSchema` keeps pylon's camelCase spelling. That spelling is the wire contract the Python SDK reads (elitea_sdk toolkits/tools.py, _init_single_mcp_tool), so do not rename it.\n",
   );
 
 export type McpRegisteredServerTool = zod.input<typeof McpRegisteredServerTool>;

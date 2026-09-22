@@ -48,7 +48,7 @@ export const PermissionMatrix = zod
     rows: zod.array(PermissionMatrixRow),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/admin\/roles.go:148-152. `total` counts the permission CATALOGUE; this endpoint is never paginated.\n",
+    "NOTE(W2): internal/api/v2/admin/roles.go:148-152. `total` counts the permission CATALOGUE; this endpoint is never paginated.\n",
   );
 
 export type PermissionMatrix = zod.input<typeof PermissionMatrix>;

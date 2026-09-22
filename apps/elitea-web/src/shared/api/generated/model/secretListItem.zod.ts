@@ -52,11 +52,11 @@ export const SecretListItem = zod
     is_default: zod
       .boolean()
       .describe(
-        "BUG-FOR-BUG: always false from the Go handler. pylon sets it from elitea_core's `default_secret_keys` config (legacy\/plugins\/secrets\/api\/v2\/secrets.py), which elitea-main does not read.\n",
+        "BUG-FOR-BUG: always false from the Go handler. pylon sets it from elitea_core's `default_secret_keys` config (legacy/plugins/secrets/api/v2/secrets.py), which elitea-main does not read.\n",
       ),
   })
   .describe(
-    "NOTE(issue 151): internal\/api\/v2\/secrets\/handler.go's SecretListItem — the list element AND the body returned by create and update. It NEVER carries a value; the plaintext is reachable only through the single-secret GET.\n",
+    "NOTE(issue 151): internal/api/v2/secrets/handler.go's SecretListItem — the list element AND the body returned by create and update. It NEVER carries a value; the plaintext is reachable only through the single-secret GET.\n",
   );
 
 export type SecretListItem = zod.input<typeof SecretListItem>;

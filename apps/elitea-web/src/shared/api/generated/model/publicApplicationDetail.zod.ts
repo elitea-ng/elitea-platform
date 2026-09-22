@@ -50,7 +50,7 @@ export const PublicApplicationDetail = zod
     version_details: ApplicationVersionDetail,
   })
   .describe(
-    "NOTE(W2): publicApplicationDetail response, internal\/api\/v2\/eliteacore\/handler.go:1477-1483.\n",
+    "NOTE(W2): publicApplicationDetail response, internal/api/v2/eliteacore/handler.go:1477-1483.\n",
   );
 
 export type PublicApplicationDetail = zod.input<typeof PublicApplicationDetail>;

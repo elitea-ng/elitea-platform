@@ -62,7 +62,7 @@ export const BulkInviteSummary = zod
     failed: zod.int(),
     results: zod.array(BulkInviteResult),
   })
-  .describe("NOTE(W2): internal\/api\/v2\/admin\/invites_bulk.go:135-143.\n");
+  .describe("NOTE(W2): internal/api/v2/admin/invites_bulk.go:135-143.\n");
 
 export type BulkInviteSummary = zod.input<typeof BulkInviteSummary>;
 export type BulkInviteSummaryOutput = zod.output<typeof BulkInviteSummary>;

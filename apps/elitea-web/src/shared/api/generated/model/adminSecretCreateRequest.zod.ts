@@ -46,7 +46,7 @@ export const AdminSecretCreateRequest = zod
     secret: zod.string(),
   })
   .describe(
-    "NOTE(issue 151): internal\/api\/v2\/secrets\/admin.go:227-235 — the body of the administration-mode create. The name comes from the path.\n",
+    "NOTE(issue 151): internal/api/v2/secrets/admin.go:227-235 — the body of the administration-mode create. The name comes from the path.\n",
   );
 
 export type AdminSecretCreateRequest = zod.input<

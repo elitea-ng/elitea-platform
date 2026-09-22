@@ -48,7 +48,7 @@ export const EvalDatasetList = zod
     total: zod.int(),
   })
   .describe(
-    "The `{rows,total}` envelope every \/elitea_core project listing uses.\n",
+    "The `{rows,total}` envelope every /elitea_core project listing uses.\n",
   );
 
 export type EvalDatasetList = zod.input<typeof EvalDatasetList>;

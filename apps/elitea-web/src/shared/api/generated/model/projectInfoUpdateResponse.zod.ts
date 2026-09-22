@@ -46,7 +46,7 @@ export const ProjectInfoUpdateResponse = zod
   .object({
     ok: zod
       .boolean()
-      .describe("Always true on a 200. A failure answers 4xx\/5xx instead."),
+      .describe("Always true on a 200. A failure answers 4xx/5xx instead."),
     name: zod
       .string()
       .optional()
@@ -56,7 +56,7 @@ export const ProjectInfoUpdateResponse = zod
     ),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go, UpdateProjectInfo — the response echoes what was written and nothing else.\n",
+    "NOTE(W2): internal/api/v2/eliteacore/handler.go, UpdateProjectInfo — the response echoes what was written and nothing else.\n",
   );
 
 export type ProjectInfoUpdateResponse = zod.input<

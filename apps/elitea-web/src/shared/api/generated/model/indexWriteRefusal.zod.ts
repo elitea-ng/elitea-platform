@@ -51,7 +51,7 @@ export const IndexWriteRefusal = zod
       ),
   })
   .describe(
-    'NOTE(W2): the refusal half of the same `{\"ok\": ..., \"error\": ...}` envelope IndexWriteAck describes — the shape the index write paths answer 4xx\/5xx with.\n',
+    'NOTE(W2): the refusal half of the same `{"ok": ..., "error": ...}` envelope IndexWriteAck describes — the shape the index write paths answer 4xx/5xx with.\n',
   );
 
 export type IndexWriteRefusal = zod.input<typeof IndexWriteRefusal>;

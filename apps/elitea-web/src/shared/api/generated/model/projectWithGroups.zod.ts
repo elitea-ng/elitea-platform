@@ -54,7 +54,7 @@ export const ProjectWithGroups = zod
     groups: zod.array(ProjectGroup),
   })
   .describe(
-    "NOTE(W2): two producers write this body. The three group writes return it from internal\/api\/v2\/projects\/groups.go:295-330. The project listing returns an array of it from internal\/api\/v2\/projects\/handler.go:134-143 (the Project struct) assembled at :226-251. Both mirror the reference's ProjectListModel, so a client re-renders the group chips without re-fetching. The struct has no `status`, `description` or `role` field: handler_test.go:145-150 pins the eight-key golden body and fails on a non-baseline key.\n",
+    "NOTE(W2): two producers write this body. The three group writes return it from internal/api/v2/projects/groups.go:295-330. The project listing returns an array of it from internal/api/v2/projects/handler.go:134-143 (the Project struct) assembled at :226-251. Both mirror the reference's ProjectListModel, so a client re-renders the group chips without re-fetching. The struct has no `status`, `description` or `role` field: handler_test.go:145-150 pins the eight-key golden body and fails on a non-baseline key.\n",
   );
 
 export type ProjectWithGroups = zod.input<typeof ProjectWithGroups>;

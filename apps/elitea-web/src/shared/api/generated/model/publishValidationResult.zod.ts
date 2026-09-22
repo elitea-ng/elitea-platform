@@ -71,7 +71,7 @@ export const PublishValidationResult = zod
       ),
   })
   .describe(
-    "NOTE(W2): built by runPublishValidation (internal\/api\/v2\/eliteacore\/handler.go:1155-1182). validateForPublish's own 200\/422 always carries status..validation_token; the publishApplication 422 short-circuits carry only `issues`. No field is therefore marked required.\n",
+    "NOTE(W2): built by runPublishValidation (internal/api/v2/eliteacore/handler.go:1155-1182). validateForPublish's own 200/422 always carries status..validation_token; the publishApplication 422 short-circuits carry only `issues`. No field is therefore marked required.\n",
   );
 
 export type PublishValidationResult = zod.input<typeof PublishValidationResult>;

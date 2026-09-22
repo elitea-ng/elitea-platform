@@ -67,7 +67,7 @@ export const Skill = zod
       .array(SkillVersion)
       .optional()
       .describe(
-        "EVERY version of the skill (issue 874), `base` first — not just `base`, as before issue 874. getSkill\/getSkillVersion both carry the full set; there is no separate list-versions endpoint.",
+        "EVERY version of the skill (issue 874), `base` first — not just `base`, as before issue 874. getSkill/getSkillVersion both carry the full set; there is no separate list-versions endpoint.",
       ),
     version_details: SkillVersion.optional().describe(
       "The CURRENT version (see `instructions`), not always versions[0].",
@@ -82,7 +82,7 @@ export const Skill = zod
     updated_at: zod.iso.datetime({ offset: true }),
   })
   .describe(
-    'NOTE(W2): `config` is never populated in responses, `is_default` (the boolean property, unrelated to `default_version_id`) is always false, `type` is always the literal \"skill\", and `updated_at` is always the zero sentinel \"0001-01-01T00:00:00Z\" — the skills table itself has no updated_at\/is_default columns (migrations\/001_initial.sql). instructions\/tags\/versions\/ version_details\/default_version_id, in contrast, DO round-trip.\n',
+    'NOTE(W2): `config` is never populated in responses, `is_default` (the boolean property, unrelated to `default_version_id`) is always false, `type` is always the literal "skill", and `updated_at` is always the zero sentinel "0001-01-01T00:00:00Z" — the skills table itself has no updated_at/is_default columns (migrations/001_initial.sql). instructions/tags/versions/ version_details/default_version_id, in contrast, DO round-trip.\n',
   );
 
 export type Skill = zod.input<typeof Skill>;

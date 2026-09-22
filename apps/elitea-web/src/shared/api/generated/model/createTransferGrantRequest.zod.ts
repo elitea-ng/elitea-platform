@@ -46,13 +46,13 @@ export const CreateTransferGrantRequest = zod
     method: zod
       .enum(["PUT"])
       .describe(
-        'Upload only. \"GET\" used to be accepted and was removed: a grant derives its storage key from a newly generated grant id and no field names an existing object, so a download grant always presigned an empty key and answered 404. Download an object with GET \/artifacts\/objects\/{projectID}\/{bucket}\/{key} instead.\n',
+        'Upload only. "GET" used to be accepted and was removed: a grant derives its storage key from a newly generated grant id and no field names an existing object, so a download grant always presigned an empty key and answered 404. Download an object with GET /artifacts/objects/{projectID}/{bucket}/{key} instead.\n',
       ),
     display_name: zod
       .string()
       .optional()
       .describe(
-        "The server derives the storage key; the caller never supplies one directly (S9\/S15).\n",
+        "The server derives the storage key; the caller never supplies one directly (S9/S15).\n",
       ),
     content_type: zod.string(),
     max_bytes: zod.int(),

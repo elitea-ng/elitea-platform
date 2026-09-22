@@ -51,7 +51,7 @@ export const ApplicationList = zod
     total_pages: zod.int(),
   })
   .describe(
-    "NOTE(W2): internal\/domain\/applications\/types.go:86-92 (ListResponse), marshaled directly by List (internal\/api\/v2\/applications\/handler.go:101-107).\n",
+    "NOTE(W2): internal/domain/applications/types.go:86-92 (ListResponse), marshaled directly by List (internal/api/v2/applications/handler.go:101-107).\n",
   );
 
 export type ApplicationList = zod.input<typeof ApplicationList>;

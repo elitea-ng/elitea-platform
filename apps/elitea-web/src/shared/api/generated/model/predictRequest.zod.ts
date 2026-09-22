@@ -48,11 +48,11 @@ export const PredictRequest = zod
     stream: zod
       .boolean()
       .optional()
-      .describe("When true the response is text\/event-stream, not JSON."),
+      .describe("When true the response is text/event-stream, not JSON."),
     mode: zod.string().optional(),
   })
   .describe(
-    "NOTE(W2): internal\/domain\/predict\/types.go:5-13, decoded in internal\/api\/v2\/predict\/handler.go:41-49.\n",
+    "NOTE(W2): internal/domain/predict/types.go:5-13, decoded in internal/api/v2/predict/handler.go:41-49.\n",
   );
 
 export type PredictRequest = zod.input<typeof PredictRequest>;

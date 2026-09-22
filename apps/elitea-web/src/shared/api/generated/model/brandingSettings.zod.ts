@@ -55,7 +55,7 @@ export const BrandingSettings = zod.object({
   effective: zod
     .union([BrandPack, zod.null()])
     .describe(
-      "The merged brand pack the bootstrap route serves (https:\/\/elitea.ai\/schemas\/brand-pack\/1.json), or null when no pack is served and the UI renders its compiled default.",
+      "The merged brand pack the bootstrap route serves (https://elitea.ai/schemas/brand-pack/1.json), or null when no pack is served and the UI renders its compiled default.",
     ),
   etag: zod
     .string()

@@ -55,7 +55,7 @@ export const ProjectInfoUpdateRequest = zod
     ),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go, UpdateProjectInfo — the body is decoded into a map and only these two keys are read.\n",
+    "NOTE(W2): internal/api/v2/eliteacore/handler.go, UpdateProjectInfo — the body is decoded into a map and only these two keys are read.\n",
   );
 
 export type ProjectInfoUpdateRequest = zod.input<

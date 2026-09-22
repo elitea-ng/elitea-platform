@@ -48,7 +48,7 @@ export const Author = zod
     name: zod.string(),
   })
   .describe(
-    "NOTE(W2): internal\/domain\/applications\/types.go:5-9 (no omitempty on any field) and the inline author maps in internal\/api\/v2\/applications\/handler.go:451, 600, 790.\n",
+    "NOTE(W2): internal/domain/applications/types.go:5-9 (no omitempty on any field) and the inline author maps in internal/api/v2/applications/handler.go:451, 600, 790.\n",
   );
 
 export type Author = zod.input<typeof Author>;

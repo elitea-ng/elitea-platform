@@ -99,7 +99,7 @@ describe('ApplicationCatalog', () => {
         rejection_comment: null,
         created_at: '2026-08-01T10:00:00Z',
         updated_at: '2026-08-01T10:00:00Z',
-      } as never));
+      }));
     const user = userEvent.setup();
     renderCatalog();
 

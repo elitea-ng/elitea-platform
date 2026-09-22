@@ -48,7 +48,7 @@ export const SkillFieldError = zod
     type: zod.string().optional(),
   })
   .describe(
-    "One pydantic-style field error, as the version_name guards emit them (internal\/api\/v2\/skillpublish\/publish.go:66-80).\n",
+    "One pydantic-style field error, as the version_name guards emit them (internal/api/v2/skillpublish/publish.go:66-80).\n",
   );
 
 export type SkillFieldError = zod.input<typeof SkillFieldError>;

@@ -59,7 +59,7 @@ export const ModeRoleAssignment = zod
     role: zod.string(),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/admin\/modes.go:52-59 — one central (user, mode, role) assignment.\n",
+    "NOTE(W2): internal/api/v2/admin/modes.go:52-59 — one central (user, mode, role) assignment.\n",
   );
 
 export type ModeRoleAssignment = zod.input<typeof ModeRoleAssignment>;

@@ -47,7 +47,7 @@ export const UserActivity = zod
     email: zod
       .string()
       .describe(
-        'EMPTY when the identity tables are absent. The row is still reported: \"user 41 made 900 calls\" is useful without a display name, and dropping it because a decoration could not be joined would silently shrink the leaderboard.\n',
+        'EMPTY when the identity tables are absent. The row is still reported: "user 41 made 900 calls" is useful without a display name, and dropping it because a decoration could not be joined would silently shrink the leaderboard.\n',
       ),
     name: zod.string().optional(),
     run_count: zod.int(),

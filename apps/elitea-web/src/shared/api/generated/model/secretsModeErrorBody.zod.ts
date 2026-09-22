@@ -46,7 +46,7 @@ import { ErrorResponse } from "./errorResponse.zod";
 export const SecretsModeErrorBody = zod
   .union([ErrorResponse, AdminMessageResponse])
   .describe(
-    'NOTE(issue 151): the error body of a mode-ful \/secrets route. `default` writes {\"error\": \"...\"}; `administration` writes {\"message\": \"...\"}. The two modes are separate handlers, so the envelope follows the mode.\n',
+    'NOTE(issue 151): the error body of a mode-ful /secrets route. `default` writes {"error": "..."}; `administration` writes {"message": "..."}. The two modes are separate handlers, so the envelope follows the mode.\n',
   );
 
 export type SecretsModeErrorBody = zod.input<typeof SecretsModeErrorBody>;

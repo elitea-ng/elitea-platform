@@ -49,9 +49,7 @@ export const ToolkitExport = zod
     import_uuid: zod.string(),
     settings: zod.record(zod.string(), zod.unknown()),
   })
-  .describe(
-    "NOTE(W2): internal\/api\/v2\/eliteacore\/export_import.go:81-84.\n",
-  );
+  .describe("NOTE(W2): internal/api/v2/eliteacore/export_import.go:81-84.\n");
 
 export type ToolkitExport = zod.input<typeof ToolkitExport>;
 export type ToolkitExportOutput = zod.output<typeof ToolkitExport>;

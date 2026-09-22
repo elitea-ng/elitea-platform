@@ -27,7 +27,23 @@
         "budget records the measured cost rather than hiding it behind an ",
         "allowlist."
       ],
-      "initialKB": 310,
+      "initialNote2": [
+        "325, not 310: measured 2026-09-22 on the npm-all group bump (PR #994).",
+        "main (765d6ea20) measures 309.6 KiB — 0.4 under the old ceiling, i.e. no",
+        "headroom at all. The group takes it to 319.4. Attribution, measured by",
+        "reverting ONLY react/react-dom to 19.2.8 on the bumped tree and",
+        "rebuilding admin: 311.0 KiB. So 8.4 of the 9.8 KiB is react/react-dom",
+        "19.2.8 -> 19.3.0 growing their own runtime, and the remaining 1.4 is",
+        "spread across the other 46 packages. Nothing in this repository's code",
+        "got bigger; the framework did.",
+        "The 310 note below still describes the real structural problem (admin",
+        "ships the whole i18n catalogue because there is no per-entry namespace",
+        "split), and splitting it is still the fix that would take this back",
+        "under 300. Until then the number records what was measured. 325 leaves",
+        "5.6 KiB of headroom, deliberately small so the next framework bump is",
+        "a conversation rather than a silent slide."
+      ],
+      "initialKB": 325,
       "routeChunkKB": 250
     },
     "maintenance": {

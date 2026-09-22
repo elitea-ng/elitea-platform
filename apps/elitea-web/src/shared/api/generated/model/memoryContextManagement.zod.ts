@@ -60,7 +60,7 @@ export const MemoryContextManagement = zod
     enable_context_editing: zod.boolean().optional(),
   })
   .describe(
-    'The user\'s default context-management settings, stored in centry.social_users.default_context_management (jsonb) and edited by Settings > Memory. Every property is optional: absent means \"the user has no opinion\", which resolves to the platform default, and is a different answer from an explicit false or zero. Ranges are enforced on write (internal\/domain\/contextsettings); an out-of-range value is refused with {\"error\", \"field\"}. `enable_context_editing` is not in pylon\'s ContextManagementModel but IS read out of the same dict by set_context_strategy, and the Memory page has always sent it.\n',
+    'The user\'s default context-management settings, stored in centry.social_users.default_context_management (jsonb) and edited by Settings > Memory. Every property is optional: absent means "the user has no opinion", which resolves to the platform default, and is a different answer from an explicit false or zero. Ranges are enforced on write (internal/domain/contextsettings); an out-of-range value is refused with {"error", "field"}. `enable_context_editing` is not in pylon\'s ContextManagementModel but IS read out of the same dict by set_context_strategy, and the Memory page has always sent it.\n',
   );
 
 export type MemoryContextManagement = zod.input<typeof MemoryContextManagement>;

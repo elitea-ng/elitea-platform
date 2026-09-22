@@ -49,7 +49,7 @@ export const PipelineTrigger = zod
     type: zod.string().nullish(),
   })
   .describe(
-    "NOTE(W2): GetTrigger\/UpdateTrigger response maps, internal\/api\/v2\/pipelines\/handler.go:122-127, 136-141, 153-158, 187-192, plus the nil-pool UpdateTrigger whole-body echo (:171-174 — version_id set, extra client keys pass through additionalProperties). Keys read from the settings.trigger jsonb are null when absent.\n",
+    "NOTE(W2): GetTrigger/UpdateTrigger response maps, internal/api/v2/pipelines/handler.go:122-127, 136-141, 153-158, 187-192, plus the nil-pool UpdateTrigger whole-body echo (:171-174 — version_id set, extra client keys pass through additionalProperties). Keys read from the settings.trigger jsonb are null when absent.\n",
   );
 
 export type PipelineTrigger = zod.input<typeof PipelineTrigger>;

@@ -46,7 +46,7 @@ export const OkResponse = zod
     ok: zod.boolean(),
   })
   .describe(
-    'NOTE(W2): `{\"ok\": true}` acknowledgements — SetDefaultVersion (internal\/api\/v2\/applications\/handler.go:981), BatchReplaceVersion (:994), UpdateAttachmentStorage (internal\/api\/v2\/eliteacore\/handler.go:1783), UpdateIcon (:1860), BatchUpdateEntitySettings (internal\/api\/v2\/conversations\/handler.go:675), and social\/handler.go\'s UpdateAuthor (:133, 166), Like (:271, plus the no-op shortcuts at :253, 258), Unlike (:304, plus :288, 293), Pin (:324, plus :315), and Unpin (:344, plus :335).\n',
+    'NOTE(W2): `{"ok": true}` acknowledgements — SetDefaultVersion (internal/api/v2/applications/handler.go:981), BatchReplaceVersion (:994), UpdateAttachmentStorage (internal/api/v2/eliteacore/handler.go:1783), UpdateIcon (:1860), BatchUpdateEntitySettings (internal/api/v2/conversations/handler.go:675), and social/handler.go\'s UpdateAuthor (:133, 166), Like (:271, plus the no-op shortcuts at :253, 258), Unlike (:304, plus :288, 293), Pin (:324, plus :315), and Unpin (:344, plus :335).\n',
   );
 
 export type OkResponse = zod.input<typeof OkResponse>;

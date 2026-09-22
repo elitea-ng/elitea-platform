@@ -49,7 +49,7 @@ export const AdminSecretUpdateRequest = zod
     }),
   })
   .describe(
-    "NOTE(issue 151): internal\/api\/v2\/secrets\/admin.go:129-135 — the NESTED body pylon's admin PUT takes. `old_name` selects the entry to replace and the path `{name}` is what it becomes, so a rename is `old_name != name`. An empty `old_name` means the path name.\n",
+    "NOTE(issue 151): internal/api/v2/secrets/admin.go:129-135 — the NESTED body pylon's admin PUT takes. `old_name` selects the entry to replace and the path `{name}` is what it becomes, so a rename is `old_name != name`. An empty `old_name` means the path name.\n",
   );
 
 export type AdminSecretUpdateRequest = zod.input<

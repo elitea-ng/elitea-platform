@@ -71,7 +71,7 @@ export const ConfigurationModelListResponse = zod
       .describe("`reviewed` only, and omitted when unset."),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/configurations\/handler.go, ListModels (compat) and internal\/application\/configurations\/models.go, CurrentModelCatalog (reviewed).\n",
+    "NOTE(W2): internal/api/v2/configurations/handler.go, ListModels (compat) and internal/application/configurations/models.go, CurrentModelCatalog (reviewed).\n",
   );
 
 export type ConfigurationModelListResponse = zod.input<

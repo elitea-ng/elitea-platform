@@ -85,7 +85,7 @@ export const WebhookDelivery = zod
     updated_at: zod.iso.datetime({ offset: true }),
   })
   .describe(
-    "NOTE(issue 876, second half): internal\/api\/webhook\/dispatcher.go's `Delivery` — one COMPLETED attempt sequence (not one row per HTTP try; `attempts` counts how many tries the sequence made, 1 to 3). `payload` is the exact signed body that was sent, so Redeliver can resend it byte-identical.\n",
+    "NOTE(issue 876, second half): internal/api/webhook/dispatcher.go's `Delivery` — one COMPLETED attempt sequence (not one row per HTTP try; `attempts` counts how many tries the sequence made, 1 to 3). `payload` is the exact signed body that was sent, so Redeliver can resend it byte-identical.\n",
   );
 
 export type WebhookDelivery = zod.input<typeof WebhookDelivery>;

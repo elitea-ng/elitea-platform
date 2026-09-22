@@ -50,7 +50,7 @@ export const EvalRunStartRequest = zod
     application_version_id: zod
       .int()
       .describe(
-        'Required. The version carries the instructions the agent turn is built from, and defaulting to \"the latest\" would make a run\'s meaning depend on when it was read.\n',
+        'Required. The version carries the instructions the agent turn is built from, and defaulting to "the latest" would make a run\'s meaning depend on when it was read.\n',
       ),
     dimension_ids: zod
       .array(zod.string())

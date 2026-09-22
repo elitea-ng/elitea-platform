@@ -57,7 +57,7 @@ export const CanvasEditor = zod
       .string()
       .optional()
       .describe(
-        'ABSENT today. The reference fills it from the `social` plugin\'s avatar store, which elitea-main composes no reader for. The key is omitted rather than sent empty: an empty string is the different and wrong claim \"this user has no avatar\".\n',
+        'ABSENT today. The reference fills it from the `social` plugin\'s avatar store, which elitea-main composes no reader for. The key is omitted rather than sent empty: an empty string is the different and wrong claim "this user has no avatar".\n',
       ),
     state: zod
       .enum(["editing", "viewing"])
@@ -66,7 +66,7 @@ export const CanvasEditor = zod
       ),
   })
   .describe(
-    "One person with the canvas open. The field names are the reference's (legacy\/plugins\/elitea_core utils\/participant_utils.py), so the SPA's existing `item_details.editors` patch path applies unchanged.\n",
+    "One person with the canvas open. The field names are the reference's (legacy/plugins/elitea_core utils/participant_utils.py), so the SPA's existing `item_details.editors` patch path applies unchanged.\n",
   );
 
 export type CanvasEditor = zod.input<typeof CanvasEditor>;

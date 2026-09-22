@@ -48,7 +48,7 @@ export const PublishValidationFailedResponse = zod
     validation_result: PublishValidationResult,
   })
   .describe(
-    "NOTE(W2): 422 envelope written by Publish (internal\/api\/v2\/eliteacore\/handler.go:500-509, 518-527, 566-570, 610-618).\n",
+    "NOTE(W2): 422 envelope written by Publish (internal/api/v2/eliteacore/handler.go:500-509, 518-527, 566-570, 610-618).\n",
   );
 
 export type PublishValidationFailedResponse = zod.input<

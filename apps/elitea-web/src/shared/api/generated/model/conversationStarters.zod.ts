@@ -44,7 +44,7 @@ import * as zod from "zod";
 export const ConversationStarters = zod
   .array(zod.unknown())
   .describe(
-    'NOTE(W2): opaque jsonb array round-trip — see items marker. One caveat to the \"never inspects\" claim: runPublishValidation decodes the column as []string (eliteacore\/handler.go:1028-1029), so non-string elements are silently read as an empty list there (spurious \"no conversation starters\" warning); the store\/return round-trip itself is untyped.\n',
+    'NOTE(W2): opaque jsonb array round-trip — see items marker. One caveat to the "never inspects" claim: runPublishValidation decodes the column as []string (eliteacore/handler.go:1028-1029), so non-string elements are silently read as an empty list there (spurious "no conversation starters" warning); the store/return round-trip itself is untyped.\n',
   );
 
 export type ConversationStarters = zod.input<typeof ConversationStarters>;

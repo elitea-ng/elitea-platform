@@ -2,7 +2,7 @@ import { within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
-import { renderWithTheme } from '@/shared/ui/lib/testTheme';
+import { remToPx, renderWithTheme } from '@/shared/ui/lib/testTheme';
 
 import type { AgentPipelineVersionOption } from '../lib/types';
 
@@ -241,7 +241,10 @@ describe('AgentPipelineVersionSelector', () => {
     const menu = getByRole('menu');
     const computed = getComputedStyle(menu);
     expect(computed.overflowY).toBe('auto');
-    expect(computed.maxHeight).toBe('11.5rem');
+    // jsdom@30 resolves rem against the root font size before reporting a
+    // computed length (jsdom@29 echoed the declaration back), so the computed
+    // value is px. `remToPx` keeps the assertion pointed at the declaration.
+    expect(computed.maxHeight).toBe(remToPx('11.5rem'));
   });
 
   it('calls onRefreshVersions from the menu refresh button', async () => {

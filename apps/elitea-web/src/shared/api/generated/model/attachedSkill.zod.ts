@@ -52,7 +52,7 @@ export const AttachedSkill = zod
     icon_meta: zod.record(zod.string(), zod.unknown()).nullish(),
   })
   .describe(
-    "NOTE(#336): one entry of the runtime skill registry the SDK binds `load_skill` against (elitea_sdk\/runtime\/tools\/skill_tools.py:127-131). It is the five-key projection pylon's `resolve_runtime_skills` produces (legacy\/plugins\/elitea_core\/utils\/skill_utils.py:1570-1607); `skill_version_id` and `version_name` are deliberately absent.\n",
+    "NOTE(#336): one entry of the runtime skill registry the SDK binds `load_skill` against (elitea_sdk/runtime/tools/skill_tools.py:127-131). It is the five-key projection pylon's `resolve_runtime_skills` produces (legacy/plugins/elitea_core/utils/skill_utils.py:1570-1607); `skill_version_id` and `version_name` are deliberately absent.\n",
   );
 
 export type AttachedSkill = zod.input<typeof AttachedSkill>;

@@ -46,7 +46,7 @@ export const PermissionMatrixRow = zod
     name: zod.string().describe("The permission name."),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/admin\/roles.go:139-147 — one permission and one boolean column per role.\n",
+    "NOTE(W2): internal/api/v2/admin/roles.go:139-147 — one permission and one boolean column per role.\n",
   );
 
 export type PermissionMatrixRow = zod.input<typeof PermissionMatrixRow>;

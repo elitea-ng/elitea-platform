@@ -54,7 +54,7 @@ export const VersionMeta = zod.object({
     .array(VersionVariable)
     .optional()
     .describe(
-      "Written into meta on create when the request carries variables (applications\/handler.go:430, 747-752).\n",
+      "Written into meta on create when the request carries variables (applications/handler.go:430, 747-752).\n",
     ),
   attachment_storage: zod
     .object({
@@ -62,19 +62,19 @@ export const VersionMeta = zod.object({
     })
     .optional()
     .describe(
-      'Written by UpdateAttachmentStorage as {\"toolkit_id\": \"...\"} (eliteacore\/handler.go:1777-1781).\n',
+      'Written by UpdateAttachmentStorage as {"toolkit_id": "..."} (eliteacore/handler.go:1777-1781).\n',
     ),
   notes: zod
     .string()
     .optional()
     .describe(
-      'NOTE(#898): the editor\'s free-text \"Editor Notes\". It has no column of its own on `application_versions` and is not meant to: pylon stores it inside this same jsonb (elitea_issues issue 5410 chose the blob over a per-tenant schema migration), folding the top-level `notes` write field in (legacy\/plugins\/elitea_core\/utils\/application_utils.py:191-211) and lifting it back out on read (models\/pd\/version.py:297-307). This service does the same, and additionally leaves the key in place here — the agent editor round-trips `meta` wholesale, so deleting it from the read would make an ordinary save of any other field erase the notes. Documentation only: never sent to the model, to chat, or to execution.\n',
+      'NOTE(#898): the editor\'s free-text "Editor Notes". It has no column of its own on `application_versions` and is not meant to: pylon stores it inside this same jsonb (elitea_issues issue 5410 chose the blob over a per-tenant schema migration), folding the top-level `notes` write field in (legacy/plugins/elitea_core/utils/application_utils.py:191-211) and lifting it back out on read (models/pd/version.py:297-307). This service does the same, and additionally leaves the key in place here — the agent editor round-trips `meta` wholesale, so deleting it from the read would make an ordinary save of any other field erase the notes. Documentation only: never sent to the model, to chat, or to execution.\n',
     ),
   internal_tools: zod
     .array(zod.string())
     .optional()
     .describe(
-      'Identifiers of the agent\'s enabled internal tools (e.g. \"internal_mcp\"). Client-owned: elitea-main never inspects the key — UpdateVersion assigns the whole meta map it receives (applications\/handler.go:826-828) — but the legacy UI writes it here and the replatformed edit page both reads and writes it, so it is modelled rather than left to the passthrough marker below.\n',
+      'Identifiers of the agent\'s enabled internal tools (e.g. "internal_mcp"). Client-owned: elitea-main never inspects the key — UpdateVersion assigns the whole meta map it receives (applications/handler.go:826-828) — but the legacy UI writes it here and the replatformed edit page both reads and writes it, so it is modelled rather than left to the passthrough marker below.\n',
     ),
 });
 

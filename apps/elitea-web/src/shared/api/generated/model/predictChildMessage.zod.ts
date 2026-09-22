@@ -47,7 +47,7 @@ export const PredictChildMessage = zod
     content: zod.string(),
     agent_id: zod.string().optional(),
   })
-  .describe("NOTE(W2) internal\/domain\/predict\/types.go:38-42.");
+  .describe("NOTE(W2) internal/domain/predict/types.go:38-42.");
 
 export type PredictChildMessage = zod.input<typeof PredictChildMessage>;
 export type PredictChildMessageOutput = zod.output<typeof PredictChildMessage>;

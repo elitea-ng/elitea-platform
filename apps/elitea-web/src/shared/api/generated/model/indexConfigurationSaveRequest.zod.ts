@@ -46,7 +46,7 @@ export const IndexConfigurationSaveRequest = zod
     index_configuration: zod.record(zod.string(), zod.unknown()),
   })
   .describe(
-    "NOTE(W2): the request body of internal\/api\/v2\/indexing\/index_meta_configuration.go's currentIndexConfigurationBody. A NAMED key rather than the bare configuration object, so the envelope has room for the next question this route will be asked (which generation the caller believed it was editing) without breaking the one it answers today.\n",
+    "NOTE(W2): the request body of internal/api/v2/indexing/index_meta_configuration.go's currentIndexConfigurationBody. A NAMED key rather than the bare configuration object, so the envelope has room for the next question this route will be asked (which generation the caller believed it was editing) without breaking the one it answers today.\n",
   );
 
 export type IndexConfigurationSaveRequest = zod.input<

@@ -46,7 +46,7 @@ export const InternalMcpPatStatus = zod
     internal: zod
       .boolean()
       .describe(
-        "True when the toolkit type is an internal Elitea MCP endpoint, i.e. the project holds a toolkit of that type whose settings URL points at `\/app\/<project id>\/mcp\/...` on this platform, with the project id either templated or resolved.\n",
+        "True when the toolkit type is an internal Elitea MCP endpoint, i.e. the project holds a toolkit of that type whose settings URL points at `/app/<project id>/mcp/...` on this platform, with the project id either templated or resolved.\n",
       ),
     state: zod
       .string()
@@ -55,7 +55,7 @@ export const InternalMcpPatStatus = zod
       ),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/mcp\/patstatus.go:74 — the exact two-field object both branches write.\n",
+    "NOTE(W2): internal/api/v2/mcp/patstatus.go:74 — the exact two-field object both branches write.\n",
   );
 
 export type InternalMcpPatStatus = zod.input<typeof InternalMcpPatStatus>;

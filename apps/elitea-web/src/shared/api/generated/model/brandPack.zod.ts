@@ -112,7 +112,7 @@ export const BrandPack = zod
     }),
   })
   .describe(
-    "A brand pack conforming to https:\/\/elitea.ai\/schemas\/brand-pack\/1.json. NOTE(W2): mirrors internal\/api\/v2\/branding\/pack.go:123 field for field (the Go mirror of apps\/elitea-web\/src\/shared\/brand\/schema.ts).",
+    "A brand pack conforming to https://elitea.ai/schemas/brand-pack/1.json. NOTE(W2): mirrors internal/api/v2/branding/pack.go:123 field for field (the Go mirror of apps/elitea-web/src/shared/brand/schema.ts).",
   );
 
 export type BrandPack = zod.input<typeof BrandPack>;

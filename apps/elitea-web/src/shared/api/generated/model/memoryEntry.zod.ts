@@ -53,20 +53,20 @@ export const MemoryEntry = zod
     tags: zod
       .array(zod.string())
       .describe(
-        "Free-form labels for the settings panel's own search\/filter. Never more than 16 (memories.MaxTags).",
+        "Free-form labels for the settings panel's own search/filter. Never more than 16 (memories.MaxTags).",
       ),
     source_conversation_id: zod
       .string()
       .nullish()
       .describe(
-        'The conversation this memory was captured from, when it was saved via the \"Remember this\" message action (chat_conversations.uuid). Absent when typed directly into the settings panel. Informational only — the source conversation may since have been deleted (tenant\/0137_personal_memory_entries.sql\'s own header explains why this deliberately holds no foreign key).\n',
+        'The conversation this memory was captured from, when it was saved via the "Remember this" message action (chat_conversations.uuid). Absent when typed directly into the settings panel. Informational only — the source conversation may since have been deleted (tenant/0137_personal_memory_entries.sql\'s own header explains why this deliberately holds no foreign key).\n',
       ),
     enabled: zod.boolean(),
     created_at: zod.iso.datetime({ offset: true }),
     updated_at: zod.iso.datetime({ offset: true }),
   })
   .describe(
-    "One persistent, cross-conversation personal memory (#870). internal\/api\/v2\/memories\/handler.go. Scoped to (project, the authenticated caller) — never readable or writable cross-user. `enabled=false` keeps the entry without letting it reach a chat turn's recall (internal\/application\/agentexecution's CurrentMemoryRecallResolver). NOT the same feature as the `memory` TOOLKIT type (integrations\/toolkits\/memory_toolkit) — that is an agent-scoped key\/value store the LLM calls as a tool mid-turn; this is read passively, before a turn starts.\n",
+    "One persistent, cross-conversation personal memory (#870). internal/api/v2/memories/handler.go. Scoped to (project, the authenticated caller) — never readable or writable cross-user. `enabled=false` keeps the entry without letting it reach a chat turn's recall (internal/application/agentexecution's CurrentMemoryRecallResolver). NOT the same feature as the `memory` TOOLKIT type (integrations/toolkits/memory_toolkit) — that is an agent-scoped key/value store the LLM calls as a tool mid-turn; this is read passively, before a turn starts.\n",
   );
 
 export type MemoryEntry = zod.input<typeof MemoryEntry>;

@@ -41,7 +41,15 @@
  */
 import * as zod from "zod";
 
+export const getRecommendationsParamsLimitDefault = 20;
+export const getRecommendationsParamsLimitMax = 1000;
+
 export const GetRecommendationsParams = zod.object({
+  limit: zod
+    .int()
+    .min(1)
+    .max(getRecommendationsParamsLimitMax)
+    .default(getRecommendationsParamsLimitDefault),
   days: zod.int().optional(),
 });
 

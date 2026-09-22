@@ -49,11 +49,11 @@ export const IconRef = zod
     url: zod
       .string()
       .describe(
-        "The path the browser loads the icon from, `\/icons\/{project}\/{name}`. That route is served OUTSIDE the authenticated group, because an `<img src>` carries no Authorization header.\n",
+        "The path the browser loads the icon from, `/icons/{project}/{name}`. That route is served OUTSIDE the authenticated group, because an `<img src>` carries no Authorization header.\n",
       ),
   })
   .describe(
-    "NOTE(W2): one row of a gallery listing — internal\/api\/v2\/eliteacore\/skill_icon.go:160-166 and internal\/api\/v2\/eliteacore\/handler.go (ListProjectIcons).\n",
+    "NOTE(W2): one row of a gallery listing — internal/api/v2/eliteacore/skill_icon.go:160-166 and internal/api/v2/eliteacore/handler.go (ListProjectIcons).\n",
   );
 
 export type IconRef = zod.input<typeof IconRef>;

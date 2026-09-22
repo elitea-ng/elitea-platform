@@ -48,7 +48,7 @@ export const FeedbackListResponse = zod
     total: zod.int(),
   })
   .describe(
-    "NOTE(W2): `{items, total}` envelope (internal\/api\/v2\/social\/handler.go:378) where `total` is simply `len(items)` — no real `COUNT(\*)` and no pagination beyond the hardcoded `LIMIT 50` (:359). A query error is swallowed to `items: []` \/ `total: 0` rather than surfaced as an error (:361-377).\n",
+    "NOTE(W2): `{items, total}` envelope (internal/api/v2/social/handler.go:378) where `total` is simply `len(items)` — no real `COUNT(*)` and no pagination beyond the hardcoded `LIMIT 50` (:359). A query error is swallowed to `items: []` / `total: 0` rather than surfaced as an error (:361-377).\n",
   );
 
 export type FeedbackListResponse = zod.input<typeof FeedbackListResponse>;

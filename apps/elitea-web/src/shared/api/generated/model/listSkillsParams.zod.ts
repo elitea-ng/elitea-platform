@@ -41,9 +41,24 @@
  */
 import * as zod from "zod";
 
+export const listSkillsParamsLimitDefault = 20;
+export const listSkillsParamsLimitMax = 1000;
+
+export const listSkillsParamsOffsetDefault = 0;
+export const listSkillsParamsOffsetMin = 0;
+
 export const listSkillsParamsPageDefault = 1;
 export const listSkillsParamsPageSizeDefault = 20;
 export const ListSkillsParams = zod.object({
+  limit: zod
+    .int()
+    .min(1)
+    .max(listSkillsParamsLimitMax)
+    .default(listSkillsParamsLimitDefault),
+  offset: zod
+    .int()
+    .min(listSkillsParamsOffsetMin)
+    .default(listSkillsParamsOffsetDefault),
   page: zod.int().default(listSkillsParamsPageDefault),
   page_size: zod.int().default(listSkillsParamsPageSizeDefault),
 });

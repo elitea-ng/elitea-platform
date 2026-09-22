@@ -47,7 +47,7 @@ export const ProjectContext = zod
     enabled: zod.boolean().nullable(),
   })
   .describe(
-    'NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go:110-134 — keys always present; \"\" \/ false when no configuration row exists, null possible when the stored jsonb lacks the key (:130-133). Update echoes the typed request back (:164), so nulls never appear after a write — EXCEPT the test-only nil-pool branch of updateProjectContext (:143-146), which returns {\"ok\": true} instead; unreachable in production (main.go exits when the pool cannot be built, and router.go:236 always passes cfg.Pool).\n',
+    'NOTE(W2): internal/api/v2/eliteacore/handler.go:110-134 — keys always present; "" / false when no configuration row exists, null possible when the stored jsonb lacks the key (:130-133). Update echoes the typed request back (:164), so nulls never appear after a write — EXCEPT the test-only nil-pool branch of updateProjectContext (:143-146), which returns {"ok": true} instead; unreachable in production (main.go exits when the pool cannot be built, and router.go:236 always passes cfg.Pool).\n',
   );
 
 export type ProjectContext = zod.input<typeof ProjectContext>;

@@ -46,7 +46,7 @@ export const IndexWriteAck = zod
     ok: zod.literal(true),
   })
   .describe(
-    'NOTE(W2): the `{\"ok\": true}` envelope every index WRITE path answers with (internal\/api\/v2\/toolkits\/index_write.go, and internal\/api\/v2\/indexing\/index_meta_delete.go \/ _configuration.go). Different from this spec\'s normal single-resource shape, and deliberately kept: the web client reads `ok`.\n',
+    'NOTE(W2): the `{"ok": true}` envelope every index WRITE path answers with (internal/api/v2/toolkits/index_write.go, and internal/api/v2/indexing/index_meta_delete.go / _configuration.go). Different from this spec\'s normal single-resource shape, and deliberately kept: the web client reads `ok`.\n',
   );
 
 export type IndexWriteAck = zod.input<typeof IndexWriteAck>;

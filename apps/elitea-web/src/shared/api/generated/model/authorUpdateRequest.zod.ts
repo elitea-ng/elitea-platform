@@ -56,7 +56,7 @@ export const AuthorUpdateRequest = zod
     default_summarization: MemorySummarization.optional(),
   })
   .describe(
-    "NOTE(W2): decoded into map[string]any (internal\/api\/v2\/social\/handler.go, UpdateAuthor); every property is optional, and any key not listed here is silently ignored. A missing name\/description\/avatar upserts as an empty string, and a missing personalization stores JSON null — but a missing default_context_management or default_summarization KEEPS whatever is stored, because Settings > AI Personality and Settings > Memory are two pages saving one record and the personality page sends no context settings at all. Either block may also arrive nested inside personalization, which is where apps\/elitea-web put them while this endpoint still dropped every other top-level key; the top-level placement wins, and a nested one is rewritten into the columns.\n",
+    "NOTE(W2): decoded into map[string]any (internal/api/v2/social/handler.go, UpdateAuthor); every property is optional, and any key not listed here is silently ignored. A missing name/description/avatar upserts as an empty string, and a missing personalization stores JSON null — but a missing default_context_management or default_summarization KEEPS whatever is stored, because Settings > AI Personality and Settings > Memory are two pages saving one record and the personality page sends no context settings at all. Either block may also arrive nested inside personalization, which is where apps/elitea-web put them while this endpoint still dropped every other top-level key; the top-level placement wins, and a nested one is rewritten into the columns.\n",
   );
 
 export type AuthorUpdateRequest = zod.input<typeof AuthorUpdateRequest>;

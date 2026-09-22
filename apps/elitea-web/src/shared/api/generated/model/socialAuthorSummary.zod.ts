@@ -50,7 +50,7 @@ export const SocialAuthorSummary = zod
     description: zod.string(),
   })
   .describe(
-    "NOTE(W2): ListAuthors row (internal\/api\/v2\/social\/handler.go:169-200, fields at :194-197). The `{project_id}` path segment is captured by the chi route (`\/authors\/{projectID}`) but never read inside the handler body — the query has no WHERE\/project filter and is capped at a hardcoded `LIMIT 50` with no offset\/pagination. A query error is swallowed to `[]` with 200, never surfaced as an error (:181-184).\n",
+    "NOTE(W2): ListAuthors row (internal/api/v2/social/handler.go:169-200, fields at :194-197). The `{project_id}` path segment is captured by the chi route (`/authors/{projectID}`) but never read inside the handler body — the query has no WHERE/project filter and is capped at a hardcoded `LIMIT 50` with no offset/pagination. A query error is swallowed to `[]` with 200, never surfaced as an error (:181-184).\n",
   );
 
 export type SocialAuthorSummary = zod.input<typeof SocialAuthorSummary>;

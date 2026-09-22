@@ -63,7 +63,7 @@ export const ModerationRequestRow = zod
     entity_id: zod
       .string()
       .describe(
-        'The catalogue key, an arbitrary string — `centry.moderation_state.entity_id` is VARCHAR (migrations\/001_initial.sql:243), e.g. \"inventory\".\n',
+        'The catalogue key, an arbitrary string — `centry.moderation_state.entity_id` is VARCHAR (migrations/001_initial.sql:243), e.g. "inventory".\n',
       ),
     description: zod.string().describe("The requester's own justification."),
     status: zod.enum(["pending", "approved", "rejected"]),
@@ -77,11 +77,11 @@ export const ModerationRequestRow = zod
       .int()
       .optional()
       .describe(
-        "Set ONLY on an APPROVED `Project Request` row (issue #871) — the id the project-creation pipeline assigned. Absent on every other row, and absent on a `Project Request` row that is still `pending` or was `rejected` (internal\/api\/v2\/moderation\/ project_requests.go's `decideProjectRequest`).\n",
+        "Set ONLY on an APPROVED `Project Request` row (issue #871) — the id the project-creation pipeline assigned. Absent on every other row, and absent on a `Project Request` row that is still `pending` or was `rejected` (internal/api/v2/moderation/ project_requests.go's `decideProjectRequest`).\n",
       ),
   })
   .describe(
-    "NOTE(W2): one `centry.moderation_state` row as internal\/api\/v2\/moderation\/requests.go's `requestRow` marshals it (:163-175).\n",
+    "NOTE(W2): one `centry.moderation_state` row as internal/api/v2/moderation/requests.go's `requestRow` marshals it (:163-175).\n",
   );
 
 export type ModerationRequestRow = zod.input<typeof ModerationRequestRow>;

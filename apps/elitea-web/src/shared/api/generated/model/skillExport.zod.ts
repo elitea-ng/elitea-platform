@@ -47,7 +47,7 @@ export const SkillExport = zod
     entity: zod
       .string()
       .describe(
-        'Always the literal \"skills\". The export stamps the key so that a document sent to the import route unchanged names its own entities (internal\/api\/v2\/eliteacore\/export_import.go:526-531).\n',
+        'Always the literal "skills". The export stamps the key so that a document sent to the import route unchanged names its own entities (internal/api/v2/eliteacore/export_import.go:526-531).\n',
       ),
     id: zod
       .string()
@@ -57,28 +57,28 @@ export const SkillExport = zod
     import_uuid: zod
       .string()
       .describe(
-        "The key every version reference uses. It is `skills.uuid`, or `skill-<id>` when the row holds no uuid (internal\/api\/v2\/eliteacore\/export_import.go:516-523).\n",
+        "The key every version reference uses. It is `skills.uuid`, or `skill-<id>` when the row holds no uuid (internal/api/v2/eliteacore/export_import.go:516-523).\n",
       ),
     name: zod.string(),
     description: zod
       .string()
       .describe(
-        "The import writes the name into the column when this value is empty, because `skills.description` is NOT NULL (internal\/api\/v2\/eliteacore\/import_skills.go:143-148).\n",
+        "The import writes the name into the column when this value is empty, because `skills.description` is NOT NULL (internal/api/v2/eliteacore/import_skills.go:143-148).\n",
       ),
     owner_id: zod
       .string()
       .describe(
-        "The SOURCE project id, and not a user id. The import ignores it and writes the destination project (internal\/api\/v2\/eliteacore\/import_skills.go:213-217).\n",
+        "The SOURCE project id, and not a user id. The import ignores it and writes the destination project (internal/api/v2/eliteacore/import_skills.go:213-217).\n",
       ),
     meta: zod.record(zod.string(), zod.unknown()),
     versions: zod
       .array(SkillVersionExport)
       .describe(
-        "ALWAYS an array, and never null. A skill needs no version row, and an agent can be attached to a skill that has none, so this value was the nil version list of such a skill; the export now writes `[]` there, which is the shape every sibling array of the document already has (internal\/api\/v2\/eliteacore\/export_import.go:617-619).\nThe import adds a `base` clone of the first entry when the array names no version called `base`, because every skills read of this service joins on that name (internal\/api\/v2\/eliteacore\/import_skills.go:304-326). The clone is additive, so a reference that pins another version still finds it. Every imported version is written with status `draft` (:251-257). An entry whose array is empty is refused and reported on errors.skills (:164-167).\n",
+        "ALWAYS an array, and never null. A skill needs no version row, and an agent can be attached to a skill that has none, so this value was the nil version list of such a skill; the export now writes `[]` there, which is the shape every sibling array of the document already has (internal/api/v2/eliteacore/export_import.go:617-619).\nThe import adds a `base` clone of the first entry when the array names no version called `base`, because every skills read of this service joins on that name (internal/api/v2/eliteacore/import_skills.go:304-326). The clone is additive, so a reference that pins another version still finds it. Every imported version is written with status `draft` (:251-257). An entry whose array is empty is refused and reported on errors.skills (:164-167).\n",
       ),
   })
   .describe(
-    'NOTE(W2): one entry of the export document\'s top-level `skills` array, internal\/api\/v2\/eliteacore\/export_import.go:525-539. The same object is what the import route accepts as an entity with entity \"skills\", and what the fork request carries in its own `skills` array.\n',
+    'NOTE(W2): one entry of the export document\'s top-level `skills` array, internal/api/v2/eliteacore/export_import.go:525-539. The same object is what the import route accepts as an entity with entity "skills", and what the fork request carries in its own `skills` array.\n',
   );
 
 export type SkillExport = zod.input<typeof SkillExport>;

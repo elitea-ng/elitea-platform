@@ -70,7 +70,7 @@ export const PublicApplicationSummary = zod
       ),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/eliteacore\/public_applications.go — PublicApplications.\n",
+    "NOTE(W2): internal/api/v2/eliteacore/public_applications.go — PublicApplications.\n",
   );
 
 export type PublicApplicationSummary = zod.input<

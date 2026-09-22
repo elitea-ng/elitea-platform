@@ -52,7 +52,7 @@ export const PublishedAgentsListing = zod
     page_size: zod.int(),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/eliteacore\/admin_published_agents.go:110-115.\n",
+    "NOTE(W2): internal/api/v2/eliteacore/admin_published_agents.go:110-115.\n",
   );
 
 export type PublishedAgentsListing = zod.input<typeof PublishedAgentsListing>;

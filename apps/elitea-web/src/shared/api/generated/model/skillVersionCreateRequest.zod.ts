@@ -46,7 +46,7 @@ export const SkillVersionCreateRequest = zod
     name: zod
       .string()
       .describe(
-        'Must be non-empty and not \"base\" (400 otherwise); a duplicate name for this skill is a 409.',
+        'Must be non-empty and not "base" (400 otherwise); a duplicate name for this skill is a 409.',
       ),
     instructions: zod
       .string()
@@ -59,11 +59,11 @@ export const SkillVersionCreateRequest = zod
       .string()
       .optional()
       .describe(
-        "The version to clone instructions\/tags from when `instructions` is empty. Defaults to `base`.",
+        "The version to clone instructions/tags from when `instructions` is empty. Defaults to `base`.",
       ),
   })
   .describe(
-    'createSkillVersion\'s body (internal\/api\/v2\/skills\/handler.go createVersionRequest) — \"Save As Version\". Posted to the SAME path as getSkill\/updateSkill\/deleteSkill (skill_id in the URL, no version_id): before issue 874 this exact URL was bound to createSkill, which ignored skill_id and created an unrelated new skill.\n',
+    'createSkillVersion\'s body (internal/api/v2/skills/handler.go createVersionRequest) — "Save As Version". Posted to the SAME path as getSkill/updateSkill/deleteSkill (skill_id in the URL, no version_id): before issue 874 this exact URL was bound to createSkill, which ignored skill_id and created an unrelated new skill.\n',
   );
 
 export type SkillVersionCreateRequest = zod.input<

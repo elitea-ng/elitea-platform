@@ -53,7 +53,7 @@ export const McpToolCallRequest = zod
       .describe("Arguments forwarded verbatim to the tool."),
   })
   .describe(
-    "NOTE(W2): the body pylon's `McpToolCallPostBody` accepts (legacy\/plugins\/elitea_core\/models\/mcp.py). Documented for completeness; internal\/api\/v2\/mcp\/registry.go:96 does not read it, because the endpoint refuses unconditionally and a 400 for a malformed body would imply a well-formed one would be dispatched.\n",
+    "NOTE(W2): the body pylon's `McpToolCallPostBody` accepts (legacy/plugins/elitea_core/models/mcp.py). Documented for completeness; internal/api/v2/mcp/registry.go:96 does not read it, because the endpoint refuses unconditionally and a 400 for a malformed body would imply a well-formed one would be dispatched.\n",
   );
 
 export type McpToolCallRequest = zod.input<typeof McpToolCallRequest>;

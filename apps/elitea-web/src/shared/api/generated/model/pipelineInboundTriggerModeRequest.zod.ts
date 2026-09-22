@@ -49,7 +49,7 @@ export const PipelineInboundTriggerModeRequest = zod
       .enum(["custom", "github"])
       .optional()
       .describe(
-        "The preset. `github` expands to `auth_mode: hmac_sha256` with `X-Hub-Signature-256` and a `\/github` URL suffix.\n",
+        "The preset. `github` expands to `auth_mode: hmac_sha256` with `X-Hub-Signature-256` and a `/github` URL suffix.\n",
       ),
     provider: zod
       .enum(["custom", "github"])
@@ -70,7 +70,7 @@ export const PipelineInboundTriggerModeRequest = zod
       ),
   })
   .describe(
-    "What a create\/rotate may ask for. Every field is optional, and a call with no body at all mints the bearer trigger this route has always minted.\n",
+    "What a create/rotate may ask for. Every field is optional, and a call with no body at all mints the bearer trigger this route has always minted.\n",
   );
 
 export type PipelineInboundTriggerModeRequest = zod.input<

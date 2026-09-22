@@ -63,16 +63,16 @@ export const PersonalAccessToken = zod
       .int()
       .nullable()
       .describe(
-        'The project this key bills, or null when the key is unbound. It is reported WITHOUT omitempty so a client can tell \"unbound\" from \"a server that does not know about bindings\".\n',
+        'The project this key bills, or null when the key is unbound. It is reported WITHOUT omitempty so a client can tell "unbound" from "a server that does not know about bindings".\n',
       ),
     token: zod
       .string()
       .describe(
-        'THE FULL SIGNED VALUE ON THE CREATE RESPONSE, AND ONLY THERE. Every read masks it to `\"...\"` plus the last seven characters, which is a display hint and not a credential.\n',
+        'THE FULL SIGNED VALUE ON THE CREATE RESPONSE, AND ONLY THERE. Every read masks it to `"..."` plus the last seven characters, which is a display hint and not a credential.\n',
       ),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/auth\/tokens.go:41-52 (the `Token` struct) and :575-600 (presentToken, which decides whether `token` is revealed).\n",
+    "NOTE(W2): internal/api/v2/auth/tokens.go:41-52 (the `Token` struct) and :575-600 (presentToken, which decides whether `token` is revealed).\n",
   );
 
 export type PersonalAccessToken = zod.input<typeof PersonalAccessToken>;

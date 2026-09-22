@@ -62,7 +62,7 @@ export const ApplicationExport = zod
       .describe("Present only with ?fork=true."),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go:3507-3528 — the four fork-only keys are set in the `isFork` branch at :3515-3528.\n",
+    "NOTE(W2): internal/api/v2/eliteacore/handler.go:3507-3528 — the four fork-only keys are set in the `isFork` branch at :3515-3528.\n",
   );
 
 export type ApplicationExport = zod.input<typeof ApplicationExport>;

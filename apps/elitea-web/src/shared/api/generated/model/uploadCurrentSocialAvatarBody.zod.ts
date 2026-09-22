@@ -42,7 +42,7 @@
 import * as zod from "zod";
 
 export const UploadCurrentSocialAvatarBody = zod.object({
-  file: zod.instanceof(File),
+  file: zod.instanceof(Blob),
 });
 
 export type UploadCurrentSocialAvatarBody = zod.input<

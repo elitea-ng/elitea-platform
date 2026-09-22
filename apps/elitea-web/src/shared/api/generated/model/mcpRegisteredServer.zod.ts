@@ -61,10 +61,10 @@ export const McpRegisteredServer = zod
       .describe("Seconds. Defaults to 90 (mcpregistry.DefaultTimeoutSeconds)."),
     group: zod
       .string()
-      .describe('Defaults to \"Other\" (mcpregistry.DefaultGroup).'),
+      .describe('Defaults to "Other" (mcpregistry.DefaultGroup).'),
   })
   .describe(
-    "NOTE(W2): internal\/mcpregistry\/registry.go:59-67 — the Server struct, which is pylon's `McpServer` shape. `tools_list` returns a bare array of it, with no envelope.\n",
+    "NOTE(W2): internal/mcpregistry/registry.go:59-67 — the Server struct, which is pylon's `McpServer` shape. `tools_list` returns a bare array of it, with no envelope.\n",
   );
 
 export type McpRegisteredServer = zod.input<typeof McpRegisteredServer>;

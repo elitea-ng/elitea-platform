@@ -46,7 +46,7 @@ export const TracingStatusResponse = zod
     enabled: zod
       .boolean()
       .describe(
-        'Mirrors libs\/go\/observability\'s own kill switch (OTEL_SDK_DISABLED != \"true\").\n',
+        'Mirrors libs/go/observability\'s own kill switch (OTEL_SDK_DISABLED != "true").\n',
       ),
     project_id: zod
       .string()
@@ -59,11 +59,11 @@ export const TracingStatusResponse = zod
       })
       .optional()
       .describe(
-        "Present only on the administration read (internal\/api\/v2\/tracing\/handler.go:StatusAdmin).\n",
+        "Present only on the administration read (internal/api/v2/tracing/handler.go:StatusAdmin).\n",
       ),
   })
   .describe(
-    "internal\/api\/v2\/tracing\/handler.go's StatusProject\/StatusAdmin. Port of legacy tracing\/api\/v2\/status.py's PromptLibAPI\/AdminAPI.\n",
+    "internal/api/v2/tracing/handler.go's StatusProject/StatusAdmin. Port of legacy tracing/api/v2/status.py's PromptLibAPI/AdminAPI.\n",
   );
 
 export type TracingStatusResponse = zod.input<typeof TracingStatusResponse>;

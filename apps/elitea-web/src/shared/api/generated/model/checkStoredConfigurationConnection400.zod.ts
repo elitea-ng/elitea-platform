@@ -48,7 +48,7 @@ export const CheckStoredConfigurationConnection400 = zod.object({
     .enum(["ok", "auth_failed", "unreachable", "unsupported_type"])
     .optional()
     .describe(
-      "The machine-readable verdict of a TOOLKIT credential probe: one of ok, auth_failed, unreachable, unsupported_type (internal\/api\/v2\/configurations\/ toolkit_check.go). Absent for an ai_credentials provider, whose own reason vocabulary is already collapsed into message by the gateway path. Read message for the text; switch on this only where it is present.\n",
+      "The machine-readable verdict of a TOOLKIT credential probe: one of ok, auth_failed, unreachable, unsupported_type (internal/api/v2/configurations/ toolkit_check.go). Absent for an ai_credentials provider, whose own reason vocabulary is already collapsed into message by the gateway path. Read message for the text; switch on this only where it is present.\n",
     ),
 });
 

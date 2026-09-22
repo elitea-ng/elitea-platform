@@ -47,7 +47,7 @@ export const PublicApplicationList = zod
     rows: zod.array(PublicApplicationSummary),
     total: zod.int(),
   })
-  .describe("NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go:1316.\n");
+  .describe("NOTE(W2): internal/api/v2/eliteacore/handler.go:1316.\n");
 
 export type PublicApplicationList = zod.input<typeof PublicApplicationList>;
 export type PublicApplicationListOutput = zod.output<

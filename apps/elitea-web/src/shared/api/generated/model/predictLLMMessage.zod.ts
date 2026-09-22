@@ -45,7 +45,7 @@ export const PredictLLMMessage = zod.object({
   role: zod
     .string()
     .describe(
-      "One of system, user or assistant. A history entry missing either field is dropped rather than forwarded, so one stray client entry cannot fail an otherwise complete turn (internal\/api\/v2\/predict\/handler.go buildMessages).\n",
+      "One of system, user or assistant. A history entry missing either field is dropped rather than forwarded, so one stray client entry cannot fail an otherwise complete turn (internal/api/v2/predict/handler.go buildMessages).\n",
     ),
   content: zod.string(),
 });

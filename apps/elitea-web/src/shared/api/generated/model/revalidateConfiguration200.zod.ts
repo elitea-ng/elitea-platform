@@ -48,7 +48,7 @@ export const RevalidateConfiguration200 = zod.object({
     .int()
     .optional()
     .describe(
-      "The owning project's numeric id. This route re-emits the detail route's Configuration projection (internal\/api\/v2\/configurations\/handler.go), whose ProjectID is a Go int, so the value on the wire is a JSON number. The spec declared a string, and the generated web client turned that into `zod.string()`; a zod parse of a correct answer threw.\n",
+      "The owning project's numeric id. This route re-emits the detail route's Configuration projection (internal/api/v2/configurations/handler.go), whose ProjectID is a Go int, so the value on the wire is a JSON number. The spec declared a string, and the generated web client turned that into `zod.string()`; a zod parse of a correct answer threw.\n",
     ),
   label: zod.string().optional(),
   name: zod.string(),

@@ -41,8 +41,16 @@
  */
 import * as zod from "zod";
 
+export const getApplicationIconsParamsLimitDefault = 20;
+export const getApplicationIconsParamsLimitMax = 1000;
+
 export const getApplicationIconsParamsSkipDefault = 0;
 export const GetApplicationIconsParams = zod.object({
+  limit: zod
+    .int()
+    .min(1)
+    .max(getApplicationIconsParamsLimitMax)
+    .default(getApplicationIconsParamsLimitDefault),
   skip: zod.int().default(getApplicationIconsParamsSkipDefault),
 });
 

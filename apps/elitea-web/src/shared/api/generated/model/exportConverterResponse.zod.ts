@@ -47,7 +47,7 @@ export const ExportConverterResponse = zod
     converted: zod.unknown().nullable(),
   })
   .describe(
-    'NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go:3575-3579 — the \"converter\" is currently an echo stub.\n',
+    'NOTE(W2): internal/api/v2/eliteacore/handler.go:3575-3579 — the "converter" is currently an echo stub.\n',
   );
 
 export type ExportConverterResponse = zod.input<typeof ExportConverterResponse>;

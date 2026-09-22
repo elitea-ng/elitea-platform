@@ -41,10 +41,25 @@
  */
 import * as zod from "zod";
 
+export const listPublicApplicationsParamsLimitDefault = 20;
+export const listPublicApplicationsParamsLimitMax = 1000;
+
+export const listPublicApplicationsParamsOffsetDefault = 0;
+export const listPublicApplicationsParamsOffsetMin = 0;
+
 export const listPublicApplicationsParamsAgentsTypeDefault = `all`;
 export const listPublicApplicationsParamsSortByDefault = `created_at`;
 export const listPublicApplicationsParamsSortOrderDefault = `desc`;
 export const ListPublicApplicationsParams = zod.object({
+  limit: zod
+    .int()
+    .min(1)
+    .max(listPublicApplicationsParamsLimitMax)
+    .default(listPublicApplicationsParamsLimitDefault),
+  offset: zod
+    .int()
+    .min(listPublicApplicationsParamsOffsetMin)
+    .default(listPublicApplicationsParamsOffsetDefault),
   category: zod.string().optional(),
   query: zod.string().optional(),
   statuses: zod.string().optional(),

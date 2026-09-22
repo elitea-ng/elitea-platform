@@ -68,7 +68,7 @@ export const ToolAnalytics = zod
     error_rate: zod.number(),
   })
   .describe(
-    "One row of the Tools tab, from elitea_runtime.tool_call_records (shared migration 0119) grouped by (toolkit_id, toolkit_name, tool_name). Source — internal\/domain\/analytics\/types.go.\n",
+    "One row of the Tools tab, from elitea_runtime.tool_call_records (shared migration 0119) grouped by (toolkit_id, toolkit_name, tool_name). Source — internal/domain/analytics/types.go.\n",
   );
 
 export type ToolAnalytics = zod.input<typeof ToolAnalytics>;

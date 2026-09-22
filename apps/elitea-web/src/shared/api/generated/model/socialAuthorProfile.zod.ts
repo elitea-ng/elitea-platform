@@ -48,7 +48,7 @@ export const SocialAuthorProfile = zod
     id: zod
       .string()
       .describe(
-        'NOTE(W2): scanned from su.user_id (social\/handler.go:88) but unconditionally overwritten with intToStr(0) at :114, then replaced with the auth-context user.ID at :118-120 whenever it reads \"0\" or \"\" — which it always does. Bug-for-bug: this field is ALWAYS auth.User.ID, never the DB row\'s su.user_id.\n',
+        'NOTE(W2): scanned from su.user_id (social/handler.go:88) but unconditionally overwritten with intToStr(0) at :114, then replaced with the auth-context user.ID at :118-120 whenever it reads "0" or "" — which it always does. Bug-for-bug: this field is ALWAYS auth.User.ID, never the DB row\'s su.user_id.\n',
       ),
     name: zod.string(),
     email: zod.string(),
@@ -69,7 +69,7 @@ export const SocialAuthorProfile = zod
       ),
   })
   .describe(
-    'NOTE(W2): AuthorResponse struct (internal\/api\/v2\/social\/handler.go:41-49), served by GetAuthor (:51-123). All string fields except personalization are present with a `\"\"` fallback on both the \"row found\" and \"no row \/ query error\" paths (:98-121) — the query error path is a swallowed fallback, always 200, never surfaced as an error.\n',
+    'NOTE(W2): AuthorResponse struct (internal/api/v2/social/handler.go:41-49), served by GetAuthor (:51-123). All string fields except personalization are present with a `""` fallback on both the "row found" and "no row / query error" paths (:98-121) — the query error path is a swallowed fallback, always 200, never surfaced as an error.\n',
   );
 
 export type SocialAuthorProfile = zod.input<typeof SocialAuthorProfile>;

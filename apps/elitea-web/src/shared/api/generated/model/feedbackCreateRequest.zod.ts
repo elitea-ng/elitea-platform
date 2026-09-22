@@ -49,7 +49,7 @@ export const FeedbackCreateRequest = zod
     comment: zod.string().optional(),
   })
   .describe(
-    'NOTE(W2): decoded into map[string]any (internal\/api\/v2\/social\/handler.go:397-401); entity_name\/entity_id are read via unchecked type assertions that silently default to `\"\"` on a wrong type or missing key, and rating similarly defaults to 0 unless the JSON value decodes as float64 (:403-408). Malformed JSON (not just wrong field types) is the only 400 case (:398-401).\n',
+    'NOTE(W2): decoded into map[string]any (internal/api/v2/social/handler.go:397-401); entity_name/entity_id are read via unchecked type assertions that silently default to `""` on a wrong type or missing key, and rating similarly defaults to 0 unless the JSON value decodes as float64 (:403-408). Malformed JSON (not just wrong field types) is the only 400 case (:398-401).\n',
   );
 
 export type FeedbackCreateRequest = zod.input<typeof FeedbackCreateRequest>;

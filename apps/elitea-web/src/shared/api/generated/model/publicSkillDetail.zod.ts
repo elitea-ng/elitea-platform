@@ -63,7 +63,7 @@ export const PublicSkillDetail = zod.object({
         .record(zod.string(), zod.unknown())
         .nullish()
         .describe(
-          "Presentation keys only — `source_\*`, `parent_\*` and `published_by` are stripped before the catalog serves it.",
+          "Presentation keys only — `source_*`, `parent_*` and `published_by` are stripped before the catalog serves it.",
         ),
     })
     .optional(),

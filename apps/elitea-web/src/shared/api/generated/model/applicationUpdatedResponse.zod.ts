@@ -53,7 +53,7 @@ export const ApplicationUpdatedResponse = zod
     version_details: ApplicationVersionDetail.optional(),
   })
   .describe(
-    "NOTE(W2): Update response map, internal\/api\/v2\/applications\/handler.go:575-611.\n",
+    "NOTE(W2): Update response map, internal/api/v2/applications/handler.go:575-611.\n",
   );
 
 export type ApplicationUpdatedResponse = zod.input<

@@ -47,7 +47,7 @@ export const TagsList = zod
     rows: zod.array(Tag),
     total: zod.int(),
   })
-  .describe("NOTE(W2): internal\/api\/v2\/tags\/handler.go:48.\n");
+  .describe("NOTE(W2): internal/api/v2/tags/handler.go:48.\n");
 
 export type TagsList = zod.input<typeof TagsList>;
 export type TagsListOutput = zod.output<typeof TagsList>;

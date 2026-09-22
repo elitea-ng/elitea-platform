@@ -48,7 +48,7 @@ export const EntitySettingsUpdateResponse = zod
       "Echo of the (possibly llm_settings-stripped) request body.",
     ),
   })
-  .describe("NOTE(W2): internal\/api\/v2\/conversations\/handler.go:624.\n");
+  .describe("NOTE(W2): internal/api/v2/conversations/handler.go:624.\n");
 
 export type EntitySettingsUpdateResponse = zod.input<
   typeof EntitySettingsUpdateResponse

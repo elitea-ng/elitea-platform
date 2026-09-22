@@ -61,7 +61,7 @@ export const ForkVersionInput = zod.object({
     .array(SkillReferenceInput)
     .optional()
     .describe(
-      "The skill attachments to give the forked version. Each entry names an entry of the request's own top-level `skills` array by `import_uuid` (internal\/api\/v2\/eliteacore\/import_skills.go:470-473). An absent key, and an empty array, both leave the forked version with no attachment. The fork copied no attachment at all before issue #611, so a forked agent lost every skill it had.\n",
+      "The skill attachments to give the forked version. Each entry names an entry of the request's own top-level `skills` array by `import_uuid` (internal/api/v2/eliteacore/import_skills.go:470-473). An absent key, and an empty array, both leave the forked version with no attachment. The fork copied no attachment at all before issue #611, so a forked agent lost every skill it had.\n",
     ),
 });
 

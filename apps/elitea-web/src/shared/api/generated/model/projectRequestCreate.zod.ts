@@ -51,7 +51,7 @@ export const ProjectRequestCreate = zod
       .describe("The requester's justification for the new project."),
   })
   .describe(
-    "internal\/api\/v2\/moderation\/project_requests.go's `projectRequestCreateBody`. `project_id` (the caller's own personal project) and `issue_type` (\"Project Request\") are never client fields — the server fills both.\n",
+    "internal/api/v2/moderation/project_requests.go's `projectRequestCreateBody`. `project_id` (the caller's own personal project) and `issue_type` (\"Project Request\") are never client fields — the server fills both.\n",
   );
 
 export type ProjectRequestCreate = zod.input<typeof ProjectRequestCreate>;
