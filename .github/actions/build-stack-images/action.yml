@@ -59,6 +59,35 @@ inputs:
 runs:
   using: composite
   steps:
+    # Third-party (non-`build:`) images the compose files reference — postgres,
+    # redis, pgvector, rustfs, traefik, the oidc-mock base, otel, etc. — pulled
+    # up front with a bounded retry, before buildx even starts.
+    #
+    # Why: three CI runs in one day died before any test ran with a Docker Hub
+    # connection reset while `compose up` pulled a base image (redis:7-alpine,
+    # postgres:18) inline, on the chat-stream shards of ci-web-e2e.yml. Every
+    # caller of this action hands compose-files here in the same order and
+    # relative-to-deploy/ spelling it later hands to the stack script's `up`,
+    # so pulling from the SAME set here means a flaky pull fails loud, with
+    # retries, on a step named for it — not silently, minutes later, inside
+    # `compose up`.
+    #
+    # Deliberately excludes anything the `build:` guard below checks: pulling
+    # a build-tagged image here would paper over a #154 guard failure with a
+    # stale registry tag instead of failing loud.
+    - name: Pull third-party images with retry
+      shell: bash
+      working-directory: ${{ github.workspace }}/deploy
+      env:
+        COMPOSE_FILES: ${{ inputs.compose-files }}
+      run: |
+        set -euo pipefail
+        args=()
+        while IFS= read -r f; do
+          [ -n "$f" ] && args+=("$f")
+        done <<< "$COMPOSE_FILES"
+        bash "${GITHUB_WORKSPACE}/scripts/ci/pull-third-party-images.sh" "${args[@]}"
+
     - uses: docker/setup-buildx-action@v4
       id: buildx
       with:

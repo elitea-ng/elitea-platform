@@ -151,6 +151,19 @@ jobs:
         if: ${{ inputs.engine_image }}
         run: docker pull "${{ inputs.engine_image }}"
 
+      - name: Pull third-party images with retry
+        # This job never goes through .github/actions/build-stack-images (the
+        # engine image is baked directly, above), so it needs its own copy of
+        # the same bounded-retry pull the other stack-bringing jobs get from
+        # that action — same script, the same two compose files
+        # deepwiki-real-engine.sh assembles (standalone-full plus this
+        # workflow's real-engine overlay) before it delegates to
+        # chat-stream-e2e.sh for `compose up`.
+        run: |
+          bash scripts/ci/pull-third-party-images.sh \
+            deploy/docker-compose.standalone-full.yml \
+            deploy/docker-compose.deepwiki-real-engine.yml
+
       - name: Run the DeepWiki journeys against the real engine
         # The script owns the whole lifecycle — it applies the real-engine
         # overlay, then delegates to chat-stream-e2e.sh for the PKI, compose up,
