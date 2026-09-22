@@ -1,0 +1,10 @@
+; PgBouncer userlist for the standalone stack (issue #964).
+;
+; The single entry carries the stack's dev credential, which the compose file
+; already states as POSTGRES_PASSWORD on the postgres service. It is the
+; password, not a hash, on purpose: auth_type = scram-sha-256 verifies the
+; client's SCRAM proof against the verifier pgbouncer computes from it, and
+; the same password is what pgbouncer uses to authenticate to Postgres, whose
+; elitea role stores a SCRAM verifier. A verifier-only userlist can check the
+; client but cannot log in to the server.
+"elitea" "elitea"

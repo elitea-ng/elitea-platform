@@ -1,0 +1,133 @@
+{{- if .Values.pgbouncer.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "elitea-pgbouncer.fullname" . }}
+  labels:
+    {{- include "elitea-pgbouncer.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  # One pooler in front of one database is shared stateful capacity: its
+  # server-side budget (poolSize + reservePoolSize, capped by
+  # max_db_connections) is what elitea-main.validateConnectionBudget counts
+  # ONCE, for the whole cluster. Two pods behind one Service would keep two
+  # server pools and double that number.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "elitea-pgbouncer.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "elitea-pgbouncer.selectorLabels" . | nindent 8 }}
+      annotations:
+        # The pod reads pgbouncer.ini once, at start. Without this a config
+        # edit would leave every running pod serving the old file with no sign
+        # of it.
+        checksum/config: {{ include (print $.Template.BasePath "/pgbouncer/configmap.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.pgbouncer.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- include "elitea.imagePullSecrets" (dict "local" .Values.pgbouncer.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
+      initContainers:
+        # The userlist is one line: "user" "password". The Secret carries the
+        # two halves as keys; this writes the line pgbouncer reads, at 0600,
+        # and removes anything in the memory-backed directory that the Secret
+        # does not carry. The pod's single user (the image's postgres user)
+        # both writes and reads it.
+        - name: userlist
+          image: "{{ .Values.pgbouncer.image.repository }}:{{ .Values.pgbouncer.image.tag }}"
+          imagePullPolicy: {{ .Values.pgbouncer.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              printf '"%s" "%s"\n' \
+                "$(cat /material/user)" \
+                "$(cat /material/password)" > /etc/pgbouncer-userlist/userlist.txt
+              chmod 600 /etc/pgbouncer-userlist/userlist.txt
+          securityContext:
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - name: material
+              mountPath: /material
+              readOnly: true
+            - name: userlist
+              mountPath: /etc/pgbouncer-userlist
+      containers:
+        - name: pgbouncer
+          image: "{{ .Values.pgbouncer.image.repository }}:{{ .Values.pgbouncer.image.tag }}"
+          imagePullPolicy: {{ .Values.pgbouncer.image.pullPolicy }}
+          # The image's entrypoint touches the userlist at AUTH_FILE before it
+          # starts pgbouncer. The default (/etc/pgbouncer/userlist.txt) sits on
+          # the read-only ConfigMap mount and the touch would fail; point it at
+          # the writable emptyDir the init container already filled.
+          env:
+            - name: AUTH_FILE
+              value: /etc/pgbouncer-userlist/userlist.txt
+          ports:
+            - name: pgbouncer
+              containerPort: {{ .Values.pgbouncer.service.port }}
+              protocol: TCP
+          # pg_isready speaks the Postgres protocol's startup packet against
+          # 127.0.0.1: it is accepting-connections proof, and pgbouncer answers
+          # it with an authentication request before the client names a
+          # database, so the probe passes even though no [databases] entry has
+          # been exercised yet.
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -h
+                - 127.0.0.1
+                - -p
+                - "{{ .Values.pgbouncer.service.port }}"
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: pgbouncer
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.pgbouncer.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/pgbouncer
+              readOnly: true
+            - name: userlist
+              mountPath: /etc/pgbouncer-userlist
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "elitea-pgbouncer.fullname" . }}-config
+        - name: material
+          secret:
+            secretName: {{ .Values.pgbouncer.credentialsSecretName }}
+            # 0440 with the pod's fsGroup: the image's entrypoint drops to the
+            # postgres user, so the read bit has to survive that.
+            defaultMode: 0440
+        - name: userlist
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+      {{- with .Values.pgbouncer.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.pgbouncer.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.pgbouncer.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

@@ -133,8 +133,9 @@ const advisoryLockClass = 0x454C5041 // "ELPA"
 // builds at once.
 //
 // IT IS A CONNECTION BUDGET, not a throughput knob. Ensure holds one pool
-// connection for its whole run — the advisory lock is session scoped, so it
-// cannot be released earlier — while projectprovisioning takes FURTHER
+// connection for its whole run — the advisory lock lives in a transaction
+// that stays open for the run, so it cannot be released earlier — while
+// projectprovisioning takes FURTHER
 // connections from that same pool for its steps, and migrate.Runner.ApplyTenant
 // takes one of its own. The pool defaults to max(4, NumCPU) connections, so on
 // a small pod four simultaneous first logins would hold every connection for
@@ -522,24 +523,38 @@ func (e *Ensurer) Ensure(ctx context.Context, userID int64) (int64, error) {
 		return 0, nil
 	}
 
-	// The lock is held for the whole check-and-create, and it is SESSION
-	// scoped rather than transaction scoped because provisioning is not one
-	// transaction: projectprovisioning commits the project row before it can
-	// apply the tenant corpus to it (see that package's doc comment), so a
-	// transaction-scoped lock would be released by the first commit and two
-	// replicas would each create a `project_user_<uid>` row. centry.project has
-	// no unique index on `name`, so nothing else would stop them.
-	connection, err := e.pool.Acquire(ctx)
+	// The lock is held for the whole check-and-create. It is a transaction
+	// lock inside a transaction this attempt keeps open, not a session lock,
+	// for the same reason the secrets backfill's is (issue #964): a session
+	// lock belongs to the backend that took it, and a connection pooler in
+	// transaction mode hands that backend to another client between
+	// statements, so the lock would stop serialising. The attempt itself is
+	// not one transaction — projectprovisioning commits the project row
+	// before it can apply the tenant corpus to it (see that package's doc
+	// comment) — so the lock transaction is a separate one, on a connection
+	// that does no other work, and the pooler pins it to one backend for the
+	// life of the open transaction. Ending it releases the lock; centry.project
+	// has no unique index on `name`, so this lock is what stops two replicas
+	// each creating a `project_user_<uid>` row.
+	lockConnection, err := e.pool.Acquire(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("personalproject: acquire connection: %w", err)
 	}
-	defer connection.Release()
+	defer lockConnection.Release()
 
+	lockTx, err := lockConnection.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("personalproject: begin lock transaction: %w", err)
+	}
 	var locked bool
-	if err := connection.QueryRow(ctx,
-		`SELECT pg_try_advisory_lock($1::integer, $2::integer)`,
+	if err := lockTx.QueryRow(ctx,
+		`SELECT pg_try_advisory_xact_lock($1::integer, $2::integer)`,
 		int32(advisoryLockClass), accountKey,
 	).Scan(&locked); err != nil {
+		if rollErr := lockTx.Rollback(context.WithoutCancel(ctx)); rollErr != nil {
+			e.logger.WarnContext(ctx, "personal project lock transaction was not ended",
+				"user_id", userID, "err", rollErr)
+		}
 		return 0, fmt.Errorf("personalproject: lock user %d: %w", userID, err)
 	}
 	if !locked {
@@ -547,20 +562,21 @@ func (e *Ensurer) Ensure(ctx context.Context, userID int64) (int64, error) {
 		// Waiting would pin this connection for as long as a tenant migration
 		// takes; the caller polls, so returning "not ready yet" is both cheaper
 		// and truthful.
+		if rollErr := lockTx.Rollback(context.WithoutCancel(ctx)); rollErr != nil {
+			e.logger.WarnContext(ctx, "personal project lock transaction was not ended",
+				"user_id", userID, "err", rollErr)
+		}
 		return 0, nil
 	}
 	defer func() {
-		// context.WithoutCancel: the unlock must run even when ctx has expired,
-		// otherwise the lock lives until the connection is closed and every
-		// later attempt reports "someone else is provisioning".
+		// context.WithoutCancel: the lock must end even when ctx has expired,
+		// otherwise it lives until the connection is closed and every later
+		// attempt reports "someone else is provisioning".
 		unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		if _, unlockErr := connection.Exec(unlockCtx,
-			`SELECT pg_advisory_unlock($1::integer, $2::integer)`,
-			int32(advisoryLockClass), accountKey,
-		); unlockErr != nil {
-			e.logger.WarnContext(ctx, "personal project advisory lock was not released",
-				"user_id", userID, "err", unlockErr)
+		if rollErr := lockTx.Rollback(unlockCtx); rollErr != nil {
+			e.logger.WarnContext(ctx, "personal project lock transaction was not ended",
+				"user_id", userID, "err", rollErr)
 		}
 	}()
 

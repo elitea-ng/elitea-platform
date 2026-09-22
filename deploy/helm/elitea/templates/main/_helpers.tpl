@@ -741,10 +741,16 @@ worker hold one pool each and do not autoscale; they are covered by
 server. Modelling every component here would drift the moment one changes,
 and the term that actually moves is the one this counts.
 
-The replica count is the HPA's maxReplicas when autoscaling is on, because the
-question is what this release may consume WITHOUT anybody doing anything —
-`replicaCount` would check a state the autoscaler is free to leave.
-*/}}
+ The replica count is the HPA's maxReplicas when autoscaling is on, because the
+ question is what this release may consume WITHOUT anybody doing anything —
+ `replicaCount` would check a state the autoscaler is free to leave.
+
+ When pgbouncer.enabled, the check splits: the server-side term becomes the
+ pooler's poolSize + reservePoolSize ONCE for the whole cluster (main's
+ replicas share its server pool, and max_db_connections caps it at exactly
+ that sum), and a second client-side term keeps every replica's pools under
+ pgbouncer.maxClientConn. See the pooler's section in values.yaml.
+ */}}
 {{- define "elitea-main.validateConnectionBudget" -}}
 {{- $main := .Values.main -}}
 {{- $pg := .Values.postgresql | default dict -}}
@@ -754,6 +760,26 @@ question is what this release may consume WITHOUT anybody doing anything —
 {{- $primary := get $env "ELITEA_DATABASE_MAX_CONNS" | toString -}}
 {{- if and $runtimeOn (not $primary) -}}
 {{- fail "main.runtime.enabled is true but main.env.ELITEA_DATABASE_MAX_CONNS is unset, so this release's connection use cannot be computed. cmd/elitea-main/database_pool.go returns early when it is unset and pgx then applies max(4, numCPU) — a value that depends on the node the pod lands on. With the runtime plane on, each replica ALSO opens 36 isolated runtime-plane connections that may not share capacity, so at autoscaling.maxReplicas the total is the number that exhausts the server. Set it explicitly (1..64)." -}}
+{{- end -}}
+
+{{- $pb := .Values.pgbouncer | default dict -}}
+{{- if $pb.enabled -}}
+{{/*
+  With the pooler in the path, the arithmetic splits in two, and each half
+  guards a different exhaustion.
+
+  Server side: every main replica's pools share the pooler's single server
+  pool, so main's server-side cost is poolSize + reservePoolSize ONCE, for the
+  whole cluster — the number the replica count used to multiply. The pooler
+  cannot open more than that (its max_db_connections is rendered as the sum),
+  so this term is exact, not a ceiling. It does not depend on
+  ELITEA_DATABASE_MAX_CONNS, so it runs even when that is unset.
+*/}}
+{{- $poolServer := add (int (default 48 $pb.poolSize)) (int (default 4 $pb.reservePoolSize)) -}}
+{{- $poolAvailable := sub (int (default 100 $pg.maxConnections)) (int (default 25 $pg.reservedConnections)) -}}
+{{- if gt $poolServer $poolAvailable -}}
+{{- fail (printf "pgbouncer.poolSize + pgbouncer.reservePoolSize is %d server-side connections for the whole cluster, but only %d are available (postgresql.maxConnections %d minus reservedConnections %d). The pooler cannot open more than poolSize + reserve (its max_db_connections is their sum), so raising it does not help: lower pgbouncer.poolSize, raise postgresql.maxConnections to match the server you actually run, or reserve fewer connections for the direct consumers." $poolServer $poolAvailable (int (default 100 $pg.maxConnections)) (int (default 25 $pg.reservedConnections))) -}}
+{{- end -}}
 {{- end -}}
 
 {{- if $primary -}}
@@ -775,10 +801,26 @@ question is what this release may consume WITHOUT anybody doing anything —
 {{- $replicas = int $main.autoscaling.maxReplicas -}}
 {{- end -}}
 
+{{- if $pb.enabled -}}
+{{/*
+  Client side: the pooler does not limit how many client connections elitea-
+  main opens; it only bounds what they cost on the server. The sum of every
+  replica's pools still has to fit under pgbouncer.maxClientConn, or the
+  pooler starts refusing main's own connections and the read plane fails with
+  'no more connections allowed'.
+*/}}
+{{- $client := mul $perReplica $replicas -}}
+{{- $clientCap := int (default 1024 $pb.maxClientConn) -}}
+{{- if gt $client $clientCap -}}
+{{- fail (printf "this release's elitea-main pools can open %d client connections (%d per replica x %d replicas), but pgbouncer.maxClientConn allows %d. The pooler refuses the excess and main loses its own database: lower main.env.ELITEA_DATABASE_MAX_CONNS or the ELITEA_RUNTIME_DB_*_MAX_CONNS pools, lower autoscaling.maxReplicas, or raise pgbouncer.maxClientConn." $client $perReplica $replicas $clientCap) -}}
+{{- end -}}
+{{- else -}}
+
 {{- $total := mul $perReplica $replicas -}}
 {{- $available := sub (int (default 100 $pg.maxConnections)) (int (default 25 $pg.reservedConnections)) -}}
 {{- if gt $total $available -}}
-{{- fail (printf "this release can open %d PostgreSQL connections (%d per elitea-main replica x %d replicas) but only %d are available (postgresql.maxConnections %d minus reservedConnections %d). Exhaustion does not surface on the replica that caused it: the next component to connect — usually a migration Job or the scheduler — fails with 'sorry, too many clients already'. Lower main.env.ELITEA_DATABASE_MAX_CONNS or the ELITEA_RUNTIME_DB_*_MAX_CONNS pools, lower autoscaling.maxReplicas, or raise postgresql.maxConnections to match the server you actually run." $total $perReplica $replicas $available (int (default 100 $pg.maxConnections)) (int (default 25 $pg.reservedConnections))) -}}
+{{- fail (printf "this release can open %d PostgreSQL connections (%d per elitea-main replica x %d replicas) but only %d are available (postgresql.maxConnections %d minus reservedConnections %d). Exhaustion does not surface on the replica that caused it: the next component to connect — usually a migration Job or the scheduler — fails with 'sorry, too many clients already'. Lower main.env.ELITEA_DATABASE_MAX_CONNS or the ELITEA_RUNTIME_DB_*_MAX_CONNS pools, lower autoscaling.maxReplicas, raise postgresql.maxConnections to match the server you actually run, or put elitea-main behind the pgbouncer component so its replicas share one server pool." $total $perReplica $replicas $available (int (default 100 $pg.maxConnections)) (int (default 25 $pg.reservedConnections))) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- end }}

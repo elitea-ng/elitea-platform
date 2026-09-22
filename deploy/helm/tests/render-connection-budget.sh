@@ -108,6 +108,69 @@ else
   fail "the default install no longer renders"
 fi
 
+# ── 6. the pooler (issue #964) ──────────────────────────────────────────────
+#
+# With pgbouncer.enabled the guard splits: the server-side term becomes
+# poolSize + reservePoolSize ONCE for the whole cluster, and a client-side
+# term keeps every replica's pools under pgbouncer.maxClientConn. values-
+# standalone.yaml ships the pooler OFF (its Postgres is operator-supplied), so
+# each assertion below turns it on explicitly with the three values the
+# component refuses without.
+PB=(--set pgbouncer.enabled=true
+    --set pgbouncer.postgresHost=pg.example.invalid
+    --set pgbouncer.database=elitea
+    --set pgbouncer.credentialsSecretName=pgbouncer-credentials)
+
+echo "== a pooler without its three prerequisites is refused, named by field =="
+if output="$(render "${PB[@]}" --set pgbouncer.postgresHost=null 2>&1)"; then
+  fail "the pooler rendered without a postgresHost"
+elif [[ "$output" != *"pgbouncer.enabled=true needs pgbouncer.postgresHost"* ]]; then
+  fail "refused for the wrong reason: $output"
+else
+  note "refused, and the message names the missing field"
+fi
+
+echo "== a pooler block set while the component is off is refused =="
+if output="$(render --set pgbouncer.postgresHost=pg.example.invalid 2>&1)"; then
+  fail "a dead pgbouncer.postgresHost rendered while pgbouncer.enabled is false"
+elif [[ "$output" != *"pgbouncer.enabled is false"* ]]; then
+  fail "refused for the wrong reason: $output"
+else
+  note "refused: the dead setting is loud"
+fi
+
+echo "== a pooler pool that outgrows the server budget is refused =="
+if output="$(render "${PB[@]}" --set pgbouncer.poolSize=180 2>&1)"; then
+  fail "poolSize 180 + reserve 4 = 184 rendered against a server budget of 175"
+else
+  for fragment in "184 server-side connections" "only 175 are available"; do
+    if [[ "$output" != *"$fragment"* ]]; then
+      fail "the refusal does not show its working — missing: $fragment"
+    fi
+  done
+  note "refused: 184 = 180 + 4, against 175"
+fi
+
+echo "== a replica fan-out that outgrows the pooler's client ceiling is refused =="
+if output="$(render "${PB[@]}" --set main.env.ELITEA_DATABASE_MAX_CONNS=64 --set pgbouncer.maxClientConn=300 2>&1)"; then
+  fail "4 replicas x (64 + 36) = 400 client connections rendered under a maxClientConn of 300"
+else
+  for fragment in "400 client connections" "100 per replica x 4" "pgbouncer.maxClientConn allows 300"; do
+    if [[ "$output" != *"$fragment"* ]]; then
+      fail "the refusal does not show its working — missing: $fragment"
+    fi
+  done
+  note "refused: 400 = 100 x 4, against 300"
+fi
+
+# The client-side refusal must not have been the server-side one: 48 + 4 = 52
+# is inside 175, so only the client term can have fired.
+if render "${PB[@]}" --set main.env.ELITEA_DATABASE_MAX_CONNS=4 >/dev/null 2>&1; then
+  note "a pooler topology inside both budgets renders (52 server, 160 client)"
+else
+  fail "the guard refuses a pooler topology inside both budgets, so it is not a guard"
+fi
+
 if [ "$failures" -ne 0 ]; then
   echo "render-connection-budget: $failures assertion(s) failed" >&2
   exit 1

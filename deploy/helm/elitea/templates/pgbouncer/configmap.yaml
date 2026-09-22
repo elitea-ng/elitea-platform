@@ -1,0 +1,59 @@
+{{- if .Values.pgbouncer.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "elitea-pgbouncer.fullname" . }}-config
+  labels:
+    {{- include "elitea-pgbouncer.labels" . | nindent 4 }}
+data:
+  # Mirrors deploy/runtime/pgbouncer.ini, which the standalone compose stack
+  # mounts as-is. The differences: the [databases] entry and the pool sizes
+  # are chart values, and the userlist path is the pod's emptyDir rather than
+  # a bind mount.
+  pgbouncer.ini: |
+    [databases]
+    {{ .Values.pgbouncer.database }} = host={{ .Values.pgbouncer.postgresHost }} port={{ .Values.pgbouncer.postgresPort }}
+
+    [pgbouncer]
+    listen_addr = 0.0.0.0
+    listen_port = {{ .Values.pgbouncer.service.port }}
+    unix_socket_dir = /tmp
+
+    auth_type = scram-sha-256
+    auth_file = /etc/pgbouncer-userlist/userlist.txt
+
+    pool_mode = transaction
+
+    ; Client side: every elitea-main replica's pools (product pool plus the
+    ; six runtime pools) connect here. Bounded, not enforced, server-side.
+    max_client_conn = {{ .Values.pgbouncer.maxClientConn }}
+
+    ; Server side: the shared pool. A short burst may take up to
+    ; reserve_pool_size more for up to reserve_pool_timeout seconds before it
+    ; queues.
+    default_pool_size = {{ .Values.pgbouncer.poolSize }}
+    min_pool_size = {{ .Values.pgbouncer.minPoolSize }}
+    reserve_pool_size = {{ .Values.pgbouncer.reservePoolSize }}
+    reserve_pool_timeout = 5
+
+    ; A hard cap on this pooler's server-side connections for the database:
+    ; pool plus reserve. The cap keeps the pooler itself from ever driving
+    ; Postgres past its budget, whatever the client side does.
+    max_db_connections = {{ add .Values.pgbouncer.poolSize .Values.pgbouncer.reservePoolSize }}
+
+    ; pgx caches named prepared statements per client connection. Track them
+    ; so a backend reassignment re-prepares instead of answering 42P05.
+    max_prepared_statements = {{ .Values.pgbouncer.maxPreparedStatements }}
+
+    ; A server connection returns to the pool between transactions. Drop
+    ; whatever session state the previous client left on it: settings,
+    ; prepared statements, temp tables.
+    server_reset_query = DISCARD ALL
+
+    ; Recycle server connections so no idle backend holds a slot forever.
+    server_idle_timeout = 300
+    server_lifetime = 3600
+
+    ; Ignore extra_float_digits at connect time; pgx sets it to 13 by default.
+    ignore_startup_parameters = extra_float_digits
+{{- end }}
