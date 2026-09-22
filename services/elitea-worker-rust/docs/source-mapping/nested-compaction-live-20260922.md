@@ -208,3 +208,18 @@ This run closes the observed waiting-parent recovery failure from chat 615 for o
 It proves continued child work, repeated compaction, parent completion, and browser reload after whole-worker loss.
 It does not prove concurrent sibling recovery, deeper delegated recovery, graph recovery, or external-effect reconciliation.
 The completed-child delivery race has component and PostgreSQL evidence, but no separate deployed failure-injection case yet.
+
+## Scoped delegation recovery
+
+`src/agents/application_tools.rs::build_uncached` now binds each child's admitted agent names to its model-scope storage configuration.
+This configuration shares the root claim but does not share child histories or pending calls.
+`ScopedModelCheckpoint` applies the same delegation boundary with the child's durable session identity.
+`ScopedDelegationModel` uses the restored scope writer after the before-model callback initializes it.
+It replays the stored grandchild call through normal ADK dispatch.
+Leaf agents keep their existing model path.
+Guard replay retains its separate control path.
+
+The new scoped ADK Runner test interrupts a child while its own delegated call waits.
+Recovery emits the same call, retains the child's prepared history, and requests only the final provider response.
+The PostgreSQL-enabled agent suite passes 386 tests; strict Clippy passes.
+These checks do not replace the pending deployed deeper-chain and concurrent-sibling crash test.

@@ -7,6 +7,64 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+use crate::agents::context_budget::{
+    ModelRequestBudget, RequestContextBudget, RequestContextUsage,
+};
+use crate::agents::context_management::ContextCompactionPlan;
+use crate::agents::model_scope::{ModelScopeBackend, ModelScopeSessions};
+use crate::agents::request::ModelContextLimits;
+
+struct Budget;
+impl ModelRequestBudget for Budget {
+    fn measure(&self, request: &LlmRequest) -> adk_rust::Result<RequestContextUsage> {
+        RequestContextBudget::resolve(
+            Some(ModelContextLimits {
+                context_window_tokens: 8000,
+                max_output_tokens: 1000,
+                context_window_fallback: false,
+                max_output_fallback: false,
+                max_input_tokens: None,
+            }),
+            &serde_json::Map::new(),
+            Some(1000),
+        )
+        .unwrap()
+        .unwrap()
+        .measure_provider_request(&serde_json::to_vec(request).unwrap(), 1_048_576)
+    }
+}
+
+fn scoped_runner(
+    storage: &ModelScopeSessions,
+    probe: Arc<Probe>,
+    sessions: Arc<dyn SessionService>,
+) -> adk_rust::runner::Runner {
+    let scope = storage.checkpoint(
+        ContextCompactionPlan {
+            max_context_tokens: 8000,
+            preserve_recent_messages: 2,
+            preserve_system_messages: true,
+            summary_instructions: "Preserve delegated work. {messages}".into(),
+        },
+        Arc::new(Budget),
+        probe.clone(),
+        None,
+        None,
+    );
+    let model = scope.clone().delegation_model(probe.clone());
+    let agent = scope
+        .clone()
+        .bind(LlmAgentBuilder::new("parent").model(model).tool(probe))
+        .build()
+        .unwrap();
+    adk_rust::runner::Runner::builder()
+        .app_name("delegation-test")
+        .agent(scope.wrap(Arc::new(agent)))
+        .session_service(sessions)
+        .build()
+        .unwrap()
+}
+
 struct Probe {
     models: AtomicUsize,
     calls: AtomicUsize,
@@ -230,4 +288,73 @@ fn delegation_validation_rejects_mixed_tools_and_duplicate_call_ids() {
         thought_signature: None,
     });
     assert!(validate_calls(&mixed, |name| name == "saved_agent").is_err());
+}
+
+#[tokio::test]
+async fn scoped_child_recovers_its_own_pending_delegation() {
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: "delegation-test".into(),
+            user_id: "user".into(),
+            session_id: Some("parent".into()),
+            state: HashMap::new(),
+        })
+        .await
+        .unwrap();
+    let storage = ModelScopeSessions::new(
+        ModelScopeBackend::Local(sessions.clone()),
+        "execution".into(),
+        1,
+        [1; 32],
+    )
+    .with_application_tools(["saved_agent"].into_iter());
+    let probe = Arc::new(Probe {
+        models: AtomicUsize::new(0),
+        calls: AtomicUsize::new(0),
+        block: AtomicBool::new(true),
+        entered: tokio::sync::Notify::new(),
+    });
+    let first = scoped_runner(&storage, probe.clone(), sessions.clone());
+    let task = tokio::spawn(async move {
+        let mut events = first
+            .run(
+                "user".try_into().unwrap(),
+                "parent".try_into().unwrap(),
+                Content::new("user").with_text("Delegate the inspection"),
+            )
+            .await
+            .unwrap();
+        while let Some(event) = events.next().await {
+            event.unwrap();
+        }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), probe.entered.notified())
+        .await
+        .unwrap();
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    probe.block.store(false, Ordering::SeqCst);
+    let replacement = scoped_runner(
+        &storage.with_pending_model_recovery(),
+        probe.clone(),
+        sessions,
+    );
+    let mut events = replacement
+        .run(
+            "user".try_into().unwrap(),
+            "parent".try_into().unwrap(),
+            Content::new("user").with_text("RECOVERY_INPUT"),
+        )
+        .await
+        .unwrap();
+    let mut final_text = false;
+    while let Some(event) = events.next().await {
+        final_text |= serde_json::to_string(&event.unwrap())
+            .unwrap()
+            .contains("Parent received the child result");
+    }
+    assert!(final_text);
+    assert_eq!(probe.models.load(Ordering::SeqCst), 2);
+    assert_eq!(probe.calls.load(Ordering::SeqCst), 2);
 }

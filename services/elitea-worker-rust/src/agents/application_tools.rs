@@ -1155,7 +1155,10 @@ impl ApplicationAssemblyState<'_> {
             delegated_authorization: delegated_authorization.clone(),
             internal_tools,
             parallel_applications,
-            model_scopes: self.model_scopes.clone(),
+            model_scopes: self
+                .model_scopes
+                .as_ref()
+                .map(|scopes| scopes.with_application_tools(child_tools.agent_tool_names())),
         });
         Ok(Arc::new(BuiltApplication {
             agent,
@@ -1487,6 +1490,10 @@ impl LazyNestedAgent {
     ) -> adk_rust::Result<Arc<dyn Agent>> {
         let (model, toolsets) =
             crate::toolkits::bind_authorization_model_tools(model, toolsets, &mut authorization)?;
+        let model = checkpoint.as_ref().map_or_else(
+            || model.clone(),
+            |checkpoint| checkpoint.clone().delegation_model(model.clone()),
+        );
         let mut builder = LlmAgentBuilder::new(self.name.clone())
             .description(self.description.clone())
             .model(model)

@@ -78,6 +78,14 @@ impl ModelCheckpointWriter {
         ctx: &dyn CallbackContext,
     ) -> adk_rust::Result<()> {
         let identity = ctx.try_identity()?;
+        self.before_application_or_tool_at(ctx, identity).await
+    }
+
+    pub(in crate::agents) async fn before_application_or_tool_at(
+        &self,
+        ctx: &dyn CallbackContext,
+        identity: AdkIdentity,
+    ) -> adk_rust::Result<()> {
         if let Some(name) = ctx.tool_name()
             && self.application_tools.contains(name)
             && self

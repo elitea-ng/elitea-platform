@@ -1,5 +1,6 @@
 //! Reuse the claim-fenced session service for independent child model histories.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -81,6 +82,7 @@ pub(super) struct ModelScopeSessions {
     definition_digest: [u8; 32],
     node_scope: Option<String>,
     recover_pending_models: bool,
+    application_tools: Arc<HashSet<String>>,
 }
 
 impl ModelScopeSessions {
@@ -97,6 +99,7 @@ impl ModelScopeSessions {
             definition_digest,
             node_scope: None,
             recover_pending_models: false,
+            application_tools: Arc::default(),
         }
     }
 
@@ -109,6 +112,12 @@ impl ModelScopeSessions {
     pub(super) fn for_node(&self, identity: &str) -> Self {
         let mut scopes = self.clone();
         scopes.node_scope = Some(identity.to_owned());
+        scopes
+    }
+
+    pub(super) fn with_application_tools<'a>(&self, names: impl Iterator<Item = &'a str>) -> Self {
+        let mut scopes = self.clone();
+        scopes.application_tools = Arc::new(names.map(str::to_owned).collect());
         scopes
     }
 
@@ -319,6 +328,7 @@ impl ScopedModelCheckpoint {
                     self.storage.generation,
                     self.storage.definition_digest,
                 )
+                .with_application_tools(self.storage.application_tools.iter().map(String::as_str))
                 .with_request_budget(Some(self.budget.clone()))
                 .with_context_events(self.context_events.clone())
                 .with_context_compaction(Some(compaction));
@@ -400,6 +410,16 @@ impl ScopedModelCheckpoint {
         })
     }
 
+    pub(super) fn delegation_model(self: Arc<Self>, inner: Arc<dyn Llm>) -> Arc<dyn Llm> {
+        if self.storage.application_tools.is_empty() {
+            return inner;
+        }
+        Arc::new(ScopedDelegationModel {
+            checkpoint: self,
+            inner,
+        })
+    }
+
     async fn before_model(
         &self,
         context: &dyn ReadonlyContext,
@@ -441,11 +461,41 @@ impl ScopedModelCheckpoint {
                     let writer = scope.writer(context.as_ref()).await?;
                     writer
                         .checkpoint
-                        .before_tool(writer.identity.clone(), context.invocation_id())
+                        .before_application_or_tool_at(context.as_ref(), writer.identity.clone())
                         .await?;
                     Ok(None)
                 })
             }))
+    }
+}
+
+struct ScopedDelegationModel {
+    checkpoint: Arc<ScopedModelCheckpoint>,
+    inner: Arc<dyn Llm>,
+}
+
+#[async_trait]
+impl Llm for ScopedDelegationModel {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+    fn schema_adapter(&self) -> &dyn adk_rust::schema_adapter::SchemaAdapter {
+        self.inner.schema_adapter()
+    }
+    fn uses_interactions_api(&self) -> bool {
+        self.inner.uses_interactions_api()
+    }
+    async fn generate_content(
+        &self,
+        request: LlmRequest,
+        stream: bool,
+    ) -> adk_rust::Result<adk_rust::LlmResponseStream> {
+        let writer = self.checkpoint.writer.get().ok_or_else(invalid_scope)?;
+        writer
+            .checkpoint
+            .delegation_model(self.inner.clone())
+            .generate_content(request, stream)
+            .await
     }
 }
 
