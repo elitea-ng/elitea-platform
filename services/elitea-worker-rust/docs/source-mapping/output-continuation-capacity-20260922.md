@@ -203,7 +203,37 @@ The old writer is rejected. The replacement calls the model once for the pending
 The ADK test returns one completed answer after multiple continuations and verifies its durable receipt content.
 All 401 agent tests pass with PostgreSQL enabled.
 
-This candidate is not yet deployed or accepted through the browser.
+The candidate is deployed below. Browser acceptance remains open.
 Live provider seam behavior, worker loss during a continuation request, and parent delivery still require rehearsal verification.
 The current composition attaches this wrapper through `ScopedModelCheckpoint`.
 Explicitly disabled legacy context plans bypass that scope; their automatic continuation remains an open composition check.
+
+## Nested browser failure and transport snapshot ownership
+
+Commit `0103d7c3` deploys as worker image `sha256:eeb175ea2c3c9e2499b5dc297233b80e8aa0d2e1abff14578b42ed80dda14866`.
+The replacement retains its environment, five mounts, networks, and resource limits.
+Fresh headed Playwright runs chat 627 with parent application 46 and child application 45.
+The parent allows 4,000 output tokens. The child allows 512 and must return 120 ordered records.
+Execution `36b811a2859dd1980678fd63fa1e52ef` fails after saving continuation round one.
+The worker reports `model_gateway.completion_reused` from the child transport.
+The browser displays the terminal error. No completed child result reaches the parent.
+
+The OpenAI-compatible transport treats every recorded answer as a final completion.
+Its second segment cannot replace the previous output-limited snapshot.
+The native Anthropic transport has the same completion guard.
+Tests must cover both real stream parsers across repeated length terminals and the final stop.
+A final stop must still reject a duplicate completion.
+This failure does not concern the compaction trigger or context capacity.
+
+The transport correction marks output-limited completion snapshots as replaceable.
+A subsequent segment replaces that snapshot; the scoped adapter still owns the combined durable answer.
+A normally completed or consumed snapshot remains protected against replacement.
+This preserves direct chat truncation snapshots and existing completion-consumption rules.
+The OpenAI-compatible regression reproduces `model_gateway.completion_reused` before this correction.
+Both transport regressions parse two output-limited segments, a final stop, and a rejected duplicate final response.
+The correction requires a new image and browser rerun before acceptance.
+
+All 47 provider-facade tests pass after the transport correction.
+The suite also corrects two stale summary tests that assumed the retired two-call summary ceiling.
+They now verify three independent summaries without consuming the ordinary chat model allowance.
+Strict Clippy passes for the transport correction. Browser rerun remains pending.

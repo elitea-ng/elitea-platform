@@ -1206,7 +1206,7 @@ async fn context_measurement_matches_dispatched_body_without_spending_turns() {
 async fn adk_summaries_are_complete_and_isolated_from_the_chat_binding() {
     use adk_rust::{BaseEventsSummarizer as _, Event, agent::LlmEventSummarizer};
     let (client, captured) = test_model_gateway_client(
-        (0..3)
+        (0..4)
             .map(|_| {
                 TestModelGatewayOutcome::Response(test_model_gateway_response(Body::new(
                     Full::new(Bytes::from(ordinary_sse())),
@@ -1230,7 +1230,7 @@ async fn adk_summaries_are_complete_and_isolated_from_the_chat_binding() {
     let mut event = Event::new("summary-fixture");
     event.author = "user".into();
     event.set_content(Content::new("user").with_text(original.clone()));
-    for _ in 0..2 {
+    for _ in 0..3 {
         let summary = summarizer
             .summarize_events(&[event.clone()])
             .await
@@ -1251,7 +1251,6 @@ async fn adk_summaries_are_complete_and_isolated_from_the_chat_binding() {
                 .is_none()
         );
     }
-    assert!(summarizer.summarize_events(&[event]).await.is_err());
     drain(
         bound
             .generate_for_test(test_model_request("ordinary chat"))
@@ -1262,7 +1261,7 @@ async fn adk_summaries_are_complete_and_isolated_from_the_chat_binding() {
     .unwrap();
     assert_eq!(bound.take_completion_for_test().unwrap(), "Hello 🌍");
     let requests = captured.lock().unwrap();
-    assert_eq!(requests.len(), 3);
+    assert_eq!(requests.len(), 4);
     let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
     assert_eq!(body["stream"], true);
     assert_eq!(body["max_completion_tokens"], 4_000);
@@ -1275,7 +1274,7 @@ async fn adk_summaries_are_complete_and_isolated_from_the_chat_binding() {
             crate::agents::context_summary::CONTRACT
         )
     );
-    let ordinary: serde_json::Value = serde_json::from_slice(&requests[2].body).unwrap();
+    let ordinary: serde_json::Value = serde_json::from_slice(&requests[3].body).unwrap();
     assert_eq!(body["response_format"]["type"], "json_schema");
     assert_eq!(body["response_format"]["json_schema"]["strict"], true);
     assert_eq!(
@@ -1507,4 +1506,53 @@ async fn summary_evidence_repair_uses_native_enum_and_rejects_other_overrides() 
     let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
     assert_eq!(body["response_format"]["json_schema"]["schema"], schema);
     assert_eq!(body["response_format"]["json_schema"]["strict"], true);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn output_limited_completion_allows_next_segment_but_not_duplicate_final() {
+    let complete = String::from_utf8(ordinary_sse()).unwrap();
+    let limited = complete.replace("stop", "length");
+    let outcomes = [limited.clone(), limited, complete.clone(), complete]
+        .into_iter()
+        .map(|body| {
+            TestModelGatewayOutcome::Response(test_model_gateway_response(Body::new(Full::new(
+                Bytes::from(body),
+            ))))
+        })
+        .collect();
+    let (client, captured) =
+        test_model_gateway_client(outcomes, test_model_gateway_config()).unwrap();
+    let bound = client
+        .bind_ordinary(
+            &ClaimScopedEliteaContext::fixture(17, TOKEN),
+            23,
+            test_model_facade_invocation(),
+        )
+        .unwrap();
+    for reason in [
+        adk_rust::FinishReason::MaxTokens,
+        adk_rust::FinishReason::MaxTokens,
+        adk_rust::FinishReason::Stop,
+    ] {
+        let responses = drain(
+            bound
+                .generate_for_test(test_model_request("continue"))
+                .await
+                .unwrap(),
+        )
+        .await
+        .expect("next continuation segment");
+        assert_eq!(responses.last().unwrap().finish_reason, Some(reason));
+    }
+    let duplicate = drain(
+        bound
+            .generate_for_test(test_model_request("continue"))
+            .await
+            .unwrap(),
+    )
+    .await
+    .unwrap_err();
+    assert!(duplicate.code.ends_with("completion_reused"));
+    assert_eq!(captured.lock().unwrap().len(), 4);
+    assert_eq!(bound.take_completion_for_test().unwrap(), "Hello 🌍");
 }

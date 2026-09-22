@@ -392,6 +392,7 @@ impl BoundOpenAiCompatibleFacade {
 #[derive(Default)]
 struct CompletionState {
     value: Option<String>,
+    output_limited: bool,
     consumed: bool,
 }
 
@@ -1237,7 +1238,7 @@ fn model_response_stream(
         }
         let (terminal, completed_text) = state.finish()?;
         if let Some(mut completed_text) = completed_text {
-            record_completion(&mut completed_text, &completion)?;
+            record_completion(&mut completed_text, &completion, terminal.finish_reason == Some(FinishReason::MaxTokens))?;
         }
         yield terminal;
     })
@@ -1304,6 +1305,7 @@ fn record_response(
 fn record_completion(
     accumulated: &mut String,
     completion: &Arc<Mutex<CompletionState>>,
+    output_limited: bool,
 ) -> Result<(), AdkError> {
     let mut state = completion.lock().map_err(|_| {
         model_error(
@@ -1312,7 +1314,7 @@ fn record_completion(
             "the model completion state is unavailable",
         )
     })?;
-    if state.value.is_some() || state.consumed {
+    if (state.value.is_some() && !state.output_limited) || state.consumed {
         return Err(model_error(
             ErrorCategory::Internal,
             "model_gateway.completion_reused",
@@ -1320,6 +1322,7 @@ fn record_completion(
         ));
     }
     state.value = Some(std::mem::take(accumulated));
+    state.output_limited = output_limited;
     Ok(())
 }
 

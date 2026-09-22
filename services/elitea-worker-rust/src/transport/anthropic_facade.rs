@@ -182,6 +182,7 @@ impl BoundAnthropicFacade {
 #[derive(Default)]
 struct AnthropicCompletionState {
     value: Option<String>,
+    output_limited: bool,
     consumed: bool,
 }
 
@@ -1090,7 +1091,7 @@ fn anthropic_response_stream(
         }
         let (terminal, completed_turn) = state.finish()?;
         if completed_turn {
-            record_anthropic_completion(&mut accumulated, &completion)?;
+            record_anthropic_completion(&mut accumulated, &completion, terminal.finish_reason == Some(FinishReason::MaxTokens))?;
         }
         yield terminal;
     })
@@ -1174,6 +1175,7 @@ fn record_anthropic_response(
 fn record_anthropic_completion(
     accumulated: &mut String,
     completion: &Arc<Mutex<AnthropicCompletionState>>,
+    output_limited: bool,
 ) -> Result<(), AdkError> {
     let mut state = completion.lock().map_err(|_| {
         anthropic_error(
@@ -1182,7 +1184,7 @@ fn record_anthropic_completion(
             "the native Anthropic completion state is unavailable",
         )
     })?;
-    if state.value.is_some() || state.consumed {
+    if (state.value.is_some() && !state.output_limited) || state.consumed {
         return Err(anthropic_error(
             ErrorCategory::Internal,
             "completion_reused",
@@ -1190,6 +1192,7 @@ fn record_anthropic_completion(
         ));
     }
     state.value = Some(std::mem::take(accumulated));
+    state.output_limited = output_limited;
     Ok(())
 }
 

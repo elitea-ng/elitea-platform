@@ -20,7 +20,7 @@ Current-platform code defines business behavior, not a requirement to copy its i
 - Chat 619 verifies concurrent siblings, a delegated grandchild, and completed-sibling reuse after worker loss.
 - [Pipeline LLM-node acceptance](source-mapping/pipeline-model-compaction-live-20260922.md) verifies two compactions, 24 reads, exact graph state, and stable reload in chat 621.
 - [Output continuation capacity](source-mapping/output-continuation-capacity-20260922.md) tracks the 64 KiB correction, admitted model restoration, and continued-answer fragment rendering.
-- Its final browser acceptance remains open. Nested output-exhaustion continuation requires separate proof.
+- Direct Continue and exact history reload pass in chat 625. Nested output-exhaustion continuation requires separate proof.
 - Graph recovery and additional crash boundaries remain unverified.
 - The [point 3 audit](source-mapping/point3-audit-20260913.md) records the completed acceptance cases and their limits.
 - Production Rust capability registration remains disabled.
