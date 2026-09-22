@@ -118,7 +118,7 @@ jobs:
         # step spell out: the script's own `docker run` pulls the image inline if
         # this fails, so a stalled pull costs the overlap and never the run.
         run: |
-          timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.63.0-noble \
+          timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble \
             || echo "::warning::pull of the pinned Playwright image failed or timed out; the journey step will pull it inline"
 
       - name: Build the engine image (bake, GHA layer cache)
@@ -175,7 +175,7 @@ jobs:
           # on separate runners today; keeping the numbers distinct means that
           # stays true if they ever do not.
           DEEPWIKI_REAL_PORT: "8088"
-          PLAYWRIGHT_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.63.0-noble
+          PLAYWRIGHT_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.62.1-noble
         run: bash apps/elitea-web/scripts/deepwiki-real-engine.sh
 
       - name: Give the report back to the runner user

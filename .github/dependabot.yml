@@ -257,3 +257,28 @@ updates:
       # FormData internals; re-run `npm run test:unit` to confirm.
       - dependency-name: jsdom
         versions: [">= 30.1.0"]
+      # playwright 1.63.0 stops exposing the body of a response the PAGE has
+      # consumed as a Blob. `Response.text()` returns "" where 1.62.1 returns the
+      # document, so chat.sharing S4/S5 — which read the conversation_export
+      # answer to prove the export is THIS conversation and not an empty file
+      # that merely answered 200 — fail 3/3.
+      #
+      # Measured on one journeys stack built from this branch, swapping ONLY the
+      # Playwright client (same app bundle, same elitea-main, same server):
+      #   server, via request context : status=200 len=320 hasName=true
+      #   same URL fetched in-page    : status=200 len=321
+      #   observed by Playwright 1.62.1: len=321 hasName=true  → S4/S5 PASS
+      #   observed by Playwright 1.63.0: len=0                 → S4/S5 FAIL
+      # The export path itself is correct; only the harness's view of it changed.
+      # Working around it in the spec would mean no longer reading the response,
+      # which is the one assertion that makes "it exported" mean anything (the
+      # spec says so in its own header), so the harness is pinned instead.
+      #
+      # This also keeps mcr.microsoft.com/playwright:v1.62.1-noble — the runner
+      # image and the library must move together (check-playwright-image-tag).
+      # Lift when Playwright restores the body, or when the spec is rewritten to
+      # verify the saved download instead of the response.
+      - dependency-name: "@playwright/test"
+        versions: [">= 1.63.0"]
+      - dependency-name: playwright
+        versions: [">= 1.63.0"]

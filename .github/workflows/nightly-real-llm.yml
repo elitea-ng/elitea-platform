@@ -67,7 +67,7 @@ jobs:
       - name: Pre-pull the pinned Playwright container and the model image
         working-directory: ${{ github.workspace }}
         run: |
-          timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.63.0-noble \
+          timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble \
             || echo "::warning::pull of the pinned Playwright image failed or timed out; the journey step will pull it inline"
           timeout 900 docker compose -f deploy/docker-compose.standalone-full.yml --profile real-llm pull -q llm-real \
             || echo "::warning::pull of the real-model image failed or timed out; compose will pull it inline at up"
@@ -101,7 +101,7 @@ jobs:
           E2E_CHAT_MODEL: vllm/${{ inputs.chat_model || 'qwen3-0.6b' }}
           CHAT_STREAM_PROJECT: elitea-chatstream-nightly-${{ matrix.worker }}
           CHAT_STREAM_PORT: "8089"
-          PLAYWRIGHT_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.63.0-noble
+          PLAYWRIGHT_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.62.1-noble
         run: bash apps/elitea-web/scripts/chat-stream-e2e.sh
       - name: Give the report back to the runner user
         if: always()
