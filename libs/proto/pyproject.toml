@@ -10,7 +10,7 @@ dependencies = [
 
 [project.optional-dependencies]
 generate = [
-  "grpcio-tools==1.84.0",
+  "grpcio-tools==1.76.0",
   "jsonschema==4.26.0",
 ]
 

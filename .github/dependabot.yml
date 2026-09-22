@@ -158,6 +158,17 @@ updates:
       # protobuf < 7; a major here cannot resolve with it (#667).
       - dependency-name: protobuf
         update-types: ["version-update:semver-major"]
+      # grpcio-tools is the SAME constraint one level down, and it is the one
+      # nothing here would have caught: from 1.82.0 it requires
+      # protobuf >= 7.35.1, so `pip install ./libs/proto[generate]` becomes
+      # ResolutionImpossible against the protobuf == 6.33.6 pinned above.
+      # No CI job installs the `generate` extra — ci-python.yml installs
+      # ./libs/proto without extras — so #800 went green on a manifest that
+      # cannot be installed. It is also a generator pin: toolchain.lock and
+      # the version assertions in scripts/contract/generate_proto.sh name
+      # 1.76.0 and protoc 31.1, and moving it rewrites every file under
+      # gen/. It moves with protobuf 7 and a regeneration, not on its own.
+      - dependency-name: grpcio-tools
 
   - package-ecosystem: npm
     directories:
