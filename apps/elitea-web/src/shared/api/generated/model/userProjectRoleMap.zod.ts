@@ -44,7 +44,7 @@ import * as zod from "zod";
 export const UserProjectRoleMap = zod
   .record(zod.string(), zod.array(zod.string()))
   .describe(
-    "NOTE(W2): internal\/api\/v2\/admin\/user_project_permissions.go:99-110 — role name → its sorted permission names, for the first personal project.\n",
+    "NOTE(W2): internal/api/v2/admin/user_project_permissions.go:99-110 — role name → its sorted permission names, for the first personal project.\n",
   );
 
 export type UserProjectRoleMap = zod.input<typeof UserProjectRoleMap>;

@@ -45,12 +45,12 @@ export const UserRecord = zod
   .object({
     id: zod
       .string()
-      .describe('Numeric id serialized as string (fmt.Sprintf(\"%d\")).'),
+      .describe('Numeric id serialized as string (fmt.Sprintf("%d")).'),
     email: zod.string(),
     name: zod.string(),
     roles: zod.array(zod.string()),
   })
-  .describe("NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go:256-258.\n");
+  .describe("NOTE(W2): internal/api/v2/eliteacore/handler.go:256-258.\n");
 
 export type UserRecord = zod.input<typeof UserRecord>;
 export type UserRecordOutput = zod.output<typeof UserRecord>;

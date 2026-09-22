@@ -48,7 +48,7 @@ export const SearchOptions = zod
       .array(zod.looseObject({}))
       .describe("Always empty today (handler.go:187)."),
   })
-  .describe("NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go:167-188.\n");
+  .describe("NOTE(W2): internal/api/v2/eliteacore/handler.go:167-188.\n");
 
 export type SearchOptions = zod.input<typeof SearchOptions>;
 export type SearchOptionsOutput = zod.output<typeof SearchOptions>;

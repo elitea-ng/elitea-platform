@@ -53,7 +53,7 @@ export const PublishSuccessResponse = zod
       ),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go, Handler.Publish.\n",
+    "NOTE(W2): internal/api/v2/eliteacore/handler.go, Handler.Publish.\n",
   );
 
 export type PublishSuccessResponse = zod.input<typeof PublishSuccessResponse>;

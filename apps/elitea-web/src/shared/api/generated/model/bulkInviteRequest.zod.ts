@@ -58,7 +58,7 @@ export const BulkInviteRequest = zod
       ),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/admin\/invites_bulk.go:110-114. The cross product the console submits: every listed account is added to every listed project with the one named role.\n",
+    "NOTE(W2): internal/api/v2/admin/invites_bulk.go:110-114. The cross product the console submits: every listed account is added to every listed project with the one named role.\n",
   );
 
 export type BulkInviteRequest = zod.input<typeof BulkInviteRequest>;

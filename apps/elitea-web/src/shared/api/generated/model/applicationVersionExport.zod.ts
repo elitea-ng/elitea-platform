@@ -72,7 +72,7 @@ export const ApplicationVersionExport = zod
     skills: zod
       .array(ExportedSkillReference)
       .describe(
-        "The skill attachments of this version. The key is ALWAYS present, and the array is empty when the version carries no attachment (internal\/api\/v2\/eliteacore\/export_import.go:364-382, written into the version entry at :169-185). Each entry names a skill in the document's top-level `skills` array. The import and the fork read this array to write the `entity_skill_mapping` rows of the version they create (internal\/api\/v2\/eliteacore\/import_skills.go:397-461).\n",
+        "The skill attachments of this version. The key is ALWAYS present, and the array is empty when the version carries no attachment (internal/api/v2/eliteacore/export_import.go:364-382, written into the version entry at :169-185). Each entry names a skill in the document's top-level `skills` array. The import and the fork read this array to write the `entity_skill_mapping` rows of the version they create (internal/api/v2/eliteacore/import_skills.go:397-461).\n",
       ),
     is_forked: zod.boolean(),
     import_version_uuid: zod
@@ -81,7 +81,7 @@ export const ApplicationVersionExport = zod
       .describe("Present only when the version row has a uuid."),
   })
   .describe(
-    "NOTE(W2): ExportImportGet version entry, internal\/api\/v2\/eliteacore\/export_import.go:176-188.\n",
+    "NOTE(W2): ExportImportGet version entry, internal/api/v2/eliteacore/export_import.go:176-188.\n",
   );
 
 export type ApplicationVersionExport = zod.input<

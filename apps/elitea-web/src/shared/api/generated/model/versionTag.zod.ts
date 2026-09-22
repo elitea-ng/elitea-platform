@@ -47,13 +47,13 @@ export const VersionTag = zod
       .int()
       .optional()
       .describe(
-        "NOTE(#345): the `tags` row this association points at. The applications handler emits it on every version-detail read (versionTags, internal\/api\/v2\/applications\/handler.go). The export and fork echoes project name and data only, so it is optional. A write ignores it: the handler matches a tag by name, the same way pylon does (legacy\/plugins\/elitea_core\/utils\/application_utils.py:219-226).\n",
+        "NOTE(#345): the `tags` row this association points at. The applications handler emits it on every version-detail read (versionTags, internal/api/v2/applications/handler.go). The export and fork echoes project name and data only, so it is optional. A write ignores it: the handler matches a tag by name, the same way pylon does (legacy/plugins/elitea_core/utils/application_utils.py:219-226).\n",
       ),
     name: zod.string().nullish(),
     data: zod.unknown().optional(),
   })
   .describe(
-    "NOTE(W2): tag entries emitted by ExportImportGet (eliteacore\/handler.go:2650-2655 — name always a scanned string there) and Fork's response echo (:2431-2438), which builds entries from unvalidated client maps: a fork payload tag without a name yields {\"name\": null, ...}. Hence name is nullable and not required. NOTE(#345): the same shape is now also the WRITE shape — `tags` on VersionWriteRequest refs this schema, matching pylon's own PromptTagUpdateModel (name, optional data, optional id).\n",
+    "NOTE(W2): tag entries emitted by ExportImportGet (eliteacore/handler.go:2650-2655 — name always a scanned string there) and Fork's response echo (:2431-2438), which builds entries from unvalidated client maps: a fork payload tag without a name yields {\"name\": null, ...}. Hence name is nullable and not required. NOTE(#345): the same shape is now also the WRITE shape — `tags` on VersionWriteRequest refs this schema, matching pylon's own PromptTagUpdateModel (name, optional data, optional id).\n",
   );
 
 export type VersionTag = zod.input<typeof VersionTag>;

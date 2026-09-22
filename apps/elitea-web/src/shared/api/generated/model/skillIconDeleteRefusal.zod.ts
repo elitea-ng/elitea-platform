@@ -47,7 +47,7 @@ export const SkillIconDeleteRefusal = zod
     error: zod.string(),
   })
   .describe(
-    'NOTE(W2): internal\/api\/v2\/eliteacore\/skill_icon.go:405-450 (DeleteSkillIcon). The refusals on this route carry `ok` beside `error`, because the success body is `{\"ok\": true}` and a client branches on one key.\n',
+    'NOTE(W2): internal/api/v2/eliteacore/skill_icon.go:405-450 (DeleteSkillIcon). The refusals on this route carry `ok` beside `error`, because the success body is `{"ok": true}` and a client branches on one key.\n',
   );
 
 export type SkillIconDeleteRefusal = zod.input<typeof SkillIconDeleteRefusal>;

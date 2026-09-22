@@ -49,7 +49,7 @@ export const SupportPredictResponse = zod.object({
   events_url: zod
     .string()
     .describe(
-      "The SSE stream to subscribe to for this turn, identical in shape to the one the chat surface uses. The reference streamed this over socket.io (`sio\/support.py`); this service has no socket.io server.\n",
+      "The SSE stream to subscribe to for this turn, identical in shape to the one the chat surface uses. The reference streamed this over socket.io (`sio/support.py`); this service has no socket.io server.\n",
     ),
   created: zod.boolean().optional(),
 });

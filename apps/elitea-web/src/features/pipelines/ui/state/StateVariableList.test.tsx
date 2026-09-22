@@ -2,7 +2,7 @@ import { fireEvent, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_BRAND_PACK, buildEliteaTheme } from '@/shared/brand';
-import { renderWithTheme } from '@/shared/ui/lib/testTheme';
+import { remToPx, renderWithTheme } from '@/shared/ui/lib/testTheme';
 
 import { StateVariableList, type StateVariableListProps } from './StateVariableList';
 
@@ -75,7 +75,10 @@ describe('StateVariableList', () => {
   it('sizes the "Context" add button off the bodySmall typography fontSize', () => {
     renderWithTheme(<StateVariableList {...baseProps()} />);
     expect(screen.getByRole('button', { name: 'Context' })).toHaveStyle({
-      fontSize: theme.typography.bodySmall.fontSize,
+      // jsdom@30 resolves rem against the root font size before reporting a
+      // computed length (jsdom@29 echoed the declaration back), so the computed
+      // value is px while the theme still declares rem.
+      fontSize: remToPx(theme.typography.bodySmall.fontSize),
     });
   });
 

@@ -47,7 +47,7 @@ export const CanvasPresence = zod
     project_id: zod.string(),
     entity_id: zod
       .string()
-      .describe("The canvas uuid. Mirrors internal\/events DomainEvent."),
+      .describe("The canvas uuid. Mirrors internal/events DomainEvent."),
     entity_type: zod
       .string()
       .describe(
@@ -61,7 +61,7 @@ export const CanvasPresence = zod
     editors: zod
       .array(CanvasEditor)
       .describe(
-        'Never null. An empty roster is `[]`, so a client can tell \"nobody is editing\" from \"this server did not answer the field\". The two service principals the reference filters in the UI (admin@centry.user, system@centry.user) are suppressed here instead.\n',
+        'Never null. An empty roster is `[]`, so a client can tell "nobody is editing" from "this server did not answer the field". The two service principals the reference filters in the UI (admin@centry.user, system@centry.user) are suppressed here instead.\n',
       ),
     ttl_seconds: zod
       .int()
@@ -70,7 +70,7 @@ export const CanvasPresence = zod
       ),
   })
   .describe(
-    "The roster. This is BOTH the POST's answer and the payload of the `canvas.editors` event published on the project SSE channel (`project:{project_id}:events`, GET \/elitea_core\/events\/prompt_lib\/{project_id}), so a client parses one shape either way.\n",
+    "The roster. This is BOTH the POST's answer and the payload of the `canvas.editors` event published on the project SSE channel (`project:{project_id}:events`, GET /elitea_core/events/prompt_lib/{project_id}), so a client parses one shape either way.\n",
   );
 
 export type CanvasPresence = zod.input<typeof CanvasPresence>;

@@ -49,7 +49,7 @@ export const MessageFeedback = zod
     comment: zod.string().optional(),
   })
   .describe(
-    "One user's like\/dislike + optional comment on a message (#880). `rating` is never `0` — the stored row's own CHECK constraint refuses it (tenant\/0135_chat_message_feedback.sql) — only its ABSENCE (no `mine` on the summary) means \"not rated\".\n",
+    "One user's like/dislike + optional comment on a message (#880). `rating` is never `0` — the stored row's own CHECK constraint refuses it (tenant/0135_chat_message_feedback.sql) — only its ABSENCE (no `mine` on the summary) means \"not rated\".\n",
   );
 
 export type MessageFeedback = zod.input<typeof MessageFeedback>;

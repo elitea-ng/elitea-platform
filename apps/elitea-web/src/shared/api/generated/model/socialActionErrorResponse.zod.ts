@@ -47,7 +47,7 @@ export const SocialActionErrorResponse = zod
     error: zod.string(),
   })
   .describe(
-    'NOTE(W2): the pylon-era `{\"ok\": false, \"error\": \"...\"}` envelope, DIFFERENT from this spec\'s normal ErrorResponse `{\"error\": \"...\"}` shape (see ErrorResponse\'s own description). Written on exactly 5 failure paths in social\/handler.go: Like (:268), Unlike (:301), Pin (:321), Unpin (:341), CreateFeedback (:419). Referenced only on the operations whose handler body actually returns it — every other error path in this file keeps using ErrorResponse.\n',
+    'NOTE(W2): the pylon-era `{"ok": false, "error": "..."}` envelope, DIFFERENT from this spec\'s normal ErrorResponse `{"error": "..."}` shape (see ErrorResponse\'s own description). Written on exactly 5 failure paths in social/handler.go: Like (:268), Unlike (:301), Pin (:321), Unpin (:341), CreateFeedback (:419). Referenced only on the operations whose handler body actually returns it — every other error path in this file keeps using ErrorResponse.\n',
   );
 
 export type SocialActionErrorResponse = zod.input<

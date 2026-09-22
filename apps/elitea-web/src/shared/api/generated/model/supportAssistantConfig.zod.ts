@@ -61,7 +61,7 @@ export const SupportAssistantConfig = zod
     user: SupportAssistantUser.optional(),
   })
   .describe(
-    'Only `enabled` is required. A disabled deployment answers `{\"enabled\": false}` and NOTHING ELSE — no project id, no operator strings, no identity — so a feature that is off is not also a disclosure channel.\n',
+    'Only `enabled` is required. A disabled deployment answers `{"enabled": false}` and NOTHING ELSE — no project id, no operator strings, no identity — so a feature that is off is not also a disclosure channel.\n',
   );
 
 export type SupportAssistantConfig = zod.input<typeof SupportAssistantConfig>;

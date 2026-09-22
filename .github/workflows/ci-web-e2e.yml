@@ -295,7 +295,7 @@ jobs:
         # this has not finished, so a slow or failed pull costs the overlap and
         # never the run. Bounded so a stalled pull cannot outlive the job.
         run: |
-          nohup timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble >/tmp/playwright-pull.log 2>&1 &
+          nohup timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.63.0-noble >/tmp/playwright-pull.log 2>&1 &
       - name: Build elitea-main:e2e, elitea-web:e2e and elitea-subapp-host:e2e
         # Through the shared action rather than three plain `docker build`s:
         # buildx bake over the SAME compose file the stack runs, one
@@ -341,7 +341,7 @@ jobs:
         # ~/.cache/ms-playwright, the usual advice, would have recovered the 14s
         # and left the 67s untouched.
         #
-        # `mcr.microsoft.com/playwright:v1.62.1-noble` ships both browsers AND
+        # `mcr.microsoft.com/playwright:v1.63.0-noble` ships both browsers AND
         # those system libraries pre-installed, so the whole install disappears;
         # what remains is the image pull, already paid for in the background of
         # the build step above. This is the same mechanism the `visual` job below
@@ -398,7 +398,7 @@ jobs:
             -e PLAYWRIGHT_BASE_URL=http://localhost:8080 \
             -e E2E_TZ="${E2E_TZ:-UTC}" \
             -e PWTEST_SHARD_WEIGHTS="${{ matrix.weights }}" \
-            mcr.microsoft.com/playwright:v1.62.1-noble \
+            mcr.microsoft.com/playwright:v1.63.0-noble \
             npx playwright test --project=${{ matrix.engine }} ${{ matrix.shard && format('--shard={0}', matrix.shard) || '' }}
       - name: Give the report back to the runner user
         # The container runs as root, so playwright-results/ and
@@ -564,7 +564,7 @@ jobs:
         # compose / the test step pull inline if this has not finished, so a
         # slow pull costs the overlap and never the run.
         run: |
-          nohup bash -c 'timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble' >/tmp/prepull.log 2>&1 &
+          nohup bash -c 'timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.63.0-noble' >/tmp/prepull.log 2>&1 &
       - name: Build the stack images (shared cache)
         # Replaces the script's own `compose build` (STANDALONE_SKIP_BUILD=1
         # below): every `build:` service of the compose file(s) the stack runs,
@@ -617,7 +617,7 @@ jobs:
           CHAT_STREAM_PROJECT: elitea-chatstream-ci
           CHAT_STREAM_PORT: "8084"
           MOCK_LLM_CHUNK_DELAY_MS: "120"
-          PLAYWRIGHT_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.62.1-noble
+          PLAYWRIGHT_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.63.0-noble
           # The script appends `--shard=` only when this is non-empty, so the
           # local and real-model paths through it are untouched. The weights
           # reach the container by name from the job env above; the script
@@ -704,7 +704,7 @@ jobs:
         # compose / the test step pull inline if this has not finished, so a
         # slow pull costs the overlap and never the run.
         run: |
-          nohup bash -c 'timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble' >/tmp/prepull.log 2>&1 &
+          nohup bash -c 'timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.63.0-noble' >/tmp/prepull.log 2>&1 &
       - name: Build the stack images (shared cache)
         # Replaces the script's own `compose build` (STANDALONE_SKIP_BUILD=1
         # below): every `build:` service of the compose file(s) the stack runs,
@@ -744,7 +744,7 @@ jobs:
           # the same host port raced the gateway's and lost.
           CHAT_STREAM_PORT: "8086"
           MOCK_LLM_CHUNK_DELAY_MS: "120"
-          PLAYWRIGHT_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.62.1-noble
+          PLAYWRIGHT_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.63.0-noble
           PLAYWRIGHT_SHARD: ${{ matrix.shard }}
         run: bash apps/elitea-web/scripts/chat-stream-e2e.sh
       - name: Give the report back to the runner user
@@ -861,7 +861,7 @@ jobs:
         # slow pull costs the overlap and never the run.
         working-directory: ${{ github.workspace }}
         run: |
-          nohup bash -c 'timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble ; timeout 900 docker compose -f deploy/docker-compose.standalone-full.yml --profile real-llm pull -q llm-real' >/tmp/prepull.log 2>&1 &
+          nohup bash -c 'timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.63.0-noble ; timeout 900 docker compose -f deploy/docker-compose.standalone-full.yml --profile real-llm pull -q llm-real' >/tmp/prepull.log 2>&1 &
       - name: Build the stack images (shared cache)
         # Replaces the script's own `compose build` (STANDALONE_SKIP_BUILD=1
         # below): every `build:` service of the compose file(s) the stack runs,
@@ -906,7 +906,7 @@ jobs:
           # Not 8085 (the gateway's debug port) and not 8086 (the Rust lane's),
           # so the three lanes can never collide even on one host.
           CHAT_STREAM_PORT: "8087"
-          PLAYWRIGHT_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.62.1-noble
+          PLAYWRIGHT_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.63.0-noble
         run: bash apps/elitea-web/scripts/chat-stream-e2e.sh
       - name: Give the report back to the runner user
         if: always()
@@ -1079,7 +1079,7 @@ jobs:
           # Not 8085/8086/8087 — the three chat lanes' ports — so this stack can
           # never collide with one of them on a shared host.
           CHAT_STREAM_PORT: "8088"
-          PLAYWRIGHT_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.62.1-noble
+          PLAYWRIGHT_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.63.0-noble
         run: bash apps/elitea-web/scripts/chat-stream-e2e.sh
       - name: Give the report back to the runner user
         if: always()
@@ -1119,7 +1119,7 @@ jobs:
         # compose / the test step pull inline if this has not finished, so a
         # slow pull costs the overlap and never the run.
         run: |
-          nohup bash -c 'timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble' >/tmp/prepull.log 2>&1 &
+          nohup bash -c 'timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.63.0-noble' >/tmp/prepull.log 2>&1 &
       - name: Build the stack images (shared cache)
         # Replaces the script's own `compose build` (STANDALONE_SKIP_BUILD=1
         # below): every `build:` service of the compose file(s) the stack runs,
@@ -1143,7 +1143,7 @@ jobs:
           STANDALONE_SKIP_BUILD: "1"
           DEEPWIKI_STREAM_PROJECT: elitea-deepwiki-ci
           DEEPWIKI_STREAM_PORT: "8087"
-          PLAYWRIGHT_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.62.1-noble
+          PLAYWRIGHT_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.63.0-noble
         run: bash apps/elitea-web/scripts/deepwiki-e2e.sh
       - name: Give the report back to the runner user
         if: always()
@@ -1188,7 +1188,7 @@ jobs:
         # compose / the test step pull inline if this has not finished, so a
         # slow pull costs the overlap and never the run.
         run: |
-          nohup bash -c 'timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble' >/tmp/prepull.log 2>&1 &
+          nohup bash -c 'timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.63.0-noble' >/tmp/prepull.log 2>&1 &
       - name: Build the stack images (shared cache)
         # Replaces the script's own `compose build` (STANDALONE_SKIP_BUILD=1
         # below): every `build:` service of the compose file(s) the stack runs,
@@ -1220,7 +1220,7 @@ jobs:
           INDEX_STREAM_PROJECT: elitea-indexstream-ci
           INDEX_STREAM_PORT: "8087"
           INDEX_STREAM_MOCK_PORT: "8091"
-          PLAYWRIGHT_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.62.1-noble
+          PLAYWRIGHT_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.63.0-noble
         run: bash apps/elitea-web/scripts/index-stream-e2e.sh
       - name: Give the report back to the runner user
         # Same root-owned-report trap and fix as the `e2e` and `chat-stream`
@@ -1300,7 +1300,7 @@ jobs:
           # the snapshot step's `docker run` pulls the image itself if this
           # fails, so the optimisation can never cost the run.
           (
-            timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble \
+            timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.63.0-noble \
               || echo "::warning::background pull of the pinned Playwright image failed or timed out; the snapshot step will pull it inline"
           ) &
           pw_pull=$!
@@ -1385,7 +1385,7 @@ jobs:
             -v "$PWD":/work -w /work \
             -e CI=1 -e E2E_REUSE_STACK=1 \
             -e E2E_TZ="${E2E_TZ:-UTC}" \
-            mcr.microsoft.com/playwright:v1.62.1-noble \
+            mcr.microsoft.com/playwright:v1.63.0-noble \
             npx playwright test --grep @visual $update_arg
 
       - name: Give the report back to the runner user
@@ -1518,7 +1518,7 @@ jobs:
           COMPOSE_BIN: docker compose
         run: |
           (
-            timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble \
+            timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.63.0-noble \
               || echo "::warning::background pull of the pinned Playwright image failed or timed out; the capture step will pull it inline"
           ) &
           pw_pull=$!
@@ -1575,7 +1575,7 @@ jobs:
             -e E2E_REUSE_STACK=1 \
             -e E2E_PORT=8080 \
             -e PLAYWRIGHT_BASE_URL=http://localhost:8080 \
-            mcr.microsoft.com/playwright:v1.62.1-noble \
+            mcr.microsoft.com/playwright:v1.63.0-noble \
             npx tsx scripts/docs-seed.ts --base-url http://localhost:8080 \
               --seed-map playwright-results/docs-seed.json \
               --skip-platform-flags
@@ -1606,7 +1606,7 @@ jobs:
             -e E2E_REUSE_STACK=1 \
             -e E2E_PORT=8080 \
             -e PLAYWRIGHT_BASE_URL=http://localhost:8080 \
-            mcr.microsoft.com/playwright:v1.62.1-noble \
+            mcr.microsoft.com/playwright:v1.63.0-noble \
             npx tsx scripts/docs-shots.ts --base-url http://localhost:8080 \
               --seed-map playwright-results/docs-seed.json \
               "${extra_args[@]}" $fail_flag

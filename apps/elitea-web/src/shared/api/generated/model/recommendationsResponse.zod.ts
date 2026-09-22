@@ -54,7 +54,7 @@ export const RecommendationsResponse = zod
     total: zod.int(),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go:1729-1734. The limit\/days query params are accepted but not read by the handler.\n",
+    "NOTE(W2): internal/api/v2/eliteacore/handler.go:1729-1734. The limit/days query params are accepted but not read by the handler.\n",
   );
 
 export type RecommendationsResponse = zod.input<typeof RecommendationsResponse>;

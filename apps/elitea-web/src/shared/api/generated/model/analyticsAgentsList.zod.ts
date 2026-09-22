@@ -46,7 +46,7 @@ export const AnalyticsAgentsList = zod
   .object({
     items: zod.array(AgentAnalytics),
   })
-  .describe("NOTE(W2) internal\/api\/v2\/analytics\/handler.go:89.");
+  .describe("NOTE(W2) internal/api/v2/analytics/handler.go:89.");
 
 export type AnalyticsAgentsList = zod.input<typeof AnalyticsAgentsList>;
 export type AnalyticsAgentsListOutput = zod.output<typeof AnalyticsAgentsList>;

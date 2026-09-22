@@ -46,7 +46,7 @@ export const UpdatedResponse = zod
     updated: zod.boolean(),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/eliteacore\/skill_icon.go:399 (UpdateSkillIcon's success body).\n",
+    "NOTE(W2): internal/api/v2/eliteacore/skill_icon.go:399 (UpdateSkillIcon's success body).\n",
   );
 
 export type UpdatedResponse = zod.input<typeof UpdatedResponse>;

@@ -68,11 +68,11 @@ export const SkillValidationResult = zod
       .string()
       .optional()
       .describe(
-        "Present on PASS\/WARN. Pins the skill's name, description and instructions; editing any of them invalidates it and the publish re-runs the gate.",
+        "Present on PASS/WARN. Pins the skill's name, description and instructions; editing any of them invalidates it and the publish re-runs the gate.",
       ),
   })
   .describe(
-    "internal\/api\/v2\/skillpublish\/validate.go (runDeterministicChecks).\n",
+    "internal/api/v2/skillpublish/validate.go (runDeterministicChecks).\n",
   );
 
 export type SkillValidationResult = zod.input<typeof SkillValidationResult>;

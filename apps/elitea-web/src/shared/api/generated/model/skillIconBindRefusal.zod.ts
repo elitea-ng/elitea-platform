@@ -47,7 +47,7 @@ export const SkillIconBindRefusal = zod
     msg: zod.string().describe("`There is no such version id N`."),
   })
   .describe(
-    'NOTE(W2): internal\/api\/v2\/eliteacore\/skill_icon.go:333-336 and :392-395 — the 404 both binding routes answer. It is NOT the flat `{\"error\": \"...\"}` shape; pylon answers `{ok, msg}` here and the port keeps it.\n',
+    'NOTE(W2): internal/api/v2/eliteacore/skill_icon.go:333-336 and :392-395 — the 404 both binding routes answer. It is NOT the flat `{"error": "..."}` shape; pylon answers `{ok, msg}` here and the port keeps it.\n',
   );
 
 export type SkillIconBindRefusal = zod.input<typeof SkillIconBindRefusal>;

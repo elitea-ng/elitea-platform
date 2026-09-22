@@ -59,19 +59,19 @@ export const AnalyticsKpis = zod
       .number()
       .optional()
       .describe(
-        "The project's distinct membership. ABSENT when the identity tables (public.auth_core__user_role \/ auth_core__project_role) are not present — they belong to another corpus, and an adoption rate over an invented denominator is a percentage of nothing.\n",
+        "The project's distinct membership. ABSENT when the identity tables (public.auth_core__user_role / auth_core__project_role) are not present — they belong to another corpus, and an adoption rate over an invented denominator is a percentage of nothing.\n",
       ),
     adoption_rate: zod
       .number()
       .optional()
       .describe(
-        "active_project_members \/ total_project_users, as a percentage to one decimal. Absent whenever its denominator is, and for a project whose membership is zero. It cannot exceed 100 — its numerator is a subset of its denominator by construction, which the earlier ai_active_users \/ total_project_users form was not (a project with one member and three non-member callers reported 300).\n",
+        "active_project_members / total_project_users, as a percentage to one decimal. Absent whenever its denominator is, and for a project whose membership is zero. It cannot exceed 100 — its numerator is a subset of its denominator by construction, which the earlier ai_active_users / total_project_users form was not (a project with one member and three non-member callers reported 300).\n",
       ),
     llm_calls: zod
       .number()
       .optional()
       .describe(
-        "Requests the gateway served in the window. A real per-call count — NOT the budget accumulator's count of billing periods, which \/analytics_costs is careful to publish as `rows`.\n",
+        "Requests the gateway served in the window. A real per-call count — NOT the budget accumulator's count of billing periods, which /analytics_costs is careful to publish as `rows`.\n",
       ),
     total_tokens: zod
       .number()
@@ -81,7 +81,7 @@ export const AnalyticsKpis = zod
       .number()
       .optional()
       .describe(
-        'NO PRODUCER, and the reason changed. \"Active in the project by any means\" needs a source of non-LLM activity. centry.audit_events is no longer READ-ONLY from this service — issue 615 gave it a writer (internal\/audit\/postgres.go:23, driven by internal\/api\/middleware\/audit.go) — but that writer records ADMINISTRATIVE and security-relevant requests only. It skips content CRUD, it skips every successful GET and it skips the \/llm path, so a count over it measures administration, not project activity. Never emitted today.\n',
+        'NO PRODUCER, and the reason changed. "Active in the project by any means" needs a source of non-LLM activity. centry.audit_events is no longer READ-ONLY from this service — issue 615 gave it a writer (internal/audit/postgres.go:23, driven by internal/api/middleware/audit.go) — but that writer records ADMINISTRATIVE and security-relevant requests only. It skips content CRUD, it skips every successful GET and it skips the /llm path, so a count over it measures administration, not project activity. Never emitted today.\n',
       ),
     tool_runs: zod
       .number()
@@ -103,11 +103,11 @@ export const AnalyticsKpis = zod
       .number()
       .optional()
       .describe(
-        "NOT EMITTED BY THIS ENDPOINT. Money has one producer (gateway.llm_budget_accumulators) and one view of it (\/analytics_costs), which carries the scope rules that stop it double-counting a user-scope row into its own project's total. A second view here could disagree with the first.\n",
+        "NOT EMITTED BY THIS ENDPOINT. Money has one producer (gateway.llm_budget_accumulators) and one view of it (/analytics_costs), which carries the scope rules that stop it double-counting a user-scope row into its own project's total. A second view here could disagree with the first.\n",
       ),
   })
   .describe(
-    "The overview KPI block. Every key present is a figure the server measured; every key absent is one nothing in this platform produces. Source: internal\/api\/v2\/analytics\/handler.go's Usage.\n",
+    "The overview KPI block. Every key present is a figure the server measured; every key absent is one nothing in this platform produces. Source: internal/api/v2/analytics/handler.go's Usage.\n",
   );
 
 export type AnalyticsKpis = zod.input<typeof AnalyticsKpis>;

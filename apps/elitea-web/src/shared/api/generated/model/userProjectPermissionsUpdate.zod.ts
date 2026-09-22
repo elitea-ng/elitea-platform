@@ -46,7 +46,7 @@ import { UserProjectRoleMap } from "./userProjectRoleMap.zod";
 export const UserProjectPermissionsUpdate = zod
   .union([UserProjectRoleMap, zod.array(PermissionMatrixRow)])
   .describe(
-    "NOTE(W2): internal\/api\/v2\/admin\/user_project_permissions.go:373-420 — both shapes the reference accepts: the role map, or the matrix rows the GET returns with ?old_format.\n",
+    "NOTE(W2): internal/api/v2/admin/user_project_permissions.go:373-420 — both shapes the reference accepts: the role map, or the matrix rows the GET returns with ?old_format.\n",
   );
 
 export type UserProjectPermissionsUpdate = zod.input<

@@ -52,34 +52,34 @@ export const ForkResponse = zod
       toolkits: zod
         .array(ImportedToolkit)
         .describe(
-          "ALWAYS present, and ALWAYS empty: a fork writes no toolkit. The channel is still carried, because the import wizard reads `result[item.entity]` for every row it sent with no guard, so a channel the answer leaves out is `undefined` at that call and the dialog stops with no message at all. The set of three is the legacy set, seeded from ENTITY_IMPORT_MAPPER (internal\/api\/v2\/eliteacore\/export_import.go:676-723, applied at handler.go:3406).\n",
+          "ALWAYS present, and ALWAYS empty: a fork writes no toolkit. The channel is still carried, because the import wizard reads `result[item.entity]` for every row it sent with no guard, so a channel the answer leaves out is `undefined` at that call and the dialog stops with no message at all. The set of three is the legacy set, seeded from ENTITY_IMPORT_MAPPER (internal/api/v2/eliteacore/export_import.go:676-723, applied at handler.go:3406).\n",
         ),
       skills: zod
         .array(ImportedSkill)
         .describe(
-          "One entry for each entry of the request's `skills` array that the fork wrote (internal\/api\/v2\/eliteacore\/handler.go:3073-3079). Present and empty when the request carried no skill.\n",
+          "One entry for each entry of the request's `skills` array that the fork wrote (internal/api/v2/eliteacore/handler.go:3073-3079). Present and empty when the request carried no skill.\n",
         ),
     }),
     errors: zod.object({
       agents: zod
         .array(ImportError)
         .describe(
-          "index\/name\/msg, which is the shape the import already writes and the wizard already maps (internal\/api\/v2\/eliteacore\/handler.go:3099-3102). The earlier name\/error entries threw inside the wizard, because it reads selectedData[item.index] with no guard (issue #505).\n",
+          "index/name/msg, which is the shape the import already writes and the wizard already maps (internal/api/v2/eliteacore/handler.go:3099-3102). The earlier name/error entries threw inside the wizard, because it reads selectedData[item.index] with no guard (issue #505).\n",
         ),
       toolkits: zod
         .array(ImportError)
         .describe(
-          "ALWAYS present, and ALWAYS empty, for the reason `result.toolkits` gives (internal\/api\/v2\/eliteacore\/handler.go:3407).\n",
+          "ALWAYS present, and ALWAYS empty, for the reason `result.toolkits` gives (internal/api/v2/eliteacore/handler.go:3407).\n",
         ),
       skills: zod
         .array(ImportError)
         .describe(
-          "Two faults report here, and every entry indexes ONE list: the `applications` the request sent, followed by its `skills`. That is the legacy numbering — `fork.py` concatenates the two arrays into one entity list, and `_wrap_import_error` numbers each entry by its position in that concatenation.\nA `skills` entry the fork could not write carries `len(applications)` plus its own position in the `skills` array (internal\/api\/v2\/eliteacore\/handler.go:3045-3048). A `skills` reference on a version that the fork could not attach carries the index of the AGENT that holds the reference (:3306-3322).\nEach entry used to carry the constant 0, which named an application and never the skill that failed. A client resolves this index against the same concatenation, and must tolerate an index it cannot resolve.\n",
+          "Two faults report here, and every entry indexes ONE list: the `applications` the request sent, followed by its `skills`. That is the legacy numbering — `fork.py` concatenates the two arrays into one entity list, and `_wrap_import_error` numbers each entry by its position in that concatenation.\nA `skills` entry the fork could not write carries `len(applications)` plus its own position in the `skills` array (internal/api/v2/eliteacore/handler.go:3045-3048). A `skills` reference on a version that the fork could not attach carries the index of the AGENT that holds the reference (:3306-3322).\nEach entry used to carry the constant 0, which named an application and never the skill that failed. A client resolves this index against the same concatenation, and must tolerate an index it cannot resolve.\n",
         ),
     }),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go:3403-3408 (the normal path) and :2975-2980 (the empty-input fast path). BOTH answers build the same three channels on BOTH envelopes, through one helper (internal\/api\/v2\/eliteacore\/export_import.go:711-723), so no answer of this route can leave a channel out. The fast path used to send `datasources` and `prompts` in place of `toolkits` and `skills`. Those two keys are in no entity mapper, no path of this route can put an entry in them, and they are gone.\nThe fast path fires only when `applications` is an array with no entry (handler.go:2975). A body with no `applications` array is refused with 400 (:2970-2973), and a handler with no pool answers 500 (:2948-2952). Status on the normal path is 201 when everything was forked, 207 when part of it was, and 400 when nothing was (:3390-3401).\n",
+    "NOTE(W2): internal/api/v2/eliteacore/handler.go:3403-3408 (the normal path) and :2975-2980 (the empty-input fast path). BOTH answers build the same three channels on BOTH envelopes, through one helper (internal/api/v2/eliteacore/export_import.go:711-723), so no answer of this route can leave a channel out. The fast path used to send `datasources` and `prompts` in place of `toolkits` and `skills`. Those two keys are in no entity mapper, no path of this route can put an entry in them, and they are gone.\nThe fast path fires only when `applications` is an array with no entry (handler.go:2975). A body with no `applications` array is refused with 400 (:2970-2973), and a handler with no pool answers 500 (:2948-2952). Status on the normal path is 201 when everything was forked, 207 when part of it was, and 400 when nothing was (:3390-3401).\n",
   );
 
 export type ForkResponse = zod.input<typeof ForkResponse>;

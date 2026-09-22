@@ -1,7 +1,7 @@
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
-import { renderWithTheme } from '../lib/testTheme';
+import { remToPx, renderWithTheme } from '../lib/testTheme';
 import type { TabGroupButtonItem } from '.';
 import { TabGroupButton } from '.';
 
@@ -162,7 +162,10 @@ describe('TabGroupButton', () => {
       />,
     );
     for (const button of getAllByRole('button')) {
-      expect(window.getComputedStyle(button).minWidth).toBe('6.25rem');
+      // jsdom@30 resolves rem against the root font size before reporting a
+      // computed length (jsdom@29 echoed the declaration back), so the computed
+      // value is px. `remToPx` keeps the assertion pointed at the declaration.
+      expect(window.getComputedStyle(button).minWidth).toBe(remToPx('6.25rem'));
     }
     expect(window.getComputedStyle(getByRole('group')).minWidth).not.toBe('6.25rem');
   });

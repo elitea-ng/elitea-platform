@@ -53,7 +53,7 @@ export const UserInviteRequest = zod
       ),
   })
   .describe(
-    "Wire truth from legacy\/plugins\/admin\/api\/v2\/users.py's post and the client that was ported from it (features\/settings\/lib\/users\/useUsersActions.ts's useInviteUsers).\n",
+    "Wire truth from legacy/plugins/admin/api/v2/users.py's post and the client that was ported from it (features/settings/lib/users/useUsersActions.ts's useInviteUsers).\n",
   );
 
 export type UserInviteRequest = zod.input<typeof UserInviteRequest>;

@@ -59,7 +59,7 @@ export const AnalyticsHealth = zod
     error_rate: zod
       .number()
       .describe(
-        "errors \/ requests, as a percentage to one decimal. 0 for a window with no traffic — nothing failed — rather than absent or NaN.\n",
+        "errors / requests, as a percentage to one decimal. 0 for a window with no traffic — nothing failed — rather than absent or NaN.\n",
       ),
     by_error_code: zod.array(AnalyticsErrorCodeCount),
     error_codes_truncated: zod
@@ -71,7 +71,7 @@ export const AnalyticsHealth = zod
     daily: zod.array(AnalyticsDailyHealth),
   })
   .describe(
-    'The Health tab\'s block, from gateway.llm_request_logs. Travels on the usage response because AnalyticsContainer fetches \/analytics for the Overview and Health tabs alike. ABSENT — not empty — when the repository could not build it: a block with zero totals is the true report of an idle project, and reusing that shape for \"we could not look\" would make the two indistinguishable.\n',
+    'The Health tab\'s block, from gateway.llm_request_logs. Travels on the usage response because AnalyticsContainer fetches /analytics for the Overview and Health tabs alike. ABSENT — not empty — when the repository could not build it: a block with zero totals is the true report of an idle project, and reusing that shape for "we could not look" would make the two indistinguishable.\n',
   );
 
 export type AnalyticsHealth = zod.input<typeof AnalyticsHealth>;

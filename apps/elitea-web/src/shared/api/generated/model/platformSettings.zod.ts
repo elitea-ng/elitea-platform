@@ -57,13 +57,13 @@ export const PlatformSettings = zod
       .boolean()
       .optional()
       .describe(
-        "A14 (issue 200): the second half of the MCP switch pair. The reference's platform_settings returns `mcp_exposure_enabled` and `mcp_in_menu_enabled` (legacy elitea_core\/api\/v2\/platform_settings.py:45-46) and every `useIsMcpVisible` hook in apps\/elitea-web documents this key as the one it wanted and could not find. Now written by the admin Features page's MCP Configuration section and marshalled from `centry.platform_config`. Optional rather than required: it is always present in the response, but a client pinned to an older deployment must not fail validation on its absence.\n",
+        "A14 (issue 200): the second half of the MCP switch pair. The reference's platform_settings returns `mcp_exposure_enabled` and `mcp_in_menu_enabled` (legacy elitea_core/api/v2/platform_settings.py:45-46) and every `useIsMcpVisible` hook in apps/elitea-web documents this key as the one it wanted and could not find. Now written by the admin Features page's MCP Configuration section and marshalled from `centry.platform_config`. Optional rather than required: it is always present in the response, but a client pinned to an older deployment must not fail validation on its absence.\n",
       ),
     voice_features_enabled: zod
       .boolean()
       .optional()
       .describe(
-        "A14 (issue 200): written by the admin Features page's Voice Features section and read by widgets\/chat's VoiceButton, which is mounted on \/chat through ChatBox's slot bundle. It replaced a module constant hardcoded to `true`, so the admin switch had no effect on the control it names. Optional for the same reason as mcp_in_menu_enabled.\n",
+        "A14 (issue 200): written by the admin Features page's Voice Features section and read by widgets/chat's VoiceButton, which is mounted on /chat through ChatBox's slot bundle. It replaced a module constant hardcoded to `true`, so the admin switch had no effect on the control it names. Optional for the same reason as mcp_in_menu_enabled.\n",
       ),
     voice_features_temporarily_disabled: zod
       .boolean()
@@ -75,19 +75,19 @@ export const PlatformSettings = zod
       .boolean()
       .optional()
       .describe(
-        "The AGENT publishing guardrail, as authored on the admin Features page (Agent Publishing) and enforced by `POST \/elitea_core\/publish\/prompt_lib\/{project_id}\/{version_id}`. Published so the product UI can gate its Publish control on the same answer the handler enforces, rather than rendering an enabled button into a 403. Optional for the same reason as mcp_in_menu_enabled.\n",
+        "The AGENT publishing guardrail, as authored on the admin Features page (Agent Publishing) and enforced by `POST /elitea_core/publish/prompt_lib/{project_id}/{version_id}`. Published so the product UI can gate its Publish control on the same answer the handler enforces, rather than rendering an enabled button into a 403. Optional for the same reason as mcp_in_menu_enabled.\n",
       ),
     publish_whitelist_project_ids: zod
       .array(zod.int())
       .optional()
       .describe(
-        'The projects that may still publish agents while the switch above is on. An EMPTY list while blocked means nobody may publish — it is not \"no restrictions\" — which is why the list is published rather than a resolved boolean: a client that has it can also say why the control is off.\n',
+        'The projects that may still publish agents while the switch above is on. An EMPTY list while blocked means nobody may publish — it is not "no restrictions" — which is why the list is published rather than a resolved boolean: a client that has it can also say why the control is off.\n',
       ),
     is_skill_publish_blocked: zod
       .boolean()
       .optional()
       .describe(
-        "The SKILL publishing guardrail, authored on the admin Features page (Skill Publishing) and enforced by `POST \/elitea_core\/publish_skill\/...`. Independent of `is_publish_blocked`: the two are separate sections with separate switches, and freezing one does not freeze the other. Admin publishes from the public project itself are exempt from both.\n",
+        "The SKILL publishing guardrail, authored on the admin Features page (Skill Publishing) and enforced by `POST /elitea_core/publish_skill/...`. Independent of `is_publish_blocked`: the two are separate sections with separate switches, and freezing one does not freeze the other. Admin publishes from the public project itself are exempt from both.\n",
       ),
     skill_publish_whitelist_project_ids: zod
       .array(zod.int())
@@ -103,7 +103,7 @@ export const PlatformSettings = zod
       ),
   })
   .describe(
-    "NOTE(W2): defaults at eliteacore\/handler.go:52-63 — the ten booleans are built unconditionally and the DB overlay (:74-76) can only add or override, never delete, so they are always present (hence required). On the sole documented route (project-less) the DB branch is skipped entirely and the response is exactly the ten booleans.\n",
+    "NOTE(W2): defaults at eliteacore/handler.go:52-63 — the ten booleans are built unconditionally and the DB overlay (:74-76) can only add or override, never delete, so they are always present (hence required). On the sole documented route (project-less) the DB branch is skipped entirely and the response is exactly the ten booleans.\n",
   );
 
 export type PlatformSettings = zod.input<typeof PlatformSettings>;

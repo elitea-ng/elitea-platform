@@ -57,14 +57,14 @@ export const IconMeta = zod
     initial_file_size: zod
       .string()
       .describe(
-        "The uploaded size, formatted by social\/utils\/image_utils.py's sizeof_fmt.",
+        "The uploaded size, formatted by social/utils/image_utils.py's sizeof_fmt.",
       ),
     resulting_file_size: zod
       .string()
       .describe("The stored size, in the same format."),
   })
   .describe(
-    "NOTE(W2): the object social\/rpc\/process_image.py:save_image returns and both upload routes answer — internal\/api\/v2\/eliteacore\/skill_icon.go:311-317 and internal\/api\/v2\/eliteacore\/handler.go (CreateProjectIcon). A caller PUTs this back, unchanged, to bind the icon to an entity.\n",
+    "NOTE(W2): the object social/rpc/process_image.py:save_image returns and both upload routes answer — internal/api/v2/eliteacore/skill_icon.go:311-317 and internal/api/v2/eliteacore/handler.go (CreateProjectIcon). A caller PUTs this back, unchanged, to bind the icon to an entity.\n",
   );
 
 export type IconMeta = zod.input<typeof IconMeta>;

@@ -47,7 +47,7 @@ export const ProjectContextUpdateRequest = zod
     enabled: zod.boolean().optional(),
   })
   .describe(
-    "NOTE(W2): typed decode, internal\/api\/v2\/eliteacore\/handler.go:137-141.\n",
+    "NOTE(W2): typed decode, internal/api/v2/eliteacore/handler.go:137-141.\n",
   );
 
 export type ProjectContextUpdateRequest = zod.input<

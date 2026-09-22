@@ -47,7 +47,7 @@ export const UserRolesUpdateRequest = zod
       .string()
       .optional()
       .describe(
-        "Target user id. A batch edit sends the selected ids COMMA-JOINED in this one string (entities\/user\/model\/useEditUser.ts's useBatchEditUsers). `id` and `ids` are pylon's own spellings and are accepted too.\n",
+        "Target user id. A batch edit sends the selected ids COMMA-JOINED in this one string (entities/user/model/useEditUser.ts's useBatchEditUsers). `id` and `ids` are pylon's own spellings and are accepted too.\n",
       ),
     id: zod.string().optional(),
     ids: zod.array(zod.int()).optional(),
@@ -57,7 +57,7 @@ export const UserRolesUpdateRequest = zod
         "The role names the users must hold after the call. This REPLACES the existing project role set rather than adding to it; an empty array is rejected (use DELETE to remove a member).\n",
       ),
   })
-  .describe("Wire truth from legacy\/plugins\/admin\/api\/v2\/users.py's put.");
+  .describe("Wire truth from legacy/plugins/admin/api/v2/users.py's put.");
 
 export type UserRolesUpdateRequest = zod.input<typeof UserRolesUpdateRequest>;
 export type UserRolesUpdateRequestOutput = zod.output<

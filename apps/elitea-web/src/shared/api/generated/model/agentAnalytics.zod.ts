@@ -58,12 +58,12 @@ export const AgentAnalytics = zod
       .number()
       .optional()
       .describe(
-        "This agent's calls priced at each call's OWN model rate, summed — an ESTIMATE from gateway.gateway_models, never the accounted figure \/analytics_costs' kpis.total_cost reports. Absent when priced is false.\n",
+        "This agent's calls priced at each call's OWN model rate, summed — an ESTIMATE from gateway.gateway_models, never the accounted figure /analytics_costs' kpis.total_cost reports. Absent when priced is false.\n",
       ),
     output_cost: zod.number().optional(),
     total_cost: zod.number().optional(),
   })
-  .describe("NOTE(W2) internal\/domain\/analytics\/types.go:22-29.");
+  .describe("NOTE(W2) internal/domain/analytics/types.go:22-29.");
 
 export type AgentAnalytics = zod.input<typeof AgentAnalytics>;
 export type AgentAnalyticsOutput = zod.output<typeof AgentAnalytics>;

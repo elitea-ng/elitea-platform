@@ -67,7 +67,7 @@ export const PublishRequest = zod
       .optional(),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go:446-450; category whitelist at :512-516.\n",
+    "NOTE(W2): internal/api/v2/eliteacore/handler.go:446-450; category whitelist at :512-516.\n",
   );
 
 export type PublishRequest = zod.input<typeof PublishRequest>;

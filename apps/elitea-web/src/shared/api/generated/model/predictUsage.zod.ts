@@ -47,7 +47,7 @@ export const PredictUsage = zod
     completion_tokens: zod.int(),
     total_tokens: zod.int(),
   })
-  .describe("NOTE(W2) internal\/domain\/predict\/types.go:24-28.");
+  .describe("NOTE(W2) internal/domain/predict/types.go:24-28.");
 
 export type PredictUsage = zod.input<typeof PredictUsage>;
 export type PredictUsageOutput = zod.output<typeof PredictUsage>;

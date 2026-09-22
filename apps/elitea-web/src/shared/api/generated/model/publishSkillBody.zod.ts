@@ -51,13 +51,13 @@ export const PublishSkillBody = zod.object({
     .string()
     .optional()
     .describe(
-      "Token issued by \/publish_skill_validate for this exact content.",
+      "Token issued by /publish_skill_validate for this exact content.",
     ),
   category: zod
     .string()
     .optional()
     .describe(
-      'One of \/skill_categories; an omitted category falls back to \"Other\".',
+      'One of /skill_categories; an omitted category falls back to "Other".',
     ),
 });
 

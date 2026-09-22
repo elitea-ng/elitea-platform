@@ -46,22 +46,22 @@ export const ExportedSkillReference = zod
     import_uuid: zod
       .string()
       .describe(
-        "Names one entry of the document's top-level `skills` array. A reference cannot name a skill by id: `skills.id` belongs to the project the file came from, and an import writes into a different project. The export reads the id and swaps the key for the uuid once it has read the skills (internal\/api\/v2\/eliteacore\/export_import.go:413-427).\n",
+        "Names one entry of the document's top-level `skills` array. A reference cannot name a skill by id: `skills.id` belongs to the project the file came from, and an import writes into a different project. The export reads the id and swaps the key for the uuid once it has read the skills (internal/api/v2/eliteacore/export_import.go:413-427).\n",
       ),
     entity_type: zod
       .enum(["agent"])
       .describe(
-        "The `entity_skill_mapping.entity_type` of the attachment, and a CLOSED set of one member. The import refuses every other value and reports it on `errors.skills` (internal\/api\/v2\/eliteacore\/import_skills.go:433-437), because the sibling write route answers 400 for anything else (internal\/api\/v2\/skills\/handler.go:423-441) and both reads filter on the literal — so a row with another value is a row nothing reads. The export writes the column out as it stands (internal\/api\/v2\/eliteacore\/export_import.go:371-374), and every writer of that column in this service writes `agent` (internal\/api\/v2\/skills\/handler.go:104).\n",
+        "The `entity_skill_mapping.entity_type` of the attachment, and a CLOSED set of one member. The import refuses every other value and reports it on `errors.skills` (internal/api/v2/eliteacore/import_skills.go:433-437), because the sibling write route answers 400 for anything else (internal/api/v2/skills/handler.go:423-441) and both reads filter on the literal — so a row with another value is a row nothing reads. The export writes the column out as it stands (internal/api/v2/eliteacore/export_import.go:371-374), and every writer of that column in this service writes `agent` (internal/api/v2/skills/handler.go:104).\n",
       ),
     version_name: zod
       .string()
       .optional()
       .describe(
-        "The skill version the attachment pins. The key is ABSENT when the source row holds a NULL `skill_version_id` (internal\/api\/v2\/eliteacore\/export_import.go:375-381). An absent key tells the import to attach the skill's `base` version (internal\/api\/v2\/eliteacore\/import_skills.go:115-127).\n",
+        "The skill version the attachment pins. The key is ABSENT when the source row holds a NULL `skill_version_id` (internal/api/v2/eliteacore/export_import.go:375-381). An absent key tells the import to attach the skill's `base` version (internal/api/v2/eliteacore/import_skills.go:115-127).\n",
       ),
   })
   .describe(
-    "NOTE(W2): one skill attachment of one agent version, in the EXPORT direction. Both required keys are always written (internal\/api\/v2\/eliteacore\/export_import.go:371-374, with `import_uuid` swapped in at :413-427). SkillReferenceInput is the REQUEST twin of this schema, and it requires `import_uuid` only.\n",
+    "NOTE(W2): one skill attachment of one agent version, in the EXPORT direction. Both required keys are always written (internal/api/v2/eliteacore/export_import.go:371-374, with `import_uuid` swapped in at :413-427). SkillReferenceInput is the REQUEST twin of this schema, and it requires `import_uuid` only.\n",
   );
 
 export type ExportedSkillReference = zod.input<typeof ExportedSkillReference>;

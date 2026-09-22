@@ -50,7 +50,7 @@ export const ProjectGroupsUpdate = zod
       ),
   })
   .describe(
-    "NOTE(W2): request body of putProjectGroups (internal\/api\/v2\/projects\/groups.go:186-188). It is no longer echoed back: the response is the project, as the reference serializes it.\n",
+    "NOTE(W2): request body of putProjectGroups (internal/api/v2/projects/groups.go:186-188). It is no longer echoed back: the response is the project, as the reference serializes it.\n",
   );
 
 export type ProjectGroupsUpdate = zod.input<typeof ProjectGroupsUpdate>;

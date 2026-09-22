@@ -51,7 +51,7 @@ export const ApplicationCreateRequest = zod.object({
     .array(VersionWriteRequest)
     .optional()
     .describe(
-      "Only versions[0] is honoured; it seeds the first version (internal\/api\/v2\/applications\/handler.go:374-463).\n",
+      "Only versions[0] is honoured; it seeds the first version (internal/api/v2/applications/handler.go:374-463).\n",
     ),
 });
 

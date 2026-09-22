@@ -45,6 +45,8 @@ export const GetAnalyticsToolDetailParams = zod.object({
   tool_id: zod.string().optional(),
   toolkit_id: zod.string().optional(),
   tool_name: zod.string().optional(),
+  date_from: zod.iso.date().optional(),
+  date_to: zod.iso.date().optional(),
 });
 
 export type GetAnalyticsToolDetailParams = zod.input<

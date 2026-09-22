@@ -51,9 +51,9 @@ export const ChatConfig = zod
     ),
     default_model: zod
       .string()
-      .describe('First configured model title; \"\" when none.'),
+      .describe('First configured model title; "" when none.'),
   })
-  .describe("NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go:301-338.\n");
+  .describe("NOTE(W2): internal/api/v2/eliteacore/handler.go:301-338.\n");
 
 export type ChatConfig = zod.input<typeof ChatConfig>;
 export type ChatConfigOutput = zod.output<typeof ChatConfig>;

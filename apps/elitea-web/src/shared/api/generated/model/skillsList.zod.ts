@@ -51,7 +51,7 @@ export const SkillsList = zod
     total_pages: zod.int(),
   })
   .describe(
-    "Returned whole by List (internal\/api\/v2\/skills\/handler.go). Pagination comes from ?page\/?page_size; ?query does an ILIKE search over name\/description, and ?sort_by (name|created_at)\/?sort_order (asc|desc) drive ORDER BY (repos\/skills.go List — sort_by is whitelisted, never interpolated raw).\n",
+    "Returned whole by List (internal/api/v2/skills/handler.go). Pagination comes from ?page/?page_size; ?query does an ILIKE search over name/description, and ?sort_by (name|created_at)/?sort_order (asc|desc) drive ORDER BY (repos/skills.go List — sort_by is whitelisted, never interpolated raw).\n",
   );
 
 export type SkillsList = zod.input<typeof SkillsList>;

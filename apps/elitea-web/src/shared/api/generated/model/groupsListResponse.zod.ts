@@ -51,7 +51,7 @@ export const GroupsListResponse = zod
     ),
     total: zod.int(),
   })
-  .describe("NOTE(W2): internal\/api\/v2\/projects\/handler.go:104-130.\n");
+  .describe("NOTE(W2): internal/api/v2/projects/handler.go:104-130.\n");
 
 export type GroupsListResponse = zod.input<typeof GroupsListResponse>;
 export type GroupsListResponseOutput = zod.output<typeof GroupsListResponse>;

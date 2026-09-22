@@ -62,7 +62,7 @@ export const ConfigurationRow = zod
       .string()
       .optional()
       .describe(
-        'BOTH. The row\'s stored title, and the name every reader resolves a credential by: a toolkit stores the reference `{\"github_configuration\": {\"elitea_title\": …}}`, and the credential picker builds its options from this field. `compat` served the column as `name` alone until the two were aligned, so against that handler the picker offered nothing to link.\n',
+        'BOTH. The row\'s stored title, and the name every reader resolves a credential by: a toolkit stores the reference `{"github_configuration": {"elitea_title": …}}`, and the credential picker builds its options from this field. `compat` served the column as `name` alone until the two were aligned, so against that handler the picker offered nothing to link.\n',
       ),
     name: zod
       .string()
@@ -106,7 +106,7 @@ export const ConfigurationRow = zod
     options: zod.record(zod.string(), zod.unknown()).optional(),
   })
   .describe(
-    "NOTE(W2): the union of internal\/api\/v2\/configurations\/handler.go's Configuration (compat) and internal\/api\/v2\/configurations\/dto.go's CurrentConfigurationDTO (reviewed).\n",
+    "NOTE(W2): the union of internal/api/v2/configurations/handler.go's Configuration (compat) and internal/api/v2/configurations/dto.go's CurrentConfigurationDTO (reviewed).\n",
   );
 
 export type ConfigurationRow = zod.input<typeof ConfigurationRow>;

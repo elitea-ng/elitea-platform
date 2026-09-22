@@ -54,7 +54,7 @@ export const PredictResponse = zod
     child_messages: zod.array(PredictChildMessage).optional(),
   })
   .describe(
-    "NOTE(W2): internal\/domain\/predict\/types.go:15-22, marshaled by internal\/api\/v2\/predict\/handler.go:56-61. With stream=true the endpoint switches to SSE (handler.go:51-53) and this JSON body is not produced.\n",
+    "NOTE(W2): internal/domain/predict/types.go:15-22, marshaled by internal/api/v2/predict/handler.go:56-61. With stream=true the endpoint switches to SSE (handler.go:51-53) and this JSON body is not produced.\n",
   );
 
 export type PredictResponse = zod.input<typeof PredictResponse>;

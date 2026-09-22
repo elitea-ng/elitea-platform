@@ -57,7 +57,7 @@ export const PublishedAgentVersion = zod
       ),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/eliteacore\/admin_published_agents.go:40-45.\n",
+    "NOTE(W2): internal/api/v2/eliteacore/admin_published_agents.go:40-45.\n",
   );
 
 export type PublishedAgentVersion = zod.input<typeof PublishedAgentVersion>;

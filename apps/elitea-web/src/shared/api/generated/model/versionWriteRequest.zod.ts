@@ -60,7 +60,7 @@ export const VersionWriteRequest = zod.object({
     .string()
     .optional()
     .describe(
-      'Defaults to \"openai\" when empty on the CREATE paths (handler.go:398-400, 731-733). On the PUT, omit the key to leave the stored value alone; an explicit empty string is REFUSED with a 400, for the same reason as `name` (issue 824).\n',
+      'Defaults to "openai" when empty on the CREATE paths (handler.go:398-400, 731-733). On the PUT, omit the key to leave the stored value alone; an explicit empty string is REFUSED with a 400, for the same reason as `name` (issue 824).\n',
     ),
   instructions: zod
     .string()
@@ -79,7 +79,7 @@ export const VersionWriteRequest = zod.object({
     .max(versionWriteRequestNotesMax)
     .optional()
     .describe(
-      "NOTE(#898): the editor's free-text notes, accepted at the top level the way pylon accepts them and folded into `meta.notes` by every write path (create, create-version and the PUT). Omit the key to leave the stored value alone; an explicit empty string clears it. Longer than 1000 characters is REFUSED with a 400 — pylon's own ceiling (models\/pd\/version.py:116). The agent editor sends the value inside `meta` instead, which is the same store; both spellings are accepted so a pylon-shaped client keeps working.\n",
+      "NOTE(#898): the editor's free-text notes, accepted at the top level the way pylon accepts them and folded into `meta.notes` by every write path (create, create-version and the PUT). Omit the key to leave the stored value alone; an explicit empty string clears it. Longer than 1000 characters is REFUSED with a 400 — pylon's own ceiling (models/pd/version.py:116). The agent editor sends the value inside `meta` instead, which is the same store; both spellings are accepted so a pylon-shaped client keeps working.\n",
     ),
   llm_settings: LlmSettings.optional(),
   conversation_starters: ConversationStarters.optional(),

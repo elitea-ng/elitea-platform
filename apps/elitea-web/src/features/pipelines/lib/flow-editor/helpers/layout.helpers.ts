@@ -19,6 +19,37 @@ import * as dagre from '@dagrejs/dagre';
 import { NodeHeightMap, ORIENTATION } from '../constants/flowEditor.constants';
 import type { FlowEdge, FlowNode } from '../reactFlowTypes';
 
+/**
+ * The node label this pass stores and reads back.
+ *
+ * `@dagrejs/dagre@3` ships its own types instead of `@types/dagre`, and the
+ * `@dagrejs/graphlib@4` types underneath it declare a label as
+ * `Label = string | number | boolean | Record<string, any>`. So the UNPARAMETERISED
+ * `dagre.graphlib.Graph` hands every `g.node()` read back as `any`, and each
+ * destructure of it is an `oxlint typescript(no-unsafe-assignment)` error (4
+ * sites, all in `arrangedNodeFor`). Naming the label type restores the checking
+ * the 1.x `@types` package used to give for free.
+ *
+ * `x`/`y` are optional because `dagre.layout()` is what writes them — they do
+ * not exist at `setNode()` time, and the type must not claim otherwise. A
+ * `type` alias rather than an `interface` on purpose: only an alias gets the
+ * implicit index signature that makes it assignable to graphlib's `Label`, which
+ * is what lets `dagre.layout()` accept this graph.
+ */
+type LayoutNodeLabel = {
+  label: string;
+  width: number;
+  height: number;
+  x?: number;
+  y?: number;
+};
+
+/** Edge labels carry nothing here — `setDefaultEdgeLabel` returns `{}`. */
+type LayoutEdgeLabel = Record<string, unknown>;
+
+/** The graph `doLayout` builds, with all three label slots named (see {@link LayoutNodeLabel}). */
+type LayoutGraph = dagre.graphlib.Graph<dagre.GraphLabel, LayoutNodeLabel, LayoutEdgeLabel>;
+
 export interface DoLayoutArgs {
   readonly nodes: readonly FlowNode[];
   readonly edges: readonly FlowEdge[];
@@ -51,7 +82,7 @@ interface PopulateGraphArgs {
   readonly expanded: boolean;
 }
 
-function populateGraph(g: dagre.graphlib.Graph, { nodes, edges, flowNodes, expanded }: PopulateGraphArgs): void {
+function populateGraph(g: LayoutGraph, { nodes, edges, flowNodes, expanded }: PopulateGraphArgs): void {
   for (const node of nodes) {
     g.setNode(node.id, {
       label: node.data.label ?? '',
@@ -64,9 +95,12 @@ function populateGraph(g: dagre.graphlib.Graph, { nodes, edges, flowNodes, expan
   }
 }
 
-function arrangedNodeFor(g: dagre.graphlib.Graph, nodeId: string, nodes: readonly FlowNode[]): FlowNode | undefined {
+function arrangedNodeFor(g: LayoutGraph, nodeId: string, nodes: readonly FlowNode[]): FlowNode | undefined {
   const node = g.node(nodeId);
-  if (!nodeId || !node) return undefined;
+  // `x`/`y` join the existing guard rather than adding a second `if`: they are
+  // written by `dagre.layout()` above, so a node reaching here without them did
+  // not take part in the layout and has no position to convert.
+  if (!nodeId || !node || node.x === undefined || node.y === undefined) return undefined;
 
   const { x, y, width, height } = node;
   const nodeData = nodes.find(flowNode => flowNode.id === nodeId);
@@ -89,7 +123,7 @@ function arrangedNodeFor(g: dagre.graphlib.Graph, nodeId: string, nodes: readonl
 }
 
 /** Dagre reduces multiple parallel edges between the same two nodes to one — restore every original edge. */
-function restoreParallelEdges(g: dagre.graphlib.Graph, edges: readonly FlowEdge[]): FlowEdge[] {
+function restoreParallelEdges(g: LayoutGraph, edges: readonly FlowEdge[]): FlowEdge[] {
   const arrangedEdges: FlowEdge[] = [];
   for (const item of g.edges()) {
     const edgeData = edges.filter(edge => edge.source === item.v && edge.target === item.w);
@@ -101,7 +135,7 @@ function restoreParallelEdges(g: dagre.graphlib.Graph, edges: readonly FlowEdge[
 }
 
 export function doLayout({ nodes, edges, flowNodes, orientation = ORIENTATION.vertical, expanded = true }: DoLayoutArgs): DoLayoutResult {
-  const g = new dagre.graphlib.Graph();
+  const g: LayoutGraph = new dagre.graphlib.Graph();
   const isHorizontal = orientation === ORIENTATION.horizontal;
 
   g.setGraph({

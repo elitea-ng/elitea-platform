@@ -65,7 +65,7 @@ export const ImportedAgent = zod
       ),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go:2663-2670 — version_details unconditionally present (hence required+nullable).\n",
+    "NOTE(W2): internal/api/v2/eliteacore/handler.go:2663-2670 — version_details unconditionally present (hence required+nullable).\n",
   );
 
 export type ImportedAgent = zod.input<typeof ImportedAgent>;

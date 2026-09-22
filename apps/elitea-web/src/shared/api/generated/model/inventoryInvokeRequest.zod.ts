@@ -51,7 +51,7 @@ export const InventoryInvokeRequest = zod
     parameters: zod.record(zod.string(), zod.unknown()).optional(),
   })
   .describe(
-    "The provider's invocation envelope, as the browser writes it.\n`configuration.parameters` carries the Inventory toolkit's own settings\n(bucket, llm_model, embedding_model, sources) and `parameters` the\ntool's arguments; a tool argument overrides a configured value only\nwhen it is truthy, which is the provider's own merge rule\n(services\/elitea-subapp-host\/internal\/apps\/inventory\/run\/params.go:85).\n\nCredentials are NOT supplied here. For the three tools that name a\nsource toolkit — run_ingestion, delta_update, remove_source_entities —\nthe facade resolves that toolkit from the project, projects the fields\none SDK loader reads, and injects them before proxying\n(internal\/api\/v2\/inventory\/sources.go:53, 172-190). The provider never holds a\nvault key.\n",
+    "The provider's invocation envelope, as the browser writes it.\n`configuration.parameters` carries the Inventory toolkit's own settings\n(bucket, llm_model, embedding_model, sources) and `parameters` the\ntool's arguments; a tool argument overrides a configured value only\nwhen it is truthy, which is the provider's own merge rule\n(services/elitea-subapp-host/internal/apps/inventory/run/params.go:85).\n\nCredentials are NOT supplied here. For the three tools that name a\nsource toolkit — run_ingestion, delta_update, remove_source_entities —\nthe facade resolves that toolkit from the project, projects the fields\none SDK loader reads, and injects them before proxying\n(internal/api/v2/inventory/sources.go:53, 172-190). The provider never holds a\nvault key.\n",
   );
 
 export type InventoryInvokeRequest = zod.input<typeof InventoryInvokeRequest>;

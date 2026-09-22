@@ -49,7 +49,7 @@ export const AdminSecretValue = zod
       .describe("The plaintext value, or null when the name is unknown."),
   })
   .describe(
-    'NOTE(issue 151): internal\/api\/v2\/secrets\/admin.go:190-209 — the administration single-secret GET. An unknown name is `{\"secret\": null}` with 200, as in pylon.\n',
+    'NOTE(issue 151): internal/api/v2/secrets/admin.go:190-209 — the administration single-secret GET. An unknown name is `{"secret": null}` with 200, as in pylon.\n',
   );
 
 export type AdminSecretValue = zod.input<typeof AdminSecretValue>;

@@ -199,3 +199,61 @@ updates:
       # Babel 8 plugins need @babel/core 8, and the web app is on core 7 (#682).
       - dependency-name: "@babel/*"
         update-types: ["version-update:semver-major"]
+      # vitest 5 has no Storybook that admits it. @storybook/addon-vitest@10.6.0
+      # (the newest release; 11.x is alpha) peers on `vitest ^3||^4` and
+      # `@vitest/browser-playwright ^4`, so a tree carrying vitest 5 is
+      # UNRESOLVABLE: `npm install` in apps/elitea-web exits ERESOLVE, which
+      # also means dependabot cannot build the next update for this directory.
+      # `npm ci` still installs it — it replays the lockfile without resolving —
+      # which is why PR #994's CI got far enough to fail on other things, and
+      # why the storybook suite passed (67 files, 272 tests) on a tree npm
+      # refuses to construct. Green tests do not make the tree installable.
+      # Lift this the day addon-vitest ships a `^5` peer.
+      - dependency-name: vitest
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@vitest/*"
+        update-types: ["version-update:semver-major"]
+      # mermaid 12 bundles ELK and makes it the DEFAULT layout engine (11
+      # shipped it as the separate @mermaid-js/layout-elk, which this app never
+      # installed). Two consequences, neither of them a dependency update:
+      #   - a 435.8 KiB gzip `elk-*` route chunk appears in BOTH the app and
+      #     docs builds, 185.8 KiB over the 250 KiB per-chunk budget (§3.5);
+      #   - every diagram silently changes appearance — 12 also moves the
+      #     default theme to redux-color and the default look to `neo`, and
+      #     neither MermaidDiagram nor docs/components/Mermaid.tsx pins
+      #     `layout`/`theme`/`look`, so they would take all three defaults.
+      # That is a product change for chat and /docs diagrams and belongs in its
+      # own reviewed PR (pin layout: dagre + look: classic, decide on the elk
+      # payload), not in a 45-package group bump.
+      - dependency-name: mermaid
+        update-types: ["version-update:semver-major"]
+      # orval 8.34.0 regressed multipart `format: binary` fields: every
+      # `file: zod.instanceof(File)` it used to emit became `file: zod.unknown()`.
+      # Two consequences across the six upload operations (branding package
+      # import, branding asset, application icon, social avatar, artifact object,
+      # skill import):
+      #   - `formData.append(..., body.file)` and the generated MSW mocks stop
+      #     type-checking — 13 TS2769/TS2740 errors, the whole `tsc --noEmit`
+      #     gate red;
+      #   - the runtime zod schema stops asserting a File at all, which is the
+      #     quieter half: `zod.unknown()` validates anything.
+      # 8.33.0 is the last version that emits `zod.instanceof(File)`, and the
+      # rest of this group is green on it. Lift when orval restores the binary
+      # mapping; the generated client is regenerated with
+      # `node scripts/check-generated-client.mjs --write`.
+      - dependency-name: orval
+        versions: [">= 8.34.0"]
+      # jsdom 30.1.0 breaks 382 of the 15 242 unit tests (30.0.1 is green on the
+      # same tree — measured by swapping only this package). Two signatures:
+      #   - `TypeError: nodeToRestore.current.focus is not a function` — MUI's
+      #     modal focus-restore path, so every Dialog/Menu-driven test dies;
+      #   - `Cannot read properties of undefined (reading '_buffer')` inside
+      #     FormData/Blob, which takes out every multipart upload test
+      #     (application icon, skill import, attachments, branding assets).
+      # Both are environment regressions, not app defects: the same sources pass
+      # under 30.0.1 and in a real browser (the storybook suite, which runs in
+      # chromium rather than jsdom, is green on 30.1.0).
+      # Lift when jsdom restores element focus() on the restore node and the
+      # FormData internals; re-run `npm run test:unit` to confirm.
+      - dependency-name: jsdom
+        versions: [">= 30.1.0"]

@@ -47,7 +47,7 @@ export const VersionVariable = zod
     value: zod.string().nullish(),
   })
   .describe(
-    'NOTE(W2): DB-backed paths always emit both keys as strings (applications\/handler.go:318-321; eliteacore ExportImportGet :2629). The echo paths do NOT guarantee that: CreateVersion returns the client\'s raw variables array verbatim (applications\/handler.go: 772-778, 797 — keys may be absent entirely) and Fork rebuilds entries from unvalidated client maps (eliteacore\/handler.go:2421-2428 — \"name\"\/\"value\" marshal as null when missing). Hence no required list and nullable on both.\n',
+    'NOTE(W2): DB-backed paths always emit both keys as strings (applications/handler.go:318-321; eliteacore ExportImportGet :2629). The echo paths do NOT guarantee that: CreateVersion returns the client\'s raw variables array verbatim (applications/handler.go: 772-778, 797 — keys may be absent entirely) and Fork rebuilds entries from unvalidated client maps (eliteacore/handler.go:2421-2428 — "name"/"value" marshal as null when missing). Hence no required list and nullable on both.\n',
   );
 
 export type VersionVariable = zod.input<typeof VersionVariable>;

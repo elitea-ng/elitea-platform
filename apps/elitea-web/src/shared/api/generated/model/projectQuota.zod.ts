@@ -63,7 +63,7 @@ export const ProjectQuota = zod
     storage_limit_total_block: zod.boolean().optional(),
   })
   .describe(
-    "centry.project_quota. `-1` is the unlimited sentinel; a null column was\nnever configured. The vcu_\* and storage_\* triples are the only ones the\nPUT writes.\n",
+    "centry.project_quota. `-1` is the unlimited sentinel; a null column was\nnever configured. The vcu_* and storage_* triples are the only ones the\nPUT writes.\n",
   );
 
 export type ProjectQuota = zod.input<typeof ProjectQuota>;

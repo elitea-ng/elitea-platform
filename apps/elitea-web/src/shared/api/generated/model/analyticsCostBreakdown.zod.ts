@@ -60,7 +60,7 @@ export const AnalyticsCostBreakdown = zod
       spend_available: zod
         .boolean()
         .describe(
-          'False when the write-back path has persisted nothing for this project in this window, so \"no spend yet\" stays distinguishable from \"no data\".\n',
+          'False when the write-back path has persisted nothing for this project in this window, so "no spend yet" stays distinguishable from "no data".\n',
         ),
       window_days: zod.int(),
     }),

@@ -49,6 +49,12 @@
     // a tag or `model/` subdirectory) — it is hand-written and stays linted.
     "src/shared/api/generated/*/*",
     "src/shared/api/generated/model/**",
+    // orval 8.33 (was 8.27) additionally emits a root barrel that
+    // `export *`s every tag module — `elitea/no-export-all` (R-L4) rejects
+    // exactly that shape. Named individually rather than by widening the glob
+    // above to `generated/*`: that widening would also swallow `mutator.ts`,
+    // which is hand-written and must stay linted (see the note above).
+    "src/shared/api/generated/index.ts",
     // unit S5: the socket contract (spec §5.5). These were generated until
     // #126 deleted the Go prototype socket.io server the generator read as a
     // required input; they are hand-maintained source now, and their unit

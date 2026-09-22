@@ -47,7 +47,7 @@ export const DefaultIcon = zod
     url: zod.string(),
   })
   .describe(
-    "NOTE(W2): static list, internal\/api\/v2\/eliteacore\/handler.go:1786-1795.\n",
+    "NOTE(W2): static list, internal/api/v2/eliteacore/handler.go:1786-1795.\n",
   );
 
 export type DefaultIcon = zod.input<typeof DefaultIcon>;

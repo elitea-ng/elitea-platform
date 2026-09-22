@@ -49,11 +49,11 @@ export const ImportedSkill = zod
     name: zod
       .string()
       .describe(
-        'The name of the skill. The import carries the entry\'s own `name`, which is never empty because an entry with no name is refused (internal\/api\/v2\/eliteacore\/handler.go:2487-2489). The fork carries the same name, and falls back to \"skills entry <n>\" when the entry has none (:3058-3060).\n',
+        'The name of the skill. The import carries the entry\'s own `name`, which is never empty because an entry with no name is refused (internal/api/v2/eliteacore/handler.go:2487-2489). The fork carries the same name, and falls back to "skills entry <n>" when the entry has none (:3058-3060).\n',
       ),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go:2483-2489 (import) and :3073-3079 (fork). Two keys only — the skill import returns no version list.\n",
+    "NOTE(W2): internal/api/v2/eliteacore/handler.go:2483-2489 (import) and :3073-3079 (fork). Two keys only — the skill import returns no version list.\n",
   );
 
 export type ImportedSkill = zod.input<typeof ImportedSkill>;

@@ -47,7 +47,7 @@ export const CompleteMultipartRequest = zod
     parts: zod.array(CompletedPart).min(1),
   })
   .describe(
-    "Body for POST ...\/grants\/{projectID}\/{grantID}:completeMultipart (S16).\n",
+    "Body for POST .../grants/{projectID}/{grantID}:completeMultipart (S16).\n",
   );
 
 export type CompleteMultipartRequest = zod.input<

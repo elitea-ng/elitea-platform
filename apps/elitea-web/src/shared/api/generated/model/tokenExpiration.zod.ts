@@ -50,11 +50,11 @@ export const TokenExpiration = zod
       .int()
       .nullable()
       .describe(
-        'Null is a 400 (\"expires must have value\"). A value large enough to overflow the duration arithmetic is a 400 as well, not a wrapped date in the past.\n',
+        'Null is a 400 ("expires must have value"). A value large enough to overflow the duration arithmetic is a 400 as well, not a wrapped date in the past.\n',
       ),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/auth\/tokens.go:410-413 (tokenExpiration) and :636-659 (resolve). The expiry is computed from the server's clock at creation, so the client sends an OFFSET and never an instant.\n",
+    "NOTE(W2): internal/api/v2/auth/tokens.go:410-413 (tokenExpiration) and :636-659 (resolve). The expiry is computed from the server's clock at creation, so the client sends an OFFSET and never an instant.\n",
   );
 
 export type TokenExpiration = zod.input<typeof TokenExpiration>;

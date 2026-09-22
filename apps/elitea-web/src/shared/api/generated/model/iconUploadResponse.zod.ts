@@ -55,7 +55,7 @@ export const IconUploadResponse = zod
       .describe("Present only when a file was stored."),
   })
   .describe(
-    "NOTE(W2): UploadIcon, internal\/api\/v2\/eliteacore\/handler.go:1797-1837 (no-file fast path :1802-1805; success :1828-1836 with fixed 64x64).\n",
+    "NOTE(W2): UploadIcon, internal/api/v2/eliteacore/handler.go:1797-1837 (no-file fast path :1802-1805; success :1828-1836 with fixed 64x64).\n",
   );
 
 export type IconUploadResponse = zod.input<typeof IconUploadResponse>;

@@ -46,7 +46,7 @@ export const CurrentAvatarResponse = zod
     avatar: zod.string().nullable(),
   })
   .describe(
-    "internal\/api\/v2\/social\/avatar.go. avatar is null when the caller has never uploaded one; otherwise a \/avatars\/{project_id}\/{filename} URL.\n",
+    "internal/api/v2/social/avatar.go. avatar is null when the caller has never uploaded one; otherwise a /avatars/{project_id}/{filename} URL.\n",
   );
 
 export type CurrentAvatarResponse = zod.input<typeof CurrentAvatarResponse>;

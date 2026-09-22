@@ -46,12 +46,12 @@ export const RuntimeCapabilities = zod
     worker: zod
       .enum(["python", "rust", ""])
       .describe(
-        'The worker image this deployment runs, or \"\" when it never said (see the operation description).\n',
+        'The worker image this deployment runs, or "" when it never said (see the operation description).\n',
       ),
     internal_tools: zod
       .record(zod.string(), zod.boolean())
       .describe(
-        "The six toggleable internal chat tools (apps\/elitea-web\/src\/features\/agents\/lib\/internalTools.ts), true when the configured worker runs the tool for real rather than skipping it.\n",
+        "The six toggleable internal chat tools (apps/elitea-web/src/features/agents/lib/internalTools.ts), true when the configured worker runs the tool for real rather than skipping it.\n",
       ),
     hidden_toolkit_types: zod
       .array(zod.string())
@@ -60,7 +60,7 @@ export const RuntimeCapabilities = zod
       ),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/toolkits\/capabilities_handler.go (RuntimeCapabilities). Restates, in one deployment-wide read, what the worker-capability projection already decides per toolkit type (ToolkitTypeSchemas' metadata.hidden) and adds the internal chat tools that projection does not cover at all.\n",
+    "NOTE(W2): internal/api/v2/toolkits/capabilities_handler.go (RuntimeCapabilities). Restates, in one deployment-wide read, what the worker-capability projection already decides per toolkit type (ToolkitTypeSchemas' metadata.hidden) and adds the internal chat tools that projection does not cover at all.\n",
   );
 
 export type RuntimeCapabilities = zod.input<typeof RuntimeCapabilities>;

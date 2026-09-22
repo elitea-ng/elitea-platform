@@ -50,7 +50,7 @@ export const AttachPublicSkillBody = zod.object({
     .string()
     .default(attachPublicSkillBodyEntityTypeDefault)
     .describe(
-      'Only \"agent\" is accepted; pylon\'s SkillEntityTypes enum has no other member (internal\/api\/v2\/skillpublish\/attach.go:66-72).',
+      'Only "agent" is accepted; pylon\'s SkillEntityTypes enum has no other member (internal/api/v2/skillpublish/attach.go:66-72).',
     ),
 });
 

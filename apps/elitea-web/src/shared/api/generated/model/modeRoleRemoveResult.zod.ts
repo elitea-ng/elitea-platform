@@ -50,7 +50,7 @@ export const ModeRoleRemoveResult = zod
         "Assignments deleted. Never 0 — an id that matched none is a 404.",
       ),
   })
-  .describe("NOTE(W2): internal\/api\/v2\/admin\/modes.go:290.\n");
+  .describe("NOTE(W2): internal/api/v2/admin/modes.go:290.\n");
 
 export type ModeRoleRemoveResult = zod.input<typeof ModeRoleRemoveResult>;
 export type ModeRoleRemoveResultOutput = zod.output<

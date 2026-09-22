@@ -131,7 +131,7 @@ jobs:
     # `mcr.microsoft.com/playwright:vX.Y.Z-noble` matches the pinned
     # @playwright/test — so this reference is gated automatically.
     container:
-      image: mcr.microsoft.com/playwright:v1.62.1-noble
+      image: mcr.microsoft.com/playwright:v1.63.0-noble
       options: --ipc=host
     steps:
       - uses: actions/checkout@v7

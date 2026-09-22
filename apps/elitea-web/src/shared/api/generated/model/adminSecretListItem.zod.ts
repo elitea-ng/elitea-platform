@@ -44,10 +44,10 @@ import * as zod from "zod";
 export const AdminSecretListItem = zod
   .object({
     name: zod.string(),
-    secret: zod.string().describe('Always the literal mask \"\*\*\*\*\*\*\".'),
+    secret: zod.string().describe('Always the literal mask "******".'),
   })
   .describe(
-    'NOTE(issue 151): internal\/api\/v2\/secrets\/admin.go:116-127 — one row of the administration listing. `secret` is always the literal mask \"\*\*\*\*\*\*\"; the listing never carries plaintext.\n',
+    'NOTE(issue 151): internal/api/v2/secrets/admin.go:116-127 — one row of the administration listing. `secret` is always the literal mask "******"; the listing never carries plaintext.\n',
   );
 
 export type AdminSecretListItem = zod.input<typeof AdminSecretListItem>;

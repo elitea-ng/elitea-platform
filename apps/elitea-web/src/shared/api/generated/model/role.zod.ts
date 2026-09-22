@@ -47,7 +47,7 @@ export const Role = zod
     name: zod.string(),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go:283, with global defaults admin\/editor\/viewer when the project has no roles (:289-295).\n",
+    "NOTE(W2): internal/api/v2/eliteacore/handler.go:283, with global defaults admin/editor/viewer when the project has no roles (:289-295).\n",
   );
 
 export type Role = zod.input<typeof Role>;

@@ -41,7 +41,22 @@
  */
 import * as zod from "zod";
 
+export const listApplicationsParamsLimitDefault = 20;
+export const listApplicationsParamsLimitMax = 1000;
+
+export const listApplicationsParamsOffsetDefault = 0;
+export const listApplicationsParamsOffsetMin = 0;
+
 export const ListApplicationsParams = zod.object({
+  limit: zod
+    .int()
+    .min(1)
+    .max(listApplicationsParamsLimitMax)
+    .default(listApplicationsParamsLimitDefault),
+  offset: zod
+    .int()
+    .min(listApplicationsParamsOffsetMin)
+    .default(listApplicationsParamsOffsetDefault),
   query: zod.string().optional(),
   tags: zod.string().optional(),
   folder_id: zod.string().optional(),

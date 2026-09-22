@@ -50,7 +50,7 @@ export const BrandingAsset = zod.object({
   path: zod
     .string()
     .describe(
-      "The public same-origin path, \/api\/v2\/branding\/assets\/{kind}\/{digest}.{ext}.",
+      "The public same-origin path, /api/v2/branding/assets/{kind}/{digest}.{ext}.",
     ),
 });
 

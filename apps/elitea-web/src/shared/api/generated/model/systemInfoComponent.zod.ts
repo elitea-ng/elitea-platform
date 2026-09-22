@@ -45,12 +45,12 @@ export const SystemInfoComponent = zod.object({
   name: zod
     .string()
     .describe(
-      '\"elitea-main\" (always present) or \"migrations\" (present only when a database connection answered the migration-head read). Never a plugin, worker or gateway name — see SystemInfo\'s description.\n',
+      '"elitea-main" (always present) or "migrations" (present only when a database connection answered the migration-head read). Never a plugin, worker or gateway name — see SystemInfo\'s description.\n',
     ),
   version: zod
     .string()
     .describe(
-      'For \"elitea-main\", the release version this binary was built with (\"dev\" outside a released build). For \"migrations\", the highest applied shared-scope migration, zero-padded to 4 digits (e.g. \"0125\").\n',
+      'For "elitea-main", the release version this binary was built with ("dev" outside a released build). For "migrations", the highest applied shared-scope migration, zero-padded to 4 digits (e.g. "0125").\n',
     ),
 });
 

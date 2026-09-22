@@ -47,7 +47,7 @@ export const ImportedToolkit = zod
     name: zod.string(),
     type: zod.string(),
   })
-  .describe("NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go:2757.\n");
+  .describe("NOTE(W2): internal/api/v2/eliteacore/handler.go:2757.\n");
 
 export type ImportedToolkit = zod.input<typeof ImportedToolkit>;
 export type ImportedToolkitOutput = zod.output<typeof ImportedToolkit>;

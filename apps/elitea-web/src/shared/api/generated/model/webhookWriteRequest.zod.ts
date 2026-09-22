@@ -53,7 +53,7 @@ export const WebhookWriteRequest = zod
     active: zod.boolean(),
   })
   .describe(
-    "The create\/update body (handler.go's Create\/Update decode `Webhook` directly; `id`\/`project_id`\/timestamps are server-assigned and ignored if sent).\n",
+    "The create/update body (handler.go's Create/Update decode `Webhook` directly; `id`/`project_id`/timestamps are server-assigned and ignored if sent).\n",
   );
 
 export type WebhookWriteRequest = zod.input<typeof WebhookWriteRequest>;

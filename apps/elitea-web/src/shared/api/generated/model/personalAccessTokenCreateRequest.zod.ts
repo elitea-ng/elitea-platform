@@ -62,7 +62,7 @@ export const PersonalAccessTokenCreateRequest = zod
       ),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/auth\/tokens.go:360-368 (tokenCreateRequest) and :375-400 (resolveTokenProjectID).\n",
+    "NOTE(W2): internal/api/v2/auth/tokens.go:360-368 (tokenCreateRequest) and :375-400 (resolveTokenProjectID).\n",
   );
 
 export type PersonalAccessTokenCreateRequest = zod.input<

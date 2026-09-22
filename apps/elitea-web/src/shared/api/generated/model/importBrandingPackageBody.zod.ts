@@ -42,7 +42,7 @@
 import * as zod from "zod";
 
 export const ImportBrandingPackageBody = zod.object({
-  file: zod.instanceof(File),
+  file: zod.instanceof(Blob),
 });
 
 export type ImportBrandingPackageBody = zod.input<

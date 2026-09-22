@@ -51,24 +51,24 @@ export const ValidationIssue = zod
       .string()
       .nullish()
       .describe(
-        "Emitted as explicit JSON null in the cycle\/depth FAIL issues (handler.go:985, 1003).\n",
+        "Emitted as explicit JSON null in the cycle/depth FAIL issues (handler.go:985, 1003).\n",
       ),
     message: zod.string().optional(),
     fix: zod
       .string()
       .optional()
       .describe(
-        "Remediation text carried by the cycle\/depth FAIL critical issues (handler.go:986, 1004).\n",
+        "Remediation text carried by the cycle/depth FAIL critical issues (handler.go:986, 1004).\n",
       ),
     suggestion: zod
       .string()
       .optional()
       .describe(
-        "The ONLY human-readable text on recommendation issues — they have no issue\/message key (handler.go:1043).\n",
+        "The ONLY human-readable text on recommendation issues — they have no issue/message key (handler.go:1043).\n",
       ),
   })
   .describe(
-    "NOTE(W2): issue maps assembled in runPublishValidation (internal\/api\/v2\/eliteacore\/handler.go:876, 885, 891, 981-1005 cycle\/ depth FAILs with fix + explicit-null context, 1043 recommendations with suggestion, 1107-1121, 1146-1151) and re-shaped in Publish's 422 path (556-565: {rule, message}). Key set varies per rule; all keys optional by construction.\n",
+    "NOTE(W2): issue maps assembled in runPublishValidation (internal/api/v2/eliteacore/handler.go:876, 885, 891, 981-1005 cycle/ depth FAILs with fix + explicit-null context, 1043 recommendations with suggestion, 1107-1121, 1146-1151) and re-shaped in Publish's 422 path (556-565: {rule, message}). Key set varies per rule; all keys optional by construction.\n",
   );
 
 export type ValidationIssue = zod.input<typeof ValidationIssue>;

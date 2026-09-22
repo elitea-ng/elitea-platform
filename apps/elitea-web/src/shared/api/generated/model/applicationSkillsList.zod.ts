@@ -57,7 +57,7 @@ export const ApplicationSkillsList = SkillsList.and(
       .describe("How many skills one agent version may attach."),
   }),
 ).describe(
-  'NOTE(issue 621): ONE body answers two clients on this path, and the deployment decides which half is real.\n`items`, `total`, `page`, `page_size` and `total_pages` are the published contract, which apps\/elitea-web reads through shared\/api\/unwrap.ts. `skills` and `max_skills` are the shape apps\/elitea-ui reads. The reviewed route (internal\/api\/v2\/applicationskills, currentApplicationSkillsResponse) has emitted all seven keys since issue 395 — before it carried the first five, turning ELITEA_APPLICATION_SKILLS_ENABLED on gave the web client a body with no `items` key, which unwrapList reports as an unrecognised shape and renders as \"no skills\".\nThe compatibility handler this route replaces emits the five keys only. A client reads the union.\n',
+  'NOTE(issue 621): ONE body answers two clients on this path, and the deployment decides which half is real.\n`items`, `total`, `page`, `page_size` and `total_pages` are the published contract, which apps/elitea-web reads through shared/api/unwrap.ts. `skills` and `max_skills` are the shape apps/elitea-ui reads. The reviewed route (internal/api/v2/applicationskills, currentApplicationSkillsResponse) has emitted all seven keys since issue 395 — before it carried the first five, turning ELITEA_APPLICATION_SKILLS_ENABLED on gave the web client a body with no `items` key, which unwrapList reports as an unrecognised shape and renders as "no skills".\nThe compatibility handler this route replaces emits the five keys only. A client reads the union.\n',
 );
 
 export type ApplicationSkillsList = zod.input<typeof ApplicationSkillsList>;

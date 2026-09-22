@@ -57,7 +57,7 @@ export const AnalyticsUsageEstimate = zod
     cost_dimension_available: zod
       .boolean()
       .describe(
-        'False when no call in the window has a catalogue price. Every money field is then absent, because a cost of zero would render as \"this project spent nothing\", which is a different claim.\n',
+        'False when no call in the window has a catalogue price. Every money field is then absent, because a cost of zero would render as "this project spent nothing", which is a different claim.\n',
       ),
     cache_dimension_available: zod
       .boolean()
@@ -96,7 +96,7 @@ export const AnalyticsUsageEstimate = zod
     unattributed_agent_calls: zod
       .int()
       .describe(
-        "Priceable requests NOT made from a runtime execution — most \/llm traffic. by_agent is never expected to sum to totals.calls.\n",
+        "Priceable requests NOT made from a runtime execution — most /llm traffic. by_agent is never expected to sum to totals.calls.\n",
       ),
     by_agent: zod
       .array(AnalyticsEstimateAgent)

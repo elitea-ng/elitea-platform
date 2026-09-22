@@ -47,11 +47,11 @@ export const SetDefaultVersionRequest = zod
       .string()
       .optional()
       .describe(
-        "When present and non-empty, this OVERRIDES the path segment; the path {version_id} is only the fallback (internal\/api\/v2\/applications\/handler.go:963-970). A numeric value fails the string decode and silently falls back to the path.\n",
+        "When present and non-empty, this OVERRIDES the path segment; the path {version_id} is only the fallback (internal/api/v2/applications/handler.go:963-970). A numeric value fails the string decode and silently falls back to the path.\n",
       ),
   })
   .describe(
-    "NOTE(W2): decode struct at internal\/api\/v2\/applications\/handler.go:965-970 — the body is optional (decode errors are ignored) and exists for old-SPA compatibility; router.go:343 registers only the 3-segment route.\n",
+    "NOTE(W2): decode struct at internal/api/v2/applications/handler.go:965-970 — the body is optional (decode errors are ignored) and exists for old-SPA compatibility; router.go:343 registers only the 3-segment route.\n",
   );
 
 export type SetDefaultVersionRequest = zod.input<

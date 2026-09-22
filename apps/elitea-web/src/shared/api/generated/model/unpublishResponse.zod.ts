@@ -45,7 +45,7 @@ export const UnpublishResponse = zod
   .object({
     status: zod.enum(["deleted"]),
   })
-  .describe("NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go:859.\n");
+  .describe("NOTE(W2): internal/api/v2/eliteacore/handler.go:859.\n");
 
 export type UnpublishResponse = zod.input<typeof UnpublishResponse>;
 export type UnpublishResponseOutput = zod.output<typeof UnpublishResponse>;

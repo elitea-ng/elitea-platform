@@ -47,7 +47,7 @@ export const ModeRoleListing = zod
     total: zod.int(),
     rows: zod.array(ModeRoleAssignment),
   })
-  .describe("NOTE(W2): internal\/api\/v2\/admin\/modes.go:104-107.\n");
+  .describe("NOTE(W2): internal/api/v2/admin/modes.go:104-107.\n");
 
 export type ModeRoleListing = zod.input<typeof ModeRoleListing>;
 export type ModeRoleListingOutput = zod.output<typeof ModeRoleListing>;

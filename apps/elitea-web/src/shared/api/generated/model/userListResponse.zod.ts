@@ -48,7 +48,7 @@ export const UserListResponse = zod
     total: zod.int(),
   })
   .describe(
-    "Users response map, internal\/api\/v2\/eliteacore\/handler.go's Users. NOTE (issue #130): this used to be the response of POST\/PUT\/DELETE too — the router mounted all four verbs on the same listing handler, so every write echoed the member list and changed nothing. The write verbs now have their own handlers and their own response shapes below.\n",
+    "Users response map, internal/api/v2/eliteacore/handler.go's Users. NOTE (issue #130): this used to be the response of POST/PUT/DELETE too — the router mounted all four verbs on the same listing handler, so every write echoed the member list and changed nothing. The write verbs now have their own handlers and their own response shapes below.\n",
   );
 
 export type UserListResponse = zod.input<typeof UserListResponse>;

@@ -55,11 +55,11 @@ export const ConversationSummary = zod
       .record(zod.string(), zod.unknown())
       .nullish()
       .describe(
-        "Carries `single_participant` (the entity this conversation was filtered by, when entity_name\/entity_meta_id were sent) among other conversation-level flags (`is_hidden`, etc).\n",
+        "Carries `single_participant` (the entity this conversation was filtered by, when entity_name/entity_meta_id were sent) among other conversation-level flags (`is_hidden`, etc).\n",
       ),
   })
   .describe(
-    "One row of listConversations — the run-history panel's (issue #868) light projection of a conversation. `duration` is a placeholder: internal\/api\/v2\/conversations\/handler.go's List always answers `-1` for it (no per-conversation duration is computed server-side yet); a caller wanting a displayed duration derives one from created_at\/updated_at instead of trusting this field.\n",
+    "One row of listConversations — the run-history panel's (issue #868) light projection of a conversation. `duration` is a placeholder: internal/api/v2/conversations/handler.go's List always answers `-1` for it (no per-conversation duration is computed server-side yet); a caller wanting a displayed duration derives one from created_at/updated_at instead of trusting this field.\n",
   );
 
 export type ConversationSummary = zod.input<typeof ConversationSummary>;

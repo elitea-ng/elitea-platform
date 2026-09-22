@@ -40,3 +40,32 @@ export function renderWithTheme(ui: ReactElement): RenderResult {
     },
   };
 }
+
+/**
+ * Converts a `rem` length to the `px` string `getComputedStyle` now reports.
+ *
+ * **Why this exists (jsdom 29 → 30).** jsdom@29 echoed the SPECIFIED value back
+ * out of `getComputedStyle`, so `getComputedStyle(el).width` returned the very
+ * `'13.5rem'` the component (or the theme) declared, and a test could compare
+ * the two strings directly. jsdom@30 resolves relative lengths first and reports
+ * `'216px'`. Six assertions across five files broke on exactly that, all of them
+ * comparing a computed length against a `rem` declaration.
+ *
+ * Converting here rather than hard-coding the pixel literal at each call site is
+ * what keeps those assertions pointed at the SHARED constant they were written
+ * to watch — `AdminNav.test.tsx` asserts `SIDE_BAR_WIDTH_REM` precisely so the
+ * admin rail and the app rail cannot drift apart behind two green tests, and a
+ * literal `'216px'` there would throw that away.
+ *
+ * 16 is jsdom's root font size: its UA stylesheet leaves `html` at `font-size:
+ * medium`, and this app never overrides it.
+ *
+ * Throws on any other unit rather than passing the value through — a helper that
+ * quietly returns a `px` or `em` input unchanged would make a mismatched-unit
+ * assertion pass for the wrong reason.
+ */
+export function remToPx(rem: string | number | undefined): string {
+  const value = typeof rem === 'number' ? rem : typeof rem === 'string' ? /^(-?[\d.]+)rem$/.exec(rem)?.[1] : undefined;
+  if (value === undefined) throw new Error(`remToPx expects a rem length, received ${JSON.stringify(rem)}`);
+  return `${Number(value) * 16}px`;
+}

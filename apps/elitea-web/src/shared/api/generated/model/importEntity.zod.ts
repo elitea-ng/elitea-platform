@@ -47,7 +47,7 @@ export const ImportEntity = zod.object({
     .string()
     .optional()
     .describe(
-      '\"toolkits\" routes to the toolkit import and \"skills\" routes to the skill import. Every other value is an agent (internal\/api\/v2\/eliteacore\/handler.go:2439-2450). A \"skills\" entry had no branch of its own, so every skill entry the wizard sent became an agent named after the skill (#611).\n',
+      '"toolkits" routes to the toolkit import and "skills" routes to the skill import. Every other value is an agent (internal/api/v2/eliteacore/handler.go:2439-2450). A "skills" entry had no branch of its own, so every skill entry the wizard sent became an agent named after the skill (#611).\n',
     ),
   import_uuid: zod.string().optional(),
   name: zod.string().optional(),
@@ -58,7 +58,7 @@ export const ImportEntity = zod.object({
     .array(VersionWriteRequest)
     .optional()
     .describe(
-      "On THIS route `versions[].agent_type` accepts `openai`, `react`, `dial`, `pipeline`, `agent` and the empty string, and nothing else; `versions[0]` decides, and any other value is refused on the agents error channel with \"invalid agent_type\" (internal\/api\/v2\/eliteacore\/handler.go, storedAgentType).\n`agent` and the empty string are both STORED as `openai`. `agent` is accepted because the platform's own markdown export writes it for a stored `openai` agent (export_markdown.go, markdownAgentType, mirroring pylon's _application_to_md), so without the mapping an exported `.agent.md` file was not importable through this API — only through a web client, which renames the value in its own file parser (issue 845).\n",
+      "On THIS route `versions[].agent_type` accepts `openai`, `react`, `dial`, `pipeline`, `agent` and the empty string, and nothing else; `versions[0]` decides, and any other value is refused on the agents error channel with \"invalid agent_type\" (internal/api/v2/eliteacore/handler.go, storedAgentType).\n`agent` and the empty string are both STORED as `openai`. `agent` is accepted because the platform's own markdown export writes it for a stored `openai` agent (export_markdown.go, markdownAgentType, mirroring pylon's _application_to_md), so without the mapping an exported `.agent.md` file was not importable through this API — only through a web client, which renames the value in its own file parser (issue 845).\n",
     ),
 });
 
