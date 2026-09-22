@@ -1,6 +1,6 @@
 # Rust worker remaining gates
 
-Updated: 2026-09-18. Main integration baseline: `1dee0c89`.
+Updated: 2026-09-22. Main integration baseline: `1dee0c89`.
 
 This register orders implementation work. The [testing register](testing-gaps.md) owns detailed proof requirements.
 Source mappings remain the behavioral evidence for each capability.
@@ -12,6 +12,9 @@ Current-platform code defines business behavior, not a requirement to copy its i
 - Gate 2 is accepted for progression, with explicit verification debt. OAuth/DCR support is not a claim of complete provider coverage.
 - Gate 3 is accepted for progression. The final restricted chat-operation permission check passes on 2026-09-14.
 - Gate 4 is active for context management and current-platform runtime drift.
+- [Native history retention](source-mapping/context-native-history-retention-20260921.md) records repeated-loop component proof and earlier live defects.
+- [Model transport timeouts](source-mapping/model-transport-timeouts-20260922.md) records the separate model-wait limits and repeated live compaction.
+- [Terminal answer snapshots](source-mapping/terminal-answer-snapshot-20260922.md) records the successful 24-call, two-compaction run and stable browser reload.
 - The [point 3 audit](source-mapping/point3-audit-20260913.md) records the completed acceptance cases and their limits.
 - Production Rust capability registration remains disabled.
 

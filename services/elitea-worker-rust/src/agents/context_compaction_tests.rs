@@ -1350,3 +1350,215 @@ async fn assert_branch_projection_refused(
     );
     assert_eq!(view.events().at(3).unwrap().branch, "sibling");
 }
+
+struct RepeatedLoopProbe {
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl Llm for RepeatedLoopProbe {
+    fn name(&self) -> &'static str {
+        "repeated-compaction-probe"
+    }
+    async fn generate_content(
+        &self,
+        request: LlmRequest,
+        _: bool,
+    ) -> adk_rust::Result<LlmResponseStream> {
+        assert!(Budget.measure(&request).unwrap().fits());
+        assert!(request.contents.iter().any(|content| {
+            content.parts
+                == Content::new("user")
+                    .with_text("Original task, preserve this exactly.")
+                    .parts
+        }));
+        let index = self.calls.fetch_add(1, Ordering::SeqCst);
+        let content = if index < 24 {
+            Content {
+                role: "model".into(),
+                parts: vec![Part::FunctionCall {
+                    name: "repeated_lookup".into(),
+                    args: json!({"index": index}),
+                    id: Some(if index == 0 {
+                        "call-one".into()
+                    } else {
+                        format!("lookup-{index}")
+                    }),
+                    thought_signature: None,
+                }],
+            }
+        } else {
+            Content::new("model").with_text("Completed 24 lookups.")
+        };
+        Ok(Box::pin(stream::once(async move {
+            Ok(LlmResponse::new(content))
+        })))
+    }
+}
+
+#[async_trait]
+impl adk_rust::Tool for RepeatedLoopProbe {
+    fn name(&self) -> &'static str {
+        "repeated_lookup"
+    }
+    fn description(&self) -> &'static str {
+        "Return fictional lookup evidence."
+    }
+    async fn execute(
+        &self,
+        _: Arc<dyn adk_rust::ToolContext>,
+        args: Value,
+    ) -> adk_rust::Result<Value> {
+        Ok(json!({"index":args["index"], "output":"archive evidence ".repeat(320)}))
+    }
+}
+
+#[tokio::test]
+async fn native_tool_loop_compacts_repeatedly_with_persisted_coverage() {
+    use adk_rust::agent::LlmAgentBuilder;
+    let sessions = Arc::new(InMemorySessionService::new());
+    let session = create(sessions.as_ref()).await;
+    let summary = Arc::new(Summary::default());
+    let compaction = Arc::new(
+        DurableContextCompaction::new(
+            plan(),
+            Arc::new(Budget),
+            summary.clone(),
+            [7; 32],
+            session.as_ref(),
+        )
+        .unwrap(),
+    );
+    let probe = Arc::new(RepeatedLoopProbe {
+        calls: AtomicUsize::new(0),
+    });
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let committed_cycles = Arc::new(AtomicUsize::new(0));
+    let agent = LlmAgentBuilder::new("elitea-agent")
+        .retain_prepared_history(true)
+        .model(probe.clone())
+        .tool(probe.clone())
+        .before_model_callback(Box::new({
+            let sessions = sessions.clone();
+            let compaction = compaction.clone();
+            let observed = observed.clone();
+            let committed_cycles = committed_cycles.clone();
+            move |_, request| {
+                let sessions = sessions.clone();
+                let compaction = compaction.clone();
+                let observed = observed.clone();
+                let committed_cycles = committed_cycles.clone();
+                Box::pin(async move {
+                    observed
+                        .lock()
+                        .unwrap()
+                        .push(serde_json::to_vec(&request).unwrap().len());
+                    let (prepared, record) = compaction.prepare(request, checkpoint_ready).await?;
+                    if record.is_some() {
+                        store(sessions.as_ref(), record.as_ref()).await;
+                        compaction.committed(record)?;
+                        committed_cycles.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Ok(BeforeModelResult::Continue(prepared))
+                })
+            }
+        }))
+        .build()
+        .unwrap();
+    let runner = adk_rust::runner::Runner::builder()
+        .app_name("elitea-agent-v1")
+        .agent(Arc::new(agent))
+        .session_service(sessions.clone())
+        .build()
+        .unwrap();
+    let mut events = runner
+        .run(
+            "user-1".try_into().unwrap(),
+            "session-1".try_into().unwrap(),
+            Content::new("user").with_text("Original task, preserve this exactly."),
+        )
+        .await
+        .unwrap();
+    while let Some(event) = events.next().await {
+        event.unwrap();
+    }
+    let sizes = observed.lock().unwrap().clone();
+    let cycles = summary.requests.lock().unwrap().len();
+    assert!(committed_cycles.load(Ordering::SeqCst) >= cycles);
+    println!("native loop compactions={cycles}, callback request bytes={sizes:?}");
+    assert_eq!(probe.calls.load(Ordering::SeqCst), 25);
+    assert!(
+        cycles >= 3,
+        "the native loop must cross the compaction threshold repeatedly"
+    );
+    assert!(
+        sizes.iter().max().unwrap() < &40_000,
+        "obsolete tool results accumulated in the model loop"
+    );
+    let restored = sessions.get(load_request()).await.unwrap();
+    assert!(restored.state().get(STATE_KEY).is_some());
+}
+
+#[tokio::test]
+async fn completed_tool_batch_larger_than_recent_budget_can_be_compacted_whole() {
+    let sessions = InMemorySessionService::new();
+    let session = create(&sessions).await;
+    let summary = Arc::new(Summary::default());
+    let compaction = DurableContextCompaction::new(
+        plan(),
+        Arc::new(Budget),
+        summary.clone(),
+        [7; 32],
+        session.as_ref(),
+    )
+    .unwrap();
+    let mut request = history();
+    request.contents.truncate(2);
+    let mut calls = Vec::new();
+    let mut results = Vec::new();
+    for index in 0..12 {
+        let id = if index == 0 {
+            "call-one".into()
+        } else {
+            format!("batch-{index}")
+        };
+        calls.push(Part::FunctionCall {
+            name: "lookup".into(),
+            args: json!({"index":index}),
+            id: Some(id.clone()),
+            thought_signature: None,
+        });
+        let content: Content = serde_json::from_value(json!({"role":"function","parts":[{"id":id,"functionResponse":{"name":"lookup","response":{"output":"evidence ".repeat(400)}}}]})).unwrap();
+        results.extend(content.parts);
+    }
+    request.contents.push(Content {
+        role: "model".into(),
+        parts: calls,
+    });
+    request.contents.push(Content {
+        role: "function".into(),
+        parts: results,
+    });
+    assert!(!Budget.measure(&request).unwrap().fits());
+    let mut pending = request.clone();
+    pending.contents.last_mut().unwrap().parts.pop();
+    let error = compaction
+        .prepare(pending, checkpoint_ready)
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.code, "context_budget_exceeded");
+    assert!(summary.requests.lock().unwrap().is_empty());
+    let original_authority = request.contents[..2].to_vec();
+    let (prepared, record) = compaction.prepare(request, checkpoint_ready).await.unwrap();
+    assert!(Budget.measure(&prepared).unwrap().fits());
+    assert_eq!(
+        serde_json::to_value(&prepared.contents[..2]).unwrap(),
+        serde_json::to_value(original_authority).unwrap()
+    );
+    assert!(record.is_some());
+    let requests = summary.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    let source = serde_json::to_string(&requests[0]).unwrap();
+    assert!(source.contains("call-one") && source.contains("batch-11"));
+}

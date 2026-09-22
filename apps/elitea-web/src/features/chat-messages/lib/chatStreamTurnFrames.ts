@@ -337,7 +337,13 @@ export function reduceTurnFrame(
       // ends without `agent_llm_end` (a pipeline whose last node is not an LLM)
       // would otherwise leave the row spinning with the answer inside it.
       const finishActions = (current.toolActions ?? []) as readonly ToolAction[];
-      const settled = settleReasoning(current.id, current.content, finishActions);
+      // Rust sends the persisted final snapshot on this terminal event.
+      // A null body refers to previously assembled result chunks.
+      const snapshot = frame.response_metadata?.should_continue === false && typeof frame.content === 'string';
+      const final = snapshot
+        ? splitWholeResponse(current.id, frameText(frame, true), finishActions, frame.created_at)
+        : { answer: current.content, actions: finishActions };
+      const settled = settleReasoning(current.id, final.answer, final.actions);
       return replaceAt(history, index, {
         isStreaming: false,
         isLoading: false,

@@ -72,3 +72,94 @@ A fresh browser also verifies the persisted answer after reload.
 Container memory samples reach 35.93 MiB during this run.
 These samples are not a baseline comparison or a repeated-compaction memory bound.
 The browser uses real providers and does not intercept model requests.
+
+## Repeated native loop verification
+
+`native_tool_loop_compacts_repeatedly_with_persisted_coverage` executes 24 tool calls and 25 model calls in one native ADK run.
+It uses the production compactor with fixture models and an in-memory session service.
+The test writes summary coverage before it commits each prepared history replacement.
+Seven summary calls complete. Every ordinary model request fits its configured input budget.
+The original user task remains exact at every ordinary model call.
+Serialized callback requests peak at 23,346 bytes instead of growing with all 24 tool results.
+The final session contains the persisted compaction record.
+This test proves repeated native-loop integration, not live-provider behavior or process RSS bounds.
+
+## Live loop fixture
+
+`tests/acceptance/compaction_mcp_fixture.py` serves twelve fictional archive records through a read-only MCP tool.
+Each record includes an index, the next index, task facts, and bounded evidence text.
+The fixture requires explicit test-only enablement and TLS certificate paths.
+It does not read external data or change product records.
+The rehearsal runs it on a separate port without restarting the existing OAuth fixture.
+TLS tool discovery passes. Twelve valid indexes and four invalid index cases pass local checks.
+Chat attachment and repeated live compaction acceptance remain open.
+
+Chat 608 reads all twelve records in order through the real MCP endpoint.
+Its real-provider run completes one compaction from 113,859 to 13,831 estimated input tokens.
+The final answer preserves the delivery code, corrected color, archive status, remaining step, and record count.
+The browser reports no page errors during this run.
+The intended test configuration has a 32k window, but runtime events report 128k.
+The run therefore fails the requirement for at least two live compactions.
+The participant model selection and budget propagation require verification before another acceptance claim.
+
+Chat 609 reproduces the 128k selection despite an explicit 32k model selection in the browser request.
+Configuration 17 stores the intended limits, but its connection status is false.
+The catalogue excludes that entry, and Main selects the configured default model.
+The stored connection endpoint rejects `llm_model` with reason `unsupported_type`.
+No configuration status is changed manually to bypass that missing verification path.
+Chat 610 uses the validated default model and requests two independent passes through the twelve records.
+Its two attempts fail acceptance.
+Executions `2c8a53170706c15a6be9301c6fe16346` and `612d1970fd87dae74fa9811366cfc590` each record twelve actual tool calls.
+Both settle as `FAILED`, despite showing only partial text without a visible error in the browser.
+Worker diagnostics report `native_agent.event_failed` with upstream code `context_budget_exceeded`.
+The settlement error-code columns are empty.
+The continuation attempt completes one compaction from 151,523 to 1,077 estimated tokens before its later failure.
+These results require investigation of grouped tool-result capacity and terminal error projection.
+They do not prove a model refusal or successful repeated compaction.
+
+## Completed tool batch capacity correction
+
+The recent-history preference keeps at least one message during cutoff selection.
+A single message can contain twelve completed tool results and exceed the entire input budget.
+This prevents compaction before the summary model receives a request.
+
+`src/agents/context_compaction.rs` now permits a complete-history cutoff when the retained tail exceeds the input budget.
+The cutoff applies only when every tool call has a matching result.
+Existing checks preserve pinned instructions and the latest user request.
+The change does not truncate tool results or change the durable source ledger.
+No database migration is required.
+
+`completed_tool_batch_larger_than_recent_budget_can_be_compacted_whole` reproduces the failure with twelve results.
+The corrected path produces a request within budget and retains the original authority messages.
+Removing one result proves that an unfinished batch fails without calling the summarizer.
+All 22 compaction tests pass locally. The PostgreSQL-enabled agent suite and strict Clippy checks also pass.
+The PostgreSQL-enabled suite completes 376 agent tests.
+The auditable release build succeeds and deploys to rehearsal with five existing mounts preserved.
+The candidate digest is `sha256:a810298a44cde25ed047997da2a2b717e1f26c23345a630bb7d47a12b3402d1e`.
+Execution `b04fa5111486c3a45afe41b978316246` compacts 152,219 estimated tokens to 1,150.
+The subsequent chat-model request fails with `model_gateway.response_header_timeout` after 15 seconds.
+This run does not prove repeated live compaction acceptance.
+
+The earlier failed chat groups contain `is_error=true` and the expected resource-limit message.
+A fresh browser renders that persisted message and the new generic runtime error.
+The empty settlement error columns do not prove missing error persistence.
+The settlement implementation does not populate those columns for ordinary worker failures.
+The earlier browser observation can precede terminal-error rendering; terminal synchronization requires further verification.
+Execution `dc032cc935f4e72171d5b523660d6585` retries from the compacted history with 1,219 estimated input tokens.
+It encounters the same response-header timeout before further tool execution.
+This confirms reuse of the compacted history, but leaves repeated live-loop acceptance open.
+The lifecycle currently maps this timeout to `Internal`; the browser consequently shows a generic runtime error.
+Provider timeout classification and the configured response-header deadline require follow-up under gate 4.
+
+ADK 2.2.0 `adk-graph/src/delta.rs` provides separate checkpoint storage compression.
+It reconstructs full state from snapshots and deltas; it does not summarize model context.
+Its save path loads checkpoint history and reconstructs previous state before computing a delta.
+Storage savings alone therefore do not prove lower peak process memory.
+This correction does not introduce that checkpointer or change checkpoint ownership.
+
+## Follow-up acceptance
+
+Fresh chat 612 completes 24 tool calls and two compactions with real providers.
+The final answer retains all required facts and remains equal after reload.
+See [terminal answer snapshots](terminal-answer-snapshot-20260922.md) for deployed images and evidence.
+This closes the repeated native-loop case, not all context-management gates.

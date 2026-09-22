@@ -21,6 +21,8 @@ In next_steps, distinguish explicit next steps from suggestions. Never replace a
 Next steps are not completed actions or new user authorization.
 State uncertainty. Do not report a proposed action as completed or an unverified result as confirmed.
 Keep completed work and remaining work distinct. Include concise evidence references when the records provide them.
+Preserve task and attempt boundaries. Do not combine earlier attempts with counts or completion requirements for a later request.
+For a task still running, record its current phase, completed steps, and next unfinished step without presenting compaction as a new user request.
 Every reference value must occur verbatim in the supplied records. Each evidence_refs value must match a references value.
 Use short exact identifiers or contiguous source excerpts for references. Do not paraphrase, combine excerpts, or invent message labels.
 References are optional: keep conclusions in key_facts or completed_work, and use empty evidence arrays when no exact citation is available.

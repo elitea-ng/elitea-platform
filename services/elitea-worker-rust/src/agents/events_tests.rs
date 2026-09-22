@@ -534,6 +534,7 @@ fn ordinary_stream_matches_current_text_lifecycle_without_a_heap_event_queue() {
         ]
     );
     assert_eq!(terminal[0]["content"], "hello");
+    assert_eq!(terminal[0]["response_metadata"]["should_continue"], false);
     assert_eq!(
         terminal[2]["response_metadata"]["application_details"],
         json!({"id": 11, "version_id": 22})

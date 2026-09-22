@@ -153,6 +153,10 @@ pub struct RuntimeLimits {
     pub admission_timeout_millis: u64,
     pub grpc_deadline_millis: u64,
     pub content_timeout_millis: u64,
+    #[serde(default = "default_model_timeout_millis")]
+    pub model_response_header_timeout_millis: u64,
+    #[serde(default = "default_model_timeout_millis")]
+    pub model_stream_idle_timeout_millis: u64,
     pub http_max_connections: usize,
     pub http_max_keepalive_connections: usize,
     pub output_max_queued_frames: usize,
@@ -162,6 +166,10 @@ pub struct RuntimeLimits {
     pub output_stream_deadline_millis: u64,
     pub lease_poll_interval_millis: u64,
     pub shutdown_timeout_millis: u64,
+}
+
+fn default_model_timeout_millis() -> u64 {
+    120_000
 }
 
 impl RuntimeLimits {
@@ -181,6 +189,8 @@ impl RuntimeLimits {
             && (1..=60_000).contains(&self.admission_timeout_millis)
             && (1..=300_000).contains(&self.grpc_deadline_millis)
             && (1..=300_000).contains(&self.content_timeout_millis)
+            && (1..=300_000).contains(&self.model_response_header_timeout_millis)
+            && (1..=300_000).contains(&self.model_stream_idle_timeout_millis)
             && (1..=512).contains(&self.http_max_connections)
             && self.http_max_keepalive_connections <= 512
             && self.http_max_keepalive_connections <= self.http_max_connections
@@ -460,6 +470,28 @@ mod tests {
         validate_private_directory,
     };
     use crate::protocol::command::LIMITS_REVISION;
+
+    #[test]
+    fn model_timeouts_default_independently_and_reject_unbounded_values() {
+        let mut value = config(Path::new("/runtime"))["limits"].clone();
+        let limits: super::RuntimeLimits = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(limits.content_timeout_millis, 15_000);
+        assert_eq!(limits.model_response_header_timeout_millis, 120_000);
+        assert_eq!(limits.model_stream_idle_timeout_millis, 120_000);
+        for field in [
+            "model_response_header_timeout_millis",
+            "model_stream_idle_timeout_millis",
+        ] {
+            for invalid in [0, 300_001] {
+                value[field] = json!(invalid);
+                let limits: super::RuntimeLimits = serde_json::from_value(value.clone()).unwrap();
+                assert!(limits.validate().is_err());
+            }
+            value[field] = json!(240_000);
+            let limits: super::RuntimeLimits = serde_json::from_value(value.clone()).unwrap();
+            assert!(limits.validate().is_ok());
+        }
+    }
 
     fn config(root: &Path) -> Value {
         let limits = json!({

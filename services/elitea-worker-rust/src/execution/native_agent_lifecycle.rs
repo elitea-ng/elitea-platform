@@ -1196,6 +1196,12 @@ fn projection_failure(error: &AgentEventProjectionError) -> RuntimeFailureKind {
 
 fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
     match upstream_code {
+        Some(
+            "model_gateway.response_header_timeout"
+            | "model_gateway.stream_idle_timeout"
+            | "model_gateway.upstream_timeout"
+            | "anthropic_gateway.response_header_timeout",
+        ) => RuntimeFailureKind::DependencyUnavailable,
         Some("context_budget_exceeded" | "model_request_bytes_exceeded") => {
             RuntimeFailureKind::ResourceExhausted
         }
@@ -1208,6 +1214,21 @@ mod taxonomy_tests {
     use super::assembly_failure;
     use crate::agents::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
     use crate::protocol::output::RuntimeFailureKind;
+
+    #[test]
+    fn model_wait_timeouts_are_dependency_failures_not_execution_deadlines() {
+        for code in [
+            "model_gateway.response_header_timeout",
+            "model_gateway.stream_idle_timeout",
+            "model_gateway.upstream_timeout",
+            "anthropic_gateway.response_header_timeout",
+        ] {
+            assert_eq!(
+                super::model_failure(Some(code)),
+                RuntimeFailureKind::DependencyUnavailable
+            );
+        }
+    }
 
     #[test]
     fn context_budget_failure_is_a_resource_limit_without_exposing_provider_text() {

@@ -147,6 +147,8 @@ mod tests {
                 admission_timeout_millis: 1_000,
                 grpc_deadline_millis: 5_000,
                 content_timeout_millis: 15_000,
+                model_response_header_timeout_millis: 120_000,
+                model_stream_idle_timeout_millis: 120_000,
                 http_max_connections: 32,
                 http_max_keepalive_connections: 16,
                 output_max_queued_frames: 4,

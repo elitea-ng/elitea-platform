@@ -34,6 +34,27 @@ function frame(type: string, extra: Record<string, unknown> = {}) {
 }
 
 describe('applyChatStreamFrame', () => {
+  it('settles the explicit terminal snapshot without retaining intermediate narration', () => {
+    const history = [{ ...pendingAssistant(), content: 'Pass one. Pass two. Final result.' }];
+    const terminal = frame(SocketMessageType.PipelineFinish, {
+      content: 'Final result.', response_metadata: { should_continue: false },
+    });
+    const settled = applyChatStreamFrame(history, terminal, CONTEXT);
+    expect(settled[0]?.content).toBe('Final result.');
+    expect(settled[0]?.isStreaming).toBe(false);
+    expect(applyChatStreamFrame(settled, terminal, CONTEXT)[0]?.content).toBe('Final result.');
+    for (const response_metadata of [{ should_continue: true }, {}]) {
+      expect(applyChatStreamFrame(history, { ...terminal, response_metadata }, CONTEXT)[0]?.content)
+        .toBe(history[0]?.content);
+    }
+    expect(applyChatStreamFrame(history, { ...terminal, content: null }, CONTEXT)[0]?.content)
+      .toBe(history[0]?.content);
+    const withReasoning = applyChatStreamFrame(history, {
+      ...terminal, content: '<think>Review the facts.</think>Final result.',
+    }, CONTEXT);
+    expect(withReasoning[0]?.content).toBe('Final result.');
+    expect(withReasoning[0]?.toolActions).toHaveLength(1);
+  });
   it('replaces intermediate output with the complete chunked result and ignores exact replay', () => {
     const first = { offset_bytes: 0, total_bytes: 7, sha256: 'a'.repeat(64), final: false };
     let history: readonly ChatMessage[] = [{ ...pendingAssistant(), content: 'Intermediate work.' }];

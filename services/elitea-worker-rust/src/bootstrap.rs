@@ -220,8 +220,10 @@ impl ProductionProfiles {
             model: ModelGatewayConfig {
                 origin: deployment.platform_origin.clone(),
                 connect_timeout: grpc_connect_timeout,
-                response_header_timeout: Duration::from_millis(limits.content_timeout_millis),
-                stream_idle_timeout: Duration::from_millis(limits.content_timeout_millis),
+                response_header_timeout: Duration::from_millis(
+                    limits.model_response_header_timeout_millis,
+                ),
+                stream_idle_timeout: Duration::from_millis(limits.model_stream_idle_timeout_millis),
                 max_request_bytes: MAX_MODEL_REQUEST_BYTES,
                 max_sse_event_bytes: MAX_MODEL_SSE_EVENT_BYTES,
                 max_stream_bytes: MAX_MODEL_STREAM_BYTES,

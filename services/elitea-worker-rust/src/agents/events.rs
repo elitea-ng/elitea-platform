@@ -2347,6 +2347,7 @@ impl AgentEventProjector {
                     "finish_reason": "finished",
                     "next_step": "END",
                     "thread_id": thread_id,
+                    "should_continue": self.context.should_continue,
                 }),
                 occurred_at,
             )?)?;

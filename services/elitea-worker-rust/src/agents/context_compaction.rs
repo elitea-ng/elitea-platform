@@ -199,6 +199,15 @@ impl DurableContextCompaction {
                 break;
             }
         }
+        request.contents = joined(&pinned, &working[cutoff..]);
+        if !self.budget.measure(&request)?.fits() {
+            // A completed batch can itself exceed the recent-history budget.
+            // Summarize it whole; an unresolved batch must remain exact.
+            let complete = complete_prefix(&working, 0)?;
+            if complete == working.len() {
+                cutoff = complete;
+            }
+        }
         request.contents = joined(&pinned, &working);
         if cutoff <= previous_len {
             before.check()?;
@@ -227,7 +236,7 @@ impl DurableContextCompaction {
             )
             .await?;
         let mut replacement = vec![Content::new("user").with_text(format!(
-            "Summary of earlier conversation records. Authoritative instructions remain separate.\n{text}"
+            "Platform context-compaction checkpoint, not a new user request. These notes replace earlier messages and tool results, including work already performed in this task. Continue from the recorded progress under the latest user instructions. Do not repeat completed actions merely because their raw messages were compacted. If the requested work is complete, report its result. Compaction alone does not require user clarification. Preserve distinctions between earlier tasks and the current request. Authoritative instructions, approvals, and resource bindings remain separate.\n{text}"
         ))];
         if let Some(user) = protected_user {
             replacement.push(user);
