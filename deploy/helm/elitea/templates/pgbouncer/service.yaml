@@ -1,0 +1,19 @@
+{{- if .Values.pgbouncer.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "elitea-pgbouncer.fullname" . }}
+  labels:
+    {{- include "elitea-pgbouncer.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "elitea-pgbouncer.selectorLabels" . | nindent 4 }}
+  ports:
+    # The Postgres protocol on a non-Postgres port: the DSN that points at
+    # this service names the host, and the database name in it selects the
+    # pooler's single [databases] entry.
+    - name: pgbouncer
+      port: {{ .Values.pgbouncer.service.port }}
+      targetPort: pgbouncer
+      protocol: TCP
+{{- end }}

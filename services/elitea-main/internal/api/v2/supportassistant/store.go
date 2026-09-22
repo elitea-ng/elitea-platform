@@ -117,24 +117,34 @@ func (s *store) bootstrapProject(ctx context.Context) (int64, error) {
 	// deployment, not to the request that noticed it was needed.
 	ctx = context.WithoutCancel(ctx)
 
-	conn, err := s.pool.Acquire(ctx)
+	lockConn, err := s.pool.Acquire(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("support assistant: acquire connection: %w", err)
 	}
-	defer conn.Release()
+	defer lockConn.Release()
 
-	// A SESSION lock, taken on a single pinned connection and released
-	// explicitly, because provisioning is many statements over its own pool
-	// connections and cannot run inside one transaction.
-	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, bootstrapLockKey); err != nil {
-		return 0, fmt.Errorf("support assistant: bootstrap lock: %w", err)
+	// A TRANSACTION lock in a transaction this attempt keeps open on a
+	// connection that does no other work, the same discipline as the secrets
+	// backfill and personal project provisioning (issue #964). Provisioning is
+	// many statements over its own pool connections and cannot run inside one
+	// transaction, so the lock transaction is separate. A session lock would
+	// stop serialising behind a transaction-mode pooler: the backend that
+	// holds it is handed to another client between statements, and in
+	// transaction mode nothing resets it, so the lock also outlives the
+	// attempt. Ending this transaction releases the lock; the rollback is
+	// registered before the lock statement so every exit path ends it.
+	lockTx, err := lockConn.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("support assistant: begin lock transaction: %w", err)
 	}
 	defer func() {
-		if _, err := conn.Exec(context.WithoutCancel(ctx),
-			`SELECT pg_advisory_unlock($1)`, bootstrapLockKey); err != nil {
-			s.logger.Error("support assistant: bootstrap unlock", "err", err)
+		if err := lockTx.Rollback(context.WithoutCancel(ctx)); err != nil {
+			s.logger.Error("support assistant: bootstrap lock transaction was not ended", "err", err)
 		}
 	}()
+	if _, err := lockTx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, bootstrapLockKey); err != nil {
+		return 0, fmt.Errorf("support assistant: bootstrap lock: %w", err)
+	}
 
 	// Re-read INSIDE the lock. This is the whole point of the lock: the replica
 	// that waited here must see the winner's write rather than provision a

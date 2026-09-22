@@ -199,6 +199,42 @@ services:
       timeout: 5s
       retries: 10
 
+  pgbouncer:
+    # The Postgres pooler elitea-main sits behind (issue #964).
+    #
+    # Transaction mode: main's client connections are NOT one per server
+    # connection. All replicas share the server pool in the config, so the
+    # read plane stops pinning Postgres at max_connections as main replicas
+    # grow. The connection math is in deploy/README.md.
+    #
+    # It is safe here only because elitea-main's three multi-statement
+    # serialisation locks are transaction-scoped locks held in a transaction
+    # the pooler keeps pinned to one backend (the secrets backfill,
+    # internal/api/v2/secrets; personal project provisioning,
+    # internal/application/personalproject; the support-assistant bootstrap,
+    # internal/api/v2/supportassistant). A session lock would stop
+    # serialising, and in transaction mode nothing resets the backend it
+    # leaks onto; the 2026-09-01 measurement is recorded in
+    # deploy/helm/elitea/values.yaml.
+    #
+    # The config is committed at deploy/runtime/pgbouncer.ini (the redis.conf
+    # precedent); the entrypoint uses the file as-is when it exists.
+    #
+    # No host port: the pooler is an internal hop, and pgbouncer's own console
+    # (SHOW POOLS / SHOW SERVERS) is reached through podman exec when needed.
+    image: edoburu/pgbouncer:v1.25.2-p0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./runtime/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
+      - ./runtime/pgbouncer-userlist.txt:/etc/pgbouncer/userlist.txt:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 6432 -U elitea"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   redis:
     image: redis:7-alpine
     ports:
@@ -795,7 +831,15 @@ services:
       # admin-ui submodule checkout is required.
       target: e2e
     environment:
-      DATABASE_URL: "postgres://elitea:elitea@postgres:5432/elitea?sslmode=disable"
+      # main reaches Postgres through the pooler (issue #964); the pooler
+      # reaches Postgres directly. The migration jobs, db-init, the LLM
+      # gateway and the one-shots keep their direct connections on purpose.
+      DATABASE_URL: "postgres://elitea:elitea@pgbouncer:6432/elitea?sslmode=disable"
+      # main's product pool, explicit instead of the pgx default max(4, NumCPU):
+      # with the pooler, main's client-side budget is a stated number the
+      # connection math in deploy/README.md can count. The chart ships the
+      # same value (deploy/helm/elitea/values.yaml, main.env).
+      ELITEA_DATABASE_MAX_CONNS: "6"
       # Keep the gateway and Main on one vault-key source. Empty preserves the
       # unwrapped E2E seed; a restored deployment can supply its existing key.
       SECRETS_MASTER_KEY: "${SECRETS_MASTER_KEY-}"
@@ -1148,7 +1192,9 @@ services:
       # public material, so a plain read-only bind mount is correct here.
       - ./runtime/auth.form.yml:/etc/elitea/auth.form.yml:ro
     depends_on:
-      postgres:
+      # main's only database path is the pooler; the pooler waits on
+      # postgres. The schema is guaranteed by elitea-migrate below.
+      pgbouncer:
         condition: service_healthy
       elitea-deepwiki:
         condition: service_healthy

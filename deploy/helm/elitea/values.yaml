@@ -127,16 +127,117 @@ postgresql:
   #     almost nothing: each client connection pins a server connection for its
   #     life, and the clients here are pgxpools that hold MaxConns open.
   #
-  # So the ceiling below is the control, not a stopgap for a pooler that is
-  # coming. A pooler becomes available after the session-scoped advisory locks
-  # are replaced — a locks table taken with SELECT ... FOR UPDATE, or moving the
-  # backfill out of the boot path into a Job.
+  # The pooler is available now (issue #964, resolved 2026-09-20), and both
+  # blockers above were removed rather than worked around:
+  #
+  #   * the 42P05s: pgbouncer max_prepared_statements = 1000 tracks pgx's
+  #     named statements and re-prepares them on backend reassignment instead
+  #     of answering 42P05.
+  #   * the session-scoped locks: the three elitea-main serialisation locks
+  #     (the secrets backfill, internal/api/v2/secrets; personal project
+  #     provisioning, internal/application/personalproject; the
+  #     support-assistant bootstrap, internal/api/v2/supportassistant) and the dbtest
+  #     template-build lock (internal/infra/db/dbtest/template.go) now take
+  #     transaction-scoped advisory locks in an open transaction, which a
+  #     transaction-mode pooler pins to one backend for the lock's life. A
+  #     session-scoped lock leaks onto a recycled backend and stops
+  #     serialising, which is the measured failure above.
+  #
+  # Re-measured 2026-09-20 on the standalone stack: the secrets,
+  # personalproject and dbtest suites pass through a transaction-mode
+  # pgbouncer end to end, and the read plane no longer pins the server. The
+  # pooler ships as the pgbouncer component below, off by default, and is ON
+  # in the standalone compose stack (deploy/runtime/pgbouncer.ini is the
+  # config it mounts; this chart renders the same settings).
 
   # Connections to leave for everything this chart does not model: interactive
   # psql, backup tooling, the migration and dbInit Jobs, and whatever else
   # shares the server. Subtracted from maxConnections before the check.
   reservedConnections: 25
 
+# ── PgBouncer — the Postgres pooler (issue #964) ───────────────────────────
+#
+# Transaction-mode pooler in front of elitea-main's database, off by default.
+# The standalone compose stack runs the same pooler with this chart's settings
+# (deploy/runtime/pgbouncer.ini); turning it on here is one more opt-in, in
+# the deepwiki sense: it renders, and it needs values only a deployment that
+# actually has a pooler slot can supply.
+#
+# WHY IT EXISTS. Without it, elitea-main's client connections are its server
+# connections: every replica's pools open straight at Postgres, and the read
+# plane pins the server at max_connections as replicas grow (issue #964). With
+# it, every main replica's pools share ONE server-side pool, so main's
+# server-side cost is poolSize + reservePoolSize no matter how many replicas
+# the HPA takes.
+#
+# WHAT IT CHANGES FOR THE OPERATOR. main.env.ELITEA_DATABASE_MAX_CONNS keeps
+# its meaning — it is now a CLIENT-side pool, the ceiling on connections one
+# replica opens toward the pooler instead of the server. The pooler is what
+# turns that client number into a bounded server number. Point elitea-main's
+# DATABASE_URL at the pooler's service to put it in the path: the DSN stays in
+# the operator's Secret, so the chart ships the pooler and the math, and the
+# DSN switch is the operator's one-line change. The database name in that DSN
+# must equal pgbouncer.database: one [databases] entry is deliberate, and a
+# DSN naming any other database is refused by the pooler.
+#
+# Direct consumers keep their direct connections by design: the migration
+# jobs, dbInit, the LLM gateway and the one-shots reach Postgres without this
+# pooler, and their connections are what reservedConnections covers.
+pgbouncer:
+  enabled: false
+  image:
+    # The same image the standalone compose stack runs; the entrypoint uses
+    # the mounted pgbouncer.ini as-is and only its AUTH_FILE env matters here.
+    repository: docker.io/edoburu/pgbouncer
+    tag: v1.25.2-p0
+    pullPolicy: IfNotPresent
+  imagePullSecrets: []
+  service:
+    name: elitea-pgbouncer
+    # The Postgres protocol on a non-Postgres port, matching the compose
+    # stack; it keeps a stray DSN pointing at 5432 from reaching the pooler.
+    port: 6432
+  # The Postgres server the pooler dials. Host and port, not a DSN:
+  # pgbouncer's [databases] section takes host= port=, and the credential
+  # comes from credentialsSecretName.
+  postgresHost: ""
+  postgresPort: 5432
+  # The single database this pooler fronts. It must match the database in the
+  # DATABASE_URL that elitea-main's pods point at the pooler.
+  database: ""
+  # A Kubernetes Secret with two keys: user and password. The init container
+  # builds the one-line userlist from them at 0600. The password, not a SCRAM
+  # verifier: pgbouncer checks the clients against the userlist AND logs in to
+  # Postgres with it, and a verifier cannot do the second half.
+  credentialsSecretName: ""
+  # Server-side pool, the whole point of the component: poolSize steady
+  # connections shared by every main replica, reservePoolSize more for short
+  # bursts. The pooler never opens more than the two summed (the rendered
+  # max_db_connections is their sum), so main's server-side cost is one
+  # constant. 48 + 4 is the measured standalone-stack value.
+  poolSize: 48
+  reservePoolSize: 4
+  # Kept open at all times even when idle; cannot exceed poolSize.
+  minPoolSize: 8
+  # Client-side ceiling: every main replica's pools that may connect at once.
+  # Bounded, not enforced, server-side.
+  maxClientConn: 1024
+  # pgx caches named prepared statements per client connection. 0 disables
+  # the tracking and every backend reassignment answers 42P05, measured
+  # 2026-09-01; 1000 is the value that cleared the 42P05s in re-measure.
+  maxPreparedStatements: 1000
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: "1"
+      memory: 128Mi
+  podSecurityContext: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+ 
 # ── NATS ────────────────────────────────────────────────────────────────────
 #
 # The gateway's budget counters and the scheduler both dial it, and they MUST
