@@ -101,7 +101,7 @@ func TestContextPolicyReachesStartAndRegenerateWithAuthorizedSummary(t *testing.
 
 func TestContinuationRestoresFrozenPolicyWithoutReadingChangedDefaults(t *testing.T) {
 	for _, kind := range []CurrentRegenerationKind{CurrentRegenerationApplication, CurrentRegenerationAdhoc} {
-		source := &contextPolicyStub{strategy: contextsettings.Resolve([]byte(`{"enabled":false,"budget_mode":"full"}`), contextsettings.UserDefaults{}), frozen: FrozenContextPolicy{Settings: json.RawMessage(`{"enabled":true,"budget_mode":"balanced","preserve_recent_messages":9}`), SummaryModel: &runtimev1.SummaryModelSnapshotV1{LlmSettings: []byte(`{"model_name":"prior-summary"}`), ModelContextLimits: &runtimev1.ModelContextLimitsV1{ContextWindowTokens: 32000, MaxOutputTokens: 4000}}}}
+		source := &contextPolicyStub{strategy: contextsettings.Resolve([]byte(`{"enabled":false,"budget_mode":"full"}`), contextsettings.UserDefaults{}), frozen: FrozenContextPolicy{TaskLLM: json.RawMessage(`{"kwargs":{"model":"model","model_project_id":7,"max_tokens":8192}}`), Settings: json.RawMessage(`{"enabled":true,"budget_mode":"balanced","preserve_recent_messages":9}`), SummaryModel: &runtimev1.SummaryModelSnapshotV1{LlmSettings: []byte(`{"model_name":"prior-summary"}`), ModelContextLimits: &runtimev1.ModelContextLimitsV1{ContextWindowTokens: 32000, MaxOutputTokens: 4000}}}}
 		service, admissions, resolver := contextDeliveryFixture(t, source)
 		resolver.continuationTarget.Kind = kind
 		request := CurrentContinuationRequest{ProjectID: 7, ActorUserID: 11, ConversationUUID: validCurrentApplicationStartRequest().ConversationUUID, ResponseMessageID: validCurrentRegenerationRequest().ResponseMessageID, Kind: CurrentContinuationOutputLimit}
@@ -124,6 +124,50 @@ func TestContextPolicyFailurePreventsAdmission(t *testing.T) {
 		service, admissions, _ := contextDeliveryFixture(t, source)
 		if _, err := service.StartCurrentApplication(t.Context(), validCurrentApplicationStartRequest()); !errors.Is(err, failure) || len(admissions.requests) != 0 {
 			t.Fatalf("failure ignored: %v", err)
+		}
+	}
+}
+
+func TestAdhocContinuationRestoresAdmittedModelWithEmptyOrChangedParticipant(t *testing.T) {
+	for _, saved := range []string{`{}`, `{"model_name":"changed","model_project_id":99,"reasoning_effort":"high"}`} {
+		source := &contextPolicyStub{frozen: FrozenContextPolicy{Settings: json.RawMessage(`{}`), TaskLLM: json.RawMessage(`{"kwargs":{"model":"model","model_project_id":7,"max_tokens":4096,"temperature":0.2,"api_key":"must-not-copy","openai_compatible":false}}`)}}
+		service, admissions, resolver := contextDeliveryFixture(t, source)
+		resolver.continuationTarget.Kind = CurrentRegenerationAdhoc
+		resolver.adhocTarget.LLMSettings = json.RawMessage(saved)
+		request := CurrentContinuationRequest{ProjectID: 7, ActorUserID: 11, ConversationUUID: validCurrentApplicationStartRequest().ConversationUUID, ResponseMessageID: validCurrentRegenerationRequest().ResponseMessageID, Kind: CurrentContinuationOutputLimit}
+		if _, err := service.ContinueCurrentAgent(t.Context(), request); err != nil {
+			t.Fatal(err)
+		}
+		var actual struct {
+			Kwargs map[string]any `json:"kwargs"`
+		}
+		if err := json.Unmarshal(admissions.requests[0].Input.Llm, &actual); err != nil {
+			t.Fatal(err)
+		}
+		if actual.Kwargs["model"] != "model" || actual.Kwargs["model_project_id"] != float64(7) || actual.Kwargs["max_tokens"] != float64(4096) || actual.Kwargs["api_key"] != nil || actual.Kwargs["reasoning_effort"] != nil || actual.Kwargs["openai_compatible"] != true {
+			t.Fatalf("selection was not reauthorized: %v", actual.Kwargs)
+		}
+		if source.restores != 1 {
+			t.Fatalf("restores=%d", source.restores)
+		}
+	}
+}
+
+func TestAdhocContinuationRejectsUnavailableFrozenModel(t *testing.T) {
+	source := &contextPolicyStub{frozen: FrozenContextPolicy{Settings: json.RawMessage(`{}`), TaskLLM: json.RawMessage(`{"kwargs":{"model":"not-authorized","model_project_id":7}}`)}}
+	service, admissions, resolver := contextDeliveryFixture(t, source)
+	resolver.continuationTarget.Kind = CurrentRegenerationAdhoc
+	request := CurrentContinuationRequest{ProjectID: 7, ActorUserID: 11, ConversationUUID: validCurrentApplicationStartRequest().ConversationUUID, ResponseMessageID: validCurrentRegenerationRequest().ResponseMessageID, Kind: CurrentContinuationOutputLimit}
+	if _, err := service.ContinueCurrentAgent(t.Context(), request); !errors.Is(err, ErrUnsupportedCurrentAgentStart) || len(admissions.requests) != 0 {
+		t.Fatalf("unavailable model admitted: %v", err)
+	}
+}
+
+func TestContinuationModelSelectionRejectsCatalogFallback(t *testing.T) {
+	original := json.RawMessage(`{"model_name":"original","model_project_id":7}`)
+	for _, frozen := range []string{`{"llm_settings":{"model_name":"default","model_project_id":7}}`, `{"llm_settings":{"model_name":"original","model_project_id":8}}`} {
+		if err := validateContinuationModelSelection(original, json.RawMessage(frozen)); err == nil {
+			t.Fatal("different model accepted")
 		}
 	}
 }

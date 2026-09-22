@@ -55,6 +55,7 @@ import type { ToolAction } from './chatStreamToolAction';
 export interface ChatMessage {
   readonly resultChunk?: unknown;
   readonly assembledResult?: string | undefined;
+  readonly continuedResultPrefix?: string | undefined;
   readonly persistedTrace?: unknown;
   readonly id: string;
   readonly role: string;

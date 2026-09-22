@@ -89,7 +89,7 @@ func decodeFrozenContextPolicy(encoded, storedDigest []byte, conversationID, gen
 		input.GetConversationId() != conversationID || input.GetExecutionGeneration() != generation {
 		return agentexecutionapp.FrozenContextPolicy{}, invalid
 	}
-	return agentexecutionapp.FrozenContextPolicy{Settings: input.ContextSettings, SummaryModel: input.SummaryModel}, nil
+	return agentexecutionapp.FrozenContextPolicy{Settings: input.ContextSettings, SummaryModel: input.SummaryModel, TaskLLM: bytes.Clone(input.Llm)}, nil
 }
 
 func validContextPolicyIdentity(projectID, actorID int64, conversationID string) bool {

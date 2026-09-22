@@ -83,7 +83,7 @@ export function reduceTurnFrame(
       const result = appendToolOutputChunk(current.assembledResult, frame.content,
         frame.response_metadata?.['result_chunk_v1'], current.resultChunk, 4194304);
       if (!result) return history;
-      const split = splitWholeResponse(current.id, result.output, (current.toolActions ?? []) as readonly ToolAction[], frame.created_at);
+      const split = splitWholeResponse(current.id, (current.continuedResultPrefix ?? '') + result.output, (current.toolActions ?? []) as readonly ToolAction[], frame.created_at);
       return replaceAt(history, index, { content: split.answer, assembledResult: result.output, resultChunk: result.chunk,
         toolActions: split.actions, isLoading: false, isStreaming: true });
     }
@@ -98,6 +98,7 @@ export function reduceTurnFrame(
       const continuingOutput = frame.response_metadata?.should_continue === true;
       return replaceAt(history, index, {
         content: continuingOutput ? current.content : '',
+        continuedResultPrefix: continuingOutput ? current.content : undefined,
         resultChunk: undefined, assembledResult: undefined,
         // An interrupted reasoning scanner belongs to the replaced answer.
         // Keep tool history, but do not route recovered text into its open sink.

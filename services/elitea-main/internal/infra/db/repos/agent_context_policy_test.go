@@ -26,10 +26,11 @@ func TestPostgresContinuationContextPolicyUsesExactAdmittedInput(t *testing.T) {
 		request.Input.ConversationId = proto.String(conversation)
 		request.Input.ContextSettings = []byte(`{"enabled":true,"budget_mode":"balanced","preserve_recent_messages":9}`)
 		request.Input.SummaryModel = want
+		request.Input.Llm = []byte(`{"kwargs":{"model":"original-model","model_project_id":1}}`)
 	})
 	repository := NewCurrentAgentContextPolicyRepository(pool)
 	policy, err := repository.ContinuationContextPolicy(t.Context(), 1, 7, conversation, response, generation)
-	if err != nil || string(policy.Settings) != `{"enabled":true,"budget_mode":"balanced","preserve_recent_messages":9}` || !proto.Equal(policy.SummaryModel, want) {
+	if err != nil || string(policy.Settings) != `{"enabled":true,"budget_mode":"balanced","preserve_recent_messages":9}` || !proto.Equal(policy.SummaryModel, want) || string(policy.TaskLLM) != `{"kwargs":{"model":"original-model","model_project_id":1}}` {
 		t.Fatalf("frozen policy changed: %+v, %v", policy, err)
 	}
 	for _, tc := range []struct {

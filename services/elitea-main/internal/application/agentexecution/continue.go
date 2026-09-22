@@ -593,6 +593,10 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 	if !projectIDValid || !actorUserIDValid {
 		return nil, nil, "", ErrUnsupportedCurrentAgentStart
 	}
+	policy, err := service.loadContinuationContext(ctx, request, target)
+	if err != nil {
+		return nil, nil, "", err
+	}
 	turn := &CurrentContinueTurn{
 		ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
 		ConversationUUID:    request.ConversationUUID,
@@ -658,16 +662,23 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 		turn.ApplicationVersionID = resolved.ApplicationVersionID
 		capabilityID = executiondomain.AgentApplicationCapability
 	case CurrentRegenerationAdhoc:
+		settings, settingsErr := continuationAdhocSettings(policy)
+		if settingsErr != nil {
+			return nil, nil, "", settingsErr
+		}
 		start := CurrentAdhocStartRequest{
 			ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
 			ConversationUUID:    request.ConversationUUID,
 			TargetParticipantID: target.TargetParticipantID,
 			QuestionID:          target.QuestionID, UserInput: target.UserInput,
-			LLMSettings: json.RawMessage(`{}`),
+			LLMSettings: settings,
 		}
 		resolved, err := service.adhocResolver.ResolveCurrentAdhoc(ctx, start)
 		if err != nil {
 			return nil, nil, "", err
+		}
+		if policy != nil {
+			resolved.LLMSettings = json.RawMessage(`{}`)
 		}
 		snapshot, err := currentAdhocSnapshot(start.LLMSettings, resolved)
 		if err != nil {
@@ -683,6 +694,11 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 		if err != nil {
 			return nil, nil, "", err
 		}
+		if policy != nil {
+			if err := validateContinuationModelSelection(settings, frozen); err != nil {
+				return nil, nil, "", err
+			}
+		}
 		input, err = currentAdhocInput(start, resolved, frozen, suggestionPolicy, toolkitGuardrails, nil, "") // #870: see currentApplicationInput's continuation call site
 		if err != nil {
 			return nil, nil, "", err
@@ -692,9 +708,7 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 		return nil, nil, "", ErrUnsupportedCurrentAgentStart
 	}
 
-	if err := service.restoreContinuationContext(ctx, request, target, input); err != nil {
-		return nil, nil, "", err
-	}
+	restoreContinuationContext(policy, input)
 	input.ThreadId = stringPointer(target.ThreadID)
 	input.ExecutionGeneration = stringPointer(target.ExecutionGeneration)
 	input.ShouldContinue = true

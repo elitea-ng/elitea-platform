@@ -82,3 +82,59 @@ Rust `application_tools.rs::drain_child` selects final child text without inspec
 `model_scope.rs::successful_terminal` also lacks an explicit output-limit exclusion.
 The current SDK's nested continuation behavior requires a dedicated reproduction and durable implementation review.
 Do not treat the child compaction and crash-recovery proofs as proof of output-exhaustion continuation.
+
+## Admitted model selection correction
+
+Main now loads the digest-verified original input before continuation assembly.
+`FrozenContextPolicy.TaskLLM` carries the original runtime selection from existing immutable input storage.
+`continuationAdhocSettings` selects only the model name, project, output allowance, reasoning effort, and temperature.
+It does not restore credentials or cached provider transport settings.
+The normal model catalog and freezer reauthorize that selection for the current caller.
+A different catalog fallback model or project is rejected.
+Changed participant settings cannot add new generation options to the continued request.
+Context settings and the dedicated summary model retain their original restoration behavior.
+
+The application package passes regressions for empty participant settings, changed settings, denied models, and catalog identity drift.
+Both PostgreSQL policy tests pass against isolated databases.
+They verify exact model recovery, actor/project/conversation/generation isolation, and digest corruption refusal.
+The Main deployment is `sha256:59e8a6d182f4c19003962bf50472833c85ecc5c19b83033bd42160f0b0a3dfdf`.
+A fresh browser retries chat 624 without changing its participant settings or regenerating its partial answer.
+Continue returns HTTP 200, and execution `984a788894e6d87ddb9fbb3dee2c9dcd` completes the missing output.
+Fresh saved-history inspection finds 700 ordered records and one terminal marker in a 117,629-byte rendered answer.
+The live answer incorrectly shows only the 215 newly completed record headings.
+This identifies a separate browser fragment-projection defect.
+The initial harness also includes the Continue button label in its partial-text comparison.
+The corrected harness removes that control label before comparing answer text.
+
+Web `features/chat-messages/lib/chatStreamTurnFrames.ts` replaces interim output when final-result fragments arrive.
+For continuation, it must prepend the fixed answer prefix captured at `agent_start`.
+`convertMessagesToChatHistory.ts` now carries that transient prefix separately from the fragment buffer.
+Exact fragment replay does not duplicate the prefix, and regeneration clears it.
+All 97 reducer tests and TypeScript checking pass.
+Go vet passes for the changed application and repository packages.
+Deployed UI acceptance passes after the saved-history correction below.
+
+
+## Exact saved-history continuation
+
+Main `infra/db/repos/conversations.go::ListMessages` previously inserted a newline between all text items.
+Streaming and external MCP concatenate continuation fragments without this separator.
+The saved `output_limit_sequence` identifies output-continuation groups.
+Their text items now concatenate exactly, with deterministic item ordering.
+Ordinary message groups retain their existing newline separator. No schema change is required.
+The PostgreSQL regression fails before the correction and passes afterward for both cases.
+
+Chat 625 uses Haiku with a 16,000-token output allowance.
+Execution `90fc91cae7924f016f76198390038322` stops at the output limit with 81,460 visible bytes.
+Reload preserves that partial answer. Continue returns HTTP 200.
+Execution `b6e898422763e99bc80853f42413f0e9` completes with 117,625 visible bytes and a normal stop.
+The live answer contains 700 ordered records, the exact original prefix, and one ending marker.
+A fresh headed Playwright browser verifies exact saved-history equality after trimming trailing DOM formatting.
+It does not normalize internal whitespace or the continuation seam.
+The rendered screenshot confirms the final records and ending marker without a runtime error.
+
+Main deployment: `sha256:48f9bd6c0f350dc2914ade7894f35a4d9898c8841f6ccc7552cb76dc0b09f406`.
+Web deployment: `sha256:06eb02816b7618fdeceb68053656f888e39965504f3392d2e2f3ffee5b4fbf03`.
+Worker deployment: `sha256:8c11be66261e0e7e0885a13335cd5483a56316693dd28c85c1e76234358f7031`.
+The Main replacement preserves its environment, six mounts, networks, and resource limits.
+This proves direct chat output continuation and reload. Replacement during continuation and nested output-exhaustion recovery remain unverified.

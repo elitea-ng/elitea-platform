@@ -70,6 +70,21 @@ describe('applyChatStreamFrame', () => {
     expect(history[0]?.content).toBe('界done');
     expect(history[0]?.isStreaming).toBe(false);
   });
+  it('keeps the saved prefix when continuation result fragments replace streamed deltas', () => {
+    let history: readonly ChatMessage[] = [{ ...pendingAssistant(), content: 'Saved prefix.' }];
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentStart, { response_metadata: { should_continue: true } }), CONTEXT);
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentLlmChunk, { content: ' suffix' }), CONTEXT);
+    const fragment = frame(SocketMessageType.AgentResultChunk, { content: ' suffix', response_metadata: {
+      result_chunk_v1: { offset_bytes: 0, total_bytes: 7, sha256: 'a'.repeat(64), final: true },
+    } });
+    history = applyChatStreamFrame(history, fragment, CONTEXT);
+    history = applyChatStreamFrame(history, fragment, CONTEXT);
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentResponse, { content: null, response_metadata: { finish_reason: 'stop' } }), CONTEXT);
+    expect(history[0]?.content).toBe('Saved prefix. suffix');
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentStart, { response_metadata: { should_continue: false } }), CONTEXT);
+    history = applyChatStreamFrame(history, fragment, CONTEXT);
+    expect(history[0]?.content).toBe(' suffix');
+  });
   it('renders a real turn from the sequence a live stack emits', () => {
     // Recorded order: agent_start, agent_on_transitional_edge, agent_llm_start,
     // agent_llm_chunk ×4, agent_llm_end, agent_response, pipeline_finish.

@@ -19,6 +19,7 @@ type CurrentContextPolicySource interface {
 }
 
 type FrozenContextPolicy struct {
+	TaskLLM      json.RawMessage
 	Settings     json.RawMessage
 	SummaryModel *runtimev1.SummaryModelSnapshotV1
 }
@@ -53,26 +54,75 @@ func (service *CurrentApplicationStartService) freezeVersionWithContext(
 	return frozen, settings, err
 }
 
-func (service *CurrentApplicationStartService) restoreContinuationContext(
-	ctx context.Context, request CurrentContinuationRequest, target CurrentContinuationTarget, input *runtimev1.AgentExecutionInputV1,
-) error {
+func (service *CurrentApplicationStartService) loadContinuationContext(
+	ctx context.Context, request CurrentContinuationRequest, target CurrentContinuationTarget,
+) (*FrozenContextPolicy, error) {
 	if service.contextPolicy == nil {
-		return nil
+		return nil, nil
 	}
 	policy, err := service.contextPolicy.ContinuationContextPolicy(
 		ctx, request.ProjectID, request.ActorUserID, request.ConversationUUID,
 		request.ResponseMessageID, target.ExecutionGeneration,
 	)
 	if err != nil {
-		return fmt.Errorf("restore admitted context policy: %w", err)
+		return nil, fmt.Errorf("restore admitted context policy: %w", err)
 	}
 	if !validJSONObject(policy.Settings) {
-		return ErrUnsupportedCurrentAgentStart
+		return nil, ErrUnsupportedCurrentAgentStart
+	}
+	return &policy, nil
+}
+
+func restoreContinuationContext(policy *FrozenContextPolicy, input *runtimev1.AgentExecutionInputV1) {
+	if policy == nil {
+		return
 	}
 	input.ContextSettings = bytes.Clone(policy.Settings)
 	input.SummaryModel = nil
 	if policy.SummaryModel != nil {
 		input.SummaryModel = proto.Clone(policy.SummaryModel).(*runtimev1.SummaryModelSnapshotV1)
+	}
+}
+
+// Recover only model selection and generation settings. Resolve current authority again.
+func continuationAdhocSettings(policy *FrozenContextPolicy) (json.RawMessage, error) {
+	if policy == nil {
+		return json.RawMessage(`{}`), nil
+	}
+	var runtime struct {
+		Kwargs map[string]json.RawMessage `json:"kwargs"`
+	}
+	if json.Unmarshal(policy.TaskLLM, &runtime) != nil || len(runtime.Kwargs["model"]) == 0 {
+		return nil, ErrUnsupportedCurrentAgentStart
+	}
+	settings := map[string]json.RawMessage{"model_name": runtime.Kwargs["model"]}
+	for _, key := range []string{"model_project_id", "max_tokens", "reasoning_effort", "temperature"} {
+		if value, ok := runtime.Kwargs[key]; ok {
+			settings[key] = value
+		}
+	}
+	encoded, err := json.Marshal(settings)
+	if err != nil {
+		return nil, ErrUnsupportedCurrentAgentStart
+	}
+	if _, err = currentAdhocLLMSettings(encoded); err != nil {
+		return nil, err
+	}
+	return encoded, nil
+}
+
+func validateContinuationModelSelection(selected, frozen json.RawMessage) error {
+	var original map[string]json.RawMessage
+	var snapshot struct {
+		Settings map[string]json.RawMessage `json:"llm_settings"`
+	}
+	if json.Unmarshal(selected, &original) != nil || json.Unmarshal(frozen, &snapshot) != nil {
+		return ErrUnsupportedCurrentAgentStart
+	}
+	for _, key := range []string{"model_name", "model_project_id"} {
+		if value, ok := original[key]; ok && !bytes.Equal(bytes.TrimSpace(value), bytes.TrimSpace(snapshot.Settings[key])) {
+			return ErrUnsupportedCurrentAgentStart
+		}
 	}
 	return nil
 }

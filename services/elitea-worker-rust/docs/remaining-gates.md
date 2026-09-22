@@ -19,7 +19,8 @@ Current-platform code defines business behavior, not a requirement to copy its i
 - Its worker-loss follow-up now passes in chat 616: the replacement worker resumes the child and completes the waiting parent.
 - Chat 619 verifies concurrent siblings, a delegated grandchild, and completed-sibling reuse after worker loss.
 - [Pipeline LLM-node acceptance](source-mapping/pipeline-model-compaction-live-20260922.md) verifies two compactions, 24 reads, exact graph state, and stable reload in chat 621.
-- [Output continuation capacity](source-mapping/output-continuation-capacity-20260922.md) removes the obsolete 64 KiB partial-answer limit; deployed acceptance remains open.
+- [Output continuation capacity](source-mapping/output-continuation-capacity-20260922.md) tracks the 64 KiB correction, admitted model restoration, and continued-answer fragment rendering.
+- Its final browser acceptance remains open. Nested output-exhaustion continuation requires separate proof.
 - Graph recovery and additional crash boundaries remain unverified.
 - The [point 3 audit](source-mapping/point3-audit-20260913.md) records the completed acceptance cases and their limits.
 - Production Rust capability registration remains disabled.
@@ -247,3 +248,11 @@ The Main history-scope classifier is unfinished gate 5 work. Its focused tests p
 Admission segmentation, UI response rebinding, and deployed history acceptance remain unimplemented or unverified.
 Do not deploy provisional-text cleanup as a complete history fix.
 Resume this work at gate 5 after gate 4.
+
+
+## Gate 4 direct output continuation verification
+
+The [continuation mapping](source-mapping/output-continuation-capacity-20260922.md) records chat 625 and its deployed proof.
+An 81,460-byte partial answer continues to 117,625 bytes without duplicate records or a changed reload seam.
+Original model selection is reauthorized. Final fragments preserve the original answer prefix.
+Nested output exhaustion and replacement during continuation remain separate checks.

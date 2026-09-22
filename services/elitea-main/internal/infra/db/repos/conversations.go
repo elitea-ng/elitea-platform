@@ -2156,7 +2156,10 @@ func (r *ConversationsRepo) ListMessages(ctx context.Context, projectID, convers
 			p.entity_name, mg.meta, mg.created_at,
 			mg.author_participant_id, mg.sent_to_id, mg.reply_to_id,
 			COALESCE((
-				SELECT string_agg(mt.content, E'\n' ORDER BY mi.order_index)
+				SELECT string_agg(mt.content,
+                    CASE WHEN COALESCE(mg.meta ->> 'output_limit_sequence', '') ~ '^[1-9][0-9]*$'
+                        THEN '' ELSE E'\n' END
+                    ORDER BY mi.order_index, mi.id)
 				FROM %s.chat_message_items mi
 				JOIN %s.chat_messages_text mt ON mt.id = mi.id
 				WHERE mi.message_group_id = mg.id AND mi.item_type = 'text_message'
