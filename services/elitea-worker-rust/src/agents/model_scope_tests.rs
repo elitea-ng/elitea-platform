@@ -717,3 +717,31 @@ async fn postgres_child_scope_is_fenced_by_root_takeover_and_reuses_its_own_summ
     );
     database.pool.close().await;
 }
+
+#[tokio::test]
+async fn output_limited_child_does_not_receive_a_completion_receipt() {
+    let storage = storage(ModelScopeBackend::Local(Arc::new(
+        InMemorySessionService::new(),
+    )));
+    let child = Context::child("output-limited-call");
+    let summary = Arc::new(Summary::default());
+    let first = checkpoint(&storage, summary);
+    prepare(&first, &child).await;
+    let mut event = Event::new(child.invocation_id());
+    event.author = child.agent_name().into();
+    event.set_content(Content::new("model").with_text("Unfinished child answer"));
+    event.llm_response.turn_complete = true;
+    event.llm_response.finish_reason = Some(adk_rust::FinishReason::MaxTokens);
+    first.append(&child, event).await.unwrap();
+    let session = stored(&first, &child).await;
+    assert!(
+        session.state().get(COMPLETION_KEY).is_none(),
+        "Truncated output is not completed work"
+    );
+    assert!(
+        first
+            .completed_content(session.as_ref(), child.agent_name())
+            .unwrap()
+            .is_none()
+    );
+}

@@ -138,3 +138,31 @@ Web deployment: `sha256:06eb02816b7618fdeceb68053656f888e39965504f3392d2e2f3ffee
 Worker deployment: `sha256:8c11be66261e0e7e0885a13335cd5483a56316693dd28c85c1e76234358f7031`.
 The Main replacement preserves its environment, six mounts, networks, and resource limits.
 This proves direct chat output continuation and reload. Replacement during continuation and nested output-exhaustion recovery remain unverified.
+
+## Nested output exhaustion investigation
+
+Current SDK reference: `966526e8334354366dd161b606d73fe8e204b850`.
+`elitea_sdk/runtime/tools/llm.py::_continue_nested_output` detects a nested response stopped by length.
+It requests continuation, validates the answer boundary, and returns the completed response to the graph.
+It rejects no-progress responses and invalid continuation boundaries after bounded retries.
+These are behavioral requirements. The Rust implementation must also preserve claim-fenced recovery.
+
+Rust `agents/application_tools.rs::ApplicationAgentTool::drain_child` currently accepts the truncated child response as its final result.
+`agents/model_scope.rs::successful_terminal` also previously generated a completion receipt for `FinishReason::MaxTokens`.
+A new regression reproduces that false receipt before the correction.
+The local correction accepts only an absent legacy finish reason or `FinishReason::Stop` for a completion receipt.
+All 12 model-scope tests pass, including the PostgreSQL child-scope takeover test.
+This correction is not deployed and does not implement automatic continuation.
+
+ADK 2.2.0 `vendor/adk-agent/src/llm_agent.rs` ends its loop when the response has no function calls.
+Its per-chunk after-model callbacks do not provide a continuation-loop decision.
+The Rust `ModelCheckpointWriter::restore_validated` rejects a model checkpoint followed by persisted model content.
+Therefore a truncated response requires an explicit durable continuation boundary before another model request.
+Do not weaken this recovery check or restart the child task from its original input.
+
+The next implementation must retain the accumulated answer, pending continuation request, and attempt identity through existing session storage.
+It must apply the same model authorization, context budgeting, compaction, cancellation, and claim fencing to each continuation request.
+Only the completed answer becomes the parent tool result and child completion receipt.
+Verify interruption before checkpoint commit, after checkpoint commit, and after final completion before parent delivery.
+Verify both visible truncation and reasoning-only output exhaustion.
+Deployed browser acceptance and worker-loss verification remain required.

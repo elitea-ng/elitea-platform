@@ -37,6 +37,10 @@ struct ModelCompletion {
 fn successful_terminal(event: &Event, agent_name: &str) -> bool {
     event.author == agent_name
         && event.llm_response.turn_complete
+        && matches!(
+            event.llm_response.finish_reason,
+            None | Some(adk_rust::FinishReason::Stop)
+        )
         && event.is_final_response()
         && !event.llm_response.partial
         && !event.llm_response.interrupted
