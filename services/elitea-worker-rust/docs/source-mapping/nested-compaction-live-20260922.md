@@ -109,3 +109,28 @@ The PostgreSQL-enabled agent suite passes 378 tests, with no failures or ignored
 Strict Clippy passes.
 This foundation does not admit the parent's unfinished delegation boundary.
 Parent/child coordination and repeated browser crash acceptance remain required before deployment acceptance.
+
+## Completed child delivery
+
+`src/agents/model_scope.rs` stores a completion receipt with the successful terminal event.
+The existing session transaction commits the event and receipt together under the root writer fence.
+The receipt binds the execution, generation, definition, agent, invocation, and event identities.
+The existing completion adapter fills an empty streamed terminal event before storage.
+No database migration or duplicate response store is required.
+
+Authorized recovery validates the receipt against its stored event before it restores an unfinished model request.
+A later model request supersedes an earlier completion receipt.
+An interrupted, failed, partial, or pending-tool event cannot establish successful completion.
+Ordinary invocation and guard replay do not consume these receipts.
+
+`ModelScopeAgent::run` returns the saved content before it invokes the child runtime.
+The delivery uses the replacement invocation and branch identities.
+It does not replay old state changes, provider usage, or provider metadata.
+The parent continues to receive the selected child answer through `ApplicationAgentTool::drain_child`.
+The legacy application reference remains unchanged; this recovery behavior extends the existing delegated-result contract.
+
+Tests cover completed delivery through an ADK Runner, superseded completion, interruption, changed definitions, and detached receipts.
+The PostgreSQL test also checks completion delivery after writer takeover and rejects the stale writer.
+The PostgreSQL-enabled agent suite passes 383 tests, with no failures or ignored tests.
+Strict Clippy, formatting, and whitespace checks pass.
+These component checks do not close the parent delegation recovery boundary or replace the browser crash gate.

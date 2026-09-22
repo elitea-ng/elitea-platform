@@ -11,12 +11,47 @@ use adk_rust::{
     InvocationContext, Llm, LlmRequest, ReadonlyContext,
 };
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
 
 use super::context_budget::ModelRequestBudget;
 use super::context_compaction::DurableContextCompaction;
 use super::context_management::ContextCompactionPlan;
 use super::model_checkpoint::ModelCheckpointWriter;
+
+const COMPLETION_KEY: &str = "elitea.model.completion.v1";
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ModelCompletion {
+    version: u8,
+    execution_id: String,
+    generation: u64,
+    definition_digest: [u8; 32],
+    agent_name: String,
+    event_id: String,
+    invocation_id: String,
+}
+
+fn successful_terminal(event: &Event, agent_name: &str) -> bool {
+    event.author == agent_name
+        && event.llm_response.turn_complete
+        && event.is_final_response()
+        && !event.llm_response.partial
+        && !event.llm_response.interrupted
+        && event.llm_response.error_code.is_none()
+        && event.llm_response.error_message.is_none()
+        && event.actions.tool_confirmation.is_none()
+        && event.long_running_tool_ids.is_empty()
+        && event.llm_response.content.as_ref().is_none_or(|content| {
+            !content.parts.iter().any(|part| {
+                matches!(
+                    part,
+                    adk_rust::Part::FunctionCall { .. } | adk_rust::Part::FunctionResponse { .. }
+                )
+            })
+        })
+}
 
 #[derive(Clone)]
 pub(super) enum ModelScopeBackend {
@@ -145,9 +180,78 @@ struct ScopedWriter {
     identity: AdkIdentity,
     sessions: Arc<dyn SessionService>,
     checkpoint: ModelCheckpointWriter,
+    completed: Option<Content>,
 }
 
 impl ScopedModelCheckpoint {
+    fn completed_content(
+        &self,
+        session: &dyn adk_rust::session::Session,
+        agent_name: &str,
+    ) -> adk_rust::Result<Option<Content>> {
+        let Some(value) = session.state().get(COMPLETION_KEY) else {
+            return Ok(None);
+        };
+        let receipt: ModelCompletion =
+            serde_json::from_value(value.clone()).map_err(|_| invalid_scope())?;
+        if receipt.version != 1
+            || receipt.execution_id != self.storage.execution_id
+            || receipt.generation != self.storage.generation
+            || receipt.definition_digest != self.storage.definition_digest
+            || receipt.agent_name != agent_name
+        {
+            return Err(invalid_scope());
+        }
+        let events = session.events().all();
+        let index = events
+            .iter()
+            .rposition(|event| {
+                event.id == receipt.event_id
+                    && event.invocation_id == receipt.invocation_id
+                    && event.actions.state_delta.get(COMPLETION_KEY) == Some(&value)
+            })
+            .ok_or_else(invalid_scope)?;
+        // A later request supersedes this receipt. It must recover its own boundary.
+        if events[index + 1..].iter().any(|event| {
+            event
+                .actions
+                .state_delta
+                .contains_key(super::model_checkpoint::CHECKPOINT_KEY)
+                || event.llm_response.content.is_some()
+        }) {
+            return Ok(None);
+        }
+        let event = &events[index];
+        if !successful_terminal(event, agent_name) {
+            return Err(invalid_scope());
+        }
+        let content = event
+            .llm_response
+            .content
+            .as_ref()
+            .ok_or_else(invalid_scope)?;
+        if content.role != "model" || content.parts.is_empty() {
+            return Err(invalid_scope());
+        }
+        Ok(Some(content.clone()))
+    }
+
+    async fn completed_event(
+        &self,
+        context: &dyn ReadonlyContext,
+    ) -> adk_rust::Result<Option<Event>> {
+        let writer = self.writer(context).await?;
+        Ok(writer.completed.as_ref().map(|content| {
+            // A receipt is delivery evidence, not a second provider call or state update.
+            let mut event = Event::new(context.invocation_id());
+            context.agent_name().clone_into(&mut event.author);
+            context.branch().clone_into(&mut event.branch);
+            event.set_content(content.clone());
+            event.llm_response.turn_complete = true;
+            event
+        }))
+    }
+
     pub(super) fn with_replay_pending(self: Arc<Self>, pending: bool) -> Arc<Self> {
         self.skip_replay_model.store(pending, Ordering::Release);
         self
@@ -218,10 +322,14 @@ impl ScopedModelCheckpoint {
                 .with_request_budget(Some(self.budget.clone()))
                 .with_context_events(self.context_events.clone())
                 .with_context_compaction(Some(compaction));
-                let checkpoint = if existing
-                    && self.storage.recover_pending_models
-                    && self.replay_marker.is_none()
-                {
+                let recovering =
+                    existing && self.storage.recover_pending_models && self.replay_marker.is_none();
+                let completed = if recovering {
+                    self.completed_content(session.as_ref(), context.agent_name())?
+                } else {
+                    None
+                };
+                let checkpoint = if recovering && completed.is_none() {
                     checkpoint.restore(session.as_ref())?
                 } else {
                     checkpoint
@@ -230,6 +338,7 @@ impl ScopedModelCheckpoint {
                     identity: identity.clone(),
                     sessions,
                     checkpoint,
+                    completed,
                 })
             })
             .await?;
@@ -250,6 +359,21 @@ impl ScopedModelCheckpoint {
             return Ok(());
         }
         let writer = self.writer(context).await?;
+        if successful_terminal(&event, context.agent_name()) {
+            let receipt = ModelCompletion {
+                version: 1,
+                execution_id: self.storage.execution_id.clone(),
+                generation: self.storage.generation,
+                definition_digest: self.storage.definition_digest,
+                agent_name: context.agent_name().to_owned(),
+                event_id: event.id.clone(),
+                invocation_id: event.invocation_id.clone(),
+            };
+            event.actions.state_delta.insert(
+                COMPLETION_KEY.to_owned(),
+                serde_json::to_value(receipt).map_err(|_| invalid_scope())?,
+            );
+        }
         event.llm_request = None;
         event
             .provider_metadata
@@ -342,6 +466,11 @@ impl Agent for ModelScopeAgent {
         self.inner.description()
     }
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> adk_rust::Result<EventStream> {
+        if let Some(event) = self.checkpoint.completed_event(ctx.as_ref()).await? {
+            return Ok(Box::pin(adk_rust::futures::stream::once(async {
+                Ok(event)
+            })));
+        }
         let mut stream = self.inner.run(ctx.clone()).await?;
         let checkpoint = self.checkpoint.clone();
         Ok(Box::pin(async_stream::try_stream! {
