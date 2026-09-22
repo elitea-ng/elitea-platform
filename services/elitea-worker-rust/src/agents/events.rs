@@ -99,6 +99,31 @@ pub(crate) const DESCENDANT_CONTAINER_INVOCATION_KEY: &str =
     "elitea.descendant.container_invocation_id";
 pub(crate) const DESCENDANT_PARENT_CALL_KEY: &str = "elitea.descendant.parent_call_id";
 pub(crate) const DESCENDANT_CHECKPOINT_THREAD_KEY: &str = "elitea.descendant.checkpoint_thread_id";
+/// The pipeline child's own pending graph checkpoint (#973).
+///
+/// Private runtime state, carried on the PERSISTED descendant interrupt event
+/// only. It is stripped before projection, so it never reaches a browser card
+/// or a stored trace step; `application_pipeline` owns its encoding.
+pub(crate) const PIPELINE_TOOL_PENDING_METADATA_KEY: &str = "elitea.pipeline_tool.pending.v1";
+
+/// Remove every PRIVATE routing/state key a descendant event carries.
+///
+/// One list, used by both readers of a persisted descendant event: the
+/// projector before it hands the event to the descendant projector, and the
+/// resume before it recomputes the card's identity. They must agree exactly —
+/// `validate_graph_interrupt_event` requires `provider_metadata.len() == 1`,
+/// so a key added to one list and not the other would make every pipeline
+/// pause resolve as corrupt while the browser still saw its card.
+pub(crate) fn strip_descendant_private_metadata(event: &mut Event) {
+    for key in [
+        DESCENDANT_CONTAINER_INVOCATION_KEY,
+        DESCENDANT_PARENT_CALL_KEY,
+        DESCENDANT_CHECKPOINT_THREAD_KEY,
+        PIPELINE_TOOL_PENDING_METADATA_KEY,
+    ] {
+        event.provider_metadata.remove(key);
+    }
+}
 
 /// Stable, low-cardinality event projection failures.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -996,6 +1021,7 @@ impl AgentEventProjector {
             event,
             &application,
             self.context.graph_checkpoint_thread_id.as_deref(),
+            &self.context.thread_id,
             parent_call_id,
         )?;
         if !self.descendants.contains_key(parent_call_id) {
@@ -1031,15 +1057,23 @@ impl AgentEventProjector {
             return Err(AgentEventProjectionError::invalid_state());
         }
         let mut child_event = event.clone();
-        child_event
-            .provider_metadata
-            .remove(DESCENDANT_CONTAINER_INVOCATION_KEY);
-        child_event
-            .provider_metadata
-            .remove(DESCENDANT_PARENT_CALL_KEY);
-        child_event
-            .provider_metadata
-            .remove(DESCENDANT_CHECKPOINT_THREAD_KEY);
+        // #973: this also drops the pipeline child's own pending checkpoint,
+        // which rides the PERSISTED event so a later turn can re-enter the
+        // child graph and is private runtime state — it must not reach the
+        // browser card or the stored trace step.
+        strip_descendant_private_metadata(&mut child_event);
+        if checkpoint_thread_id.is_some() {
+            // #973: a pipeline child's events carry a BRANCH so the parent's
+            // own next turn cannot re-read the child's monologue as its own
+            // (ADK treats an empty branch as visible to every branch). That
+            // branch is a parent-side routing fact; the child's graph
+            // interrupt is projected as the root of its own descendant
+            // projector, whose `validate_graph_interrupt_event` admits only an
+            // empty or root branch. The same clear
+            // `nested_pipeline_interrupt_child_event` performs for the
+            // pipeline-parent case, for the same reason.
+            child_event.branch.clear();
+        }
         let batch = descendant.projector.project(&child_event)?;
         overlay_batch_hierarchy(batch, std::slice::from_ref(&descendant.tier))
     }
@@ -4485,10 +4519,23 @@ fn valid_tool_identity(value: &str) -> bool {
         && !value.chars().any(char::is_control)
 }
 
+/// The checkpoint thread a pipeline descendant's own graph pauses on.
+///
+/// Two parents can own a pipeline child, and the thread is derived — never
+/// taken on the child's word — in both:
+///
+/// * a PIPELINE parent reaches it through an `agent` node, so the call id is
+///   `pipeline:<node>:<step>` and the thread is the parent graph's own thread
+///   namespaced by that node (ADK `SubgraphNode` semantics);
+/// * an ORDINARY parent (#973) has no graph and no graph thread, so the thread
+///   is the CONVERSATION thread namespaced by the model's function-call id.
+///   That id is stable across the pause because the parent's resume replays
+///   the identical call, which is what lets the pause be re-entered at all.
 fn descendant_checkpoint_thread(
     event: &Event,
     application: &ApplicationToolPresentation,
     parent_thread_id: Option<&str>,
+    conversation_thread_id: &str,
     parent_call_id: &str,
 ) -> Result<Option<String>, AgentEventProjectionError> {
     let marker = event
@@ -4504,10 +4551,15 @@ fn descendant_checkpoint_thread(
     let checkpoint_thread_id = marker
         .filter(|value| valid_tool_identity(value))
         .ok_or_else(AgentEventProjectionError::invalid_state)?;
-    let parent_thread_id = parent_thread_id.ok_or_else(AgentEventProjectionError::invalid_state)?;
-    let node_name = pipeline_application_call_node(parent_call_id)
-        .ok_or_else(AgentEventProjectionError::invalid_state)?;
-    if checkpoint_thread_id != &format!("{parent_thread_id}/{node_name}") {
+    let expected = match parent_thread_id {
+        Some(parent_thread_id) => {
+            let node_name = pipeline_application_call_node(parent_call_id)
+                .ok_or_else(AgentEventProjectionError::invalid_state)?;
+            format!("{parent_thread_id}/{node_name}")
+        }
+        None => format!("{conversation_thread_id}/{parent_call_id}"),
+    };
+    if checkpoint_thread_id != &expected {
         return Err(AgentEventProjectionError::invalid_state());
     }
     Ok(Some(checkpoint_thread_id.clone()))

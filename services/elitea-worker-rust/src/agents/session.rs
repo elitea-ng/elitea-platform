@@ -491,6 +491,16 @@ pub(crate) struct OrdinaryNativeAgentPlan {
 }
 
 impl OrdinaryNativeAgentPlan {
+    /// The durable conversation thread this turn belongs to.
+    ///
+    /// #973 reads it so a saved pipeline child can namespace its own graph
+    /// checkpoint thread under the conversation rather than under a value the
+    /// child could choose.
+    #[must_use]
+    pub(crate) fn thread_id(&self) -> &str {
+        &self.thread_id
+    }
+
     /// `attachments` is the RESOLVED chunk list for this turn — see
     /// [`ordinary_user_content`]. Callers that performed no read pass
     /// `&request.payload.input_attachments`, which renders exactly what

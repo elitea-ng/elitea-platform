@@ -9,36 +9,21 @@
  * whether the HITL prompt still reaches the person through the indirection.
  *
  * ─────────────────────────────────────────────────────────────────────────
- * IT DOES NOT, AND NEITHER HALF OF THE PREMISE IS IMPLEMENTED
+ * IT DOES NOW — AND ONE HALF OF THE PREMISE REMAINS AN HONEST DEGRADE
  * ─────────────────────────────────────────────────────────────────────────
  *
- * 1. THE PIPELINE CANNOT BE INVOKED AS A TOOL. The native runtime compiles
- *    exactly one kind of Application child — a nested `LlmAgent` — and a
- *    stored pipeline is a graph the pipeline assembler owns
- *    (`services/elitea-worker-rust/src/agents/application_tools.rs`).
+ * 1. THE PIPELINE IS INVOKED AS A TOOL (#973, closed in fix wave 5). The
+ *    native runtime used to compile exactly one kind of Application child — a
+ *    nested `LlmAgent` — and refused a stored pipeline during ASSEMBLY, so one
+ *    attached pipeline killed EVERY turn of that agent. Wave 3 stopped the
+ *    bricking by skipping the child; wave 5 admits it.
  *
- *    The BLAST RADIUS half of that is fixed (#973, fix wave 3): the refusal
- *    used to land during ASSEMBLY —
- *
- *      agent.assemble:agent.nested_application.assemble …
- *      WARN native agent assembly failed after invocation authorization
- *           error_code="native_agent.unsupported_capability"
- *
- *    — so one attached pipeline killed EVERY turn of that agent, including
- *    the turns that never mentioned it, while the agent's own tool picker
- *    went on offering pipelines (`ToolMenu.tsx` runs a second listing with
- *    `agents_type: 'pipeline'` beside the `classic` one). The child is now
- *    SKIPPED instead: the agent answers, the pipeline binds no tool, and the
- *    run carries one `attached pipeline '<name>' is not available on this
- *    worker` notice — the same honest degrade `swarm` takes below (#866).
- *
- *    The CAPABILITY half is still open, and is what keeps this test marked:
- *    compiling the child as a sub-graph tool over a durable checkpoint, and
- *    surfacing its `hitl` node through the parent's interrupt/resume path,
- *    is a runtime feature this wave did not build. Note the attachment is
- *    NOT refused upstream, and must not be: the SDK (python) worker builds
- *    pipeline children through its application toolkit, so hiding them in
- *    the picker would take a working capability away from those deployments.
+ *    `services/elitea-worker-rust/src/agents/application_pipeline.rs` compiles
+ *    the child's stored graph and offers it as one `task` tool. Its `hitl`
+ *    node pauses inside the child, the pause's own pending checkpoint travels
+ *    on the descendant event the parent's durable session already persists,
+ *    and the card reaches the chat through the parent's existing nested
+ *    interrupt path — which is what this test drives end to end.
  *
  * 2. SWARM MODE IS A NO-OP ON THIS RUNTIME. `swarm` is in
  *    `PLATFORM_INTERNAL_TOOLS` — the list of names the native runtime
@@ -48,14 +33,15 @@
  *    the test asserts it as a FACT rather than pretending the toggle did
  *    something.
  *
- * The test below is written as the cases say it should pass and is marked
- * against #973's remaining half. The fixture it builds — attach a pipeline to
- * an agent as a tool and read the reference back off the PARENT version — is
- * the capability #939 group 3 asked for, and it stays useful the moment the
- * runtime admits a pipeline child: only the `test.fail` has to go.
+ * The fixture it builds — attach a pipeline to an agent as a tool and read the
+ * reference back off the PARENT version — is the capability #939 group 3 asked
+ * for.
  *
- * RUST ONLY, like its sibling: the `hitl` node family is native-runtime graph
- * territory with no SDK-worker equivalent measured here.
+ * RUST ONLY, like its sibling, and gated rather than merely claimed: the
+ * python (SDK) worker SERVES Swarm mode, so assertion 2's precondition is a
+ * fact about this leg and not about that one (measured — see the `test.skip`
+ * on the test itself). What the SDK worker does with a child pipeline's
+ * `hitl` pause is a separate question this file makes no claim about.
  */
 import { expect, test, type Page } from '@playwright/test';
 
@@ -220,13 +206,25 @@ async function openAgentChat(page: Page, agentId: string): Promise<string> {
  * (pipeline-nodes-hitl) — ONE journey for five cases because all five are the
  * same mechanism observed with different decorations (all three routes, two
  * sequential HITL nodes, the chat entry point, the agent entry point, a second
- * model). None of the decorations is reachable while the mechanism itself is
- * refused, so a second copy would fail for the same reason five times.
+ * model). The decorations are covered where they are cheap to observe rather
+ * than by five browser turns of the same shape: the third route, the two
+ * sequential gates and the decline path are asserted against the runtime
+ * itself in `application_pipeline_tests.rs`, and this journey drives the
+ * INDIRECTION the five cases actually share — agent → attached pipeline →
+ * card → decision → answer — once, through the browser.
  */
 test('a Swarm-mode agent can invoke an attached pipeline, and its HITL prompt reaches the chat', async ({ page }) => {
-  test.fail(
-    true,
-    '#973 (remaining half): the native runtime no longer dies at assembly over an attached pipeline — it skips the child and says so — but it still compiles no pipeline child, so the model is offered no tool for it and the pipeline’s HITL node cannot surface through the parent',
+  // RUST LEG ONLY, and measured rather than assumed. On the python (SDK) leg
+  // `/runtime_capabilities` reports `internal_tools.swarm` TRUE — that worker
+  // SERVES Swarm mode — so assertion 2 below, which pins the NATIVE runtime's
+  // honest "recognized and skipped" degrade (#866) as a fact, is a statement
+  // about this leg alone and fails there before the pipeline is ever reached.
+  // The pipeline half is NOT the reason for the gate: the SDK worker builds
+  // pipeline children through its own application toolkit, and what it does
+  // with a child's `hitl` pause is simply not measured by this file.
+  test.skip(
+    (process.env['E2E_WORKER'] ?? 'rust') !== 'rust',
+    'the SDK worker serves Swarm mode, so this file’s swarm precondition is a rust-leg fact',
   );
   test.setTimeout(420_000);
 
@@ -311,6 +309,38 @@ test('a Swarm-mode agent can invoke an attached pipeline, and its HITL prompt re
       timeout: 240_000,
       contains: review,
       message: 'the rejected pipeline produced no answer through its agent',
+    });
+
+    // ── THE SECOND TURN — what the child left behind (#990 review 1) ───────
+    //
+    // The child pipeline's own events are persisted in the SAME claim-fenced
+    // session the parent's next turn reads back. ADK treats an event with no
+    // branch as visible to every branch, so a child whose events carried none
+    // would put its monologue — and a `tool_use` with no matching result — into
+    // the PARENT's history here. An Anthropic-shaped provider refuses such a
+    // turn outright; others answer as though the child's words were the
+    // agent's own. Either way the follow-up is the only place it shows.
+    //
+    // Asserted as a plain follow-up question with its own marker, because that
+    // is exactly the shape a user's next message takes.
+    const followUp = marker('followup');
+    const followUpButton = await fillComposer(page, `Say ${followUp} and nothing else.`);
+    const followUpStarted = page.waitForResponse(
+      (r) => START_RE.test(r.url()) && r.request().method() === 'POST',
+      { timeout: 60_000 },
+    );
+    await followUpButton.click();
+    expect(
+      (await followUpStarted).status(),
+      'the turn AFTER a pipeline-tool call must still be admitted — a child event leaking ' +
+        'into the parent history is refused by the provider, not by us',
+    ).toBe(200);
+    await expectStoredAssistantAnswer(page, projectId, conversationId, {
+      timeout: 240_000,
+      contains: followUp,
+      message:
+        'the follow-up turn produced no answer — the child pipeline’s events most likely ' +
+        'leaked into the parent’s history',
     });
   } finally {
     if (pipeline !== undefined) await deletePipeline(page.request, pipeline);

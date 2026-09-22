@@ -333,6 +333,63 @@ impl Agent for PipelineNodeEventStreamingAgent {
     }
 }
 
+/// One borrowed drain of the node-event channel.
+///
+/// #973: an ordinary agent that calls a saved pipeline as a TOOL owns the
+/// child run's event stream itself — it forwards every child event onto the
+/// parent's descendant channel rather than onto a Runner stream — so it cannot
+/// use [`PipelineNodeEventStreamingAgent`], which consumes the receiver. The
+/// guard is held for the length of one call, which is also what keeps two
+/// calls of the same tool from interleaving node events onto one channel.
+pub(crate) struct PipelineNodeEventDrain<'receiver> {
+    guard: tokio::sync::MutexGuard<'receiver, Option<mpsc::Receiver<PipelineNodeEventSignal>>>,
+    invocation_id: String,
+    author: String,
+    /// The child's own nested-application tier. NOT empty: ADK treats an empty
+    /// branch as visible to every branch, so a node event without one is
+    /// re-read into the parent's own next turn (#990 review 1).
+    branch: String,
+}
+
+impl PipelineNodeEventReceiver {
+    /// Borrow the channel for one child run without consuming it.
+    pub(crate) async fn drain(
+        &self,
+        invocation_id: &str,
+        author: &str,
+        branch: &str,
+    ) -> adk_rust::Result<PipelineNodeEventDrain<'_>> {
+        let guard = self.inner.lock().await;
+        if guard.is_none() {
+            return Err(pipeline_node_event_channel_error());
+        }
+        Ok(PipelineNodeEventDrain {
+            guard,
+            invocation_id: invocation_id.to_owned(),
+            author: author.to_owned(),
+            branch: branch.to_owned(),
+        })
+    }
+}
+
+impl PipelineNodeEventDrain<'_> {
+    /// Await the next node event, or `None` once the channel has closed.
+    pub(crate) async fn recv(&mut self) -> Option<adk_rust::Result<Event>> {
+        let signal = self.guard.as_mut()?.recv().await?;
+        Some(self.event(signal))
+    }
+
+    /// Take one already buffered node event without awaiting.
+    pub(crate) fn try_recv(&mut self) -> Option<adk_rust::Result<Event>> {
+        let signal = self.guard.as_mut()?.try_recv().ok()?;
+        Some(self.event(signal))
+    }
+
+    fn event(&self, signal: PipelineNodeEventSignal) -> adk_rust::Result<Event> {
+        pipeline_node_signal_event(signal, &self.invocation_id, &self.author, &self.branch)
+    }
+}
+
 fn pipeline_node_signal_event(
     signal: PipelineNodeEventSignal,
     root_invocation_id: &str,

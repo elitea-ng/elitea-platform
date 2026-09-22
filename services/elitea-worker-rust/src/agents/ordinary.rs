@@ -141,6 +141,7 @@ impl OrdinaryNativeAgentAssembler {
                 context.clone(),
                 &profile,
                 &tool_policy,
+                plan.thread_id().to_owned(),
             )
             .await?;
         let output_continuation = matches!(&start, AdmittedNativeStart::OutputContinuation);
@@ -193,6 +194,11 @@ impl OrdinaryNativeAgentAssembler {
         }
     }
 
+    // One more owner than the pedantic bound allows: the conversation thread is
+    // a per-TURN identity a pipeline child namespaces its checkpoint under
+    // (#973), and folding it into one of the frozen inputs beside it would hide
+    // that it comes from the plan rather than from the agent's version.
+    #[allow(clippy::too_many_arguments)]
     async fn materialize_runtime(
         &self,
         tool_snapshot: &AdmittedToolSnapshot<'_>,
@@ -201,6 +207,7 @@ impl OrdinaryNativeAgentAssembler {
         context: Arc<ClaimScopedEliteaContext>,
         profile: &OrdinaryNoToolProfile,
         tool_policy: &Arc<ToolAdmissionPolicy>,
+        conversation_thread_id: String,
     ) -> Result<(OrdinaryRuntimeBindings, NativeToolExecutionMode), NativeAgentAssemblyError> {
         let tool_reference_count = tool_snapshot.iter().count();
         let nested_application_count = tool_snapshot
@@ -238,17 +245,12 @@ impl OrdinaryNativeAgentAssembler {
         ))));
         let mut application_runtime = ApplicationRuntimeProjection::default();
         // #973: read BEFORE materialization, off the same snapshot it reads.
-        // An attached pipeline is not built here and no longer fails the
-        // assembly; the run says so instead, once, the way a skipped internal
-        // tool does.
-        let skipped_applications = skipped_application_children(tool_snapshot, None);
-        if !skipped_applications.is_empty() {
-            tracing::warn!(
-                skipped = skipped_applications.len(),
-                "attached application children this worker cannot build were skipped"
-            );
-        }
-        if let Some(materialized) = materialize_application_toolset(
+        // A saved PIPELINE child IS built here now, so the reference scan only
+        // reports the child TYPES this worker never executes — `predict`. A
+        // pipeline whose own build fails is added below from the materializer's
+        // own outcome (#990 review 4), because only the build knows that.
+        let mut skipped_applications = skipped_application_children(tool_snapshot, None, true);
+        let (materialized, skipped_pipelines) = materialize_application_toolset(
             tool_snapshot,
             self.platform.as_ref(),
             runtime_context.as_ref(),
@@ -259,16 +261,28 @@ impl OrdinaryNativeAgentAssembler {
                 Arc::clone(tool_policy),
                 self.mcp_connector.clone(),
                 mcp_tokens,
-            ),
+            )
+            .with_conversation_thread(conversation_thread_id),
         )
-        .await?
-        {
+        .await?;
+        // #990 review 4: named whether or not a single child survived — an
+        // agent whose ONLY attached pipeline could not be built binds no
+        // application toolset at all, and that is exactly the case the notice
+        // exists for.
+        skipped_applications.extend(skipped_pipelines);
+        if let Some(materialized) = materialized {
             validate_nested_application_hitl_scope(application_only, &materialized.presentations)?;
             toolsets.push(materialized.toolset);
             application_runtime = ApplicationRuntimeProjection::streaming(
                 materialized.presentations,
                 materialized.events,
                 materialized.resume,
+            );
+        }
+        if !skipped_applications.is_empty() {
+            tracing::warn!(
+                skipped = skipped_applications.len(),
+                "attached application children this worker cannot build were skipped"
             );
         }
         tracing::Span::current().record("materialized_toolset_count", toolsets.len());

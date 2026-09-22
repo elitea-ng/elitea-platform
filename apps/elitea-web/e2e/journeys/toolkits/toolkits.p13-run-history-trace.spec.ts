@@ -80,6 +80,7 @@ async function mockMessageTrace(page: Page, conversationId: string): Promise<voi
             parent_agent_call_id: null,
             started_at: new Date().toISOString(),
             is_error: false,
+            attrs: { metadata: { toolkit_name: 'Artifacts' } },
           },
         ],
         total: 1,
@@ -99,6 +100,7 @@ async function mockMessageTrace(page: Page, conversationId: string): Promise<voi
         parent_agent_call_id: null,
         started_at: new Date().toISOString(),
         is_error: false,
+        attrs: { metadata: { toolkit_name: 'Artifacts' } },
         tool_inputs: {
           max_tokens: 512,
           process_attachments: true,
@@ -121,14 +123,17 @@ test.describe('generic Run History trace: request params + thinking steps (ELITE
     await page.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => undefined);
   });
 
-  /* onetest: ELITEA-2802, ELITEA-2803, ELITEA-2805 — `RunHistoryTrace`'s `StepDetail` now also renders
-   * `tool_inputs` (JSON-formatted) and `thinking`, fetched by the same `useGetMessageTrace` call `text`/
-   * `tool_output` already used. FIXED: the parameters and reasoning content. STILL A GAP, not attempted
-   * here (a separate, cosmetic concern from the data being shown at all): the step list still labels a
-   * step with the bare tool name, not the "[Toolkit Name]: [tool_action]" format 2803 also asks for, and
-   * `tool_output` is still shown verbatim rather than specially formatted per tool (2805's "not raw
-   * JSON" claim) — this test does not require either. */
-  test('a tool_call trace step shows its request parameters and thinking content', async ({ page }) => {
+  /* onetest: ELITEA-2802, ELITEA-2803, ELITEA-2805 — `RunHistoryTrace`'s `StepDetail` renders
+   * `tool_inputs` (JSON-formatted), `thinking`, and step timing, fetched by the same `useGetMessageTrace`
+   * call `text`/`tool_output` already used. The step list also labels a `tool_call` step
+   * "[Toolkit Name]: [tool_action]" (`stepLabel`, reading `attrs.metadata.toolkit_name`) rather than the
+   * bare tool name, and `tool_output` is pretty-printed rather than a raw single-line dump, and is
+   * chunk/partial-aware (`attrs.tool_output_chunks`) — see `RunHistoryTrace.test.tsx` for the partial
+   * case, which this fixture (a complete, non-chunked run) does not exercise. STILL A GAP, not attempted
+   * here: a per-tool FORMATTED SUMMARY (2805's stronger claim — e.g. "Indexed 5, skipped 2" instead of
+   * the pretty-printed JSON `index_data` actually returns) would need a per-tool renderer registry, a
+   * product decision beyond this fix's scope. */
+  test('a tool_call trace step shows its toolkit-qualified label, request parameters and thinking content', async ({ page }) => {
     const toolkitId = await createArtifactToolkit(page.request, uniqueName('runhist-trace-toolkit'));
     const conversationId = await createConversation(page.request, uniqueName('runhist-trace-convo'));
     await attachToolkitParticipant(page.request, conversationId, toolkitId);
@@ -150,15 +155,16 @@ test.describe('generic Run History trace: request params + thinking steps (ELITE
       await expect(trace).toBeVisible({ timeout: 15_000 });
       const step = page.getByTestId('run-history-trace-step');
       await expect(step).toHaveCount(1);
-      // The label the case wants ("Toolkit: action") is not what this renders
-      // (the row's text also carries the step's timestamp, from `secondary`).
-      await expect(step).toContainText('index_data');
+      // ELITEA-2803's "[Toolkit Name]: [tool_action]" label format.
+      await expect(step).toContainText('Artifacts: index_data');
       await step.click();
 
       const detail = page.getByTestId('run-history-trace-detail');
       await expect(detail).toBeVisible({ timeout: 10_000 });
-      // What IS shown: tool_output, verbatim (raw JSON, undisguised — 2805's own complaint).
-      await expect(detail).toContainText('"indexed": 5');
+      // tool_output is pretty-printed (multi-line), not the raw single-line dump.
+      await expect(page.getByTestId('run-history-trace-tool-output')).toContainText('"indexed": 5');
+      await expect(page.getByTestId('run-history-trace-output-partial')).toHaveCount(0);
+      await expect(page.getByTestId('run-history-trace-timing')).toBeVisible();
 
       // The assertion this case says SHOULD hold — request parameters and thinking rendered.
       await expect(detail).toContainText('p13-marker-index-name');
