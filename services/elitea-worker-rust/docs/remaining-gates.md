@@ -290,3 +290,11 @@ Fresh headed browser chat 652 fails recovery after a durable structured-continua
 The pipeline assembler lacks checkpoint inspection and restoration overrides.
 See [failure evidence and source boundary](source-mapping/output-continuation-capacity-20260922.md#structured-pipeline-crash-verification-open).
 Uninterrupted structured continuation passes; pipeline crash recovery is not accepted.
+
+
+### Structured pipeline crash recovery acceptance
+
+Fresh headed browser chat 653 passes the previously failing continuation crash boundary.
+Claim attempt 2 restores the same execution, completes the downstream node, and preserves one answer after reload.
+See [process-crash evidence](source-mapping/output-continuation-capacity-20260922.md#structured-pipeline-process-crash-acceptance).
+Other pending node families and the remaining Gate 4 drift checks stay open.

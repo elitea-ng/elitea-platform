@@ -866,3 +866,25 @@ It verifies the exact pending request, one completed downstream answer, and no r
 Foreign execution metadata and unknown frontiers fail inspection; changed graph state changes the authorized digest.
 All 424 PostgreSQL-backed agent tests pass.
 Live process-crash verification remains required before acceptance.
+
+
+### Structured pipeline process-crash acceptance
+
+Worker `e5df80a3` runs as image
+`sha256:02c04de932d4dfe8a264861f2eecd4d7dff650f2eec518e302dcaaebdbcb559c`.
+Fresh headed browser chat 653 verifies execution `1daa33b2ea1f266183fa6fc0da81e95b`.
+The harness kills the worker after continuation round 1 persists a 1039-character JSON prefix.
+It restarts the worker without resubmitting the browser request.
+Claim attempt and lease epoch advance from 1 to 2 within generation 1.
+The same execution completes with all 40 ordered records and one ending marker.
+The browser receives `pipeline_finish`, reports no runtime errors, and preserves the answer after reload.
+
+PostgreSQL confirms one completed model receipt and one graph writer.
+The graph's `answer`, downstream `final_text`, and rendered answer match.
+Reference graph data remains unchanged.
+This accepts recovery during structured LLM-node output continuation followed by a deterministic node.
+It does not accept other pending node families or close Gate 4.
+
+Evidence: `elitea-structured-crash-recovered-boundary.json`, `elitea-structured-crash-recovered-result.json`,
+`elitea-structured-crash-recovered-durable-proof.json`, `elitea-structured-crash-recovered-complete.png`, and the corresponding browser log.
+All 424 PostgreSQL-backed agent tests and strict all-target Clippy pass.
