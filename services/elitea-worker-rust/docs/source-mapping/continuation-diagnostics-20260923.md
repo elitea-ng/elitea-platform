@@ -162,3 +162,23 @@ The direct pipeline's public message remains the registered generic continuation
 More detailed public error guidance and other failure categories remain separate gate 4 work.
 
 Evidence files: `elitea-pipeline-nested-failure-live.json` and `elitea-orchestrator-pipeline-failure-live.json` in the local test evidence directory.
+
+## Public error reference
+
+The current UI reference is `projects/EliteaUI/src/[fsd]/features/chat/ui/error-trace/ErrorTrace.jsx`.
+It provides expandable diagnostics with copy and download controls.
+The replatform adds a separate public reference in `apps/elitea-web/src/features/chat-messages/ui/error-trace/FailureReference.tsx`.
+`ApplicationAnswer.tsx` mounts this reference for ordinary errors and incomplete continuation responses.
+The reference contains the error code, when available, and the response message ID.
+It excludes conversation content, provider payloads, and internal stack traces.
+
+Operators can resolve the message ID through `elitea_runtime.agent_execution_jobs.client_message_id`.
+The existing `agent_cancel.sql::IsCurrentAgentCancellationReplay` query shows this execution binding.
+This change adds no persistence fields, migrations, or worker contracts.
+
+The focused ApplicationAnswer suite passes 24 tests. TypeScript checking passes.
+A fresh headed Playwright browser reads real conversation 665 through the development UI and rehearsal backend.
+The copied reference remains identical after reload. The browser reports no page errors.
+The screenshot is inspected. The test uses no mocked requests and starts no additional model calls.
+Evidence files are `elitea-error-reference-browser.json` and `elitea-error-reference-browser.png` in the local test evidence directory.
+This verification uses the development UI. Container deployment is a separate acceptance step.

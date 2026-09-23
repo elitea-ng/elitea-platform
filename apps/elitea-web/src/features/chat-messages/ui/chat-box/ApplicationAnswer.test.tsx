@@ -131,6 +131,25 @@ describe('ApplicationAnswer', () => {
     expect(screen.getByText('An unfinished answer.')).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Copy partial response' }));
     expect(await navigator.clipboard.readText()).toBe('An unfinished answer.');
+    await user.click(screen.getByText('Details for support'));
+    await user.click(screen.getByRole('button', { name: 'Copy error reference' }));
+    expect(await navigator.clipboard.readText()).toBe('Error code: OUTPUT_CONTINUATION_EXHAUSTED\nMessage ID: partial-answer');
+  });
+
+  it('copies a message reference for untyped failures without copying private output', async () => {
+    const user = userEvent.setup();
+    const answer = { id: 'failed-message', role: 'assistant', content: 'Private output',
+      exception: 'The runtime operation failed.' } as ChatMessage;
+    renderWithTheme(<ApplicationAnswer answer={answer} messageId={answer.id} />);
+    await user.click(screen.getByText('Details for support'));
+    await user.click(screen.getByRole('button', { name: 'Copy error reference' }));
+    expect(await navigator.clipboard.readText()).toBe('Message ID: failed-message');
+  });
+
+  it('does not show an error reference for successful responses', () => {
+    const answer = { id: 'success', role: 'assistant', content: 'Complete' } as ChatMessage;
+    renderWithTheme(<ApplicationAnswer answer={answer} messageId={answer.id} />);
+    expect(screen.queryByTestId('failure-reference')).not.toBeInTheDocument();
   });
 
   it('copies authoritative text items without duplicating collapsed group content', async () => {

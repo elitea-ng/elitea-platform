@@ -44,6 +44,7 @@ import type { McpAuthRequiredAction } from '../chat-continue/ChatContinue';
 import { ChatHitlActions } from '../chat-hitl-actions/ChatHitlActions';
 import type { HitlInterrupt } from '../chat-hitl-actions/ChatHitlActions';
 import { ErrorTrace } from '../error-trace/ErrorTrace';
+import { FailureReference } from '../error-trace/FailureReference';
 import { ContinuationError } from '../error-trace/ContinuationError';
 
 import { PersistedMessageTrace } from './PersistedMessageTrace';
@@ -333,6 +334,8 @@ export function ApplicationAnswer({
               {!!exception && <ErrorTrace error={exception} />}
             </>
           )}
+
+          {!!exception && <FailureReference messageId={messageId} code={answer.failureCode} />}
 
           {!hideContinueButton && !!requiresConfirmationSignal && (
             <ChatContinue
