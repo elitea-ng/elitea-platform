@@ -489,3 +489,12 @@ session. Rejected seam text is excluded. A non-streaming ADK runner regression
 proves that all five accepted segments are inspectable before the failure and no
 completed receipt exists. The outer lifecycle persists the resulting incomplete
 step before publishing its terminal error.
+
+The corrected worker in chat 639 preserved 5,071 characters of accepted partial
+output. Read-only browser inspection confirmed it in the persisted trace. The
+first harness still searched the older `Thought for` control; this trace uses
+`Execution details`. Its label also exposed a real rendering gap:
+`PersistedMessageTrace.tsx` ignored `attrs.response_metadata.tool_name`, where Main
+already preserves thinking-step display names. It now reads that existing field
+before falling back to the model name. No Main change or schema addition is needed.
+The two persisted-trace UI tests and TypeScript checking pass.

@@ -31,6 +31,14 @@ function TraceDetail({ detail }: { readonly detail: MessageTraceStepDetail }): R
   </Box>;
 }
 
+function traceStepName(step: MessageTraceStep): string {
+  if (step.tool_name) return step.tool_name;
+  const metadata = step.attrs?.['response_metadata'];
+  if (typeof metadata === 'object' && metadata !== null && 'tool_name' in metadata
+    && typeof metadata.tool_name === 'string' && metadata.tool_name.trim()) return metadata.tool_name;
+  return step.model_name ?? step.kind;
+}
+
 function TracePanel({ reference }: { readonly reference: TraceReference }): ReactNode {
   const [selected, setSelected] = useState<MessageTraceStep>();
   const summary = useListMessageTraces(reference.projectId, Number(reference.conversationId), { message_group_ids: String(reference.messageGroupId) }, { query: { enabled: false } });
@@ -46,7 +54,7 @@ function TracePanel({ reference }: { readonly reference: TraceReference }): Reac
     {steps.map(step => <BasicAccordion key={step.id} uppercase={false} expanded={selected?.id === step.id}
       onChange={(_event, expanded) => { setSelected(expanded ? step : undefined); }}
       items={[{
-        title: [step.parent_agent_name, step.tool_name ?? step.model_name ?? step.kind, step.is_error ? t('common.error', 'Error') : undefined].filter(Boolean).join(' · '),
+        title: [step.parent_agent_name, traceStepName(step), step.is_error ? t('common.error', 'Error') : undefined].filter(Boolean).join(' · '),
         content: selected?.id === step.id ? <Box>
           {detail.isFetching && <Typography component="output">{t('common.loading', 'Loading...')}</Typography>}
           {detail.isError && <Box role="alert">{t('features.chatMessages.traceReadFailed', 'Execution details could not be loaded.')}<Button onClick={() => { void detail.refetch(); }}>{t('common.retry', 'Retry')}</Button></Box>}

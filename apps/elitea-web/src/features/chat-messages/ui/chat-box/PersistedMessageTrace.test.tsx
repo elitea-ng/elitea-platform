@@ -27,3 +27,15 @@ it('fetches heavy output only when its step opens and keeps the message identity
   await waitFor(() => expect(screen.getByText('persisted issue 11148')).toBeVisible());
   expect(requests).toBe(1);
 });
+
+it('preserves the incomplete generation label stored in trace display metadata', async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  renderWithTheme(<QueryClientProvider client={client}><PersistedMessageTrace value={{
+    projectId: '2', conversationId: '543', messageGroupId: 5820, failed: false,
+    steps: [{ id: 7280, message_group_id: 5820, kind: 'thinking_step', model_name: 'model',
+      parent_agent_name: 'Child', is_error: false,
+      attrs: { response_metadata: { tool_name: 'Incomplete response' } } }],
+  }} /></QueryClientProvider>);
+  await userEvent.setup().click(screen.getByRole('button', { name: 'Execution details' }));
+  expect(screen.getByRole('button', { name: 'Child · Incomplete response' })).toBeVisible();
+});
