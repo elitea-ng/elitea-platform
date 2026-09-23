@@ -1270,3 +1270,38 @@ async fn output_limited_completion_allows_next_segment_but_not_duplicate_final()
     assert_eq!(captured.lock().unwrap().len(), 4);
     assert_eq!(bound.take_completion_for_test().unwrap(), "native response");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn discarded_unaccepted_completion_can_be_replaced_but_consumed_cannot() {
+    let complete = native_sse(MODEL);
+    let outcomes = [complete.clone(), complete]
+        .into_iter()
+        .map(|body| {
+            TestModelGatewayOutcome::Response(test_model_gateway_response(Body::new(Full::new(
+                Bytes::from(body),
+            ))))
+        })
+        .collect();
+    let (client, captured) =
+        test_model_gateway_client(outcomes, test_model_gateway_config()).unwrap();
+    let bound = client
+        .bind_anthropic_ordinary(
+            &ClaimScopedEliteaContext::fixture(17, TOKEN),
+            23,
+            invocation(MODEL, Some(ModelReasoningEffort::Medium)),
+        )
+        .unwrap();
+    let completion = bound.durable_completion().unwrap();
+    drain(bound.generate_for_test(request(MODEL, None)).await.unwrap())
+        .await
+        .unwrap();
+    assert!(completion.snapshot().unwrap().is_some());
+    completion.discard_unaccepted().unwrap();
+    assert!(completion.snapshot().unwrap().is_none());
+    drain(bound.generate_for_test(request(MODEL, None)).await.unwrap())
+        .await
+        .unwrap();
+    assert_eq!(bound.take_completion_for_test().unwrap(), "native response");
+    assert!(completion.discard_unaccepted().is_err());
+    assert_eq!(captured.lock().unwrap().len(), 2);
+}

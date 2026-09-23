@@ -191,6 +191,26 @@ struct AnthropicCompletion {
 }
 
 impl DurableModelCompletion for Mutex<AnthropicCompletionState> {
+    fn discard_unaccepted(&self) -> adk_rust::Result<()> {
+        let mut state = self.lock().map_err(|_| {
+            anthropic_error(
+                ErrorCategory::Internal,
+                "completion_state",
+                "the native Anthropic completion state is unavailable",
+            )
+        })?;
+        if state.consumed {
+            return Err(anthropic_error(
+                ErrorCategory::Internal,
+                "completion_state",
+                "the native Anthropic completion state is unavailable",
+            ));
+        }
+        state.value = None;
+        state.output_limited = false;
+        Ok(())
+    }
+
     fn snapshot(&self) -> adk_rust::Result<Option<String>> {
         self.lock().map(|state| state.value.clone()).map_err(|_| {
             anthropic_error(

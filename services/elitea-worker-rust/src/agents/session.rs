@@ -1105,6 +1105,12 @@ pub(crate) trait BoundOrdinaryAgentModel: Send + 'static {
 /// the event that continues through the Runner and browser projector.
 pub(crate) trait DurableModelCompletion: Send + Sync {
     fn snapshot(&self) -> adk_rust::Result<Option<String>>;
+
+    /// Discard a provider result rejected before any of its text was accepted.
+    /// A consumed/persisted completion must never become reusable.
+    fn discard_unaccepted(&self) -> adk_rust::Result<()> {
+        Err(super::model_checkpoint::output::exhausted())
+    }
 }
 
 pub(super) struct RunnerSessionService {

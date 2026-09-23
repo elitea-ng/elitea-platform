@@ -401,6 +401,26 @@ struct OpenAiCompatibleCompletion {
 }
 
 impl DurableModelCompletion for Mutex<CompletionState> {
+    fn discard_unaccepted(&self) -> adk_rust::Result<()> {
+        let mut state = self.lock().map_err(|_| {
+            model_error(
+                ErrorCategory::Internal,
+                "model_gateway.completion_state",
+                "the model completion state is unavailable",
+            )
+        })?;
+        if state.consumed {
+            return Err(model_error(
+                ErrorCategory::Internal,
+                "model_gateway.completion_state",
+                "the model completion state is unavailable",
+            ));
+        }
+        state.value = None;
+        state.output_limited = false;
+        Ok(())
+    }
+
     fn snapshot(&self) -> adk_rust::Result<Option<String>> {
         self.lock().map(|state| state.value.clone()).map_err(|_| {
             model_error(

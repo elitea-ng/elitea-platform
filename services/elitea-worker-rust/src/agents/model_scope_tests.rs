@@ -905,7 +905,11 @@ async fn child_output_refuses_an_unverified_continuation_seam() {
     let child = Context::child("invalid-output-seam");
     let scope = checkpoint(&storage, Arc::new(Summary::default()));
     let request = simple_request(&scope, &child).await;
-    let model = OutputModel::new(vec![("First part", MaxTokens), ("Different answer", Stop)]);
+    let model = OutputModel::new(vec![
+        ("First part", MaxTokens),
+        ("Different answer", Stop),
+        ("Still different", Stop),
+    ]);
     let output = scope
         .clone()
         .delegation_model(model, 25)
@@ -1174,4 +1178,178 @@ async fn child_output_accepts_verified_suffix_without_changing_accepted_prefix()
         collect_output(output).await.unwrap(),
         format!("{first}\nRECORD 082: final")
     );
+}
+
+#[tokio::test]
+async fn child_output_repairs_one_invalid_boundary_without_accepting_rejected_text() {
+    use adk_rust::FinishReason::{MaxTokens, Stop};
+    let storage = storage(ModelScopeBackend::Local(Arc::new(
+        InMemorySessionService::new(),
+    )));
+    let child = Context::child("repair-output");
+    let scope = checkpoint(&storage, Arc::new(Summary::default()));
+    let request = simple_request(&scope, &child).await;
+    let model = OutputModel::new(vec![
+        ("First part", MaxTokens),
+        ("UNACCEPTED REPLACEMENT", Stop),
+        ("First part and ending", Stop),
+    ]);
+    let output = scope
+        .delegation_model(model.clone(), 25)
+        .generate_content(request, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        collect_output(output).await.unwrap(),
+        "First part and ending"
+    );
+    let requests = model.requests.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    let repair = serde_json::to_string(&requests[2]).unwrap();
+    assert!(!repair.contains("UNACCEPTED REPLACEMENT"));
+    assert!(repair.contains("previous continuation was rejected"));
+    assert_eq!(requests[2].contents.len(), 3);
+}
+
+#[tokio::test]
+async fn child_output_recovery_does_not_reset_boundary_repair_allowance() {
+    use adk_rust::FinishReason::{MaxTokens, Stop};
+    let storage = storage(ModelScopeBackend::Local(Arc::new(
+        InMemorySessionService::new(),
+    )));
+    let child = Context::child("repair-recovery");
+    let summary = Arc::new(Summary::default());
+    let first = checkpoint(&storage, summary.clone());
+    let request = simple_request(&first, &child).await;
+    let model = OutputModel::new(vec![
+        ("First part", MaxTokens),
+        ("UNACCEPTED REPLACEMENT", Stop),
+    ]);
+    let mut output = first
+        .clone()
+        .delegation_model(model.clone(), 25)
+        .generate_content(request, true)
+        .await
+        .unwrap();
+    for _ in 0..3 {
+        output.next().await.unwrap().unwrap();
+    }
+    drop(output);
+    let saved = stored(&first, &child)
+        .await
+        .state()
+        .get(CHECKPOINT_KEY)
+        .unwrap();
+    assert_eq!(saved["output_continuation"]["repair_used"], true);
+    assert_eq!(saved["output_continuation"]["round"], 2);
+    assert_eq!(saved["output_continuation"]["prefix"], "First part");
+    assert!(!saved.to_string().contains("UNACCEPTED REPLACEMENT"));
+    let replacement = checkpoint(&storage.with_pending_model_recovery(), summary);
+    let request = simple_request(&replacement, &child).await;
+    assert_eq!(
+        serde_json::to_value(&request).unwrap(),
+        saved["model"]["request"]
+    );
+    let model = OutputModel::new(vec![("STILL INVALID", Stop)]);
+    let output = replacement
+        .delegation_model(model.clone(), 25)
+        .generate_content(request, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        collect_output(output).await.unwrap_err().code,
+        "model.output_continuation_failed"
+    );
+    assert_eq!(model.requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn postgres_boundary_repair_survives_claim_takeover() {
+    use crate::state::postgres_session_tests::{IsolatedPostgres, authority_for, install_schema};
+    use adk_rust::FinishReason::{MaxTokens, Stop};
+    let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("skipping output continuation PostgreSQL test: set ELITEA_TEST_DATABASE_URL");
+        return;
+    };
+    let database = IsolatedPostgres::create(&url).await;
+    install_schema(&database.pool).await;
+    let root = Arc::new(
+        PostgresSessionService::activate(
+            database.pool.clone(),
+            authority_for("claim-1", 1, 1, [1; 32]),
+            SessionLimits::default(),
+            Arc::new(TestStateWriterLease::current()),
+        )
+        .await
+        .unwrap(),
+    );
+    let first_storage = storage(ModelScopeBackend::Postgres(root));
+    let child = Context::child("postgres-output");
+    let summary = Arc::new(Summary::default());
+    let first = checkpoint(&first_storage, summary.clone());
+    let request = simple_request(&first, &child).await;
+    let model = OutputModel::new(vec![
+        ("Accepted prefix", MaxTokens),
+        ("UNACCEPTED REPLACEMENT", Stop),
+    ]);
+    let mut output = first
+        .clone()
+        .delegation_model(model, 25)
+        .generate_content(request, true)
+        .await
+        .unwrap();
+    output.next().await.unwrap().unwrap();
+    output.next().await.unwrap().unwrap();
+    output.next().await.unwrap().unwrap();
+    drop(output);
+    let saved = stored(&first, &child)
+        .await
+        .state()
+        .get(CHECKPOINT_KEY)
+        .unwrap();
+    assert_eq!(saved["output_continuation"]["repair_used"], true);
+    assert_eq!(saved["output_continuation"]["round"], 2);
+    assert!(!saved.to_string().contains("UNACCEPTED REPLACEMENT"));
+    let replacement_root = Arc::new(
+        PostgresSessionService::activate(
+            database.pool.clone(),
+            authority_for("claim-2", 2, 2, [2; 32]),
+            SessionLimits::default(),
+            Arc::new(TestStateWriterLease::current()),
+        )
+        .await
+        .unwrap(),
+    );
+    let old_writer = first.writer.get().unwrap();
+    let error = old_writer
+        .checkpoint
+        .before_model(
+            old_writer.identity.clone(),
+            &old_writer.invocation_id,
+            &old_writer.agent_name,
+            LlmRequest::new("output-fixture", vec![child.input.clone()]),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "session.writer_not_current");
+    let replacement_storage =
+        storage(ModelScopeBackend::Postgres(replacement_root)).with_pending_model_recovery();
+    let replacement = checkpoint(&replacement_storage, summary);
+    let request = simple_request(&replacement, &child).await;
+    assert_eq!(
+        serde_json::to_value(&request).unwrap(),
+        saved["model"]["request"]
+    );
+    let model = OutputModel::new(vec![("Accepted prefix and complete ending", Stop)]);
+    let output = replacement
+        .delegation_model(model.clone(), 25)
+        .generate_content(request, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        collect_output(output).await.unwrap(),
+        "Accepted prefix and complete ending"
+    );
+    assert_eq!(model.requests.lock().unwrap().len(), 1);
+    database.pool.close().await;
 }

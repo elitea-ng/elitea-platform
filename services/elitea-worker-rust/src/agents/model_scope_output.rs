@@ -42,6 +42,7 @@ pub(super) fn generate(
             let mut segment = String::new();
             let mut terminal = None;
             let mut has_tools = false;
+            let mut invalid_boundary = false;
             let mut responses = inner.generate_content(request.clone(), stream).await?;
             while let Some(response) = responses.next().await {
                 let mut response = response?;
@@ -49,20 +50,13 @@ pub(super) fn generate(
                     yield response;
                     return;
                 }
-                if let Some(content) = &mut response.content {
-                    for part in &mut content.parts {
-                        match part {
-                            Part::Text { text } => {
-                                seam.rewrite(text)?;
-                                extend(&mut segment, text)?;
-                            }
-                            Part::FunctionCall { .. } | Part::FunctionResponse { .. } => {
-                                has_tools = true;
-                                if state.is_some() { Err(exhausted())?; }
-                            }
-                            _ => {}
-                        }
+                match rewrite_content(&mut response, &mut seam, &mut segment, state.is_some()) {
+                    Ok(tools) => has_tools |= tools,
+                    Err(error) if error.code == "model.output_continuation_boundary" => {
+                        invalid_boundary = true;
+                        break;
                     }
+                    Err(error) => Err(error)?,
                 }
                 let ended = response.turn_complete || response.finish_reason.is_some();
                 if ended {
@@ -78,8 +72,18 @@ pub(super) fn generate(
                 response.partial = true;
                 yield response;
             }
+            drop(responses);
+            let boundary_tail = if invalid_boundary { None } else { seam.finish_or_repair()? };
+            let Some(boundary_tail) = boundary_tail else {
+                let (prepared, next) = prepare_repair(&scope, request, state.as_ref(), max_model_turns).await?;
+                request = prepared;
+                state = Some(next);
+                // A yield after the durable boundary allows recovery without
+                // releasing any bytes from the rejected provider result.
+                yield LlmResponse { partial: true, ..LlmResponse::default() };
+                continue;
+            };
             let mut terminal = terminal.ok_or_else(exhausted)?;
-            let boundary_tail = seam.finish()?;
             if !boundary_tail.is_empty() {
                 extend(&mut segment, &boundary_tail)?;
                 yield LlmResponse { content: Some(Content::new("model").with_text(boundary_tail)), partial: true, ..LlmResponse::default() };
@@ -100,16 +104,11 @@ pub(super) fn generate(
             extend(&mut prefix, &segment)?;
             let round = state.as_ref().map_or(1, |state| state.round.saturating_add(1));
             if round >= max_model_turns { Err(exhausted())?; }
-            let next = OutputContinuation { prefix: prefix.clone(), round };
-            request = next.request(request, segment);
-            writer.checkpoint.set_output_continuation(Some(next.clone()))?;
-            // The prefix and exact next request commit together before dispatch.
-            request = match writer.checkpoint.before_model(
-                writer.identity.clone(), &writer.invocation_id, &writer.agent_name, request,
-            ).await? {
-                BeforeModelResult::Continue(prepared) => prepared,
-                BeforeModelResult::Skip(_) => Err(exhausted())?,
+            let next = OutputContinuation {
+                prefix: prefix.clone(), round,
+                repair_used: state.as_ref().is_some_and(|state| state.repair_used),
             };
+            request = prepare_next(&scope, request, segment, &next).await?;
             state = Some(next);
             terminal.turn_complete = false;
             terminal.finish_reason = None;
@@ -117,6 +116,88 @@ pub(super) fn generate(
             yield terminal;
         }
     }))
+}
+
+fn rewrite_content(
+    response: &mut LlmResponse,
+    seam: &mut Seam,
+    segment: &mut String,
+    is_continuation: bool,
+) -> adk_rust::Result<bool> {
+    let mut has_tools = false;
+    if let Some(content) = &mut response.content {
+        for part in &mut content.parts {
+            match part {
+                Part::Text { text } => {
+                    seam.rewrite(text)?;
+                    extend(segment, text)?;
+                }
+                Part::FunctionCall { .. } | Part::FunctionResponse { .. } => {
+                    if is_continuation {
+                        return Err(exhausted());
+                    }
+                    has_tools = true;
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(has_tools)
+}
+
+async fn prepare_repair(
+    scope: &ScopedModelCheckpoint,
+    request: LlmRequest,
+    previous: Option<&OutputContinuation>,
+    max_model_turns: u32,
+) -> adk_rust::Result<(LlmRequest, OutputContinuation)> {
+    let previous = previous.ok_or_else(exhausted)?;
+    let round = previous.round.saturating_add(1);
+    if previous.repair_used || round >= max_model_turns {
+        return Err(exhausted());
+    }
+    if let Some(completion) = &scope.completion {
+        completion.discard_unaccepted()?;
+    }
+    let next = OutputContinuation {
+        prefix: previous.prefix.clone(),
+        round,
+        repair_used: true,
+    };
+    let prepared = prepare_next(scope, request, String::new(), &next).await?;
+    tracing::info!(
+        event = "nested_output_boundary_repair_checkpointed",
+        round,
+        "One continuation boundary repair was durably prepared"
+    );
+    Ok((prepared, next))
+}
+
+async fn prepare_next(
+    scope: &ScopedModelCheckpoint,
+    request: LlmRequest,
+    segment: String,
+    next: &OutputContinuation,
+) -> adk_rust::Result<LlmRequest> {
+    let writer = scope.writer.get().ok_or_else(invalid_scope)?;
+    let request = next.request(request, segment);
+    writer
+        .checkpoint
+        .set_output_continuation(Some(next.clone()))?;
+    // Prefix, repair allowance, and exact request commit before dispatch.
+    match writer
+        .checkpoint
+        .before_model(
+            writer.identity.clone(),
+            &writer.invocation_id,
+            &writer.agent_name,
+            request,
+        )
+        .await?
+    {
+        BeforeModelResult::Continue(prepared) => Ok(prepared),
+        BeforeModelResult::Skip(_) => Err(exhausted()),
+    }
 }
 
 fn extend(target: &mut String, text: &str) -> adk_rust::Result<()> {
@@ -180,6 +261,13 @@ impl Seam {
         }
         self.resolve().map(Cow::Owned)
     }
+    fn finish_or_repair(&mut self) -> adk_rust::Result<Option<String>> {
+        match self.finish() {
+            Ok(text) => Ok(Some(text)),
+            Err(error) if error.code == "model.output_continuation_boundary" => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
     fn finish(&mut self) -> adk_rust::Result<String> {
         if self.resolved {
             return Ok(String::new());
@@ -194,7 +282,12 @@ impl Seam {
                 incoming_bytes = self.pending.len(),
                 "The child continuation did not preserve its accepted boundary"
             );
-            return Err(exhausted());
+            return Err(adk_rust::AdkError::new(
+                adk_rust::ErrorComponent::Model,
+                adk_rust::ErrorCategory::Internal,
+                "model.output_continuation_boundary",
+                "The continuation did not preserve the accepted answer boundary.",
+            ));
         };
         self.resolved = true;
         let mut text = std::mem::take(&mut self.pending);

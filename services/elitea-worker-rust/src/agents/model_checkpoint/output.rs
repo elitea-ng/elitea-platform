@@ -9,11 +9,14 @@ use serde::{Deserialize, Serialize};
 pub(in crate::agents) struct OutputContinuation {
     pub prefix: String,
     pub round: u32,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub repair_used: bool,
 }
 
 impl OutputContinuation {
     pub(in crate::agents) fn validate(&self) -> adk_rust::Result<()> {
-        if self.round == 0
+        if (self.repair_used && self.round < 2)
+            || self.round == 0
             || self.round > crate::agents::assembly::MAX_AGENT_STEP_LIMIT
             || self.prefix.len() > crate::agents::request::MAX_OUTPUT_CONTINUATION_BYTES
         {
@@ -45,7 +48,7 @@ impl OutputContinuation {
                 parts,
             });
         }
-        let prompt = if self.prefix.is_empty() {
+        let mut prompt = if self.prefix.is_empty() {
             "The previous response exhausted its output allowance before producing visible text. Complete the original task now. Return the answer without referring to this retry.".to_owned()
         } else {
             format!(
@@ -53,6 +56,9 @@ impl OutputContinuation {
                 serde_json::json!(self.anchor())
             )
         };
+        if self.repair_used {
+            prompt.push_str(" The previous continuation was rejected because it did not preserve this exact boundary. Its text was discarded. Begin with the exact anchor, then complete only the remaining original task; do not restart the answer or explain this repair.");
+        }
         request
             .contents
             .push(Content::new("user").with_text(prompt));
@@ -140,6 +146,7 @@ mod tests {
             let state = OutputContinuation {
                 prefix: "accepted ".repeat(round as usize),
                 round,
+                repair_used: false,
             };
             request = state.request(request, "accepted ".into());
             assert_eq!(request.contents.len(), 3);
@@ -157,6 +164,7 @@ mod tests {
         let first = OutputContinuation {
             prefix: "old output".into(),
             round: 1,
+            repair_used: false,
         };
         let mut request = first.request(request(), "old output".into());
         request.contents.remove(1);
@@ -164,6 +172,7 @@ mod tests {
         let next = OutputContinuation {
             prefix: "old output new output".into(),
             round: 2,
+            repair_used: false,
         };
         let request = next.request(request, " new output".into());
         assert_eq!(request.contents.len(), 3);
