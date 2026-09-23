@@ -365,8 +365,9 @@ Scope and ownership:
 - Operator configuration: control capture, sampling, size bounds, retention, and access to detailed diagnostics.
 - Release packaging: retain the debug information needed to resolve optimized synchronous stack frames. Verify async span context separately; a native stack does not reconstruct suspended task ancestry.
 
-The current release profile uses `debug = 0` and `strip = "symbols"`.
-The diagnostics slice must select and test suitable release debug information and symbol packaging.
+The previous release profile removed debug information and symbols.
+The [release packaging slice](release-diagnostics-20260923.md) retains function symbols and line tables.
+Runtime capture and symbolized stack acceptance remain open.
 Do not claim symbolized backtraces from debug-build tests alone.
 
 Acceptance criteria:

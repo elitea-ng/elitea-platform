@@ -71,8 +71,10 @@ pedantic = "deny"
 
 [profile.release]
 opt-level = 3
-debug = 0
-strip = "symbols"
+# Keep optimized frame names and source lines for operator diagnostics.
+# Line tables omit local-variable debug data.
+debug = "line-tables-only"
+strip = "none"
 lto = "thin"
 codegen-units = 1
 panic = "abort"
