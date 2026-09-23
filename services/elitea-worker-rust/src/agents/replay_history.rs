@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use adk_rust::schema_adapter::SchemaAdapter;
-use adk_rust::{AdkError, Content, Llm, LlmRequest, LlmResponseStream, Part};
+use adk_rust::{AdkError, Content, FunctionResponseData, Llm, LlmRequest, LlmResponseStream, Part};
 use async_trait::async_trait;
 
 mod recovery;
@@ -105,7 +105,75 @@ pub(super) fn model_history(mut request: LlmRequest) -> adk_rust::Result<LlmRequ
         }
     }
     request.contents.retain(|content| !content.parts.is_empty());
+    close_abandoned_calls(&mut request.contents, &results);
     Ok(request)
+}
+
+/// A later user turn can follow a failed child without a recorded tool result.
+/// Close only that historical provider pair. This is not an execution receipt,
+/// a recovery result, or permission to repeat a side effect.
+fn close_abandoned_calls(contents: &mut Vec<Content>, results: &HashMap<String, usize>) {
+    let Some(boundary) = contents.iter().rposition(|content| {
+        content.role == "user"
+            && content
+                .parts
+                .iter()
+                .any(|part| matches!(part, Part::Text { text } if !text.is_empty()))
+            && !content
+                .parts
+                .iter()
+                .any(|part| matches!(part, Part::FunctionResponse { .. }))
+    }) else {
+        return;
+    };
+    let mut missing = Vec::new();
+    for (index, content) in contents[..boundary].iter().enumerate() {
+        let mut parts = Vec::new();
+        for part in &content.parts {
+            if let Part::FunctionCall {
+                id: Some(id), name, ..
+            } = part
+                && !results.contains_key(id)
+            {
+                parts.push(Part::FunctionResponse {
+                    id: Some(id.clone()),
+                    function_response: FunctionResponseData::new(name, serde_json::json!({
+                        "error": {
+                            "code": "prior_tool_result_unavailable",
+                            "message": "No result was recorded before a later user turn. The operation outcome is unknown. Do not assume success or repeat side effects without checking."
+                        }
+                    })),
+                    annotations: None,
+                });
+            }
+        }
+        if !parts.is_empty() {
+            missing.push((
+                index + 1,
+                Content {
+                    role: "function".into(),
+                    parts,
+                },
+            ));
+        }
+    }
+    if missing.is_empty() {
+        return;
+    }
+    // Move payloads once; repeated insertion would shift long histories repeatedly.
+    let mut repaired = Vec::with_capacity(contents.len() + missing.len());
+    let mut missing = missing.into_iter().peekable();
+    for (index, content) in std::mem::take(contents).into_iter().enumerate() {
+        repaired.push(content);
+        if missing
+            .peek()
+            .is_some_and(|(position, _)| *position == index + 1)
+            && let Some((_, result)) = missing.next()
+        {
+            repaired.push(result);
+        }
+    }
+    *contents = repaired;
 }
 
 /// Project the old worker directive without rewriting durable events.
@@ -216,6 +284,104 @@ mod tests {
             ],
         ] {
             assert!(model_continuation(LlmRequest::new("fixture", contents), &marker).is_err());
+        }
+    }
+
+    #[test]
+    fn later_user_turn_closes_missing_history_result_without_a_success_receipt() {
+        let original = vec![
+            content("model", vec![call(0)]),
+            Content::new("user").with_text("New task"),
+        ];
+        let projected = model_history(LlmRequest::new("fixture", original.clone())).unwrap();
+        assert_eq!(projected.contents.len(), 3);
+        assert_eq!(
+            serde_json::to_value(&projected.contents[0]).unwrap(),
+            serde_json::to_value(&original[0]).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&projected.contents[2]).unwrap(),
+            serde_json::to_value(&original[1]).unwrap()
+        );
+        let Part::FunctionResponse {
+            id,
+            function_response,
+            ..
+        } = &projected.contents[1].parts[0]
+        else {
+            panic!("missing historical response");
+        };
+        assert_eq!(id.as_deref(), Some("call-0"));
+        assert_eq!(function_response.name, "read");
+        assert_eq!(
+            function_response.response["error"]["code"],
+            "prior_tool_result_unavailable"
+        );
+        assert!(function_response.response.get("output").is_none());
+        let again = model_history(projected.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&again.contents).unwrap(),
+            serde_json::to_value(&projected.contents).unwrap()
+        );
+    }
+
+    #[test]
+    fn mixed_batch_keeps_real_results_and_closes_only_the_missing_call() {
+        let request = LlmRequest::new(
+            "fixture",
+            vec![
+                content("model", vec![call(0), call(1)]),
+                content("function", vec![result(0)]),
+                Content::new("user").with_text("Next task"),
+            ],
+        );
+        let projected = model_history(request).unwrap();
+        let responses: Vec<_> = projected
+            .contents
+            .iter()
+            .flat_map(|c| &c.parts)
+            .filter_map(|part| match part {
+                Part::FunctionResponse {
+                    id,
+                    function_response,
+                    ..
+                } => Some((id.as_deref(), &function_response.response)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(responses.len(), 2);
+        assert_eq!(responses[0].0, Some("call-1"));
+        assert_eq!(
+            responses[0].1["error"]["code"],
+            "prior_tool_result_unavailable"
+        );
+        assert_eq!(responses[1].0, Some("call-0"));
+        assert_eq!(responses[1].1["status"], "declined");
+    }
+
+    #[test]
+    fn pending_recovery_calls_and_recorded_results_are_not_replaced() {
+        for contents in [
+            vec![
+                Content::new("user").with_text("Task"),
+                content("model", vec![call(0)]),
+            ],
+            vec![content("model", vec![call(0)]), Content::new("user")],
+            vec![
+                content("model", vec![call(0)]),
+                content("function", vec![result(0)]),
+                Content::new("user").with_text("Next"),
+            ],
+        ] {
+            let projected = model_history(LlmRequest::new("fixture", contents.clone())).unwrap();
+            let expected: Vec<_> = contents
+                .into_iter()
+                .filter(|c| !c.parts.is_empty())
+                .collect();
+            assert_eq!(
+                serde_json::to_value(&projected.contents).unwrap(),
+                serde_json::to_value(&expected).unwrap()
+            );
         }
     }
 
