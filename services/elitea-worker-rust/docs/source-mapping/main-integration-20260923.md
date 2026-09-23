@@ -201,3 +201,39 @@ key. The local restored patch now admits both, with a catalogue regression case.
 The affected `agentexecution`, repository, and `eliteacore` Go packages pass.
 This compatibility reconciliation remains with the deferred working-tree patch;
 it is not part of the clean merge's committed runtime changes.
+
+
+## Isolated database reconciliation proof
+
+The actual rehearsal product ledger was read after integration. Of 138 recorded
+shared/tenant receipts, only shared versions 125–127 differ from the merged
+manifest. Each is byte-identical to its new version 126–128. Tenant projects 1
+and 2 are at version 137. Worker-state versions 1–3 already match all merged
+checksums and require no migration.
+
+A fresh custom-format backup was restored into an isolated database. The
+unchanged merged migrator first refused the copy with the expected name mismatch
+at `shared/0125_token_lifecycle.sql`. A single transaction then locked the ledger,
+verified all three original names and SHA-256 hashes, checked destination slots,
+and moved only their version numbers to 126–128 through unused temporary numbers.
+Names, checksums and application timestamps were not rewritten. No product or
+worker rows were removed or recreated.
+
+The unchanged migrator then applied shared 125 (token lifecycle) and tenant 138
+(trigger authentication mode) for both projects. A second run succeeded without
+further changes. These migrations come from merged main; this reconciliation
+introduces no additional product schema.
+
+Exact row fingerprints before/after match across twelve chat, application,
+application-version and skill tables. Private-project counts include 631 chats,
+2,473 message items, 2,299 text records, 48 applications, 56 versions and two skills.
+The public project retains five chats and twelve message/text records.
+
+Local evidence: `elitea-rehearsal-ledger-20260923.csv`,
+`elitea-rehearsal-ledger-diff-20260923.json`,
+`elitea-reconcile-main-ledger-20260923.sql`,
+`elitea-clone-migrations-20260923.log`, and
+`elitea-migration-copy-data-check.json`, under `/private/tmp`.
+The recoverable backup is `elitea-before-main-ledger-20260923.dump`.
+At this verification boundary the active rehearsal ledger is unchanged;
+coordinated replacement with matching images remains required.
