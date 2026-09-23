@@ -74,6 +74,17 @@ CREATE TABLE elitea_runtime.execution_admission_policies (
     created_at timestamptz NOT NULL
 );
 
+CREATE TABLE elitea_runtime.agent_admission_reservations (
+    capability_id text NOT NULL,
+    idempotency_scope text NOT NULL,
+    idempotency_key text NOT NULL,
+    execution_id text NOT NULL,
+    configured_max bigint NOT NULL,
+    reserved_at timestamptz NOT NULL,
+    materialized_at timestamptz,
+    PRIMARY KEY (capability_id, idempotency_scope, idempotency_key)
+);
+
 CREATE TABLE elitea_runtime.command_outbox (
     outbox_id text PRIMARY KEY,
     execution_id text NOT NULL,

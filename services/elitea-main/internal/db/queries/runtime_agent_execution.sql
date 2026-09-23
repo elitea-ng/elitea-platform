@@ -62,6 +62,41 @@ INSERT INTO elitea_runtime.agent_execution_jobs (
     sqlc.arg(sio_event)::text
 );
 
+-- name: ReserveAgentAdmission :one
+INSERT INTO elitea_runtime.agent_admission_reservations (
+    capability_id, idempotency_scope, idempotency_key,
+    execution_id, configured_max
+) VALUES (
+    sqlc.arg(capability_id)::text,
+    sqlc.arg(idempotency_scope)::text,
+    sqlc.arg(idempotency_key)::text,
+    sqlc.arg(execution_id)::text,
+    sqlc.arg(configured_max)::bigint
+)
+ON CONFLICT (capability_id, idempotency_scope, idempotency_key) DO NOTHING
+RETURNING execution_id;
+
+-- name: MarkAgentAdmissionMaterialized :execrows
+UPDATE elitea_runtime.agent_admission_reservations
+SET materialized_at = clock_timestamp()
+WHERE capability_id = sqlc.arg(capability_id)::text
+  AND idempotency_scope = sqlc.arg(idempotency_scope)::text
+  AND idempotency_key = sqlc.arg(idempotency_key)::text
+  AND materialized_at IS NULL;
+
+-- name: ReapAgentAdmissionReservations :execrows
+DELETE FROM elitea_runtime.agent_admission_reservations
+WHERE (
+    materialized_at IS NULL
+    AND reserved_at < clock_timestamp()
+        - (sqlc.arg(stale_seconds)::bigint * interval '1 second')
+)
+   OR (
+    materialized_at IS NOT NULL
+    AND materialized_at < clock_timestamp()
+        - (sqlc.arg(gc_seconds)::bigint * interval '1 second')
+);
+
 -- name: GetExpectedAgentExecutionHeader :one
 SELECT j.tenant_id,
        j.resource_project_id,

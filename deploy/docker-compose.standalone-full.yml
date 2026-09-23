@@ -176,6 +176,11 @@ services:
     # volume is reused in place rather than re-initialized.
     image: pgvector/pgvector:0.8.1-pg18
     shm_size: '2g'
+    # Raise the server-side budget for the enlarged #965 pooler pool
+    # (deploy/runtime/pgbouncer.ini now runs default_pool_size 128). The image
+    # default of 100 would cap the pooler's server connections and re-introduce
+    # the queue the pooler change removes.
+    command: ["postgres", "-c", "max_connections=200"]
     environment:
       POSTGRES_USER: elitea
       POSTGRES_PASSWORD: elitea
@@ -852,9 +857,14 @@ services:
       DATABASE_URL: "postgres://elitea:elitea@pgbouncer:6432/elitea?sslmode=disable"
       # main's product pool, explicit instead of the pgx default max(4, NumCPU):
       # with the pooler, main's client-side budget is a stated number the
-      # connection math in deploy/README.md can count. The chart ships the
-      # same value (deploy/helm/elitea/values.yaml, main.env).
-      ELITEA_DATABASE_MAX_CONNS: "6"
+      # connection math in deploy/README.md can count. Sized for the #965 start
+      # burst (~14 concurrent starts per replica), not the old steady-state 6.
+      # The chart ships the same value (deploy/helm/elitea/values.yaml, main.env).
+      ELITEA_DATABASE_MAX_CONNS: "16"
+      # Agent-admission pool. Unset, it defaults to 10 (see
+      # internal/runtimecomposition/database_pools.go). Sized for the #965
+      # start burst so the materialize transaction stops queueing.
+      ELITEA_RUNTIME_DB_ADMISSION_MAX_CONNS: "16"
       # Keep the gateway and Main on one vault-key source. Empty preserves the
       # unwrapped E2E seed; a restored deployment can supply its existing key.
       SECRETS_MASTER_KEY: "${SECRETS_MASTER_KEY-}"

@@ -420,6 +420,7 @@ type Querier interface {
 	LockRuntimeAdmissionPolicy(ctx context.Context, capabilityID string) (int64, error)
 	LockToolkitCallToolEnvelope(ctx context.Context, arg LockToolkitCallToolEnvelopeParams) (LockToolkitCallToolEnvelopeRow, error)
 	LockToolkitCallToolPublication(ctx context.Context, arg LockToolkitCallToolPublicationParams) (LockToolkitCallToolPublicationRow, error)
+	MarkAgentAdmissionMaterialized(ctx context.Context, arg MarkAgentAdmissionMaterializedParams) (int64, error)
 	MarkAgentExecutionDispatched(ctx context.Context, arg MarkAgentExecutionDispatchedParams) (int64, error)
 	MarkAgentExecutionPublished(ctx context.Context, arg MarkAgentExecutionPublishedParams) (int64, error)
 	MarkArtifactBucketNotified(ctx context.Context, id int64) (int64, error)
@@ -441,12 +442,14 @@ type Querier interface {
 	ProjectCurrentAgentStop(ctx context.Context, arg ProjectCurrentAgentStopParams) (ProjectCurrentAgentStopRow, error)
 	QuarantineExpiredTerminalIndexMetaInitializations(ctx context.Context, quarantineLimit int32) (int64, error)
 	QuarantineIndexMetaInitialization(ctx context.Context, arg QuarantineIndexMetaInitializationParams) (string, error)
+	ReapAgentAdmissionReservations(ctx context.Context, arg ReapAgentAdmissionReservationsParams) (int64, error)
 	RefreshAgentExecutionPublication(ctx context.Context, arg RefreshAgentExecutionPublicationParams) (int64, error)
 	ReleaseIndexMetaInitialization(ctx context.Context, arg ReleaseIndexMetaInitializationParams) (int64, error)
 	ReleaseScheduledOccurrenceForRetry(ctx context.Context, arg ReleaseScheduledOccurrenceForRetryParams) (int64, error)
 	ReplaceCurrentConfiguration(ctx context.Context, arg ReplaceCurrentConfigurationParams) (ReplaceCurrentConfigurationRow, error)
 	ReplaceCurrentDeletedLLMApplicationReferences(ctx context.Context, arg ReplaceCurrentDeletedLLMApplicationReferencesParams) (ReplaceCurrentDeletedLLMApplicationReferencesRow, error)
 	RequestCurrentIndexIngestCancellation(ctx context.Context, arg RequestCurrentIndexIngestCancellationParams) (bool, error)
+	ReserveAgentAdmission(ctx context.Context, arg ReserveAgentAdmissionParams) (string, error)
 	ResetCurrentAgentResponse(ctx context.Context, arg ResetCurrentAgentResponseParams) (ResetCurrentAgentResponseRow, error)
 	// Chat history for this turn: one entry per prior message group, whose
 	// `content` is the group's items flattened into ONE LangChain content array.

@@ -335,6 +335,16 @@ type EliteaIdentityTokenProjectBinding struct {
 	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
 }
 
+type EliteaRuntimeAgentAdmissionReservation struct {
+	CapabilityID     string             `db:"capability_id" json:"capability_id"`
+	IdempotencyScope string             `db:"idempotency_scope" json:"idempotency_scope"`
+	IdempotencyKey   string             `db:"idempotency_key" json:"idempotency_key"`
+	ExecutionID      string             `db:"execution_id" json:"execution_id"`
+	ConfiguredMax    int64              `db:"configured_max" json:"configured_max"`
+	ReservedAt       pgtype.Timestamptz `db:"reserved_at" json:"reserved_at"`
+	MaterializedAt   pgtype.Timestamptz `db:"materialized_at" json:"materialized_at"`
+}
+
 type EliteaRuntimeAgentExecutionJob struct {
 	ExecutionID               string `db:"execution_id" json:"execution_id"`
 	Generation                int64  `db:"generation" json:"generation"`
