@@ -58,7 +58,7 @@ It requires an explicit, reviewed ledger reconciliation before upgrade.
 Existing earlier rehearsal-ledger differences can require further reconciliation.
 The unit fixture verifies prefix acceptance and rejection of the unreconciled feature version.
 It does not prove a database upgrade or authorize ledger edits.
-**Deployment remains on hold until the actual target ledger and schema are reconciled and verified.**
+Deployment was held at merge time until the actual target ledger and schema were reconciled and verified. The completed rehearsal update is recorded below; this is not production-cutover approval.
 
 ## Verification
 
@@ -237,3 +237,53 @@ Local evidence: `elitea-rehearsal-ledger-20260923.csv`,
 The recoverable backup is `elitea-before-main-ledger-20260923.dump`.
 At this verification boundary the active rehearsal ledger is unchanged;
 coordinated replacement with matching images remains required.
+
+
+## Coordinated rehearsal update
+
+Committed runtime source `ea2dfa80` was archived into a clean build context;
+uncommitted HITL work and the local runtime file were not included in the images.
+The three release images built successfully:
+
+| Service | Tag suffix | Image SHA-256 |
+| --- | --- | --- |
+| Main | `main-merged-20260923` | `87313fcc642a0d68865fa1ad97ccb1ed78441add6803b024fe350301ae26c954` |
+| Rust worker | `main-merged-20260923` | `f7b4f4bd4ec0a2fdbf14c59e9b96d19423119a38523ae22efc9985b22328f6d1` |
+| Web | `main-merged-20260923` | `c1e1f2f7525913a4465a959f363d77684ae37c100ccda7eb97ede39145984b58` |
+
+After confirming zero active claims, Main and the worker were stopped. Fresh
+custom-format product and agent-state backups were taken. The copy-verified
+ledger transaction and normal incoming migrations were then applied to rehearsal.
+The unchanged merged migrator accepts a repeated `-all-tenants` invocation.
+The agent-state database required no changes.
+
+All three services were replaced using their existing environment, network,
+entrypoint, command, security settings and resource limits. The six Main mounts
+and five worker mounts were preserved exactly. Main is healthy. Rehearsal still
+uses the same product database and existing chats, rather than switching to the
+verification copy. Gateway, Redis and object storage were retained.
+
+A fresh headed browser verified the persisted chat 658 answer and actionable
+context error after reload, with no page errors. The context dialog opened but
+showed no latest measurement in this historical failed run; this is not live
+compaction acceptance. The initial new-conversation exact-marker smoke assertion
+failed because Haiku returned a complete refusal of the synthetic instruction.
+Chat 659 stores that answer with no terminal error; the failed assertion is not
+an execution failure. An ordinary question is tested separately below.
+
+
+The ordinary-question live run passes in chat 660: Haiku answers the arithmetic
+question, and the browser renders the full response. A test-only wait for the
+Send button timed out because the empty composer correctly shows voice controls;
+the screenshot and persisted response confirmed successful completion. A fresh
+headed reload check then passes with identical response text and zero page errors.
+The context dialog reports measured input 86 / 110,720 (rounded to 0%), Balanced,
+a 128,000 total window, 16,000 output reserve and 1,280 safety margin.
+This verifies normal generation, history retention, and context measurement on
+the deployed merged stack. It does not substitute for long-loop compaction,
+continuation-repair, collision-binding or crash-boundary acceptance.
+
+Evidence: `/private/tmp/elitea-deployed-merge-hi.json`,
+`/private/tmp/elitea-deployed-merge-hi.png`, and
+`/private/tmp/elitea-deployed-merge-reload.log`. The earlier failed test assertions
+remain in `elitea-deployed-merge-ui-smoke.log` for accurate provenance.

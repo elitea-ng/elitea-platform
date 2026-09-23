@@ -4,7 +4,7 @@ Updated: 2026-09-23. Main integration baseline: `6537ca30`.
 
 This register orders implementation work. The [testing register](testing-gaps.md) owns detailed proof requirements.
 Source mappings remain the behavioral evidence for each capability.
-[Main integration](source-mapping/main-integration-20260923.md) records conflict decisions, verification, and the migration-ledger deployment hold.
+[Main integration](source-mapping/main-integration-20260923.md) records conflict decisions, verification, migration-ledger reconciliation, and rehearsal deployment.
 Current-platform code defines business behavior, not a requirement to copy its implementation or security defects.
 
 ## Progression status
