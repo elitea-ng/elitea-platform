@@ -294,14 +294,16 @@ async fn pipeline_continuation_exhaustion_keeps_downstream_state_unwritten() {
         Some("model.output_continuation_failed")
     );
     assert_eq!(captured.lock().unwrap().len(), 5);
-    if let Some(saved) = graph
+    let saved = graph
         .load(&private_pipeline_session_id(&request))
         .await
         .unwrap()
-    {
-        assert!(saved.state.get("answer").is_none_or(Value::is_null));
-        assert!(saved.state.get("final_text").is_none_or(Value::is_null));
-    }
+        .expect("the graph frontier must exist before its first model call");
+    assert_eq!(saved.step, 0);
+    assert_eq!(saved.pending_nodes, ["answer"]);
+    assert_eq!(saved.state.get("answer"), Some(&json!("")));
+    assert_eq!(saved.state.get("final_text"), Some(&json!("")));
+    assert_eq!(saved.state["messages"].as_array().unwrap().len(), 1);
 }
 
 #[tokio::test]

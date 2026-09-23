@@ -11,8 +11,8 @@ use std::fmt;
 use std::sync::Arc;
 
 use adk_rust::graph::{
-    Channel, Checkpointer, CompiledGraph, END, GraphAgent, GraphAgentBuilder, GraphError, Node,
-    NodeContext, NodeOutput, Reducer, START, State, StateGraph, StateSchema,
+    Channel, Checkpoint, Checkpointer, CompiledGraph, END, GraphAgent, GraphAgentBuilder,
+    GraphError, Node, NodeContext, NodeOutput, Reducer, START, State, StateGraph, StateSchema,
 };
 use adk_rust::{Event, InvocationContext, Part};
 use async_trait::async_trait;
@@ -699,7 +699,7 @@ impl PipelineDefinition {
         let mut builder = PipelineGraphBuilder::Agent(Box::new(
             GraphAgent::builder(agent_name)
                 .description("Elitea stored pipeline")
-                .state_schema(state_schema)
+                .state_schema(state_schema.clone())
                 .edge(START, &self.entry_point)
                 .checkpointer_arc(checkpointer)
                 .recursion_limit(PIPELINE_RECURSION_LIMIT)
@@ -735,9 +735,13 @@ impl PipelineDefinition {
             builder = builder
                 .input_mapper(move |context| invocation_state(context, None, Some(&resume_state)));
         } else {
-            let defaults = self.state_defaults.clone();
-            builder = builder
-                .input_mapper(move |context| invocation_state(context, Some(&defaults), None));
+            builder = with_initial_checkpoint(
+                builder,
+                node_checkpointer,
+                state_schema,
+                self.state_defaults.clone(),
+                self.entry_point.clone(),
+            );
         }
         builder.build().map_err(PipelineConfigurationError::Graph)
     }
@@ -1311,6 +1315,37 @@ fn runtime_channel_default(channel: &str) -> serde_json::Value {
 
 fn internal_result_key(key: &str) -> bool {
     INTERNAL_RESULT_KEYS.contains(&key)
+}
+
+/// Persist the first frontier before any node can call a model or tool.
+/// ADK restores it and receives no extra input, so append reducers run once.
+fn with_initial_checkpoint(
+    builder: GraphAgentBuilder,
+    checkpointer: Arc<dyn Checkpointer>,
+    schema: StateSchema,
+    defaults: BTreeMap<String, serde_json::Value>,
+    entry_point: String,
+) -> GraphAgentBuilder {
+    builder
+        .before_agent_callback(move |context| {
+            let checkpointer = checkpointer.clone();
+            let schema = schema.clone();
+            let defaults = defaults.clone();
+            let entry_point = entry_point.clone();
+            async move {
+                if checkpointer.load(context.session_id()).await?.is_none() {
+                    let mut state = schema.initialize_state();
+                    for (key, value) in invocation_state(context.as_ref(), Some(&defaults), None) {
+                        schema.apply_update(&mut state, &key, value);
+                    }
+                    let checkpoint =
+                        Checkpoint::new(context.session_id(), state, 0, vec![entry_point]);
+                    checkpointer.save(&checkpoint).await?;
+                }
+                Ok(())
+            }
+        })
+        .input_mapper(|_| State::new())
 }
 
 fn invocation_state(

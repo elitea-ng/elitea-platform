@@ -808,7 +808,7 @@ Recovery returns `UNSUPPORTED_CAPABILITY`; this test fails acceptance.
 The browser shows the partial result and the safe configuration error, without a browser runtime error.
 
 `agents/native_runtime.rs::inspect_checkpoint` routes pipeline recovery to the pipeline assembler.
-`NativePipelineAssembler` does not override checkpoint inspection or restoration.
+`PipelineNativeAgentAssembler` does not override checkpoint inspection or restoration.
 The defaults in `agents/runtime.rs::NativeAgentAssembler` return `UnsupportedCapability`.
 `execution/checkpoint_recovery.rs` publishes this inspection failure before model restoration.
 This is a pipeline recovery implementation gap, not an Anthropic schema-format regression.
@@ -819,3 +819,26 @@ Preserve completed graph state and restore the interrupted node's model-local co
 Evidence: `elitea-structured-crash-boundary.json`, `elitea-structured-crash-result.json`,
 `elitea-structured-crash-live.log`, and `elitea-structured-crash-failure.png` in the local evidence directory.
 The deployed worker remains `93d3de80`; no runtime code or database schema changes occur in this verification.
+
+
+### Initial graph frontier persistence
+
+`agents/graph/compiler.rs::with_initial_checkpoint` uses ADK's existing before-agent callback and checkpointer APIs.
+The callback saves the initialized graph state and entry node before the first node starts.
+ADK then loads this checkpoint with an empty input update.
+This prevents append reducers from adding the original input twice.
+Existing checkpoints remain intact; explicit HITL and Printer resume paths retain their existing input mapping.
+The existing `TurnCheckpointer` supplies execution identity, and PostgreSQL enforces the claim fence.
+No new database table, schema, dependency, or provider call is introduced.
+
+This extends replatform durability beyond the current platform's behavior.
+The implementation uses ADK 2.2.0 `GraphAgentBuilder::before_agent_callback`, `StateSchema`, and `Checkpointer`.
+ADK's executor saves later frontiers after each successful graph step.
+The added callback closes the first-node checkpoint gap without modifying ADK source.
+
+The continuation-exhaustion regression failed before this change because no graph checkpoint existed.
+It now requires step zero, the pending LLM node, one original message, and empty downstream output fields.
+All 423 PostgreSQL-backed agent tests and strict all-target Clippy pass.
+Evidence logs are `elitea-pipeline-frontier-red.log`, `elitea-nested-output-agent-tests.log`, and `elitea-pipeline-frontier-clippy.log`.
+This prerequisite is not deployed yet.
+Pipeline checkpoint inspection, authorized restoration, and a repeated browser crash test remain required.
