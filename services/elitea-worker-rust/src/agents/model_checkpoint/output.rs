@@ -56,6 +56,9 @@ impl OutputContinuation {
                 serde_json::json!(self.anchor())
             )
         };
+        if !self.prefix.is_empty() {
+            prompt.push_str(" If the original answer is JSON, the schema applies to the joined answer, not this fragment. Do not restart the JSON object or wrap the fragment in quotes or a code fence. Preserve literal JSON escape sequences in the anchor and in new string content; for example, a backslash followed by n must stay those two characters, not become a newline. Close the existing JSON value only when the original task is complete.");
+        }
         if self.repair_used {
             prompt.push_str(" The previous continuation was rejected because it did not preserve this exact boundary. Its text was discarded. Begin with the exact anchor, then complete only the remaining original task; do not restart the answer or explain this repair.");
         }

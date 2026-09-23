@@ -651,3 +651,14 @@ The accepted prefix exceeds the 256-byte anchor, so continuation starts inside t
 Assertions check native schema on the initial call and text fragments thereafter.
 All 421 PostgreSQL-backed agent tests, 154 transport tests, and strict all-target Clippy pass.
 Deployed browser acceptance of this change remains pending.
+
+
+Structured live follow-up: committed worker `51b4a517` was deployed as image
+`sha256:c0ce7f477fdf85e8d1ab28a3a61273d92c8d3e19f1e8cf8ea76ae58c2b171516`.
+Fresh headed browser chat 644, execution `9d1c649553d35fae25f582ace3a03567`,
+reaches Haiku successfully but fails continuation boundary validation, including its one
+repair attempt (three total model calls). Logs show two 256-byte anchor mismatches.
+This is not acceptance: the test reports explicit incomplete output, not a completed graph result.
+An earlier browser launch failed at login with an invalid state cookie; starting at the normal
+chat entry resolved login without changing the runtime. The continuation prompt is being clarified
+for JSON lexical fragments and literal escape preservation; live verification remains open.
