@@ -145,7 +145,7 @@ export function ContextBudgetPanel({ stats, onEdit }: ContextBudgetPanelProps): 
       </Box>
 
       {stats.runtime && <Typography variant="bodySmall2" sx={{ paddingX: 2, paddingBottom: 1 }}>
-        {t('widgets.contextBudget.estimateHelp', 'Estimated input for the latest model call, within the usable input budget. Output and the safety margin are reserved separately. Automatic compaction starts at 90%.')}
+        {t('widgets.contextBudget.estimateHelp', 'Estimated input for the latest model call, within the usable input budget. Output and the safety margin are reserved separately. When enabled, automatic compaction starts at 90%.')}
       </Typography>}
       <ContextPhaseNotice stats={stats} />
       {visibleStatRows(stats).map((row) => (

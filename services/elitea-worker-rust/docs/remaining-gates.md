@@ -263,4 +263,6 @@ Nested output exhaustion and replacement during continuation remain separate che
 The [continuation mapping](source-mapping/output-continuation-capacity-20260922.md#continuation-when-compaction-is-disabled) records the independent child checkpoint change.
 All 418 PostgreSQL-enabled agent tests pass. These include early completion and claim takeover without compaction.
 Nested confirmation and authorization replay regressions also pass.
-Fresh deployed browser acceptance remains required. Gate 4 remains open.
+Fresh headed browser chat 641 verifies early completion, stable reload, and one completed child receipt with compaction disabled.
+The [continuation mapping](source-mapping/output-continuation-capacity-20260922.md#disabled-compaction-browser-acceptance) records the deployed worker and evidence.
+Gate 4 remains open.

@@ -550,3 +550,21 @@ This fixes nested authorization and confirmation paths exposed by enabling check
 Regression coverage checks early completion without summarization and PostgreSQL claim takeover with compaction enabled and disabled.
 All 418 PostgreSQL-enabled agent tests pass, including nested confirmation and authorization replay regressions.
 Strict all-target Clippy also passes. Deployed browser acceptance remains pending for this change.
+
+
+### Disabled-compaction browser acceptance
+
+Worker commit `0e7a9de5` runs as image `sha256:3d6df3e2fb2b77df9c858acc6046c75dd92740b002b9ee22a5da091a04654dbc`.
+Fresh headed Playwright verifies chat 641, execution `dd07530708e81db43fd6dbddbdabd36d`.
+The persisted conversation disables both context management and summarization.
+The existing child uses Haiku, a 256-token output allowance, and two logical steps.
+It completes 40 ordered records with one final marker after the initial call and two continuation calls.
+No compaction or browser error occurs. Reload preserves the displayed answer exactly.
+PostgreSQL confirms one completed child receipt with all 40 records and one final marker.
+The parent adds an introduction, so its full response differs from the child result.
+
+Local evidence: `elitea-disabled-result.json`, `elitea-disabled-durable-proof.json`,
+`elitea-disabled-policy.json`, `elitea-disabled-complete.png`, and `elitea-disabled-ending.png`.
+The context tooltip incorrectly states unconditional automatic compaction.
+`ContextBudgetPanel.tsx` now qualifies the threshold with “When enabled”.
+This wording correction does not change the saved policy or runtime behavior.
