@@ -394,3 +394,40 @@ completed all 120 records and survived reload, but did not emit a boundary misma
 or repair-checkpoint event. The synthetic refusal instruction did not exercise
 repair. This is ordinary continuation regression evidence only, not live repair
 acceptance. The PostgreSQL repair takeover tests remain component evidence.
+
+## Four-call policy rehearsal acceptance
+
+Commit `31e5a5ab` passes 413 PostgreSQL-enabled agent tests, 154 transport tests,
+and strict all-target Clippy. Rehearsal worker image
+`sha256:7f015015797b13f4275b8c9e3e36f6469ec4ee37b4326790f6e053eedc7063ed`
+contains that committed source; the replacement preserved all five mounts,
+credentials, networks, and resource settings.
+
+Fresh headed Playwright chat 636 (execution
+`5e37f59bb1702fda8e0fe1484ea310d0`) uses Haiku, a 256-token child output cap,
+and a two-step agent limit. It completes after two additional continuation calls
+(three child model-context measurements). All 40 ordered records and one ending
+marker reach the parent, with no browser errors and exact persisted reload.
+PostgreSQL contains one completed child-result receipt with those 40 records.
+The parent adds an introductory sentence; its full response is not byte-identical
+to the child result. The worker does not spend the unused third/fourth continuation
+allowances. Artifacts: `elitea-continuation-four-result.json`,
+`elitea-continuation-four-durable-proof.json`, and
+`elitea-continuation-four-complete.png` in the local temporary verification directory.
+
+The current SDK reference `elitea_sdk/runtime/tools/llm.py::_continue_nested_output`
+also exits when the provider no longer reports an output-length finish. Four is a
+hard upper bound, never a required number of calls. The Rust scoped loop returns
+on a successful terminal response using the same behavioral rule.
+
+Fresh headed Playwright chat 637 (execution
+`ad2ad8b77b7443a557f89318b4704c66`) requests 120 records with the same 256-token
+child output cap and two-step agent limit. Five child model-context measurements
+show the initial call plus all four allowed continuations. The run stops with
+`OUTPUT_CONTINUATION_EXHAUSTED` and the specific incomplete-response sentence,
+without a browser error. The error survives reload. PostgreSQL contains one child
+session and zero completed child-result receipts. Artifacts:
+`elitea-continuation-cap-result.json`, `elitea-continuation-cap-durable-proof.json`,
+and `elitea-continuation-cap-complete.png` in the local temporary directory.
+Both screenshots were inspected. These cases accept early completion and cap
+exhaustion; they do not close live repair or failed-child partial-result delivery.
