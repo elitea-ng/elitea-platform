@@ -33,7 +33,7 @@ Current-platform code defines business behavior, not a requirement to copy its i
 | 3b | Internal MCP discovery and entity parity | Complete tag relation metadata, Search Options, actor-safe chat operations, and the remaining configuration, skill, application, and secret contracts. |
 | 3c | Toolkit discovery and Test | Implement shared `toolkit.available_tools.v1` and `toolkit.call_tool.v1` in Rust. Preserve exact selection, authority, result shape, cancellation, and recovery. |
 | 3d | External MCP | Complete dynamic instance schemas and saved-agent/pipeline autonomous terminal, failure, pause refusal, and transport replay proofs. |
-| 4 | Current-platform runtime drift | Complete context management, pipeline summaries, dedicated summary models, SDK/UI continuation parity, tool-output editing, provider errors and diagnostics, and same-name toolkit binding. Preserve authoritative skills and project context across compaction. |
+| 4 | Current-platform runtime drift | Complete context management, pipeline summaries, dedicated summary models, SDK/UI continuation parity, provider errors and diagnostics, and same-name toolkit binding. Preserve authoritative skills and project context across compaction. |
 | 5 | Remaining graph capabilities | Complete deeper pipeline composition, child variables, static pauses, and isolated Code nodes. |
 | 5a | New parallel and map nodes | Implement the separate fixed-branch and data-driven designs with durable child state, bounded concurrency, reducers, and recovery. |
 | 6 | Effectful toolkit operations | Require durable intent, effect receipts, idempotency, approval, fencing, and crash reconciliation before writes. |
@@ -109,11 +109,11 @@ Point 4 also includes the following required work, confirmed by the user on 2026
 - Support pipeline summaries and a separately authorized summarization model where the model contract permits it. Preserve its own token and credential limits.
 - Inherit context policy for nested agents and applications, with independent occupancy and durable summaries. Recompute capacity against each child's model.
 - Apply pipeline compaction to eligible history at model invocations. Preserve exact graph state and keep deterministic nodes free of summarization calls.
-- Complete tool-output editing without destroying tool identity, outcomes, or authoritative instruction state.
+- Defer optional tool-output clearing per user direction on 2026-09-23. See [scope and source mapping](source-mapping/tool-output-editing-deferral-20260923.md).
 - Resolve same-name toolkit bindings by exact toolkit and tool identity, using the current SDK fix as behavioral evidence.
 - Complete [OBS-RUST-01](source-mapping/agent-runtime.md#obs-rust-01-detailed-runtime-diagnostics): useful public errors, detailed internal causes, synchronous backtraces, async span context, and release-build symbol information. Keep sensitive payloads out of diagnostics.
 
-These are part of gate 4 acceptance, not optional follow-up work after compaction.
+These requirements remain part of gate 4 acceptance, except the explicitly deferred tool-output clearing feature.
 
 The [checkpoint retention investigation](source-mapping/context-event-retention-20260921.md) separates active recovery markers from immutable replay evidence.
 The [prepared-request history projection](source-mapping/context-runner-history-projection-20260921.md) verifies six storage retirement cycles and browser recovery after abrupt worker loss.
