@@ -2132,8 +2132,27 @@ impl Tool for ApplicationAgentTool {
     fn response_schema(&self) -> Option<Value> {
         Some(json!({
             "type": "object",
-            "properties": {"response": {"type": "string"}},
-            "required": ["response"],
+            "properties": {
+                "response": {"type": "string"},
+                "error": {"type": "string"},
+                "failure": {
+                    "type": "object",
+                    "description": "A failed child result. Read recovery guidance before continuing.",
+                    "properties": {
+                        "code": {"type": "string"},
+                        "message": {"type": "string"},
+                        "recoverable": {"type": "boolean"},
+                        "retryable": {"type": "boolean"},
+                        "recovery_action": {"type": "string"},
+                        "guidance": {"type": "string"},
+                        "partial_output_available": {"type": "boolean"},
+                        "partial_output": {"type": ["string", "null"]}
+                    },
+                    "required": ["code", "message", "recoverable", "retryable", "recovery_action", "guidance", "partial_output_available", "partial_output"],
+                    "additionalProperties": false
+                }
+            },
+            "oneOf": [{"required": ["response"]}, {"required": ["error", "failure"]}],
             "additionalProperties": false
         }))
     }
@@ -2157,6 +2176,10 @@ impl Tool for ApplicationAgentTool {
             .instrument(span.clone())
             .await;
         match &result {
+            Ok(result) if result.get("error").is_some() => {
+                span.record("outcome", "failed");
+                span.record("error_code", "model.output_continuation_failed");
+            }
             Ok(_) => {
                 span.record("outcome", "succeeded");
             }
@@ -2248,16 +2271,24 @@ impl ApplicationAgentTool {
             let mut event = match result {
                 Ok(event) => event,
                 Err(error) => {
-                    let failure = if error.code == "model.output_continuation_failed" {
-                        ApplicationEventFailure::OutputContinuation(
-                            super::model_checkpoint::output::failure_reason(&error).unwrap_or(
-                                super::model_checkpoint::output::ContinuationFailure::ChildFailure,
-                            ),
-                        )
-                    } else {
-                        ApplicationEventFailure::ChildExecution
-                    };
-                    self.send_fatal(failure).await?;
+                    if let Some(report) = child_continuation_report(&error, last_text.take()) {
+                        tracing::error!(
+                            event = "nested_application_failed",
+                            application_id = self.identity.0,
+                            version_id = self.identity.1,
+                            invocation_id = %ctx.invocation_id(),
+                            function_call_id = %ctx.function_call_id(),
+                            error_code = error.code,
+                            cause_message = report["failure"]["message"].as_str(),
+                            recovery = "revise_task",
+                            failure_diagnostic = %crate::diagnostics::failure::capture()
+                                .as_deref().unwrap_or("disabled_or_rate_limited"),
+                            "child answer is incomplete; returning failure to the orchestrator"
+                        );
+                        return Ok(report);
+                    }
+                    self.send_fatal(ApplicationEventFailure::ChildExecution)
+                        .await?;
                     return Err(error);
                 }
             };
@@ -2384,6 +2415,31 @@ impl ApplicationAgentTool {
             .await
             .map_err(|_| application_event_channel_error())
     }
+}
+
+/// A child-local output failure is data for the parent, not a root failure.
+/// Other errors keep their existing terminal/control handling.
+fn child_continuation_report(error: &AdkError, partial: Option<String>) -> Option<Value> {
+    if error.code != "model.output_continuation_failed" {
+        return None;
+    }
+    let message = super::model_checkpoint::output::failure_reason(error)
+        .unwrap_or(super::model_checkpoint::output::ContinuationFailure::ChildFailure)
+        .to_string();
+    let partial = partial.filter(|text| !text.is_empty());
+    Some(json!({
+        "error": message,
+        "failure": {
+            "code": "OUTPUT_CONTINUATION_EXHAUSTED",
+            "message": message,
+            "recoverable": true,
+            "retryable": false,
+            "recovery_action": "revise_task",
+            "guidance": "The child task is incomplete. Use verified partial output or split the remaining work into smaller tasks. Do not repeat the identical call automatically. Prior tool side effects may exist; verify them before repeating any action.",
+            "partial_output_available": partial.is_some(),
+            "partial_output": partial,
+        }
+    }))
 }
 
 fn event_text(event: &Event) -> Option<String> {
@@ -3365,6 +3421,48 @@ mod tests {
             crate::agents::model_checkpoint::output::failure_reason(&error),
             Some(crate::agents::model_checkpoint::output::ContinuationFailure::CallLimit)
         ));
+    }
+
+    #[test]
+    fn child_continuation_is_an_error_report_not_a_successful_answer() {
+        let error = crate::agents::model_checkpoint::output::failed(
+            crate::agents::model_checkpoint::output::ContinuationFailure::CallLimit,
+        );
+        let report = child_continuation_report(&error, Some("accepted prefix".into())).unwrap();
+        assert!(report.get("response").is_none());
+        assert!(report["error"].is_string());
+        assert_eq!(report["failure"]["retryable"], false);
+        assert_eq!(report["failure"]["recoverable"], true);
+        assert_eq!(report["failure"]["partial_output"], "accepted prefix");
+        assert_eq!(report["failure"]["partial_output_available"], true);
+        assert_eq!(report["failure"]["code"], "OUTPUT_CONTINUATION_EXHAUSTED");
+    }
+
+    #[test]
+    fn child_control_failures_do_not_become_recoverable_reports() {
+        for code in [
+            "context_budget_exceeded",
+            "cancelled",
+            "tool.authorization_required",
+            "runtime.invalid_state",
+        ] {
+            let error = AdkError::new(
+                ErrorComponent::Agent,
+                ErrorCategory::Internal,
+                code,
+                "PRIVATE_PROVIDER_BODY",
+            );
+            assert!(child_continuation_report(&error, None).is_none());
+        }
+        let error = AdkError::new(
+            ErrorComponent::Model,
+            ErrorCategory::Internal,
+            "model.output_continuation_failed",
+            "PRIVATE_PROVIDER_BODY",
+        );
+        let report = child_continuation_report(&error, None).unwrap();
+        assert!(!report.to_string().contains("PRIVATE_PROVIDER_BODY"));
+        assert_eq!(report["failure"]["partial_output_available"], false);
     }
 
     fn application_call_event(

@@ -37,4 +37,13 @@ The user clarified that child-local failures must not terminate a healthy orches
 Add a structured child error result, with recovery guidance and partial-output availability.
 Distinguish parent recovery from permission to repeat the same operation.
 Do not convert cancellation, authorization, or execution-wide limits into recoverable tool data.
-The current nested fatal behavior remains until that separate contract is implemented and verified.
+The ordinary nested-agent continuation path now returns an error report instead of sending the root fatal signal.
+The report includes the cause, available partial output, recoverable=true, and retryable=false.
+Recovery means revising the task, not permission to repeat the same call or its side effects.
+The error field remains a string for the existing tool-error UI projection.
+The structured failure field gives the parent explicit recovery guidance.
+A failed report has no successful response field.
+The failed child does not create a completed model receipt.
+The parent can persist the error tool result through its existing checkpoint flow.
+Direct root continuation failure still uses the terminal failure contract.
+Other child failure categories and graph propagation require separate classification and acceptance.
