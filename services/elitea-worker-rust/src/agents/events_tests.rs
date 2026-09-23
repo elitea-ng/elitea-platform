@@ -120,6 +120,120 @@ fn terminal_event_without_content(id: &str, second: u32) -> Event {
     event
 }
 
+fn context_status_event() -> Event {
+    let mut event = Event::new("invocation-1");
+    event.author = "root-agent".into();
+    event.llm_response.partial = true;
+    event.provider_metadata.insert(super::context_status::METADATA_KEY.into(), json!({
+        "version":1, "phase":"compacting", "budget_mode":"balanced", "total_tokens":272_000,
+        "usable_input_tokens":205_280, "reserved_output_tokens":64_000, "safety_margin_tokens":2720,
+        "estimated_input_tokens":190_000, "compaction_trigger_tokens":184_752, "compaction_target_tokens":143_696,
+    }).to_string());
+    event
+}
+
+#[test]
+fn context_status_preserves_model_turn_boundaries_and_scopes_pipeline_nodes() {
+    let mut projector =
+        AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({}))).unwrap();
+    projector.start(timestamp(0)).unwrap();
+    let status = context_status_event();
+    let batch: Vec<_> = projector
+        .project(&status)
+        .unwrap()
+        .into_iter()
+        .map(|event| current(&event))
+        .collect();
+    assert_eq!(batch.len(), 1);
+    assert_eq!(batch[0]["type"], "agent_context_status");
+    assert_eq!(batch[0]["response_metadata"]["model_scope"], "agent");
+    assert_eq!(
+        batch[0]["response_metadata"]["context_status"]["reserved_output_tokens"],
+        64_000
+    );
+    assert_eq!(batch[0]["content"], Value::Null);
+    let model = event(
+        "answer",
+        2,
+        false,
+        true,
+        vec![Part::Text {
+            text: "One answer".into(),
+        }],
+    );
+    let batch: Vec<_> = projector
+        .project(&model)
+        .unwrap()
+        .into_iter()
+        .map(|event| current(&event))
+        .collect();
+    assert_eq!(batch[0]["type"], "agent_llm_start");
+    let mut pipeline_status = status;
+    pipeline_status.provider_metadata.insert(
+        super::graph::PIPELINE_NODE_METADATA_KEY.into(),
+        "review_model".into(),
+    );
+    let batch: Vec<_> = projector
+        .project(&pipeline_status)
+        .unwrap()
+        .into_iter()
+        .map(|event| current(&event))
+        .collect();
+    assert_eq!(batch.len(), 1);
+    assert_eq!(
+        batch[0]["response_metadata"]["model_scope"],
+        "pipeline_node"
+    );
+    assert_eq!(batch[0]["response_metadata"]["node_name"], "review_model");
+}
+
+#[test]
+fn child_context_status_keeps_the_exact_parent_call_hierarchy() {
+    let mut projector = AgentEventProjector::with_tool_catalogs(
+        AgentEventProjectionContext::fixture(json!({})),
+        super::sensitive_tools::SensitiveToolCatalog::default(),
+        nested_application_catalog(),
+    )
+    .unwrap();
+    projector.start(timestamp(0)).unwrap();
+    projector
+        .project(&event(
+            "delegation",
+            1,
+            false,
+            true,
+            vec![Part::FunctionCall {
+                name: "elitea_agent_17_v_9".into(),
+                args: json!({"task":"Child task"}),
+                id: Some("child-call-1".into()),
+                thought_signature: None,
+            }],
+        ))
+        .unwrap();
+    let mut status = context_status_event();
+    status.invocation_id = "child-invocation-1".into();
+    status.author = "elitea_agent_17_v_9".into();
+    status.provider_metadata.insert(
+        DESCENDANT_CONTAINER_INVOCATION_KEY.into(),
+        "invocation-1".into(),
+    );
+    status
+        .provider_metadata
+        .insert(DESCENDANT_PARENT_CALL_KEY.into(), "child-call-1".into());
+    let batch: Vec<_> = projector
+        .project(&status)
+        .unwrap()
+        .into_iter()
+        .map(|event| current(&event))
+        .collect();
+    assert_eq!(batch.len(), 1);
+    let metadata = &batch[0]["response_metadata"];
+    assert_eq!(metadata["parent_agent_call_id"], "child-call-1");
+    assert_eq!(metadata["parent_agent_path"][0]["call_id"], "child-call-1");
+    assert_eq!(metadata["context_status"]["phase"], "compacting");
+    assert_eq!(metadata["model_scope"], "agent");
+}
+
 fn pipeline_hitl_event(data: Value) -> Event {
     let payload = GraphInterruptPayload {
         kind: "dynamic".to_owned(),
@@ -422,10 +536,136 @@ fn ordinary_stream_matches_current_text_lifecycle_without_a_heap_event_queue() {
         ]
     );
     assert_eq!(terminal[0]["content"], "hello");
+    assert_eq!(terminal[0]["response_metadata"]["should_continue"], false);
     assert_eq!(
         terminal[2]["response_metadata"]["application_details"],
         json!({"id": 11, "version_id": 22})
     );
+}
+
+#[test]
+fn completed_text_projection_is_independent_of_provider_chunk_count() {
+    for fragments in [1, 255, 256, 257, 285, 2048] {
+        let mut projector =
+            AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({})))
+                .expect("projector");
+        projector.start(timestamp(0)).unwrap();
+        let text = "é".repeat(fragments);
+        let parts = text
+            .chars()
+            .map(|c| Part::Text {
+                text: c.to_string(),
+            })
+            .collect();
+        let projected = projector
+            .project(&event("fragmented", 1, false, true, parts))
+            .expect("bounded text must not fail due to provider fragmentation");
+        assert!(
+            projected
+                .into_iter()
+                .map(|e| current(&e))
+                .any(|e| e["response_metadata"]["thinking_steps"][0]["text"] == text)
+        );
+    }
+}
+
+#[test]
+fn fragmented_projection_retains_byte_logical_part_and_work_bounds() {
+    let oversized = vec![Part::Text {
+        text: "x".repeat(4 * 1024 * 1024 + 1),
+    }];
+    let empty_flood = vec![
+        Part::Text {
+            text: String::new()
+        };
+        60 * 1024 + 1
+    ];
+    let distinct_blocks = (0..257)
+        .map(|i| {
+            if i % 2 == 0 {
+                Part::Text { text: "x".into() }
+            } else {
+                Part::Thinking {
+                    thinking: "y".into(),
+                    signature: None,
+                }
+            }
+        })
+        .collect();
+    for parts in [oversized, empty_flood, distinct_blocks] {
+        let mut projector =
+            AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({})))
+                .expect("projector");
+        projector.start(timestamp(0)).unwrap();
+        assert_eq!(
+            projection_error(projector.project(&event("bounded", 1, false, true, parts))).code(),
+            AgentEventProjectionErrorCode::ResourceExhausted
+        );
+    }
+}
+
+#[test]
+fn long_escaped_model_output_uses_bounded_frames_and_a_complete_result_reference() {
+    for text in ["🦀\n\"\\".repeat(12_000), "answer ".repeat(100_000)] {
+        let mut projector =
+            AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({}))).unwrap();
+        projector.start(timestamp(0)).unwrap();
+        let model = event(
+            "large-model",
+            1,
+            false,
+            true,
+            vec![Part::Text { text: text.clone() }],
+        );
+        let projected: Vec<_> = projector
+            .project(&model)
+            .unwrap()
+            .into_iter()
+            .map(|e| current(&e))
+            .collect();
+        let restored: String = projected
+            .iter()
+            .filter(|e| e["type"] == "partial_message")
+            .map(|e| {
+                e["response_metadata"]["thinking_steps"][0]["text"]
+                    .as_str()
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(restored, text);
+        let terminal: Vec<_> = projector
+            .finish_after_eos(
+                CompletedAgentBrowserOutput::ordinary(text.clone(), "thread-1".into()).unwrap(),
+                timestamp(2),
+            )
+            .unwrap()
+            .into_iter()
+            .map(|e| current(&e))
+            .collect();
+        let mut offset = 0;
+        let mut result = String::new();
+        for chunk in terminal
+            .iter()
+            .filter(|e| e["type"] == "agent_result_chunk")
+        {
+            assert_eq!(
+                chunk["response_metadata"]["result_chunk_v1"]["offset_bytes"],
+                offset
+            );
+            let value = chunk["content"].as_str().unwrap();
+            assert!(value.len() <= 8192);
+            result.push_str(value);
+            offset += value.len();
+        }
+        assert_eq!(result, text);
+        let full = terminal.last().unwrap();
+        assert_eq!(full["type"], "full_message");
+        assert!(full["content"].is_null());
+        assert_eq!(
+            full["response_metadata"]["result_ref_v1"]["total_bytes"],
+            text.len()
+        );
+    }
 }
 
 #[test]
@@ -1280,6 +1520,18 @@ fn graph_mcp_authorization_projects_current_durable_card_without_tool_arguments(
             "server_url": "https://mcp.example.invalid/v1/mcp",
             "resource_metadata_url": "https://mcp.example.invalid/.well-known/oauth-protected-resource",
             "www_authenticate": "Bearer resource_metadata=\"https://mcp.example.invalid/.well-known/oauth-protected-resource\"",
+            "resource_metadata": {
+                "authorization_servers": ["https://login.example.invalid"],
+                "oauth_authorization_server": {
+                    "issuer": "https://login.example.invalid",
+                    "authorization_endpoint": "https://login.example.invalid/authorize",
+                    "token_endpoint": "https://login.example.invalid/token",
+                    "registration_endpoint": "https://login.example.invalid/register",
+                    "grant_types_supported": ["authorization_code", "refresh_token"],
+                    "code_challenge_methods_supported": ["S256"]
+                },
+                "scopes_supported": ["mcp:read"]
+            },
         })))
         .expect("MCP authorization projection")
         .into_iter()
@@ -1293,6 +1545,14 @@ fn graph_mcp_authorization_projects_current_durable_card_without_tool_arguments(
     assert_eq!(metadata["tool_call_id"], "pipeline:lookup:4");
     assert_eq!(metadata["tool_args"], json!({}));
     assert_eq!(metadata["resume_strategy"], "root");
+    assert_eq!(
+        metadata["authorization_servers"],
+        json!(["https://login.example.invalid"])
+    );
+    assert_eq!(
+        metadata["resource_metadata"]["oauth_authorization_server"]["registration_endpoint"],
+        "https://login.example.invalid/register"
+    );
     assert!(
         metadata["interrupt_id"]
             .as_str()
@@ -1301,7 +1561,10 @@ fn graph_mcp_authorization_projects_current_durable_card_without_tool_arguments(
     assert!(metadata.get("checkpoint_id").is_none());
     assert!(metadata.get("definition_digest").is_none());
     assert!(projector.is_paused());
+}
 
+#[test]
+fn graph_delegated_toolkit_authorization_projects_current_card() {
     let sharepoint_message = "Authorization is required to use the Team Documents toolkit. Choose Authorize to sign in, or Skip to stop this pipeline safely.";
     let mut sharepoint =
         AgentEventProjector::new(AgentEventProjectionContext::pipeline_fixture(json!({})))
@@ -1438,6 +1701,343 @@ fn malformed_graph_hitl_never_becomes_an_approval_card() {
         let error = projection_error(projector.project(&pipeline_hitl_event(invalid)));
         assert_eq!(error.code(), AgentEventProjectionErrorCode::InvalidState);
     }
+}
+
+#[test]
+fn large_tool_results_use_bounded_complete_utf8_chunks() {
+    check_large_tool_result(false);
+}
+
+#[test]
+fn large_tool_errors_keep_complete_output_and_error_status() {
+    check_large_tool_result(true);
+}
+
+#[allow(clippy::too_many_lines)] // Verify both wire shapes and their complete UTF-8 result.
+fn check_large_tool_result(is_error: bool) {
+    let payload = if is_error {
+        json!({"error": "界\\\"".repeat(30000)})
+    } else {
+        json!({"title": "界\\\"".repeat(30000)})
+    };
+    let mut projector = AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({})))
+        .expect("projector");
+    projector.start(timestamp(0)).expect("start");
+    let tool = event(
+        "llm-tool",
+        1,
+        false,
+        true,
+        vec![Part::FunctionCall {
+            name: "lookup_issue".to_owned(),
+            args: json!({"issue_number": 42}),
+            id: Some("call-1".to_owned()),
+            thought_signature: None,
+        }],
+    );
+    let start = projector
+        .project(&tool)
+        .expect("tool start")
+        .into_iter()
+        .map(|event| current(&event))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        start.iter().map(|event| &event["type"]).collect::<Vec<_>>(),
+        [
+            "agent_llm_start",
+            "agent_llm_end",
+            "partial_message",
+            "agent_tool_start",
+            "partial_message"
+        ]
+    );
+    assert_eq!(start[3]["response_metadata"]["tool_run_id"], "call-1");
+    assert_eq!(
+        start[3]["response_metadata"]["tool_inputs"]["issue_number"],
+        42
+    );
+
+    let mut result = Event::with_id("tool-result", "invocation-1");
+    result.timestamp = timestamp(2);
+    result.author = "root-agent".to_owned();
+    result.llm_response.content = Some(Content {
+        role: "function".to_owned(),
+        parts: vec![Part::FunctionResponse {
+            function_response: adk_rust::FunctionResponseData::new("lookup_issue", payload.clone()),
+            id: Some("call-1".to_owned()),
+            annotations: None,
+        }],
+    });
+    result.actions.tool_confirmation_decision = Some(ToolConfirmationDecision::Approve);
+    let finish = projector
+        .project(&result)
+        .expect("tool result")
+        .into_iter()
+        .map(|event| current(&event))
+        .collect::<Vec<_>>();
+    if !is_error {
+        let chunks: Vec<_> = finish
+            .iter()
+            .filter(|event| event["type"] == "agent_tool_output_chunk")
+            .collect();
+        assert!(chunks.len() > 1);
+        let mut output = String::new();
+        for (index, chunk) in chunks.iter().enumerate() {
+            assert_eq!(
+                chunk["response_metadata"]["tool_output_chunk"]["index"],
+                index
+            );
+            assert!(
+                serde_json::to_vec(chunk).expect("json").len()
+                    <= crate::protocol::node_event::MAX_CURRENT_NODE_EVENT_JSON_BYTES
+            );
+            output.push_str(chunk["content"].as_str().expect("chunk"));
+        }
+        assert_eq!(
+            serde_json::from_str::<Value>(&output).expect("complete JSON"),
+            payload
+        );
+        let terminal = finish
+            .iter()
+            .find(|event| event["type"] == "agent_tool_end")
+            .expect("terminal");
+        assert_eq!(terminal["response_metadata"]["finish_reason"], "stop");
+        return;
+    }
+    let mut output = String::new();
+    for pair in finish.chunks_exact(2) {
+        assert_eq!(pair[0]["type"], "partial_message");
+        let metadata = &pair[1]["response_metadata"];
+        let final_error = is_error && metadata["tool_output_chunk_v1"]["final"] == true;
+        assert_eq!(
+            pair[1]["type"],
+            if final_error {
+                "agent_tool_error"
+            } else {
+                "agent_tool_end"
+            }
+        );
+        if final_error {
+            assert_eq!(metadata["error"], "Tool execution failed. See tool output.");
+        }
+        assert_eq!(
+            metadata["tool_output_chunk_v1"]["offset_bytes"],
+            output.len()
+        );
+        let text = metadata["tool_output"].as_str().expect("fragment");
+        assert!(text.len() <= 8192);
+        output.push_str(text);
+        assert!(
+            serde_json::to_vec(&pair[0]).expect("json").len()
+                <= crate::protocol::node_event::MAX_CURRENT_NODE_EVENT_JSON_BYTES
+        );
+    }
+    assert_eq!(
+        serde_json::from_str::<Value>(&output).expect("complete JSON"),
+        payload
+    );
+    let last = finish.last().expect("last");
+    assert_eq!(
+        last["response_metadata"]["tool_output_chunk_v1"]["final"],
+        true
+    );
+    assert_eq!(
+        last["response_metadata"]["finish_reason"],
+        if is_error { "error" } else { "stop" }
+    );
+}
+
+#[test]
+fn checkpoint_only_pipeline_completion_keeps_result_without_new_model_step() {
+    for reused in [false, true] {
+        let mut projector =
+            AgentEventProjector::new(AgentEventProjectionContext::pipeline_fixture(json!({})))
+                .expect("projector");
+        projector.start(timestamp(0)).expect("start");
+        let mut result = pipeline_result_event("Reviewed answer");
+        result.invocation_id = "invocation-1".to_owned();
+        result.author = "root-agent".to_owned();
+        if reused {
+            result.provider_metadata.insert(
+                super::graph::PIPELINE_REUSED_RESULT_METADATA_KEY.to_owned(),
+                "v1".to_owned(),
+            );
+        }
+        let events = projector
+            .project(&result)
+            .expect("completion")
+            .into_iter()
+            .map(|event| current(&event))
+            .collect::<Vec<_>>();
+        assert_eq!(events.is_empty(), reused);
+        let finished = projector
+            .finish_after_eos(
+                CompletedAgentBrowserOutput::fixture("Pipeline completed."),
+                timestamp(2),
+            )
+            .expect("terminal response")
+            .into_iter()
+            .map(|event| current(&event))
+            .collect::<Vec<_>>();
+        assert!(
+            finished
+                .iter()
+                .all(|event| event["content"] == "Reviewed answer")
+        );
+        assert_eq!(finished.len(), 3);
+    }
+}
+
+#[test]
+fn recovered_output_continuation_replaces_attempt_with_exact_bounded_prefix() {
+    for prefix in [
+        "Saved answer.".to_owned(),
+        "🦀\n\"".repeat(100_000),
+        "x".repeat(4 * 1024 * 1024),
+    ] {
+        let mut projector = AgentEventProjector::new(
+            AgentEventProjectionContext::output_continuation_fixture(json!({}), &prefix),
+        )
+        .expect("continuation context");
+        projector.mark_checkpoint_recovery();
+        let events: Vec<_> = projector
+            .start(timestamp(0))
+            .expect("recovery start")
+            .into_iter()
+            .map(|event| current(&event))
+            .collect();
+        assert_eq!(events[0]["type"], "agent_start");
+        assert_eq!(events[0]["response_metadata"]["should_continue"], false);
+        let restored: String = events[1..]
+            .iter()
+            .map(|event| {
+                assert_eq!(event["type"], "agent_llm_chunk");
+                event["content"].as_str().expect("prefix chunk")
+            })
+            .collect();
+        assert_eq!(restored, prefix);
+        assert!(
+            projector.start(timestamp(0)).is_err(),
+            "start cannot replay twice"
+        );
+    }
+}
+
+#[test]
+fn failed_child_retains_partial_output_only_as_incomplete_trace_evidence() {
+    let mut projector = AgentEventProjector::with_tool_catalogs(
+        AgentEventProjectionContext::fixture(json!({})),
+        super::sensitive_tools::SensitiveToolCatalog::default(),
+        nested_application_catalog(),
+    )
+    .unwrap();
+    projector.start(timestamp(0)).unwrap();
+    projector
+        .project(&event(
+            "delegation",
+            1,
+            false,
+            true,
+            vec![Part::FunctionCall {
+                name: "elitea_agent_17_v_9".into(),
+                args: json!({"task":"Child task"}),
+                id: Some("child-call-1".into()),
+                thought_signature: None,
+            }],
+        ))
+        .unwrap();
+    let mut child = descendant_model_event(
+        "child-output",
+        "child-invocation",
+        "elitea_agent_17_v_9",
+        2,
+        vec![Part::Text {
+            text: "Accepted partial answer".into(),
+        }],
+        "invocation-1",
+        "child-call-1",
+    );
+    child.llm_response.partial = true;
+    child.llm_response.turn_complete = false;
+    child.llm_response.finish_reason = None;
+    projector.project(&child).unwrap();
+    let projected: Vec<_> = projector
+        .preserve_incomplete_output(timestamp(3))
+        .unwrap()
+        .into_iter()
+        .map(|e| current(&e))
+        .collect();
+    assert_eq!(projected.len(), 2);
+    assert_eq!(projected[0]["type"], "agent_llm_end");
+    assert_eq!(projected[1]["type"], "partial_message");
+    for frame in &projected {
+        let step = &frame["response_metadata"]["thinking_steps"][0];
+        assert_eq!(step["text"], "Accepted partial answer");
+        assert_eq!(
+            step["message"]["response_metadata"]["tool_name"],
+            "Incomplete response"
+        );
+        assert_eq!(step["parent_agent_path"][0]["call_id"], "child-call-1");
+        assert!(frame["content"].is_null());
+    }
+    assert!(
+        projector
+            .preserve_incomplete_output(timestamp(4))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        projector
+            .finish_after_eos(
+                CompletedAgentBrowserOutput::fixture("not a completed answer"),
+                timestamp(4)
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn failed_model_partial_output_uses_existing_chunked_trace_persistence() {
+    let mut projector =
+        AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({}))).unwrap();
+    projector.start(timestamp(0)).unwrap();
+    let text = "é".repeat(10_000);
+    projector
+        .project(&event(
+            "partial",
+            1,
+            true,
+            false,
+            vec![Part::Text { text: text.clone() }],
+        ))
+        .unwrap();
+    let frames: Vec<_> = projector
+        .preserve_incomplete_output(timestamp(2))
+        .unwrap()
+        .into_iter()
+        .map(|e| current(&e))
+        .collect();
+    let fragments: Vec<_> = frames
+        .iter()
+        .filter(|f| f["type"] == "partial_message")
+        .map(|f| &f["response_metadata"]["thinking_steps"][0])
+        .collect();
+    let restored: String = fragments
+        .iter()
+        .map(|s| s["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(restored, text);
+    assert_eq!(fragments.len(), 3);
+    assert!(
+        fragments.last().unwrap()["text_chunk_v1"]["final"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        frames
+            .iter()
+            .all(|f| f["type"] != "agent_response" && f["type"] != "pipeline_finish")
+    );
 }
 
 /// CHUNKED TOOL OUTPUT (#956), the emit half.

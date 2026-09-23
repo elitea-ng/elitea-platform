@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState, type ReactNode } from 'react';
 
 import Typography from '@mui/material/Typography';
 
-import { McpAuthModal, useGetRemoteMcpTools } from '@/features/mcps';
+import { McpAuthModal, McpAuthStatusBadge, useGetRemoteMcpTools } from '@/features/mcps';
 import { t } from '@/shared/i18n';
 
 import type { EditToolDetail } from './toolkitFormTypes';
@@ -49,6 +49,7 @@ import type { EditToolDetail } from './toolkitFormTypes';
 
 /** The four props `ToolBaseSlots.toolActionsExtra` accepts. */
 export interface McpLoadToolsSlot {
+  readonly mcpAuthStatus?: ReactNode;
   readonly onLoadTools: () => void;
   readonly isLoadingTools: boolean;
   readonly canLoadTools: boolean;
@@ -79,7 +80,7 @@ function hasSomethingToDial(toolkitType: string, settings: Readonly<Record<strin
 /** The tool NAMES out of `mcp_sync_tools`' loosely typed tool list. A nameless entry is dropped: a blank chip is unselectable. */
 function toolNamesOf(tools: readonly unknown[]): readonly string[] {
   return tools
-    .map((tool) => (typeof tool === 'object' && tool !== null ? (tool as { name?: unknown }).name : undefined))
+    .map((tool) => typeof tool === 'string' ? tool : (typeof tool === 'object' && tool !== null ? (tool as { name?: unknown }).name : undefined))
     .filter((name): name is string => typeof name === 'string' && name !== '');
 }
 
@@ -89,25 +90,36 @@ function toolNamesOf(tools: readonly unknown[]): readonly string[] {
  * `exactOptionalPropertyTypes` makes the difference load-bearing at the call
  * site, and an always-built object is simpler than widening the hook's type.
  */
-interface RemoteMcpValues {
-  readonly type: string | undefined;
-  readonly settings: { url?: string; headers?: Record<string, string>; timeout?: number; ssl_verify?: boolean };
+type RemoteMcpValues = NonNullable<Parameters<typeof useGetRemoteMcpTools>[0]['values']>;
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function timeoutValue(value: unknown): number | undefined {
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) return Number(value);
+  return undefined;
 }
 
 function toRemoteMcpValues(editToolDetail: EditToolDetail | null | undefined): RemoteMcpValues {
   const settings = editToolDetail?.settings ?? {};
   const url = settings['url'];
   const headers = settings['headers'];
-  const timeout = settings['timeout'];
+  const timeout = timeoutValue(settings['timeout']);
   return {
+    id: editToolDetail?.id === undefined ? undefined : String(editToolDetail.id),
     type: editToolDetail?.type,
     settings: {
+      client_id: stringValue(settings['client_id']),
+      client_secret: stringValue(settings['client_secret']),
+      scopes: Array.isArray(settings['scopes']) ? settings['scopes'].filter((v): v is string => typeof v === 'string') : stringValue(settings['scopes']),
       ...(typeof url === 'string' ? { url } : {}),
-      ...(typeof headers === 'object' && headers !== null ? { headers: headers as Record<string, string> } : {}),
+      ...(typeof headers === 'object' && headers !== null ? { headers: Object.fromEntries(Object.entries(headers).filter((entry): entry is [string, string] => typeof entry[1] === 'string')) } : {}),
       // The form stores a number, but the baseline's own schema types this
       // field as `int | str` because the UI has been known to send a string.
-      ...(typeof timeout === 'number' ? { timeout } : {}),
-      ...(typeof timeout === 'string' && timeout.trim() !== '' && Number.isFinite(Number(timeout)) ? { timeout: Number(timeout) } : {}),
+      ...(timeout !== undefined ? { timeout } : {}),
+      ...(typeof settings['ssl_verify'] === 'boolean' ? { ssl_verify: settings['ssl_verify'] } : {}),
     },
   };
 }
@@ -133,9 +145,14 @@ export function useMcpLoadTools({ projectId, editToolDetail, onChangeToolDetail 
     (tools: readonly unknown[]) => {
       setError(undefined);
       const names = toolNamesOf(tools);
-      onChangeToolDetail((previous) =>
-        previous === null ? previous : { ...previous, settings: { ...previous.settings, available_mcp_tools: names } },
-      );
+      onChangeToolDetail((previous) => {
+        if (previous === null) return previous;
+        const selected = previous.settings?.['selected_tools'];
+        const initializeSelection = names.length > 0 && (!Array.isArray(selected) || selected.length === 0);
+        return { ...previous, settings: { ...previous.settings, available_mcp_tools: names,
+          ...(initializeSelection ? { selected_tools: names } : {}),
+        } };
+      });
     },
     [onChangeToolDetail],
   );
@@ -183,5 +200,8 @@ export function useMcpLoadTools({ projectId, editToolDetail, onChangeToolDetail 
   );
 
   if (!isMcpToolkitType(toolkitType)) return undefined;
-  return { onLoadTools: fetchTools, isLoadingTools: isLoading, canLoadTools, mcpAuthModal };
+  // Saved MCPs use the same REST discovery and consent flow for Login.
+  // The status component owns logout and cross-tab grant invalidation.
+  const mcpAuthStatus = values.id ? <McpAuthStatusBadge values={values} projectId={projectId} authConfig={{ onLogin: fetchTools, isRunning: isLoading }} /> : undefined;
+  return { onLoadTools: fetchTools, isLoadingTools: isLoading, canLoadTools, mcpAuthModal, mcpAuthStatus };
 }

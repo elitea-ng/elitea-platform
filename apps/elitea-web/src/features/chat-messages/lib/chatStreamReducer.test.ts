@@ -36,6 +36,57 @@ function frame(type: string, extra: Record<string, unknown> = {}) {
 }
 
 describe('applyChatStreamFrame', () => {
+  it('settles the explicit terminal snapshot without retaining intermediate narration', () => {
+    const history = [{ ...pendingAssistant(), content: 'Pass one. Pass two. Final result.' }];
+    const terminal = frame(SocketMessageType.PipelineFinish, {
+      content: 'Final result.', response_metadata: { should_continue: false },
+    });
+    const settled = applyChatStreamFrame(history, terminal, CONTEXT);
+    expect(settled[0]?.content).toBe('Final result.');
+    expect(settled[0]?.isStreaming).toBe(false);
+    expect(applyChatStreamFrame(settled, terminal, CONTEXT)[0]?.content).toBe('Final result.');
+    for (const response_metadata of [{ should_continue: true }, {}]) {
+      expect(applyChatStreamFrame(history, { ...terminal, response_metadata }, CONTEXT)[0]?.content)
+        .toBe(history[0]?.content);
+    }
+    expect(applyChatStreamFrame(history, { ...terminal, content: null }, CONTEXT)[0]?.content)
+      .toBe(history[0]?.content);
+    const withReasoning = applyChatStreamFrame(history, {
+      ...terminal, content: '<think>Review the facts.</think>Final result.',
+    }, CONTEXT);
+    expect(withReasoning[0]?.content).toBe('Final result.');
+    expect(withReasoning[0]?.toolActions).toHaveLength(1);
+  });
+  it('replaces intermediate output with the complete chunked result and ignores exact replay', () => {
+    const first = { offset_bytes: 0, total_bytes: 7, sha256: 'a'.repeat(64), final: false };
+    let history: readonly ChatMessage[] = [{ ...pendingAssistant(), content: 'Intermediate work.' }];
+    const part = frame(SocketMessageType.AgentResultChunk, { content: '界', response_metadata: { result_chunk_v1: first } });
+    history = applyChatStreamFrame(history, part, CONTEXT);
+    expect(history[0]?.content).toBe('界');
+    history = applyChatStreamFrame(history, part, CONTEXT);
+    expect(history[0]?.content).toBe('界');
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentResultChunk, { content: 'done', response_metadata: {
+      result_chunk_v1: { ...first, offset_bytes: 3, final: true },
+    } }), CONTEXT);
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentResponse, { content: null, response_metadata: { finish_reason: 'stop' } }), CONTEXT);
+    expect(history[0]?.content).toBe('界done');
+    expect(history[0]?.isStreaming).toBe(false);
+  });
+  it('keeps the saved prefix when continuation result fragments replace streamed deltas', () => {
+    let history: readonly ChatMessage[] = [{ ...pendingAssistant(), content: 'Saved prefix.' }];
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentStart, { response_metadata: { should_continue: true } }), CONTEXT);
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentLlmChunk, { content: ' suffix' }), CONTEXT);
+    const fragment = frame(SocketMessageType.AgentResultChunk, { content: ' suffix', response_metadata: {
+      result_chunk_v1: { offset_bytes: 0, total_bytes: 7, sha256: 'a'.repeat(64), final: true },
+    } });
+    history = applyChatStreamFrame(history, fragment, CONTEXT);
+    history = applyChatStreamFrame(history, fragment, CONTEXT);
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentResponse, { content: null, response_metadata: { finish_reason: 'stop' } }), CONTEXT);
+    expect(history[0]?.content).toBe('Saved prefix. suffix');
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentStart, { response_metadata: { should_continue: false } }), CONTEXT);
+    history = applyChatStreamFrame(history, fragment, CONTEXT);
+    expect(history[0]?.content).toBe(' suffix');
+  });
   it('renders a real turn from the sequence a live stack emits', () => {
     // Recorded order: agent_start, agent_on_transitional_edge, agent_llm_start,
     // agent_llm_chunk ×4, agent_llm_end, agent_response, pipeline_finish.
@@ -97,6 +148,47 @@ describe('applyChatStreamFrame', () => {
     );
 
     expect(history[0]?.content).toBe('');
+  });
+
+  it('replaces interrupted reasoning on restart while retaining completed tools', () => {
+    let history: readonly ChatMessage[] = [pendingAssistant()];
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentToolStart, {
+      response_metadata: { tool_run_id: 'saved-tool', tool_name: 'Search' },
+    }), CONTEXT);
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentToolEnd, {
+      content: 'saved result', response_metadata: { tool_run_id: 'saved-tool' },
+    }), CONTEXT);
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentLlmChunk, {
+      content: '<think>interrupted reasoning',
+    }), CONTEXT);
+    const savedTool = (history[0]?.toolActions as readonly ToolAction[] | undefined)?.find((action) => action.id === 'saved-tool');
+    expect(savedTool).toBeDefined();
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentStart), CONTEXT);
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentLlmChunk, {
+      content: 'Recovered answer',
+    }), CONTEXT);
+    expect(history).toHaveLength(1);
+    expect(history[0]?.content).toBe('Recovered answer');
+    expect(history[0]?.toolActions).toEqual([savedTool]);
+  });
+
+  it('replays the frozen prefix once when recovering an interrupted continuation', () => {
+    let history: readonly ChatMessage[] = [{
+      ...pendingAssistant(), content: 'Saved answer. Interrupted continuation',
+    }];
+    const sequence = [
+      frame(SocketMessageType.AgentStart, { response_metadata: { should_continue: false } }),
+      frame(SocketMessageType.AgentLlmChunk, { content: 'Saved ' }),
+      frame(SocketMessageType.AgentLlmChunk, { content: 'answer.' }),
+      frame(SocketMessageType.AgentLlmChunk, { content: ' Recovered continuation.' }),
+      frame(SocketMessageType.AgentResponse, {
+        content: ' Recovered continuation.', response_metadata: { finish_reason: 'stop' },
+      }),
+    ];
+    for (const event of sequence) history = applyChatStreamFrame(history, event, CONTEXT);
+    expect(history).toHaveLength(1);
+    expect(history[0]?.content).toBe('Saved answer. Recovered continuation.');
+    expect(history[0]?.isStreaming).toBe(false);
   });
 
   it('surfaces a failure without discarding what already streamed', () => {
@@ -198,6 +290,8 @@ describe('the ported boundary is explicit', () => {
           uuid: 'echo-uuid',
           response_metadata: {
             tool_run_id: 'run-x',
+            result_chunk_v1: { offset_bytes: 0, total_bytes: 1, sha256: 'a'.repeat(64), final: true },
+            context_status: { version: 1, phase: 'compacting' },
             tool_output_chunk: {
               tool_call_id: 'run-x',
               index: 0,
@@ -297,6 +391,44 @@ describe('the tool lifecycle', () => {
     const twice = applyChatStreamFrame(once, toolFrame(SocketMessageType.AgentToolStart, {}), CONTEXT);
 
     expect(twice[0]?.toolActions).toHaveLength(1);
+  });
+
+  it('keeps chunked output running until its final frame and ignores replay', () => {
+    let history = withStartedTool();
+    const initialStatus = (history[0]?.toolActions?.[0] as ToolAction | undefined)?.status;
+    const first = toolFrame(SocketMessageType.AgentToolEnd, { tool_output: '{"ok":', tool_output_chunk_v1: { offset_bytes: 0, total_bytes: 11, sha256: 'a'.repeat(64), final: false } });
+    history = applyChatStreamFrame(history, first, CONTEXT);
+    history = applyChatStreamFrame(history, first, CONTEXT);
+    expect((history[0]?.toolActions?.[0] as ToolAction | undefined)?.status).toBe(initialStatus);
+    history = applyChatStreamFrame(history, toolFrame(SocketMessageType.AgentToolEnd, { tool_output: 'true}', tool_output_chunk_v1: { offset_bytes: 6, total_bytes: 11, sha256: 'a'.repeat(64), final: true } }), CONTEXT);
+    const action = history[0]?.toolActions?.[0] as ToolAction;
+    expect(action['toolOutputs']).toBe('{"ok":true}');
+    expect(action.status).toBe('complete');
+  });
+
+  it('assembles the final error fragment and keeps the tool failed on replay', () => {
+    let history = withStartedTool();
+    const output = JSON.stringify({ error: 'large failure' });
+    const split = 9;
+    const metadata = { total_bytes: output.length, sha256: 'a'.repeat(64) };
+    const first = toolFrame(SocketMessageType.AgentToolEnd, {
+      tool_output: output.slice(0, split),
+      tool_output_chunk_v1: { ...metadata, offset_bytes: 0, final: false },
+    });
+    history = applyChatStreamFrame(history, first, CONTEXT);
+    const last = toolFrame(SocketMessageType.AgentToolError, {
+      tool_output: output.slice(split), finish_reason: 'error',
+      tool_output_chunk_v1: { ...metadata, offset_bytes: split, final: true },
+    });
+    history = applyChatStreamFrame(history, last, CONTEXT);
+    const completed = history[0]?.toolActions?.[0];
+    history = applyChatStreamFrame(history, last, CONTEXT);
+    history = applyChatStreamFrame(history, first, CONTEXT);
+    expect(history[0]?.toolActions?.[0]).toBe(completed);
+    const action = history[0]?.toolActions?.[0] as ToolAction;
+    expect(action['toolOutputs']).toBe(output);
+    expect(action.status).toBe('error');
+    expect(action['isError']).toBe(true);
   });
 
   it('accumulates string outputs across end frames rather than replacing them', () => {
@@ -463,6 +595,27 @@ describe('thinking steps', () => {
   });
 
   describe('the agent_llm_end fan-out', () => {
+    it('assembles separate text and reasoning fragments without completing early or duplicating replay', () => {
+      let history = withAction();
+      const send = (step: Record<string, unknown>) => {
+        history = applyChatStreamFrame(history, frame(SocketMessageType.AgentLlmEnd, {
+          response_metadata: { thinking_steps: [{ tool_run_id: RUN, ...step }] },
+        }), CONTEXT);
+      };
+      const chunk = (offset: number, final: boolean) => ({ offset_bytes: offset, total_bytes: 6, sha256: 'a'.repeat(64), final });
+      send({ text: 'abc', text_chunk_v1: chunk(0, false) });
+      send({ text: 'abc', text_chunk_v1: chunk(0, false) });
+      expect(actionsOf(history)[0]?.content).toBe('abc');
+      expect(actionsOf(history)[0]?.status).toBe('processing');
+      send({ text: 'def', text_chunk_v1: chunk(3, true) });
+      expect(actionsOf(history)[0]?.status).toBe('processing');
+      send({ thinking: 'one', thinking_chunk_v1: chunk(0, false) });
+      send({ thinking: 'two', thinking_chunk_v1: chunk(3, true), timestamp_finish: '2026-09-18T00:00:00Z' });
+      expect(actionsOf(history)[0]?.content).toBe('abcdef');
+      expect(actionsOf(history)[0]?.thinking).toBe('onetwo');
+      expect(actionsOf(history)[0]?.status).toBe('complete');
+    });
+
     it('closes every step in one batch, not just the first', () => {
       // A pipeline with several LLM nodes reports them all in one frame.
       const history: readonly ChatMessage[] = [
@@ -895,6 +1048,31 @@ describe('applyChatStreamFrame — interrupts', () => {
 
       expect(history[0]?.toolActions).toHaveLength(1);
       expect(((history[0]?.toolActions ?? [])[0] as ToolAction).status).toBe('action_required');
+    });
+
+    it('renders every exact request from a parallel terminal event without duplicates', () => {
+      const request = (interruptId: string, toolCallId: string) => ({
+        interrupt_id: interruptId,
+        tool_call_id: toolCallId,
+        guardrail_type: 'mcp_auth',
+        tool_name: 'SharePoint search',
+        toolkit_type: 'sharepoint',
+        server_url: 'https://sharepoint.example',
+        resource_metadata: {
+          resource_name: 'SharePoint',
+          authorization_servers: ['https://login.example'],
+        },
+      });
+      const terminal = authFrame({
+        authorization_requests: [request('auth-1', 'call-1'), request('auth-2', 'call-2')],
+      });
+      let history = applyChatStreamFrame([pendingAssistant()], terminal, CONTEXT);
+      history = applyChatStreamFrame(history, terminal, CONTEXT);
+
+      expect(history[0]?.toolActions).toHaveLength(2);
+      expect(history[0]?.toolActions?.map(
+        (action) => (action as ToolAction & { authorizationRequestId?: string }).authorizationRequestId,
+      )).toEqual(['auth-1', 'auth-2']);
     });
   });
 });

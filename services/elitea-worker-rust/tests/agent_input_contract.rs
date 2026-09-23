@@ -46,6 +46,54 @@ fn application_message() -> AgentExecutionInputV1 {
 }
 
 #[test]
+fn authorized_model_limits_survive_canonical_wire_and_old_inputs_remain_absent() {
+    use elitea_worker_rust::protocol::elitea::runtime::v1::ModelContextLimitsV1;
+    use prost::Message;
+    let mut message = application_message();
+    assert!(message.model_context_limits.is_none());
+    message.model_context_limits = Some(ModelContextLimitsV1 {
+        context_window_tokens: 1_000_000,
+        max_output_tokens: 128_000,
+        context_window_fallback: false,
+        max_output_fallback: true,
+        max_input_tokens: Some(872_000),
+    });
+    let decoded = parse_agent_execution_input(&message.encode_to_vec()).unwrap();
+    let request = request_from(decoded, AgentExecutionKind::Application, binding()).unwrap();
+    let limits = request.payload.model_context_limits.unwrap();
+    assert_eq!(limits.context_window_tokens, 1_000_000);
+    assert_eq!(limits.max_output_tokens, 128_000);
+    assert_eq!(limits.max_input_tokens, Some(872_000));
+    assert!(!limits.context_window_fallback);
+    assert!(limits.max_output_fallback);
+}
+
+#[test]
+fn summary_model_requires_its_own_limits_and_preserves_its_selection() {
+    use elitea_worker_rust::protocol::elitea::runtime::v1::{
+        ModelContextLimitsV1, SummaryModelSnapshotV1,
+    };
+    use prost::Message;
+    let mut message = application_message();
+    assert!(message.summary_model.is_none());
+    message.summary_model = Some(SummaryModelSnapshotV1 {
+        llm_settings: br#"{"model_name":"summary-model","model_project_id":7,"max_tokens":2048,"openai_compatible":true}"#.to_vec(),
+        model_context_limits: Some(ModelContextLimitsV1 {
+            context_window_tokens: 32_000, max_output_tokens: 4_000,
+            context_window_fallback: false, max_output_fallback: false, max_input_tokens: Some(24_000),
+        }),
+    });
+    let decoded = parse_agent_execution_input(&message.encode_to_vec()).unwrap();
+    let request = request_from(decoded, AgentExecutionKind::Application, binding()).unwrap();
+    let summary = request.payload.summary_model.unwrap();
+    assert_eq!(summary.llm_settings["model_name"], "summary-model");
+    assert_eq!(summary.model_context_limits.max_input_tokens, Some(24_000));
+    assert!(request.payload.model_context_limits.is_none());
+    message.summary_model.as_mut().unwrap().model_context_limits = None;
+    assert!(request_from(message, AgentExecutionKind::Application, binding()).is_err());
+}
+
+#[test]
 fn python_generated_application_fixture_maps_all_current_fields() {
     let raw = application_bytes();
     let message = parse_agent_execution_input(&raw).expect("canonical Python protobuf");
@@ -129,7 +177,7 @@ fn protobuf_boundary_rejects_noncanonical_unknown_and_oversize_inputs() {
         Err(AgentProtocolError::ResourceExhausted(_))
     ));
     assert!(matches!(
-        parse_agent_execution_input(&vec![0; 1024 * 1024 + 1]),
+        parse_agent_execution_input(&vec![0; 8 * 1024 * 1024 + 1]),
         Err(AgentProtocolError::ResourceExhausted(_))
     ));
 }
@@ -191,6 +239,31 @@ fn json_boundary_rejects_duplicate_escaped_duplicate_and_nonfinite_members() {
             Err(AgentProtocolError::InvalidInput(_))
         ));
     }
+}
+
+#[test]
+fn admitted_history_reaches_compaction_without_control_field_limits() {
+    use prost::Message;
+    let mut message = application_message();
+    message.chat_history = serde_json::to_vec(&serde_json::json!([
+        {"role": "assistant", "content": "a".repeat(430_000)}
+    ]))
+    .unwrap();
+    let decoded = parse_agent_execution_input(&message.encode_to_vec()).unwrap();
+    assert!(request_from(decoded, AgentExecutionKind::Application, binding()).is_ok());
+
+    // Other fields retain their smaller budget and strict JSON validation.
+    message.meta = message.chat_history.clone();
+    assert!(matches!(
+        request_from(message, AgentExecutionKind::Application, binding()),
+        Err(AgentProtocolError::ResourceExhausted(_))
+    ));
+    let mut message = application_message();
+    message.chat_history = br#"[{"role":"user","role":"assistant"}]"#.to_vec();
+    assert!(matches!(
+        request_from(message, AgentExecutionKind::Application, binding()),
+        Err(AgentProtocolError::InvalidInput(_))
+    ));
 }
 
 #[test]
@@ -487,4 +560,32 @@ fn assert_invalid(message: AgentExecutionInputV1, kind: AgentExecutionKind, expe
         error.to_string().contains(expected),
         "expected {expected:?}, got {error}"
     );
+}
+
+#[test]
+fn large_output_continuation_survives_wire_and_rejects_oversized_text() {
+    use prost::Message;
+    for text in [
+        "x".repeat(65_537),
+        "é\n".repeat(100_000),
+        "x".repeat(4 * 1024 * 1024),
+    ] {
+        let mut message = application_message();
+        message.truncated_content = serde_json::to_vec(&text).unwrap();
+        let decoded = parse_agent_execution_input(&message.encode_to_vec()).unwrap();
+        let request = request_from(decoded, AgentExecutionKind::Application, binding()).unwrap();
+        assert_eq!(
+            request.payload.truncated_content.as_deref(),
+            Some(text.as_str())
+        );
+    }
+    for text in [
+        "x".repeat(4 * 1024 * 1024 + 1),
+        "é".repeat(2 * 1024 * 1024) + "x",
+    ] {
+        let mut message = application_message();
+        message.truncated_content = serde_json::to_vec(&text).unwrap();
+        let decoded = parse_agent_execution_input(&message.encode_to_vec()).unwrap();
+        assert!(request_from(decoded, AgentExecutionKind::Application, binding()).is_err());
+    }
 }

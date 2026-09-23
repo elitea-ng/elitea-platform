@@ -8,8 +8,30 @@ import (
 	"strings"
 	"testing"
 
+	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 )
+
+func TestRecoverableToolRequestHeaderAndConflict(t *testing.T) {
+	for _, key := range []string{"browser-request", "../invalid"} {
+		r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"tool_name":"echo","tool_params":{}}`))
+		r.Header.Set("Idempotency-Key", key)
+		request, err := DecodeRequest(r, 1, 7, 19)
+		if key == "browser-request" {
+			if err != nil || request.IdempotencyKey != key {
+				t.Fatalf("missing request key: %v", err)
+			}
+		} else if err == nil {
+			t.Fatal("accepted invalid request key")
+		}
+	}
+	recorder := httptest.NewRecorder()
+	WriteError(recorder, executionapp.ErrIdempotencyConflict)
+	if recorder.Code != http.StatusConflict || decodeBody(t, recorder)["reason"] != "idempotency_conflict" {
+		t.Fatalf("conflict response: %s", recorder.Body.String())
+	}
+}
 
 func decodeBody(t *testing.T, recorder *httptest.ResponseRecorder) map[string]any {
 	t.Helper()
@@ -262,5 +284,46 @@ func TestDecodeRequestRefusesABodyItCannotBind(t *testing.T) {
 				t.Fatal("expected a refusal")
 			}
 		})
+	}
+}
+
+func TestDecodeRequestPreservesModelReferenceAndRefusesInlineCredentials(t *testing.T) {
+	for _, extra := range []string{`,"llm_model":"saved-model"`, `,"llm_configuration":{"api_key":"secret"}`, `,"mcp_tokens":{"token":"secret"}`} {
+		request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"tool_name":"list_issues","tool_params":{"large":9007199254740993}`+extra+`}`))
+		decoded, err := DecodeRequest(request, 7, 42, 19)
+		if strings.Contains(extra, "llm_model") {
+			if err != nil || decoded.LLMModel != "saved-model" || string(decoded.Arguments) != `{"large":9007199254740993}` {
+				t.Fatalf("model reference or arguments lost: %v", err)
+			}
+		} else if err == nil {
+			t.Fatal("inline credential context accepted")
+		}
+	}
+}
+
+func TestWriteAuthorizationRequiredReturnsTypedConflict(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	WriteOutcome(recorder, toolkitcalltoolapp.RunOutcome{ExecutionID: "exec", Status: toolkitcalltoolapp.RunStatusAuthorizationRequired, ToolkitType: "mcp", ToolName: "list", ErrorMessage: executiondomain.ToolkitAuthorizationMessage, AuthorizationRequired: &executiondomain.ToolkitAuthorizationRequired{ToolkitID: "19", ToolkitName: "saved", ToolkitType: "mcp", ServerURL: "https://mcp.example.test/"}})
+	if recorder.Code != http.StatusConflict {
+		t.Fatal(recorder.Code)
+	}
+	body := decodeBody(t, recorder)
+	if body["reason"] != "authorization_required" || body["authorization_required"].(map[string]any)["toolkit_id"] != "19" {
+		t.Fatal("typed challenge lost")
+	}
+}
+
+func TestDecodeAuthorizationReferenceAndBoundedModelSettings(t *testing.T) {
+	reference := strings.Repeat("a", 43)
+	body := `{"tool_name":"list","tool_params":{},"mcp_authorization_reference":"` + reference + `","llm_model":"selected","llm_settings":{"temperature":0.6,"max_tokens":-1,"reasoning_effort":"medium"}}`
+	request, err := DecodeRequest(httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body)), 7, 42, 19)
+	if err != nil || request.MCPAuthorizationReference != reference || string(request.LLMSettings) != `{"temperature":0.6,"max_tokens":-1,"reasoning_effort":"medium"}` {
+		t.Fatalf("reference/model settings lost: %v", err)
+	}
+	for _, settings := range []string{`{"api_key":"secret"}`, `{"temperature":3}`, `{"max_tokens":-2}`, `{"reasoning_effort":"arbitrary"}`} {
+		invalid := strings.Replace(body, `{"temperature":0.6,"max_tokens":-1,"reasoning_effort":"medium"}`, settings, 1)
+		if _, err := DecodeRequest(httptest.NewRequest(http.MethodPost, "/", strings.NewReader(invalid)), 7, 42, 19); err == nil {
+			t.Fatal("unbounded or credential model settings accepted")
+		}
 	}
 }

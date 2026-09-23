@@ -500,6 +500,19 @@ else
   fail "these runtime file names cannot be Secret keys:$bad_keys"
 fi
 
+if [ "$(data ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED "$WORK/standalone.yaml")" = "false" ]; then
+  pass "toolkit discovery stays disabled until explicitly enabled"
+else
+  fail "toolkit discovery is enabled by default"
+fi
+helm template ${GATEWAY_RENDER_POSTURE} ${ONLY_MAIN} test-release "$CHART" \
+  -f "$CHART/values-standalone.yaml" --set main.runtime.toolkitDiscovery.enabled=true >"$WORK/discovery.yaml"
+if [ "$(data ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED "$WORK/discovery.yaml")" = "true" ]; then
+  pass "toolkit discovery activation reaches the rendered environment"
+else
+  fail "toolkit discovery activation is absent from the rendered environment"
+fi
+
 # The operator-supplied volume stays supported, and it renders NO init
 # container: those files are already real and owner-owned.
 cat >"$WORK/csi-material.yaml" <<'YAML'
@@ -870,6 +883,17 @@ refuses "index scheduling without index ingest" \
 refuses "a dispatch plane enabled while the runtime is off" \
   "runtime.enabled" \
   --set main.runtime.agentExecutionDispatch.enabled=true
+
+refuses "toolkit discovery while the runtime is off" \
+  "runtime.enabled" \
+  --set main.runtime.toolkitDiscovery.enabled=true
+
+refuses "toolkit discovery without worker dispatch" \
+  "needs an active agentExecutionDispatch or indexIngestDispatch" \
+  -f "$CHART/values-standalone.yaml" \
+  --set main.runtime.toolkitDiscovery.enabled=true \
+  --set main.runtime.agentExecutionDispatch.enabled=false \
+  --set main.runtime.indexIngestDispatch.enabled=false
 
 refuses "two dispatch planes sharing a stream with different consumer groups" \
   "consumer group" \

@@ -14,7 +14,7 @@ use adk_rust::session::{
     AppendEventRequest, CreateRequest, DeleteRequest, Events, GetRequest, ListRequest, Session,
     SessionService, State, extract_state_deltas, merge_states,
 };
-use adk_rust::{AdkError, ErrorCategory, ErrorComponent, Event};
+use adk_rust::{AdkError, AdkIdentity, ErrorCategory, ErrorComponent, Event};
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone as _, Utc};
 use serde::de::DeserializeOwned;
@@ -27,8 +27,9 @@ use zeroize::Zeroizing;
 use super::StateWriterLease;
 
 const SESSION_FAMILY: &str = "adk-session.2.0.0.v1";
-const MAX_STATE_BYTES: usize = 1024 * 1024;
-const MAX_EVENT_BYTES: usize = 2 * 1024 * 1024;
+const MAX_SHARED_STATE_BYTES: usize = 1024 * 1024;
+const MAX_STATE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_EVENT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_EVENTS: usize = 4096;
 const MAX_RETAINED_EVENT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_JSON_DEPTH: usize = 64;
@@ -126,7 +127,7 @@ impl PostgresSessionError {
         }
     }
 
-    fn into_adk(self) -> AdkError {
+    pub(crate) fn into_adk(self) -> AdkError {
         let (category, message) = match self {
             Self::InvalidConfiguration | Self::InvalidScope => (
                 ErrorCategory::InvalidInput,
@@ -161,6 +162,7 @@ impl PostgresSessionError {
 ///
 /// Raw construction is crate-private. The native invocation coordinator will
 /// derive it from the accepted claim and the admitted frozen definition.
+#[derive(Clone)]
 pub(crate) struct SessionWriterAuthority {
     tenant_id: String,
     resource_project_id: i32,
@@ -278,6 +280,7 @@ pub struct PostgresSessionService {
     authority: SessionWriterAuthority,
     limits: SessionLimits,
     state_writer_lease: Arc<dyn StateWriterLease>,
+    parent: Option<Arc<Self>>,
 }
 
 struct StoredSession {
@@ -363,12 +366,25 @@ impl PostgresSessionService {
         limits: SessionLimits,
         state_writer_lease: Arc<dyn StateWriterLease>,
     ) -> Result<Self, PostgresSessionError> {
+        Self::activate_with_parent(pool, authority, limits, state_writer_lease, None).await
+    }
+
+    async fn activate_with_parent(
+        pool: PgPool,
+        authority: SessionWriterAuthority,
+        limits: SessionLimits,
+        state_writer_lease: Arc<dyn StateWriterLease>,
+        parent: Option<Arc<Self>>,
+    ) -> Result<Self, PostgresSessionError> {
         authority.validate()?;
         let limits = limits.validate()?;
         state_writer_lease
             .ensure_current()
             .map_err(|_| PostgresSessionError::WriterNotCurrent)?;
         let mut transaction = pool.begin().await.map_err(storage_error)?;
+        if let Some(parent) = &parent {
+            parent.lock_writer_row(&mut transaction, false).await?;
+        }
         let activated =
             activate_writer_row(&mut transaction, &authority, authority.claim_started_at).await?;
         if activated.as_deref() != Some(authority.claim_id.as_str()) {
@@ -383,7 +399,35 @@ impl PostgresSessionService {
             authority,
             limits,
             state_writer_lease,
+            parent,
         })
+    }
+
+    /// Derive a worker-owned model session without widening the root service scope.
+    /// Both writer rows remain fenced by the same supervised execution claim.
+    pub(crate) async fn model_scope(
+        self: &Arc<Self>,
+        identity: &AdkIdentity,
+    ) -> Result<Self, PostgresSessionError> {
+        self.require_app_user(identity.app_name.as_ref(), identity.user_id.as_ref())?;
+        let suffix = identity.session_id.as_ref().strip_prefix("elitea-model-");
+        if self.parent.is_some()
+            || !suffix.is_some_and(|value| {
+                value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+        {
+            return Err(PostgresSessionError::InvalidScope);
+        }
+        let mut authority = self.authority.clone();
+        authority.session_id = identity.session_id.to_string();
+        Self::activate_with_parent(
+            self.pool.clone(),
+            authority,
+            self.limits,
+            self.state_writer_lease.clone(),
+            Some(self.clone()),
+        )
+        .await
     }
 
     fn require_identity(
@@ -409,6 +453,19 @@ impl PostgresSessionService {
     }
 
     async fn lock_current_writer(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        exclusive: bool,
+    ) -> Result<(), PostgresSessionError> {
+        // Lock the root first. Replacement cannot admit a stale child write,
+        // even before this worker observes loss of its live lease.
+        if let Some(parent) = &self.parent {
+            parent.lock_writer_row(transaction, false).await?;
+        }
+        self.lock_writer_row(transaction, exclusive).await
+    }
+
+    async fn lock_writer_row(
         &self,
         transaction: &mut Transaction<'_, Postgres>,
         exclusive: bool,
@@ -616,38 +673,27 @@ WHERE tenant_id = $1
             .ok_or(PostgresSessionError::ResourceExhausted)?;
         let fetch_limit =
             i64::try_from(fetch_limit).map_err(|_| PostgresSessionError::ResourceExhausted)?;
-        let rows = sqlx::query(
-            r"
-SELECT event_payload, event_timestamp
-FROM elitea_runtime.agent_session_events
-WHERE tenant_id = $1
-  AND resource_project_id = $2
-  AND projection_project_id = $3
-  AND capability_id = $4
-  AND session_family = $5
-  AND definition_digest = $6
-  AND thread_id = $7
-  AND app_name = $8
-  AND user_id = $9
-  AND session_id = $10
-ORDER BY event_ordinal DESC
-LIMIT $11
-            ",
-        )
-        .bind(&self.authority.tenant_id)
-        .bind(self.authority.resource_project_id)
-        .bind(self.authority.projection_project_id)
-        .bind(self.authority.capability_id)
-        .bind(SESSION_FAMILY)
-        .bind(self.authority.definition_digest.as_slice())
-        .bind(&self.authority.thread_id)
-        .bind(&self.authority.app_name)
-        .bind(&self.authority.user_id)
-        .bind(&self.authority.session_id)
-        .bind(fetch_limit)
-        .fetch_all(&mut **transaction)
-        .await
-        .map_err(storage_error)?;
+        let query = format!(
+            "{} SELECT event_payload, event_timestamp FROM active_events ORDER BY event_ordinal DESC LIMIT $13",
+            include_str!("postgres_session_active_events.sql")
+        );
+        let rows = sqlx::query(&query)
+            .bind(&self.authority.tenant_id)
+            .bind(self.authority.resource_project_id)
+            .bind(self.authority.projection_project_id)
+            .bind(self.authority.capability_id)
+            .bind(SESSION_FAMILY)
+            .bind(self.authority.definition_digest.as_slice())
+            .bind(&self.authority.thread_id)
+            .bind(&self.authority.app_name)
+            .bind(&self.authority.user_id)
+            .bind(&self.authority.session_id)
+            .bind(Option::<&str>::None)
+            .bind(false)
+            .bind(fetch_limit)
+            .fetch_all(&mut **transaction)
+            .await
+            .map_err(storage_error)?;
         if num_recent_events.is_none() && rows.len() > self.limits.max_events {
             return Err(PostgresSessionError::ResourceExhausted);
         }
@@ -746,7 +792,7 @@ WHERE tenant_id = $1
             None => {}
         }
 
-        self.ensure_event_capacity(&mut transaction, encoded_event.len())
+        self.ensure_event_capacity(&mut transaction, encoded_event.len(), &event)
             .await?;
         let now = event.timestamp;
         upsert_app_state(
@@ -784,36 +830,33 @@ WHERE tenant_id = $1
         &self,
         transaction: &mut Transaction<'_, Postgres>,
         candidate_bytes: usize,
+        candidate: &Event,
     ) -> Result<(), PostgresSessionError> {
-        let (count, bytes) = sqlx::query_as::<_, (i64, i64)>(
-            r"
-SELECT count(*), COALESCE(sum(payload_bytes), 0)::bigint
-FROM elitea_runtime.agent_session_events
-WHERE tenant_id = $1
-  AND resource_project_id = $2
-  AND projection_project_id = $3
-  AND capability_id = $4
-  AND session_family = $5
-  AND definition_digest = $6
-  AND thread_id = $7
-  AND app_name = $8
-  AND user_id = $9
-  AND session_id = $10
-            ",
-        )
-        .bind(&self.authority.tenant_id)
-        .bind(self.authority.resource_project_id)
-        .bind(self.authority.projection_project_id)
-        .bind(self.authority.capability_id)
-        .bind(SESSION_FAMILY)
-        .bind(self.authority.definition_digest.as_slice())
-        .bind(&self.authority.thread_id)
-        .bind(&self.authority.app_name)
-        .bind(&self.authority.user_id)
-        .bind(&self.authority.session_id)
-        .fetch_one(&mut **transaction)
-        .await
-        .map_err(storage_error)?;
+        let query = format!(
+            "{} SELECT count(*), COALESCE(sum(payload_bytes), 0)::bigint FROM active_events \
+             WHERE NOT ($13 AND recovery_marker AND branch = $14 \
+               AND ($11::text IS NOT NULL AND NOT has_branches \
+                    OR latest_snapshot IS NULL OR event_ordinal <> latest_snapshot))",
+            include_str!("postgres_session_active_events.sql")
+        );
+        let (count, bytes) = sqlx::query_as::<_, (i64, i64)>(&query)
+            .bind(&self.authority.tenant_id)
+            .bind(self.authority.resource_project_id)
+            .bind(self.authority.projection_project_id)
+            .bind(self.authority.capability_id)
+            .bind(SESSION_FAMILY)
+            .bind(self.authority.definition_digest.as_slice())
+            .bind(&self.authority.thread_id)
+            .bind(&self.authority.app_name)
+            .bind(&self.authority.user_id)
+            .bind(&self.authority.session_id)
+            .bind(history_snapshot_agent(candidate))
+            .bind(!candidate.branch.is_empty())
+            .bind(is_recovery_marker(candidate))
+            .bind(&candidate.branch)
+            .fetch_one(&mut **transaction)
+            .await
+            .map_err(storage_error)?;
         let count = usize::try_from(count).map_err(|_| PostgresSessionError::CorruptStoredState)?;
         let retained = usize::try_from(bytes)
             .ok()
@@ -1219,6 +1262,10 @@ async fn upsert_app_state(
     updated_at: DateTime<Utc>,
     limits: SessionLimits,
 ) -> Result<(), PostgresSessionError> {
+    let limits = SessionLimits {
+        max_state_bytes: limits.max_state_bytes.min(MAX_SHARED_STATE_BYTES),
+        ..limits
+    };
     if delta.is_empty() {
         return Ok(());
     }
@@ -1288,6 +1335,10 @@ async fn upsert_user_state(
     updated_at: DateTime<Utc>,
     limits: SessionLimits,
 ) -> Result<(), PostgresSessionError> {
+    let limits = SessionLimits {
+        max_state_bytes: limits.max_state_bytes.min(MAX_SHARED_STATE_BYTES),
+        ..limits
+    };
     if delta.is_empty() {
         return Ok(());
     }
@@ -1358,6 +1409,10 @@ async fn load_app_state(
     authority: &SessionWriterAuthority,
     limits: SessionLimits,
 ) -> Result<HashMap<String, Value>, PostgresSessionError> {
+    let limits = SessionLimits {
+        max_state_bytes: limits.max_state_bytes.min(MAX_SHARED_STATE_BYTES),
+        ..limits
+    };
     let state = sqlx::query_scalar::<_, String>(
         r"
 SELECT state
@@ -1393,6 +1448,10 @@ async fn load_user_state(
     authority: &SessionWriterAuthority,
     limits: SessionLimits,
 ) -> Result<HashMap<String, Value>, PostgresSessionError> {
+    let limits = SessionLimits {
+        max_state_bytes: limits.max_state_bytes.min(MAX_SHARED_STATE_BYTES),
+        ..limits
+    };
     let state = sqlx::query_scalar::<_, String>(
         r"
 SELECT state
@@ -1628,3 +1687,43 @@ WHERE writer.tenant_id = $1
   AND writer.writer_lease_epoch = $15
 FOR UPDATE OF writer
 ";
+
+// Only internal, content-free recovery markers can supersede an earlier marker.
+// The immutable event rows remain available for exact replay/conflict checks.
+fn is_recovery_marker(event: &Event) -> bool {
+    event.author == "elitea-recovery"
+        && event.llm_response.content.is_none()
+        && event
+            .actions
+            .state_delta
+            .contains_key("elitea.agent.recovery.v1")
+        && event.actions.artifact_delta.is_empty()
+        && event.actions.transfer_to_agent.is_none()
+        && !event.actions.escalate
+        && !event.actions.skip_summarization
+        && event.actions.tool_confirmation.is_none()
+        && event.actions.tool_confirmation_decision.is_none()
+        && event.actions.compaction.is_none()
+        && event.actions.route.is_none()
+        && event.long_running_tool_ids.is_empty()
+}
+
+fn history_snapshot_agent(event: &Event) -> Option<&str> {
+    if !is_recovery_marker(event) || !event.branch.is_empty() {
+        return None;
+    }
+    let descriptor = event
+        .actions
+        .state_delta
+        .get("elitea.agent.history_snapshot.v1")?;
+    let checkpoint = event.actions.state_delta.get("elitea.agent.recovery.v1")?;
+    if descriptor["version"] != 1
+        || checkpoint["phase"] != "model_pending"
+        || !checkpoint["model"]["request"]["contents"].is_array()
+    {
+        return None;
+    }
+    descriptor["agent_name"]
+        .as_str()
+        .filter(|name| !name.is_empty())
+}

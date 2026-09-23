@@ -1,6 +1,7 @@
 package repos
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -42,7 +43,7 @@ func TestPostgresCurrentAgentTextSurvivesAWorkerFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	projector := postgresCurrentAgentTextProjector{}
-	for _, content := range []string{"durable ", "partial answer"} {
+	for _, content := range []string{"durable ", "child result", "partial answer"} {
 		frame := currentAgentTextFrame(
 			admitted.ExecutionID,
 			conversationID,
@@ -50,6 +51,20 @@ func TestPostgresCurrentAgentTextSurvivesAWorkerFailure(t *testing.T) {
 			clientGeneration,
 			content,
 		)
+		if content == "child result" {
+			var event map[string]any
+			if err := json.Unmarshal(frame.BrowserData, &event); err != nil {
+				t.Fatal(err)
+			}
+			event["response_metadata"] = map[string]any{
+				"parent_agent_name": "Name Resolver",
+				"parent_agent_path": []any{map[string]any{"name": "Name Resolver", "call_id": "name-call"}},
+			}
+			frame.BrowserData, err = json.Marshal(event)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
 		if err := store.WithinTx(
 			t.Context(),
 			pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite},
@@ -71,8 +86,8 @@ func TestPostgresCurrentAgentTextSurvivesAWorkerFailure(t *testing.T) {
 				1,
 				executiondomain.AgentApplicationCapability,
 				outputRecord{ExecutionID: admitted.ExecutionID, Generation: 1},
-				"INTERNAL",
-				"The runtime operation failed.",
+				"OUTPUT_CONTINUATION_EXHAUSTED",
+				"Automatic continuation could not finish.",
 			)
 		},
 	)
@@ -96,7 +111,7 @@ WHERE message_group.uuid::text = $1
 		t.Fatal(err)
 	}
 	if content != "durable partial answer" || isStreaming ||
-		!containsAll(metadata, `"is_error": true`, "The runtime operation failed.") {
+		!containsAll(metadata, `"is_error": true`, `"error_code": "OUTPUT_CONTINUATION_EXHAUSTED"`, "Automatic continuation could not finish.") {
 		t.Fatalf("content=%q streaming=%t metadata=%s", content, isStreaming, metadata)
 	}
 
@@ -170,4 +185,55 @@ SELECT id FROM p_1.chat_message_group WHERE uuid::text = $1`, responseID).Scan(&
 		t.Fatal(err)
 	}
 	return id
+}
+
+func TestPostgresPipelineTerminalClearsPausedProvisionalTextButKeepsCommittedHistory(t *testing.T) {
+	for _, pipeline := range []bool{false, true} {
+		t.Run(fmt.Sprint(pipeline), func(t *testing.T) {
+			pool := newMigratedPostgresIntegrationPool(t)
+			seedCurrentActivitySchemas(t, pool)
+			const conversationID = "10000000-0000-4000-8000-000000000031"
+			const responseID = "20000000-0000-4000-8000-000000000031"
+			const generationID = "30000000-0000-4000-8000-000000000031"
+			admitted := admitPostgresAgentExecution(t, pool, conversationID, responseID, generationID)
+			seedCurrentAgentResponseGroup(t, pool, conversationID, responseID, generationID, admitted.ExecutionID)
+			groupID := currentResponseGroupID(t, pool, responseID)
+			_, err := pool.Exec(t.Context(), `
+INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, meta, message_group_id)
+VALUES
+(gen_random_uuid(), 'text_message', 0, jsonb_build_object('runtime_stream_provisional', true, 'runtime_stream_execution_id', 'paused-execution', 'runtime_stream_generation', '1'), $1),
+(gen_random_uuid(), 'text_message', 1, jsonb_build_object('runtime_stream_provisional', true, 'runtime_stream_execution_id', $2::text, 'runtime_stream_generation', '1'), $1),
+(gen_random_uuid(), 'text_message', 2, '{}'::jsonb, $1)`, groupID, admitted.ExecutionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			projects, err := newPostgresProjectStore(pool)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = projects.WithinProjectTx(t.Context(), 1,
+				pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite},
+				func(tx sqlExecutor) error {
+					return tx.(currentAgentTerminalWriter).DeleteCurrentAgentProvisionalText(t.Context(), sqlcgen.DeleteCurrentAgentProvisionalTextParams{
+						MessageGroupID: groupID, ExecutionID: admitted.ExecutionID, Generation: 1,
+						ReplacePipelineProvisional: pipeline,
+					})
+				})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var total, committed int
+			err = pool.QueryRow(t.Context(), `SELECT count(*), count(*) FILTER (WHERE meta = '{}'::jsonb) FROM p_1.chat_message_items WHERE message_group_id=$1`, groupID).Scan(&total, &committed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			expected := 2
+			if pipeline {
+				expected = 1
+			}
+			if total != expected || committed != 1 {
+				t.Fatalf("rows=%d committed=%d", total, committed)
+			}
+		})
+	}
 }

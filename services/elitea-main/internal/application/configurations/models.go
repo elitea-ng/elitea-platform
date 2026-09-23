@@ -18,26 +18,30 @@ const (
 )
 
 const (
-	defaultLLMContextWindow   = 128000
-	defaultLLMMaxOutputTokens = 16000
+	DefaultLLMContextWindow   = 128000
+	DefaultLLMMaxOutputTokens = 16000
 )
 
 // CurrentModelCatalogItem is the union of the current model-list response
 // shapes. Pointer fields distinguish a present false/zero value from a field
 // that is absent for another section.
 type CurrentModelCatalogItem struct {
-	Name              string  `json:"name"`
-	DisplayName       *string `json:"display_name,omitempty"`
-	ProjectID         int32   `json:"project_id"`
-	Shared            bool    `json:"shared"`
-	ContextWindow     *int    `json:"context_window,omitempty"`
-	MaxOutputTokens   *int    `json:"max_output_tokens,omitempty"`
-	SupportsReasoning *bool   `json:"supports_reasoning,omitempty"`
-	SupportsVision    *bool   `json:"supports_vision,omitempty"`
-	LowTier           *bool   `json:"low_tier,omitempty"`
-	HighTier          *bool   `json:"high_tier,omitempty"`
-	OpenAICompatible  *bool   `json:"openai_compatible,omitempty"`
-	Default           bool    `json:"default"`
+	Name            string  `json:"name"`
+	DisplayName     *string `json:"display_name,omitempty"`
+	ProjectID       int32   `json:"project_id"`
+	Shared          bool    `json:"shared"`
+	ContextWindow   *int    `json:"context_window,omitempty"`
+	MaxOutputTokens *int    `json:"max_output_tokens,omitempty"`
+	MaxInputTokens  *int    `json:"max_input_tokens,omitempty"`
+	// These flags retain the provenance of catalogue read-time defaults.
+	ContextWindowFallback bool  `json:"-"`
+	MaxOutputFallback     bool  `json:"-"`
+	SupportsReasoning     *bool `json:"supports_reasoning,omitempty"`
+	SupportsVision        *bool `json:"supports_vision,omitempty"`
+	LowTier               *bool `json:"low_tier,omitempty"`
+	HighTier              *bool `json:"high_tier,omitempty"`
+	OpenAICompatible      *bool `json:"openai_compatible,omitempty"`
+	Default               bool  `json:"default"`
 
 	// Grant is the row's platform GRANT SCOPE, read off its `data` object by
 	// the adapter (model_grant.go). It never reaches the wire: it is the rule
@@ -202,8 +206,10 @@ func deduplicateCurrentModelItems(
 func normalizeCurrentModelItem(section CurrentModelSection, item CurrentModelCatalogItem) CurrentModelCatalogItem {
 	item.Default = false
 	if section == CurrentModelSectionLLM {
-		item.ContextWindow = currentModelIntDefault(item.ContextWindow, defaultLLMContextWindow)
-		item.MaxOutputTokens = currentModelIntDefault(item.MaxOutputTokens, defaultLLMMaxOutputTokens)
+		item.ContextWindowFallback = item.ContextWindowFallback || item.ContextWindow == nil
+		item.MaxOutputFallback = item.MaxOutputFallback || item.MaxOutputTokens == nil
+		item.ContextWindow = currentModelIntDefault(item.ContextWindow, DefaultLLMContextWindow)
+		item.MaxOutputTokens = currentModelIntDefault(item.MaxOutputTokens, DefaultLLMMaxOutputTokens)
 		item.SupportsReasoning = currentModelBoolDefault(item.SupportsReasoning, false)
 		item.SupportsVision = currentModelBoolDefault(item.SupportsVision, true)
 		item.LowTier = currentModelBoolDefault(item.LowTier, false)
@@ -214,6 +220,7 @@ func normalizeCurrentModelItem(section CurrentModelSection, item CurrentModelCat
 
 	item.ContextWindow = nil
 	item.MaxOutputTokens = nil
+	item.MaxInputTokens = nil
 	item.SupportsReasoning = nil
 	item.SupportsVision = nil
 	item.LowTier = nil

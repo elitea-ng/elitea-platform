@@ -30,6 +30,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -154,6 +155,11 @@ func newRelationFixture(t *testing.T) *relationFixture {
 	skillHandler := handler.NewHandler(repos.NewSkillsRepo(pool))
 
 	router := chi.NewRouter()
+	router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(auth.ContextWithUser(r.Context(), auth.User{UserID: "1"})))
+		})
+	})
 	router.Patch("/elitea_core/skill/{mode}/{projectID}/{skillID}", skillHandler.Update)
 	router.Patch("/elitea_core/version/prompt_lib/{projectID}/{applicationID}/{versionID}", appHandler.GetVersionExpanded)
 	fixture.router = router

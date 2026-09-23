@@ -249,7 +249,7 @@ export function CreateToolkit({ isMCP = false, isApplication = false, deps }: Cr
     () => ({
       sharepointAuthModals: SHAREPOINT_AUTH_MODALS,
       renderCredentialPicker,
-      ...(mcpLoadTools !== undefined && { toolActionsExtra: mcpLoadTools }),
+      ...(mcpLoadTools !== undefined && { toolActionsExtra: mcpLoadTools, mcpAuthStatus: mcpLoadTools.mcpAuthStatus }),
     }),
     [renderCredentialPicker, mcpLoadTools],
   );

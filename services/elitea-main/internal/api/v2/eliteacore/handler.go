@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	appmailer "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/mailer"
 	"io"
 	"log/slog"
 	"mime"
@@ -27,6 +26,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	appmailer "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/mailer"
+	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
@@ -56,6 +57,9 @@ type Handler struct {
 	// WithPrebuiltMCPCatalogue is applied, in which case resolution is a no-op.
 	prebuiltMCP      *mcpregistry.PrebuiltStore
 	prebuiltMCPVault PrebuiltSecretReader
+	delegatedAuth    DelegatedAuthToolkitSettingsResolver
+	dcrClients       MCPDCRClients
+	delegatedTokens  MCPDelegatedTokens
 	// Outbound e-mail for project invitations (users_write.go); nil means
 	// the invite result reports no delivery.
 	mailer InviteMailer
@@ -168,6 +172,29 @@ func WithHTTPClient(client *http.Client) Option {
 	return func(handler *Handler) {
 		if client != nil {
 			handler.httpClient = client
+		}
+	}
+}
+
+// DelegatedAuthToolkitSettingsResolver materializes one actor-visible
+// toolkit through Main's configuration and vault graph. Plaintext exists only
+// for the outbound OAuth request and must never be logged or returned.
+type DelegatedAuthToolkitSettingsResolver interface {
+	ResolveDelegatedAuthToolkitSettings(
+		context.Context,
+		int32,
+		int32,
+		int32,
+	) (toolkitexecutionapp.DelegatedAuthToolkitSettings, bool, error)
+}
+
+// WithDelegatedAuthToolkitSettingsResolver supplies the claim-mode settings
+// resolver used by the OAuth proxy. A nil resolver leaves stored-credential
+// fallback unavailable; caller-supplied and DCR credentials still work.
+func WithDelegatedAuthToolkitSettingsResolver(resolver DelegatedAuthToolkitSettingsResolver) Option {
+	return func(handler *Handler) {
+		if resolver != nil {
+			handler.delegatedAuth = resolver
 		}
 	}
 }
@@ -596,155 +623,6 @@ func (h *Handler) writeProjectIcon(
 		return err
 	}
 	return nil
-}
-
-func (h *Handler) ProjectContext(w http.ResponseWriter, r *http.Request) {
-	projectID := chi.URLParam(r, "projectID")
-
-	if h.pool == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"content": "", "enabled": false})
-		return
-	}
-
-	ctx := r.Context()
-	s, schemaOK := tenantSchema(w, projectID)
-	if !schemaOK {
-		return
-	}
-
-	q := fmt.Sprintf(`SELECT data FROM %s.configuration WHERE type = 'project_context' LIMIT 1`, s)
-	var data []byte
-	err := h.pool.QueryRow(ctx, q).Scan(&data)
-	if err != nil || len(data) == 0 {
-		writeJSON(w, http.StatusOK, map[string]any{"content": "", "enabled": false})
-		return
-	}
-	var cfg map[string]any
-	_ = json.Unmarshal(data, &cfg) // data was just read from DB; malformed means empty cfg is safe
-	writeJSON(w, http.StatusOK, map[string]any{
-		"content": cfg["content"],
-		"enabled": cfg["enabled"],
-	})
-}
-
-func (h *Handler) UpdateProjectContext(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Content string `json:"content"`
-		Enabled bool   `json:"enabled"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&body) // body is optional; ignore EOF/empty-body errors
-
-	if h.pool == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-		return
-	}
-
-	projectID := chi.URLParam(r, "projectID")
-	ctx := r.Context()
-	s, schemaOK := tenantSchema(w, projectID)
-	if !schemaOK {
-		return
-	}
-
-	numericProjectID, parseErr := strconv.ParseInt(projectID, 10, 64)
-	if parseErr != nil || numericProjectID <= 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid project id"})
-		return
-	}
-
-	// json.Marshal of a map[string]any of a string and a bool cannot fail.
-	dataBytes, _ := json.Marshal(map[string]any{"content": body.Content, "enabled": body.Enabled})
-
-	if err := h.writeProjectContext(ctx, s, numericProjectID, dataBytes); err != nil {
-		slog.ErrorContext(ctx, "update project context: write failed",
-			"error", err, "project_id", numericProjectID)
-		writeJSON(w, http.StatusInternalServerError, map[string]any{
-			"error": projectContextWriteFailed,
-			"code":  "project_context_write_failed",
-		})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"content": body.Content, "enabled": body.Enabled})
-}
-
-const projectContextWriteFailed = "failed to save project context"
-
-// writeProjectContext persists one project's context row, UPDATE-first so that
-// a row this deployment already holds is reused whatever its elitea_title is.
-//
-// Three properties are load-bearing, each of them a way the previous version
-// silently wrote nothing (#888):
-//
-//   - project_id IS NOT NULL on the tenant `configuration` table. The INSERT
-//     never named the column, so every write into a project with no prior row
-//     — that is, every project on a fresh install — died with
-//     `null value in column "project_id" ... violates not-null constraint`.
-//   - `ON CONFLICT (elitea_title) WHERE type = 'project_context'` names a
-//     PARTIAL unique index. 001_initial.sql gives elitea_title a plain,
-//     non-partial UNIQUE constraint, so no index matched the inference
-//     predicate and PostgreSQL refused the statement at plan time, on every
-//     call, row or no row. The conflict target below is the bare column, the
-//     way UpdateProjectIcon already spells it.
-//   - The UPDATE fallback matched on `type = 'project_context'` alone, which
-//     is right for an existing row and matches zero rows when there is none.
-//     It ran only on the INSERT's error and its own error was discarded, so
-//     the handler answered 200 having written nothing at all.
-//
-// The error is returned, never swallowed: the caller turns it into a typed 500.
-func (h *Handler) writeProjectContext(
-	ctx context.Context,
-	schema string,
-	projectID int64,
-	data []byte,
-) error {
-	update := fmt.Sprintf(
-		`UPDATE %s.configuration SET data = $1, updated_at = NOW() WHERE type = 'project_context'`,
-		schema)
-	tag, err := h.pool.Exec(ctx, update, data)
-	if err != nil {
-		return fmt.Errorf("update project context: %w", err)
-	}
-	if tag.RowsAffected() > 0 {
-		return nil
-	}
-
-	insert := fmt.Sprintf(`
-		INSERT INTO %s.configuration
-			(project_id, label, elitea_title, type, section, data, status_ok, created_at)
-		VALUES ($1, 'Project Context', $2, 'project_context', 'project_context', $3, true, NOW())
-		ON CONFLICT (elitea_title) DO UPDATE
-			SET data = EXCLUDED.data, updated_at = NOW()`, schema)
-	title := fmt.Sprintf("project_context_%d", projectID)
-	if _, err := h.pool.Exec(ctx, insert, projectID, title, data); err != nil {
-		return fmt.Errorf("insert project context: %w", err)
-	}
-	return nil
-}
-
-func (h *Handler) SearchOptions(w http.ResponseWriter, r *http.Request) {
-	projectID := chi.URLParam(r, "projectID")
-	s, schemaOK := tenantSchema(w, projectID)
-	if !schemaOK {
-		return
-	}
-	ctx := r.Context()
-
-	q := fmt.Sprintf(`SELECT name FROM %s.tags ORDER BY name`, s)
-	rows, err := h.pool.Query(ctx, q)
-
-	tags := make([]string, 0)
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var name string
-			if rows.Scan(&name) != nil {
-				continue
-			}
-			tags = append(tags, name)
-		}
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{"tags": tags, "collections": []any{}})
 }
 
 // usersCountQuery and usersPageQuery list the members of one project, plus the
@@ -5158,6 +5036,9 @@ func validateMCPProxyURL(rawURL string) (*url.URL, error) {
 	if host == "" {
 		return nil, fmt.Errorf("invalid MCP endpoint host")
 	}
+	if hasMCPProxyDotPathSegment(endpoint.Path) {
+		return nil, fmt.Errorf("invalid MCP endpoint path")
+	}
 
 	switch scheme {
 	case "https":
@@ -5172,6 +5053,15 @@ func validateMCPProxyURL(rawURL string) (*url.URL, error) {
 
 	endpoint.Scheme = scheme
 	return endpoint, nil
+}
+
+func hasMCPProxyDotPathSegment(path string) bool {
+	for _, segment := range strings.Split(path, "/") {
+		if segment == "." || segment == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 func isLoopbackMCPHost(host string) bool {
@@ -5224,193 +5114,11 @@ func (h *Handler) doMCPProxyRequest(req *http.Request) (*http.Response, error) {
 }
 
 func (h *Handler) MCPOAuthProxy(w http.ResponseWriter, r *http.Request) {
-	if !h.requireMCPEnabled(w, r) {
-		return
-	}
-	projectID := chi.URLParam(r, "projectID")
-	ctx := r.Context()
-
-	var body struct {
-		TokenEndpoint string `json:"token_endpoint"`
-		Code          string `json:"code,omitempty"`
-		RedirectURI   string `json:"redirect_uri,omitempty"`
-		ClientID      string `json:"client_id,omitempty"`
-		ClientSecret  string `json:"client_secret,omitempty"`
-		CodeVerifier  string `json:"code_verifier,omitempty"`
-		GrantType     string `json:"grant_type,omitempty"`
-		RefreshToken  string `json:"refresh_token,omitempty"`
-		Scope         string `json:"scope,omitempty"`
-		ToolkitID     string `json:"toolkit_id,omitempty"`
-		// ToolkitType names the pre-built catalogue entry whose credentials
-		// this exchange should use. apps/elitea-web has always sent it
-		// (features/mcps/api/mcpOAuthClient.ts); until the catalogue existed
-		// there was nothing here to look it up in, so it was decoded into
-		// nothing. pylon reads the same field at mcp_oauth_proxy.py:112.
-		ToolkitType string `json:"toolkit_type,omitempty"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-		return
-	}
-
-	if body.TokenEndpoint == "" {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-		return
-	}
-	tokenEndpoint, err := validateMCPProxyURL(body.TokenEndpoint)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_token_endpoint"})
-		return
-	}
-
-	clientID := body.ClientID
-	clientSecret := body.ClientSecret
-
-	if h.pool != nil && body.ToolkitID != "" && (clientID == "" || clientSecret == "") {
-		s, schemaOK := tenantSchema(w, projectID)
-		if !schemaOK {
-			return
-		}
-		var settings []byte
-		_ = h.pool.QueryRow(ctx, fmt.Sprintf(`SELECT settings FROM %s.elitea_tools WHERE id = $1`, s), body.ToolkitID).Scan(&settings) // failure leaves settings nil
-		if len(settings) > 0 {
-			var cfg map[string]any
-			_ = json.Unmarshal(settings, &cfg) // DB jsonb column; malformed means empty cfg
-			if clientID == "" {
-				if v, ok := cfg["client_id"].(string); ok {
-					clientID = v
-				}
-			}
-			if clientSecret == "" {
-				if v, ok := cfg["client_secret"].(string); ok {
-					clientSecret = v
-				}
-			}
-		}
-	}
-
-	// The catalogue is the LAST source consulted, after the request body and
-	// after the toolkit's own stored settings. That is pylon's priority order
-	// and the safe one: an operator's platform-wide default must not override a
-	// credential the project configured for itself.
-	if clientID == "" || clientSecret == "" {
-		resolved, err := h.resolvePrebuiltSettings(ctx, map[string]any{
-			"client_id":     clientID,
-			"client_secret": clientSecret,
-		}, body.ToolkitType)
-		if err != nil {
-			// Exchanging with a half-resolved client would send an empty or
-			// absent secret and be rejected by the authorisation server, which
-			// reports it as a bad client rather than as this service failing to
-			// read its own catalogue.
-			writeJSON(w, http.StatusServiceUnavailable,
-				map[string]any{"error": "prebuilt_catalogue_unavailable"})
-			return
-		}
-		clientID = stringSetting(resolved, "client_id", clientID)
-		clientSecret = stringSetting(resolved, "client_secret", clientSecret)
-	}
-
-	grantType := body.GrantType
-	if grantType == "" {
-		grantType = "authorization_code"
-	}
-
-	formData := url.Values{
-		"grant_type": {grantType},
-		"client_id":  {clientID},
-	}
-	if clientSecret != "" {
-		formData.Set("client_secret", clientSecret)
-	}
-	if body.Scope != "" {
-		formData.Set("scope", body.Scope)
-	}
-
-	if grantType == "refresh_token" {
-		formData.Set("refresh_token", body.RefreshToken)
-	} else {
-		formData.Set("code", body.Code)
-		formData.Set("redirect_uri", body.RedirectURI)
-		if body.CodeVerifier != "" {
-			formData.Set("code_verifier", body.CodeVerifier)
-		}
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenEndpoint.String(), strings.NewReader(formData.Encode()))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_token_endpoint"})
-		return
-	}
-	httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := h.doMCPProxyRequest(httpReq)
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "token_exchange_failed"})
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	var tokenResp map[string]any
-	_ = json.NewDecoder(resp.Body).Decode(&tokenResp) // external HTTP response; malformed means nil tokenResp
-	writeJSON(w, resp.StatusCode, tokenResp)
+	h.mcpOAuthProxy(w, r)
 }
 
 func (h *Handler) MCPDCRProxy(w http.ResponseWriter, r *http.Request) {
-	if !h.requireMCPEnabled(w, r) {
-		return
-	}
-	ctx := r.Context()
-
-	var body struct {
-		RegistrationEndpoint string         `json:"registration_endpoint"`
-		ClientName           string         `json:"client_name,omitempty"`
-		RedirectURIs         []string       `json:"redirect_uris,omitempty"`
-		GrantTypes           []string       `json:"grant_types,omitempty"`
-		Metadata             map[string]any `json:"metadata,omitempty"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-		return
-	}
-
-	if body.RegistrationEndpoint == "" {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-		return
-	}
-	registrationEndpoint, err := validateMCPProxyURL(body.RegistrationEndpoint)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_registration_endpoint"})
-		return
-	}
-
-	regBody := map[string]any{
-		"client_name":   body.ClientName,
-		"redirect_uris": body.RedirectURIs,
-		"grant_types":   body.GrantTypes,
-	}
-	for k, v := range body.Metadata {
-		regBody[k] = v
-	}
-	reqBytes, _ := json.Marshal(regBody)
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, registrationEndpoint.String(), bytes.NewReader(reqBytes))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_registration_endpoint"})
-		return
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := h.doMCPProxyRequest(httpReq)
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "dcr_failed"})
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	var dcrResp map[string]any
-	_ = json.NewDecoder(resp.Body).Decode(&dcrResp) // external HTTP response; malformed means nil dcrResp
-	writeJSON(w, resp.StatusCode, dcrResp)
+	h.mcpDCRProxy(w, r)
 }
 
 // MCPSyncTools discovers the tools of a remote MCP server and records them.
@@ -5446,13 +5154,13 @@ func (h *Handler) MCPSyncTools(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		URL         string            `json:"url"`
-		Headers     map[string]string `json:"headers"`
-		Timeout     int               `json:"timeout"`
-		ToolkitType string            `json:"toolkit_type"`
+		URL         string                       `json:"url"`
+		Headers     map[string]string            `json:"headers"`
+		Timeout     int                          `json:"timeout"`
+		ToolkitType string                       `json:"toolkit_type"`
+		MCPTokens   map[string]mcpDiscoveryToken `json:"mcp_tokens"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request"})
+	if !decodeMCPProxyRequest(w, r, &body) {
 		return
 	}
 
@@ -5514,8 +5222,12 @@ func (h *Handler) MCPSyncTools(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	tools, err := mcpregistry.NewDiscoverer(h.doMCPProxyRequest).
-		Discover(ctx, endpoint.String(), body.Headers)
+		Discover(ctx, endpoint.String(), mcpDiscoveryHeaders(body.Headers, body.MCPTokens, endpoint.String(), body.ToolkitType))
 	if err != nil {
+		if metadata, authErr := h.mcpDiscoveryAuthorization(ctx, endpoint, err); authErr == nil {
+			writeJSON(w, http.StatusOK, map[string]any{"success": false, "requires_authorization": true, "response_metadata": metadata})
+			return
+		}
 		// The stated cause is the remote server's, not this service's, so it is
 		// reported as a failed discovery rather than a fault here. The web
 		// client renders `error` directly.

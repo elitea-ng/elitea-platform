@@ -67,6 +67,7 @@ type CurrentRegenerationRequest struct {
 	RegenerationID         string
 	RequestedParticipantID int64
 	LLMSettings            json.RawMessage
+	MCPTokens              json.RawMessage
 	// EditedQuestion is the rewritten question this regeneration runs from
 	// (issue 980), or the zero value for the ordinary retry. Its presence is
 	// what makes a regeneration an EDIT: the turn runs from `Text` instead of
@@ -114,7 +115,7 @@ func (request CurrentRegenerationRequest) Validate() error {
 		request.RequestedParticipantID < 0 ||
 		!validUUID(request.ConversationUUID) || !validUUID(request.QuestionID) ||
 		!validUUID(request.ResponseMessageID) || !validUUID(request.RegenerationID) ||
-		!validJSONObject(request.LLMSettings) {
+		!validJSONObject(request.LLMSettings) || !validCurrentMCPTokens(request.MCPTokens) {
 		return ErrInvalidCurrentAgentStart
 	}
 	return request.EditedQuestion.Validate()
@@ -276,6 +277,7 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 	switch target.Kind {
 	case CurrentRegenerationApplication:
 		start := CurrentApplicationStartRequest{
+			MCPTokens: request.MCPTokens,
 			ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
 			ConversationUUID:    target.ConversationUUID,
 			TargetParticipantID: target.TargetParticipantID,
@@ -285,12 +287,14 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 		if err != nil {
 			return nil, nil, "", err
 		}
-		frozen, err := service.freezer.FreezeCurrentApplicationVersion(
+		frozen, contextSettings, err := service.freezeVersionWithContext(
 			ctx,
 			CurrentApplicationVersionFreezeRequest{
 				ProjectID: projectID32, ActorUserID: actorUserID32,
 				VersionDetails: resolved.VersionDetails,
+				InternalTools:  resolved.InternalTools,
 			},
+			target.ConversationUUID,
 		)
 		if err != nil {
 			return nil, nil, "", err
@@ -310,12 +314,14 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 		if err != nil {
 			return nil, nil, "", err
 		}
+		input.ContextSettings = contextSettings
 		input.IsRegenerate = true
 		turn.ApplicationID = resolved.ApplicationID
 		turn.ApplicationVersionID = resolved.ApplicationVersionID
 		return input, turn, executiondomain.AgentApplicationCapability, nil
 	case CurrentRegenerationAdhoc:
 		start := CurrentAdhocStartRequest{
+			MCPTokens: request.MCPTokens,
 			ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
 			ConversationUUID:    target.ConversationUUID,
 			TargetParticipantID: target.TargetParticipantID,
@@ -330,12 +336,13 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 		if err != nil {
 			return nil, nil, "", err
 		}
-		frozen, err := service.freezer.FreezeCurrentApplicationVersion(
+		frozen, contextSettings, err := service.freezeVersionWithContext(
 			ctx,
 			CurrentApplicationVersionFreezeRequest{
 				ProjectID: projectID32, ActorUserID: actorUserID32,
 				VersionDetails: snapshot,
 			},
+			target.ConversationUUID,
 		)
 		if err != nil {
 			return nil, nil, "", err
@@ -351,6 +358,7 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 		if err != nil {
 			return nil, nil, "", err
 		}
+		input.ContextSettings = contextSettings
 		input.IsRegenerate = true
 		return input, turn, executiondomain.AgentAdhocCapability, nil
 	default:

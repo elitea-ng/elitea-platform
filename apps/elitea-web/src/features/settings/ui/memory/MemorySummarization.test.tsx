@@ -24,7 +24,7 @@ import {
 
 import { MemorySummarization } from './MemorySummarization';
 
-const INSTRUCTIONS_LABEL = 'Summarization instructions';
+const INSTRUCTIONS_LABEL = 'Additional summary guidance (optional)';
 const TARGET_TOKENS_LABEL = 'Target Summary Tokens';
 const SWITCH_LABEL = 'Enable automatic summarization';
 

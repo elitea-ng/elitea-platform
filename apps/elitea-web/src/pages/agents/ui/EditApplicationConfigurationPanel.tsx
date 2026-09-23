@@ -11,8 +11,9 @@ import { useCallback } from 'react';
 
 import Box from '@mui/material/Box';
 
+import type { Tag } from '@/entities/tag';
+import { AgentIconEditor, AgentTagEditor, ApplicationEditorNotes, ApplicationInformation, ApplicationMcpAccessToggle, CreateAgentForm } from '@/features/agents';
 import { AgentSkillsPanel } from '@/features/agent-skills';
-import { AgentIconEditor, AgentTagEditor, ApplicationEditorNotes, ApplicationInformation, CreateAgentForm } from '@/features/agents';
 import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import type { ApplicationVersionDetail } from '@/shared/api/generated/model';
 import { AgentModelSettings } from '@/widgets/agent-model-settings';
@@ -20,6 +21,15 @@ import { AgentModelSettings } from '@/widgets/agent-model-settings';
 import type { EditApplicationEditorBridge } from '../lib/useEditApplicationEditorBridge';
 import type { EditApplicationVersionFieldsState } from '../lib/useEditApplicationVersionFields';
 import { EditApplicationToolsPanel } from './EditApplicationToolsPanel';
+
+const mcpTagName = 'mcp';
+
+function withMcpExposure(tags: readonly Tag[], enabled: boolean): readonly Tag[] {
+  const withoutMcp = tags.filter((tag) => tag.name !== mcpTagName);
+  if (!enabled) return withoutMcp;
+  const existing = tags.find((tag) => tag.name === mcpTagName);
+  return [...withoutMcp, existing ?? { id: -1, name: mcpTagName, data: null }];
+}
 
 export interface EditApplicationConfigurationPanelProps {
   readonly projectId: string | undefined;
@@ -88,17 +98,12 @@ function applicationIconMetaOf(
 }
 
 export function EditApplicationConfigurationPanel(props: EditApplicationConfigurationPanelProps): ReactNode {
-  const {
-    projectId,
-    applicationId,
-    activeVersion,
-    editor,
-    versionFields,
-    isEditorDisabled,
-    isDirty,
-    isReadOnly,
-    onModelSettingsChange,
-  } = props;
+  const { projectId, applicationId, activeVersion, editor, versionFields, isEditorDisabled, isDirty, isReadOnly, onModelSettingsChange } =
+    props;
+  const tags = versionFields.fields.tags;
+  const setTags = versionFields.setTags;
+  const handleMcpAccessChange = useCallback((enabled: boolean) => setTags(withMcpExposure(tags, enabled)), [setTags, tags]);
+  const mcpAccessEnabled = tags.some((tag) => tag.name === mcpTagName);
   const fork = forkOrigin(activeVersion);
   const iconMeta = applicationIconMetaOf(activeVersion);
   const onNotesChange = useCallback(
@@ -129,11 +134,15 @@ export function EditApplicationConfigurationPanel(props: EditApplicationConfigur
           />
         }
         tagsSlot={
-          <AgentTagEditor
-            projectId={projectId}
-            value={versionFields.fields.tags}
-            onChange={versionFields.setTags}
-          />
+          <>
+            <ApplicationMcpAccessToggle
+              checked={mcpAccessEnabled}
+              onChange={handleMcpAccessChange}
+              disabled={isEditorDisabled}
+              entityType="agent"
+            />
+            <AgentTagEditor projectId={projectId} value={tags} onChange={setTags} />
+          </>
         }
         modelSettingsSlot={
           <AgentModelSettings

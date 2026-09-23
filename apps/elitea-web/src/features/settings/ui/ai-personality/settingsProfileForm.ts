@@ -27,6 +27,8 @@
  *     mention them, which is what lets Settings › AI Personality save without
  *     carrying Settings › Memory's fields.
  */
+import { resolveContextBudgetMode, type ContextBudgetMode } from '@/shared/lib/contextBudget';
+
 import { DEFAULT_CONTEXT_STRATEGY } from '@/features/settings/lib/profile/context-budget/constants';
 
 import { DEFAULT_PERSONA, emptyPersonalityInstructions } from './personaOptions';
@@ -52,7 +54,7 @@ export interface SettingsProfileFormValues {
   /** Instructions are stored PER PERSONA, keyed by persona id (baseline #5392). */
   personality_instructions: Record<string, string>;
   context_enabled: boolean;
-  max_context_tokens: NumericFieldValue;
+  budget_mode: ContextBudgetMode;
   preserve_recent_messages: NumericFieldValue;
   enable_context_editing: boolean;
   enable_summarization: boolean;
@@ -127,7 +129,7 @@ function serializeSummarization(
     summary_llm_settings: {
       instructions: asString(s.summary_instructions, ''),
       model_name: asString(s.summary_model_name, ''),
-      model_project_id: typeof projectId === 'string' ? projectId : fallbackProjectId,
+      model_project_id: typeof projectId === 'number' || typeof projectId === 'string' ? String(projectId) : fallbackProjectId,
       max_tokens: asNumber(s.target_summary_tokens, DEFAULT_TARGET_SUMMARY_TOKENS),
     },
   };
@@ -153,7 +155,7 @@ export function serializeSettingsProfile(
     persona: asString(p.persona, DEFAULT_PERSONA),
     personality_instructions: { ...emptyPersonalityInstructions(), ...p.personality_instructions },
     context_enabled: asBoolean(cm.enabled, DEFAULT_CONTEXT_STRATEGY.ENABLED),
-    max_context_tokens: asNumber(cm.max_context_tokens, DEFAULT_CONTEXT_STRATEGY.MAX_CONTEXT_TOKENS),
+    budget_mode: resolveContextBudgetMode(cm.budget_mode),
     preserve_recent_messages: asNumber(
       cm.preserve_recent_messages,
       DEFAULT_CONTEXT_STRATEGY.PRESERVE_RECENT_MESSAGES,
@@ -187,7 +189,7 @@ export function deserializeMemoryBlocks(values: SettingsProfileFormValues): {
   return {
     default_context_management: {
       enabled: values.context_enabled,
-      ...numberField('max_context_tokens', values.max_context_tokens),
+      budget_mode: values.budget_mode,
       ...numberField('preserve_recent_messages', values.preserve_recent_messages),
       enable_context_editing: values.enable_context_editing,
     },
@@ -195,7 +197,7 @@ export function deserializeMemoryBlocks(values: SettingsProfileFormValues): {
       enable_summarization: values.enable_summarization,
       summary_instructions: s.instructions,
       summary_model_name: s.model_name,
-      ...projectIdField(s.model_project_id),
+      ...(s.model_name ? projectIdField(s.model_project_id) : {}),
       ...numberField('target_summary_tokens', s.max_tokens),
     },
   };

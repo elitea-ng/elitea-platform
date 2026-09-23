@@ -1,0 +1,35 @@
+# Separate test project. Never recreate the rehearsal services through this file.
+services:
+  oauth-emulator:
+    image: elitea-oauth-emulator:test
+    build:
+      context: ./oauth-emulator
+      dockerfile: Containerfile
+    environment:
+      OAUTH_EMULATOR_ENABLED: test-only
+      OAUTH_EMULATOR_CLIENT_SECRET: ${OAUTH_EMULATOR_CLIENT_SECRET:?Set a separate test client secret}
+      OAUTH_EMULATOR_INTERNAL_ORIGIN: https://oauth-emulator:8443
+      OAUTH_EMULATOR_BROWSER_ORIGIN: https://localhost:18443
+      OAUTH_EMULATOR_CALLBACK: http://localhost:18084/app/mcp-auth-callback
+      OAUTH_EMULATOR_TOKEN_TTL: "60"
+    ports:
+      - "127.0.0.1:18443:8443"
+    networks:
+      rehearsal:
+        aliases: [oauth-emulator]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 128m
+    cpus: 0.5
+    stop_grace_period: 15s
+    healthcheck:
+      test: [CMD, python3, -c, "import ssl, urllib.request; urllib.request.urlopen('https://localhost:8443/healthz', context=ssl.create_default_context(cafile='/opt/oauth-emulator/tls/ca.crt'), timeout=3).close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+networks:
+  rehearsal:
+    external: true
+    name: ${OAUTH_EMULATOR_NETWORK:-elitea-rust-rehearsal_default}

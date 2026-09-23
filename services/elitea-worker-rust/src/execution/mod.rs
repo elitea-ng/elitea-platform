@@ -6,12 +6,17 @@ mod agent_delivery_processor;
 mod agent_invocation;
 pub mod agent_lease;
 pub mod agent_preparation;
+mod checkpoint_recovery;
+mod execution_delivery_processor;
 pub mod invocation_admission;
 mod invocation_supervisor;
 mod native_agent_lifecycle;
 pub mod output_delivery;
 pub(crate) mod production;
 mod redis_delivery;
+mod toolkit_delivery;
+mod toolkit_delivery_processor;
+mod toolkit_output;
 
 #[cfg(test)]
 mod agent_lease_tests;
@@ -25,6 +30,8 @@ mod invocation_supervisor_tests;
 mod output_delivery_tests;
 #[cfg(test)]
 mod redis_delivery_tests;
+#[cfg(test)]
+mod toolkit_output_tests;
 
 pub use agent_delivery::{
     AgentDeliveryCompletion, AgentDeliveryCompletionKind, AgentDeliveryError, AgentDeliveryRoute,

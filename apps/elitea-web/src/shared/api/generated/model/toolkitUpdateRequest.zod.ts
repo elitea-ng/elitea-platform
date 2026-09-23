@@ -46,8 +46,13 @@ export const ToolkitUpdateRequest = zod
     name: zod.string().min(1).optional(),
     type: zod.string().optional(),
     description: zod.string().optional(),
+    meta: zod
+      .record(zod.string(), zod.unknown())
+      .optional()
+      .describe(
+        "Toolkit metadata, including MCP sharing options and index schedules. This replaces the stored object; preserve other metadata when editing.\n",
+      ),
     settings: zod.record(zod.string(), zod.unknown()).optional(),
-    meta: zod.record(zod.string(), zod.unknown()).optional(),
   })
   .describe(
     "NOTE(1c): all fields optional — `pgRepo.UpdateToolkit` applies only the keys present. Must NOT contain `has_relation`: that key makes the handler dispatch to a different operation entirely (tool↔entity relation, see the `updateToolkit` description and issue #38).\n",

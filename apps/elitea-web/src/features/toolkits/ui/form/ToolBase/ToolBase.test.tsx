@@ -122,6 +122,22 @@ describe('ToolBase', () => {
     expect(getByText('Create issue')).toBeInTheDocument();
   });
 
+  it.each([['echo_marker'], []])('prefers explicit MCP discovery over stale catalogue names: %j', async (...names) => {
+    mockPlatformSettings(true);
+    const schema: ToolSchema = {
+      title: 'mcp',
+      properties: { selected_tools: { items: { enum: ['stale_tool'] } } },
+    };
+    const { queryByText, getByText } = renderToolBase({
+      editToolDetail: detail({ type: 'mcp', settings: { available_mcp_tools: names, selected_tools: [] } }),
+      setEditToolDetail: vi.fn(), editField: vi.fn(), toolErrors: {},
+      showValidation: false, setToolErrors: vi.fn(), schema,
+    });
+    await waitFor(() => expect(getByText('Tools')).toBeInTheDocument());
+    expect(queryByText('Stale tool')).not.toBeInTheDocument();
+    expect(queryByText('Echo marker') !== null).toBe(names.length > 0);
+  });
+
   it('does not render the tools picker when showTools is false', async () => {
     mockPlatformSettings(true);
     const schema: ToolSchema = {

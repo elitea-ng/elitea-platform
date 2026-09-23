@@ -62,7 +62,7 @@ function valuesUnchangedSince(saved: SettingsProfileFormValues, current: Setting
   if (
     saved.persona !== current.persona ||
     saved.context_enabled !== current.context_enabled ||
-    saved.max_context_tokens !== current.max_context_tokens ||
+    saved.budget_mode !== current.budget_mode ||
     saved.preserve_recent_messages !== current.preserve_recent_messages ||
     saved.enable_context_editing !== current.enable_context_editing ||
     saved.enable_summarization !== current.enable_summarization

@@ -22,6 +22,17 @@ function statsFrom(overrides: Readonly<Record<string, unknown>> = {}): ContextBu
 }
 
 describe('ContextBudgetPanel', () => {
+  it('explains a provider input ceiling below the combined window allocation', () => {
+    const stats: ContextBudgetStats = {
+      ...statsFrom({ max_tokens: 272000 }),
+      runtime: { phase: 'measured', active: false, legacy: false, totalTokens: 400000, reservedOutputTokens: 8192, safetyMarginTokens: 4000 },
+    };
+    const { getByTestId, rerender, queryByTestId } = renderWithTheme(<ContextBudgetPanel stats={stats} />);
+    expect(getByTestId('context-budget-stat-input-limit').textContent).toBe(`Provider input limit:272${NBSP}000`);
+    rerender(<ContextBudgetPanel stats={{ ...stats, maxTokens: 387808 }} />);
+    expect(queryByTestId('context-budget-stat-input-limit')).toBeNull();
+  });
+
   it('renders the grouped token counts, the percentage and the three stat rows', () => {
     const { getByTestId } = renderWithTheme(<ContextBudgetPanel stats={statsFrom()} />);
 
@@ -32,14 +43,15 @@ describe('ContextBudgetPanel', () => {
     expect(getByTestId('context-budget-stat-strategy').textContent).toBe('Strategy:sliding window with summary');
   });
 
-  it('renders a dash for the maximum and only the Messages row when the context manager is off', () => {
+  it('shows unknown usage without a percentage or progress bar when capacity is unavailable', () => {
     const { getByTestId, queryByTestId } = renderWithTheme(
       <ContextBudgetPanel stats={statsFrom({ max_tokens: 0 })} />,
     );
 
-    expect(getByTestId('context-budget-tokens').textContent).toBe(`12${NBSP}000 / - tokens`);
-    expect(getByTestId('context-budget-utilization').textContent).toBe('0%');
-    expect(getByTestId('context-budget-stat-messages').textContent).toBe('Messages:9');
+    expect(getByTestId('context-budget-tokens').textContent).toBe('Usage not yet measured');
+    expect(getByTestId('context-budget-utilization').textContent).toBe('—');
+    expect(getByTestId('context-budget-stat-mode').textContent).toBe('Window:Balanced');
+    expect(queryByTestId('context-budget-progress')).toBeNull();
     expect(queryByTestId('context-budget-stat-summaries')).toBeNull();
     expect(queryByTestId('context-budget-stat-strategy')).toBeNull();
   });

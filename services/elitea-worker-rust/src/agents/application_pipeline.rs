@@ -369,9 +369,18 @@ impl Tool for ApplicationPipelineTool {
     fn response_schema(&self) -> Option<Value> {
         Some(json!({
             "type": "object",
-            "properties": {"response": {"type": "string"}},
-            "required": ["response"],
-            "additionalProperties": false
+            "oneOf": [
+                {
+                    "properties": {"response": {"type": "string"}},
+                    "required": ["response"],
+                    "additionalProperties": false
+                },
+                {
+                    "properties": {"error": {"type": "string"}, "failure": {"type": "object"}},
+                    "required": ["error", "failure"],
+                    "additionalProperties": false
+                }
+            ]
         }))
     }
 
@@ -389,7 +398,7 @@ impl Tool for ApplicationPipelineTool {
             outcome = tracing::field::Empty,
         );
         let result = self
-            .invoke_child(ctx, arguments)
+            .invoke_child(ctx.clone(), arguments)
             .instrument(span.clone())
             .await;
         span.record(
@@ -399,7 +408,27 @@ impl Tool for ApplicationPipelineTool {
                 Err(_) => "failed",
             },
         );
-        result
+        match result {
+            Err(error) => {
+                if let Some(report) =
+                    super::application_tools::child_continuation_report(&error, None, false)
+                {
+                    tracing::error!(
+                        event = "nested_pipeline_failed",
+                        invocation_id = %ctx.invocation_id(),
+                        function_call_id = %ctx.function_call_id(),
+                        error_code = error.code,
+                        cause_message = report["failure"]["message"].as_str(),
+                        recovery = "revise_task",
+                        "child pipeline answer is incomplete; returning failure to the orchestrator"
+                    );
+                    Ok(report)
+                } else {
+                    Err(error)
+                }
+            }
+            Ok(value) => Ok(value),
+        }
     }
 }
 
@@ -523,6 +552,11 @@ impl ApplicationPipelineTool {
                     continue;
                 }
                 next = stream.next() => {
+                    // The graph may wrap an error after queuing its typed cause.
+                    // Drain that cause before returning the generic graph error.
+                    while let Some(queued) = node_events.try_recv() {
+                        self.forward(ctx, thread_id, queued?).await?;
+                    }
                     let Some(next) = next else { break };
                     next?
                 }

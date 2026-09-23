@@ -3,6 +3,7 @@ pub mod control;
 mod error;
 pub mod node_event;
 pub mod output;
+pub mod toolkit_execution;
 mod wire;
 
 // Generated protobuf and gRPC clients mirror comments and method shapes owned

@@ -41,8 +41,52 @@
  */
 import * as zod from "zod";
 
+export const toolkitToolRunRequestMcpAuthorizationReferenceMin = 43;
+export const toolkitToolRunRequestMcpAuthorizationReferenceMax = 43;
+
+export const toolkitToolRunRequestLlmModelMax = 256;
+
+export const toolkitToolRunRequestLlmSettingsTemperatureMin = 0;
+export const toolkitToolRunRequestLlmSettingsTemperatureMax = 2;
+
+export const toolkitToolRunRequestLlmSettingsMaxTokensMin = -1;
+export const toolkitToolRunRequestLlmSettingsMaxTokensMax = 1048576;
+
 export const ToolkitToolRunRequest = zod
   .object({
+    mcp_authorization_reference: zod
+      .string()
+      .min(toolkitToolRunRequestMcpAuthorizationReferenceMin)
+      .max(toolkitToolRunRequestMcpAuthorizationReferenceMax)
+      .optional()
+      .describe(
+        "Reference from a saved-toolkit OAuth exchange. Main checks actor, project, toolkit, resource, and expiry.",
+      ),
+    llm_model: zod
+      .string()
+      .max(toolkitToolRunRequestLlmModelMax)
+      .optional()
+      .describe("Saved project model selection for toolkit Test."),
+    llm_settings: zod
+      .object({
+        temperature: zod
+          .number()
+          .min(toolkitToolRunRequestLlmSettingsTemperatureMin)
+          .max(toolkitToolRunRequestLlmSettingsTemperatureMax)
+          .optional(),
+        max_tokens: zod
+          .int()
+          .min(toolkitToolRunRequestLlmSettingsMaxTokensMin)
+          .max(toolkitToolRunRequestLlmSettingsMaxTokensMax)
+          .optional(),
+        reasoning_effort: zod
+          .enum(["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+          .optional(),
+      })
+      .optional()
+      .describe(
+        "Bounded model settings for toolkit Test. Credential values are refused.",
+      ),
     tool_name: zod
       .string()
       .describe(

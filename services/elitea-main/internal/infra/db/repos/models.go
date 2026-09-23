@@ -257,6 +257,10 @@ func mapCurrentModelCandidate(
 	if err != nil {
 		return currentModelCandidate{}, err
 	}
+	item.MaxInputTokens, err = optionalCurrentModelInt(data, "max_input_tokens")
+	if err != nil {
+		return currentModelCandidate{}, err
+	}
 	item.SupportsReasoning, err = optionalCurrentModelBool(data, "supports_reasoning")
 	if err != nil {
 		return currentModelCandidate{}, err

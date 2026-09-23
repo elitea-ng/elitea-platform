@@ -764,7 +764,7 @@ async fn expired_and_oversized_authority_is_rejected() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn authoritative_one_mebibyte_agent_reference_boundary_is_exact() {
+async fn authoritative_eight_mebibyte_agent_reference_boundary_is_exact() {
     let (control, state) = client();
     *state.claim.lock().expect("claim") =
         ClaimCommandResponseV1::decode(bytes("accepted_claim_agent_input_at_limit").as_slice())

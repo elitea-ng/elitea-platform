@@ -26,7 +26,9 @@ const MAX_TARGET_BYTES: usize = 512;
 const MAX_ORIGIN_BYTES: usize = 2_048;
 const RUNTIME_REDIS_ENTRY_BYTES: usize = 64 * 1024;
 const RUNTIME_REDIS_FIELD_BYTES: usize = 48 * 1024;
-const RUNTIME_INPUT_CONTENT_BYTES: usize = 256 * 1024;
+// Match Main's admitted agent bundle and the claim-bound content contract.
+// A smaller fetch limit rejects saved history before compaction can run.
+const RUNTIME_INPUT_CONTENT_BYTES: usize = 8 * 1024 * 1024;
 const RUNTIME_OUTPUT_FRAME_BYTES: usize = 64 * 1024;
 const RUNTIME_GRPC_REQUEST_BYTES: usize = 64 * 1024;
 const RUNTIME_GRPC_RESPONSE_BYTES: usize = 80 * 1024;
@@ -87,6 +89,8 @@ pub struct RuntimeDeployConfig {
     pub spool_root: PathBuf,
     pub spool_key_path: PathBuf,
     pub agent_checkpoint_connection_path: Option<PathBuf>,
+    #[serde(default)]
+    pub agent_model_checkpoint_recovery: bool,
     pub limits: RuntimeLimits,
 }
 
@@ -125,6 +129,9 @@ impl RuntimeDeployConfig {
         if let Some(path) = &self.agent_checkpoint_connection_path {
             require_absolute_path(path)?;
         }
+        if self.agent_model_checkpoint_recovery && self.agent_checkpoint_connection_path.is_none() {
+            return Err(invalid_config());
+        }
         self.limits.validate()?;
         Ok(self)
     }
@@ -146,6 +153,10 @@ pub struct RuntimeLimits {
     pub admission_timeout_millis: u64,
     pub grpc_deadline_millis: u64,
     pub content_timeout_millis: u64,
+    #[serde(default = "default_model_timeout_millis")]
+    pub model_response_header_timeout_millis: u64,
+    #[serde(default = "default_model_timeout_millis")]
+    pub model_stream_idle_timeout_millis: u64,
     pub http_max_connections: usize,
     pub http_max_keepalive_connections: usize,
     pub output_max_queued_frames: usize,
@@ -155,6 +166,10 @@ pub struct RuntimeLimits {
     pub output_stream_deadline_millis: u64,
     pub lease_poll_interval_millis: u64,
     pub shutdown_timeout_millis: u64,
+}
+
+fn default_model_timeout_millis() -> u64 {
+    120_000
 }
 
 impl RuntimeLimits {
@@ -174,6 +189,8 @@ impl RuntimeLimits {
             && (1..=60_000).contains(&self.admission_timeout_millis)
             && (1..=300_000).contains(&self.grpc_deadline_millis)
             && (1..=300_000).contains(&self.content_timeout_millis)
+            && (1..=300_000).contains(&self.model_response_header_timeout_millis)
+            && (1..=300_000).contains(&self.model_stream_idle_timeout_millis)
             && (1..=512).contains(&self.http_max_connections)
             && self.http_max_keepalive_connections <= 512
             && self.http_max_keepalive_connections <= self.http_max_connections
@@ -454,6 +471,28 @@ mod tests {
     };
     use crate::protocol::command::LIMITS_REVISION;
 
+    #[test]
+    fn model_timeouts_default_independently_and_reject_unbounded_values() {
+        let mut value = config(Path::new("/runtime"))["limits"].clone();
+        let limits: super::RuntimeLimits = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(limits.content_timeout_millis, 15_000);
+        assert_eq!(limits.model_response_header_timeout_millis, 120_000);
+        assert_eq!(limits.model_stream_idle_timeout_millis, 120_000);
+        for field in [
+            "model_response_header_timeout_millis",
+            "model_stream_idle_timeout_millis",
+        ] {
+            for invalid in [0, 300_001] {
+                value[field] = json!(invalid);
+                let limits: super::RuntimeLimits = serde_json::from_value(value.clone()).unwrap();
+                assert!(limits.validate().is_err());
+            }
+            value[field] = json!(240_000);
+            let limits: super::RuntimeLimits = serde_json::from_value(value.clone()).unwrap();
+            assert!(limits.validate().is_ok());
+        }
+    }
+
     fn config(root: &Path) -> Value {
         let limits = json!({
             "redis_read_batch": 8,
@@ -511,6 +550,22 @@ mod tests {
     }
 
     #[test]
+    fn checkpoint_recovery_requires_explicit_opt_in_and_durable_storage() {
+        let root = tempdir().expect("root");
+        let mut value = config(root.path());
+        let loaded: super::RuntimeDeployConfig =
+            serde_json::from_value(value.clone()).expect("config");
+        assert!(!loaded.agent_model_checkpoint_recovery);
+        value["agent_model_checkpoint_recovery"] = json!(true);
+        let loaded: super::RuntimeDeployConfig =
+            serde_json::from_value(value.clone()).expect("opt-in");
+        assert!(loaded.validate().is_ok());
+        value["agent_checkpoint_connection_path"] = Value::Null;
+        let loaded: super::RuntimeDeployConfig = serde_json::from_value(value).expect("no storage");
+        assert!(loaded.validate().is_err());
+    }
+
+    #[test]
     fn strict_file_config_normalizes_origins_and_retains_fixed_limits() {
         let root = tempdir().expect("temporary directory");
         let root_path = root
@@ -525,7 +580,7 @@ mod tests {
         assert_eq!(loaded.content_origin, "https://content.internal:9445");
         assert_eq!(loaded.limits.redis_max_entry_bytes(), 64 * 1024);
         assert_eq!(loaded.limits.redis_max_field_bytes(), 48 * 1024);
-        assert_eq!(loaded.limits.content_max_body_bytes(), 256 * 1024);
+        assert_eq!(loaded.limits.content_max_body_bytes(), 8 * 1024 * 1024);
         assert_eq!(loaded.limits.grpc_max_request_bytes(), 64 * 1024);
         assert_eq!(loaded.limits.grpc_max_response_bytes(), 80 * 1024);
         assert_eq!(loaded.limits.output_max_frame_bytes(), 64 * 1024);

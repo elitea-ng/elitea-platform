@@ -1,35 +1,12 @@
-/**
- * lib/contextStatus.ts — the display logic of the context-budget panel.
- *
- * `useGetContextStatusQuery` (`entities/conversation/api/contextManagementApi.ts`)
- * types its response as an opaque `Record<string, unknown>` wire bag, so the
- * narrowing lives here rather than in the component: it is where the two
- * production quirks the panel has to honour are actually decidable, and it is
- * unit-testable without a DOM.
- *
- * Quirk 1 — `max_tokens === 0` renders as `-`, never as `0`. Zero is the
- * server's "context manager disabled for this conversation" signal
- * (`ContextBudgetStatsDisplay.jsx`'s own `if (maxTokens === 0)` branch), not a
- * budget of zero tokens.
- *
- * Quirk 2 — the utilization SCALE differs between the two backends. Old-app
- * `useContextUtilization.hooks.js` does `Math.round(utilization * 100)`, i.e.
- * it expects a 0..1 fraction; the Go handler that actually serves this route
- * today returns `currentTokens / maxContextTokens * 100`, i.e. already a
- * percentage (`services/elitea-main/internal/infra/db/repos/conversations.go`,
- * `GetContextAnalytics`). Multiplying the Go value by 100 would render 10000%.
- * Rather than guess the scale from the value, the percentage is derived from
- * the two token counts, which are unambiguous and are exactly what the Go
- * handler divides anyway.
- */
+import { resolveContextBudgetMode, type ContextBudgetMode } from '@/shared/lib/contextBudget';
 
 /** The digit-group separator: U+00A0, so a grouped count never line-wraps mid-number. */
 const GROUP_SEPARATOR = '\u00a0';
 
-/** `>= 100%` of the budget — matches old-app `CONTEXT_BUDGET.HIGH_UTILIZATION_THRESHOLD: 1`. */
-const HIGH_UTILIZATION_PERCENTAGE = 100;
+/** Warn at the worker’s 90% usable-input trigger, before the hard limit. */
+const HIGH_UTILIZATION_PERCENTAGE = 90;
 
-/** What the panel renders in place of `max_tokens` when the context manager is off. */
+/** Legacy count formatting when a maximum is unavailable. */
 const NO_MAX_TOKENS_DISPLAY = '-';
 
 /**
@@ -48,12 +25,22 @@ export function formatNumberWithSpaces(value: number): string {
 
 /** @public The narrowed, display-ready shape the panel renders. */
 export interface ContextBudgetStats {
+  readonly budgetMode: ContextBudgetMode;
+  readonly runtime?: {
+    readonly phase: 'measured' | 'compacting' | 'compacted';
+    readonly active: boolean;
+    readonly legacy: boolean;
+    readonly totalTokens: number;
+    readonly reservedOutputTokens: number;
+    readonly safetyMarginTokens: number;
+  };
+  readonly usageAvailable: boolean;
   readonly currentTokens: number;
   readonly maxTokens: number;
   /** `"12 000 / 128 000"`, or `"12 000 / -"` when `maxTokens` is 0. */
   readonly tokensDisplay: string;
-  /** Whole percent, `0` when there is no budget to divide by. Not capped — the bar caps its own width. */
-  readonly utilizationPercentage: number;
+  /** Undefined until measured. The bar caps over-budget values at 100%. */
+  readonly utilizationPercentage: number | undefined;
   readonly isHighUtilization: boolean;
   readonly messageGroups: number;
   readonly summariesGenerated: number;
@@ -76,7 +63,7 @@ function readStrategyName(wire: Record<string, unknown>): string {
   return typeof name === 'string' ? name.replace(/_/g, ' ') : '';
 }
 
-/** Percentage of the budget used. `0` when there is no budget (quirk 2 above). */
+/** Percentage of a known budget. Callers separately represent unknown capacity. */
 export function deriveUtilizationPercentage(currentTokens: number, maxTokens: number): number {
   if (maxTokens <= 0) return 0;
   return Math.round((currentTokens / maxTokens) * 100);
@@ -94,16 +81,40 @@ export function toContextBudgetStats(wire: unknown): ContextBudgetStats | undefi
 
   const currentTokens = readNumber(source, 'current_tokens');
   const maxTokens = readNumber(source, 'max_tokens');
-  const utilizationPercentage = deriveUtilizationPercentage(currentTokens, maxTokens);
+  const unavailable = Array.isArray(source.unavailable) ? source.unavailable : [];
+  const usageAvailable = source.context_analytics_available !== false &&
+    typeof source.current_tokens === 'number' && maxTokens > 0 &&
+    !unavailable.includes('current_tokens') && !unavailable.includes('max_tokens');
+  const utilizationPercentage = usageAvailable ? deriveUtilizationPercentage(currentTokens, maxTokens) : undefined;
 
+  const runtime = readRuntime(source.runtime_context);
   return {
+    ...(runtime ? { runtime } : {}),
+    budgetMode: resolveContextBudgetMode(source.budget_mode),
+    usageAvailable,
     currentTokens,
     maxTokens,
-    tokensDisplay: formatTokensDisplay(currentTokens, maxTokens),
+    tokensDisplay: usageAvailable ? formatTokensDisplay(currentTokens, maxTokens) : '—',
     utilizationPercentage,
-    isHighUtilization: utilizationPercentage >= HIGH_UTILIZATION_PERCENTAGE,
+    isHighUtilization: usageAvailable && currentTokens * 100 >= maxTokens * HIGH_UTILIZATION_PERCENTAGE,
     messageGroups: readNumber(source, 'message_groups_in_context'),
     summariesGenerated: readNumber(readAnalytics(source), 'summaries_generated'),
     strategyName: readStrategyName(source),
+  };
+}
+
+/** Main serves only the latest response's admitted, fenced measurement. */
+function readRuntime(value: unknown): ContextBudgetStats['runtime'] {
+  if (!value || typeof value !== 'object') return undefined;
+  const source = value as Record<string, unknown>;
+  const m = source.measurement as Record<string, unknown> | undefined;
+  if (!m || m.version !== 1 || !['measured', 'compacting', 'compacted'].includes(String(m.phase))) return undefined;
+  return {
+    phase: m.phase as 'measured' | 'compacting' | 'compacted',
+    active: source.active === true,
+    legacy: m.budget_mode === 'legacy',
+    totalTokens: readNumber(m, 'total_tokens'),
+    reservedOutputTokens: readNumber(m, 'reserved_output_tokens'),
+    safetyMarginTokens: readNumber(m, 'safety_margin_tokens'),
   };
 }

@@ -200,6 +200,7 @@ export function AgentVersionControls({
           projectId={projectId}
           existingVersionNames={commands.visibleVersions.map((version) => version.name)}
           version={versionBody}
+          {...(activeVersionId === undefined ? {} : { sourceVersionId: activeVersionId })}
           disabled={saveNewVersionDisabled}
           onSuccess={onNewVersionSaved}
           {...(onNewVersionError === undefined ? {} : { onError: onNewVersionError })}

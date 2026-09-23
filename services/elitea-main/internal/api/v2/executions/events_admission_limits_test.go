@@ -59,7 +59,7 @@ func TestSSEStreamLimitsFromEnvRejectsSubLimitAboveGlobal(t *testing.T) {
 			"ELITEA_RUNTIME_SSE_MAX_STREAMS_PER_PRINCIPAL": "17",
 		},
 		"project above global": {
-			"ELITEA_RUNTIME_SSE_MAX_STREAMS":           "16",
+			"ELITEA_RUNTIME_SSE_MAX_STREAMS":             "16",
 			"ELITEA_RUNTIME_SSE_MAX_STREAMS_PER_PROJECT": "17",
 		},
 	}

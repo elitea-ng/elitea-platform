@@ -1,3 +1,5 @@
+import { ToolActionStatus } from '@/shared/lib/chat';
+import { t } from '@/shared/i18n';
 import type { SubAgentGroupable } from '@/entities/message/lib/subAgentGrouping';
 
 /**
@@ -19,4 +21,15 @@ export interface ToolAction extends SubAgentGroupable {
   readonly status: string;
   readonly toolMeta?: Record<string, unknown> | undefined;
   readonly [key: string]: unknown;
+}
+
+/** Ending a run cannot leave a model-local compaction notice spinning. */
+export function settleContextProgress(actions: readonly SubAgentGroupable[] | undefined): readonly SubAgentGroupable[] | undefined {
+  if (!actions?.some((action) => (action as ToolAction).contextProgress === true && (action as ToolAction).status === ToolActionStatus.processing)) return actions;
+  return actions.map((action) => {
+    const progress = action as ToolAction;
+    return progress.contextProgress === true && progress.status === ToolActionStatus.processing
+      ? { ...progress, status: ToolActionStatus.cancelled, message: undefined, content: t('chatMessages.context.stopped', 'Compaction stopped before completion.') }
+      : action;
+  });
 }

@@ -24,6 +24,7 @@ class ClaimDispositionV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     CLAIM_DISPOSITION_V1_RETIRED_ACK: _ClassVar[ClaimDispositionV1]
     CLAIM_DISPOSITION_V1_RECOVER_RUNNING_NOACK: _ClassVar[ClaimDispositionV1]
     CLAIM_DISPOSITION_V1_RECOVER_AMBIGUOUS_INVOCATION_NOACK: _ClassVar[ClaimDispositionV1]
+    CLAIM_DISPOSITION_V1_RECOVER_AGENT_MODEL_CHECKPOINT: _ClassVar[ClaimDispositionV1]
 
 class BeginExecutionDispositionV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -47,6 +48,7 @@ CLAIM_DISPOSITION_V1_RETRY_LATER_NOACK: ClaimDispositionV1
 CLAIM_DISPOSITION_V1_RETIRED_ACK: ClaimDispositionV1
 CLAIM_DISPOSITION_V1_RECOVER_RUNNING_NOACK: ClaimDispositionV1
 CLAIM_DISPOSITION_V1_RECOVER_AMBIGUOUS_INVOCATION_NOACK: ClaimDispositionV1
+CLAIM_DISPOSITION_V1_RECOVER_AGENT_MODEL_CHECKPOINT: ClaimDispositionV1
 BEGIN_EXECUTION_DISPOSITION_V1_UNSPECIFIED: BeginExecutionDispositionV1
 BEGIN_EXECUTION_DISPOSITION_V1_STARTED_NOW: BeginExecutionDispositionV1
 BEGIN_EXECUTION_DISPOSITION_V1_ALREADY_STARTED: BeginExecutionDispositionV1
@@ -55,14 +57,16 @@ AUTHORIZE_INVOCATION_DISPOSITION_V1_AUTHORIZED_NOW: AuthorizeInvocationDispositi
 AUTHORIZE_INVOCATION_DISPOSITION_V1_ALREADY_AUTHORIZED: AuthorizeInvocationDispositionV1
 
 class ClaimCommandRequestV1(_message.Message):
-    __slots__ = ("workload_session_id", "producer_id", "signed_command")
+    __slots__ = ("workload_session_id", "producer_id", "signed_command", "agent_model_checkpoint_recovery")
     WORKLOAD_SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     PRODUCER_ID_FIELD_NUMBER: _ClassVar[int]
     SIGNED_COMMAND_FIELD_NUMBER: _ClassVar[int]
+    AGENT_MODEL_CHECKPOINT_RECOVERY_FIELD_NUMBER: _ClassVar[int]
     workload_session_id: str
     producer_id: str
     signed_command: _envelope_pb2.SignedWorkerCommandEnvelopeV1
-    def __init__(self, workload_session_id: _Optional[str] = ..., producer_id: _Optional[str] = ..., signed_command: _Optional[_Union[_envelope_pb2.SignedWorkerCommandEnvelopeV1, _Mapping]] = ...) -> None: ...
+    agent_model_checkpoint_recovery: bool
+    def __init__(self, workload_session_id: _Optional[str] = ..., producer_id: _Optional[str] = ..., signed_command: _Optional[_Union[_envelope_pb2.SignedWorkerCommandEnvelopeV1, _Mapping]] = ..., agent_model_checkpoint_recovery: bool = ...) -> None: ...
 
 class SettlementRecoveryV1(_message.Message):
     __slots__ = ("proposal", "proposal_digest", "idempotency_key", "settlement_receipt_id", "outcome")
@@ -139,6 +143,24 @@ class AuthorizeInvocationRequestV1(_message.Message):
     def __init__(self, identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ...) -> None: ...
 
 class AuthorizeInvocationResponseV1(_message.Message):
+    __slots__ = ("disposition", "rejection")
+    DISPOSITION_FIELD_NUMBER: _ClassVar[int]
+    REJECTION_FIELD_NUMBER: _ClassVar[int]
+    disposition: AuthorizeInvocationDispositionV1
+    rejection: _errors_pb2.RuntimeErrorV1
+    def __init__(self, disposition: _Optional[_Union[AuthorizeInvocationDispositionV1, str]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...
+
+class AuthorizeAgentModelCheckpointRequestV1(_message.Message):
+    __slots__ = ("identity", "fence", "checkpoint_digest")
+    IDENTITY_FIELD_NUMBER: _ClassVar[int]
+    FENCE_FIELD_NUMBER: _ClassVar[int]
+    CHECKPOINT_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    identity: _common_pb2.ExecutionIdentityV1
+    fence: _common_pb2.ExecutionFenceV1
+    checkpoint_digest: _common_pb2.DigestV1
+    def __init__(self, identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ..., checkpoint_digest: _Optional[_Union[_common_pb2.DigestV1, _Mapping]] = ...) -> None: ...
+
+class AuthorizeAgentModelCheckpointResponseV1(_message.Message):
     __slots__ = ("disposition", "rejection")
     DISPOSITION_FIELD_NUMBER: _ClassVar[int]
     REJECTION_FIELD_NUMBER: _ClassVar[int]

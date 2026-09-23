@@ -16,28 +16,12 @@ export interface CarryPipelineGraphArgs {
  * Copy the live flow graph onto a version that was just created by
  * `POST /elitea_core/versions/prompt_lib/{projectId}/{applicationId}`.
  *
- * **Why a second request exists at all — a measured asymmetry between the two
- * write paths, not defensive padding.** Both were read in full:
- *
- *  - `CreateVersion` -> `versionFromBody`
- *    (`services/elitea-main/internal/api/v2/applications/handler.go:496-525`)
- *    reads exactly `name`/`agent_type`/`instructions`/`welcome_message`/
- *    `llm_settings`/`conversation_starters`/`variables`/`meta`. There is no
- *    `pipeline_settings` branch, and `insertVersion`
- *    (`internal/infra/db/repos/applications.go:517-525`) names ten columns in
- *    its INSERT — `pipeline_settings` is not one of them. A POST carrying the
- *    key answers 201 and stores nothing from it.
- *  - `UpdateVersion` (handler.go:940-942) DOES read it, and
- *    `ApplicationsRepo.UpdateVersion` (applications.go:588-594) writes the
- *    column. This is the path #135 fixed for the ordinary Save.
- *
- * So the created version would come back with `pipeline_settings = '{}'`:
- * the graph still renders (the editor re-parses `instructions` and re-lays it
- * out), but every node position the author arranged is silently gone —
- * exactly the "accepted with a 200, lost on reload" shape #135 existed to
- * remove. Sending the live `instructions` in the same call also makes the
- * clone reflect the canvas as edited rather than as last stored, which is
- * what "Save As Version" means everywhere else in this app.
+ * Main now persists `pipeline_settings` during creation. This caller still
+ * creates from stored instructions, then reads the live canvas on success.
+ * This PUT therefore remains necessary to preserve unsaved nodes and positions.
+ * Removing it requires passing an admitted live graph into the original POST.
+ * The pipeline versioning journey tests both Main's creation contract and
+ * this editor's unsaved-canvas behavior separately.
  *
  * No route is invented here: this is the same PUT the Save button already
  * uses, aimed at the id the POST just returned. It is deliberately NOT folded

@@ -4,17 +4,26 @@ pub(crate) mod application_pipeline;
 pub(crate) mod application_tools;
 pub(crate) mod assembly;
 pub(crate) mod attachments;
+pub(crate) mod context_budget;
+mod context_compaction;
 pub(crate) mod context_management;
+mod context_status;
+pub(crate) mod context_summary;
 pub(crate) mod direct_hitl;
 pub(crate) mod events;
 pub mod graph;
+pub(crate) mod instruction_authority;
 pub(crate) mod internal_tools;
+mod model_checkpoint;
+mod model_scope;
 pub(crate) mod native_runtime;
 pub(crate) mod ordinary;
 pub(crate) mod pipeline;
 pub mod protocol;
+mod replay_history;
 pub mod request;
 pub mod result;
+mod runner_history;
 pub(crate) mod runtime;
 pub(crate) mod sensitive_tools;
 pub(crate) mod session;
@@ -54,3 +63,6 @@ pub use result::{
     AGENT_RESULT_CLASSIFICATION, AGENT_RESULT_MEDIA_TYPE, AgentResultArtifact, AgentTerminalState,
     BoundAgentExecutionResult, bind_result_artifact,
 };
+
+#[cfg(test)]
+mod native_history_tests;

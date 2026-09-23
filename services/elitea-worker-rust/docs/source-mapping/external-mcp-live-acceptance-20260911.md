@@ -1,0 +1,157 @@
+# External MCP deployed acceptance: 2026-09-11
+
+## Scope and source mapping
+
+This record covers the deployed external MCP bridge and Rust runtime.
+The [contract mapping](external-mcp-completion.md) identifies current Core and SDK business sources.
+Main `internal/api/v2/mcp/execute.go` starts the exact saved application version.
+Rust `src/agents/ordinary.rs` executes the agent and its configured tools.
+Rust `src/agents/pipeline.rs` executes the saved pipeline graph.
+The shared chat projection supplies the external terminal response.
+
+## Saved agent terminal success
+
+Playwright uses the authenticated browser session to call `/app/2/mcp/agent/20`.
+`tools/list` returns `rust-gate3-joke-agent-20260909` with the required `task` argument.
+`tools/call` requests an OpenAPI echo and a joke from the linked skill.
+The response returns HTTP 200 without `isError`.
+It contains marker `RUST_GATE3_EXTERNAL_AGENT_20260911`, mode `stored`, and generation `1`.
+It also contains a computer joke and its wordplay explanation.
+
+Execution `9d0487418367372be7e5e0b2b7bd9f8d` settles as `SUCCEEDED`.
+Conversation `547`, message group `5850`, and trace `7336` correlate the invocation.
+The trace records `echo_marker`, the exact marker argument, and the provider result.
+Its `is_error` field is false.
+This proves actual provider invocation and external terminal return for this saved agent.
+It does not prove authorization resume, replacement, or all toolkit families.
+
+## External completion boundary
+
+External callers use published toolkits, agents, and pipelines as autonomous tools.
+An external caller is not required to answer Elitea interrupts or resume paused executions.
+An unexpected pause must return an explicit failure instead of partial successful output.
+The browser-resume check below tests the shared runtime, not autonomous external completion.
+
+## Pipeline approval and resume
+
+Playwright calls the existing `Hitl_node` pipeline through `/app/2/mcp/pipeline/8`.
+The task contains marker `RUST_GATE3_EXTERNAL_HITL_20260911`.
+Execution `2fe737fcd3e08182c202193463e6a7c6` reaches a human-approval pause.
+The external response sets `isError: true` and directs the caller to the conversation.
+It does not return the intermediate joke as successful final output.
+
+Conversation `548` has UUID `a0d73798-bbc4-4d68-ad22-60c5ad3c1068`.
+Playwright opens that conversation and clicks its existing Approve button.
+Resume execution `cd95978ec4f39820056dd9a370ea7c87` settles as `SUCCEEDED`.
+Message group `5852` stops streaming and clears its pending HITL metadata.
+The Approve button remains absent after browser reload.
+
+The final conversation displays the joke twice, including after reload.
+Stored trace rows `7339` and `7340` contain identical joke text.
+This is a confirmed duplicate-output symptom, not only a transient streaming observation.
+The source of the duplicate remains under investigation.
+This proof establishes approval and settlement but does not close resume-output correctness.
+
+## Remaining proof
+
+Pipeline terminal completion, failure, mixed authorization, resume, and replay remain separate checks.
+A new external call creates a new conversation; it is not a replay request.
+
+## Autonomous saved pipeline terminal success
+
+The existing `Gneral Purpose` pipeline version `18` contains a saved Agent node.
+Playwright sends direct JSON-RPC `tools/list` and `tools/call` requests to `/app/2/mcp/pipeline/18`.
+The call returns `RUST_GATE3_AUTONOMOUS_PIPELINE_20260911` without `isError` or an interrupt.
+Execution `b6a261437c3be59eb1da86722ad46e14` settles as `SUCCEEDED`.
+Conversation `550` and message group `5854` retain the execution history.
+Trace `7342` invokes saved child `elitea_agent_12_v_17`.
+Trace `7343` records the child's marker response.
+This proves autonomous saved-pipeline completion through the external MCP bridge.
+It does not prove external-client retry deduplication or provider failures.
+
+## External toolkit sharing and invocation: 2026-09-13
+
+The editor originally omits `meta` from create and update requests.
+Its sharing checkbox appears saved, but external discovery returns an empty catalogue.
+Main already persists toolkit metadata; the UI client contract is stale.
+Web `features/toolkits/api/toolkits.ts` now forwards optional metadata on both writes.
+The OpenAPI request schemas now expose that existing Main field.
+The database schema remains unchanged.
+
+The UI API suite passes 12 tests, including four metadata preservation checks.
+UI TypeScript checking and focused lint pass.
+Deployed UI image: `sha256:828a4f4a774ead5bf820881f6ddfbd2fac08000fb23349be59f28ce49f3dc973`.
+Main and Rust images remain unchanged.
+
+Playwright enables sharing for synthetic toolkit `31` and saves it.
+The PUT request includes `meta.mcp_options.available_by_mcp=true`.
+The checkbox remains enabled after reload.
+External `tools/list` exposes exactly `rust-gate3-oauth-read-20260911_echo_marker`.
+Its instance schema requires `marker` and retains the OpenAPI response-selection controls.
+
+External `tools/call` returns the exact marker `RUST_GATE3_EXTERNAL_TOOLKIT_20260913`.
+It returns mode `stored` and generation `1`, without `isError`.
+Execution `111b05c9d48c4595cf276c6f0bfdf5f5` settles as `SUCCEEDED`.
+An omitted required marker produces an explicit MCP error for execution `26357a101a19135dba3ddf948e89496f`.
+An unknown exported name returns JSON-RPC code `-32602`.
+These requests use browser-session authentication against the external protocol route.
+They are not independent-client authentication proof.
+
+The Python acceptance client is `tests/acceptance/external_mcp_client.py`.
+It checks initialization, unique discovery names, the exact schema, invocation, and a synthetic result marker.
+Its independent authenticated run passes as recorded below. It reads only an explicitly supplied bearer token.
+Browser-session export was rejected by automatic approval review and did not occur.
+
+The test restores toolkit `31` sharing to disabled after verification.
+A final external discovery returns an empty catalogue.
+This verifies that disabling sharing also reaches persisted state.
+
+
+## Independent PAT client acceptance: 2026-09-13
+
+Personal Tokens in the deployed UI created short-lived project-2 PATs for this test.
+The Python client used `Authorization: Bearer <PAT>` and no browser session.
+Initialization, unique tool discovery, object argument schemas, and actual invocation passed.
+The saved pipeline exports `Gneral_Purpose`; its display name contains a space.
+Two preliminary pipeline attempts stopped at exact-name validation before invocation.
+Using the discovered canonical name passed.
+
+| Published entity | Synthetic marker | Execution | Outcome |
+| --- | --- | --- | --- |
+| Toolkit 31 | RUST_PAT_TOOLKIT_20260913 | 5a3b761c3719de1d41e3a192151acb8c | SUCCEEDED; stored echo, generation 1 |
+| Agent version 20 | RUST_PAT_AGENT_20260913 | 422cdfa94b00b3fa285c1db23ed7867c | SUCCEEDED; actual echo and linked-skill response |
+| Autonomous pipeline version 18 | RUST_PAT_PIPELINE_20260913 | 40a7ec8e8915eb60d52f13f29e891ffd | SUCCEEDED; terminal marker |
+
+An unknown exported tool returns JSON-RPC `-32602`.
+Omitting the toolkit marker returns `isError=true`; execution
+`f88bbfd8043674658141ae67e10e04f1` settles as FAILED.
+An unauthenticated external request returns HTTP 401.
+
+A project-2 PAT received HTTP 200 for the project-1 catalogue. This is not a
+restricted-user isolation test: the caller has the administration-mode
+`super_admin` role, verified in the rehearsal database. Main
+`internal/api/router.go::mountMCPServerRoutes` applies authentication and
+`internal/api/middleware/project_authorization.go::RequireProjectAccess`,
+which permits project membership or that central administrator role.
+The negative test's unconditional expectation of 401/403 was therefore not
+supported by this route's authorization contract. Restricted-user proof stays open.
+The token's LLM project binding is a separate contract; this test does not
+establish stricter MCP token scoping.
+
+All three temporary PATs were revoked through the normal token API with HTTP 204.
+The token listing subsequently contains none of the temporary test names.
+Toolkit 31 sharing was restored to disabled and verified after browser reload.
+No token values or browser credentials are stored in this record or the client.
+
+This completes independent-client happy-path verification for these three
+published fixtures, not the remaining mixed-guard, replacement, or replay gates.
+Direct pipeline HITL history and editor Test entry points remain gate 5 work.
+
+Current-platform reference checked after the public-project clarification:
+`projects/centry/pylon_main/plugins/elitea_core/routes/mcp_sse.py::_check_project_access`
+uses `list_user_projects`; `plugins/projects/rpc/poc.py::list_user_projects`
+resolves project membership through `admin_check_user_in_projects`.
+The same module's project classification helper classifies the configured `ai_project_id`
+(default 1) as public. Public sharing must therefore remain distinct from a
+negative test against an unrelated private project. No blanket same-project PAT
+restriction was introduced on the basis of the project-1 response.

@@ -16,6 +16,7 @@ import type { Theme } from '@mui/material/styles';
 import { useTheme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
+import { convertJsonToString } from '@/shared/lib/json';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 
 import type { PartitionedBlock } from '../../lib/subAgentGrouping';
@@ -108,7 +109,7 @@ export function SubAgentAccordion({
                         >
                           {(action.name as string) || action.type || 'Action'}
                         </Typography>
-                        {(action.toolOutputs as string) || ''}
+                        {convertJsonToString(action.toolOutputs ?? '')}
                       </Box>
                     ))}
                     {block.pausedForResume && (

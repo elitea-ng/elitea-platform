@@ -205,6 +205,36 @@ CREATE TABLE elitea_runtime.agent_execution_jobs (
         REFERENCES elitea_runtime.input_bundle_entries (input_bundle_id, entry_id)
 );
 
+CREATE TABLE elitea_runtime.toolkit_execute_read_jobs (
+    execution_id text NOT NULL,
+    generation bigint NOT NULL,
+    capability_id text NOT NULL,
+    input_bundle_id text NOT NULL,
+    request_entry_id text NOT NULL,
+    PRIMARY KEY (execution_id, generation),
+    FOREIGN KEY (execution_id, generation, capability_id, input_bundle_id)
+        REFERENCES elitea_runtime.execution_jobs
+                   (execution_id, generation, capability_id, input_bundle_id),
+    FOREIGN KEY (input_bundle_id, request_entry_id)
+        REFERENCES elitea_runtime.input_bundle_entries (input_bundle_id, entry_id)
+);
+
+CREATE TABLE elitea_runtime.toolkit_execute_read_results (
+    execution_id text NOT NULL,
+    generation bigint NOT NULL,
+    event_id text NOT NULL UNIQUE,
+    result_json bytea NOT NULL,
+    toolkit_type text NOT NULL,
+    toolkit_name text NOT NULL,
+    tool_name text NOT NULL,
+    projected_at timestamptz NOT NULL,
+    PRIMARY KEY (execution_id, generation),
+    FOREIGN KEY (execution_id, generation)
+        REFERENCES elitea_runtime.toolkit_execute_read_jobs (execution_id, generation),
+    FOREIGN KEY (event_id)
+        REFERENCES elitea_runtime.output_inbox (event_id)
+);
+
 CREATE TABLE elitea_runtime.execution_replay_events (
     cursor bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     event_id text NOT NULL UNIQUE,

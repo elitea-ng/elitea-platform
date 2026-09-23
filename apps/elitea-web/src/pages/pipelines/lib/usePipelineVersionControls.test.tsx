@@ -165,13 +165,8 @@ describe('usePipelineVersionControls', () => {
   });
 
   /**
-   * The gap this hook exists to close. `CreateVersion`/`versionFromBody`
-   * reads no `pipeline_settings` key and `insertVersion`'s INSERT does not
-   * name the column, so the POST alone leaves the new version with an empty
-   * graph geometry and the previously STORED `instructions` — a "Save As
-   * Version" taken after editing the canvas would clone the graph the user
-   * had already moved past. The follow-up PUT is the only write path that
-   * can carry either.
+   * This caller's POST uses stored instructions. Its follow-up PUT must
+   * preserve the live canvas, even though Main now accepts geometry on POST.
    */
   it('carries the LIVE graph onto the created version with a PUT aimed at its id', async () => {
     const puts = captureVersionPuts();

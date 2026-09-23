@@ -23,11 +23,8 @@ const (
 	// larger than this: `RuntimeContextConfig::validate` rejects a
 	// `max_application_response_bytes` above MAX_APPLICATION_VERSION_BYTES
 	// (1 MiB, runtime_context.rs:40,94), and bootstrap.rs:212 sets exactly
-	// that constant. It coincides with MaxAgentExecutionInputBytes, which is
-	// the bound the freeze already applies to the version document itself —
-	// so a version that fits an execution input still has to fit here once
-	// the identity envelope is added, and one that does not is an error, not
-	// something to trim.
+	// that constant. This version-document bound remains 1 MiB even when an
+	// agent input permits a larger conversation history.
 	maxRuntimeApplicationVersionResponseBytes = 1024 * 1024
 
 	runtimeContextStageNestedVersionRead   = "nested_version_read"
@@ -83,6 +80,11 @@ type AgentRuntimeContextAuthorizer interface {
 	AuthorizeAgentRuntimeContext(context.Context, ContentClaim) (RuntimeContextAuthorization, error)
 }
 
+// CurrentApplicationVersionMaterializer redeems frozen settings after claim authorization.
+type CurrentApplicationVersionMaterializer interface {
+	MaterializeCurrentApplicationVersion(context.Context, int32, int32, json.RawMessage) (json.RawMessage, error)
+}
+
 // RuntimeApplicationVersionService serves one nested (agent-as-tool) child
 // definition to the native runtime, under the same durable claim that already
 // authorized the parent turn.
@@ -90,27 +92,29 @@ type AgentRuntimeContextAuthorizer interface {
 // It exists because the worker deliberately has no other way to obtain a child:
 // its loader refuses to fall back to the mutable public version endpoint or the
 // legacy `X-SECRET` expansion path (runtime_context.rs:328-333). Both halves of
-// that contract matter here — the definition must be FROZEN (toolkit references
-// resolved, blocked toolkits dropped, credentials still sealed) and it must be
-// selected by the claim's project, never by anything the request carries.
+// that contract matter here: the definition is frozen before credentials are
+// redeemed, and the claim selects its project. The request cannot select a project.
 type RuntimeApplicationVersionService struct {
-	authorizer AgentRuntimeContextAuthorizer
-	versions   CurrentApplicationVersionSource
-	freezer    agentexecutionapp.CurrentApplicationVersionFreezer
+	materializer CurrentApplicationVersionMaterializer
+	authorizer   AgentRuntimeContextAuthorizer
+	versions     CurrentApplicationVersionSource
+	freezer      agentexecutionapp.CurrentApplicationVersionFreezer
 }
 
 func NewRuntimeApplicationVersionService(
 	authorizer AgentRuntimeContextAuthorizer,
 	versions CurrentApplicationVersionSource,
 	freezer agentexecutionapp.CurrentApplicationVersionFreezer,
+	materializer CurrentApplicationVersionMaterializer,
 ) (*RuntimeApplicationVersionService, error) {
-	if authorizer == nil || versions == nil || freezer == nil {
+	if authorizer == nil || versions == nil || freezer == nil || materializer == nil {
 		return nil, errors.New("runtime application version dependencies are required")
 	}
 	return &RuntimeApplicationVersionService{
-		authorizer: authorizer,
-		versions:   versions,
-		freezer:    freezer,
+		authorizer:   authorizer,
+		versions:     versions,
+		freezer:      freezer,
+		materializer: materializer,
 	}, nil
 }
 
@@ -136,7 +140,7 @@ func (service *RuntimeApplicationVersionService) Resolve(
 	versionID uint64,
 ) (RuntimeApplicationVersionContext, error) {
 	if service == nil || service.authorizer == nil ||
-		service.versions == nil || service.freezer == nil {
+		service.versions == nil || service.freezer == nil || service.materializer == nil {
 		return RuntimeApplicationVersionContext{}, runtimeContextUnavailable(
 			runtimeContextStageNestedVersionRead,
 		)
@@ -217,6 +221,13 @@ func (service *RuntimeApplicationVersionService) Resolve(
 		return RuntimeApplicationVersionContext{}, runtimeContextUnavailable(
 			runtimeContextStageNestedVersionFreeze,
 		)
+	}
+	frozen, err = service.materializer.MaterializeCurrentApplicationVersion(ctx, int32(authorization.ResourceProjectID), int32(actorID), frozen)
+	if err != nil {
+		if ctx.Err() != nil {
+			return RuntimeApplicationVersionContext{}, ctx.Err()
+		}
+		return RuntimeApplicationVersionContext{}, runtimeContextUnavailable(runtimeContextStageNestedVersionFreeze)
 	}
 	if len(frozen) == 0 || !json.Valid(frozen) {
 		return RuntimeApplicationVersionContext{}, runtimeContextUnavailable(

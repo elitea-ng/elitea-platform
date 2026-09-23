@@ -1,0 +1,1773 @@
+{
+  "base": [
+    {
+      "columns": [
+        {
+          "default": null,
+          "generated": "",
+          "identity": "a",
+          "name": "id",
+          "not_null": true,
+          "type": "bigint"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "catalogue_key",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "display_name",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "''::text",
+          "generated": "",
+          "identity": "",
+          "name": "server_url",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "''::text",
+          "generated": "",
+          "identity": "",
+          "name": "base_url",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "''::text",
+          "generated": "",
+          "identity": "",
+          "name": "client_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "''::text",
+          "generated": "",
+          "identity": "",
+          "name": "client_secret_ref",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "0",
+          "generated": "",
+          "identity": "",
+          "name": "timeout_seconds",
+          "not_null": true,
+          "type": "integer"
+        },
+        {
+          "default": "'{}'::jsonb",
+          "generated": "",
+          "identity": "",
+          "name": "headers",
+          "not_null": true,
+          "type": "jsonb"
+        },
+        {
+          "default": "true",
+          "generated": "",
+          "identity": "",
+          "name": "enabled",
+          "not_null": true,
+          "type": "boolean"
+        },
+        {
+          "default": "now()",
+          "generated": "",
+          "identity": "",
+          "name": "created_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        },
+        {
+          "default": "now()",
+          "generated": "",
+          "identity": "",
+          "name": "updated_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        },
+        {
+          "default": "'{\"properties\": {}}'::jsonb",
+          "generated": "",
+          "identity": "",
+          "name": "config_schema",
+          "not_null": true,
+          "type": "jsonb"
+        }
+      ],
+      "constraints": [
+        {
+          "definition": "NOT NULL base_url",
+          "name": "prebuilt_servers_base_url_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL catalogue_key",
+          "name": "prebuilt_servers_catalogue_key_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL client_id",
+          "name": "prebuilt_servers_client_id_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL client_secret_ref",
+          "name": "prebuilt_servers_client_secret_ref_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL config_schema",
+          "name": "prebuilt_servers_config_schema_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK (((jsonb_typeof(config_schema) = 'object'::text) AND ((NOT (config_schema ? 'properties'::text)) OR (jsonb_typeof((config_schema -> 'properties'::text)) = 'object'::text))))",
+          "name": "prebuilt_servers_config_schema_object",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL created_at",
+          "name": "prebuilt_servers_created_at_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL display_name",
+          "name": "prebuilt_servers_display_name_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK ((length(btrim(display_name)) > 0))",
+          "name": "prebuilt_servers_display_name_present",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL enabled",
+          "name": "prebuilt_servers_enabled_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL headers",
+          "name": "prebuilt_servers_headers_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK ((jsonb_typeof(headers) = 'object'::text))",
+          "name": "prebuilt_servers_headers_object",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL id",
+          "name": "prebuilt_servers_id_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK ((length(btrim(catalogue_key)) > 0))",
+          "name": "prebuilt_servers_key_present",
+          "validated": true
+        },
+        {
+          "definition": "PRIMARY KEY (id)",
+          "name": "prebuilt_servers_pkey",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL server_url",
+          "name": "prebuilt_servers_server_url_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK ((timeout_seconds >= 0))",
+          "name": "prebuilt_servers_timeout_not_negative",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL timeout_seconds",
+          "name": "prebuilt_servers_timeout_seconds_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL updated_at",
+          "name": "prebuilt_servers_updated_at_not_null",
+          "validated": true
+        }
+      ],
+      "inbound": [],
+      "indexes": [
+        "CREATE UNIQUE INDEX prebuilt_servers_key_uniq ON elitea_mcp.prebuilt_servers USING btree (catalogue_key)",
+        "CREATE UNIQUE INDEX prebuilt_servers_pkey ON elitea_mcp.prebuilt_servers USING btree (id)"
+      ],
+      "kind": "r",
+      "rls": false,
+      "table": "elitea_mcp.prebuilt_servers",
+      "triggers": 0
+    },
+    {
+      "columns": [
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "execution_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "generation",
+          "not_null": true,
+          "type": "bigint"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "command_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "tenant_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "resource_project_id",
+          "not_null": true,
+          "type": "integer"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "projection_project_id",
+          "not_null": true,
+          "type": "integer"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "actor_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "principal_ref",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "capability_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "capability_version",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "input_bundle_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "request_digest",
+          "not_null": true,
+          "type": "bytea"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "idempotency_scope",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "idempotency_key",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "configuration_revision_id",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "configuration_type",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "catalog_revision",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "catalog_digest",
+          "not_null": false,
+          "type": "bytea"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "schema_id",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "schema_revision",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "schema_digest",
+          "not_null": false,
+          "type": "bytea"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "settings_entry_id",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "default": "'PENDING'::text",
+          "generated": "",
+          "identity": "",
+          "name": "state",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "'RUNNING'::text",
+          "generated": "",
+          "identity": "",
+          "name": "desired_state",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "clock_timestamp()",
+          "generated": "",
+          "identity": "",
+          "name": "admitted_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "settled_at",
+          "not_null": false,
+          "type": "timestamp with time zone"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "terminal_error_code",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "default": "'NOT_STARTED'::text",
+          "generated": "",
+          "identity": "",
+          "name": "invocation_state",
+          "not_null": true,
+          "type": "text"
+        }
+      ],
+      "constraints": [
+        {
+          "definition": "NOT NULL actor_id",
+          "name": "execution_jobs_actor_id_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL admitted_at",
+          "name": "execution_jobs_admitted_at_not_null",
+          "validated": true
+        },
+        {
+          "definition": "UNIQUE (execution_id, generation, capability_id, input_bundle_id)",
+          "name": "execution_jobs_capability_bundle_identity",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL capability_id",
+          "name": "execution_jobs_capability_id_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK ((((capability_id = 'configuration.validate.v1'::text) AND (num_nonnulls(configuration_revision_id, configuration_type, catalog_revision, catalog_digest, schema_id, schema_revision, schema_digest, settings_entry_id) = 8)) OR ((capability_id = ANY (ARRAY['index.ingest.v1'::text, 'agent.execute.application.v1'::text, 'agent.execute.adhoc.v1'::text, 'toolkit.call_tool.v1'::text, 'toolkit.execute.read.v1'::text])) AND (num_nonnulls(configuration_revision_id, configuration_type, catalog_revision, catalog_digest, schema_id, schema_revision, schema_digest, settings_entry_id) = 0))))",
+          "name": "execution_jobs_capability_payload",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL capability_version",
+          "name": "execution_jobs_capability_version_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK ((octet_length(catalog_digest) = 32))",
+          "name": "execution_jobs_catalog_digest_length",
+          "validated": true
+        },
+        {
+          "definition": "UNIQUE (command_id)",
+          "name": "execution_jobs_command_id_key",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL command_id",
+          "name": "execution_jobs_command_id_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK ((desired_state = ANY (ARRAY['RUNNING'::text, 'CANCELLED'::text, 'DRAINING'::text])))",
+          "name": "execution_jobs_desired_state",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL desired_state",
+          "name": "execution_jobs_desired_state_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL execution_id",
+          "name": "execution_jobs_execution_id_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK ((generation > 0))",
+          "name": "execution_jobs_generation",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL generation",
+          "name": "execution_jobs_generation_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL idempotency_key",
+          "name": "execution_jobs_idempotency_key_not_null",
+          "validated": true
+        },
+        {
+          "definition": "UNIQUE (idempotency_scope, idempotency_key)",
+          "name": "execution_jobs_idempotency_scope_idempotency_key_key",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL idempotency_scope",
+          "name": "execution_jobs_idempotency_scope_not_null",
+          "validated": true
+        },
+        {
+          "definition": "FOREIGN KEY (input_bundle_id) REFERENCES elitea_runtime.input_bundles(input_bundle_id)",
+          "name": "execution_jobs_input_bundle_id_fkey",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL input_bundle_id",
+          "name": "execution_jobs_input_bundle_id_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK ((invocation_state = ANY (ARRAY['NOT_STARTED'::text, 'PREPARING'::text, 'MAY_HAVE_STARTED'::text])))",
+          "name": "execution_jobs_invocation_state",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL invocation_state",
+          "name": "execution_jobs_invocation_state_not_null",
+          "validated": true
+        },
+        {
+          "definition": "PRIMARY KEY (execution_id, generation)",
+          "name": "execution_jobs_pkey",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL principal_ref",
+          "name": "execution_jobs_principal_ref_not_null",
+          "validated": true
+        },
+        {
+          "definition": "FOREIGN KEY (projection_project_id) REFERENCES centry.project(id)",
+          "name": "execution_jobs_projection_project_id_fkey",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL projection_project_id",
+          "name": "execution_jobs_projection_project_id_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK ((octet_length(request_digest) = 32))",
+          "name": "execution_jobs_request_digest_length",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL request_digest",
+          "name": "execution_jobs_request_digest_not_null",
+          "validated": true
+        },
+        {
+          "definition": "FOREIGN KEY (resource_project_id) REFERENCES centry.project(id)",
+          "name": "execution_jobs_resource_project_id_fkey",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL resource_project_id",
+          "name": "execution_jobs_resource_project_id_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK ((octet_length(schema_digest) = 32))",
+          "name": "execution_jobs_schema_digest_length",
+          "validated": true
+        },
+        {
+          "definition": "CHECK ((state = ANY (ARRAY['PENDING'::text, 'DISPATCHED'::text, 'CLAIMED'::text, 'RUNNING'::text, 'SETTLING'::text, 'SUCCEEDED'::text, 'FAILED'::text, 'CANCELLED'::text, 'QUARANTINED'::text])))",
+          "name": "execution_jobs_state",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL state",
+          "name": "execution_jobs_state_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL tenant_id",
+          "name": "execution_jobs_tenant_id_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK (((terminal_error_code IS NULL) OR ((state = 'FAILED'::text) AND (terminal_error_code = 'DEADLINE_EXCEEDED'::text))))",
+          "name": "execution_jobs_terminal_error",
+          "validated": true
+        }
+      ],
+      "inbound": [
+        {
+          "definition": "FOREIGN KEY (execution_id, generation, capability_id, input_bundle_id) REFERENCES elitea_runtime.execution_jobs(execution_id, generation, capability_id, input_bundle_id) ON DELETE CASCADE",
+          "name": "agent_execution_jobs_execution_id_generation_capability_id_fkey",
+          "relation": "elitea_runtime.agent_execution_jobs"
+        },
+        {
+          "definition": "FOREIGN KEY (execution_id, generation) REFERENCES elitea_runtime.execution_jobs(execution_id, generation) ON DELETE CASCADE",
+          "name": "command_outbox_execution_id_generation_fkey",
+          "relation": "elitea_runtime.command_outbox"
+        },
+        {
+          "definition": "FOREIGN KEY (execution_id, generation) REFERENCES elitea_runtime.execution_jobs(execution_id, generation)",
+          "name": "configuration_validation_results_execution_id_generation_fkey",
+          "relation": "elitea_runtime.configuration_validation_results"
+        },
+        {
+          "definition": "FOREIGN KEY (execution_id, generation) REFERENCES elitea_runtime.execution_jobs(execution_id, generation) ON DELETE CASCADE",
+          "name": "execution_claims_execution_id_generation_fkey",
+          "relation": "elitea_runtime.execution_claims"
+        },
+        {
+          "definition": "FOREIGN KEY (execution_id, generation) REFERENCES elitea_runtime.execution_jobs(execution_id, generation) ON DELETE CASCADE",
+          "name": "execution_replay_events_execution_id_generation_fkey",
+          "relation": "elitea_runtime.execution_replay_events"
+        },
+        {
+          "definition": "FOREIGN KEY (execution_id, generation) REFERENCES elitea_runtime.execution_jobs(execution_id, generation) ON DELETE CASCADE",
+          "name": "execution_replay_state_execution_id_generation_fkey",
+          "relation": "elitea_runtime.execution_replay_state"
+        },
+        {
+          "definition": "FOREIGN KEY (execution_id, generation) REFERENCES elitea_runtime.execution_jobs(execution_id, generation) ON DELETE CASCADE",
+          "name": "execution_settlements_execution_id_generation_fkey",
+          "relation": "elitea_runtime.execution_settlements"
+        },
+        {
+          "definition": "FOREIGN KEY (execution_id, generation, capability_id, input_bundle_id) REFERENCES elitea_runtime.execution_jobs(execution_id, generation, capability_id, input_bundle_id) ON DELETE CASCADE",
+          "name": "index_ingest_jobs_execution_id_generation_capability_id_in_fkey",
+          "relation": "elitea_runtime.index_ingest_jobs"
+        },
+        {
+          "definition": "FOREIGN KEY (execution_id, generation) REFERENCES elitea_runtime.execution_jobs(execution_id, generation) ON DELETE CASCADE",
+          "name": "index_result_artifacts_execution_id_generation_fkey",
+          "relation": "elitea_runtime.index_result_artifacts"
+        },
+        {
+          "definition": "FOREIGN KEY (execution_id, generation) REFERENCES elitea_runtime.execution_jobs(execution_id, generation) ON DELETE CASCADE",
+          "name": "output_inbox_execution_id_generation_fkey",
+          "relation": "elitea_runtime.output_inbox"
+        },
+        {
+          "definition": "FOREIGN KEY (execution_id, generation, capability_id, input_bundle_id) REFERENCES elitea_runtime.execution_jobs(execution_id, generation, capability_id, input_bundle_id) ON DELETE CASCADE",
+          "name": "toolkit_execute_read_jobs_execution_id_generation_capabili_fkey",
+          "relation": "elitea_runtime.toolkit_execute_read_jobs"
+        }
+      ],
+      "indexes": [
+        "CREATE INDEX execution_jobs_active_capability_idx ON elitea_runtime.execution_jobs USING btree (capability_id) WHERE (state = ANY (ARRAY['PENDING'::text, 'DISPATCHED'::text, 'CLAIMED'::text, 'RUNNING'::text, 'SETTLING'::text]))",
+        "CREATE INDEX execution_jobs_cancel_pending_idx ON elitea_runtime.execution_jobs USING btree (capability_id, generation, admitted_at, execution_id) WHERE ((desired_state = 'CANCELLED'::text) AND (state = ANY (ARRAY['PENDING'::text, 'DISPATCHED'::text])))",
+        "CREATE INDEX execution_jobs_index_identity_order_idx ON elitea_runtime.execution_jobs USING btree (resource_project_id, admitted_at, execution_id, generation) WHERE (capability_id = 'index.ingest.v1'::text)",
+        "CREATE UNIQUE INDEX execution_jobs_capability_bundle_identity ON elitea_runtime.execution_jobs USING btree (execution_id, generation, capability_id, input_bundle_id)",
+        "CREATE UNIQUE INDEX execution_jobs_command_id_key ON elitea_runtime.execution_jobs USING btree (command_id)",
+        "CREATE UNIQUE INDEX execution_jobs_idempotency_scope_idempotency_key_key ON elitea_runtime.execution_jobs USING btree (idempotency_scope, idempotency_key)",
+        "CREATE UNIQUE INDEX execution_jobs_pkey ON elitea_runtime.execution_jobs USING btree (execution_id, generation)"
+      ],
+      "kind": "r",
+      "rls": false,
+      "table": "elitea_runtime.execution_jobs",
+      "triggers": 0
+    },
+    {
+      "columns": [
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "input_bundle_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "entry_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "entry_version",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "semantic_role",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "media_type",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "content_digest",
+          "not_null": true,
+          "type": "bytea"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "content_size",
+          "not_null": true,
+          "type": "bigint"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "content_reference",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "classification",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "required_grant_audience",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "content_bytes",
+          "not_null": true,
+          "type": "bytea"
+        }
+      ],
+      "constraints": [
+        {
+          "definition": "NOT NULL classification",
+          "name": "input_bundle_entries_classification_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL content_bytes",
+          "name": "input_bundle_entries_content_bytes_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL content_digest",
+          "name": "input_bundle_entries_content_digest_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK ((octet_length(content_bytes) = content_size))",
+          "name": "input_bundle_entries_content_length",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL content_reference",
+          "name": "input_bundle_entries_content_reference_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK ((((media_type = 'application/json'::text) AND ((content_size >= 1) AND (content_size <= 262144))) OR ((media_type = ANY (ARRAY['application/vnd.elitea.agent-execution-input.v1+protobuf'::text, 'application/vnd.elitea.toolkit-execute-read-input.v1+protobuf'::text])) AND ((content_size >= 1) AND (content_size <= 1048576)))))",
+          "name": "input_bundle_entries_content_size",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL content_size",
+          "name": "input_bundle_entries_content_size_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK ((octet_length(content_digest) = 32))",
+          "name": "input_bundle_entries_digest_length",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL entry_id",
+          "name": "input_bundle_entries_entry_id_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL entry_version",
+          "name": "input_bundle_entries_entry_version_not_null",
+          "validated": true
+        },
+        {
+          "definition": "FOREIGN KEY (input_bundle_id) REFERENCES elitea_runtime.input_bundles(input_bundle_id) ON DELETE CASCADE",
+          "name": "input_bundle_entries_input_bundle_id_fkey",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL input_bundle_id",
+          "name": "input_bundle_entries_input_bundle_id_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL media_type",
+          "name": "input_bundle_entries_media_type_not_null",
+          "validated": true
+        },
+        {
+          "definition": "PRIMARY KEY (input_bundle_id, entry_id)",
+          "name": "input_bundle_entries_pkey",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL required_grant_audience",
+          "name": "input_bundle_entries_required_grant_audience_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL semantic_role",
+          "name": "input_bundle_entries_semantic_role_not_null",
+          "validated": true
+        }
+      ],
+      "inbound": [
+        {
+          "definition": "FOREIGN KEY (input_bundle_id, request_entry_id) REFERENCES elitea_runtime.input_bundle_entries(input_bundle_id, entry_id)",
+          "name": "agent_execution_jobs_input_bundle_id_request_entry_id_fkey",
+          "relation": "elitea_runtime.agent_execution_jobs"
+        },
+        {
+          "definition": "FOREIGN KEY (input_bundle_id, embedding_binding_entry_id) REFERENCES elitea_runtime.input_bundle_entries(input_bundle_id, entry_id)",
+          "name": "index_ingest_jobs_embedding_binding_entry",
+          "relation": "elitea_runtime.index_ingest_jobs"
+        },
+        {
+          "definition": "FOREIGN KEY (input_bundle_id, llm_configuration_entry_id) REFERENCES elitea_runtime.input_bundle_entries(input_bundle_id, entry_id)",
+          "name": "index_ingest_jobs_input_bundle_id_llm_configuration_entry__fkey",
+          "relation": "elitea_runtime.index_ingest_jobs"
+        },
+        {
+          "definition": "FOREIGN KEY (input_bundle_id, llm_model_entry_id) REFERENCES elitea_runtime.input_bundle_entries(input_bundle_id, entry_id)",
+          "name": "index_ingest_jobs_input_bundle_id_llm_model_entry_id_fkey",
+          "relation": "elitea_runtime.index_ingest_jobs"
+        },
+        {
+          "definition": "FOREIGN KEY (input_bundle_id, mcp_tokens_entry_id) REFERENCES elitea_runtime.input_bundle_entries(input_bundle_id, entry_id)",
+          "name": "index_ingest_jobs_input_bundle_id_mcp_tokens_entry_id_fkey",
+          "relation": "elitea_runtime.index_ingest_jobs"
+        },
+        {
+          "definition": "FOREIGN KEY (input_bundle_id, tool_parameters_entry_id) REFERENCES elitea_runtime.input_bundle_entries(input_bundle_id, entry_id)",
+          "name": "index_ingest_jobs_input_bundle_id_tool_parameters_entry_id_fkey",
+          "relation": "elitea_runtime.index_ingest_jobs"
+        },
+        {
+          "definition": "FOREIGN KEY (input_bundle_id, toolkit_configuration_entry_id) REFERENCES elitea_runtime.input_bundle_entries(input_bundle_id, entry_id)",
+          "name": "index_ingest_jobs_input_bundle_id_toolkit_configuration_en_fkey",
+          "relation": "elitea_runtime.index_ingest_jobs"
+        },
+        {
+          "definition": "FOREIGN KEY (input_bundle_id, request_entry_id) REFERENCES elitea_runtime.input_bundle_entries(input_bundle_id, entry_id)",
+          "name": "toolkit_execute_read_jobs_input_bundle_id_request_entry_id_fkey",
+          "relation": "elitea_runtime.toolkit_execute_read_jobs"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX input_bundle_entries_pkey ON elitea_runtime.input_bundle_entries USING btree (input_bundle_id, entry_id)"
+      ],
+      "kind": "r",
+      "rls": false,
+      "table": "elitea_runtime.input_bundle_entries",
+      "triggers": 0
+    },
+    {
+      "columns": [
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "event_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "logical_output_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "execution_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "generation",
+          "not_null": true,
+          "type": "bigint"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "claim_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "fence_token",
+          "not_null": true,
+          "type": "bytea"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "workload_identity",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "workload_session_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "producer_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "claim_attempt",
+          "not_null": true,
+          "type": "bigint"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "lease_epoch",
+          "not_null": true,
+          "type": "bigint"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "stream_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "sequence",
+          "not_null": true,
+          "type": "bigint"
+        },
+        {
+          "default": "0",
+          "generated": "",
+          "identity": "",
+          "name": "claim_handoff_watermark",
+          "not_null": true,
+          "type": "bigint"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "payload_type",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "payload_digest",
+          "not_null": true,
+          "type": "bytea"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "payload_bytes",
+          "not_null": true,
+          "type": "bytea"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "settlement_proposal_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "settlement_outcome",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "settlement_proposal_bytes",
+          "not_null": true,
+          "type": "bytea"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "settlement_proposal_digest",
+          "not_null": true,
+          "type": "bytea"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "settlement_idempotency_key",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "occurred_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        },
+        {
+          "default": "clock_timestamp()",
+          "generated": "",
+          "identity": "",
+          "name": "received_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "projected_at",
+          "not_null": false,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": [
+        {
+          "definition": "CHECK ((claim_attempt > 0))",
+          "name": "output_inbox_claim_attempt",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL claim_attempt",
+          "name": "output_inbox_claim_attempt_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL claim_handoff_watermark",
+          "name": "output_inbox_claim_handoff_watermark_not_null",
+          "validated": true
+        },
+        {
+          "definition": "FOREIGN KEY (claim_id) REFERENCES elitea_runtime.execution_claims(claim_id)",
+          "name": "output_inbox_claim_id_fkey",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL claim_id",
+          "name": "output_inbox_claim_id_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK ((octet_length(payload_digest) = 32))",
+          "name": "output_inbox_digest_length",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL event_id",
+          "name": "output_inbox_event_id_not_null",
+          "validated": true
+        },
+        {
+          "definition": "FOREIGN KEY (execution_id, generation) REFERENCES elitea_runtime.execution_jobs(execution_id, generation) ON DELETE CASCADE",
+          "name": "output_inbox_execution_id_generation_fkey",
+          "validated": true
+        },
+        {
+          "definition": "UNIQUE (execution_id, generation, logical_output_id)",
+          "name": "output_inbox_execution_id_generation_logical_output_id_key",
+          "validated": true
+        },
+        {
+          "definition": "UNIQUE (execution_id, generation, producer_id, sequence)",
+          "name": "output_inbox_execution_id_generation_producer_id_sequence_key",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL execution_id",
+          "name": "output_inbox_execution_id_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK ((octet_length(fence_token) = 32))",
+          "name": "output_inbox_fence_length",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL fence_token",
+          "name": "output_inbox_fence_token_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL generation",
+          "name": "output_inbox_generation_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK ((claim_handoff_watermark >= 0))",
+          "name": "output_inbox_handoff_watermark",
+          "validated": true
+        },
+        {
+          "definition": "CHECK ((lease_epoch > 0))",
+          "name": "output_inbox_lease_epoch",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL lease_epoch",
+          "name": "output_inbox_lease_epoch_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL logical_output_id",
+          "name": "output_inbox_logical_output_id_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL occurred_at",
+          "name": "output_inbox_occurred_at_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL payload_bytes",
+          "name": "output_inbox_payload_bytes_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL payload_digest",
+          "name": "output_inbox_payload_digest_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK (((octet_length(payload_bytes) >= 1) AND (octet_length(payload_bytes) <= 262144)))",
+          "name": "output_inbox_payload_size",
+          "validated": true
+        },
+        {
+          "definition": "CHECK ((payload_type = ANY (ARRAY['CONFIGURATION_VALIDATION'::text, 'RUNTIME_FAILURE'::text, 'INDEX_INGEST_RESULT'::text, 'AGENT_EXECUTION_RESULT'::text, 'TOOLKIT_CALL_TOOL_RESULT'::text, 'TOOLKIT_EXECUTE_READ_RESULT'::text])))",
+          "name": "output_inbox_payload_type",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL payload_type",
+          "name": "output_inbox_payload_type_not_null",
+          "validated": true
+        },
+        {
+          "definition": "PRIMARY KEY (event_id)",
+          "name": "output_inbox_pkey",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL producer_id",
+          "name": "output_inbox_producer_id_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL received_at",
+          "name": "output_inbox_received_at_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK ((sequence > 0))",
+          "name": "output_inbox_sequence",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL sequence",
+          "name": "output_inbox_sequence_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL settlement_idempotency_key",
+          "name": "output_inbox_settlement_idempotency_key_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK ((settlement_outcome = ANY (ARRAY['SUCCEEDED'::text, 'FAILED'::text, 'CANCELLED'::text, 'OUTCOME_UNKNOWN'::text])))",
+          "name": "output_inbox_settlement_outcome",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL settlement_outcome",
+          "name": "output_inbox_settlement_outcome_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL settlement_proposal_bytes",
+          "name": "output_inbox_settlement_proposal_bytes_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK ((octet_length(settlement_proposal_digest) = 32))",
+          "name": "output_inbox_settlement_proposal_digest",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL settlement_proposal_digest",
+          "name": "output_inbox_settlement_proposal_digest_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL settlement_proposal_id",
+          "name": "output_inbox_settlement_proposal_id_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK (((octet_length(settlement_proposal_bytes) >= 1) AND (octet_length(settlement_proposal_bytes) <= 65536)))",
+          "name": "output_inbox_settlement_proposal_size",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL stream_id",
+          "name": "output_inbox_stream_id_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL workload_identity",
+          "name": "output_inbox_workload_identity_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL workload_session_id",
+          "name": "output_inbox_workload_session_id_not_null",
+          "validated": true
+        }
+      ],
+      "inbound": [
+        {
+          "definition": "FOREIGN KEY (execution_id, generation, logical_output_id) REFERENCES elitea_runtime.output_inbox(execution_id, generation, logical_output_id)",
+          "name": "configuration_validation_resu_execution_id_generation_logi_fkey",
+          "relation": "elitea_runtime.configuration_validation_results"
+        },
+        {
+          "definition": "FOREIGN KEY (execution_id, generation, logical_output_id) REFERENCES elitea_runtime.output_inbox(execution_id, generation, logical_output_id)",
+          "name": "index_ingest_results_execution_id_generation_logical_outpu_fkey",
+          "relation": "elitea_runtime.index_ingest_results"
+        },
+        {
+          "definition": "FOREIGN KEY (event_id) REFERENCES elitea_runtime.output_inbox(event_id)",
+          "name": "toolkit_execute_read_results_event_id_fkey",
+          "relation": "elitea_runtime.toolkit_execute_read_results"
+        }
+      ],
+      "indexes": [
+        "CREATE INDEX output_inbox_unprojected_idx ON elitea_runtime.output_inbox USING btree (received_at, event_id) WHERE (projected_at IS NULL)",
+        "CREATE UNIQUE INDEX output_inbox_execution_id_generation_logical_output_id_key ON elitea_runtime.output_inbox USING btree (execution_id, generation, logical_output_id)",
+        "CREATE UNIQUE INDEX output_inbox_execution_id_generation_producer_id_sequence_key ON elitea_runtime.output_inbox USING btree (execution_id, generation, producer_id, sequence)",
+        "CREATE UNIQUE INDEX output_inbox_pkey ON elitea_runtime.output_inbox USING btree (event_id)"
+      ],
+      "kind": "r",
+      "rls": false,
+      "table": "elitea_runtime.output_inbox",
+      "triggers": 0
+    },
+    {
+      "columns": [
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "execution_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "generation",
+          "not_null": true,
+          "type": "bigint"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "capability_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "input_bundle_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "request_entry_id",
+          "not_null": true,
+          "type": "text"
+        }
+      ],
+      "constraints": [
+        {
+          "definition": "CHECK ((capability_id = 'toolkit.execute.read.v1'::text))",
+          "name": "toolkit_execute_read_jobs_capability",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL capability_id",
+          "name": "toolkit_execute_read_jobs_capability_id_not_null",
+          "validated": true
+        },
+        {
+          "definition": "FOREIGN KEY (execution_id, generation, capability_id, input_bundle_id) REFERENCES elitea_runtime.execution_jobs(execution_id, generation, capability_id, input_bundle_id) ON DELETE CASCADE",
+          "name": "toolkit_execute_read_jobs_execution_id_generation_capabili_fkey",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL execution_id",
+          "name": "toolkit_execute_read_jobs_execution_id_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL generation",
+          "name": "toolkit_execute_read_jobs_generation_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL input_bundle_id",
+          "name": "toolkit_execute_read_jobs_input_bundle_id_not_null",
+          "validated": true
+        },
+        {
+          "definition": "FOREIGN KEY (input_bundle_id, request_entry_id) REFERENCES elitea_runtime.input_bundle_entries(input_bundle_id, entry_id)",
+          "name": "toolkit_execute_read_jobs_input_bundle_id_request_entry_id_fkey",
+          "validated": true
+        },
+        {
+          "definition": "PRIMARY KEY (execution_id, generation)",
+          "name": "toolkit_execute_read_jobs_pkey",
+          "validated": true
+        },
+        {
+          "definition": "CHECK (((octet_length(request_entry_id) >= 1) AND (octet_length(request_entry_id) <= 256)))",
+          "name": "toolkit_execute_read_jobs_request_entry",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL request_entry_id",
+          "name": "toolkit_execute_read_jobs_request_entry_id_not_null",
+          "validated": true
+        }
+      ],
+      "inbound": [
+        {
+          "definition": "FOREIGN KEY (execution_id, generation) REFERENCES elitea_runtime.toolkit_execute_read_jobs(execution_id, generation) ON DELETE CASCADE",
+          "name": "toolkit_execute_read_results_execution_id_generation_fkey",
+          "relation": "elitea_runtime.toolkit_execute_read_results"
+        }
+      ],
+      "indexes": [
+        "CREATE INDEX toolkit_execute_read_jobs_bundle_idx ON elitea_runtime.toolkit_execute_read_jobs USING btree (input_bundle_id, request_entry_id, execution_id, generation)",
+        "CREATE UNIQUE INDEX toolkit_execute_read_jobs_pkey ON elitea_runtime.toolkit_execute_read_jobs USING btree (execution_id, generation)"
+      ],
+      "kind": "r",
+      "rls": false,
+      "table": "elitea_runtime.toolkit_execute_read_jobs",
+      "triggers": 0
+    },
+    {
+      "columns": [
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "execution_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "generation",
+          "not_null": true,
+          "type": "bigint"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "event_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "result_json",
+          "not_null": true,
+          "type": "bytea"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "toolkit_type",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "toolkit_name",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "tool_name",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "clock_timestamp()",
+          "generated": "",
+          "identity": "",
+          "name": "projected_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": [
+        {
+          "definition": "FOREIGN KEY (event_id) REFERENCES elitea_runtime.output_inbox(event_id)",
+          "name": "toolkit_execute_read_results_event_id_fkey",
+          "validated": true
+        },
+        {
+          "definition": "UNIQUE (event_id)",
+          "name": "toolkit_execute_read_results_event_id_key",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL event_id",
+          "name": "toolkit_execute_read_results_event_id_not_null",
+          "validated": true
+        },
+        {
+          "definition": "FOREIGN KEY (execution_id, generation) REFERENCES elitea_runtime.toolkit_execute_read_jobs(execution_id, generation) ON DELETE CASCADE",
+          "name": "toolkit_execute_read_results_execution_id_generation_fkey",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL execution_id",
+          "name": "toolkit_execute_read_results_execution_id_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL generation",
+          "name": "toolkit_execute_read_results_generation_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK ((((octet_length(toolkit_type) >= 1) AND (octet_length(toolkit_type) <= 256)) AND ((octet_length(toolkit_name) >= 1) AND (octet_length(toolkit_name) <= 256)) AND ((octet_length(tool_name) >= 1) AND (octet_length(tool_name) <= 256))))",
+          "name": "toolkit_execute_read_results_identity",
+          "validated": true
+        },
+        {
+          "definition": "CHECK (((octet_length(result_json) >= 1) AND (octet_length(result_json) <= 49152)))",
+          "name": "toolkit_execute_read_results_payload",
+          "validated": true
+        },
+        {
+          "definition": "PRIMARY KEY (execution_id, generation)",
+          "name": "toolkit_execute_read_results_pkey",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL projected_at",
+          "name": "toolkit_execute_read_results_projected_at_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL result_json",
+          "name": "toolkit_execute_read_results_result_json_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL tool_name",
+          "name": "toolkit_execute_read_results_tool_name_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL toolkit_name",
+          "name": "toolkit_execute_read_results_toolkit_name_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL toolkit_type",
+          "name": "toolkit_execute_read_results_toolkit_type_not_null",
+          "validated": true
+        }
+      ],
+      "inbound": [],
+      "indexes": [
+        "CREATE UNIQUE INDEX toolkit_execute_read_results_event_id_key ON elitea_runtime.toolkit_execute_read_results USING btree (event_id)",
+        "CREATE UNIQUE INDEX toolkit_execute_read_results_pkey ON elitea_runtime.toolkit_execute_read_results USING btree (execution_id, generation)"
+      ],
+      "kind": "r",
+      "rls": false,
+      "table": "elitea_runtime.toolkit_execute_read_results",
+      "triggers": 0
+    }
+  ],
+  "oauth": [
+    {
+      "columns": [
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "project_id",
+          "not_null": true,
+          "type": "integer"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "actor_id",
+          "not_null": true,
+          "type": "integer"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "client_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "token_endpoint",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "''::text",
+          "generated": "",
+          "identity": "",
+          "name": "resource",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "encrypted_credentials",
+          "not_null": true,
+          "type": "bytea"
+        },
+        {
+          "default": null,
+          "generated": "",
+          "identity": "",
+          "name": "secret_expires_at",
+          "not_null": false,
+          "type": "timestamp with time zone"
+        },
+        {
+          "default": "(now() + '30 days'::interval)",
+          "generated": "",
+          "identity": "",
+          "name": "idle_expires_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": [
+        {
+          "definition": "CHECK ((actor_id > 0))",
+          "name": "mcp_oauth_clients_actor_id_check",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL actor_id",
+          "name": "mcp_oauth_clients_actor_id_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK (((length(client_id) >= 1) AND (length(client_id) <= 4096)))",
+          "name": "mcp_oauth_clients_client_id_check",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL client_id",
+          "name": "mcp_oauth_clients_client_id_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK (((octet_length(encrypted_credentials) >= 29) AND (octet_length(encrypted_credentials) <= 32768)))",
+          "name": "mcp_oauth_clients_encrypted_credentials_check",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL encrypted_credentials",
+          "name": "mcp_oauth_clients_encrypted_credentials_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK ((length(id) = 43))",
+          "name": "mcp_oauth_clients_id_check",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL id",
+          "name": "mcp_oauth_clients_id_not_null",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL idle_expires_at",
+          "name": "mcp_oauth_clients_idle_expires_at_not_null",
+          "validated": true
+        },
+        {
+          "definition": "PRIMARY KEY (id)",
+          "name": "mcp_oauth_clients_pkey",
+          "validated": true
+        },
+        {
+          "definition": "CHECK ((project_id > 0))",
+          "name": "mcp_oauth_clients_project_id_check",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL project_id",
+          "name": "mcp_oauth_clients_project_id_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK ((length(resource) <= 4096))",
+          "name": "mcp_oauth_clients_resource_check",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL resource",
+          "name": "mcp_oauth_clients_resource_not_null",
+          "validated": true
+        },
+        {
+          "definition": "CHECK (((length(token_endpoint) >= 1) AND (length(token_endpoint) <= 4096)))",
+          "name": "mcp_oauth_clients_token_endpoint_check",
+          "validated": true
+        },
+        {
+          "definition": "NOT NULL token_endpoint",
+          "name": "mcp_oauth_clients_token_endpoint_not_null",
+          "validated": true
+        }
+      ],
+      "inbound": [],
+      "indexes": [
+        "CREATE INDEX mcp_oauth_clients_idle_expiry ON elitea_auth.mcp_oauth_clients USING btree (idle_expires_at, id)",
+        "CREATE UNIQUE INDEX mcp_oauth_clients_pkey ON elitea_auth.mcp_oauth_clients USING btree (id)"
+      ],
+      "kind": "r",
+      "rls": false,
+      "table": "elitea_auth.mcp_oauth_clients",
+      "triggers": 0
+    }
+  ]
+}

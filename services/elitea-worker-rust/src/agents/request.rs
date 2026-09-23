@@ -1,3 +1,9 @@
+/// Additional calls for one truncated answer, including its one boundary repair.
+pub(crate) const MAX_OUTPUT_CONTINUATION_CALLS: u32 = 4;
+
+// Match completed-answer capacity; the full encoded request has its own bound.
+pub(super) const MAX_OUTPUT_CONTINUATION_BYTES: usize = 4 * 1_024 * 1_024;
+
 use serde_json::{Map, Value};
 
 /// Selects one of the two current agent assembly semantics.
@@ -93,6 +99,30 @@ pub struct AgentExecutionPayload {
     /// Visible root-assistant output that ended on the provider token limit.
     /// Presence distinguishes output continuation from HITL/authorization.
     pub truncated_content: Option<String>,
+    pub project_context: Option<ProjectContextSnapshot>,
+    pub model_context_limits: Option<ModelContextLimits>,
+    pub summary_model: Option<SummaryModelSnapshot>,
+}
+
+/// Main resolves this model and its limits before execution admission.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SummaryModelSnapshot {
+    pub llm_settings: Map<String, Value>,
+    pub model_context_limits: ModelContextLimits,
+}
+
+/// Authorized model limits from the language-neutral runtime contract.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelContextLimits {
+    pub context_window_tokens: u32,
+    pub max_output_tokens: u32,
+    #[serde(default)]
+    pub context_window_fallback: bool,
+    #[serde(default)]
+    pub max_output_fallback: bool,
+    #[serde(default)]
+    pub max_input_tokens: Option<u32>,
 }
 
 #[derive(Eq, PartialEq)]
@@ -100,4 +130,16 @@ pub struct AgentExecutionRequest {
     pub kind: AgentExecutionKind,
     pub binding: AgentInputBinding,
     pub payload: AgentExecutionPayload,
+}
+
+/// Main freezes this authorized content in the immutable input bundle.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectContextSnapshot {
+    pub id: String,
+    pub revision: String,
+    pub scope: String,
+    pub content: String,
+    #[serde(default)]
+    pub activation_description: String,
 }

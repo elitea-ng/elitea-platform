@@ -15,6 +15,38 @@ option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elite
 // are forbidden on Redis. Producers and consumers must validate the fragments
 // and the complete output frame against the selected protocol limits before
 // transport or durable projection.
+// Large agent tool results use the versioned JSON member tool_output_chunk_v1
+// beside tool_output in agent_tool_end or final agent_tool_error response_metadata
+// and in each matching
+// partial_message.response_metadata.tool_calls entry. Its exact fields are:
+// offset_bytes (unsigned integer), total_bytes (unsigned integer, <= 1048576),
+// sha256 (64 lowercase hexadecimal characters), final (boolean).
+// tool_output is one complete UTF-8 string fragment, at most 8192 bytes.
+// Offsets count UTF-8 bytes in the complete serialized JSON tool result.
+// Chunks are contiguous; total_bytes and sha256 stay constant for one call.
+// The final chunk ends at total_bytes. Consumers verify the assembled digest.
+// Exact duplicate chunks are idempotent; gaps or conflicting bytes are refused.
+// The existing execution fence, output sequence and tool_run_id scope assembly.
+// Only a final chunk marks the tool complete. A failed result uses finish_reason
+// error and bounded error metadata; its complete JSON remains in tool_output.
+// Frame byte limits stay unchanged.
+// Large model text uses the same offset/digest contract with total_bytes <=
+// 4194304. A thinking_steps entry can carry text_chunk_v1 or thinking_chunk_v1
+// beside its text or thinking fragment. Consumers assemble each field separately
+// within the existing thinking-step identity. Absent fields retain prior values.
+// Only the final fragment supplies timestamp_finish.
+// agent_result_chunk carries a content fragment and response_metadata.result_chunk_v1.
+// It replaces provisional root output at offset zero and appends later fragments.
+// A subsequent full_message can use null content and result_ref_v1 metadata:
+// total_bytes and sha256 identify the complete, durably assembled root result.
+// Terminal projection must verify both values before accepting success.
+// These fragments use the existing execution, generation, and message fences.
+// Consumers must deploy before producers emit these versioned members.
+// agent_context_status uses response_metadata.context_status version 1.
+// compaction_target_tokens is floor(usable_input_tokens * 15 / 100).
+// Consumers also accept the legacy 70-percent target for persisted events.
+// The target is advisory. Protected instructions and active tool groups can exceed it.
+// The trigger remains ceil(usable_input_tokens * 90 / 100).
 message NodeEventV1 {
   string type = 1;
   optional string stream_id = 2;

@@ -265,8 +265,8 @@ def size_bound_pair(
     )
 
 
-signed_at_limit, claim_at_limit = size_bound_pair(1024 * 1024)
-signed_over_limit, claim_over_limit = size_bound_pair(1024 * 1024 + 1)
+signed_at_limit, claim_at_limit = size_bound_pair(8 * 1024 * 1024)
+signed_over_limit, claim_over_limit = size_bound_pair(8 * 1024 * 1024 + 1)
 
 output_session_command = command_pb2.WorkerCommandV1.FromString(command_raw)
 output_session_command.resource_project_id = "resource-1"

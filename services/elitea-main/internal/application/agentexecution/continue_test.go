@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"math"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -658,5 +659,27 @@ func TestCurrentContinuationRejectsUnavailableActionBeforeAdmission(t *testing.T
 	})
 	if err != ErrUnsupportedCurrentAgentStart || len(admissions.requests) != 0 {
 		t.Fatalf("error=%v admissions=%d", err, len(admissions.requests))
+	}
+}
+
+func TestCurrentOutputContinuationAcceptsLargePartialAndBoundsBytes(t *testing.T) {
+	target := CurrentContinuationTarget{
+		ContinuationKind: CurrentContinuationOutputLimit,
+		Kind:             CurrentRegenerationAdhoc, TargetParticipantID: 21,
+		QuestionID: "ee92ccbd-3312-4c72-b20b-fddf224e7c0e", UserInput: "Continue the report",
+		ThreadID: "thread-output-large", ExecutionGeneration: "9fba0a08-5049-42bb-9019-c2f3df686010",
+		OutputLimitSequence: 1,
+	}
+	for _, size := range []int{65537, 4 * 1024 * 1024} {
+		target.TruncatedContent = strings.Repeat("x", size)
+		if err := target.Validate(); err != nil {
+			t.Fatalf("valid partial with %d bytes: %v", size, err)
+		}
+	}
+	for _, partial := range []string{strings.Repeat("x", 4*1024*1024+1), "invalid\x00partial", strings.Repeat("é", 2*1024*1024) + "x"} {
+		target.TruncatedContent = partial
+		if err := target.Validate(); err != ErrUnsupportedCurrentAgentStart {
+			t.Fatalf("invalid partial with %d bytes: %v", len(partial), err)
+		}
 	}
 }

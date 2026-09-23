@@ -95,6 +95,7 @@ export interface AssistantMessage extends MessageBase {
   readonly isLoading?: boolean;
   readonly isSummarized?: boolean;
   readonly exception?: unknown;
+  readonly failureCode?: string;
   readonly references?: unknown;
   readonly toolActions?: readonly ToolAction[];
   readonly hitlInterrupt?: unknown;

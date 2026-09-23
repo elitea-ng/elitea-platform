@@ -237,7 +237,7 @@ pgbouncer:
   nodeSelector: {}
   tolerations: []
   affinity: {}
- 
+
 # ── NATS ────────────────────────────────────────────────────────────────────
 #
 # The gateway's budget counters and the scheduler both dial it, and they MUST
@@ -1533,6 +1533,10 @@ main:
       commandStream: ""
       consumerGroup: ""
       streamMaxEntries: 1024
+
+    # Saved toolkit discovery requires an active worker dispatch.
+    toolkitDiscovery:
+      enabled: false
 
     # The index schedule write and delete routes. NEEDS indexIngestDispatch.
     indexScheduling:

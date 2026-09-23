@@ -62,9 +62,7 @@ type CompletionRequest struct {
 	ProjectID string
 	// UserID is the authenticated caller, signed alongside the project.
 	UserID string
-	// Model is llm_settings.model_name. Empty means "the caller named no
-	// model"; the gateway answers with its own model-resolution error rather
-	// than this service guessing one.
+	// Model is llm_settings.model_name or the catalog default resolved before dispatch.
 	Model    string
 	Messages []Message
 	// Temperature and MaxTokens are pointers so "absent" and "explicitly 0"

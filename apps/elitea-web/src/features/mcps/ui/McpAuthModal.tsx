@@ -42,6 +42,7 @@ import type { McpAuthMetadata } from '../lib/types';
 import { OAuthFormFields } from './OAuthFormFields';
 
 export interface McpAuthModalProps {
+  authorizationReferenceOnly?: boolean | undefined;
   serverUrl?: string | undefined;
   /** Credential-scoped token storage key; falls back to `serverUrl` when absent. */
   tokenStorageKey?: string | undefined;
@@ -75,7 +76,7 @@ export function McpAuthModal(props: McpAuthModalProps): ReactNode {
 
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
-  const [scope, setScope] = useState(() => scopesToString(resourceScopes) || scopesToString(scopes));
+  const [scope, setScope] = useState(() => scopesToString(scopes) || scopesToString(resourceScopes));
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState('');
   const [authSuccess, setAuthSuccess] = useState(false);
@@ -97,7 +98,7 @@ export function McpAuthModal(props: McpAuthModalProps): ReactNode {
       setClientSecret('');
       setSaveCredentials(false);
     }
-    setScope(scopesToString(resourceScopes) || scopesToString(scopes));
+    setScope(scopesToString(scopes) || scopesToString(resourceScopes));
     setAuthError('');
     setAuthSuccess(false);
     // `scopes`/`resourceScopes` ARE real dependencies (baseline includes
@@ -171,7 +172,7 @@ export function McpAuthModal(props: McpAuthModalProps): ReactNode {
     () => ({ clientId: client_id.trim() || clientId, clientSecret: client_secret.trim() || clientSecret }),
     [client_id, client_secret, clientId, clientSecret],
   );
-  const flowContext = useMemo(() => ({ toolkitId, toolkitType, projectId }), [toolkitId, toolkitType, projectId]);
+  const flowContext = useMemo(() => ({ toolkitId, toolkitType, projectId, serverUrl, authorizationReferenceOnly: props.authorizationReferenceOnly }), [toolkitId, toolkitType, projectId, serverUrl, props.authorizationReferenceOnly]);
 
   const isAuthorizeDisabled = useMemo(() => {
     if (isAuthLifecycleActive) return true;

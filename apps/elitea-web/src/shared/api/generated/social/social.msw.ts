@@ -73,6 +73,10 @@ export const getGetCurrentAuthorResponseMock = (
         faker.datatype.boolean(),
         undefined,
       ]),
+      budget_mode: faker.helpers.arrayElement([
+        faker.helpers.arrayElement(["balanced", "full"] as const),
+        undefined,
+      ]),
       max_context_tokens: faker.helpers.arrayElement([
         faker.number.int({ min: 1000 }),
         undefined,

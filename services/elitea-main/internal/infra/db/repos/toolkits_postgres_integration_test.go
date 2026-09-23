@@ -58,6 +58,43 @@ func TestCurrentToolkitsRepositoryPostgresParity(t *testing.T) {
 	if _, err := repository.Get(ctx, 2, 999); !errors.Is(err, ErrCurrentToolkitNotFound) {
 		t.Fatalf("missing toolkit error=%v", err)
 	}
+
+	// The social folder feature is optional. Its absence keeps project RBAC as
+	// the authority. Once the complete projection exists, a no_access override
+	// hides the toolkit only from the named actor.
+	if toolkit, err := repository.GetMCPVisible(ctx, 1, 11, 1); err != nil || toolkit.ID != 1 {
+		t.Fatalf("MCP read without social projection toolkit=%#v error=%v", toolkit, err)
+	}
+	if _, err := pool.Exec(ctx, `
+CREATE TABLE p_1.entity_folders (
+    id INTEGER PRIMARY KEY,
+    entity_type VARCHAR(32) NOT NULL
+);
+CREATE TABLE p_1.social_folder_items (
+    id INTEGER PRIMARY KEY,
+    folder_id INTEGER NOT NULL,
+    entity VARCHAR(32) NOT NULL,
+    entity_id INTEGER NOT NULL
+);
+CREATE TABLE p_1.folder_access_overrides (
+    id INTEGER PRIMARY KEY,
+    folder_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    access_level VARCHAR(16) NOT NULL
+);
+INSERT INTO p_1.entity_folders (id, entity_type) VALUES (3, 'toolkit');
+INSERT INTO p_1.social_folder_items (id, folder_id, entity, entity_id)
+VALUES (5, 3, 'toolkit', 1);
+INSERT INTO p_1.folder_access_overrides (id, folder_id, user_id, access_level)
+VALUES (7, 3, 11, 'no_access');`); err != nil {
+		t.Fatalf("prepare folder access projection: %v", err)
+	}
+	if _, err := repository.GetMCPVisible(ctx, 1, 11, 1); !errors.Is(err, ErrCurrentToolkitNotFound) {
+		t.Fatalf("restricted MCP toolkit error=%v", err)
+	}
+	if toolkit, err := repository.GetMCPVisible(ctx, 1, 12, 1); err != nil || toolkit.ID != 1 {
+		t.Fatalf("unrestricted MCP toolkit=%#v error=%v", toolkit, err)
+	}
 }
 
 func prepareCurrentToolkitProjects(t *testing.T, pool *pgxpool.Pool) {

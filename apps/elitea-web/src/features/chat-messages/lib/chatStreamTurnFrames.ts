@@ -9,11 +9,13 @@
  * and §3.5 caps a file at 400 with no warning tier — that is the whole reason;
  * the cases and their comments are the originals, moved unchanged.
  */
+import { appendToolOutputChunk } from './toolOutputChunks';
 import { convertJsonToString } from '@/shared/lib/json';
-import { ToolActionStatus } from '@/shared/lib/chat';
+import { TOOL_ACTION_TYPES, ToolActionStatus } from '@/shared/lib/chat';
 
 import { applyThinkingStep, isEmptyTransition } from './chatStreamThinkingFrames';
-import { applyReasoningDelta, settleReasoning, splitWholeResponse } from './chatStreamReasoning';
+import { normalizeExecutionHierarchy } from './executionHierarchy';
+import { applyReasoningDelta, reasoningActionId, settleReasoning, splitWholeResponse } from './chatStreamReasoning';
 import {
   createAssistantMessage,
   replaceAt,
@@ -41,6 +43,18 @@ function isFinalResponse(frame: ChatStreamFrame): boolean {
   return Boolean(frame.response_metadata?.finish_reason);
 }
 
+const ANSWER_LIFECYCLE_FRAMES = new Set<string>([
+  SocketMessageType.StartTask,
+  SocketMessageType.AgentStart,
+  SocketMessageType.AgentLlmStart,
+  SocketMessageType.AgentLlmChunk,
+  SocketMessageType.Chunk,
+  SocketMessageType.AIMessageChunk,
+  SocketMessageType.AgentResultChunk,
+  SocketMessageType.AgentResponse,
+  SocketMessageType.PipelineFinish,
+]);
+
 /**
  * Reduce one turn-lifecycle frame, or return `undefined` for a frame this
  * family does not own so the dispatcher can offer it to the next one.
@@ -52,7 +66,28 @@ export function reduceTurnFrame(
   context: ChatStreamContext,
   index: number,
 ): readonly ChatMessage[] | undefined {
+  const hierarchy = normalizeExecutionHierarchy(
+    frame.response_metadata,
+    frame.response_metadata?.metadata,
+    frame.response_metadata?.tool_meta?.metadata,
+  );
+  const childOutput = hierarchy.parent_agent_path.length > 0 || Boolean(hierarchy.parent_agent_name);
+  // Child model output belongs to its execution steps, not the parent answer.
+  // A child's finish reason must not settle a parent that still waits for siblings.
+  if (childOutput && ANSWER_LIFECYCLE_FRAMES.has(type)) return history;
   switch (type) {
+    case SocketMessageType.AgentResultChunk: {
+      if (index === -1) return history;
+      const current = history[index];
+      if (!current) return history;
+      const result = appendToolOutputChunk(current.assembledResult, frame.content,
+        frame.response_metadata?.['result_chunk_v1'], current.resultChunk, 4194304);
+      if (!result) return history;
+      const split = splitWholeResponse(current.id, (current.continuedResultPrefix ?? '') + result.output, (current.toolActions ?? []) as readonly ToolAction[], frame.created_at);
+      return replaceAt(history, index, { content: split.answer, assembledResult: result.output, resultChunk: result.chunk,
+        toolActions: split.actions, isLoading: false, isStreaming: true });
+    }
+
     // The turn begins. The baseline resets content here unless it is resuming a
     // continuation, so a regenerate does not append to the previous answer.
     case SocketMessageType.StartTask:
@@ -63,6 +98,13 @@ export function reduceTurnFrame(
       const continuingOutput = frame.response_metadata?.should_continue === true;
       return replaceAt(history, index, {
         content: continuingOutput ? current.content : '',
+        continuedResultPrefix: continuingOutput ? current.content : undefined,
+        resultChunk: undefined, assembledResult: undefined,
+        // An interrupted reasoning scanner belongs to the replaced answer.
+        // Keep tool history, but do not route recovered text into its open sink.
+        ...(!continuingOutput && current.toolActions ? {
+          toolActions: (current.toolActions as readonly ToolAction[]).filter((action) => action.id !== reasoningActionId(current.id)),
+        } : {}),
         isStreaming: true,
         isLoading: true,
         references: continuingOutput ? current.references : [],
@@ -173,21 +215,29 @@ export function reduceTurnFrame(
         // for providers that only echoed it inside the message id.
         const stepRunId = step.tool_run_id ?? step.message?.id?.replace('lc_run--', '');
         if (!stepRunId) continue;
-        const target = next.find((action) => action.id === stepRunId);
+        let target = next.find((action) => action.id === stepRunId);
+        if (!target && childOutput) {
+          // Child answer chunks do not create parent bubbles. A persisted
+          // child step must still become inspectable when its end frame arrives.
+          target = { id: stepRunId, type: TOOL_ACTION_TYPES.Llm,
+            status: ToolActionStatus.processing, ...hierarchy } as ToolAction;
+          next = [...next, target];
+        }
         if (!target) continue;
         const updated = applyThinkingStep(target, step);
-        if (isEmptyTransition(updated)) {
+        if (isEmptyTransition(updated) && !step['text_chunk_v1'] && !step['thinking_chunk_v1']) {
           removed.add(stepRunId);
           continue;
         }
         next = next.map((action) =>
-          action.id === stepRunId ? ({ ...updated, status: ToolActionStatus.complete } as ToolAction) : action,
+          action.id === stepRunId ? ({ ...updated, status: (step['text_chunk_v1'] || step['thinking_chunk_v1']) && !step.timestamp_finish ? ToolActionStatus.processing : ToolActionStatus.complete } as ToolAction) : action,
         );
       }
 
       // The frame's own tool_run_id closes too, unless something already
       // settled it or it is waiting on the user.
-      const primaryId = frame.response_metadata?.tool_run_id;
+      const pendingChunk = steps.some((step) => (step["text_chunk_v1"] || step["thinking_chunk_v1"]) && !step.timestamp_finish);
+      const primaryId = pendingChunk ? undefined : frame.response_metadata?.tool_run_id;
       if (primaryId) {
         next = next.map((action) =>
           action.id === primaryId &&
@@ -199,6 +249,10 @@ export function reduceTurnFrame(
       }
 
       if (removed.size > 0) next = next.filter((action) => !removed.has(action.id));
+
+      if (childOutput) {
+        return next === actions ? history : replaceAt(history, index, { toolActions: next });
+      }
 
       // The token stream is over, so a reasoning block still open here is never
       // going to close. `settleReasoning` hands its text back to an empty
@@ -291,7 +345,13 @@ export function reduceTurnFrame(
       // ends without `agent_llm_end` (a pipeline whose last node is not an LLM)
       // would otherwise leave the row spinning with the answer inside it.
       const finishActions = (current.toolActions ?? []) as readonly ToolAction[];
-      const settled = settleReasoning(current.id, current.content, finishActions);
+      // Rust sends the persisted final snapshot on this terminal event.
+      // A null body refers to previously assembled result chunks.
+      const snapshot = frame.response_metadata?.should_continue === false && typeof frame.content === 'string';
+      const final = snapshot
+        ? splitWholeResponse(current.id, frameText(frame, true), finishActions, frame.created_at)
+        : { answer: current.content, actions: finishActions };
+      const settled = settleReasoning(current.id, final.answer, final.actions);
       return replaceAt(history, index, {
         isStreaming: false,
         isLoading: false,

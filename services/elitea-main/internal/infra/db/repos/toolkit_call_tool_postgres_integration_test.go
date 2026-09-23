@@ -36,7 +36,7 @@ func newToolRunAdmissionService(
 			Classification:        "project-confidential",
 			RequiredGrantAudience: "elitea.runtime.input.read.v1",
 		},
-		postgresIndexIDs(prefix+"-bundle", prefix+"-settings-content", prefix+"-arguments-content"),
+		postgresIndexIDs(prefix+"-bundle", prefix+"-settings-content", prefix+"-arguments-content", prefix+"-runtime-context-content"),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +66,8 @@ func toolRunSubmitRequest(idempotencyKey, arguments string) toolkitcalltoolapp.S
 			ToolName:    "list_issues",
 			Settings: json.RawMessage(
 				`{"id":19,"type":"github","toolkit_name":"gh","settings":{"token":"secret-ref://toolkit/19"}}`),
-			Arguments: json.RawMessage(arguments),
+			Arguments:      json.RawMessage(arguments),
+			RuntimeContext: json.RawMessage(`{"toolkit_security":{"blocked_toolkits":[],"blocked_tools":{},"sensitive_tools":{}}}`),
 		},
 	}
 }
@@ -96,7 +97,7 @@ func TestPostgresToolkitCallToolAdmission(t *testing.T) {
 		`SELECT count(*) FROM elitea_runtime.execution_jobs WHERE capability_id = 'toolkit.call_tool.v1'`)
 	// NO per-capability binding table: the two entry ids come from the roles.
 	assertPostgresCount(t, ctx, pool, 1, `SELECT count(*) FROM elitea_runtime.input_bundles`)
-	assertPostgresCount(t, ctx, pool, 2, `SELECT count(*) FROM elitea_runtime.input_bundle_entries`)
+	assertPostgresCount(t, ctx, pool, 3, `SELECT count(*) FROM elitea_runtime.input_bundle_entries`)
 	assertPostgresCount(t, ctx, pool, 1,
 		`SELECT count(*) FROM elitea_runtime.input_bundle_entries WHERE semantic_role = 'toolkit.call_tool.settings'`)
 	assertPostgresCount(t, ctx, pool, 1,
@@ -245,5 +246,31 @@ func TestPostgresToolkitCallToolExpectedBindingComesFromTheRoles(t *testing.T) {
 	}
 	if err := expected.Validate(); err != nil {
 		t.Fatalf("the rebuilt binding does not validate: %v", err)
+	}
+}
+
+func TestPostgresToolkitCallToolAuthorizationIdentityComesFromFrozenSettings(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	repository, err := NewToolkitCallToolJobsRepository(pool, toolRunDispatchPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := NewToolkitCallToolResultsRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := toolRunSubmitRequest("authorization", `{}`)
+	request.Inputs.ToolkitType = "mcp"
+	request.Inputs.Settings = json.RawMessage(`{"id":19,"type":"mcp","toolkit_name":"saved","settings":{"url":"https://mcp.example.test/tools"}}`)
+	admitted, err := newToolRunAdmissionService(t, repository, "authorization").Submit(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := results.ExpectedToolkitCallTool(context.Background(), admitted.Outcome.ExecutionID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expected.ToolkitID != "19" || expected.ToolkitType != "mcp" || expected.ToolkitName != "saved" || expected.ServerURL != "https://mcp.example.test/tools" {
+		t.Fatal("authorization subject differs from frozen saved toolkit")
 	}
 }

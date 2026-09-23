@@ -108,7 +108,7 @@ func TestCurrentConfigurationsRepositoryRoutesCurrentAndSharedLists(t *testing.T
 	repository := newCurrentConfigurationsRepositoryForTest(t, store, queries)
 
 	currentFilter := configurationapp.CurrentConfigurationListFilter{
-		ProjectID: 7, Types: []string{"github"}, Sections: []string{"credentials"},
+		IDs: []int32{11, 12}, ProjectID: 7, Types: []string{"github"}, Sections: []string{"credentials"},
 		Offset: 3, Limit: 25, LabelQuery: "team", SortBy: "elitea_title", SortOrder: "asc",
 	}
 	total, err := repository.Count(context.Background(), currentFilter)
@@ -144,6 +144,11 @@ func TestCurrentConfigurationsRepositoryRoutesCurrentAndSharedLists(t *testing.T
 		t.Fatalf("shared params: count=%#v list=%#v", queries.countSharedParams, queries.listSharedParams)
 	}
 
+	for _, ids := range [][]int32{queries.countCurrentParams.Ids, queries.listCurrentParams.Ids, queries.countSharedParams.Ids, queries.listSharedParams.Ids} {
+		if !reflect.DeepEqual(ids, []int32{11, 12}) {
+			t.Fatalf("IDs not forwarded: %v", ids)
+		}
+	}
 	if !reflect.DeepEqual(store.projectIDs, []int64{7, 7, 1, 1}) {
 		t.Fatalf("project transaction routing=%v", store.projectIDs)
 	}

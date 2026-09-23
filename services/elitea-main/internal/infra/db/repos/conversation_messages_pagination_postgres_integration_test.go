@@ -470,3 +470,37 @@ func TestListMessagesQueryIsBoundNotInterpolated(t *testing.T) {
 		t.Fatalf("%d groups left, want 1", groups)
 	}
 }
+
+func TestListMessagesPreservesContinuationSeams(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	repo := NewConversationsRepo(pool)
+	ctx := context.Background()
+	for _, tc := range []struct{ name, meta, want string }{
+		{"ordinary", `{}`, "group 0\n suffix"},
+		{"continued", `{"output_limit_sequence":1}`, "group 0 suffix"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id, _ := seedOrderedTranscript(t, repo, 1)
+			_, err := pool.Exec(ctx, `
+WITH grp AS (
+ UPDATE p_1.chat_message_group SET meta = $2::jsonb
+ WHERE conversation_id = (SELECT id FROM p_1.chat_conversations WHERE uuid = $1::uuid)
+ RETURNING id
+), item AS (
+ INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id)
+ SELECT gen_random_uuid(), 'text_message', 1, id FROM grp RETURNING id
+)
+INSERT INTO p_1.chat_messages_text (id, content) SELECT id, ' suffix' FROM item`, id, tc.meta)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := repo.ListMessages(ctx, "1", id, wholeTranscript())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(response.Items) != 1 || response.Items[0].Content != tc.want {
+				t.Fatalf("content = %v; want %q", listedContents(response.Items), tc.want)
+			}
+		})
+	}
+}

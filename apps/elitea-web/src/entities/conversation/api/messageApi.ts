@@ -19,6 +19,8 @@
  */
 import { useMutation, useQuery, type UseMutationResult, type UseQueryResult } from '@tanstack/react-query';
 
+import { attachMessageTraces } from './messageTraces';
+
 import { eliteaFetch } from '@/shared/api/generated/mutator';
 
 async function fetchData<T>(url: string, options?: RequestInit): Promise<T> {
@@ -61,7 +63,8 @@ function messageListQueryString(params: MessageListParams): string {
 
 export async function messageList(params: MessageListParams, signal?: AbortSignal): Promise<MessageListResponse> {
   const url = `/elitea_core/messages/prompt_lib/${String(params.projectId)}/${String(params.conversationId)}${messageListQueryString(params)}`;
-  return fetchData<MessageListResponse>(url, signal ? { signal } : {});
+  const payload = await fetchData<MessageListResponse>(url, signal ? { signal } : {});
+  return attachMessageTraces(payload, params.projectId, params.conversationId, signal);
 }
 
 export function useMessageListQuery(params: MessageListParams, options: { enabled?: boolean } = {}): UseQueryResult<MessageListResponse> {

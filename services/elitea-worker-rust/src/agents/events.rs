@@ -45,6 +45,9 @@ use crate::toolkits::{
 };
 
 const MAX_TOOL_CALLS_PER_MODEL_TURN: usize = 16;
+const MAX_TOOL_RESULT_BYTES: usize = 1024 * 1024;
+const INLINE_TEXT_CHUNK_BYTES: usize = 8 * 1024;
+const MAX_TOOL_RESULT_CHUNKS: usize = MAX_TOOL_RESULT_BYTES / INLINE_TEXT_CHUNK_BYTES + 1;
 /// CHUNKED TOOL OUTPUT (#956).
 ///
 /// A tool result larger than one output frame used to be REFUSED here — the
@@ -71,12 +74,13 @@ const MAX_TOOL_OUTPUT_CHUNKS: usize = 64;
 /// the ceiling that keeps one hostile result from becoming an unbounded event
 /// stream.
 const MAX_TOOL_OUTPUT_CHUNK_EVENTS_PER_ADK_EVENT: usize = MAX_TOOL_OUTPUT_CHUNKS;
-const MAX_PROJECTED_EVENTS_PER_ADK_EVENT: usize =
-    3 + 2 * MAX_TOOL_CALLS_PER_MODEL_TURN + MAX_TOOL_OUTPUT_CHUNK_EVENTS_PER_ADK_EVENT;
+const MAX_PROJECTED_EVENTS_PER_ADK_EVENT: usize = 3
+    + 2 * MAX_TOOL_CALLS_PER_MODEL_TURN * MAX_TOOL_RESULT_CHUNKS
+    + MAX_TOOL_OUTPUT_CHUNK_EVENTS_PER_ADK_EVENT;
 const MAX_ADK_EVENT_ID_BYTES: usize = 512;
 const MAX_ADK_PARTS_PER_EVENT: usize = 256;
 const MAX_CONTEXT_TEXT_BYTES: usize = 2_048;
-const MAX_COMPLETED_CONTENT_BYTES: usize = 60 * 1_024;
+const MAX_COMPLETED_CONTENT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_TOOL_EVENT_VALUE_BYTES: usize = 40 * 1_024;
 const PIPELINE_HITL_DIGEST_DOMAIN: &[u8] = b"elitea.pipeline-hitl-interrupt.v1\0";
 const PIPELINE_TOOL_HITL_DIGEST_DOMAIN: &[u8] = b"elitea.pipeline-tool-hitl-interrupt.v1\0";
@@ -235,7 +239,7 @@ impl std::error::Error for AgentEventProjectionError {}
 /// A caller sends and durably acknowledges every event in order before polling
 /// the ADK stream again. The event slots stay heap-owned so nested projection
 /// and async delivery never copy an 11 KiB inline array through the executor
-/// stack; capacity remains fixed at the admitted per-event maximum.
+/// stack; capacity grows only up to the admitted per-event maximum.
 pub(crate) struct ProjectedAgentEventBatch {
     events: Vec<NodeEventV1>,
 }
@@ -243,7 +247,7 @@ pub(crate) struct ProjectedAgentEventBatch {
 impl ProjectedAgentEventBatch {
     fn new() -> Self {
         Self {
-            events: Vec::with_capacity(MAX_PROJECTED_EVENTS_PER_ADK_EVENT),
+            events: Vec::with_capacity(3 + 2 * MAX_TOOL_CALLS_PER_MODEL_TURN),
         }
     }
 
@@ -375,6 +379,11 @@ impl ApplicationToolPresentation {
 }
 
 impl ApplicationToolPresentationCatalog {
+    pub(super) fn agent_tool_names(&self) -> impl Iterator<Item = &str> {
+        self.by_tool_name
+            .iter()
+            .filter_map(|(name, entry)| (entry.agent_type == "agent").then_some(name.as_str()))
+    }
     pub(crate) fn insert(
         &mut self,
         tool_name: String,
@@ -471,6 +480,11 @@ pub(crate) struct PipelineProjectionInput {
 }
 
 impl AgentEventProjectionContext {
+    pub(crate) fn with_instruction_skills(mut self, skills: Vec<Value>) -> Self {
+        self.invoked_skills.clone_from(&skills);
+        self.applied_skills = skills;
+        self
+    }
     pub(crate) fn ordinary(
         input: OrdinaryProjectionInput,
     ) -> Result<Self, AgentEventProjectionError> {
@@ -714,6 +728,7 @@ pub(crate) struct AgentEventProjector {
     pipeline_result: Option<String>,
     saw_pipeline_node_events: bool,
     continuation_overlap: Option<ContinuationOverlap>,
+    checkpoint_recovery: bool,
 }
 
 const MAX_CONTINUATION_OVERLAP_CHARS: usize = 150;
@@ -828,7 +843,14 @@ impl AgentEventProjector {
             pipeline_result: None,
             saw_pipeline_node_events: false,
             continuation_overlap,
+            checkpoint_recovery: false,
         })
+    }
+
+    /// Restored generation replaces its interrupted browser attempt. The
+    /// frozen continuation prefix is replayed before ADK starts producing.
+    pub(crate) fn mark_checkpoint_recovery(&mut self) {
+        self.checkpoint_recovery = true;
     }
 
     /// Emit the current `agent_start` event before the ADK stream is started.
@@ -847,13 +869,32 @@ impl AgentEventProjector {
             None,
             &json!({
                 "invoked_skills": self.context.invoked_skills,
-                "should_continue": self.context.should_continue,
+                "should_continue": self.context.should_continue && !self.checkpoint_recovery,
             }),
             occurred_at,
         )?;
-        self.state = ProjectionState::Started;
         let mut batch = ProjectedAgentEventBatch::new();
         batch.push(event)?;
+        if self.checkpoint_recovery
+            && let Some(prefix) = self.context.continuation_prefix.as_deref()
+        {
+            let mut offset = 0;
+            while offset < prefix.len() {
+                let mut end = (offset + INLINE_TEXT_CHUNK_BYTES).min(prefix.len());
+                while !prefix.is_char_boundary(end) {
+                    end -= 1;
+                }
+                batch.push(self.event(
+                    "agent_llm_chunk",
+                    &Value::String(prefix[offset..end].to_owned()),
+                    None,
+                    &json!({}),
+                    occurred_at,
+                )?)?;
+                offset = end;
+            }
+        }
+        self.state = ProjectionState::Started;
         Ok(batch)
     }
 
@@ -896,6 +937,11 @@ impl AgentEventProjector {
             }
             return self.project_descendant_event(event);
         }
+        if let Some(skills) =
+            super::instruction_authority::public_active_delta(&event.actions.state_delta)
+        {
+            self.context.applied_skills = skills;
+        }
         if has_descendant_checkpoint {
             return Err(AgentEventProjectionError::invalid_state());
         }
@@ -937,25 +983,60 @@ impl AgentEventProjector {
             return Ok(batch);
         }
         validate_adk_event(event, &self.context.root_agent_name)?;
+        let batch = if let Some(status) =
+            super::context_status::ModelContextStatus::from_event(event)
+                .map_err(|_| AgentEventProjectionError::invalid_state())?
+        {
+            self.project_context_status(event, &status)?
+        } else {
+            self.project_ordinary_event(event)?
+        };
+        self.bind_invocation_id(event);
+        Ok(batch)
+    }
+
+    fn project_context_status(
+        &self,
+        event: &Event,
+        status: &super::context_status::ModelContextStatus,
+    ) -> Result<ProjectedAgentEventBatch, AgentEventProjectionError> {
+        if !matches!(
+            self.state,
+            ProjectionState::Started | ProjectionState::Active(_) | ProjectionState::Complete(_)
+        ) {
+            return Err(AgentEventProjectionError::invalid_state());
+        }
+        let mut batch = ProjectedAgentEventBatch::new();
+        batch.push(self.event(
+            "agent_context_status", &Value::Null, None,
+            &json!({
+                "context_status": status,
+                "model_scope": if pipeline_node_name(event)?.is_some() { "pipeline_node" } else { "agent" },
+                "node_name": pipeline_node_name(event)?,
+            }), event.timestamp,
+        )?)?;
+        Ok(batch)
+    }
+
+    fn project_ordinary_event(
+        &mut self,
+        event: &Event,
+    ) -> Result<ProjectedAgentEventBatch, AgentEventProjectionError> {
         let tool_calls = event.tool_calls();
         let tool_results = event.tool_results();
         if !tool_calls.is_empty() && !tool_results.is_empty() {
             return Err(AgentEventProjectionError::invalid_state());
         }
         if !tool_results.is_empty() {
-            let batch = self.project_tool_results(event, &tool_results)?;
-            self.bind_invocation_id(event);
-            return Ok(batch);
+            return self.project_tool_results(event, &tool_results);
         }
         let Some(model_event) = ordinary_model_event(event, !tool_calls.is_empty())? else {
-            self.bind_invocation_id(event);
             return Ok(ProjectedAgentEventBatch::new());
         };
         let mut batch = self.project_model_event(event, model_event)?;
         if !tool_calls.is_empty() {
             self.project_tool_starts(event, &tool_calls, &mut batch)?;
         }
-        self.bind_invocation_id(event);
         Ok(batch)
     }
 
@@ -1342,7 +1423,7 @@ impl AgentEventProjector {
         if self
             .delegated_authorization
             .requirement_for(&request.tool_name)
-            != Some(&requirement)
+            .is_none_or(|expected| !expected.same_authority(&requirement))
         {
             return Err(AgentEventProjectionError::invalid_state());
         }
@@ -1372,6 +1453,8 @@ impl AgentEventProjector {
             "server_url": requirement.server_url(),
             "resource_metadata_url": requirement.resource_metadata_url(),
             "www_authenticate": requirement.www_authenticate(),
+            "resource_metadata": requirement.resource_metadata(),
+            "authorization_servers": requirement.authorization_servers(),
             "resume_strategy": "root",
         });
         let mut batch = ProjectedAgentEventBatch::new();
@@ -1618,6 +1701,8 @@ impl AgentEventProjector {
             "server_url": data.server_url,
             "resource_metadata_url": data.resource_metadata_url,
             "www_authenticate": data.www_authenticate,
+            "resource_metadata": data.resource_metadata,
+            "authorization_servers": data.authorization_servers(),
             "resume_strategy": "root",
         });
         let mut batch = ProjectedAgentEventBatch::new();
@@ -1734,11 +1819,19 @@ impl AgentEventProjector {
             return Err(AgentEventProjectionError::invalid_state());
         };
         let terminal = text == PIPELINE_COMPLETED_CONTENT;
+        let reused_result = match event
+            .provider_metadata
+            .get(super::graph::PIPELINE_REUSED_RESULT_METADATA_KEY)
+        {
+            None => false,
+            Some(value) if value == "v1" => true,
+            Some(_) => return Err(AgentEventProjectionError::invalid_state()),
+        };
         if content.role != "assistant"
             || text.is_empty()
             || text.len() > MAX_COMPLETED_CONTENT_BYTES
             || text.contains('\0')
-            || event.provider_metadata.len() != 1
+            || event.provider_metadata.len() != 1 + usize::from(reused_result)
             || event
                 .provider_metadata
                 .get(PIPELINE_COMPLETED_METADATA_KEY)
@@ -1757,7 +1850,7 @@ impl AgentEventProjector {
             ProjectedAgentEventBatch::new()
         } else {
             self.pipeline_result = Some(text.clone());
-            if self.saw_pipeline_node_events {
+            if self.saw_pipeline_node_events || reused_result {
                 ProjectedAgentEventBatch::new()
             } else {
                 self.project_model_event(
@@ -1864,8 +1957,23 @@ impl AgentEventProjector {
             batch.push(self.model_start_event(event, &timestamp)?)?;
         }
 
-        if let Some(chunk) = self.model_chunk_event(event, content_delta, thinking_delta)? {
-            batch.push(chunk)?;
+        if content_delta.len() + thinking_delta.len() <= INLINE_TEXT_CHUNK_BYTES {
+            if let Some(chunk) = self.model_chunk_event(event, content_delta, thinking_delta)? {
+                batch.push(chunk)?;
+            }
+        } else {
+            for (field, value) in [("text", content_delta), ("thinking", thinking_delta)] {
+                for (_, fragment) in text_fragments(&value) {
+                    let (text, thinking) = if field == "text" {
+                        (fragment.to_owned(), String::new())
+                    } else {
+                        (String::new(), fragment.to_owned())
+                    };
+                    if let Some(chunk) = self.model_chunk_event(event, text, thinking)? {
+                        batch.push(chunk)?;
+                    }
+                }
+            }
         }
 
         if model_event.closes_turn {
@@ -1883,28 +1991,7 @@ impl AgentEventProjector {
                     "metadata": response_tool_metadata,
                 }},
             });
-            batch.push(self.event(
-                "agent_llm_end",
-                &Value::Null,
-                None,
-                &json!({"tool_run_id": event.id, "thinking_steps": [step.clone()]}),
-                event.timestamp,
-            )?)?;
-            batch.push(self.event(
-                "partial_message",
-                &Value::Null,
-                None,
-                &json!({
-                    "project_id": self.context.project_id,
-                    "chat_project_id": self.context.chat_project_id,
-                    "thread_id": self.context.thread_id,
-                    "thinking_steps": [step],
-                    "tool_calls": {},
-                    "additional_response_meta": {},
-                    "invoked_skills": self.context.applied_skills,
-                }),
-                event.timestamp,
-            )?)?;
+            self.project_model_steps(&mut batch, event, &step)?;
             self.state = ProjectionState::Complete(CompletedModelTurn { output_limited });
             if let Some(confirmation) = self.output_limit_confirmation(event, output_limited)? {
                 batch.push(confirmation)?;
@@ -1918,6 +2005,70 @@ impl AgentEventProjector {
             });
         }
         Ok(batch)
+    }
+
+    fn project_model_steps(
+        &self,
+        batch: &mut ProjectedAgentEventBatch,
+        event: &Event,
+        step: &Value,
+    ) -> Result<(), AgentEventProjectionError> {
+        let text = step["text"].as_str().unwrap_or_default();
+        let thinking = step["thinking"].as_str().unwrap_or_default();
+        if text.len() + thinking.len() <= INLINE_TEXT_CHUNK_BYTES {
+            return self.project_model_step(batch, event, step);
+        }
+        let mut base = step.clone();
+        let object = base
+            .as_object_mut()
+            .ok_or_else(AgentEventProjectionError::invalid_state)?;
+        object.remove("text");
+        object.remove("thinking");
+        object.remove("timestamp_finish");
+        for (field, value) in [("text", text), ("thinking", thinking)] {
+            let hash = text_digest(value);
+            for (offset, fragment) in text_fragments(value) {
+                let mut part = base.clone();
+                part[field] = json!(fragment);
+                let final_field = offset + fragment.len() == value.len();
+                part[format!("{field}_chunk_v1")] = json!({"offset_bytes": offset, "total_bytes": value.len(), "sha256": hash, "final": final_field});
+                if final_field && (field == "thinking" || thinking.is_empty()) {
+                    part["timestamp_finish"] = step["timestamp_finish"].clone();
+                }
+                self.project_model_step(batch, event, &part)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn project_model_step(
+        &self,
+        batch: &mut ProjectedAgentEventBatch,
+        event: &Event,
+        step: &Value,
+    ) -> Result<(), AgentEventProjectionError> {
+        let end = self.event(
+            "agent_llm_end",
+            &Value::Null,
+            None,
+            &json!({"tool_run_id": event.id, "thinking_steps": [step]}),
+            event.timestamp,
+        )?;
+        let chunked =
+            step.get("text_chunk_v1").is_some() || step.get("thinking_chunk_v1").is_some();
+        if !chunked {
+            batch.push(end.clone())?;
+        }
+        // Main validates and persists each fragment before browser delivery.
+        batch.push(self.event("partial_message", &Value::Null, None, &json!({
+            "project_id": self.context.project_id, "chat_project_id": self.context.chat_project_id,
+            "thread_id": self.context.thread_id, "thinking_steps": [step], "tool_calls": {},
+            "additional_response_meta": {}, "invoked_skills": self.context.applied_skills,
+        }), event.timestamp)?)?;
+        if chunked {
+            batch.push(end)?;
+        }
+        Ok(())
     }
 
     fn model_chunk_event(
@@ -2054,6 +2205,25 @@ impl AgentEventProjector {
                 .get(id)
                 .filter(|active| active.name == result.name)
                 .ok_or_else(AgentEventProjectionError::invalid_state)?;
+            let serialized = serde_json::to_string(result.response)
+                .map_err(|_| AgentEventProjectionError::invalid_state())?;
+            let error = result
+                .response
+                .as_object()
+                .and_then(|value| value.get("error"))
+                .and_then(Value::as_str);
+            if error.is_some() && serialized.len() > MAX_TOOL_EVENT_VALUE_BYTES {
+                self.project_tool_result_chunks(
+                    &mut batch,
+                    event,
+                    id,
+                    active,
+                    &serialized,
+                    error.is_some(),
+                )?;
+                completed.push(id.to_owned());
+                continue;
+            }
             let CompletedToolProjection {
                 mut entry,
                 chunks,
@@ -2096,6 +2266,79 @@ impl AgentEventProjector {
             self.active_tools.remove(&id);
         }
         Ok(batch)
+    }
+
+    fn project_tool_result_chunks(
+        &self,
+        batch: &mut ProjectedAgentEventBatch,
+        event: &Event,
+        id: &str,
+        active: &ActiveToolCall,
+        serialized: &str,
+        is_error: bool,
+    ) -> Result<(), AgentEventProjectionError> {
+        let timestamp_finish = event
+            .timestamp
+            .to_rfc3339_opts(SecondsFormat::AutoSi, false);
+        if serialized.len() > MAX_TOOL_RESULT_BYTES {
+            return Err(AgentEventProjectionError {
+                code: AgentEventProjectionErrorCode::ResourceExhausted,
+                protocol: None,
+            });
+        }
+        let hash = ring::digest::digest(&ring::digest::SHA256, serialized.as_bytes());
+        let mut encoded_hash = String::with_capacity(64);
+        for byte in hash.as_ref() {
+            const HEX: &[u8; 16] = b"0123456789abcdef";
+            encoded_hash.push(char::from(HEX[usize::from(byte >> 4)]));
+            encoded_hash.push(char::from(HEX[usize::from(byte & 15)]));
+        }
+        let hash = encoded_hash;
+        let mut offset = 0;
+        while offset < serialized.len() {
+            let mut end = (offset + INLINE_TEXT_CHUNK_BYTES).min(serialized.len());
+            while !serialized.is_char_boundary(end) {
+                end -= 1;
+            }
+            let final_chunk = end == serialized.len();
+            let final_error = final_chunk && is_error;
+            // The complete error remains in tool_output. Keep lifecycle metadata bounded.
+            let error = final_error.then_some("Tool execution failed. See tool output.");
+            let mut entry = tool_entry(
+                id,
+                active,
+                final_chunk.then_some(timestamp_finish.as_str()),
+                final_chunk.then_some(if is_error { "error" } else { "stop" }),
+                Some(&serialized[offset..end]),
+                error,
+            );
+            let object = entry
+                .as_object_mut()
+                .ok_or_else(AgentEventProjectionError::invalid_state)?;
+            object.remove("tool_inputs");
+            object.insert(
+                "tool_output_chunk_v1".to_owned(),
+                json!({
+                    "offset_bytes": offset, "total_bytes": serialized.len(),
+                    "sha256": hash, "final": final_chunk,
+                }),
+            );
+            // Persist and validate each chunk before its browser lifecycle frame.
+            batch.push(self.tool_partial_event(id, &entry, event.timestamp)?)?;
+            batch.push(self.event(
+                if final_error {
+                    "agent_tool_error"
+                } else {
+                    "agent_tool_end"
+                },
+                &error.map_or(Value::Null, |value| Value::String(value.to_owned())),
+                None,
+                &entry,
+                event.timestamp,
+            )?)?;
+            offset = end;
+        }
+        Ok(())
     }
 
     /// The completed call's entry, and the chunks its output must ride as.
@@ -2250,6 +2493,45 @@ impl AgentEventProjector {
         )
     }
 
+    /// Persist accepted partial text as an explicitly incomplete execution step.
+    /// This is presentation evidence only: no answer, tool result, or completion
+    /// receipt is synthesized for the waiting parent.
+    pub(crate) fn preserve_incomplete_output(
+        &mut self,
+        occurred_at: DateTime<Utc>,
+    ) -> Result<ProjectedAgentEventBatch, AgentEventProjectionError> {
+        let mut batch = ProjectedAgentEventBatch::new();
+        if let ProjectionState::Active(turn) = &self.state {
+            if !turn.content.is_empty() {
+                let mut event = Event::with_id(&turn.event_id, "incomplete-output");
+                event.timestamp = occurred_at;
+                let step = json!({
+                    "tool_run_id": turn.event_id,
+                    "type": "ChatGeneration",
+                    "text": turn.content,
+                    "timestamp_start": turn.timestamp_start,
+                    "timestamp_finish": occurred_at.to_rfc3339_opts(SecondsFormat::AutoSi, false),
+                    "message": {"response_metadata": {
+                        "model_name": self.context.model_name,
+                        "tool_name": "Incomplete response",
+                        "metadata": {},
+                    }},
+                });
+                self.project_model_steps(&mut batch, &event, &step)?;
+            }
+            self.state = ProjectionState::Finished;
+        }
+        for descendant in self.descendants.values_mut() {
+            let child = descendant
+                .projector
+                .preserve_incomplete_output(occurred_at)?;
+            for event in overlay_batch_hierarchy(child, std::slice::from_ref(&descendant.tier))? {
+                batch.push(event)?;
+            }
+        }
+        Ok(batch)
+    }
+
     /// Emit the selected completed result only after ADK reaches EOS.
     pub(crate) fn finish_after_eos(
         &mut self,
@@ -2278,8 +2560,30 @@ impl AgentEventProjector {
             .continuation_overlap
             .as_ref()
             .map_or(content.clone(), |overlap| overlap.completed(&content));
+        if content.len() > MAX_COMPLETED_CONTENT_BYTES {
+            return Err(AgentEventProjectionError::output(
+                ProtocolError::ResourceExhausted(
+                    "the completed agent content exceeds its approved limit",
+                ),
+            ));
+        }
         let mut batch = ProjectedAgentEventBatch::new();
-        let response = Value::String(content);
+        let (response, result_ref) =
+            if content.len() > INLINE_TEXT_CHUNK_BYTES {
+                let hash = text_digest(&content);
+                for (offset, fragment) in text_fragments(&content) {
+                    batch.push(self.event("agent_result_chunk", &json!(fragment), None, &json!({
+                    "result_chunk_v1": {"offset_bytes": offset, "total_bytes": content.len(),
+                        "sha256": hash, "final": offset + fragment.len() == content.len()},
+                }), occurred_at)?)?;
+                }
+                (
+                    Value::Null,
+                    json!({"total_bytes": content.len(), "sha256": hash}),
+                )
+            } else {
+                (Value::String(content), Value::Null)
+            };
         if execution_finished {
             batch.push(self.event(
                 "pipeline_finish",
@@ -2289,6 +2593,7 @@ impl AgentEventProjector {
                     "finish_reason": "finished",
                     "next_step": "END",
                     "thread_id": thread_id,
+                    "should_continue": self.context.should_continue,
                 }),
                 occurred_at,
             )?)?;
@@ -2325,6 +2630,7 @@ impl AgentEventProjector {
                 "parallel_reconcile": self.context.parallel_reconcile,
                 "context_info": context_info,
                 "invoked_skills": self.context.applied_skills,
+                "result_ref_v1": result_ref,
             }),
             occurred_at,
         )?)?;
@@ -2346,6 +2652,16 @@ impl AgentEventProjector {
         response_metadata: &Value,
         occurred_at: DateTime<Utc>,
     ) -> Result<NodeEventV1, AgentEventProjectionError> {
+        let mut response_metadata = response_metadata.clone();
+        if response_metadata
+            .get("result_ref_v1")
+            .is_some_and(Value::is_null)
+        {
+            response_metadata
+                .as_object_mut()
+                .ok_or_else(AgentEventProjectionError::invalid_state)?
+                .remove("result_ref_v1");
+        }
         let event = NodeEventV1 {
             r#type: event_type.to_owned(),
             stream_id: Some(self.context.stream_id.clone()),
@@ -2357,7 +2673,7 @@ impl AgentEventProjector {
                 ))
             })?,
             thinking,
-            response_metadata: serde_json::to_vec(response_metadata).map_err(|_| {
+            response_metadata: serde_json::to_vec(&response_metadata).map_err(|_| {
                 AgentEventProjectionError::output(ProtocolError::InvalidInput(
                     "the projected agent event metadata is malformed",
                 ))
@@ -2485,10 +2801,9 @@ fn validate_context(
         .graph_checkpoint_thread_id
         .as_deref()
         .is_some_and(|value| validate_public_text(value).is_err())
-        || context
-            .continuation_prefix
-            .as_deref()
-            .is_some_and(|value| value.len() > 64 * 1_024 || value.contains('\0'))
+        || context.continuation_prefix.as_deref().is_some_and(|value| {
+            value.len() > super::request::MAX_OUTPUT_CONTINUATION_BYTES || value.contains('\0')
+        })
     {
         return Err(AgentEventProjectionError::invalid_state());
     }
@@ -2541,7 +2856,9 @@ fn validate_adk_event(
         return Err(AgentEventProjectionError::unsupported());
     }
     if event.content().is_some()
-        && (!event.actions.state_delta.is_empty() || event.actions.skip_summarization)
+        && ((!event.actions.state_delta.is_empty()
+            && !super::instruction_authority::valid_state_delta(&event.actions.state_delta))
+            || event.actions.skip_summarization)
     {
         return Err(AgentEventProjectionError::unsupported());
     }
@@ -2819,10 +3136,21 @@ struct PipelineMcpAuthData {
     resource_metadata_url: Option<String>,
     www_authenticate: Option<String>,
     #[serde(default)]
+    resource_metadata: Option<Value>,
+    #[serde(default)]
     llm_replay: Option<PipelineLlmReplayEnvelope>,
 }
 
 impl PipelineMcpAuthData {
+    fn authorization_servers(&self) -> Option<&[Value]> {
+        self.resource_metadata
+            .as_ref()
+            .and_then(Value::as_object)
+            .and_then(|metadata| metadata.get("authorization_servers"))
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+    }
+
     fn validate(&self, graph_message: &str) -> Result<(), AgentEventProjectionError> {
         if self.schema_revision != PIPELINE_MCP_AUTH_SCHEMA
             || self.interrupt_type != "hitl"
@@ -2847,6 +3175,22 @@ impl PipelineMcpAuthData {
                 value.is_empty() || value.len() > 16 * 1024 || value.chars().any(char::is_control)
             })
         {
+            return Err(AgentEventProjectionError::invalid_state());
+        }
+        let requirement = DelegatedAuthorizationRequirement::new(
+            self.toolkit_name.clone(),
+            self.toolkit_type.clone(),
+            self.server_url.clone(),
+            self.resource_metadata_url.clone(),
+            self.www_authenticate.clone(),
+        )
+        .ok_or_else(AgentEventProjectionError::invalid_state)?;
+        let requirement = match &self.resource_metadata {
+            Some(metadata) => requirement.with_resource_metadata(metadata.clone()),
+            None => Some(requirement),
+        }
+        .ok_or_else(AgentEventProjectionError::invalid_state)?;
+        if requirement.resource_metadata() != self.resource_metadata.as_ref() {
             return Err(AgentEventProjectionError::invalid_state());
         }
         if let Some(replay) = &self.llm_replay {
@@ -3076,6 +3420,10 @@ impl PipelineMcpAuthEventBinding {
 
     pub(crate) fn www_authenticate(&self) -> Option<&str> {
         self.data.www_authenticate.as_deref()
+    }
+
+    pub(crate) fn resource_metadata(&self) -> Option<&Value> {
+        self.data.resource_metadata.as_ref()
     }
 
     pub(crate) fn llm_replay(&self) -> Option<&PipelineLlmReplayEnvelope> {
@@ -4153,7 +4501,7 @@ fn ordinary_model_event(
     if content.role != "model" && content.role != "assistant" {
         return Err(AgentEventProjectionError::unsupported());
     }
-    if content.parts.len() > MAX_ADK_PARTS_PER_EVENT {
+    if !bounded_logical_parts(&content.parts) {
         return Err(AgentEventProjectionError {
             code: AgentEventProjectionErrorCode::ResourceExhausted,
             protocol: None,
@@ -4175,6 +4523,26 @@ fn ordinary_model_event(
             .timestamp
             .to_rfc3339_opts(SecondsFormat::AutoSi, false),
     }))
+}
+
+fn bounded_logical_parts(parts: &[Part]) -> bool {
+    // ADK's non-streaming result keeps one text/thinking part per provider
+    // delta. Count adjacent fragments as one logical block, without modifying
+    // durable content or signatures. Also bound empty-fragment scanning.
+    if parts.len() > MAX_CURRENT_NODE_EVENT_JSON_BYTES {
+        return false;
+    }
+    let adjacent_fragments = parts
+        .windows(2)
+        .filter(|pair| {
+            matches!(
+                pair,
+                [Part::Text { .. }, Part::Text { .. }]
+                    | [Part::Thinking { .. }, Part::Thinking { .. }]
+            )
+        })
+        .count();
+    parts.len() - adjacent_fragments <= MAX_ADK_PARTS_PER_EVENT
 }
 
 fn output_limited(event: &Event) -> Result<bool, AgentEventProjectionError> {
@@ -4721,7 +5089,7 @@ fn merge_stream_value(
     current: String,
 ) -> Result<(String, String), AgentEventProjectionError> {
     if previous.is_empty() {
-        if current.len() > MAX_CURRENT_NODE_EVENT_JSON_BYTES {
+        if current.len() > MAX_COMPLETED_CONTENT_BYTES {
             return Err(AgentEventProjectionError {
                 code: AgentEventProjectionErrorCode::ResourceExhausted,
                 protocol: None,
@@ -4780,7 +5148,7 @@ fn trim_continuation_overlap(existing_tail: &str, incoming_content: &str) -> Str
 }
 
 fn extend_bounded(target: &mut String, value: &str) -> Result<(), AgentEventProjectionError> {
-    if target.len().saturating_add(value.len()) > MAX_CURRENT_NODE_EVENT_JSON_BYTES {
+    if target.len().saturating_add(value.len()) > MAX_COMPLETED_CONTENT_BYTES {
         return Err(AgentEventProjectionError {
             code: AgentEventProjectionErrorCode::ResourceExhausted,
             protocol: None,
@@ -4788,4 +5156,31 @@ fn extend_bounded(target: &mut String, value: &str) -> Result<(), AgentEventProj
     }
     target.push_str(value);
     Ok(())
+}
+
+fn text_fragments(text: &str) -> impl Iterator<Item = (usize, &str)> {
+    let mut offset = 0;
+    std::iter::from_fn(move || {
+        if offset == text.len() {
+            return None;
+        }
+        let mut end = (offset + INLINE_TEXT_CHUNK_BYTES).min(text.len());
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        let result = (offset, &text[offset..end]);
+        offset = end;
+        Some(result)
+    })
+}
+
+fn text_digest(text: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let hash = digest::digest(&digest::SHA256, text.as_bytes());
+    let mut value = String::with_capacity(64);
+    for byte in hash.as_ref() {
+        value.push(char::from(HEX[usize::from(byte >> 4)]));
+        value.push(char::from(HEX[usize::from(byte & 15)]));
+    }
+    value
 }

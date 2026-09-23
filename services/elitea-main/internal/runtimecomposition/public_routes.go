@@ -13,6 +13,8 @@ import (
 	toolkitrun "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
+	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
+	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 )
 
 type PublicRoutes struct {
@@ -28,10 +30,15 @@ type PublicRoutes struct {
 	// ToolkitCallTool runs ONE tool of ONE saved toolkit, synchronously
 	// (#340/#616). It is composed only with index ingest, because the worker
 	// that runs an index is the worker that can run that toolkit's tools.
-	ToolkitCallTool toolkitrun.UseCase
+	ToolkitCallTool  toolkitrun.UseCase
+	ToolkitDiscovery discovery.UseCase
 	// AgentCancel preserves the current DELETE contract while atomically
 	// cancelling the exact durable execution and its current chat projection.
 	AgentCancel agentexecutionapi.CurrentAgentCanceller
+	// ToolkitExecuteRead runs one explicitly MCP-exposed, selected, non-sensitive
+	// toolkit operation through the durable Rust worker path. It is nil whenever
+	// the agent/runtime plane is disabled.
+	ToolkitExecuteRead *toolkitexecutionapp.CurrentReadToolExecutionService
 	// AgentTaskStatus is the READ half of the legacy application_task surface.
 	// It is composed beside AgentCancel because the two resolve the same
 	// durable execution from the same response message and share one ownership

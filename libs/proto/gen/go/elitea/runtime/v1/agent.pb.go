@@ -156,43 +156,46 @@ func (x *AgentExecutionCommandV1) GetSioEvent() string {
 // null and arbitrary toolkit shapes survive cross-language transport. They are
 // data-plane content and must never be embedded in WorkerCommandV1.
 type AgentExecutionInputV1 struct {
-	state                       protoimpl.MessageState `protogen:"open.v1"`
-	SchemaRevision              string                 `protobuf:"bytes,1,opt,name=schema_revision,json=schemaRevision,proto3" json:"schema_revision,omitempty"`
-	Llm                         []byte                 `protobuf:"bytes,2,opt,name=llm,proto3" json:"llm,omitempty"`
-	ChatHistory                 []byte                 `protobuf:"bytes,3,opt,name=chat_history,json=chatHistory,proto3" json:"chat_history,omitempty"`
-	UserInput                   []byte                 `protobuf:"bytes,4,opt,name=user_input,json=userInput,proto3" json:"user_input,omitempty"`
-	ThreadId                    *string                `protobuf:"bytes,5,opt,name=thread_id,json=threadId,proto3,oneof" json:"thread_id,omitempty"`
-	CheckpointId                *string                `protobuf:"bytes,6,opt,name=checkpoint_id,json=checkpointId,proto3,oneof" json:"checkpoint_id,omitempty"`
-	Debug                       bool                   `protobuf:"varint,7,opt,name=debug,proto3" json:"debug,omitempty"`
-	Tools                       []byte                 `protobuf:"bytes,8,opt,name=tools,proto3" json:"tools,omitempty"`
-	Application                 []byte                 `protobuf:"bytes,9,opt,name=application,proto3" json:"application,omitempty"`
-	InternalTools               []byte                 `protobuf:"bytes,10,opt,name=internal_tools,json=internalTools,proto3" json:"internal_tools,omitempty"`
-	StepsLimit                  *int32                 `protobuf:"varint,11,opt,name=steps_limit,json=stepsLimit,proto3,oneof" json:"steps_limit,omitempty"`
-	McpTokens                   []byte                 `protobuf:"bytes,12,opt,name=mcp_tokens,json=mcpTokens,proto3" json:"mcp_tokens,omitempty"`
-	IgnoredMcpServers           []byte                 `protobuf:"bytes,13,opt,name=ignored_mcp_servers,json=ignoredMcpServers,proto3" json:"ignored_mcp_servers,omitempty"`
-	UserDeclinedMcpServers      []byte                 `protobuf:"bytes,14,opt,name=user_declined_mcp_servers,json=userDeclinedMcpServers,proto3" json:"user_declined_mcp_servers,omitempty"`
-	ShouldContinue              bool                   `protobuf:"varint,15,opt,name=should_continue,json=shouldContinue,proto3" json:"should_continue,omitempty"`
-	HitlResume                  bool                   `protobuf:"varint,16,opt,name=hitl_resume,json=hitlResume,proto3" json:"hitl_resume,omitempty"`
-	HitlAction                  *string                `protobuf:"bytes,17,opt,name=hitl_action,json=hitlAction,proto3,oneof" json:"hitl_action,omitempty"`
-	HitlValue                   *string                `protobuf:"bytes,18,opt,name=hitl_value,json=hitlValue,proto3,oneof" json:"hitl_value,omitempty"`
-	HitlDecisions               []byte                 `protobuf:"bytes,19,opt,name=hitl_decisions,json=hitlDecisions,proto3" json:"hitl_decisions,omitempty"`
-	ExecutionGeneration         *string                `protobuf:"bytes,20,opt,name=execution_generation,json=executionGeneration,proto3,oneof" json:"execution_generation,omitempty"`
-	IsRegenerate                bool                   `protobuf:"varint,21,opt,name=is_regenerate,json=isRegenerate,proto3" json:"is_regenerate,omitempty"`
-	Meta                        []byte                 `protobuf:"bytes,22,opt,name=meta,proto3" json:"meta,omitempty"`
-	ConversationId              *string                `protobuf:"bytes,23,opt,name=conversation_id,json=conversationId,proto3,oneof" json:"conversation_id,omitempty"`
-	Persona                     string                 `protobuf:"bytes,24,opt,name=persona,proto3" json:"persona,omitempty"`
-	ContextSettings             []byte                 `protobuf:"bytes,25,opt,name=context_settings,json=contextSettings,proto3" json:"context_settings,omitempty"`
-	SupportsVision              bool                   `protobuf:"varint,26,opt,name=supports_vision,json=supportsVision,proto3" json:"supports_vision,omitempty"`
-	ReturnChatHistory           bool                   `protobuf:"varint,27,opt,name=return_chat_history,json=returnChatHistory,proto3" json:"return_chat_history,omitempty"`
-	InvokedSkills               []byte                 `protobuf:"bytes,28,opt,name=invoked_skills,json=invokedSkills,proto3" json:"invoked_skills,omitempty"`
-	AppliedSkills               []byte                 `protobuf:"bytes,29,opt,name=applied_skills,json=appliedSkills,proto3" json:"applied_skills,omitempty"`
-	AutoApproveSensitiveActions bool                   `protobuf:"varint,30,opt,name=auto_approve_sensitive_actions,json=autoApproveSensitiveActions,proto3" json:"auto_approve_sensitive_actions,omitempty"`
-	AttachedSkills              []byte                 `protobuf:"bytes,31,opt,name=attached_skills,json=attachedSkills,proto3" json:"attached_skills,omitempty"`
-	InputAttachments            []byte                 `protobuf:"bytes,32,opt,name=input_attachments,json=inputAttachments,proto3" json:"input_attachments,omitempty"`
-	ParallelReconcile           []byte                 `protobuf:"bytes,33,opt,name=parallel_reconcile,json=parallelReconcile,proto3" json:"parallel_reconcile,omitempty"`
-	ParallelTerminalErrors      []byte                 `protobuf:"bytes,34,opt,name=parallel_terminal_errors,json=parallelTerminalErrors,proto3" json:"parallel_terminal_errors,omitempty"`
-	ExceptionHandlingEnabled    *bool                  `protobuf:"varint,35,opt,name=exception_handling_enabled,json=exceptionHandlingEnabled,proto3,oneof" json:"exception_handling_enabled,omitempty"`
-	DebugMode                   *bool                  `protobuf:"varint,36,opt,name=debug_mode,json=debugMode,proto3,oneof" json:"debug_mode,omitempty"`
+	state                  protoimpl.MessageState `protogen:"open.v1"`
+	SchemaRevision         string                 `protobuf:"bytes,1,opt,name=schema_revision,json=schemaRevision,proto3" json:"schema_revision,omitempty"`
+	Llm                    []byte                 `protobuf:"bytes,2,opt,name=llm,proto3" json:"llm,omitempty"`
+	ChatHistory            []byte                 `protobuf:"bytes,3,opt,name=chat_history,json=chatHistory,proto3" json:"chat_history,omitempty"`
+	UserInput              []byte                 `protobuf:"bytes,4,opt,name=user_input,json=userInput,proto3" json:"user_input,omitempty"`
+	ThreadId               *string                `protobuf:"bytes,5,opt,name=thread_id,json=threadId,proto3,oneof" json:"thread_id,omitempty"`
+	CheckpointId           *string                `protobuf:"bytes,6,opt,name=checkpoint_id,json=checkpointId,proto3,oneof" json:"checkpoint_id,omitempty"`
+	Debug                  bool                   `protobuf:"varint,7,opt,name=debug,proto3" json:"debug,omitempty"`
+	Tools                  []byte                 `protobuf:"bytes,8,opt,name=tools,proto3" json:"tools,omitempty"`
+	Application            []byte                 `protobuf:"bytes,9,opt,name=application,proto3" json:"application,omitempty"`
+	InternalTools          []byte                 `protobuf:"bytes,10,opt,name=internal_tools,json=internalTools,proto3" json:"internal_tools,omitempty"`
+	StepsLimit             *int32                 `protobuf:"varint,11,opt,name=steps_limit,json=stepsLimit,proto3,oneof" json:"steps_limit,omitempty"`
+	McpTokens              []byte                 `protobuf:"bytes,12,opt,name=mcp_tokens,json=mcpTokens,proto3" json:"mcp_tokens,omitempty"`
+	IgnoredMcpServers      []byte                 `protobuf:"bytes,13,opt,name=ignored_mcp_servers,json=ignoredMcpServers,proto3" json:"ignored_mcp_servers,omitempty"`
+	UserDeclinedMcpServers []byte                 `protobuf:"bytes,14,opt,name=user_declined_mcp_servers,json=userDeclinedMcpServers,proto3" json:"user_declined_mcp_servers,omitempty"`
+	ShouldContinue         bool                   `protobuf:"varint,15,opt,name=should_continue,json=shouldContinue,proto3" json:"should_continue,omitempty"`
+	HitlResume             bool                   `protobuf:"varint,16,opt,name=hitl_resume,json=hitlResume,proto3" json:"hitl_resume,omitempty"`
+	HitlAction             *string                `protobuf:"bytes,17,opt,name=hitl_action,json=hitlAction,proto3,oneof" json:"hitl_action,omitempty"`
+	HitlValue              *string                `protobuf:"bytes,18,opt,name=hitl_value,json=hitlValue,proto3,oneof" json:"hitl_value,omitempty"`
+	HitlDecisions          []byte                 `protobuf:"bytes,19,opt,name=hitl_decisions,json=hitlDecisions,proto3" json:"hitl_decisions,omitempty"`
+	ExecutionGeneration    *string                `protobuf:"bytes,20,opt,name=execution_generation,json=executionGeneration,proto3,oneof" json:"execution_generation,omitempty"`
+	IsRegenerate           bool                   `protobuf:"varint,21,opt,name=is_regenerate,json=isRegenerate,proto3" json:"is_regenerate,omitempty"`
+	Meta                   []byte                 `protobuf:"bytes,22,opt,name=meta,proto3" json:"meta,omitempty"`
+	ConversationId         *string                `protobuf:"bytes,23,opt,name=conversation_id,json=conversationId,proto3,oneof" json:"conversation_id,omitempty"`
+	Persona                string                 `protobuf:"bytes,24,opt,name=persona,proto3" json:"persona,omitempty"`
+	// Context strategy JSON. budget_mode admits "balanced" and "full".
+	// max_context_tokens preserves an explicit combined-window override.
+	// Output reservation stays inside that window; it is not additional capacity.
+	ContextSettings             []byte `protobuf:"bytes,25,opt,name=context_settings,json=contextSettings,proto3" json:"context_settings,omitempty"`
+	SupportsVision              bool   `protobuf:"varint,26,opt,name=supports_vision,json=supportsVision,proto3" json:"supports_vision,omitempty"`
+	ReturnChatHistory           bool   `protobuf:"varint,27,opt,name=return_chat_history,json=returnChatHistory,proto3" json:"return_chat_history,omitempty"`
+	InvokedSkills               []byte `protobuf:"bytes,28,opt,name=invoked_skills,json=invokedSkills,proto3" json:"invoked_skills,omitempty"`
+	AppliedSkills               []byte `protobuf:"bytes,29,opt,name=applied_skills,json=appliedSkills,proto3" json:"applied_skills,omitempty"`
+	AutoApproveSensitiveActions bool   `protobuf:"varint,30,opt,name=auto_approve_sensitive_actions,json=autoApproveSensitiveActions,proto3" json:"auto_approve_sensitive_actions,omitempty"`
+	AttachedSkills              []byte `protobuf:"bytes,31,opt,name=attached_skills,json=attachedSkills,proto3" json:"attached_skills,omitempty"`
+	InputAttachments            []byte `protobuf:"bytes,32,opt,name=input_attachments,json=inputAttachments,proto3" json:"input_attachments,omitempty"`
+	ParallelReconcile           []byte `protobuf:"bytes,33,opt,name=parallel_reconcile,json=parallelReconcile,proto3" json:"parallel_reconcile,omitempty"`
+	ParallelTerminalErrors      []byte `protobuf:"bytes,34,opt,name=parallel_terminal_errors,json=parallelTerminalErrors,proto3" json:"parallel_terminal_errors,omitempty"`
+	ExceptionHandlingEnabled    *bool  `protobuf:"varint,35,opt,name=exception_handling_enabled,json=exceptionHandlingEnabled,proto3,oneof" json:"exception_handling_enabled,omitempty"`
+	DebugMode                   *bool  `protobuf:"varint,36,opt,name=debug_mode,json=debugMode,proto3,oneof" json:"debug_mode,omitempty"`
 	// A bounded, non-secret snapshot of the current live guardrail. The Go
 	// admission path resolves this policy before dispatch; the worker never
 	// reads Pylon configuration directly and treats suggestion generation as a
@@ -225,8 +228,16 @@ type AgentExecutionInputV1 struct {
 	// hidden reasoning from leaking into the continuation prompt and gives every
 	// language the same unambiguous continuation discriminator.
 	TruncatedContent []byte `protobuf:"bytes,39,opt,name=truncated_content,json=truncatedContent,proto3" json:"truncated_content,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Main resolves and freezes this project-owned content after authorization.
+	// Absence disables Project Context for this independent turn.
+	ProjectContext *ProjectContextSnapshotV1 `protobuf:"bytes,64,opt,name=project_context,json=projectContext,proto3" json:"project_context,omitempty"`
+	// Main freezes the authorized catalogue limits. Absence preserves old inputs.
+	ModelContextLimits *ModelContextLimitsV1 `protobuf:"bytes,65,opt,name=model_context_limits,json=modelContextLimits,proto3" json:"model_context_limits,omitempty"`
+	// Main resolves this optional model from the actor's authorized catalogue.
+	// Absence uses the task model for summarization. Never accept a client-authored snapshot.
+	SummaryModel  *SummaryModelSnapshotV1 `protobuf:"bytes,66,opt,name=summary_model,json=summaryModel,proto3" json:"summary_model,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AgentExecutionInputV1) Reset() {
@@ -532,6 +543,241 @@ func (x *AgentExecutionInputV1) GetTruncatedContent() []byte {
 	return nil
 }
 
+func (x *AgentExecutionInputV1) GetProjectContext() *ProjectContextSnapshotV1 {
+	if x != nil {
+		return x.ProjectContext
+	}
+	return nil
+}
+
+func (x *AgentExecutionInputV1) GetModelContextLimits() *ModelContextLimitsV1 {
+	if x != nil {
+		return x.ModelContextLimits
+	}
+	return nil
+}
+
+func (x *AgentExecutionInputV1) GetSummaryModel() *SummaryModelSnapshotV1 {
+	if x != nil {
+		return x.SummaryModel
+	}
+	return nil
+}
+
+// A separately authorized summarizer. Credentials stay in claim-scoped redemption.
+// llm_settings uses the frozen application-model shape: model_name,
+// model_project_id, openai_compatible, max_tokens, and temperature.
+// max_tokens is an explicit summary output cap. No tools or task instructions belong here.
+type SummaryModelSnapshotV1 struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	LlmSettings        []byte                 `protobuf:"bytes,1,opt,name=llm_settings,json=llmSettings,proto3" json:"llm_settings,omitempty"`
+	ModelContextLimits *ModelContextLimitsV1  `protobuf:"bytes,2,opt,name=model_context_limits,json=modelContextLimits,proto3" json:"model_context_limits,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *SummaryModelSnapshotV1) Reset() {
+	*x = SummaryModelSnapshotV1{}
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SummaryModelSnapshotV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SummaryModelSnapshotV1) ProtoMessage() {}
+
+func (x *SummaryModelSnapshotV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SummaryModelSnapshotV1.ProtoReflect.Descriptor instead.
+func (*SummaryModelSnapshotV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *SummaryModelSnapshotV1) GetLlmSettings() []byte {
+	if x != nil {
+		return x.LlmSettings
+	}
+	return nil
+}
+
+func (x *SummaryModelSnapshotV1) GetModelContextLimits() *ModelContextLimitsV1 {
+	if x != nil {
+		return x.ModelContextLimits
+	}
+	return nil
+}
+
+// Limits describe one model, not cumulative execution usage.
+// Nested application version snapshots use this same JSON field shape.
+type ModelContextLimitsV1 struct {
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	ContextWindowTokens   uint32                 `protobuf:"varint,1,opt,name=context_window_tokens,json=contextWindowTokens,proto3" json:"context_window_tokens,omitempty"`
+	MaxOutputTokens       uint32                 `protobuf:"varint,2,opt,name=max_output_tokens,json=maxOutputTokens,proto3" json:"max_output_tokens,omitempty"`
+	ContextWindowFallback bool                   `protobuf:"varint,3,opt,name=context_window_fallback,json=contextWindowFallback,proto3" json:"context_window_fallback,omitempty"`
+	MaxOutputFallback     bool                   `protobuf:"varint,4,opt,name=max_output_fallback,json=maxOutputFallback,proto3" json:"max_output_fallback,omitempty"`
+	// A provider can impose an input-only maximum within its combined window.
+	MaxInputTokens *uint32 `protobuf:"varint,5,opt,name=max_input_tokens,json=maxInputTokens,proto3,oneof" json:"max_input_tokens,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *ModelContextLimitsV1) Reset() {
+	*x = ModelContextLimitsV1{}
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ModelContextLimitsV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ModelContextLimitsV1) ProtoMessage() {}
+
+func (x *ModelContextLimitsV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ModelContextLimitsV1.ProtoReflect.Descriptor instead.
+func (*ModelContextLimitsV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *ModelContextLimitsV1) GetContextWindowTokens() uint32 {
+	if x != nil {
+		return x.ContextWindowTokens
+	}
+	return 0
+}
+
+func (x *ModelContextLimitsV1) GetMaxOutputTokens() uint32 {
+	if x != nil {
+		return x.MaxOutputTokens
+	}
+	return 0
+}
+
+func (x *ModelContextLimitsV1) GetContextWindowFallback() bool {
+	if x != nil {
+		return x.ContextWindowFallback
+	}
+	return false
+}
+
+func (x *ModelContextLimitsV1) GetMaxOutputFallback() bool {
+	if x != nil {
+		return x.MaxOutputFallback
+	}
+	return false
+}
+
+func (x *ModelContextLimitsV1) GetMaxInputTokens() uint32 {
+	if x != nil && x.MaxInputTokens != nil {
+		return *x.MaxInputTokens
+	}
+	return 0
+}
+
+// ProjectContextSnapshotV1 remains in the immutable input data plane.
+// Empty activation_description selects the legacy eager instruction mode.
+type ProjectContextSnapshotV1 struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// Lowercase SHA-256 of the exact UTF-8 content bytes.
+	Revision              string `protobuf:"bytes,2,opt,name=revision,proto3" json:"revision,omitempty"`
+	Scope                 string `protobuf:"bytes,3,opt,name=scope,proto3" json:"scope,omitempty"`
+	Content               string `protobuf:"bytes,4,opt,name=content,proto3" json:"content,omitempty"`
+	ActivationDescription string `protobuf:"bytes,5,opt,name=activation_description,json=activationDescription,proto3" json:"activation_description,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
+}
+
+func (x *ProjectContextSnapshotV1) Reset() {
+	*x = ProjectContextSnapshotV1{}
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProjectContextSnapshotV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProjectContextSnapshotV1) ProtoMessage() {}
+
+func (x *ProjectContextSnapshotV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProjectContextSnapshotV1.ProtoReflect.Descriptor instead.
+func (*ProjectContextSnapshotV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *ProjectContextSnapshotV1) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ProjectContextSnapshotV1) GetRevision() string {
+	if x != nil {
+		return x.Revision
+	}
+	return ""
+}
+
+func (x *ProjectContextSnapshotV1) GetScope() string {
+	if x != nil {
+		return x.Scope
+	}
+	return ""
+}
+
+func (x *ProjectContextSnapshotV1) GetContent() string {
+	if x != nil {
+		return x.Content
+	}
+	return ""
+}
+
+func (x *ProjectContextSnapshotV1) GetActivationDescription() string {
+	if x != nil {
+		return x.ActivationDescription
+	}
+	return ""
+}
+
 type AgentExecutionArtifactReferenceV1 struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	ArtifactId       string                 `protobuf:"bytes,1,opt,name=artifact_id,json=artifactId,proto3" json:"artifact_id,omitempty"`
@@ -546,7 +792,7 @@ type AgentExecutionArtifactReferenceV1 struct {
 
 func (x *AgentExecutionArtifactReferenceV1) Reset() {
 	*x = AgentExecutionArtifactReferenceV1{}
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[2]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -558,7 +804,7 @@ func (x *AgentExecutionArtifactReferenceV1) String() string {
 func (*AgentExecutionArtifactReferenceV1) ProtoMessage() {}
 
 func (x *AgentExecutionArtifactReferenceV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[2]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -571,7 +817,7 @@ func (x *AgentExecutionArtifactReferenceV1) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use AgentExecutionArtifactReferenceV1.ProtoReflect.Descriptor instead.
 func (*AgentExecutionArtifactReferenceV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{2}
+	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *AgentExecutionArtifactReferenceV1) GetArtifactId() string {
@@ -656,7 +902,7 @@ type AgentExecutionAttachmentContentV1 struct {
 
 func (x *AgentExecutionAttachmentContentV1) Reset() {
 	*x = AgentExecutionAttachmentContentV1{}
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[3]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -668,7 +914,7 @@ func (x *AgentExecutionAttachmentContentV1) String() string {
 func (*AgentExecutionAttachmentContentV1) ProtoMessage() {}
 
 func (x *AgentExecutionAttachmentContentV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[3]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -681,7 +927,7 @@ func (x *AgentExecutionAttachmentContentV1) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use AgentExecutionAttachmentContentV1.ProtoReflect.Descriptor instead.
 func (*AgentExecutionAttachmentContentV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{3}
+	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *AgentExecutionAttachmentContentV1) GetItemId() string {
@@ -747,7 +993,7 @@ type AgentExecutionResultV1 struct {
 
 func (x *AgentExecutionResultV1) Reset() {
 	*x = AgentExecutionResultV1{}
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[4]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -759,7 +1005,7 @@ func (x *AgentExecutionResultV1) String() string {
 func (*AgentExecutionResultV1) ProtoMessage() {}
 
 func (x *AgentExecutionResultV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[4]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -772,7 +1018,7 @@ func (x *AgentExecutionResultV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentExecutionResultV1.ProtoReflect.Descriptor instead.
 func (*AgentExecutionResultV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{4}
+	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *AgentExecutionResultV1) GetInputBundleId() string {
@@ -840,7 +1086,7 @@ const file_elitea_runtime_v1_agent_proto_rawDesc = "" +
 	"\x10request_entry_id\x18\x01 \x01(\tR\x0erequestEntryId\x12(\n" +
 	"\x10client_stream_id\x18\x02 \x01(\tR\x0eclientStreamId\x12*\n" +
 	"\x11client_message_id\x18\x03 \x01(\tR\x0fclientMessageId\x12\x1b\n" +
-	"\tsio_event\x18\x04 \x01(\tR\bsioEventJ\x04\b\x05\x10\x10\"\xf6\r\n" +
+	"\tsio_event\x18\x04 \x01(\tR\bsioEventJ\x04\b\x05\x10\x10\"\xf7\x0f\n" +
 	"\x15AgentExecutionInputV1\x12'\n" +
 	"\x0fschema_revision\x18\x01 \x01(\tR\x0eschemaRevision\x12\x10\n" +
 	"\x03llm\x18\x02 \x01(\fR\x03llm\x12!\n" +
@@ -888,7 +1134,10 @@ const file_elitea_runtime_v1_agent_proto_rawDesc = "" +
 	"debug_mode\x18$ \x01(\bH\bR\tdebugMode\x88\x01\x01\x122\n" +
 	"\x15next_input_suggestion\x18% \x01(\fR\x13nextInputSuggestion\x12-\n" +
 	"\x12toolkit_guardrails\x18& \x01(\fR\x11toolkitGuardrails\x12+\n" +
-	"\x11truncated_content\x18' \x01(\fR\x10truncatedContentB\f\n" +
+	"\x11truncated_content\x18' \x01(\fR\x10truncatedContent\x12T\n" +
+	"\x0fproject_context\x18@ \x01(\v2+.elitea.runtime.v1.ProjectContextSnapshotV1R\x0eprojectContext\x12Y\n" +
+	"\x14model_context_limits\x18A \x01(\v2'.elitea.runtime.v1.ModelContextLimitsV1R\x12modelContextLimits\x12N\n" +
+	"\rsummary_model\x18B \x01(\v2).elitea.runtime.v1.SummaryModelSnapshotV1R\fsummaryModelB\f\n" +
 	"\n" +
 	"_thread_idB\x10\n" +
 	"\x0e_checkpoint_idB\x0e\n" +
@@ -898,7 +1147,23 @@ const file_elitea_runtime_v1_agent_proto_rawDesc = "" +
 	"\x15_execution_generationB\x12\n" +
 	"\x10_conversation_idB\x1d\n" +
 	"\x1b_exception_handling_enabledB\r\n" +
-	"\v_debug_modeJ\x04\b(\x10@\"\x94\x02\n" +
+	"\v_debug_modeJ\x04\b(\x10@\"\x9c\x01\n" +
+	"\x16SummaryModelSnapshotV1\x12!\n" +
+	"\fllm_settings\x18\x01 \x01(\fR\vllmSettings\x12Y\n" +
+	"\x14model_context_limits\x18\x02 \x01(\v2'.elitea.runtime.v1.ModelContextLimitsV1R\x12modelContextLimitsJ\x04\b\x03\x10\x10\"\xa8\x02\n" +
+	"\x14ModelContextLimitsV1\x122\n" +
+	"\x15context_window_tokens\x18\x01 \x01(\rR\x13contextWindowTokens\x12*\n" +
+	"\x11max_output_tokens\x18\x02 \x01(\rR\x0fmaxOutputTokens\x126\n" +
+	"\x17context_window_fallback\x18\x03 \x01(\bR\x15contextWindowFallback\x12.\n" +
+	"\x13max_output_fallback\x18\x04 \x01(\bR\x11maxOutputFallback\x12-\n" +
+	"\x10max_input_tokens\x18\x05 \x01(\rH\x00R\x0emaxInputTokens\x88\x01\x01B\x13\n" +
+	"\x11_max_input_tokensJ\x04\b\x06\x10\x10\"\xb3\x01\n" +
+	"\x18ProjectContextSnapshotV1\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1a\n" +
+	"\brevision\x18\x02 \x01(\tR\brevision\x12\x14\n" +
+	"\x05scope\x18\x03 \x01(\tR\x05scope\x12\x18\n" +
+	"\acontent\x18\x04 \x01(\tR\acontent\x125\n" +
+	"\x16activation_description\x18\x05 \x01(\tR\x15activationDescriptionJ\x04\b\x06\x10\x10\"\x94\x02\n" +
 	"!AgentExecutionArtifactReferenceV1\x12\x1f\n" +
 	"\vartifact_id\x18\x01 \x01(\tR\n" +
 	"artifactId\x12+\n" +
@@ -941,28 +1206,35 @@ func file_elitea_runtime_v1_agent_proto_rawDescGZIP() []byte {
 }
 
 var file_elitea_runtime_v1_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_elitea_runtime_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_elitea_runtime_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_elitea_runtime_v1_agent_proto_goTypes = []any{
 	(AgentExecutionTerminalStateV1)(0),        // 0: elitea.runtime.v1.AgentExecutionTerminalStateV1
 	(*AgentExecutionCommandV1)(nil),           // 1: elitea.runtime.v1.AgentExecutionCommandV1
 	(*AgentExecutionInputV1)(nil),             // 2: elitea.runtime.v1.AgentExecutionInputV1
-	(*AgentExecutionArtifactReferenceV1)(nil), // 3: elitea.runtime.v1.AgentExecutionArtifactReferenceV1
-	(*AgentExecutionAttachmentContentV1)(nil), // 4: elitea.runtime.v1.AgentExecutionAttachmentContentV1
-	(*AgentExecutionResultV1)(nil),            // 5: elitea.runtime.v1.AgentExecutionResultV1
-	(*DigestV1)(nil),                          // 6: elitea.runtime.v1.DigestV1
+	(*SummaryModelSnapshotV1)(nil),            // 3: elitea.runtime.v1.SummaryModelSnapshotV1
+	(*ModelContextLimitsV1)(nil),              // 4: elitea.runtime.v1.ModelContextLimitsV1
+	(*ProjectContextSnapshotV1)(nil),          // 5: elitea.runtime.v1.ProjectContextSnapshotV1
+	(*AgentExecutionArtifactReferenceV1)(nil), // 6: elitea.runtime.v1.AgentExecutionArtifactReferenceV1
+	(*AgentExecutionAttachmentContentV1)(nil), // 7: elitea.runtime.v1.AgentExecutionAttachmentContentV1
+	(*AgentExecutionResultV1)(nil),            // 8: elitea.runtime.v1.AgentExecutionResultV1
+	(*DigestV1)(nil),                          // 9: elitea.runtime.v1.DigestV1
 }
 var file_elitea_runtime_v1_agent_proto_depIdxs = []int32{
-	6, // 0: elitea.runtime.v1.AgentExecutionArtifactReferenceV1.digest:type_name -> elitea.runtime.v1.DigestV1
-	6, // 1: elitea.runtime.v1.AgentExecutionResultV1.input_bundle_digest:type_name -> elitea.runtime.v1.DigestV1
-	6, // 2: elitea.runtime.v1.AgentExecutionResultV1.request_content_digest:type_name -> elitea.runtime.v1.DigestV1
-	0, // 3: elitea.runtime.v1.AgentExecutionResultV1.terminal_state:type_name -> elitea.runtime.v1.AgentExecutionTerminalStateV1
-	3, // 4: elitea.runtime.v1.AgentExecutionResultV1.result_artifact:type_name -> elitea.runtime.v1.AgentExecutionArtifactReferenceV1
-	4, // 5: elitea.runtime.v1.AgentExecutionResultV1.attachment_contents:type_name -> elitea.runtime.v1.AgentExecutionAttachmentContentV1
-	6, // [6:6] is the sub-list for method output_type
-	6, // [6:6] is the sub-list for method input_type
-	6, // [6:6] is the sub-list for extension type_name
-	6, // [6:6] is the sub-list for extension extendee
-	0, // [0:6] is the sub-list for field type_name
+	5,  // 0: elitea.runtime.v1.AgentExecutionInputV1.project_context:type_name -> elitea.runtime.v1.ProjectContextSnapshotV1
+	4,  // 1: elitea.runtime.v1.AgentExecutionInputV1.model_context_limits:type_name -> elitea.runtime.v1.ModelContextLimitsV1
+	3,  // 2: elitea.runtime.v1.AgentExecutionInputV1.summary_model:type_name -> elitea.runtime.v1.SummaryModelSnapshotV1
+	4,  // 3: elitea.runtime.v1.SummaryModelSnapshotV1.model_context_limits:type_name -> elitea.runtime.v1.ModelContextLimitsV1
+	9,  // 4: elitea.runtime.v1.AgentExecutionArtifactReferenceV1.digest:type_name -> elitea.runtime.v1.DigestV1
+	9,  // 5: elitea.runtime.v1.AgentExecutionResultV1.input_bundle_digest:type_name -> elitea.runtime.v1.DigestV1
+	9,  // 6: elitea.runtime.v1.AgentExecutionResultV1.request_content_digest:type_name -> elitea.runtime.v1.DigestV1
+	0,  // 7: elitea.runtime.v1.AgentExecutionResultV1.terminal_state:type_name -> elitea.runtime.v1.AgentExecutionTerminalStateV1
+	6,  // 8: elitea.runtime.v1.AgentExecutionResultV1.result_artifact:type_name -> elitea.runtime.v1.AgentExecutionArtifactReferenceV1
+	7,  // 9: elitea.runtime.v1.AgentExecutionResultV1.attachment_contents:type_name -> elitea.runtime.v1.AgentExecutionAttachmentContentV1
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_elitea_runtime_v1_agent_proto_init() }
@@ -972,13 +1244,14 @@ func file_elitea_runtime_v1_agent_proto_init() {
 	}
 	file_elitea_runtime_v1_common_proto_init()
 	file_elitea_runtime_v1_agent_proto_msgTypes[1].OneofWrappers = []any{}
+	file_elitea_runtime_v1_agent_proto_msgTypes[3].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_elitea_runtime_v1_agent_proto_rawDesc), len(file_elitea_runtime_v1_agent_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   5,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

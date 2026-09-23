@@ -15,6 +15,7 @@ import (
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/guardrails"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
 )
 
 const (
@@ -38,6 +39,10 @@ type CurrentApplicationVersionFreezeRequest struct {
 	ProjectID      int32
 	ActorUserID    int32
 	VersionDetails json.RawMessage
+	InternalTools  json.RawMessage
+	// SummaryLLMSettings comes from the resolved context strategy. A saved
+	// version cannot supply the authorized summary_model snapshot itself.
+	SummaryLLMSettings map[string]any
 }
 
 type CurrentAgentToolkitNameRequest struct {
@@ -74,6 +79,7 @@ type CurrentApplicationToolSnapshotService struct {
 	names           CurrentAgentToolkitNameResolver
 	models          CurrentAgentModelCatalog
 	guardrails      CurrentAgentGuardrailResolver
+	projectContext  CurrentProjectContextResolver
 	publicProjectID int32
 }
 
@@ -96,14 +102,15 @@ func NewCurrentApplicationToolSnapshotService(
 	names CurrentAgentToolkitNameResolver,
 	models CurrentAgentModelCatalog,
 	guardrailPolicies CurrentAgentGuardrailResolver,
+	projectContext CurrentProjectContextResolver,
 	publicProjectID int32,
 ) (*CurrentApplicationToolSnapshotService, error) {
-	if settings == nil || names == nil || models == nil || guardrailPolicies == nil || publicProjectID <= 0 {
+	if settings == nil || names == nil || models == nil || guardrailPolicies == nil || projectContext == nil || publicProjectID <= 0 {
 		return nil, errors.New("current agent toolkit snapshot dependencies are required")
 	}
 	return &CurrentApplicationToolSnapshotService{
 		settings: settings, names: names, models: models,
-		guardrails: guardrailPolicies, publicProjectID: publicProjectID,
+		guardrails: guardrailPolicies, projectContext: projectContext, publicProjectID: publicProjectID,
 	}, nil
 }
 
@@ -116,7 +123,7 @@ func (service *CurrentApplicationToolSnapshotService) FreezeCurrentApplicationVe
 	request CurrentApplicationVersionFreezeRequest,
 ) (json.RawMessage, error) {
 	if service == nil || service.settings == nil || service.names == nil || service.models == nil ||
-		service.guardrails == nil ||
+		service.guardrails == nil || service.projectContext == nil ||
 		service.publicProjectID <= 0 || ctx == nil ||
 		request.ProjectID <= 0 || request.ActorUserID <= 0 ||
 		!validJSONObject(request.VersionDetails) {
@@ -135,6 +142,12 @@ func (service *CurrentApplicationToolSnapshotService) FreezeCurrentApplicationVe
 			return nil, contextErr
 		}
 		return nil, unsupportedStartBecause("model resolution", err)
+	}
+	if err := service.freezeCurrentSummaryModel(ctx, request.ProjectID, request.SummaryLLMSettings, version); err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, contextErr
+		}
+		return nil, unsupportedStartBecause("summary model resolution", err)
 	}
 	normalizeCurrentAgentRuntimeProfile(ctx, version, request.ProjectID)
 	tools, ok := version["tools"].([]any)
@@ -207,6 +220,11 @@ func (service *CurrentApplicationToolSnapshotService) FreezeCurrentApplicationVe
 				"toolkit_type", toolType, "project_id", request.ProjectID)
 			continue
 		}
+		if _, internal := mcpregistry.InternalBuilderForType(toolType); internal {
+			tool["settings"] = map[string]any{"server_name": toolType}
+			frozenTools = append(frozenTools, tool)
+			continue
+		}
 		toolID, ok := positiveCurrentAgentJSONInteger(tool["id"])
 		if !ok {
 			return nil, unsupportedStart("a tool entry has no positive integer id")
@@ -267,7 +285,14 @@ func (service *CurrentApplicationToolSnapshotService) FreezeCurrentApplicationVe
 		tool["toolkit_name"] = toolkitName
 		frozenTools = append(frozenTools, tool)
 	}
+	frozenTools, err = freezeCurrentInternalMCP(version, request.InternalTools, frozenTools, policy)
+	if err != nil {
+		return nil, err
+	}
 	version["tools"] = frozenTools
+	if err := service.freezeCurrentInstructionSnapshots(ctx, request, version); err != nil {
+		return nil, err
+	}
 
 	encoded, err := json.Marshal(version)
 	if err != nil || !validJSONObject(encoded) || len(encoded) > executiondomain.MaxAgentExecutionInputBytes {
@@ -596,7 +621,7 @@ func (service *CurrentApplicationToolSnapshotService) resolveCurrentAgentModel(
 	}
 	settings["openai_compatible"] = compatible
 	version["llm_settings"] = settings
-	return nil
+	return freezeCurrentModelContextLimits(version, selected)
 }
 
 // currentAgentRuntimeDirectAgentType is the agent_type the runtime's direct
@@ -638,7 +663,6 @@ const currentAgentStoredDirectAgentType = "openai"
 // dropCurrentAgentInternalMCP.
 func normalizeCurrentAgentRuntimeProfile(ctx context.Context, version map[string]any, projectID int32) {
 	normalizeCurrentAgentTypeField(version)
-	dropCurrentAgentInternalMCP(ctx, version, projectID)
 	tools, ok := version["tools"].([]any)
 	if !ok {
 		return
@@ -649,63 +673,6 @@ func normalizeCurrentAgentRuntimeProfile(ctx context.Context, version map[string
 		}
 	}
 }
-
-// dropCurrentAgentInternalMCP removes `internal_mcp` from the version's
-// internal-tool list.
-//
-// Internal MCP is not an internal TOOL to this runtime: it reaches the worker
-// through the frozen tools projection, which is why currentRuntimeInternalTools
-// (start.go) already accepts the name on the conversation's list and drops it
-// rather than forwarding it. The runtime's own catalogue admits `ask_user` and
-// nothing else (services/elitea-worker-rust/src/agents/internal_tools.rs), and
-// it reads the VERSION's list as well as the conversation's, so a name left in
-// the snapshot refuses the whole profile.
-//
-// This matters for agents that already exist: the create-agent form seeded
-// `internal_mcp` into every new version until it was changed, so a project can
-// hold any number of saved agents carrying it. Dropping it here is what lets
-// those run without rewriting anyone's stored version. Nothing is lost — the
-// Python worker never reads this list at all (it takes its internal tools from
-// the execution input), and the Go layer was already discarding the name.
-//
-// A list that named nothing else becomes empty rather than absent: the two are
-// the same input to the runtime's catalogue, and rebuilding the key keeps the
-// snapshot's shape stable for anything that reads it.
-func dropCurrentAgentInternalMCP(ctx context.Context, version map[string]any, projectID int32) {
-	meta, ok := version["meta"].(map[string]any)
-	if !ok {
-		return
-	}
-	configured, ok := meta["internal_tools"].([]any)
-	if !ok {
-		return
-	}
-	retained := make([]any, 0, len(configured))
-	for _, value := range configured {
-		if name, ok := value.(string); ok && name == currentAgentInternalMCPTool {
-			continue
-		}
-		retained = append(retained, value)
-	}
-	if len(retained) == len(configured) {
-		return
-	}
-	// Logged, not silent. The agent is about to run WITHOUT a capability its
-	// author asked for, and this repository has been bitten more than once by a
-	// removal that read as "there was nothing to remove". The toolkit walk below
-	// states its own drops the same way (`agent_toolkit_skipped`).
-	slog.WarnContext(ctx, "agent internal tool is unavailable in this runtime and was omitted from the execution snapshot",
-		"event", "agent_internal_tool_skipped",
-		"reason_code", "internal_tool_unsupported",
-		"internal_tool", currentAgentInternalMCPTool,
-		"project_id", projectID,
-	)
-	meta["internal_tools"] = retained
-}
-
-// currentAgentInternalMCPTool is the name the previous create-agent form seeded
-// into every new version's meta.
-const currentAgentInternalMCPTool = "internal_mcp"
 
 func normalizeCurrentAgentTypeField(holder map[string]any) {
 	if agentType, ok := holder["agent_type"].(string); ok &&

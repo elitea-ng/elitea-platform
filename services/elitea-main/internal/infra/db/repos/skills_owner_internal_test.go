@@ -101,3 +101,13 @@ func splitTopLevel(list string) []string {
 	}
 	return append(parts, list[start:])
 }
+
+func TestCreateSkillRefusesMissingAuthorBeforeDatabaseAccess(t *testing.T) {
+	repo := &SkillsRepo{}
+	if _, err := repo.Create(context.Background(), "1", skills.Skill{Name: "missing-author"}); err == nil {
+		t.Fatal("skill creation accepted a missing author")
+	}
+	if _, err := repo.CreateVersion(context.Background(), "1", "7", skills.VersionCreateInput{Name: "missing-author"}); err == nil {
+		t.Fatal("version creation accepted a missing author")
+	}
+}

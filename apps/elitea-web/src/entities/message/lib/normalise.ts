@@ -2,6 +2,7 @@ import { ChatParticipantType } from '@/shared/lib/chat';
 import { ROLES } from '@/shared/lib/enums';
 
 import type { AssistantMessage, UserMessage } from '../model/types';
+import { buildAuthorizationActions } from './authorizationActions';
 import { buildToolActions, resolveAssistantToolInputs } from './toolActions';
 import type {
   HitlInterruptRawWire,
@@ -364,13 +365,11 @@ export function normaliseAssistantMessage(
     isParticipant(participant.id, messageGroup.author_participant_id),
   );
 
-  const toolActions = buildToolActions(
-    thinkingSteps,
-    toolCalls,
-    convertTime(messageGroup.created_at),
-    firstToolTimestampStart,
-    foundParticipant,
-  );
+  const createdAt = convertTime(messageGroup.created_at);
+  const toolActions = [
+    ...buildToolActions(thinkingSteps, toolCalls, createdAt, firstToolTimestampStart, foundParticipant),
+    ...buildAuthorizationActions((meta ?? {}) as Record<string, unknown>, messageGroup.content, createdAt),
+  ];
   const exception = resolveException(messageGroup, meta, isError, messageItems);
 
   return {
@@ -378,7 +377,7 @@ export function normaliseAssistantMessage(
     role: ROLES.Assistant,
     content: messageGroup.is_streaming ? '...' : messageGroup.content,
     messageItems: [...messageItems].sort((a, b) => a.id - b.id),
-    createdAt: convertTime(messageGroup.created_at),
+    createdAt,
     isSummarized,
     references,
     toolActions,
@@ -386,6 +385,7 @@ export function normaliseAssistantMessage(
     ...(messageGroup.updated_at !== undefined ? { updatedAt: convertTime(messageGroup.updated_at) } : {}),
     ...assistantStreamingFields(messageGroup),
     ...(exception !== undefined ? { exception } : {}),
+    ...(isError && typeof meta?.error_code === 'string' ? { failureCode: meta.error_code } : {}),
     ...(messageGroup.likes !== undefined ? { likes: messageGroup.likes } : {}),
     ...assistantHitlFields(meta),
     ...assistantContinuationFields(meta),

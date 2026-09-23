@@ -41,6 +41,8 @@ import {
   initialForm,
   keyHelperText,
   normalizeCatalogueKey,
+  parseMcpHeadersYaml,
+  parseMcpYamlMapping,
   resolveSecretForSave,
   validateDraft,
   type McpServerForm,
@@ -84,7 +86,14 @@ export function AdminMcpServerDialog({
   };
 
   const handleSubmit = (): void => {
-    const problem = validateDraft(form.displayName, form.timeout, isEdit, existingKeys);
+    const problem = validateDraft(
+      form.displayName,
+      form.timeout,
+      form.headersYaml,
+      form.configSchemaYaml,
+      isEdit,
+      existingKeys,
+    );
     if (problem !== undefined) {
       setLocalError(problem);
       return;
@@ -103,7 +112,8 @@ export function AdminMcpServerDialog({
       clientId: form.clientId.trim(),
       clientSecret: resolveSecretForSave(form.clientSecret, form.clearSecret),
       timeout: form.timeout.trim() === '' ? 0 : Number(form.timeout),
-      headers: editing?.headers ?? {},
+      headers: parseMcpHeadersYaml(form.headersYaml),
+      configSchema: parseMcpYamlMapping(form.configSchemaYaml),
       enabled: form.enabled,
     });
   };
@@ -195,6 +205,40 @@ export function AdminMcpServerDialog({
           fullWidth
           size="small"
           inputMode="numeric"
+        />
+
+        <TextField
+          label={t('pages.admin.mcpServers.dialog.headers', 'Headers (YAML mapping)')}
+          value={form.headersYaml}
+          onChange={(event) => {
+            update('headersYaml', event.target.value);
+          }}
+          disabled={isSaving}
+          fullWidth
+          multiline
+          minRows={3}
+          size="small"
+          helperText={t(
+            'pages.admin.mcpServers.dialog.headersHelp',
+            'Header values may use declared placeholders, for example Bearer {api_token}.',
+          )}
+        />
+
+        <TextField
+          label={t('pages.admin.mcpServers.dialog.configSchema', 'Project parameter schema (YAML mapping)')}
+          value={form.configSchemaYaml}
+          onChange={(event) => {
+            update('configSchemaYaml', event.target.value);
+          }}
+          disabled={isSaving}
+          fullWidth
+          multiline
+          minRows={5}
+          size="small"
+          helperText={t(
+            'pages.admin.mcpServers.dialog.configSchemaHelp',
+            'Define properties with type, description, required, default, and secret metadata. Main validates every template before saving.',
+          )}
         />
 
         <FormControlLabel
@@ -294,4 +338,3 @@ function McpSecretFields({
     </>
   );
 }
-

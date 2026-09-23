@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
 )
 
@@ -22,7 +23,7 @@ import (
 func newSkillsTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	pool := newPostgresIntegrationPool(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(auth.ContextWithUser(context.Background(), auth.User{UserID: "1"}), 30*time.Second)
 	defer cancel()
 	if err := db.RunMigrations(ctx, pool); err != nil {
 		t.Fatalf("run baseline migrations: %v", err)
@@ -33,10 +34,10 @@ func newSkillsTestPool(t *testing.T) *pgxpool.Pool {
 func TestSkillsRepoPostgres_CreateReadRoundTrip(t *testing.T) {
 	pool := newSkillsTestPool(t)
 	repo := NewSkillsRepo(pool)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(auth.ContextWithUser(context.Background(), auth.User{UserID: "1"}), 20*time.Second)
 	defer cancel()
 
-	created, err := repo.Create(ctx, "1", skills.Skill{
+	created, err := repo.Create(ctx, "1", skills.Skill{AuthorID: 1,
 		Name:         "Code Reviewer",
 		Description:  "Reviews code for bugs",
 		Instructions: "Always check for security issues.",
@@ -89,10 +90,10 @@ func TestSkillsRepoPostgres_CreateReadRoundTrip(t *testing.T) {
 func TestSkillsRepoPostgres_UpdateReplacesTags(t *testing.T) {
 	pool := newSkillsTestPool(t)
 	repo := NewSkillsRepo(pool)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(auth.ContextWithUser(context.Background(), auth.User{UserID: "1"}), 20*time.Second)
 	defer cancel()
 
-	created, err := repo.Create(ctx, "1", skills.Skill{
+	created, err := repo.Create(ctx, "1", skills.Skill{AuthorID: 1,
 		Name: "Doc Writer", Description: "Writes docs",
 		Instructions: "Be concise.", Tags: []string{"docs", "writing"},
 	})
@@ -100,7 +101,7 @@ func TestSkillsRepoPostgres_UpdateReplacesTags(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	updated, err := repo.Update(ctx, "1", created.ID, skills.Skill{
+	updated, err := repo.Update(ctx, "1", created.ID, skills.Skill{AuthorID: 1,
 		Name: "Doc Writer", Description: "Writes docs",
 		Instructions: "Be thorough.", Tags: []string{"writing", "clarity"},
 	})
@@ -135,13 +136,13 @@ func TestSkillsRepoPostgres_UpdateReplacesTags(t *testing.T) {
 func TestSkillsRepoPostgres_SearchAndSort(t *testing.T) {
 	pool := newSkillsTestPool(t)
 	repo := NewSkillsRepo(pool)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(auth.ContextWithUser(context.Background(), auth.User{UserID: "1"}), 20*time.Second)
 	defer cancel()
 
 	for _, sk := range []skills.Skill{
-		{Name: "Alpha Reviewer", Description: "reviews things"},
-		{Name: "Beta Helper", Description: "helps with alpha tasks"},
-		{Name: "Gamma Writer", Description: "writes content"},
+		{AuthorID: 1, Name: "Alpha Reviewer", Description: "reviews things"},
+		{AuthorID: 1, Name: "Beta Helper", Description: "helps with alpha tasks"},
+		{AuthorID: 1, Name: "Gamma Writer", Description: "writes content"},
 	} {
 		if _, err := repo.Create(ctx, "1", sk); err != nil {
 			t.Fatalf("create %q: %v", sk.Name, err)
@@ -186,10 +187,10 @@ func namesOf(items []skills.Skill) []string {
 func TestSkillsRepoPostgres_GetByName(t *testing.T) {
 	pool := newSkillsTestPool(t)
 	repo := NewSkillsRepo(pool)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(auth.ContextWithUser(context.Background(), auth.User{UserID: "1"}), 20*time.Second)
 	defer cancel()
 
-	if _, err := repo.Create(ctx, "1", skills.Skill{Name: "Unique Skill", Description: "d"}); err != nil {
+	if _, err := repo.Create(ctx, "1", skills.Skill{AuthorID: 1, Name: "Unique Skill", Description: "d"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
@@ -213,10 +214,10 @@ func TestSkillsRepoPostgres_GetByName(t *testing.T) {
 func TestSkillsRepoPostgres_DeleteCascadesVersionsAndTags(t *testing.T) {
 	pool := newSkillsTestPool(t)
 	repo := NewSkillsRepo(pool)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(auth.ContextWithUser(context.Background(), auth.User{UserID: "1"}), 20*time.Second)
 	defer cancel()
 
-	created, err := repo.Create(ctx, "1", skills.Skill{Name: "Temp Skill", Description: "d", Instructions: "i", Tags: []string{"x"}})
+	created, err := repo.Create(ctx, "1", skills.Skill{AuthorID: 1, Name: "Temp Skill", Description: "d", Instructions: "i", Tags: []string{"x"}})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -245,10 +246,10 @@ func TestSkillsRepoPostgres_DeleteCascadesVersionsAndTags(t *testing.T) {
 func TestSkillsRepoPostgres_DeleteRefusesWhilePublished(t *testing.T) {
 	pool := newSkillsTestPool(t)
 	repo := NewSkillsRepo(pool)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(auth.ContextWithUser(context.Background(), auth.User{UserID: "1"}), 20*time.Second)
 	defer cancel()
 
-	created, err := repo.Create(ctx, "1", skills.Skill{Name: "Published Skill", Description: "d", Instructions: "i", Tags: []string{"x"}})
+	created, err := repo.Create(ctx, "1", skills.Skill{AuthorID: 1, Name: "Published Skill", Description: "d", Instructions: "i", Tags: []string{"x"}})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -295,3 +296,26 @@ func TestSkillsRepoPostgres_DeleteRefusesWhilePublished(t *testing.T) {
 // agent version, a second agent version and a `pipeline` row on the SAME
 // entity_version_id, then asserts the answer holds only the first version's
 // agent skills.
+
+func TestSkillsRepoPostgres_WritesVersionUUIDWithoutDatabaseDefault(t *testing.T) {
+	pool := newSkillsTestPool(t)
+	ctx := auth.ContextWithUser(context.Background(), auth.User{UserID: "1"})
+	if _, err := pool.Exec(ctx, `ALTER TABLE p_1.skill_versions ALTER COLUMN uuid DROP DEFAULT, ALTER COLUMN uuid SET NOT NULL, ALTER COLUMN meta DROP DEFAULT, ALTER COLUMN meta SET NOT NULL`); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewSkillsRepo(pool)
+	created, err := repo.Create(ctx, "1", skills.Skill{AuthorID: 1, Name: "UUID compatibility", Instructions: "Use the existing schema."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.CreateVersion(ctx, "1", created.ID, skills.VersionCreateInput{AuthorID: 1, Name: "next"}); err != nil {
+		t.Fatal(err)
+	}
+	var versions, identities int
+	if err := pool.QueryRow(ctx, `SELECT count(*), count(DISTINCT uuid) FROM p_1.skill_versions WHERE skill_id=$1`, created.ID).Scan(&versions, &identities); err != nil {
+		t.Fatal(err)
+	}
+	if versions != 2 || identities != 2 {
+		t.Fatalf("versions=%d UUIDs=%d", versions, identities)
+	}
+}

@@ -37,7 +37,15 @@ pub(crate) const PIPELINE_NODE_EVENT_SCOPE_STATE_KEY: &str =
 pub(crate) const PIPELINE_NODE_EVENT_SCOPE_WRAPPER_KEY: &str = "elitea_event_scope";
 const MAX_EVENT_SCOPE_IDENTITY_BYTES: usize = 480;
 
-struct PipelineNodeEventSignal {
+enum PipelineNodeEventSignal {
+    Event(PipelineNodeEventData),
+    ModelFailed {
+        code: &'static str,
+        continuation: Option<super::super::model_checkpoint::output::ContinuationFailure>,
+    },
+}
+
+struct PipelineNodeEventData {
     node_name: Option<String>,
     scope: Option<PipelineNodeEventScope>,
     event: Box<Event>,
@@ -138,6 +146,33 @@ pub(crate) fn pipeline_node_event_channel() -> (PipelineNodeEventSender, Pipelin
 }
 
 impl PipelineNodeEventSender {
+    /// Preserve safe codes and typed continuation causes, never provider messages.
+    pub(crate) async fn send_model_failure(&self, error: &AdkError) -> adk_rust::Result<()> {
+        self.inner
+            .send(PipelineNodeEventSignal::ModelFailed {
+                code: error.code,
+                continuation: super::super::model_checkpoint::output::failure_reason(error),
+            })
+            .await
+            .map_err(|_| pipeline_node_event_channel_error())
+    }
+
+    /// Reuse the invocation-owned bridge for before-model progress. The outer
+    /// wrapper supplies the agent identity; graph forwarding adds node scope.
+    pub(crate) async fn send_context_status(&self, event: Event) -> adk_rust::Result<()> {
+        if crate::agents::context_status::ModelContextStatus::from_event(&event)?.is_none() {
+            return Err(pipeline_node_event_channel_error());
+        }
+        self.inner
+            .send(PipelineNodeEventSignal::Event(PipelineNodeEventData {
+                node_name: None,
+                scope: None,
+                event: Box::new(event),
+            }))
+            .await
+            .map_err(|_| pipeline_node_event_channel_error())
+    }
+
     /// Forward one ordinary model/tool event. Confirmations stay owned by the
     /// graph interrupt, and incremental tool-progress events remain closed
     /// until the public projection has a bounded schema for them.
@@ -162,11 +197,11 @@ impl PipelineNodeEventSender {
             .provider_metadata
             .remove(ADK_LLM_RESPONSE_METADATA_KEY);
         self.inner
-            .send(PipelineNodeEventSignal {
+            .send(PipelineNodeEventSignal::Event(PipelineNodeEventData {
                 node_name: Some(node_name.to_owned()),
                 scope: scope.cloned(),
                 event: Box::new(event),
-            })
+            }))
             .await
             .map_err(|_| pipeline_node_event_channel_error())
     }
@@ -219,11 +254,11 @@ impl PipelineNodeEventSender {
             return Err(pipeline_node_event_channel_error());
         }
         self.inner
-            .send(PipelineNodeEventSignal {
+            .send(PipelineNodeEventSignal::Event(PipelineNodeEventData {
                 node_name: None,
                 scope: None,
                 event: Box::new(event),
-            })
+            }))
             .await
             .map_err(|_| pipeline_node_event_channel_error())
     }
@@ -396,6 +431,20 @@ fn pipeline_node_signal_event(
     root_author: &str,
     root_branch: &str,
 ) -> adk_rust::Result<Event> {
+    let signal = match signal {
+        PipelineNodeEventSignal::Event(signal) => signal,
+        PipelineNodeEventSignal::ModelFailed { code, continuation } => {
+            if let Some(reason) = continuation {
+                return Err(super::super::model_checkpoint::output::failed(reason));
+            }
+            return Err(AdkError::new(
+                ErrorComponent::Model,
+                ErrorCategory::Internal,
+                code,
+                "The pipeline model invocation failed.",
+            ));
+        }
+    };
     let mut event = *signal.event;
     if let Some(node_name) = signal.node_name
         && (!valid_graph_id(&node_name)
@@ -459,4 +508,58 @@ fn pipeline_node_event_channel_error() -> AdkError {
         "elitea_pipeline.node_event_channel_unavailable",
         "the pipeline node event channel is unavailable",
     )
+}
+
+#[cfg(test)]
+mod failure_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn model_failure_bridge_preserves_typed_continuation_reason() {
+        use crate::agents::model_checkpoint::output::{
+            ContinuationFailure, failed, failure_reason,
+        };
+        let (sender, receiver) = pipeline_node_event_channel();
+        sender
+            .send_model_failure(&failed(ContinuationFailure::CallLimit))
+            .await
+            .expect("queue typed failure");
+        let mut channel = receiver.inner.lock().await.take().expect("receiver");
+        let error =
+            pipeline_node_signal_event(channel.recv().await.expect("signal"), "root", "agent", "")
+                .expect_err("failure");
+        assert_eq!(error.code, "model.output_continuation_failed");
+        assert!(matches!(
+            failure_reason(&error),
+            Some(ContinuationFailure::CallLimit)
+        ));
+    }
+
+    #[tokio::test]
+    async fn model_failure_bridge_preserves_codes_without_provider_messages() {
+        for code in [
+            "context_budget_exceeded",
+            "model_gateway.rate_limited",
+            "model_gateway.provider_error",
+            "model.output_continuation_failed",
+            "unknown_static_code",
+        ] {
+            let (sender, receiver) = pipeline_node_event_channel();
+            sender
+                .send_model_failure(&AdkError::new(
+                    ErrorComponent::Model,
+                    ErrorCategory::Internal,
+                    code,
+                    "secret provider payload",
+                ))
+                .await
+                .expect("queued failure");
+            let mut channel = receiver.inner.lock().await.take().expect("receiver");
+            let signal = channel.recv().await.expect("failure signal");
+            let error = pipeline_node_signal_event(signal, "root", "agent", "")
+                .expect_err("failure must not become a successful graph event");
+            assert_eq!(error.code, code);
+            assert_eq!(error.message, "The pipeline model invocation failed.");
+        }
+    }
 }

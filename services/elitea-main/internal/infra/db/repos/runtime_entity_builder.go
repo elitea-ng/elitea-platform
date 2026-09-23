@@ -119,7 +119,7 @@ func (r *CurrentRuntimeEntityBuilderRepository) UpsertRuntimeSkillByName(
 	if err != nil {
 		return storage.RuntimeSkillRecord{}, err
 	}
-	if _, err := upsertBaseSkillVersion(ctx, tx, tenantSchema, skillID, instructions, existingTags); err != nil {
+	if _, err := upsertBaseSkillVersion(ctx, tx, tenantSchema, skillID, instructions, existingTags, ownerID.Int64()); err != nil {
 		return storage.RuntimeSkillRecord{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

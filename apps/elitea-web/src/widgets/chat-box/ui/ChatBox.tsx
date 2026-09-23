@@ -2,11 +2,7 @@
  * ChatBox — composition root for the chat experience. Composes entities/conversation
  * lifecycle + streaming, features/chat-messages ChatMessageList, features/chat-input
  * NewChatInput, Phase-2 button primitives, Phase-4 recommendation list, and TTS.
- * Port of the old 2300-line ChatBox.jsx — split across sibling hooks
- * (data/state/handlers/participant/model-selection/internal-tools/
- * versioning/mentions/actions — see ./hooks/) plus a pure-helpers module
- * (./ChatBox.helpers.ts) to stay under the §3.5 file-length/component-props/
- * use-effects/complexity budgets.
+ * Sibling hooks and ChatBox.helpers.ts keep this composition within §3.5 budgets.
  *
  * Lives in widgets/ (not features/) because a composition root that pulls
  * together chat-messages, chat-input, and chat-recommendations necessarily
@@ -22,6 +18,7 @@ import type { AttachmentButtonHandle, PlusChatButtonEntitySubmenus, VoiceButtonH
 import { ChatConversationStarters, NewChatInput, voiceHooks } from '@/features/chat-input';
 import { useSocketClient } from '@/shared/api/socket/client';
 import { ChatMessageList, useDeleteMessageAlert } from '@/features/chat-messages';
+import { getAllTokens } from '@/features/mcps';
 import { conversationApi } from '@/entities/conversation';
 import { t } from '@/shared/i18n';
 
@@ -62,7 +59,7 @@ import { useChatBoxMentions } from './hooks/useChatBoxMentions';
 import { useChatBoxActions } from './hooks/useChatBoxActions';
 import { useAddEntityParticipant } from './hooks/useAddEntityParticipant';
 import { useActiveParticipantSelection } from './hooks/useActiveParticipantSelection';
-import { useSessionDeclinedMcpServersRef } from './hooks/useSessionDeclinedMcpServersRef';
+import { useSessionMcpAuthorizationRefs } from './hooks/useSessionMcpAuthorizationRefs';
 import { useChatBoxSend } from './hooks/useChatBoxSend';
 import { useStableRef } from './hooks/useStableRef';
 
@@ -91,6 +88,7 @@ export interface ChatBoxProps {
   readonly onDelete?: { readonly answer?: (messageId: string) => void; readonly all?: () => void };
   /** Host-supplied composer extension points, bundled to stay under the §3.5 component-props budget (one slot instead of two, as `onDelete` above); both pass straight through. */
   readonly extensions?: {
+    readonly contextIndicator?: React.ReactNode;
     /** Agent/pipeline editor open/close callbacks — see `ChatBox.helpers.ts`'s `buildAgentEditorProps`. Optional; falls back to the pre-existing no-ops. */
     readonly editorCallbacks?: ChatBoxEditorCallbacks;
     /** Real lists for the composer's "+" menu — see `processes/chat/model/usePlusMenuEntities.ts`, which is the only layer allowed to fetch them. */
@@ -115,7 +113,7 @@ const ChatBoxInner = memo(function ChatBox({
   onDelete,
   extensions,
 }: ChatBoxProps) {
-  const { editorCallbacks, entitySubmenus, onAgentEvent } = extensions ?? {};
+  const { editorCallbacks, entitySubmenus, onAgentEvent, contextIndicator } = extensions ?? {};
   const chatInputRef = useRef<NewChatInputHandle>(null);
   const attachmentButtonRef = useRef<AttachmentButtonHandle>(null); const voiceButtonRef = useRef<VoiceButtonHandle>(null);
   const { activeConversation, isLoadingConversation, onConversationCreated } = unwrapChatBoxConversation(conversation);
@@ -123,7 +121,6 @@ const ChatBoxInner = memo(function ChatBox({
   const { conversationId, conversationParticipants, conversationUuid, conversationMeta, isConversationSending, projectIdString } = deriveChatBoxIds(activeConversation, projectId);
   const { activeParticipant, onChangeParticipant } = useActiveParticipantSelection(participant, conversationParticipants);
 
-  // Data layer
   const data = useChatBoxData(buildChatBoxDataParams({ activeConversation, activeParticipant, projectId, userId, userName, userAvatar, isAgentsPage }));
   const messages = data.messageList.messages;
 
@@ -158,7 +155,6 @@ const ChatBoxInner = memo(function ChatBox({
     setChatHistory?.(messages);
   }, [messages, setChatHistory]);
 
-  // Nav blocker
   const setStreamingBlockNav = useNavBlockerStore((s) => s.setStreamingBlockNav);
   useEffect(() => {
     setStreamingBlockNav(data.streaming.isStreamingNow, 'prompt');
@@ -166,13 +162,21 @@ const ChatBoxInner = memo(function ChatBox({
 
   // Session-scoped bookkeeping of MCP servers declined/authenticated this
   // conversation (never persisted) — resets whenever the conversation changes.
-  const sessionDeclinedMcpServersRef = useSessionDeclinedMcpServersRef(conversationUuid);
+  const { sessionDeclinedMcpServersRef, sessionMcpAuthorizationBatchesRef } =
+    useSessionMcpAuthorizationRefs(conversationUuid);
 
   // Real RTK/TanStack mutations the action handlers below trigger.
   const { mutateAsync: regenerateMutateAsync } = conversationApi.useRegenerate();
   const { mutateAsync: deleteMessageMutateAsync } = conversationApi.useDeleteMessage();
   const { mutateAsync: deleteAllMessagesMutateAsync } = conversationApi.useDeleteAllMessages();
   const { mutateAsync: stopChatTaskMutateAsync } = conversationApi.useStopTask();
+
+  const { internalToolsButtonTools, handleInternalToolChange, isUpdatingInternalToolsConfig, getInternalToolsForSend } = useChatBoxInternalTools({
+    conversationId,
+    conversationMeta,
+    projectId,
+    isAgentsPage,
+  });
 
   // Everything one send needs: the SSE transport (issue #93) plus the
   // create-conversation-first and upload-attachments-first adapters.
@@ -182,7 +186,7 @@ const ChatBoxInner = memo(function ChatBox({
     deps: { createConversation: lifecycle.createConversation, uploadAttachments: data.attachments.upload.uploadAttachments },
     setChatHistory: data.setChatHistory, projectId, projectIdString, isAgentsPage, conversationUuid,
     activeParticipant, participants: conversationParticipants, userName, userAvatar,
-    llmSettings, model: data.selectedModel, userId, onAgentEvent,
+    llmSettings, model: data.selectedModel, userId, onAgentEvent, getInternalToolsForSend,
   });
   // After `useChatBoxSend`: a "+" pick on a chat with no conversation has to create one first, and it reuses the adapter the first send would have used, so an eagerly created conversation is seeded exactly like a send-created one.
   const entityParticipantActions = useAddEntityParticipant({ projectId, conversationId, participants: normalisedParticipants, onChangeParticipant, createConversation: () => createConversationForSend(''), ...(onConversationCreated ? { onConversationCreated } : {}) });
@@ -213,6 +217,8 @@ const ChatBoxInner = memo(function ChatBox({
     projectId,
     socketId: socketClient.socket.id,
     sessionDeclinedMcpServersRef,
+    sessionMcpAuthorizationBatchesRef,
+    getMcpTokens: getAllTokens,
     startStreamedExecution, continueStreamedExecution, regenerateStreamedExecution,
   });
 
@@ -236,13 +242,6 @@ const ChatBoxInner = memo(function ChatBox({
     setSelectedModel: data.setSelectedModel,
   });
 
-  // Real internal-tools-config persistence
-  const { internalToolsButtonTools, handleInternalToolChange, isUpdatingInternalToolsConfig } = useChatBoxInternalTools({
-    conversationId,
-    conversationMeta,
-    projectId,
-    isAgentsPage,
-  });
 
   // Version selection (real fetch + persist) + auto-recovery
   const { handleSelectVersion } = useChatBoxVersioning({
@@ -359,6 +358,7 @@ const ChatBoxInner = memo(function ChatBox({
             onSelectTool: handleSelectSkillTool,
           })}
         />
+        {contextIndicator}
         <NewChatInput
           ref={chatInputRef}
           conversationId={conversationId !== undefined ? String(conversationId) : undefined}

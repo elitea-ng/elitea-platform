@@ -39,6 +39,16 @@ type currentAgentTextDelta struct {
 	executionGeneration string
 	sioEvent            string
 	content             string
+	resultChunk         json.RawMessage
+}
+
+type currentAgentTextOwner struct {
+	ParentAgentName string            `json:"parent_agent_name"`
+	ParentAgentPath []json.RawMessage `json:"parent_agent_path"`
+}
+
+func (owner currentAgentTextOwner) isChild() bool {
+	return strings.TrimSpace(owner.ParentAgentName) != "" || len(owner.ParentAgentPath) > 0
 }
 
 func (postgresCurrentAgentTextProjector) projectAgentTextDelta(
@@ -87,6 +97,9 @@ func (postgresCurrentAgentTextProjector) projectAgentTextDelta(
 	if err != nil {
 		return err
 	}
+	if len(delta.resultChunk) != 0 {
+		return appendCurrentAgentResultChunk(ctx, tx, schema, messageGroupID, frame.Fence.ExecutionID, frame.Fence.Generation, delta.content, delta.resultChunk)
+	}
 	return appendCurrentAgentProvisionalText(
 		ctx,
 		tx,
@@ -106,11 +119,30 @@ func decodeCurrentAgentTextDelta(raw json.RawMessage) (currentAgentTextDelta, bo
 		ExecutionGeneration string          `json:"execution_generation"`
 		SIOEvent            string          `json:"sio_event"`
 		Content             json.RawMessage `json:"content"`
+		ResponseMetadata    struct {
+			currentAgentTextOwner
+			ResultChunk json.RawMessage       `json:"result_chunk_v1"`
+			Metadata    currentAgentTextOwner `json:"metadata"`
+			ToolMeta    struct {
+				Metadata currentAgentTextOwner `json:"metadata"`
+			} `json:"tool_meta"`
+		} `json:"response_metadata"`
 	}
 	if err := json.Unmarshal(raw, &event); err != nil {
 		return currentAgentTextDelta{}, false, errors.New("decode current agent text event")
 	}
-	if event.Type != "agent_llm_chunk" {
+	if event.Type != "agent_llm_chunk" && event.Type != "agent_result_chunk" {
+		return currentAgentTextDelta{}, false, nil
+	}
+	if event.Type == "agent_result_chunk" && len(event.ResponseMetadata.ResultChunk) == 0 {
+		return currentAgentTextDelta{}, false, errors.New("result chunk metadata is required")
+	}
+	if event.Type != "agent_result_chunk" && len(event.ResponseMetadata.ResultChunk) != 0 {
+		return currentAgentTextDelta{}, false, errors.New("result chunk metadata requires a result event")
+	}
+	owner := event.ResponseMetadata
+	if owner.isChild() || owner.Metadata.isChild() || owner.ToolMeta.Metadata.isChild() {
+		// The trace projector stores child output. Do not copy it into the parent answer.
 		return currentAgentTextDelta{}, false, nil
 	}
 	if !validCurrentAgentCorrelation(event.StreamID) ||
@@ -120,6 +152,9 @@ func decodeCurrentAgentTextDelta(raw json.RawMessage) (currentAgentTextDelta, bo
 		return currentAgentTextDelta{}, false, errors.New("current agent text correlation is invalid")
 	}
 	if string(event.Content) == "null" {
+		if event.Type == "agent_result_chunk" {
+			return currentAgentTextDelta{}, false, errors.New("result chunk content is required")
+		}
 		return currentAgentTextDelta{
 			streamID:            event.StreamID,
 			messageID:           event.MessageID,
@@ -130,7 +165,8 @@ func decodeCurrentAgentTextDelta(raw json.RawMessage) (currentAgentTextDelta, bo
 	var content string
 	if err := json.Unmarshal(event.Content, &content); err != nil ||
 		!utf8.ValidString(content) || strings.ContainsRune(content, '\x00') ||
-		len(content) > outputapp.MaxNodeEventOutputBytes {
+		len(content) > outputapp.MaxNodeEventOutputBytes ||
+		(event.Type == "agent_result_chunk" && content == "") {
 		return currentAgentTextDelta{}, false, errors.New("current agent text content is invalid")
 	}
 	return currentAgentTextDelta{
@@ -139,6 +175,7 @@ func decodeCurrentAgentTextDelta(raw json.RawMessage) (currentAgentTextDelta, bo
 		executionGeneration: event.ExecutionGeneration,
 		sioEvent:            event.SIOEvent,
 		content:             content,
+		resultChunk:         event.ResponseMetadata.ResultChunk,
 	}, true, nil
 }
 

@@ -278,7 +278,7 @@ describe('useToolkitChat', () => {
     });
 
     await waitFor(() => expect(createConversation).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(testToolBody).toEqual({ tool_name: 'search_index', tool_params: { query: 'x' } }));
+    await waitFor(() => expect(testToolBody).toEqual({ request_id: expect.any(String) as unknown, tool_name: 'search_index', tool_params: { query: 'x' }, llm_model: 'gpt-4o-mini', llm_settings: { temperature: 0.6, max_tokens: -1 } }));
     expect(client.getEmitted('chat_predict')).toHaveLength(0);
   });
 
@@ -1132,4 +1132,28 @@ describe('useToolkitChat', () => {
       expect(client.getEmitted('chat_predict')).toHaveLength(0);
     });
   });
+});
+
+it('forwards REST authorization to TestTools callback and retries the same named operation', async () => {
+  const client = createTestSocketClient();
+  const onMcpAuthRequired = vi.fn();
+  const bodies: Record<string, unknown>[] = [];
+  server.use(http.post(`${BASE}/elitea_core/test_tool/prompt_lib/7/9`, async ({ request }) => {
+    bodies.push(await request.json() as Record<string, unknown>);
+    return bodies.length === 1
+      ? HttpResponse.json({ reason: 'authorization_required', task_id: 'task-9', authorization_required: { toolkit_id: 9, toolkit_type: 'mcp', toolkit_name: 'Docs', server_url: 'https://mcp.example/tools', resource_metadata: {} } }, { status: 409 })
+      : HttpResponse.json({ ok: true, result: 'done' });
+  }));
+  const { box } = renderToolkitChat(baseParams({ toolkitId: '9', onMcpAuthRequired }), client, '7');
+  await waitFor(() => expect(box.current).toBeDefined());
+  act(() => box.current?.handleRunTool());
+  await waitFor(() => expect(onMcpAuthRequired).toHaveBeenCalledOnce());
+  const message = onMcpAuthRequired.mock.calls[0]?.[0] as { onAuthorized: (reference: string) => Promise<void> };
+  await act(async () => message.onAuthorized('R'.repeat(43)));
+  expect(bodies).toHaveLength(2);
+  expect(bodies[1]).toEqual({ ...bodies[0], request_id: expect.any(String) as unknown, mcp_authorization_reference: 'R'.repeat(43) });
+  expect(bodies[1]?.['request_id']).not.toBe(bodies[0]?.['request_id']);
+  expect(client.getEmitted('chat_predict')).toHaveLength(0);
+  await act(async () => message.onAuthorized('R'.repeat(43)));
+  expect(bodies).toHaveLength(2);
 });

@@ -119,6 +119,7 @@ func TestCurrentConfigurationListRoutePreservesQueryAndResponseContract(t *testi
 	reader := &currentConfigurationReaderStub{
 		list: func(_ context.Context, request configurationapp.CurrentConfigurationListRequest) (configurationapp.CurrentConfigurationListResult, error) {
 			if request.ProjectID != 7 || request.PublicProjectID != 1 ||
+				len(request.IDs) != 2 || request.IDs[0] != 9 || request.IDs[1] != 8 ||
 				request.Offset != 0 || request.Limit != 25 ||
 				!request.IncludeShared || request.SharedOffset != -3 || request.SharedLimit != 0 ||
 				request.Query != "docs" || request.SortBy != "label" || request.SortOrder != "asc" {
@@ -154,7 +155,7 @@ func TestCurrentConfigurationListRoutePreservesQueryAndResponseContract(t *testi
 
 	request := currentReadRequest(
 		http.MethodGet,
-		"/api/v2/configurations/configurations/007?type=github&type=confluence&section=integration&section=toolkit&offset=not-an-int&limit=25&include_shared=TrUe&shared_offset=-3&shared_limit=bad&query=docs&sort_by=label&sort_order=asc",
+		"/api/v2/configurations/configurations/007?ids=9,8,9&type=github&type=confluence&section=integration&section=toolkit&offset=not-an-int&limit=25&include_shared=TrUe&shared_offset=-3&shared_limit=bad&query=docs&sort_by=label&sort_order=asc",
 		"10.0.0.8:43120",
 	)
 	response := httptest.NewRecorder()

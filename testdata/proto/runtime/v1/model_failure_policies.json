@@ -1,0 +1,52 @@
+[
+  {
+    "code": "MODEL_TIMEOUT",
+    "message": "The model did not respond in time. Try again; if this continues, ask an administrator to check the model connection.",
+    "retryable": true
+  },
+  {
+    "code": "MODEL_RATE_LIMITED",
+    "message": "The model service reached its request limit. Wait briefly and try again, or select another model.",
+    "retryable": true
+  },
+  {
+    "code": "MODEL_ACCESS_DENIED",
+    "message": "The model service denied access. Ask an administrator to check the model credentials and project permissions.",
+    "retryable": false
+  },
+  {
+    "code": "MODEL_BUDGET_EXHAUSTED",
+    "message": "The model budget is exhausted. Ask an administrator to check the project budget or provider billing before retrying.",
+    "retryable": false
+  },
+  {
+    "code": "MODEL_REQUEST_REJECTED",
+    "message": "The model service rejected this request. Check the selected model and its settings, or ask an administrator to inspect the execution logs.",
+    "retryable": false
+  },
+  {
+    "code": "MODEL_RESPONSE_INVALID",
+    "message": "The model returned an incomplete or invalid response. Try again or select another model. Report repeated failures to an administrator.",
+    "retryable": true
+  },
+  {
+    "code": "CONTEXT_BUDGET_EXCEEDED",
+    "message": "The model input exceeds the available context budget. Enable compaction, reduce attached content, or select a model with a larger context window.",
+    "retryable": false
+  },
+  {
+    "code": "MODEL_REQUEST_TOO_LARGE",
+    "message": "The model request exceeds the transport size limit. Reduce attached content or tool results. A larger token window alone may not resolve this.",
+    "retryable": false
+  },
+  {
+    "code": "MODEL_UNAVAILABLE",
+    "message": "The model service could not be reached or is temporarily unavailable. Try again; ask an administrator to check the connection if it persists.",
+    "retryable": true
+  },
+  {
+    "code": "MODEL_PROVIDER_FAILURE",
+    "message": "The model service reported an error while generating the response. Try again or select another model. An administrator can inspect the execution logs.",
+    "retryable": true
+  }
+]

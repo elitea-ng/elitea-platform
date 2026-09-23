@@ -8,6 +8,7 @@
 
 #![allow(dead_code)] // Capability registration remains intentionally disabled.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -17,6 +18,7 @@ use super::application_tools::{
     ApplicationToolDependencies, materialize_application_toolset, skipped_application_children,
 };
 use super::assembly::{OrdinaryModelProvider, OrdinaryNoToolProfile, ReasoningEffort};
+use super::internal_tools::ASK_USER_TOOLSET_NAME;
 use super::internal_tools::BuilderToolAuthority;
 use super::runtime::{
     AdmittedNativeStart, AssembledNativeAgentInvocation, AuthorizedNativeAssembly,
@@ -24,7 +26,7 @@ use super::runtime::{
     RedeemedOrdinaryNativeAssembly,
 };
 use super::sensitive_tools::{
-    SensitiveToolCatalog, policy_for_guardrails, sensitive_tools_for_kind_with_renames,
+    SensitiveToolCatalog, policy_for_guardrails, sensitive_tools_for_kind,
 };
 use super::session::{
     ApplicationRuntimeProjection, NativeSessionBackend, NativeToolExecutionMode,
@@ -33,14 +35,15 @@ use super::session::{
     assemble_direct_hitl_resume_with_sessions_and_applications,
     assemble_ordinary_native_with_sessions_and_runtime_catalogs,
 };
-use super::tool_namespacing::{RenamedTool, apply_tool_namespacing, plan_tool_namespacing};
+use super::tool_namespacing::RenamedTool;
 use crate::protocol::control::ClaimBoundRuntimeContextAuthority;
 use crate::state::SessionLimits;
 use crate::toolkits::{
     AdkHttpMcpConnector, AdmittedToolSnapshot, ArtifactToolAuthority, FrozenToolKind, McpConnector,
-    McpMaterializationError, McpMaterializationErrorCode, ToolAdmissionPolicy,
-    ToolsetMaterializationError, ToolsetMaterializationErrorCode,
-    materialize_configured_toolsets_with_artifact_authority, materialize_mcp_toolsets_by_toolset,
+    McpMaterializationError, McpMaterializationErrorCode, ToolAdmissionPolicy, ToolBindingError,
+    ToolsetMaterializationError, ToolsetMaterializationErrorCode, bind_toolsets,
+    materialize_configured_toolsets_with_artifact_authority,
+    materialize_mcp_toolsets_with_tokens_and_authorization,
 };
 use crate::transport::model_facade::{
     BoundModelFacade, ModelAdapterKind, ModelFacade, ModelFacadeError, ModelInvocation,
@@ -61,6 +64,16 @@ pub(crate) struct OrdinaryNativeAgentAssembler {
     tool_policy: Arc<ToolAdmissionPolicy>,
     mcp_connector: Arc<dyn McpConnector>,
     sessions: NativeSessionBackend,
+}
+
+/// Shared provider/session dependencies; constructing them never starts Runner.
+struct OrdinaryRunnerInputs {
+    model: BoundModelFacade,
+    plan: super::session::OrdinaryNativeAgentPlan,
+    runtime: OrdinaryRuntimeBindings,
+    mode: NativeToolExecutionMode,
+    sessions: Arc<dyn adk_rust::session::SessionService>,
+    start: AdmittedNativeStart,
 }
 
 impl OrdinaryNativeAgentAssembler {
@@ -114,43 +127,15 @@ impl OrdinaryNativeAgentAssembler {
         AssembledNativeAgentInvocation<OrdinaryAgentCompletion<BoundModelFacade>>,
         NativeAgentAssemblyError,
     > {
-        let RedeemedOrdinaryNativeAssembly {
-            profile,
+        let OrdinaryRunnerInputs {
+            model,
             plan,
-            toolsets: tool_snapshot,
+            runtime,
+            mode: fresh_execution_mode,
+            sessions,
             start,
-            mcp_tokens,
-            context: claim_context,
-            runtime_context,
-            session: session_authority,
-            state_writer_lease,
-        } = redeemed;
-        let context = Arc::new(claim_context);
-        // Shared, not duplicated. The two builder tools (#940 A8) are called
-        // DURING the run and must write under this same claim, so the single
-        // minted authority has to outlive assembly — see
-        // `internal_tools::BuilderToolAuthority` for why sharing it is the only
-        // correct option and minting a second one is not.
-        let runtime_context = Arc::new(runtime_context);
-        tracing::Span::current().record("stage", "toolsets");
-        let (runtime, fresh_execution_mode) = self
-            .materialize_runtime(
-                &tool_snapshot,
-                mcp_tokens,
-                &runtime_context,
-                context.clone(),
-                &profile,
-                &tool_policy,
-                plan.thread_id().to_owned(),
-            )
-            .await?;
-        let output_continuation = matches!(&start, AdmittedNativeStart::OutputContinuation);
-        tracing::Span::current().record("output_continuation", output_continuation);
-        let model = self.bind_model(&profile, context.as_ref(), output_continuation)?;
-        tracing::Span::current().record("stage", "runner");
-        let sessions = self
-            .sessions
-            .open(session_authority, state_writer_lease, &plan)
+        } = self
+            .prepare_runner_inputs(redeemed, tool_policy, false)
             .await?;
         match start {
             AdmittedNativeStart::Fresh
@@ -194,11 +179,78 @@ impl OrdinaryNativeAgentAssembler {
         }
     }
 
-    // One more owner than the pedantic bound allows: the conversation thread is
-    // a per-TURN identity a pipeline child namespaces its checkpoint under
-    // (#973), and folding it into one of the frozen inputs beside it would hide
-    // that it comes from the plan rather than from the agent's version.
-    #[allow(clippy::too_many_arguments)]
+    async fn prepare_runner_inputs(
+        &self,
+        redeemed: RedeemedOrdinaryNativeAssembly<'_>,
+        tool_policy: Arc<ToolAdmissionPolicy>,
+        checkpoint_recovery: bool,
+    ) -> Result<OrdinaryRunnerInputs, NativeAgentAssemblyError> {
+        let RedeemedOrdinaryNativeAssembly {
+            profile,
+            plan,
+            toolsets: tool_snapshot,
+            start,
+            mcp_tokens,
+            context: claim_context,
+            runtime_context,
+            session: session_authority,
+            state_writer_lease,
+        } = redeemed;
+        let (sessions, model_scopes) = self
+            .sessions
+            .open_with_model_scopes(session_authority, state_writer_lease, &plan)
+            .await?;
+        let model_scopes = if checkpoint_recovery {
+            model_scopes.with_pending_model_recovery()
+        } else {
+            model_scopes
+        };
+        let context = Arc::new(claim_context);
+        let runtime_context = Arc::new(runtime_context);
+        tracing::Span::current().record("stage", "toolsets");
+        let (runtime, fresh_execution_mode) = self
+            .materialize_runtime(
+                &tool_snapshot,
+                mcp_tokens,
+                &runtime_context,
+                context.clone(),
+                &profile,
+                &tool_policy,
+                model_scopes,
+                plan.thread_id().to_owned(),
+            )
+            .await?;
+        let output_continuation = matches!(&start, AdmittedNativeStart::OutputContinuation);
+        tracing::Span::current().record("output_continuation", output_continuation);
+        let model = self.bind_model(&profile, context.as_ref(), output_continuation)?;
+        tracing::Span::current().record("stage", "runner");
+        Ok(OrdinaryRunnerInputs {
+            model,
+            plan,
+            runtime,
+            mode: fresh_execution_mode,
+            sessions,
+            start,
+        })
+    }
+
+    async fn redeem_for_runner<'a>(
+        &self,
+        assembly: AuthorizedNativeAssembly<'a>,
+        tool_policy: &ToolAdmissionPolicy,
+    ) -> Result<RedeemedOrdinaryNativeAssembly<'a>, NativeAgentAssemblyError> {
+        let admitted = assembly.admit_llm_agent(tool_policy)?;
+        if admitted.is_resume() && !self.sessions.supports_resume() {
+            return Err(unsupported_session_resume());
+        }
+        tracing::Span::current().record("stage", "runtime_context");
+        admitted
+            .redeem_runtime_context(self.platform.as_ref())
+            .await
+            .map_err(NativeAgentAssemblyError::from)
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // Keep claim, policy, and model storage owners together.
     async fn materialize_runtime(
         &self,
         tool_snapshot: &AdmittedToolSnapshot<'_>,
@@ -207,6 +259,7 @@ impl OrdinaryNativeAgentAssembler {
         context: Arc<ClaimScopedEliteaContext>,
         profile: &OrdinaryNoToolProfile,
         tool_policy: &Arc<ToolAdmissionPolicy>,
+        model_scopes: super::model_scope::ModelScopeSessions,
         conversation_thread_id: String,
     ) -> Result<(OrdinaryRuntimeBindings, NativeToolExecutionMode), NativeAgentAssemblyError> {
         let tool_reference_count = tool_snapshot.iter().count();
@@ -229,7 +282,6 @@ impl OrdinaryNativeAgentAssembler {
             mut toolsets,
             sensitive: sensitive_tools,
             delegated_authorization,
-            renamed_tools,
         } = materialize_direct_toolsets(
             tool_snapshot,
             self.mcp_connector.as_ref(),
@@ -243,6 +295,7 @@ impl OrdinaryNativeAgentAssembler {
             Arc::clone(&self.platform),
             Arc::clone(runtime_context),
         ))));
+        toolsets.extend(profile.instruction_plan().toolsets());
         let mut application_runtime = ApplicationRuntimeProjection::default();
         // #973: read BEFORE materialization, off the same snapshot it reads.
         // A saved PIPELINE child IS built here now, so the reference scan only
@@ -262,6 +315,7 @@ impl OrdinaryNativeAgentAssembler {
                 self.mcp_connector.clone(),
                 mcp_tokens,
             )
+            .with_model_scopes(model_scopes)
             .with_conversation_thread(conversation_thread_id),
         )
         .await?;
@@ -279,6 +333,28 @@ impl OrdinaryNativeAgentAssembler {
                 materialized.resume,
             );
         }
+        let reserved_toolsets = BTreeSet::from([
+            ASK_USER_TOOLSET_NAME.to_owned(),
+            super::instruction_authority::TOOLSET_NAME.to_owned(),
+            "elitea_nested_applications".to_owned(),
+        ]);
+        let binding = bind_toolsets(toolsets, &reserved_toolsets, "elitea_ordinary_tool_binding")
+            .await
+            .map_err(tool_binding_error)?;
+        let sensitive_tools = sensitive_tools.bind_provider_names(&binding)?;
+        let delegated_authorization = delegated_authorization
+            .bind_provider_names(&binding)
+            .map_err(|()| invalid_tool_authorization_catalog())?;
+        let renamed_tools = binding
+            .bindings()
+            .filter(|(_, original, exposed)| original != exposed)
+            .map(|(toolkit, original, exposed)| RenamedTool {
+                toolkit: toolkit.to_owned(),
+                original: original.to_owned(),
+                exposed: exposed.to_owned(),
+            })
+            .collect();
+        let toolsets = binding.into_toolsets();
         if !skipped_applications.is_empty() {
             tracing::warn!(
                 skipped = skipped_applications.len(),
@@ -290,6 +366,7 @@ impl OrdinaryNativeAgentAssembler {
             && sensitive_tools.is_empty()
             && delegated_authorization.is_empty()
             && internal_tools.is_empty()
+            && profile.instruction_plan().is_empty()
         {
             NativeToolExecutionMode::ParallelApplications
         } else {
@@ -303,6 +380,7 @@ impl OrdinaryNativeAgentAssembler {
                 application_runtime,
             )
             .with_internal_tools(internal_tools)
+            .with_instruction_plan(profile.instruction_plan().clone())
             .with_skipped_application_children(skipped_applications)
             .with_renamed_tools(renamed_tools),
             fresh_execution_mode,
@@ -316,6 +394,9 @@ impl OrdinaryNativeAgentAssembler {
         output_continuation: bool,
     ) -> Result<BoundModelFacade, NativeAgentAssemblyError> {
         let invocation = ModelInvocation {
+            response_schema: None,
+            allow_text_continuation: false,
+            context_budget: profile.context_budget(),
             model_name: profile.model_name().to_owned(),
             system_instruction: profile.instructions().to_owned(),
             max_tokens: profile.max_tokens(),
@@ -339,14 +420,85 @@ impl OrdinaryNativeAgentAssembler {
         tracing::Span::current().record("model_project_id", profile.model_project_id());
         tracing::Span::current().record("stage", "model_binding");
         self.model_facade
-            .bind(adapter, context, profile.model_project_id(), invocation)
+            .bind_with_summary(
+                adapter,
+                context,
+                profile.model_project_id(),
+                invocation,
+                profile.summary_model(),
+            )
             .map_err(model_binding_error)
     }
+}
+
+fn tool_binding_error(error: ToolBindingError) -> NativeAgentAssemblyError {
+    let code = match error {
+        ToolBindingError::InvalidConfiguration => {
+            NativeAgentAssemblyErrorCode::InvalidConfiguration
+        }
+        ToolBindingError::ResourceExhausted => NativeAgentAssemblyErrorCode::ResourceExhausted,
+        ToolBindingError::DependencyUnavailable => {
+            NativeAgentAssemblyErrorCode::DependencyUnavailable
+        }
+    };
+    NativeAgentAssemblyError::new(code, "the model-callable toolkit namespace is invalid")
 }
 
 #[async_trait]
 impl NativeAgentAssembler for OrdinaryNativeAgentAssembler {
     type Completion = OrdinaryAgentCompletion<BoundModelFacade>;
+
+    async fn inspect_checkpoint(
+        &self,
+        request: &super::request::AgentExecutionRequest,
+        command: &super::session::AuthorizedNativeCommandBinding,
+        session: crate::protocol::control::ClaimBoundSessionAuthority,
+        state_writer_lease: Arc<dyn crate::state::StateWriterLease>,
+    ) -> Result<super::session::ValidatedModelCheckpoint, NativeAgentAssemblyError> {
+        let (_, plan, _) = super::runtime::admit_ordinary_plan(
+            request,
+            command,
+            &request.payload.input_attachments,
+        )?;
+        self.sessions
+            .inspect_model_checkpoint(session, state_writer_lease, &plan)
+            .await
+    }
+
+    async fn assemble_checkpoint(
+        &self,
+        assembly: AuthorizedNativeAssembly<'_>,
+    ) -> Result<
+        super::runtime::PendingRecoveredAgentInvocation<Self::Completion>,
+        NativeAgentAssemblyError,
+    > {
+        if !self.sessions.supports_resume() {
+            return Err(unsupported_session_resume());
+        }
+        let tool_policy = policy_for_guardrails(
+            assembly.request().payload.toolkit_guardrails.as_ref(),
+            &self.tool_policy,
+        )?;
+        // The saved model request already contains resolved attachments. Do not
+        // reread mutable documents while reconstructing this execution.
+        let redeemed = self
+            .redeem_for_runner(assembly, tool_policy.as_ref())
+            .await?;
+        let OrdinaryRunnerInputs {
+            model,
+            plan,
+            runtime,
+            mode,
+            sessions,
+            ..
+        } = self
+            .prepare_runner_inputs(redeemed, tool_policy, true)
+            .await?;
+        super::session::assemble_ordinary_native_from_checkpoint(
+            model, plan, runtime, mode, sessions,
+        )
+        .await
+    }
 
     async fn assemble(
         &self,
@@ -370,15 +522,9 @@ impl NativeAgentAssembler for OrdinaryNativeAgentAssembler {
                 .resolve_attachment_contents(self.platform.as_ref())
                 .await;
             tracing::Span::current().record("stage", "admission");
-            let admitted = assembly.admit_llm_agent(tool_policy.as_ref())?;
-            if admitted.is_resume() && !self.sessions.supports_resume() {
-                return Err(unsupported_session_resume());
-            }
-            tracing::Span::current().record("stage", "runtime_context");
-            let redeemed = admitted
-                .redeem_runtime_context(self.platform.as_ref())
-                .await
-                .map_err(NativeAgentAssemblyError::from)?;
+            let redeemed = self
+                .redeem_for_runner(assembly, tool_policy.as_ref())
+                .await?;
             self.assemble_redeemed(redeemed, tool_policy).await
         }
         .instrument(span.clone())
@@ -444,9 +590,6 @@ struct DirectToolsets {
     toolsets: Vec<Arc<dyn adk_rust::Toolset>>,
     sensitive: SensitiveToolCatalog,
     delegated_authorization: crate::toolkits::DelegatedAuthorizationCatalog,
-    /// #983: the tools two toolsets both published, and what each is called
-    /// now. Empty for every agent with no collision.
-    renamed_tools: Vec<RenamedTool>,
 }
 
 /// Materialize the configured and MCP toolkits, then decide what the model is
@@ -467,69 +610,38 @@ async fn materialize_direct_toolsets(
     mcp_tokens: &serde_json::Map<String, serde_json::Value>,
     artifacts: &ArtifactToolAuthority,
 ) -> Result<DirectToolsets, NativeAgentAssemblyError> {
-    let (configured_toolsets, configured_authorization) =
+    let (mut toolsets, mut delegated_authorization) =
         materialize_configured_toolsets_with_artifact_authority(
             snapshot,
             policy,
             mcp_tokens,
             Some(artifacts),
         )
+        .await
         .map_err(tool_materialization_error)?;
-    let (mcp_toolsets, mcp_authorization) =
-        materialize_mcp_toolsets_by_toolset(snapshot, connector, policy, mcp_tokens)
-            .await
-            .map_err(|error| mcp_materialization_error(&error))?;
-
-    let configured_count = configured_toolsets.len();
-    let mut toolsets = configured_toolsets;
-    toolsets.extend(mcp_toolsets.iter().map(Arc::clone));
-    let plan = plan_tool_namespacing(&toolsets).await?;
-    if !plan.is_empty() {
-        tracing::warn!(
-            renamed = plan.renamed().len(),
-            "two toolsets published the same tool name; each is exposed under its own toolkit"
-        );
-    }
-    let total = toolsets.len();
-
-    let mut sensitive = sensitive_tools_for_kind_with_renames(
+    let mut sensitive = sensitive_tools_for_kind(
         snapshot,
         FrozenToolKind::Configured,
-        &toolsets[..configured_count],
+        &toolsets,
         policy.as_ref(),
-        plan.renames_slice(0, configured_count),
     )
     .await?;
+    let (mut mcp, mcp_authorization) = materialize_mcp_toolsets_with_tokens_and_authorization(
+        snapshot, connector, policy, mcp_tokens,
+    )
+    .await
+    .map_err(|error| mcp_materialization_error(&error))?;
     sensitive.merge(
-        sensitive_tools_for_kind_with_renames(
-            snapshot,
-            FrozenToolKind::Mcp,
-            &toolsets[configured_count..],
-            policy.as_ref(),
-            plan.renames_slice(configured_count, total),
-        )
-        .await?,
+        sensitive_tools_for_kind(snapshot, FrozenToolKind::Mcp, &mcp, policy.as_ref()).await?,
     )?;
-
-    let mut delegated_authorization = configured_authorization;
-    for (offset, catalog) in mcp_authorization.into_iter().enumerate() {
-        let renamed = match plan.renames_for(configured_count + offset) {
-            Some(renames) => catalog
-                .renamed(renames)
-                .map_err(|()| invalid_tool_authorization_catalog())?,
-            None => catalog,
-        };
-        delegated_authorization
-            .merge(renamed)
-            .map_err(|()| invalid_tool_authorization_catalog())?;
-    }
-
-    let renamed_tools = plan.renamed().to_vec();
+    delegated_authorization
+        .merge(mcp_authorization)
+        .map_err(|()| invalid_tool_authorization_catalog())?;
+    toolsets.append(&mut mcp);
     Ok(DirectToolsets {
-        toolsets: apply_tool_namespacing(&plan, toolsets),
+        toolsets,
         sensitive,
         delegated_authorization,
-        renamed_tools,
     })
 }
 
@@ -570,6 +682,9 @@ fn tool_materialization_error(error: ToolsetMaterializationError) -> NativeAgent
         }
         ToolsetMaterializationErrorCode::UnsupportedToolkit => {
             NativeAgentAssemblyErrorCode::UnsupportedCapability
+        }
+        ToolsetMaterializationErrorCode::DependencyUnavailable => {
+            NativeAgentAssemblyErrorCode::DependencyUnavailable
         }
         ToolsetMaterializationErrorCode::ResourceExhausted => {
             NativeAgentAssemblyErrorCode::ResourceExhausted

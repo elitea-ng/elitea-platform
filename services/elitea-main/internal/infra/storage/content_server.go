@@ -68,6 +68,7 @@ type ContentClaim struct {
 
 type ContentAuthorization struct {
 	ResourceProjectID string
+	ToolkitType       string
 	// ActorID is the exact durable execution_jobs.actor_id. Materializers own
 	// any capability-specific interpretation, including current user lookup.
 	ActorID           string
@@ -105,6 +106,7 @@ type ContentServer struct {
 	runtimeToken     *EliteaClientTokenService
 	runtimeVersions  *RuntimeApplicationVersionService
 	runtimeObjects   *RuntimeAttachmentObjectService
+	toolkitArtifacts ToolkitDiscoveryArtifactStore
 	runtimeBuilders  *RuntimeEntityBuilderService
 	runtimeArtifacts *RuntimeArtifactObjectService
 	maxBytes         int64
@@ -334,6 +336,10 @@ func (s *ContentServer) WithRuntimeArtifacts(artifacts *RuntimeArtifactObjectSer
 // Routes exposes only the internal, claim-bound input data plane.
 func (s *ContentServer) Routes() http.Handler {
 	r := chi.NewRouter()
+	if s.toolkitArtifacts != nil {
+		r.Put("/executions/{executionID}/generations/{generation}/inputs/{contentID}/versions/{version}/toolkit-discovery-result", s.PutToolkitDiscoveryArtifact)
+		r.Get("/executions/{executionID}/generations/{generation}/inputs/{contentID}/versions/{version}/toolkit-discovery-result", s.GetToolkitDiscoveryArtifact)
+	}
 	r.Get("/executions/{executionID}/generations/{generation}/inputs/{contentID}/versions/{version}", s.Get)
 	if s.runtimeToken != nil {
 		r.Post("/executions/{executionID}/generations/{generation}/runtime-context/elitea-client-token", s.PostEliteaClientToken)

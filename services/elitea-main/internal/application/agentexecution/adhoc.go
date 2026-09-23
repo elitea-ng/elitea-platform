@@ -82,6 +82,7 @@ type CurrentAdhocStartRequest struct {
 	UserInput           string
 	InteractionUUID     string
 	LLMSettings         json.RawMessage
+	MCPTokens           json.RawMessage
 	// Attachments carries `payload.attachments` from the start body: the
 	// files the composer uploaded before sending, already split into
 	// (bucket, name) by the route. #606.
@@ -93,7 +94,7 @@ func (request CurrentAdhocStartRequest) Validate() error {
 		!validUUID(request.ConversationUUID) || !validUUID(request.QuestionID) ||
 		!validCurrentAgentText(request.UserInput, maxCurrentAgentUserInputBytes) ||
 		(request.InteractionUUID != "" && !validUUID(request.InteractionUUID)) ||
-		!validJSONObject(request.LLMSettings) {
+		!validJSONObject(request.LLMSettings) || !validCurrentMCPTokens(request.MCPTokens) {
 		return ErrInvalidCurrentAgentStart
 	}
 	return nil
@@ -123,12 +124,13 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, fmt.Errorf("build current ad-hoc snapshot: %w", err)
 	}
-	frozen, err := service.freezer.FreezeCurrentApplicationVersion(
+	frozen, contextSettings, err := service.freezeVersionWithContext(
 		ctx,
 		CurrentApplicationVersionFreezeRequest{
 			ProjectID: int32(request.ProjectID), ActorUserID: int32(request.ActorUserID),
 			VersionDetails: snapshot,
 		},
+		request.ConversationUUID,
 	)
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, fmt.Errorf("freeze current ad-hoc snapshot: %w", err)
@@ -172,6 +174,7 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, fmt.Errorf("build current ad-hoc execution input: %w", err)
 	}
+	input.ContextSettings = contextSettings
 	questionItemID := currentTurnUUID(request.QuestionID, "question-item")
 	responseMessageID := currentTurnUUID(request.QuestionID, "response-message")
 	questionMeta := json.RawMessage(`{}`)
@@ -230,7 +233,12 @@ func currentAdhocSnapshot(
 	if err := decodeCurrentJSON(target.Tools, &tools); err != nil {
 		return nil, err
 	}
+	var meta map[string]any
+	if err := decodeCurrentJSON(target.ConversationMeta, &meta); err != nil {
+		return nil, err
+	}
 	encoded, err := json.Marshal(map[string]any{
+		"meta":         meta,
 		"llm_settings": base,
 		"tools":        tools,
 	})
@@ -327,7 +335,9 @@ func currentAdhocInput(
 	// appendCurrentInstructionsMemories's own comment.
 	instructions := appendCurrentInstructionsMemories(target.Instructions, memoryText)
 	// #946: and then the project's standing context, in the same position.
-	instructions = appendCurrentInstructionsProjectContext(instructions, projectContextText)
+	if !hasFrozenProjectContext(frozen) {
+		instructions = appendCurrentInstructionsProjectContext(instructions, projectContextText)
+	}
 	application, err := json.Marshal(map[string]string{"instructions": instructions})
 	if err != nil {
 		return nil, ErrUnsupportedCurrentAgentStart
@@ -344,14 +354,29 @@ func currentAdhocInput(
 	if err != nil {
 		return nil, err
 	}
+	projectContext, err := currentFrozenProjectContext(snapshot)
+	if err != nil {
+		return nil, err
+	}
+	modelContextLimits, err := currentFrozenModelContextLimits(snapshot)
+	if err != nil {
+		return nil, err
+	}
+	summaryModel, err := currentFrozenSummaryModel(snapshot)
+	if err != nil {
+		return nil, err
+	}
 	threadID := request.ConversationUUID
 	conversationID := request.ConversationUUID
 	executionGeneration := request.QuestionID
 	input := &runtimev1.AgentExecutionInputV1{
-		SchemaRevision: "elitea.runtime.agent-execution-input.v1",
-		Llm:            llm, ChatHistory: bytes.Clone(target.ChatHistory), UserInput: userInput,
+		SchemaRevision:     "elitea.runtime.agent-execution-input.v1",
+		ProjectContext:     projectContext,
+		ModelContextLimits: modelContextLimits,
+		SummaryModel:       summaryModel,
+		Llm:                llm, ChatHistory: bytes.Clone(target.ChatHistory), UserInput: userInput,
 		ThreadId: &threadID, Tools: toolsJSON, Application: application,
-		InternalTools: internalTools, McpTokens: []byte(`{}`),
+		InternalTools: internalTools, McpTokens: currentMCPTokens(request.MCPTokens),
 		IgnoredMcpServers: []byte(`[]`), UserDeclinedMcpServers: []byte(`[]`),
 		HitlDecisions: []byte(`[]`), ExecutionGeneration: &executionGeneration,
 		Meta: []byte(`{}`), ConversationId: &conversationID, Persona: persona,

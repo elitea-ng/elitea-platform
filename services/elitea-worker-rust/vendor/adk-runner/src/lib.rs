@@ -1,0 +1,80 @@
+//! # adk-runner
+#![allow(clippy::result_large_err)]
+#![deny(missing_docs)]
+//!
+//! Agent execution runtime for ADK.
+//!
+//! ## Overview
+//!
+//! This crate provides the execution runtime:
+//!
+//! - [`Runner`] - Manages agent execution with full context
+//! - [`RunnerConfig`] - Configuration for the runner
+//! - [`InvocationContext`] - Execution context implementation
+//! - [`Callbacks`] - Hook points during execution
+//!
+//! ## What's New in 0.6.0
+//!
+//! - **`InvocationContext::shared_state()`**: Propagates [`SharedState`](adk_core::SharedState)
+//!   from `ParallelAgent` through the runner context chain, making it accessible to tools.
+//!
+//! ## Quick Start
+//!
+//! ```rust,no_run
+//! use adk_runner::{Runner, RunnerConfig};
+//! use std::sync::Arc;
+//!
+//! // Configure runner with services
+//! // let config = RunnerConfig {
+//! //     app_name: "my_app".to_string(),
+//! //     session_service: sessions,
+//! //     artifact_service: Some(artifacts),
+//! //     memory_service: None,
+//! // };
+//! //
+//! // let runner = Runner::new(config);
+//! ```
+//!
+//! ## Features
+//!
+//! - Automatic session management
+//! - Memory injection
+//! - Artifact handling
+//! - Callback hooks at every stage
+
+mod agent_invoker;
+pub mod builder;
+mod cache;
+mod callbacks;
+#[cfg(feature = "context-compaction")]
+pub mod compaction;
+mod context;
+pub mod intra_compaction;
+mod launcher;
+mod runner;
+#[cfg(feature = "sandbox-runner")]
+pub mod sandbox_runner;
+pub mod tool_concurrency;
+
+pub use builder::RunnerConfigBuilder;
+pub use callbacks::{
+    AfterModelCallback, AfterToolCallback, BeforeModelCallback, BeforeToolCallback, Callbacks,
+};
+pub use context::{InvocationContext, MutableSession};
+pub use launcher::Launcher;
+pub use runner::{Runner, RunnerConfig};
+
+// Re-export RequestContext for convenience
+pub use adk_core::RequestContext;
+
+// Re-export compaction types for convenience
+pub use adk_core::IntraCompactionConfig;
+pub use adk_core::{BaseEventsSummarizer, EventsCompactionConfig};
+pub use intra_compaction::IntraInvocationCompactor;
+
+// Re-export secret service trait for convenience
+pub use adk_core::SecretService;
+
+// Re-export cache types for convenience
+pub use adk_core::{CacheCapable, ContextCacheConfig};
+pub use cache::{CacheMetrics, CachePerformanceAnalyzer};

@@ -42,6 +42,8 @@ type ConversationState struct {
 	// has never had one written — the resolution rule's cue to fall through to
 	// the user's defaults.
 	Strategy []byte
+	// RuntimeContext is the latest response measurement, bound to its current execution.
+	RuntimeContext []byte
 	// Analytics is the raw `meta.context_analytics`. Nil when the runtime has
 	// recorded nothing; see AnalyticsUnavailableReason.
 	Analytics []byte
@@ -54,13 +56,15 @@ type ConversationState struct {
 // and the availability pair that keeps an absent runtime record from reading
 // as a real zero.
 type Status struct {
-	CurrentTokens          int            `json:"current_tokens"`
-	MaxTokens              int            `json:"max_tokens"`
-	Utilization            float64        `json:"utilization"`
-	MessageGroupsInContext int            `json:"message_groups_in_context"`
-	SummaryCount           int            `json:"summary_count"`
-	StrategyName           string         `json:"strategy_name"`
-	ContextAnalytics       map[string]any `json:"context_analytics"`
+	RuntimeContext         *RuntimeContext `json:"runtime_context,omitempty"`
+	BudgetMode             BudgetMode      `json:"budget_mode,omitempty"`
+	CurrentTokens          int             `json:"current_tokens"`
+	MaxTokens              int             `json:"max_tokens"`
+	Utilization            float64         `json:"utilization"`
+	MessageGroupsInContext int             `json:"message_groups_in_context"`
+	SummaryCount           int             `json:"summary_count"`
+	StrategyName           string          `json:"strategy_name"`
+	ContextAnalytics       map[string]any  `json:"context_analytics"`
 
 	// MessageGroupsTotal is a real COUNT(*) of the conversation's message
 	// groups. It is NOT `message_groups_in_context`: a group can be present in
@@ -92,6 +96,7 @@ type Status struct {
 // the scale — so this restores the documented contract without moving the UI.
 func BuildStatus(strategy Strategy, analytics []byte, messageGroupsTotal int) Status {
 	status := Status{
+		BudgetMode:         strategy.BudgetMode,
 		MaxTokens:          strategy.MaxContextTokens,
 		StrategyName:       strategy.Name,
 		MessageGroupsTotal: messageGroupsTotal,
@@ -108,6 +113,10 @@ func BuildStatus(strategy Strategy, analytics []byte, messageGroupsTotal int) St
 		status.ContextAnalyticsAvailable = false
 		status.UnavailableReason = AnalyticsUnavailableReason
 		status.Unavailable = []string{"current_tokens", "utilization", "message_groups_in_context", "summary_count"}
+		if strategy.BudgetMode != "" {
+			status.MaxTokens = 0
+			status.Unavailable = append(status.Unavailable, "max_tokens")
+		}
 		status.ContextAnalytics = map[string]any{
 			"summaries_generated":       0,
 			"total_messages_summarized": 0,
@@ -120,6 +129,12 @@ func BuildStatus(strategy Strategy, analytics []byte, messageGroupsTotal int) St
 
 	status.ContextAnalyticsAvailable = true
 	status.ContextAnalytics = decoded
+	// Legacy analytics have no admitted provider budget. A preset cannot use
+	// a nominal ceiling as its measured input capacity.
+	if strategy.BudgetMode != "" {
+		status.MaxTokens = 0
+		status.Unavailable = []string{"max_tokens", "utilization"}
+	}
 	if tokens, ok := numeric(decoded["current_context_tokens"]); ok {
 		status.CurrentTokens = tokens
 	}

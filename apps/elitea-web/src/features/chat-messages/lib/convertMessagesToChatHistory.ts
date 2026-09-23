@@ -19,6 +19,9 @@
  * functions (`partitionActionsIntoBlocks`, etc.) are built locally in
  * `./subAgentGrouping.ts`.
  *
+ * Normalized trace summaries arrive separately from the message metadata.
+ * The shared message reader attaches scoped `persisted_trace` references.
+ * The answer carries these references to the lazy detail renderer.
  * Trace-pin chips (`EL-5728`) come either from a turn's own
  * `MessageGroupWire.meta` or, once the trace-step migration emptied it, from
  * `persistedTraceStepsByGroup` (#951 — `entities/message/lib/traceSteps.ts`).
@@ -53,6 +56,10 @@ import type { ToolAction } from './chatStreamToolAction';
  * `convertMessagesToChatHistory` adds at the conversation level.
  */
 export interface ChatMessage {
+  readonly resultChunk?: unknown;
+  readonly assembledResult?: string | undefined;
+  readonly continuedResultPrefix?: string | undefined;
+  readonly persistedTrace?: unknown;
   readonly id: string;
   readonly role: string;
   readonly name: string;
@@ -68,6 +75,7 @@ export interface ChatMessage {
   readonly interactionUuid?: string | undefined;
   readonly toolActions?: readonly SubAgentGroupable[] | undefined;
   readonly exception?: unknown;
+  readonly failureCode?: string;
   readonly isStreaming?: boolean | undefined;
   readonly isLoading?: boolean | undefined;
   /**
@@ -361,6 +369,8 @@ export function convertMessagesToChatHistory(
     const aiMessage = splitPersistedReasoning(
       normaliseAssistantMessage(messageGroup, sortedMessages, participants, persisted) as unknown as ChatMessage,
     );
+
+    if (messageGroup.persisted_trace) Object.assign(aiMessage, { persistedTrace: messageGroup.persisted_trace });
 
     // Attach child messages as SwarmChild toolActions.
     const childMessages = childMessagesByParent[uuid] ?? [];

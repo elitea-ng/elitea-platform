@@ -32,6 +32,7 @@ regex = "=1.13.1"
 reqwest = { version = "=0.12.28", default-features = false, features = ["http2", "json", "multipart", "rustls-tls-native-roots", "stream"] }
 reqwest-mcp = { package = "reqwest", version = "=0.13.4", default-features = false, features = ["json", "rustls", "stream"] }
 ring = "=0.17.14"
+rmcp = { version = "=3.1.2", default-features = false, features = ["auth"] }
 rustls = { version = "=0.23.45", default-features = false, features = ["ring", "std"] }
 rustls-native-certs = "=0.8.4"
 rustix = { version = "=1.1.5", features = ["fs", "process"] }
@@ -70,9 +71,16 @@ pedantic = "deny"
 
 [profile.release]
 opt-level = 3
-debug = 0
-strip = "symbols"
+# Keep optimized frame names and source lines for operator diagnostics.
+# Line tables omit local-variable debug data.
+debug = "line-tables-only"
+strip = "none"
 lto = "thin"
 codegen-units = 1
 panic = "abort"
 incremental = false
+
+# Pinned ADK 2.2.0 history-retention extensions. See vendor/README.md.
+[patch.crates-io]
+adk-agent = { path = "vendor/adk-agent" }
+adk-runner = { path = "vendor/adk-runner" }

@@ -132,6 +132,7 @@ mod tests {
             ed25519_keyring_path: PathBuf::from("/runtime/keyring.json"),
             spool_root: PathBuf::from("/runtime/spool"),
             spool_key_path: PathBuf::from("/runtime/spool.key"),
+            agent_model_checkpoint_recovery: false,
             agent_checkpoint_connection_path: Some(PathBuf::from("/runtime/agentstate")),
             limits: RuntimeLimits {
                 redis_read_batch: 8,
@@ -146,6 +147,8 @@ mod tests {
                 admission_timeout_millis: 1_000,
                 grpc_deadline_millis: 5_000,
                 content_timeout_millis: 15_000,
+                model_response_header_timeout_millis: 120_000,
+                model_stream_idle_timeout_millis: 120_000,
                 http_max_connections: 32,
                 http_max_keepalive_connections: 16,
                 output_max_queued_frames: 4,

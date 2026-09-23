@@ -546,15 +546,9 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// unwired because the settlement engine itself carries no notion of
 	// "this execution is a pipeline run". See the file's own header for why
 	// this lives outside elitea_runtime's claim-fence tables entirely.
-	//
-	// 125: shared/0125_token_lifecycle.sql, the per-token side row the
-	// personal-access-token expiry notice needs: `issued_at` (so a key whose
-	// WHOLE lifetime is under a day is not warned about the moment it is
-	// minted) and `notified_for_expires` (the dedupe mark, in a place the
-	// notification's own recipient cannot delete). Pylon owns
-	// auth_core__token, so this is a side table, the same shape and for the
-	// same reason as 0071.
-	require.EqualValues(t, 125, Head(shared))
+	// Main owns token lifecycle at 125. Feature SQL remains byte-identical at 126 through 132.
+	// Feature rehearsal ledgers need explicit reconciliation before deployment.
+	require.EqualValues(t, 132, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -699,5 +693,5 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// database, so its ledger advances independently of the tenant one.
 	agentState, err := LoadManifest(platformmigrations.Files, ScopeAgentState)
 	require.NoError(t, err)
-	require.EqualValues(t, 2, Head(agentState))
+	require.EqualValues(t, 3, Head(agentState))
 }

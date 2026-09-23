@@ -70,6 +70,7 @@ class AgentExecutionPayload:
     toolkit_guardrails: dict[str, Any] | None
     exception_handling_enabled: bool | None
     debug_mode: bool | None
+    project_context: dict[str, str] | None = None
 
 
 @dataclass(frozen=True, slots=True)

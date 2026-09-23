@@ -35,6 +35,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     println!("cargo:rerun-if-changed={}", proto_root.display());
     println!("cargo:rerun-if-changed=build.rs");
+    for proto in &protos {
+        println!("cargo:rerun-if-changed={}", proto.display());
+    }
 
     tonic_prost_build::configure()
         .build_server(false)

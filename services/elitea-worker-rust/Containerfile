@@ -58,6 +58,12 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     CARGO_TARGET_DIR=/cargo-target cargo auditable build --locked --release && \
     cp /cargo-target/release/elitea-worker-rust /usr/local/bin/elitea-worker-rust
 
+# Verify the shipped artifact, not only Cargo profile intent.
+# Keep function symbols and source lines without local-variable debug data.
+RUN readelf --sections --wide /usr/local/bin/elitea-worker-rust > /tmp/worker-sections && \
+    grep -q '[.]debug_line ' /tmp/worker-sections && \
+    grep -q '[.]symtab ' /tmp/worker-sections
+
 FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
 
 COPY --from=builder \

@@ -79,6 +79,8 @@ describe('toContextBudgetStats', () => {
 
   it('narrows the wire bag into display-ready stats', () => {
     expect(toContextBudgetStats(wire)).toEqual({
+      budgetMode: 'balanced',
+      usageAvailable: true,
       currentTokens: 12000,
       maxTokens: 128000,
       tokensDisplay: `12${NBSP}000 / 128${NBSP}000`,
@@ -96,9 +98,9 @@ describe('toContextBudgetStats', () => {
     expect(toContextBudgetStats({ ...wire, utilization: 0.09375 })?.utilizationPercentage).toBe(9);
   });
 
-  it('flags utilization at or above 100% as high', () => {
+  it('flags utilization at or above 90% as high', () => {
     expect(toContextBudgetStats({ ...wire, current_tokens: 128000 })?.isHighUtilization).toBe(true);
-    expect(toContextBudgetStats({ ...wire, current_tokens: 127000 })?.isHighUtilization).toBe(false);
+    expect(toContextBudgetStats({ ...wire, current_tokens: 115000 })?.isHighUtilization).toBe(false);
   });
 
   it('treats a missing analytics object as zero summaries rather than throwing', () => {
@@ -108,10 +110,12 @@ describe('toContextBudgetStats', () => {
 
   it('defaults every absent or wrongly-typed count to 0 and the strategy to an empty name', () => {
     expect(toContextBudgetStats({ current_tokens: '12000', strategy_name: 42 })).toEqual({
+      budgetMode: 'balanced',
+      usageAvailable: false,
       currentTokens: 0,
       maxTokens: 0,
-      tokensDisplay: '0 / -',
-      utilizationPercentage: 0,
+      tokensDisplay: '—',
+      utilizationPercentage: undefined,
       isHighUtilization: false,
       messageGroups: 0,
       summariesGenerated: 0,
@@ -124,4 +128,19 @@ describe('toContextBudgetStats', () => {
     expect(toContextBudgetStats(null)).toBeUndefined();
     expect(toContextBudgetStats('nope')).toBeUndefined();
   });
+});
+
+it('does not report absent or explicitly unavailable analytics as measured zero', () => {
+  for (const availability of [{ context_analytics_available: false }, { unavailable: ['current_tokens'] }, { unavailable: ['max_tokens'] }]) {
+    const stats = toContextBudgetStats({ current_tokens: 0, max_tokens: 272000, ...availability });
+    expect(stats?.usageAvailable).toBe(false);
+    expect(stats?.utilizationPercentage).toBeUndefined();
+  }
+});
+
+it('keeps the admitted runtime window, reservations and inactive compaction phase separate', () => {
+  const stats = toContextBudgetStats({ current_tokens:190000, max_tokens:205280, context_analytics_available:true,
+    runtime_context:{active:false, measurement:{version:1, phase:'compacting', budget_mode:'legacy', total_tokens:272000, reserved_output_tokens:64000, safety_margin_tokens:2720}} });
+  expect(stats?.utilizationPercentage).toBe(93);
+  expect(stats?.runtime).toEqual({phase:'compacting',active:false,legacy:true,totalTokens:272000,reservedOutputTokens:64000,safetyMarginTokens:2720});
 });
