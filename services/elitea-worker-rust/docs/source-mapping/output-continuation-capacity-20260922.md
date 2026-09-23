@@ -431,3 +431,36 @@ session and zero completed child-result receipts. Artifacts:
 and `elitea-continuation-cap-complete.png` in the local temporary directory.
 Both screenshots were inspected. These cases accept early completion and cap
 exhaustion; they do not close live repair or failed-child partial-result delivery.
+
+## Incomplete child output remains inspectable
+
+Current SDK `966526e8334354366dd161b606d73fe8e204b850` carries accepted partial
+text on `OutputContinuationExhausted` in `runtime/exceptions.py` and
+`runtime/tools/llm.py`. Indexer `c048daabef6c59106f96a7a36d094fe79fc149e8`
+projects that text for the user in `utils/funcs.py`. UI
+`2a3b14f93aa6c821f9ca13f06ea15730c2d59ee7` renders an expandable partial response
+in `features/chat/ui/error-trace/ContinuationError.jsx` under its `[fsd]` tree.
+Core `6c59068503cab7adecfce6bebc19ed8bfaf1af90` explicitly strips partial text
+from parallel-parent error messages; its parallel-dispatch test requires this.
+Therefore, inspectable partial evidence must not become a successful child tool
+result or an instruction for the orchestrator to complete the failed answer.
+
+Rust `agents/events.rs::preserve_incomplete_output` snapshots already accepted
+visible text from active model projections, recursively preserving descendant
+call identity. It uses the existing chunked `thinking_steps` persistence contract
+and labels the generation `Incomplete response`. It emits neither an agent answer
+nor a tool result; completed sibling steps remain unchanged. Repeated local
+finalization emits no duplicate snapshot. Reasoning text and rejected seams are
+not added to the snapshot.
+
+`execution/native_agent_lifecycle.rs` publishes and acknowledges these trace
+frames before the registered continuation failure. Failed publication does not
+acknowledge terminal completion, so the existing claim/replay path retains
+ownership. No application-table migration or new wire field is introduced.
+The existing UI execution-step renderer is used; the top-level failure remains
+explicit and no child completion receipt is synthesized.
+
+Two focused tests cover descendant identity, explicit incomplete labeling,
+no successful-answer projection, idempotence, and bounded UTF-8 fragments.
+The PostgreSQL-enabled agent suite (415 tests), execution suite (143 tests), and
+strict all-target Clippy pass. Deployed browser verification remains pending.

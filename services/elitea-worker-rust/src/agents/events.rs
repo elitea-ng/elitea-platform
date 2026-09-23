@@ -2291,6 +2291,45 @@ impl AgentEventProjector {
         )
     }
 
+    /// Persist accepted partial text as an explicitly incomplete execution step.
+    /// This is presentation evidence only: no answer, tool result, or completion
+    /// receipt is synthesized for the waiting parent.
+    pub(crate) fn preserve_incomplete_output(
+        &mut self,
+        occurred_at: DateTime<Utc>,
+    ) -> Result<ProjectedAgentEventBatch, AgentEventProjectionError> {
+        let mut batch = ProjectedAgentEventBatch::new();
+        if let ProjectionState::Active(turn) = &self.state {
+            if !turn.content.is_empty() {
+                let mut event = Event::with_id(&turn.event_id, "incomplete-output");
+                event.timestamp = occurred_at;
+                let step = json!({
+                    "tool_run_id": turn.event_id,
+                    "type": "ChatGeneration",
+                    "text": turn.content,
+                    "timestamp_start": turn.timestamp_start,
+                    "timestamp_finish": occurred_at.to_rfc3339_opts(SecondsFormat::AutoSi, false),
+                    "message": {"response_metadata": {
+                        "model_name": self.context.model_name,
+                        "tool_name": "Incomplete response",
+                        "metadata": {},
+                    }},
+                });
+                self.project_model_steps(&mut batch, &event, &step)?;
+            }
+            self.state = ProjectionState::Finished;
+        }
+        for descendant in self.descendants.values_mut() {
+            let child = descendant
+                .projector
+                .preserve_incomplete_output(occurred_at)?;
+            for event in overlay_batch_hierarchy(child, std::slice::from_ref(&descendant.tier))? {
+                batch.push(event)?;
+            }
+        }
+        Ok(batch)
+    }
+
     /// Emit the selected completed result only after ADK reaches EOS.
     pub(crate) fn finish_after_eos(
         &mut self,

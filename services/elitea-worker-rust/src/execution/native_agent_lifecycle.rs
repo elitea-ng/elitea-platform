@@ -437,7 +437,35 @@ where
                 }
             }
         }
-        NativeStreamOutcome::Failure(failure) => Some(failure),
+        NativeStreamOutcome::Failure(failure) => {
+            if failure == RuntimeFailureKind::OutputContinuationExhausted {
+                let Some(occurred_at) =
+                    chrono::DateTime::from_timestamp_millis(clock.now_unix_millis())
+                else {
+                    return Box::pin(run.close_no_ack("agent_lifecycle.invalid_clock", false))
+                        .await;
+                };
+                let batch = match projector.preserve_incomplete_output(occurred_at) {
+                    Ok(batch) => batch,
+                    Err(error) => {
+                        return Box::pin(run.close_no_ack(error.code().as_str(), false)).await;
+                    }
+                };
+                match Box::pin(publish_batch(&mut run, batch, &mut pauses, clock.as_ref())).await {
+                    BatchPublication::Acknowledged => {}
+                    BatchPublication::Rejected => {
+                        return Box::pin(
+                            run.close_no_ack("agent_lifecycle.partial_rejected", false),
+                        )
+                        .await;
+                    }
+                    BatchPublication::RecoveryRequired { code, retryable } => {
+                        return Box::pin(run.close_no_ack(code, retryable)).await;
+                    }
+                }
+            }
+            Some(failure)
+        }
         NativeStreamOutcome::RecoveryRequired { code, retryable } => {
             return Box::pin(run.close_no_ack(code, retryable)).await;
         }

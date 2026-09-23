@@ -1890,3 +1890,120 @@ fn recovered_output_continuation_replaces_attempt_with_exact_bounded_prefix() {
         );
     }
 }
+
+#[test]
+fn failed_child_retains_partial_output_only_as_incomplete_trace_evidence() {
+    let mut projector = AgentEventProjector::with_tool_catalogs(
+        AgentEventProjectionContext::fixture(json!({})),
+        super::sensitive_tools::SensitiveToolCatalog::default(),
+        nested_application_catalog(),
+    )
+    .unwrap();
+    projector.start(timestamp(0)).unwrap();
+    projector
+        .project(&event(
+            "delegation",
+            1,
+            false,
+            true,
+            vec![Part::FunctionCall {
+                name: "elitea_agent_17_v_9".into(),
+                args: json!({"task":"Child task"}),
+                id: Some("child-call-1".into()),
+                thought_signature: None,
+            }],
+        ))
+        .unwrap();
+    let mut child = descendant_model_event(
+        "child-output",
+        "child-invocation",
+        "elitea_agent_17_v_9",
+        2,
+        vec![Part::Text {
+            text: "Accepted partial answer".into(),
+        }],
+        "invocation-1",
+        "child-call-1",
+    );
+    child.llm_response.partial = true;
+    child.llm_response.turn_complete = false;
+    child.llm_response.finish_reason = None;
+    projector.project(&child).unwrap();
+    let projected: Vec<_> = projector
+        .preserve_incomplete_output(timestamp(3))
+        .unwrap()
+        .into_iter()
+        .map(|e| current(&e))
+        .collect();
+    assert_eq!(projected.len(), 2);
+    assert_eq!(projected[0]["type"], "agent_llm_end");
+    assert_eq!(projected[1]["type"], "partial_message");
+    for frame in &projected {
+        let step = &frame["response_metadata"]["thinking_steps"][0];
+        assert_eq!(step["text"], "Accepted partial answer");
+        assert_eq!(
+            step["message"]["response_metadata"]["tool_name"],
+            "Incomplete response"
+        );
+        assert_eq!(step["parent_agent_path"][0]["call_id"], "child-call-1");
+        assert!(frame["content"].is_null());
+    }
+    assert!(
+        projector
+            .preserve_incomplete_output(timestamp(4))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        projector
+            .finish_after_eos(
+                CompletedAgentBrowserOutput::fixture("not a completed answer"),
+                timestamp(4)
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn failed_model_partial_output_uses_existing_chunked_trace_persistence() {
+    let mut projector =
+        AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({}))).unwrap();
+    projector.start(timestamp(0)).unwrap();
+    let text = "é".repeat(10_000);
+    projector
+        .project(&event(
+            "partial",
+            1,
+            true,
+            false,
+            vec![Part::Text { text: text.clone() }],
+        ))
+        .unwrap();
+    let frames: Vec<_> = projector
+        .preserve_incomplete_output(timestamp(2))
+        .unwrap()
+        .into_iter()
+        .map(|e| current(&e))
+        .collect();
+    let fragments: Vec<_> = frames
+        .iter()
+        .filter(|f| f["type"] == "partial_message")
+        .map(|f| &f["response_metadata"]["thinking_steps"][0])
+        .collect();
+    let restored: String = fragments
+        .iter()
+        .map(|s| s["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(restored, text);
+    assert_eq!(fragments.len(), 3);
+    assert!(
+        fragments.last().unwrap()["text_chunk_v1"]["final"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        frames
+            .iter()
+            .all(|f| f["type"] != "agent_response" && f["type"] != "pipeline_finish")
+    );
+}
