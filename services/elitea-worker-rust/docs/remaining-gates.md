@@ -38,6 +38,8 @@ Current-platform code defines business behavior, not a requirement to copy its i
 | 5 | Remaining graph capabilities | Complete deeper pipeline composition, child variables, static pauses, and isolated Code nodes. |
 | 5a | New parallel and map nodes | Implement the separate fixed-branch and data-driven designs with durable child state, bounded concurrency, reducers, and recovery. |
 | 5b | Pipeline node recovery policies | Add explicit retry conditions, attempt limits, backoff, failure routes, and operator recovery controls. Persist attempts and prevent unsafe repetition of external effects. |
+| 5c | Data shaping nodes | Define SplitOut and Aggregate contracts, item identity, ordering, empty inputs, bounded output, and YAML/editor parity. |
+| 5d | HTTP action nodes | Reuse admitted HTTP execution with typed requests, credentials, response contracts, artifact bodies, and durable effect handling. |
 | 6 | Effectful toolkit operations | Require durable intent, effect receipts, idempotency, approval, fencing, and crash reconciliation before writes. |
 | 7 | Artifact-backed capabilities | Complete attachment authority, object grants, storage behavior, and affected toolkit operations. |
 | 7a | Built-in runtime modules | Complete Attachments, Data Analysis, Image Creation, Ask User, Planner, Python Sandbox, and Smart Tools Selection. Reuse builder contracts and exclude Swarm. Verify runtime behavior and UI controls before indexing. |
@@ -47,6 +49,24 @@ Current-platform code defines business behavior, not a requirement to copy its i
 Read-only runtime tool binding already works for supported native families.
 It does not close standalone editor discovery or toolkit Test.
 OpenAPI supports delegated OAuth and client credentials. DCR remains an MCP or other explicitly supported toolkit flow.
+
+## Customer workflow migration track
+
+The customer requests eight capabilities for migration from n8n.
+See [the capability assessment](source-mapping/customer-workflow-migration-20260923.md) for source evidence and acceptance boundaries.
+Gates 5b, 5c, and 5d cover node recovery, data shaping, and HTTP actions.
+Gates 5, 7, 7a, and 8 retain their existing Code, artifact, module, and indexing scope.
+
+The following plans require separate implementation decisions:
+
+- `WF-DOC-01`: document processing and structured extraction through approved toolkits or MCP services.
+- `WF-SP-01`: customer SharePoint document and list-operation acceptance.
+- `WF-TRIGGER-01`: scheduled, webhook, form, and manual workflow triggers.
+- `WF-TABLE-01`: native data tables with read and upsert operations.
+
+These plans do not block the current gate 4 closure.
+Their sequence requires dependency review before implementation.
+Do not treat the customer's evaluation request as evidence of implemented parity.
 
 ## Final point 3 acceptance
 
@@ -326,3 +346,8 @@ Do not publish incomplete node output as successful downstream state.
 
 Gate 4 still owns friendly error messages and correct propagation.
 See the [error propagation matrix](source-mapping/continuation-diagnostics-20260923.md#error-propagation-acceptance-matrix).
+
+Explicit sensitive-tool rejection and authorization Skip are not retryable failures.
+A retry policy must never reinterpret either decision as permission.
+Preserve completed work for diagnosis, but do not treat partial state as the missing node result.
+A future rejection route must define its own valid downstream contract.
