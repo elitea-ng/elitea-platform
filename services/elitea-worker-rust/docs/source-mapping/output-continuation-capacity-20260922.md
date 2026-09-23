@@ -568,3 +568,8 @@ Local evidence: `elitea-disabled-result.json`, `elitea-disabled-durable-proof.js
 The context tooltip incorrectly states unconditional automatic compaction.
 `ContextBudgetPanel.tsx` now qualifies the threshold with “When enabled”.
 This wording correction does not change the saved policy or runtime behavior.
+
+The tooltip correction passes all 57 context-budget UI tests.
+UI commit `bada7cde` runs as image `sha256:9d39544fce7bc383772824186d8a962dd34889e05833f6e136d73df62446f5b4`.
+A fresh read-only headed browser verifies the corrected text and the persisted disabled policy.
+Screenshot `elitea-disabled-tooltip.png` records this check. No additional model call is made.
