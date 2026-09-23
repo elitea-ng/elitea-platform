@@ -1356,7 +1356,7 @@ async fn run_model_agent(
         Err(error) => {
             if let Some(sender) = factory.event_sender() {
                 sender
-                    .send_model_failure(error.code)
+                    .send_model_failure(&error)
                     .await
                     .map_err(|_| LlmExecutionError::Unavailable)?;
             }
@@ -1373,7 +1373,7 @@ async fn run_model_agent(
             Err(error) => {
                 if let Some(sender) = factory.event_sender() {
                     sender
-                        .send_model_failure(error.code)
+                        .send_model_failure(&error)
                         .await
                         .map_err(|_| LlmExecutionError::Unavailable)?;
                 }

@@ -121,3 +121,25 @@ The report contains only a generic LLM-node explanation.
 The expected continuation-specific reason is absent, so diagnostic acceptance fails.
 The screenshot is `elitea-orchestrator-pipeline-failure-failed.png` in the local test evidence directory.
 Do not count parent survival alone as complete error-contract verification.
+
+## Typed pipeline continuation cause
+
+The graph event bridge previously retained only the stable model error code.
+It discarded the typed continuation reason before the root error projector received it.
+The bridge now carries the safe continuation enum beside the code.
+It never forwards arbitrary provider messages or source text.
+
+An ordinary orchestrator's pipeline tool now returns the existing structured continuation failure contract.
+The failed child graph stops. The parent receives retry and recovery guidance.
+Direct pipeline execution still propagates the failure as a terminal event.
+The tool drains queued node causes before accepting a generic graph error.
+This preserves the specific cause when the graph wraps the model error in the same poll.
+
+Source owners: `agents/graph/node_events.rs`, `agents/graph/llm.rs`, and `agents/application_pipeline.rs`.
+The tool reuses `application_tools.rs::child_continuation_report` instead of defining a second failure format.
+Current-platform orchestration behavior remains the reference described in the propagation matrix.
+Deployed acceptance of this follow-up remains pending.
+
+The follow-up passes all 1,215 worker library tests with PostgreSQL available.
+Clippy passes for the library and tests with warnings denied.
+The bridge regression checks typed cause preservation and provider-message exclusion.

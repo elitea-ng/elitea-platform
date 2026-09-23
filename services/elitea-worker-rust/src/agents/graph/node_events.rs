@@ -39,7 +39,10 @@ const MAX_EVENT_SCOPE_IDENTITY_BYTES: usize = 480;
 
 enum PipelineNodeEventSignal {
     Event(PipelineNodeEventData),
-    ModelFailed(&'static str),
+    ModelFailed {
+        code: &'static str,
+        continuation: Option<super::super::model_checkpoint::output::ContinuationFailure>,
+    },
 }
 
 struct PipelineNodeEventData {
@@ -143,10 +146,13 @@ pub(crate) fn pipeline_node_event_channel() -> (PipelineNodeEventSender, Pipelin
 }
 
 impl PipelineNodeEventSender {
-    /// Preserve a data-free ADK code across graph wrapping; never forward its message or source.
-    pub(crate) async fn send_model_failure(&self, code: &'static str) -> adk_rust::Result<()> {
+    /// Preserve safe codes and typed continuation causes, never provider messages.
+    pub(crate) async fn send_model_failure(&self, error: &AdkError) -> adk_rust::Result<()> {
         self.inner
-            .send(PipelineNodeEventSignal::ModelFailed(code))
+            .send(PipelineNodeEventSignal::ModelFailed {
+                code: error.code,
+                continuation: super::super::model_checkpoint::output::failure_reason(error),
+            })
             .await
             .map_err(|_| pipeline_node_event_channel_error())
     }
@@ -427,7 +433,10 @@ fn pipeline_node_signal_event(
 ) -> adk_rust::Result<Event> {
     let signal = match signal {
         PipelineNodeEventSignal::Event(signal) => signal,
-        PipelineNodeEventSignal::ModelFailed(code) => {
+        PipelineNodeEventSignal::ModelFailed { code, continuation } => {
+            if let Some(reason) = continuation {
+                return Err(super::super::model_checkpoint::output::failed(reason));
+            }
             return Err(AdkError::new(
                 ErrorComponent::Model,
                 ErrorCategory::Internal,
@@ -506,6 +515,27 @@ mod failure_tests {
     use super::*;
 
     #[tokio::test]
+    async fn model_failure_bridge_preserves_typed_continuation_reason() {
+        use crate::agents::model_checkpoint::output::{
+            ContinuationFailure, failed, failure_reason,
+        };
+        let (sender, receiver) = pipeline_node_event_channel();
+        sender
+            .send_model_failure(&failed(ContinuationFailure::CallLimit))
+            .await
+            .expect("queue typed failure");
+        let mut channel = receiver.inner.lock().await.take().expect("receiver");
+        let error =
+            pipeline_node_signal_event(channel.recv().await.expect("signal"), "root", "agent", "")
+                .expect_err("failure");
+        assert_eq!(error.code, "model.output_continuation_failed");
+        assert!(matches!(
+            failure_reason(&error),
+            Some(ContinuationFailure::CallLimit)
+        ));
+    }
+
+    #[tokio::test]
     async fn model_failure_bridge_preserves_codes_without_provider_messages() {
         for code in [
             "context_budget_exceeded",
@@ -516,7 +546,12 @@ mod failure_tests {
         ] {
             let (sender, receiver) = pipeline_node_event_channel();
             sender
-                .send_model_failure(code)
+                .send_model_failure(&AdkError::new(
+                    ErrorComponent::Model,
+                    ErrorCategory::Internal,
+                    code,
+                    "secret provider payload",
+                ))
                 .await
                 .expect("queued failure");
             let mut channel = receiver.inner.lock().await.take().expect("receiver");

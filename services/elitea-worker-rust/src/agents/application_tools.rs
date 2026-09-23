@@ -2430,7 +2430,7 @@ impl ApplicationAgentTool {
 
 /// A child-local output failure is data for the parent, not a root failure.
 /// Other errors keep their existing terminal/control handling.
-fn child_continuation_report(
+pub(super) fn child_continuation_report(
     error: &AdkError,
     partial: Option<String>,
     pipeline_node: bool,
