@@ -282,3 +282,11 @@ Fresh headed browser chat 651 verifies structured JSON continuation after two ad
 calls, exact downstream graph output, one durable completed node receipt, and reload stability.
 See [source mapping and acceptance evidence](source-mapping/output-continuation-capacity-20260922.md#structured-continuation-browser-acceptance).
 Gate 4 remains open for its other verification boundaries and drift requirements.
+
+
+### Pipeline crash recovery remains open
+
+Fresh headed browser chat 652 fails recovery after a durable structured-continuation checkpoint.
+The pipeline assembler lacks checkpoint inspection and restoration overrides.
+See [failure evidence and source boundary](source-mapping/output-continuation-capacity-20260922.md#structured-pipeline-crash-verification-open).
+Uninterrupted structured continuation passes; pipeline crash recovery is not accepted.

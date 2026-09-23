@@ -796,3 +796,26 @@ Evidence: `elitea-structured-output-result.json`, `elitea-structured-output-dura
 inspection. All 423 PostgreSQL-backed agent tests and strict all-target Clippy pass. This
 accepts structured pipeline continuation and early completion; it does not close the remaining
 Gate 4 checks, including live pipeline crash injection and the other drift work.
+
+
+### Structured pipeline crash verification: open
+
+Fresh headed browser chat 652 tests worker recovery during structured output continuation.
+Execution `ab52f0b20189101ab8ed2d44cb3b05aa` persists continuation round 1, a 1039-character prefix, and `structured_output=true`.
+The test verifies that this execution owns the only active claim, then kills and restarts the rehearsal worker.
+The browser remains connected and does not resubmit the request.
+Recovery returns `UNSUPPORTED_CAPABILITY`; this test fails acceptance.
+The browser shows the partial result and the safe configuration error, without a browser runtime error.
+
+`agents/native_runtime.rs::inspect_checkpoint` routes pipeline recovery to the pipeline assembler.
+`NativePipelineAssembler` does not override checkpoint inspection or restoration.
+The defaults in `agents/runtime.rs::NativeAgentAssembler` return `UnsupportedCapability`.
+`execution/checkpoint_recovery.rs` publishes this inspection failure before model restoration.
+This is a pipeline recovery implementation gap, not an Anthropic schema-format regression.
+The existing structured continuation acceptance remains valid for uninterrupted execution only.
+Implement claim-fenced pipeline recovery before accepting this crash boundary.
+Preserve completed graph state and restore the interrupted node's model-local continuation.
+
+Evidence: `elitea-structured-crash-boundary.json`, `elitea-structured-crash-result.json`,
+`elitea-structured-crash-live.log`, and `elitea-structured-crash-failure.png` in the local evidence directory.
+The deployed worker remains `93d3de80`; no runtime code or database schema changes occur in this verification.
