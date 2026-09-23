@@ -40,13 +40,13 @@ fn scoped_runner(
     sessions: Arc<dyn SessionService>,
 ) -> adk_rust::runner::Runner {
     let scope = storage.checkpoint(
-        ContextCompactionPlan {
+        Some(ContextCompactionPlan {
             max_context_tokens: 8000,
             preserve_recent_messages: 2,
             preserve_system_messages: true,
             summary_instructions: "Preserve delegated work. {messages}".into(),
-        },
-        Arc::new(Budget),
+        }),
+        Some(Arc::new(Budget)),
         probe.clone(),
         None,
         None,

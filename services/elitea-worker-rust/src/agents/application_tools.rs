@@ -1441,14 +1441,7 @@ impl LazyNestedAgent {
             // A truncated final answer has its own bounded continuation allowance.
             // ADK still admits only step_limit logical model/tool iterations.
             max_model_turns: self.profile.step_limit()
-                + if matches!(
-                    self.profile.context_management(),
-                    ContextManagementPlan::Summarize(_)
-                ) {
-                    crate::agents::request::MAX_OUTPUT_CONTINUATION_CALLS
-                } else {
-                    0
-                },
+                + crate::agents::request::MAX_OUTPUT_CONTINUATION_CALLS,
         };
         let adapter = match self.profile.model_provider() {
             OrdinaryModelProvider::OpenAiChat => ModelAdapterKind::OpenAiCompatible,
@@ -1470,8 +1463,9 @@ impl LazyNestedAgent {
         model: &BoundModelFacade,
         replay_marker: Option<Content>,
     ) -> adk_rust::Result<Option<Arc<ScopedModelCheckpoint>>> {
-        let ContextManagementPlan::Summarize(plan) = self.profile.context_management() else {
-            return Ok(None);
+        let plan = match self.profile.context_management() {
+            ContextManagementPlan::Disabled => None,
+            ContextManagementPlan::Summarize(plan) => Some(plan),
         };
         let storage = self
             .model_scopes
@@ -1480,9 +1474,7 @@ impl LazyNestedAgent {
         Ok(Some(
             storage.checkpoint(
                 plan,
-                model
-                    .request_budget()
-                    .ok_or_else(agent_configuration_error)?,
+                model.request_budget(),
                 model
                     .summarization_model()
                     .ok_or_else(agent_configuration_error)?,

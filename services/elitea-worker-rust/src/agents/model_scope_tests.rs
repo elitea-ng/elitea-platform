@@ -96,13 +96,13 @@ fn storage(backend: ModelScopeBackend) -> ModelScopeSessions {
 
 fn checkpoint(storage: &ModelScopeSessions, summary: Arc<Summary>) -> Arc<ScopedModelCheckpoint> {
     storage.checkpoint(
-        ContextCompactionPlan {
+        Some(ContextCompactionPlan {
             max_context_tokens: 8000,
             preserve_recent_messages: 2,
             preserve_system_messages: true,
             summary_instructions: "Preserve work. {messages}".into(),
-        },
-        Arc::new(Budget),
+        }),
+        Some(Arc::new(Budget)),
         summary,
         None,
         None,
@@ -274,7 +274,7 @@ async fn replay_control_input_stays_outside_compaction_and_pending_provider_requ
     let marker = Content::new("user").with_text("PRIVATE_REPLAY_CONTROL");
     let scope = storage.checkpoint(
         base.plan.clone(),
-        Arc::new(Budget),
+        Some(Arc::new(Budget)),
         summary.clone(),
         Some(marker.clone()),
         None,
@@ -292,12 +292,17 @@ async fn replay_control_input_stays_outside_compaction_and_pending_provider_requ
         serde_json::to_value(&request).unwrap()
     );
     assert_eq!(summary.0.load(Ordering::SeqCst), 0);
+    let replay_boundary = stored(&scope, &context)
+        .await
+        .state()
+        .get(CHECKPOINT_KEY)
+        .unwrap();
+    assert_eq!(replay_boundary["phase"], "tool_may_have_started");
+    assert!(replay_boundary["model"].is_null());
     assert!(
-        stored(&scope, &context)
-            .await
-            .state()
-            .get(CHECKPOINT_KEY)
-            .is_none()
+        !replay_boundary
+            .to_string()
+            .contains("PRIVATE_REPLAY_CONTROL")
     );
     let BeforeModelResult::Continue(next) = scope.before_model(&context, request).await.unwrap()
     else {
@@ -326,7 +331,7 @@ async fn completed_guard_replay_prepares_the_first_real_provider_request() {
     let scope = storage
         .checkpoint(
             base.plan.clone(),
-            Arc::new(Budget),
+            Some(Arc::new(Budget)),
             summary.clone(),
             Some(marker.clone()),
             None,
@@ -411,7 +416,7 @@ async fn authorized_recovery_delivers_completed_child_without_another_model_requ
     let base = checkpoint(&storage, summary.clone());
     let first = storage.checkpoint(
         base.plan.clone(),
-        Arc::new(Budget),
+        Some(Arc::new(Budget)),
         summary.clone(),
         None,
         Some(Arc::new(Completion)),
@@ -626,7 +631,7 @@ async fn postgres_child_scope_is_fenced_by_root_takeover_and_reuses_its_own_summ
     let first = checkpoint(&storage, summary.clone());
     let first = storage.checkpoint(
         first.plan.clone(),
-        Arc::new(Budget),
+        Some(Arc::new(Budget)),
         summary.clone(),
         None,
         Some(Arc::new(Completion)),
@@ -1031,6 +1036,15 @@ async fn adk_child_returns_one_complete_answer_after_multiple_output_continuatio
 
 #[tokio::test]
 async fn postgres_child_output_continuation_survives_claim_takeover() {
+    postgres_output_takeover(true).await;
+}
+
+#[tokio::test]
+async fn postgres_child_without_compaction_continues_after_claim_takeover() {
+    postgres_output_takeover(false).await;
+}
+
+async fn postgres_output_takeover(compaction_enabled: bool) {
     use crate::state::postgres_session_tests::{IsolatedPostgres, authority_for, install_schema};
     use adk_rust::FinishReason::{MaxTokens, Stop};
     let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
@@ -1052,7 +1066,14 @@ async fn postgres_child_output_continuation_survives_claim_takeover() {
     let first_storage = storage(ModelScopeBackend::Postgres(root));
     let child = Context::child("postgres-output");
     let summary = Arc::new(Summary::default());
-    let first = checkpoint(&first_storage, summary.clone());
+    let make_checkpoint = |storage: &ModelScopeSessions| {
+        if compaction_enabled {
+            checkpoint(storage, summary.clone())
+        } else {
+            storage.checkpoint(None, Some(Arc::new(Budget)), summary.clone(), None, None)
+        }
+    };
+    let first = make_checkpoint(&first_storage);
     let request = simple_request(&first, &child).await;
     let model = OutputModel::new(vec![("Accepted prefix", MaxTokens)]);
     let mut output = first
@@ -1088,7 +1109,7 @@ async fn postgres_child_output_continuation_survives_claim_takeover() {
     assert_eq!(error.code, "session.writer_not_current");
     let replacement_storage =
         storage(ModelScopeBackend::Postgres(replacement_root)).with_pending_model_recovery();
-    let replacement = checkpoint(&replacement_storage, summary);
+    let replacement = make_checkpoint(&replacement_storage);
     let request = simple_request(&replacement, &child).await;
     let model = OutputModel::new(vec![("Accepted prefix and complete ending", Stop)]);
     let output = replacement
@@ -1101,6 +1122,7 @@ async fn postgres_child_output_continuation_survives_claim_takeover() {
         "Accepted prefix and complete ending"
     );
     assert_eq!(model.requests.lock().unwrap().len(), 1);
+    assert_eq!(summary.0.load(Ordering::SeqCst), 0);
     database.pool.close().await;
 }
 
@@ -1527,6 +1549,44 @@ async fn non_streaming_child_emits_incomplete_evidence_before_failure_without_re
     assert!(
         scope
             .completed_content(saved.as_ref(), child.agent_name())
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn child_without_compaction_continues_and_stops_after_first_complete_response() {
+    use adk_rust::FinishReason::{MaxTokens, Stop};
+    let storage = storage(ModelScopeBackend::Local(Arc::new(
+        InMemorySessionService::new(),
+    )));
+    let summary = Arc::new(Summary::default());
+    let scope = storage.checkpoint(None, Some(Arc::new(Budget)), summary.clone(), None, None);
+    let child = Context::child("continuation-without-compaction");
+    let request = simple_request(&scope, &child).await;
+    let model = OutputModel::new(vec![
+        ("Accepted prefix", MaxTokens),
+        ("Accepted prefix and complete ending", Stop),
+    ]);
+    let output = scope
+        .clone()
+        .delegation_model(model.clone())
+        .generate_content(request, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        collect_output(output).await.unwrap(),
+        "Accepted prefix and complete ending"
+    );
+    assert_eq!(model.requests.lock().unwrap().len(), 2);
+    assert_eq!(summary.0.load(Ordering::SeqCst), 0);
+    assert!(
+        scope
+            .writer
+            .get()
+            .unwrap()
+            .checkpoint
+            .output_continuation()
             .unwrap()
             .is_none()
     );

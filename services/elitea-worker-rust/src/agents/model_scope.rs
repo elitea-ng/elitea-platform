@@ -156,8 +156,8 @@ impl ModelScopeSessions {
 
     pub(super) fn checkpoint(
         &self,
-        plan: ContextCompactionPlan,
-        budget: Arc<dyn ModelRequestBudget>,
+        plan: Option<ContextCompactionPlan>,
+        budget: Option<Arc<dyn ModelRequestBudget>>,
         model: Arc<dyn Llm>,
         replay_marker: Option<Content>,
         completion: Option<Arc<dyn super::session::DurableModelCompletion>>,
@@ -183,8 +183,8 @@ impl ModelScopeSessions {
 /// One instance per child invocation. Repeated calls do not share mutable state.
 pub(super) struct ScopedModelCheckpoint {
     storage: ModelScopeSessions,
-    plan: ContextCompactionPlan,
-    budget: Arc<dyn ModelRequestBudget>,
+    plan: Option<ContextCompactionPlan>,
+    budget: Option<Arc<dyn ModelRequestBudget>>,
     model: Arc<dyn Llm>,
     writer: OnceCell<ScopedWriter>,
     skip_replay_model: AtomicBool,
@@ -329,13 +329,7 @@ impl ScopedModelCheckpoint {
                     }
                     Err(error) => return Err(error),
                 };
-                let compaction = Arc::new(DurableContextCompaction::new(
-                    self.plan.clone(),
-                    self.budget.clone(),
-                    self.model.clone(),
-                    self.storage.definition_digest,
-                    session.as_ref(),
-                )?);
+                let compaction = self.compaction(session.as_ref())?;
                 // Loading a summary does not grant permission to replay a child tool.
                 // Parent recovery must authorize its own pending call separately.
                 let checkpoint = ModelCheckpointWriter::new(
@@ -345,9 +339,9 @@ impl ScopedModelCheckpoint {
                     self.storage.definition_digest,
                 )
                 .with_application_tools(self.storage.application_tools.iter().map(String::as_str))
-                .with_request_budget(Some(self.budget.clone()))
+                .with_request_budget(self.budget.clone())
                 .with_context_events(self.context_events.clone())
-                .with_context_compaction(Some(compaction));
+                .with_context_compaction(compaction);
                 let recovering =
                     existing && self.storage.recover_pending_models && self.replay_marker.is_none();
                 let completed = if recovering {
@@ -374,6 +368,25 @@ impl ScopedModelCheckpoint {
             return Err(invalid_scope());
         }
         Ok(writer)
+    }
+
+    fn compaction(
+        &self,
+        session: &dyn adk_rust::session::Session,
+    ) -> adk_rust::Result<Option<Arc<DurableContextCompaction>>> {
+        self.plan
+            .as_ref()
+            .map(|plan| {
+                DurableContextCompaction::new(
+                    plan.clone(),
+                    self.budget.clone().ok_or_else(invalid_scope)?,
+                    self.model.clone(),
+                    self.storage.definition_digest,
+                    session,
+                )
+                .map(Arc::new)
+            })
+            .transpose()
     }
 
     async fn append(
@@ -444,6 +457,12 @@ impl ScopedModelCheckpoint {
         // A resumed guard emits a deterministic pending call first.
         // Only subsequent requests reach the provider and need compaction.
         if self.skip_replay_model.swap(false, Ordering::AcqRel) {
+            // This is an authorized synthetic call, not a provider request.
+            // Fence its tools in the current invocation without granting model replay.
+            writer
+                .checkpoint
+                .before_tool(writer.identity.clone(), context.invocation_id())
+                .await?;
             return Ok(BeforeModelResult::Continue(request));
         }
         let request = if let Some(marker) = &self.replay_marker {

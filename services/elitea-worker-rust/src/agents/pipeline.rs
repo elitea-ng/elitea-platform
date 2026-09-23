@@ -989,10 +989,8 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
                 self.model_scopes
                     .for_node(scope.identity())
                     .checkpoint(
-                        plan,
-                        model
-                            .request_budget()
-                            .ok_or(LlmExecutionError::Unavailable)?,
+                        Some(plan),
+                        model.request_budget(),
                         model
                             .summarization_model()
                             .ok_or(LlmExecutionError::Unavailable)?,

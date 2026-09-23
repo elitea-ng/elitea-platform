@@ -256,3 +256,11 @@ The [continuation mapping](source-mapping/output-continuation-capacity-20260922.
 An 81,460-byte partial answer continues to 117,625 bytes without duplicate records or a changed reload seam.
 Original model selection is reauthorized. Final fragments preserve the original answer prefix.
 Nested output exhaustion and replacement during continuation remain separate checks.
+
+
+### Disabled-compaction continuation follow-up
+
+The [continuation mapping](source-mapping/output-continuation-capacity-20260922.md#continuation-when-compaction-is-disabled) records the independent child checkpoint change.
+All 418 PostgreSQL-enabled agent tests pass. These include early completion and claim takeover without compaction.
+Nested confirmation and authorization replay regressions also pass.
+Fresh deployed browser acceptance remains required. Gate 4 remains open.

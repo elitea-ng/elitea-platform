@@ -528,3 +528,25 @@ This accepts partial-output visibility for the bounded nested-child failure.
 It does not claim crash injection during partial-trace publication, live boundary
 repair, disabled-compaction child continuation, or bare pipeline-LLM continuation.
 Those boundaries remain separate from this browser acceptance.
+
+
+### Continuation when compaction is disabled
+
+Current SDK reference remains `966526e8334354366dd161b606d73fe8e204b850`.
+`elitea_sdk/runtime/tools/llm.py::_continue_nested_output` detects truncated nested output independently of summarization settings.
+It stops when the answer completes. Four additional calls remain the maximum, including boundary repair.
+
+`agents/application_tools.rs::LazyNestedAgent` now installs the child checkpoint regardless of the compaction switch.
+The provider allowance includes four continuation calls. ADK retains the configured logical step limit.
+`agents/model_scope.rs` accepts an optional compaction plan and optional provider budget metadata.
+An enabled compaction plan still requires budget metadata. Disabled compaction never constructs or invokes a summarizer.
+The existing model checkpoint owns accepted prefixes, pending requests, claim fencing, and completed child receipts.
+No database schema or wire contract changes are required.
+
+Authorized synthetic replay now records the current invocation's conservative tool boundary before dispatch.
+It does not record the synthetic response as a pending provider request or grant permission to replay effects.
+This fixes nested authorization and confirmation paths exposed by enabling checkpoints without compaction.
+
+Regression coverage checks early completion without summarization and PostgreSQL claim takeover with compaction enabled and disabled.
+All 418 PostgreSQL-enabled agent tests pass, including nested confirmation and authorization replay regressions.
+Strict all-target Clippy also passes. Deployed browser acceptance remains pending for this change.
