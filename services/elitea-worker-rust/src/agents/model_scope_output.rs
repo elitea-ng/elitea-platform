@@ -35,7 +35,7 @@ pub(super) fn generate(
             let mut has_tools = false;
             let mut invalid_boundary = false;
             let responses = inner.generate_content(request.clone(), stream).await?;
-            let mut responses = if structured_output && state.is_some() {
+            let mut responses = if structured_output {
                 structured_fragments(responses)
             } else {
                 responses
@@ -143,7 +143,7 @@ fn restore_output(
     Ok((saved, structured_output))
 }
 
-// Buffer only a structured continuation call, under the existing byte bound.
+// Buffer a structured model call under the existing byte bound.
 // No unverified fragment or Markdown envelope is released to graph consumers.
 fn structured_fragments(mut responses: LlmResponseStream) -> LlmResponseStream {
     Box::pin(async_stream::try_stream! {

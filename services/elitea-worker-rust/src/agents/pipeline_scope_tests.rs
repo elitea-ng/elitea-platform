@@ -321,7 +321,9 @@ async fn pipeline_structured_output_validates_after_continuation() {
             &json!({"schema_version":"elitea.runtime.elitea-client-token.v1","project_id":17,"token":"ephemeral-pipeline-token"}),
         )]),
         vec![
-            TestModelGatewayOutcome::Response(limited_text_response(&initial)),
+            TestModelGatewayOutcome::Response(limited_text_response(&format!(
+                "```json\n{initial}"
+            ))),
             TestModelGatewayOutcome::Response(limited_text_response(&format!("```json\n{second}"))),
             TestModelGatewayOutcome::Response(pipeline_text_response(&format!(
                 "{final_segment}\n```"

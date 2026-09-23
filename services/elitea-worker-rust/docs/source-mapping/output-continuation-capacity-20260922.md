@@ -767,3 +767,13 @@ an empty terminal frame. The existing `RunnerSessionService::durable_event` then
 only the persisted terminal event from the joined completion snapshot. This restores the
 existing empty-terminal streaming contract, keeps live output unduplicated, and preserves
 provider finish/usage metadata on the terminal frame. The application schema is unchanged.
+
+After the receipt fix (`ed06ce40`, image
+`sha256:d391b3716dc12012e3ffee1e9e48c794237ca18d10e0ebd4fde589ad350fc77c`),
+chat 650 / execution `51e1eebec143608802f4dc2b5e3634a6` persists the full joined
+answer, confirming that fix. JSON parsing of that durable answer then identifies an opening
+Markdown JSON fence from the initial provider call. Normalization had covered continuation
+calls only. The structured-call wrapper now applies to the initial call as well, and the
+pipeline regression starts with a fenced, truncated initial response. Final schema validation
+remains mandatory. This matches the legacy structured-output fallback's support for provider
+formatting while retaining exact interior text and explicit validation.
