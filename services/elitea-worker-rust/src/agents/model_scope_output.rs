@@ -173,13 +173,11 @@ fn structured_fragments(mut responses: LlmResponseStream) -> LlmResponseStream {
 }
 
 fn strip_fragment_fence(text: &str) -> &str {
-    let Some(body) = text
+    let body = text
         .strip_prefix("```json\n")
         .or_else(|| text.strip_prefix("```\n"))
-    else {
-        return text;
-    };
-    // The closing fence may be absent when this call also hit its output cap.
+        .unwrap_or(text);
+    // A closing fence can arrive in a later call after a fenced fragment hit its cap.
     body.strip_suffix("\n```\n")
         .or_else(|| body.strip_suffix("\n```"))
         .unwrap_or(body)
@@ -434,7 +432,7 @@ mod tests {
         );
         assert_eq!(strip_fragment_fence(&format!("```\n{fragment}")), fragment);
         let prose = format!("Here is the JSON:\n```json\n{fragment}\n```");
-        assert_eq!(strip_fragment_fence(&prose), prose);
+        assert!(strip_fragment_fence(&prose).starts_with("Here is the JSON:"));
         let mut seam = Seam::new("different boundary".into());
         let _ = seam.accept(strip_fragment_fence(&format!("```json\n{fragment}\n```")));
         assert!(seam.finish().is_err());

@@ -736,3 +736,13 @@ complete JSON answer. The run still terminates with `INTERNAL` during `model_too
 so it is not accepted. This moves investigation to ADK final validation / completion handling;
 the graph's generic error mapping currently obscures that underlying reason. The browser
 has no runtime errors. Keep this distinct from the earlier boundary failures.
+
+Checkpoint inspection of execution `071936cde2ae22228bc3654c50eca496` identifies
+an orphan closing Markdown fence at the end of the final provider fragment. The opening
+fence was emitted in an earlier output-limited call. The original normalizer stripped a
+closing fence only when the same call contained its opening fence. The final fragment
+therefore left non-JSON trailing syntax. Rendering hid the fence, making the visible JSON
+look valid. Normalization now handles exact trailing fences independently of a same-call
+opening fence for structured fragments; interior bytes and overlap validation are unchanged.
+The pipeline regression now emits the opening fence in one call and closing fence in the
+next, matching the observed failure. Prose wrappers still fail overlap/JSON validation.
