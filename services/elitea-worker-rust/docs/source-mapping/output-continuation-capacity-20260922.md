@@ -746,3 +746,14 @@ look valid. Normalization now handles exact trailing fences independently of a s
 opening fence for structured fragments; interior bytes and overlap validation are unchanged.
 The pipeline regression now emits the opening fence in one call and closing fence in the
 next, matching the observed failure. Prose wrappers still fail overlap/JSON validation.
+
+The split-fence runtime correction (`5bcf1c33`) is deployed as
+`sha256:2f7ed619f7509b0a9ffa8e63a09957aa88f648ed5056f4eb6cc55e9b8a56f0c8`.
+Fresh browser chat 649, execution `12d638650aa922485ebafef0d632bd5d`, still reaches
+the complete visible answer but fails with `INTERNAL`. Acceptance remains open.
+Inspection of the preceding run's durable session events found that terminal content was
+only the final continuation segment. `RunnerSessionService::durable_event` enriches an
+empty terminal event but leaves a nonempty terminal delta unchanged. The structured
+fragment buffer introduces a nonempty terminal delta, unlike the prior empty terminal
+frame. Verify terminal persistence and same-event-ID history handling with a focused
+regression before changing that boundary; this is not yet a proven fix.
