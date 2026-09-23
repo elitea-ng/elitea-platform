@@ -338,3 +338,11 @@ Deployment order: deploy Main with the new registered error before a worker that
 Component tests and fresh deployed-browser failure acceptance are tracked separately. Bounded join repair, round-policy alignment, and failed-child partial-result handling remain open.
 
 Validation of the registered-error candidate: 408 PostgreSQL-enabled agent tests pass, including preservation through the nested fatal channel. The focused Rust continuation suite passes 20 tests (its standalone PostgreSQL case was separately covered by the enabled full agent suite), including canonical failure restoration and rejection of injected message text. Main output transport/application suites pass. The UI settle suite passes nine tests, including preservation of streamed partial content with the explicit incomplete-response message. Strict all-target Clippy and formatting pass. The candidate is not yet deployed; live failure rendering and reload remain unverified.
+
+### Registered-error deployment and fixture correction
+
+Commit `cac24c2e` is deployed to Main (`sha256:d2ae5d06ffe364d0730fc32aea9c9e015fec9d28bc8a7e93b7162ae5ecefad7b`) before the worker (`sha256:3dacf295f95c930bade05c281f5b7ade3468e9c29c5c489b93715588e906f5c1`). Existing environments, mounts, networks, and limits are preserved.
+
+Chat 633 completed its 120-record task rather than failing: its child saved `meta.step_limit=1` does not override the admitted parent's 30-step limit. `OrdinaryNoToolProfile` child construction intentionally uses `fallback.step_limit`; the fixture therefore did not establish exhaustion. This is not failure-path acceptance. Chat 634 instead sets the admitted parent/conversation limit to one, with the same 512-token child output cap.
+
+Chat 634, execution `4aa270fc357b13d045ac77660a1244ce`, passes the registered failure path in a fresh headed browser. SSE carries `OUTPUT_CONTINUATION_EXHAUSTED` with the registered sentence and `retryable=false`; the sentence is visible in chat and unchanged after reload. No browser errors occur. The rendered screenshot was inspected. PostgreSQL contains one child model session and zero completed-child receipts. The final parent response contains the error sentence only: this verifies error projection and persistence, not delivery of the failed child's partial answer.
