@@ -1,5 +1,7 @@
 //! Process-wide diagnostic safety boundaries.
 
+pub(crate) mod failure;
+
 use std::fmt;
 use std::io::{self, Write};
 use std::sync::Once;
@@ -37,6 +39,7 @@ pub enum DiagnosticInitError {
     CryptoProviderUnavailable,
     InvalidLogLevel,
     InvalidTraceLevel,
+    InvalidFailureDiagnostics,
     ExporterUnavailable,
     SubscriberUnavailable,
 }
@@ -51,6 +54,9 @@ impl fmt::Display for DiagnosticInitError {
                 .write_str("ELITEA_RUST_LOG must be off, error, warn, info, debug, or trace"),
             Self::InvalidTraceLevel => formatter
                 .write_str("ELITEA_RUST_TRACE must be off, error, warn, info, debug, or trace"),
+            Self::InvalidFailureDiagnostics => {
+                formatter.write_str("ELITEA_RUST_FAILURE_DIAGNOSTICS must be off or on")
+            }
             Self::ExporterUnavailable => {
                 formatter.write_str("the OpenTelemetry trace exporter could not be configured")
             }
@@ -143,6 +149,8 @@ impl std::error::Error for DiagnosticShutdownError {}
 /// level and [`DiagnosticInitError::SubscriberUnavailable`] if another global
 /// subscriber is already installed or process-level installation fails.
 pub fn install_tracing_subscriber() -> Result<DiagnosticGuard, DiagnosticInitError> {
+    let failure_setting = std::env::var("ELITEA_RUST_FAILURE_DIAGNOSTICS").ok();
+    let capture_failures = failure::configured(failure_setting.as_deref())?;
     let configured = std::env::var(LOG_LEVEL_ENVIRONMENT).ok();
     let directive = tracing_directive(configured.as_deref())?;
     let log_filter =
@@ -176,6 +184,7 @@ pub fn install_tracing_subscriber() -> Result<DiagnosticGuard, DiagnosticInitErr
             .try_init()
             .map_err(|_| DiagnosticInitError::SubscriberUnavailable)?,
     }
+    failure::enable(capture_failures);
     Ok(DiagnosticGuard { provider })
 }
 

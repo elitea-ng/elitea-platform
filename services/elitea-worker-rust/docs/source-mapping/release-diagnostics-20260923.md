@@ -62,3 +62,43 @@ Build log: `/private/tmp/elitea-release-diagnostics-build.log`.
 The rehearsal deployment remains unchanged.
 No browser test runs for this packaging-only slice.
 Stack capture and browser error acceptance remain required before OBS-RUST-01 closes.
+
+## Opt-in runner failure capture
+
+`src/diagnostics/failure.rs` captures diagnostics when `ELITEA_RUST_FAILURE_DIAGNOSTICS=on`.
+The default is `off`; other values fail startup validation.
+Capture admits at most one failure per monotonic second across the process.
+The diagnostic text contains at most 8,192 UTF-8 bytes and 32 async span names.
+
+The implementation uses the existing tracing registry for active async ancestry.
+It reads static worker span names only, never recorded field values.
+`std::backtrace::Backtrace::force_capture` supplies the synchronous stack.
+No new tracing framework, dependency, database table, or wire field is introduced.
+
+`src/agents/runtime.rs::NativeAgentRuntimeError` captures at runner start and event failure conversion.
+The owning lifecycle emits this detail with its existing execution span and upstream error code.
+`Debug`, `Display`, and the public error projection do not expose the captured diagnostic.
+The implementation never formats the upstream error message, details, or source chain.
+Existing public errors and browser behavior remain unchanged.
+
+The current-platform traceback references above provide the behavioral mapping for this slice.
+The Rust implementation uses separate operator diagnostics instead of forwarding traceback text to users.
+
+### Focused verification
+
+Four capture tests pass: configuration, frequency limiting, UTF-8 bounds, and async ancestry after a task yield.
+The async test includes secret sentinel values in span fields and confirms their exclusion.
+Strict all-target Clippy passes.
+The complete diagnostics tests and runner ownership tests also pass.
+
+### Limits and next verification
+
+Capture occurs at the runner boundary, not every original dependency failure location.
+Async ancestry includes active, instrumented worker spans only.
+The process frequency limit can suppress additional failures during a burst.
+The retained error code and execution correlation still accompany suppressed captures.
+The byte limit bounds rendered text; it does not bound native stack capture or symbolization time.
+Capture remains disabled by default until release overhead and deployed behavior are measured.
+
+Release capture, nested correlation, provider-specific causes, and browser error acceptance remain open.
+This slice does not complete OBS-RUST-01.

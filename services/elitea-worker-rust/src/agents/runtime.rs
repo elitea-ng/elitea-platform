@@ -866,12 +866,14 @@ impl NativeAgentRuntimeErrorCode {
 pub(crate) struct NativeAgentRuntimeError {
     code: NativeAgentRuntimeErrorCode,
     upstream: Option<Box<AdkError>>,
+    diagnostic: Option<String>,
 }
 
 impl NativeAgentRuntimeError {
     fn invalid_state() -> Self {
         Self {
             code: NativeAgentRuntimeErrorCode::InvalidState,
+            diagnostic: crate::diagnostics::failure::capture(),
             upstream: None,
         }
     }
@@ -883,6 +885,7 @@ impl NativeAgentRuntimeError {
     fn start_failed(error: AdkError) -> Self {
         Self {
             code: NativeAgentRuntimeErrorCode::StartFailed,
+            diagnostic: crate::diagnostics::failure::capture(),
             upstream: Some(Box::new(error)),
         }
     }
@@ -890,6 +893,7 @@ impl NativeAgentRuntimeError {
     fn start_deferred() -> Self {
         Self {
             code: NativeAgentRuntimeErrorCode::StartFailed,
+            diagnostic: crate::diagnostics::failure::capture(),
             upstream: None,
         }
     }
@@ -897,6 +901,7 @@ impl NativeAgentRuntimeError {
     fn event_failed(error: AdkError) -> Self {
         Self {
             code: NativeAgentRuntimeErrorCode::EventFailed,
+            diagnostic: crate::diagnostics::failure::capture(),
             upstream: Some(Box::new(error)),
         }
     }
@@ -904,6 +909,12 @@ impl NativeAgentRuntimeError {
     #[must_use]
     pub(crate) const fn code(&self) -> NativeAgentRuntimeErrorCode {
         self.code
+    }
+
+    pub(crate) fn diagnostic_detail(&self) -> &str {
+        self.diagnostic
+            .as_deref()
+            .unwrap_or("disabled_or_rate_limited")
     }
 
     pub(crate) fn upstream_code(&self) -> Option<&'static str> {
