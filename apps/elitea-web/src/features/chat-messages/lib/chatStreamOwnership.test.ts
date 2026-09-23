@@ -78,3 +78,23 @@ describe('child model output ownership', () => {
     expect(result[0]?.toolActions?.[0]).toMatchObject({ content: 'Completed child result', status: 'complete' });
   });
 });
+
+it('creates a missing incomplete child step once without replacing the parent answer', () => {
+  const frame: ChatStreamFrame = {
+    type: SocketMessageType.AgentLlmEnd, message_id: parent.id,
+    response_metadata: { ...owner, thinking_steps: [{
+      tool_run_id: 'incomplete-child', text: 'Accepted partial answer',
+      message: { response_metadata: { tool_name: 'Incomplete response', model_name: 'fixture-model' } },
+      timestamp_finish: '2026-09-23T12:00:00Z',
+    }] },
+  };
+  const first = applyChatStreamFrame([parent], frame);
+  const replayed = applyChatStreamFrame(first, frame);
+  expect(replayed[0]?.content).toBe(parent.content);
+  expect(replayed[0]?.isStreaming).toBe(true);
+  expect(replayed[0]?.toolActions).toHaveLength(1);
+  expect(replayed[0]?.toolActions?.[0]).toMatchObject({
+    id: 'incomplete-child', name: 'Incomplete response',
+    content: 'Accepted partial answer', toolOutputs: 'Accepted partial answer', ...owner,
+  });
+});

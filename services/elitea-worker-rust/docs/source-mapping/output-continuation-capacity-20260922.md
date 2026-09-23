@@ -464,3 +464,11 @@ Two focused tests cover descendant identity, explicit incomplete labeling,
 no successful-answer projection, idempotence, and bounded UTF-8 fragments.
 The PostgreSQL-enabled agent suite (415 tests), execution suite (143 tests), and
 strict all-target Clippy pass. Deployed browser verification remains pending.
+
+The new UI's `chatStreamTurnFrames.ts` previously discarded a child ending step
+unless an action placeholder already existed; child start/chunk frames intentionally
+cannot create a parent answer. It now creates the missing child step by its stable
+run identity, preserving hierarchy and parent streaming state. `applyThinkingStep`
+also updates `toolOutputs`, which the nested-step renderer reads live. A regression
+test checks that duplicate end frames do not duplicate the step or alter the parent.
+This is rendering-only ownership: no incomplete content returns to the parent model.

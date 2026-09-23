@@ -11,7 +11,7 @@
  */
 import { appendToolOutputChunk } from './toolOutputChunks';
 import { convertJsonToString } from '@/shared/lib/json';
-import { ToolActionStatus } from '@/shared/lib/chat';
+import { TOOL_ACTION_TYPES, ToolActionStatus } from '@/shared/lib/chat';
 
 import { applyThinkingStep, isEmptyTransition } from './chatStreamThinkingFrames';
 import { normalizeExecutionHierarchy } from './executionHierarchy';
@@ -215,7 +215,14 @@ export function reduceTurnFrame(
         // for providers that only echoed it inside the message id.
         const stepRunId = step.tool_run_id ?? step.message?.id?.replace('lc_run--', '');
         if (!stepRunId) continue;
-        const target = next.find((action) => action.id === stepRunId);
+        let target = next.find((action) => action.id === stepRunId);
+        if (!target && childOutput) {
+          // Child answer chunks do not create parent bubbles. A persisted
+          // child step must still become inspectable when its end frame arrives.
+          target = { id: stepRunId, type: TOOL_ACTION_TYPES.Llm,
+            status: ToolActionStatus.processing, ...hierarchy } as ToolAction;
+          next = [...next, target];
+        }
         if (!target) continue;
         const updated = applyThinkingStep(target, step);
         if (isEmptyTransition(updated) && !step['text_chunk_v1'] && !step['thinking_chunk_v1']) {

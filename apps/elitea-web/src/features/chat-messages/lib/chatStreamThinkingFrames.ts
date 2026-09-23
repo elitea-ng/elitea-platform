@@ -63,6 +63,7 @@ export function applyThinkingStep(action: ToolAction, step: ThinkingStep): ToolA
     ...action,
     ...hierarchy,
     content: text,
+    toolOutputs: text,
     ended_at: step.timestamp_finish,
     toolMeta,
   };
