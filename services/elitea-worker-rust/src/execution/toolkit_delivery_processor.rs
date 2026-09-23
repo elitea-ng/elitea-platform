@@ -1033,6 +1033,7 @@ const fn runtime_failure_code(failure: RuntimeFailureKind) -> &'static str {
         RuntimeFailureKind::DeadlineExceeded => "runtime.deadline_exceeded",
         RuntimeFailureKind::AuthorizationFailed => "runtime.authorization_failed",
         RuntimeFailureKind::Cancelled => "runtime.cancelled",
+        RuntimeFailureKind::OutputContinuationExhausted => "runtime.output_continuation_exhausted",
         RuntimeFailureKind::Internal => "runtime.internal",
     }
 }

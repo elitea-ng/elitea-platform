@@ -18,6 +18,7 @@ enum RuntimeErrorCodeV1 {
   RUNTIME_ERROR_CODE_V1_PROTOCOL_VIOLATION = 10;
   RUNTIME_ERROR_CODE_V1_INTERNAL = 11;
   RUNTIME_ERROR_CODE_V1_DEADLINE_EXCEEDED = 12;
+  RUNTIME_ERROR_CODE_V1_OUTPUT_CONTINUATION_EXHAUSTED = 13;
 }
 
 // RuntimeErrorV1 contains only a registered safe code/message pair. Detailed

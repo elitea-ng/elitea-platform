@@ -1196,6 +1196,7 @@ fn projection_failure(error: &AgentEventProjectionError) -> RuntimeFailureKind {
 
 fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
     match upstream_code {
+        Some("model.output_continuation_failed") => RuntimeFailureKind::OutputContinuationExhausted,
         Some(
             "model_gateway.response_header_timeout"
             | "model_gateway.stream_idle_timeout"
@@ -1228,6 +1229,14 @@ mod taxonomy_tests {
                 RuntimeFailureKind::DependencyUnavailable
             );
         }
+    }
+
+    #[test]
+    fn incomplete_continuation_has_a_specific_terminal_failure() {
+        assert_eq!(
+            super::model_failure(Some("model.output_continuation_failed")),
+            RuntimeFailureKind::OutputContinuationExhausted
+        );
     }
 
     #[test]

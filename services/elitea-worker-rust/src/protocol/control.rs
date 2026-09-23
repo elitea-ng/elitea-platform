@@ -3276,7 +3276,8 @@ fn runtime_rejection(error: &RuntimeErrorV1) -> ControlSemanticError {
         Some(RuntimeErrorCodeV1::DependencyUnavailable | RuntimeErrorCodeV1::Internal) => {
             RuntimeControlRejectionKind::DependencyUnavailable
         }
-        Some(RuntimeErrorCodeV1::Unspecified) | None => {
+        Some(RuntimeErrorCodeV1::Unspecified | RuntimeErrorCodeV1::OutputContinuationExhausted)
+        | None => {
             return ControlSemanticError::InvalidInput(
                 "the runtime control response contains an unknown error",
             );

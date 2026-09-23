@@ -69,6 +69,20 @@ describe('runtimeFailureReason', () => {
 });
 
 describe('recordStreamFailure', () => {
+  it('preserves partial output while explaining incomplete automatic continuation', () => {
+    const reason = runtimeFailureReason({
+      code: 'OUTPUT_CONTINUATION_EXHAUSTED',
+      safe_message: 'Automatic continuation could not finish. The model response is incomplete.',
+      retryable: false,
+    });
+    const next = recordStreamFailure([question(), streamingAnswer()], reason, CONTEXT);
+    expect(next).toHaveLength(2);
+    expect(next[1]?.content).toBe('partial');
+    expect(next[1]?.exception).toBe(reason);
+    expect(next[1]?.isStreaming).toBe(false);
+    expect(next[1]?.isLoading).toBe(false);
+  });
+
   it('makes an early refusal visible even though no message was ever created', () => {
     // The defect: `settleInFlight` matched nothing and returned the history
     // unchanged, so the composer re-enabled over a transcript that never

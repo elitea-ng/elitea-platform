@@ -324,3 +324,17 @@ Commit `645ae550` is deployed as worker image `sha256:ea21cb72ececf63c2192869ffe
 Fresh headed-browser chat 632, execution `f17862e94cbd79e0ca7db48a8ce2b900`, confirms output continuation round two in PostgreSQL before killing the rehearsal worker with SIGKILL and starting it again. The original browser session receives the recovered final answer: records 001–120 occur once in order, the ending marker occurs once, there are no browser errors or terminal execution failures, and reload preserves the rendered result. The final screenshot was inspected. PostgreSQL contains one completed child receipt with all 120 records and one marker. The parent adds an introductory sentence here too; the child report remains intact.
 
 This proves recovery after a persisted continuation boundary for this nested-agent fixture. It does not prove recovery from every provider-stream position or close the remaining continuation parity items above. No database schema change was required.
+
+## Registered incomplete-continuation failure
+
+Legacy business reference: SDK `OutputContinuationExhausted` and UI `normalizeContinuationError` distinguish an unfinished response from a generic runtime failure. The replatform adds `RUNTIME_ERROR_CODE_V1_OUTPUT_CONTINUATION_EXHAUSTED` (13) to `libs/proto/elitea/runtime/v1/errors.proto`, using the existing error envelope without changing persistence schemas.
+
+Rust `ApplicationEventFailure::OutputContinuation` preserves the static error identity through the nested fatal channel. `native_agent_lifecycle::model_failure` maps it to a dedicated terminal kind. `protocol/output.rs` registers its safe message and recognizes it during durable output restoration. The code is not valid as a control-plane rejection.
+
+Main `transport/runtimegrpc/output::runtimeFailurePolicyFor` accepts the registered code/message pair and projects `OUTPUT_CONTINUATION_EXHAUSTED` through the existing failure path. The browser's `runtimeFailureReason` and `recordStreamFailure` already show this message while retaining streamed content. Detailed provider text is not added to the safe message. This does not yet guarantee that every failed child's unstreamed partial output is delivered to its parent.
+
+Deployment order: deploy Main with the new registered error before a worker that can emit it; an older Main deliberately rejects unknown codes. Generated Go/Python bindings use the pinned repository generator versions. Rust build dependencies explicitly include each input proto to avoid stale bindings during incremental development.
+
+Component tests and fresh deployed-browser failure acceptance are tracked separately. Bounded join repair, round-policy alignment, and failed-child partial-result handling remain open.
+
+Validation of the registered-error candidate: 408 PostgreSQL-enabled agent tests pass, including preservation through the nested fatal channel. The focused Rust continuation suite passes 20 tests (its standalone PostgreSQL case was separately covered by the enabled full agent suite), including canonical failure restoration and rejection of injected message text. Main output transport/application suites pass. The UI settle suite passes nine tests, including preservation of streamed partial content with the explicit incomplete-response message. Strict all-target Clippy and formatting pass. The candidate is not yet deployed; live failure rendering and reload remain unverified.

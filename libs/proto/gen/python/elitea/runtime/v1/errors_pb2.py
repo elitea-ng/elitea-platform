@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1e\x65litea/runtime/v1/errors.proto\x12\x11\x65litea.runtime.v1\"t\n\x0eRuntimeErrorV1\x12\x33\n\x04\x63ode\x18\x01 \x01(\x0e\x32%.elitea.runtime.v1.RuntimeErrorCodeV1\x12\x14\n\x0csafe_message\x18\x02 \x01(\t\x12\x11\n\tretryable\x18\x03 \x01(\x08J\x04\x08\x04\x10\x10*\xd2\x04\n\x12RuntimeErrorCodeV1\x12%\n!RUNTIME_ERROR_CODE_V1_UNSPECIFIED\x10\x00\x12\x30\n,RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY\x10\x01\x12.\n*RUNTIME_ERROR_CODE_V1_INCOMPATIBLE_VERSION\x10\x02\x12\'\n#RUNTIME_ERROR_CODE_V1_INVALID_INPUT\x10\x03\x12,\n(RUNTIME_ERROR_CODE_V1_RESOURCE_EXHAUSTED\x10\x04\x12\x30\n,RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE\x10\x05\x12/\n+RUNTIME_ERROR_CODE_V1_AUTHENTICATION_FAILED\x10\x06\x12.\n*RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED\x10\x07\x12%\n!RUNTIME_ERROR_CODE_V1_STALE_FENCE\x10\x08\x12#\n\x1fRUNTIME_ERROR_CODE_V1_CANCELLED\x10\t\x12,\n(RUNTIME_ERROR_CODE_V1_PROTOCOL_VIOLATION\x10\n\x12\"\n\x1eRUNTIME_ERROR_CODE_V1_INTERNAL\x10\x0b\x12+\n\'RUNTIME_ERROR_CODE_V1_DEADLINE_EXCEEDED\x10\x0c\x42SZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1e\x65litea/runtime/v1/errors.proto\x12\x11\x65litea.runtime.v1\"t\n\x0eRuntimeErrorV1\x12\x33\n\x04\x63ode\x18\x01 \x01(\x0e\x32%.elitea.runtime.v1.RuntimeErrorCodeV1\x12\x14\n\x0csafe_message\x18\x02 \x01(\t\x12\x11\n\tretryable\x18\x03 \x01(\x08J\x04\x08\x04\x10\x10*\x8b\x05\n\x12RuntimeErrorCodeV1\x12%\n!RUNTIME_ERROR_CODE_V1_UNSPECIFIED\x10\x00\x12\x30\n,RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY\x10\x01\x12.\n*RUNTIME_ERROR_CODE_V1_INCOMPATIBLE_VERSION\x10\x02\x12\'\n#RUNTIME_ERROR_CODE_V1_INVALID_INPUT\x10\x03\x12,\n(RUNTIME_ERROR_CODE_V1_RESOURCE_EXHAUSTED\x10\x04\x12\x30\n,RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE\x10\x05\x12/\n+RUNTIME_ERROR_CODE_V1_AUTHENTICATION_FAILED\x10\x06\x12.\n*RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED\x10\x07\x12%\n!RUNTIME_ERROR_CODE_V1_STALE_FENCE\x10\x08\x12#\n\x1fRUNTIME_ERROR_CODE_V1_CANCELLED\x10\t\x12,\n(RUNTIME_ERROR_CODE_V1_PROTOCOL_VIOLATION\x10\n\x12\"\n\x1eRUNTIME_ERROR_CODE_V1_INTERNAL\x10\x0b\x12+\n\'RUNTIME_ERROR_CODE_V1_DEADLINE_EXCEEDED\x10\x0c\x12\x37\n3RUNTIME_ERROR_CODE_V1_OUTPUT_CONTINUATION_EXHAUSTED\x10\rBSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -33,7 +33,7 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'ZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1'
   _globals['_RUNTIMEERRORCODEV1']._serialized_start=172
-  _globals['_RUNTIMEERRORCODEV1']._serialized_end=766
+  _globals['_RUNTIMEERRORCODEV1']._serialized_end=823
   _globals['_RUNTIMEERRORV1']._serialized_start=53
   _globals['_RUNTIMEERRORV1']._serialized_end=169
 # @@protoc_insertion_point(module_scope)

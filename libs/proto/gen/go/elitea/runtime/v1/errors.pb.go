@@ -24,19 +24,20 @@ const (
 type RuntimeErrorCodeV1 int32
 
 const (
-	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_UNSPECIFIED            RuntimeErrorCodeV1 = 0
-	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY RuntimeErrorCodeV1 = 1
-	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INCOMPATIBLE_VERSION   RuntimeErrorCodeV1 = 2
-	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INVALID_INPUT          RuntimeErrorCodeV1 = 3
-	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_RESOURCE_EXHAUSTED     RuntimeErrorCodeV1 = 4
-	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE RuntimeErrorCodeV1 = 5
-	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_AUTHENTICATION_FAILED  RuntimeErrorCodeV1 = 6
-	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED   RuntimeErrorCodeV1 = 7
-	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_STALE_FENCE            RuntimeErrorCodeV1 = 8
-	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_CANCELLED              RuntimeErrorCodeV1 = 9
-	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PROTOCOL_VIOLATION     RuntimeErrorCodeV1 = 10
-	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INTERNAL               RuntimeErrorCodeV1 = 11
-	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_DEADLINE_EXCEEDED      RuntimeErrorCodeV1 = 12
+	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_UNSPECIFIED                   RuntimeErrorCodeV1 = 0
+	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY        RuntimeErrorCodeV1 = 1
+	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INCOMPATIBLE_VERSION          RuntimeErrorCodeV1 = 2
+	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INVALID_INPUT                 RuntimeErrorCodeV1 = 3
+	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_RESOURCE_EXHAUSTED            RuntimeErrorCodeV1 = 4
+	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE        RuntimeErrorCodeV1 = 5
+	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_AUTHENTICATION_FAILED         RuntimeErrorCodeV1 = 6
+	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED          RuntimeErrorCodeV1 = 7
+	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_STALE_FENCE                   RuntimeErrorCodeV1 = 8
+	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_CANCELLED                     RuntimeErrorCodeV1 = 9
+	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PROTOCOL_VIOLATION            RuntimeErrorCodeV1 = 10
+	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INTERNAL                      RuntimeErrorCodeV1 = 11
+	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_DEADLINE_EXCEEDED             RuntimeErrorCodeV1 = 12
+	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_OUTPUT_CONTINUATION_EXHAUSTED RuntimeErrorCodeV1 = 13
 )
 
 // Enum value maps for RuntimeErrorCodeV1.
@@ -55,21 +56,23 @@ var (
 		10: "RUNTIME_ERROR_CODE_V1_PROTOCOL_VIOLATION",
 		11: "RUNTIME_ERROR_CODE_V1_INTERNAL",
 		12: "RUNTIME_ERROR_CODE_V1_DEADLINE_EXCEEDED",
+		13: "RUNTIME_ERROR_CODE_V1_OUTPUT_CONTINUATION_EXHAUSTED",
 	}
 	RuntimeErrorCodeV1_value = map[string]int32{
-		"RUNTIME_ERROR_CODE_V1_UNSPECIFIED":            0,
-		"RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY": 1,
-		"RUNTIME_ERROR_CODE_V1_INCOMPATIBLE_VERSION":   2,
-		"RUNTIME_ERROR_CODE_V1_INVALID_INPUT":          3,
-		"RUNTIME_ERROR_CODE_V1_RESOURCE_EXHAUSTED":     4,
-		"RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE": 5,
-		"RUNTIME_ERROR_CODE_V1_AUTHENTICATION_FAILED":  6,
-		"RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED":   7,
-		"RUNTIME_ERROR_CODE_V1_STALE_FENCE":            8,
-		"RUNTIME_ERROR_CODE_V1_CANCELLED":              9,
-		"RUNTIME_ERROR_CODE_V1_PROTOCOL_VIOLATION":     10,
-		"RUNTIME_ERROR_CODE_V1_INTERNAL":               11,
-		"RUNTIME_ERROR_CODE_V1_DEADLINE_EXCEEDED":      12,
+		"RUNTIME_ERROR_CODE_V1_UNSPECIFIED":                   0,
+		"RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY":        1,
+		"RUNTIME_ERROR_CODE_V1_INCOMPATIBLE_VERSION":          2,
+		"RUNTIME_ERROR_CODE_V1_INVALID_INPUT":                 3,
+		"RUNTIME_ERROR_CODE_V1_RESOURCE_EXHAUSTED":            4,
+		"RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE":        5,
+		"RUNTIME_ERROR_CODE_V1_AUTHENTICATION_FAILED":         6,
+		"RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED":          7,
+		"RUNTIME_ERROR_CODE_V1_STALE_FENCE":                   8,
+		"RUNTIME_ERROR_CODE_V1_CANCELLED":                     9,
+		"RUNTIME_ERROR_CODE_V1_PROTOCOL_VIOLATION":            10,
+		"RUNTIME_ERROR_CODE_V1_INTERNAL":                      11,
+		"RUNTIME_ERROR_CODE_V1_DEADLINE_EXCEEDED":             12,
+		"RUNTIME_ERROR_CODE_V1_OUTPUT_CONTINUATION_EXHAUSTED": 13,
 	}
 )
 
@@ -170,7 +173,7 @@ const file_elitea_runtime_v1_errors_proto_rawDesc = "" +
 	"\x0eRuntimeErrorV1\x129\n" +
 	"\x04code\x18\x01 \x01(\x0e2%.elitea.runtime.v1.RuntimeErrorCodeV1R\x04code\x12!\n" +
 	"\fsafe_message\x18\x02 \x01(\tR\vsafeMessage\x12\x1c\n" +
-	"\tretryable\x18\x03 \x01(\bR\tretryableJ\x04\b\x04\x10\x10*\xd2\x04\n" +
+	"\tretryable\x18\x03 \x01(\bR\tretryableJ\x04\b\x04\x10\x10*\x8b\x05\n" +
 	"\x12RuntimeErrorCodeV1\x12%\n" +
 	"!RUNTIME_ERROR_CODE_V1_UNSPECIFIED\x10\x00\x120\n" +
 	",RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY\x10\x01\x12.\n" +
@@ -185,7 +188,8 @@ const file_elitea_runtime_v1_errors_proto_rawDesc = "" +
 	"(RUNTIME_ERROR_CODE_V1_PROTOCOL_VIOLATION\x10\n" +
 	"\x12\"\n" +
 	"\x1eRUNTIME_ERROR_CODE_V1_INTERNAL\x10\v\x12+\n" +
-	"'RUNTIME_ERROR_CODE_V1_DEADLINE_EXCEEDED\x10\fBSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"'RUNTIME_ERROR_CODE_V1_DEADLINE_EXCEEDED\x10\f\x127\n" +
+	"3RUNTIME_ERROR_CODE_V1_OUTPUT_CONTINUATION_EXHAUSTED\x10\rBSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_errors_proto_rawDescOnce sync.Once

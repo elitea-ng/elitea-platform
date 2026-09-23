@@ -40,6 +40,7 @@ pub enum RuntimeFailureKind {
     ResourceExhausted,
     DependencyUnavailable,
     DeadlineExceeded,
+    OutputContinuationExhausted,
     AuthorizationFailed,
     Cancelled,
     Internal,
@@ -622,6 +623,11 @@ fn runtime_error(kind: RuntimeFailureKind) -> RuntimeErrorV1 {
             "Execution was cancelled.",
             false,
         ),
+        RuntimeFailureKind::OutputContinuationExhausted => (
+            RuntimeErrorCodeV1::OutputContinuationExhausted,
+            "Automatic continuation could not finish. The model response is incomplete.",
+            false,
+        ),
         RuntimeFailureKind::Internal => (
             RuntimeErrorCodeV1::Internal,
             "The runtime operation failed.",
@@ -645,6 +651,7 @@ fn canonical_runtime_failure(error: &RuntimeErrorV1) -> Option<RuntimeFailureKin
         RuntimeFailureKind::DeadlineExceeded,
         RuntimeFailureKind::AuthorizationFailed,
         RuntimeFailureKind::Cancelled,
+        RuntimeFailureKind::OutputContinuationExhausted,
         RuntimeFailureKind::Internal,
     ]
     .into_iter()
@@ -973,4 +980,30 @@ fn validate_fence(fence: &ExecutionFenceV1) -> Result<(), ProtocolError> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod continuation_failure_tests {
+    use super::*;
+
+    #[test]
+    fn incomplete_output_has_a_restorable_registered_failure() {
+        let error = runtime_error(RuntimeFailureKind::OutputContinuationExhausted);
+        assert_eq!(
+            error.code,
+            RuntimeErrorCodeV1::OutputContinuationExhausted as i32
+        );
+        assert_eq!(
+            error.safe_message,
+            "Automatic continuation could not finish. The model response is incomplete."
+        );
+        assert!(!error.retryable);
+        assert_eq!(
+            canonical_runtime_failure(&error),
+            Some(RuntimeFailureKind::OutputContinuationExhausted)
+        );
+        let mut injected = error;
+        injected.safe_message = "untrusted provider detail".into();
+        assert_eq!(canonical_runtime_failure(&injected), None);
+    }
 }

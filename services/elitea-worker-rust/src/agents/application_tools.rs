@@ -91,6 +91,7 @@ enum ApplicationEventSignal {
 #[derive(Clone, Copy)]
 enum ApplicationEventFailure {
     ChildExecution,
+    OutputContinuation,
 }
 
 #[derive(Clone)]
@@ -1781,8 +1782,12 @@ impl ApplicationAgentTool {
             let mut event = match result {
                 Ok(event) => event,
                 Err(error) => {
-                    self.send_fatal(ApplicationEventFailure::ChildExecution)
-                        .await?;
+                    let failure = if error.code == "model.output_continuation_failed" {
+                        ApplicationEventFailure::OutputContinuation
+                    } else {
+                        ApplicationEventFailure::ChildExecution
+                    };
+                    self.send_fatal(failure).await?;
                     return Err(error);
                 }
             };
@@ -2359,6 +2364,9 @@ fn application_signal_event(signal: ApplicationEventSignal) -> adk_rust::Result<
                 .insert(DESCENDANT_PARENT_CALL_KEY.to_owned(), parent_call_id);
             Ok(event)
         }
+        ApplicationEventSignal::Fatal(ApplicationEventFailure::OutputContinuation) => {
+            Err(super::model_checkpoint::output::exhausted())
+        }
         ApplicationEventSignal::Fatal(ApplicationEventFailure::ChildExecution) => {
             Err(child_execution_error())
         }
@@ -2818,6 +2826,15 @@ fn resource_exhausted() -> NativeAgentAssemblyError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn child_fatal_channel_preserves_incomplete_continuation() {
+        let error = application_signal_event(ApplicationEventSignal::Fatal(
+            ApplicationEventFailure::OutputContinuation,
+        ))
+        .unwrap_err();
+        assert_eq!(error.code, "model.output_continuation_failed");
+    }
 
     fn application_call_event(
         id: &str,

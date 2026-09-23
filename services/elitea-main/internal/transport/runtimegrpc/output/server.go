@@ -1078,6 +1078,8 @@ func runtimeFailurePolicyFor(code runtimev1.RuntimeErrorCodeV1) (runtimeFailureP
 		return runtimeFailurePolicy{Code: "AUTHORIZATION_FAILED", SafeMessage: "Execution authorization failed."}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_CANCELLED:
 		return runtimeFailurePolicy{Code: "CANCELLED", SafeMessage: "Execution was cancelled."}, true
+	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_OUTPUT_CONTINUATION_EXHAUSTED:
+		return runtimeFailurePolicy{Code: "OUTPUT_CONTINUATION_EXHAUSTED", SafeMessage: "Automatic continuation could not finish. The model response is incomplete."}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INTERNAL:
 		return runtimeFailurePolicy{Code: "INTERNAL", SafeMessage: "The runtime operation failed."}, true
 	default:
