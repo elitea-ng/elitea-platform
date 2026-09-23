@@ -727,3 +727,12 @@ other instructions, schema contents, and ADK final validation remain unchanged. 
 regression asserts that the original instruction is present initially and the scoped version
 replaces it in the continuation request. This is a targeted adapter for the vendored ADK
 instruction contract, not a general prompt rewrite.
+
+The generated-instruction correction (`ce6879fb`) was deployed as
+`sha256:309d713f72002f907886ddf4464be1ebd8db163d5354838fbc087965190963a2`.
+Fresh browser chat 648, execution `071936cde2ae22228bc3654c50eca496`, now passes
+continuation overlap: three model calls produce all 40 records and the final marker in a
+complete JSON answer. The run still terminates with `INTERNAL` during `model_tool_loop`,
+so it is not accepted. This moves investigation to ADK final validation / completion handling;
+the graph's generic error mapping currently obscures that underlying reason. The browser
+has no runtime errors. Keep this distinct from the earlier boundary failures.
