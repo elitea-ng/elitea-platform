@@ -45,7 +45,10 @@ const MAX_SSE_EVENT_BYTES: usize = 256 * 1_024;
 const MAX_STREAM_BYTES: usize = 8 * 1_024 * 1_024;
 const MAX_COMPLETION_BYTES: usize = 4 * 1024 * 1024;
 const MAX_SSE_EVENTS: usize = 4_096;
-const MAX_MODEL_TURNS: u32 = 1_024;
+// Provider calls include the bounded final-answer continuation calls; logical
+// agent steps remain independently bounded by MAX_AGENT_STEP_LIMIT.
+const MAX_MODEL_TURNS: u32 = crate::agents::assembly::MAX_AGENT_STEP_LIMIT
+    + crate::agents::request::MAX_OUTPUT_CONTINUATION_CALLS;
 const MAX_TOOL_CALLS_PER_TURN: usize = 16;
 const MAX_TOOL_NAME_BYTES: usize = 256;
 const MAX_TOOL_CALL_ID_BYTES: usize = 512;

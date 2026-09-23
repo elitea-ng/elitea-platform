@@ -426,15 +426,10 @@ impl ScopedModelCheckpoint {
         })
     }
 
-    pub(super) fn delegation_model(
-        self: Arc<Self>,
-        inner: Arc<dyn Llm>,
-        max_model_turns: u32,
-    ) -> Arc<dyn Llm> {
+    pub(super) fn delegation_model(self: Arc<Self>, inner: Arc<dyn Llm>) -> Arc<dyn Llm> {
         Arc::new(ScopedDelegationModel {
             checkpoint: self,
             inner,
-            max_model_turns,
         })
     }
 
@@ -490,7 +485,6 @@ impl ScopedModelCheckpoint {
 struct ScopedDelegationModel {
     checkpoint: Arc<ScopedModelCheckpoint>,
     inner: Arc<dyn Llm>,
-    max_model_turns: u32,
 }
 
 #[async_trait]
@@ -509,13 +503,7 @@ impl Llm for ScopedDelegationModel {
         request: LlmRequest,
         stream: bool,
     ) -> adk_rust::Result<adk_rust::LlmResponseStream> {
-        output::generate(
-            self.checkpoint.clone(),
-            self.inner.clone(),
-            request,
-            stream,
-            self.max_model_turns,
-        )
+        output::generate(self.checkpoint.clone(), self.inner.clone(), request, stream)
     }
 }
 

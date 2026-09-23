@@ -1438,7 +1438,17 @@ impl LazyNestedAgent {
             max_tokens: self.profile.max_tokens(),
             reasoning_effort: self.profile.reasoning_effort().map(model_reasoning_effort),
             temperature: self.profile.temperature(),
-            max_model_turns: self.profile.step_limit(),
+            // A truncated final answer has its own bounded continuation allowance.
+            // ADK still admits only step_limit logical model/tool iterations.
+            max_model_turns: self.profile.step_limit()
+                + if matches!(
+                    self.profile.context_management(),
+                    ContextManagementPlan::Summarize(_)
+                ) {
+                    crate::agents::request::MAX_OUTPUT_CONTINUATION_CALLS
+                } else {
+                    0
+                },
         };
         let adapter = match self.profile.model_provider() {
             OrdinaryModelProvider::OpenAiChat => ModelAdapterKind::OpenAiCompatible,
@@ -1493,11 +1503,7 @@ impl LazyNestedAgent {
             crate::toolkits::bind_authorization_model_tools(model, toolsets, &mut authorization)?;
         let model = checkpoint.as_ref().map_or_else(
             || model.clone(),
-            |checkpoint| {
-                checkpoint
-                    .clone()
-                    .delegation_model(model.clone(), self.profile.step_limit())
-            },
+            |checkpoint| checkpoint.clone().delegation_model(model.clone()),
         );
         let mut builder = LlmAgentBuilder::new(self.name.clone())
             .description(self.description.clone())

@@ -24,7 +24,7 @@ const MAX_MODEL_NAME_BYTES: usize = 256;
 const MAX_USER_INPUT_BYTES: usize = 512 * 1_024;
 const MAX_CHAT_HISTORY_MESSAGES: usize = 999;
 pub(super) const DEFAULT_AGENT_STEP_LIMIT: u32 = 25;
-pub(super) const MAX_AGENT_STEP_LIMIT: u32 = 1_024;
+pub(crate) const MAX_AGENT_STEP_LIMIT: u32 = 1_024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ReasoningEffort {

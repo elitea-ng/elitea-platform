@@ -2,7 +2,7 @@
 
 use super::{ScopedModelCheckpoint, invalid_scope};
 use crate::agents::model_checkpoint::output::{OutputContinuation, exhausted};
-use crate::agents::request::MAX_OUTPUT_CONTINUATION_BYTES;
+use crate::agents::request::{MAX_OUTPUT_CONTINUATION_BYTES, MAX_OUTPUT_CONTINUATION_CALLS};
 use adk_rust::futures::StreamExt as _;
 use adk_rust::{
     BeforeModelResult, Content, FinishReason, Llm, LlmRequest, LlmResponse, LlmResponseStream, Part,
@@ -15,15 +15,13 @@ pub(super) fn generate(
     inner: Arc<dyn Llm>,
     mut request: LlmRequest,
     stream: bool,
-    max_model_turns: u32,
 ) -> adk_rust::Result<LlmResponseStream> {
     let writer = scope.writer.get().ok_or_else(invalid_scope)?;
     let saved = writer.checkpoint.output_continuation()?;
     save_completion(&scope.output_completion, None)?;
-    if max_model_turns == 0
-        || saved
-            .as_ref()
-            .is_some_and(|state| state.round >= max_model_turns)
+    if saved
+        .as_ref()
+        .is_some_and(|state| state.round > MAX_OUTPUT_CONTINUATION_CALLS)
     {
         return Err(exhausted());
     }
@@ -75,7 +73,7 @@ pub(super) fn generate(
             drop(responses);
             let boundary_tail = if invalid_boundary { None } else { seam.finish_or_repair()? };
             let Some(boundary_tail) = boundary_tail else {
-                let (prepared, next) = prepare_repair(&scope, request, state.as_ref(), max_model_turns).await?;
+                let (prepared, next) = prepare_repair(&scope, request, state.as_ref()).await?;
                 request = prepared;
                 state = Some(next);
                 // A yield after the durable boundary allows recovery without
@@ -103,7 +101,7 @@ pub(super) fn generate(
             if has_tools { Err(exhausted())?; }
             extend(&mut prefix, &segment)?;
             let round = state.as_ref().map_or(1, |state| state.round.saturating_add(1));
-            if round >= max_model_turns { Err(exhausted())?; }
+            if round > MAX_OUTPUT_CONTINUATION_CALLS { Err(exhausted())?; }
             let next = OutputContinuation {
                 prefix: prefix.clone(), round,
                 repair_used: state.as_ref().is_some_and(|state| state.repair_used),
@@ -149,11 +147,10 @@ async fn prepare_repair(
     scope: &ScopedModelCheckpoint,
     request: LlmRequest,
     previous: Option<&OutputContinuation>,
-    max_model_turns: u32,
 ) -> adk_rust::Result<(LlmRequest, OutputContinuation)> {
     let previous = previous.ok_or_else(exhausted)?;
     let round = previous.round.saturating_add(1);
-    if previous.repair_used || round >= max_model_turns {
+    if previous.repair_used || round > MAX_OUTPUT_CONTINUATION_CALLS {
         return Err(exhausted());
     }
     if let Some(completion) = &scope.completion {

@@ -831,7 +831,7 @@ async fn child_output_continues_without_repeating_the_anchor() {
     ]);
     let output = scope
         .clone()
-        .delegation_model(model.clone(), 25)
+        .delegation_model(model.clone())
         .generate_content(request, true)
         .await
         .unwrap();
@@ -861,7 +861,7 @@ async fn child_output_recovery_restores_prefix_and_exact_pending_request() {
     let first_model = OutputModel::new(vec![("First part", MaxTokens)]);
     let mut output = first
         .clone()
-        .delegation_model(first_model.clone(), 25)
+        .delegation_model(first_model.clone())
         .generate_content(request, true)
         .await
         .unwrap();
@@ -885,7 +885,7 @@ async fn child_output_recovery_restores_prefix_and_exact_pending_request() {
     );
     let model = OutputModel::new(vec![("First part and ending", Stop)]);
     let output = replacement
-        .delegation_model(model.clone(), 25)
+        .delegation_model(model.clone())
         .generate_content(request, true)
         .await
         .unwrap();
@@ -912,7 +912,7 @@ async fn child_output_refuses_an_unverified_continuation_seam() {
     ]);
     let output = scope
         .clone()
-        .delegation_model(model, 25)
+        .delegation_model(model)
         .generate_content(request, true)
         .await
         .unwrap();
@@ -940,7 +940,7 @@ async fn child_output_reasoning_only_exhaustion_retries_for_visible_answer() {
     let request = simple_request(&scope, &child).await;
     let model = OutputModel::new(vec![("", MaxTokens), ("Complete answer", Stop)]);
     let output = scope
-        .delegation_model(model, 25)
+        .delegation_model(model)
         .generate_content(request, true)
         .await
         .unwrap();
@@ -963,7 +963,7 @@ async fn adk_child_returns_one_complete_answer_after_multiple_output_continuatio
         .clone()
         .bind(
             LlmAgentBuilder::new(child.agent_name())
-                .model(scope.clone().delegation_model(model.clone(), 25)),
+                .model(scope.clone().delegation_model(model.clone())),
         )
         .build()
         .unwrap();
@@ -1057,7 +1057,7 @@ async fn postgres_child_output_continuation_survives_claim_takeover() {
     let model = OutputModel::new(vec![("Accepted prefix", MaxTokens)]);
     let mut output = first
         .clone()
-        .delegation_model(model, 25)
+        .delegation_model(model)
         .generate_content(request, true)
         .await
         .unwrap();
@@ -1092,7 +1092,7 @@ async fn postgres_child_output_continuation_survives_claim_takeover() {
     let request = simple_request(&replacement, &child).await;
     let model = OutputModel::new(vec![("Accepted prefix and complete ending", Stop)]);
     let output = replacement
-        .delegation_model(model.clone(), 25)
+        .delegation_model(model.clone())
         .generate_content(request, true)
         .await
         .unwrap();
@@ -1105,7 +1105,7 @@ async fn postgres_child_output_continuation_survives_claim_takeover() {
 }
 
 #[tokio::test]
-async fn child_output_uses_admitted_turn_limit_instead_of_a_four_retry_cap() {
+async fn child_output_accepts_completion_on_fourth_continuation() {
     use adk_rust::FinishReason::{MaxTokens, Stop};
     let storage = storage(ModelScopeBackend::Local(Arc::new(
         InMemorySessionService::new(),
@@ -1118,20 +1118,19 @@ async fn child_output_uses_admitted_turn_limit_instead_of_a_four_retry_cap() {
         ("ab", MaxTokens),
         ("abc", MaxTokens),
         ("abcd", MaxTokens),
-        ("abcde", MaxTokens),
-        ("abcdef", Stop),
+        ("abcde", Stop),
     ]);
     let output = scope
-        .delegation_model(model.clone(), 6)
+        .delegation_model(model.clone())
         .generate_content(request, true)
         .await
         .unwrap();
-    assert_eq!(collect_output(output).await.unwrap(), "abcdef");
-    assert_eq!(model.requests.lock().unwrap().len(), 6);
+    assert_eq!(collect_output(output).await.unwrap(), "abcde");
+    assert_eq!(model.requests.lock().unwrap().len(), 5);
 }
 
 #[tokio::test]
-async fn child_output_stops_before_exceeding_its_admitted_turn_limit() {
+async fn child_output_never_dispatches_a_fifth_continuation() {
     use adk_rust::FinishReason::MaxTokens;
     let storage = storage(ModelScopeBackend::Local(Arc::new(
         InMemorySessionService::new(),
@@ -1139,9 +1138,15 @@ async fn child_output_stops_before_exceeding_its_admitted_turn_limit() {
     let child = Context::child("bounded-output");
     let scope = checkpoint(&storage, Arc::new(Summary::default()));
     let request = simple_request(&scope, &child).await;
-    let model = OutputModel::new(vec![("a", MaxTokens), ("ab", MaxTokens)]);
+    let model = OutputModel::new(vec![
+        ("a", MaxTokens),
+        ("ab", MaxTokens),
+        ("abc", MaxTokens),
+        ("abcd", MaxTokens),
+        ("abcde", MaxTokens),
+    ]);
     let output = scope
-        .delegation_model(model.clone(), 2)
+        .delegation_model(model.clone())
         .generate_content(request, true)
         .await
         .unwrap();
@@ -1149,7 +1154,83 @@ async fn child_output_stops_before_exceeding_its_admitted_turn_limit() {
         collect_output(output).await.unwrap_err().code,
         "model.output_continuation_failed"
     );
-    assert_eq!(model.requests.lock().unwrap().len(), 2);
+    assert_eq!(model.requests.lock().unwrap().len(), 5);
+}
+
+#[tokio::test]
+async fn child_output_repair_consumes_one_of_four_continuations() {
+    use adk_rust::FinishReason::{MaxTokens, Stop};
+    let storage = storage(ModelScopeBackend::Local(Arc::new(
+        InMemorySessionService::new(),
+    )));
+    let child = Context::child("repair-counts-toward-cap");
+    let scope = checkpoint(&storage, Arc::new(Summary::default()));
+    let request = simple_request(&scope, &child).await;
+    let model = OutputModel::new(vec![
+        ("a", MaxTokens),
+        ("ab", MaxTokens),
+        ("INVALID", Stop),
+        ("abc", MaxTokens),
+        ("abcd", MaxTokens),
+    ]);
+    let output = scope
+        .delegation_model(model.clone())
+        .generate_content(request, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        collect_output(output).await.unwrap_err().code,
+        "model.output_continuation_failed"
+    );
+    assert_eq!(model.requests.lock().unwrap().len(), 5);
+}
+
+#[tokio::test]
+async fn child_output_recovery_keeps_only_the_remaining_continuation_allowance() {
+    use adk_rust::FinishReason::MaxTokens;
+    let storage = storage(ModelScopeBackend::Local(Arc::new(
+        InMemorySessionService::new(),
+    )));
+    let child = Context::child("fourth-continuation-recovery");
+    let summary = Arc::new(Summary::default());
+    let first = checkpoint(&storage, summary.clone());
+    let request = simple_request(&first, &child).await;
+    let model = OutputModel::new(vec![
+        ("a", MaxTokens),
+        ("ab", MaxTokens),
+        ("abc", MaxTokens),
+        ("abcd", MaxTokens),
+    ]);
+    let mut output = first
+        .clone()
+        .delegation_model(model.clone())
+        .generate_content(request, true)
+        .await
+        .unwrap();
+    // Each fixture call emits its text and the persisted continuation boundary.
+    for _ in 0..8 {
+        output.next().await.unwrap().unwrap();
+    }
+    drop(output);
+    let saved = stored(&first, &child)
+        .await
+        .state()
+        .get(CHECKPOINT_KEY)
+        .unwrap();
+    assert_eq!(saved["output_continuation"]["round"], 4);
+    let replacement = checkpoint(&storage.with_pending_model_recovery(), summary);
+    let request = simple_request(&replacement, &child).await;
+    let model = OutputModel::new(vec![("abcde", MaxTokens)]);
+    let output = replacement
+        .delegation_model(model.clone())
+        .generate_content(request, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        collect_output(output).await.unwrap_err().code,
+        "model.output_continuation_failed"
+    );
+    assert_eq!(model.requests.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -1170,7 +1251,7 @@ async fn child_output_accepts_verified_suffix_without_changing_accepted_prefix()
         ),
     ]);
     let output = scope
-        .delegation_model(model, 25)
+        .delegation_model(model)
         .generate_content(request, true)
         .await
         .unwrap();
@@ -1195,7 +1276,7 @@ async fn child_output_repairs_one_invalid_boundary_without_accepting_rejected_te
         ("First part and ending", Stop),
     ]);
     let output = scope
-        .delegation_model(model.clone(), 25)
+        .delegation_model(model.clone())
         .generate_content(request, true)
         .await
         .unwrap();
@@ -1227,7 +1308,7 @@ async fn child_output_recovery_does_not_reset_boundary_repair_allowance() {
     ]);
     let mut output = first
         .clone()
-        .delegation_model(model.clone(), 25)
+        .delegation_model(model.clone())
         .generate_content(request, true)
         .await
         .unwrap();
@@ -1252,7 +1333,7 @@ async fn child_output_recovery_does_not_reset_boundary_repair_allowance() {
     );
     let model = OutputModel::new(vec![("STILL INVALID", Stop)]);
     let output = replacement
-        .delegation_model(model.clone(), 25)
+        .delegation_model(model.clone())
         .generate_content(request, true)
         .await
         .unwrap();
@@ -1294,7 +1375,7 @@ async fn postgres_boundary_repair_survives_claim_takeover() {
     ]);
     let mut output = first
         .clone()
-        .delegation_model(model, 25)
+        .delegation_model(model)
         .generate_content(request, true)
         .await
         .unwrap();
@@ -1342,7 +1423,7 @@ async fn postgres_boundary_repair_survives_claim_takeover() {
     );
     let model = OutputModel::new(vec![("Accepted prefix and complete ending", Stop)]);
     let output = replacement
-        .delegation_model(model.clone(), 25)
+        .delegation_model(model.clone())
         .generate_content(request, true)
         .await
         .unwrap();

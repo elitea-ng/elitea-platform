@@ -358,3 +358,39 @@ SDK functional reference: `_continue_nested_output` permits one invalid-seam ret
 Tests cover successful repair without rejected text, repeated mismatch failure, exact request restoration with the repair allowance already consumed, and provider replacement only after explicit discard. Live browser/restart acceptance of the repair path remains pending. Automatic-round policy and failed-child partial-result handling remain separate open items.
 
 Component validation: 411 PostgreSQL-enabled agent tests pass, including claim takeover after a persisted repair request. The replacement restores the exact request and the consumed repair allowance; the old writer is fenced out. Both provider facade suites pass 49 tests, including explicit discard/replacement and refusal to reset a consumed completion. Live repair-path acceptance remains pending.
+
+## Four-call continuation policy (2026-09-23)
+
+The user selected the current SDK's four automatic continuation calls, including
+one possible boundary repair, rather than coupling retries to the agent step limit.
+The initial answer call is not one of those four calls. Each call retains the
+configured output cap and context admission checks. No-progress and a second
+invalid boundary still terminate early with the explicit incomplete-response error.
+
+Rust `agents/request.rs::MAX_OUTPUT_CONTINUATION_CALLS` owns the fixed allowance.
+`agents/model_scope_output.rs` enforces it for both normal continuation and repair.
+The existing durable round is restored after interruption: recovery at round four
+allows only that pending fourth call, not a fresh allowance. Older saved rounds
+above four fail explicitly before provider dispatch; checkpoint decoding remains
+compatible. No persistence schema change is needed.
+
+`agents/application_tools.rs::LazyNestedAgent::bind_model` reserves four additional
+provider calls for checkpointed child final-answer continuation. ADK's logical
+`max_iterations(step_limit)` stays unchanged. The shared provider admission ceiling
+is correspondingly the maximum logical steps plus four, used by both native
+Anthropic and OpenAI-compatible routes. Continuation cannot introduce tool calls;
+it completes the child's final answer rather than adding agent/tool iterations.
+Explicitly disabled context-management children still bypass this scoped path;
+that pre-existing coverage gap is not closed by this policy change.
+
+Focused tests cover completion on the fourth continuation, no fifth dispatch,
+repair consuming the same allowance, and recovery retaining only the remaining
+allowance. Deployment and fresh browser acceptance of this policy are still pending.
+
+### Repair browser evidence correction
+
+Chat 635 (execution `c7206765a9b8f6edc024b3d5c0489eb9`) on the prior repair image
+completed all 120 records and survived reload, but did not emit a boundary mismatch
+or repair-checkpoint event. The synthetic refusal instruction did not exercise
+repair. This is ordinary continuation regression evidence only, not live repair
+acceptance. The PostgreSQL repair takeover tests remain component evidence.

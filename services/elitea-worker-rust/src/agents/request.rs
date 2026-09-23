@@ -1,3 +1,6 @@
+/// Additional calls for one truncated answer, including its one boundary repair.
+pub(crate) const MAX_OUTPUT_CONTINUATION_CALLS: u32 = 4;
+
 // Match completed-answer capacity; the full encoded request has its own bound.
 pub(super) const MAX_OUTPUT_CONTINUATION_BYTES: usize = 4 * 1_024 * 1_024;
 
