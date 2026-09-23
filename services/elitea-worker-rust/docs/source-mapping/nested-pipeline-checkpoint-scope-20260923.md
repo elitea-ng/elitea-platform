@@ -1,7 +1,7 @@
 # Nested pipeline checkpoint scope
 
 Date: 2026-09-23.
-Status: component checks pass; deployed acceptance remains open.
+Status: component checks and deployed nested failure acceptance pass.
 
 ## Failure evidence
 
@@ -52,3 +52,24 @@ Successful component checks alone do not close that acceptance gate.
 All 1,214 worker library tests pass with PostgreSQL available.
 Clippy passes for the library and tests with warnings denied.
 The new PostgreSQL regression executes the child graph and verifies claim takeover.
+
+## Deployed acceptance
+
+Worker revision `fdb9619e` runs as image `sha256:540cd43fbc8184d2d351adee13cb5c92e133d341c574c52553265e3a3c74405e`.
+The deployment preserves the existing environment, networks, limits, and five mounts.
+
+A fresh headed Playwright browser reruns conversation 665 without mocked responses.
+Execution `c2cf1d238aeeb022b2f9abc10a23ff8a` returns `OUTPUT_CONTINUATION_EXHAUSTED`.
+The friendly continuation error persists after reload. No browser error occurs.
+No downstream sentinel appears. No partial response is offered by this case.
+
+PostgreSQL contains both root and delegate checkpoint writer bindings.
+The child model session contains five events.
+The root checkpoint retains delegate as pending, with empty answer and final_text fields.
+The failing child does not commit a completed graph frontier.
+These records prove child execution and downstream suppression, not live crash recovery of a successful child.
+The PostgreSQL component test separately proves stored child recovery and stale-writer refusal.
+
+The UI still shows a generic continuation explanation.
+Preservation of the exact nested continuation cause remains a separate gate 4 diagnostic gap.
+Evidence files: `elitea-pipeline-nested-failure-live.json` and `elitea-pipeline-nested-failure-live.png` in the local test evidence directory.

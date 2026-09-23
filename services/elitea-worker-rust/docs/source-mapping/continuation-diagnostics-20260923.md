@@ -68,7 +68,7 @@ Use the execution boundary, not the application type name, to select behavior.
 | Direct pipeline | LLM node continuation | Stop before downstream state is written | Existing focused graph test passes |
 | Direct pipeline | Agent node calling an Agent application | Stop with the typed failure | Local classification and deployed graph acceptance pass |
 | Pipeline | Nested pipeline | Propagate failure; do not release partial state as success | Open |
-| Pipeline Agent node | Pipeline application | Propagate failure to the owning graph | Open |
+| Pipeline Agent node | Pipeline application | Propagate failure to the owning graph | Deployed continuation code and downstream suppression pass; exact cause remains open |
 | Chat orchestrator | Pipeline child | Stop the child graph; report its contained failure to the parent | Open |
 | Any scope | Cancellation or execution-wide limit | Preserve control semantics; do not offer automatic retry | Existing handling retained; combination tests remain |
 
