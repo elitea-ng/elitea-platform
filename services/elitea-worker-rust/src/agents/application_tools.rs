@@ -109,7 +109,7 @@ pub(super) enum ApplicationEventSignal {
 #[derive(Clone, Copy)]
 pub(super) enum ApplicationEventFailure {
     ChildExecution,
-    OutputContinuation,
+    OutputContinuation(super::model_checkpoint::output::ContinuationFailure),
 }
 
 #[derive(Clone)]
@@ -2249,7 +2249,11 @@ impl ApplicationAgentTool {
                 Ok(event) => event,
                 Err(error) => {
                     let failure = if error.code == "model.output_continuation_failed" {
-                        ApplicationEventFailure::OutputContinuation
+                        ApplicationEventFailure::OutputContinuation(
+                            super::model_checkpoint::output::failure_reason(&error).unwrap_or(
+                                super::model_checkpoint::output::ContinuationFailure::ChildFailure,
+                            ),
+                        )
                     } else {
                         ApplicationEventFailure::ChildExecution
                     };
@@ -2841,8 +2845,8 @@ pub(super) fn application_signal_event(signal: ApplicationEventSignal) -> adk_ru
             }
             Ok(event)
         }
-        ApplicationEventSignal::Fatal(ApplicationEventFailure::OutputContinuation) => {
-            Err(super::model_checkpoint::output::exhausted())
+        ApplicationEventSignal::Fatal(ApplicationEventFailure::OutputContinuation(reason)) => {
+            Err(super::model_checkpoint::output::failed(reason))
         }
         ApplicationEventSignal::Fatal(ApplicationEventFailure::ChildExecution) => {
             Err(child_execution_error())
@@ -3351,10 +3355,16 @@ mod tests {
     #[test]
     fn child_fatal_channel_preserves_incomplete_continuation() {
         let error = application_signal_event(ApplicationEventSignal::Fatal(
-            ApplicationEventFailure::OutputContinuation,
+            ApplicationEventFailure::OutputContinuation(
+                crate::agents::model_checkpoint::output::ContinuationFailure::CallLimit,
+            ),
         ))
         .unwrap_err();
         assert_eq!(error.code, "model.output_continuation_failed");
+        assert!(matches!(
+            crate::agents::model_checkpoint::output::failure_reason(&error),
+            Some(crate::agents::model_checkpoint::output::ContinuationFailure::CallLimit)
+        ));
     }
 
     fn application_call_event(

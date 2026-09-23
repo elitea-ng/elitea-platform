@@ -153,18 +153,90 @@ impl ModelCheckpointWriter {
     }
 }
 
-pub(in crate::agents) fn exhausted() -> AdkError {
+/// This cause contains no provider text, arguments, or credentials.
+#[derive(Clone, Copy, Debug, thiserror::Error)]
+pub(in crate::agents) enum ContinuationFailure {
+    #[error("The child could not finish its answer; its detailed cause is unavailable.")]
+    ChildFailure,
+    #[error("The model stream ended without a completion marker.")]
+    MissingCompletion,
+    #[error("The continuation returned no new answer text.")]
+    NoProgress,
+    #[error("The output limit interrupted a tool call.")]
+    TruncatedToolCall,
+    #[error("The answer still reached the output limit after four continuation calls.")]
+    CallLimit,
+    #[error("The continuation returned a tool call instead of the missing answer text.")]
+    UnexpectedToolCall,
+    #[error("The continuation did not preserve the answer boundary after the permitted repair.")]
+    BoundaryRepairFailed,
+    #[error("The answer boundary needs repair, but all four continuation calls were used.")]
+    RepairCallLimit,
+    #[error("The saved continuation exceeds the four-call limit.")]
+    InvalidSavedRound,
+    #[error("The model checkpoint skipped the required continuation call.")]
+    SkippedCall,
+    #[error("The accumulated answer exceeded the output byte limit.")]
+    ByteLimit,
+    #[error("The completion store cannot discard an unaccepted continuation.")]
+    DiscardUnavailable,
+    #[error("The answer boundary needs repair, but no continuation state is available.")]
+    MissingRepairState,
+}
+
+pub(in crate::agents) fn failed(reason: ContinuationFailure) -> AdkError {
     AdkError::new(
         adk_rust::ErrorComponent::Model,
         adk_rust::ErrorCategory::Internal,
         "model.output_continuation_failed",
-        "The child model could not complete its answer within the continuation contract.",
+        reason.to_string(),
     )
+    .with_source(reason)
+}
+
+/// Inspect only our typed cause. Never format an arbitrary provider error chain.
+pub(in crate::agents) fn failure_reason(error: &AdkError) -> Option<ContinuationFailure> {
+    use std::error::Error as _;
+    let mut source = error.source();
+    for _ in 0..16 {
+        let current = source?;
+        if let Some(reason) = current.downcast_ref::<ContinuationFailure>() {
+            return Some(*reason);
+        }
+        source = current.source();
+    }
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn operator_cause_survives_wrapping_without_reading_provider_text() {
+        let error = AdkError::new(
+            adk_rust::ErrorComponent::Model,
+            adk_rust::ErrorCategory::Internal,
+            "wrapper",
+            "PRIVATE_PROVIDER_BODY",
+        )
+        .with_source(failed(ContinuationFailure::NoProgress));
+        assert!(matches!(
+            failure_reason(&error),
+            Some(ContinuationFailure::NoProgress)
+        ));
+        assert_eq!(
+            failure_reason(&error).unwrap().to_string(),
+            "The continuation returned no new answer text."
+        );
+        let unknown = AdkError::new(
+            adk_rust::ErrorComponent::Model,
+            adk_rust::ErrorCategory::Internal,
+            "model.output_continuation_failed",
+            "PRIVATE_PROVIDER_BODY",
+        );
+        assert!(failure_reason(&unknown).is_none());
+    }
 
     fn request() -> LlmRequest {
         serde_json::from_value(serde_json::json!({"model":"fixture","contents":[{"role":"user","parts":[{"text":"Original task"}]}]})).unwrap()

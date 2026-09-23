@@ -956,6 +956,11 @@ impl NativeAgentRuntimeError {
             .unwrap_or("disabled_or_rate_limited")
     }
 
+    pub(crate) fn failure_message(&self) -> Option<String> {
+        super::model_checkpoint::output::failure_reason(self.upstream.as_deref()?)
+            .map(|reason| reason.to_string())
+    }
+
     pub(crate) fn upstream_code(&self) -> Option<&'static str> {
         self.upstream.as_ref().map(|error| error.code)
     }

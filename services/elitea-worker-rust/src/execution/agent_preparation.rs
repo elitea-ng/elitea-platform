@@ -843,6 +843,14 @@ where
 
 #[allow(dead_code)] // Consumed by the capability-disabled native lifecycle.
 impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
+    pub(super) fn trace_execution_id(&self) -> &str {
+        &self.verified.command().execution_id
+    }
+
+    pub(super) const fn trace_generation(&self) -> u64 {
+        self.verified.command().generation
+    }
+
     #[must_use]
     pub(crate) const fn execution_kind(&self) -> AgentExecutionKind {
         self.request.kind

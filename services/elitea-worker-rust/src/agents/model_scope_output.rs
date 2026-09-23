@@ -1,7 +1,9 @@
 //! Continue an output-limited child within its existing model/checkpoint scope.
 
 use super::{ScopedModelCheckpoint, invalid_scope};
-use crate::agents::model_checkpoint::output::{OutputContinuation, exhausted};
+use crate::agents::model_checkpoint::output::{
+    ContinuationFailure as Failure, OutputContinuation, failed,
+};
 use crate::agents::request::{MAX_OUTPUT_CONTINUATION_BYTES, MAX_OUTPUT_CONTINUATION_CALLS};
 use adk_rust::futures::StreamExt as _;
 use adk_rust::{
@@ -79,12 +81,12 @@ pub(super) fn generate(
                 yield LlmResponse { partial: true, ..LlmResponse::default() };
                 continue;
             };
-            let mut terminal = terminal.ok_or_else(exhausted)?;
+            let mut terminal = terminal.ok_or_else(|| failed(Failure::MissingCompletion))?;
             if !boundary_tail.is_empty() {
                 extend(&mut segment, &boundary_tail)?;
                 yield LlmResponse { content: Some(Content::new("model").with_text(boundary_tail)), partial: true, ..LlmResponse::default() };
             }
-            if state.is_some() && segment.is_empty() { Err(exhausted())?; }
+            if state.is_some() && segment.is_empty() { Err(failed(Failure::NoProgress))?; }
             if terminal.finish_reason != Some(FinishReason::MaxTokens) {
                 if !has_tools && matches!(terminal.finish_reason, None | Some(FinishReason::Stop)) {
                     extend(&mut prefix, &segment)?;
@@ -99,11 +101,11 @@ pub(super) fn generate(
                 yield terminal;
                 return;
             }
-            if has_tools { Err(exhausted())?; }
+            if has_tools { Err(failed(Failure::TruncatedToolCall))?; }
             extend(&mut prefix, &segment)?;
             save_completion(&scope.output_partial, Some(prefix.clone()))?;
             let round = state.as_ref().map_or(1, |state| state.round.saturating_add(1));
-            if round > MAX_OUTPUT_CONTINUATION_CALLS { Err(exhausted())?; }
+            if round > MAX_OUTPUT_CONTINUATION_CALLS { Err(failed(Failure::CallLimit))?; }
             let next = OutputContinuation {
                 prefix: prefix.clone(), round, structured_output,
                 repair_used: state.as_ref().is_some_and(|state| state.repair_used),
@@ -138,7 +140,7 @@ fn restore_output(
         .as_ref()
         .is_some_and(|state| state.round > MAX_OUTPUT_CONTINUATION_CALLS)
     {
-        return Err(exhausted());
+        return Err(failed(Failure::InvalidSavedRound));
     }
     Ok((saved, structured_output))
 }
@@ -171,7 +173,7 @@ fn structured_fragments(mut responses: LlmResponseStream) -> LlmResponseStream {
             }
             yield response;
         }
-        Err(exhausted())?;
+        Err(failed(Failure::MissingCompletion))?;
     })
 }
 
@@ -202,7 +204,7 @@ fn rewrite_content(
                 }
                 Part::FunctionCall { .. } | Part::FunctionResponse { .. } => {
                     if is_continuation {
-                        return Err(exhausted());
+                        return Err(failed(Failure::UnexpectedToolCall));
                     }
                     has_tools = true;
                 }
@@ -218,10 +220,13 @@ async fn prepare_repair(
     request: LlmRequest,
     previous: Option<&OutputContinuation>,
 ) -> adk_rust::Result<(LlmRequest, OutputContinuation)> {
-    let previous = previous.ok_or_else(exhausted)?;
+    let previous = previous.ok_or_else(|| failed(Failure::MissingRepairState))?;
     let round = previous.round.saturating_add(1);
-    if previous.repair_used || round > MAX_OUTPUT_CONTINUATION_CALLS {
-        return Err(exhausted());
+    if previous.repair_used {
+        return Err(failed(Failure::BoundaryRepairFailed));
+    }
+    if round > MAX_OUTPUT_CONTINUATION_CALLS {
+        return Err(failed(Failure::RepairCallLimit));
     }
     if let Some(completion) = &scope.completion {
         completion.discard_unaccepted()?;
@@ -264,13 +269,13 @@ async fn prepare_next(
         .await?
     {
         BeforeModelResult::Continue(prepared) => Ok(prepared),
-        BeforeModelResult::Skip(_) => Err(exhausted()),
+        BeforeModelResult::Skip(_) => Err(failed(Failure::SkippedCall)),
     }
 }
 
 fn extend(target: &mut String, text: &str) -> adk_rust::Result<()> {
     if target.len().saturating_add(text.len()) > MAX_OUTPUT_CONTINUATION_BYTES {
-        return Err(exhausted());
+        return Err(failed(Failure::ByteLimit));
     }
     target.push_str(text);
     Ok(())

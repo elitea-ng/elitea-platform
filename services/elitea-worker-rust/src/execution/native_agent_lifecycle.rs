@@ -378,7 +378,10 @@ where
         }
         Err(failure) => {
             let (run, error) = (*failure).into_parts();
-            tracing::warn!(
+            tracing::error!(
+                execution_id = %run.trace_execution_id(),
+                generation = run.trace_generation(),
+                cause_message = error.failure_message(),
                 error_code = error.code().as_str(),
                 upstream_error_code = error.upstream_code(),
                 failure_reason = model_failure(error.upstream_code()).safe_message(),
@@ -654,14 +657,6 @@ where
                         };
                     }
                     Err(error) => {
-                        tracing::warn!(
-                            error = %error,
-                            error_code = error.code().as_str(),
-                            upstream_error_code = error.upstream_code(),
-                failure_reason = model_failure(error.upstream_code()).safe_message(),
-                failure_diagnostic = %error.diagnostic_detail(),
-                            "native agent event stream failed"
-                        );
                         // #982: a remote MCP server that answers the dial with
                         // a `401` is not an anonymous runtime failure. The MCP
                         // toolset is dialled LAZILY, so the challenge arrives
@@ -680,6 +675,17 @@ where
                         {
                             return NativeStreamOutcome::Eos;
                         }
+                        tracing::error!(
+                            execution_id = %run.trace_execution_id(),
+                            generation = run.trace_generation(),
+                            cause_message = error.failure_message(),
+                            error = %error,
+                            error_code = error.code().as_str(),
+                            upstream_error_code = error.upstream_code(),
+                            failure_reason = model_failure(error.upstream_code()).safe_message(),
+                            failure_diagnostic = %error.diagnostic_detail(),
+                            "native agent event stream failed"
+                        );
                         return NativeStreamOutcome::Failure(
                             failure.unwrap_or_else(|| model_failure(error.upstream_code())),
                         );

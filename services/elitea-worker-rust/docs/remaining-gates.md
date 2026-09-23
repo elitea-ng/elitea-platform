@@ -105,7 +105,8 @@ The 2026-09-17 clarification retires legacy numeric context settings from new co
 
 Deployed chat 662 verifies typed continuation errors, partial-output inspection and copying, and exact reload without response fixtures.
 See [continuation UI acceptance](source-mapping/output-continuation-capacity-20260922.md#deployed-continuation-error-acceptance-2026-09-23).
-Reusing old chat 637 produces `MODEL_REQUEST_REJECTED`; investigate that history-specific failure before closing point 4.
+Original chat 637 now passes deployed history repair, continuation error, partial-output copying, and reload checks.
+See [historical tool-call repair](source-mapping/abandoned-tool-history-20260923.md).
 
 Point 4 also includes the following required work, confirmed by the user on 2026-09-14:
 

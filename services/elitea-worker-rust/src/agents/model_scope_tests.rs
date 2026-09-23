@@ -1172,10 +1172,12 @@ async fn child_output_never_dispatches_a_fifth_continuation() {
         .generate_content(request, true)
         .await
         .unwrap();
-    assert_eq!(
-        collect_output(output).await.unwrap_err().code,
-        "model.output_continuation_failed"
-    );
+    let error = collect_output(output).await.unwrap_err();
+    assert_eq!(error.code, "model.output_continuation_failed");
+    assert!(matches!(
+        crate::agents::model_checkpoint::output::failure_reason(&error),
+        Some(crate::agents::model_checkpoint::output::ContinuationFailure::CallLimit)
+    ));
     assert_eq!(model.requests.lock().unwrap().len(), 5);
 }
 

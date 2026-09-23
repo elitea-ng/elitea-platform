@@ -36,5 +36,8 @@ Repeated normalization does not add another response.
 
 The full Rust library suite passes 1,209 tests with PostgreSQL enabled. Clippy and formatting checks pass.
 Coverage includes active recovery calls, recorded results, mixed batches, and repeated projection.
-The candidate still needs deployed reproduction in the original chat.
-The provider rejection remains open until that acceptance passes.
+Deployed acceptance passes in the original chat 637 after worker replacement.
+The real provider reaches expected continuation exhaustion instead of rejecting historical messages.
+A fresh headed browser verifies partial-output copying, exact reload, and persisted terminal error identity.
+The test uses no response fixtures. Database schemas and existing worker mounts remain unchanged.
+Evidence: history-repair-live.json and history-repair-live.png in the local test artifacts.

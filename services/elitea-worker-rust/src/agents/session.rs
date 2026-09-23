@@ -1184,7 +1184,9 @@ pub(crate) trait DurableModelCompletion: Send + Sync {
     /// Discard a provider result rejected before any of its text was accepted.
     /// A consumed/persisted completion must never become reusable.
     fn discard_unaccepted(&self) -> adk_rust::Result<()> {
-        Err(super::model_checkpoint::output::exhausted())
+        Err(super::model_checkpoint::output::failed(
+            super::model_checkpoint::output::ContinuationFailure::DiscardUnavailable,
+        ))
     }
 }
 
