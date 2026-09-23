@@ -1434,3 +1434,100 @@ async fn postgres_boundary_repair_survives_claim_takeover() {
     assert_eq!(model.requests.lock().unwrap().len(), 1);
     database.pool.close().await;
 }
+
+#[tokio::test]
+async fn non_streaming_child_emits_incomplete_evidence_before_failure_without_receipt() {
+    use adk_rust::FinishReason::MaxTokens;
+    let sessions = Arc::new(InMemorySessionService::new());
+    let storage = storage(ModelScopeBackend::Local(sessions.clone()));
+    let child = Context::child("adk-output");
+    let scope = checkpoint(&storage, Arc::new(Summary::default()));
+    let model = OutputModel::new(vec![
+        ("First", MaxTokens),
+        ("First second", MaxTokens),
+        ("First second third", MaxTokens),
+        ("First second third fourth", MaxTokens),
+        ("First second third fourth fifth", MaxTokens),
+    ]);
+    let agent = scope
+        .clone()
+        .bind(
+            LlmAgentBuilder::new(child.agent_name())
+                .model(scope.clone().delegation_model(model.clone())),
+        )
+        .build()
+        .unwrap();
+    sessions
+        .create(CreateRequest {
+            app_name: child.app_name().into(),
+            user_id: child.user_id().into(),
+            session_id: Some(child.session_id().into()),
+            state: std::collections::HashMap::new(),
+        })
+        .await
+        .unwrap();
+    let runner = adk_rust::runner::Runner::builder()
+        .app_name(child.app_name())
+        .agent(scope.clone().wrap(Arc::new(agent)))
+        .session_service(sessions)
+        .build()
+        .unwrap();
+    let mut invocation = crate::agents::runtime::NativeAgentInvocation::new_with_run_config(
+        runner,
+        child.user_id().try_into().unwrap(),
+        child.session_id().try_into().unwrap(),
+        child.input.clone(),
+        adk_rust::RunConfig::builder()
+            .streaming_mode(adk_rust::StreamingMode::None)
+            .build(),
+    )
+    .start()
+    .unwrap();
+    let mut partials = Vec::new();
+    loop {
+        match invocation.next_event().await {
+            Ok(Some(event)) => {
+                assert!(!event.llm_response.turn_complete);
+                if event.llm_response.partial
+                    && let Some(content) = event.llm_response.content
+                {
+                    partials.push(content);
+                }
+            }
+            Ok(None) => panic!("Expected continuation failure"),
+            Err(error) => {
+                assert_eq!(
+                    error.upstream_code(),
+                    Some("model.output_continuation_failed")
+                );
+                break;
+            }
+        }
+    }
+    assert_eq!(partials.len(), 1);
+    assert_eq!(
+        partials[0].parts[0],
+        adk_rust::Part::Text {
+            text: "First second third fourth fifth".into()
+        }
+    );
+    assert_eq!(model.requests.lock().unwrap().len(), 5);
+    let writer = scope.writer.get().unwrap();
+    let saved = writer
+        .sessions
+        .get(GetRequest {
+            app_name: writer.identity.app_name.to_string(),
+            user_id: writer.identity.user_id.to_string(),
+            session_id: writer.identity.session_id.to_string(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .unwrap();
+    assert!(
+        scope
+            .completed_content(saved.as_ref(), child.agent_name())
+            .unwrap()
+            .is_none()
+    );
+}

@@ -472,3 +472,20 @@ run identity, preserving hierarchy and parent streaming state. `applyThinkingSte
 also updates `toolOutputs`, which the nested-step renderer reads live. A regression
 test checks that duplicate end frames do not duplicate the step or alter the parent.
 This is rendering-only ownership: no incomplete content returns to the parent model.
+
+### Non-streaming child handoff correction
+
+Fresh browser chat 638 correctly failed at the continuation cap but did not expose
+the new partial step. This failed acceptance revealed that nested ADK invocations
+use `StreamingMode::None`: their accepted deltas never reach the outer projector.
+It is not accepted UI evidence.
+
+`agents/model_scope_output.rs` now retains the accepted prefix at each completed
+output-limited response (at most five bounded snapshots), including the last
+accepted segment when the cap is reached. `agents/model_scope.rs` forwards that
+snapshot as a partial presentation event immediately before propagating the
+continuation error. It never appends a successful result/receipt to the child
+session. Rejected seam text is excluded. A non-streaming ADK runner regression
+proves that all five accepted segments are inspectable before the failure and no
+completed receipt exists. The outer lifecycle persists the resulting incomplete
+step before publishing its terminal error.

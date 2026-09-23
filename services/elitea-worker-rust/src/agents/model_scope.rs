@@ -173,6 +173,7 @@ impl ModelScopeSessions {
             replay_marker,
             completion,
             output_completion: Arc::default(),
+            output_partial: Arc::default(),
             context_events,
             context_receiver,
         })
@@ -190,6 +191,7 @@ pub(super) struct ScopedModelCheckpoint {
     replay_marker: Option<Content>,
     completion: Option<Arc<dyn super::session::DurableModelCompletion>>,
     output_completion: Arc<Mutex<Option<String>>>,
+    output_partial: Arc<Mutex<Option<String>>>,
     context_events: super::graph::PipelineNodeEventSender,
     context_receiver: super::graph::PipelineNodeEventReceiver,
 }
@@ -532,13 +534,42 @@ impl Agent for ModelScopeAgent {
         let mut stream = self.inner.run(ctx.clone()).await?;
         let checkpoint = self.checkpoint.clone();
         Ok(Box::pin(async_stream::try_stream! {
+            let mut partial_event_id = None;
             while let Some(event) = stream.next().await {
-                let event = event?;
+                let event = match event {
+                    Ok(event) => event,
+                    Err(error) => {
+                        if error.code == "model.output_continuation_failed" {
+                            let partial = take_partial_output(&checkpoint.output_partial)?;
+                            if let Some(text) = partial.filter(|text| !text.is_empty()) {
+                                // ADK's non-streaming child mode withholds deltas.
+                                // Forward accepted text to presentation only before
+                                // propagating the original error. Never append a
+                                // successful event/receipt to the child session.
+                                let mut event = Event::new(ctx.invocation_id());
+                                if let Some(id) = partial_event_id.take() { event.id = id; }
+                                event.author = ctx.agent_name().to_owned();
+                                event.branch = ctx.branch().to_owned();
+                                event.set_content(Content::new("model").with_text(text));
+                                event.llm_response.partial = true;
+                                yield event;
+                            }
+                        }
+                        Err(error)?;
+                        unreachable!();
+                    }
+                };
+                if event.llm_response.partial { partial_event_id = Some(event.id.clone()); }
+                else if event.llm_response.turn_complete { partial_event_id = None; }
                 checkpoint.append(ctx.as_ref(), event.clone()).await?;
                 yield event;
             }
         }))
     }
+}
+
+fn take_partial_output(output: &Mutex<Option<String>>) -> adk_rust::Result<Option<String>> {
+    Ok(output.lock().map_err(|_| invalid_scope())?.take())
 }
 
 fn invalid_scope() -> AdkError {

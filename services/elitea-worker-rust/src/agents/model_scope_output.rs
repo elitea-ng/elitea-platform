@@ -19,6 +19,10 @@ pub(super) fn generate(
     let writer = scope.writer.get().ok_or_else(invalid_scope)?;
     let saved = writer.checkpoint.output_continuation()?;
     save_completion(&scope.output_completion, None)?;
+    save_completion(
+        &scope.output_partial,
+        saved.as_ref().map(|state| state.prefix.clone()),
+    )?;
     if saved
         .as_ref()
         .is_some_and(|state| state.round > MAX_OUTPUT_CONTINUATION_CALLS)
@@ -100,6 +104,7 @@ pub(super) fn generate(
             }
             if has_tools { Err(exhausted())?; }
             extend(&mut prefix, &segment)?;
+            save_completion(&scope.output_partial, Some(prefix.clone()))?;
             let round = state.as_ref().map_or(1, |state| state.round.saturating_add(1));
             if round > MAX_OUTPUT_CONTINUATION_CALLS { Err(exhausted())?; }
             let next = OutputContinuation {
