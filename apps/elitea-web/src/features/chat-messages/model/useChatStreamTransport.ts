@@ -256,13 +256,13 @@ export function useChatStreamTransport(
    * the question it answers.
    */
   const failWith = useCallback(
-    (reason: string) => {
+    (reason: string, failureCode?: string) => {
       const streamContext = contextRef.current;
       const questionId = questionIdRef.current;
       const responseMessageId = cancelRef.current?.messageGroupUuid;
       detach();
       setChatHistory((prev) =>
-        recordStreamFailure(prev, reason, streamContext, questionId, responseMessageId),
+        recordStreamFailure(prev, reason, streamContext, questionId, responseMessageId, failureCode),
       );
       onStreamErrorRef.current?.(reason);
     },
@@ -276,7 +276,7 @@ export function useChatStreamTransport(
       // assume a message exists to carry it; `recordStreamFailure` appends one
       // when nothing is in flight.
       refreshContext();
-      failWith(runtimeFailureReason(frame));
+      failWith(runtimeFailureReason(frame), typeof frame['code'] === 'string' ? frame['code'] : undefined);
     },
     [failWith, refreshContext],
   );

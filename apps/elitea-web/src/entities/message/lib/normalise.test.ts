@@ -535,3 +535,15 @@ describe('normaliseAssistantMessage', () => {
     expect(result.toolActions?.every((action) => action.status === 'action_required')).toBe(true);
   });
 });
+
+
+describe('runtime failure identity', () => {
+  it.each([true, false])('uses the saved failure code only for a failed message: %s', (failed) => {
+    const result = normaliseAssistantMessage({
+      id: 'typed-failure', uuid: 'typed-failure-uuid', created_at: '2026-09-23T00:00:00Z', content: 'Partial output',
+      meta: { is_error: failed, error: 'Automatic continuation could not finish.',
+        error_code: 'OUTPUT_CONTINUATION_EXHAUSTED' },
+    }, [], undefined);
+    expect(result.failureCode).toBe(failed ? 'OUTPUT_CONTINUATION_EXHAUSTED' : undefined);
+  });
+});

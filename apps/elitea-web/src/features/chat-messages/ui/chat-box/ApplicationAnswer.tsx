@@ -44,6 +44,7 @@ import type { McpAuthRequiredAction } from '../chat-continue/ChatContinue';
 import { ChatHitlActions } from '../chat-hitl-actions/ChatHitlActions';
 import type { HitlInterrupt } from '../chat-hitl-actions/ChatHitlActions';
 import { ErrorTrace } from '../error-trace/ErrorTrace';
+import { ContinuationError } from '../error-trace/ContinuationError';
 
 import { PersistedMessageTrace } from './PersistedMessageTrace';
 
@@ -208,6 +209,24 @@ export function ApplicationAnswer({
     (!!requiresConfirmationSignal && !!onContinueTokenLimitExecution) ||
     effectiveHitlInterrupts.length > 0;
 
+  const renderedContent = canRenderContent && hasTextContent ? (
+    <AnswerContent
+      content={answer.content}
+      items={items}
+      messageGroupUuid={answer.id}
+      isStreaming={isStreaming}
+      spokenRange={currentSpokenRange}
+      onEditCanvas={onEditCanvas}
+      selectedCodeBlockInfo={selectedCodeBlockInfo}
+      onCreateCanvasFromSelection={onCreateCanvasFromSelection}
+    />
+  ) : null;
+  const continuationFailed = !!exception && answer.failureCode === 'OUTPUT_CONTINUATION_EXHAUSTED';
+  const textItems = items.filter((item) => item.kind === 'text');
+  const partialOutput = textItems.length > 0
+    ? textItems.map((item) => item.content).join('\n\n')
+    : answer.content;
+
   return (
     <Box
       data-testid="application-answer"
@@ -304,20 +323,16 @@ export function ApplicationAnswer({
             marginTop: nonSwarmChildActions.length > 0 || !!exception ? '0.5rem' : 0,
           })}
         >
-          {canRenderContent && (
-            <AnswerContent
-              content={answer.content}
-              items={items}
-              messageGroupUuid={answer.id}
-              isStreaming={isStreaming}
-              spokenRange={currentSpokenRange}
-              onEditCanvas={onEditCanvas}
-              selectedCodeBlockInfo={selectedCodeBlockInfo}
-              onCreateCanvasFromSelection={onCreateCanvasFromSelection}
-            />
+          {continuationFailed ? (
+            <ContinuationError error={exception} partialOutput={partialOutput}>
+              {renderedContent}
+            </ContinuationError>
+          ) : (
+            <>
+              {renderedContent}
+              {!!exception && <ErrorTrace error={exception} />}
+            </>
           )}
-
-          {!!exception && <ErrorTrace error={exception} />}
 
           {!hideContinueButton && !!requiresConfirmationSignal && (
             <ChatContinue

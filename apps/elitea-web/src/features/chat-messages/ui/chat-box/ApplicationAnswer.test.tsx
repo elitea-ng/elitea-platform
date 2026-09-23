@@ -116,6 +116,45 @@ describe('ApplicationAnswer', () => {
     expect(screen.getByText('The runtime operation failed.')).toBeInTheDocument();
   });
 
+  it('restores a typed continuation failure with inspectable and copyable partial output', async () => {
+    const user = userEvent.setup();
+    const answer = normaliseAssistantMessage({
+      id: 'partial-row', uuid: 'partial-answer', content: 'An unfinished answer.',
+      created_at: '2026-09-23T00:00:00Z',
+      meta: { is_error: true, error: 'Automatic continuation could not finish.',
+        error_code: 'OUTPUT_CONTINUATION_EXHAUSTED' },
+    }, [], undefined) as unknown as ChatMessage;
+    renderWithTheme(<ApplicationAnswer answer={answer} messageId={answer.id} />);
+    expect(screen.getByText('The model response is incomplete')).toBeInTheDocument();
+    expect(screen.queryByText('An unfinished answer.')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Show partial response' }));
+    expect(screen.getByText('An unfinished answer.')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Copy partial response' }));
+    expect(await navigator.clipboard.readText()).toBe('An unfinished answer.');
+  });
+
+  it('copies authoritative text items without duplicating collapsed group content', async () => {
+    const user = userEvent.setup();
+    const answer = { id: 'items', role: 'assistant', content: 'Stale group text',
+      exception: 'Incomplete', failureCode: 'OUTPUT_CONTINUATION_EXHAUSTED',
+      messageItems: [{ id: 1, item_type: 'text_message', item_details: { content: 'First fragment' } },
+        { id: 2, item_type: 'text_message', item_details: { content: 'Second fragment' } }],
+    } as unknown as ChatMessage;
+    renderWithTheme(<ApplicationAnswer answer={answer} messageId={answer.id} />);
+    await user.click(screen.getByRole('button', { name: 'Copy partial response' }));
+    expect(await navigator.clipboard.readText()).toBe('First fragment\n\nSecond fragment');
+  });
+
+  it('shows continuation guidance without empty partial-output controls', () => {
+    const answer = { id: 'empty', role: 'assistant', content: '',
+      exception: 'Automatic continuation could not finish.',
+      failureCode: 'OUTPUT_CONTINUATION_EXHAUSTED' } as ChatMessage;
+    renderWithTheme(<ApplicationAnswer answer={answer} messageId={answer.id} />);
+    expect(screen.getByTestId('continuation-error')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Copy partial response' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Show partial response' })).not.toBeInTheDocument();
+  });
+
   it('renders a refusal that arrived before any content', () => {
     // The shape `recordStreamFailure` appends when a run is refused before it
     // streams anything (`lib/chatStreamSettle.ts`): no content, no tool

@@ -146,6 +146,7 @@ export interface MessageGroupMetaWire {
   readonly references?: unknown;
   readonly is_error?: boolean;
   readonly error?: unknown;
+  readonly error_code?: string;
   readonly thinking_steps?: readonly ThinkingStepWire[];
   readonly tool_calls?: Readonly<Record<string, ToolCallStepWire>> | readonly ToolCallStepWire[];
   readonly first_tool_timestamp_start?: string;

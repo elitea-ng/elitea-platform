@@ -86,8 +86,8 @@ func TestPostgresCurrentAgentTextSurvivesAWorkerFailure(t *testing.T) {
 				1,
 				executiondomain.AgentApplicationCapability,
 				outputRecord{ExecutionID: admitted.ExecutionID, Generation: 1},
-				"INTERNAL",
-				"The runtime operation failed.",
+				"OUTPUT_CONTINUATION_EXHAUSTED",
+				"Automatic continuation could not finish.",
 			)
 		},
 	)
@@ -111,7 +111,7 @@ WHERE message_group.uuid::text = $1
 		t.Fatal(err)
 	}
 	if content != "durable partial answer" || isStreaming ||
-		!containsAll(metadata, `"is_error": true`, "The runtime operation failed.") {
+		!containsAll(metadata, `"is_error": true`, `"error_code": "OUTPUT_CONTINUATION_EXHAUSTED"`, "Automatic continuation could not finish.") {
 		t.Fatalf("content=%q streaming=%t metadata=%s", content, isStreaming, metadata)
 	}
 

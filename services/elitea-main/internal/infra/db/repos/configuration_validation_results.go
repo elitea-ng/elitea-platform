@@ -461,10 +461,11 @@ func persistCurrentAgentRuntimeTerminal(
 UPDATE %s AS message_group
 SET is_streaming = FALSE,
     meta = CASE
-        WHEN $4::boolean THEN message_group.meta - 'is_error' - 'error'
+        WHEN $4::boolean THEN message_group.meta - 'is_error' - 'error' - 'error_code'
         ELSE message_group.meta || jsonb_build_object(
             'is_error', TRUE,
-            'error', $3::text
+            'error', $3::text,
+            'error_code', $5::text
         )
     END,
     updated_at = clock_timestamp()
@@ -484,7 +485,7 @@ WHERE agent.execution_id = $1
       agent.client_execution_generation`,
 		schema+".chat_message_group",
 		schema+".chat_conversations",
-	), record.ExecutionID, int64(record.Generation), safeMessage, failureCode == "CANCELLED")
+	), record.ExecutionID, int64(record.Generation), safeMessage, failureCode == "CANCELLED", failureCode)
 	if err != nil {
 		return fmt.Errorf("finalize current agent terminal state: %w", err)
 	}

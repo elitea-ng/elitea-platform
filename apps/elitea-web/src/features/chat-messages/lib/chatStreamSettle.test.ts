@@ -75,9 +75,10 @@ describe('recordStreamFailure', () => {
       safe_message: 'Automatic continuation could not finish. The model response is incomplete.',
       retryable: false,
     });
-    const next = recordStreamFailure([question(), streamingAnswer()], reason, CONTEXT);
+    const next = recordStreamFailure([question(), streamingAnswer()], reason, CONTEXT, undefined, undefined, 'OUTPUT_CONTINUATION_EXHAUSTED');
     expect(next).toHaveLength(2);
     expect(next[1]?.content).toBe('partial');
+    expect(next[1]?.failureCode).toBe('OUTPUT_CONTINUATION_EXHAUSTED');
     expect(next[1]?.exception).toBe(reason);
     expect(next[1]?.isStreaming).toBe(false);
     expect(next[1]?.isLoading).toBe(false);

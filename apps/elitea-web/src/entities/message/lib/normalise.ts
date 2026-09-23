@@ -385,6 +385,7 @@ export function normaliseAssistantMessage(
     ...(messageGroup.updated_at !== undefined ? { updatedAt: convertTime(messageGroup.updated_at) } : {}),
     ...assistantStreamingFields(messageGroup),
     ...(exception !== undefined ? { exception } : {}),
+    ...(isError && typeof meta?.error_code === 'string' ? { failureCode: meta.error_code } : {}),
     ...(messageGroup.likes !== undefined ? { likes: messageGroup.likes } : {}),
     ...assistantHitlFields(meta),
     ...assistantContinuationFields(meta),

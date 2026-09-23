@@ -888,3 +888,36 @@ It does not accept other pending node families or close Gate 4.
 Evidence: `elitea-structured-crash-recovered-boundary.json`, `elitea-structured-crash-recovered-result.json`,
 `elitea-structured-crash-recovered-durable-proof.json`, `elitea-structured-crash-recovered-complete.png`, and the corresponding browser log.
 All 424 PostgreSQL-backed agent tests and strict all-target Clippy pass.
+
+
+## Typed incomplete-response presentation, 2026-09-23
+
+The current UI uses `continuationError.helpers.js` and `ContinuationError.jsx` for incomplete responses.
+These files are under `projects/EliteaUI/src/[fsd]/features/chat`.
+The behavior reference preserves partial output, explains the failure, and provides inspection and copy controls.
+
+Rust already emits `OUTPUT_CONTINUATION_EXHAUSTED` when bounded automatic continuation cannot complete.
+The browser stream carries the typed code and a safe message.
+Main previously saved only the safe message, so reload lost the failure category.
+
+Main now saves `error_code` in existing message-group metadata through `persistCurrentAgentRuntimeTerminal`.
+Cancellation clears the saved error fields.
+This change requires no schema migration.
+The UI normalizer restores the code only for failed messages.
+The stream failure reducer also retains the code for live messages.
+
+`ApplicationAnswer` selects `ContinuationError` by code, without matching error sentences.
+The component shows recovery guidance and collapsible partial output.
+Its copy action uses the displayed text source, without repeating collapsed group content.
+Canvas content remains inspectable even when no text exists.
+Other failures keep the existing error presentation.
+
+The focused PostgreSQL test preserves partial text and the typed failure in an isolated test database.
+The focused UI tests cover saved failures, expansion, exact copying, empty partial output, and generic errors.
+Verification passes: 88 focused UI tests, TypeScript, focused lint, the app build, and the PostgreSQL integration test.
+A fresh headed Playwright browser verifies expansion, exact copying, and stable reload without page errors.
+This browser check adds a continuation code to historical partial-output metadata in the HTTP response only.
+It changes no saved chat data and does not prove deployed worker-to-browser delivery.
+The actual API uses `metadata`; the page adapter retains it as `meta` before message normalization.
+Evidence is in `/private/tmp/elitea-continuation-browser.json` and the expanded and collapsed screenshots.
+Deployment and an unmodified end-to-end run remain required.

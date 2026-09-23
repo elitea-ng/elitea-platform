@@ -4395,5 +4395,11 @@
   "pipelines.pipelineWebhookModal.applyMode": "Apply and rotate",
   "pipelines.pipelineWebhookModal.signatureHeader": "Signature header",
   "pipelines.pipelineWebhookModal.copyHeader": "Copy header name",
-  "pipelines.pipelineWebhookModal.headerCopied": "Signature header copied to clipboard"
+  "pipelines.pipelineWebhookModal.headerCopied": "Signature header copied to clipboard",
+  "chatMessages.continuation.incomplete": "The model response is incomplete",
+  "chatMessages.continuation.failed": "Automatic continuation could not finish the response.",
+  "chatMessages.continuation.guidance": "Increase the output limit in Model settings, or ask for a smaller part of the task, then try again.",
+  "chatMessages.continuation.hidePartial": "Hide partial response",
+  "chatMessages.continuation.showPartial": "Show partial response",
+  "chatMessages.continuation.copyPartial": "Copy partial response"
 }

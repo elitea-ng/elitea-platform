@@ -75,6 +75,7 @@ export interface ChatMessage {
   readonly interactionUuid?: string | undefined;
   readonly toolActions?: readonly SubAgentGroupable[] | undefined;
   readonly exception?: unknown;
+  readonly failureCode?: string;
   readonly isStreaming?: boolean | undefined;
   readonly isLoading?: boolean | undefined;
   /**
