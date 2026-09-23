@@ -704,10 +704,71 @@ impl PipelineNativeAgentAssembler {
 impl NativeAgentAssembler for PipelineNativeAgentAssembler {
     type Completion = PipelineAgentCompletion;
 
+    async fn inspect_checkpoint(
+        &self,
+        request: &AgentExecutionRequest,
+        command: &super::session::AuthorizedNativeCommandBinding,
+        session: crate::protocol::control::ClaimBoundSessionAuthority,
+        lease: Arc<dyn crate::state::StateWriterLease>,
+    ) -> Result<super::session::ValidatedModelCheckpoint, NativeAgentAssemblyError> {
+        let policy = policy_for_guardrails(
+            request.payload.toolkit_guardrails.as_ref(),
+            &self.tool_policy,
+        )?;
+        let (profile, plan, _, _) = super::runtime::admit_pipeline_plan(
+            request,
+            command,
+            &request.payload.input_attachments,
+            &policy,
+        )?;
+        self.state
+            .open(
+                session,
+                lease,
+                &plan,
+                profile.definition().definition_digest(),
+            )
+            .await?
+            .inspect_checkpoint(&plan, profile.definition())
+            .await
+    }
+
+    async fn assemble_checkpoint(
+        &self,
+        assembly: AuthorizedNativeAssembly<'_>,
+    ) -> Result<
+        super::runtime::PendingRecoveredAgentInvocation<Self::Completion>,
+        NativeAgentAssemblyError,
+    > {
+        let (assembled, evidence) = self.assemble_with_recovery(assembly, true).await?;
+        let evidence = evidence.ok_or_else(unsupported_pipeline_runtime)?;
+        Ok(super::runtime::PendingRecoveredAgentInvocation::new(
+            assembled, evidence,
+        ))
+    }
+
     async fn assemble(
         &self,
         assembly: AuthorizedNativeAssembly<'_>,
     ) -> Result<AssembledNativeAgentInvocation<Self::Completion>, NativeAgentAssemblyError> {
+        self.assemble_with_recovery(assembly, false)
+            .await
+            .map(|(assembled, _)| assembled)
+    }
+}
+
+impl PipelineNativeAgentAssembler {
+    async fn assemble_with_recovery(
+        &self,
+        assembly: AuthorizedNativeAssembly<'_>,
+        recovery: bool,
+    ) -> Result<
+        (
+            AssembledNativeAgentInvocation<PipelineAgentCompletion>,
+            Option<super::session::ValidatedModelCheckpoint>,
+        ),
+        NativeAgentAssemblyError,
+    > {
         let span = tracing::info_span!(
             "agent.pipeline.assemble",
             execution_kind = ?assembly.request().kind,
@@ -716,7 +777,7 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
             outcome = tracing::field::Empty,
             error_code = tracing::field::Empty,
         );
-        let result = async {
+        let result: Result<_, NativeAgentAssemblyError> = async {
             tracing::Span::current().record("stage", "admission");
             let tool_policy = policy_for_guardrails(
                 assembly.request().payload.toolkit_guardrails.as_ref(),
@@ -727,7 +788,7 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
             // has none; a stored pipeline that runs for real always does, and a
             // missing client leaves attachments rendered by their headers, the
             // same as an unreadable file.
-            let assembly = match self.platform.as_ref() {
+            let assembly = match self.platform.as_ref().filter(|_| !recovery) {
                 Some(platform) => {
                     assembly
                         .resolve_attachment_contents(platform.as_ref())
@@ -739,7 +800,7 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
             let (profile, plan, toolsets, mcp_tokens, start, runtime_context, session, lease) =
                 admitted.into_parts();
             tracing::Span::current().record("stage", "state");
-            let state = self
+            let mut state = self
                 .state
                 .open(
                     session,
@@ -748,6 +809,20 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
                     profile.definition().definition_digest(),
                 )
                 .await?;
+            let evidence = if recovery {
+                let evidence = state
+                    .inspect_checkpoint(&plan, profile.definition())
+                    .await?;
+                state.model_scopes = state.model_scopes.with_pending_model_recovery();
+                Some(evidence)
+            } else {
+                None
+            };
+            let start = if recovery {
+                super::runtime::PipelineNativeStart::Checkpoint
+            } else {
+                start
+            };
             let node_runtimes = self
                 .bind_node_runtimes(
                     &profile,
@@ -759,8 +834,15 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
                 )
                 .await?;
             tracing::Span::current().record("stage", "state");
-            assemble_pipeline_native(plan, profile.into_definition(), start, state, node_runtimes)
-                .await
+            let assembled = assemble_pipeline_native(
+                plan,
+                profile.into_definition(),
+                start,
+                state,
+                node_runtimes,
+            )
+            .await?;
+            Ok((assembled, evidence))
         }
         .instrument(span.clone())
         .await;

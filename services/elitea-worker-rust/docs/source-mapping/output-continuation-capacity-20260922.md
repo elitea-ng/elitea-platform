@@ -842,3 +842,27 @@ All 423 PostgreSQL-backed agent tests and strict all-target Clippy pass.
 Evidence logs are `elitea-pipeline-frontier-red.log`, `elitea-nested-output-agent-tests.log`, and `elitea-pipeline-frontier-clippy.log`.
 This prerequisite is not deployed yet.
 Pipeline checkpoint inspection, authorized restoration, and a repeated browser crash test remain required.
+
+
+### Authorized pipeline frontier restoration
+
+`runtime.rs::admit_pipeline_plan` shares frozen admission between initial assembly and recovery inspection.
+`PipelineStateServices::inspect_checkpoint` validates thread identity, execution, generation, and supported pending nodes.
+It hashes the complete graph checkpoint with the admitted definition digest.
+The existing control protocol authorizes this opaque digest without receiving graph contents.
+Assembly reads and validates the frontier again before releasing the recovered Runner.
+
+`PipelineNativeAgentAssembler::assemble_checkpoint` enables pending model recovery on the existing independent model scopes.
+`PipelineNativeStart::Checkpoint` restores the root session without adding another user message or resolving mutable attachments again.
+ADK restores the saved graph frontier through the existing checkpointer.
+The model scope restores its saved request, continuation prefix, round counter, and structured-output flag.
+Unknown tool outcomes remain rejected by model checkpoint validation.
+Supported root frontiers contain LLM, Decision, Router, or StateModifier nodes, or a completed graph.
+Direct-tool, Agent/subgraph, and interrupt frontiers require separate recovery evidence and remain open.
+No application database schema or external protocol changes are required.
+
+The component test interrupts structured continuation with a provider failure and restores through recovery authorization.
+It verifies the exact pending request, one completed downstream answer, and no repeated initial generation.
+Foreign execution metadata and unknown frontiers fail inspection; changed graph state changes the authorized digest.
+All 424 PostgreSQL-backed agent tests pass.
+Live process-crash verification remains required before acceptance.

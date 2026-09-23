@@ -97,6 +97,15 @@ pub(crate) struct ValidatedModelCheckpoint {
 }
 
 impl ValidatedModelCheckpoint {
+    /// Graph admission supplies a digest of its validated, claim-fenced frontier.
+    pub(super) fn from_graph(execution_id: String, generation: u64, digest: [u8; 32]) -> Self {
+        Self {
+            execution_id,
+            generation,
+            digest,
+        }
+    }
+
     pub(crate) fn matches_checkpoint(&self, other: &Self) -> bool {
         self.execution_id == other.execution_id
             && self.generation == other.generation

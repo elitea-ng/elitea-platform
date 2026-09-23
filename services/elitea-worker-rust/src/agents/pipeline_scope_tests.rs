@@ -376,3 +376,132 @@ async fn pipeline_structured_output_validates_after_continuation() {
     assert_eq!(saved.state.get("answer"), Some(&json!(expected)));
     assert_eq!(saved.state.get("final_text"), Some(&json!(expected)));
 }
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One crash, authorization fence, and exact continuation proof.
+async fn structured_pipeline_recovers_pending_continuation_without_restarting_node() {
+    let mut request = pipeline_request();
+    request.payload.context_settings = json!({"enabled":false}).as_object().unwrap().clone();
+    request.payload.application["version_details"]["instructions"] = json!(
+        "state:\n  answer: str\n  final_text: str\n  messages: list\nentry_point: answer\nnodes:\n  - id: answer\n    type: llm\n    structured_output: true\n    output: [answer, messages]\n    transition: finish\n  - id: finish\n    type: state_modifier\n    template: '{{ answer }}'\n    input: [answer]\n    output: [final_text]\n    transition: END\n"
+    );
+    let prefix = r#"{"answer":"Cedar"#;
+    let complete = r#"{"answer":"Cedar complete"}"#;
+    let ((platform, facade, _, _), captured) = pipeline_runtime_from_responses_with_capture(
+        VecDeque::from([
+            runtime_response(
+                &json!({"schema_version":"elitea.runtime.elitea-client-token.v1","project_id":17,"token":"ephemeral-pipeline-token"}),
+            ),
+            runtime_response(
+                &json!({"schema_version":"elitea.runtime.elitea-client-token.v1","project_id":17,"token":"ephemeral-pipeline-token"}),
+            ),
+        ]),
+        vec![
+            TestModelGatewayOutcome::Response(limited_text_response(prefix)),
+            TestModelGatewayOutcome::Unavailable,
+            TestModelGatewayOutcome::Response(pipeline_text_response(complete)),
+        ],
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(Mutex::new(vec![])),
+    );
+    let graph = Arc::new(MemoryCheckpointer::new());
+    let assembler = PipelineNativeAgentAssembler::with_state(
+        Arc::new(InMemorySessionService::new()),
+        graph.clone(),
+    )
+    .with_runtime_clients(platform, facade);
+    let mut invocation = assembler.assemble(authorized(&request)).await.unwrap();
+    invocation.project_start(timestamp(1)).unwrap();
+    let (mut run, _, _) = invocation.start().unwrap();
+    loop {
+        match run.next_event().await {
+            Err(_) => break,
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("fixture must fail during continuation"),
+        }
+    }
+    drop(run);
+    assert_eq!(captured.lock().unwrap().len(), 2);
+    let evidence = assembler
+        .inspect_checkpoint(
+            &request,
+            &AuthorizedNativeCommandBinding::fixture(),
+            crate::protocol::control::test_session_authority(),
+            Arc::new(crate::state::TestStateWriterLease::current()),
+        )
+        .await
+        .unwrap();
+    let original = graph
+        .load(&private_pipeline_session_id(&request))
+        .await
+        .unwrap()
+        .unwrap();
+    for corruption in ["foreign_execution", "unsupported_frontier", "changed_state"] {
+        let mut changed = original.clone();
+        match corruption {
+            "foreign_execution" => {
+                changed.metadata.insert(
+                    "elitea.pipeline.execution.v1".to_owned(),
+                    json!(["foreign", 3]),
+                );
+            }
+            "unsupported_frontier" => {
+                changed.pending_nodes = vec!["unknown-tool".to_owned()];
+            }
+            _ => {
+                changed.state.insert("input".to_owned(), json!("changed"));
+            }
+        }
+        graph.save(&changed).await.unwrap();
+        let inspected = assembler
+            .inspect_checkpoint(
+                &request,
+                &AuthorizedNativeCommandBinding::fixture(),
+                crate::protocol::control::test_session_authority(),
+                Arc::new(crate::state::TestStateWriterLease::current()),
+            )
+            .await;
+        if corruption == "changed_state" {
+            assert!(!evidence.matches_checkpoint(&inspected.unwrap()));
+        } else {
+            assert!(inspected.is_err());
+        }
+        assert_eq!(captured.lock().unwrap().len(), 2);
+    }
+    graph.save(&original).await.unwrap();
+    let (claim, control) =
+        crate::protocol::control::test_checkpoint_authorizer("execution/one", 3, evidence.digest());
+    let authorization = claim
+        .authorize(&control, evidence)
+        .await
+        .unwrap_or_else(|_| panic!("authorization"));
+    let pending = assembler
+        .assemble_checkpoint(authorized(&request))
+        .await
+        .unwrap();
+    let (_, _, _, _, permit) = authorization.into_lifecycle_parts();
+    let restored = pending.authorize_lifecycle(permit).unwrap();
+    let browser = collect_pipeline_completion(restored).await;
+    assert!(
+        browser
+            .iter()
+            .any(|event| event["content"] == "Cedar complete")
+    );
+    let calls: Vec<Value> = captured
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|call| serde_json::from_slice(&call.body).unwrap())
+        .collect();
+    assert_eq!(calls.len(), 3);
+    assert_eq!(calls[1]["messages"], calls[2]["messages"]);
+    assert!(calls[2].get("response_format").is_none());
+    let state = graph
+        .load(&private_pipeline_session_id(&request))
+        .await
+        .unwrap()
+        .unwrap()
+        .state;
+    assert_eq!(state["answer"], "Cedar complete");
+    assert_eq!(state["final_text"], "Cedar complete");
+}

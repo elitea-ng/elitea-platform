@@ -525,6 +525,22 @@ impl PipelineDefinition {
     }
 
     #[must_use]
+    /// Replay only nodes with model-local recovery or deterministic state updates.
+    pub(crate) fn recovery_frontier_supported(&self, pending: &[String]) -> bool {
+        pending.iter().all(|id| {
+            self.nodes.iter().any(|node| {
+                node.id() == id
+                    && matches!(
+                        node,
+                        PipelineNodeDefinition::Llm(_)
+                            | PipelineNodeDefinition::StateModifier(_)
+                            | PipelineNodeDefinition::Decision(_)
+                            | PipelineNodeDefinition::Router(_)
+                    )
+            })
+        })
+    }
+
     pub(crate) fn entry_point(&self) -> &str {
         &self.entry_point
     }

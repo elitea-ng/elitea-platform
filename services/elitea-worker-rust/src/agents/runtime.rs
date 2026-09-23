@@ -282,59 +282,8 @@ impl<'a> AuthorizedNativeAssembly<'a> {
         self,
         policy: &ToolAdmissionPolicy,
     ) -> Result<AdmittedPipelineNativeAssembly<'a>, NativeAgentAssemblyError> {
-        tracing::Span::current().record("stage", "start_admission");
-        let has_continuation = has_continuation(self.request);
-        let start = if has_continuation {
-            if self.request.payload.should_continue && !self.request.payload.hitl_resume {
-                if !self.request.payload.mcp_tokens.is_empty()
-                    || !self.request.payload.ignored_mcp_servers.is_empty()
-                    || !self.request.payload.user_declined_mcp_servers.is_empty()
-                {
-                    PipelineMcpAuthorizationContinuation::from_payload(&self.request.payload)
-                        .map(PipelineNativeStart::McpAuthorization)
-                        .map_err(|error| pipeline_hitl_admission_error(&error))?
-                } else {
-                    PrinterContinuation::from_payload(&self.request.payload)
-                        .map(PipelineNativeStart::Printer)
-                        .map_err(|error| pipeline_hitl_admission_error(&error))?
-                }
-            } else {
-                PipelineContinuationDecision::from_payload(&self.request.payload)
-                    .map(PipelineNativeStart::Hitl)
-                    .map_err(|error| pipeline_hitl_admission_error(&error))?
-            }
-        } else if self.request.payload.is_regenerate {
-            PipelineNativeStart::Regenerate
-        } else {
-            PipelineNativeStart::Fresh
-        };
-        tracing::Span::current().record("stage", "profile_validation");
-        let mut profile = match &start {
-            PipelineNativeStart::McpAuthorization(_) => {
-                PipelineExecutionProfile::validate_mcp_authorization_resume(self.request)?
-            }
-            PipelineNativeStart::Hitl(decision)
-                if decision.has_delegated_authorization_actions() =>
-            {
-                PipelineExecutionProfile::validate_guardrail_authorization_resume(self.request)?
-            }
-            _ => PipelineExecutionProfile::validate(self.request, start.is_resume())?,
-        };
-        tracing::Span::current().record("stage", "tool_snapshot");
-        let frozen_toolsets =
-            FrozenToolSnapshot::from_request(self.request).map_err(tool_snapshot_error)?;
-        tracing::Span::current().record("stage", "tool_scope");
-        profile.validate_tool_snapshot(&frozen_toolsets, policy)?;
-        let toolsets = frozen_toolsets.apply_policy(policy);
-        tracing::Span::current().record("stage", "execution_plan");
-        let plan = OrdinaryNativeAgentPlan::from_authorized_pipeline(
-            self.request,
-            profile.shell(),
-            &self.command,
-            &self.attachments,
-            start.is_resume(),
-            start.is_hitl_resume(),
-        )?;
+        let (profile, plan, toolsets, start) =
+            admit_pipeline_plan(self.request, &self.command, &self.attachments, policy)?;
         Ok(AdmittedPipelineNativeAssembly {
             request: self.request,
             runtime_context: self.runtime_context,
@@ -362,7 +311,77 @@ impl<'a> AuthorizedNativeAssembly<'a> {
     }
 }
 
+/// Validate the frozen pipeline without redeeming runtime credentials.
+#[allow(clippy::type_complexity)]
+pub(super) fn admit_pipeline_plan<'a>(
+    request: &'a AgentExecutionRequest,
+    command: &AuthorizedNativeCommandBinding,
+    attachments: &[serde_json::Value],
+    policy: &ToolAdmissionPolicy,
+) -> Result<
+    (
+        PipelineExecutionProfile,
+        OrdinaryNativeAgentPlan,
+        AdmittedToolSnapshot<'a>,
+        PipelineNativeStart,
+    ),
+    NativeAgentAssemblyError,
+> {
+    tracing::Span::current().record("stage", "start_admission");
+    let has_continuation = has_continuation(request);
+    let start = if has_continuation {
+        if request.payload.should_continue && !request.payload.hitl_resume {
+            if !request.payload.mcp_tokens.is_empty()
+                || !request.payload.ignored_mcp_servers.is_empty()
+                || !request.payload.user_declined_mcp_servers.is_empty()
+            {
+                PipelineMcpAuthorizationContinuation::from_payload(&request.payload)
+                    .map(PipelineNativeStart::McpAuthorization)
+                    .map_err(|error| pipeline_hitl_admission_error(&error))?
+            } else {
+                PrinterContinuation::from_payload(&request.payload)
+                    .map(PipelineNativeStart::Printer)
+                    .map_err(|error| pipeline_hitl_admission_error(&error))?
+            }
+        } else {
+            PipelineContinuationDecision::from_payload(&request.payload)
+                .map(PipelineNativeStart::Hitl)
+                .map_err(|error| pipeline_hitl_admission_error(&error))?
+        }
+    } else if request.payload.is_regenerate {
+        PipelineNativeStart::Regenerate
+    } else {
+        PipelineNativeStart::Fresh
+    };
+    tracing::Span::current().record("stage", "profile_validation");
+    let mut profile = match &start {
+        PipelineNativeStart::McpAuthorization(_) => {
+            PipelineExecutionProfile::validate_mcp_authorization_resume(request)?
+        }
+        PipelineNativeStart::Hitl(decision) if decision.has_delegated_authorization_actions() => {
+            PipelineExecutionProfile::validate_guardrail_authorization_resume(request)?
+        }
+        _ => PipelineExecutionProfile::validate(request, start.is_resume())?,
+    };
+    tracing::Span::current().record("stage", "tool_snapshot");
+    let frozen_toolsets = FrozenToolSnapshot::from_request(request).map_err(tool_snapshot_error)?;
+    tracing::Span::current().record("stage", "tool_scope");
+    profile.validate_tool_snapshot(&frozen_toolsets, policy)?;
+    let toolsets = frozen_toolsets.apply_policy(policy);
+    tracing::Span::current().record("stage", "execution_plan");
+    let plan = OrdinaryNativeAgentPlan::from_authorized_pipeline(
+        request,
+        profile.shell(),
+        command,
+        attachments,
+        start.is_resume(),
+        start.is_hitl_resume(),
+    )?;
+    Ok((profile, plan, toolsets, start))
+}
+
 pub(crate) enum PipelineNativeStart {
+    Checkpoint,
     Fresh,
     Regenerate,
     Hitl(PipelineContinuationDecision),

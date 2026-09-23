@@ -1068,6 +1068,44 @@ pub(super) struct PipelineStateServices {
     pub(super) model_scopes: super::model_scope::ModelScopeSessions,
 }
 
+impl PipelineStateServices {
+    pub(super) async fn inspect_checkpoint(
+        &self,
+        plan: &OrdinaryNativeAgentPlan,
+        definition: &PipelineDefinition,
+    ) -> Result<ValidatedModelCheckpoint, NativeAgentAssemblyError> {
+        let checkpoint = self
+            .checkpointer
+            .load(plan.session_id.as_ref())
+            .await
+            .map_err(|_| dependency_unavailable())?
+            .ok_or_else(invalid_configuration)?;
+        if checkpoint.thread_id != plan.session_id.as_str()
+            || checkpoint.metadata.get("elitea.pipeline.execution.v1")
+                != Some(&serde_json::json!([plan.execution_id, plan.generation]))
+            || !definition.recovery_frontier_supported(&checkpoint.pending_nodes)
+            || checkpoint.cleared_interrupt.is_some()
+        {
+            return Err(invalid_configuration());
+        }
+        // Bind all frontier data, including graph state, attempts and child receipts.
+        // Convert through Value to order map keys before hashing.
+        let value = serde_json::to_value(&checkpoint).map_err(|_| invalid_configuration())?;
+        let bytes =
+            serde_json::to_vec(&("elitea.pipeline.recovery.v1", plan.definition_digest, value))
+                .map_err(|_| invalid_configuration())?;
+        let digest = ring::digest::digest(&ring::digest::SHA256, &bytes);
+        Ok(ValidatedModelCheckpoint::from_graph(
+            plan.execution_id.clone(),
+            plan.generation,
+            digest
+                .as_ref()
+                .try_into()
+                .map_err(|_| invalid_configuration())?,
+        ))
+    }
+}
+
 /// One bound provider invocation that remains paired with its completion.
 ///
 /// Implementations may return a cloned ADK model handle only while the owner
@@ -1319,6 +1357,7 @@ pub(super) async fn assemble_pipeline_native(
     } = application_runtime;
     let printer_catalog = definition.printer_pause_catalog();
     let printer_resume = matches!(&start, PipelineNativeStart::Printer(_));
+    let checkpoint_recovery = matches!(&start, PipelineNativeStart::Checkpoint);
     let resume = resolve_pipeline_start(
         start,
         &state,
@@ -1375,7 +1414,9 @@ pub(super) async fn assemble_pipeline_native(
     let runner = adk_rust::runner::Runner::builder()
         .app_name(APP_NAME)
         .agent(agent)
-        .session_service(Arc::new(RunnerSessionService::new(state.sessions, None)))
+        .session_service(Arc::new(
+            RunnerSessionService::new(state.sessions, None).with_recovery(checkpoint_recovery),
+        ))
         .build()
         .map_err(|_| invalid_configuration())?;
     let projector = AgentEventProjector::with_tool_catalogs(
@@ -1384,7 +1425,9 @@ pub(super) async fn assemble_pipeline_native(
         application_tools,
     )
     .map_err(projection_configuration)?;
-    let input = if printer_resume {
+    let input = if checkpoint_recovery {
+        Content::new("user")
+    } else if printer_resume {
         user_content
     } else if is_resume {
         Content::new("user").with_text(PIPELINE_RESUME_MARKER)
@@ -1419,6 +1462,10 @@ async fn resolve_pipeline_start(
             .await?;
     }
     Ok(match start {
+        PipelineNativeStart::Checkpoint => {
+            restore_pipeline_session(state, plan).await?;
+            None
+        }
         PipelineNativeStart::Fresh | PipelineNativeStart::Regenerate => {
             let (session, created) =
                 restore_or_create_session(state.sessions.as_ref(), &plan.user_id, &plan.session_id)
