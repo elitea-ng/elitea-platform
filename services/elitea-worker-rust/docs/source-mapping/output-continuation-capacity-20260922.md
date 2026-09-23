@@ -676,3 +676,13 @@ Boundary diagnostics now record only response shape (object/quote/fence), escape
 counts and first differing byte position. They do not log response text, anchors, or credentials.
 This is needed to distinguish provider formatting from an actual incorrect overlap in live
 structured continuation failures; existing byte-length-only events could not establish cause.
+
+The diagnostic worker (`0ec1a55f`, image
+`sha256:364a3d3ada7b2094b72ccd784fb694dbb364d3182f6c51728276ad07011c6789`)
+reproduces the failure in execution `fe8275ffca5c3ff7381735e3160da3eb`.
+Both rejected responses begin with a Markdown code fence; neither starts with a JSON object
+or quote. Both differ from the anchor at byte zero. This establishes a provider wrapper as
+the first mismatch, despite the fragment instruction forbidding fences. It does not yet prove
+that the text inside the fences has a valid overlap. The next fix must remove only the known
+wrapper for structured continuation, preserve exact interior bytes, and still validate overlap
+and the final joined schema. No acceptance is claimed for this run.
