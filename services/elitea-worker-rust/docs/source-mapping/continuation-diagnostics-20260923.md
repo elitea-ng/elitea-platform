@@ -69,7 +69,7 @@ Use the execution boundary, not the application type name, to select behavior.
 | Direct pipeline | Agent node calling an Agent application | Stop with the typed failure | Local classification and deployed graph acceptance pass |
 | Pipeline | Nested pipeline | Propagate failure; do not release partial state as success | Open |
 | Pipeline Agent node | Pipeline application | Propagate failure to the owning graph | Deployed continuation code and downstream suppression pass; exact cause remains open |
-| Chat orchestrator | Pipeline child | Stop the child graph; report its contained failure to the parent | Open |
+| Chat orchestrator | Pipeline child | Stop the child graph; report its contained failure to the parent | Deployed continuation failure report and parent completion pass |
 | Any scope | Cancellation or execution-wide limit | Preserve control semantics; do not offer automatic retry | Existing handling retained; combination tests remain |
 
 The legacy platform does not establish acceptance for all nested combinations.
@@ -138,8 +138,27 @@ This preserves the specific cause when the graph wraps the model error in the sa
 Source owners: `agents/graph/node_events.rs`, `agents/graph/llm.rs`, and `agents/application_pipeline.rs`.
 The tool reuses `application_tools.rs::child_continuation_report` instead of defining a second failure format.
 Current-platform orchestration behavior remains the reference described in the propagation matrix.
-Deployed acceptance of this follow-up remains pending.
+Deployed acceptance of this continuation follow-up passes below.
 
 The follow-up passes all 1,215 worker library tests with PostgreSQL available.
 Clippy passes for the library and tests with warnings denied.
 The bridge regression checks typed cause preservation and provider-message exclusion.
+
+## Deployed typed pipeline cause acceptance
+
+Worker revision `18982ecb` runs as image `sha256:360c9ab9a1aa1633d61d3dc08a484d4b46564f2f711950b0e5c5777f60ad28f1`.
+The worker retains its environment, limits, networks, and five mounts.
+
+Fresh headed-browser conversation 665 retains terminal continuation failure and downstream suppression.
+Fresh headed-browser conversation 666 completes its parent response after receiving the child failure report.
+The parent explains the four-call limit, retryable=false, recoverable=true, and revise_task guidance.
+It reports no available partial output and does not repeat the child call.
+Both checks use real responses and pass reload verification without browser errors.
+The screenshots are inspected.
+
+Worker logs record both boundaries at ERROR level.
+The cause_message states that output still reached the limit after four continuation calls.
+The direct pipeline's public message remains the registered generic continuation explanation.
+More detailed public error guidance and other failure categories remain separate gate 4 work.
+
+Evidence files: `elitea-pipeline-nested-failure-live.json` and `elitea-orchestrator-pipeline-failure-live.json` in the local test evidence directory.
