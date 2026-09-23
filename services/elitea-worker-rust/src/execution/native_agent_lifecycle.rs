@@ -222,7 +222,9 @@ where
             let run = *run;
             let failure = assembly_failure(&error);
             tracing::warn!(
+                event = "agent_native_assembly_failed",
                 error_code = error.code().as_str(),
+                failure_reason = %error,
                 "native agent assembly failed after invocation authorization"
             );
             return Box::pin(finalize(

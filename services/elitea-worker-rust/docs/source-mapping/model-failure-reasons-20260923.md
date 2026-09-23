@@ -131,6 +131,14 @@ and fails native assembly with `native_agent.invalid_input`; its generic public
 error also survives reload. Assembly cause visibility remains a separate open
 diagnostic boundary and must not be attributed to this preparation fix.
 
+The assembly follow-up adds `agent_native_assembly_failed` and `failure_reason`
+to `src/execution/native_agent_lifecycle.rs` at the failed assembly boundary.
+`src/agents/runtime.rs::NativeAgentAssemblyError` stores only a static message;
+its `Display` is safe for this log. No model/provider payload or source chain
+is formatted. This supplements the existing error code and execution span,
+without changing failure persistence, retryability, or authorization order.
+The 34 assembly-related component tests pass. Deployed proof is pending.
+
 Source mapping: `src/execution/agent_preparation.rs::pre_invocation_terminal`
 consumes the existing `PreInvocationTerminalCause` produced by typed input
 validation/materialization; its safe contracts are
