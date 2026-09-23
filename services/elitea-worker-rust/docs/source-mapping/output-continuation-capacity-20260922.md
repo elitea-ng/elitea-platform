@@ -621,3 +621,33 @@ Local evidence uses the `elitea-pipeline-output` and `elitea-pipeline-output-cap
 Success artifacts also include `-policy.json`; failure artifacts include the persisted error screenshot `-ending.png`.
 These checks accept ordinary pipeline-node continuation and bounded exhaustion.
 Live crash injection during pipeline output continuation and structured-output continuation remain separate verification boundaries.
+
+### Structured pipeline continuation: schema binding
+
+Legacy behavior reference: `projects/elitea-sdk/elitea_sdk/runtime/tools/llm.py`
+at revision `966526e8334354366dd161b606d73fe8e204b850`,
+`_continue_nested_output` and `_invoke_with_structured_output` / `_structured_via_json_prompt`.
+The SDK bounds additional calls at four and returns as soon as the answer completes.
+Its provider-specific structured-output fallback is a behavioral reference, not copied transport logic.
+
+The Rust regression found that ADK attached the pipeline output schema to its request,
+but `agents/pipeline.rs` omitted it from the frozen provider invocation. Admission rejected
+this mismatch before the first model call. The invocation now binds the same schema.
+`model_checkpoint/output.rs` removes the schema constraint only for a continuation with
+an accepted prefix: a fragment can begin inside a JSON string and cannot itself satisfy
+a whole-object schema. ADK retains validation of the completed joined answer before graph
+state is updated. The provider adapters encode the validated request schema, rather than
+reintroducing the original schema on every fragment.
+
+`transport/openai_compatible_facade.rs` permits this relaxation only for explicitly bound
+pipeline invocations; a different schema remains invalid. Ordinary calls retain exact schema
+admission. `transport/summary_model.rs` explicitly disables the relaxation for summaries.
+Both OpenAI-compatible and Anthropic request encoders honor the validated schema choice.
+No database or wire schema changes are needed.
+
+The focused structured pipeline regression passes with an initial truncated JSON response,
+two continuation calls, and a downstream deterministic node receiving the complete answer.
+The accepted prefix exceeds the 256-byte anchor, so continuation starts inside the JSON string.
+Assertions check native schema on the initial call and text fragments thereafter.
+All 421 PostgreSQL-backed agent tests, 154 transport tests, and strict all-target Clippy pass.
+Deployed browser acceptance of this change remains pending.

@@ -107,6 +107,9 @@ impl ModelGatewayConfig {
 #[derive(Clone)]
 pub(crate) struct ModelFacadeInvocation {
     pub(crate) response_schema: Option<serde_json::Value>,
+    /// Pipeline output is validated after joining bounded continuation fragments.
+    /// Ordinary calls and compaction summaries keep exact schema admission.
+    pub(crate) allow_text_continuation: bool,
     pub(crate) context_budget: Option<crate::agents::context_budget::RequestContextBudget>,
     pub(crate) model_name: String,
     pub(crate) system_instruction: String,
@@ -670,7 +673,11 @@ fn encode_request_body(
             );
         }
     }
-    if let Some(schema) = &invocation.response_schema {
+    if let Some(schema) = request
+        .config
+        .as_ref()
+        .and_then(|config| config.response_schema.as_ref())
+    {
         body.insert(
             "response_format".to_owned(),
             serde_json::json!({
@@ -1033,7 +1040,8 @@ fn generation_config_matches(
         && config.seed.is_none()
         && config.top_logprobs.is_none()
         && config.stop_sequences.is_empty()
-        && config.response_schema == invocation.response_schema
+        && (config.response_schema == invocation.response_schema
+            || (invocation.allow_text_continuation && config.response_schema.is_none()))
         && config.cached_content.is_none()
         && config.extensions.is_empty()
 }
@@ -2067,6 +2075,7 @@ pub(crate) fn test_model_gateway_client(
 pub(super) fn test_model_facade_invocation() -> ModelFacadeInvocation {
     ModelFacadeInvocation {
         response_schema: None,
+        allow_text_continuation: false,
         context_budget: None,
         model_name: "fixture-model".to_owned(),
         system_instruction: "review carefully\nbe concise".to_owned(),

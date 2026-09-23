@@ -303,3 +303,55 @@ async fn pipeline_continuation_exhaustion_keeps_downstream_state_unwritten() {
         assert!(saved.state.get("final_text").is_none_or(Value::is_null));
     }
 }
+
+#[tokio::test]
+async fn pipeline_structured_output_validates_after_continuation() {
+    let mut request = pipeline_request();
+    request.payload.context_settings = json!({"enabled":false}).as_object().unwrap().clone();
+    request.payload.application["version_details"]["instructions"] = json!(
+        "state:\n  answer: str\n  final_text: str\n  messages: list\nentry_point: answer\nnodes:\n  - id: answer\n    type: llm\n    structured_output: true\n    output: [answer, messages]\n    transition: finish\n  - id: finish\n    type: state_modifier\n    template: '{{ answer }}'\n    input: [answer]\n    output: [final_text]\n    transition: END\n"
+    );
+    let initial = format!(r#"{{"answer":"{}"#, "Cedar record. ".repeat(30));
+    let second = format!("{} second segment", &initial[initial.len() - 256..]);
+    let joined = format!("{initial} second segment");
+    let final_segment = format!(r#"{} complete"}}"#, &joined[joined.len() - 256..]);
+    let expected = format!("{} second segment complete", "Cedar record. ".repeat(30));
+    let ((platform, facade, _, _), captured) = pipeline_runtime_from_responses_with_capture(
+        VecDeque::from([runtime_response(
+            &json!({"schema_version":"elitea.runtime.elitea-client-token.v1","project_id":17,"token":"ephemeral-pipeline-token"}),
+        )]),
+        vec![
+            TestModelGatewayOutcome::Response(limited_text_response(&initial)),
+            TestModelGatewayOutcome::Response(limited_text_response(&second)),
+            TestModelGatewayOutcome::Response(pipeline_text_response(&final_segment)),
+        ],
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(Mutex::new(vec![])),
+    );
+    let graph = Arc::new(MemoryCheckpointer::new());
+    let assembler = PipelineNativeAgentAssembler::with_state(
+        Arc::new(InMemorySessionService::new()),
+        graph.clone(),
+    )
+    .with_runtime_clients(platform, facade);
+    let browser =
+        collect_pipeline_completion(assembler.assemble(authorized(&request)).await.unwrap()).await;
+    assert!(browser.iter().any(|event| event["content"] == expected));
+    let calls: Vec<Value> = captured
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|call| serde_json::from_slice(&call.body).unwrap())
+        .collect();
+    assert_eq!(calls.len(), 3);
+    assert_eq!(calls[0]["response_format"]["type"], "json_schema");
+    assert!(calls[1].get("response_format").is_none());
+    assert!(calls[2].get("response_format").is_none());
+    let saved = graph
+        .load(&private_pipeline_session_id(&request))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.state.get("answer"), Some(&json!(expected)));
+    assert_eq!(saved.state.get("final_text"), Some(&json!(expected)));
+}

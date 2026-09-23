@@ -166,6 +166,7 @@ fn summary_invocation(
         crate::agents::context_summary::CONTRACT
     );
     invocation.response_schema = Some(crate::agents::context_summary::response_schema());
+    invocation.allow_text_continuation = false;
     invocation.max_model_turns = 1;
     invocation.reasoning_effort = None;
     invocation.max_tokens = match source.context_budget {

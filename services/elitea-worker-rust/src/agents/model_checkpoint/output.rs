@@ -62,6 +62,14 @@ impl OutputContinuation {
         request
             .contents
             .push(Content::new("user").with_text(prompt));
+        // A continuation may start inside a JSON string. The ADK agent validates
+        // the joined answer; constraining each fragment to a full object conflicts
+        // with the exact accepted boundary. Summary models never use this loop.
+        if !self.prefix.is_empty()
+            && let Some(config) = &mut request.config
+        {
+            config.response_schema = None;
+        }
         request.previous_response_id = None;
         request
     }

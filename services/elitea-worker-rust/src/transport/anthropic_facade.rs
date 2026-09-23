@@ -447,7 +447,11 @@ fn encode_anthropic_body(
     params.temperature = generation.temperature;
     params.thinking = generation.thinking;
     params.output_config = generation.output_config;
-    if let Some(schema) = &invocation.response_schema {
+    if let Some(schema) = request
+        .config
+        .as_ref()
+        .and_then(|config| config.response_schema.as_ref())
+    {
         let config = params.output_config.get_or_insert(OutputConfig {
             effort: None,
             format: None,

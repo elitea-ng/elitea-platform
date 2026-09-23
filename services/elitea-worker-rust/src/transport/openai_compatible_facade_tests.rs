@@ -1462,6 +1462,10 @@ fn response_schema_must_match_the_frozen_invocation() {
     assert!(validate_llm_request(&request, true, &invocation).is_err());
     request.config.as_mut().unwrap().response_schema = None;
     assert!(validate_llm_request(&request, true, &invocation).is_err());
+    invocation.allow_text_continuation = true;
+    assert!(validate_llm_request(&request, true, &invocation).is_ok());
+    request.config.as_mut().unwrap().response_schema = Some(serde_json::json!({"type": "string"}));
+    assert!(validate_llm_request(&request, true, &invocation).is_err());
 }
 
 #[tokio::test(flavor = "current_thread")]

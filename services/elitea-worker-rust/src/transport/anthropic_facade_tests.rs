@@ -23,6 +23,7 @@ const MODEL: &str = "claude-sonnet-4-5";
 fn invocation(model: &str, effort: Option<ModelReasoningEffort>) -> ModelFacadeInvocation {
     ModelFacadeInvocation {
         response_schema: None,
+        allow_text_continuation: false,
         context_budget: None,
         model_name: model.to_owned(),
         system_instruction: "review carefully\nbe concise".to_owned(),
