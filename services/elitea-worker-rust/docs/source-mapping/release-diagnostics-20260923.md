@@ -102,3 +102,41 @@ Capture remains disabled by default until release overhead and deployed behavior
 
 Release capture, nested correlation, provider-specific causes, and browser error acceptance remain open.
 This slice does not complete OBS-RUST-01.
+
+## Deployed capture verification
+
+The rehearsal worker runs source `49e8ab2e` with capture enabled.
+Image ID: `sha256:8850e0c34e5b4a97b8421b2b839afb36b4ab6bf8cecbd3d6f86e042fc07502e5`.
+The deployment retains all five mounts, networks, credentials, and resource limits.
+No active execution claim exists before replacement.
+
+Fresh headed Playwright chat 654 exercises a 256-token pipeline response with four continuation calls.
+Execution: `b1b5fd112e4417db9d840332174ad601`.
+The browser displays `OUTPUT_CONTINUATION_EXHAUSTED`, preserves the partial response after reload, and reports no page errors.
+The screenshot confirms the visible error below the partial answer.
+
+The worker emits one diagnostic with exactly 8,192 bytes.
+It includes the lifecycle span, execution identity, and `model.output_continuation_failed` code.
+The optimized stack resolves `capture_detail`, `event_failed`, and the runner boundary to Rust source lines.
+The diagnostic does not contain the fixture's model output text.
+This is a controlled payload check, not exhaustive redaction acceptance.
+
+Local evidence:
+
+- `/private/tmp/elitea-diagnostic-failure-result.json`
+- `/private/tmp/elitea-diagnostic-failure-complete.png`
+- `/private/tmp/elitea-capture-diagnostics-proof.json`
+
+The first log scan misses the diagnostic because ANSI sequences interrupt the field name.
+Normalized inspection confirms successful capture; there is no missing event capture in this test.
+The follow-up removes ANSI formatting and renders diagnostic stack text with actual line breaks.
+That formatting change requires the next image deployment.
+
+## User and operator explanation requirements
+
+The user requires understandable failure reasons, corrective actions, and operator context without source-code investigation.
+`native_agent_lifecycle.rs::model_failure` still maps many distinct model errors to `Internal`.
+Main's `runtimeFailurePolicy` enforces canonical messages for the current protocol categories.
+A UI-only wording change cannot restore distinctions already lost upstream.
+The next contract slice must preserve safe reasons across worker, Main, persistence, replay, and UI.
+Raw provider text remains excluded from public messages.

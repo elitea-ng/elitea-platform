@@ -157,6 +157,7 @@ pub fn install_tracing_subscriber() -> Result<DiagnosticGuard, DiagnosticInitErr
         EnvFilter::try_new(directive).map_err(|_| DiagnosticInitError::InvalidLogLevel)?;
     let format = tracing_subscriber::fmt::layer()
         .compact()
+        .with_ansi(false)
         .with_target(true)
         .with_thread_ids(true)
         .with_span_events(FmtSpan::CLOSE)

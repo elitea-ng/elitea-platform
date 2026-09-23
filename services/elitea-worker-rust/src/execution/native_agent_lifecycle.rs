@@ -351,7 +351,7 @@ where
             tracing::warn!(
                 error_code = error.code().as_str(),
                 upstream_error_code = error.upstream_code(),
-                failure_diagnostic = error.diagnostic_detail(),
+                failure_diagnostic = %error.diagnostic_detail(),
                 "native agent runtime failed to start"
             );
             return Box::pin(finalize(
@@ -627,7 +627,7 @@ where
                             error = %error,
                             error_code = error.code().as_str(),
                             upstream_error_code = error.upstream_code(),
-                failure_diagnostic = error.diagnostic_detail(),
+                failure_diagnostic = %error.diagnostic_detail(),
                             "native agent event stream failed"
                         );
                         return NativeStreamOutcome::Failure(
