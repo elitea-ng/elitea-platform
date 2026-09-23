@@ -112,6 +112,7 @@ Point 4 also includes the following required work, confirmed by the user on 2026
 - Defer optional tool-output clearing per user direction on 2026-09-23. See [scope and source mapping](source-mapping/tool-output-editing-deferral-20260923.md).
 - Resolve same-name toolkit bindings by exact toolkit and tool identity, using the current SDK fix as behavioral evidence.
 - Complete [OBS-RUST-01](source-mapping/agent-runtime.md#obs-rust-01-detailed-runtime-diagnostics): useful public errors, detailed internal causes, synchronous backtraces, async span context, and release-build symbol information. Keep sensitive payloads out of diagnostics.
+- Main's pass-through and durable UI projection of worker failures belong to this gate. Improving Main's own validation/HTTP error explanations, logs, and tracing is a separate platform follow-up, as clarified on 2026-09-23; worker diagnostics do not establish that broader coverage.
 
 These requirements remain part of gate 4 acceptance, except the explicitly deferred tool-output clearing feature.
 

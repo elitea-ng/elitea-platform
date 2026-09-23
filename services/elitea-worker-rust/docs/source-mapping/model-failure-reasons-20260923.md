@@ -71,7 +71,7 @@ Rust verifies canonical replay and rejects injected messages.
 Main tests cross the output handler, preserve reason and retryability, and reject unregistered text.
 Taxonomy tests cover known gateway categories and retain the unknown-error fallback.
 
-Deployment, new-category browser acceptance, and a copyable UI correlation control remain open.
+Main and worker deployment is complete (rehearsal images below). New-category browser acceptance and a copyable UI correlation control remain open.
 Existing generic configuration and non-model failures still require further classification.
 This slice does not complete OBS-RUST-01 or Gate 4.
 
@@ -85,3 +85,38 @@ This slice does not complete OBS-RUST-01 or Gate 4.
 - The shared fixture verifies ten new message policies in both languages.
 
 These checks use component boundaries, not deployed browser traffic.
+
+## Rehearsal deployment and rejected fixtures
+
+On 2026-09-23 Main was deployed first, followed by the worker, retaining existing
+environment, mounts, and runtime limits. Images:
+
+- Main `elitea-main:model-reasons-20260923`, image `a5bbe878da7d`.
+- Worker `elitea-worker-rust:model-reasons-20260923`, image `9d9d095d1be1`.
+
+Fresh headed browser fixtures reached earlier guards instead of the intended
+model-failure boundary. They are explicitly **not acceptance** of the new codes:
+
+| Chat | Execution | Observed boundary |
+| --- | --- | --- |
+| 655 | `04ee12df18663fa2fb5d7b94ec2bc21f` | Invalid temperature rejected as `INVALID_INPUT`. |
+| 656 | None | Large submitted message rejected with HTTP 413 before execution. |
+| 657 | `5459e9abc6216394fff7965432dca58f` | Large saved pipeline rejected with `RESOURCE_EXHAUSTED` before invocation. |
+| 658 | `93d3a0feb34cfdbde94564215c713782` | Synthetic toolkit pipeline rejected as `INVALID_INPUT`. |
+
+The preparation investigation found that `PreInvocationTerminalCause` retains a
+safe reason, but `pre_invocation_terminal` only recorded its broad code on the
+span. The worker now emits `agent_preparation_terminal` with `error_code` and
+`failure_reason` in the existing execution span. It uses the data-free `Display`
+implementation, never `Debug`, request content, or the transport source chain.
+This is operator logging; the persisted public failure contract is unchanged.
+Deployment and live verification of this preparation-log addition remain open.
+
+Source mapping: `src/execution/agent_preparation.rs::pre_invocation_terminal`
+consumes the existing `PreInvocationTerminalCause` produced by typed input
+validation/materialization; its safe contracts are
+`src/protocol/error.rs::ProtocolError` and
+`src/transport/input_content.rs::InputContentError`. No legacy behavior is
+being ported here: this fills a diagnostic gap in the new worker's admission
+boundary. Main's own validation and HTTP error UX/logging remain a separate
+platform follow-up; this worker work does not establish coverage of them.

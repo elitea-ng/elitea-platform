@@ -1777,6 +1777,15 @@ fn pre_invocation_terminal(
 ) -> AgentPreparationOutcome {
     tracing::Span::current().record("outcome", "pre_invocation_terminal");
     tracing::Span::current().record("error_code", cause.code());
+    // These Display implementations contain static, data-free reasons and
+    // redact transport causes. Never substitute Debug or the source chain:
+    // those may contain connection details or caller-controlled payloads.
+    tracing::warn!(
+        event = "agent_preparation_terminal",
+        error_code = cause.code(),
+        failure_reason = %cause,
+        "agent execution stopped before model invocation"
+    );
     AgentPreparationOutcome::PreInvocationTerminal(Box::new(PreInvocationTerminal {
         delivery,
         verified,
