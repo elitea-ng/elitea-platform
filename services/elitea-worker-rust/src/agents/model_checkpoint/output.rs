@@ -72,11 +72,29 @@ impl OutputContinuation {
         // with the exact accepted boundary. Summary models never use this loop.
         if !self.prefix.is_empty()
             && let Some(config) = &mut request.config
+            && let Some(schema) = config.response_schema.take()
         {
-            config.response_schema = None;
+            scope_joined_schema_instruction(&mut request.contents, &schema);
         }
         request.previous_response_id = None;
         request
+    }
+}
+
+// Match only ADK's generated schema instruction, not arbitrary user text.
+fn scope_joined_schema_instruction(contents: &mut [Content], schema: &serde_json::Value) {
+    let generated = format!(
+        "You MUST respond with valid JSON conforming to this schema: {schema}. Do not include any text outside the JSON object."
+    );
+    for content in contents {
+        if content.role == "user"
+            && let [Part::Text { text }] = content.parts.as_mut_slice()
+            && *text == generated
+        {
+            *text = format!(
+                "The complete joined answer must conform to this JSON schema: {schema}. For output continuation, return the requested exact anchor and missing fragment only. The fragment itself is not a standalone JSON object; do not wrap or restart it."
+            );
+        }
     }
 }
 

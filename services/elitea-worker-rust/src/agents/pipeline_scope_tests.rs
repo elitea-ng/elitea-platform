@@ -349,6 +349,21 @@ async fn pipeline_structured_output_validates_after_continuation() {
     assert_eq!(calls[0]["response_format"]["type"], "json_schema");
     assert!(calls[1].get("response_format").is_none());
     assert!(calls[2].get("response_format").is_none());
+    assert!(
+        calls[0]
+            .to_string()
+            .contains("You MUST respond with valid JSON")
+    );
+    assert!(
+        !calls[1]
+            .to_string()
+            .contains("You MUST respond with valid JSON")
+    );
+    assert!(
+        calls[1]
+            .to_string()
+            .contains("The complete joined answer must conform")
+    );
     let saved = graph
         .load(&private_pipeline_session_id(&request))
         .await

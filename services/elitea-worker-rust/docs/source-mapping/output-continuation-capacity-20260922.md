@@ -717,3 +717,13 @@ sizes (281, 800, 859 tokens), ruling out an unchanged continuation request at th
 The fix removes the observed envelope but does not yet establish successful continuation;
 the model restarts an object. Inspect the retained ADK schema instruction versus the fragment
 contract before changing overlap acceptance. Browser acceptance remains open.
+
+ADK `vendor/adk-agent/src/llm_agent.rs::build_instructions` also inserts a user-role
+instruction requiring every response to be a complete JSON object. Removing only the
+provider's native schema leaves that conflicting generated instruction in continuation
+history. `model_checkpoint/output.rs` now matches only the exact ADK-generated instruction
+for the admitted schema and scopes it to the complete joined answer. User-authored text,
+other instructions, schema contents, and ADK final validation remain unchanged. The pipeline
+regression asserts that the original instruction is present initially and the scoped version
+replaces it in the continuation request. This is a targeted adapter for the vendored ADK
+instruction contract, not a general prompt rewrite.
