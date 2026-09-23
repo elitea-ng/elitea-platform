@@ -57,3 +57,41 @@ A marked Agent node retains the typed fatal continuation signal and stops the gr
 The existing direct LLM-node path also stops on continuation exhaustion.
 The focused suite includes downstream-state protection and the new Agent-node classification.
 Pipeline-as-child propagation remains a separate verification item.
+
+## Error propagation acceptance matrix
+
+Use the execution boundary, not the application type name, to select behavior.
+
+| Caller | Failed operation | Required result | Evidence |
+| --- | --- | --- | --- |
+| Chat orchestrator | Agent child continuation | Return a failed tool report; let the parent decide | Local tests and deployed browser acceptance pass |
+| Direct pipeline | LLM node continuation | Stop before downstream state is written | Existing focused graph test passes |
+| Direct pipeline | Agent node calling an Agent application | Stop with the typed failure | Caller classification test passes; live graph acceptance remains |
+| Pipeline | Nested pipeline | Propagate failure; do not release partial state as success | Open |
+| Pipeline Agent node | Pipeline application | Propagate failure to the owning graph | Open |
+| Chat orchestrator | Pipeline child | Stop the child graph; report its contained failure to the parent | Open |
+| Any scope | Cancellation or execution-wide limit | Preserve control semantics; do not offer automatic retry | Existing handling retained; combination tests remain |
+
+The legacy platform does not establish acceptance for all nested combinations.
+Verify each path against the intended state and error contract.
+Keep graph expansion in gate 5, but track error propagation under gate 4.
+Do not claim that all child error categories are handled by the continuation-specific correction.
+
+## Deployed acceptance on 2026-09-23
+
+Worker revision d705fa9a is deployed to rehearsal with existing configuration and mounts.
+A fresh headed browser runs the original chat 637 without response fixtures.
+The child exhausts continuation. The parent receives its error report and completes normally.
+The parent explains the four-call limit, partial-output availability, and the prohibition on an identical automatic retry.
+The response remains after reload. No root execution failure or browser error occurs.
+The rendered screenshot is inspected.
+Local evidence: elitea-nested-report-live.json, elitea-nested-report-live.png, and elitea-nested-report-frames.json.
+
+The worker emits ERROR for nested_application_failed.
+Its cause_message states that the answer still reached the output limit after four continuation calls.
+The event includes application, version, invocation, tool-call identity, and the diagnostic trace.
+
+The full PostgreSQL-enabled worker suite passes 1,212 tests before the pipeline-boundary refinement.
+The refinement passes 31 focused continuation tests and strict all-target Clippy.
+The refinement includes the direct Agent-node failure classifier and existing downstream graph-state checks.
+Live direct Agent-node and wider nested-pipeline acceptance remain open.

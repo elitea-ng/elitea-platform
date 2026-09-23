@@ -37,6 +37,7 @@ Current-platform code defines business behavior, not a requirement to copy its i
 | 4 | Current-platform runtime drift | Complete context management, pipeline summaries, dedicated summary models, SDK/UI continuation parity, provider errors and diagnostics, and same-name toolkit binding. Preserve authoritative skills and project context across compaction. |
 | 5 | Remaining graph capabilities | Complete deeper pipeline composition, child variables, static pauses, and isolated Code nodes. |
 | 5a | New parallel and map nodes | Implement the separate fixed-branch and data-driven designs with durable child state, bounded concurrency, reducers, and recovery. |
+| 5b | Pipeline node recovery policies | Add explicit retry conditions, attempt limits, backoff, failure routes, and operator recovery controls. Persist attempts and prevent unsafe repetition of external effects. |
 | 6 | Effectful toolkit operations | Require durable intent, effect receipts, idempotency, approval, fencing, and crash reconciliation before writes. |
 | 7 | Artifact-backed capabilities | Complete attachment authority, object grants, storage behavior, and affected toolkit operations. |
 | 7a | Built-in runtime modules | Complete Attachments, Data Analysis, Image Creation, Ask User, Planner, Python Sandbox, and Smart Tools Selection. Reuse builder contracts and exclude Swarm. Verify runtime behavior and UI controls before indexing. |
@@ -305,3 +306,23 @@ Fresh headed browser chat 653 passes the previously failing continuation crash b
 Claim attempt 2 restores the same execution, completes the downstream node, and preserves one answer after reload.
 See [process-crash evidence](source-mapping/output-continuation-capacity-20260922.md#structured-pipeline-process-crash-acceptance).
 Other pending node families and the remaining Gate 4 drift checks stay open.
+
+## Gate 5b: pipeline node recovery policies
+
+The user adds this separate gap on 2026-09-23.
+Until a node has an explicit recovery policy, its failure stops the graph.
+Do not publish incomplete node output as successful downstream state.
+
+- Define retryable failure classes, maximum attempts, backoff, and elapsed-time limits.
+- Persist attempt counts and pending retry times across worker crashes.
+- Define explicit failure routes and typed failed-node output contracts.
+- Define operator retry and resume actions with authorization and an audit history.
+- Reconcile unknown external effects before retrying an effectful node.
+- Preserve cancellation, authentication, and sensitive-tool approval boundaries.
+- Expose the policy and attempt history through Main and the pipeline editor.
+- Verify LLM, Agent, nested Pipeline, parallel, and map-node behavior.
+- Test interruption during an attempt, during backoff, and after an external effect.
+- Keep this policy separate from the four-call model output continuation limit.
+
+Gate 4 still owns friendly error messages and correct propagation.
+See the [error propagation matrix](source-mapping/continuation-diagnostics-20260923.md#error-propagation-acceptance-matrix).
