@@ -569,3 +569,105 @@ DROP FUNCTION block_agent_graph_checkpoint_insert();
     replacement_lease.revoke();
     assert!(replacement.load("thread-1").await.is_err());
 }
+
+#[tokio::test]
+async fn postgres_application_subgraph_threads_are_admitted_fenced_and_durable() {
+    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+        eprintln!("skipping PostgreSQL checkpoint component test: set {TEST_DATABASE_URL}");
+        return;
+    };
+    let database = IsolatedPostgres::create(&database_url).await;
+    install_test_schema(&database.pool).await;
+    let lease = Arc::new(TestStateWriterLease::current());
+    let root = PostgresCheckpointer::activate(
+        database.pool.clone(),
+        writer("execution-1", "claim-1", 1, 1, [0x41; 32], [0x61; 32]),
+        CheckpointLimits::default(),
+        lease.clone(),
+    )
+    .await
+    .expect("activate root");
+    assert!(root.load("thread-1/delegate").await.is_err());
+    let family: Arc<dyn Checkpointer> = Arc::new(
+        root.with_application_children(["delegate"].into_iter())
+            .await
+            .expect("activate admitted child"),
+    );
+    for thread in ["other", "thread-1/unknown", "thread-1/delegate/deeper"] {
+        assert!(family.load(thread).await.is_err());
+        assert!(
+            family
+                .save(&Checkpoint::new(thread, State::new(), 0, vec![]))
+                .await
+                .is_err()
+        );
+    }
+    let calls = Arc::new(AtomicUsize::new(0));
+    let count = calls.clone();
+    let child = StateGraph::with_channels(&["result"])
+        .add_node_fn("work", move |_| {
+            let count = count.clone();
+            async move {
+                count.fetch_add(1, Ordering::SeqCst);
+                Ok(NodeOutput::new().with_update("result", json!("child completed")))
+            }
+        })
+        .add_edge(START, "work")
+        .add_edge("work", END)
+        .compile()
+        .expect("compile child")
+        .with_checkpointer_arc(family.clone());
+    let parent = StateGraph::with_channels(&["result"])
+        .add_node(adk_rust::graph::subgraph::SubgraphNode::new(
+            "delegate",
+            Arc::new(child),
+        ))
+        .add_edge(START, "delegate")
+        .add_edge("delegate", END)
+        .compile()
+        .expect("compile parent")
+        .with_checkpointer_arc(family.clone());
+    let result = parent
+        .invoke(State::new(), ExecutionConfig::new("thread-1"))
+        .await
+        .expect("execute admitted subgraph");
+    assert_eq!(result.get("result"), Some(&json!("child completed")));
+    let child_checkpoint = family
+        .load("thread-1/delegate")
+        .await
+        .expect("load child")
+        .expect("child saved");
+    assert_eq!(
+        family
+            .load_by_id(&child_checkpoint.checkpoint_id)
+            .await
+            .expect("load by id")
+            .expect("saved")
+            .thread_id,
+        "thread-1/delegate"
+    );
+    let replacement = PostgresCheckpointer::activate(
+        database.pool.clone(),
+        writer("execution-1", "claim-2", 2, 2, [0x41; 32], [0x62; 32]),
+        CheckpointLimits::default(),
+        Arc::new(TestStateWriterLease::current()),
+    )
+    .await
+    .expect("take over root")
+    .with_application_children(["delegate"].into_iter())
+    .await
+    .expect("take over child");
+    assert!(family.save(&child_checkpoint).await.is_err());
+    let recovered = replacement
+        .load("thread-1/delegate")
+        .await
+        .expect("recover child")
+        .expect("checkpoint");
+    assert_eq!(
+        recovered.state.get("result"),
+        Some(&json!("child completed"))
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    lease.revoke();
+    assert!(family.load("thread-1/delegate").await.is_err());
+}

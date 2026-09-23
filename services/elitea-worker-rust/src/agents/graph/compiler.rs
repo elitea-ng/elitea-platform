@@ -593,6 +593,14 @@ impl PipelineDefinition {
         })
     }
 
+    /// Admitted node identifiers that can own an ADK subgraph thread.
+    pub(crate) fn application_node_ids(&self) -> impl Iterator<Item = &str> {
+        self.nodes.iter().filter_map(|node| match node {
+            PipelineNodeDefinition::Application(node) => Some(node.id()),
+            _ => None,
+        })
+    }
+
     /// Exact saved-application participants selected by Agent nodes.
     pub(crate) fn application_selections(
         &self,

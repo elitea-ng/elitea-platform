@@ -15,6 +15,7 @@ use zeroize::Zeroizing;
 
 use super::StateWriterLease;
 
+mod application_children;
 mod parallel_children;
 
 const CHECKPOINT_FAMILY: &str = "adk-graph.2.0.0.v1";

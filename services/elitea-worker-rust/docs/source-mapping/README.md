@@ -46,6 +46,8 @@ authorization, failure behavior, and recovery boundary.
 
 Detailed ledgers:
 
+- `nested-pipeline-checkpoint-scope-20260923.md` maps admitted child checkpoint threads and claim-fenced recovery.
+
 - `customer-workflow-migration-20260923.md` maps customer workflow requirements, reuse candidates, and separate acceptance plans.
 
 - `../testing-gaps.md` records accepted progression decisions, verification debt, observed warnings, and separate implementation gaps.

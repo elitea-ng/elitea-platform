@@ -672,12 +672,7 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
             &policy,
         )?;
         self.state
-            .open(
-                session,
-                lease,
-                &plan,
-                profile.definition().definition_digest(),
-            )
+            .open(session, lease, &plan, profile.definition())
             .await?
             .inspect_checkpoint(&plan, profile.definition())
             .await
@@ -752,12 +747,7 @@ impl PipelineNativeAgentAssembler {
             tracing::Span::current().record("stage", "state");
             let mut state = self
                 .state
-                .open(
-                    session,
-                    lease,
-                    &plan,
-                    profile.definition().definition_digest(),
-                )
+                .open(session, lease, &plan, profile.definition())
                 .await?;
             let evidence = if recovery {
                 let evidence = state

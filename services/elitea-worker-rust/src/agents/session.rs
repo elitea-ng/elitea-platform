@@ -960,7 +960,7 @@ impl NativePipelineStateBackend {
         authority: ClaimBoundSessionAuthority,
         state_writer_lease: Arc<dyn StateWriterLease>,
         plan: &OrdinaryNativeAgentPlan,
-        pipeline_definition_digest: [u8; 32],
+        pipeline_definition: &PipelineDefinition,
     ) -> Result<PipelineStateServices, NativeAgentAssemblyError> {
         let claim = authority.into_writer_binding();
         if claim.tenant_id != plan.tenant_id
@@ -984,7 +984,7 @@ impl NativePipelineStateBackend {
                     claim,
                     state_writer_lease,
                     plan,
-                    pipeline_definition_digest,
+                    pipeline_definition,
                 )
                 .await
             }
@@ -1014,7 +1014,7 @@ async fn activate_pipeline_postgres(
     claim: SessionWriterClaimBinding,
     state_writer_lease: Arc<dyn StateWriterLease>,
     plan: &OrdinaryNativeAgentPlan,
-    pipeline_definition_digest: [u8; 32],
+    pipeline_definition: &PipelineDefinition,
 ) -> Result<PipelineStateServices, NativeAgentAssemblyError> {
     let resource_project_id = claim
         .resource_project_id
@@ -1059,7 +1059,7 @@ async fn activate_pipeline_postgres(
         resource_project_id,
         projection_project_id,
         plan.capability_id,
-        pipeline_definition_digest,
+        pipeline_definition.definition_digest(),
         plan.session_id.to_string(),
         claim.execution_id,
         claim.generation,
@@ -1088,6 +1088,10 @@ async fn activate_pipeline_postgres(
     )
     .await
     .map_err(|error| checkpoint_activation_error(&error))?;
+    let checkpointer = checkpointer
+        .with_application_children(pipeline_definition.application_node_ids())
+        .await
+        .map_err(|error| checkpoint_activation_error(&error))?;
     let sessions = Arc::new(sessions);
     let model_scopes = plan.model_scope_sessions(super::model_scope::ModelScopeBackend::Postgres(
         sessions.clone(),
