@@ -103,6 +103,10 @@ User-authored summary text is optional additional guidance, not a replacement pr
 Long-term user memory belongs to [gate 7b](source-mapping/long-term-memory.md); compaction does not implicitly save memories.
 The 2026-09-17 clarification retires legacy numeric context settings from new compaction. Use Balanced or Full without rewriting old records.
 
+Deployed chat 662 verifies typed continuation errors, partial-output inspection and copying, and exact reload without response fixtures.
+See [continuation UI acceptance](source-mapping/output-continuation-capacity-20260922.md#deployed-continuation-error-acceptance-2026-09-23).
+Reusing old chat 637 produces `MODEL_REQUEST_REJECTED`; investigate that history-specific failure before closing point 4.
+
 Point 4 also includes the following required work, confirmed by the user on 2026-09-14:
 
 - Wire compaction settings, context budget, status, and continuation through UI, Main, and Rust.

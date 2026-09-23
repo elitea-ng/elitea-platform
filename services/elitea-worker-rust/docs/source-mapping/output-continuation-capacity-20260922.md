@@ -921,3 +921,30 @@ It changes no saved chat data and does not prove deployed worker-to-browser deli
 The actual API uses `metadata`; the page adapter retains it as `meta` before message normalization.
 Evidence is in `/private/tmp/elitea-continuation-browser.json` and the expanded and collapsed screenshots.
 Deployment and an unmodified end-to-end run remain required.
+
+
+## Deployed continuation-error acceptance, 2026-09-23
+
+Committed source `eac6cb36` builds the Main and web images from a clean archive.
+Main image: `sha256:a1bba50deca093c288213c3afdf3b4a59fb39c606737b9273006636b1529040c`.
+Web image: `sha256:625ced057afda297a3446ed6e4ac922ee717023d3fe3875b566439c792dd3453`.
+The deployment retains credentials, mounts, networks, and resource limits.
+The Rust image and database schemas remain unchanged.
+
+Chat 661 targets a direct participant and reaches its explicit per-call output cap.
+That path uses user-driven Continue, so it does not exercise automatic child-continuation failure.
+Reusing chat 637 returns `MODEL_REQUEST_REJECTED` before the intended failure.
+The old-history rejection remains unresolved; a fresh conversation does not prove its cause.
+
+Fresh chat 662 uses the same capped parent and child applications.
+The parent prints a heading before delegation.
+The real provider run emits `OUTPUT_CONTINUATION_EXHAUSTED`.
+The browser displays recovery guidance and retains the 108-character parent partial response.
+Expansion and copying pass. Reload preserves the exact copied text and the typed failure.
+The history API contains the saved `metadata.error_code`.
+No browser page errors occur. No requests or responses are mocked.
+The screenshot confirms that the warning and partial-output controls are readable.
+
+Evidence: `/private/tmp/elitea-continuation-ui-nested.json`, `elitea-continuation-ui-fresh.log`, and `elitea-continuation-ui-nested.png`.
+This closes deployed acceptance for the new continuation-error presentation.
+It does not close bounded-repair, old-history rejection, or the other point 4 requirements.
