@@ -4401,5 +4401,7 @@
   "chatMessages.continuation.guidance": "Increase the output limit in Model settings, or ask for a smaller part of the task, then try again.",
   "chatMessages.continuation.hidePartial": "Hide partial response",
   "chatMessages.continuation.showPartial": "Show partial response",
-  "chatMessages.continuation.copyPartial": "Copy partial response"
+  "chatMessages.continuation.copyPartial": "Copy partial response",
+  "chatMessages.error.supportDetails": "Details for support",
+  "chatMessages.error.copyReference": "Copy error reference"
 }
