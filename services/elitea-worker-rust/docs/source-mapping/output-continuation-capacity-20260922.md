@@ -662,3 +662,12 @@ This is not acceptance: the test reports explicit incomplete output, not a compl
 An earlier browser launch failed at login with an invalid state cookie; starting at the normal
 chat entry resolved login without changing the runtime. The continuation prompt is being clarified
 for JSON lexical fragments and literal escape preservation; live verification remains open.
+
+The JSON fragment clarification (`7bd9de1c`) was deployed as
+`sha256:b0d935582ec35580a1d276de855167292f4eb8662b848f661a108246862fdccd`.
+Fresh browser chat 645, execution `9eb3e5f68982740ea149e04794abe86e`, still
+fails with `OUTPUT_CONTINUATION_EXHAUSTED`; the clarification alone is insufficient.
+Do not treat this run as structured continuation acceptance. The focused regression now
+also uses literal JSON newline escapes and checks the decoded downstream answer; it passes.
+Further diagnosis must identify the rejected provider fragment shape without weakening
+exact boundary verification or claiming that increased call allowances solve the defect.

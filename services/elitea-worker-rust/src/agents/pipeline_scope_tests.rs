@@ -311,11 +311,11 @@ async fn pipeline_structured_output_validates_after_continuation() {
     request.payload.application["version_details"]["instructions"] = json!(
         "state:\n  answer: str\n  final_text: str\n  messages: list\nentry_point: answer\nnodes:\n  - id: answer\n    type: llm\n    structured_output: true\n    output: [answer, messages]\n    transition: finish\n  - id: finish\n    type: state_modifier\n    template: '{{ answer }}'\n    input: [answer]\n    output: [final_text]\n    transition: END\n"
     );
-    let initial = format!(r#"{{"answer":"{}"#, "Cedar record. ".repeat(30));
+    let initial = format!(r#"{{"answer":"{}"#, r"Cedar record.\n".repeat(30));
     let second = format!("{} second segment", &initial[initial.len() - 256..]);
     let joined = format!("{initial} second segment");
     let final_segment = format!(r#"{} complete"}}"#, &joined[joined.len() - 256..]);
-    let expected = format!("{} second segment complete", "Cedar record. ".repeat(30));
+    let expected = format!("{} second segment complete", "Cedar record.\n".repeat(30));
     let ((platform, facade, _, _), captured) = pipeline_runtime_from_responses_with_capture(
         VecDeque::from([runtime_response(
             &json!({"schema_version":"elitea.runtime.elitea-client-token.v1","project_id":17,"token":"ephemeral-pipeline-token"}),
