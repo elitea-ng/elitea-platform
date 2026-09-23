@@ -102,7 +102,7 @@ model-failure boundary. They are explicitly **not acceptance** of the new codes:
 | 655 | `04ee12df18663fa2fb5d7b94ec2bc21f` | Invalid temperature rejected as `INVALID_INPUT`. |
 | 656 | None | Large submitted message rejected with HTTP 413 before execution. |
 | 657 | `5459e9abc6216394fff7965432dca58f` | Large saved pipeline rejected with `RESOURCE_EXHAUSTED` before invocation. |
-| 658 | `93d3a0feb34cfdbde94564215c713782` | Synthetic toolkit pipeline rejected as `INVALID_INPUT`. |
+| 658 | `93d3a0feb34cfdbde94564215c713782` | Synthetic toolkit pipeline rejected as `INVALID_INPUT`; a repeat reaches native assembly, not preparation validation. |
 
 The preparation investigation found that `PreInvocationTerminalCause` retains a
 safe reason, but `pre_invocation_terminal` only recorded its broad code on the
@@ -110,7 +110,26 @@ span. The worker now emits `agent_preparation_terminal` with `error_code` and
 `failure_reason` in the existing execution span. It uses the data-free `Display`
 implementation, never `Debug`, request content, or the transport source chain.
 This is operator logging; the persisted public failure contract is unchanged.
-Deployment and live verification of this preparation-log addition remain open.
+Commit `4182b419` was deployed as worker image
+`elitea-worker-rust:preparation-reasons-20260923` (`fc36e2bdab59`). All five mounts,
+environment, networks, and resource limits were preserved; no active claim was
+interrupted. Eighteen preparation tests and strict all-target Clippy pass.
+
+Fresh headed browser execution `1eacec3702927e4e580798e3fdc3d352` in chat 657
+reproduces the resource rejection. The new warning includes the execution ID,
+`agent_input.resource_exhausted`, and the exact safe reason:
+`agent input validation failed: the agent JSON input exceeds the approved limit`.
+The public error survives reload unchanged, with zero browser runtime errors.
+The screenshot was visually inspected. This verifies the preparation diagnostic,
+not the new model taxonomy or an improved public resource-limit explanation.
+
+Evidence: `/private/tmp/elitea-preparation-resource-live-result.json`,
+`/private/tmp/elitea-preparation-resource-live-complete.png`, and
+`/private/tmp/elitea-preparation-resource-live.log` (local rehearsal artifacts).
+The earlier chat 658 repeat (`5b1fe85e31a09e08e190d21432fbd096`) passes preparation
+and fails native assembly with `native_agent.invalid_input`; its generic public
+error also survives reload. Assembly cause visibility remains a separate open
+diagnostic boundary and must not be attributed to this preparation fix.
 
 Source mapping: `src/execution/agent_preparation.rs::pre_invocation_terminal`
 consumes the existing `PreInvocationTerminalCause` produced by typed input
