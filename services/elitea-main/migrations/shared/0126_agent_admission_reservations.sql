@@ -46,9 +46,8 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    persisted_max  bigint;
-    active_count   bigint;
-    reserved_count bigint;
+    persisted_max bigint;
+    slot_count    bigint;
 BEGIN
     -- Serialize on the capability policy row. Take the lock BEFORE the replay
     -- check so a same-key retry sees every reservation that committed while it
@@ -88,19 +87,29 @@ BEGIN
     -- Cap: durable active executions plus unmaterialized reservations. A
     -- terminal execution leaves the active set and frees its slot; a
     -- materialized reservation stops counting here.
-    SELECT count(*)
-    INTO active_count
-    FROM elitea_runtime.execution_jobs
-    WHERE capability_id = NEW.capability_id
-      AND state IN ('PENDING', 'DISPATCHED', 'CLAIMED', 'RUNNING', 'SETTLING');
+    --
+    -- Both counts MUST run in one statement. This function is VOLATILE, so
+    -- under READ COMMITTED every statement takes its own snapshot; materialize
+    -- commits without the policy lock and flips a reservation to materialized
+    -- in the same commit that inserts the job. With two statements that commit
+    -- can land between them and the in-flight start is counted zero times
+    -- (job not yet visible, reservation already materialized), admitting one
+    -- start over the cap. One statement sees the commit either fully or not
+    -- at all.
+    SELECT (
+        SELECT count(*)
+        FROM elitea_runtime.execution_jobs
+        WHERE capability_id = NEW.capability_id
+          AND state IN ('PENDING', 'DISPATCHED', 'CLAIMED', 'RUNNING', 'SETTLING')
+    ) + (
+        SELECT count(*)
+        FROM elitea_runtime.agent_admission_reservations
+        WHERE capability_id = NEW.capability_id
+          AND materialized_at IS NULL
+    )
+    INTO slot_count;
 
-    SELECT count(*)
-    INTO reserved_count
-    FROM elitea_runtime.agent_admission_reservations
-    WHERE capability_id = NEW.capability_id
-      AND materialized_at IS NULL;
-
-    IF active_count + reserved_count >= persisted_max THEN
+    IF slot_count >= persisted_max THEN
         RAISE EXCEPTION 'agent admission capacity exhausted for capability %', NEW.capability_id
             USING ERRCODE = 'E9652';
     END IF;

@@ -235,7 +235,33 @@ func (r *AgentExecutionJobsRepository) AdmitAgentExecution(
 	if err := r.reserveAgentAdmission(ctx, admission); err != nil {
 		return executionapp.AdmissionOutcome{}, err
 	}
-	return r.materializeAgentAdmission(ctx, admission, resourceProject, projectionProject)
+	outcome, err := r.materializeAgentAdmission(ctx, admission, resourceProject, projectionProject)
+	if err != nil || !outcome.Created {
+		// The reserve committed but this call did not commit a new job: an
+		// error, a cancelled request, or a replay resolved against the durable
+		// job. Release the slot now instead of leaving it to the reaper's
+		// stale window, where it would refuse other starts for up to 90s.
+		// Best effort: the reaper remains the backstop if this fails.
+		r.releaseAgentAdmission(context.WithoutCancel(ctx), admission)
+	}
+	return outcome, err
+}
+
+// releaseAgentAdmission deletes the admission's reservation if it is still
+// unmaterialized. It is a no-op after a successful materialize and after a
+// replay whose reservation was materialized by the original start.
+func (r *AgentExecutionJobsRepository) releaseAgentAdmission(
+	ctx context.Context,
+	admission agentexecutionapp.Admission,
+) {
+	_, _ = sqlcgen.New(r.pool).ReleaseAgentAdmissionReservation(
+		ctx,
+		sqlcgen.ReleaseAgentAdmissionReservationParams{
+			CapabilityID:     admission.Record.Job.CapabilityID,
+			IdempotencyScope: admission.Record.IdempotencyScope,
+			IdempotencyKey:   admission.Record.IdempotencyKey,
+		},
+	)
 }
 
 // reserveAgentAdmission claims the admission's durable slot. It runs in its own
@@ -615,18 +641,37 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 	); err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("insert agent command outbox: %w", err)
 	}
-	// Mark the reserved slot materialized in the same commit as the job. Zero
-	// rows means the reaper reclaimed it as stale while this materialized; the
-	// job now holds the slot, so this is not fatal (issue 965).
-	if _, err := txQueries.MarkAgentAdmissionMaterialized(
+	// Mark the reserved slot materialized in the same commit as the job.
+	marked, err := txQueries.MarkAgentAdmissionMaterialized(
 		ctx,
 		sqlcgen.MarkAgentAdmissionMaterializedParams{
 			CapabilityID:     capabilityID,
 			IdempotencyScope: admission.Record.IdempotencyScope,
 			IdempotencyKey:   admission.Record.IdempotencyKey,
 		},
-	); err != nil {
+	)
+	if err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("mark agent admission materialized: %w", err)
+	}
+	if marked == 0 {
+		// The reaper reclaimed the reservation as stale while this materialize
+		// was still running (a >60s wait on the conversation lock or the
+		// pooler), and the guard may already have admitted another start into
+		// the freed slot. Re-check the cap under the policy row lock, counting
+		// this transaction's own job, before committing over it (issue 965).
+		if _, err := txQueries.LockRuntimeAdmissionPolicy(ctx, capabilityID); err != nil {
+			return executionapp.AdmissionOutcome{}, fmt.Errorf("lock agent admission policy after reap: %w", err)
+		}
+		slots, err := txQueries.CountAgentAdmissionSlots(ctx, capabilityID)
+		if err != nil {
+			return executionapp.AdmissionOutcome{}, fmt.Errorf("count agent admission slots after reap: %w", err)
+		}
+		if slots > r.policy.MaxOutstanding {
+			return executionapp.AdmissionOutcome{}, &executionapp.AdmissionCapacityError{
+				CapabilityID:   capabilityID,
+				MaxOutstanding: r.policy.MaxOutstanding,
+			}
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("commit agent admission: %w", err)

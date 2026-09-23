@@ -11,6 +11,30 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countAgentAdmissionSlots = `-- name: CountAgentAdmissionSlots :one
+SELECT ((
+    SELECT count(*)
+    FROM elitea_runtime.execution_jobs
+    WHERE capability_id = $1::text
+      AND state IN ('PENDING', 'DISPATCHED', 'CLAIMED', 'RUNNING', 'SETTLING')
+) + (
+    SELECT count(*)
+    FROM elitea_runtime.agent_admission_reservations
+    WHERE capability_id = $1::text
+      AND materialized_at IS NULL
+))::bigint AS slots
+`
+
+// The live cap the reservation guard trigger computes, in ONE statement so both
+// counts share a snapshot. Used by materialize to re-check the cap under the
+// policy row lock when its reservation was reaped before it committed.
+func (q *Queries) CountAgentAdmissionSlots(ctx context.Context, capabilityID string) (int64, error) {
+	row := q.db.QueryRow(ctx, countAgentAdmissionSlots, capabilityID)
+	var slots int64
+	err := row.Scan(&slots)
+	return slots, err
+}
+
 const getAgentExecutionAdmissionByIdempotency = `-- name: GetAgentExecutionAdmissionByIdempotency :one
 SELECT j.execution_id,
        j.command_id,
@@ -953,12 +977,12 @@ const reapAgentAdmissionReservations = `-- name: ReapAgentAdmissionReservations 
 DELETE FROM elitea_runtime.agent_admission_reservations
 WHERE (
     materialized_at IS NULL
-    AND reserved_at < clock_timestamp()
+    AND reserved_at < now()
         - ($1::bigint * interval '1 second')
 )
    OR (
     materialized_at IS NOT NULL
-    AND materialized_at < clock_timestamp()
+    AND materialized_at < now()
         - ($2::bigint * interval '1 second')
 )
 `
@@ -968,6 +992,10 @@ type ReapAgentAdmissionReservationsParams struct {
 	GcSeconds    int64 `db:"gc_seconds" json:"gc_seconds"`
 }
 
+// now() (STABLE) rather than clock_timestamp() (VOLATILE): the planner can only
+// turn a STABLE cutoff into an index condition, and the DELETE is a single
+// statement, so the two are the same instant here. With clock_timestamp() the
+// planner ignored both partial indexes and heap-scanned the table every pass.
 func (q *Queries) ReapAgentAdmissionReservations(ctx context.Context, arg ReapAgentAdmissionReservationsParams) (int64, error) {
 	result, err := q.db.Exec(ctx, reapAgentAdmissionReservations, arg.StaleSeconds, arg.GcSeconds)
 	if err != nil {
@@ -997,6 +1025,32 @@ type RefreshAgentExecutionPublicationParams struct {
 
 func (q *Queries) RefreshAgentExecutionPublication(ctx context.Context, arg RefreshAgentExecutionPublicationParams) (int64, error) {
 	result, err := q.db.Exec(ctx, refreshAgentExecutionPublication, arg.OutboxID, arg.EnvelopeDigest)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const releaseAgentAdmissionReservation = `-- name: ReleaseAgentAdmissionReservation :execrows
+DELETE FROM elitea_runtime.agent_admission_reservations
+WHERE capability_id = $1::text
+  AND idempotency_scope = $2::text
+  AND idempotency_key = $3::text
+  AND materialized_at IS NULL
+`
+
+type ReleaseAgentAdmissionReservationParams struct {
+	CapabilityID     string `db:"capability_id" json:"capability_id"`
+	IdempotencyScope string `db:"idempotency_scope" json:"idempotency_scope"`
+	IdempotencyKey   string `db:"idempotency_key" json:"idempotency_key"`
+}
+
+// Compensates a reserve whose materialize did not commit a new job (an error,
+// a cancelled request, or a replay resolved against the durable job). Only an
+// unmaterialized row is released, so this is a no-op after a successful
+// materialize and safe to run on every non-created outcome.
+func (q *Queries) ReleaseAgentAdmissionReservation(ctx context.Context, arg ReleaseAgentAdmissionReservationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, releaseAgentAdmissionReservation, arg.CapabilityID, arg.IdempotencyScope, arg.IdempotencyKey)
 	if err != nil {
 		return 0, err
 	}

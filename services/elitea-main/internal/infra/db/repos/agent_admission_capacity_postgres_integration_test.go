@@ -391,3 +391,101 @@ SELECT count(*)
 FROM elitea_runtime.agent_admission_reservations
 WHERE capability_id = $1 AND materialized_at IS NOT NULL`, capability)
 }
+
+// TestPostgresAgentMaterializeFailureReleasesReservation pins the compensation
+// for a reserve whose materialize does not commit a job (issue 965 review). A
+// materialize error after the reserve committed used to leave the reservation
+// unmaterialized, so the slot counted against the cap for up to 90s (the
+// reaper's stale window plus one poll). The start path now releases it.
+func TestPostgresAgentMaterializeFailureReleasesReservation(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	const maxOutstanding = int64(2)
+	policy := testAgentDispatchPolicy()
+	policy.MaxOutstanding = maxOutstanding
+	repository, err := NewAgentExecutionJobsRepository(pool, policy, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if _, err := repository.AdmitAgentExecution(ctx, postgresAgentCapacityAdmission(0)); err != nil {
+		t.Fatalf("admit first agent execution: %v", err)
+	}
+
+	// A fresh idempotency key that reuses the first start's bundle, job and
+	// outbox ids: the reserve succeeds, the materialize fails on the duplicate
+	// input bundle primary key.
+	colliding := postgresAgentCapacityAdmission(0)
+	colliding.Record.IdempotencyKey = "agent-request-colliding"
+	colliding.Record.RequestDigest = runtimedomain.SHA256([]byte("agent-request:colliding"))
+	if _, err := repository.AdmitAgentExecution(ctx, colliding); err == nil {
+		t.Fatal("expected the colliding materialize to fail")
+	}
+
+	// The failed start's reservation is gone, so the cap still has one slot.
+	assertPostgresAgentAdmissionState(t, ctx, pool, 1, 1, 0, 1)
+	if _, err := repository.AdmitAgentExecution(ctx, postgresAgentCapacityAdmission(1)); err != nil {
+		t.Fatalf("the failed start's slot was not released: %v", err)
+	}
+	assertPostgresAgentAdmissionState(t, ctx, pool, 2, 2, 0, 2)
+}
+
+// TestPostgresAgentReapedReservationRechecksCapOnMaterialize pins the
+// materialize-side guard for a reservation the reaper reclaimed while the
+// start was still running (issue 965 review). Once the reservation is gone
+// the guard trigger may admit another start into the freed slot, so a
+// materialize that finds its reservation missing must re-check the cap under
+// the policy row lock instead of committing over it.
+func TestPostgresAgentReapedReservationRechecksCapOnMaterialize(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	const maxOutstanding = int64(2)
+	policy := testAgentDispatchPolicy()
+	policy.MaxOutstanding = maxOutstanding
+	repository, err := NewAgentExecutionJobsRepository(pool, policy, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// A slow start reserves its slot, then the reaper reclaims the reservation
+	// before the materialize runs.
+	slow := postgresAgentCapacityAdmission(0)
+	if err := repository.reserveAgentAdmission(ctx, slow); err != nil {
+		t.Fatalf("reserve slow agent admission: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+DELETE FROM elitea_runtime.agent_admission_reservations
+WHERE idempotency_key = $1`, slow.Record.IdempotencyKey); err != nil {
+		t.Fatalf("simulate reaper: %v", err)
+	}
+
+	// Two other starts fill the cap in the meantime.
+	for index := 1; index < 3; index++ {
+		if _, err := repository.AdmitAgentExecution(ctx, postgresAgentCapacityAdmission(index)); err != nil {
+			t.Fatalf("admit agent execution %d: %v", index, err)
+		}
+	}
+	assertPostgresAgentAdmissionState(t, ctx, pool, 2, 2, 0, 2)
+
+	// The slow start's materialize must refuse rather than admit a third job.
+	_, err = repository.materializeAgentAdmission(ctx, slow, 1, 1)
+	assertPostgresAgentCapacityError(t, err, maxOutstanding)
+	assertPostgresAgentAdmissionState(t, ctx, pool, 2, 2, 0, 2)
+
+	// With a slot free again (one job reaches a terminal state) the same
+	// reaped materialize commits: the re-check passes and the job holds the
+	// slot without a reservation row.
+	if _, err := pool.Exec(ctx, `
+UPDATE elitea_runtime.execution_jobs
+SET state = 'SUCCEEDED'
+WHERE execution_id = $1`, postgresAgentCapacityAdmission(1).Record.Job.ID); err != nil {
+		t.Fatalf("settle agent execution: %v", err)
+	}
+	outcome, err := repository.materializeAgentAdmission(ctx, slow, 1, 1)
+	if err != nil || !outcome.Created {
+		t.Fatalf("reaped materialize under the cap must commit: created=%v err=%v", outcome.Created, err)
+	}
+	assertPostgresAgentAdmissionState(t, ctx, pool, 3, 2, 0, 2)
+}

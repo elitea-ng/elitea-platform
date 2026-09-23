@@ -80,7 +80,7 @@ CREATE TABLE elitea_runtime.agent_admission_reservations (
     idempotency_key text NOT NULL,
     execution_id text NOT NULL,
     configured_max bigint NOT NULL,
-    reserved_at timestamptz NOT NULL,
+    reserved_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     materialized_at timestamptz,
     PRIMARY KEY (capability_id, idempotency_scope, idempotency_key)
 );
