@@ -324,7 +324,7 @@ async fn pipeline_structured_output_validates_after_continuation() {
             TestModelGatewayOutcome::Response(limited_text_response(&initial)),
             TestModelGatewayOutcome::Response(limited_text_response(&format!("```json\n{second}"))),
             TestModelGatewayOutcome::Response(pipeline_text_response(&format!(
-                "```json\n{final_segment}\n```"
+                "{final_segment}\n```"
             ))),
         ],
         Arc::new(AtomicUsize::new(0)),
