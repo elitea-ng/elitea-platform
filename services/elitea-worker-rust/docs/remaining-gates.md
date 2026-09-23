@@ -275,3 +275,10 @@ All 420 PostgreSQL-enabled agent tests pass. Exhaustion leaves downstream graph 
 Fresh headed browser chats 642 and 643 verify pipeline continuation, reload, typed exhaustion, and downstream graph-state boundaries.
 See the [deployed evidence](source-mapping/output-continuation-capacity-20260922.md#pipeline-continuation-browser-acceptance).
 Gate 4 remains open.
+
+### Structured pipeline continuation acceptance
+
+Fresh headed browser chat 651 verifies structured JSON continuation after two additional
+calls, exact downstream graph output, one durable completed node receipt, and reload stability.
+See [source mapping and acceptance evidence](source-mapping/output-continuation-capacity-20260922.md#structured-continuation-browser-acceptance).
+Gate 4 remains open for its other verification boundaries and drift requirements.

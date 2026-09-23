@@ -777,3 +777,22 @@ calls only. The structured-call wrapper now applies to the initial call as well,
 pipeline regression starts with a fenced, truncated initial response. Final schema validation
 remains mandatory. This matches the legacy structured-output fallback's support for provider
 formatting while retaining exact interior text and explicit validation.
+
+### Structured continuation browser acceptance
+
+Worker `93d3de80` runs as image
+`sha256:a31c7963192bb4d581cf07a3b535e5293f5839302a0d617d38c11cb6405afefd`.
+Fresh headed browser chat 651, execution `6eb014835cf7148402dd3bb8e7269920`, passes:
+Haiku, 256-token per-call output cap, disabled compaction, structured LLM node followed by
+a deterministic node. Initial call plus two continuation calls produce all 40 ordered records
+and one marker. The pipeline emits `pipeline_finish`, no browser runtime errors occur, and
+the answer is unchanged after reload. PostgreSQL proof confirms one completed node receipt,
+one graph writer, exact equality of `answer` and downstream `final_text`, unchanged reference
+graph data, and matching rendered output. The durable model event parses as valid JSON with
+one `answer` field and contains the full joined response.
+
+Evidence: `elitea-structured-output-result.json`, `elitea-structured-output-durable-proof.json`,
+`elitea-structured-output-complete.png`, `elitea-structured-live.log`, and the scoped session
+inspection. All 423 PostgreSQL-backed agent tests and strict all-target Clippy pass. This
+accepts structured pipeline continuation and early completion; it does not close the remaining
+Gate 4 checks, including live pipeline crash injection and the other drift work.
