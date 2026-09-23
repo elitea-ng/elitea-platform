@@ -178,3 +178,26 @@ This check does not stage, copy, discard, or modify those files.
 - `services/elitea-worker-rust/src/transport/anthropic_facade.rs`
 - `services/elitea-worker-rust/src/transport/anthropic_gateway_tests.rs`
 - `services/elitea-worker-rust/src/transport/openai_compatible_facade_tests.rs`
+
+
+## Primary worktree handoff
+
+Merge `821d7280810baa57c9452ae1ac8199f5ed68d88a` was fast-forwarded onto
+`feat/rust-worker-continuation` in the original consolidated worktree.
+All 11 pre-existing modified or untracked files were copied with SHA-256 hashes
+and a binary tracked patch before handoff. Git's automatic preservation stash
+was retained after restoring the tracked edits.
+
+Only the predicted SQL query and generated binding paths conflicted during
+restoration. The nine builder allowlists retain both `skill_builder` and
+`skills_builder`, plus `project_context_builder`. The deferred continuation
+fields and exact application-version joins remain; bindings were regenerated
+with sqlc. Deferred edits and the local recovery configuration remain uncommitted.
+No database schema or migration ledger was changed.
+
+The restored-work check exposed a catalogue admission mismatch: SQL retained the
+legacy singular builder key while main's Go catalogue guard knew only the plural
+key. The local restored patch now admits both, with a catalogue regression case.
+The affected `agentexecution`, repository, and `eliteacore` Go packages pass.
+This compatibility reconciliation remains with the deferred working-tree patch;
+it is not part of the clean merge's committed runtime changes.

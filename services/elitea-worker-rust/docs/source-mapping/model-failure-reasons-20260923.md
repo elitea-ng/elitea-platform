@@ -171,8 +171,8 @@ extra model call, or fabricated successful node output is introduced.
 
 The bridge regression covers context exhaustion, rate limiting, provider
 failure, continuation exhaustion, and an unknown static code. All 77 graph
-component tests pass. Deployed verification of the propagation change remains
-open. This is worker-owned error transport rather than a literal current-SDK
+component tests pass. Deployed verification of the context-error propagation
+change passes as recorded below. This is worker-owned error transport rather than a literal current-SDK
 port; the current platform's user-facing failure behavior remains the reference
 described at the start of this mapping.
 
@@ -184,3 +184,37 @@ validation/materialization; its safe contracts are
 being ported here: this fills a diagnostic gap in the new worker's admission
 boundary. Main's own validation and HTTP error UX/logging remain a separate
 platform follow-up; this worker work does not establish coverage of them.
+
+
+## Deployed pipeline context failure verification
+
+The feature baseline `dc7190cf` was deployed as
+`elitea-worker-rust:pipeline-model-errors-20260923`, image
+`77e685e1212097381e9d5d0651caa86a0070efef41e201ebbcec2323e803d8a0`.
+Only the worker was replaced, after checking for active claims and retaining
+its environment and all five mounts. Main remained on `model-reasons-20260923`.
+
+Fresh headed Playwright execution `1aa474d030babf37f53f890957473052`, chat 658,
+reached the context guard through real model calls and synthetic tool records.
+The pipeline used Haiku with a 128,000-token Full window, 4,000 output reserve,
+1,280 safety margin, and 122,720 usable input tokens. Compaction was intentionally
+disabled for this failure test. The saved toolkit relation used `entity_type=agent`.
+
+The browser received `CONTEXT_BUDGET_EXCEEDED` with the canonical actionable
+message. The partial response remained visible and both response and error
+survived reload exactly. No browser runtime errors were observed; the screenshot
+was visually inspected. The earlier execution `ca6c2c7eea7388d05ab8b5ff0444884e`
+at this boundary returned `INTERNAL` before the bridge fix.
+
+Evidence: `/private/tmp/elitea-pipeline-model-errors-result.json`,
+`/private/tmp/elitea-pipeline-model-errors-complete.png`, and
+`/private/tmp/elitea-pipeline-model-errors-live.log`.
+This proves the deployed pipeline context-error category, not every provider
+error or execution against the later merged backend. The merged frontend also
+rendered this persisted result and retained it after reload against the unchanged
+rehearsal backend; see `main-integration-20260923.md`.
+
+Remaining diagnostic work includes continuation-specific partial-output controls,
+live provider-category checks beyond context errors, and origin-level async
+ancestry. Current opt-in captures contain active runner span names and a native
+stack at the capture boundary, not complete suspended-future stacks.
