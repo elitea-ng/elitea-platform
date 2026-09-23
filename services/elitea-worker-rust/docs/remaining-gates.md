@@ -272,4 +272,6 @@ Gate 4 remains open.
 
 The [continuation mapping](source-mapping/output-continuation-capacity-20260922.md#pipeline-llm-node-continuation) records the per-node wrapper and typed failure forwarding.
 All 420 PostgreSQL-enabled agent tests pass. Exhaustion leaves downstream graph output unwritten.
-Fresh deployed browser acceptance remains required. Gate 4 remains open.
+Fresh headed browser chats 642 and 643 verify pipeline continuation, reload, typed exhaustion, and downstream graph-state boundaries.
+See the [deployed evidence](source-mapping/output-continuation-capacity-20260922.md#pipeline-continuation-browser-acceptance).
+Gate 4 remains open.

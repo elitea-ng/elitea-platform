@@ -593,3 +593,31 @@ No new database schema or wire contract is introduced.
 New regressions cover a two-continuation answer followed by a deterministic node, and failure after four continuation calls.
 All 420 PostgreSQL-enabled agent tests pass, including both new pipeline regressions.
 Strict all-target Clippy passes. Deployed pipeline browser acceptance remains pending.
+
+
+### Pipeline continuation browser acceptance
+
+Worker commit `21cabf82` runs as image `sha256:7d3ce7a4742257b883965bba41547e52761c47646e2f2b7aadf8db77ce5743aa`.
+Both fresh headed browser fixtures use a direct pipeline participant, Haiku, a 256-token output allowance, and disabled compaction.
+The pipeline has one LLM node followed by a deterministic state modifier.
+
+Chat 642, execution `587cae152abd0defafaebbfdbe79cd38`, completes after the initial call and two continuation calls.
+All 40 records and one final marker appear exactly once and survive browser reload.
+The saved `answer`, downstream `final_text`, and displayed answer match exactly.
+The reference graph value remains unchanged. The node has one completed result receipt.
+The first harness waits incorrectly for aggregate conversation context analytics, which this direct pipeline does not publish.
+After verifying the terminal graph checkpoint, a fresh read-only browser completes the reload checks without another model call.
+Observed model-call measurements remain recorded in the original browser log.
+
+Chat 643, execution `7a4a56b66edc6b400bc0376615e8d87a`, requests 120 records and exhausts all four continuation calls.
+The browser receives `OUTPUT_CONTINUATION_EXHAUSTED` after five total model calls.
+Accepted partial output and the specific incomplete-response message remain stable after reload.
+There are no browser runtime errors in either case.
+The failed first node has one fenced graph writer, no successful graph checkpoint, and zero completed node receipts.
+No downstream answer is written. The first proof script assumes a checkpoint exists; its corrected check verifies this first-node failure boundary.
+
+Local evidence uses the `elitea-pipeline-output` and `elitea-pipeline-output-cap` prefixes:
+`-result.json`, `-durable-proof.json`, `-live.log`, and browser screenshots.
+Success artifacts also include `-policy.json`; failure artifacts include the persisted error screenshot `-ending.png`.
+These checks accept ordinary pipeline-node continuation and bounded exhaustion.
+Live crash injection during pipeline output continuation and structured-output continuation remain separate verification boundaries.
