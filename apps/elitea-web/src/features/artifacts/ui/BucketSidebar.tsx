@@ -45,6 +45,8 @@ interface BucketSidebarProps {
    * cannot open — the same state in which the bucket list itself is empty.
    */
   readonly projectId?: string | undefined;
+  /** See `BucketList.tsx`'s own doc — gates the per-row "Manage access" action to Team projects (#901). */
+  readonly isTeamProject: boolean;
   readonly onPin: (bucket: Bucket) => Promise<unknown>;
   readonly onDelete: (bucket: Bucket) => Promise<unknown>;
   readonly onSelectFile: (item: ArtifactTreeItem) => void;
@@ -116,6 +118,7 @@ export function BucketSidebar(props: BucketSidebarProps): ReactNode {
             {...(props.selectedKey === undefined ? {} : { selectedKey: props.selectedKey })}
             onSelect={props.onSelect}
             onEdit={props.onEdit}
+            isTeamProject={props.isTeamProject}
             onManageAccess={(bucket) => setAccessBucket(bucket.name)}
             onPin={(bucket) => void props.onPin(bucket).catch(() => undefined)}
             onDelete={setDeleting}

@@ -11,6 +11,7 @@ import { FlowIcon } from '@/shared/ui/icons/flow-icon';
 import { GearIcon } from '@/shared/ui/icons/gear-icon';
 
 import { EditorPanel, type EditorPanelHandle } from './EditorPanel';
+import { PipelineTriggerScopeContext, type PipelineTriggerScope } from '../lib/flow-editor/flowEditorContext';
 import { useFlowEditorVersionInputs } from '../lib/hooks/useFlowEditorVersionInputs';
 import { useValidatePipelineVersion } from '../lib/useValidatePipelineVersion';
 
@@ -95,6 +96,8 @@ export interface PipelineEditorDeps {
    */
   readonly onSaveVersion?: (onSuccess: (savedFormData: unknown) => void) => void;
   readonly isSavingVersion?: boolean;
+  /** `true` once the same caller-owned Configuration form has an unsaved edit — folded into `PipelineEditor.tsx`'s `totalDirty` alongside `isDirty`/`isYamlDirty`, neither of which ever sees one (`elitea_issues #2223/#2664`'s Save gate). */
+  readonly isConfigurationDirty?: boolean;
   readonly onEditorClosed?: () => void;
 }
 
@@ -114,10 +117,30 @@ interface SaveButtonSlotProps {
   readonly isSavingVersion: boolean | undefined;
   readonly deps: PipelineEditorDeps;
   readonly onSaveSuccess: (savedFormData: unknown) => void;
+  /**
+   * `true` once the open pipeline actually differs from its last
+   * loaded/saved snapshot (`PipelineEditor.tsx`'s `totalDirty` —
+   * `isDirty || isYamlDirty`).
+   *
+   * `elitea_issues #2223 / #2664`: in EDIT mode this save button used to be
+   * gated only on `!onSaveVersion` — enabled the instant the Canvas editor
+   * opened (a save handler is wired from the first render), with no regard
+   * to whether the user had actually changed anything, and staying enabled
+   * across a bare Configuration<->Flow-editor tab switch. `AgentEditor.tsx`'s
+   * standalone `pages/agents/EditApplication.tsx` page already carries the
+   * equivalent fix (`canSaveApplication(isValid, isSaving, isDirty)`,
+   * elitea_issues #5107/#5987) for the full agent edit page; this Canvas
+   * save button (used for both pipeline and agent participants opened from
+   * chat) had not received it. Only the PIPELINE half is fixed here — it is
+   * this package's own owned file; the agent Canvas editor
+   * (`features/agents/ui/AgentEditor.tsx`) shares the identical gap and is
+   * out of this package's scope.
+   */
+  readonly isDirty: boolean;
 }
 
 /** The create-vs-edit `ApplicationSaveButton` branch — mirrors `AgentEditor.tsx`'s own `AgentEditorSaveButton`. Resolves `deps.onSaveVersion`'s presence/binding itself (rather than the caller doing it) purely to keep `PipelineEditor`'s own complexity under budget. */
-export function PipelineEditorSaveButton({ isCreateMode, onCreateSave, isCreating, canSaveCreate, isSavingVersion, deps, onSaveSuccess }: SaveButtonSlotProps): ReactNode {
+export function PipelineEditorSaveButton({ isCreateMode, onCreateSave, isCreating, canSaveCreate, isSavingVersion, deps, onSaveSuccess, isDirty }: SaveButtonSlotProps): ReactNode {
   if (isCreateMode) {
     return (
       <ApplicationSaveButton
@@ -133,7 +156,7 @@ export function PipelineEditorSaveButton({ isCreateMode, onCreateSave, isCreatin
     <ApplicationSaveButton
       onSave={onSaveVersion ? () => onSaveVersion(onSaveSuccess) : noopSave}
       isSaving={isSavingVersion ?? false}
-      disabled={!onSaveVersion}
+      disabled={!onSaveVersion || !isDirty}
       testId="pipeline-save-button"
     />
   );
@@ -260,6 +283,11 @@ export function PipelineEditorBody({
 }: PipelineEditorBodyProps): ReactNode {
   const { pipelineId, projectId, entityProjectId, validateProjectId, versionId } = identity;
   const { versionTools, llmSettings } = useFlowEditorVersionInputs(versionDetails);
+  const triggerScope: PipelineTriggerScope = {
+    projectId,
+    versionId: versionId === undefined ? undefined : Number(versionId),
+    versionInstructions: versionDetails?.instructions ?? undefined,
+  };
   return (
     <>
       <ApplicationValidator
@@ -285,15 +313,24 @@ export function PipelineEditorBody({
         />
       )}
 
+      {/*
+        #899: the Entrypoint node's Trigger surface addresses THIS project and
+        version. `identity` and `versionDetails` are both already here, and
+        nothing below this point had them — which is why `NodeCard`'s
+        `triggerProps` never had a caller. Published as a context rather than
+        threaded as a prop; see `PipelineTriggerScopeContext`'s own doc comment.
+      */}
       {!isCreateMode && activeTab === 1 && (
-        <EditorPanel
-          ref={editorPanelRef}
-          setYamlDirty={setIsYamlDirty}
-          disabled={viewMode !== 'Owner'}
-          stopRun={() => onStopRun(true)}
-          versionTools={versionTools}
-          llmSettings={llmSettings}
-        />
+        <PipelineTriggerScopeContext.Provider value={triggerScope}>
+          <EditorPanel
+            ref={editorPanelRef}
+            setYamlDirty={setIsYamlDirty}
+            disabled={viewMode !== 'Owner'}
+            stopRun={() => onStopRun(true)}
+            versionTools={versionTools}
+            llmSettings={llmSettings}
+          />
+        </PipelineTriggerScopeContext.Provider>
       )}
 
       {isCreateMode && activeTab === 1 && <Box>{t('features.pipelines.pipelineEditor.saveToAccessFlowEditor', 'Save the pipeline to access the flow editor.')}</Box>}

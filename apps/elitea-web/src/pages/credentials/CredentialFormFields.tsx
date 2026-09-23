@@ -40,6 +40,8 @@ export interface CredentialSchemaFieldProps {
   readonly required: boolean;
   /** The project whose stored rows a `'configuration'` reference field picks from. */
   readonly projectId: string;
+  /** #925/ELITEA-1069,1074: scopes the secret field's "Create new secret" wording. Undefined when the caller has no notion of project scope (kept generic). */
+  readonly isTeamProject?: boolean;
   readonly onChange: (fieldKey: string, value: unknown) => void;
 }
 
@@ -69,8 +71,8 @@ function metaFor(fieldKey: string, property: ConfigSchemaNode | undefined, requi
  * queries, and this mounts on the secret branch alone.
  */
 function CredentialSecretField({ field, label }: { readonly field: CredentialSchemaFieldProps; readonly label: string }): ReactNode {
-  const { fieldKey, value, error, required, onChange } = field;
-  const secrets = useSecretFieldOptions();
+  const { fieldKey, value, error, required, isTeamProject, onChange } = field;
+  const secrets = useSecretFieldOptions(isTeamProject === undefined ? {} : { isTeamProject });
   return (
     <SecretManagementInput
       name={fieldKey}
@@ -81,6 +83,7 @@ function CredentialSecretField({ field, label }: { readonly field: CredentialSch
         onChange(fieldKey, next);
       }}
       secrets={secrets}
+      passwordVisibilityToggle
       {...(error !== undefined ? { error: true, helperText: error } : {})}
     />
   );

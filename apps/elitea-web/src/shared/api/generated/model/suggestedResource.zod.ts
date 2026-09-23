@@ -48,7 +48,7 @@ export const SuggestedResource = zod
     type: zod
       .string()
       .optional()
-      .describe("Toolkit type (e.g. `github`) — toolkit\/MCP entries only."),
+      .describe("Toolkit type (e.g. `github`) — toolkit/MCP entries only."),
     description: zod.string().optional(),
     agent_type: zod
       .string()
@@ -58,7 +58,7 @@ export const SuggestedResource = zod
       ),
   })
   .describe(
-    "One entry of ApplicationDraft's five suggested_\* lists (issue #881): a project toolkit\/MCP\/pipeline\/agent\/skill scored as relevant to the generated draft (internal\/api\/v2\/drafts\/suggestions.go's lexical overlap scorer — Go-side matching, not an LLM candidate pick; see that file's own doc comment for why).\n",
+    "One entry of ApplicationDraft's five suggested_* lists (issue #881): a project toolkit/MCP/pipeline/agent/skill scored as relevant to the generated draft (internal/api/v2/drafts/suggestions.go's lexical overlap scorer — Go-side matching, not an LLM candidate pick; see that file's own doc comment for why).\n",
   );
 
 export type SuggestedResource = zod.input<typeof SuggestedResource>;

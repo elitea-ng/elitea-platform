@@ -52,7 +52,7 @@ export const PresignUploadPartResponse = zod
       ),
   })
   .describe(
-    "Response for POST ...\/grants\/{projectID}\/{grantID}\/parts\/{partNumber} (S16).\n",
+    "Response for POST .../grants/{projectID}/{grantID}/parts/{partNumber} (S16).\n",
   );
 
 export type PresignUploadPartResponse = zod.input<

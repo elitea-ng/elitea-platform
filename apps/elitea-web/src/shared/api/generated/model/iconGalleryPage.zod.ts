@@ -48,11 +48,11 @@ export const IconGalleryPage = zod
     total: zod
       .int()
       .describe(
-        "Every icon in the project, NOT the length of this page. social\/rpc\/icons.py:get_icons_list computes it before it slices, and a client paging on it needs the full figure.\n",
+        "Every icon in the project, NOT the length of this page. social/rpc/icons.py:get_icons_list computes it before it slices, and a client paging on it needs the full figure.\n",
       ),
   })
   .describe(
-    "NOTE(W2): the `{rows, total}` shape both galleries answer — internal\/api\/v2\/eliteacore\/skill_icon.go:168-171 and internal\/api\/v2\/eliteacore\/handler.go (ListProjectIcons). It is `rows` and not `items`: an `items` key is a 200 that renders an empty gallery, which this family has already shipped once.\n",
+    "NOTE(W2): the `{rows, total}` shape both galleries answer — internal/api/v2/eliteacore/skill_icon.go:168-171 and internal/api/v2/eliteacore/handler.go (ListProjectIcons). It is `rows` and not `items`: an `items` key is a 200 that renders an empty gallery, which this family has already shipped once.\n",
   );
 
 export type IconGalleryPage = zod.input<typeof IconGalleryPage>;

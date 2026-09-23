@@ -481,12 +481,18 @@ func (r *SkillsRepo) getSkillWithVersions(ctx context.Context, projectID, skillI
 
 	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
 		SELECT sv.id, sv.name, COALESCE(sv.instructions, ''), sv.meta, sv.status, sv.created_at, sv.parent_version_id,
-			COALESCE(array_agg(t.name ORDER BY t.name) FILTER (WHERE t.name IS NOT NULL), '{}')
+			COALESCE(array_agg(t.name ORDER BY t.name) FILTER (WHERE t.name IS NOT NULL), '{}'),
+			sv.author_id, COALESCE(u.email, ''), COALESCE(u.name, '')
 		FROM %s.skill_versions sv
 		LEFT JOIN %s.skill_version_tag_association svta ON svta.version_id = sv.id
 		LEFT JOIN %s.tags t ON t.id = svta.tag_id
+		-- #917/ELITEA-3294: the creator, resolved here rather than left as a
+		-- bare author_id, the same join applications/handler.go's getVersions
+		-- makes for the identical dropdown. auth_core__user is a PUBLIC
+		-- table, not a tenant one, so the schema format args stay three.
+		LEFT JOIN public.auth_core__user u ON u.id = sv.author_id
 		WHERE sv.skill_id = $1
-		GROUP BY sv.id
+		GROUP BY sv.id, u.email, u.name
 		ORDER BY (sv.name = 'base') DESC, sv.created_at ASC, sv.id ASC`, s, s, s), skillID)
 	if err != nil {
 		return skills.Skill{}, fmt.Errorf("skills: get versions: %w", err)
@@ -550,8 +556,18 @@ func scanSkillVersionRow(row pgx.Row) (skills.SkillVersion, error) {
 	var meta map[string]any
 	var parentID *int
 	var tags []string
-	if err := row.Scan(&id, &v.Name, &v.Instructions, &meta, &v.Status, &v.CreatedAt, &parentID, &tags); err != nil {
+	var authorID *int
+	var authorEmail, authorName string
+	if err := row.Scan(&id, &v.Name, &v.Instructions, &meta, &v.Status, &v.CreatedAt, &parentID, &tags,
+		&authorID, &authorEmail, &authorName); err != nil {
 		return skills.SkillVersion{}, err
+	}
+	// Absent, not present-with-nulls, when the row genuinely names no author —
+	// the same convention applications/handler.go uses, which keeps "no
+	// author" and "an author the join could not resolve" (id present, name and
+	// email empty) distinguishable.
+	if authorID != nil {
+		v.Author = &skills.SkillVersionAuthor{ID: strconv.Itoa(*authorID), Email: authorEmail, Name: authorName}
 	}
 	v.ID = strconv.Itoa(id)
 	if len(meta) > 0 {

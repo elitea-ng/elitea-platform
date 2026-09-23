@@ -14,12 +14,12 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use adk_anthropic::{
-    CacheControlEphemeral, ContentBlock, ContentBlockDelta, ContentBlockDeltaEvent,
-    ContentBlockStartEvent, ContentBlockStopEvent, EffortLevel, MessageCreateParams,
-    MessageDeltaEvent, MessageParam, MessageRole, MessageStartEvent, MessageStreamEvent, Model,
-    OutputConfig, OutputFormat, StopReason, SystemPrompt, TextBlock, ThinkingConfig,
-    ThinkingDisplay, ToolParam, ToolResultBlock, ToolResultBlockContent, ToolUnionParam,
-    ToolUseBlock,
+    Base64ImageSource, CacheControlEphemeral, ContentBlock, ContentBlockDelta,
+    ContentBlockDeltaEvent, ContentBlockStartEvent, ContentBlockStopEvent, EffortLevel, ImageBlock,
+    ImageMediaType, MessageCreateParams, MessageDeltaEvent, MessageParam, MessageRole,
+    MessageStartEvent, MessageStreamEvent, Model, OutputConfig, OutputFormat, StopReason,
+    SystemPrompt, TextBlock, ThinkingConfig, ThinkingDisplay, ToolParam, ToolResultBlock,
+    ToolResultBlockContent, ToolUnionParam, ToolUseBlock,
 };
 use adk_rust::model::anthropic::AnthropicSchemaAdapter;
 use adk_rust::{
@@ -28,6 +28,8 @@ use adk_rust::{
 };
 use async_stream::try_stream;
 use async_trait::async_trait;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use bytes::Bytes;
 use http::header::{ACCEPT, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE};
 use http::{HeaderName, HeaderValue, Method, Request, Version};
@@ -463,6 +465,28 @@ fn encode_anthropic_body(
     serde_json::to_vec(&params).map_err(|_| invalid_anthropic_request())
 }
 
+/// The Anthropic media type for one of the four image types this runtime
+/// renders, or `None` for anything else. Kept next to the block construction
+/// because the mapping IS the contract: a media type with no arm here is a
+/// part this gateway refuses rather than one it guesses at.
+fn anthropic_image_media_type(mime_type: &str) -> Option<ImageMediaType> {
+    match mime_type {
+        "image/png" => Some(ImageMediaType::Png),
+        "image/jpeg" => Some(ImageMediaType::Jpeg),
+        "image/gif" => Some(ImageMediaType::Gif),
+        "image/webp" => Some(ImageMediaType::Webp),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+pub(super) fn anthropic_message_for_test(
+    content: &Content,
+    is_last: bool,
+) -> Result<MessageParam, AdkError> {
+    anthropic_message(content, is_last)
+}
+
 fn anthropic_message(content: &Content, is_last: bool) -> Result<MessageParam, AdkError> {
     let role = match content.role.as_str() {
         "user" | "function" | "tool" => MessageRole::User,
@@ -477,6 +501,22 @@ fn anthropic_message(content: &Content, is_last: bool) -> Result<MessageParam, A
         .iter()
         .map(|part| match part {
             Part::Text { text } => Ok(ContentBlock::Text(TextBlock::new(text))),
+            // #981: an attached image, decoded from its `image_url` chunk by
+            // `agents/attachments.rs`. Anthropic takes RAW base64 plus a media
+            // type — not a data URL — so the bytes are re-encoded here rather
+            // than a URL being carried through; `ImageMediaType` is the same
+            // four types that module renders, which is why the mapping is
+            // total and an unknown one still falls through to the refusal
+            // below.
+            Part::InlineData {
+                mime_type, data, ..
+            } if anthropic_image_media_type(mime_type).is_some() && !data.is_empty() => {
+                let media_type =
+                    anthropic_image_media_type(mime_type).ok_or_else(invalid_anthropic_request)?;
+                Ok(ContentBlock::Image(ImageBlock::new_with_base64(
+                    Base64ImageSource::new(BASE64_STANDARD.encode(data), media_type),
+                )))
+            }
             Part::Thinking { thinking, .. } => Ok(ContentBlock::Text(TextBlock::new(thinking))),
             Part::FunctionCall {
                 name,

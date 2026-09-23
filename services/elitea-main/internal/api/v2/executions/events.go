@@ -76,20 +76,43 @@ func NewEventHandler(authorizer EventAuthorizer, repository EventRepository, wai
 
 // NewEventHandlerWithReplayCapacity binds authorization concurrency to the
 // database capacity that serves both execution-policy lookup and durable
-// replay. Stream lifetime limits remain independently conservative.
+// replay. Stream lifetime limits remain the built-in defaults.
 func NewEventHandlerWithReplayCapacity(
 	authorizer EventAuthorizer,
 	repository EventRepository,
 	waiter ReplayWaiter,
 	replayCapacity int,
 ) (*EventHandler, error) {
+	return NewEventHandlerWithStreamLimits(
+		authorizer,
+		repository,
+		waiter,
+		replayCapacity,
+		DefaultSSEStreamLimits(),
+	)
+}
+
+// NewEventHandlerWithStreamLimits binds authorization concurrency to the
+// database capacity that serves both execution-policy lookup and durable
+// replay, and takes the stream lifetime profile explicitly. The zero profile
+// keeps the built-in defaults.
+func NewEventHandlerWithStreamLimits(
+	authorizer EventAuthorizer,
+	repository EventRepository,
+	waiter ReplayWaiter,
+	replayCapacity int,
+	limits SSEStreamLimits,
+) (*EventHandler, error) {
 	if authorizer == nil || repository == nil || waiter == nil {
 		return nil, errors.New("event authorizer, repository and waiter are required")
 	}
+	if limits == (SSEStreamLimits{}) {
+		limits = DefaultSSEStreamLimits()
+	}
 	admission := newSSEAdmissionGate(
-		defaultMaxActiveSSEStreams,
-		defaultMaxActiveSSEStreamsPerPrincipal,
-		defaultMaxActiveSSEStreamsPerProject,
+		limits.MaxStreams,
+		limits.MaxPerPrincipal,
+		limits.MaxPerProject,
 	)
 	if admission == nil {
 		return nil, errors.New("event stream admission profile is invalid")

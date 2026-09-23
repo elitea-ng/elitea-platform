@@ -144,6 +144,7 @@ fn runtime_context_client_from(
             max_response_bytes: 32 * 1_024,
             max_application_response_bytes: 1_024 * 1_024,
             max_attachment_response_bytes: 1_024 * 1_024,
+            max_artifact_response_bytes: 2 * 1_024 * 1_024,
         },
     )
     .expect("runtime-context fixture client")
@@ -3544,4 +3545,379 @@ async fn ordinary_model_checkpoint_proof(with_instructions: bool) {
         serde_json::from_slice(&requests[1].body).expect("resumed request");
     assert_eq!(first["messages"], resumed["messages"]);
     assert_eq!(context_calls.load(Ordering::Acquire), 2);
+}
+
+/* ── #973: an attached child this worker cannot build ─────────────────── */
+
+/// The reference the agent editor's tool picker writes when a PIPELINE is
+/// picked: the same `type: "application"` entry a sub-agent produces, with
+/// `agent_type: "pipeline"`.
+fn stored_pipeline_reference(
+    tool_id: u64,
+    application_id: u64,
+    version_id: u64,
+    name: &str,
+) -> serde_json::Value {
+    let mut reference = stored_application_reference(tool_id, application_id, version_id, name);
+    reference["agent_type"] = serde_json::json!("pipeline");
+    reference["description"] = serde_json::json!("Reviews a change and pauses for approval.");
+    reference
+}
+
+/// One `hitl` gate, compiled by the child's own graph. No `llm` node, so the
+/// child needs no model of its own.
+const CHILD_PIPELINE_YAML: &str = "state:\n  input:\n    type: str\n  messages:\n    type: list\n  verdict:\n    type: str\nentry_point: review\nnodes:\n  - id: review\n    type: hitl\n    input:\n      - input\n    user_message:\n      type: fixed\n      value: Approve?\n    routes:\n      approve: approved\n  - id: approved\n    type: state_modifier\n    template: APPROVED\n    input: [input]\n    output: [verdict]\n    transition: END\n";
+
+fn runtime_context_with_pipeline_child() -> (RuntimeContextClient, Arc<AtomicUsize>) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let paths = Arc::new(Mutex::new(Vec::new()));
+    let token = runtime_context_response(&serde_json::json!({
+        "schema_version": "elitea.runtime.elitea-client-token.v1",
+        "project_id": 17,
+        "token": TOKEN,
+    }));
+    let child = application_version_response(
+        31,
+        41,
+        serde_json::json!({
+            "agent_type": "pipeline",
+            "instructions": CHILD_PIPELINE_YAML,
+            "meta": {},
+            "variables": [],
+            "tools": [],
+            "llm_settings": {
+                "model_name": "child-model",
+                "model_project_id": 23,
+                "max_tokens": 2048,
+                "reasoning_effort": null,
+                "temperature": 0.2,
+                "openai_compatible": true
+            }
+        }),
+    );
+    let client = runtime_context_client_from(
+        VecDeque::from([token, child]),
+        Arc::clone(&calls),
+        Arc::clone(&paths),
+    );
+    (client, calls)
+}
+
+/// A child this worker cannot build: its own graph delegates to a further
+/// saved participant, and depth stays one.
+const UNBUILDABLE_CHILD_PIPELINE_YAML: &str = "state:\n  answer:\n    type: str\n  messages:\n    type: list\nentry_point: delegate\nnodes:\n  - id: delegate\n    type: agent\n    tool: \"inner\"\n    input_mapping:\n      task: {type: fixed, value: 'Summarize'}\n    output: [answer, messages]\n    transition: END\n";
+
+fn runtime_context_with_unbuildable_pipeline_child() -> (RuntimeContextClient, Arc<AtomicUsize>) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let paths = Arc::new(Mutex::new(Vec::new()));
+    let token = runtime_context_response(&serde_json::json!({
+        "schema_version": "elitea.runtime.elitea-client-token.v1",
+        "project_id": 17,
+        "token": TOKEN,
+    }));
+    let child = application_version_response(
+        31,
+        41,
+        serde_json::json!({
+            "agent_type": "pipeline",
+            "instructions": UNBUILDABLE_CHILD_PIPELINE_YAML,
+            "meta": {},
+            "variables": [],
+            "tools": [],
+            "llm_settings": {
+                "model_name": "child-model",
+                "model_project_id": 23,
+                "max_tokens": 2048,
+                "reasoning_effort": null,
+                "temperature": 0.2,
+                "openai_compatible": true
+            }
+        }),
+    );
+    let client = runtime_context_client_from(
+        VecDeque::from([token, child]),
+        Arc::clone(&calls),
+        Arc::clone(&paths),
+    );
+    (client, calls)
+}
+
+/// #990 review 4 — THE WAVE-3 DEGRADE, RESTORED.
+///
+/// Admitting the pipeline children this worker CAN build must not make one it
+/// cannot build fail the whole turn again: that was the original shape of
+/// #973, where a single attached pipeline killed every turn of the agent
+/// including the turns that never mentioned it. The child is skipped, the
+/// agent answers, the model is offered no tool for it, and the run carries the
+/// notice naming it (asserted in `session_tests.rs`, where the session that
+/// carries it is observable).
+#[tokio::test(flavor = "current_thread")]
+async fn an_unbuildable_attached_pipeline_is_skipped_and_the_agent_still_answers() {
+    let mut request = ordinary_request(AgentExecutionKind::Application);
+    attach_application_tools(
+        &mut request,
+        vec![stored_pipeline_reference(44, 31, 41, "review-pipeline")],
+    );
+    let (runtime_context, context_calls) = runtime_context_with_unbuildable_pipeline_child();
+    let (model_gateway, captured) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(text_response(
+            "root answer",
+        ))],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway fixture client");
+    let assembler = OrdinaryNativeAgentAssembler::new(
+        platform_client(runtime_context),
+        Arc::new(ModelFacade::from_gateway(model_gateway)),
+        empty_tool_policy(),
+    );
+    let assembly = AuthorizedNativeAssembly::new(
+        &request,
+        test_runtime_context_authority(),
+        AuthorizedNativeCommandBinding::fixture(),
+    );
+
+    let mut invocation = assembler
+        .assemble(assembly)
+        .await
+        .expect("an unbuildable pipeline child must not end the assembly");
+    let _ = invocation
+        .project_start(chrono::Utc::now())
+        .expect("agent start");
+    let (mut native, mut projector, completion) = invocation.start().expect("native start");
+    while let Some(event) = native.next_event().await.expect("native event") {
+        let _ = projector.project(&event).expect("projected event");
+    }
+    let completed = completion.select().await.expect("selected completion");
+    let _ = projector
+        .finish_after_eos(completed, chrono::Utc::now())
+        .expect("finished browser output");
+
+    assert_eq!(
+        context_calls.load(Ordering::Acquire),
+        2,
+        "the child's version is still resolved — the refusal happens after it is read"
+    );
+    let captured = captured.lock().expect("captured model request");
+    assert_eq!(captured.len(), 1, "the model was never called");
+    let body: serde_json::Value =
+        serde_json::from_slice(&captured[0].body).expect("model request JSON");
+    assert!(
+        body["tools"].as_array().is_none_or(Vec::is_empty),
+        "a child that could not be built was still offered to the model: {}",
+        body["tools"]
+    );
+}
+
+/// THE DEFECT #973 REPORTS: one attached pipeline used to end the whole
+/// assembly with `native_agent.unsupported_capability`, before any model call,
+/// so EVERY turn of that agent died — including the turns that never mentioned
+/// the pipeline. The picker offers pipelines and the relation route stores
+/// them, so a supported UI action bricked the agent.
+///
+/// Wave 3 stopped the bricking by SKIPPING the child. The capability half is
+/// now closed too: the child is resolved through the claim-bound platform
+/// boundary, compiled as its own checkpointed graph, and offered to the model
+/// as one `task` tool — so the two calls here (the runtime-context redemption
+/// and the child's version) are both expected, and the model's request carries
+/// the tool.
+#[tokio::test(flavor = "current_thread")]
+async fn an_attached_pipeline_is_compiled_and_offered_to_the_model() {
+    let mut request = ordinary_request(AgentExecutionKind::Application);
+    attach_application_tools(
+        &mut request,
+        vec![stored_pipeline_reference(44, 31, 41, "review-pipeline")],
+    );
+    let (runtime_context, context_calls) = runtime_context_with_pipeline_child();
+    let (model_gateway, captured) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(text_response(
+            "root answer",
+        ))],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway fixture client");
+    let assembler = OrdinaryNativeAgentAssembler::new(
+        platform_client(runtime_context),
+        Arc::new(ModelFacade::from_gateway(model_gateway)),
+        empty_tool_policy(),
+    );
+    let assembly = AuthorizedNativeAssembly::new(
+        &request,
+        test_runtime_context_authority(),
+        AuthorizedNativeCommandBinding::fixture(),
+    );
+
+    let mut invocation = assembler
+        .assemble(assembly)
+        .await
+        .expect("an attached pipeline must not end the assembly");
+    let _ = invocation
+        .project_start(chrono::Utc::now())
+        .expect("agent start");
+    let (mut native, mut projector, completion) = invocation.start().expect("native start");
+    while let Some(event) = native.next_event().await.expect("native event") {
+        let _ = projector.project(&event).expect("projected event");
+    }
+    let completed = completion.select().await.expect("selected completion");
+    let _ = projector
+        .finish_after_eos(completed, chrono::Utc::now())
+        .expect("finished browser output");
+
+    assert_eq!(
+        context_calls.load(Ordering::Acquire),
+        2,
+        "the child pipeline must be resolved through the claim-bound boundary"
+    );
+    let captured = captured.lock().expect("captured model request");
+    assert_eq!(captured.len(), 1, "the model was never called");
+    let body: serde_json::Value =
+        serde_json::from_slice(&captured[0].body).expect("model request JSON");
+    let tools = body["tools"].as_array().cloned().unwrap_or_default();
+    let names = tools
+        .iter()
+        .filter_map(|tool| tool["function"]["name"].as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        vec!["elitea_agent_31_v_41"],
+        "the attached pipeline must be offered as one callable tool: {}",
+        body["tools"]
+    );
+    let schema = &tools[0]["function"]["parameters"];
+    assert_eq!(
+        schema["required"],
+        serde_json::json!(["task"]),
+        "the pipeline tool takes one self-contained task: {schema}"
+    );
+}
+
+fn runtime_context_with_pipeline_and_agent_children() -> (RuntimeContextClient, Arc<AtomicUsize>) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let paths = Arc::new(Mutex::new(Vec::new()));
+    let token = runtime_context_response(&serde_json::json!({
+        "schema_version": "elitea.runtime.elitea-client-token.v1",
+        "project_id": 17,
+        "token": TOKEN,
+    }));
+    // The pipeline child is materialized before the agent children, so its
+    // version is the first one asked for.
+    let pipeline = application_version_response(
+        32,
+        42,
+        serde_json::json!({
+            "agent_type": "pipeline",
+            "instructions": CHILD_PIPELINE_YAML,
+            "meta": {},
+            "variables": [],
+            "tools": [],
+            "llm_settings": {
+                "model_name": "child-model",
+                "model_project_id": 23,
+                "max_tokens": 2048,
+                "reasoning_effort": null,
+                "temperature": 0.2,
+                "openai_compatible": true
+            }
+        }),
+    );
+    let agent = application_version_response(
+        31,
+        41,
+        serde_json::json!({
+            "agent_type": "agent",
+            "instructions": "Answer only the delegated task.",
+            "meta": {},
+            "variables": [],
+            "tools": [],
+            "llm_settings": {
+                "model_name": "child-model",
+                "model_project_id": 23,
+                "max_tokens": 2048,
+                "reasoning_effort": null,
+                "temperature": 0.2,
+                "openai_compatible": true
+            }
+        }),
+    );
+    let client = runtime_context_client_from(
+        VecDeque::from([token, pipeline, agent]),
+        Arc::clone(&calls),
+        Arc::clone(&paths),
+    );
+    (client, calls)
+}
+
+/// Admission is per CHILD, not per agent: a pipeline and a sub-agent attached
+/// to the same parent are each compiled by their own materializer and both
+/// reach the model.
+#[tokio::test(flavor = "current_thread")]
+async fn an_attached_pipeline_leaves_the_agent_children_beside_it_bound() {
+    let mut request = ordinary_request(AgentExecutionKind::Application);
+    attach_application_tools(
+        &mut request,
+        vec![
+            stored_pipeline_reference(45, 32, 42, "review-pipeline"),
+            stored_application_reference(44, 31, 41, "release-risk-agent"),
+        ],
+    );
+    let (runtime_context, context_calls) = runtime_context_with_pipeline_and_agent_children();
+    let (model_gateway, captured) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(text_response(
+            "root answer",
+        ))],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway fixture client");
+    let assembler = OrdinaryNativeAgentAssembler::new(
+        platform_client(runtime_context),
+        Arc::new(ModelFacade::from_gateway(model_gateway)),
+        empty_tool_policy(),
+    );
+    let assembly = AuthorizedNativeAssembly::new(
+        &request,
+        test_runtime_context_authority(),
+        AuthorizedNativeCommandBinding::fixture(),
+    );
+
+    let mut invocation = assembler
+        .assemble(assembly)
+        .await
+        .expect("mixed nested children must assemble");
+    let _ = invocation
+        .project_start(chrono::Utc::now())
+        .expect("agent start");
+    let (mut native, mut projector, completion) = invocation.start().expect("native start");
+    while let Some(event) = native.next_event().await.expect("native event") {
+        let _ = projector.project(&event).expect("projected event");
+    }
+    let completed = completion.select().await.expect("selected completion");
+    let _ = projector
+        .finish_after_eos(completed, chrono::Utc::now())
+        .expect("finished browser output");
+
+    assert_eq!(
+        context_calls.load(Ordering::Acquire),
+        3,
+        "both children's versions must be resolved"
+    );
+    let captured = captured.lock().expect("captured model request");
+    let body: serde_json::Value =
+        serde_json::from_slice(&captured[0].body).expect("model request JSON");
+    let mut names = body["tools"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|tool| tool["function"]["name"].as_str().map(ToOwned::to_owned))
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        vec![
+            "elitea_agent_31_v_41".to_owned(),
+            "elitea_agent_32_v_42".to_owned()
+        ],
+        "both the sub-agent and the pipeline must reach the model: {}",
+        body["tools"]
+    );
 }

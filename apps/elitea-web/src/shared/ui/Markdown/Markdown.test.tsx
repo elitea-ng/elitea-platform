@@ -53,6 +53,31 @@ describe('Markdown', () => {
     expect(container.textContent).toContain('bold html');
   });
 
+  /**
+   * elitea_issues #4971 — "assistant returns image links using markdown
+   * syntax; the markdown/HTML code is displayed as plain text instead of
+   * rendering images inline". Not reproduced against this component: the
+   * `image` token type is one of `Token.tsx`'s explicitly-rendered inline
+   * kinds, `sanitizeMarkdownHtml`'s forbid-list never names `img`, and
+   * `DefaultMarkdown.tsx` styles `'& img'` — all three only make sense if an
+   * `<img>` was always meant to reach the DOM. This pins that it does, for
+   * both source forms the issue names.
+   */
+  it('renders a markdown image', () => {
+    const { container } = renderWithTheme(<Markdown>{'![a diagram](https://example.com/diagram.png)'}</Markdown>);
+    const img = container.querySelector('img');
+    expect(img).not.toBeNull();
+    expect(img?.getAttribute('src')).toBe('https://example.com/diagram.png');
+    expect(img?.getAttribute('alt')).toBe('a diagram');
+  });
+
+  it('renders a literal <img> tag inline', () => {
+    const { container } = renderWithTheme(<Markdown>{'See: <img src="https://example.com/pic.png" alt="pic" /> above.'}</Markdown>);
+    const img = container.querySelector('img');
+    expect(img).not.toBeNull();
+    expect(img?.getAttribute('src')).toBe('https://example.com/pic.png');
+  });
+
   it('forwards data-testid', () => {
     const { getByTestId } = renderWithTheme(<Markdown data-testid="md-root">{'x'}</Markdown>);
     expect(getByTestId('md-root')).toBeInTheDocument();

@@ -3,6 +3,8 @@ package runtimecomposition
 import (
 	"strings"
 	"testing"
+
+	executionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/executions"
 )
 
 func TestConfigFromEnvIsDisabledByDefaultAndFailClosedWhenEnabled(t *testing.T) {
@@ -326,6 +328,101 @@ func TestConfigIndexSchedulingRequiresCanonicalUniqueInstanceID(t *testing.T) {
 	if _, err := ConfigFromEnv(mapLookup(disabled)); err == nil ||
 		!strings.Contains(err.Error(), "requires explicit index scheduling") {
 		t.Fatalf("disabled scheduler instance error=%v", err)
+	}
+}
+
+func TestConfigSSEStreamLimitsAreOptionalAndValidated(t *testing.T) {
+	baseline, err := ConfigFromEnv(mapLookup(validEnvironment()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if baseline.SSEStreamLimits != executionapi.DefaultSSEStreamLimits() {
+		t.Fatalf("default SSE stream limits = %+v", baseline.SSEStreamLimits)
+	}
+
+	environment := validEnvironment()
+	environment["ELITEA_RUNTIME_SSE_MAX_STREAMS"] = "32"
+	environment["ELITEA_RUNTIME_SSE_MAX_STREAMS_PER_PRINCIPAL"] = "8"
+	environment["ELITEA_RUNTIME_SSE_MAX_STREAMS_PER_PROJECT"] = "16"
+	config, err := ConfigFromEnv(mapLookup(environment))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := executionapi.SSEStreamLimits{MaxStreams: 32, MaxPerPrincipal: 8, MaxPerProject: 16}
+	if config.SSEStreamLimits != want {
+		t.Fatalf("SSE stream limits = %+v, want %+v", config.SSEStreamLimits, want)
+	}
+}
+
+func TestConfigSSEStreamLimitsFailClosed(t *testing.T) {
+	tests := []struct {
+		name  string
+		apply func(map[string]string)
+		want  string
+	}{
+		{
+			name: "zero global limit",
+			apply: func(values map[string]string) {
+				values["ELITEA_RUNTIME_SSE_MAX_STREAMS"] = "0"
+			},
+			want: "ELITEA_RUNTIME_SSE_MAX_STREAMS must be a canonical positive integer",
+		},
+		{
+			name: "non-canonical global limit",
+			apply: func(values map[string]string) {
+				values["ELITEA_RUNTIME_SSE_MAX_STREAMS"] = "007"
+			},
+			want: "ELITEA_RUNTIME_SSE_MAX_STREAMS must be a canonical positive integer",
+		},
+		{
+			name: "text principal limit",
+			apply: func(values map[string]string) {
+				values["ELITEA_RUNTIME_SSE_MAX_STREAMS_PER_PRINCIPAL"] = "abc"
+			},
+			want: "ELITEA_RUNTIME_SSE_MAX_STREAMS_PER_PRINCIPAL must be a canonical positive integer",
+		},
+		{
+			name: "principal above global",
+			apply: func(values map[string]string) {
+				values["ELITEA_RUNTIME_SSE_MAX_STREAMS"] = "16"
+				values["ELITEA_RUNTIME_SSE_MAX_STREAMS_PER_PRINCIPAL"] = "17"
+			},
+			want: "ELITEA_RUNTIME_SSE_MAX_STREAMS_PER_PRINCIPAL must not exceed ELITEA_RUNTIME_SSE_MAX_STREAMS",
+		},
+		{
+			name: "project above global",
+			apply: func(values map[string]string) {
+				values["ELITEA_RUNTIME_SSE_MAX_STREAMS"] = "8"
+				values["ELITEA_RUNTIME_SSE_MAX_STREAMS_PER_PROJECT"] = "16"
+			},
+			want: "ELITEA_RUNTIME_SSE_MAX_STREAMS_PER_PROJECT must not exceed ELITEA_RUNTIME_SSE_MAX_STREAMS",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			environment := validEnvironment()
+			test.apply(environment)
+			_, err := ConfigFromEnv(mapLookup(environment))
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestConfigSSEStreamLimitsRequireExplicitEnablement(t *testing.T) {
+	for _, name := range []string{
+		"ELITEA_RUNTIME_SSE_MAX_STREAMS",
+		"ELITEA_RUNTIME_SSE_MAX_STREAMS_PER_PRINCIPAL",
+		"ELITEA_RUNTIME_SSE_MAX_STREAMS_PER_PROJECT",
+	} {
+		t.Run(name, func(t *testing.T) {
+			environment := map[string]string{name: "32"}
+			_, err := ConfigFromEnv(mapLookup(environment))
+			if err == nil || !strings.Contains(err.Error(), "require explicit enablement") {
+				t.Fatalf("%s without enablement error = %v", name, err)
+			}
+		})
 	}
 }
 

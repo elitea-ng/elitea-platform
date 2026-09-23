@@ -47,7 +47,7 @@ export const PublishedAgentAdoption = zod
     project_count: zod.int().nullable(),
   })
   .describe(
-    'NOTE(W2): internal\/api\/v2\/eliteacore\/admin_published_agents.go:47-54. Both counters are NULL when the agent\'s `meta.adoption` is absent — nothing in this stack writes that key. The reference defaults them to 0, which renders as \"nobody uses this\" rather than \"this platform does not measure that\".\n',
+    'NOTE(W2): internal/api/v2/eliteacore/admin_published_agents.go:47-54. Both counters are NULL when the agent\'s `meta.adoption` is absent — nothing in this stack writes that key. The reference defaults them to 0, which renders as "nobody uses this" rather than "this platform does not measure that".\n',
   );
 
 export type PublishedAgentAdoption = zod.input<typeof PublishedAgentAdoption>;

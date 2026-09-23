@@ -1,0 +1,129 @@
+---
+title: "Run a local Kubernetes cluster"
+description: "Install the real Helm chart into a kind cluster to prove the DeepWiki provider's two-container pod and mTLS hop, offline."
+---
+
+`deploy/kind/` brings up a disposable Kubernetes cluster with [kind](https://kind.sigs.k8s.io/) and installs this repository's own Helm chart (`deploy/helm/elitea`) into it — not a rendering exercise, an actual `helm upgrade --install`. Where `helm lint` and `helm template` catch a malformed manifest, this stack catches what only shows up after `kubectl apply`: a hook Job that runs before its ServiceAccount exists, a Deployment that crash-loops on a bucket nobody created, a provider registrar that never arms because a required project isn't configured.
+
+<Warning>
+This is a chart- and engine-verification stack, not a place to do day-to-day UI development. `web.enabled: false` in `values-kind.yaml` — there's no browser login and no ingress. Use the [standalone stack](/development/standalone-stack) for anything that needs a UI.
+</Warning>
+
+<Note>
+This stack proves one capability end to end: the DeepWiki provider running as the chart ships it in production — a two-container pod (the Go sub-application host and the Python engine sidecar) reached over a mutually authenticated hop. The web app, the LLM gateway, the scheduler, the agent worker, and the OTel collector are all disabled through values.
+</Note>
+
+## Prerequisites
+
+- `podman` (this machine has no `docker`). The script exports `KIND_EXPERIMENTAL_PROVIDER=podman` itself; set `KIND_ENGINE=docker` to use Docker instead, which also switches every build, save, and exec step and is how CI runs this same stack on a GitHub-hosted runner.
+- `kind` v0.33 or newer, `kubectl`, `helm` v3 or v4, `python3`, `curl`.
+- Network access on the first run only, to pull the cert-manager chart and its images — everything else builds locally or side-loads from podman.
+- About 10 GB of free disk (images run 14 MB to 467 MB each, plus the ~932 MB kind node image) and about 4 GB of memory for the podman machine.
+
+## The commands
+
+```bash
+deploy/kind/kind-stack.sh up       # build, load, install, seed
+deploy/kind/kind-stack.sh verify   # prove the four claims below
+deploy/kind/kind-stack.sh down     # delete the cluster
+```
+
+`seed` also exists as its own subcommand (applying `seed.sql` again without a full reinstall), but `up` already runs it as its last step. `up` is idempotent: an existing cluster, an already-built image, and an already-installed cert-manager are all reused, and the chart install itself is a `helm upgrade --install`.
+
+<Accordion title="Measured timing on a developer machine (podman, warm build cache)">
+`up` took **3m50s** end to end, and `verify` about **13s**. That's faster than a fully cold run — the README's own estimate is roughly 2m26s for `up` once images are built, plus about 8 minutes to build them from nothing; a warm podman build cache (layers shared with other local image builds) cut that second number close to 2 minutes here. Only one third-party image (`pgvector/pgvector:0.8.5-pg16`, ~467 MB) needed a fresh pull; Redis, rustfs, and the kind node image were already cached locally. Built images: `elitea-subapp-host:kind` (~14 MB), `elitea-main:kind` (~146 MB), `elitea-deepwiki:kind-engine` (~262 MB, built without the `engine` extras — see [Known limits](#known-limits)).
+</Accordion>
+
+## What `up` does, step by step
+
+<Steps>
+<Step title="Create the cluster">
+Creates the kind cluster `elitea-kind`.
+</Step>
+<Step title="Build and side-load images">
+Builds three images with podman, skipping existing ones, then side-loads them into the node.
+</Step>
+<Step title="Install cert-manager and the internal CA">
+Installs cert-manager, then applies `manifests/ca-issuer.yaml`: a self-signed `ClusterIssuer`, a CA `Certificate` in the `cert-manager` namespace, and the `elitea-internal-ca` `ClusterIssuer` built on top of it.
+</Step>
+<Step title="Mint runtime material">
+Mints (or reuses) the production-authentication material through `deploy/scripts/gen-runtime-certs.sh` — the same idempotent script the compose stacks use — and writes it into the Secrets the chart names.
+</Step>
+<Step title="Apply infrastructure manifests">
+Applies `manifests/infra.yaml`: PostgreSQL (`pgvector/pgvector`, with `CREATE EXTENSION vector` run in its `initdb`), Redis, and an S3-compatible object store (rustfs), plus the remaining Secrets the chart names.
+</Step>
+<Step title="Create the artifact bucket">
+Creates it before elitea-main starts; omitting it causes the Deployment to crash-loop.
+</Step>
+<Step title="Install the chart">
+Runs `helm upgrade --install` with `values-kind.yaml`. The chart's own pre-install hooks run both migrations: elitea-main's `-all-tenants` migration and the provider's own storage migration.
+</Step>
+<Step title="Seed">
+Applies `seed.sql`: project 1, toolkits, credentials, artifacts bucket, and a PAT for API authentication.
+</Step>
+</Steps>
+
+<Note title="No first login, on purpose">
+This stack has no OIDC provider and no edge — the Form provider's user list exists only so the authentication graph parses (one throwaway account `gen-runtime-certs.sh` writes). `verify`'s bearer token, minted from the seeded PAT, is the only credential this stack ever authenticates with. Don't expect, or try to reproduce, a browser sign-in here.
+</Note>
+
+<Accordion title="A harmless restart in the first 20 seconds">
+`elitea-main` may restart briefly while its Auth Redis listener starts; Kubernetes' restart backoff resolves it in under a minute. This is expected and harmless.
+</Accordion>
+
+## Reaching the API — there is no UI here
+
+Services are `ClusterIP` only. Reach elitea-main via port-forward with a bearer token minted from the seeded PAT:
+
+```bash
+kubectl --context kind-elitea-kind -n elitea port-forward svc/elitea-main 18080:8080
+curl -H "Authorization: Bearer <token minted from the seeded PAT>" \
+  http://localhost:18080/api/v2/...
+```
+
+`elitea-deepwiki-svc`, the runtime Redis, Postgres, and rustfs are all in-cluster only — elitea-main reaches the DeepWiki provider over mTLS, and the script itself reaches Postgres with `kubectl exec`.
+
+## What `verify` proves
+
+Four checks, each exiting non-zero on failure — this **is** the project's `helm test` equivalent; the chart carries no separate `helm test` hook, and this is exactly what `.github/workflows/helm-install-smoke.yml` runs on every relevant pull request:
+
+1. **Every pod is Ready** (completed migration Jobs are excluded — a `Succeeded` Job is never `Ready`, and counting it as a failure would fail a correct install forever).
+2. **The provider pod's two containers** — `elitea-deepwiki` (host, `legacy` runner, reaches the sidecar over the shared Unix socket) and `engine` (`fixture` runner) — are both present with the runner the chart set.
+3. **The facade registered the provider.** A `kubectl exec` into PostgreSQL reads `provider_hub.provider_origin_registration` joined to `provider_hub.provider_health_projection` and expects a `wikis` row with `healthy = true` — proof that elitea-main's provider registrar armed itself and its health probe reached the provider over the mTLS hop.
+4. **A fixture generation completes through the facade.** The check port-forwards elitea-main, mints the seeded PAT into a bearer token, `POST`s the same wiki-generation request the web app sends, polls until it completes, then lists the resulting artifact objects — one manifest and a handful of generated pages under `acme--e2e-generated--main/`.
+
+## Why Form authentication, not OIDC
+
+The provider registrar only arms when `ELITEA_AI_PROJECT_ID` names a public project. This stack uses Form authentication instead of OIDC, which is why `runtimeRedis` is enabled despite no runtime plane or worker running.
+
+## Known limits
+
+- The engine sidecar's `-engine` image tag doesn't carry the real analysis-engine dependency closure here — it's built with a minimal extras set (`storage-postgres` only), and the sidecar still runs the `fixture` runner. Set `DEEPWIKI_ENGINE_EXTRAS='[engine,storage-postgres]'` to build the real one; see [Run the standalone stack](/development/standalone-stack#overlays) for where the real engine is actually exercised (on compose, not kind).
+- No browser login and no edge — `verify` authenticates with a PAT, not a session.
+- No web UI, LLM gateway, scheduler, worker, or OTel collector; all disabled through values.
+- Nothing is durable — PostgreSQL and the object store use `emptyDir`, so a node restart loses the database. This is a proving stack, not a place to keep state.
+
+## What CI proves
+
+`.github/workflows/helm-install-smoke.yml` runs on changes to the chart, the kind stack, or the composition code the chart's values reach into (weekly otherwise, to catch drift in a third-party image or cert-manager). It builds the same three images with `docker/bake-action`, sets up a kind cluster with `helm/kind-action` (`version: v0.33.0`), then runs the same two commands with `KIND_ENGINE=docker`:
+
+```bash
+bash deploy/kind/kind-stack.sh up
+bash deploy/kind/kind-stack.sh verify
+```
+
+CI reports a cold run landing in under 15 minutes with the three application images warm from the shared layer cache. On failure it dumps every non-Ready pod's description, recent cluster events, and every container's logs before the final step — `bash deploy/kind/kind-stack.sh down || true`, run unconditionally (`if: always()`) so a failed run doesn't leak a cluster on the runner.
+
+## Tear down
+
+```bash
+deploy/kind/kind-stack.sh down
+```
+
+Deletes the `elitea-kind` cluster. Nothing else on the machine is affected — the images `up` built or pulled stay in podman's local store unless you remove them yourself (`podman rmi ...`).
+
+{/* source: deploy/kind/README.md (prerequisites, "The three commands", "What up does", "What verify proves", "Why this stack carries Form authentication", "Known limits", "The real engine") */}
+{/* source: deploy/kind/kind-stack.sh:64-66 (KIND_EXPERIMENTAL_PROVIDER/KIND_ENGINE), 500-504 (case dispatch: up, verify, down, seed) */}
+{/* source: .github/workflows/helm-install-smoke.yml:1-24 (why this job exists), 78-115 (build step, kind-action v0.33.0), 159-184 (up/verify/failure-dump/down invocations) */}
+{/* source: deploy/kind/*.yaml,seed.sql (values-kind.yaml, manifests/ca-issuer.yaml, manifests/infra.yaml, seed.sql — file listing) */}
+{/* source: kind-proof.md — live run on this workstation, 2026-09-09, podman provider: up 3m50s / verify ~13s, image sizes, web.enabled:false + port-forward-only access, seed.sql contents (project 1, toolkit 9002, toolkit 9010, credential, bucket, PAT), the transient elitea-main/runtime-redis restart, verify output mirroring helm-install-smoke.yml, clean teardown */}

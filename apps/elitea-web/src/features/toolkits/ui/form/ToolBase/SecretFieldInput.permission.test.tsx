@@ -26,7 +26,7 @@ import { writePersistedProject } from '@/shared/lib/selectedProjectPersistence';
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 import { server } from '@/test/setup';
 
-import { SecretFieldInput } from './ToolBaseProperty.renderers';
+import { SecretFieldInput } from './SecretFieldInput';
 
 const BASE = '/api/v2';
 const PERMISSIONS_PATH = `${BASE}/auth/permissions/prompt_lib/:projectId`;
@@ -47,7 +47,7 @@ function serveSecrets(grants: readonly string[]): void {
   );
 }
 
-function renderSecretFieldInput() {
+function renderSecretFieldInput(isTeamProject?: boolean) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return renderWithTheme(
     <QueryClientProvider client={client}>
@@ -60,6 +60,7 @@ function renderSecretFieldInput() {
         required
         error={false}
         helperText={undefined}
+        {...(isTeamProject === undefined ? {} : { isTeamProject })}
       />
     </QueryClientProvider>,
   );
@@ -113,5 +114,40 @@ describe('SecretFieldInput — configuration.secrets.secret.create gating (#441)
       expect(await openPicker()).toContain(SAVED_SECRET);
     });
     expect(screen.queryByRole('option', { name: CREATE_ENTRY })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * #902/ELITEA-0726. The scope-aware wording already existed in
+ * `entities/secret`'s `secretCreateLabel`; what was missing was a caller that
+ * told it the scope, so every project type got the one generic entry. These
+ * assert the caller half from this leaf — the same place the #441 tests above
+ * proved the `secrets` bag itself was unsupplied.
+ */
+describe('SecretFieldInput — the CREATE entry names the project scope (#902)', () => {
+  beforeEach(() => {
+    serveSecrets(['configuration.secrets.secret.list', 'configuration.secrets.secret.create']);
+  });
+
+  it('reads "New Project Secret" in a team project', async () => {
+    renderSecretFieldInput(true);
+    await waitFor(async () => {
+      expect(await openPicker()).toContain('New Project Secret');
+    });
+    expect(screen.queryByRole('option', { name: CREATE_ENTRY })).not.toBeInTheDocument();
+  });
+
+  it('reads "New Private Secret" in a personal project', async () => {
+    renderSecretFieldInput(false);
+    await waitFor(async () => {
+      expect(await openPicker()).toContain('New Private Secret');
+    });
+  });
+
+  it('keeps the generic entry when the caller does not know the scope', async () => {
+    renderSecretFieldInput();
+    await waitFor(async () => {
+      expect(await openPicker()).toContain(CREATE_ENTRY);
+    });
   });
 });

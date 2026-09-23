@@ -1045,6 +1045,45 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
             .await
     }
 
+    /// The terminal notice for an MCP server that demanded authorization while
+    /// the agent was being assembled (#982).
+    ///
+    /// `None` when this run cannot carry one — a command without the agent
+    /// capability, or without the thread the conversation is projected onto.
+    /// The caller then keeps the ordinary failure terminal.
+    pub(crate) fn assembly_authorization_notice(
+        &self,
+        requirement: &crate::toolkits::DelegatedAuthorizationRequirement,
+        occurred_at: chrono::DateTime<chrono::Utc>,
+    ) -> Option<crate::protocol::elitea::runtime::v1::NodeEventV1> {
+        let command = self.verified.command();
+        let crate::protocol::elitea::runtime::v1::worker_command_v1::CapabilityCommand::AgentExecution(
+            agent,
+        ) = command.capability_command.as_ref()?
+        else {
+            return None;
+        };
+        let thread_id = self.request.payload.thread_id.as_deref()?;
+        let execution_generation = self
+            .request
+            .payload
+            .execution_generation
+            .clone()
+            .unwrap_or_else(|| command.generation.to_string());
+        crate::agents::events::delegated_authorization_assembly_notice(
+            &crate::agents::events::AssemblyNoticeIdentity {
+                stream_id: &agent.client_stream_id,
+                message_id: &agent.client_message_id,
+                sio_event: &agent.sio_event,
+                execution_generation: &execution_generation,
+                thread_id,
+            },
+            requirement,
+            occurred_at,
+        )
+        .ok()
+    }
+
     pub(crate) async fn publish_full_message(
         &mut self,
         event: crate::protocol::elitea::runtime::v1::NodeEventV1,

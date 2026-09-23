@@ -626,10 +626,48 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
  * (features/chat-messages/ui/chat-box/RememberMemoryAction.tsx) both call
  * them through the generated hooks, so each is `source: 'generated'` in
  * the manifest (see MANIFEST_ENTRY_COUNT's own note on this step).
+ *
+ * 266 -> 267 (issue 940/A5, the Indexes tab's "Save" / "Save & Reindex"
+ * split). ONE new operation, saveIndexConfiguration, describing the PUT that
+ * persists an index's configuration without starting a run
+ * (services/elitea-main/internal/api/v2/indexing/index_meta_configuration.go).
+ * The generated hook is a BYPRODUCT here and has no caller: orval emits a
+ * `useQuery` for every operation (orval.config.ts's global
+ * `query.useQuery: true`), which is the wrong shape for a PUT, so
+ * features/toolkits' `saveIndexConfiguration` calls `eliteaFetch` directly
+ * and its manifest entry stays `source: 'handwritten'` — the same reason
+ * agents.generateContentBlocking and the message-feedback trio already
+ * record below. The operation is in the spec because
+ * testdata/reverse_check_allowlist.txt may only shrink: a NEW hand-written
+ * endpoint has to be described, not allowlisted.
+ *
+ * 267 -> 268 (#978, the SDK's by-filepath artifact read). ONE new operation,
+ * downloadArtifactByPath, describing
+ * `GET /artifacts/artifact/default/{projectID}/{bucket}/{key}` — the url
+ * `elitea-sdk`'s `download_artifact` builds and elitea-main did not serve, so
+ * every toolkit that turns a `/{bucket}/{filename}` argument into bytes
+ * answered "Resource not found". The generated hook is a BYPRODUCT with no
+ * caller, the same as saveIndexConfiguration above: this route is spoken by
+ * the SDK worker, not by the browser, and the web's own downloads go through
+ * the `/artifacts/objects/...` plane (#138). It is in the spec because
+ * describing it let `artifacts.getArtifactContent` — a manifest entry on this
+ * exact path — come OFF testdata/reverse_check_allowlist.txt, which may only
+ * shrink.
+ *
+ * 268 -> 269 (#970, the inbound trigger's provider signature mode). ONE new
+ * operation, runPipelineInboundTriggerForProvider, describing
+ * `POST /pipeline_trigger/{project_id}/{token_id}/{provider}` — the URL a
+ * GitHub-preset trigger hands out, which chi cannot match against the bare
+ * inbound pattern and which is therefore a second registration of the same
+ * handler. The generated hook is a BYPRODUCT with no caller, like the two
+ * notes above: this route is spoken by a third-party webhook sender, never by
+ * the browser. The create/rotate operation grew a request body in the same
+ * change without changing this count.
  */
 // 266 -> 269: exchangeMcpOAuthGrant, registerMcpOAuthClient, and
 // deleteProjectContext. Existing handwritten callers keep the manifest count unchanged.
-const GENERATED_OPERATION_COUNT = 269;
+// Combined main and Rust branch contract surface after the September integration.
+const GENERATED_OPERATION_COUNT = 274;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -804,8 +842,13 @@ const GENERATED_OPERATION_COUNT = 269;
  * above, and because every generated hook here is a `useQuery`
  * (orval.config.ts's global `query.useQuery: true`, no per-operation
  * mutation override) — the wrong shape for a POST/DELETE write.
+ *
+ * 270 -> 271 (issue 940/A5): toolkits.saveIndexConfiguration, the Save half
+ * of the Indexes tab's Save / Save & Reindex split. See
+ * GENERATED_OPERATION_COUNT's note above for why it is `handwritten` even
+ * though the spec now describes it.
  */
-const MANIFEST_ENTRY_COUNT = 270;
+const MANIFEST_ENTRY_COUNT = 271;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

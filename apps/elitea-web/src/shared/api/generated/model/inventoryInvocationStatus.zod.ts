@@ -55,7 +55,7 @@ export const InventoryInvocationStatus = zod
       .string()
       .optional()
       .describe(
-        "A JSON \*string\* holding the list of result objects. It is a string\non the wire, not an object — the provider's frozen contract.\n",
+        "A JSON *string* holding the list of result objects. It is a string\non the wire, not an object — the provider's frozen contract.\n",
       ),
     result_type: zod.enum(["String"]).optional(),
     error_category: zod.string().optional(),

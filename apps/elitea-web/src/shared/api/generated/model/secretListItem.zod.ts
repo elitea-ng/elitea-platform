@@ -56,7 +56,7 @@ export const SecretListItem = zod
       ),
   })
   .describe(
-    "NOTE(issue 151): internal\/api\/v2\/secrets\/handler.go's SecretListItem — the list element AND the body returned by create and update. It NEVER carries a value; the plaintext is reachable only through the single-secret GET.\n",
+    "NOTE(issue 151): internal/api/v2/secrets/handler.go's SecretListItem — the list element AND the body returned by create and update. It NEVER carries a value; the plaintext is reachable only through the single-secret GET.\n",
   );
 
 export type SecretListItem = zod.input<typeof SecretListItem>;

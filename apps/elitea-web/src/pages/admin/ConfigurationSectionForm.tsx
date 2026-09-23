@@ -21,6 +21,8 @@
  * unsupported rows would have made the page's first screen a form whose two
  * most important controls do nothing.
  */
+import type { ReactNode } from 'react';
+
 import Box from '@mui/material/Box';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import MenuItem from '@mui/material/MenuItem';
@@ -43,8 +45,9 @@ import {
   fromConfigToolMapRows,
   toConfigToolMapRows,
 } from './ConfigurationToolMapEditor';
+import { ProjectListEditor } from './ProjectListEditor';
 import { useConfigSuggestions, type AdminConfigField } from './api/adminConfigurationApi';
-import { isFieldVisible, listItemTypeFor, widgetFor } from './configurationFields';
+import { isFieldVisible, listItemTypeFor, widgetFor, type ConfigWidget } from './configurationFields';
 
 // Re-exported so the spec-reading helpers keep ONE import path for their
 // existing consumers (`useAdminConfigurationPage`, and the two page test
@@ -218,6 +221,25 @@ function ListField({ field, value, disabled, onChange }: FieldProps) {
   );
 }
 
+/** A1 (ELITEA-0016): the project-picker widget for `*whitelist_project_ids` fields — see `ProjectListEditor.tsx`'s own module doc. */
+function ProjectListField({ field, value, disabled, onChange }: FieldProps) {
+  const ids = Array.isArray(value) ? value.filter((entry): entry is number => typeof entry === 'number') : [];
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
+      <FieldHeading field={field} />
+      <ProjectListEditor
+        fieldKey={field.key}
+        label={fieldLabel(field)}
+        value={ids}
+        disabled={disabled}
+        onChange={(next) => {
+          onChange(field.key, [...next]);
+        }}
+      />
+    </Box>
+  );
+}
+
 function SelectField({ field, value, disabled, onChange }: FieldProps) {
   return (
     <TextField
@@ -276,31 +298,30 @@ function TextFieldRow({ field, value, disabled, onChange, multiline }: FieldProp
   );
 }
 
+/**
+ * A lookup table, not a `switch`, DELIBERATELY (A1): a `switch` over
+ * `ConfigWidget`'s dozen variants counts every `case` as a branch under
+ * oxlint's `complexity` rule, and `projectList` (this unit's own addition)
+ * was the one that finally tipped it over the §3.5 budget (12). Same fix
+ * shape as `widgetFor`'s own `arrayWidgetFor` split just above.
+ */
+const WIDGET_RENDERERS: Record<ConfigWidget, (props: FieldProps) => ReactNode> = {
+  boolean: (props) => <BooleanField {...props} />,
+  links: (props) => <LinksField {...props} />,
+  none: (props) => <UnsupportedField field={props.field} />,
+  unavailable: (props) => <UnavailableField field={props.field} value={props.value} />,
+  list: (props) => <ListField {...props} />,
+  projectList: (props) => <ProjectListField {...props} />,
+  toolMap: (props) => <ToolMapField {...props} />,
+  select: (props) => <SelectField {...props} />,
+  number: (props) => <NumberField {...props} />,
+  multiline: (props) => <TextFieldRow {...props} multiline />,
+  html: (props) => <ConfigurationHtmlField {...props} />,
+  text: (props) => <TextFieldRow {...props} multiline={false} />,
+};
+
 function FieldRow(props: FieldProps) {
-  switch (widgetFor(props.field)) {
-    case 'boolean':
-      return <BooleanField {...props} />;
-    case 'links':
-      return <LinksField {...props} />;
-    case 'none':
-      return <UnsupportedField field={props.field} />;
-    case 'unavailable':
-      return <UnavailableField field={props.field} value={props.value} />;
-    case 'list':
-      return <ListField {...props} />;
-    case 'toolMap':
-      return <ToolMapField {...props} />;
-    case 'select':
-      return <SelectField {...props} />;
-    case 'number':
-      return <NumberField {...props} />;
-    case 'multiline':
-      return <TextFieldRow {...props} multiline />;
-    case 'html':
-      return <ConfigurationHtmlField {...props} />;
-    case 'text':
-      return <TextFieldRow {...props} multiline={false} />;
-  }
+  return WIDGET_RENDERERS[widgetFor(props.field)](props);
 }
 
 export function ConfigurationSectionForm({

@@ -15,7 +15,7 @@ use crate::agents::AgentExecutionKind;
 
 pub const ENVELOPE_SCHEMA_REVISION: &str = "elitea.runtime.signed-worker-command.v1";
 pub const PROTOCOL_REVISION: &str = "elitea.runtime.v1";
-pub const LIMITS_REVISION: &str = "elitea.runtime.limits.conformance.v1";
+pub const LIMITS_REVISION: &str = "elitea.runtime.limits.conformance.v2";
 pub const AGENT_EXECUTION_CAPABILITY_VERSION: &str = "1";
 pub const AGENT_EXECUTE_APPLICATION_CAPABILITY_ID: &str = "agent.execute.application.v1";
 pub const AGENT_EXECUTE_ADHOC_CAPABILITY_ID: &str = "agent.execute.adhoc.v1";

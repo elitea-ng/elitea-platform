@@ -57,7 +57,7 @@ export const SkillForkPayload = zod.object({
           .string()
           .optional()
           .describe(
-            'uuid5(OID, \"skill_fork:{project}:{skill}:{name}\") — stable across re-forks.',
+            'uuid5(OID, "skill_fork:{project}:{skill}:{name}") — stable across re-forks.',
           ),
         meta: zod.record(zod.string(), zod.unknown()).nullish(),
         versions: zod

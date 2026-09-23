@@ -25,6 +25,10 @@ const (
 	MaxInputEntryContentBytes         = 256 * 1024
 	MaxAgentExecutionInputBytes       = 8 * 1024 * 1024
 	MaxToolkitExecuteReadInputBytes   = 1024 * 1024
+	// MaxWorkerInputBundleBytes retains the conservative shared attachment budget.
+	// Python still fetches at most 256 KiB. Rust admits 8 MiB for full context.
+	// Keep image allocation at 64 KiB while both worker routes remain supported.
+	MaxWorkerInputBundleBytes = 256 * 1024
 
 	IndexToolkitConfigurationRole     = "index.toolkit_configuration"
 	IndexToolParametersRole           = "index.tool_parameters"

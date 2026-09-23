@@ -36,6 +36,14 @@ interface PipelineVersionMeta {
 interface PipelineVersionDetails {
   readonly instructions?: string | undefined;
   readonly welcome_message?: string | undefined;
+  /**
+   * #940 A12 — the pipeline's chat starters. Same field, same shape, as
+   * `AgentVersionDetails.conversation_starters`: the baseline renders ONE
+   * create form for both entity types (`CreateAgentForm entityType="pipeline"`),
+   * so a pipeline draft that could not hold them made the shared form's
+   * starters panel write into a value the submit could not read.
+   */
+  readonly conversation_starters?: readonly string[] | undefined;
   readonly tags?: readonly string[] | undefined;
   readonly variables?: readonly PipelineVariable[] | undefined;
   readonly meta?: PipelineVersionMeta | undefined;

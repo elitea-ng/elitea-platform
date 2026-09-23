@@ -21,6 +21,7 @@ import { useIndexesStore } from '../../model/indexesStore';
 import type { IndexRow, ScheduleEntry } from '../../model/indexesStore';
 import type { CredentialsFieldDescriptor, CredentialsSelectSlotProps } from './IndexScheduleModal';
 import { IndexScheduleModal } from './IndexScheduleModal';
+import type { IndexConfigSaveActions } from './IndexActionsParts';
 import { CreateModeActions, EditModeActions, IndexingInProgressActions } from './IndexActionsParts';
 
 /**
@@ -81,6 +82,8 @@ export interface IndexActionsProps {
   readonly currentProjectName?: string | undefined;
   readonly isPrivateProject?: boolean | undefined;
   readonly renderCredentialsSelect?: ((props: CredentialsSelectSlotProps) => ReactNode) | undefined;
+  /** The Save / Save & Reindex pair (ELITEA-2880…2887). Absent when the caller has no configuration form to save — then only "Reindex" is offered, which is the pre-split behaviour. */
+  readonly configSave?: IndexConfigSaveActions | undefined;
 }
 
 /**
@@ -205,6 +208,7 @@ export function IndexActions(props: IndexActionsProps): ReactNode {
     currentProjectName,
     isPrivateProject,
     renderCredentialsSelect,
+    configSave,
   } = props;
 
   const projectId = useSelectedProjectId();
@@ -252,10 +256,16 @@ export function IndexActions(props: IndexActionsProps): ReactNode {
 
   const handleChangeIndexSchedule = useCallback(
     async (data: Partial<ScheduleEntry>) => {
+      // elitea_issues: #6547 — `data` is `{...scheduleData, ...}` and
+      // `scheduleData` is the backend's STORED schedule record, which
+      // carries whatever timezone was captured on a previous save. The
+      // timezone sent with THIS update must always be the current user's
+      // (at the moment of the update), so it is spread last: a stale
+      // `data.timezone` must never win over the freshly resolved one.
       const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
       if (projectId === undefined) return;
       try {
-        await updateIndexScheduleMutation.mutateAsync({ projectId, toolkitId, indexName, timezone, ...data });
+        await updateIndexScheduleMutation.mutateAsync({ projectId, toolkitId, indexName, ...data, timezone });
       } catch {
         // The baseline surfaces this via `useToast` (`toastSuccess`/`toastError`).
         // No toast/snackbar primitive exists yet in `shared/ui` (see `features/
@@ -292,6 +302,7 @@ export function IndexActions(props: IndexActionsProps): ReactNode {
       <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '.75rem' }}>
         {isEditMode ? (
           <EditModeActions
+            indexName={indexName}
             scheduleData={scheduleData}
             schedulingTooltipMessage={schedulingTooltipMessage}
             scheduleConfigMessage={scheduleConfigMessage}
@@ -302,6 +313,7 @@ export function IndexActions(props: IndexActionsProps): ReactNode {
             isRemovingDisabled={isRemovingDisabled}
             onIndexData={indexData}
             onDelete={handleDeleteIndex}
+            configSave={configSave}
           />
         ) : (
           <CreateModeActions

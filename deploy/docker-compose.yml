@@ -72,7 +72,7 @@ services:
       retries: 15
 
   rustfs-bucket-init:
-    image: docker.io/minio/mc:latest
+    image: quay.io/minio/mc:latest
     entrypoint: ["sh", "-c"]
     command:
       - |

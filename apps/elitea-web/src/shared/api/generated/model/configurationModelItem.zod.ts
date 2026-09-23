@@ -96,7 +96,7 @@ export const ConfigurationModelItem = zod
     data: zod.record(zod.string(), zod.unknown()).optional(),
   })
   .describe(
-    "NOTE(W2): the union of internal\/api\/v2\/configurations\/handler.go's Model (compat) and internal\/application\/configurations\/models.go's CurrentModelCatalogItem (reviewed).\n",
+    "NOTE(W2): the union of internal/api/v2/configurations/handler.go's Model (compat) and internal/application/configurations/models.go's CurrentModelCatalogItem (reviewed).\n",
   );
 
 export type ConfigurationModelItem = zod.input<typeof ConfigurationModelItem>;

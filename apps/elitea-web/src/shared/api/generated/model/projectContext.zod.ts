@@ -57,7 +57,7 @@ export const ProjectContext = zod
     updated_at: zod.iso.datetime({ offset: true }).nullable(),
   })
   .describe(
-    "The current project-context builder response. An absent configuration returns id\/activation_description\/updated_at as null, empty content, and enabled=true.\n",
+    "The current project-context builder response. An absent configuration returns id/activation_description/updated_at as null, empty content, and enabled=true.\n",
   );
 
 export type ProjectContext = zod.input<typeof ProjectContext>;

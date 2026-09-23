@@ -62,7 +62,7 @@ export const ToolkitCreateRequest = zod
       ),
   })
   .describe(
-    "NOTE(1c): the handler decodes into `map[string]any` and the repository reads `name`, `type`, `description`, `settings`, and `meta` (internal\/api\/v2\/toolkits\/handler.go:891-900). There is no Go struct to mirror, so this schema DEFINES the contract rather than reflecting one — keep it in step with pgRepo.CreateToolkit if that changes. `author_id` is deliberately absent: the handler overwrites it from the authenticated principal.\nOnly `type` is required. `name` is NOT enforced by the backend — `validateToolkitCreate` checks settings for `type: github` and nothing else, and the repository stores whatever `name` it is given, including an empty one. Marking `name` required here would make the generated client stricter than the server and reject requests the API accepts.\n",
+    "NOTE(1c): the handler decodes into `map[string]any` and the repository reads `name`, `type`, `description`, `settings`, and `meta` (internal/api/v2/toolkits/handler.go:891-900). There is no Go struct to mirror, so this schema DEFINES the contract rather than reflecting one — keep it in step with pgRepo.CreateToolkit if that changes. `author_id` is deliberately absent: the handler overwrites it from the authenticated principal.\nOnly `type` is required. `name` is NOT enforced by the backend — `validateToolkitCreate` checks settings for `type: github` and nothing else, and the repository stores whatever `name` it is given, including an empty one. Marking `name` required here would make the generated client stricter than the server and reject requests the API accepts.\n",
   );
 
 export type ToolkitCreateRequest = zod.input<typeof ToolkitCreateRequest>;

@@ -89,6 +89,51 @@ describe('useReadAloud', () => {
     expect(result.current.speakingSegments).not.toBeNull();
   });
 
+  /* issue 974: `onAutoSpeak` STARTS the voice. It used to arm the player and stop
+   * there, so "Read out" — a control that sits on the answer and says it will
+   * read it out — produced silence until a second, unrelated-looking control in
+   * the composer was pressed, and the speaking-mode auto-read (which has no
+   * control at all) never spoke. */
+  it('issue 974: onAutoSpeak speaks the converted text, not only the player', () => {
+    configureGeneratedClient({ baseUrl: BASE });
+    server.use(http.get(`${BASE}/configurations/models/proj-1`, () => HttpResponse.json({ items: [], total: 0 })));
+    const spoken: string[] = [];
+    const synthesis = {
+      speaking: false,
+      paused: false,
+      pending: false,
+      getVoices: () => [],
+      speak: (utterance: { text: string }) => {
+        spoken.push(utterance.text);
+      },
+      cancel: () => {},
+      pause: () => {},
+      resume: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+    const utteranceClass = class {
+      text: string;
+      constructor(text?: string) {
+        this.text = text ?? '';
+      }
+    };
+    Object.defineProperty(window, 'speechSynthesis', { configurable: true, value: synthesis });
+    Object.defineProperty(window, 'SpeechSynthesisUtterance', { configurable: true, value: utteranceClass });
+
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(() => useReadAloud({ projectId: 'proj-1', socket: null }), { wrapper });
+
+    act(() => result.current.onAutoSpeak('**Hello** world', 'msg-1'));
+
+    expect(spoken, 'the browser engine must have been asked to speak').toHaveLength(1);
+    // The SPEAKABLE text, markdown stripped — the same string the player was
+    // armed with, so the two halves cannot drift.
+    expect(spoken[0]).toContain('Hello');
+    expect(spoken[0]).not.toContain('**');
+    expect(result.current.showPlayer, 'the player still appears — stopping needs a control').toBe(true);
+  });
+
   it('onAutoSpeak with empty/whitespace-only markdown does nothing', () => {
     configureGeneratedClient({ baseUrl: BASE });
     server.use(http.get(`${BASE}/configurations/models/proj-1`, () => HttpResponse.json({ items: [], total: 0 })));

@@ -176,6 +176,14 @@ adminTest('J27: the admin SPA is served with injected config and lists database 
   await checkA11y(page);
 });
 
+/* elitea_issues: #6147 — NOT REPRODUCED on this UI: `useSuspendAdminUser`
+   (`api/adminUsersApi.ts`) calls `queryClient.invalidateQueries(adminUsersKeys.
+   all)` in its own `onSuccess`, so the grid refetches and repaints the row's
+   Status chip and its Suspend/Unsuspend action live, with no manual reload —
+   and this test's own DB-write + reload-persistence assertions below are the
+   stronger claim. `AdminUsersTable.tsx`'s own doc comment separately records
+   the reference's `status === 'suspended'` bug (no such column exists) as a
+   deliberate, already-fixed correction in this port. */
 adminTest('J28: suspending a user is written to the database and survives a reload', async ({ page }, testInfo) => {
   // NOT the member persona — see `suspendFixture`'s note. Every assertion
   // below is the one this journey always made; only the row it acts on moved

@@ -522,15 +522,26 @@ describe('ToolBaseProperty', () => {
       expect(editField).toHaveBeenCalledWith('settings.headers', { a: 1 }, true);
     });
 
-    it('commits {} via editField when the typed text is not valid JSON', async () => {
+    /*
+     * elitea_issues: #2611 — leaves the stored value untouched and flags the
+     * field errored (blocking Save via `hasErrors`) instead of committing
+     * `{}` on blur. The old behaviour silently wiped a saved JSON object
+     * (e.g. Postman's "Environment Config JSON") whenever the box happened
+     * to hold invalid text at blur time — a real data-loss bug this pins as
+     * fixed, not as intended.
+     */
+    // oxlint-disable-next-line elitea/no-raw-color -- "#2611" is an elitea_issues issue number, not a colour literal.
+    it('elitea_issues: #2611 — leaves the stored value untouched and flags an error when the typed text is not valid JSON', async () => {
       const user = userEvent.setup();
       const editField = vi.fn();
+      const setToolErrors = vi.fn();
       const { container } = renderWithTheme(
         <ToolBaseProperty
           {...baseProps({
             field: { key: 'headers', schema: { title: 'Headers', type: 'object' }, required: false },
-            settings: {},
+            settings: { headers: { a: 1 } },
             editField,
+            formState: { toolErrors: {}, showValidation: false, setToolErrors },
           })}
         />,
       );
@@ -539,7 +550,10 @@ describe('ToolBaseProperty', () => {
       await user.keyboard('{Control>}a{/Control}');
       await user.keyboard('not json');
       content.blur();
-      expect(editField).toHaveBeenCalledWith('settings.headers', {}, true);
+      expect(editField).not.toHaveBeenCalled();
+      expect(setToolErrors).toHaveBeenCalled();
+      const updater = setToolErrors.mock.calls.at(-1)?.[0] as (prev: Record<string, boolean>) => Record<string, boolean>;
+      expect(updater({})).toEqual({ headers: true });
     });
 
     it('commits {} via editField, without skipValidation, when the field is cleared to empty', async () => {

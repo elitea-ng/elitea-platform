@@ -55,7 +55,7 @@ export const EvalDatasetCase = zod
       .string()
       .nullable()
       .describe(
-        '`null` means the author stated no expected answer, which is NOT the same as an expected answer of \"\". A judge told to compare against \"\" marks every non-empty answer wrong.\n',
+        '`null` means the author stated no expected answer, which is NOT the same as an expected answer of "". A judge told to compare against "" marks every non-empty answer wrong.\n',
       ),
     source_type: zod.enum(["manual", "import", "conversation"]),
     order_index: zod.int(),

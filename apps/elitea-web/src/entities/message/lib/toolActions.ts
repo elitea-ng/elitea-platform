@@ -15,7 +15,39 @@ import { TOOL_ACTION_NAMES, TOOL_ACTION_TYPES, ToolActionStatus } from '@/shared
 import { convertJsonToString } from '@/shared/lib/json';
 
 import { collapseSubAgentInvocationKeys } from './subAgentGrouping';
-import type { MessageParticipantToolWire, MessageParticipantWire, ThinkingStepWire, ToolCallStepWire } from './wire';
+import type { PersistedTraceSteps } from './traceSteps';
+import type {
+  MessageGroupWire,
+  MessageParticipantToolWire,
+  MessageParticipantWire,
+  ThinkingStepWire,
+  ToolCallStepWire,
+} from './wire';
+
+/**
+ * `meta.thinking_steps`/`meta.tool_calls`/`meta.first_tool_timestamp_start` —
+ * `buildToolActions`' raw inputs.
+ *
+ * `persisted` is the trace-step fallback (#951): the conversation read stopped
+ * carrying tool detail in `meta` when the trace-step migration landed, so a
+ * RELOADED turn has an empty `meta` and its steps live in
+ * `chat_message_trace_step` instead. Taken only when `meta` carries NEITHER
+ * kind, so a live turn and a pre-migration conversation both keep what they
+ * had, and the two sources are never interleaved.
+ */
+export function resolveAssistantToolInputs(
+  meta: MessageGroupWire['meta'],
+  persisted: PersistedTraceSteps | undefined,
+) {
+  const own = { toolCalls: meta?.tool_calls ?? {}, thinkingSteps: meta?.thinking_steps ?? [] };
+  const source = countSteps(own.toolCalls) === 0 && own.thinkingSteps.length === 0 ? (persisted ?? own) : own;
+  return { ...source, firstToolTimestampStart: meta?.first_tool_timestamp_start };
+}
+
+/** `meta.tool_calls` is a map on one producer and an array on another. */
+function countSteps(toolCalls: Readonly<Record<string, ToolCallStepWire>> | readonly ToolCallStepWire[]): number {
+  return Array.isArray(toolCalls) ? toolCalls.length : Object.keys(toolCalls).length;
+}
 
 /**
  * One built tool-action entry, pre-`ToolAction`-cast (mutable during
@@ -36,6 +68,9 @@ export interface ToolActionDraft {
   toolInputs?: unknown;
   toolOutputs?: unknown;
   toolMeta?: Record<string, unknown>;
+  /** See `traceStepIdentity` — set only on a step rebuilt from a trace row. */
+  traceStepId?: number;
+  traceMessageGroupId?: number;
   created_at: string;
   ended_at: string;
   timestamp: string;
@@ -43,6 +78,18 @@ export interface ToolActionDraft {
   thinking?: unknown;
   isError?: boolean;
   [key: string]: unknown;
+}
+
+/**
+ * The persisted row a restored step came from, carried onto the draft so
+ * `ToolModal` can fetch that one row's heavy columns when the pin is opened
+ * (#951). Absent on every live step.
+ */
+function traceStepIdentity(
+  step: { readonly trace_step_id?: number; readonly trace_message_group_id?: number },
+): { traceStepId?: number; traceMessageGroupId?: number } {
+  if (step.trace_step_id === undefined || step.trace_message_group_id === undefined) return {};
+  return { traceStepId: step.trace_step_id, traceMessageGroupId: step.trace_message_group_id };
 }
 
 type SortableStep =
@@ -96,29 +143,40 @@ function resolveActionCreatedAt(
   return gatedFirstTimestampStart || timestampStart || timestampFinish || fallbackCreatedAt;
 }
 
-/** The LLM/thinking-step branch (lines 152-191); `undefined` when skipped (167-169). */
+/**
+ * The LLM/thinking-step branch (lines 152-191); `undefined` when skipped
+ * (167-169).
+ *
+ * The text gate is the source's, with one exception: a step REBUILT from a
+ * persisted trace row (`trace_step_id`) is kept even with no text, because the
+ * listing that produced it has already dropped the blank ones
+ * (`has_visible_content` — `messagetraces/handler.go`) and the text it does
+ * have is a detail-only column the modal fetches on open (#951). Dropping it
+ * here would silently lose a step the API says exists.
+ */
 function buildLlmToolAction(
   step: ThinkingStepWire,
   fallbackCreatedAt: string,
   gatedFirstTimestampStart: string | undefined,
 ): ToolActionDraft | undefined {
   const text = step.text;
-  if (!text || !text.trim()) return undefined;
+  if ((!text || !text.trim()) && step.trace_step_id === undefined) return undefined;
   const { modelName, toolName } = resolveLlmResponseMetadata(step);
   const endedAt = step.timestamp_finish || fallbackCreatedAt;
   return {
+    ...traceStepIdentity(step),
     type: TOOL_ACTION_TYPES.Llm,
     name: toolName || TOOL_ACTION_NAMES.Llm,
     parent_agent_name: step.parent_agent_name || null,
     id: step.message?.id,
     status: ToolActionStatus.complete,
     toolInputs: '',
-    toolOutputs: text,
+    toolOutputs: text ?? '',
     toolMeta: { ls_model_name: modelName },
     created_at: resolveActionCreatedAt(gatedFirstTimestampStart, step.timestamp_start, step.timestamp_finish, fallbackCreatedAt),
     ended_at: endedAt,
     timestamp: endedAt,
-    content: text,
+    content: text ?? '',
     thinking: step.thinking,
   };
 }
@@ -184,6 +242,7 @@ function buildToolCallAction(
   const toolkitType = resolveToolkitType(step, toolkitName, tools);
   const endedAt = step.timestamp_finish || fallbackCreatedAt;
   return {
+    ...traceStepIdentity(step),
     type: TOOL_ACTION_TYPES.Tool,
     name: resolveToolActionName(step),
     original_name: getToolActionOriginalName(step.metadata),

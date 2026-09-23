@@ -205,6 +205,13 @@ func (h *Handler) toolkitTypeSchema(toolkitType string) (map[string]any, error) 
 		typeSchema = withSettingsDefinitions(typeSchema, definitions, configurationProperties)
 	}
 
+	// LAST of the schema-shaping steps, deliberately: it reads the tool list
+	// off `properties.selected_tools` and both steps above can change that
+	// node. A type whose tools are discovered at run time (Remote MCP) has no
+	// list here and gets no groups — which is how the client knows to keep
+	// rendering its flat list. See tool_groups.go.
+	typeSchema = withToolGroups(typeSchema)
+
 	return withToolkitMetadata(
 		typeSchema,
 		h.toolkitTypeMetadata(toolkitType, metadata, catalogued),

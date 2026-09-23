@@ -979,3 +979,97 @@ def test_project_context_tool_trace_withholds_instruction_body():
     callback.on_tool_end("PRIVATE_PROJECT_INSTRUCTIONS", run_id="project-context")
     assert "PRIVATE_PROJECT_INSTRUCTIONS" not in str([_json(event) for event in events])
     assert "Project Context is active." in str([_json(event) for event in events])
+
+
+def test_oversized_tool_result_is_chunked_rather_than_refused() -> None:
+    """CHUNKED TOOL OUTPUT (#956), the emit half.
+
+    An 80,000-character tool result — well inside the SDK artifact toolkit's
+    own 200,000-character agent-path cap — used to raise
+    ``RESOURCE_EXHAUSTED: The agent event exceeds its output limit`` here, and
+    the user saw a failed tool call for a file that had been read perfectly
+    well. It must now ride as an ordered sequence of frame-sized chunk events
+    that reassemble BYTE FOR BYTE, with the completed call naming the count and
+    the digest instead of text it could not carry.
+    """
+    import json
+
+    from elitea_worker.handlers.agent_events import TOOL_OUTPUT_CHUNK_EVENT
+    from elitea_worker.protocol.node_event import MAX_CURRENT_NODE_EVENT_JSON_BYTES
+
+    callback, events = _callback()
+    callback.on_tool_start(
+        {"name": "read_file", "metadata": {"display_name": "Artifact"}},
+        "ignored",
+        run_id="run-big",
+        metadata={"toolkit_name": "artifact"},
+        inputs={"filename": "big.txt"},
+    )
+    payload = (
+        "AUTOTESTMED the quick brown fox jumps over the lazy dog 0123456789\n" * 1_213
+    )
+    assert len(payload) > 80_000
+    callback.on_tool_end(payload, run_id="run-big")
+
+    decoded = [_json(event) for event in events]
+    types = [event["type"] for event in decoded]
+    assert types[0] == "agent_tool_start"
+    chunks = [event for event in decoded if event["type"] == TOOL_OUTPUT_CHUNK_EVENT]
+    assert len(chunks) > 1, "an 80k result must span frames"
+
+    # Every chunk is ONE output frame. This is the property the whole mechanism
+    # exists for, so it is asserted on the encoded event rather than the text.
+    for chunk in chunks:
+        encoded = json.dumps(chunk, ensure_ascii=False, separators=(",", ":")).encode(
+            "utf-8"
+        )
+        assert len(encoded) <= MAX_CURRENT_NODE_EVENT_JSON_BYTES
+
+    # The chunks precede the completed call, so main holds the whole value by
+    # the time it sees the entry that names its digest.
+    assert types.index(TOOL_OUTPUT_CHUNK_EVENT) < types.index("agent_tool_end")
+
+    reassembled = ""
+    digest = chunks[0]["response_metadata"]["tool_output_chunk"]["tool_output_sha256"]
+    for index, chunk in enumerate(chunks):
+        position = chunk["response_metadata"]["tool_output_chunk"]
+        assert position["tool_call_id"] == "run-big"
+        assert position["index"] == index
+        assert position["total"] == len(chunks)
+        assert position["tool_output_sha256"] == digest
+        reassembled += chunk["content"]
+    assert reassembled == payload
+    assert digest == hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    completed = decoded[types.index("agent_tool_end")]["response_metadata"]
+    assert completed["tool_output"] == ""
+    assert completed["tool_output_chunks"] == {
+        "total": len(chunks),
+        "tool_output_sha256": digest,
+    }
+    # …and the stored entry is the chunked one, so the partial message that
+    # follows does not try to carry the same oversized value again.
+    trailing = decoded[-1]["response_metadata"]["tool_calls"]["run-big"]
+    assert trailing["tool_output"] == ""
+    assert trailing["tool_output_chunks"]["total"] == len(chunks)
+
+
+def test_a_tool_result_that_fits_is_not_chunked() -> None:
+    """Chunking a small result would change every consumer's shape for nothing."""
+    from elitea_worker.handlers.agent_events import TOOL_OUTPUT_CHUNK_EVENT
+
+    callback, events = _callback()
+    callback.on_tool_start(
+        {"name": "read_file", "metadata": {"display_name": "Artifact"}},
+        "ignored",
+        run_id="run-small",
+        metadata={"toolkit_name": "artifact"},
+        inputs={"filename": "small.txt"},
+    )
+    callback.on_tool_end("a short result", run_id="run-small")
+
+    decoded = [_json(event) for event in events]
+    assert all(event["type"] != TOOL_OUTPUT_CHUNK_EVENT for event in decoded)
+    completed = decoded[2]["response_metadata"]
+    assert completed["tool_output"] == "a short result"
+    assert "tool_output_chunks" not in completed

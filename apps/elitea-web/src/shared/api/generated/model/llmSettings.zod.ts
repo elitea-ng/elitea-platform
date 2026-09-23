@@ -47,7 +47,7 @@ export const LlmSettings = zod.object({
     .union([zod.string(), zod.int()])
     .optional()
     .describe(
-      "Stored as string or number depending on writer; ExportImportGet normalizes float64 to a numeric string (internal\/api\/v2\/eliteacore\/handler.go:2590-2597).\n",
+      "Stored as string or number depending on writer; ExportImportGet normalizes float64 to a numeric string (internal/api/v2/eliteacore/handler.go:2590-2597).\n",
     ),
   temperature: zod.number().optional(),
   max_tokens: zod.int().optional(),
@@ -56,7 +56,7 @@ export const LlmSettings = zod.object({
     .string()
     .optional()
     .describe(
-      "One of none, low, medium or high. Mutually exclusive with temperature on the runtime profile: the native worker refuses a profile carrying both (services\/elitea-worker-rust\/src\/agents\/ assembly.rs, parse_reasoning_effort), and the web write path encodes the same rule (apps\/elitea-web\/src\/shared\/api\/ agentLlmSettings.ts, selectEffortAndTemperature).\n",
+      "One of none, low, medium or high. Mutually exclusive with temperature on the runtime profile: the native worker refuses a profile carrying both (services/elitea-worker-rust/src/agents/ assembly.rs, parse_reasoning_effort), and the web write path encodes the same rule (apps/elitea-web/src/shared/api/ agentLlmSettings.ts, selectEffortAndTemperature).\n",
     ),
 });
 

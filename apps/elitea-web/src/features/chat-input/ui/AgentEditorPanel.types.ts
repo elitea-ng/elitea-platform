@@ -41,7 +41,7 @@ interface AgentEditorNavProps {
   readonly onClosePipelineEditor?: (() => void) | undefined;
 }
 
-/** @public §3.5 budget: 10 top-level props (grouped). */
+/** @public §3.5 budget: 11 top-level props (grouped). */
 export interface AgentEditorPanelProps {
   readonly activeParticipant: Participant | undefined;
   readonly participantDetails: AgentEditorParticipantDetails | undefined;
@@ -53,4 +53,12 @@ export interface AgentEditorPanelProps {
   readonly version: AgentEditorVersionProps;
   readonly variablesEditor: AgentEditorVariablesProps;
   readonly editorNav: AgentEditorNavProps;
+  /**
+   * A14 (ELITEA-0386): opens the composition root's LLM-settings dialog for
+   * `activeParticipant` — see `widgets/chat-box/ui/ChatBoxLlmSettingsDialog
+   * .tsx`'s own module doc for why this stays a plain callback (this feature
+   * may not import `widgets/llm-model-selector` — R-L1). Omitted (`undefined`)
+   * withholds the button entirely, same convention as `onSwitchToModel`.
+   */
+  readonly onEditLlmSettings?: (() => void) | undefined;
 }

@@ -5,354 +5,256 @@ import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
 import { PipelineWebhookModal } from './PipelineWebhookModal';
 
-/**
- * `userEvent.setup()` unconditionally installs its own `navigator.clipboard`
- * stub -- reading the copied text back via that same stub's `readText()` is
- * the reliable proof, matching `shared/ui/CopyToClipboardButton.test.tsx`'s
- * own established convention (its doc comment explains why a bespoke mock
- * would be silently clobbered).
- */
+const URL_PATH = '/api/v2/pipeline_trigger/1/tok-abc';
+
+function noop(): void {
+  /* intentionally empty */
+}
+
 describe('PipelineWebhookModal', () => {
-  it('is not rendered when closed', () => {
+  it('renders nothing while closed', () => {
     const { queryByText } = renderWithTheme(
       <PipelineWebhookModal
         open={false}
-        onClose={vi.fn()}
-        onSubmit={vi.fn()}
+        onClose={noop}
+        onReveal={noop}
+        onRotate={noop}
+        onRevoke={noop}
       />,
     );
-    expect(queryByText('Webhook settings')).not.toBeInTheDocument();
+    expect(queryByText('Webhook settings')).toBeNull();
   });
 
-  it('shows the webhook type description and the GitHub example request', () => {
-    const { getByText } = renderWithTheme(
+  it('shows the inbound URL resolved against this origin', () => {
+    const { getByTestId } = renderWithTheme(
       <PipelineWebhookModal
         open
-        onClose={vi.fn()}
-        onSubmit={vi.fn()}
-        webhookType="github"
-        webhookUrl="/elitea_core/pipeline_trigger/prompt_lib/proj-1/pipeline/1/webhook/github"
+        onClose={noop}
+        webhookUrl={URL_PATH}
+        onReveal={noop}
+        onRotate={noop}
+        onRevoke={noop}
       />,
     );
-    expect(getByText('Uses x-hub-signature-256 header with HMAC-SHA256 signature')).toBeInTheDocument();
-    expect(getByText('Example Request')).toBeInTheDocument();
+    expect(getByTestId('pipeline-webhook-url')).toHaveValue(`${window.location.origin}${URL_PATH}`);
   });
 
-  it('does not render a Secret Value section when no secret exists yet', () => {
-    const { queryByText } = renderWithTheme(
+  /**
+   * The plain read never carries a credential — that is the backend's rule
+   * (`/pipeline_triggers/secret/...` is a separate operation with the WRITE
+   * permission on it), so "no secret" is a normal view of a live trigger and
+   * not an error state.
+   */
+  it('explains where the secret is when none has been revealed', () => {
+    const { queryByTestId, getByText } = renderWithTheme(
       <PipelineWebhookModal
         open
-        onClose={vi.fn()}
-        onSubmit={vi.fn()}
-        webhookType="github"
+        onClose={noop}
+        webhookUrl={URL_PATH}
+        onReveal={noop}
+        onRotate={noop}
+        onRevoke={noop}
       />,
     );
-    expect(queryByText(/Secret Value/)).not.toBeInTheDocument();
+    expect(queryByTestId('pipeline-webhook-secret')).toBeNull();
+    expect(getByText(/stored server-side/)).toBeInTheDocument();
   });
 
-  it('masks the secret by default and reveals it on toggle', async () => {
+  it('masks a revealed secret until the eye is clicked', async () => {
     const user = userEvent.setup();
-    const { getByText, getByDisplayValue, getByRole } = renderWithTheme(
+    const { getByTestId, getByLabelText } = renderWithTheme(
       <PipelineWebhookModal
         open
-        onClose={vi.fn()}
-        onSubmit={vi.fn()}
-        webhookType="github"
-        secretValue="topsecret123"
+        onClose={noop}
+        webhookUrl={URL_PATH}
+        secretValue="s3cr3t"
+        onReveal={noop}
+        onRotate={noop}
+        onRevoke={noop}
       />,
     );
-
-    expect(getByText(/Secret Value/)).toBeInTheDocument();
-    expect(() => getByDisplayValue('topsecret123')).toThrow();
-
-    await user.click(getByRole('button', { name: 'Show secret' }));
-    expect(getByDisplayValue('topsecret123')).toBeInTheDocument();
+    expect(getByTestId('pipeline-webhook-secret')).toHaveValue('••••••');
+    await user.click(getByLabelText('Show secret'));
+    expect(getByTestId('pipeline-webhook-secret')).toHaveValue('s3cr3t');
   });
 
-  it('copies the webhook URL to the clipboard', async () => {
+  it('keeps the secret out of the example request until it is shown', async () => {
     const user = userEvent.setup();
-    const { getByRole } = renderWithTheme(
+    const { getByText, getByLabelText, queryByText } = renderWithTheme(
       <PipelineWebhookModal
         open
-        onClose={vi.fn()}
-        onSubmit={vi.fn()}
-        webhookType="github"
-        webhookUrl="/elitea_core/pipeline_trigger/prompt_lib/proj-1/pipeline/1/webhook/github"
+        onClose={noop}
+        webhookUrl={URL_PATH}
+        secretValue="s3cr3t"
+        onReveal={noop}
+        onRotate={noop}
+        onRevoke={noop}
       />,
     );
-
-    await user.click(getByRole('button', { name: 'Copy URL' }));
-    expect(await navigator.clipboard.readText()).toBe(`${window.location.origin}/elitea_core/pipeline_trigger/prompt_lib/proj-1/pipeline/1/webhook/github`);
+    expect(getByText(/Bearer <your_secret>/)).toBeInTheDocument();
+    await user.click(getByLabelText('Show secret'));
+    expect(queryByText(/Bearer <your_secret>/)).toBeNull();
+    expect(getByText(/Bearer s3cr3t/)).toBeInTheDocument();
   });
 
-  it('generates a pending new secret on Regenerate, submitted on Apply', async () => {
+  it('wires reveal, rotate and revoke to their own callbacks', async () => {
     const user = userEvent.setup();
-    const onSubmit = vi.fn<(webhookType: string, newSecretValue: string | null) => void>();
-    const onClose = vi.fn();
-    const { getByRole, getByText } = renderWithTheme(
+    const onReveal = vi.fn();
+    const onRotate = vi.fn();
+    const onRevoke = vi.fn();
+    const { getByTestId } = renderWithTheme(
       <PipelineWebhookModal
         open
-        onClose={onClose}
-        onSubmit={onSubmit}
-        webhookType="github"
-        secretValue="oldsecret"
+        onClose={noop}
+        webhookUrl={URL_PATH}
+        onReveal={onReveal}
+        onRotate={onRotate}
+        onRevoke={onRevoke}
       />,
     );
-
-    await user.click(getByRole('button', { name: 'Regenerate secret' }));
-    expect(getByText(/new - click Apply to save/)).toBeInTheDocument();
-
-    await user.click(getByRole('button', { name: 'Apply' }));
-    expect(onSubmit).toHaveBeenCalledWith('github', expect.any(String));
-    const [, newSecretValue] = onSubmit.mock.calls[0] ?? [];
-    expect(typeof newSecretValue === 'string' && newSecretValue.length > 0).toBe(true);
-    expect(onClose).toHaveBeenCalled();
+    await user.click(getByTestId('pipeline-webhook-reveal'));
+    await user.click(getByTestId('pipeline-webhook-rotate'));
+    await user.click(getByTestId('pipeline-webhook-revoke'));
+    expect(onReveal).toHaveBeenCalledOnce();
+    expect(onRotate).toHaveBeenCalledOnce();
+    expect(onRevoke).toHaveBeenCalledOnce();
   });
 
-  it('submits with a null secret when nothing was regenerated', async () => {
-    const user = userEvent.setup();
-    const onSubmit = vi.fn();
-    const { getByRole } = renderWithTheme(
+  it('disables every action while a write is in flight', () => {
+    const { getByTestId } = renderWithTheme(
       <PipelineWebhookModal
         open
-        onClose={vi.fn()}
-        onSubmit={onSubmit}
-        webhookType="gitlab"
+        onClose={noop}
+        webhookUrl={URL_PATH}
+        isLoading
+        onReveal={noop}
+        onRotate={noop}
+        onRevoke={noop}
       />,
     );
-
-    await user.click(getByRole('button', { name: 'Apply' }));
-    expect(onSubmit).toHaveBeenCalledWith('gitlab', null);
+    expect(getByTestId('pipeline-webhook-reveal')).toBeDisabled();
+    expect(getByTestId('pipeline-webhook-rotate')).toBeDisabled();
+    expect(getByTestId('pipeline-webhook-revoke')).toBeDisabled();
   });
 
-  it('toggling "Show secret" then "Hide secret" masks it again', async () => {
-    const user = userEvent.setup();
-    const { getByRole, getByDisplayValue, queryByDisplayValue } = renderWithTheme(
-      <PipelineWebhookModal
-        open
-        onClose={vi.fn()}
-        onSubmit={vi.fn()}
-        webhookType="github"
-        secretValue="topsecret123"
-      />,
-    );
-
-    await user.click(getByRole('button', { name: 'Show secret' }));
-    expect(getByDisplayValue('topsecret123')).toBeInTheDocument();
-
-    await user.click(getByRole('button', { name: 'Hide secret' }));
-    expect(queryByDisplayValue('topsecret123')).not.toBeInTheDocument();
-  });
-
-  it('copies the secret to the clipboard and notifies via onNotify', async () => {
-    const user = userEvent.setup();
+  /**
+   * `userEvent.setup()` installs its OWN `navigator.clipboard` stub, so a
+   * bespoke `vi.fn()` here would be clobbered and the assertion would
+   * false-negative — read the copied text back through that stub instead, the
+   * same technique `shared/ui/CopyToClipboardButton`'s own test records.
+   */
+  it('copies the URL and notifies', async () => {
     const onNotify = vi.fn();
-    const { getByRole } = renderWithTheme(
+    const user = userEvent.setup();
+    const { getByLabelText } = renderWithTheme(
       <PipelineWebhookModal
         open
-        onClose={vi.fn()}
-        onSubmit={vi.fn()}
-        webhookType="github"
-        secretValue="topsecret123"
+        onClose={noop}
+        webhookUrl={URL_PATH}
+        onReveal={noop}
+        onRotate={noop}
+        onRevoke={noop}
         onNotify={onNotify}
       />,
     );
-
-    await user.click(getByRole('button', { name: 'Copy secret' }));
-    expect(await navigator.clipboard.readText()).toBe('topsecret123');
-    expect(onNotify).toHaveBeenCalledWith('Secret copied to clipboard');
+    await user.click(getByLabelText('Copy URL'));
+    expect(await navigator.clipboard.readText()).toBe(`${window.location.origin}${URL_PATH}`);
+    expect(onNotify).toHaveBeenCalledWith('Webhook URL copied to clipboard');
   });
 
-  it('copies the example request to the clipboard', async () => {
+  /* ── #970: the two authentication modes ─────────────────────────────── */
+
+  /**
+   * A signing trigger is the one a GitHub repository webhook can actually
+   * call, and the ONE thing the person configuring that webhook needs from
+   * this dialog is which header to sign into. It is on the plain read, so it
+   * is shown without revealing anything.
+   */
+  it('shows the signature header a signing trigger is configured with', () => {
+    const { getByTestId } = renderWithTheme(
+      <PipelineWebhookModal
+        open
+        onClose={noop}
+        webhookUrl={`${URL_PATH}/github`}
+        authMode="hmac_sha256"
+        signatureHeader="X-Hub-Signature-256"
+        onReveal={noop}
+        onRotate={noop}
+        onRevoke={noop}
+      />,
+    );
+    expect(getByTestId('pipeline-webhook-signature-header')).toHaveValue('X-Hub-Signature-256');
+    expect(getByTestId('pipeline-webhook-mode-hint').textContent).toContain('X-Hub-Signature-256');
+    // The example must not show the bearer form for a trigger that refuses
+    // it: a copied command that always answers 401 is worse than none.
+    expect(getByTestId('pipeline-webhook-url')).toHaveValue(`${window.location.origin}${URL_PATH}/github`);
+  });
+
+  /** A bearer trigger keeps the carrier documentation and shows no header. */
+  it('shows no signature header for a bearer trigger', () => {
+    const { queryByTestId, getByTestId } = renderWithTheme(
+      <PipelineWebhookModal
+        open
+        onClose={noop}
+        webhookUrl={URL_PATH}
+        authMode="token"
+        onReveal={noop}
+        onRotate={noop}
+        onRevoke={noop}
+      />,
+    );
+    expect(queryByTestId('pipeline-webhook-signature-header')).toBeNull();
+    expect(getByTestId('pipeline-webhook-mode-hint').textContent).toContain('Authorization: Bearer');
+  });
+
+  /**
+   * Changing the type is not applied on selection: the backend writes the
+   * mode on the create/rotate route and nowhere else, so applying it replaces
+   * the credential. The dialog says so and asks for a second click.
+   */
+  it('asks before applying a type change, and rotates with the chosen one', async () => {
+    const onRotate = vi.fn();
     const user = userEvent.setup();
-    const { getByRole } = renderWithTheme(
+    const { getByTestId, queryByTestId, getByRole } = renderWithTheme(
       <PipelineWebhookModal
         open
-        onClose={vi.fn()}
-        onSubmit={vi.fn()}
-        webhookType="github"
-        webhookUrl="/elitea_core/pipeline_trigger/prompt_lib/proj-1/pipeline/1/webhook/github"
+        onClose={noop}
+        webhookUrl={URL_PATH}
+        authMode="token"
+        onReveal={noop}
+        onRotate={onRotate}
+        onRevoke={noop}
       />,
     );
+    expect(queryByTestId('pipeline-webhook-apply-mode')).toBeNull();
 
-    await user.click(getByRole('button', { name: 'Copy example' }));
-    const copied = await navigator.clipboard.readText();
-    expect(copied).toContain('X-Hub-Signature-256');
+    await user.click(getByRole('combobox'));
+    await user.click(getByRole('option', { name: 'GitHub (signed payload)' }));
+
+    expect(getByTestId('pipeline-webhook-mode-pending').textContent).toContain('rotates the credential');
+    expect(onRotate).not.toHaveBeenCalled();
+
+    await user.click(getByTestId('pipeline-webhook-apply-mode'));
+    expect(onRotate).toHaveBeenCalledWith('github');
   });
 
-  it('renders a GitLab-flavoured example request with the X-Gitlab-Token header', () => {
-    const { getByText } = renderWithTheme(
-      <PipelineWebhookModal
-        open
-        onClose={vi.fn()}
-        onSubmit={vi.fn()}
-        webhookType="gitlab"
-        webhookUrl="/elitea_core/pipeline_trigger/prompt_lib/proj-1/pipeline/1/webhook/gitlab"
-        secretValue="gl-secret"
-      />,
-    );
-    expect(getByText(/X-Gitlab-Token/)).toBeInTheDocument();
-  });
-
-  it('renders a Custom-flavoured example request using the given secretHeader, falling back to X-Webhook-Token when none is given', () => {
-    const { getByText, rerender } = renderWithTheme(
-      <PipelineWebhookModal
-        open
-        onClose={vi.fn()}
-        onSubmit={vi.fn()}
-        webhookType="custom"
-        webhookUrl="/elitea_core/pipeline_trigger/prompt_lib/proj-1/pipeline/1/webhook/custom"
-        secretValue="cust-secret"
-        secretHeader="X-My-Custom-Header"
-      />,
-    );
-    expect(getByText(/X-My-Custom-Header/)).toBeInTheDocument();
-
-    rerender(
-      <PipelineWebhookModal
-        open
-        onClose={vi.fn()}
-        onSubmit={vi.fn()}
-        webhookType="custom"
-        webhookUrl="/elitea_core/pipeline_trigger/prompt_lib/proj-1/pipeline/1/webhook/custom"
-        secretValue="cust-secret"
-      />,
-    );
-    // The description line and the example request curl command both mention
-    // "X-Webhook-Token" once the header falls back to its default -- confirm at least one occurrence.
-    expect(document.body.textContent).toContain('X-Webhook-Token');
-  });
-
-  it('renders no example section at all when there is no webhookUrl', () => {
-    const { queryByText } = renderWithTheme(
-      <PipelineWebhookModal
-        open
-        onClose={vi.fn()}
-        onSubmit={vi.fn()}
-        webhookType="github"
-      />,
-    );
-    expect(queryByText('Example Request')).not.toBeInTheDocument();
-  });
-
-  it('masks the secret substring inside secretInstructions until "Show secret" is clicked', async () => {
+  /** The plain Rotate button keeps the mode the row already carries. */
+  it('rotates a signing trigger as a signing trigger', async () => {
+    const onRotate = vi.fn();
     const user = userEvent.setup();
-    const { getByText, queryByText, getByRole } = renderWithTheme(
+    const { getByTestId } = renderWithTheme(
       <PipelineWebhookModal
         open
-        onClose={vi.fn()}
-        onSubmit={vi.fn()}
-        webhookType="github"
-        secretValue="topsecret123"
-        secretInstructions="Use header value: topsecret123 in your request"
+        onClose={noop}
+        webhookUrl={`${URL_PATH}/github`}
+        authMode="hmac_sha256"
+        signatureHeader="X-Hub-Signature-256"
+        onReveal={noop}
+        onRotate={onRotate}
+        onRevoke={noop}
       />,
     );
-
-    expect(queryByText(/Use header value: topsecret123/)).not.toBeInTheDocument();
-    expect(getByText(/Use header value: •+ in your request/)).toBeInTheDocument();
-
-    await user.click(getByRole('button', { name: 'Show secret' }));
-    expect(getByText('Use header value: topsecret123 in your request')).toBeInTheDocument();
-  });
-
-  it('shows the "(new - click Apply to save)" pending marker instead of secretInstructions once a new secret has been regenerated', async () => {
-    const user = userEvent.setup();
-    const { getByRole, queryByText, getByText } = renderWithTheme(
-      <PipelineWebhookModal
-        open
-        onClose={vi.fn()}
-        onSubmit={vi.fn()}
-        webhookType="github"
-        secretValue="topsecret123"
-        secretInstructions="Use header value: topsecret123 in your request"
-      />,
-    );
-
-    await user.click(getByRole('button', { name: 'Regenerate secret' }));
-    expect(getByText(/new - click Apply to save/)).toBeInTheDocument();
-    expect(queryByText(/Use header value:/)).not.toBeInTheDocument();
-  });
-
-  it('passes isLoading through to the confirm button\'s confirming state', () => {
-    const { getByRole } = renderWithTheme(
-      <PipelineWebhookModal
-        open
-        onClose={vi.fn()}
-        onSubmit={vi.fn()}
-        webhookType="github"
-        isLoading
-      />,
-    );
-    expect(getByRole('button', { name: 'Apply' })).toBeDisabled();
-  });
-
-  it('resets pending secret and revealed state (but not webhook type) when reopened without a webhookType override', async () => {
-    const user = userEvent.setup();
-    const { getByRole, rerender, getByText, queryByText } = renderWithTheme(
-      <PipelineWebhookModal
-        open
-        onClose={vi.fn()}
-        onSubmit={vi.fn()}
-        webhookType="github"
-        secretValue="topsecret123"
-      />,
-    );
-
-    await user.click(getByRole('button', { name: 'Show secret' }));
-    await user.click(getByRole('button', { name: 'Regenerate secret' }));
-    expect(getByText(/new - click Apply to save/)).toBeInTheDocument();
-
-    // Close then reopen -- the effect should clear the pending secret and re-hide it.
-    rerender(
-      <PipelineWebhookModal
-        open={false}
-        onClose={vi.fn()}
-        onSubmit={vi.fn()}
-        webhookType="github"
-        secretValue="topsecret123"
-      />,
-    );
-    rerender(
-      <PipelineWebhookModal
-        open
-        onClose={vi.fn()}
-        onSubmit={vi.fn()}
-        webhookType="github"
-        secretValue="topsecret123"
-      />,
-    );
-
-    expect(queryByText(/new - click Apply to save/)).not.toBeInTheDocument();
-    expect(() => getByRole('button', { name: 'Hide secret' })).toThrow();
-  });
-
-  it('does not throw when onNotify is not supplied and a copy/regenerate action fires', async () => {
-    const user = userEvent.setup();
-    const { getByRole } = renderWithTheme(
-      <PipelineWebhookModal
-        open
-        onClose={vi.fn()}
-        onSubmit={vi.fn()}
-        webhookType="github"
-        secretValue="topsecret123"
-      />,
-    );
-    await expect(user.click(getByRole('button', { name: 'Regenerate secret' }))).resolves.toBeUndefined();
-    await expect(user.click(getByRole('button', { name: 'Copy secret' }))).resolves.toBeUndefined();
-  });
-
-  it('switches webhook type via the radio group', async () => {
-    const user = userEvent.setup();
-    const { getByLabelText, getByText } = renderWithTheme(
-      <PipelineWebhookModal
-        open
-        onClose={vi.fn()}
-        onSubmit={vi.fn()}
-        webhookType="github"
-      />,
-    );
-
-    await user.click(getByLabelText('Custom'));
-    expect(getByText('Uses X-Webhook-Token header with secret token')).toBeInTheDocument();
+    await user.click(getByTestId('pipeline-webhook-rotate'));
+    expect(onRotate).toHaveBeenCalledWith('github');
   });
 });

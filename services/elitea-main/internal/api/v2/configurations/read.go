@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -123,6 +124,12 @@ func (h *currentConfigurationReadHandler) list(w http.ResponseWriter, r *http.Re
 		Query:           query.Get("query"),
 		SortBy:          query.Get("sort_by"),
 		SortOrder:       query.Get("sort_order"),
+		// The viewer, so the project page can withhold another member's
+		// UNSHARED rows (#922). An unauthenticated request never reaches this
+		// handler — Auth runs in front of it — but a principal that carries no
+		// numeric user id (a service token) reads the page unrestricted, which
+		// is the behaviour every non-browser caller had before.
+		ViewerID: currentConfigurationViewerID(r.Context()),
 	})
 	if err != nil {
 		writeCurrentConfigurationServiceErrorContext(r.Context(), w, err)
@@ -144,7 +151,47 @@ func (h *currentConfigurationReadHandler) get(w http.ResponseWriter, r *http.Req
 		writeCurrentConfigurationServiceErrorContext(r.Context(), w, err)
 		return
 	}
+	if !currentConfigurationVisibleToViewer(configuration, currentConfigurationViewerID(r.Context())) {
+		// The same answer an absent row gets. Withholding the row from the
+		// list (#922) while serving it by id would leave the id itself as the
+		// whole access control, and ids here are small consecutive integers.
+		writeCurrentConfigurationServiceErrorContext(r.Context(), w, configurationapp.ErrCurrentConfigurationNotFound)
+		return
+	}
 	writeJSON(w, http.StatusOK, newCurrentConfigurationDTO(configuration))
+}
+
+// currentConfigurationViewerID reads the authenticated user this list is for.
+//
+// It is the same principal read the mutation path uses to stamp author_id
+// (mutation.go's currentConfigurationMutationAuthorID), which is the column
+// the visibility predicate compares against — the two must agree or a user
+// would be hidden from their own rows.
+func currentConfigurationViewerID(ctx context.Context) *int32 {
+	principal, ok := auth.UserFromContext(ctx)
+	if !ok {
+		return nil
+	}
+	viewerID, ok := principal.OwningUserID()
+	if !ok || viewerID <= 0 || viewerID > math.MaxInt32 {
+		return nil
+	}
+	value := int32(viewerID)
+	return &value
+}
+
+// currentConfigurationVisibleToViewer applies the LIST's visibility rule to
+// one row, and is deliberately the same three clauses the SQL predicate
+// spells (internal/db/queries/configurations.sql): shared, unauthored, or the
+// viewer's own. A nil viewer is a caller with no user identity, which reads
+// everything, as it did before #922.
+func currentConfigurationVisibleToViewer(configuration configurationapp.CurrentConfiguration, viewerID *int32) bool {
+	switch {
+	case viewerID == nil, configuration.Shared, configuration.AuthorID == nil:
+		return true
+	default:
+		return *configuration.AuthorID == *viewerID
+	}
 }
 
 func currentConfigurationProjectID(r *http.Request) (string, bool) {

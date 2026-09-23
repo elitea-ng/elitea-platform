@@ -204,7 +204,7 @@ test('J8: a send this deployment cannot run leaves the server transcript empty',
 // its dirty-state gate. That is what this test drives; the re-answer itself is
 // out of reach here and is deliberately not faked.
 // ─────────────────────────────────────────────────────────────────────────────
-test('J9: the edit-and-regenerate control opens a dirty-gated editor on the user message', async ({ page }) => {
+test('J9: the edit-and-regenerate control opens a blank-gated editor on the user message', async ({ page }) => {
   await page.goto(BASE_URL + '/app/chat');
   await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 20_000 });
 
@@ -225,9 +225,18 @@ test('J9: the edit-and-regenerate control opens a dirty-gated editor on the user
 
   const save = userMessage.getByRole('button', { name: 'Save and apply' });
   const cancel = userMessage.getByRole('button', { name: 'Cancel' });
-  // Unmodified content must not be submittable — the dirty gate is behaviour a
-  // stub cannot reproduce, since it depends on comparing the live field value
-  // with the message's own content.
+  // THE GATE IS BLANK, NOT DIRTY (issue #980, onetest ELITEA-0540). This
+  // control is a RETRY as well as an edit: re-running the same question after
+  // a bad answer is the reason a person opens the editor and changes nothing,
+  // and the regenerate route now accepts that unchanged `updated_items` and
+  // re-runs the turn from it. So an UNCHANGED question must be submittable —
+  // this assertion used to read `toBeDisabled()` against the old dirty gate,
+  // which made the retry unreachable.
+  await expect(save).toBeEnabled();
+  // An EMPTY question stays refused: there is no question left to ask, and
+  // whitespace alone is empty too — behaviour a stub cannot reproduce, since
+  // it depends on the live field value.
+  await editor.fill('   ');
   await expect(save).toBeDisabled();
   await editor.fill(`${text} edited`);
   await expect(save).toBeEnabled();
@@ -267,6 +276,19 @@ test('J11: a server-side rename persists and the conversation opens at its deep 
 
   const originalName = uniqueMessage('j11');
   const conversation = await sendFirstMessage(page, originalName);
+
+  // `sendFirstMessage` only awaits the POST response — the app's OWN success
+  // handler (`pages/chat/index.tsx`'s `handleConversationCreated`) reacts to
+  // that same response by client-navigating to this conversation's route.
+  // That is a history push, not a real navigation (`toHaveURL`, not
+  // `waitForURL` — see `chat.navigation.spec.ts`'s own note: a history push
+  // fires no navigation lifecycle event for `waitForURL` to wait on). Letting
+  // it settle here, before the explicit hard `page.goto` to the SAME URL
+  // below, is what the webkit-only flake needs: without it, that `goto`
+  // sometimes starts while the app's own history push is still in flight and
+  // gets aborted as "interrupted by another navigation to the same URL" —
+  // the same class `admin.secrets.spec.ts` documents for its own goto.
+  await expect(page).toHaveURL(`${BASE_URL}/app/chat/${conversation.id}`, { timeout: 15_000 });
 
   // Rename from outside the tab, exactly as a server-side auto-naming pass would.
   const renamed = `${AUTOTEST_PREFIX}renamed-${Date.now()}${SUFFIX}`;

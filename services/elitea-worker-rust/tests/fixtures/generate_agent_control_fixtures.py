@@ -84,7 +84,7 @@ command = command_pb2.WorkerCommandV1(
     deadline_unix_millis=1_700_000_100_000,
     traceparent="00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
     tracestate="vendor=value",
-    limits_revision="elitea.runtime.limits.conformance.v1",
+    limits_revision="elitea.runtime.limits.conformance.v2",
     agent_execution=agent_pb2.AgentExecutionCommandV1(
         request_entry_id="agent-request",
         client_stream_id="conversation-1",
@@ -265,8 +265,8 @@ def size_bound_pair(
     )
 
 
-signed_at_limit, claim_at_limit = size_bound_pair(1024 * 1024)
-signed_over_limit, claim_over_limit = size_bound_pair(1024 * 1024 + 1)
+signed_at_limit, claim_at_limit = size_bound_pair(8 * 1024 * 1024)
+signed_over_limit, claim_over_limit = size_bound_pair(8 * 1024 * 1024 + 1)
 
 output_session_command = command_pb2.WorkerCommandV1.FromString(command_raw)
 output_session_command.resource_project_id = "resource-1"

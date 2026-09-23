@@ -46,7 +46,7 @@ export const SetAgentAttachmentStorageBody = zod.object({
     .string()
     .optional()
     .describe(
-      'Read as a string; non-string values degrade to \"\" and are stored as such (handler.go:1773).\n',
+      'Read as a string; non-string values degrade to "" and are stored as such (handler.go:1773).\n',
     ),
 });
 

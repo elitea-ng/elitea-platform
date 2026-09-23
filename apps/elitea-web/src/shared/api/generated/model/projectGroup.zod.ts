@@ -47,7 +47,7 @@ export const ProjectGroup = zod
     name: zod.string(),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/projects\/handler.go — the Group struct.\n",
+    "NOTE(W2): internal/api/v2/projects/handler.go — the Group struct.\n",
   );
 
 export type ProjectGroup = zod.input<typeof ProjectGroup>;

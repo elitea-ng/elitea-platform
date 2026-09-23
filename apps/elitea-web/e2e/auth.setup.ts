@@ -62,6 +62,18 @@ setup.describe('Auth setup', () => {
     setup.setTimeout(PERSONA_TIMEOUT_MS);
     await performOidcLogin(page, 'e2e-chat@autotest.local', STORAGE_STATE.chat, 'personal');
   });
+
+  // The restricted-viewer persona (issue #940 D4/D6) — see
+  // `playwright.config.ts`'s STORAGE_STATE.viewer for what makes it
+  // genuinely restricted, and `scripts/e2e-stack.sh seed` for how it is
+  // seeded. Pinned to the seeded project like member/admin, not to a
+  // personal project like the chat driver: the two cases this persona exists
+  // for (Project Context, the Secrets CREATE section) are both scoped to
+  // project 1.
+  setup('authenticate as viewer persona', async ({ page }) => {
+    setup.setTimeout(PERSONA_TIMEOUT_MS);
+    await performOidcLogin(page, 'e2e-viewer@autotest.local', STORAGE_STATE.viewer, 'seeded');
+  });
 });
 
 /**

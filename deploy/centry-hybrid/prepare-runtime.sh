@@ -179,7 +179,7 @@ chmod 600 "$acl_tmp"
 printf '%s\n' \
   '{' \
   '  "schema_version": "elitea.runtime-deploy.v1",' \
-  '  "limits_revision": "elitea.runtime.limits.conformance.v1",' \
+  '  "limits_revision": "elitea.runtime.limits.conformance.v2",' \
   '  "workload_session_id": "indexer-worker-pov-1",' \
   '  "producer_id": "indexer-worker-pov-1",' \
   '  "consumer_id": "indexer-worker-pov-v2-consumer",' \

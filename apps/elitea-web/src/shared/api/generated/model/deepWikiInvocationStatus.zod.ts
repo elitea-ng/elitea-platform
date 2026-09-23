@@ -49,7 +49,7 @@ export const DeepWikiInvocationStatus = zod
       .string()
       .optional()
       .describe(
-        "A JSON \*string\* holding the list of result objects. It is a string\non the wire, not an object — the provider's frozen contract.\n",
+        "A JSON *string* holding the list of result objects. It is a string\non the wire, not an object — the provider's frozen contract.\n",
       ),
     result_type: zod.enum(["String"]).optional(),
     error_category: zod.string().optional(),
@@ -70,7 +70,7 @@ export const DeepWikiInvocationStatus = zod
       ),
   })
   .describe(
-    'One of three provider shapes, passed through unchanged: pending\n(`Started`), running (`InProgress`, with any `custom_events` drained by\nthis read), or terminal. A failed TOOL is HTTP 200 with\n`status: \"Error\"` plus `error_category` and `error_type`; only\ntransport failures use the error envelope.\n',
+    'One of three provider shapes, passed through unchanged: pending\n(`Started`), running (`InProgress`, with any `custom_events` drained by\nthis read), or terminal. A failed TOOL is HTTP 200 with\n`status: "Error"` plus `error_category` and `error_type`; only\ntransport failures use the error envelope.\n',
   );
 
 export type DeepWikiInvocationStatus = zod.input<

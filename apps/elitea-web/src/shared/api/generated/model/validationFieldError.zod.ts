@@ -45,14 +45,14 @@ export const ValidationFieldError = zod
   .object({
     loc: zod
       .array(zod.string())
-      .describe('Field path, e.g. [\"body\", \"version_name\"]'),
+      .describe('Field path, e.g. ["body", "version_name"]'),
     msg: zod.string(),
     type: zod
       .string()
       .describe("pydantic-style error code, e.g. value_error.missing"),
   })
   .describe(
-    "NOTE(W2): pydantic-parity field error emitted by Publish\/PublishValidate for a missing or malformed version_name (internal\/api\/v2\/eliteacore\/handler.go:455-474, 1202-1219).\n",
+    "NOTE(W2): pydantic-parity field error emitted by Publish/PublishValidate for a missing or malformed version_name (internal/api/v2/eliteacore/handler.go:455-474, 1202-1219).\n",
   );
 
 export type ValidationFieldError = zod.input<typeof ValidationFieldError>;

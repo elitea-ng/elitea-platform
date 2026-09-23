@@ -42,7 +42,7 @@
 import * as zod from "zod";
 
 export const ImportSkillBody = zod.object({
-  file: zod.instanceof(File).optional(),
+  file: zod.instanceof(Blob).optional(),
 });
 
 export type ImportSkillBody = zod.input<typeof ImportSkillBody>;

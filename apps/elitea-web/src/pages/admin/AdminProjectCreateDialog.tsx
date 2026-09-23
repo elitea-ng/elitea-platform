@@ -105,6 +105,24 @@ function looksLikeEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
+/**
+ * elitea_issues: #4626 — an email copied from an external source (a copy
+ * button, a formatted document) can carry invisible Unicode format
+ * characters (Word Joiner U+2060, zero-width space/non-joiner/joiner, a BOM,
+ * a soft hyphen). `String.prototype.trim()` only strips whitespace, and none
+ * of these are whitespace, so a hidden character survives `.trim()` and then
+ * fails admin matching on the backend with no visible reason. Stripped here,
+ * before validation, so what the operator SEES is what gets matched.
+ */
+function stripInvisibleUnicode(value: string): string {
+  return value.replace(/[​-‏⁠﻿­]/g, '');
+}
+
+/** @internal exported only for {@link sanitizeEmail}'s own unit test. */
+export function sanitizeEmail(value: string): string {
+  return stripInvisibleUnicode(value).trim();
+}
+
 export function AdminProjectCreateDialog({
   open,
   isSaving,
@@ -137,7 +155,7 @@ export function AdminProjectCreateDialog({
     }
     // An address left in the input, never committed to a chip, is one the
     // operator typed and expects to be used. The reference includes it too.
-    const typed = pendingEmail.trim();
+    const typed = sanitizeEmail(pendingEmail);
     const emails = typed ? [...adminEmails, typed] : adminEmails;
     const invalid = emails.filter((email) => !looksLikeEmail(email));
     if (invalid.length > 0) {
@@ -198,7 +216,7 @@ export function AdminProjectCreateDialog({
           inputValue={pendingEmail}
           disabled={isSaving}
           onInputChange={(_event, value) => setPendingEmail(value)}
-          onChange={(_event, value) => setAdminEmails(value)}
+          onChange={(_event, value) => setAdminEmails(value.map(sanitizeEmail))}
           renderValue={(value, getTagProps) =>
             // `getTagProps` supplies its own `key`; destructuring it out is what
             // keeps the spread from overwriting an explicit one (TS2783).

@@ -59,6 +59,8 @@ export interface ConversationsProps {
   /** See `onLoadMore` above — same disclosed dead-prop class. */
   readonly isLoadMoreConversations?: boolean | undefined;
   readonly onPinConversation: (conversation: Conversation, shouldPin: boolean) => void;
+  /** Issue 940/A6 — clones a conversation (participants + settings) into a new, independent one and selects it. */
+  readonly onDuplicateConversation: (conversation: Conversation) => void;
   readonly onCreateConversation: (conversation: Conversation) => Promise<unknown>;
   readonly onCancelCreateConversation: () => void;
   readonly onChangeActiveConversationName: (name: string) => void;

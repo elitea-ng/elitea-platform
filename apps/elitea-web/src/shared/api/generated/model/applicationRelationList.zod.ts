@@ -49,9 +49,57 @@ export const ApplicationRelationList = zod
         id: zod.string(),
       }),
     ),
+    in_use: zod
+      .boolean()
+      .optional()
+      .describe(
+        "NOTE(#894): whether another version references THIS one as a sub-agent. It is not `items.length > 0` — `items` answers the opposite relation (what this version uses). A reference with no valid parent mapping is an orphan and does not count, matching pylon (legacy/plugins/elitea_core/rpc/application.py:1861-1863).\n",
+      ),
+    referencing_parents: zod
+      .array(
+        zod.object({
+          application_id: zod.int().optional(),
+          application_name: zod.string().optional(),
+          application_type: zod
+            .string()
+            .optional()
+            .describe(
+              'The parent version\'s agent_type ("openai", "pipeline", ...).',
+            ),
+          version_id: zod.int().optional(),
+          version_name: zod.string().optional(),
+          tool_id: zod.int().optional(),
+        }),
+      )
+      .optional()
+      .describe(
+        'NOTE(#894): the parent versions that reference this version as a sub-agent — what the "Version in use" dialog lists by name.\n',
+      ),
+    replacement_versions: zod
+      .array(
+        zod.object({
+          id: zod.int().optional(),
+          name: zod.string().optional(),
+          created_at: zod.iso.datetime({ offset: true }).nullish(),
+        }),
+      )
+      .optional()
+      .describe(
+        "NOTE(#894): the sibling versions of the same application this one could be replaced by, oldest first. Empty when the application has only this version.\n",
+      ),
+    version_name: zod
+      .string()
+      .optional()
+      .describe("NOTE(#894): the name of the version being checked."),
+    application_id: zod
+      .string()
+      .optional()
+      .describe(
+        "NOTE(#894): the application the version belongs to, serialized as a string like every other id in this spec.",
+      ),
   })
   .describe(
-    "NOTE(W2): built by the ApplicationRelation handler, internal\/api\/v2\/eliteacore\/handler.go:1596-1626. The sole operation in this spec that references it is checkVersionInUse (internal\/api\/router.go:509 routes \/check_version_in_use\/... to that handler). The router ALSO serves GET \/application_relation\/... via the same handler (router.go:519), which is deliberately not specced — no manifest API item calls it.\n",
+    "NOTE(W2): built by the ApplicationRelation handler, internal/api/v2/eliteacore/handler.go:1596-1626. The sole operation in this spec that references it is checkVersionInUse (internal/api/router.go:509 routes /check_version_in_use/... to that handler). The router ALSO serves GET /application_relation/... via the same handler (router.go:519), which is deliberately not specced — no manifest API item calls it.\n",
   );
 
 export type ApplicationRelationList = zod.input<typeof ApplicationRelationList>;

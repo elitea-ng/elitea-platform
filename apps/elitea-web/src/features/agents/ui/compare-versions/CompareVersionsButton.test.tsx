@@ -159,4 +159,77 @@ describe('CompareVersionsButton', () => {
     await user.click(screen.getByRole('button', { name: 'Change versions' }));
     await waitFor(() => expect(screen.getByTestId('compare-versions-select')).toBeInTheDocument());
   });
+
+  /* elitea_issues: #6563 — the creator's name (already on the wire as
+   * `ApplicationVersionDetail.author.name`, the same fetch every other
+   * compared field uses) now appears next to each side's version name once
+   * both versions have loaded. Fixed in CompareVersionsModal.tsx. */
+  it('elitea_issues 6563: shows each version author next to its name once loaded', async () => {
+    const user = userEvent.setup();
+    serveVersion(1, {
+      id: '1',
+      application_id: '42',
+      name: 'latest',
+      status: 'draft',
+      instructions: 'a',
+      author: { id: 'u1', email: 'jane@example.com', name: 'Jane Doe' },
+    });
+    serveVersion(2, {
+      id: '2',
+      application_id: '42',
+      name: 'v2',
+      status: 'draft',
+      instructions: 'b',
+      author: { id: 'u2', email: 'sam@example.com', name: 'Sam Rivera' },
+    });
+
+    renderButton(
+      <CompareVersionsButton
+        projectId="7"
+        applicationId={42}
+        versions={versions}
+        activeVersionId={1}
+      />,
+    );
+    await user.click(screen.getByTestId('compare-versions-button'));
+    await user.click(screen.getByRole('button', { name: 'Compare' }));
+
+    await screen.findAllByTestId('text-diff-modified');
+    expect(screen.getByText('latest · Jane Doe')).toBeInTheDocument();
+    expect(screen.getByText('v2 · Sam Rivera')).toBeInTheDocument();
+  });
+
+  /* elitea_issues: #6576 — a skill attached to only one of the two compared
+   * versions must appear in the Tools & Skills step (it is one more
+   * `entity_type` flowing through the same tool-matching path as agents,
+   * pipelines and toolkits — CompareToolsSkillsStep/matchDependencies do not
+   * special-case any of them). Untested until now; not a live bug. */
+  it('elitea_issues 6576: a skill attached to only the right version appears in Tools & Skills', async () => {
+    const user = userEvent.setup();
+    serveVersion(1, { id: '1', application_id: '42', name: 'latest', status: 'draft', instructions: 'a', tools: [] });
+    serveVersion(2, {
+      id: '2',
+      application_id: '42',
+      name: 'v2',
+      status: 'draft',
+      instructions: 'a',
+      tools: [{ id: 's1', name: 'Release Notes Skill', type: 'toolkit', entity_type: 'skill' }],
+    });
+
+    renderButton(
+      <CompareVersionsButton
+        projectId="7"
+        applicationId={42}
+        versions={versions}
+        activeVersionId={1}
+      />,
+    );
+    await user.click(screen.getByTestId('compare-versions-button'));
+    await user.click(screen.getByRole('button', { name: 'Compare' }));
+    await screen.findAllByTestId('text-diff-modified');
+
+    await user.click(screen.getByRole('tab', { name: 'Tools & Skills' }));
+    expect(screen.getByText('Release Notes Skill')).toBeInTheDocument();
+    expect(screen.getByText('skill')).toBeInTheDocument();
+  });
 });

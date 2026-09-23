@@ -201,7 +201,7 @@ export function useUserInputInsertTextAtCursor(
 export interface UseUserInputChangeHandlersParams {
   readonly setInputContent: (value: string) => void;
   readonly setQuestion: (value: string) => void;
-  readonly setShowExpandIcon: (value: boolean) => void;
+  readonly setShowExpandIcon: (value: boolean) => void; readonly lastEditPositionRef: RefObject<number | null>; // #933
   readonly setRows: (updater: (previousRows: number) => number) => void;
   readonly onInputChange: ((value: string) => void) | undefined;
   readonly maxRows: number;
@@ -213,18 +213,19 @@ export function useUserInputChangeHandlers(params: UseUserInputChangeHandlersPar
   readonly onInputQuestion: (event: ChangeEvent<HTMLTextAreaElement>) => void;
   readonly onClickExpander: () => void;
 } {
-  const { setInputContent, setQuestion, setShowExpandIcon, setRows, onInputChange, maxRows, minRows } = params;
+  const { setInputContent, setQuestion, setShowExpandIcon, lastEditPositionRef, setRows, onInputChange, maxRows, minRows } = params;
 
   const onInputQuestion = useCallback(
     (event: ChangeEvent<HTMLTextAreaElement>) => {
       const value = event.target.value;
+      lastEditPositionRef.current = event.target.selectionStart; // #933: the ONE handler every real edit goes through, so the last EDITED caret position is recorded here.
       setInputContent(value);
       setQuestion(value.trim() ? value : '');
       onInputChange?.(value);
       const target = event.target;
       setTimeout(() => setShowExpandIcon(target.offsetHeight > MIN_HEIGHT), 0);
     },
-    [onInputChange, setInputContent, setQuestion, setShowExpandIcon],
+    [onInputChange, setInputContent, setQuestion, setShowExpandIcon, lastEditPositionRef],
   );
 
   const onClickExpander = useCallback(() => {
@@ -269,10 +270,11 @@ export interface UseUserInputImperativeHandleParams {
   readonly setShowExpandIcon: (value: boolean) => void;
   readonly sendQuestion: () => void;
   readonly insertTextAtCursor: (text: string) => void;
+  readonly lastEditPositionRef: RefObject<number | null>;
 }
 
 export function useUserInputImperativeHandle(params: UseUserInputImperativeHandleParams): void {
-  const { ref, inputRef, inputContent, setInputContent, setQuestion, setShowExpandIcon, sendQuestion, insertTextAtCursor } =
+  const { ref, inputRef, inputContent, setInputContent, setQuestion, setShowExpandIcon, sendQuestion, insertTextAtCursor, lastEditPositionRef } =
     params;
 
   useImperativeHandle(
@@ -285,7 +287,7 @@ export function useUserInputImperativeHandle(params: UseUserInputImperativeHandl
         setShowExpandIcon(false);
       },
       getInputContent: () => inputContent,
-      getCursorPosition: () => inputRef.current?.selectionStart ?? null,
+      getCursorPosition: () => inputRef.current?.selectionStart ?? null, getLastEditPosition: () => lastEditPositionRef.current,
       setValue: (value, cursorPos) => {
         setQuestion(value);
         setInputContent(value);
@@ -322,7 +324,7 @@ export function useUserInputImperativeHandle(params: UseUserInputImperativeHandl
         }
       },
     }),
-    [inputContent, sendQuestion, insertTextAtCursor, inputRef, setInputContent, setQuestion, setShowExpandIcon],
+    [inputContent, sendQuestion, insertTextAtCursor, inputRef, setInputContent, setQuestion, setShowExpandIcon, lastEditPositionRef],
   );
 }
 
@@ -390,8 +392,9 @@ export function useUserInputFocusHandlers(setIsFocused: (value: boolean) => void
 export function useUserInputRefs(): {
   readonly inputRef: RefObject<HTMLTextAreaElement | null>;
   readonly mirrorRef: RefObject<HTMLDivElement | null>;
+  readonly lastEditPositionRef: RefObject<number | null>; // #933 — null until the user edits
 } {
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const mirrorRef = useRef<HTMLDivElement>(null);
-  return { inputRef, mirrorRef };
+  const mirrorRef = useRef<HTMLDivElement>(null); const lastEditPositionRef = useRef<number | null>(null);
+  return { inputRef, mirrorRef, lastEditPositionRef };
 }

@@ -52,7 +52,7 @@ export const ValidateForPublishRequest = zod
       .regex(validateForPublishRequestVersionNameRegExp),
     category: zod.string().optional(),
   })
-  .describe("NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go:1192-1195.\n");
+  .describe("NOTE(W2): internal/api/v2/eliteacore/handler.go:1192-1195.\n");
 
 export type ValidateForPublishRequest = zod.input<
   typeof ValidateForPublishRequest

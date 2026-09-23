@@ -102,6 +102,58 @@ describe('buildStartBody', () => {
     expect(body?.['project_id']).toBe(1);
     expect(body?.['participant_id']).toBe(7);
   });
+
+  /*
+   * #984: THE @MENTIONS USED TO STOP HERE.
+   *
+   * The composer resolves an `@` into `isSendingToUser`/`userIds` and puts
+   * them on its payload; this builder emitted `user_input` and `attachments`
+   * alone, so every mention made through the UI reached the start route as an
+   * ordinary message and notified nobody. The server half has parsed
+   * `user_ids` at the TOP level of the body since #977.
+   */
+  it('carries the composer @mentions as top-level numeric user_ids', () => {
+    const body = buildStartBody({
+      ...commonBody,
+      payload: { question: 'hi', question_id: 'q-1', isSendingToUser: true, userIds: ['11', '12'] },
+      isApplicationTurn: true,
+      participantId: 42,
+    });
+    // NUMBERS: `parseMentionedUserIDs` unmarshals into []int64 and answers 400
+    // for a list of strings, so forwarding the composer's own spelling would
+    // have cost the whole turn rather than the mention.
+    expect(body?.['user_ids']).toEqual([11, 12]);
+    expect(body?.['is_mentioning_everyone']).toBeUndefined();
+  });
+
+  it('asks the server to resolve @everyone rather than sending its own list as the answer', () => {
+    const body = buildStartBody({
+      ...commonBody,
+      payload: {
+        question: 'hi', question_id: 'q-1',
+        isSendingToUser: true, userIds: ['11'], isMentioningEveryone: true,
+      },
+      isApplicationTurn: true,
+      participantId: 42,
+    });
+    expect(body?.['is_mentioning_everyone']).toBe(true);
+  });
+
+  it('drops an id that cannot name a user rather than failing the turn with it', () => {
+    const body = buildStartBody({
+      ...commonBody,
+      payload: { question: 'hi', question_id: 'q-1', isSendingToUser: true, userIds: ['0', 'abc', '11', '11'] },
+      isApplicationTurn: true,
+      participantId: 42,
+    });
+    expect(body?.['user_ids']).toEqual([11]);
+  });
+
+  it('emits no mention keys for an ordinary message', () => {
+    const body = buildStartBody({ ...commonBody, isApplicationTurn: true, participantId: 42 });
+    expect(Object.hasOwn(body ?? {}, 'user_ids')).toBe(false);
+    expect(Object.hasOwn(body ?? {}, 'is_mentioning_everyone')).toBe(false);
+  });
 });
 
 describe('buildRegenerateBody', () => {
@@ -151,12 +203,49 @@ describe('buildRegenerateBody', () => {
     expect(Object.hasOwn((body?.['payload'] as object | undefined) ?? {}, 'llm_settings')).toBe(false);
   });
 
-  it('does not claim current-route support for edited message items', () => {
-    expect(buildRegenerateBody({
+  /* issue 980: an EDITED question regenerates through this same route. The body
+   * used to be refused here (`return undefined`) because the server refused the
+   * field; both ends accept it now, and the body must carry the edit AND run
+   * from it — `user_input` and `updated_items` describing two different
+   * questions would answer one and store the other. */
+  it('carries an edited question and runs from its text', () => {
+    const updatedItems = [
+      { uuid: '00000000-0000-4000-8000-00000000000a', content: 'the rewritten question', item_type: 'text_message' },
+    ];
+    const body = buildRegenerateBody({
       ...commonRegeneration,
-      isApplicationTurn: false,
-      participantId: undefined,
-      updatedItems: [{ content: 'edited' }],
-    })).toBeUndefined();
+      isApplicationTurn: true,
+      participantId: 42,
+      updatedItems,
+    });
+
+    expect(body).toMatchObject({
+      updated_items: updatedItems,
+      payload: { user_input: 'the rewritten question' },
+    });
+  });
+
+  it('runs a retry from the stored question, with no items', () => {
+    const body = buildRegenerateBody({
+      ...commonRegeneration,
+      isApplicationTurn: true,
+      participantId: 42,
+    });
+
+    expect(body).toMatchObject({ updated_items: [], payload: { user_input: 'try again' } });
+  });
+
+  /* A shape this client should not be building — the route admits exactly one
+   * `text_message` entry — falls back to the stored question rather than
+   * silently sending half an edit. */
+  it('ignores an items array it cannot read as one edited question', () => {
+    const body = buildRegenerateBody({
+      ...commonRegeneration,
+      isApplicationTurn: true,
+      participantId: 42,
+      updatedItems: [{ content: 'edited' }, { content: 'also edited' }],
+    });
+
+    expect(body).toMatchObject({ payload: { user_input: 'try again' } });
   });
 });

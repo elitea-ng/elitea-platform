@@ -125,10 +125,21 @@ export interface ToolkitCredentialPickerProps {
    * the form can learn the verdict — see `pages/toolkits/lib/useCredentialSaveGate.ts`.
    */
   readonly onRefusalChange?: ((refusal: SelectedCredentialRefusal | null) => void) | undefined;
+  /**
+   * #953/ELITEA-2494 vs elitea_issues#4138 — the SAME auto-select mechanism
+   * (`CredentialsSelect`'s `autoSelectFirstShared`) is right on one screen and
+   * wrong on the other: #4138 found that silently preselecting the only saved
+   * credential on the EDIT page activates Save with a choice the user never
+   * made, so `EditToolkit.tsx` must keep this `false` (its own default).
+   * #953 wants exactly that preselection on the fresh, still-unsaved CREATE
+   * page, where there is no existing choice to override and Save is not yet a
+   * live action against a stored toolkit. `CreateToolkit.tsx` passes `true`.
+   */
+  readonly isCreating?: boolean;
 }
 
 export function ToolkitCredentialPicker(props: ToolkitCredentialPickerProps): ReactNode {
-  const { projectId, section, configurationTypes, value, onChange, field, onlyPublic = false, onRefusalChange } = props;
+  const { projectId, section, configurationTypes, value, onChange, field, onlyPublic = false, onRefusalChange, isCreating = false } = props;
   const navigate = useNavigate();
   const { rows, hasFetchedData, isFetching, refresh } = useCredentialRows({ projectId, section, configurationTypes, onlyPublic });
   const validation = useCredentialValidation();
@@ -182,7 +193,8 @@ export function ToolkitCredentialPicker(props: ToolkitCredentialPickerProps): Re
         type={credentialType}
         // The baseline's own gate: a vector-storage reference is picked, never created here.
         isCreationAllowed={section !== 'vectorstorage'}
-        mismatch={{ mismatchedPrivateCredential: false, createHref: `/credentials/create-credential/${credentialType}` }}
+        autoSelectFirstShared={isCreating && section === CREDENTIALS_SECTION}
+        mismatch={{ mismatchedPrivateCredential: true, createHref: `/credentials/create-credential/${credentialType}` }}
       />
       {section === CREDENTIALS_SECTION && selectedCredential && <DelegatedCredentialStatus key={delegatedCredentialKey(selectedCredential)} credential={selectedCredential} />}
     </>

@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use chrono::Utc;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use md5::Md5;
 use ring::digest::{SHA256, digest};
 use rustls::pki_types::ServerName;

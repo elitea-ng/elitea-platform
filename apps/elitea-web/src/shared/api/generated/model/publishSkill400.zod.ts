@@ -48,7 +48,7 @@ export const PublishSkill400 = zod.object({
     .union([zod.string(), zod.array(SkillFieldError)])
     .optional()
     .describe(
-      "A refusal code, or the pydantic-style field-error list the version_name checks emit (internal\/api\/v2\/skillpublish\/publish.go:66-80).",
+      "A refusal code, or the pydantic-style field-error list the version_name checks emit (internal/api/v2/skillpublish/publish.go:66-80).",
     ),
   msg: zod.string().optional(),
   validation_result: SkillValidationResult.optional(),

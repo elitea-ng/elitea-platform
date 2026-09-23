@@ -290,6 +290,8 @@ export interface EditPipelineVersionOption {
   readonly created_at?: string | undefined;
   readonly status?: string | undefined;
   readonly is_default?: boolean | undefined;
+  /** Issue 940/A11 — same wire-ahead-of-schema read as `is_default` below; see `pages/agents/lib/editApplicationMappers.ts`'s `readAuthor` for the full note. */
+  readonly author?: { readonly id?: string; readonly email?: string; readonly name?: string } | undefined;
 }
 
 /**
@@ -316,6 +318,7 @@ export function toVersionOptions(versions: readonly ApplicationVersionSummary[])
      * `no-sideways-*` reason this file already duplicates the option type.
      */
     is_default: (version as { readonly is_default?: unknown }).is_default === true,
+    author: (version as { readonly author?: EditPipelineVersionOption['author'] }).author,
   }));
 }
 

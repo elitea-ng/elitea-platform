@@ -244,6 +244,44 @@ describe('SecretField', () => {
       expect(onChange).not.toHaveBeenCalled();
     });
 
+    it('keeps the dropdown open after "create new secret" is selected (issue 926/ELITEA-1071)', async () => {
+      const user = userEvent.setup();
+      const onCreate = vi.fn();
+      const { getByRole, findByRole } = renderWithTheme(
+        <SecretField
+          value="{{secret.prod_api_key}}"
+          onChange={() => {}}
+          label="API key"
+          secrets={{ options: secretOptions, canCreate: true, onCreate }}
+        />,
+      );
+      await user.click(getByRole('combobox'));
+      const createOption = await findByRole('option', { name: 'Create new secret' });
+      await user.click(createOption);
+      expect(onCreate).toHaveBeenCalledTimes(1);
+      // Unlike selecting a real secret (which closes the popup, tested
+      // above), the create shortcut's own `onClose` request is swallowed
+      // once: the option is still findable.
+      expect(await findByRole('option', { name: 'Create new secret' })).toBeInTheDocument();
+    });
+
+    it('closes the dropdown normally when a real secret is selected (unlike the create shortcut)', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      const { getByRole, findByRole, queryByRole } = renderWithTheme(
+        <SecretField
+          value="{{secret.prod_api_key}}"
+          onChange={onChange}
+          label="API key"
+          secrets={{ options: secretOptions }}
+        />,
+      );
+      await user.click(getByRole('combobox'));
+      const option = await findByRole('option', { name: 'Staging API key' });
+      await user.click(option);
+      expect(queryByRole('listbox')).not.toBeInTheDocument();
+    });
+
     it('calls onRefresh when the refresh button is clicked', async () => {
       const user = userEvent.setup();
       const onRefresh = vi.fn();

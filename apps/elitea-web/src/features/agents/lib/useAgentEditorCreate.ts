@@ -130,6 +130,23 @@ function optionalCreateVersionFields(versionDetails: AgentDraftValues['version_d
   return versionDetails?.welcome_message !== undefined ? { welcomeMessage: versionDetails.welcome_message } : {};
 }
 
+/**
+ * The chat starters the form collected (#940 A12).
+ *
+ * This used to be a literal `[]` at the call site below, while
+ * `ConversationStartersEditor` wrote `version_details.conversation_starters`
+ * and `useCreateAgentFormState` carried the setter for it — the dead-wiring
+ * shape where both halves are correct and nothing joins them. A user who added
+ * four chat starters before saving got an agent with none and no error
+ * anywhere.
+ *
+ * Its own function purely to keep `buildCreateDraft` under the oxlint
+ * complexity budget (12), which the added optional-chain branch tipped over.
+ */
+function draftConversationStarters(versionDetails: AgentDraftValues['version_details']): readonly string[] {
+  return [...(versionDetails?.conversation_starters ?? [])];
+}
+
 /** `submit`'s request-body construction, extracted purely to keep `useAgentEditorCreate` under the oxlint complexity budget. */
 function buildCreateDraft(values: AgentDraftValues): ApplicationDraftInput {
   const versionDetails = values.version_details;
@@ -147,7 +164,7 @@ function buildCreateDraft(values: AgentDraftValues): ApplicationDraftInput {
       agentType: undefined,
       instructions: versionDetails?.instructions ?? '',
       ...optionalCreateVersionFields(versionDetails),
-      conversationStarters: [],
+      conversationStarters: draftConversationStarters(versionDetails),
       variables: (versionDetails?.variables ?? []).map((variable) => ({ name: variable.name, value: variable.value })),
       meta: { step_limit: meta?.step_limit ?? 25, internal_tools: resolveInternalTools(meta) },
       // Whatever the model picker wrote into the form, or `undefined` when

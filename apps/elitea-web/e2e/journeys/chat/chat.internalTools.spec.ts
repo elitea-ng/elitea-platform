@@ -63,6 +63,14 @@ const CONVERSATION_PATH = `/elitea_core/conversation/prompt_lib/${DEFAULT_PROJEC
  * keyed on and what `meta.internal_tools` stores; the title is only a label.
  */
 const UNGATED_TOOLS = ['data_analysis', 'planner', 'pyodide', 'swarm', 'lazy_tools_mode'] as const;
+/**
+ * #940 A8's two chat-authored builder modules. Ungated like the five above —
+ * neither declares `agentOnly` nor a `requiredToolkitType`, deliberately: a
+ * toolkit-type gate would make the toggle VANISH in every project with no such
+ * provider, and these two need none. They are listed separately only because
+ * the independence assertions below are theirs.
+ */
+const BUILDER_TOOLS = ['skills_builder', 'project_context_builder'] as const;
 /** Offered only when their gate is open — present or absent, never invented. */
 const GATED_TOOLS = ['image_generation', 'internal_mcp'] as const;
 /** `agentOnly: true` — the agent editor's panel offers it, the chat's must not. */
@@ -125,9 +133,13 @@ test('the Modules panel offers the chat catalogue, and a switch is a conversatio
   for (const tool of UNGATED_TOOLS) {
     expect(offered, `the chat Modules panel must offer ${tool}`).toContain(tool);
   }
+  // 1b. ELITEA-2783 step 1 — and both builder modules with them.
+  for (const tool of BUILDER_TOOLS) {
+    expect(offered, `the chat Modules panel must offer ${tool}`).toContain(tool);
+  }
   // 2. Nothing outside the catalogue is there — a panel that invented rows, or
   //    that leaked the agent editor's list, fails here.
-  const known = new Set<string>([...UNGATED_TOOLS, ...GATED_TOOLS]);
+  const known = new Set<string>([...UNGATED_TOOLS, ...BUILDER_TOOLS, ...GATED_TOOLS]);
   for (const key of offered) {
     expect(known.has(key), `${key} is not a member of INTERNAL_TOOLS_LIST for the chat surface`).toBe(true);
   }
@@ -169,6 +181,82 @@ test('the Modules panel offers the chat catalogue, and a switch is a conversatio
     })
     .toEqual([]);
   await expect(toggle).not.toBeChecked();
+
+  await deleteConversation(page.request, conversationId);
+});
+
+/* onetest: ELITEA-2783 — Skills Builder and Project Context Builder are
+   independent toggles, disabled by default, each with its own tooltip.
+   ELITEA-2779 — while a module is OFF the conversation stores nothing for it,
+   which is what leaves the runtime with no tool to bind however explicit a
+   later request is (the binding half is `internal_tools.rs`'s own tests; the
+   turn half is `e2e/streaming/chat.builders.spec.ts`).
+   ELITEA-2778 — turning one on leaves every other module exactly as it was. */
+test('the two builder modules are off by default and toggle independently of each other', async ({ page }) => {
+  const conversationId = await createConversation(
+    page.request,
+    `${AUTOTEST_PREFIX}builders${SUFFIX}-${Date.now()}`,
+  );
+
+  // ELITEA-2779's precondition, asserted rather than assumed: nothing is on.
+  expect(await readInternalTools(page.request, conversationId)).toEqual([]);
+
+  await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
+  await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 20_000 });
+  await openModules(page);
+
+  const rowFor = (key: string) =>
+    page.locator(`[data-testid="plus-submenu-item"][data-item-key="${key}"]`);
+  const skills = rowFor('skills_builder');
+  const projectContext = rowFor('project_context_builder');
+  await expect(skills).toHaveCount(1);
+  await expect(projectContext).toHaveCount(1);
+
+  // The LABELS the cases name. Asserted on the rendered row rather than on the
+  // catalogue constant: a panel that renders the right key under the wrong
+  // label is what a user actually meets.
+  await expect(skills).toContainText('Skills Builder');
+  await expect(projectContext).toContainText('Project Context Builder');
+
+  // Step 2 — both off by default.
+  const skillsToggle = skills.locator('input[type="checkbox"]');
+  const contextToggle = projectContext.locator('input[type="checkbox"]');
+  await expect(skillsToggle, 'Skills Builder must be disabled by default').not.toBeChecked();
+  await expect(contextToggle, 'Project Context Builder must be disabled by default').not.toBeChecked();
+
+  // Step 3 — one on, the other untouched, measured on the SERVER. A pair of
+  // switches wired to one setting looks identical on screen until this read.
+  await skillsToggle.click();
+  await expect
+    .poll(async () => [...(await readInternalTools(page.request, conversationId))], {
+      timeout: 15_000,
+      message: 'enabling Skills Builder must persist onto the conversation',
+    })
+    .toEqual(['skills_builder']);
+  await expect(contextToggle, 'enabling one builder must not enable the other').not.toBeChecked();
+
+  // Step 4 — swap them. The first must come OFF, which is the half a toggle
+  // that only ever appends gets wrong.
+  await skillsToggle.click();
+  await contextToggle.click();
+  await expect
+    .poll(async () => [...(await readInternalTools(page.request, conversationId))], {
+      timeout: 15_000,
+      message: 'the two builder modules must toggle independently',
+    })
+    .toEqual(['project_context_builder']);
+  await expect(skillsToggle).not.toBeChecked();
+
+  // ELITEA-2778: an unrelated module switched on alongside is unaffected — the
+  // regression the case is written to catch is one module's write clobbering
+  // the list rather than adding to it.
+  await rowFor(TOGGLED_TOOL).locator('input[type="checkbox"]').click();
+  await expect
+    .poll(async () => [...(await readInternalTools(page.request, conversationId))].sort(), {
+      timeout: 15_000,
+      message: 'enabling another module must not drop the builder module already on',
+    })
+    .toEqual(['planner', 'project_context_builder']);
 
   await deleteConversation(page.request, conversationId);
 });

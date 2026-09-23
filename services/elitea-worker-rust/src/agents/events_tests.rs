@@ -10,7 +10,9 @@ use super::events::{
 };
 use super::graph::pipeline_result_event;
 use crate::protocol::elitea::runtime::v1::NodeEventV1;
-use crate::protocol::node_event::encode_current_node_event_json;
+use crate::protocol::node_event::{
+    MAX_CURRENT_NODE_EVENT_JSON_BYTES, encode_current_node_event_json,
+};
 
 fn timestamp(second: u32) -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 8, 14, 12, 0, second)
@@ -1711,6 +1713,7 @@ fn large_tool_errors_keep_complete_output_and_error_status() {
     check_large_tool_result(true);
 }
 
+#[allow(clippy::too_many_lines)] // Verify both wire shapes and their complete UTF-8 result.
 fn check_large_tool_result(is_error: bool) {
     let payload = if is_error {
         json!({"error": "界\\\"".repeat(30000)})
@@ -1772,6 +1775,35 @@ fn check_large_tool_result(is_error: bool) {
         .into_iter()
         .map(|event| current(&event))
         .collect::<Vec<_>>();
+    if !is_error {
+        let chunks: Vec<_> = finish
+            .iter()
+            .filter(|event| event["type"] == "agent_tool_output_chunk")
+            .collect();
+        assert!(chunks.len() > 1);
+        let mut output = String::new();
+        for (index, chunk) in chunks.iter().enumerate() {
+            assert_eq!(
+                chunk["response_metadata"]["tool_output_chunk"]["index"],
+                index
+            );
+            assert!(
+                serde_json::to_vec(chunk).expect("json").len()
+                    <= crate::protocol::node_event::MAX_CURRENT_NODE_EVENT_JSON_BYTES
+            );
+            output.push_str(chunk["content"].as_str().expect("chunk"));
+        }
+        assert_eq!(
+            serde_json::from_str::<Value>(&output).expect("complete JSON"),
+            payload
+        );
+        let terminal = finish
+            .iter()
+            .find(|event| event["type"] == "agent_tool_end")
+            .expect("terminal");
+        assert_eq!(terminal["response_metadata"]["finish_reason"], "stop");
+        return;
+    }
     let mut output = String::new();
     for pair in finish.chunks_exact(2) {
         assert_eq!(pair[0]["type"], "partial_message");
@@ -2005,5 +2037,387 @@ fn failed_model_partial_output_uses_existing_chunked_trace_persistence() {
         frames
             .iter()
             .all(|f| f["type"] != "agent_response" && f["type"] != "pipeline_finish")
+    );
+}
+
+/// CHUNKED TOOL OUTPUT (#956), the emit half.
+///
+/// An 80,000-character tool result — well inside the SDK artifact toolkit's own
+/// 200,000-character agent-path cap — used to fail projection outright
+/// (`MAX_TOOL_EVENT_VALUE_BYTES`), which reached the user as a failed tool call
+/// for a file that had been read perfectly well. It must now ride as an ordered
+/// sequence of frame-sized chunk events that reassemble BYTE FOR BYTE, with the
+/// completed call naming the count and the digest instead of carrying text it
+/// could not carry.
+#[test]
+fn an_oversized_tool_result_is_chunked_rather_than_refused() {
+    let mut projector = AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({})))
+        .expect("projector");
+    projector.start(timestamp(0)).expect("start");
+    let tool = event(
+        "llm-tool",
+        1,
+        false,
+        true,
+        vec![Part::FunctionCall {
+            name: "read_file".to_owned(),
+            args: json!({"filename": "big.txt"}),
+            id: Some("call-1".to_owned()),
+            thought_signature: None,
+        }],
+    );
+    projector.project(&tool).expect("tool start");
+
+    let payload =
+        "AUTOTESTMED the quick brown fox jumps over the lazy dog 0123456789\n".repeat(1_213);
+    assert!(payload.len() > 80_000, "this case needs an 80k result");
+    let response = json!(payload.clone());
+    let mut result = Event::with_id("tool-result", "invocation-1");
+    result.timestamp = timestamp(2);
+    result.author = "root-agent".to_owned();
+    result.llm_response.content = Some(Content {
+        role: "function".to_owned(),
+        parts: vec![Part::FunctionResponse {
+            function_response: adk_rust::FunctionResponseData::new("read_file", response.clone()),
+            id: Some("call-1".to_owned()),
+            annotations: None,
+        }],
+    });
+    let projected = projector
+        .project(&result)
+        .expect("an oversized tool result must project, not fail")
+        .into_iter()
+        .map(|event| current(&event))
+        .collect::<Vec<_>>();
+
+    let chunks = projected
+        .iter()
+        .filter(|event| event["type"] == "agent_tool_output_chunk")
+        .collect::<Vec<_>>();
+    assert!(chunks.len() > 1, "an 80k result must span frames");
+    // Every chunk is one ordinary output frame. This is the property the whole
+    // mechanism exists for, so it is asserted on the ENCODED event.
+    for chunk in &chunks {
+        let encoded = serde_json::to_vec(chunk).expect("encoded chunk event");
+        assert!(
+            encoded.len() <= MAX_CURRENT_NODE_EVENT_JSON_BYTES,
+            "a chunk event of {} bytes exceeds the output frame",
+            encoded.len()
+        );
+    }
+    // The chunks precede the completed call, so main has the whole value by
+    // the time it sees the entry that names its digest.
+    let first_chunk = projected
+        .iter()
+        .position(|event| event["type"] == "agent_tool_output_chunk")
+        .expect("a chunk event");
+    let tool_end = projected
+        .iter()
+        .position(|event| event["type"] == "agent_tool_end")
+        .expect("a tool end event");
+    assert!(first_chunk < tool_end);
+
+    let mut reassembled = String::new();
+    for (index, chunk) in chunks.iter().enumerate() {
+        let metadata = &chunk["response_metadata"]["tool_output_chunk"];
+        assert_eq!(metadata["tool_call_id"], "call-1");
+        assert_eq!(metadata["index"], index);
+        assert_eq!(metadata["total"], chunks.len());
+        reassembled.push_str(chunk["content"].as_str().expect("chunk text"));
+    }
+    let expected = serde_json::to_string(&response).expect("encoded tool result");
+    assert_eq!(reassembled, expected, "the chunks must reassemble exactly");
+
+    // The completed call carries the count and the digest and NO inline text.
+    let entry = &projected[tool_end]["response_metadata"];
+    assert_eq!(entry["tool_output"], "");
+    assert_eq!(entry["tool_output_chunks"]["total"], chunks.len());
+    let digest = entry["tool_output_chunks"]["tool_output_sha256"]
+        .as_str()
+        .expect("the completed call names the digest");
+    assert_eq!(digest.len(), 64);
+    assert_eq!(
+        digest,
+        chunks[0]["response_metadata"]["tool_output_chunk"]["tool_output_sha256"]
+            .as_str()
+            .expect("the chunk names the same digest")
+    );
+}
+
+/// A result that already fits is untouched: no chunk events, the text inline.
+/// Chunking a small result would change every existing consumer's shape for no
+/// reason.
+#[test]
+fn a_tool_result_that_fits_is_not_chunked() {
+    let mut projector = AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({})))
+        .expect("projector");
+    projector.start(timestamp(0)).expect("start");
+    projector
+        .project(&event(
+            "llm-tool",
+            1,
+            false,
+            true,
+            vec![Part::FunctionCall {
+                name: "read_file".to_owned(),
+                args: json!({"filename": "small.txt"}),
+                id: Some("call-1".to_owned()),
+                thought_signature: None,
+            }],
+        ))
+        .expect("tool start");
+    let mut result = Event::with_id("tool-result", "invocation-1");
+    result.timestamp = timestamp(2);
+    result.author = "root-agent".to_owned();
+    result.llm_response.content = Some(Content {
+        role: "function".to_owned(),
+        parts: vec![Part::FunctionResponse {
+            function_response: adk_rust::FunctionResponseData::new(
+                "read_file",
+                json!({"title": "Bounded result"}),
+            ),
+            id: Some("call-1".to_owned()),
+            annotations: None,
+        }],
+    });
+    let projected = projector
+        .project(&result)
+        .expect("tool result")
+        .into_iter()
+        .map(|event| current(&event))
+        .collect::<Vec<_>>();
+    assert!(
+        projected
+            .iter()
+            .all(|event| event["type"] != "agent_tool_output_chunk")
+    );
+    assert_eq!(
+        projected[0]["response_metadata"]["tool_output"],
+        "{\"title\":\"Bounded result\"}"
+    );
+    assert!(projected[0]["response_metadata"]["tool_output_chunks"].is_null());
+}
+
+/// The assembly-time authorization notice NAMES the connection that challenged
+/// (#982).
+///
+/// The regression this pins is not a wording choice: before the change, an MCP
+/// server answering the assembly dial with a `401` ended the turn as the
+/// generic "The runtime operation failed.", so a person with several MCP
+/// connections attached had nothing to act on. Both halves are asserted — the
+/// sentence a reader sees, and the structured block a browser can render an
+/// affordance from — because the sentence alone would let the metadata rot
+/// unnoticed, and the metadata alone renders as a blank assistant row.
+#[test]
+fn an_assembly_authorization_notice_names_the_challenging_connection() {
+    let requirement = crate::toolkits::DelegatedAuthorizationRequirement::new(
+        "Customer Support".to_owned(),
+        "mcp".to_owned(),
+        "https://mcp.example.invalid/v1/mcp".to_owned(),
+        Some("https://mcp.example.invalid/.well-known/oauth-protected-resource".to_owned()),
+        Some("Bearer realm=\"mcp\"".to_owned()),
+    )
+    .expect("a well-formed requirement");
+
+    let event = super::events::delegated_authorization_assembly_notice(
+        &super::events::AssemblyNoticeIdentity {
+            stream_id: "conversation-1",
+            message_id: "message-1",
+            sio_event: "chat_predict",
+            execution_generation: "generation-1",
+            thread_id: "thread-1",
+        },
+        &requirement,
+        timestamp(3),
+    )
+    .expect("the notice must project");
+
+    // An ANSWER, not a failure: the turn settles as completed on this path, so
+    // a partial/error frame here would contradict the terminal it precedes.
+    assert_eq!(event.r#type, "full_message");
+
+    let projected = current(&event);
+    let said = projected["content"].as_str().expect("notice content");
+    assert!(
+        said.contains("Customer Support"),
+        "the notice must name the toolkit that challenged: {said}"
+    );
+    assert!(
+        said.contains("https://mcp.example.invalid/v1/mcp"),
+        "the notice must name the endpoint that challenged: {said}"
+    );
+
+    let block = &projected["response_metadata"]["mcp_authorization_required"];
+    assert_eq!(block["toolkit_name"], "Customer Support");
+    assert_eq!(block["toolkit_type"], "mcp");
+    assert_eq!(block["server_url"], "https://mcp.example.invalid/v1/mcp");
+    assert_eq!(block["raised_during"], "assembly");
+    assert_eq!(projected["response_metadata"]["thread_id"], "thread-1");
+    // NOTHING SECRET. The requirement carries a `www_authenticate` header
+    // value; a notice that echoed it would put a provider's challenge — and
+    // whatever a server chose to put in it — into a stored transcript.
+    assert!(
+        !projected.to_string().contains("Bearer realm"),
+        "the challenge header must not reach the transcript: {projected}"
+    );
+}
+
+/// A notice cannot be stamped with an identity the browser could not route.
+///
+/// Every one of the five bound fields is load-bearing — a blank `stream_id` or
+/// a newline in `thread_id` would be written into a document the projector
+/// itself refuses elsewhere — so the guard is asserted field by field rather
+/// than on one representative.
+#[test]
+fn an_assembly_authorization_notice_refuses_an_unroutable_identity() {
+    let requirement = crate::toolkits::DelegatedAuthorizationRequirement::new(
+        "Customer Support".to_owned(),
+        "mcp".to_owned(),
+        "https://mcp.example.invalid/v1/mcp".to_owned(),
+        None,
+        None,
+    )
+    .expect("a well-formed requirement");
+
+    for (label, identity) in [
+        (
+            "empty stream id",
+            super::events::AssemblyNoticeIdentity {
+                stream_id: "",
+                message_id: "message-1",
+                sio_event: "chat_predict",
+                execution_generation: "generation-1",
+                thread_id: "thread-1",
+            },
+        ),
+        (
+            "empty thread id",
+            super::events::AssemblyNoticeIdentity {
+                stream_id: "conversation-1",
+                message_id: "message-1",
+                sio_event: "chat_predict",
+                execution_generation: "generation-1",
+                thread_id: "",
+            },
+        ),
+        (
+            "newline in the message id",
+            super::events::AssemblyNoticeIdentity {
+                stream_id: "conversation-1",
+                message_id: "message\n1",
+                sio_event: "chat_predict",
+                execution_generation: "generation-1",
+                thread_id: "thread-1",
+            },
+        ),
+    ] {
+        assert!(
+            super::events::delegated_authorization_assembly_notice(
+                &identity,
+                &requirement,
+                timestamp(3),
+            )
+            .is_err(),
+            "{label} must be refused"
+        );
+    }
+}
+
+/// #984: THE CHUNK DECISION IS MADE ON THE EVENT THAT IS ACTUALLY EMITTED.
+///
+/// The decision used to measure the RESPONSE alone against
+/// `MAX_TOOL_EVENT_VALUE_BYTES` (40 KiB). The entry the projector then built
+/// from it also carries `tool_inputs` — bounded separately, at that same
+/// 40 KiB — so a 38 KiB result that "fits" rode out beside ~25 KiB of
+/// arguments as a ~63 KiB frame, and `encode_current_node_event_json` (60 KiB)
+/// refused the whole projection: the person saw a FAILED tool call for a tool
+/// that had done its job. Python has always decided on the rendered entry
+/// (`_chunk_tool_output`, in `handlers/agent_events.py`) and this is that rule.
+///
+/// The assertion is deliberately about the FRAMES rather than about chunk
+/// counts: how many chunks it takes is an implementation detail, and "every
+/// event this projection emits fits an output frame" is the property the whole
+/// mechanism exists for.
+#[test]
+fn large_arguments_beside_a_fitting_result_still_chunk() {
+    let mut projector = AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({})))
+        .expect("projector");
+    projector.start(timestamp(0)).expect("start");
+
+    // 25 KiB of arguments and a 38 KiB result: each is comfortably inside the
+    // per-value bound, and together they are not.
+    let args = json!({"query": "Q".repeat(25 * 1_024)});
+    let payload = "R".repeat(38 * 1_024);
+    assert!(
+        serde_json::to_vec(&args).expect("encoded args").len() < 40 * 1_024,
+        "the arguments must be under the per-value bound for this case to mean anything"
+    );
+    assert!(
+        serde_json::to_vec(&json!(payload.clone()))
+            .expect("encoded result")
+            .len()
+            < 40 * 1_024,
+        "the result must be under the per-value bound for this case to mean anything"
+    );
+
+    let tool = event(
+        "llm-tool",
+        1,
+        false,
+        true,
+        vec![Part::FunctionCall {
+            name: "search".to_owned(),
+            args: args.clone(),
+            id: Some("call-1".to_owned()),
+            thought_signature: None,
+        }],
+    );
+    projector.project(&tool).expect("tool start");
+
+    let response = json!(payload);
+    let mut result = Event::with_id("tool-result", "invocation-1");
+    result.timestamp = timestamp(2);
+    result.author = "root-agent".to_owned();
+    result.llm_response.content = Some(Content {
+        role: "function".to_owned(),
+        parts: vec![Part::FunctionResponse {
+            function_response: adk_rust::FunctionResponseData::new("search", response.clone()),
+            id: Some("call-1".to_owned()),
+            annotations: None,
+        }],
+    });
+
+    let projected = projector
+        .project(&result)
+        .expect("a fitting result with large arguments must project, not fail");
+
+    let emitted = projected.into_iter().collect::<Vec<_>>();
+    for event in &emitted {
+        let encoded = encode_current_node_event_json(event).expect("every emitted event encodes");
+        assert!(
+            encoded.len() <= MAX_CURRENT_NODE_EVENT_JSON_BYTES,
+            "an emitted event of {} bytes exceeds the output frame",
+            encoded.len()
+        );
+    }
+
+    // And the value is not lost to the chunking: it reassembles exactly, which
+    // is what makes this a size fix rather than a truncation.
+    let projected = emitted.iter().map(current).collect::<Vec<_>>();
+    let chunks = projected
+        .iter()
+        .filter(|event| event["type"] == "agent_tool_output_chunk")
+        .collect::<Vec<_>>();
+    assert!(
+        !chunks.is_empty(),
+        "the rendered entry does not fit a frame, so it must be chunked"
+    );
+    let mut reassembled = String::new();
+    for chunk in &chunks {
+        reassembled.push_str(chunk["content"].as_str().expect("chunk text"));
+    }
+    assert_eq!(
+        reassembled,
+        serde_json::to_string(&response).expect("encoded tool result")
     );
 }

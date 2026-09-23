@@ -52,7 +52,7 @@ export const AgentCategoriesResponse = zod
     total: zod.int(),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go:2960-2991 — nine static defaults merged with publishing_guardrail extras.\n",
+    "NOTE(W2): internal/api/v2/eliteacore/handler.go:2960-2991 — nine static defaults merged with publishing_guardrail extras.\n",
   );
 
 export type AgentCategoriesResponse = zod.input<typeof AgentCategoriesResponse>;

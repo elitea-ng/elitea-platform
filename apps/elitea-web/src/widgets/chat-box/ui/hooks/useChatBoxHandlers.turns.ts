@@ -101,7 +101,7 @@ async function deliverTurn(
 export function createSendQuestion(
   deps: ChatBoxHandlerDeps,
 ): (params: SendQuestionParams) => Promise<SendResult> {
-  return async ({ question, attachments, isSendingToUser, userIds }) => {
+  return async ({ question, attachments, isSendingToUser, userIds, isMentioningEveryone }) => {
     if (!question.trim()) return { success: false };
     const lastMessage = deps.chatHistory[deps.chatHistory.length - 1];
     const pendingAuth = findActionRequiredToolAction(lastMessage);
@@ -131,7 +131,7 @@ export function createSendQuestion(
     );
     // The conversation is already committed on the server by this point, so it
     // is announced even though this send is being abandoned (see `SendResult`).
-    if (attachmentList === UPLOAD_FAILED) return buildSendResult(createdConversation, false);
+    if (attachmentList === UPLOAD_FAILED) return buildSendResult(createdConversation, false, questionId);
     const payload = (
       deps.generateMessagePayload ?? buildDefaultMessagePayload
     )({
@@ -142,6 +142,7 @@ export function createSendQuestion(
       attachmentList,
       isSendingToUser,
       userIds,
+      isMentioningEveryone,
     });
     deps.setChatHistory((prev) => [
       ...prev,
@@ -182,9 +183,9 @@ export function createSendQuestion(
        * `success: false` still says the TURN failed, and the failure bubble is
        * on screen; announcing the row does not contradict that.
        */
-      return buildSendResult(createdConversation, false);
+      return buildSendResult(createdConversation, false, questionId);
     }
-    return buildSendResult(createdConversation);
+    return buildSendResult(createdConversation, true, questionId);
   };
 }
 

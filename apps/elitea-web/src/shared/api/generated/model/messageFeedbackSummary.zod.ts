@@ -49,7 +49,7 @@ export const MessageFeedbackSummary = zod
     mine: zod.union([MessageFeedback, zod.null()]).optional(),
   })
   .describe(
-    "What every message-feedback endpoint answers: the aggregate like\/dislike counts across every user who has rated this message, plus the CALLING user's own feedback. The client's hover tooltip reads the counts; the thumbs buttons' highlighted state reads `mine`.\n",
+    "What every message-feedback endpoint answers: the aggregate like/dislike counts across every user who has rated this message, plus the CALLING user's own feedback. The client's hover tooltip reads the counts; the thumbs buttons' highlighted state reads `mine`.\n",
   );
 
 export type MessageFeedbackSummary = zod.input<typeof MessageFeedbackSummary>;

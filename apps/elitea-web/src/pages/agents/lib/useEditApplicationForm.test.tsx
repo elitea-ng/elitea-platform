@@ -240,7 +240,10 @@ describe('useEditApplicationForm', () => {
     // `internal_tools` joined this payload with #307's Tools-panel mount —
     // the switches are saved through this same `meta` blob, and an empty
     // array is a real value (all switches off), not an omission.
-    expect(versionBody['meta']).toEqual({ category: 'support', step_limit: 40, internal_tools: [] });
+    // `notes` rides in the same blob (#898 — the field has no column, by
+    // design), and an empty string is a real value there: it is what an
+    // emptied Editor Notes box sends, and the patch merge cannot delete a key.
+    expect(versionBody['meta']).toEqual({ category: 'support', step_limit: 40, internal_tools: [], notes: '' });
   });
 
   it('sends the internal-tool switches through `meta.internal_tools` (issue 307 — the Tools panel had no save path at all)', async () => {
@@ -265,5 +268,38 @@ describe('useEditApplicationForm', () => {
     });
     expect(versionBody['instructions']).toBe(VERSION.instructions);
     expect(versionBody['conversation_starters']).toEqual(VERSION.conversation_starters);
+  });
+
+  /*
+   * elitea_issues #6054 — `applicationCreationSchema`'s
+   * `conversationStarterEntrySchema` already refines each entry as "absent,
+   * or a non-blank string" (`entities/application-form/model/validation.ts`),
+   * so the form's own `isValid` goes false the moment a starter is blank —
+   * `handleSubmit`'s `onValid` never runs and no PUT is sent at all. This is
+   * the existing protection against a blank starter being persisted; it just
+   * has no VISIBLE row-level error affordance (`ConversationStartersEditor`
+   * passes no `error`/`helperText` to the row, unlike the AI-draft review
+   * form's equivalent field — see gaps.md).
+   */
+  it('#6054 — a blank conversation starter makes the form invalid, so Save cannot fire the request at all', async () => {
+    const saveSpy = vi.fn(() => ({ id: '1', application_id: '42', name: 'base', status: 'draft' }));
+    server.use(getUpdateApplicationVersionMockHandler(saveSpy));
+    const { result } = renderHook(() => useEditApplicationFormHarness(DETAIL, VERSION), { wrapper });
+
+    act(() => {
+      result.current.form.setValue('version_details.conversation_starters', ['Real one', '   '], {
+        shouldValidate: true,
+        shouldDirty: true,
+      });
+    });
+    await waitFor(() => expect(result.current.form.formState.isValid).toBe(false));
+
+    act(() => {
+      result.current.handleSave();
+    });
+
+    // No PUT should ever land — give any (wrongly) in-flight request a tick.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(saveSpy).not.toHaveBeenCalled();
   });
 });

@@ -46,6 +46,7 @@ export function isFieldVisible(
 export type ConfigWidget =
   | 'links'
   | 'list'
+  | 'projectList'
   | 'toolMap'
   | 'boolean'
   | 'select'
@@ -56,6 +57,37 @@ export type ConfigWidget =
   | 'unavailable'
   | 'none';
 
+/**
+ * A1 (ELITEA-0016): the two publish-guardrail whitelist fields
+ * (`publish_whitelist_project_ids`, `skill_publish_whitelist_project_ids` —
+ * `config_schemas.go`'s `agentPublishingSection`/`skillPublishingSection`)
+ * both end this suffix and share the exact same semantics (project ids the
+ * guardrail exempts), so both get the project-picker widget rather than
+ * hand-picking one field key. Matched on suffix, same convention `_links`
+ * already uses in `widgetFor` below, for the identical reason: the schema
+ * types the field as a plain integer array, so the shape alone can't
+ * distinguish "any list of ids" from "a list of PROJECT ids".
+ */
+function isProjectWhitelistField(field: AdminConfigField): boolean {
+  return field.key.endsWith('whitelist_project_ids');
+}
+
+/**
+ * Both array-shaped widget cases in one function — folded out of `widgetFor`
+ * so ITS OWN complexity stays under the §3.5 budget (12); the `projectList`
+ * branch was the one that tipped it over.
+ *
+ * `agent_categories` (strings) gets `list`; `publish_whitelist_project_ids`/
+ * `skill_publish_whitelist_project_ids` (integers) get `projectList` instead
+ * of `list` now. An array that declares NO element type falls through to
+ * `none`: the reference renders those as a free chips input, which invites an
+ * operator to type values the consumer will drop on the floor.
+ */
+function arrayWidgetFor(field: AdminConfigField): ConfigWidget {
+  if (isProjectWhitelistField(field)) return 'projectList';
+  return listItemTypeFor(field) !== undefined ? 'list' : 'none';
+}
+
 export function widgetFor(field: AdminConfigField): ConfigWidget {
   // Checked FIRST, before the type. A field the server says cannot be set must
   // render as read-only whatever shape it has, and a later branch winning would
@@ -65,12 +97,7 @@ export function widgetFor(field: AdminConfigField): ConfigWidget {
   if (field.type === 'boolean') return 'boolean';
   if (field.type === 'string') return stringWidgetFor(field);
   if (field.type === 'integer' || field.type === 'number') return 'number';
-  // An array whose element type the schema declares — the Features page's
-  // `agent_categories` (strings) and `publish_whitelist_project_ids`
-  // (integers). An array that declares NO element type still falls through to
-  // `none`: the reference renders those as a free chips input, which invites an
-  // operator to type values the consumer will drop on the floor.
-  if (field.type === 'array' && listItemTypeFor(field) !== undefined) return 'list';
+  if (field.type === 'array') return arrayWidgetFor(field);
   // An object whose VALUES the schema types as a list of strings — the two
   // guardrail tool maps. An object that declares no `additionalProperties`
   // shape still falls through to `none`, for the same reason an untyped array

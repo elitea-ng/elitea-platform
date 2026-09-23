@@ -18,7 +18,7 @@ import CssBaseline from '@mui/material/CssBaseline';
 import { ThemeProvider } from '@mui/material/styles';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -368,5 +368,103 @@ describe('NotificationButton — popover', () => {
     await screen.findByText('Notifications');
     await user.click(screen.getByRole('button', { name: 'Close notifications' }));
     await waitFor(() => expect(screen.queryByText('View all')).toBeNull());
+  });
+});
+
+/**
+ * Issue 940/A4 — ELITEA-0747/0748. The popover used to show a fixed top-5
+ * with no scroll handler at all; it now pages through the real API on
+ * scroll via `useNotificationsInfiniteList`.
+ *
+ * `MESSAGE_TEXT` renders identically for every row (`wireNotification`'s
+ * fixed `event_type`), so `findAllByText(MESSAGE_TEXT)` is this suite's row
+ * counter throughout — one assertion, reused, rather than asserting on ids
+ * `NotificationListItem` may not even expose as text.
+ */
+describe('NotificationButton — popover infinite scroll (issue 940/A4)', () => {
+  const MESSAGE_TEXT = 'Project was successfully created.';
+
+  function makeGroup(startId: number, count: number): Record<string, unknown>[] {
+    return Array.from({ length: count }, (_, index) => wireNotification({ id: startId + index }));
+  }
+
+  /** Forces the scroll-area `Box` to report "at the bottom" — jsdom never computes real layout metrics. */
+  function scrollToBottom(scrollArea: HTMLElement): void {
+    Object.defineProperty(scrollArea, 'scrollHeight', { value: 1000, configurable: true });
+    Object.defineProperty(scrollArea, 'clientHeight', { value: 300, configurable: true });
+    Object.defineProperty(scrollArea, 'scrollTop', { value: 690, configurable: true });
+    fireEvent.scroll(scrollArea);
+  }
+
+  it('ELITEA-0748: appends the next group below the first on scroll, without replacing it, and stops after the last partial group', async () => {
+    const offsetsRequested: string[] = [];
+    server.use(
+      http.get(LIST_PATH, ({ request }) => {
+        const url = new URL(request.url);
+        const offset = url.searchParams.get('offset');
+        // The bell's own unread-badge query (`pageSize: 1`) also hits this
+        // route at `offset=0`; only the popover's own `limit=20` requests
+        // are the ones this test is about.
+        if (url.searchParams.get('limit') !== '20') return HttpResponse.json({ rows: [], total: 0 });
+        offsetsRequested.push(offset ?? '');
+        if (offset === '0') return HttpResponse.json({ rows: makeGroup(1, 20), total: 22 });
+        if (offset === '20') return HttpResponse.json({ rows: makeGroup(21, 2), total: 22 });
+        return HttpResponse.json({ rows: [], total: 22 });
+      }),
+    );
+    const user = userEvent.setup();
+    await renderNotificationButton({ personalProjectId: '7' });
+    await user.click(screen.getByTestId('sidebar-notification-button'));
+
+    // Group 1: 20 rows, nothing more loaded yet.
+    await waitFor(() => expect(screen.getAllByText(MESSAGE_TEXT)).toHaveLength(20));
+
+    scrollToBottom(screen.getByTestId('sidebar-notification-scroll-area'));
+
+    // Group 2 (the last, partial one) APPENDS — group 1's 20 rows are still
+    // on screen, not replaced (ELITEA-0748's own core assertion).
+    await waitFor(() => expect(screen.getAllByText(MESSAGE_TEXT)).toHaveLength(22));
+    expect(screen.queryByText('No new notifications right now')).toBeNull();
+
+    // A further scroll past the last group must not fire a third request —
+    // `hasNextPage` is false once every row is accounted for against `total`.
+    scrollToBottom(screen.getByTestId('sidebar-notification-scroll-area'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(offsetsRequested).toEqual(['0', '20']);
+  });
+
+  it('ELITEA-0747: resets to the first group on close and reopen, and can page again from there', async () => {
+    const offsetsRequested: string[] = [];
+    server.use(
+      http.get(LIST_PATH, ({ request }) => {
+        const url = new URL(request.url);
+        const offset = url.searchParams.get('offset');
+        if (url.searchParams.get('limit') !== '20') return HttpResponse.json({ rows: [], total: 0 });
+        offsetsRequested.push(offset ?? '');
+        if (offset === '0') return HttpResponse.json({ rows: makeGroup(1, 20), total: 25 });
+        if (offset === '20') return HttpResponse.json({ rows: makeGroup(21, 5), total: 25 });
+        return HttpResponse.json({ rows: [], total: 25 });
+      }),
+    );
+    const user = userEvent.setup();
+    await renderNotificationButton({ personalProjectId: '7' });
+
+    await user.click(screen.getByTestId('sidebar-notification-button'));
+    await waitFor(() => expect(screen.getAllByText(MESSAGE_TEXT)).toHaveLength(20));
+    scrollToBottom(screen.getByTestId('sidebar-notification-scroll-area'));
+    await waitFor(() => expect(screen.getAllByText(MESSAGE_TEXT)).toHaveLength(25));
+
+    await user.click(screen.getByRole('button', { name: 'Close notifications' }));
+    await waitFor(() => expect(screen.queryByText('View all')).toBeNull());
+
+    // Reopen: no stale, already-accumulated 25 rows — back to group 1 alone,
+    // exactly like the very first open of the session.
+    await user.click(screen.getByTestId('sidebar-notification-button'));
+    await waitFor(() => expect(screen.getAllByText(MESSAGE_TEXT)).toHaveLength(20));
+    expect(offsetsRequested).toEqual(['0', '20', '0']);
+
+    // And scrolling still loads the next group correctly post-reopen.
+    scrollToBottom(screen.getByTestId('sidebar-notification-scroll-area'));
+    await waitFor(() => expect(screen.getAllByText(MESSAGE_TEXT)).toHaveLength(25));
   });
 });

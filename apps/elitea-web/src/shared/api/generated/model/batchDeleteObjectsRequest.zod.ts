@@ -46,7 +46,7 @@ export const BatchDeleteObjectsRequest = zod.object({
     .array(zod.string())
     .min(1)
     .describe(
-      'An empty array is 400 InvalidArgument — it never means \"delete the bucket\" (S9).\n',
+      'An empty array is 400 InvalidArgument — it never means "delete the bucket" (S9).\n',
     ),
 });
 

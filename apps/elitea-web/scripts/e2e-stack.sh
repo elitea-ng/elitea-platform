@@ -205,6 +205,15 @@ case "$CMD" in
       -d '{"email":"e2e-admin@autotest.local","name":"E2E Admin"}' >/dev/null
     echo "  ✓ oidc-mock user: e2e-admin@autotest.local"
 
+    # persona: viewer (restricted project member — Bucket D, issue #940
+    # D4/D6: `viewer`-role coverage for Project Context and the Secrets
+    # CREATE-section gate needed a genuinely restricted persona, and this
+    # harness had only member (editor) and admin.)
+    curl -sf -X PUT "${OIDC_BASE}/users/e2e-viewer@autotest.local" \
+      -H "Content-Type: application/json" \
+      -d '{"email":"e2e-viewer@autotest.local","name":"E2E Viewer"}' >/dev/null
+    echo "  ✓ oidc-mock user: e2e-viewer@autotest.local"
+
     # ── 2. Insert matching DB rows ─────────────────────────────────────────
     # Adapted from deploy/scripts/seed-staging-oidc-user.sql.
     # DB: elitea (local compose default), user: elitea, host: postgres.
@@ -265,6 +274,18 @@ JOIN auth_core__role r ON r.name = 'admin'
 WHERE u.email = 'e2e-admin@autotest.local'
   AND r.mode = 'default'
 ON CONFLICT (user_id, role_id) DO NOTHING;
+
+-- viewer persona (issue #940 D4/D6). DELIBERATELY no `auth_core__user_role`
+-- row: member and admin both hold the CENTRAL 'admin' role (mode='default'),
+-- which is what makes their OWN personal projects (no per-project override
+-- rows) resolve broad default-mode permissions. Granting the same to viewer
+-- would not by itself break the project-1 assertions below (project 1's
+-- per-project rows always win there), but this persona exists to be the
+-- least-privileged one the rig has, so it gets nothing beyond what signing in
+-- and holding project 1's `viewer` role produce on their own.
+INSERT INTO auth_core__user (email, name)
+VALUES ('e2e-viewer@autotest.local', 'E2E Viewer')
+ON CONFLICT (email) DO NOTHING;
 
 -- ── suspension fixtures (issue #519) ─────────────────────────────────────
 -- Journey 28 suspends a user, reloads, and unsuspends it. It used to do that
@@ -789,6 +810,132 @@ FROM auth_core__user u
 JOIN auth_core__project_role r ON r.project_id = 1 AND r.name = 'editor'
 WHERE u.email = 'e2e-member@autotest.local'
 ON CONFLICT (project_id, user_id, role_id) DO NOTHING;
+
+-- Assign e2e-viewer as project VIEWER (issue #940 D4/D6).
+INSERT INTO auth_core__project_user_role (project_id, user_id, role_id)
+SELECT 1, u.id, r.id
+FROM auth_core__user u
+JOIN auth_core__project_role r ON r.project_id = 1 AND r.name = 'viewer'
+WHERE u.email = 'e2e-viewer@autotest.local'
+ON CONFLICT (project_id, user_id, role_id) DO NOTHING;
+
+-- ── the viewer must NOT inherit the broad grant above ────────────────────
+--
+-- The CROSS JOIN a few dozen lines up grants its whole permission list to
+-- ALL THREE of project 1's roles — admin, editor AND viewer alike — because
+-- until this file the only personas that ever held ANY of those roles were
+-- e2e-admin (project 'admin') and e2e-member (project 'editor'), and the
+-- broad grant is what keeps ~230 shared journeys green. Nothing ever assigned
+-- a real user project 1's 'viewer' role before, so that role's copy of the
+-- grant was always inert — until the INSERT above gave it a holder.
+--
+-- A genuinely restricted viewer is the whole point of ELITEA-0941 (Project
+-- Context read-only) and ELITEA-1072 (no Secrets CREATE section), so the two
+-- permissions those cases are ABOUT are revoked from 'viewer' specifically,
+-- here, rather than narrowing the CROSS JOIN itself — which would also
+-- change what e2e-admin/e2e-member hold if a future edit ever added 'viewer'
+-- to their own role list by mistake. `configuration.secrets.secret.list`
+-- stays granted: migration 0083 deliberately gives the default-mode viewer
+-- that one (see its own header) precisely so the SAVED SECRETS dropdown can
+-- show names to a viewer while hiding values — ELITEA-1072's own expectation
+-- that a viewer sees NONE of that list is the one part of that case this
+-- product does not implement, on purpose, and the journey documents the
+-- delta instead of re-widening the restriction here.
+DELETE FROM auth_core__project_role_permission
+WHERE project_id = 1
+  AND role_id = (SELECT id FROM auth_core__project_role WHERE project_id = 1 AND name = 'viewer')
+  AND permission IN ('models.project_context.edit', 'configuration.secrets.secret.create');
+
+-- ── project 99 — the PUBLIC project (issue #940 D5) ──────────────────────
+--
+-- `apps/elitea-web`'s `isPublicProject` (entities/project) is a bare id
+-- comparison against `VITE_PUBLIC_PROJECT_ID`, which
+-- `deploy/docker-compose.e2e-standalone.yml`'s `elitea-web` service pins to
+-- "99" — DELIBERATELY not "1", per that file's own comment: pinning both to
+-- the seeded working project made every agents/pipelines/skills page render
+-- the PUBLIC view and made the private one unreachable (measured, journey
+-- J14). That comment also names the gap this fills: "99 is an id no fixture
+-- creates" — nothing before this block ever seeded a project 99, so the
+-- switcher had no public-classified project to offer and D5's case
+-- (ELITEA-1024, the Public-project sidebar precondition) could not run.
+--
+-- This does NOT touch project 1 or its `ELITEA_AI_PROJECT_ID=1` backend
+-- setting (see that file's own comment on the elitea-main service) — the two
+-- "public project" concepts are independent: the backend's is which project
+-- id `internal/publicproject` resolves (used by the publish/catalogue
+-- mirror, unaffected by anything here), and the frontend's is purely this
+-- id comparison the sidebar/agents/pipelines pages make. Project 99 only
+-- ever needs to satisfy the FRONTEND'S comparison.
+--
+-- POSITIONED HERE — right after project 1's own setup, and well before
+-- 90500's `e2e-publish-author` block below — ON PURPOSE, and not merely for
+-- reading order. `scripts/e2e-journey-shape.test.mjs`'s `publishTenancySeeded`
+-- finds `e2e-publish-author`'s creation, slices the seed from there to the
+-- tenant-schema loop, and checks THAT SLICE for both personas' emails. A
+-- project-99 block placed AFTER `e2e-publish-author`'s creation (it was,
+-- originally — moved here for exactly this reason) but before the schema
+-- loop would fall INSIDE that slice, and its own admin/editor grants
+-- mention both persona emails too — which made the shape test's NEGATIVE
+-- fixture (one that deliberately strips e2e-admin from the 90500 grant
+-- alone) pass regardless, since the slice found the emails again from THIS
+-- block instead. Keeping every project-99 statement before the
+-- `e2e-publish-author` marker avoids the overlap entirely.
+INSERT INTO centry.project (id, name, owner_id, keycloak_groups, create_success, suspended)
+SELECT 99, 'e2e-public', u.id, '{}', true, false
+FROM auth_core__user u
+WHERE u.email = 'e2e-admin@autotest.local'
+ON CONFLICT (id) DO UPDATE
+    SET name = EXCLUDED.name, owner_id = EXCLUDED.owner_id, suspended = EXCLUDED.suspended;
+
+INSERT INTO auth_core__project_role (project_id, name) VALUES
+    (99, 'admin'), (99, 'editor'), (99, 'viewer')
+ON CONFLICT (project_id, name) DO NOTHING;
+
+-- Copied from project 1's CURRENT overrides — i.e. AFTER the viewer-revoke
+-- DELETE above — for the same reason 90500's block gives: a hand-written
+-- subset drifts, and copying after the revoke means project 99's viewer role
+-- is exactly as restricted as project 1's.
+INSERT INTO auth_core__project_role_permission (project_id, role_id, permission)
+SELECT 99, target.id, source.permission
+FROM auth_core__project_role_permission source
+JOIN auth_core__project_role origin
+  ON origin.id = source.role_id AND origin.project_id = 1
+JOIN auth_core__project_role target
+  ON target.project_id = 99 AND target.name = origin.name
+WHERE source.project_id = 1
+ON CONFLICT (project_id, role_id, permission) DO NOTHING;
+
+-- All three personas get a role here, so any of them can switch to it.
+INSERT INTO auth_core__project_user_role (project_id, user_id, role_id)
+SELECT 99, u.id, r.id
+FROM auth_core__user u
+JOIN auth_core__project_role r ON r.project_id = 99 AND r.name = 'admin'
+WHERE u.email = 'e2e-admin@autotest.local'
+ON CONFLICT (project_id, user_id, role_id) DO NOTHING;
+
+INSERT INTO auth_core__project_user_role (project_id, user_id, role_id)
+SELECT 99, u.id, r.id
+FROM auth_core__user u
+JOIN auth_core__project_role r ON r.project_id = 99 AND r.name = 'editor'
+WHERE u.email = 'e2e-member@autotest.local'
+ON CONFLICT (project_id, user_id, role_id) DO NOTHING;
+
+INSERT INTO auth_core__project_user_role (project_id, user_id, role_id)
+SELECT 99, u.id, r.id
+FROM auth_core__user u
+JOIN auth_core__project_role r ON r.project_id = 99 AND r.name = 'viewer'
+WHERE u.email = 'e2e-viewer@autotest.local'
+ON CONFLICT (project_id, user_id, role_id) DO NOTHING;
+
+-- The empty vault pair, copied from project 1 exactly as 90500's block copies
+-- it and for the same measured reason (`CurrentModelCatalogReader` 500s on
+-- ABSENT rows, not on empty ones).
+INSERT INTO centry.secrets_key (id, data)
+SELECT 'project-99', data FROM centry.secrets_key WHERE id = 'project-1'
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO centry.secrets_data (id, data)
+SELECT 'project-99', data FROM centry.secrets_data WHERE id = 'project-1'
+ON CONFLICT (id) DO NOTHING;
 
 -- A dedicated chat-driver persona and its personal project (#290).
 --
@@ -1606,6 +1753,29 @@ CROSS JOIN LATERAL (
     SELECT id AS user_id, email AS user_email FROM auth_core__user WHERE email = 'e2e-admin@autotest.local'
 ) AS actor
 CROSS JOIN LATERAL (SELECT 1 AS project_id) AS proj;
+
+-- ── the project id sequence must start ABOVE every id seeded by hand ──────
+--
+-- Everything above inserts `centry.project` rows with an EXPLICIT id (1, 99,
+-- 90001, 90500, …) so the fixtures can name them. The column's sequence does
+-- not move when an id is supplied, so it stays at 1 — and the provisioning
+-- pipeline, which does NOT name an id (`INSERT INTO centry.project (name,
+-- owner_id, …) RETURNING id`), then walks up from there through ids the seed
+-- already used. Measured: after enough projects were provisioned in one
+-- session, `create_project` answered 500 with
+-- `insert project: duplicate key value violates unique constraint
+-- "project_pkey"` on reaching id 99 (`e2e-public`) — a failure with nothing to
+-- do with the caller, and one a journey that provisions a project per test
+-- (`e2e/fixtures/scratchProject.ts`) meets sooner than anything else.
+--
+-- `setval` puts the sequence past the highest seeded id, so provisioning
+-- allocates 90501+ and cannot collide. `pg_get_serial_sequence` answers NULL
+-- if the column is ever redefined without one, and `setval` is strict, so this
+-- degrades to a no-op rather than an error.
+SELECT setval(
+    pg_get_serial_sequence('centry.project', 'id'),
+    GREATEST((SELECT max(id) FROM centry.project), 1)
+);
 ENDSQL
 
     # Use the correct binary for exec: podman exec or docker exec.
@@ -2120,7 +2290,7 @@ WIKI_PAGE
     # (rustfs-bucket-init), so this adds no new dependency to the stack.
     $EXEC_BIN run --rm --network "${E2E_PROJECT}_default" \
       -v "${WIKI_TMP}:/wiki:ro" \
-      --entrypoint sh docker.io/minio/mc:latest -c "
+      --entrypoint sh quay.io/minio/mc:latest -c "
         mc alias set rustfs http://rustfs:9000 elitea elitea-dev-secret >/dev/null &&
         mc cp --recursive /wiki/${WIKI_ID} rustfs/elitea-artifacts/p/90200/b/wiki-artifacts/o/ >/dev/null
       " || {
@@ -2138,7 +2308,7 @@ WIKI_PAGE
     # leaves the browser empty. This lists the exact prefix elitea-main derives
     # for (project 1, bucket wiki-artifacts) and requires the manifest in it.
     WIKI_OBJECTS=$($EXEC_BIN run --rm --network "${E2E_PROJECT}_default" \
-      --entrypoint sh docker.io/minio/mc:latest -c "
+      --entrypoint sh quay.io/minio/mc:latest -c "
         mc alias set rustfs http://rustfs:9000 elitea elitea-dev-secret >/dev/null &&
         mc ls --recursive rustfs/elitea-artifacts/p/90200/b/wiki-artifacts/o/ 2>/dev/null
       " || true)

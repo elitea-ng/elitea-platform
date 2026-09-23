@@ -29,6 +29,7 @@ import { ScrollableContainer } from '@/shared/ui/ScrollableContainer';
 import type { SimpleBarInstance } from '@/shared/ui/ScrollableContainer';
 
 import type { ChatMessage } from '../../lib/convertMessagesToChatHistory';
+import { TraceStepDetailProvider } from '../../model/traceStepDetail';
 import { t } from '@/shared/i18n';
 
 import type { ChatMessageListProps } from './ChatMessageList.types';
@@ -118,7 +119,7 @@ export function ChatMessageList({
   projectId,
   messageActions: { onCopyToClipboard, onDeleteAnswer, onRegenerateAnswer, onSubmitEditedMessage } = {},
   canvas: { onEdit: onEditCanvas, selected: selectedCodeBlockInfo, onCreateFromSelection: onCreateCanvasFromSelection, onOpenFile: onOpenFileInCanvas } = {},
-  tts: { onAutoSpeak, speakingMessageId, speakingSegments, spokenRange } = {},
+  tts: { autoSpeak = false, onAutoSpeak, speakingMessageId, speakingSegments, spokenRange } = {},
   continuation: {
     onContinueMcpExecution,
     renderAuthModal,
@@ -199,6 +200,7 @@ export function ChatMessageList({
   }
 
   return (
+    <TraceStepDetailProvider projectId={projectId}>
     <ScrollableContainer ref={scrollRef}>
       {/*
         * A plain `<ul>`, NOT MUI's `<List>`: `shared/brand/mui-overrides/
@@ -291,6 +293,12 @@ export function ChatMessageList({
                   answer={message}
                   messageId={messageId}
                   isLastMessage={isLastMessage}
+                  // issue 974: the flag that lets this row's auto-read effect fire.
+                  // It was declared on the `tts` prop group and destructured
+                  // nowhere, so speaking mode reached the composer and never
+                  // the answers — the mode's whole point (reading the reply
+                  // back) could not happen.
+                  isSpeakingMode={autoSpeak}
                   author={{ participantName: assistantName }}
                   toolActions={message.toolActions}
                   status={{ isLoading: Boolean(message.isLoading), isStreaming: messageIsStreaming }}
@@ -333,5 +341,6 @@ export function ChatMessageList({
         <Box component="li" ref={messagesEndRef} sx={{ listStyle: 'none' }} />
       </Box>
     </ScrollableContainer>
+    </TraceStepDetailProvider>
   );
 }

@@ -23,6 +23,29 @@ describe('INTERNAL_TOOLS_LIST / INTERNAL_TOOL_ICONS', () => {
     const imageGeneration = INTERNAL_TOOLS_LIST.find((tool) => tool.name === 'image_generation');
     expect(imageGeneration?.requiredToolkitType).toBe('ImageGenServiceProvider_ImageGen');
   });
+
+  it('ELITEA-2783: lists Skills Builder and Project Context Builder with their own tooltips', () => {
+    const skills = INTERNAL_TOOLS_LIST.find((tool) => tool.name === 'skills_builder');
+    const projectContext = INTERNAL_TOOLS_LIST.find((tool) => tool.name === 'project_context_builder');
+
+    expect(skills?.title).toBe('Skills Builder');
+    expect(skills?.infoTooltip.text).toBe('Create and update Skills directly from chat.');
+    expect(projectContext?.title).toBe('Project Context Builder');
+    expect(projectContext?.infoTooltip.text).toBe('Create and update Project Context directly from chat.');
+
+    // Neither is agent-only and neither is gated on a toolkit type: both are
+    // offered in a plain conversation, which is the only place the cases
+    // exercise them. A `requiredToolkitType` here would make the toggle
+    // vanish in every project with no such provider.
+    expect(skills?.agentOnly).toBeUndefined();
+    expect(skills?.requiredToolkitType).toBeUndefined();
+    expect(projectContext?.agentOnly).toBeUndefined();
+    expect(projectContext?.requiredToolkitType).toBeUndefined();
+
+    // The two are SEPARATE entries. A single combined toggle is the failure
+    // ELITEA-2783 step 3/4 is written to catch.
+    expect(skills).not.toBe(projectContext);
+  });
 });
 
 describe('useAvailableInternalTools', () => {

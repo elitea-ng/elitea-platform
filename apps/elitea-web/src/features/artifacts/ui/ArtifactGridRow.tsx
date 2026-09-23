@@ -71,12 +71,16 @@ export function ArtifactGridRow(props: ArtifactGridRowProps): ReactNode {
             sx={folderIconSx}
           />
         )}
-        <Typography
-          variant="bodyMedium"
-          sx={cellTextSx}
-        >
-          {props.item.name}
-        </Typography>
+        {/* elitea_issues: #4447/#3758 — the name column has a fixed width and no resize handle, so a
+         * long file/folder name ellipsizes; a Tooltip restores the full name on hover/focus. */}
+        <Tooltip title={props.item.name}>
+          <Typography
+            variant="bodyMedium"
+            sx={cellTextSx}
+          >
+            {props.item.name}
+          </Typography>
+        </Tooltip>
       </Box>
       {dataColumns.map((column) => (
         <Box

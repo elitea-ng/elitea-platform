@@ -60,7 +60,7 @@ export const PublishedAgent = zod
     created_at: zod.string().nullable(),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/eliteacore\/admin_published_agents.go:56-65.\n",
+    "NOTE(W2): internal/api/v2/eliteacore/admin_published_agents.go:56-65.\n",
   );
 
 export type PublishedAgent = zod.input<typeof PublishedAgent>;

@@ -16,6 +16,7 @@ import (
 	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenant"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -556,6 +557,60 @@ func resetCurrentAgentResponse(
 	}
 	if row.ResponseMessageGroupID <= 0 || row.ResponseMessageID != responseMessageID {
 		return errors.New("current agent regeneration returned an invalid response binding")
+	}
+	return rewriteCurrentAgentQuestion(ctx, queries, turn, conversationUUID, questionID)
+}
+
+// rewriteCurrentAgentQuestion writes an EDITED question's text onto its stored
+// item, in the same transaction that has just reset the answer (issue 980).
+//
+// A retry carries no edit and this is a no-op — the ordinary regeneration does
+// not touch the question at all.
+//
+// WHY THE ORDER IS RESET-THEN-REWRITE: the reset holds `FOR UPDATE` on the
+// response row and is the statement that decides whether this caller may
+// regenerate this turn at all. Rewriting first would let a request that the
+// reset then refuses leave an edited question behind with its old answer
+// underneath it.
+//
+// NO ROW MEANS REFUSED, NOT IGNORED. The statement matches nothing when the
+// item named does not belong to this question — the only way that happens is a
+// client naming another message's item — so the admission fails with the
+// invalid-request error the route renders as 400. The alternative (treat it as
+// "nothing to rewrite" and run anyway) would answer a question the user never
+// asked while telling them it had been edited.
+func rewriteCurrentAgentQuestion(
+	ctx context.Context,
+	queries *sqlcgen.Queries,
+	turn agentexecutionapp.CurrentRegenerateTurn,
+	conversationUUID pgtype.UUID,
+	questionID pgtype.UUID,
+) error {
+	if !turn.EditedQuestion.Requested() {
+		return nil
+	}
+	// The zero uuid is this statement's "the caller named no item" — see the
+	// query's own comment. It is not a value any row carries.
+	itemUUID := pgtype.UUID{Bytes: [16]byte{}, Valid: true}
+	if turn.EditedQuestion.ItemUUID != "" {
+		parsed, err := currentPGUUID(turn.EditedQuestion.ItemUUID)
+		if err != nil {
+			return agentexecutionapp.ErrInvalidCurrentAgentStart
+		}
+		itemUUID = parsed
+	}
+	if _, err := queries.RewriteCurrentAgentQuestionText(
+		ctx,
+		sqlcgen.RewriteCurrentAgentQuestionTextParams{
+			ConversationUuid: conversationUUID, QuestionID: questionID,
+			ActorUserID: turn.ActorUserID, ItemUuid: itemUUID,
+			Content: turn.EditedQuestion.Text,
+		},
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return agentexecutionapp.ErrInvalidCurrentAgentStart
+		}
+		return fmt.Errorf("rewrite current agent question: %w", err)
 	}
 	return nil
 }

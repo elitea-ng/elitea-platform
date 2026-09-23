@@ -356,6 +356,25 @@ describe('Artifacts page', () => {
     expect(mocks.deleteBucket).toHaveBeenCalledWith('docs');
   });
 
+  /* elitea_issues: #5242 — deleting the currently-selected bucket clears its `?bucket=` search param
+   * immediately, so the app never re-fetches the just-deleted bucket (the old app's stale GET + empty
+   * error toast). */
+  it('clears the bucket from the URL when the selected bucket is the one deleted', async () => {
+    const user = userEvent.setup();
+    // Simulate the refetch a real delete triggers: the bucket is gone from the list.
+    mocks.deleteBucket.mockImplementationOnce(() => {
+      mocks.buckets.data = [];
+      return Promise.resolve(undefined);
+    });
+    const { router } = renderArtifactsRoute(<Artifacts />, '/artifacts?bucket=docs');
+    await user.click(await screen.findByRole('button', { name: 'delete-docs' }));
+    await waitFor(() => expect(mocks.deleteBucket).toHaveBeenCalledWith('docs'));
+    // The component itself must have asked to clear `bucket` (not merely relied on the
+    // stale list emptying out) — otherwise it re-fetches the deleted bucket's contents
+    // and can surface a stray error toast/state (elitea_issues: #5242).
+    await waitFor(() => expect(router.state.location.search).not.toMatchObject({ bucket: 'docs' }));
+  });
+
   it('confirms artifact deletion and ignores empty expansions', async () => {
     const user = userEvent.setup();
     renderArtifactsRoute(<Artifacts />, '/artifacts?bucket=docs');

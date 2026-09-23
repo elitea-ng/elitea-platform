@@ -258,6 +258,7 @@ func (r *CurrentConfigurationsRepository) Count(ctx context.Context, filter conf
 				Types:      append([]string(nil), filter.Types...),
 				Sections:   append([]string(nil), filter.Sections...),
 				LabelQuery: filter.LabelQuery,
+				ViewerID:   currentConfigurationViewerID(filter),
 			})
 		}
 		if err != nil {
@@ -322,6 +323,7 @@ func (r *CurrentConfigurationsRepository) List(ctx context.Context, filter confi
 			SortBy:     filter.SortBy,
 			OffsetRows: offset,
 			LimitRows:  limit,
+			ViewerID:   currentConfigurationViewerID(filter),
 		})
 		if err != nil {
 			return fmt.Errorf("list current configurations: %w", err)
@@ -610,3 +612,20 @@ func validateCurrentConfigurationRepositoryContext(ctx context.Context, projectI
 var _ configurationapp.CurrentConfigurationRepository = (*CurrentConfigurationsRepository)(nil)
 var _ configurationapp.CurrentExpansionFinder = (*CurrentConfigurationsRepository)(nil)
 var _ configurationapp.CurrentConfigurationTypesRepository = (*CurrentConfigurationsRepository)(nil)
+
+// currentConfigurationViewerID is the one place the "no viewer" sentinel is
+// spelled.
+//
+// The queries take a plain integer because a NULL parameter would make every
+// comparison in the visibility predicate NULL, which reads as false and would
+// hide the whole project page rather than widen it. 0 is not a user id (the
+// column is a positive identity), so it is unambiguous, and a NEGATIVE or
+// out-of-range value cannot reach here: the filter's ViewerID is written from
+// an authenticated principal's own id. A viewer id of 0 leaves the page
+// unrestricted, which is what an absent viewer means (#922).
+func currentConfigurationViewerID(filter configurationapp.CurrentConfigurationListFilter) int32 {
+	if filter.ViewerID == nil || *filter.ViewerID <= 0 {
+		return 0
+	}
+	return *filter.ViewerID
+}

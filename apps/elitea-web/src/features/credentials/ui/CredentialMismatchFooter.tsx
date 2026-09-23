@@ -12,7 +12,7 @@ import FormHelperText from '@mui/material/FormHelperText';
 
 import { t } from '@/shared/i18n';
 
-import { CredentialWarningBanner } from './CredentialWarningBanner';
+import { CredentialWarningBanner } from '@/entities/credential';
 
 export interface CredentialMismatchFooterProps {
   readonly mismatchedPrivateCredential: boolean;

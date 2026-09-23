@@ -17,6 +17,7 @@ import (
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
 	indexscheduleapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexschedule"
 	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/patexpiry"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/pipelineruns"
 	schedulingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/scheduling"
 	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
@@ -48,7 +49,7 @@ const (
 	capabilityVersion      = "1"
 	indexCapabilityVersion = "2"
 	agentCapabilityVersion = "1"
-	limitsRevision         = "elitea.runtime.limits.conformance.v1"
+	limitsRevision         = "elitea.runtime.limits.conformance.v2"
 
 	resourceClass          = "validation-small"
 	isolationClass         = "shared-claim-scoped-authority"
@@ -674,6 +675,37 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		// MemoriesRepo (main.go) — see that field's own comment.
 		agentStart = agentStart.WithMemories(repos.NewMemoriesRepo(dependencies.AdmissionPool))
 		agentStart = agentStart.WithContextPolicy(repos.NewCurrentAgentContextPolicyRepository(dependencies.AdmissionPool))
+		// Project Context injection (#946). Same post-construction setter
+		// idiom, same admission pool. This is what replaced the admission
+		// gate that used to 422 every turn in a project whose Settings >
+		// Project Context was switched on — see
+		// internal/application/agentexecution/projectcontext.go's header.
+		agentStart = agentStart.WithProjectContext(repos.NewProjectContextRepo(dependencies.AdmissionPool))
+		// @mention notifications (#977). Same setter idiom, same admission
+		// pool. The composer has always put the tagged users on the wire; the
+		// start route used to REFUSE the field and nothing wrote a row, so a
+		// tagged colleague was never told. This is the producer half — the
+		// web's `chat_user_mentioned` rendering already existed.
+		agentStart = agentStart.WithMentionNotifications(
+			repos.NewChatMentionNotificationRepo(dependencies.AdmissionPool),
+		)
+		// An attached IMAGE reaches the model as bytes (#979). Same setter
+		// idiom; the reader is the SAME repository the native runtime's
+		// attachment route uses, so both paths agree about what a chat
+		// attachment is (the reserved system bucket, a metadata row, matching
+		// lengths). Wired only where there IS an object store: without one
+		// the honest behaviour is the pre-#979 one — the file is announced by
+		// name — and that is what a nil reader produces.
+		if dependencies.ObjectStore != nil {
+			attachmentImages, attachmentImagesErr := repos.NewCurrentAttachmentObjectRepository(
+				dependencies.AdmissionPool,
+				dependencies.ObjectStore,
+			)
+			if attachmentImagesErr != nil {
+				return nil, fmt.Errorf("construct attachment image reader: %w", attachmentImagesErr)
+			}
+			agentStart = agentStart.WithAttachmentImages(attachmentImages)
+		}
 		agentDispatcher, err := agentexecutionapp.NewDispatcher(agentJobs, agentProducer)
 		if err != nil {
 			return nil, err
@@ -1275,6 +1307,59 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct attachment object context: %w", err)
 		}
 	}
+	// runtimeArtifacts is the `artifact` toolkit family's own plane (#906).
+	// Before it, an artifact toolkit attached to an agent was skipped at
+	// assembly on the native worker (`agent_toolkit_skipped
+	// reason_code=unsupported_toolkit_family`) — the toggle did nothing, and
+	// for an agent whose only tool was that one the turn sometimes failed
+	// outright. It is built on the ADMISSION pool and the deployment's object
+	// store, and it is nil — the routes unregistered — wherever either the
+	// agent dispatch plane or that store is absent, for the reason the
+	// attachment reader's own comment above gives.
+	var runtimeArtifacts *storage.RuntimeArtifactObjectService
+	if config.AgentExecutionDispatchEnabled && dependencies.ObjectStore != nil {
+		artifactSource, artifactErr := repos.NewCurrentRuntimeArtifactRepository(
+			dependencies.AdmissionPool,
+			dependencies.ObjectStore,
+		)
+		if artifactErr != nil {
+			return nil, fmt.Errorf("construct runtime artifact plane: %w", artifactErr)
+		}
+		runtimeArtifacts, err = storage.NewRuntimeArtifactObjectService(
+			contentRepository,
+			artifactSource,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("construct runtime artifact context: %w", err)
+		}
+	}
+	// entityBuilders is the WRITE half of the same argument (#940 A8): the two
+	// chat-authored builder modules — `skills_builder` and
+	// `project_context_builder` — give the model a tool that creates or
+	// updates a Skill or the Project Context from the conversation, and the
+	// native runtime has no other channel to this service's tenant data for
+	// exactly the reasons the attachment route's own comment above gives.
+	//
+	// It is built on the ADMISSION pool, the same pool the attachment reader
+	// takes, because the write must land in the same database the claimed
+	// execution_jobs row lives in.
+	var entityBuilders *storage.RuntimeEntityBuilderService
+	if config.AgentExecutionDispatchEnabled {
+		builderSink, builderErr := repos.NewCurrentRuntimeEntityBuilderRepository(
+			dependencies.AdmissionPool,
+		)
+		if builderErr != nil {
+			return nil, fmt.Errorf("construct runtime entity builder writer: %w", builderErr)
+		}
+		entityBuilders, err = storage.NewRuntimeEntityBuilderService(
+			contentRepository,
+			builderSink,
+			builderSink,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("construct runtime entity builder context: %w", err)
+		}
+	}
 	if config.IndexIngestDispatchEnabled {
 		currentIndex, err = newCurrentIndexRuntime(
 			dependencies.AdmissionPool,
@@ -1510,6 +1595,38 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 				retentionSchedule = parsedRetentionSchedule
 			}
 
+			// The personal-access-token expiry notice (#940 A3). Built here
+			// beside the retention sweep because it is the same kind of thing:
+			// a periodic producer whose whole effect is a row a user reads.
+			// A nil admission pool leaves both handler and schedule nil, and
+			// scheduledJobs then registers no job at all rather than one that
+			// cannot run.
+			var patExpiryHandler schedulingapp.Handler
+			var patExpirySchedule schedulingapp.Schedule
+			if dependencies.AdmissionPool != nil {
+				patExpiryStore, patExpiryStoreErr := repos.NewPATExpiryNotificationRepository(dependencies.AdmissionPool)
+				if patExpiryStoreErr != nil {
+					return nil, fmt.Errorf("construct personal access token expiry repository: %w", patExpiryStoreErr)
+				}
+				patExpiryNotifier, patExpiryNotifierErr := patexpiry.New(patExpiryStore)
+				if patExpiryNotifierErr != nil {
+					return nil, fmt.Errorf("construct personal access token expiry notifier: %w", patExpiryNotifierErr)
+				}
+				patExpirySweepHandler, patExpirySweepErr := newPATExpirySweep(patExpiryNotifier)
+				if patExpirySweepErr != nil {
+					return nil, fmt.Errorf("construct personal access token expiry sweep: %w", patExpirySweepErr)
+				}
+				parsedPATExpirySchedule, patExpiryScheduleErr := schedulingapp.ParseCron(patExpirySweepCadence)
+				if patExpiryScheduleErr != nil {
+					return nil, fmt.Errorf(
+						"parse personal access token expiry sweep cadence: %w",
+						patExpiryScheduleErr,
+					)
+				}
+				patExpiryHandler = patExpirySweepHandler
+				patExpirySchedule = parsedPATExpirySchedule
+			}
+
 			// One scan observes all projects and may cover the same due index
 			// occurrence as an older scan. Claiming scan occurrences in
 			// parallel only makes the product runner's overlap guard release
@@ -1525,7 +1642,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			}
 			registry, registryErr := scheduledJobRegistry(
 				schedulerConfig.LeaseDuration,
-				scheduledJobs(indexDueWork, retentionHandler, schedule, retentionSchedule)...,
+				scheduledJobs(
+					indexDueWork, retentionHandler, patExpiryHandler,
+					schedule, retentionSchedule, patExpirySchedule,
+				)...,
 			)
 			if registryErr != nil {
 				return nil, fmt.Errorf(
@@ -1638,6 +1758,19 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if toolkitDiscoveryArtifacts != nil {
 		contentServer.WithToolkitDiscoveryArtifacts(toolkitDiscoveryArtifacts)
 	}
+	// Registered once, after whichever branch above built the listener: both
+	// agent-execution branches want the builder routes and the index-only
+	// branch leaves entityBuilders nil, so the routes are ABSENT rather than
+	// present-and-refusing wherever agent execution is not dispatched.
+	contentServer = contentServer.WithRuntimeEntityBuilders(entityBuilders)
+	// The `artifact` toolkit family's four routes (#906), registered the same
+	// way and nil for the same reasons: no agent dispatch, or no Go object
+	// store, leaves them ABSENT rather than present-and-failing. A mixed
+	// deployment that keeps Centry's artifacts authoritative therefore keeps
+	// the honest old behaviour — the native worker skips the toolkit — instead
+	// of gaining a family whose every call answers 503.
+	contentServer = contentServer.WithRuntimeArtifacts(runtimeArtifacts)
+
 	privateServers, err := runtimegrpc.NewPrivateServerSet(runtimegrpc.PrivateServerConfig{
 		ControlAddress:          config.ControlAddress,
 		OutputAddress:           config.OutputAddress,
@@ -1688,6 +1821,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		agentStart,
 		toolkitCallTool,
 		int(dependencies.ReplayPool.Config().MaxConns),
+		config.SSEStreamLimits,
 	)
 	if err != nil {
 		return nil, err
@@ -1697,6 +1831,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		publicRoutes.IndexCancel = currentIndex.cancel
 		publicRoutes.IndexMeta = currentIndex.indexMeta
 		publicRoutes.IndexMetaDelete = currentIndex.indexDelete
+		publicRoutes.IndexConfiguration = currentIndex.indexConfig
 		if config.IndexSchedulingEnabled {
 			publicRoutes.IndexScheduleUpdate = currentIndex.scheduleUpdate
 			publicRoutes.IndexScheduleDelete = currentIndex.scheduleDelete

@@ -50,7 +50,7 @@ export const TracingTraceBatch = zod
     spans: zod.array(TracingSpan).optional(),
   })
   .describe(
-    "internal\/api\/v2\/tracing\/handler.go's traceBatch — one entry of the `collect` request body's `traces` array. Port of legacy tracing\/api\/v2\/collect.py's per-trace shape.\n",
+    "internal/api/v2/tracing/handler.go's traceBatch — one entry of the `collect` request body's `traces` array. Port of legacy tracing/api/v2/collect.py's per-trace shape.\n",
   );
 
 export type TracingTraceBatch = zod.input<typeof TracingTraceBatch>;

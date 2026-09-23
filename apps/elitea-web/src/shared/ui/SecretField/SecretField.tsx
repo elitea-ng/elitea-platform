@@ -8,50 +8,27 @@ import { useCallback, useState } from 'react';
 import Visibility from '@mui/icons-material/Visibility';
 import VisibilityOff from '@mui/icons-material/VisibilityOff';
 import Box from '@mui/material/Box';
-import FormControl from '@mui/material/FormControl';
-import FormHelperText from '@mui/material/FormHelperText';
 import IconButton from '@mui/material/IconButton';
 import InputAdornment from '@mui/material/InputAdornment';
-import InputLabel from '@mui/material/InputLabel';
-import ListSubheader from '@mui/material/ListSubheader';
-import MenuItem from '@mui/material/MenuItem';
-import Select, { type SelectChangeEvent } from '@mui/material/Select';
+import type { SelectChangeEvent } from '@mui/material/Select';
 import type { Theme } from '@mui/material/styles';
 import TextField from '@mui/material/TextField';
 import ToggleButton from '@mui/material/ToggleButton';
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
-import Tooltip from '@mui/material/Tooltip';
 
-import { RefreshIcon } from '../icons/refresh-icon';
 import { t } from '@/shared/i18n';
+
+import { CREATE_SECRET_VALUE, SecretSelect } from './SecretSelect';
+import type { SecretFieldMode, SecretFieldSecretsOptions } from './SecretField.types';
+
+// Re-exported so existing importers of these names from this file (e.g.
+// this folder's `index.ts`) keep working unchanged — see
+// `SecretField.types.ts`'s own doc comment for why the definitions moved
+// out of this file.
+export type { SecretFieldMode, SecretOption, SecretFieldSecretsOptions } from './SecretField.types';
 
 /** @public Matches the baseline's `{{secret.NAME}}` reference syntax. Exported so a caller can detect the shape without duplicating the pattern. */
 export const SECRET_REFERENCE_RE = /^{{secret\.([A-Za-z0-9_]+)}}$/;
-
-/** @public */
-export type SecretFieldMode = 'secret' | 'password';
-
-/** @public One entry in {@link SecretFieldSecretsOptions.options}. */
-export interface SecretOption {
-  label: string;
-  value: string;
-}
-
-/** @public Everything about the "pick an existing secret" mode — omit entirely to render a plain masked text field with no mode toggle. */
-export interface SecretFieldSecretsOptions {
-  /** The caller's already-fetched secret list (replaces the baseline's internal `useSecretsListQuery`). */
-  options?: SecretOption[];
-  /** Caller may create a new secret (e.g. navigate to secret settings). Omit to hide the affordance. */
-  onCreate?: () => void;
-  /** Permission to create a secret, computed by the caller — replaces the baseline's internal `useCheckPermission(PERMISSIONS.secrets.create)` call. */
-  canCreate?: boolean;
-  createLabel?: string;
-  /** Refresh the option list (e.g. after creating one out-of-band). Omit to hide the refresh action — replaces the baseline's internal RTK-Query `refetch`. */
-  onRefresh?: () => void;
-  /** Locks the field to whichever mode `value` currently implies — hides the toggle. */
-  disableToggle?: boolean;
-  tabLabels?: { secret?: string; password?: string };
-}
 
 /** @public shared/ui component API — consumed once a features/widgets/pages caller exists (none does yet in this pass). */
 export interface SecretFieldProps {
@@ -73,7 +50,6 @@ export interface SecretFieldProps {
   secrets?: SecretFieldSecretsOptions;
 }
 
-const CREATE_SECRET_VALUE = '__create_secret__';
 // Printable ASCII only (space through tilde) — matches the baseline's
 // `[^\x20-\x7E]` intent without the `\x` escapes (kept simple to read, and
 // sidesteps any doubt about oxlint's `no-control-regex`-style rules, since
@@ -145,94 +121,6 @@ function PasswordField({
         },
       }}
     />
-  );
-}
-
-interface SecretSelectProps {
-  name: string | undefined;
-  label: string;
-  value: string;
-  onChange: (event: SelectChangeEvent<string>) => void;
-  secrets: SecretFieldSecretsOptions;
-  disabled: boolean;
-  required: boolean;
-  error: boolean | undefined;
-  helperText: string | undefined;
-}
-
-/** The "pick an existing secret" entry, split out for the same reason as `PasswordField`. */
-function SecretSelect({
-  name,
-  label,
-  value,
-  onChange,
-  secrets,
-  disabled,
-  required,
-  error,
-  helperText,
-}: SecretSelectProps): ReactNode {
-  const labelId = name ? `${name}-label` : 'secret-field-select-label';
-  const canCreate = Boolean(secrets.canCreate && secrets.onCreate);
-  const refreshLabel = t('shared.ui.secretField.refreshTooltip', 'Refresh secrets');
-
-  return (
-    <Box sx={{ display: 'flex', alignItems: 'flex-end', gap: (theme: Theme) => theme.spacing(1), flex: 1 }}>
-      <FormControl
-        variant="standard"
-        fullWidth
-        disabled={disabled}
-        required={required}
-        error={error}
-      >
-        <InputLabel id={labelId}>{label}</InputLabel>
-        <Select<string>
-          labelId={labelId}
-          id={name}
-          name={name}
-          value={value}
-          onChange={onChange}
-        >
-          {canCreate
-            ? [
-                <MenuItem
-                  key={CREATE_SECRET_VALUE}
-                  value={CREATE_SECRET_VALUE}
-                >
-                  {secrets.createLabel ?? t('shared.ui.secretField.createSecret', 'Create new secret')}
-                </MenuItem>,
-                <ListSubheader key="saved-secrets-header">
-                  {t('shared.ui.secretField.savedSecrets', 'Saved secrets')}
-                </ListSubheader>,
-              ]
-            : null}
-          {(secrets.options ?? []).map((option) => (
-            <MenuItem
-              key={option.value}
-              value={option.value}
-            >
-              {option.label}
-            </MenuItem>
-          ))}
-        </Select>
-        {helperText && <FormHelperText>{helperText}</FormHelperText>}
-      </FormControl>
-      {secrets.onRefresh && (
-        <Tooltip
-          title={refreshLabel}
-          placement="top"
-        >
-          <IconButton
-            aria-label={refreshLabel}
-            size="small"
-            disabled={disabled}
-            onClick={secrets.onRefresh}
-          >
-            <RefreshIcon />
-          </IconButton>
-        </Tooltip>
-      )}
-    </Box>
   );
 }
 

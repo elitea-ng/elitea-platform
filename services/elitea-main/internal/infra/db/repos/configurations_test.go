@@ -539,3 +539,41 @@ func (s *currentConfigurationQueriesStub) DeleteCurrentConfiguration(_ context.C
 	s.deleteParams = params
 	return s.deleteID, s.deleteErr
 }
+
+// TestCurrentConfigurationsRepositorySendsTheViewerToBothProjectPageQueries is
+// the repository half of #922: the visibility predicate lives in the SQL, so
+// the viewer has to reach BOTH the page and its count — a count that ignored
+// it would report a total describing rows the page withholds.
+//
+// The sentinel matters as much as the value: the queries take a plain integer
+// and read 0 as "no viewer", because a NULL parameter would make every
+// comparison NULL and hide the whole page.
+func TestCurrentConfigurationsRepositorySendsTheViewerToBothProjectPageQueries(t *testing.T) {
+	viewer := int32(11)
+	for name, test := range map[string]struct {
+		viewerID *int32
+		want     int32
+	}{
+		"a browser user narrows the page": {viewerID: &viewer, want: 11},
+		"an absent viewer reads it whole": {want: 0},
+		"a non-positive id is not a user": {viewerID: func() *int32 { zero := int32(0); return &zero }(), want: 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			queries := &currentConfigurationQueriesStub{currentCount: 1}
+			repository := newCurrentConfigurationsRepositoryForTest(t, &currentConfigurationProjectStore{}, queries)
+			filter := configurationapp.CurrentConfigurationListFilter{
+				ProjectID: 7, Limit: 25, ViewerID: test.viewerID,
+			}
+			if _, err := repository.Count(context.Background(), filter); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := repository.List(context.Background(), filter); err != nil {
+				t.Fatal(err)
+			}
+			if queries.countCurrentParams.ViewerID != test.want || queries.listCurrentParams.ViewerID != test.want {
+				t.Fatalf("viewer: count=%d list=%d want=%d",
+					queries.countCurrentParams.ViewerID, queries.listCurrentParams.ViewerID, test.want)
+			}
+		})
+	}
+}

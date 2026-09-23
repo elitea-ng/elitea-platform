@@ -50,7 +50,7 @@ export const ModelUsage = zod
     run_count: zod.int(),
   })
   .describe(
-    'One (provider, model) pair\'s share of the window, from gateway.llm_request_logs. There is NO total_cost: the accumulator that holds money is keyed by (scope, scope_id, period) and carries no model dimension, so a per-model cost cannot be derived from anything this platform writes — and a zero would read as \"this model was free\". Requests that never resolved a model are counted in kpis.llm_calls and excluded here; a nameless bar on the chart is not something an operator can act on.\n',
+    'One (provider, model) pair\'s share of the window, from gateway.llm_request_logs. There is NO total_cost: the accumulator that holds money is keyed by (scope, scope_id, period) and carries no model dimension, so a per-model cost cannot be derived from anything this platform writes — and a zero would read as "this model was free". Requests that never resolved a model are counted in kpis.llm_calls and excluded here; a nameless bar on the chart is not something an operator can act on.\n',
   );
 
 export type ModelUsage = zod.input<typeof ModelUsage>;

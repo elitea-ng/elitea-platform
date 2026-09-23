@@ -93,6 +93,11 @@ type CurrentConfigurationListRequest struct {
 	Query           string
 	SortBy          string
 	SortOrder       string
+	// ViewerID is the user this read is FOR. nil means the caller is not a
+	// browser user (a service-internal read) and the project page is
+	// unrestricted; a value restricts the project page to rows the viewer may
+	// see — see CurrentConfigurationListFilter.ViewerID (#922).
+	ViewerID *int32
 }
 
 // CurrentConfigurationListFilter is a single tenant-schema query. SharedOnly
@@ -110,6 +115,17 @@ type CurrentConfigurationListFilter struct {
 	SortBy     string
 	SortOrder  string
 	SharedOnly bool
+	// ViewerID restricts the project page to the rows one user may see: every
+	// shared row, every row nobody authored, and that user's own rows.
+	//
+	// `shared` is an ACL on this read and not only a hint for how a later
+	// REFERENCE resolves — a member's `shared: false` credential was listed,
+	// by display name, in every other project member's credential picker
+	// (#922). nil leaves the page unrestricted, which is what a
+	// service-internal read (expansion, admission, the model projection)
+	// needs: those resolve a row the platform itself owns, not a row a
+	// browser user is browsing.
+	ViewerID *int32
 }
 
 type CurrentConfigurationPage struct {
@@ -170,6 +186,7 @@ func (s *CurrentCRUDService) List(ctx context.Context, request CurrentConfigurat
 		LabelQuery: request.Query,
 		SortBy:     request.SortBy,
 		SortOrder:  request.SortOrder,
+		ViewerID:   request.ViewerID,
 	})
 	if err != nil {
 		return CurrentConfigurationListResult{}, fmt.Errorf("list project configurations: %w", err)
@@ -358,6 +375,10 @@ func validateCurrentConfigurationIdentity(ctx context.Context, projectID, config
 func cloneCurrentConfigurationListFilter(filter CurrentConfigurationListFilter) CurrentConfigurationListFilter {
 	filter.Types = append([]string(nil), filter.Types...)
 	filter.Sections = append([]string(nil), filter.Sections...)
+	if filter.ViewerID != nil {
+		viewerID := *filter.ViewerID
+		filter.ViewerID = &viewerID
+	}
 	return filter
 }
 

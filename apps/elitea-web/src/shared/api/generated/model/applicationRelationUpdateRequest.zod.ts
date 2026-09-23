@@ -48,7 +48,7 @@ export const ApplicationRelationUpdateRequest = zod
     has_relation: zod.boolean().optional(),
   })
   .describe(
-    "NOTE(W2): decoded into map[string]any; string and number are both accepted (internal\/api\/v2\/eliteacore\/handler.go:1636-1695) — the %v formatting happens only at the published-version guard (:1648); the duplicate-check\/insert\/delete paths pass the raw decoded values to pgx (:1668, :1687, :1695), which converts numerics itself.\n",
+    "NOTE(W2): decoded into map[string]any; string and number are both accepted (internal/api/v2/eliteacore/handler.go:1636-1695) — the %v formatting happens only at the published-version guard (:1648); the duplicate-check/insert/delete paths pass the raw decoded values to pgx (:1668, :1687, :1695), which converts numerics itself.\n",
   );
 
 export type ApplicationRelationUpdateRequest = zod.input<

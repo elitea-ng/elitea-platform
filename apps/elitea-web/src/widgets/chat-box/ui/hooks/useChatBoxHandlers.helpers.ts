@@ -35,14 +35,17 @@ export interface UpdatedMessageItem { readonly uuid?: string | undefined; readon
  * result too, and the caller announces it either way — see
  * `useChatBoxActions`'s `handleSend`.
  */
-export interface SendResult { readonly success: boolean; readonly createdConversation?: { readonly id?: string | number; readonly uuid?: string } }
+/** `questionId` is the client-generated `question_id` this turn was admitted under — the value the start route persists as the question row's own uuid, so a caller still recognises the row after a reload (A17's queue marks its interjections with it). */
+export interface SendResult { readonly success: boolean; readonly createdConversation?: { readonly id?: string | number; readonly uuid?: string }; readonly questionId?: string }
 export interface SendQuestionParams {
   readonly question: string;
   readonly attachments?: readonly File[];
   /** baseline: `getPayload`'s `isSendingToUser` (`ChatBox.jsx:488`) — truthy when this question targets specific user(s) or everyone rather than the active participant. */
   readonly isSendingToUser?: boolean;
-  /** baseline: `getPayload`'s `userIds` (`ChatBox.jsx:489-498`). */
+  /** baseline: `getPayload`'s `userIds` (`ChatBox.jsx:489-498`). USER ids — see `ResolvedUserMention`. */
   readonly userIds?: readonly string[];
+  /** `@everyone` rather than a named list. The server re-resolves the project's membership for it rather than trusting the ids that ride alongside. */
+  readonly isMentioningEveryone?: boolean;
 }
 /** One uploaded attachment's outcome (structurally matches `entities/conversation`'s `UploadedAttachment`). */
 interface UploadedAttachmentOutcome { readonly filepath?: string | undefined; readonly sanitizedName: string; }
@@ -57,7 +60,7 @@ export interface ChatBoxHandlerDeps {
   readonly isStreamingNow?: boolean;
   readonly setStreamingInfo: (questionId: string) => void;
   /** Builds the base `chat_predict` payload; falls back to a minimal built-in payload when not supplied (see module doc). */
-  readonly generateMessagePayload?: (data: { question: string; questionId: string; participant: unknown; conversationUuid?: string | undefined; attachmentList?: readonly unknown[] | undefined; isSendingToUser?: boolean | undefined; userIds?: readonly string[] | undefined }) => Record<string, unknown>;
+  readonly generateMessagePayload?: (data: { question: string; questionId: string; participant: unknown; conversationUuid?: string | undefined; attachmentList?: readonly unknown[] | undefined; isSendingToUser?: boolean | undefined; userIds?: readonly string[] | undefined; isMentioningEveryone?: boolean | undefined }) => Record<string, unknown>;
   /** Creates a new conversation for a fresh chat's first message — called BEFORE `chat_predict` is emitted. */
   readonly createConversation?: (question: string) => Promise<{ readonly id?: string | number; readonly uuid?: string } | undefined>;
   /** Uploads pending attachments once the target conversation is known, before `chat_predict` is emitted. */
@@ -267,7 +270,7 @@ export function findQuestionText(chatHistory: readonly ChatMessage[], message: C
   return chatHistory.find((item) => item.id === message.questionId)?.content || undefined;
 }
 /** Minimal built-in `chat_predict` payload builder, used when the caller doesn't inject a fuller `generateMessagePayload` (see module doc). */
-export function buildDefaultMessagePayload(data: { readonly question: string; readonly questionId: string; readonly participant: unknown; readonly conversationUuid?: string | undefined; readonly attachmentList?: readonly unknown[] | undefined; readonly isSendingToUser?: boolean | undefined; readonly userIds?: readonly string[] | undefined }): Record<string, unknown> {
+export function buildDefaultMessagePayload(data: { readonly question: string; readonly questionId: string; readonly participant: unknown; readonly conversationUuid?: string | undefined; readonly attachmentList?: readonly unknown[] | undefined; readonly isSendingToUser?: boolean | undefined; readonly userIds?: readonly string[] | undefined; readonly isMentioningEveryone?: boolean | undefined }): Record<string, unknown> {
   const participantId = resolveParticipantId(data.participant);
   return {
     question: data.question,
@@ -276,6 +279,7 @@ export function buildDefaultMessagePayload(data: { readonly question: string; re
     ...(participantId !== undefined ? { participant_id: participantId } : {}),
     ...(data.attachmentList && data.attachmentList.length > 0 ? { attachments: data.attachmentList } : {}),
     ...(data.isSendingToUser ? { isSendingToUser: data.isSendingToUser, userIds: data.userIds ?? [] } : {}),
+    ...(data.isMentioningEveryone ? { isMentioningEveryone: true } : {}),
   };
 }
 /** Shared `chat_continue_predict` base fields every continuation path emits. */
@@ -369,8 +373,8 @@ export function buildOptimisticUserMessage(questionId: string, question: string,
  * path a first attachment takes.
  */
 export const resolveUploadConversationId = (createdConversation: { readonly id?: string | number; readonly uuid?: string } | undefined, fallbackUuid: string | undefined): string | undefined => createdConversation?.uuid ?? fallbackUuid;
-export const buildSendResult = (createdConversation: { readonly id?: string | number; readonly uuid?: string } | undefined, success = true): SendResult =>
-  createdConversation ? { success, createdConversation } : { success };
+export const buildSendResult = (createdConversation: { readonly id?: string | number; readonly uuid?: string } | undefined, success = true, questionId?: string): SendResult =>
+  ({ success, ...(createdConversation ? { createdConversation } : {}), ...(questionId !== undefined ? { questionId } : {}) });
 /** `chatHistory.find` for the question a given answer replies to. */
 export function findQuestionForAnswer(chatHistory: readonly ChatMessage[], answer: ChatMessage | undefined): ChatMessage | undefined {
   if (answer?.questionId === undefined) return undefined;

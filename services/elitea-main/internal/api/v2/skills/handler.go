@@ -52,11 +52,34 @@ type SkillVersion struct {
 	// ancestor — every skill's original `base` version, and any version
 	// created before this migration ran.
 	ParentVersionID string `json:"parent_version_id,omitempty"`
+	// Author is skill_versions.author_id resolved against
+	// public.auth_core__user — who created this version.
+	//
+	// #917/ELITEA-3294: the version selector's dropdown names the creator
+	// beside the timestamp, and searches by it. `author_id` alone cannot do
+	// either: a name the user saw beside a version would become an id on the
+	// next read. Joined here for the same reason and in the same shape
+	// applications/handler.go's own `getVersions`/`fetchVersionDetails`
+	// already join it (`{id, email, name}`), and — like that one's `author`
+	// and `is_default` — the field rides on the response ahead of the
+	// generated schema, which the frontend reads with a narrow cast rather
+	// than rippling a spec edit through two codegens and several pinned
+	// gates. Absent (not present-with-nulls) when the row's author could not
+	// be resolved.
+	Author *SkillVersionAuthor `json:"author,omitempty"`
 	// IsDefault reports whether this is the version named by
 	// skills.meta.default_version_id — the version a new attachment
 	// proposes and the one skillpublish's ExportFork prefers when nothing
 	// else pins one. Mirrors ApplicationVersionDetail's own `is_default`.
 	IsDefault bool `json:"is_default,omitempty"`
+}
+
+// SkillVersionAuthor is one skill version's creator — the same `{id, email,
+// name}` shape an application version's `author` carries.
+type SkillVersionAuthor struct {
+	ID    string `json:"id"`
+	Email string `json:"email"`
+	Name  string `json:"name"`
 }
 
 type Skill struct {

@@ -93,9 +93,9 @@ func TestCurrentInstructionSnapshotReachesApplicationAndAdhocBundles(t *testing.
 	require.NoError(t, err)
 	frozen, err := freezer.FreezeCurrentApplicationVersion(t.Context(), CurrentApplicationVersionFreezeRequest{ProjectID: 7, ActorUserID: 11, VersionDetails: json.RawMessage(`{"agent_type":"agent","llm_settings":{"model_name":"model"},"tools":[]}`)})
 	require.NoError(t, err)
-	app, err := currentApplicationInput(validCurrentApplicationStartRequest(), CurrentApplicationTarget{ApplicationID: 31, ApplicationVersionID: 41, Variables: json.RawMessage(`[]`), VersionDetails: frozen, ChatHistory: json.RawMessage(`[]`), InternalTools: json.RawMessage(`[]`)}, nil, nil, nil, "")
+	app, err := currentApplicationInput(validCurrentApplicationStartRequest(), CurrentApplicationTarget{ApplicationID: 31, ApplicationVersionID: 41, Variables: json.RawMessage(`[]`), VersionDetails: frozen, ChatHistory: json.RawMessage(`[]`), InternalTools: json.RawMessage(`[]`)}, nil, nil, nil, "", "must not bypass activation")
 	require.NoError(t, err)
-	adhoc, err := currentAdhocInput(validCurrentAdhocStartRequest(), CurrentAdhocTarget{Instructions: "Adhoc", ChatHistory: json.RawMessage(`[]`), ConversationMeta: json.RawMessage(`{}`)}, frozen, nil, nil, nil, "")
+	adhoc, err := currentAdhocInput(validCurrentAdhocStartRequest(), CurrentAdhocTarget{Instructions: "Adhoc", ChatHistory: json.RawMessage(`[]`), ConversationMeta: json.RawMessage(`{}`)}, frozen, nil, nil, nil, "", "must not bypass activation")
 	require.NoError(t, err)
 	for _, input := range []*runtimev1.AgentExecutionInputV1{app, adhoc} {
 		require.Equal(t, "Project rules", input.GetProjectContext().GetContent())

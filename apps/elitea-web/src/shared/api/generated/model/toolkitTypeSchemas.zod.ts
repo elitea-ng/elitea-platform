@@ -44,7 +44,7 @@ import * as zod from "zod";
 export const ToolkitTypeSchemas = zod
   .record(zod.string(), zod.record(zod.string(), zod.unknown()))
   .describe(
-    "NOTE(W2): toolkit-type → settings-JSON-Schema map (pylon_indexer \/toolkits\/ parity).\n",
+    "NOTE(W2): toolkit-type → settings-JSON-Schema map (pylon_indexer /toolkits/ parity).\n",
   );
 
 export type ToolkitTypeSchemas = zod.input<typeof ToolkitTypeSchemas>;

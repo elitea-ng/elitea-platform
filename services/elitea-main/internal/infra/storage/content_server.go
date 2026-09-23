@@ -107,6 +107,8 @@ type ContentServer struct {
 	runtimeVersions  *RuntimeApplicationVersionService
 	runtimeObjects   *RuntimeAttachmentObjectService
 	toolkitArtifacts ToolkitDiscoveryArtifactStore
+	runtimeBuilders  *RuntimeEntityBuilderService
+	runtimeArtifacts *RuntimeArtifactObjectService
 	maxBytes         int64
 	requests         chan struct{}
 	logger           *slog.Logger
@@ -285,6 +287,52 @@ func newContentServer(
 	}, nil
 }
 
+// WithRuntimeEntityBuilders enables the two chat-authored builder WRITE routes
+// (#940 A8) on this listener.
+//
+// It is a post-construction setter rather than a sixth constructor, and that
+// is a deliberate break with the pattern the five above established. Each of
+// those exists because its route must be ABSENT, not merely unreachable,
+// wherever its dependency is missing — and the same is true here — but the
+// combinatorics had already reached three call-site branches over two optional
+// services; a fourth optional service would have made it six, each one a
+// separately-maintained argument list that differs from its neighbours by one
+// nil. This setter keeps the same property (a nil service leaves both routes
+// unregistered) with one line at each composition site.
+//
+// It must be called before Routes(). Both composition sites do
+// (internal/runtimecomposition/composition.go), and a later call is harmless
+// but silently useless, which is why this returns the server: the intended
+// shape is one chained expression, not a statement somebody can drift away
+// from its constructor.
+func (s *ContentServer) WithRuntimeEntityBuilders(builders *RuntimeEntityBuilderService) *ContentServer {
+	if s == nil {
+		return nil
+	}
+	s.runtimeBuilders = builders
+	return s
+}
+
+// WithRuntimeArtifacts enables the four claim-scoped `artifact` toolkit routes
+// (#906) on this listener: list, read, write and delete, inside the claimed
+// project and under the claimed actor's own per-bucket access list.
+//
+// Same shape and same reason as WithRuntimeEntityBuilders above: a nil service
+// leaves all four routes UNREGISTERED rather than serving a route that answers
+// 503 forever. That is not a detail here — this service runs in deployments
+// with no Go object store at all (mixed deployments keep Centry's artifacts
+// authoritative), and there the honest answer is that the native runtime skips
+// the toolkit, not that it has one that always fails.
+//
+// It must be called before Routes(), which both composition sites do.
+func (s *ContentServer) WithRuntimeArtifacts(artifacts *RuntimeArtifactObjectService) *ContentServer {
+	if s == nil {
+		return nil
+	}
+	s.runtimeArtifacts = artifacts
+	return s
+}
+
 // Routes exposes only the internal, claim-bound input data plane.
 func (s *ContentServer) Routes() http.Handler {
 	r := chi.NewRouter()
@@ -312,6 +360,45 @@ func (s *ContentServer) Routes() http.Handler {
 		r.Post(
 			"/executions/{executionID}/generations/{generation}/runtime-context/attachments/{bucket}/{name}",
 			s.PostAttachmentObject,
+		)
+	}
+	if s.runtimeBuilders != nil {
+		// The only two routes on this listener that take a request BODY.
+		// Everything else here is a read whose whole selection fits in the
+		// path, which is why parseExecutionClaim's callers all refuse a body
+		// outright; these two carry the document being written, so they read
+		// one under an explicit cap instead.
+		r.Post(
+			"/executions/{executionID}/generations/{generation}/runtime-context/skills",
+			s.PostSkillWrite,
+		)
+		r.Post(
+			"/executions/{executionID}/generations/{generation}/runtime-context/project-context",
+			s.PostProjectContextWrite,
+		)
+	}
+	if s.runtimeArtifacts != nil {
+		// The `artifact` toolkit family's four operations (#906). They carry
+		// a BODY like the two builder writes above, and for the same reason:
+		// a bucket name, a key and — for the write — the document itself do
+		// not belong in a path, and one of them is the payload rather than a
+		// selection. The operation is the last path segment so the four share
+		// one prefix and one claim contract.
+		r.Post(
+			"/executions/{executionID}/generations/{generation}/runtime-context/artifacts/list",
+			s.PostArtifactList,
+		)
+		r.Post(
+			"/executions/{executionID}/generations/{generation}/runtime-context/artifacts/read",
+			s.PostArtifactRead,
+		)
+		r.Post(
+			"/executions/{executionID}/generations/{generation}/runtime-context/artifacts/write",
+			s.PostArtifactWrite,
+		)
+		r.Post(
+			"/executions/{executionID}/generations/{generation}/runtime-context/artifacts/delete",
+			s.PostArtifactDelete,
 		)
 	}
 	return r
@@ -613,6 +700,259 @@ func (s *ContentServer) PostAttachmentObject(w http.ResponseWriter, r *http.Requ
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write(encoded); err != nil {
 		s.logger.WarnContext(r.Context(), "attachment object write failed")
+	}
+}
+
+// PostSkillWrite creates or updates one Skill from the conversation the claim
+// authorizes (#940 A8, `skills_builder`).
+//
+// It is the first WRITE on this listener, and it keeps every property the
+// reads have: same claim parsing, same concurrency gate, same private
+// no-cache headers, same error taxonomy. What it adds is a bounded request
+// body — refused, never truncated, for the same reason the attachment read
+// refuses an oversized file rather than sending a prefix.
+func (s *ContentServer) PostSkillWrite(w http.ResponseWriter, r *http.Request) {
+	setPrivateNoCacheHeaders(w.Header())
+	if !s.acquire(w) {
+		return
+	}
+	defer s.release()
+	if s.runtimeBuilders == nil {
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+	claim, err := parseExecutionClaim(r)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		return
+	}
+	var request RuntimeSkillWriteRequest
+	if !decodeBuilderRequest(w, r, &request) {
+		return
+	}
+	value, err := s.runtimeBuilders.WriteSkill(r.Context(), claim, request)
+	if err != nil {
+		s.writeBuilderError(w, r, err, "skill write unavailable")
+		return
+	}
+	s.writeBuilderResponse(w, r, value, "skill write response failed")
+}
+
+// PostProjectContextWrite writes the claimed project's Project Context
+// (#940 A8, `project_context_builder`). Twin of PostSkillWrite above.
+func (s *ContentServer) PostProjectContextWrite(w http.ResponseWriter, r *http.Request) {
+	setPrivateNoCacheHeaders(w.Header())
+	if !s.acquire(w) {
+		return
+	}
+	defer s.release()
+	if s.runtimeBuilders == nil {
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+	claim, err := parseExecutionClaim(r)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		return
+	}
+	var request RuntimeProjectContextWriteRequest
+	if !decodeBuilderRequest(w, r, &request) {
+		return
+	}
+	value, err := s.runtimeBuilders.WriteProjectContext(r.Context(), claim, request)
+	if err != nil {
+		s.writeBuilderError(w, r, err, "project context write unavailable")
+		return
+	}
+	s.writeBuilderResponse(w, r, value, "project context write response failed")
+}
+
+// PostArtifactList, PostArtifactRead, PostArtifactWrite and PostArtifactDelete
+// are the `artifact` toolkit family's four operations (#906).
+//
+// They are twins of PostSkillWrite above in every respect that authorizes
+// anything — same claim parsing, same concurrency gate, same private no-cache
+// headers, same bounded body refused rather than truncated, same error
+// taxonomy — and differ only in the document each carries. The symmetry is the
+// point: one mTLS channel, one authority, and no route on it that authorizes
+// differently from its neighbours.
+func (s *ContentServer) PostArtifactList(w http.ResponseWriter, r *http.Request) {
+	setPrivateNoCacheHeaders(w.Header())
+	if !s.acquire(w) {
+		return
+	}
+	defer s.release()
+	var request RuntimeArtifactListRequest
+	claim, ok := s.artifactRequest(w, r, &request)
+	if !ok {
+		return
+	}
+	value, err := s.runtimeArtifacts.List(r.Context(), claim, request)
+	if err != nil {
+		s.writeBuilderError(w, r, err, "artifact listing unavailable")
+		return
+	}
+	s.writeRuntimeResponse(w, r, value, maxRuntimeArtifactResponseBytes, "artifact listing response failed")
+}
+
+func (s *ContentServer) PostArtifactRead(w http.ResponseWriter, r *http.Request) {
+	setPrivateNoCacheHeaders(w.Header())
+	if !s.acquire(w) {
+		return
+	}
+	defer s.release()
+	var request RuntimeArtifactReadRequest
+	claim, ok := s.artifactRequest(w, r, &request)
+	if !ok {
+		return
+	}
+	value, err := s.runtimeArtifacts.Read(r.Context(), claim, request)
+	if err != nil {
+		s.writeBuilderError(w, r, err, "artifact read unavailable")
+		return
+	}
+	s.writeRuntimeResponse(w, r, value, maxRuntimeArtifactResponseBytes, "artifact read response failed")
+}
+
+func (s *ContentServer) PostArtifactWrite(w http.ResponseWriter, r *http.Request) {
+	setPrivateNoCacheHeaders(w.Header())
+	if !s.acquire(w) {
+		return
+	}
+	defer s.release()
+	var request RuntimeArtifactWriteRequest
+	claim, ok := s.artifactRequest(w, r, &request)
+	if !ok {
+		return
+	}
+	value, err := s.runtimeArtifacts.Write(r.Context(), claim, request)
+	if err != nil {
+		s.writeBuilderError(w, r, err, "artifact write unavailable")
+		return
+	}
+	s.writeRuntimeResponse(w, r, value, maxRuntimeArtifactResponseBytes, "artifact write response failed")
+}
+
+func (s *ContentServer) PostArtifactDelete(w http.ResponseWriter, r *http.Request) {
+	setPrivateNoCacheHeaders(w.Header())
+	if !s.acquire(w) {
+		return
+	}
+	defer s.release()
+	var request RuntimeArtifactDeleteRequest
+	claim, ok := s.artifactRequest(w, r, &request)
+	if !ok {
+		return
+	}
+	value, err := s.runtimeArtifacts.Delete(r.Context(), claim, request)
+	if err != nil {
+		s.writeBuilderError(w, r, err, "artifact delete unavailable")
+		return
+	}
+	s.writeRuntimeResponse(w, r, value, maxRuntimeArtifactResponseBytes, "artifact delete response failed")
+}
+
+// artifactRequest is the claim-and-body half all four artifact routes share.
+//
+// Four copies of it would be four places for one to drift out of step with the
+// others, and the thing that would drift is the authorization. It writes the
+// refusal itself and returns ok=false; the caller returns immediately.
+func (s *ContentServer) artifactRequest(
+	w http.ResponseWriter,
+	r *http.Request,
+	target any,
+) (ContentClaim, bool) {
+	if s.runtimeArtifacts == nil {
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return ContentClaim{}, false
+	}
+	claim, err := parseExecutionClaim(r)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		return ContentClaim{}, false
+	}
+	if !decodeRuntimeRequest(w, r, target, maxRuntimeArtifactRequestBytes) {
+		return ContentClaim{}, false
+	}
+	return claim, true
+}
+
+// decodeBuilderRequest reads one bounded JSON body, refusing unknown keys.
+//
+// DisallowUnknownFields is the mirror of the worker”'s own
+// `deny_unknown_fields` on every response: both directions refuse a document
+// carrying a field the other side does not know, so a version skew fails
+// loudly at the edge instead of half-applying a write.
+func decodeBuilderRequest(w http.ResponseWriter, r *http.Request, target any) bool {
+	return decodeRuntimeRequest(w, r, target, maxRuntimeBuilderRequestBytes)
+}
+
+// decodeRuntimeRequest is decodeBuilderRequest with the cap named by the
+// caller: the two builder writes carry prompt-sized documents, the artifact
+// write carries a file, and one number could not honestly bound both.
+func decodeRuntimeRequest(w http.ResponseWriter, r *http.Request, target any, maxBytes int64) bool {
+	if r.ContentLength > maxBytes {
+		http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+		return false
+	}
+	decoder := json.NewDecoder(io.LimitReader(r.Body, maxBytes+1))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+// writeBuilderError maps one builder failure onto the listener”'s shared
+// taxonomy. 422 (ErrContentRejected) is the write-side addition and it is
+// deliberately NOT an error the worker fails a turn on: it means the document
+// the model composed cannot be stored as written, which the model can read and
+// retry from.
+func (s *ContentServer) writeBuilderError(w http.ResponseWriter, r *http.Request, err error, message string) {
+	status := http.StatusServiceUnavailable
+	switch {
+	case errors.Is(err, ErrContentUnauthorized):
+		status = http.StatusForbidden
+	case errors.Is(err, ErrContentNotFound):
+		status = http.StatusNotFound
+	case errors.Is(err, ErrContentRejected):
+		status = http.StatusUnprocessableEntity
+	case errors.Is(err, ErrContentUnavailable):
+		s.logger.WarnContext(r.Context(), message, "stage", runtimeContextUnavailableStage(err))
+	}
+	http.Error(w, http.StatusText(status), status)
+}
+
+func (s *ContentServer) writeBuilderResponse(w http.ResponseWriter, r *http.Request, value any, message string) {
+	s.writeRuntimeResponse(w, r, value, maxRuntimeBuilderResponseBytes, message)
+}
+
+// writeRuntimeResponse is writeBuilderResponse with the envelope ceiling named
+// by the caller. An over-cap body is REFUSED rather than trimmed, for the
+// reason PostApplicationVersion states: the document is indivisible, and a
+// truncated one either fails the client's decode or — worse — parses into
+// something that looks complete.
+func (s *ContentServer) writeRuntimeResponse(
+	w http.ResponseWriter,
+	r *http.Request,
+	value any,
+	maxBytes int,
+	message string,
+) {
+	encoded, err := json.Marshal(value)
+	if err != nil || len(encoded) == 0 || len(encoded) > maxBytes {
+		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
+		return
+	}
+	digest := sha256.Sum256(encoded)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Length", strconv.Itoa(len(encoded)))
+	w.Header().Set("Content-Digest", formatSHA256Digest(digest))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(encoded); err != nil {
+		s.logger.WarnContext(r.Context(), message)
 	}
 }
 

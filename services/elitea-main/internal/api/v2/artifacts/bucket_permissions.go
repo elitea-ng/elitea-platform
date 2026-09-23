@@ -64,7 +64,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"slices"
 
 	platformauth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
@@ -105,22 +104,13 @@ type deleteBucketPermissionRequest struct {
 // accessPermitted is legacy's check_bucket_perm_from_dict
 // (utils/utils.py:99-132), one exception at a time.
 //
-// found=false is the no-exception case and ALLOWS. The quirk on the last line
-// is legacy's and is kept: ANY non-empty permission list grants read, so an
-// exception of ["write"] reads as well as it writes. Narrowing it here would
-// deny a caller that the reference platform allows, on data an operator
-// authored under the reference's rules.
+// The decision itself lives in repos.BucketAccessPermitted, beside the rows it
+// reads, because the claim-bound runtime artifact plane (#906) applies exactly
+// the same rule to the same rows for the actor an agent turn runs as. This
+// stays as the name the routes in this package call so the HTTP layer keeps
+// reading in its own vocabulary.
 func accessPermitted(permissions []string, found bool, need string) bool {
-	if !found {
-		return true
-	}
-	if len(permissions) == 0 {
-		return false
-	}
-	if need == accessRead {
-		return true
-	}
-	return slices.Contains(permissions, accessWrite)
+	return repos.BucketAccessPermitted(permissions, found, need)
 }
 
 // callerUserID is the member an exception can name: the owning user behind the

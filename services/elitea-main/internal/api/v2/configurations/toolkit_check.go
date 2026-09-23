@@ -8,7 +8,11 @@
 // a tenant-authored api_base. Every OTHER known type — github, gitlab,
 // bitbucket, jira, confluence — answered the honest "Checking connection is
 // not supported yet for configuration type github", because the gateway speaks
-// to LLM providers and nothing else.
+// to LLM providers and nothing else. #920 recorded the same gap for `aha`,
+// whose descriptor advertises the button: the map below grew to cover it, and
+// a family still absent from it is one whose SDK check is not a single
+// authenticated GET (an OAuth exchange, a POST that mints a token) or that has
+// no network endpoint at all.
 //
 // The consequence was user visible and is recorded in the live lane's own
 // header (apps/elitea-web/e2e/live/toolkits.indicators.spec.ts): the credential
@@ -77,13 +81,15 @@ import (
 // both searched by the string.
 const ToolkitCheckAllowlistEnv = "ELITEA_TOOLKIT_CHECK_ALLOWLIST"
 
-// defaultToolkitCheckAllowlist is the five vendors' public API hosts.
+// defaultToolkitCheckAllowlist is the public API host of every family
+// toolkitCheckProbes carries.
 //
 // It is a DEFAULT, not a floor: setting the variable replaces it entirely, so a
 // deployment that must not reach github.com can say so. `*.atlassian.net`
-// covers a Jira/Confluence Cloud tenant, which is a direct subdomain by
-// construction.
-const defaultToolkitCheckAllowlist = "api.github.com, github.com, gitlab.com, api.bitbucket.org, bitbucket.org, *.atlassian.net"
+// covers a Jira/Confluence Cloud tenant and `*.aha.io` an Aha! one, which are
+// direct subdomains by construction. A self-hosted Langfuse, like a
+// self-hosted GitLab, has to be named.
+const defaultToolkitCheckAllowlist = "api.github.com, github.com, gitlab.com, api.bitbucket.org, bitbucket.org, *.atlassian.net, *.aha.io, api.figma.com, cloud.langfuse.com"
 
 // toolkitCheckTimeout bounds ONE probe. It is short on purpose: the credential
 // card checks a whole project's rows at once through the batch route, whose own
@@ -230,6 +236,44 @@ var toolkitCheckProbes = map[string]toolkitProbe{
 		defaultBaseURL: "",
 		path:           func(map[string]any) string { return "/rest/api/user/current" },
 		authorize:      authorizeBasicOrBearer("username", "api_key", "token", "api_key"),
+	},
+	// aha (#920). The type's descriptor has advertised has_test_connection
+	// since it shipped and the form has always rendered the button, but no
+	// probe existed, so EVERY input — a malformed string, an unroutable host,
+	// a real tenant — answered unsupported_type. The endpoint and the header
+	// are the SDK configuration's own (elitea_sdk/configurations/aha.py:
+	// `GET {base_url}/api/v1/me`, bearer), so the two sides agree about what
+	// a working Aha! credential is.
+	//
+	// There is NO default base URL: an Aha! tenant is a company subdomain
+	// (https://mycompany.aha.io), so a credential that names none cannot be
+	// probed at all and says so rather than dialling somebody else's tenant.
+	"aha": {
+		baseURLFields:  []string{"base_url", "url"},
+		defaultBaseURL: "",
+		path:           func(map[string]any) string { return "/api/v1/me" },
+		authorize:      authorizeBearer("api_key", "token", "access_token"),
+	},
+	// figma. The credential carries a token and nothing else — the API host
+	// is the product's, not the tenant's — so defaultBaseURL is where every
+	// probe goes (elitea_sdk/configurations/figma.py). The header is Figma's
+	// own X-Figma-Token: a personal access token presented as a bearer is
+	// answered 403, which would read here as a refused credential.
+	"figma": {
+		baseURLFields:  []string{"base_url", "url"},
+		defaultBaseURL: "https://api.figma.com",
+		path:           func(map[string]any) string { return "/v1/me" },
+		authorize:      authorizeHeaderToken("X-Figma-Token", "token", "api_key", "access_token"),
+	},
+	// langfuse. Basic auth over the key PAIR, against the projects endpoint
+	// the SDK deliberately chose: /api/public/health is unauthenticated and
+	// answers 200 for any key, which would certify every credential
+	// (elitea_sdk/configurations/langfuse.py says so in its own comment).
+	"langfuse": {
+		baseURLFields:  []string{"base_url", "url"},
+		defaultBaseURL: "",
+		path:           func(map[string]any) string { return "/api/public/projects" },
+		authorize:      authorizeBasicPair("public_key", "secret_key"),
 	},
 }
 
@@ -416,6 +460,46 @@ func authorizeBasicOrBearer(userField, secretField string, bearerFields ...strin
 			return authorizedRequest()
 		}
 		return unsupportedAuth()
+	}
+}
+
+// authorizeBearer presents the first non-empty field as a bearer token. It is
+// the shape of every credential whose whole secret is one API token.
+func authorizeBearer(tokenFields ...string) func(http.Header, map[string]any) authorizeOutcome {
+	return func(header http.Header, data map[string]any) authorizeOutcome {
+		if token := firstStrVal(data, tokenFields...); token != "" {
+			header.Set("Authorization", "Bearer "+token)
+			return authorizedRequest()
+		}
+		return unsupportedAuth()
+	}
+}
+
+// authorizeHeaderToken presents the token in a VENDOR-NAMED header rather than
+// Authorization. A provider that reads its own header answers 403 to a bearer,
+// which this file would otherwise report as a refused credential.
+func authorizeHeaderToken(headerName string, tokenFields ...string) func(http.Header, map[string]any) authorizeOutcome {
+	return func(header http.Header, data map[string]any) authorizeOutcome {
+		if token := firstStrVal(data, tokenFields...); token != "" {
+			header.Set(headerName, token)
+			return authorizedRequest()
+		}
+		return unsupportedAuth()
+	}
+}
+
+// authorizeBasicPair is HTTP basic over two stored fields that are BOTH the
+// credential — a key id and its secret — rather than a user name and a token.
+// Missing either half is not a credential this build can present, and saying
+// so is not a verdict on the half that is there.
+func authorizeBasicPair(userField, secretField string) func(http.Header, map[string]any) authorizeOutcome {
+	return func(header http.Header, data map[string]any) authorizeOutcome {
+		user, secret := strVal(data, userField), strVal(data, secretField)
+		if user == "" || secret == "" {
+			return unsupportedAuth()
+		}
+		setBasicAuth(header, user, secret)
+		return authorizedRequest()
 	}
 }
 

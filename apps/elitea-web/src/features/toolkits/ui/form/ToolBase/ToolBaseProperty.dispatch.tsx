@@ -18,8 +18,8 @@ import {
   MaskedSecretField,
   MultilineField,
   ObjectField,
-  SecretFieldInput,
 } from './ToolBaseProperty.renderers';
+import { SecretFieldInput } from './SecretFieldInput';
 import { isCredentialLikeKind, isIntegerKind, resolveAnyOfDefault } from './ToolBaseProperty.kinds';
 import type { FieldKind } from './ToolBaseProperty.kinds';
 import type { ToolBasePropertyCredentialContext, ToolBasePropertySlots } from './ToolBaseProperty.types';
@@ -206,11 +206,7 @@ function renderArray(ctx: FieldRenderContext): ReactNode {
 function renderSecret(ctx: FieldRenderContext): ReactNode {
   if (ctx.effectiveDisabled) {
     return (
-      <MaskedSecretField
-        required={ctx.required}
-        label={ctx.label}
-        maxLength={ctx.schema.max_toolkit_length}
-      />
+      <MaskedSecretField required={ctx.required} label={ctx.label} maxLength={ctx.schema.max_toolkit_length} />
     );
   }
   return (
@@ -221,22 +217,34 @@ function renderSecret(ctx: FieldRenderContext): ReactNode {
       required={ctx.required}
       error={ctx.toastError}
       helperText={ctx.errorText}
+      isTeamProject={ctx.credentialContext?.isTeamProject}
     />
   );
 }
 
 function renderObject(ctx: FieldRenderContext): ReactNode {
+  // elitea_issues: #2611 — a JSON object field (e.g. Postman's "Environment
+  // Config JSON") used to commit `{}` on blur whenever the typed text was not
+  // valid JSON, silently wiping whatever had been saved before and flipping
+  // Save on with no actual valid change. On a parse failure this now LEAVES
+  // the stored value untouched and flags the field as errored (blocking Save
+  // via `hasErrors`, same mechanism `renderOpenapiSpec`'s schema field
+  // already uses) instead of clobbering it — the user's data survives an
+  // accidental or mid-edit blur, and the error clears itself once the text
+  // parses again.
   const onChange = (rawText: string): void => {
     const textContent = rawText.trim();
     if (textContent === '') {
       ctx.editField(ctx.buildEditFieldPath(ctx.key), {});
+      ctx.setToolErrors?.((previous) => ({ ...previous, [ctx.key]: false }));
       return;
     }
     try {
       const parsedValue = JSON.parse(textContent) as Readonly<Record<string, unknown>>;
       ctx.editField(ctx.buildEditFieldPath(ctx.key), parsedValue, true);
+      ctx.setToolErrors?.((previous) => ({ ...previous, [ctx.key]: false }));
     } catch {
-      ctx.editField(ctx.buildEditFieldPath(ctx.key), {}, true);
+      ctx.setToolErrors?.((previous) => ({ ...previous, [ctx.key]: true }));
     }
   };
   return (

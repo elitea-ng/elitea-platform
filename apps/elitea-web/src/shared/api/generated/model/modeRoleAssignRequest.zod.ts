@@ -51,11 +51,11 @@ export const ModeRoleAssignRequest = zod
     mode: zod
       .string()
       .describe(
-        "Any mode except `default`: default-mode roles are project membership and are written through \/admin\/users\/{mode}\/{project_id}.\n",
+        "Any mode except `default`: default-mode roles are project membership and are written through /admin/users/{mode}/{project_id}.\n",
       ),
     role: zod.string(),
   })
-  .describe("NOTE(W2): internal\/api\/v2\/admin\/modes.go:117-126.\n");
+  .describe("NOTE(W2): internal/api/v2/admin/modes.go:117-126.\n");
 
 export type ModeRoleAssignRequest = zod.input<typeof ModeRoleAssignRequest>;
 export type ModeRoleAssignRequestOutput = zod.output<

@@ -56,9 +56,16 @@ export interface ApplicationAnswerTts {
 /** MCP-auth / token-limit continue-execution props, grouped to stay under the component-props budget. */
 export interface ApplicationAnswerContinuation {
   readonly onContinueMcpExecution?: ((messageId: string, addToIgnoreList?: boolean, authorizationRequestId?: string) => void) | undefined;
-  readonly renderAuthModal?: ChatContinueProps['renderAuthModal'];
   readonly onContinueTokenLimitExecution?: ((messageId: string) => void) | undefined;
   readonly hideContinueButton?: boolean;
+  /**
+   * A13 (ELITEA-0725): fills `ChatContinue`'s `renderAuthModal` slot with the
+   * real `McpAuthModal` — see that component's own module doc for why this
+   * stays a slot (`no-sideways-features` forbids `chat-messages` importing
+   * `features/mcps`) rather than a hard import. Built once, above both
+   * features, by `widgets/chat-box`.
+   */
+  readonly renderAuthModal?: ChatContinueProps['renderAuthModal'];
 }
 
 /** Message feedback (#880) props, grouped to stay under the component-props budget. */

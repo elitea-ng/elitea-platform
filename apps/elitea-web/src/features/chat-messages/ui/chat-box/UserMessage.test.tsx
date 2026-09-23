@@ -28,9 +28,9 @@
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider } from '@mui/material/styles';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
@@ -218,5 +218,195 @@ describe('UserMessage caption line', () => {
     const actions = screen.getByRole('button', { name: 'Copy to clipboard' });
     expect(actions).toBeTruthy();
     expect(actions.closest('.actionButtons')).toBeTruthy();
+  });
+});
+
+/*
+ * A17 (ELITEA-2870). A question that was typed while a previous turn was still
+ * running is captioned "Sent while running", and the caption has to survive a
+ * reload — which is why the flag rides on the normalised `ChatMessage` rather
+ * than on some live send-time state. The negative case matters just as much:
+ * an ORDINARY question must not carry it, or the caption says nothing.
+ */
+describe('UserMessage interjection caption', () => {
+  it('captions a question delivered from the waiting queue', () => {
+    renderMessage({ name: 'Bob Reviewer', interjected: true });
+    expect(screen.getByTestId('chat-message-interjected')).toHaveTextContent('Sent while running');
+  });
+
+  it('leaves an ordinary question uncaptioned', () => {
+    renderMessage({ name: 'Bob Reviewer' });
+    expect(screen.queryByTestId('chat-message-interjected')).toBeNull();
+  });
+});
+
+/**
+ * Issues programme, package C-chat — the edit-and-resubmit flow, judged
+ * against three CLOSED legacy defects that all targeted this exact
+ * component. Rendered directly (not through a live conversation) because
+ * seeding a STORED message with an attachment needs a real model turn,
+ * which this wave's stack does not offer — `UserMessage` is the entire
+ * surface those three bugs lived in, so exercising it directly is a faithful
+ * reproduction, not a weaker one.
+ */
+describe('UserMessage edit-and-resubmit (elitea_issues #5140, #5221, #5138, #5137)', () => {
+  const attachmentItem = {
+    item_type: 'attachment_message',
+    item_details: { name: 'photo.png', content: { type: 'image_url', image_url: { url: 'https://example.test/photo.png' } } },
+  };
+  const questionItem = { uuid: 'q-uuid-1', item_type: 'text_message', item_details: { content: 'What is the capital of France?' } };
+
+  /* elitea_issues: #5140, #5221 — entering edit mode on a message that has an attachment
+   * keeps the attachment visible (not lost), and its remove control is wired to a real
+   * callback (not a no-op). */
+  it('#5140/#5221: an attachment stays visible in edit mode and its remove control calls back', () => {
+    const onRemoveAttachment = vi.fn();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const message = buildMessage(0, {
+      content: 'What is the capital of France?',
+      messageItems: [questionItem, attachmentItem] as unknown as ChatMessage['messageItems'],
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+          <UserMessage
+            message={message}
+            messageId={message.id}
+            onSubmit={vi.fn()}
+            onRemoveAttachment={onRemoveAttachment}
+          />
+        </ThemeProvider>
+      </QueryClientProvider>,
+    );
+
+    // Attachment visible before edit.
+    expect(screen.getByText('photo.png')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit the message and regenerate answer' }));
+
+    // Still visible IN edit mode — #5140's regression was that it vanished here.
+    expect(screen.getByText('photo.png')).toBeInTheDocument();
+  });
+
+  /* elitea_issues: #5138 — Save and apply is disabled once the field is cleared to empty,
+   * so an empty message can never reach the LLM. */
+  it('#5138: Save and apply is disabled for an empty edited message', () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const message = buildMessage(0, {
+      content: 'What is the capital of France?',
+      messageItems: [questionItem] as unknown as ChatMessage['messageItems'],
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+          <UserMessage message={message} messageId={message.id} onSubmit={vi.fn()} />
+        </ThemeProvider>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit the message and regenerate answer' }));
+    const saveButton = screen.getByRole('button', { name: 'Save and apply' });
+    // UNCHANGED IS ENABLED (issue 980): this test used to assert the opposite here,
+    // which is the behaviour that made the retry onetest ELITEA-0540 describes
+    // unreachable. What #5138 is about is the EMPTY field, asserted below.
+    expect(saveButton).toBeEnabled();
+
+    const textbox = screen.getByRole('textbox');
+    fireEvent.change(textbox, { target: { value: '' } });
+    expect(saveButton).toBeDisabled();
+
+    fireEvent.change(textbox, { target: { value: '   ' } });
+    expect(saveButton, 'whitespace-only content must not count as a real edit').toBeDisabled();
+  });
+
+  /* elitea_issues: #5137 — Save and apply hands the caller the EDITED text, not the
+   * message's original (pre-edit) content; the caller regenerates off whatever
+   * `onSubmit` receives, so this is the whole fix surface for "regenerates using OLD
+   * content". */
+  it('#5137: Save and apply submits the NEW edited text, not the original', () => {
+    const onSubmit = vi.fn();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const message = buildMessage(0, {
+      content: 'What is the capital of France?',
+      messageItems: [questionItem] as unknown as ChatMessage['messageItems'],
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+          <UserMessage message={message} messageId={message.id} onSubmit={onSubmit} />
+        </ThemeProvider>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit the message and regenerate answer' }));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'What is the capital of Germany?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save and apply' }));
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    const [, updatedItems] = onSubmit.mock.calls[0] as [string, ReadonlyArray<{ content: string }>];
+    expect(updatedItems[0]?.content).toBe('What is the capital of Germany?');
+    expect(updatedItems[0]?.content).not.toBe('What is the capital of France?');
+  });
+  /* onetest: ELITEA-0540, issue 980 — "Save and apply" on an UNCHANGED question is a
+   * retry, and must reach the caller. It was disabled on `value ===
+   * resolvedContent`, so re-running a question after a bad answer could not be
+   * done from the editor at all. */
+  it('issue 980: an unchanged question can still be saved, and submits its text', () => {
+    const onSubmit = vi.fn();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const message = buildMessage(0, {
+      content: 'What is the capital of France?',
+      messageItems: [questionItem] as unknown as ChatMessage['messageItems'],
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+          <UserMessage message={message} messageId={message.id} onSubmit={onSubmit} />
+        </ThemeProvider>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit the message and regenerate answer' }));
+    const saveButton = screen.getByRole('button', { name: 'Save and apply' });
+    expect(saveButton, 'a retry of the same question must be reachable').toBeEnabled();
+    fireEvent.click(saveButton);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    const [, updatedItems] = onSubmit.mock.calls[0] as [string, ReadonlyArray<{ content: string }>];
+    expect(updatedItems[0]?.content).toBe('What is the capital of France?');
+  });
+
+  /* onetest: ELITEA-0545, issue 980 — a message with NO stored `text_message` item
+   * (the ordinary shape of a question the browser is still holding from the
+   * send that created it) must still submit its edited text. It used to submit
+   * an EMPTY array, which `handleSubmitEditedMessage` drops silently: the
+   * editor closed, the bubble updated locally, and no request was made. */
+  it('issue 980: a message with no stored question item still submits its edited text', () => {
+    const onSubmit = vi.fn();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const message = buildMessage(0, { content: 'What is the capital of France?' });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+          <UserMessage message={message} messageId={message.id} onSubmit={onSubmit} />
+        </ThemeProvider>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit the message and regenerate answer' }));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'What is the capital of Spain?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save and apply' }));
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    const [, updatedItems] = onSubmit.mock.calls[0] as [
+      string,
+      ReadonlyArray<{ content: string; item_type: string; uuid?: string }>,
+    ];
+    expect(updatedItems, 'the caller must be given something to send').toHaveLength(1);
+    expect(updatedItems[0]?.content).toBe('What is the capital of Spain?');
+    expect(updatedItems[0]?.item_type).toBe('text_message');
+    // No `uuid` is invented for an item that does not exist: the field names
+    // WHICH stored row to rewrite.
+    expect(updatedItems[0]?.uuid).toBeUndefined();
   });
 });

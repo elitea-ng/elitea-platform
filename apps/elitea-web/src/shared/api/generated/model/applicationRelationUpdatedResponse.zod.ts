@@ -51,7 +51,7 @@ export const ApplicationRelationUpdatedResponse = zod
       .describe("Echo of the {selected_version_id} path segment."),
     has_relation: zod.boolean(),
   })
-  .describe("NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go:1698-1702.\n");
+  .describe("NOTE(W2): internal/api/v2/eliteacore/handler.go:1698-1702.\n");
 
 export type ApplicationRelationUpdatedResponse = zod.input<
   typeof ApplicationRelationUpdatedResponse

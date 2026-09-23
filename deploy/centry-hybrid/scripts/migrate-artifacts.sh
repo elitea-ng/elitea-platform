@@ -33,7 +33,7 @@
 #     inventing values the API computes.
 #   * it deletes nothing from the source. The source tree is the rollback.
 #
-# It uses `mc` (docker.io/minio/mc), which is the client the compose stacks
+# It uses `mc` (quay.io/minio/mc), which is the client the compose stacks
 # already use to create the bucket (rustfs-bucket-init in
 # deploy/docker-compose.standalone-full.yml and runtime-artifacts-bucket-init in
 # deploy/centry-hybrid/pov-compose.yml). One client for the store, not two.
@@ -93,7 +93,7 @@ if [[ ! -d "$source_root" ]]; then
 fi
 if ! command -v mc >/dev/null 2>&1; then
   echo "mc is not on PATH. Install the MinIO client, or run this script inside" >&2
-  echo "docker.io/minio/mc with the source root and ~/.mc mounted." >&2
+  echo "quay.io/minio/mc with the source root and ~/.mc mounted." >&2
   exit 2
 fi
 if ! command -v python3 >/dev/null 2>&1; then

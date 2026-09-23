@@ -51,7 +51,7 @@ export const ProjectIconMeta = zod
   })
   .nullable()
   .describe(
-    "NOTE(W2): the exact object internal\/api\/v2\/eliteacore\/handler.go's normalizeProjectIconMeta produces — the two keys `name` and `url`, each of which may be null, and NO other key survives the write. A null `icon_meta` means the project has no icon.\n",
+    "NOTE(W2): the exact object internal/api/v2/eliteacore/handler.go's normalizeProjectIconMeta produces — the two keys `name` and `url`, each of which may be null, and NO other key survives the write. A null `icon_meta` means the project has no icon.\n",
   );
 
 export type ProjectIconMeta = zod.input<typeof ProjectIconMeta>;

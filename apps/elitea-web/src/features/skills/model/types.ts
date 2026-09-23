@@ -13,6 +13,17 @@ export interface SkillVersion {
   readonly parent_version_id?: string;
   /** Whether this is the version named by SkillRecord.default_version_id. */
   readonly is_default?: boolean;
+  /**
+   * #917/ELITEA-3294 — the version's creator, joined server-side from
+   * `skill_versions.author_id` against `public.auth_core__user`
+   * (`internal/infra/db/repos/skills.go`'s `getSkillWithVersions`).
+   *
+   * Read off the wire ahead of the generated `SkillVersion` schema modelling
+   * it, exactly as `AgentPipelineVersionOption.author` already is for
+   * application versions — see that field's own note for why the field rides
+   * on the response instead of rippling a spec edit through two codegens.
+   */
+  readonly author?: { readonly id?: string; readonly name?: string; readonly email?: string };
 }
 
 /**

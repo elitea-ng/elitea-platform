@@ -24,6 +24,9 @@ afterEach(() => {
 });
 
 describe('CreateSkill', () => {
+  /* elitea_issues: #5399 — saving with Instructions empty shows inline
+     "Instructions are required." validation, never a raw backend error;
+     the mutation is never even sent (no request mock is registered here). */
   it('validates incomplete drafts before sending', async () => {
     const user = userEvent.setup();
     renderSkillsRoute(<CreateSkill />, '/skills/create');

@@ -201,7 +201,15 @@ describe('AdminToolkitTypes', () => {
 });
 
 describe('AdminToolkitTypes decisions', () => {
-  it('refuses to submit without a reason, and sends the decision when there is one', async () => {
+  it('refuses to submit without a reason', async () => {
+    // Kept separate from the "sends the decision" case below: combined into
+    // one `it()`, the two rounds of typing plus the submit round-trip pushed
+    // this test's real (non-fake-timer) work close enough to vitest's 5000ms
+    // default per-test timeout that it flaked under coverage instrumentation
+    // on a loaded CI shard (green locally, red only in CI). Splitting halves
+    // the interaction each test performs — matching the same split already
+    // used by the sibling `ServiceDescriptors.test.tsx` — rather than
+    // loosening the timeout or the assertions.
     serveDefaultListing();
     recordWrites();
     const user = userEvent.setup();
@@ -219,8 +227,19 @@ describe('AdminToolkitTypes decisions', () => {
     await user.type(within(dialog).getByLabelText(/Reason/), '   ');
     expect(save).toBeDisabled();
     expect(writes).toHaveLength(0);
+  });
 
-    await user.clear(within(dialog).getByLabelText(/Reason/));
+  it('sends the decision when there is a reason', async () => {
+    serveDefaultListing();
+    recordWrites();
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminToolkitTypes />);
+
+    await user.click((await screen.findAllByRole('button', { name: 'Decide' }))[0]!);
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('radio', { name: /Disabled/ }));
+
+    const save = within(dialog).getByRole('button', { name: 'Save decision' });
     await user.type(within(dialog).getByLabelText(/Reason/), 'the worker image does not carry it');
     await user.click(save);
 

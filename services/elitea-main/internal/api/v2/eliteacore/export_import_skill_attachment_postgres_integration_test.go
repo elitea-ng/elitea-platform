@@ -621,6 +621,10 @@ func TestImportKeepsTheSkillCapOfAVersion(t *testing.T) {
 // instructions, tags or versions, so it cannot see this defect at all. Get
 // projects all three through the same `skillsFromJoin` LEFT JOIN, which is
 // where the defect lives.
+//
+// elitea_issues: #5469 — importing an agent pinned to a non-base skill
+// version must not leave the imported skill with no "base" version and no
+// instructions.
 func TestImportedSkillIsReadableThroughTheSkillsRoute(t *testing.T) {
 	pool := newImportLinkPool(t)
 	router := importLinkRouter(eliteacore.NewHandler(pool))
@@ -709,6 +713,69 @@ WHERE skill.name = 'pinned skill'`)
 		skillName: "pinned skill", versionName: versionName,
 		instructions: instructions, entityType: "agent",
 	}})
+}
+
+/*
+	elitea_issues: #5478 — an agent import document carrying two skills that
+
+share one NAME (different import_uuid, different instructions) writes both
+as independent skills and keeps both attachments, rather than collapsing
+them onto a single imported row and answering "Some fields have missing or
+invalid data!". importSkill's upsert is keyed on `import_uuid`
+(export_import_skill_attachment... see importSkill above), never on name, so
+this was never reachable through that code path — this test is the
+regression pin.
+*/
+func TestImportKeepsBothSkillsWithIdenticalNames(t *testing.T) {
+	pool := newImportLinkPool(t)
+	router := importLinkRouter(eliteacore.NewHandler(pool))
+
+	recorder := importLinkDo(t, router, []any{
+		map[string]any{
+			"entity": "skills", "import_uuid": "sk-animals",
+			"name": "joke-maker", "description": "animal jokes",
+			"versions": []any{map[string]any{"name": "base", "instructions": "Tell jokes about animals"}},
+		},
+		map[string]any{
+			"entity": "skills", "import_uuid": "sk-robots",
+			"name": "joke-maker", "description": "robot jokes",
+			"versions": []any{map[string]any{"name": "base", "instructions": "Tell jokes about robots"}},
+		},
+		map[string]any{
+			"entity": "agents", "import_uuid": "ag-1", "name": "duo joker",
+			"versions": []any{map[string]any{
+				"name": "latest", "agent_type": "openai", "instructions": "tell jokes",
+				"skills": []any{
+					map[string]any{"import_uuid": "sk-animals", "version_name": "base", "entity_type": "agent"},
+					map[string]any{"import_uuid": "sk-robots", "version_name": "base", "entity_type": "agent"},
+				},
+			}},
+		},
+	})
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("import status = %d, want %d, body = %s", recorder.Code, http.StatusCreated, recorder.Body.String())
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var skillCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM p_1.skills WHERE name = 'joke-maker'`).Scan(&skillCount); err != nil {
+		t.Fatalf("count joke-maker skills: %v", err)
+	}
+	if skillCount != 2 {
+		t.Fatalf("the project holds %d skills named joke-maker, want 2 — the second was collapsed onto the first", skillCount)
+	}
+
+	var agentVersionID int
+	if err := pool.QueryRow(ctx, `SELECT id FROM p_1.application_versions WHERE name = 'latest'`).Scan(&agentVersionID); err != nil {
+		t.Fatalf("the import wrote no agent version: %v", err)
+	}
+
+	assertAttachedSkills(t, readAttachedSkills(t, pool, agentVersionID), []attachedSkill{
+		{skillName: "joke-maker", versionName: "base", instructions: "Tell jokes about animals", entityType: "agent"},
+		{skillName: "joke-maker", versionName: "base", instructions: "Tell jokes about robots", entityType: "agent"},
+	})
 }
 
 // TestImportOfTheSameDocumentIsRepeatable is the case the wizard invites most.

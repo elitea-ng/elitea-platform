@@ -29,6 +29,7 @@ import {
   computeIndexConfigWrapperSx,
   validateToolkitForm,
   useIndexDetailsTabSync,
+  useIndexConfigSaveBinding,
   TOOLKIT_CHAT_MODE_CREATE_INDEX,
 } from './IndexDetails.helpers';
 import type { SelectedToolSchemaRead, UseToolkitChatParams, UseToolkitChatResult } from './IndexDetails.helpers';
@@ -99,6 +100,11 @@ export interface IndexDetailsProps {
   readonly currentProjectName?: string | undefined;
   readonly isPrivateProject?: boolean | undefined;
   readonly renderCredentialsSelect?: ((props: CredentialsSelectSlotProps) => ReactNode) | undefined;
+  /** The tab's Snackbar (`IndexesTab.tsx`) — this app has no global toast host, so save notifications go to the one this screen already owns. */
+  readonly onSuccess?: ((message: string) => void) | undefined;
+  readonly onError?: ((message: string) => void) | undefined;
+  /** Reports unsaved configuration edits so `pages/toolkits` can arm the app's unsaved-changes guard (ELITEA-2885). */
+  readonly onConfigDirtyChange?: ((dirty: boolean) => void) | undefined;
 }
 
 const wrapperSx: SxProps<Theme> = { flexGrow: 1, maxWidth: 'calc(100% - 16.25rem)' };
@@ -138,6 +144,9 @@ export function IndexDetails(props: IndexDetailsProps): ReactNode {
     currentProjectName,
     isPrivateProject,
     renderCredentialsSelect,
+    onSuccess,
+    onError,
+    onConfigDirtyChange,
   } = props;
 
   const configInitialized = useRef(false);
@@ -267,6 +276,12 @@ export function IndexDetails(props: IndexDetailsProps): ReactNode {
     [clearIndexNameError, isIndexNameValid, updateIndexNameError],
   );
 
+  // The Save / Save & Reindex split (ELITEA-2880 … ELITEA-2887) — see `useIndexConfigSaveBinding`.
+  const configSave = useIndexConfigSaveBinding({
+    index, toolkitId, schema: adjustedIndexDataSchema, current: toolInputVariables, isValidForm, onReindex: handleIndexData,
+    isConfigurationTab: !isCreateView && activeEditTab === EditViewTabsEnum.configuration, onSuccess, onError, onDirtyChange: onConfigDirtyChange,
+  });
+
   const toolConfigProps: IndexConfigToolsConfig = useMemo(
     () => ({
       selectedRunTool,
@@ -298,6 +313,7 @@ export function IndexDetails(props: IndexDetailsProps): ReactNode {
     currentProjectName,
     isPrivateProject,
     renderCredentialsSelect,
+    configSave,
   };
 
   return (

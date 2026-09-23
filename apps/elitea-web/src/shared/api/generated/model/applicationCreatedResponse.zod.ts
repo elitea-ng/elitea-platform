@@ -55,7 +55,7 @@ export const ApplicationCreatedResponse = zod
     versions: zod.array(ApplicationVersionDetail).optional(),
   })
   .describe(
-    "NOTE(W2): Create response map, internal\/api\/v2\/applications\/handler.go:465-478. version_details and versions (a single-element echo of version_details) appear only when the request carried a `versions` array (:374-463).\n",
+    "NOTE(W2): Create response map, internal/api/v2/applications/handler.go:465-478. version_details and versions (a single-element echo of version_details) appear only when the request carried a `versions` array (:374-463).\n",
   );
 
 export type ApplicationCreatedResponse = zod.input<

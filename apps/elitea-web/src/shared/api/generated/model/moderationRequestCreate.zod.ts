@@ -58,11 +58,11 @@ export const ModerationRequestCreate = zod
       .enum(["pending"])
       .optional()
       .describe(
-        'Accepted only as \"pending\", and refused with 400 otherwise — a requester may not file an already-approved request. The value is never applied: the server always stores \"pending\" (internal\/api\/v2\/moderation\/requests.go:666-681).\n',
+        'Accepted only as "pending", and refused with 400 otherwise — a requester may not file an already-approved request. The value is never applied: the server always stores "pending" (internal/api/v2/moderation/requests.go:666-681).\n',
       ),
   })
   .describe(
-    "NOTE(W2): the fields internal\/api\/v2\/moderation\/requests.go's `requestCreateBody` (:602-608) reads. Two more fields are decoded only so they can be refused, and neither is modeled here because no client should send one: `user_id` is refused with 400 (the author is the authenticated caller), and a non-empty `meta` is refused with 400 (an absent, null or empty one is tolerated for the two shipped clients). `project_id` and `entity_id` come from the path.\n",
+    "NOTE(W2): the fields internal/api/v2/moderation/requests.go's `requestCreateBody` (:602-608) reads. Two more fields are decoded only so they can be refused, and neither is modeled here because no client should send one: `user_id` is refused with 400 (the author is the authenticated caller), and a non-empty `meta` is refused with 400 (an absent, null or empty one is tolerated for the two shipped clients). `project_id` and `entity_id` come from the path.\n",
   );
 
 export type ModerationRequestCreate = zod.input<typeof ModerationRequestCreate>;

@@ -657,6 +657,30 @@ type Querier interface {
 	ResumeCurrentAgentAuthorization(ctx context.Context, arg ResumeCurrentAgentAuthorizationParams) (ResumeCurrentAgentAuthorizationRow, error)
 	ResumeCurrentAgentHITL(ctx context.Context, arg ResumeCurrentAgentHITLParams) (ResumeCurrentAgentHITLRow, error)
 	ResumeCurrentAgentOutputLimit(ctx context.Context, arg ResumeCurrentAgentOutputLimitParams) (ResumeCurrentAgentOutputLimitRow, error)
+	//
+	// Rewrite the text of a question that is being regenerated (issue 980), inside
+	// the SAME admission transaction that resets its answer.
+	//
+	// WHY IT IS A SEPARATE STATEMENT rather than another CTE on
+	// `ResetCurrentAgentResponse`: the reset is what every regeneration performs
+	// and this is what only an EDITED one performs. Folding an optional write into
+	// the statement that owns the mandatory one would make the ordinary retry pay
+	// for — and be refusable by — a clause it never uses.
+	//
+	// The ownership gate is the reset's own, restated: the conversation must be
+	// the one named, the question must be that conversation's, its author must be
+	// a user, and the ACTOR must either own the conversation or be the question's
+	// author. A caller that can regenerate a turn can rewrite the question it is
+	// regenerating, and nothing else.
+	//
+	// WHICH ITEM. `item_uuid` is the item the browser is editing. When it names
+	// one, that item must belong to THIS question group — a uuid from another
+	// message matches nothing and the caller is refused rather than silently
+	// rewriting the wrong row. When it is the zero uuid ("the message carries no
+	// stored item", the ordinary shape of a question the browser is still holding
+	// from the send that created it), the group's FIRST text item is rewritten,
+	// which is the one `ListMessages` renders as the question.
+	RewriteCurrentAgentQuestionText(ctx context.Context, arg RewriteCurrentAgentQuestionTextParams) (int32, error)
 	ScheduledDatabaseNow(ctx context.Context) (pgtype.Timestamptz, error)
 	SetArtifactBucketPinned(ctx context.Context, arg SetArtifactBucketPinnedParams) (EliteaStorageBucket, error)
 	// Configuration lifecycle internal effects. Unqualified tenant tables are

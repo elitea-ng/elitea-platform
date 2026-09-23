@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
@@ -12,71 +13,87 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
+import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { BaseModal } from '@/shared/ui/BaseModal';
 import { InputBase } from '@/shared/ui/InputBase';
-import { RadioButtonGroup } from '@/shared/ui/RadioButtonGroup';
+import { SingleSelect } from '@/shared/ui/SingleSelect';
 
-const WEBHOOK_TYPE_OPTIONS = [
-  { label: 'GitHub', value: 'github' },
-  { label: 'GitLab', value: 'gitlab' },
-  { label: 'Custom', value: 'custom' },
-] as const;
+import {
+  DEFAULT_SIGNATURE_HEADER,
+  MODE_OPTIONS,
+  WEBHOOK_MODES,
+  buildExampleRequest,
+  webhookModeFromAuthMode,
+  type WebhookMode,
+} from './pipelineWebhookModal.lib';
 
-const WEBHOOK_TYPE_DESCRIPTIONS: Readonly<Record<string, string>> = {
-  github: 'Uses x-hub-signature-256 header with HMAC-SHA256 signature',
-  gitlab: 'Uses x-gitlab-token header with secret token',
-  custom: 'Uses X-Webhook-Token header with secret token',
-};
-
-/** Matches the backend's `secrets.token_urlsafe`-shaped secret (baseline: `generateSecretToken`). */
-function generateSecretToken(): string {
-  const array = new Uint8Array(32);
-  crypto.getRandomValues(array);
-  return btoa(String.fromCharCode(...array)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-}
-
-function buildExampleRequest(webhookType: string, webhookUrl: string, secretValue: string | undefined, secretHeader: string | undefined, showSecret: boolean): string | null {
-  if (!webhookUrl) return null;
-  const payload = 'Your message or data here';
-  const maskedSecret = '<your_secret>';
-  const displaySecret = showSecret ? (secretValue ?? maskedSecret) : maskedSecret;
-
-  if (webhookType === 'github') {
-    return `curl -X POST "${webhookUrl}" \\\n  -H "Content-Type: text/plain" \\\n  -H "X-Hub-Signature-256: sha256=<computed_hmac>" \\\n  -d '${payload}'\n\n# To compute HMAC-SHA256 signature:\n# echo -n '${payload}' | openssl dgst -sha256 -hmac "${displaySecret}"`;
-  }
-  if (webhookType === 'gitlab') {
-    return `curl -X POST "${webhookUrl}" \\\n  -H "Content-Type: text/plain" \\\n  -H "X-Gitlab-Token: ${displaySecret}" \\\n  -d '${payload}'`;
-  }
-  if (webhookType === 'custom') {
-    const header = secretHeader ?? 'X-Webhook-Token';
-    return `curl -X POST "${webhookUrl}" \\\n  -H "Content-Type: text/plain" \\\n  -H "${header}: ${displaySecret}" \\\n  -d '${payload}'`;
-  }
-  return null;
-}
+/**
+ * The inbound trigger's settings dialog (baseline:
+ * `apps/elitea-ui/src/[fsd]/features/pipelines/flow-editor/ui/settings/
+ * PipelineWebhookModal.jsx`, unit A2h), rebuilt on the Go inbound route by
+ * #899.
+ *
+ * THE TYPE SELECTOR IS BACK, WITH TWO ENTRIES AND NOT THREE (#970). The
+ * baseline offered GitHub / GitLab / Custom, each naming a different
+ * signature header, because pylon's endpoint verified all three. When this
+ * dialog was rebuilt the Go route verified ONE credential — a bearer secret
+ * in one of three carriers — so the group was removed rather than left
+ * selecting something the backend ignored. The route now carries a per-trigger
+ * MODE, so the choice exists again and means something:
+ *
+ *   - Custom keeps the bearer secret and the three carriers;
+ *   - GitHub verifies `HMAC-SHA256(secret, raw body)` out of
+ *     `X-Hub-Signature-256`, which is what a repository webhook sends — it
+ *     sends no `Authorization` header and cannot be made to.
+ *
+ * GitLab is NOT offered: `X-Gitlab-Token` is a shared token sent verbatim
+ * rather than a signature, so it is the Custom mode with a different header
+ * name, and listing it would imply a verification this service does not
+ * perform.
+ *
+ * CHANGING THE MODE ROTATES THE CREDENTIAL, because the backend writes the
+ * mode on the create/rotate route and nowhere else. That is stated in the
+ * dialog rather than done quietly: the previous secret stops working the
+ * moment the mode changes, and whoever configured the sender has to paste the
+ * new one.
+ *
+ * The secret is likewise no longer generated in the browser. The backend
+ * mints it, returns it exactly once on create/rotate, stores only its digest
+ * beside the row and its plaintext in the vault's hidden bucket, and hands it
+ * back only through the separate reveal operation that carries the WRITE
+ * permission. So this dialog has a Reveal action instead of a value it holds:
+ * with nothing revealed it shows the URL alone, which is what a view of a
+ * trigger looks like when the credential has not been asked for.
+ */
 
 export interface PipelineWebhookModalProps {
   readonly open: boolean;
   readonly onClose: () => void;
-  readonly onSubmit: (webhookType: string, newSecretValue: string | null) => void;
-  readonly webhookType?: string | undefined;
+  /** The inbound URL WITHOUT the secret — present on every read. */
   readonly webhookUrl?: string | undefined;
+  /** The live credential, present only after a create/rotate or a reveal. */
   readonly secretValue?: string | undefined;
-  readonly secretHeader?: string | undefined;
-  readonly secretInstructions?: string | undefined;
+  /** The stored `auth_mode` — `hmac_sha256` selects the GitHub entry. */
+  readonly authMode?: string | undefined;
+  /** The header the sender must sign into, for a signing trigger. */
+  readonly signatureHeader?: string | undefined;
   readonly isLoading?: boolean | undefined;
-  /** Fires with a short confirmation message on copy/regenerate actions (baseline: `toastSuccess`). See `TriggerTypeSelector.tsx`'s doc comment for the "no global toast hook" convention this replaces. */
+  readonly onReveal: () => void;
+  /** Rotates the credential. The mode is passed because the rotate route is where the backend writes it. */
+  readonly onRotate: (mode?: WebhookMode) => void;
+  readonly onRevoke: () => void;
+  /** Fires with a short confirmation message on copy actions (baseline: `toastSuccess`). See `TriggerTypeSelector.tsx`'s doc comment for the "no global toast hook" convention this replaces. */
   readonly onNotify?: ((message: string) => void) | undefined;
 }
 
 const contentWrapperSx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', gap: '1.5rem', minWidth: '25rem' };
 const sectionSx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', gap: '0.5rem' };
 const descriptionSx: SxProps<Theme> = { color: 'text.secondary' };
-const helperTextSx: SxProps<Theme> = { color: 'text.secondary', fontStyle: 'italic' };
-const urlContainerSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: '0.5rem' };
-function urlInputSx(theme: Theme) {
+const rowSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: '0.5rem' };
+const actionRowSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' };
+function valueInputSx(theme: Theme) {
   return { flex: 1, '& input': { fontSize: theme.typography.bodySmall.fontSize, fontFamily: 'monospace' } };
 }
-const exampleHeaderSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', justifyContent: 'space-between' };
 function codeBlockSx(theme: Theme) {
   return { backgroundColor: theme.vars.palette.background.secondary, border: `1px solid ${theme.vars.palette.border.lines}`, borderRadius: theme.vars.shape.radiusMd, padding: '0.75rem', overflow: 'auto', maxHeight: '12rem' };
 }
@@ -84,26 +101,34 @@ function codeTextSx(theme: Theme) {
   return { fontFamily: 'monospace', fontSize: theme.typography.bodySmall2.fontSize, color: theme.vars.palette.text.secondary, whiteSpace: 'pre-wrap' as const, wordBreak: 'break-all' as const, margin: 0 };
 }
 
-interface WebhookUrlSectionProps {
-  readonly webhookUrl: string;
+interface ValueRowProps {
+  readonly label: string;
+  readonly value: string;
+  readonly testId: string;
+  readonly copyTooltip: string;
   readonly onCopy: () => void;
+  readonly extra?: ReactNode;
 }
 
-function WebhookUrlSection({ webhookUrl, onCopy }: WebhookUrlSectionProps): ReactNode {
+function ValueRow({ label, value, testId, copyTooltip, onCopy, extra }: ValueRowProps): ReactNode {
   return (
     <Box sx={sectionSx}>
-      <Typography variant="labelMedium">{t('pipelines.pipelineWebhookModal.webhookUrl', 'Webhook URL')}</Typography>
-      <Box sx={urlContainerSx}>
+      <Typography variant="labelMedium">{label}</Typography>
+      <Box sx={rowSx}>
         <InputBase
-          value={webhookUrl}
-          slotProps={{ htmlInput: { readOnly: true } }}
-          sx={urlInputSx}
+          value={value}
+          slotProps={{ htmlInput: { readOnly: true, 'data-testid': testId } }}
+          sx={valueInputSx}
         />
+        {extra}
         <Tooltip
-          title={t('pipelines.pipelineWebhookModal.copyUrl', 'Copy URL')}
+          title={copyTooltip}
           placement="top"
         >
-          <IconButton onClick={onCopy}>
+          <IconButton
+            onClick={onCopy}
+            aria-label={copyTooltip}
+          >
             <ContentCopyIcon fontSize="small" />
           </IconButton>
         </Tooltip>
@@ -112,109 +137,100 @@ function WebhookUrlSection({ webhookUrl, onCopy }: WebhookUrlSectionProps): Reac
   );
 }
 
-interface WebhookSecretSectionProps {
-  readonly secretValue: string;
-  readonly displaySecretValue: string | undefined;
-  readonly showSecretValue: boolean;
-  readonly isPendingRegenerate: boolean;
-  readonly displayedSecretInstructions: string | undefined;
-  readonly onToggleVisibility: () => void;
-  readonly onCopy: () => void;
-  readonly onRegenerate: () => void;
+interface WebhookModeSectionProps {
+  readonly selectedMode: WebhookMode;
+  readonly storedMode: WebhookMode;
+  readonly signatureHeader: string | undefined;
+  readonly isLoading: boolean;
+  readonly onSelect: (mode: WebhookMode) => void;
+  readonly onApply: () => void;
 }
 
-function WebhookSecretSection(props: WebhookSecretSectionProps): ReactNode {
-  const { displaySecretValue, showSecretValue, isPendingRegenerate, displayedSecretInstructions, onToggleVisibility, onCopy, onRegenerate } = props;
-
+/**
+ * The type selector, its one-sentence explanation, and the "applying this
+ * rotates the credential" confirmation.
+ *
+ * Its own component because the dialog function is at the §3.5 complexity
+ * budget (12) and this section carries three branches of its own — not because
+ * anything here is reusable.
+ */
+function WebhookModeSection({ selectedMode, storedMode, signatureHeader, isLoading, onSelect, onApply }: WebhookModeSectionProps): ReactNode {
+  const hint =
+    selectedMode === WEBHOOK_MODES.github
+      ? t(
+          'pipelines.pipelineWebhookModal.modeGithubHint',
+          'GitHub signs the request body with the secret and sends the digest in {{header}}. Configure that secret in the repository\u2019s webhook settings; no Authorization header is sent or accepted.',
+          { header: signatureHeader ?? DEFAULT_SIGNATURE_HEADER },
+        )
+      : t(
+          'pipelines.pipelineWebhookModal.modeCustomHint',
+          'The sender presents the secret itself, as an Authorization: Bearer header, as X-Elitea-Trigger-Token, or as a token query parameter.',
+        );
   return (
     <Box sx={sectionSx}>
-      <Typography variant="labelMedium">
-        {t('pipelines.pipelineWebhookModal.secretValue', 'Secret Value')}{' '}
-        {isPendingRegenerate && (
-          <Typography
-            component="span"
-            variant="bodySmall2"
-            color="warning.main"
-          >
-            {t('pipelines.pipelineWebhookModal.newPending', '(new - click Apply to save)')}
-          </Typography>
-        )}
+      <Typography variant="labelMedium">{t('pipelines.pipelineWebhookModal.modeLabel', 'Webhook type')}</Typography>
+      <SingleSelect
+        value={selectedMode}
+        options={MODE_OPTIONS}
+        onChange={value => onSelect(value === WEBHOOK_MODES.github ? WEBHOOK_MODES.github : WEBHOOK_MODES.custom)}
+        disabled={isLoading}
+        id="pipeline-webhook-mode"
+      />
+      <Typography
+        variant="bodySmall"
+        sx={descriptionSx}
+        data-testid="pipeline-webhook-mode-hint"
+      >
+        {hint}
       </Typography>
-      <Box sx={urlContainerSx}>
-        <InputBase
-          value={showSecretValue ? (displaySecretValue ?? '') : '•'.repeat(displaySecretValue?.length ?? 32)}
-          slotProps={{ htmlInput: { readOnly: true } }}
-          sx={urlInputSx}
-        />
-        <Tooltip
-          title={showSecretValue ? t('pipelines.pipelineWebhookModal.hideSecret', 'Hide secret') : t('pipelines.pipelineWebhookModal.showSecret', 'Show secret')}
-          placement="top"
-        >
-          <IconButton onClick={onToggleVisibility}>{showSecretValue ? <VisibilityOffIcon fontSize="small" /> : <VisibilityIcon fontSize="small" />}</IconButton>
-        </Tooltip>
-        <Tooltip
-          title={t('pipelines.pipelineWebhookModal.copySecret', 'Copy secret')}
-          placement="top"
-        >
-          <IconButton onClick={onCopy}>
-            <ContentCopyIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
-        <Tooltip
-          title={t('pipelines.pipelineWebhookModal.regenerateSecret', 'Regenerate secret')}
-          placement="top"
-        >
-          <IconButton onClick={onRegenerate}>
-            <RefreshIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
-      </Box>
-      {!isPendingRegenerate && displayedSecretInstructions && (
-        <Typography
-          variant="bodySmall"
-          sx={helperTextSx}
-        >
-          {displayedSecretInstructions}
-        </Typography>
+      {selectedMode !== storedMode && (
+        <Box sx={rowSx}>
+          <Typography
+            variant="bodySmall"
+            sx={descriptionSx}
+            data-testid="pipeline-webhook-mode-pending"
+          >
+            {t(
+              'pipelines.pipelineWebhookModal.modePending',
+              'Applying this type rotates the credential: the current secret stops working and the sender has to be given the new one.',
+            )}
+          </Typography>
+          <BaseBtn
+            variant="secondary"
+            onClick={onApply}
+            disabled={isLoading}
+            data-testid="pipeline-webhook-apply-mode"
+          >
+            {t('pipelines.pipelineWebhookModal.applyMode', 'Apply and rotate')}
+          </BaseBtn>
+        </Box>
       )}
     </Box>
   );
 }
 
-interface WebhookExampleSectionProps {
-  readonly exampleRequest: string;
-  readonly onCopy: () => void;
-}
+export function PipelineWebhookModal(props: PipelineWebhookModalProps): ReactNode {
+  const { open, onClose, webhookUrl, secretValue, authMode, signatureHeader, isLoading = false, onReveal, onRotate, onRevoke, onNotify } = props;
 
-function WebhookExampleSection({ exampleRequest, onCopy }: WebhookExampleSectionProps): ReactNode {
-  return (
-    <Box sx={sectionSx}>
-      <Box sx={exampleHeaderSx}>
-        <Typography variant="labelMedium">{t('pipelines.pipelineWebhookModal.exampleRequest', 'Example Request')}</Typography>
-        <Tooltip
-          title={t('pipelines.pipelineWebhookModal.copyExample', 'Copy example')}
-          placement="top"
-        >
-          <IconButton onClick={onCopy}>
-            <ContentCopyIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
-      </Box>
-      <Box sx={codeBlockSx}>
-        <Typography
-          component="pre"
-          sx={codeTextSx}
-        >
-          {exampleRequest}
-        </Typography>
-      </Box>
-    </Box>
-  );
-}
+  const [showSecret, setShowSecret] = useState(false);
+  const storedMode: WebhookMode = webhookModeFromAuthMode(authMode);
+  // The SELECTED mode is local until the rotate that writes it: the backend
+  // has no way to change a trigger's mode without minting a new credential, so
+  // the dialog must be able to show the pending choice beside the warning that
+  // applying it replaces the secret.
+  const [selectedMode, setSelectedMode] = useState<WebhookMode>(storedMode);
 
-/** Every `navigator.clipboard.writeText` + `onNotify` pairing this modal needs -- split out to keep {@link PipelineWebhookModal} under the §3.5 complexity budget. */
-function useWebhookClipboardActions(onNotify: ((message: string) => void) | undefined) {
-  const copy = useCallback(
+  useEffect(() => {
+    if (open) {
+      setShowSecret(false);
+      setSelectedMode(storedMode);
+    }
+    // `storedMode` is derived from a prop that can change while the dialog is
+    // open (a rotate answers with the new mode); re-seeding the selection on
+    // every open is what makes "what is stored" the starting point each time.
+  }, [open, storedMode]);
+
+  const copyToClipboard = useCallback(
     (value: string | undefined, message: string) => {
       if (!value) return;
       void navigator.clipboard.writeText(value);
@@ -222,82 +238,13 @@ function useWebhookClipboardActions(onNotify: ((message: string) => void) | unde
     },
     [onNotify],
   );
-  return copy;
-}
 
-/**
- * Ported from `apps/elitea-ui/src/[fsd]/features/pipelines/flow-editor/ui/
- * settings/PipelineWebhookModal.jsx` (unit A2h). `useToast()` -> `onNotify`
- * prop, matching `TriggerTypeSelector.tsx`'s convention (this app's own).
- * `WebhookUrlSection`/`WebhookSecretSection`/`WebhookExampleSection` split
- * out purely to keep this function's own complexity under the §3.5 budget
- * (12) -- same technique `features/agents/ui/ToolCard.tsx` uses for its
- * own oversized JSX body.
- */
-export function PipelineWebhookModal(props: PipelineWebhookModalProps): ReactNode {
-  const { open, onClose, onSubmit, webhookType: initialWebhookType, webhookUrl, secretValue, secretHeader, secretInstructions, isLoading = false, onNotify } = props;
-
-  const [selectedWebhookType, setSelectedWebhookType] = useState('github');
-  const [showSecretValue, setShowSecretValue] = useState(false);
-  const [pendingSecretValue, setPendingSecretValue] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (open && initialWebhookType) setSelectedWebhookType(initialWebhookType);
-    if (open) {
-      setShowSecretValue(false);
-      setPendingSecretValue(null);
-    }
-  }, [open, initialWebhookType]);
-
-  const copyToClipboard = useWebhookClipboardActions(onNotify);
-
-  const handleRegenerateClick = useCallback(() => {
-    setPendingSecretValue(generateSecretToken());
-    onNotify?.(t('pipelines.pipelineWebhookModal.newSecretGenerated', 'New secret generated. Click Apply to save.'));
-  }, [onNotify]);
-
-  const displaySecretValue = pendingSecretValue ?? secretValue;
-  const isPendingRegenerate = pendingSecretValue !== null;
-
-  const fullWebhookUrl = useMemo(() => {
-    if (!webhookUrl) return '';
-    const baseUrl = window.location.origin;
-    return `${baseUrl}${webhookUrl.replace(/\/[^/]+$/, `/${selectedWebhookType}`)}`;
-  }, [webhookUrl, selectedWebhookType]);
-
-  const handleCopyUrl = useCallback(
-    () => copyToClipboard(fullWebhookUrl, t('pipelines.pipelineWebhookModal.urlCopied', 'Webhook URL copied to clipboard')),
-    [copyToClipboard, fullWebhookUrl],
-  );
-  const handleCopySecret = useCallback(
-    () => copyToClipboard(displaySecretValue, t('pipelines.pipelineWebhookModal.secretCopied', 'Secret copied to clipboard')),
-    [copyToClipboard, displaySecretValue],
-  );
-
-  const handleToggleSecretVisibility = useCallback(() => setShowSecretValue(prev => !prev), []);
-
-  const displayedSecretInstructions = useMemo(() => {
-    if (!secretInstructions || !displaySecretValue) return secretInstructions;
-    if (showSecretValue) return secretInstructions;
-    return secretInstructions.replace(secretValue ?? '', '•'.repeat(Math.min(displaySecretValue.length, 32)));
-  }, [secretInstructions, secretValue, displaySecretValue, showSecretValue]);
-
+  const fullWebhookUrl = useMemo(() => (webhookUrl ? new URL(webhookUrl, window.location.origin).toString() : ''), [webhookUrl]);
+  const storedSignatureHeader = storedMode === WEBHOOK_MODES.github ? (signatureHeader ?? DEFAULT_SIGNATURE_HEADER) : undefined;
   const exampleRequest = useMemo(
-    () => buildExampleRequest(selectedWebhookType, fullWebhookUrl, displaySecretValue, secretHeader, showSecretValue),
-    [selectedWebhookType, fullWebhookUrl, displaySecretValue, secretHeader, showSecretValue],
+    () => buildExampleRequest({ url: fullWebhookUrl, secret: secretValue, showSecret, signatureHeader: storedSignatureHeader }),
+    [fullWebhookUrl, secretValue, showSecret, storedSignatureHeader],
   );
-
-  const handleCopyExample = useCallback(
-    () => copyToClipboard(exampleRequest ?? undefined, t('pipelines.pipelineWebhookModal.exampleCopied', 'Example request copied to clipboard')),
-    [copyToClipboard, exampleRequest],
-  );
-
-  const applyChanges = useCallback(() => {
-    onSubmit(selectedWebhookType, pendingSecretValue);
-    onClose();
-  }, [onSubmit, selectedWebhookType, pendingSecretValue, onClose]);
-
-  const currentDescription = WEBHOOK_TYPE_DESCRIPTIONS[selectedWebhookType];
 
   return (
     <BaseModal
@@ -306,43 +253,98 @@ export function PipelineWebhookModal(props: PipelineWebhookModalProps): ReactNod
       title={t('pipelines.pipelineWebhookModal.title', 'Webhook settings')}
       content={
         <Box sx={contentWrapperSx}>
-          <Box sx={sectionSx}>
-            <Typography variant="labelMedium">{t('pipelines.pipelineWebhookModal.webhookType', 'Webhook Type')}</Typography>
-            <RadioButtonGroup
-              aria-label={t('pipelines.pipelineWebhookModal.webhookTypeAriaLabel', 'Webhook type')}
-              value={selectedWebhookType}
-              items={WEBHOOK_TYPE_OPTIONS.map(option => ({ value: option.value, label: option.label }))}
-              onChange={setSelectedWebhookType}
+          <WebhookModeSection
+            selectedMode={selectedMode}
+            storedMode={storedMode}
+            signatureHeader={signatureHeader}
+            isLoading={isLoading}
+            onSelect={setSelectedMode}
+            onApply={() => onRotate(selectedMode)}
+          />
+
+          {storedSignatureHeader !== undefined && (
+            <ValueRow
+              label={t('pipelines.pipelineWebhookModal.signatureHeader', 'Signature header')}
+              value={storedSignatureHeader}
+              testId="pipeline-webhook-signature-header"
+              copyTooltip={t('pipelines.pipelineWebhookModal.copyHeader', 'Copy header name')}
+              onCopy={() => copyToClipboard(storedSignatureHeader, t('pipelines.pipelineWebhookModal.headerCopied', 'Signature header copied to clipboard'))}
             />
-            {currentDescription && (
+          )}
+
+          {fullWebhookUrl && (
+            <ValueRow
+              label={t('pipelines.pipelineWebhookModal.webhookUrl', 'Webhook URL')}
+              value={fullWebhookUrl}
+              testId="pipeline-webhook-url"
+              copyTooltip={t('pipelines.pipelineWebhookModal.copyUrl', 'Copy URL')}
+              onCopy={() => copyToClipboard(fullWebhookUrl, t('pipelines.pipelineWebhookModal.urlCopied', 'Webhook URL copied to clipboard'))}
+            />
+          )}
+
+          {secretValue === undefined ? (
+            <Box sx={sectionSx}>
+              <Typography variant="labelMedium">{t('pipelines.pipelineWebhookModal.secretValue', 'Secret Value')}</Typography>
               <Typography
                 variant="bodySmall"
                 sx={descriptionSx}
               >
-                {currentDescription}
+                {t('pipelines.pipelineWebhookModal.secretHidden', 'The credential is stored server-side and is never part of the ordinary read. Reveal it to copy it again, or rotate it to replace it.')}
               </Typography>
-            )}
+            </Box>
+          ) : (
+            <ValueRow
+              label={t('pipelines.pipelineWebhookModal.secretValue', 'Secret Value')}
+              value={showSecret ? secretValue : '•'.repeat(Math.min(secretValue.length, 32))}
+              testId="pipeline-webhook-secret"
+              copyTooltip={t('pipelines.pipelineWebhookModal.copySecret', 'Copy secret')}
+              onCopy={() => copyToClipboard(secretValue, t('pipelines.pipelineWebhookModal.secretCopied', 'Secret copied to clipboard'))}
+              extra={
+                <Tooltip
+                  title={showSecret ? t('pipelines.pipelineWebhookModal.hideSecret', 'Hide secret') : t('pipelines.pipelineWebhookModal.showSecret', 'Show secret')}
+                  placement="top"
+                >
+                  <IconButton
+                    onClick={() => setShowSecret(previous => !previous)}
+                    aria-label={showSecret ? t('pipelines.pipelineWebhookModal.hideSecret', 'Hide secret') : t('pipelines.pipelineWebhookModal.showSecret', 'Show secret')}
+                  >
+                    {showSecret ? <VisibilityOffIcon fontSize="small" /> : <VisibilityIcon fontSize="small" />}
+                  </IconButton>
+                </Tooltip>
+              }
+            />
+          )}
+
+          <Box sx={actionRowSx}>
+            <BaseBtn
+              variant="secondary"
+              onClick={onReveal}
+              disabled={isLoading}
+              data-testid="pipeline-webhook-reveal"
+              startIcon={<VisibilityIcon fontSize="small" />}
+            >
+              {t('pipelines.pipelineWebhookModal.reveal', 'Reveal secret')}
+            </BaseBtn>
+            <BaseBtn
+              variant="secondary"
+              onClick={() => onRotate(storedMode)}
+              disabled={isLoading}
+              data-testid="pipeline-webhook-rotate"
+              startIcon={<RefreshIcon fontSize="small" />}
+            >
+              {t('pipelines.pipelineWebhookModal.rotate', 'Rotate secret')}
+            </BaseBtn>
+            <BaseBtn
+              variant="secondary"
+              color="error"
+              onClick={onRevoke}
+              disabled={isLoading}
+              data-testid="pipeline-webhook-revoke"
+              startIcon={<DeleteOutlineIcon fontSize="small" />}
+            >
+              {t('pipelines.pipelineWebhookModal.revoke', 'Revoke')}
+            </BaseBtn>
           </Box>
-
-          {webhookUrl && (
-            <WebhookUrlSection
-              webhookUrl={fullWebhookUrl}
-              onCopy={handleCopyUrl}
-            />
-          )}
-
-          {secretValue && (
-            <WebhookSecretSection
-              secretValue={secretValue}
-              displaySecretValue={displaySecretValue}
-              showSecretValue={showSecretValue}
-              isPendingRegenerate={isPendingRegenerate}
-              displayedSecretInstructions={displayedSecretInstructions}
-              onToggleVisibility={handleToggleSecretVisibility}
-              onCopy={handleCopySecret}
-              onRegenerate={handleRegenerateClick}
-            />
-          )}
 
           <Box sx={sectionSx}>
             <Typography variant="labelMedium">{t('pipelines.pipelineWebhookModal.payloadFormat', 'Payload Format')}</Typography>
@@ -350,24 +352,49 @@ export function PipelineWebhookModal(props: PipelineWebhookModalProps): ReactNod
               variant="bodySmall"
               sx={descriptionSx}
             >
-              {t('pipelines.pipelineWebhookModal.payloadDescription', 'Send a POST request with any body content. The raw request body will be passed directly to the pipeline as user input.')}
+              {t('pipelines.pipelineWebhookModal.payloadDescription', 'Send a POST request with an optional JSON body. Its `input` field is placed in front of the pipeline; an unparseable body is accepted as empty input.')}
             </Typography>
           </Box>
 
-          {exampleRequest && (
-            <WebhookExampleSection
-              exampleRequest={exampleRequest}
-              onCopy={handleCopyExample}
-            />
+          {exampleRequest !== null && (
+            <Box sx={sectionSx}>
+              <Box sx={rowSx}>
+                <Typography
+                  variant="labelMedium"
+                  sx={{ flex: 1 }}
+                >
+                  {t('pipelines.pipelineWebhookModal.exampleRequest', 'Example Request')}
+                </Typography>
+                <Tooltip
+                  title={t('pipelines.pipelineWebhookModal.copyExample', 'Copy example')}
+                  placement="top"
+                >
+                  <IconButton
+                    onClick={() => copyToClipboard(exampleRequest, t('pipelines.pipelineWebhookModal.exampleCopied', 'Example request copied to clipboard'))}
+                    aria-label={t('pipelines.pipelineWebhookModal.copyExample', 'Copy example')}
+                  >
+                    <ContentCopyIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              </Box>
+              <Box sx={codeBlockSx}>
+                <Typography
+                  component="pre"
+                  sx={codeTextSx}
+                >
+                  {exampleRequest}
+                </Typography>
+              </Box>
+            </Box>
           )}
         </Box>
       }
       actions={{
         confirming: isLoading,
-        confirmText: t('pipelines.pipelineWebhookModal.apply', 'Apply'),
+        confirmText: t('pipelines.pipelineWebhookModal.done', 'Done'),
         cancelText: t('pipelines.pipelineWebhookModal.cancel', 'Cancel'),
       }}
-      onConfirm={applyChanges}
+      onConfirm={onClose}
     />
   );
 }

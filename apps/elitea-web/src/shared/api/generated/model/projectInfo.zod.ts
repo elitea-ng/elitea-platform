@@ -52,7 +52,7 @@ export const ProjectInfo = zod
     icon_meta: ProjectIconMeta,
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/projectinfo\/handler.go, CurrentProjectInfo. Both keys are always present on a 200.\n",
+    "NOTE(W2): internal/api/v2/projectinfo/handler.go, CurrentProjectInfo. Both keys are always present on a 200.\n",
   );
 
 export type ProjectInfo = zod.input<typeof ProjectInfo>;

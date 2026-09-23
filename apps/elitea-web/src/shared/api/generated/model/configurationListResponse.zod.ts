@@ -58,7 +58,7 @@ export const ConfigurationListResponse = zod
     ),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/configurations\/handler.go, ListResponse (compat) and dto.go, CurrentConfigurationListDTO (reviewed).\n",
+    "NOTE(W2): internal/api/v2/configurations/handler.go, ListResponse (compat) and dto.go, CurrentConfigurationListDTO (reviewed).\n",
   );
 
 export type ConfigurationListResponse = zod.input<

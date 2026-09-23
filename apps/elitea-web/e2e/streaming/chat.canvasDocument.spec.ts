@@ -169,8 +169,13 @@ test('a whole reply opens as a document, a heading edited in it round-trips, and
     await editor.getByTestId('canvas-edit-save-to-artifacts').click();
     const dialog = page.getByTestId('canvas-save-to-artifacts-dialog');
     await expect(dialog).toBeVisible({ timeout: 10_000 });
-    // The lone bucket this run just seeded auto-fills — proof the picker
-    // reached the real bucket list rather than opening empty.
+    // Select THIS run's own bucket explicitly, rather than assuming it is
+    // the only bucket the picker offers and trusting whatever it auto-fills
+    // with — the project is shared with other concurrent specs (notably
+    // `chat.artifacts-toolkit.spec.ts`), any of which can leave the picker's
+    // list carrying more than one bucket at once.
+    await dialog.getByRole('combobox', { name: 'Bucket' }).click();
+    await page.getByRole('option', { name: bucket, exact: true }).click();
     await expect(page.getByTestId('canvas-save-bucket-select')).toHaveValue(bucket, { timeout: 10_000 });
 
     const fileName = `${token}.md`;

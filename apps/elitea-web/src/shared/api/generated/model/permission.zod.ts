@@ -47,7 +47,7 @@ export const Permission = zod
     enabled: zod.boolean(),
   })
   .describe(
-    "NOTE(W2): defaultPermissions(), internal\/api\/v2\/eliteacore\/handler.go:3003-3018 — static list, enabled always true; empty array when the request carries no user identity.\n",
+    "NOTE(W2): defaultPermissions(), internal/api/v2/eliteacore/handler.go:3003-3018 — static list, enabled always true; empty array when the request carries no user identity.\n",
   );
 
 export type Permission = zod.input<typeof Permission>;

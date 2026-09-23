@@ -53,7 +53,7 @@ export const Application = zod
     tags: zod
       .array(zod.string())
       .describe(
-        "Tag NAMES, deduplicated and sorted, taken from every version of the application (repos\/applications.go List, tagsExpr). ALWAYS present: an application with no tags carries an empty array, not null and not an absent key (issue 841). Only the LIST response fills it; Get and Create build their own maps.\n",
+        "Tag NAMES, deduplicated and sorted, taken from every version of the application (repos/applications.go List, tagsExpr). ALWAYS present: an application with no tags carries an empty array, not null and not an absent key (issue 841). Only the LIST response fills it; Get and Create build their own maps.\n",
       ),
     folder_id: zod.string().optional(),
     status: zod.string().optional(),
@@ -62,7 +62,7 @@ export const Application = zod
     updated_at: zod.iso
       .datetime({ offset: true })
       .describe(
-        'When the agent last changed. ALWAYS present despite the omitempty tag — encoding\/json never omits struct types. It used to be the zero sentinel \"0001-01-01T00:00:00Z\" on every row, because `applications` had no such column and nothing scanned one: migrations\/tenant\/0134 adds it and every write stamps it inside the statement that makes the change — a rename, a version save, a new version, a version delete and a default-version change (repos\/applications.go). A request that changes nothing does not move it.\n',
+        'When the agent last changed. ALWAYS present despite the omitempty tag — encoding/json never omits struct types. It used to be the zero sentinel "0001-01-01T00:00:00Z" on every row, because `applications` had no such column and nothing scanned one: migrations/tenant/0134 adds it and every write stamps it inside the statement that makes the change — a rename, a version save, a new version, a version delete and a default-version change (repos/applications.go). A request that changes nothing does not move it.\n',
       ),
     created_by: zod.string().optional(),
     owner_id: zod.string(),
@@ -73,7 +73,7 @@ export const Application = zod
     agent_type: zod.string().optional(),
   })
   .describe(
-    "NOTE(W2): internal\/domain\/applications\/types.go:15-50 — required set = json tags WITHOUT omitempty (id, name, tags, created_at, owner_id, is_forked, meta, has_interrupt) PLUS updated_at, whose omitempty is ineffective on a time.Time (always marshaled; zero sentinel when unscanned). Every other omitempty field is optional (absent when zero-valued).\n",
+    "NOTE(W2): internal/domain/applications/types.go:15-50 — required set = json tags WITHOUT omitempty (id, name, tags, created_at, owner_id, is_forked, meta, has_interrupt) PLUS updated_at, whose omitempty is ineffective on a time.Time (always marshaled; zero sentinel when unscanned). Every other omitempty field is optional (absent when zero-valued).\n",
   );
 
 export type Application = zod.input<typeof Application>;

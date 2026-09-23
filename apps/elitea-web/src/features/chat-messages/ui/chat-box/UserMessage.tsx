@@ -252,9 +252,27 @@ export function UserMessage({
   }, []);
 
   const handleSubmit = useCallback(() => {
-    const updatedItems: readonly UserMessageUpdatedItem[] = questionItem
-      ? [{ uuid: questionItem.uuid as string | undefined, content: value, item_type: TEXT_MESSAGE_ITEM_TYPE }]
-      : [];
+    // issue 980: ALWAYS one item, whether or not this message carries a stored
+    // `text_message` item. It used to send `[]` when `questionItem` was
+    // absent, and absent is the ordinary case for a question the browser is
+    // still holding from the send that created it — a live-streamed group has
+    // no `messageItems` until the transcript is re-read. The consumer
+    // (`useChatBoxActions.handleSubmitEditedMessage`) derives the new text
+    // from THIS array and returns silently when it is blank, so the editor
+    // closed, the bubble updated locally, and not one request left the
+    // browser: the edit was lost on reload with no error anywhere.
+    //
+    // `uuid` is carried only when the message really has one. The field
+    // identifies WHICH stored item to rewrite; inventing one would ask the
+    // server to update a row that does not exist.
+    const uuid = questionItem?.uuid;
+    const updatedItems: readonly UserMessageUpdatedItem[] = [
+      {
+        ...(typeof uuid === 'string' ? { uuid } : {}),
+        content: value,
+        item_type: TEXT_MESSAGE_ITEM_TYPE,
+      },
+    ];
     setIsEditing(false);
     onSubmit?.(messageId, updatedItems);
   }, [messageId, onSubmit, questionItem, value]);
@@ -301,7 +319,14 @@ export function UserMessage({
             <Button
               size="small"
               variant="contained"
-              disabled={value === resolvedContent || !value.trim()}
+              // issue 980: BLANK ONLY. `value === resolvedContent` used to disable it
+              // too, which made "Save and apply" unreachable for an unchanged
+              // question — and that control is a RETRY as well as an edit
+              // (onetest ELITEA-0540): re-running the same question after a
+              // bad answer is the reason a person opens the editor and changes
+              // nothing. An empty one stays disabled, because there is no
+              // question left to ask.
+              disabled={!value.trim()}
               onClick={handleSubmit}
             >
               {t('features.chatMessages.saveAndApply', 'Save and apply')}
@@ -328,6 +353,16 @@ export function UserMessage({
               ? t('features.chatMessages.typing', 'Typing...')
               : resolvedContent}
           </Typography>
+          {message.interjected === true && (
+            <Typography
+              variant="labelSmall"
+              color="text.secondary"
+              data-testid="chat-message-interjected"
+              sx={{ display: 'block', mt: 0.5 }}
+            >
+              {t('features.chatMessages.sentWhileRunning', 'Sent while running')}
+            </Typography>
+          )}
           <MessageAttachmentList
             items={attachmentItems}
             {...(onRemoveAttachment !== undefined ? { onRemoveAttachment } : {})}

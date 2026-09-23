@@ -61,16 +61,10 @@ func TestPostgresTokenRepositoryLifecycle(t *testing.T) {
 	if _, err := pool.Exec(ctx, dbschema.CentryProjectsBaselineSQLCProjection); err != nil {
 		t.Fatal(err)
 	}
-	// The REAL migration file, not a hand-copied projection. It carries the
+	// The REAL migration files, not hand-copied projections. They carry the
 	// to_regclass guard and the foreign key, so this test proves both apply
 	// against a database that already has auth_core.
-	bindingMigration, err := platformmigrations.Files.ReadFile(tokenProjectBindingMigration)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, string(bindingMigration)); err != nil {
-		t.Fatalf("apply %s: %v", tokenProjectBindingMigration, err)
-	}
+	applyTokenMigrations(ctx, t, pool, 1)
 	if _, err := pool.Exec(ctx, `
 INSERT INTO public.auth_core__user (id, email, suspended)
 VALUES (7, 'owner@example.test', false), (42, 'collision@example.test', false);`); err != nil {
@@ -92,6 +86,19 @@ VALUES (7, 'owner@example.test', false), (42, 'collision@example.test', false);`
 	}
 	if created.ProjectID != nil {
 		t.Fatalf("created project = %d, want unbound", *created.ProjectID)
+	}
+	// The issue stamp is written inside the create transaction, so a committed
+	// token always has one — it is what tells a key that has lived a month from
+	// one whose whole life is twelve hours when the expiry notice is decided.
+	var issuedAt *time.Time
+	if err := pool.QueryRow(ctx,
+		`SELECT issued_at FROM elitea_identity.token_lifecycle WHERE token_id = $1`,
+		created.ID,
+	).Scan(&issuedAt); err != nil {
+		t.Fatalf("read issue stamp for token %d: %v", created.ID, err)
+	}
+	if issuedAt == nil {
+		t.Fatalf("token %d committed with no issue stamp", created.ID)
 	}
 	const signingKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	encoded, err := (&Handler{tokenSigningKey: []byte(signingKey)}).signBaselineToken(created)
@@ -202,6 +209,31 @@ RETURNING id`).Scan(&nullableMetadataID); err != nil {
 
 const tokenProjectBindingMigration = "shared/0071_token_project_binding.sql"
 
+// tokenLifecycleMigration creates elitea_identity.token_lifecycle, which the
+// PAT-create transaction writes the issue stamp into (tokens.go Create →
+// repos.RecordPATIssued). A fixture that builds auth_core by projection has to
+// apply it too, or every Create fails with 42P01 the way a deployment that
+// skipped the migration would.
+const tokenLifecycleMigration = "shared/0125_token_lifecycle.sql"
+
+// applyTokenMigrations runs the real migration files this package's token paths
+// depend on, `times` times each — more than once proves idempotency, which is
+// what the ledgered runner assumes of every file it re-reads.
+func applyTokenMigrations(ctx context.Context, t *testing.T, pool *pgxpool.Pool, times int) {
+	t.Helper()
+	for _, name := range []string{tokenProjectBindingMigration, tokenLifecycleMigration} {
+		statements, err := platformmigrations.Files.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for range times {
+			if _, err := pool.Exec(ctx, string(statements)); err != nil {
+				t.Fatalf("apply %s: %v", name, err)
+			}
+		}
+	}
+}
+
 // TestPostgresTokenProjectBindingLifecycle is the §4 half of ADR-0018 measured
 // against a real database: the membership predicate, the refusal, the fact that
 // a refusal writes no token row, and the cascade that removes a binding with
@@ -253,17 +285,9 @@ func TestPostgresTokenProjectBindingLifecycle(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	bindingMigration, err := platformmigrations.Files.ReadFile(tokenProjectBindingMigration)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Applied TWICE. The migration must be idempotent, and a second run is the
+	// Applied TWICE. The migrations must be idempotent, and a second run is the
 	// only check that proves it.
-	for range 2 {
-		if _, err := pool.Exec(ctx, string(bindingMigration)); err != nil {
-			t.Fatalf("apply %s: %v", tokenProjectBindingMigration, err)
-		}
-	}
+	applyTokenMigrations(ctx, t, pool, 2)
 
 	// Project 5 has the owner as a member. Project 6 does not. Project 7 has an
 	// assignment but is suspended, so the predicate must refuse it as well.

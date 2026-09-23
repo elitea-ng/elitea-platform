@@ -10,6 +10,8 @@ import { useState } from 'react';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
+import { t } from '@/shared/i18n';
+
 import { ToolModal } from './ToolModal';
 
 /** @public Props for `ActionView`. */
@@ -21,10 +23,19 @@ export interface ActionViewProps {
     readonly content?: string;
     readonly toolInputs?: unknown;
     readonly toolOutputs?: string;
+    /**
+     * A chunked tool output (#956) whose chunks did not all arrive, or whose
+     * assembly did not match the digest its producer stamped. The row says so
+     * rather than presenting a prefix as the result.
+     */
+    readonly toolOutputPartial?: boolean;
     readonly toolMeta?: Record<string, unknown>;
     readonly isError?: boolean;
     readonly status?: string;
     readonly timestamp?: string;
+    /** A pin rebuilt from a persisted trace row — see `ToolModalProps` (#951). */
+    readonly traceStepId?: number;
+    readonly traceMessageGroupId?: number;
   };
   /** Called when the action is clicked. */
   readonly onClick?: (() => void) | undefined;
@@ -104,6 +115,18 @@ export function ActionView({ action, onClick, isSelected = false }: ActionViewPr
         >
           {displayText || '...'}
         </Typography>
+        {action.toolOutputPartial ? (
+          // Said on the ROW, not only in the modal: the preview above is a
+          // prefix that ends mid-document and otherwise reads exactly like a
+          // complete small result.
+          <Typography
+            data-testid="chat-tool-action-partial-output"
+            variant="caption"
+            sx={{ display: 'block', mt: 0.25, color: 'warning.main', fontWeight: 600 }}
+          >
+            {t('chatMessages.actionView.partialOutput', 'Partial output — some of this result did not arrive.')}
+          </Typography>
+        ) : null}
       </Box>
       <ToolModal
         open={isModalOpen}

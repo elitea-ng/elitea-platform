@@ -45,6 +45,8 @@ export const GetAnalyticsAgentDetailParams = zod.object({
   application_id: zod.string().optional(),
   agent_id: zod.string().optional(),
   entity_id: zod.string().optional(),
+  date_from: zod.iso.date().optional(),
+  date_to: zod.iso.date().optional(),
 });
 
 export type GetAnalyticsAgentDetailParams = zod.input<

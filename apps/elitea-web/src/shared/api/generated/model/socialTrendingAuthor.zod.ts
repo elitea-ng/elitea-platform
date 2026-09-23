@@ -50,7 +50,7 @@ export const SocialTrendingAuthor = zod
     likes: zod.int(),
   })
   .describe(
-    "NOTE(W2): social.TrendingAuthors row shape (internal\/api\/v2\/social\/handler.go:202-237, fields at :230-233) — ranks social authors by their like activity in the authorized project schema (social\/handler.go:206-240). The handler reads `p_{project_id}.social_likes`, matching migration 001's per-project table shape.\n",
+    "NOTE(W2): social.TrendingAuthors row shape (internal/api/v2/social/handler.go:202-237, fields at :230-233) — ranks social authors by their like activity in the authorized project schema (social/handler.go:206-240). The handler reads `p_{project_id}.social_likes`, matching migration 001's per-project table shape.\n",
   );
 
 export type SocialTrendingAuthor = zod.input<typeof SocialTrendingAuthor>;

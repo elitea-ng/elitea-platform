@@ -135,6 +135,9 @@ export function resolveCoreProps(props: ToolBaseProps): ResolvedCoreProps {
 
 /** `credentialContext` (an advanced escape hatch) wins when supplied; otherwise the plain `onCredentialReload` prop (the baseline's own `ToolBase.jsx:56` shape) is wrapped into the same struct `ToolBaseProperty`'s `credentialContext` prop expects. */
 export function resolveCredentialContext(props: ToolBaseProps): ToolBasePropertyCredentialContext | undefined {
-  if (props.credentialContext) return props.credentialContext;
-  return props.onCredentialReload ? { onCredentialReload: props.onCredentialReload } : undefined;
+  const base = props.credentialContext ?? (props.onCredentialReload ? { onCredentialReload: props.onCredentialReload } : undefined);
+  // #902: merged ON TOP of either branch, so the escape hatch above does not
+  // swallow the project scope the composition root knows.
+  if (props.isTeamProject === undefined) return base;
+  return { ...base, isTeamProject: props.isTeamProject };
 }

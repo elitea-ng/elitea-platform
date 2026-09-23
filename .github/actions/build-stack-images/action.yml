@@ -59,12 +59,81 @@ inputs:
 runs:
   using: composite
   steps:
+    # Third-party (non-`build:`) images the compose files reference — postgres,
+    # redis, pgvector, rustfs, traefik, the oidc-mock base, otel, etc. — pulled
+    # up front with a bounded retry, before buildx even starts.
+    #
+    # Why: three CI runs in one day died before any test ran with a Docker Hub
+    # connection reset while `compose up` pulled a base image (redis:7-alpine,
+    # postgres:18) inline, on the chat-stream shards of ci-web-e2e.yml. Every
+    # caller of this action hands compose-files here in the same order and
+    # relative-to-deploy/ spelling it later hands to the stack script's `up`,
+    # so pulling from the SAME set here means a flaky pull fails loud, with
+    # retries, on a step named for it — not silently, minutes later, inside
+    # `compose up`.
+    #
+    # Deliberately excludes anything the `build:` guard below checks: pulling
+    # a build-tagged image here would paper over a #154 guard failure with a
+    # stale registry tag instead of failing loud.
+    - name: Pull third-party images with retry
+      shell: bash
+      working-directory: ${{ github.workspace }}/deploy
+      env:
+        COMPOSE_FILES: ${{ inputs.compose-files }}
+      run: |
+        set -euo pipefail
+        args=()
+        while IFS= read -r f; do
+          [ -n "$f" ] && args+=("$f")
+        done <<< "$COMPOSE_FILES"
+        bash "${GITHUB_WORKSPACE}/scripts/ci/pull-third-party-images.sh" "${args[@]}"
+
     - uses: docker/setup-buildx-action@v4
       id: buildx
       with:
+        # v0.37.1: v0.37.0 derives the docker-container driver's readiness
+        # wait from the builder container's StartedAt instead of the request
+        # time (docker/buildx#4050, fixed in #4058-era v0.37.1). A client
+        # request arriving late in that fixed window inherits only
+        # milliseconds of wait and fails with `DeadlineExceeded: context
+        # deadline exceeded while waiting for connections to become ready`
+        # even though the builder is healthy — exactly the failure on run
+        # 35673640989: buildkit-cache-dance's 6th sequential inject build
+        # (pip), ~16-20s after the container started, got the tail end of
+        # the window while the first 5 didn't. Pin past the bug rather than
+        # paper over it with retries.
+        version: v0.37.1
         # The builder image from the org's own mirror (mirror-buildkit.yml), by
         # digest: no anonymous Docker Hub pull per job.
         driver-opts: image=ghcr.io/elitea-ng/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+
+    # Belt-and-suspenders for the same class of race: `setup-buildx-action`
+    # already runs `buildx inspect --bootstrap` once, but the cache-dance step
+    # below makes several MORE `docker buildx build` calls against this same
+    # builder in quick succession (one per cache-mount entry), and none of
+    # them re-check readiness first. Confirm the builder answers before that
+    # step starts, with a bounded retry, so a slow-to-settle container never
+    # reaches the dance at all instead of failing partway through it.
+    - name: Wait for the builder to be ready
+      shell: bash
+      env:
+        BUILDER: ${{ steps.buildx.outputs.name }}
+      run: |
+        set -uo pipefail
+        deadline=$((SECONDS + 60))
+        attempt=0
+        until docker buildx inspect --bootstrap --builder "$BUILDER" >/tmp/buildx-inspect.log 2>&1; do
+          attempt=$((attempt + 1))
+          if [ "$SECONDS" -ge "$deadline" ]; then
+            echo "::error::builder $BUILDER did not become ready within 60s (attempt $attempt)"
+            cat /tmp/buildx-inspect.log
+            exit 1
+          fi
+          echo "builder $BUILDER not ready yet (attempt $attempt), retrying..."
+          cat /tmp/buildx-inspect.log
+          sleep 3
+        done
+        echo "builder $BUILDER is ready after $attempt retr$([ "$attempt" = 1 ] && echo y || echo ies)"
 
     # ── What a run may write, and why (the 10 GB cap) ─────────────────────
     #
@@ -89,9 +158,47 @@ runs:
         WRITE: ${{ inputs.cache-write }}
         # The mount-cache key, computed ONCE: a writer and a reader that
         # spelled it separately could drift apart and never hit each other.
-        MOUNT_KEY: buildkit-mounts-${{ runner.os }}-${{ inputs.mount-cache-suffix }}-${{ hashFiles('services/elitea-worker-rust/Cargo.lock', 'services/elitea-main/go.sum', 'services/elitea-llm-gateway/go.sum', 'services/elitea-subapp-host/go.sum', 'services/elitea-worker-python/pyproject.toml', 'services/elitea-deepwiki/pyproject.toml') }}
+        #
+        # ── `-v2-`, AND WHY A CACHE KEY NEEDED A GENERATION NUMBER ──────────
+        #
+        # MEASURED on run 35606872334, `Chat journey on the native Rust
+        # runtime`:
+        #
+        #   Cache hit for: buildkit-mounts-Linux-rust-8ffbe7a7f70e…
+        #   Received 391394 of 391394 (100.0%)
+        #   Cache Size: ~0 MB (391394 B)
+        #
+        # 391 KB. The cargo registry, the cargo git checkouts and the whole
+        # /cargo-target directory, in 391 KB — i.e. six empty directories. The
+        # python lane's entry, for comparison, restores 395 MB and is real.
+        #
+        # That empty entry was IMMORTAL, and the immortality is the defect.
+        # `actions/cache` does not overwrite an existing key: the writer on
+        # main hit the key exactly, `skip-extraction` went true because
+        # `cache-hit` was true, the dance therefore extracted nothing, and the
+        # post step then declined to save because the key already existed. The
+        # entry could never be replaced by a populated one, so every Rust
+        # build since compiled all 418 crates from an empty registry — 371 s
+        # of the 499 s bake, in three shards, on every pull request, for a
+        # cache that reported a hit each time. This is the failure mode this
+        # action's own header warns about, one layer up: the key exists, so
+        # the hit is real, so the miss is invisible.
+        #
+        # THE FIX IS THE RUN-SCOPED WRITER KEY BELOW, not the generation
+        # number — a writer whose key is unique per run never hits exactly, so
+        # it always extracts and always saves, and an empty entry can never
+        # become permanent again. `-v2-` is only what abandons the poisoned
+        # `buildkit-mounts-Linux-rust-…` entry that is already out there; it
+        # will be evicted by LRU on its own.
+        MOUNT_BASE: buildkit-mounts-v2-${{ runner.os }}-${{ inputs.mount-cache-suffix }}-${{ hashFiles('services/elitea-worker-rust/Cargo.lock', 'services/elitea-main/go.sum', 'services/elitea-llm-gateway/go.sum', 'services/elitea-subapp-host/go.sum', 'services/elitea-worker-python/pyproject.toml', 'services/elitea-deepwiki/pyproject.toml') }}
+        MOUNT_PREFIX: buildkit-mounts-v2-${{ runner.os }}-${{ inputs.mount-cache-suffix }}-
+        RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       run: |
-        echo "mount-key=$MOUNT_KEY" >> "$GITHUB_OUTPUT"
+        echo "mount-base=$MOUNT_BASE" >> "$GITHUB_OUTPUT"
+        echo "mount-prefix=$MOUNT_PREFIX" >> "$GITHUB_OUTPUT"
+        # Writers save under a key no run has used before, so the save always
+        # happens; readers never name it and fall through to the prefix.
+        echo "mount-write-key=$MOUNT_BASE-$RUN_ID" >> "$GITHUB_OUTPUT"
         if [ "$WRITE" = "true" ]; then
           echo "write-mounts=true" >> "$GITHUB_OUTPUT"; echo "layer-mode=max" >> "$GITHUB_OUTPUT"
         else
@@ -121,18 +228,33 @@ runs:
       uses: actions/cache@v4
       with:
         path: .buildkit-mounts
-        key: ${{ steps.policy.outputs.mount-key }}
+        # RUN-SCOPED, so this key CANNOT already exist and the post-step save
+        # therefore always runs. The previous spelling was the lockfile key
+        # itself, which a writer hit exactly — and an exact hit makes both the
+        # extraction (below) and the save no-ops, so whatever the entry held
+        # the first time it was written is what it holds for ever. See the
+        # policy step's note for the 391 KB it held on the Rust lane.
+        #
+        # The restore side still wants the closest OLDER entry, so the
+        # lockfile-keyed prefix comes first and the suffix-only prefix second:
+        # same dependencies beats different dependencies beats nothing.
+        key: ${{ steps.policy.outputs.mount-write-key }}
         restore-keys: |
-          buildkit-mounts-${{ runner.os }}-${{ inputs.mount-cache-suffix }}-
+          ${{ steps.policy.outputs.mount-base }}-
+          ${{ steps.policy.outputs.mount-prefix }}
     - name: Restore BuildKit cache mounts (readers)
       if: steps.policy.outputs.write-mounts != 'true'
       id: mounts-ro
       uses: actions/cache/restore@v4
       with:
         path: .buildkit-mounts
-        key: ${{ steps.policy.outputs.mount-key }}
+        # Deliberately NOT a key any writer uses: readers want the newest
+        # entry under the prefix, and naming an exact key that happens to
+        # exist would pin them to one run's snapshot for ever.
+        key: ${{ steps.policy.outputs.mount-base }}-
         restore-keys: |
-          buildkit-mounts-${{ runner.os }}-${{ inputs.mount-cache-suffix }}-
+          ${{ steps.policy.outputs.mount-base }}-
+          ${{ steps.policy.outputs.mount-prefix }}
 
     # Injects the restored directories into the builder's cache mounts before
     # the build and, only when this run will save them, extracts them back
@@ -142,6 +264,12 @@ runs:
       uses: reproducible-containers/buildkit-cache-dance@v3
       with:
         builder: ${{ steps.buildx.outputs.name }}
+        # `cache-hit` is now structurally false on a writer (the key carries
+        # the run id), so this reduces to "readers do not extract" — which is
+        # the whole rule. It is spelled with both halves because the second
+        # one is what USED to make a writer skip extraction after an exact
+        # hit, and a reader of this file should be able to see that it can no
+        # longer fire rather than have to reason about it.
         skip-extraction: ${{ steps.policy.outputs.write-mounts != 'true' || steps.mounts-rw.outputs.cache-hit == 'true' }}
         cache-map: |
           {

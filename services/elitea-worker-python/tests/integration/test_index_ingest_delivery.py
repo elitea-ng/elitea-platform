@@ -3048,7 +3048,7 @@ def _case() -> Case:
         isolation_class="shared",
         priority=1,
         deadline_unix_millis=_NOW + 60_000,
-        limits_revision="elitea.runtime.limits.conformance.v1",
+        limits_revision="elitea.runtime.limits.conformance.v2",
         index_ingest=indexing_pb2.IndexIngestCommandV1(
             toolkit_configuration_entry_id="toolkit-config",
             tool_parameters_entry_id="tool-params",

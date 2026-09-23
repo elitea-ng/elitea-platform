@@ -13,6 +13,17 @@ export interface TabGroupButtonItem {
   icon?: ReactNode;
   tooltip?: string;
   disabled?: boolean;
+  /**
+   * Opt-in only (#923/ELITEA-2815, `FormViewToggle`): hides the visible
+   * `label` text and uses it as the `aria-label`/accessible name instead,
+   * for a button that has BOTH an icon and a label. Not inferred from
+   * `icon` presence alone — `ThemeModeToggle`/`EditorPanel`/
+   * `AnalyticsContainer`/`ProjectAIConfigurationSection` all pass items
+   * with both an icon and a label and rely on the label staying visible,
+   * which an icon-based inference previously broke (reverted in
+   * `160a5cc34`, "nothing depends on it" — FormViewToggle did).
+   */
+  iconOnly?: boolean;
 }
 
 /** @public shared/ui component API — consumed once a features/widgets/pages caller exists (none does yet in this pass). */
@@ -52,16 +63,20 @@ export interface TabButtonItemProps {
  */
 export function TabButtonItem({ item, disableTooltip, sx }: TabButtonItemProps): ReactNode {
   const tooltipTitle = item.tooltip ?? item.label ?? item.value;
+  // See `iconOnly`'s doc comment on `TabGroupButtonItem`: hidden only when a
+  // caller explicitly opts in, never inferred from `icon` presence alone.
+  const showVisibleLabel = Boolean(item.label) && !item.iconOnly;
+  const accessibleName = item.label ?? tooltipTitle;
 
   const button = (
     <ToggleButton
       value={item.value}
       disabled={item.disabled}
-      aria-label={item.label ? undefined : tooltipTitle}
+      aria-label={showVisibleLabel ? undefined : accessibleName}
       sx={sx}
     >
       {item.icon}
-      {item.label && (
+      {showVisibleLabel && (
         <Typography
           variant="labelSmall"
           sx={item.icon ? labelWithIconSx : undefined}

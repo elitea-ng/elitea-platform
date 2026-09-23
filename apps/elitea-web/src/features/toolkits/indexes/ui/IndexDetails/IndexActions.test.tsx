@@ -2,7 +2,7 @@ import { ThemeProvider } from '@mui/material/styles';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createMemoryHistory, createRootRoute, createRouter } from '@tanstack/react-router';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -109,13 +109,30 @@ describe('IndexActions — edit view', () => {
     expect(await screen.findByRole('button', { name: 'Reindex' })).toBeDisabled();
   });
 
-  it('Reindex calls indexData when enabled', async () => {
+  /* elitea_issues: #5984 — reindexing must be confirmed before it starts ("Reindex confirmation
+   * / Are you sure to reindex the [index name] index? ... Cancel | Reindex"). */
+  it('Reindex opens a confirm dialog naming the index, and confirming calls indexData', async () => {
     const user = userEvent.setup();
     const indexData = vi.fn();
     renderActions({ view: 'edit', activeView: 'configuration', indexData });
     const button = await screen.findByRole('button', { name: 'Reindex' });
     await user.click(button);
+    expect(indexData).not.toHaveBeenCalled();
+    const dialog = await within(document.body).findByRole('dialog');
+    expect(within(dialog).getByText('Reindex confirmation')).toBeInTheDocument();
+    expect(within(dialog).getByText(/reindex the my-index index/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Reindex' }));
     expect(indexData).toHaveBeenCalled();
+  });
+
+  it('Reindex confirm dialog: Cancel dismisses without calling indexData', async () => {
+    const user = userEvent.setup();
+    const indexData = vi.fn();
+    renderActions({ view: 'edit', activeView: 'configuration', indexData });
+    await user.click(await screen.findByRole('button', { name: 'Reindex' }));
+    const dialog = await within(document.body).findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(indexData).not.toHaveBeenCalled();
   });
 
   it('Delete is disabled when the "remove_index" tool is not selected', async () => {
@@ -131,6 +148,7 @@ describe('IndexActions — edit view', () => {
     expect(handleDeleteIndex).toHaveBeenCalled();
   });
 
+  /* elitea_issues: #3269 — a viewer without scheduling permission must see a clear "insufficient permissions" message up front (disabled control + tooltip), not a generic error only after clicking. */
   it('schedule switch is disabled with an insufficient-permissions tooltip when the user lacks the permission', async () => {
     renderActions({ view: 'edit', activeView: 'configuration', userPermissions: [], currentProjectName: 'Acme' });
     await screen.findByText('Schedule');
@@ -168,6 +186,34 @@ describe('IndexActions — edit view', () => {
     await user.click(switchInput);
     await waitFor(() => expect(capturedBody).toMatchObject({ enabled: true }));
   });
+
+  /* elitea_issues: #6547 — updating a schedule must send the CURRENT user's time zone, not the
+   * original creation-time zone the stored schedule record carries. `handleChangeIndexSchedule`
+   * builds its request body as `{..., timezone, ...data}` before the fix, and `data` is
+   * `{...scheduleData, ...}` — a stale `scheduleData.timezone` from a previous save would win
+   * over the freshly resolved one. Seed a stored schedule with an implausible stale timezone and
+   * assert the PATCH never carries it. */
+  it('always sends the current timezone on update, never a stale one carried by the stored schedule', async () => {
+    const user = userEvent.setup();
+    let capturedBody: { timezone?: unknown } | undefined;
+    server.use(
+      http.patch(`${BASE}/elitea_core/index_meta/prompt_lib/proj-1/tk-1/my-index`, async ({ request }) => {
+        capturedBody = (await request.json()) as { timezone?: unknown };
+        return HttpResponse.json({});
+      }),
+    );
+    useIndexesStore.setState({
+      toolkitScheduler: {
+        'my-index': { schedules: { '-1': { enabled: false, cron: '0 0 * * 1', credentials: null, timezone: 'Pacific/Kiritimati' } } },
+      },
+    });
+    renderActions({ view: 'edit', activeView: 'configuration', userPermissions: ['models.applications.index_meta.edit'] });
+    const switchInput = await screen.findByRole('switch');
+    await user.click(switchInput);
+    await waitFor(() => expect(capturedBody).toBeDefined());
+    expect(capturedBody?.timezone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+    expect(capturedBody?.timezone).not.toBe('Pacific/Kiritimati');
+  });
 });
 
 describe('IndexActions — indexing in progress', () => {
@@ -184,5 +230,76 @@ describe('IndexActions — indexing in progress', () => {
       onCancelIndexing,
     });
     expect(await screen.findByRole('button', { name: 'Stop' })).toBeInTheDocument();
+  });
+});
+
+/**
+ * ELITEA-2880 / 2883 / 2887 — the Save / Save & Reindex split.
+ *
+ * The rule the cases state four different ways: a CLEAN configuration form
+ * offers "Reindex" and nothing else; a DIRTY one offers "Save" and
+ * "Save & Reindex" and withdraws "Reindex". These assert both directions,
+ * because a change that rendered all three at once would satisfy either half
+ * alone.
+ */
+describe('IndexActions — Save / Save & Reindex (ELITEA-2880, ELITEA-2883)', () => {
+  const configSave = { isDirty: false, isSaving: false, onSave: vi.fn(), onSaveAndReindex: vi.fn() };
+
+  it('offers only Reindex while the form is clean', async () => {
+    renderActions({ view: 'edit', activeView: 'configuration', configSave: { ...configSave, isDirty: false } });
+    expect(await screen.findByRole('button', { name: 'Reindex' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save & Reindex' })).not.toBeInTheDocument();
+  });
+
+  it('swaps Reindex for Save + Save & Reindex the moment the form is dirty', async () => {
+    renderActions({ view: 'edit', activeView: 'configuration', configSave: { ...configSave, isDirty: true } });
+    expect(await screen.findByRole('button', { name: 'Save' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Save & Reindex' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Reindex' })).not.toBeInTheDocument();
+  });
+
+  it('Save calls onSave and does NOT start a reindex', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    const onSaveAndReindex = vi.fn();
+    const indexData = vi.fn();
+    renderActions({
+      view: 'edit',
+      activeView: 'configuration',
+      indexData,
+      configSave: { isDirty: true, isSaving: false, onSave, onSaveAndReindex },
+    });
+    await user.click(await screen.findByRole('button', { name: 'Save' }));
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSaveAndReindex).not.toHaveBeenCalled();
+    expect(indexData).not.toHaveBeenCalled();
+  });
+
+  it('Save & Reindex calls onSaveAndReindex, never `indexData` directly — the reindex has to follow the save', async () => {
+    const user = userEvent.setup();
+    const onSaveAndReindex = vi.fn();
+    const indexData = vi.fn();
+    renderActions({
+      view: 'edit',
+      activeView: 'configuration',
+      indexData,
+      configSave: { isDirty: true, isSaving: false, onSave: vi.fn(), onSaveAndReindex },
+    });
+    await user.click(await screen.findByRole('button', { name: 'Save & Reindex' }));
+    expect(onSaveAndReindex).toHaveBeenCalledTimes(1);
+    expect(indexData).not.toHaveBeenCalled();
+  });
+
+  it('disables both buttons while the save is in flight', async () => {
+    renderActions({ view: 'edit', activeView: 'configuration', configSave: { ...configSave, isDirty: true, isSaving: true } });
+    expect(await screen.findByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save & Reindex' })).toBeDisabled();
+  });
+
+  it('keeps the pre-split behaviour for a caller that wires no save at all', async () => {
+    renderActions({ view: 'edit', activeView: 'configuration' });
+    expect(await screen.findByRole('button', { name: 'Reindex' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
   });
 });

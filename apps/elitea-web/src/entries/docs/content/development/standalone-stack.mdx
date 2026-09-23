@@ -1,0 +1,157 @@
+---
+title: "Run the standalone stack"
+description: "Bring up the full Compose stack locally with deploy/scripts/standalone-stack.sh: certs, seeding, a real model, and the overlays."
+---
+
+The standalone stack (`deploy/docker-compose.standalone-full.yml`) runs Elitea's whole one-host topology — elitea-web, elitea-main, the LLM gateway, an agent worker, PostgreSQL, Redis, and a mock identity provider — driven by `deploy/scripts/standalone-stack.sh`. [Install Elitea](/getting-started/install) covers the same stack from an operator's perspective; this page covers the local-development path: seeding fixtures, pointing the gateway at a real model, and the overlays that swap in the Rust worker or the DeepWiki real engine.
+
+## Bring it up
+
+<Steps>
+<Step title="Generate local certificates">
+
+```bash
+deploy/scripts/standalone-stack.sh certs
+```
+
+Idempotent. It mints two independent trust roots: the gateway CA for the elitea-main → LLM gateway egress hop, and the runtime CA that signs the worker's authorized identity — plus the DeepWiki and Inventory provider server certificates off the gateway CA.
+
+</Step>
+<Step title="Build the images">
+
+```bash
+deploy/scripts/standalone-stack.sh build
+```
+
+`up` reuses whatever image already carries the stack's tag, so a source change only reaches a running stack after you run `build` first.
+
+</Step>
+<Step title="Bring the stack up">
+
+```bash
+deploy/scripts/standalone-stack.sh up
+```
+
+Schema bootstrap, the vector extension, the artifact bucket, RBAC roles, and the worker's runtime authorization all happen automatically on a fresh `up` — none of the `seed*` subcommands below are required to reach a working, logged-in stack.
+
+</Step>
+</Steps>
+
+## Subcommands
+
+<Accordion title="certs, build, up, down, logs">
+- **`certs`** — generate local mTLS and runtime-plane material (idempotent).
+- **`build [service...]`** — rebuild images from source.
+- **`up`** — bring the stack up and wait for it to settle; prints the URLs below when it's ready.
+- **`down [-v]`** — tear down; add `-v` yourself to also drop volumes.
+- **`logs [service...]`** — tail the last `STANDALONE_LOG_TAIL` (default 400) lines per service.
+</Accordion>
+<Accordion title="seed, seed-runtime, seed-llm, seed-index (all optional dev/E2E convenience)">
+None of these are required for a working stack — an operator normally configures a provider from the admin UI after logging in instead.
+
+- **`seed`** — delegates to the E2E seeder (`apps/elitea-web/scripts/e2e-stack.sh seed`) for schema bootstrap, oidc-mock users, and RBAC fixtures, then applies tenant migrations for the newly seeded projects and restarts elitea-main so it backfills their per-project secret header.
+- **`seed-runtime`** — manual fallback to authorize the worker's identity if `up` skipped it.
+- **`seed-llm`** — writes an LLM credential and models via the product API; needs Configurations plane enabled. See [Point the gateway at a real model](#point-the-gateway-at-a-real-model) below.
+- **`seed-index`** — provisions a vector store and an indexable toolkit. It only writes the embedding model row when none exists yet, so it never overwrites the name `seed-llm` wrote.
+</Accordion>
+<Accordion title="check">
+Verifies the gateway's mTLS hop, the runtime plane, the chat critical path (via `chat-smoke.py`), the embedding path, and a real SDK client round trip. It counts passes, failures, **and** skips — a skipped assertion fails the run unless you pass `--allow-skips` — and it also checks that the number of assertions it made matches the number it is written to make. There is no separate `status` subcommand: `check` and `podman compose -p elitea-standalone -f deploy/docker-compose.standalone-full.yml ps` cover that.
+</Accordion>
+
+## Required and useful environment variables
+
+| Variable | Default in this stack | What it does |
+|---|---|---|
+| `SECRETS_MASTER_KEY` | unset | Optional here: seeded credentials carry a literal `api_key` rather than a vault reference. See [the three states](#secrets_master_key-states) below if you set one. |
+| `ELITEA_INITIAL_GLOBAL_ADMINS` | unset | Comma-separated `oidc:<sub>` / `saml:<nameid>` / `email:<address>` entries that become global administrators on first login — see [Install Elitea](/getting-started/install#first-login-and-setup). |
+| `GATEWAY_IDENTITY_SECRET` | `standalone-dev-identity-secret` | HMAC key elitea-main and the gateway share to sign/verify the project/user/tenant identity headers. |
+| `GATEWAY_EGRESS_ALLOWLIST` | `llm-mock:8090,llm-real:8090,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16` | `host:port` allowlist the gateway checks a saved credential's base URL against. Add your own model host before saving a credential that points there. |
+| `GATEWAY_SELF_LLM_ORIGINS` | `http://elitea-main:8080/llm/v1,http://localhost:8080/llm/v1` | The origins the gateway advertises to itself, for the self-referential-origin guard. |
+| `GATEWAY_NATS_URL` | unset | Optional. This stack runs no NATS, so budget enforcement stays disabled with a startup warning — set `LLM_BUDGET_REQUIRE_ENFORCEMENT` if you need the cluster's stricter posture locally. |
+| `STANDALONE_WORKER` | `python` | Set to `rust` to layer the `docker-compose.standalone-rust-agent.yml` overlay and select the native worker (see [Overlays](#overlays)). |
+
+## Ports
+
+| Port | Service | Override |
+|---|---|---|
+| 8084 | Traefik (entry point) | `STANDALONE_PORT` |
+| 8085 | LLM gateway, direct (debug) | `STANDALONE_GATEWAY_PORT` |
+| 15433 | PostgreSQL | `STANDALONE_PG_PORT` |
+| 16380 | Redis | `STANDALONE_REDIS_PORT` |
+| 8090 | llm-mock journal | `STANDALONE_MOCK_PORT` |
+| 9400 | oidc-provider-mock | fixed — cannot be remapped |
+
+The runtime plane (`runtime-redis`, and elitea-main's mTLS listeners) is not published to the host at all — only the worker, on the compose network, needs it.
+
+## The mock LLM and mock MCP services
+
+`llm-mock` is a journaled OpenAI-compatible server on the compose network. `mcp-mock` is a mock MCP server for toolkit journeys; `mcp-mock-trust` writes the trust bundle the Rust worker uses to verify it.
+
+### Point the gateway at a real model
+
+```bash
+LLM_PROVIDER=vllm LLM_API_BASE=http://192.168.1.10:8000 LLM_MODEL=Qwen/Qwen3-8B \
+  deploy/scripts/standalone-stack.sh seed-llm
+```
+
+`LLM_API_BASE` must **not** end in `/v1` — the gateway appends `/v1/chat/completions` itself, and a trailing `/v1` produces a 404 that looks like a routing bug. The credential is seeded as provider type `vllm` regardless of what server you're pointing at (Ollama, LM Studio, TGI, …): the gateway's egress dialer only lifts its private-address guard for that provider class. Set `LLM_API_KEY` if your server checks one; most self-hosted servers ignore it, but the variable cannot be empty. Set `LLM_EMBEDDING_MODEL` too if the server also serves embeddings — a self-hosted chat server usually does not, and `seed-llm` seeds no embedding row unless you name one.
+
+<Tip>
+For a local real-model test, enable the bundled `real-llm` Compose profile — a llama.cpp router serving chat and embedding models:
+
+```bash
+COMPOSE_PROFILES=real-llm LLM_PROVIDER=vllm LLM_API_BASE=http://llm-real:8090 \
+  LLM_MODEL=qwen3-0.6b LLM_EMBEDDING_MODEL=vllm/nomic-embed-text-v1.5 \
+  deploy/scripts/standalone-stack.sh seed-llm
+```
+
+Output is non-deterministic, so specs needing determinism use `llm-mock`; this profile is for specs needing real SSE streams and tool calls.
+</Tip>
+
+## Overlays
+
+Set `STANDALONE_OVERLAY` to a space-separated list of compose files after the base stack, or use the shortcuts below.
+
+<CardGroup cols={3}>
+<Card title="Rust agent" icon="wrench">
+`STANDALONE_WORKER=rust deploy/scripts/standalone-stack.sh build && … up` layers `docker-compose.standalone-rust-agent.yml`: it replaces the worker with the native Rust runtime and disables the index-ingest dispatch path (the native worker skips toolkit families it can't build).
+</Card>
+<Card title="DeepWiki real engine" icon="git-branch">
+`STANDALONE_OVERLAY=deploy/docker-compose.deepwiki-real-engine.yml DEEPWIKI_ENGINE_IMAGE=<tag> deploy/scripts/standalone-stack.sh up` swaps the DeepWiki fixture engine for the real analysis engine, with a git daemon serving a sample repository and a deterministic LLM stub at the gateway's allowlisted mock address.
+</Card>
+<Card title="Staging" icon="database">
+`docker-compose.staging.yml` (used with the plain `deploy/docker-compose.yml`, not this stack) points elitea-main at a restored staging database dump and requires `SECRETS_MASTER_KEY` from your shell — it decrypts vault data the dump already carries.
+</Card>
+</CardGroup>
+
+## First login
+
+Sign in through the browser at `http://localhost:${STANDALONE_PORT:-8084}/app/`. `oidc-mock` accepts any username as its "Subject" field — there is no real identity check. Whether that account becomes a global administrator depends on `ELITEA_INITIAL_GLOBAL_ADMINS`, or on the fixtures `seed` wrote if you ran it (its member and admin personas already hold the roles the journeys need).
+
+## Common failures
+
+<AccordionGroup>
+<Accordion title="ERROR: port 9400 (oidc-mock) is already in use">
+`oidc-mock`'s published port must equal its container port — the mock derives its issuer from the request's `Host` header — so it cannot be remapped, and this stack cannot run at the same time as the E2E stack ([Run the browser test stack](/development/e2e-stack)). Stop the other stack first: `apps/elitea-web/scripts/e2e-stack.sh down`.
+</Accordion>
+<Accordion title="ERROR: mTLS material missing. Run: standalone-stack.sh certs">
+`up` checks for the gateway client certificate, the runtime CA, and the DeepWiki/Inventory provider certificates before starting anything, so a missing one fails fast with this message rather than leaving elitea-main in a restart loop.
+</Accordion>
+<Accordion title="SECRETS_MASTER_KEY states">
+The variable has three states, and they are not equivalent: **set and valid** — elitea-main wraps each project's vault key with it, stored as a Fernet token; **not set** — elitea-main starts and logs a warning, storing the project key in the clear (anyone who can read the database can open every project secret); **set but malformed** — elitea-main **refuses to start**, naming the variable in its error. A trailing newline is not malformed (both Go and Python ignore it on decode); a stray space or tab is. This stack does not require the variable at all, unlike `deploy/docker-compose.yml` and the staging overlay, which fail to start without it.
+</Accordion>
+</AccordionGroup>
+
+{/* source: deploy/scripts/standalone-stack.sh:2-32 (subcommand header comments) */}
+{/* source: deploy/scripts/standalone-stack.sh:751-2361 (case statement: certs, up, build, logs, down, seed, seed-runtime, seed-llm, seed-index, check) */}
+{/* source: deploy/docker-compose.standalone-full.yml:123-131 (ports table) */}
+{/* source: deploy/docker-compose.standalone-full.yml:440,444,454-456,499,528-529 (GATEWAY_* env vars) */}
+{/* source: deploy/docker-compose.standalone-full.yml:594-615 (llm-mock), :1475-1516 (mcp-mock, mcp-mock-trust) */}
+{/* source: deploy/docker-compose.standalone-full.yml:636-670 (real-llm profile) */}
+{/* source: deploy/scripts/standalone-stack.sh:498-520 (vllm provider config and LLM_API_BASE guard) */}
+{/* source: deploy/docker-compose.standalone-rust-agent.yml:1-19 */}
+{/* source: deploy/docker-compose.deepwiki-real-engine.yml:1-19 */}
+{/* source: deploy/docker-compose.staging.yml:1-24 */}
+{/* source: deploy/scripts/standalone-stack.sh:792-808 (port 9400 conflict check) */}
+{/* source: deploy/scripts/standalone-stack.sh:769-786 (mTLS material checks) */}
+{/* source: deploy/README.md:920-977 (SECRETS_MASTER_KEY — the three states) */}

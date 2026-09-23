@@ -47,14 +47,14 @@ export const ModerationRequestList = zod
     total: zod
       .int()
       .describe(
-        "On the per-entity route this is `len(rows)`, not a page total — the route answers with the caller's own rows for one entity and takes no paging parameters (internal\/api\/v2\/moderation\/requests.go:594).\n",
+        "On the per-entity route this is `len(rows)`, not a page total — the route answers with the caller's own rows for one entity and takes no paging parameters (internal/api/v2/moderation/requests.go:594).\n",
       ),
     rows: zod
       .array(ModerationRequestRow)
       .describe("Newest first, so the current state is `rows[0]`."),
   })
   .describe(
-    'NOTE(W2): internal\/api\/v2\/moderation\/requests.go:594 — `{\"total\": len(rows), \"rows\": rows}`.\n',
+    'NOTE(W2): internal/api/v2/moderation/requests.go:594 — `{"total": len(rows), "rows": rows}`.\n',
   );
 
 export type ModerationRequestList = zod.input<typeof ModerationRequestList>;

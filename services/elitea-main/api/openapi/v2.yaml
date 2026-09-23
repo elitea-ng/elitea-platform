@@ -2739,6 +2739,21 @@ components:
           description: >
             Written by UpdateAttachmentStorage as {"toolkit_id": "..."}
             (eliteacore/handler.go:1777-1781).
+        notes:
+          type: string
+          description: >
+            NOTE(#898): the editor's free-text "Editor Notes". It has no column
+            of its own on `application_versions` and is not meant to: pylon
+            stores it inside this same jsonb (elitea_issues issue 5410 chose the
+            blob over a per-tenant schema migration), folding the top-level
+            `notes` write field in
+            (legacy/plugins/elitea_core/utils/application_utils.py:191-211)
+            and lifting it back out on read (models/pd/version.py:297-307).
+            This service does the same, and additionally leaves the key in
+            place here — the agent editor round-trips `meta` wholesale, so
+            deleting it from the read would make an ordinary save of any other
+            field erase the notes. Documentation only: never sent to the model,
+            to chat, or to execution.
         internal_tools:
           type: array
           items: { type: string }
@@ -3050,6 +3065,15 @@ components:
         agent_type: { type: string }
         instructions: { type: string }
         welcome_message: { type: string }
+        notes:
+          type: string
+          description: >
+            NOTE(#898): `meta.notes`, surfaced beside `meta` as pylon's
+            `hydrate_notes_from_meta` surfaces it. Always a string on the
+            version-detail read and on the two write echoes ("" when the
+            version carries no notes); absent from the other version maps
+            (import, fork, the public catalogue detail), which do not build
+            their response through these two helpers.
         llm_settings: { $ref: '#/components/schemas/LlmSettings' }
         meta:
           allOf: [{ $ref: '#/components/schemas/VersionMeta' }]
@@ -3275,6 +3299,18 @@ components:
             Omit the key to leave the stored text alone. An explicit empty
             string CLEARS the column, exactly as for `instructions`
             (issue 824).
+        notes:
+          type: string
+          maxLength: 1000
+          description: >
+            NOTE(#898): the editor's free-text notes, accepted at the top level
+            the way pylon accepts them and folded into `meta.notes` by every
+            write path (create, create-version and the PUT). Omit the key to
+            leave the stored value alone; an explicit empty string clears it.
+            Longer than 1000 characters is REFUSED with a 400 — pylon's own
+            ceiling (models/pd/version.py:116). The agent editor sends the
+            value inside `meta` instead, which is the same store; both spellings
+            are accepted so a pylon-shaped client keeps working.
         llm_settings: { $ref: '#/components/schemas/LlmSettings' }
         conversation_starters: { $ref: '#/components/schemas/ConversationStarters' }
         variables:
@@ -4550,6 +4586,51 @@ components:
                 type: string
                 enum: [skill, tool]
               id: { type: string }
+        in_use:
+          type: boolean
+          description: >
+            NOTE(#894): whether another version references THIS one as a
+            sub-agent. It is not `items.length > 0` — `items` answers the
+            opposite relation (what this version uses). A reference with no
+            valid parent mapping is an orphan and does not count, matching
+            pylon (legacy/plugins/elitea_core/rpc/application.py:1861-1863).
+        referencing_parents:
+          type: array
+          description: >
+            NOTE(#894): the parent versions that reference this version as a
+            sub-agent — what the "Version in use" dialog lists by name.
+          items:
+            type: object
+            properties:
+              application_id: { type: integer }
+              application_name: { type: string }
+              application_type:
+                type: string
+                description: The parent version's agent_type ("openai", "pipeline", ...).
+              version_id: { type: integer }
+              version_name: { type: string }
+              tool_id: { type: integer }
+        replacement_versions:
+          type: array
+          description: >
+            NOTE(#894): the sibling versions of the same application this one
+            could be replaced by, oldest first. Empty when the application has
+            only this version.
+          items:
+            type: object
+            properties:
+              id: { type: integer }
+              name: { type: string }
+              created_at:
+                type: string
+                format: date-time
+                nullable: true
+        version_name:
+          type: string
+          description: 'NOTE(#894): the name of the version being checked.'
+        application_id:
+          type: string
+          description: 'NOTE(#894): the application the version belongs to, serialized as a string like every other id in this spec.'
       description: >
         NOTE(W2): built by the ApplicationRelation handler,
         internal/api/v2/eliteacore/handler.go:1596-1626. The sole operation
@@ -6888,6 +6969,34 @@ components:
         :636-659 (resolve). The expiry is computed from the server's clock at
         creation, so the client sends an OFFSET and never an instant.
 
+    # ---- System info (issue 36, item 7; issue #892) -----------------------------
+    SystemInfoComponent:
+      type: object
+      required: [name, version]
+      properties:
+        name:
+          type: string
+          description: >
+            "elitea-main" (always present) or "migrations" (present only when
+            a database connection answered the migration-head read). Never a
+            plugin, worker or gateway name — see SystemInfo's description.
+        version:
+          type: string
+          description: >
+            For "elitea-main", the release version this binary was built
+            with ("dev" outside a released build). For "migrations", the
+            highest applied shared-scope migration, zero-padded to 4 digits
+            (e.g. "0125").
+
+    SystemInfo:
+      type: object
+      required: [components]
+      properties:
+        components:
+          type: array
+          items:
+            $ref: '#/components/schemas/SystemInfoComponent'
+
     # ---- Public platform configuration (issue 36, item 7) ----------------------
     PublicConfigValues:
       type: object
@@ -7778,6 +7887,64 @@ components:
         operations whose handler body actually returns it — every other
         error path in this file keeps using ErrorResponse.
 
+    IndexConfigurationSaveRequest:
+      type: object
+      required: [index_configuration]
+      properties:
+        index_configuration:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >
+            NOTE(W2): the index's tool parameters, whose shape is the
+            `index_data` argument schema of the toolkit TYPE — per type, only
+            known at run time from the pinned SDK snapshot
+            (internal/runtimecomposition/current_toolkit_schema_snapshot.json),
+            and stored verbatim so the next reindex can replay it byte for
+            byte (internal/application/indexschedule/executor.go's
+            scheduledIndexParameters). elitea-main validates only that it is
+            one bounded JSON OBJECT
+            (internal/application/indexmeta/configuration.go:69); it never
+            interprets a field.
+      description: >
+        NOTE(W2): the request body of
+        internal/api/v2/indexing/index_meta_configuration.go's
+        currentIndexConfigurationBody. A NAMED key rather than the bare
+        configuration object, so the envelope has room for the next question
+        this route will be asked (which generation the caller believed it was
+        editing) without breaking the one it answers today.
+
+    IndexWriteAck:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+      description: >
+        NOTE(W2): the `{"ok": true}` envelope every index WRITE path answers
+        with (internal/api/v2/toolkits/index_write.go, and
+        internal/api/v2/indexing/index_meta_delete.go / _configuration.go).
+        Different from this spec's normal single-resource shape, and
+        deliberately kept: the web client reads `ok`.
+
+    IndexWriteRefusal:
+      type: object
+      required: [ok, error]
+      properties:
+        ok:
+          type: boolean
+          enum: [false]
+        error:
+          type: string
+          description: >
+            A fixed, human-readable sentence. It never carries the driver
+            error: an unwrapped pgx failure names the PgVector user,
+            database, host and port.
+      description: >
+        NOTE(W2): the refusal half of the same `{"ok": ..., "error": ...}`
+        envelope IndexWriteAck describes — the shape the index write paths
+        answer 4xx/5xx with.
+
     CreateFeedbackResponse:
       type: object
       required: [ok, id]
@@ -7911,7 +8078,9 @@ components:
         meta:
           type: object
           additionalProperties: true
-          description: Toolkit metadata, including MCP sharing options.
+          description: >
+            Toolkit metadata, including MCP sharing options and index schedules.
+            This replaces the stored object; preserve other metadata when editing.
           x-elitea-passthrough: >-
             NOTE(W2): pgRepo.createToolkit and pgRepo.UpdateToolkit persist
             this object in the existing elitea_tools.meta JSONB column.
@@ -9590,6 +9759,70 @@ components:
           type: string
           format: date-time
           description: When an inbound call last presented a correct secret.
+        auth_mode:
+          type: string
+          enum: [token, hmac_sha256]
+          description: >
+            How this trigger's inbound calls are authenticated. `token` is the
+            bearer secret in one of the three carriers. `hmac_sha256` verifies
+            HMAC-SHA256 of the RAW request body under the same secret, read
+            from `signature_header` — which is what a GitHub repository webhook
+            sends, and it sends no `Authorization` header at all.
+
+            The mode is a property of the stored row. Nothing a caller sends
+            can select it, and a signing trigger does NOT also accept the
+            bearer secret: accepting both would mean the stricter setting
+            bought nothing.
+        signature_header:
+          type: string
+          description: >
+            The header the sender signs into, for `hmac_sha256` only. It is
+            configuration, not a credential — the sender chooses to send it —
+            so it is on the plain read as well, which is what lets the settings
+            dialog say which header to configure without revealing anything.
+        provider:
+          type: string
+          enum: [custom, github]
+          description: >
+            The preset a create named, and the URL SUFFIX that follows from it
+            (`github` gives a url ending in `/github`, which is the shape a
+            GitHub webhook form expects). It selects nothing at call time: the
+            inbound path checks a suffix it is given AGAINST this value and
+            refuses a mismatch rather than reading a mode out of the URL.
+
+    PipelineInboundTriggerModeRequest:
+      type: object
+      description: >
+        What a create/rotate may ask for. Every field is optional, and a call
+        with no body at all mints the bearer trigger this route has always
+        minted.
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          enum: [custom, github]
+          description: >
+            The preset. `github` expands to `auth_mode: hmac_sha256` with
+            `X-Hub-Signature-256` and a `/github` URL suffix.
+        provider:
+          type: string
+          enum: [custom, github]
+          description: An alias of `type`, for callers that prefer the noun.
+        auth_mode:
+          type: string
+          enum: [token, hmac_sha256]
+          description: >
+            The explicit form, for a sender that signs the same way under a
+            header of its own. Asking for `token` beside the `github` preset is
+            refused rather than resolved: turning the stricter request into the
+            weaker setting is exactly the failure this refusal exists to stop.
+        signature_header:
+          type: string
+          maxLength: 128
+          description: >
+            The header to read the signature from. Required by a signing mode
+            that names no preset; overrides the preset's own header when both
+            are given.
 
     PipelineSchedule:
       type: object
@@ -13398,7 +13631,14 @@ paths:
         - name: replacement_version_id
           in: query
           schema: { type: integer }
-          description: Version to use as replacement when this version is the default
+          description: >
+            NOTE(#894): another version of the SAME application to move this
+            version's inbound sub-agent references onto before deleting it.
+            Required when `check_version_in_use` reports `in_use` — the delete
+            is refused with a 400 otherwise, rather than leaving every parent
+            pointing at a row that no longer exists. Ignored when nothing
+            references the version. The parameter was declared here long
+            before the handler read it; it is honoured now.
       responses:
         '204':
           description: Deleted (no content)
@@ -15639,6 +15879,53 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
 
+  /artifacts/artifact/default/{projectID}/{bucket}/{key}:
+    # The SDK's by-filepath object read. Registered on the same trailing chi
+    # `/*` wildcard the object-plane download uses, for the same reason its
+    # comment gives: a key may contain `/`.
+    #
+    # `default` is the pylon MODE segment the SDK's client still sends
+    # (elitea-sdk runtime/clients/client.py builds this URL and appends
+    # `/{bucket}/{artifact_name}`). The router resolves PermissionModeDefault
+    # unconditionally here, so the segment selects nothing — it is matched
+    # because it is in the URL, not because it decides anything.
+    parameters:
+      - name: projectID
+        in: path
+        required: true
+        schema: { type: integer }
+      - name: bucket
+        in: path
+        required: true
+        schema: { type: string }
+      - name: key
+        in: path
+        required: true
+        schema: { type: string }
+        description: May itself contain `/` characters.
+
+    get:
+      operationId: downloadArtifactByPath
+      summary: Download an object by the SDK's artifact filepath
+      description: >
+        Alias of `downloadObject` on the URL the SDK's `download_artifact`
+        builds. Same `view` permission, same per-bucket access list, same raw
+        body — the SDK returns the response content as the file's bytes.
+      tags: [artifacts]
+      responses:
+        '200':
+          description: Full object
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
   /artifacts/grants/{projectID}/{bucket}:
     parameters:
       - name: projectID
@@ -16495,43 +16782,51 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
 
   # ==========================================================================
-  # ADMIN — system info (issue 36, item 7)
+  # ADMIN — system info (issue 36, item 7; issue #892)
   #
-  # DESCRIBED AS A REFUSAL, deliberately. internal/api/v2/admin/handler.go:170
-  # answers 501 unconditionally, in every deployment, and the comment above it
-  # states why: in pylon this route reports the versions of six named plugins,
-  # collected from the pylons that announced themselves on the Arbiter bus in
-  # the last 60 seconds. This service loads no plugins and has no such bus, and
-  # AGENTS.md names both as things the target architecture does not preserve.
-  # The route used to invent a hardcoded elitea_core/auth version map instead.
+  # internal/api/v2/admin/handler.go:SystemInfo used to answer 501
+  # unconditionally, in every deployment: in pylon this route reports the
+  # versions of six named plugins, collected from the pylons that announced
+  # themselves on the Arbiter bus in the last 60 seconds. This service loads
+  # no plugins and has no such bus, and AGENTS.md names both as things the
+  # target architecture does not preserve. The route used to invent a
+  # hardcoded elitea_core/auth version map instead (#219) — that fleet answer
+  # is gone for good, and this document must never describe one.
   #
-  # NO FIRST-PARTY CLIENT CALLS IT, and none should while the answer can only
-  # be a refusal: apps/elitea-web's useResourcesConfig returns an empty plugin
-  # list on purpose rather than putting a 501 in the network log of every Help
-  # Center visit. It is described here so that anyone generating a client from
-  # this document gets the refusal, not an invented shape — and so the day this
-  # service has a real build version to report, the operation already exists.
+  # #892 closes the OTHER half of the old 501: this service always has at
+  # least one real, local fact to report about itself (its own build
+  # version), and a database connection lets it report a second (the highest
+  # applied shared-scope migration). Neither is a plugin, a worker or a
+  # gateway version — this service still has no fleet telemetry for any of
+  # those, and reporting one without a real source would be the #219 defect
+  # again. `components` is deliberately the same `[{name, version}]` shape
+  # pylon's `plugins` used, so apps/elitea-web's Help Center tooltip
+  # (useResourcesConfig.ts) needed no reshaping, only a real source.
   # ==========================================================================
   /admin/system_info/prompt_lib:
     get:
       operationId: getSystemInfo
-      summary: Report the platform's component versions (not available here)
+      summary: Report this service's own component versions
       description: |
-        NOTE(W2): internal/api/v2/admin/handler.go:170 (SystemInfo). It answers
-        501 and nothing else. There is no 200 to describe: this service reports
-        no per-plugin versions because it loads no plugins.
+        NOTE(W2): internal/api/v2/admin/handler.go (SystemInfo). Reports this
+        binary's own build version, always, and a `migrations` entry for the
+        highest applied shared-scope migration when a database connection is
+        available. Reports no plugin, worker or gateway versions: this
+        service has no fleet telemetry for other processes (#219), and
+        inventing one here would be that same defect again.
       tags: [admin]
       responses:
-        '401': { $ref: '#/components/responses/401' }
-        '403': { $ref: '#/components/responses/403' }
-        '501':
+        '200':
           description: >
-            System information has no equivalent in this service. The body is
-            the flat `{"error": "..."}` shape, with no `code`.
+            This service's own known component versions. `components` never
+            includes a plugin, worker or gateway entry — see the operation
+            description.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/SystemInfo'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
 
   # ==========================================================================
   # SEARCH
@@ -18733,6 +19028,89 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
 
+  /elitea_core/index_meta/prompt_lib/{project_id}/{toolkit_id}/{index_name}/configuration:
+    put:
+      operationId: saveIndexConfiguration
+      summary: Save one index's configuration without reindexing
+      description: |
+        The SAVE half of the Indexes tab's "Save" / "Save & Reindex" split.
+
+        Before this route existed the ONLY writer of an index's stored
+        `index_configuration` was an indexing RUN: the configuration travels
+        as the `tool_params` of `test_toolkit_tool`, and the run records it on
+        the index metadata document on its way through. So a person who
+        changed `progress_step` could persist that change only by re-indexing
+        the whole collection, and a SCHEDULED reindex — which reads the same
+        stored field
+        (internal/runtimecomposition/index_schedule_inspector.go) — kept
+        running the configuration of the last run rather than the one the
+        editor showed.
+
+        This write replaces exactly that one field on the addressed index
+        metadata document and leaves every run-owned field (`state`,
+        `task_id`, `history`, the document counters) untouched. It starts
+        nothing: the index data is not touched and no worker is dispatched.
+
+        The `{index_name}` segment carries the index NAME
+        (`metadata.collection`), not a row id — the same asymmetry the
+        schedule PATCH on this prefix already has
+        (internal/api/v2/toolkits/index_write.go's header).
+
+        Guarded by `models.applications.index_meta.edit` in the `default`
+        permission mode: saving a configuration is not running a tool, so it
+        does not take the run permission.
+      tags: [toolkits]
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: toolkit_id
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: index_name
+          in: path
+          required: true
+          description: The index's `metadata.collection`.
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IndexConfigurationSaveRequest' }
+      responses:
+        '200':
+          description: Stored
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IndexWriteAck' }
+        '400':
+          description: |
+            `index_configuration` is not a JSON object, the toolkit is not
+            visible to the caller, or it has no PgVector configuration to
+            write into.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IndexWriteRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No index of that name exists under this toolkit.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IndexWriteRefusal' }
+        '502':
+          description: The project's PgVector store could not be written.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IndexWriteRefusal' }
+        '504':
+          description: The write did not finish inside its deadline.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IndexWriteRefusal' }
+
   # NOTE(W2): "tools" (plural), NOT "toolkits" — a different, real, mounted
   # route (internal/api/router.go:369 `r.Get("/tools/prompt_lib/{projectID}",
   # toolkitHandler.List)`), sitting in the same toolkitHandler mount as the
@@ -20563,6 +20941,12 @@ paths:
         Rotation is immediate and total: the previous secret stops working the
         moment this returns, and its vault entry is removed. That is what
         "rotate" has to mean for a credential somebody else holds.
+
+        The body chooses how the trigger's inbound calls will be
+        AUTHENTICATED. It is optional, and a call without one mints the bearer
+        trigger this route has always minted. A rotation writes the mode too,
+        so "rotate this as a plain token trigger" really stops verifying
+        signatures.
       tags: [applications]
       parameters:
         - name: project_id
@@ -20573,12 +20957,22 @@ paths:
           in: path
           required: true
           schema: { type: integer }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PipelineInboundTriggerModeRequest' }
       responses:
         '200':
           description: The trigger, WITH the new credential
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PipelineInboundTrigger' }
+        '400':
+          description: The requested authentication mode is not one this service implements
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
         '403':
           description: Caller lacks models.applications.version.update in this project
           content:
@@ -20865,6 +21259,81 @@ paths:
             The secret, for senders that cannot set a header. Least preferred of
             the three carriers; see the description.
           schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PipelineInboundTriggerRunRequest' }
+      responses:
+        '202':
+          description: The run was admitted; follow it on the events URL
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PipelineInboundTriggerRunAccepted' }
+        '400':
+          description: The run input is too large
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401':
+          description: This trigger cannot be used. One answer for every cause.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '413':
+          description: The request body is too large
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: This deployment cannot run pipelines, or the trigger could not be checked
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /pipeline_trigger/{project_id}/{token_id}/{provider}:
+    post:
+      operationId: runPipelineInboundTriggerForProvider
+      summary: Start a pipeline run from a provider-shaped webhook URL
+      description: |
+        The SAME inbound trigger as the operation above, at the URL a provider
+        preset hands out. Read that description first; only the two paragraphs
+        below differ.
+
+        ## The suffix is decoration, and it is still checked
+
+        A GitHub webhook form takes one payload URL, and the URL minted for a
+        GitHub-preset trigger ends in `/github`. The segment selects nothing:
+        the stored `auth_mode` decides how the call is authenticated. What the
+        handler does with it is compare it against the trigger's stored
+        `provider` and refuse a mismatch, so a URL that is not the one this
+        service minted does not quietly work.
+
+        ## How a signed call is authenticated
+
+        For a trigger in `hmac_sha256` mode there is no bearer secret at all.
+        The sender signs the RAW request body with the trigger secret and sends
+        the hex digest in the configured header — `X-Hub-Signature-256:
+        sha256=<hex>` for GitHub, and a bare hex digest is accepted too. The
+        digest is compared in constant time. A missing header, a malformed
+        value and a wrong signature are all the one refusal, and none of them
+        starts a run.
+      tags: [applications]
+      security: []
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: token_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: provider
+          in: path
+          required: true
+          description: The trigger's stored provider preset.
+          schema: { type: string, enum: [github] }
       requestBody:
         required: false
         content:

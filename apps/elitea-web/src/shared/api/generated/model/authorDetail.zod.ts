@@ -55,7 +55,7 @@ export const AuthorDetail = zod
     title: zod
       .string()
       .optional()
-      .describe('Always \"\" — hardcoded (handler.go:431).'),
+      .describe('Always "" — hardcoded (handler.go:431).'),
     description: zod.string().optional(),
     total_conversations: zod
       .int()
@@ -73,7 +73,7 @@ export const AuthorDetail = zod
       .int()
       .optional()
       .describe(
-        "Real `COUNT(\*)` of non-pipeline applications owned by this author, summed across every project schema the author belongs to (handler.go:397-421, query at :414).\n",
+        "Real `COUNT(*)` of non-pipeline applications owned by this author, summed across every project schema the author belongs to (handler.go:397-421, query at :414).\n",
       ),
     public_pipelines: zod
       .int()
@@ -83,13 +83,13 @@ export const AuthorDetail = zod
       .int()
       .optional()
       .describe(
-        "Real COUNT(\*) of pipeline-type applications (handler.go:417).",
+        "Real COUNT(*) of pipeline-type applications (handler.go:417).",
       ),
     total_toolkits: zod
       .int()
       .optional()
       .describe(
-        "Real COUNT(\*) of elitea_tools rows authored (handler.go:420).",
+        "Real COUNT(*) of elitea_tools rows authored (handler.go:420).",
       ),
     public_collections: zod
       .int()
@@ -99,7 +99,7 @@ export const AuthorDetail = zod
       .int()
       .optional()
       .describe(
-        "Real COUNT(\*) of prompt_collections rows authored (handler.go:423).",
+        "Real COUNT(*) of prompt_collections rows authored (handler.go:423).",
       ),
     rewards: zod
       .int()
@@ -107,7 +107,7 @@ export const AuthorDetail = zod
       .describe("Always 0 — hardcoded stub (handler.go:436)."),
   })
   .describe(
-    "NOTE(W2): eliteacore.Author (internal\/api\/v2\/eliteacore\/handler.go:380-438, fields at :429-437) — NOT internal\/api\/v2\/social's ListAuthors\/GetAuthor, a different handler\/package despite the similar name. BUG-FOR-BUG: on no-matching-author or any DB error, the handler writes a bare `{}` with 200 (:392-395) instead of a 404 — every property above is therefore genuinely optional (no `required` list); a real author response always includes all of them.\n",
+    "NOTE(W2): eliteacore.Author (internal/api/v2/eliteacore/handler.go:380-438, fields at :429-437) — NOT internal/api/v2/social's ListAuthors/GetAuthor, a different handler/package despite the similar name. BUG-FOR-BUG: on no-matching-author or any DB error, the handler writes a bare `{}` with 200 (:392-395) instead of a 404 — every property above is therefore genuinely optional (no `required` list); a real author response always includes all of them.\n",
   );
 
 export type AuthorDetail = zod.input<typeof AuthorDetail>;

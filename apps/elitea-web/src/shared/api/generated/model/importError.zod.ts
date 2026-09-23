@@ -46,13 +46,13 @@ export const ImportError = zod
     index: zod
       .int()
       .describe(
-        "The position of the failed entity. The two routes count over different lists, and a client must know which one it is reading.\nThe IMPORT channel indexes the single flat entity array the request sent — the bare array, or the `applications` array of the envelope (internal\/api\/v2\/eliteacore\/handler.go:2430-2450).\nThe FORK channel indexes the CONCATENATION of the request's `applications` array and its `skills` array, in that order, which is the legacy numbering. An agent-attributed error therefore keeps the position it had, and a skill-attributed error carries `len(applications)` plus its position in the `skills` array (:3045-3048). See ForkResponse.errors.skills.\n",
+        "The position of the failed entity. The two routes count over different lists, and a client must know which one it is reading.\nThe IMPORT channel indexes the single flat entity array the request sent — the bare array, or the `applications` array of the envelope (internal/api/v2/eliteacore/handler.go:2430-2450).\nThe FORK channel indexes the CONCATENATION of the request's `applications` array and its `skills` array, in that order, which is the legacy numbering. An agent-attributed error therefore keeps the position it had, and a skill-attributed error carries `len(applications)` plus its position in the `skills` array (:3045-3048). See ForkResponse.errors.skills.\n",
       ),
     name: zod.string(),
     msg: zod.string(),
   })
   .describe(
-    "NOTE(W2): all 35 emit sites write the three keys — 17 in the import (internal\/api\/v2\/eliteacore\/handler.go:2433, 2469, 2500, 2524, 2532, 2544, 2562, 2589, 2610, 2701, 2723, 2736, 2746, 2759, 2873, 2880, 2887) and 18 in the fork (:3051, 3063, 3090, 3099, 3115, 3130, 3149, 3162, 3170, 3181, 3208, 3226, 3251, 3269, 3283, 3294, 3311, 3318).\n",
+    "NOTE(W2): all 35 emit sites write the three keys — 17 in the import (internal/api/v2/eliteacore/handler.go:2433, 2469, 2500, 2524, 2532, 2544, 2562, 2589, 2610, 2701, 2723, 2736, 2746, 2759, 2873, 2880, 2887) and 18 in the fork (:3051, 3063, 3090, 3099, 3115, 3130, 3149, 3162, 3170, 3181, 3208, 3226, 3251, 3269, 3283, 3294, 3311, 3318).\n",
   );
 
 export type ImportError = zod.input<typeof ImportError>;

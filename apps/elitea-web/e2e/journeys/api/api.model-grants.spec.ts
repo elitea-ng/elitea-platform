@@ -50,6 +50,7 @@ import {
   AUTOTEST_PREFIX,
   createAgentWithVersion,
   deleteAgent,
+  PUBLISHABLE_TAGS,
   readApplicationVersions,
   readCallerPersonalProjectId,
   readCatalogue,
@@ -321,6 +322,9 @@ test('an agent on a restricted platform model cannot be published, and one on an
         // The model IS the catalogue's, so the existing owning-project guard
         // admits it. What refuses the publish is the grant alone.
         model: { modelName: modelTitle, modelProjectId: catalogueProjectId },
+      // #913 — an untagged version is a Critical now, and the publish route
+      // refuses a FAIL inline. See `PUBLISHABLE_TAGS`.
+      tags: PUBLISHABLE_TAGS,
       },
       authorProjectId,
     );

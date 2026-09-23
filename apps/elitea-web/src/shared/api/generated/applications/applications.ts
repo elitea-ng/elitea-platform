@@ -117,6 +117,7 @@ import type {
   N500Response,
   OkResponse,
   PipelineInboundTrigger,
+  PipelineInboundTriggerModeRequest,
   PipelineInboundTriggerRunAccepted,
   PipelineInboundTriggerRunRequest,
   PipelineSchedule,
@@ -495,8 +496,21 @@ export const createEvalDataset = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<createEvalDatasetResponse>(
     getCreateEvalDatasetUrl(projectId),
@@ -1009,8 +1023,21 @@ export const updateEvalDataset = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<updateEvalDatasetResponse>(
     getUpdateEvalDatasetUrl(projectId, datasetId),
@@ -1589,8 +1616,21 @@ export const addEvalDatasetCase = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<addEvalDatasetCaseResponse>(
     getAddEvalDatasetCaseUrl(projectId, datasetId),
@@ -1873,8 +1913,21 @@ export const updateEvalDatasetCase = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<updateEvalDatasetCaseResponse>(
     getUpdateEvalDatasetCaseUrl(projectId, datasetId, caseId),
@@ -2667,8 +2720,21 @@ export const startEvalRun = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<startEvalRunResponse>(getStartEvalRunUrl(projectId), {
     ...options,
@@ -3681,8 +3747,21 @@ export const predictLLM = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<predictLLMResponse>(getPredictLLMUrl(projectId), {
     ...options,
@@ -3963,8 +4042,21 @@ export const generateApplicationDraft = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<generateApplicationDraftResponse>(
     getGenerateApplicationDraftUrl(projectId),
@@ -4474,8 +4566,21 @@ export const createApplication = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<createApplicationResponse>(
     getCreateApplicationUrl(projectId),
@@ -5390,8 +5495,21 @@ export const editApplication = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<editApplicationResponse>(
     getEditApplicationUrl(projectId, id),
@@ -6132,8 +6250,21 @@ export const publishApplication = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<publishApplicationResponse>(
     getPublishApplicationUrl(projectId, versionId),
@@ -6440,8 +6571,21 @@ export const unpublishApplication = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<unpublishApplicationResponse>(
     getUnpublishApplicationUrl(projectId, versionId),
@@ -6713,8 +6857,21 @@ export const validateForPublish = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<validateForPublishResponse>(
     getValidateForPublishUrl(projectId, versionId),
@@ -7265,8 +7422,21 @@ export const updateApplicationVersion = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<updateApplicationVersionResponse>(
     getUpdateApplicationVersionUrl(projectId, applicationId, versionId),
@@ -8122,8 +8292,21 @@ export const saveApplicationNewVersion = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<saveApplicationNewVersionResponse>(
     getSaveApplicationNewVersionUrl(projectId, applicationId),
@@ -8399,8 +8582,21 @@ export const setApplicationDefaultVersion = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<setApplicationDefaultVersionResponse>(
     getSetApplicationDefaultVersionUrl(projectId, applicationId, versionId),
@@ -9714,8 +9910,21 @@ export const convertLegacyApplication = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<convertLegacyApplicationResponse>(
     getConvertLegacyApplicationUrl(),
@@ -9954,8 +10163,21 @@ export const importWizard = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<importWizardResponse>(getImportWizardUrl(projectId), {
     ...options,
@@ -10440,8 +10662,21 @@ export const replaceApplicationIcon = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<replaceApplicationIconResponse>(
     getReplaceApplicationIconUrl(projectId, versionId),
@@ -11374,8 +11609,21 @@ export const updateApplicationRelation = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<updateApplicationRelationResponse>(
     getUpdateApplicationRelationUrl(
@@ -11667,8 +11915,21 @@ export const setAgentAttachmentStorage = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<setAgentAttachmentStorageResponse>(
     getSetAgentAttachmentStorageUrl(projectId, applicationId, versionId),
@@ -12802,8 +13063,21 @@ export const forkAgent = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<forkAgentResponse>(getForkAgentUrl(projectId), {
     ...options,
@@ -13592,8 +13866,21 @@ export const addProjectGroup = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<addProjectGroupResponse>(
     getAddProjectGroupUrl(projectId),
@@ -14100,8 +14387,21 @@ export const putProjectGroups = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<putProjectGroupsResponse>(
     getPutProjectGroupsUrl(projectId),
@@ -14640,8 +14940,21 @@ export const setProjectQuota = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<setProjectQuotaResponse>(
     getSetProjectQuotaUrl(projectId, params),
@@ -15352,8 +15665,21 @@ export const updateProjectContext = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<updateProjectContextResponse>(
     getUpdateProjectContextUrl(projectId),
@@ -16024,8 +16350,21 @@ export const updateProjectInfo = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<updateProjectInfoResponse>(
     getUpdateProjectInfoUrl(projectId),
@@ -17259,6 +17598,11 @@ export type rotatePipelineInboundTriggerResponse200 = {
   status: 200;
 };
 
+export type rotatePipelineInboundTriggerResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
 export type rotatePipelineInboundTriggerResponse403 = {
   data: ErrorResponse;
   status: 403;
@@ -17279,6 +17623,7 @@ export type rotatePipelineInboundTriggerResponseSuccess =
     headers: Headers;
   };
 export type rotatePipelineInboundTriggerResponseError = (
+  | rotatePipelineInboundTriggerResponse400
   | rotatePipelineInboundTriggerResponse403
   | rotatePipelineInboundTriggerResponse404
   | rotatePipelineInboundTriggerResponse503
@@ -17309,18 +17654,51 @@ export const getRotatePipelineInboundTriggerUrl = (
  * Rotation is immediate and total: the previous secret stops working the
  * moment this returns, and its vault entry is removed. That is what
  * "rotate" has to mean for a credential somebody else holds.
+ *
+ * The body chooses how the trigger's inbound calls will be
+ * AUTHENTICATED. It is optional, and a call without one mints the bearer
+ * trigger this route has always minted. A rotation writes the mode too,
+ * so "rotate this as a plain token trigger" really stops verifying
+ * signatures.
  * @summary Create or rotate a pipeline version's inbound trigger
  */
 export const rotatePipelineInboundTrigger = async (
   projectId: number,
   versionId: number,
+  pipelineInboundTriggerModeRequest?: PipelineInboundTriggerModeRequest,
   options?: Parameters<typeof eliteaFetch>[1],
 ): Promise<rotatePipelineInboundTriggerResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
   return eliteaFetch<rotatePipelineInboundTriggerResponse>(
     getRotatePipelineInboundTriggerUrl(projectId, versionId),
     {
       ...options,
       method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(pipelineInboundTriggerModeRequest),
     },
   );
 };
@@ -17328,10 +17706,12 @@ export const rotatePipelineInboundTrigger = async (
 export const getRotatePipelineInboundTriggerQueryKey = (
   projectId: number,
   versionId: number,
+  pipelineInboundTriggerModeRequest?: PipelineInboundTriggerModeRequest,
 ) => {
   return [
     "POST",
     `/pipeline_triggers/prompt_lib/${projectId}/${versionId}`,
+    pipelineInboundTriggerModeRequest,
   ] as const;
 };
 
@@ -17341,6 +17721,7 @@ export const getRotatePipelineInboundTriggerQueryOptions = <
 >(
   projectId: number,
   versionId: number,
+  pipelineInboundTriggerModeRequest?: PipelineInboundTriggerModeRequest,
   options?: {
     query?: Partial<
       UseQueryOptions<
@@ -17356,15 +17737,21 @@ export const getRotatePipelineInboundTriggerQueryOptions = <
 
   const queryKey =
     queryOptions?.queryKey ??
-    getRotatePipelineInboundTriggerQueryKey(projectId, versionId);
+    getRotatePipelineInboundTriggerQueryKey(
+      projectId,
+      versionId,
+      pipelineInboundTriggerModeRequest,
+    );
 
   const queryFn: QueryFunction<
     Awaited<ReturnType<typeof rotatePipelineInboundTrigger>>
   > = ({ signal }) =>
-    rotatePipelineInboundTrigger(projectId, versionId, {
-      signal,
-      ...requestOptions,
-    });
+    rotatePipelineInboundTrigger(
+      projectId,
+      versionId,
+      pipelineInboundTriggerModeRequest,
+      { signal, ...requestOptions },
+    );
 
   return {
     queryKey,
@@ -17393,6 +17780,8 @@ export function useRotatePipelineInboundTrigger<
 >(
   projectId: number,
   versionId: number,
+  pipelineInboundTriggerModeRequest:
+    undefined | PipelineInboundTriggerModeRequest,
   options: {
     query: Partial<
       UseQueryOptions<
@@ -17421,6 +17810,7 @@ export function useRotatePipelineInboundTrigger<
 >(
   projectId: number,
   versionId: number,
+  pipelineInboundTriggerModeRequest?: PipelineInboundTriggerModeRequest,
   options?: {
     query?: Partial<
       UseQueryOptions<
@@ -17449,6 +17839,7 @@ export function useRotatePipelineInboundTrigger<
 >(
   projectId: number,
   versionId: number,
+  pipelineInboundTriggerModeRequest?: PipelineInboundTriggerModeRequest,
   options?: {
     query?: Partial<
       UseQueryOptions<
@@ -17473,6 +17864,7 @@ export function useRotatePipelineInboundTrigger<
 >(
   projectId: number,
   versionId: number,
+  pipelineInboundTriggerModeRequest?: PipelineInboundTriggerModeRequest,
   options?: {
     query?: Partial<
       UseQueryOptions<
@@ -17490,6 +17882,7 @@ export function useRotatePipelineInboundTrigger<
   const queryOptions = getRotatePipelineInboundTriggerQueryOptions(
     projectId,
     versionId,
+    pipelineInboundTriggerModeRequest,
     options,
   );
 
@@ -18280,8 +18673,21 @@ export const savePipelineSchedule = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<savePipelineScheduleResponse>(
     getSavePipelineScheduleUrl(projectId, versionId),
@@ -18828,8 +19234,21 @@ export const runPipelineInboundTrigger = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<runPipelineInboundTriggerResponse>(
     getRunPipelineInboundTriggerUrl(projectId, tokenId, params),
@@ -19035,6 +19454,325 @@ export function useRunPipelineInboundTrigger<
     tokenId,
     pipelineInboundTriggerRunRequest,
     params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type runPipelineInboundTriggerForProviderResponse202 = {
+  data: PipelineInboundTriggerRunAccepted;
+  status: 202;
+};
+
+export type runPipelineInboundTriggerForProviderResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type runPipelineInboundTriggerForProviderResponse401 = {
+  data: ErrorResponse;
+  status: 401;
+};
+
+export type runPipelineInboundTriggerForProviderResponse413 = {
+  data: ErrorResponse;
+  status: 413;
+};
+
+export type runPipelineInboundTriggerForProviderResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type runPipelineInboundTriggerForProviderResponseSuccess =
+  runPipelineInboundTriggerForProviderResponse202 & {
+    headers: Headers;
+  };
+export type runPipelineInboundTriggerForProviderResponseError = (
+  | runPipelineInboundTriggerForProviderResponse400
+  | runPipelineInboundTriggerForProviderResponse401
+  | runPipelineInboundTriggerForProviderResponse413
+  | runPipelineInboundTriggerForProviderResponse503
+) & {
+  headers: Headers;
+};
+
+export type runPipelineInboundTriggerForProviderResponse =
+  | runPipelineInboundTriggerForProviderResponseSuccess
+  | runPipelineInboundTriggerForProviderResponseError;
+
+export const getRunPipelineInboundTriggerForProviderUrl = (
+  projectId: number,
+  tokenId: string,
+  provider: "github",
+) => {
+  return `/pipeline_trigger/${projectId}/${tokenId}/${provider}`;
+};
+
+/**
+ * The SAME inbound trigger as the operation above, at the URL a provider
+ * preset hands out. Read that description first; only the two paragraphs
+ * below differ.
+ *
+ * ## The suffix is decoration, and it is still checked
+ *
+ * A GitHub webhook form takes one payload URL, and the URL minted for a
+ * GitHub-preset trigger ends in `/github`. The segment selects nothing:
+ * the stored `auth_mode` decides how the call is authenticated. What the
+ * handler does with it is compare it against the trigger's stored
+ * `provider` and refuse a mismatch, so a URL that is not the one this
+ * service minted does not quietly work.
+ *
+ * ## How a signed call is authenticated
+ *
+ * For a trigger in `hmac_sha256` mode there is no bearer secret at all.
+ * The sender signs the RAW request body with the trigger secret and sends
+ * the hex digest in the configured header — `X-Hub-Signature-256:
+ * sha256=<hex>` for GitHub, and a bare hex digest is accepted too. The
+ * digest is compared in constant time. A missing header, a malformed
+ * value and a wrong signature are all the one refusal, and none of them
+ * starts a run.
+ * @summary Start a pipeline run from a provider-shaped webhook URL
+ */
+export const runPipelineInboundTriggerForProvider = async (
+  projectId: number,
+  tokenId: string,
+  provider: "github",
+  pipelineInboundTriggerRunRequest?: PipelineInboundTriggerRunRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<runPipelineInboundTriggerForProviderResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<runPipelineInboundTriggerForProviderResponse>(
+    getRunPipelineInboundTriggerForProviderUrl(projectId, tokenId, provider),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(pipelineInboundTriggerRunRequest),
+    },
+  );
+};
+
+export const getRunPipelineInboundTriggerForProviderQueryKey = (
+  projectId: number,
+  tokenId: string,
+  provider: "github",
+  pipelineInboundTriggerRunRequest?: PipelineInboundTriggerRunRequest,
+) => {
+  return [
+    "POST",
+    `/pipeline_trigger/${projectId}/${tokenId}/${provider}`,
+    pipelineInboundTriggerRunRequest,
+  ] as const;
+};
+
+export const getRunPipelineInboundTriggerForProviderQueryOptions = <
+  TData = Awaited<ReturnType<typeof runPipelineInboundTriggerForProvider>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  tokenId: string,
+  provider: "github",
+  pipelineInboundTriggerRunRequest?: PipelineInboundTriggerRunRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof runPipelineInboundTriggerForProvider>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRunPipelineInboundTriggerForProviderQueryKey(
+      projectId,
+      tokenId,
+      provider,
+      pipelineInboundTriggerRunRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof runPipelineInboundTriggerForProvider>>
+  > = ({ signal }) =>
+    runPipelineInboundTriggerForProvider(
+      projectId,
+      tokenId,
+      provider,
+      pipelineInboundTriggerRunRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      tokenId !== null &&
+      tokenId !== undefined &&
+      provider !== null &&
+      provider !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof runPipelineInboundTriggerForProvider>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RunPipelineInboundTriggerForProviderQueryResult = NonNullable<
+  Awaited<ReturnType<typeof runPipelineInboundTriggerForProvider>>
+>;
+export type RunPipelineInboundTriggerForProviderQueryError = ErrorResponse;
+
+export function useRunPipelineInboundTriggerForProvider<
+  TData = Awaited<ReturnType<typeof runPipelineInboundTriggerForProvider>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  tokenId: string,
+  provider: "github",
+  pipelineInboundTriggerRunRequest:
+    undefined | PipelineInboundTriggerRunRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof runPipelineInboundTriggerForProvider>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof runPipelineInboundTriggerForProvider>>,
+          TError,
+          Awaited<ReturnType<typeof runPipelineInboundTriggerForProvider>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRunPipelineInboundTriggerForProvider<
+  TData = Awaited<ReturnType<typeof runPipelineInboundTriggerForProvider>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  tokenId: string,
+  provider: "github",
+  pipelineInboundTriggerRunRequest?: PipelineInboundTriggerRunRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof runPipelineInboundTriggerForProvider>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof runPipelineInboundTriggerForProvider>>,
+          TError,
+          Awaited<ReturnType<typeof runPipelineInboundTriggerForProvider>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRunPipelineInboundTriggerForProvider<
+  TData = Awaited<ReturnType<typeof runPipelineInboundTriggerForProvider>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  tokenId: string,
+  provider: "github",
+  pipelineInboundTriggerRunRequest?: PipelineInboundTriggerRunRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof runPipelineInboundTriggerForProvider>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Start a pipeline run from a provider-shaped webhook URL
+ */
+
+export function useRunPipelineInboundTriggerForProvider<
+  TData = Awaited<ReturnType<typeof runPipelineInboundTriggerForProvider>>,
+  TError = ErrorResponse,
+>(
+  projectId: number,
+  tokenId: string,
+  provider: "github",
+  pipelineInboundTriggerRunRequest?: PipelineInboundTriggerRunRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof runPipelineInboundTriggerForProvider>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRunPipelineInboundTriggerForProviderQueryOptions(
+    projectId,
+    tokenId,
+    provider,
+    pipelineInboundTriggerRunRequest,
     options,
   );
 

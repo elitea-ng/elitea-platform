@@ -1,6 +1,7 @@
 import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { useCallback, useEffect, useState } from 'react';
 
+import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useRouteContext } from '@tanstack/react-router';
 
 import Box from '@mui/material/Box';
@@ -8,18 +9,13 @@ import IconButton from '@mui/material/IconButton';
 import Popover from '@mui/material/Popover';
 import type { Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
-import Typography from '@mui/material/Typography';
-import CloseIcon from '@mui/icons-material/Close';
+
 import NotificationsNoneOutlined from '@mui/icons-material/NotificationsNoneOutlined';
 
-import {
-  NotificationListItem,
-  useBulkMarkSeenNotifications,
-  useNotificationsSSE,
-  useNotificationsList,
-} from '@/features/notifications';
+import { NOTIFICATIONS_QUERY_ROOT, useNotificationsList, useNotificationsSSE } from '@/features/notifications';
 import { t } from '@/shared/i18n';
-import { BUTTON_VARIANTS, BaseBtn } from '@/shared/ui/BaseBtn';
+
+import { NotificationPopoverContent } from './NotificationPopoverContent';
 
 /**
  * SHELL-013 (disclosed composition gap) — the header-bell notification
@@ -121,9 +117,6 @@ function selectPersonalProjectId(context: unknown): string | undefined {
   return context.auth?.getUser?.()?.personal_project_id;
 }
 
-/** Old app: `NotificationList.jsx`'s `POPOVER_PAGE_SIZE = 5`. */
-const POPOVER_PAGE_SIZE = 5;
-
 /**
  * How often the badge query polls once the live stream is gone for good. One
  * minute is slow enough to cost nothing and fast enough that the dot is not
@@ -133,6 +126,7 @@ const DEAD_STREAM_POLL_MS = 60_000;
 
 export function NotificationButton(): ReactNode {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const routeContext: unknown = useRouteContext({ strict: false });
   const personalProjectId = selectPersonalProjectId(routeContext);
 
@@ -201,7 +195,22 @@ export function NotificationButton(): ReactNode {
     [navigate, personalProjectId],
   );
 
-  const handleClose = useCallback(() => setAnchorEl(null), []);
+  /**
+   * ELITEA-0747 — "scroll load state resets correctly on popup close and
+   * reopen". `NotificationPopoverContent` unmounts on close (the `Popover`
+   * below is gated on `anchorEl` truthiness, not MUI's own `open` prop
+   * alone), but its infinite-query CACHE would otherwise survive under the
+   * same query key and rehydrate every previously loaded group straight back
+   * on reopen. Removing (not merely invalidating) that one query on close is
+   * what makes a reopen start from group 1 again, every time — invalidate
+   * would refetch every stale page instead of dropping them.
+   */
+  const handleClose = useCallback(() => {
+    setAnchorEl(null);
+    if (personalProjectId) {
+      queryClient.removeQueries({ queryKey: [...NOTIFICATIONS_QUERY_ROOT, 'infinite', personalProjectId] });
+    }
+  }, [personalProjectId, queryClient]);
 
   return (
     <>
@@ -256,113 +265,5 @@ export function NotificationButton(): ReactNode {
         </Popover>
       )}
     </>
-  );
-}
-
-interface NotificationPopoverContentProps {
-  readonly projectId: string;
-  readonly onClose: () => void;
-}
-
-/** The popover body: header + up to 5 most-recent-unread rows + mark-all/view-all. Split out to keep `NotificationButton`'s own prop/effect counts minimal (§3.5). */
-function NotificationPopoverContent({ projectId, onClose }: NotificationPopoverContentProps): ReactNode {
-  const navigate = useNavigate();
-  const { data, isFetching } = useNotificationsList({
-    projectId,
-    pageSize: POPOVER_PAGE_SIZE,
-    params: { only_new: true },
-  });
-  const bulkMarkSeen = useBulkMarkSeenNotifications();
-  const rows = data?.rows ?? [];
-  const hasUnreadRow = rows.some((row) => !row.isSeen);
-
-  const handleMarkAllAsRead = useCallback(() => {
-    bulkMarkSeen.mutate({ projectId, ids: 'all', isSeen: true });
-  }, [projectId, bulkMarkSeen]);
-
-  const handleViewAll = useCallback(() => {
-    void navigate({ to: '/settings/notifications' });
-    onClose();
-  }, [navigate, onClose]);
-
-  return (
-    <Box
-      sx={(theme: Theme) => ({
-        background: theme.vars.palette.background.notificationList,
-        width: '20rem',
-        display: 'flex',
-        flexDirection: 'column',
-        overflow: 'hidden',
-      })}
-    >
-      <Box
-        sx={(theme: Theme) => ({
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '0.75rem 1.25rem',
-          borderBottom: `0.0625rem solid ${theme.vars.palette.border.notificationItem}`,
-        })}
-      >
-        <Typography
-          variant="labelMedium"
-          color="text.secondary"
-        >
-          {t('widgets.sidebar.notification.title', 'Notifications')}
-        </Typography>
-        <IconButton
-          size="small"
-          aria-label={t('widgets.sidebar.notification.close', 'Close notifications')}
-          onClick={onClose}
-        >
-          <CloseIcon fontSize="small" />
-        </IconButton>
-      </Box>
-
-      <Box>
-        {rows.map((notification) => (
-          <NotificationListItem
-            key={notification.id}
-            notification={notification}
-            projectId={projectId}
-            context="list"
-            onCloseNotificationList={onClose}
-          />
-        ))}
-        {rows.length === 0 && (
-          <Box sx={{ padding: '0.75rem 1.25rem' }}>
-            <Typography
-              variant="bodySmall"
-              color="text.secondary"
-            >
-              {isFetching
-                ? t('widgets.sidebar.notification.loading', 'Loading…')
-                : t('widgets.sidebar.notification.empty', 'No new notifications right now')}
-            </Typography>
-          </Box>
-        )}
-      </Box>
-
-      {rows.length > 0 && (
-        <BaseBtn
-          variant={BUTTON_VARIANTS.auxiliary}
-          onClick={handleMarkAllAsRead}
-          disabled={!hasUnreadRow}
-          // `borderRadius: 0` (old app's own override here) dropped —
-          // R-T10 bans ad-hoc radius even for the zero value; same
-          // documented drop as `RunStateNodeGroup.tsx`.
-          sx={(theme: Theme) => ({ borderTop: `0.0625rem solid ${theme.vars.palette.border.notificationItem}` })}
-        >
-          {t('widgets.sidebar.notification.markAllRead', 'Mark all as read')}
-        </BaseBtn>
-      )}
-      <BaseBtn
-        variant={BUTTON_VARIANTS.auxiliary}
-        onClick={handleViewAll}
-        sx={(theme: Theme) => ({ borderTop: `0.0625rem solid ${theme.vars.palette.border.notificationItem}` })}
-      >
-        {t('widgets.sidebar.notification.viewAll', 'View all')}
-      </BaseBtn>
-    </Box>
   );
 }

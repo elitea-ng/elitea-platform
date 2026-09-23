@@ -114,73 +114,72 @@ describe('ApplicationInformation', () => {
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
   });
 
+  /**
+   * #899: the pylon trigger route these rows used to read is gone. The panel
+   * now derives the type from the two Go facilities, and `timezone` /
+   * `webhook type` are no longer rows at all — nothing stores them.
+   */
   describe('pipeline trigger rows', () => {
-    it('renders the trigger type row for a chat_message trigger, with no schedule/webhook rows', async () => {
+    const SCHEDULE = '*/pipeline_schedules/prompt_lib/:projectId/:versionId';
+    const TRIGGER = '*/pipeline_triggers/prompt_lib/:projectId/:versionId';
+
+    it('renders no trigger row when neither facility is configured', async () => {
       server.use(
-        http.get('*/elitea_core/pipeline_trigger/prompt_lib/:projectId/pipeline/:versionId/trigger', () =>
-          HttpResponse.json({ versionId: 'v1', enabled: true, type: 'chat_message', schedule: null }),
-        ),
+        http.get(SCHEDULE, () => HttpResponse.json({ configured: false, active: false })),
+        http.get(TRIGGER, () => HttpResponse.json({ configured: false })),
       );
-      renderInfo({ isPipeline: true, versionId: 'v1' });
-      expect(await screen.findByText('Trigger:')).toBeInTheDocument();
-      expect(screen.getByText('Chat Message')).toBeInTheDocument();
-      expect(screen.queryByText('Schedule:')).not.toBeInTheDocument();
-      expect(screen.queryByText('Webhook type:')).not.toBeInTheDocument();
+      renderInfo({ isPipeline: true, versionId: '1' });
+      await screen.findByText('Version ID:');
+      expect(screen.queryByText('Trigger:')).not.toBeInTheDocument();
     });
 
-    it('renders cron/timezone/last-run rows for a schedule trigger', async () => {
+    it('renders cron and last-run rows for a configured schedule', async () => {
       server.use(
-        http.get('*/elitea_core/pipeline_trigger/prompt_lib/:projectId/pipeline/:versionId/trigger', () =>
-          HttpResponse.json({
-            versionId: 'v1',
-            enabled: true,
-            type: 'schedule',
-            schedule: { cron: '0 9 * * *', timezone: 'UTC', last_run: '2026-07-20T09:00:00Z' },
-          }),
-        ),
+        http.get(SCHEDULE, () => HttpResponse.json({ configured: true, active: true, cron: '0 9 * * *', last_run: '2026-07-20T09:00:00Z' })),
+        http.get(TRIGGER, () => HttpResponse.json({ configured: false })),
       );
-      renderInfo({ isPipeline: true, versionId: 'v1' });
+      renderInfo({ isPipeline: true, versionId: '1' });
       expect(await screen.findByText('Trigger:')).toBeInTheDocument();
       expect(screen.getByText('Schedule')).toBeInTheDocument();
       expect(screen.getByText('Schedule:')).toBeInTheDocument();
       expect(screen.getByText('0 9 * * *')).toBeInTheDocument();
-      expect(screen.getByText('Timezone:')).toBeInTheDocument();
-      expect(screen.getByText('UTC')).toBeInTheDocument();
       expect(screen.getByText('Last run:')).toBeInTheDocument();
     });
 
-    it('omits cron/timezone/last-run rows a schedule trigger does not carry', async () => {
+    it('omits the cron/last-run rows a schedule does not carry', async () => {
       server.use(
-        http.get('*/elitea_core/pipeline_trigger/prompt_lib/:projectId/pipeline/:versionId/trigger', () =>
-          HttpResponse.json({ versionId: 'v1', enabled: true, type: 'schedule', schedule: {} }),
-        ),
+        http.get(SCHEDULE, () => HttpResponse.json({ configured: true, active: true })),
+        http.get(TRIGGER, () => HttpResponse.json({ configured: false })),
       );
-      renderInfo({ isPipeline: true, versionId: 'v1' });
+      renderInfo({ isPipeline: true, versionId: '1' });
       expect(await screen.findByText('Trigger:')).toBeInTheDocument();
       expect(screen.queryByText('Schedule:')).not.toBeInTheDocument();
-      expect(screen.queryByText('Timezone:')).not.toBeInTheDocument();
       expect(screen.queryByText('Last run:')).not.toBeInTheDocument();
     });
 
-    it('renders the webhook type row for a webhook trigger', async () => {
+    it('names the webhook when only an inbound trigger is configured', async () => {
       server.use(
-        http.get('*/elitea_core/pipeline_trigger/prompt_lib/:projectId/pipeline/:versionId/trigger', () =>
-          HttpResponse.json({
-            versionId: 'v1',
-            enabled: true,
-            type: 'webhook',
-            schedule: { webhook_type: 'github' },
-          }),
-        ),
+        http.get(SCHEDULE, () => HttpResponse.json({ configured: false, active: false })),
+        http.get(TRIGGER, () => HttpResponse.json({ configured: true, token_id: 'tok', url: '/api/v2/pipeline_trigger/1/tok' })),
       );
-      renderInfo({ isPipeline: true, versionId: 'v1' });
+      renderInfo({ isPipeline: true, versionId: '1' });
       expect(await screen.findByText('Trigger:')).toBeInTheDocument();
-      expect(screen.getByText('Webhook type:')).toBeInTheDocument();
-      expect(screen.getByText('GitHub')).toBeInTheDocument();
+      expect(screen.getByText('Webhook')).toBeInTheDocument();
+    });
+
+    /** A revoked row is KEPT as evidence, and the inbound path refuses it — so it must not read as a live trigger here either. */
+    it('treats a revoked trigger as no trigger', async () => {
+      server.use(
+        http.get(SCHEDULE, () => HttpResponse.json({ configured: false, active: false })),
+        http.get(TRIGGER, () => HttpResponse.json({ configured: true, token_id: 'tok', revoked_at: '2026-07-20T09:00:00Z' })),
+      );
+      renderInfo({ isPipeline: true, versionId: '1' });
+      await screen.findByText('Version ID:');
+      expect(screen.queryByText('Trigger:')).not.toBeInTheDocument();
     });
 
     it('renders no trigger row at all when isPipeline is false, even with a versionId', async () => {
-      renderInfo({ isPipeline: false, versionId: 'v1' });
+      renderInfo({ isPipeline: false, versionId: '1' });
       await screen.findByText('Version ID:');
       expect(screen.queryByText('Trigger:')).not.toBeInTheDocument();
     });

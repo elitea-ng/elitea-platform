@@ -7,6 +7,8 @@
  */
 import { describe, expect, it } from 'vitest';
 
+import { sha256Hex } from '@/shared/lib/hash/sha256';
+
 import { applyChatStreamFrame, mcpSessionFromFrame, type ChatStreamContext, type ToolAction } from './chatStreamReducer';
 import { HANDLED_STREAM_TYPES, SocketMessageType, isChatStreamFrame } from './chatStreamFrame';
 import type { ChatMessage } from './convertMessagesToChatHistory';
@@ -263,9 +265,12 @@ describe('the ported boundary is explicit', () => {
     // The fixture satisfies EVERY handled case's preconditions — an
     // already-started tool action for the end/error cases, a processing summary
     // for chat_predict_summary_finished (which closes by type rather than by
-    // run id), and a `uuid` for chat_user_message (whose id is uuid, not
-    // message_id) — so a "handled type changed nothing" failure means the case
-    // is genuinely unreachable rather than under-supplied by the test.
+    // run id), a `uuid` for chat_user_message (whose id is uuid, not
+    // message_id), and a `tool_output_chunk` position for the chunked-output
+    // case (#956), whose payload is the chunk itself rather than the tool
+    // metadata every other tool frame carries — so a "handled type changed
+    // nothing" failure means the case is genuinely unreachable rather than
+    // under-supplied by the test.
     const before: readonly ChatMessage[] = [
       {
         ...pendingAssistant(),
@@ -279,7 +284,22 @@ describe('the ported boundary is explicit', () => {
     for (const type of Object.values(SocketMessageType)) {
       const next = applyChatStreamFrame(
         before,
-        frame(type, { content: 'x', references: [], uuid: 'echo-uuid', response_metadata: { result_chunk_v1: { offset_bytes: 0, total_bytes: 1, sha256: 'a'.repeat(64), final: true }, tool_run_id: 'run-x', context_status: { version: 1, phase: 'compacting' } } }),
+        frame(type, {
+          content: 'x',
+          references: [],
+          uuid: 'echo-uuid',
+          response_metadata: {
+            tool_run_id: 'run-x',
+            result_chunk_v1: { offset_bytes: 0, total_bytes: 1, sha256: 'a'.repeat(64), final: true },
+            context_status: { version: 1, phase: 'compacting' },
+            tool_output_chunk: {
+              tool_call_id: 'run-x',
+              index: 0,
+              total: 1,
+              tool_output_sha256: sha256Hex('x'),
+            },
+          },
+        }),
         CONTEXT,
       );
       if (HANDLED_STREAM_TYPES.has(type)) {

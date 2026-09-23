@@ -15,6 +15,10 @@ import { RESOURCE_CARD_CONFIGS } from './lib/ResourceCardConfig';
 import { resourcesVersionLabel } from './lib/useResourcesConfig';
 
 const documentationConfig = RESOURCE_CARD_CONFIGS[0]!;
+// #891: the only two cards left with NO `defaultLinks` (no real video/tour
+// content exists to default to) — the right subjects for a "still returns
+// [], not a fabricated fallback" assertion.
+const videoLibraryConfig = RESOURCE_CARD_CONFIGS[2]!;
 
 /**
  * The Help Center now READS its cards from
@@ -55,12 +59,12 @@ function serveResourceValues(values: Record<string, unknown>): void {
 }
 
 describe('resolveLinks (finding #3 regression)', () => {
-  it('returns an empty array when the config value for the key is absent', () => {
-    expect(resolveLinks(documentationConfig, {})).toEqual([]);
+  it('returns an empty array when the config value for the key is absent and the card has no defaultLinks', () => {
+    expect(resolveLinks(videoLibraryConfig, {})).toEqual([]);
   });
 
-  it('returns an empty array when the config value is present but not an array', () => {
-    expect(resolveLinks(documentationConfig, { [documentationConfig.linksKey]: 'not-an-array' })).toEqual([]);
+  it('returns an empty array when the config value is present but not an array, and the card has no defaultLinks', () => {
+    expect(resolveLinks(videoLibraryConfig, { [videoLibraryConfig.linksKey]: 'not-an-array' })).toEqual([]);
   });
 
   it('returns the configured links verbatim once a real admin config value provides them', () => {
@@ -74,7 +78,34 @@ describe('resolveLinks (finding #3 regression)', () => {
   it("only reads the given card's own linksKey, not another card's", () => {
     const releaseNotesConfig = RESOURCE_CARD_CONFIGS[1]!;
     const links = [{ title: 'v2.3.0 notes', url: 'https://example.com/changelog' }];
-    expect(resolveLinks(documentationConfig, { [releaseNotesConfig.linksKey]: links })).toEqual([]);
+    expect(resolveLinks(videoLibraryConfig, { [releaseNotesConfig.linksKey]: links })).toEqual([]);
+  });
+
+  /*
+   * #891/ELITEA-0967,0972,0973,0975: a fresh deployment (no admin config at
+   * all) used to leave every card's link list empty. Cards that ship a real
+   * default (`ResourceCardConfig.ts`) now fall back to it instead.
+   */
+  it("falls back to the card's own defaultLinks when the config value is absent", () => {
+    expect(resolveLinks(documentationConfig, {})).toEqual(documentationConfig.defaultLinks);
+    expect(documentationConfig.defaultLinks?.length).toBeGreaterThan(0);
+  });
+
+  /*
+   * The real shape on the wire: `GET /admin/plugin_config_values/prompt_lib/
+   * resources` answers every card's `linksKey` as `[]`, not an absent key,
+   * on a fresh deployment (confirmed live) — an empty array must fall back
+   * to defaultLinks too, or #891's fix never actually applies in production.
+   */
+  it("also falls back to defaultLinks when the config value is an EMPTY array (the real fresh-deployment shape)", () => {
+    expect(resolveLinks(documentationConfig, { [documentationConfig.linksKey]: [] })).toEqual(
+      documentationConfig.defaultLinks,
+    );
+  });
+
+  it("an admin-configured value still wins over the card's defaultLinks", () => {
+    const links = [{ title: 'Admin override', url: 'https://example.com/override' }];
+    expect(resolveLinks(documentationConfig, { [documentationConfig.linksKey]: links })).toEqual(links);
   });
 });
 
@@ -130,6 +161,19 @@ describe('HelpCenterPage', () => {
     expect(screen.getByText(documentationConfig.defaultTitle)).toBeInTheDocument();
   });
 
+  /* onetest: ELITEA-NONE (#890) — axe `scrollable-region-focusable`: the content
+   * region (`contentSx`'s `overflowY: auto` Box) must itself be reachable and
+   * scrollable by a keyboard-only user, not just by mouse/trackpad. No dedicated
+   * e2e case pins this (see `shell.resources.spec.ts`'s RES01 comment); regression-
+   * tested here instead. */
+  it('the scrollable content region is keyboard-focusable (#890)', async () => {
+    serveResourceValues({});
+    renderHelpCenter(<HelpCenterPage />);
+
+    const region = await screen.findByRole('region', { name: 'Help Center content' });
+    expect(region).toHaveAttribute('tabindex', '0');
+  });
+
   it('falls back to every card enabled with no links when the read fails', async () => {
     configureGeneratedClient({ baseUrl: '/api/v2' });
     server.use(
@@ -146,6 +190,13 @@ describe('HelpCenterPage', () => {
     for (const config of RESOURCE_CARD_CONFIGS) {
       expect(await screen.findByText(config.defaultTitle)).toBeInTheDocument();
     }
-    expect(screen.getAllByText('No links configured')).toHaveLength(RESOURCE_CARD_CONFIGS.length);
+    // #891: cards with a real `defaultLinks` (Documentation, Release Notes,
+    // Tutorials) now render THAT instead of the placeholder — only the two
+    // cards with no real content left (Video Library, Interactive Tours)
+    // still show it.
+    const cardsWithNoDefault = RESOURCE_CARD_CONFIGS.filter((config) => config.defaultLinks === undefined);
+    expect(screen.getAllByText('No links configured')).toHaveLength(cardsWithNoDefault.length);
+    expect(screen.getByRole('link', { name: 'Getting Started' })).toBeInTheDocument();
+    expect(screen.getByText('Latest', { exact: true })).toBeInTheDocument();
   });
 });

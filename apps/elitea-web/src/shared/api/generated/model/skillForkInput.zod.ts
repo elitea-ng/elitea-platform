@@ -45,18 +45,18 @@ export const SkillForkInput = zod.object({
   import_uuid: zod
     .string()
     .describe(
-      "The key that every `skills` reference of a forked version names, and the key that makes a repeated fork of one document converge on one skill. An entry that carries none is REFUSED before anything is written: it is reported on `errors.skills`, and it never appears in `result.skills` (internal\/api\/v2\/eliteacore\/import_skills.go:151-157). The remainder of the request still runs, so such a body answers 207 and not 400.\n",
+      "The key that every `skills` reference of a forked version names, and the key that makes a repeated fork of one document converge on one skill. An entry that carries none is REFUSED before anything is written: it is reported on `errors.skills`, and it never appears in `result.skills` (internal/api/v2/eliteacore/import_skills.go:151-157). The remainder of the request still runs, so such a body answers 207 and not 400.\n",
     ),
   name: zod
     .string()
     .describe(
-      "An entry with no name is refused the same way, and for the same reason: nothing is written and the entry is reported on `errors.skills` (internal\/api\/v2\/eliteacore\/import_skills.go:139-141).\n",
+      "An entry with no name is refused the same way, and for the same reason: nothing is written and the entry is reported on `errors.skills` (internal/api/v2/eliteacore/import_skills.go:139-141).\n",
     ),
   description: zod
     .string()
     .optional()
     .describe(
-      "The name is written into the column when this value is empty, because `skills.description` is NOT NULL (internal\/api\/v2\/eliteacore\/import_skills.go:143-148).\n",
+      "The name is written into the column when this value is empty, because `skills.description` is NOT NULL (internal/api/v2/eliteacore/import_skills.go:143-148).\n",
     ),
   meta: zod.record(zod.string(), zod.unknown()).optional(),
   versions: zod
@@ -66,7 +66,7 @@ export const SkillForkInput = zod.object({
           .string()
           .optional()
           .describe(
-            'An empty or absent name is written as \"base\" (internal\/api\/v2\/eliteacore\/import_skills.go:229-232).\n',
+            'An empty or absent name is written as "base" (internal/api/v2/eliteacore/import_skills.go:229-232).\n',
           ),
         instructions: zod.string().optional(),
         meta: zod.record(zod.string(), zod.unknown()).optional(),
@@ -82,7 +82,7 @@ export const SkillForkInput = zod.object({
       }),
     )
     .describe(
-      "An entry with no version is refused, because a skill with no version has no instructions (internal\/api\/v2\/eliteacore\/import_skills.go:164-167). A `base` clone of the first entry is added when no entry is named `base` (:304-326).\n",
+      "An entry with no version is refused, because a skill with no version has no instructions (internal/api/v2/eliteacore/import_skills.go:164-167). A `base` clone of the first entry is added when no entry is named `base` (:304-326).\n",
     ),
 });
 

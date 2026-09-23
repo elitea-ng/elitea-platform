@@ -14,11 +14,15 @@
  * exactly.
  */
 import type { ComponentProps, ReactNode, RefObject } from 'react';
+import { useCallback, useState } from 'react';
+
+import Alert from '@mui/material/Alert';
+import Snackbar from '@mui/material/Snackbar';
 
 import { AttachmentButton, ChatInternalToolsConfigButton, ClearChatButton, PlusChatButton, SendButton, VoiceButton } from '@/widgets/chat';
 import type { AttachmentButtonHandle, PlusChatButtonEntitySubmenus, VoiceButtonHandle, VoiceButtonInputHandle } from '@/widgets/chat';
 import { FileList, HighlightedText } from '@/features/chat-messages';
-import { NewChatInput } from '@/features/chat-input';
+import { NewChatInput, VoiceControlButton } from '@/features/chat-input';
 import { LLMModelSelector } from '@/widgets/llm-model-selector';
 import { t } from '@/shared/i18n';
 
@@ -33,10 +37,21 @@ type AttachmentListSlotProps = Parameters<NonNullable<NewChatInputSlotsType['att
 type LLMSettingsValues = NonNullable<ComponentProps<typeof LLMModelSelector>['llmSettings']>;
 type LLMModelListItem = NonNullable<ComponentProps<typeof LLMModelSelector>['models']>[number];
 type InternalToolItem = NonNullable<ComponentProps<typeof ChatInternalToolsConfigButton>['tools']>[number];
+/** `voiceHooks.useReadAloud()`'s unexported `VoicePlayerProps` — same `ComponentProps`-derivation convention as the other slot-prop types in this file (see `features/chat-input/index.ts`'s own doc comment for why that type stays intra-slice). */
+type VoiceControlProps = ComponentProps<typeof VoiceControlButton>;
 
 interface ChatBoxInputSlotsAttachments {
   readonly attachments: ComponentProps<typeof AttachmentButton>['attachments'] | undefined;
   readonly onAttachFiles: ComponentProps<typeof AttachmentButton>['onAttachFiles'] | undefined;
+  /**
+   * A17 (ELITEA-2867): attachments are refused for the whole of an open run.
+   * `disableAttachments` is the one switch that covers every way in — the "+"
+   * menu's own Attach Files row, the bare paperclip, AND the drop/paste bridge,
+   * which delivers files through `attachmentButtonRef.current.onDrop(...)` and
+   * is gated on the same flag inside `AttachmentButton`. Gating only the button
+   * would leave drag-and-drop and Ctrl+V attaching to a turn already in flight.
+   */
+  readonly disabled: boolean;
 }
 
 interface ChatBoxInputSlotsInternalTools {
@@ -77,6 +92,16 @@ interface ChatBoxInputSlotsClearChat {
   readonly onClear: () => void;
 }
 
+/**
+ * `VoiceButton`'s two feedback callbacks (#932/#934) — see
+ * `ChatBoxVoiceFeedback.tsx` for what the chat surface does with them. They
+ * used to be `onRecordingChange={() => {}}` and no `onError` at all.
+ */
+interface ChatBoxInputSlotsVoiceInput {
+  readonly onRecordingChange: (isRecording: boolean) => void;
+  readonly onError: (message: string) => void;
+}
+
 interface ChatBoxInputSlotsRefs {
   readonly attachmentButtonRef: RefObject<AttachmentButtonHandle | null>;
   readonly voiceButtonRef: RefObject<VoiceButtonHandle | null>;
@@ -89,6 +114,15 @@ export interface ChatBoxInputSlotsProps {
   readonly model: ChatBoxInputSlotsModel;
   readonly clearChat: ChatBoxInputSlotsClearChat;
   readonly refs: ChatBoxInputSlotsRefs;
+  /**
+   * `voiceHooks.useReadAloud()`'s `voicePlayerProps` (A9, ELITEA-1312/1313/
+   * 1315) — spread directly onto `VoiceControlButton`, the gear-icon control
+   * that opens `VoiceConfigDialog` beside the composer's mic button. See
+   * that component's own module doc for the "PUBLIC SLOT"/coordination
+   * contract this wiring fulfils — it had no render site until this pass.
+   */
+  readonly voice: VoiceControlProps;
+  readonly voiceInput: ChatBoxInputSlotsVoiceInput;
   /**
    * The baseline's `fromTheChat` — true on the chat surface, false when the
    * ChatBox is embedded in the agents page. It selects WHICH left-hand
@@ -136,13 +170,16 @@ export interface ChatBoxInputSlotsResult {
 export function buildChatBoxAttachmentProps(attachments: {
   readonly state: { readonly attachments: readonly File[]; readonly onAttachFiles: (files: readonly File[]) => void; readonly onDeleteAttachment: (index: number) => void };
   readonly upload: { readonly isUploading: boolean; readonly uploadProgress: number };
-}): NonNullable<ComponentProps<typeof NewChatInput>['attachments']> {
+}, disabled = false): NonNullable<ComponentProps<typeof NewChatInput>['attachments']> {
   return {
     items: attachments.state.attachments,
     onAttachFiles: attachments.state.onAttachFiles,
     onDeleteAttachment: attachments.state.onDeleteAttachment,
     isUploading: attachments.upload.isUploading,
     uploadProgress: attachments.upload.uploadProgress,
+    // A17: `NewChatInput`'s drop/paste bridge reads THIS flag
+    // (`useNewChatInputAttachmentBridge`), so a run in flight blocks both.
+    disabled,
   };
 }
 
@@ -150,6 +187,8 @@ export function buildChatBoxAttachmentProps(attachments: {
 function buildSendButtonProps(props: SendControlSlotProps) {
   return {
     isSpeakingMode: props.isSpeakingMode,
+    // #932: the mic/wave control's own gate, distinct from `disabledSend`.
+    isRecording: props.isRecording,
     question: props.question,
     disabledSend: props.disabledSend,
     onSend: props.onSend,
@@ -172,9 +211,11 @@ export function buildChatBoxInputSlots({
   onCreateAgent,
   onCreatePipeline,
   onCreateToolkit,
+  voice,
+  voiceInput,
 }: ChatBoxInputSlotsProps): ChatBoxInputSlotsResult {
   const attachmentButtonProps = {
-    disableAttachments: false,
+    disableAttachments: attachments.disabled,
     ...optField('attachments', attachments.attachments),
     ...optField('onAttachFiles', attachments.onAttachFiles),
   };
@@ -257,7 +298,85 @@ export function buildChatBoxInputSlots({
     // ChatPanel.tsx`'s `renderClearChatButton`), so supplying one here would
     // put two on the same screen.
     clearChat: isAgentsPage ? undefined : <ClearChatButton {...clearChatProps} />,
-    voiceButton: <VoiceButton ref={refs.voiceButtonRef} inputRef={refs.voiceInputRef} disabled={false} onRecordingChange={() => {}} />,
+    // Mic (ASR dictation) + gear (TTS `VoiceConfigDialog`) side by side —
+    // two independent voice controls sharing one footer slot (A9).
+    voiceButton: (
+      <>
+        <VoiceButton ref={refs.voiceButtonRef} inputRef={refs.voiceInputRef} disabled={false} onRecordingChange={voiceInput.onRecordingChange} onError={voiceInput.onError} />
+        <VoiceControlButton {...voice} />
+      </>
+    ),
     modelSelector: <LLMModelSelector {...modelSelectorProps} />,
   };
+}
+
+/**
+ * The composer's voice-control feedback seam (issues #932, #934).
+ *
+ * `VoiceButton` has always exposed two callbacks the chat surface never
+ * connected:
+ *
+ *  - `onRecordingChange` — wired to `() => {}` in `ChatBoxInputSlots.tsx`, so
+ *    `NewChatInput`'s `finalIsRecording = voice.isRecording ||
+ *    isSpeakingModeRecording` was driven by speaking mode alone. Starting
+ *    dictation never reached the send control, which is why the Speaking Mode
+ *    wave icon stayed live while the mic was recording and a user could
+ *    enter both modes at once (#932, ELITEA-1295).
+ *  - `onError` — passed nothing at all. `VoiceButton`'s own module doc
+ *    disclosed the gap ("no toast/snackbar primitive exists yet in
+ *    `shared/ui`... the caller decides how to surface the message until one
+ *    lands") and no caller ever decided, so a denied microphone permission
+ *    failed in complete silence (#934, ELITEA-1324).
+ *
+ * The Snackbar+Alert pair is the same shape `widgets/deepwiki`'s
+ * `WikiFileAttach.tsx` already uses for its own inline errors — MUI's `Alert`
+ * carries `role="alert"`, so the message is announced, not merely drawn.
+ */
+const VOICE_ERROR_AUTO_HIDE_MS = 6000;
+
+export interface ChatBoxVoiceFeedback {
+  /** True while `VoiceButton`'s dictation (NOT speaking mode) is capturing. */
+  readonly isRecording: boolean;
+  readonly onRecordingChange: (isRecording: boolean) => void;
+  readonly onError: (message: string) => void;
+  /** Rendered by `ChatBox` alongside its other overlays. */
+  readonly alert: ReactNode;
+}
+
+export function useChatBoxVoiceFeedback(): ChatBoxVoiceFeedback {
+  const [isRecording, setIsRecording] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const onRecordingChange = useCallback((recording: boolean) => {
+    setIsRecording(recording);
+    // A new session clears the previous session's complaint; leaving it up
+    // would outlive the state it described.
+    if (recording) setError(null);
+  }, []);
+
+  const onError = useCallback((message: string) => {
+    setError(message);
+  }, []);
+
+  const onClose = useCallback(() => {
+    setError(null);
+  }, []);
+
+  const alert = (
+    <Snackbar
+      open={error !== null}
+      autoHideDuration={VOICE_ERROR_AUTO_HIDE_MS}
+      onClose={onClose}
+    >
+      <Alert
+        severity="error"
+        onClose={onClose}
+        data-testid="chat-voice-error"
+      >
+        {error}
+      </Alert>
+    </Snackbar>
+  );
+
+  return { isRecording, onRecordingChange, onError, alert };
 }

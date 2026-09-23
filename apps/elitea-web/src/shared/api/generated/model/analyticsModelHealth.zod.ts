@@ -59,7 +59,7 @@ export const AnalyticsModelHealth = zod
     p95_duration_ms: zod
       .number()
       .describe(
-        'Reported alongside the mean because the mean is what hides the tail an operator investigating \"chat feels slow\" came to look at. percentile_cont, so a small group interpolates rather than jumping to its slowest member.\n',
+        'Reported alongside the mean because the mean is what hides the tail an operator investigating "chat feels slow" came to look at. percentile_cont, so a small group interpolates rather than jumping to its slowest member.\n',
       ),
   })
   .describe(

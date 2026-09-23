@@ -32,8 +32,10 @@ pub(crate) use direct_request::{DirectToolkitRequest, DirectToolkitRequestErrorC
 pub(crate) use direct_runtime::{
     DirectToolkitRuntime, DirectToolkitRuntimeError, DirectToolkitRuntimeErrorCode,
 };
+pub(crate) use families::artifact::ArtifactToolAuthority;
 pub(crate) use materialize::{
     ToolsetMaterializationError, ToolsetMaterializationErrorCode,
+    materialize_configured_toolsets_with_artifact_authority,
     materialize_configured_toolsets_with_tokens_and_authorization,
 };
 pub(crate) use mcp::{
@@ -57,6 +59,8 @@ pub(crate) use tool_binding::{
 
 #[cfg(test)]
 mod aha_tests;
+#[cfg(test)]
+mod artifact_tests;
 #[cfg(test)]
 mod azure_search_tests;
 #[cfg(test)]

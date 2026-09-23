@@ -4,10 +4,12 @@ import { t } from '@/shared/i18n';
 import { isInternalToolAvailable, useRuntimeCapabilities } from '@/shared/api/runtimeCapabilities';
 import { AttachIcon } from '@/shared/ui/icons/attach-icon';
 import { CalendarIcon } from '@/shared/ui/icons/calendar-icon';
+import { ContextIcon } from '@/shared/ui/icons/context-icon';
 import { ImageIcon } from '@/shared/ui/icons/image-icon';
 import { McpIcon } from '@/shared/ui/icons/mcp-icon';
 import { PieChartIcon } from '@/shared/ui/icons/pie-chart-icon';
 import { PythonIcon } from '@/shared/ui/icons/python-icon';
+import { SkillIcon } from '@/shared/ui/icons/skill-icon';
 import { SwarmIcon } from '@/shared/ui/icons/swarm-icon';
 import { ToolsIcon } from '@/shared/ui/icons/tools-icon';
 import type { SvgIconComponent } from '@/shared/ui/icons/svg-icon.types';
@@ -148,19 +150,66 @@ export const INTERNAL_TOOLS_LIST: readonly InternalToolDescriptor[] = [
       text: 'Reduces token usage by using meta-tools instead of binding all tools directly. Recommended when using many toolkits.',
     },
   },
+  {
+    // #940 A8. Unlike every entry above, these two are served by the NATIVE
+    // runtime and NOT by the Python SDK worker — `useAvailableInternalTools`
+    // below reads that verdict off `/elitea_core/runtime_capabilities` the
+    // same way it does for the six the Rust worker skips, so on a Python
+    // deployment they render disabled-with-a-reason rather than silently
+    // doing nothing. Both default to OFF, like every other entry here: a
+    // toggle nobody switched on binds no tool
+    // (services/elitea-worker-rust/src/agents/internal_tools.rs).
+    name: 'skills_builder',
+    title: 'Skills Builder',
+    icon: 'SkillIcon',
+    infoTooltip: { text: 'Create and update Skills directly from chat.' },
+  },
+  {
+    name: 'project_context_builder',
+    title: 'Project Context Builder',
+    icon: 'ContextIcon',
+    infoTooltip: { text: 'Create and update Project Context directly from chat.' },
+  },
 ] as const;
 
 /** `AgentInternalToolSwitch.jsx`'s `iconMap`, re-keyed to this port's icon names (see the module doc comment). */
 export const INTERNAL_TOOL_ICONS: Readonly<Record<string, SvgIconComponent>> = {
   AttachIcon,
   CalendarIcon,
+  ContextIcon,
   ImageIcon,
   McpIcon,
   PieChartIcon,
   PythonIcon,
+  SkillIcon,
   SwarmIcon,
   ToolsIcon,
 };
+
+/**
+ * Why a tool this deployment offers is nonetheless unavailable.
+ *
+ * It names the WORKER the endpoint reported rather than always saying "Rust",
+ * which is what this read said before #940. That was true while every entry
+ * the endpoint answered for was a Python-only capability; the two builder
+ * modules are the opposite case — native-only — so a fixed sentence would
+ * have told a Python deployment its Skills Builder was unavailable "on the
+ * Rust worker", which is the exact inversion of the truth.
+ *
+ * The `''` case is the deployment that did not state a worker at all (see
+ * `WithWorkerImplementation`'s own doc comment); it cannot be reached with
+ * `available: false`, because an unstated worker makes every tool available,
+ * but it is answered rather than asserted away.
+ */
+function unavailableReasonFor(worker: string | undefined): string {
+  if (worker === 'rust') {
+    return t('features.agents.internalTools.notAvailableOnRustWorker', 'Not available on the Rust worker');
+  }
+  if (worker === 'python') {
+    return t('features.agents.internalTools.notAvailableOnPythonWorker', 'Not available on the Python worker');
+  }
+  return t('features.agents.internalTools.notAvailableOnThisWorker', 'Not available on this worker');
+}
 
 export interface UseAvailableInternalToolsOptions {
   readonly includeAgentOnly?: boolean;
@@ -202,14 +251,7 @@ export function useAvailableInternalTools(options: UseAvailableInternalToolsOpti
         return {
           ...tool,
           available,
-          ...(available
-            ? {}
-            : {
-                unavailableReason: t(
-                  'features.agents.internalTools.notAvailableOnRustWorker',
-                  'Not available on the Rust worker',
-                ),
-              }),
+          ...(available ? {} : { unavailableReason: unavailableReasonFor(capabilities?.worker) }),
         };
       }),
     [toolkitTypeSchemas, includeAgentOnly, isMcpVisible, capabilities],

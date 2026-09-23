@@ -47,7 +47,7 @@ export const GlobalUserInviteRequest = zod
     user_email: zod.string(),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/admin\/user_invite.go:62-65. Distinct from UserInviteRequest, which is the PROJECT invite (emails + roles).\n",
+    "NOTE(W2): internal/api/v2/admin/user_invite.go:62-65. Distinct from UserInviteRequest, which is the PROJECT invite (emails + roles).\n",
   );
 
 export type GlobalUserInviteRequest = zod.input<typeof GlobalUserInviteRequest>;

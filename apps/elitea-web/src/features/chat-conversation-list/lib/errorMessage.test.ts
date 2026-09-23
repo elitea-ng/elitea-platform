@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import { EliteaApiError } from '@/shared/api/generated/mutator';
+import type { ApiDownloadFailure } from '@/shared/lib/download';
 
-import { conversationListErrorMessage } from './errorMessage';
+import { conversationExportErrorMessage, conversationListErrorMessage } from './errorMessage';
 
 describe('conversationListErrorMessage', () => {
   it('kind: http — delegates to buildErrorMessage with {status, data}', () => {
@@ -56,5 +57,37 @@ describe('conversationListErrorMessage', () => {
 
   it('falls back to String() for a non-Error, non-EliteaApiError value', () => {
     expect(conversationListErrorMessage('oops')).toBe('oops');
+  });
+
+  it('kind: <unknown> — the exhaustiveness fallback returns the failure itself (no HttpFailure kind reaches this in practice)', () => {
+    const error = new EliteaApiError({ kind: 'weird' } as never);
+    expect(conversationListErrorMessage(error)).toEqual({ kind: 'weird' });
+  });
+});
+
+describe('conversationExportErrorMessage', () => {
+  it('kind: http — the server’s own refusal reason, when it sent one', () => {
+    const failure: ApiDownloadFailure = { kind: 'http', status: 400, reason: 'this conversation has more than 10000 messages and cannot be exported in one document' };
+    expect(conversationExportErrorMessage(failure)).toBe('this conversation has more than 10000 messages and cannot be exported in one document');
+  });
+
+  it('kind: http — a short, honest fallback when the server sent no reason', () => {
+    const failure: ApiDownloadFailure = { kind: 'http', status: 500, reason: undefined };
+    expect(conversationExportErrorMessage(failure)).toBe('The conversation could not be exported.');
+  });
+
+  it('kind: network — passes the failure message through', () => {
+    const failure: ApiDownloadFailure = { kind: 'network', message: 'boom' };
+    expect(conversationExportErrorMessage(failure)).toBe('boom');
+  });
+
+  it('kind: aborted — a short cancellation message', () => {
+    const failure: ApiDownloadFailure = { kind: 'aborted' };
+    expect(conversationExportErrorMessage(failure)).toBe('The export was cancelled.');
+  });
+
+  it('kind: <unknown> — the exhaustiveness fallback returns the failure itself (no ApiDownloadFailure kind reaches this in practice)', () => {
+    const failure = { kind: 'weird' } as never;
+    expect(conversationExportErrorMessage(failure)).toEqual({ kind: 'weird' });
   });
 });

@@ -1807,6 +1807,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/admin/user_project_permissions/administration",
 		"GET /api/v2/admin/users/administration/{projectID}",
 		"GET /api/v2/admin/users/{mode}/{projectID}",
+		"GET /api/v2/artifacts/artifact/default/{projectID}/{bucket}/*",
 		"GET /api/v2/artifacts/bucket_permissions/{projectID}",
 		"GET /api/v2/artifacts/buckets/{projectID}",
 		"GET /api/v2/artifacts/buckets/{projectID}/{bucket}",
@@ -1907,6 +1908,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/elitea_core/skill_export_fork/prompt_lib/{projectID}/{skillID}/{versionID}",
 		"GET /api/v2/elitea_core/skills/{mode}/{projectID}",
 		"GET /api/v2/elitea_core/tags/prompt_lib/{projectID}",
+		"GET /api/v2/elitea_core/test_tool/prompt_lib/{projectID}/{toolID}/{executionID}",
 		"GET /api/v2/elitea_core/tool/prompt_lib/{projectID}/{toolkitID}",
 		"GET /api/v2/elitea_core/toolkit_available_tools/prompt_lib/{projectID}/{toolkitID}",
 		"GET /api/v2/elitea_core/toolkit_types/prompt_lib/{projectID}",
@@ -1987,6 +1989,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"PATCH /api/v2/scim/v2/Groups/{id}",
 		"PATCH /api/v2/scim/v2/Users/{id}",
 		"POST /api/v2/admin/auth_users/{mode}",
+		"POST /api/v2/admin/background_jobs/administration/pat_expiry_notices:run",
 		"POST /api/v2/admin/background_jobs/administration/{kind}/{jobID}:cancel",
 		"POST /api/v2/admin/branding/assets/{kind}",
 		"POST /api/v2/admin/branding/package/administration",
@@ -2438,6 +2441,10 @@ type recordingMessageRepo struct {
 	v2convs.Repository
 	gotProjectID  string
 	gotMessageUID string
+}
+
+func (r *recordingMessageRepo) AuthorizeChatResource(_ context.Context, _, _, _ string) error {
+	return nil
 }
 
 func (r *recordingMessageRepo) GetMessageByUUID(

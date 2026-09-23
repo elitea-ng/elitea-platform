@@ -45,7 +45,7 @@ export const VersionValidatorResponse = zod
   .object({
     valid: zod.boolean(),
   })
-  .describe("NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go:1239-1249.\n");
+  .describe("NOTE(W2): internal/api/v2/eliteacore/handler.go:1239-1249.\n");
 
 export type VersionValidatorResponse = zod.input<
   typeof VersionValidatorResponse

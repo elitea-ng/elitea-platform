@@ -28,6 +28,7 @@ import {
 import type { MessageGroupWire, MessageParticipantWire } from '@/entities/message';
 import {
   convertMessagesToChatHistory,
+  useConversationTraceSteps,
   useSyncChatMessage,
 } from '@/features/chat-messages';
 import type { ChatMessage } from '@/features/chat-messages';
@@ -201,15 +202,31 @@ export function useChatBoxData(params: UseChatBoxDataParams): UseChatBoxDataResu
   // Seeded from messageGroups/participants (conversation load or switch) and
   // kept live by `useSyncChatMessage`'s `chat_message_sync` listener, which
   // merges each incoming persisted message_group into `chat_history` below.
+  /*
+   * The pins a reopened conversation shows (#951). Tool-call detail no longer
+   * rides `message_group.meta` — the trace-step migration moved it into
+   * `chat_message_trace_step`, and the conversation read deliberately stopped
+   * carrying it — so a transcript built from the groups alone had an EMPTY
+   * `toolActions` for every settled turn and `ApplicationAnswerThinking`
+   * rendered nothing at all. The listing is the reader that was missing; a
+   * turn whose own `meta` still carries `tool_calls` is left untouched.
+   */
+  const persistedTraceStepsByGroup = useConversationTraceSteps(projectId, conversationId);
+
   const seedConversationForSync = useCallback(
     (): ConversationForSync => ({
       // `exactOptionalPropertyTypes`: only set `id`/`participants` when
       // actually present, rather than assigning an explicit `undefined`.
       ...(conversationId !== undefined ? { id: conversationId } : {}),
-      chat_history: convertMessagesToChatHistory(messageGroups ?? [], participants as MessageParticipantWire[] | undefined),
+      chat_history: convertMessagesToChatHistory(
+        messageGroups ?? [],
+        participants as MessageParticipantWire[] | undefined,
+        undefined,
+        persistedTraceStepsByGroup,
+      ),
       ...(participants !== undefined ? { participants: participants as MessageParticipantWire[] } : {}),
     }),
-    [conversationId, messageGroups, participants],
+    [conversationId, messageGroups, participants, persistedTraceStepsByGroup],
   );
 
   const [conversationForSync, setConversationForSync] = useState<ConversationForSync>(seedConversationForSync);

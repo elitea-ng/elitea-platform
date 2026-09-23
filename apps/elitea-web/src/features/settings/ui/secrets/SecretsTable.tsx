@@ -189,6 +189,19 @@ export const SecretsTable = memo(function SecretsTable({
     return [...newRows, ...existingRows];
   }, [rows]);
 
+  /*
+   * elitea_issues 4860 — a new (unsaved) row always sorts to the FRONT
+   * above, so it always lands on page 1's slice below. Clicking "+" while
+   * viewing any other page created the row exactly as before, just off
+   * the visible slice — nothing on screen changed and nothing said why.
+   * Jump back to page 1 whenever an unsaved row exists, so the row that
+   * was just created is the one the user is actually looking at.
+   */
+  const hasNewRow = useMemo(() => rows.some((row) => row.isNew), [rows]);
+  useEffect(() => {
+    if (hasNewRow) setCurrentPage(1);
+  }, [hasNewRow]);
+
   // Paginate
   const totalPages = Math.max(1, Math.ceil(sortedRows.length / pageSize));
   const paginatedRows = useMemo(() => {

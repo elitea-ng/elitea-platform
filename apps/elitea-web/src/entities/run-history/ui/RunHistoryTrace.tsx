@@ -23,7 +23,10 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { useGetMessageTrace, useListMessageTraces } from '@/shared/api/generated/chat/chat';
 import type { MessageTraceStep, MessageTraceStepDetail } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
+import { toolPayloadText } from '@/shared/lib/toolPayloadText';
 import { NoResultsMessage } from '@/shared/ui/NoResultsMessage';
+
+import { formatRunDuration } from '../lib/formatRunDuration';
 
 export interface RunHistoryTraceProps {
   readonly projectId: string;
@@ -40,10 +43,59 @@ const detailBoxSx: SxProps<Theme> = {
   overflowY: 'auto',
 };
 
+/** `attrs` is a bounded jsonb sidecar (see `messagetraces/handler.go`); narrow it to a plain object before indexing. */
+function attrsRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : undefined;
+}
+
+/**
+ * The toolkit name behind a tool-call step, read off `attrs` — nested under
+ * either `metadata.toolkit_name` or `tool_meta.metadata.toolkit_name`,
+ * because `agent_trace.go`'s `currentAgentToolCallAttrs` folds the worker's
+ * `metadata` and its `tool_meta.metadata` separately and only whichever one
+ * the emitting frame carried is populated (same two places
+ * `currentAgentToolkitAttr` reads server-side).
+ */
+function toolkitNameFromAttrs(attrs: unknown): string | undefined {
+  const record = attrsRecord(attrs);
+  if (record === undefined) return undefined;
+  const fromMetadata = attrsRecord(record['metadata'])?.['toolkit_name'];
+  if (typeof fromMetadata === 'string' && fromMetadata !== '') return fromMetadata;
+  const fromToolMeta = attrsRecord(attrsRecord(record['tool_meta'])?.['metadata'])?.['toolkit_name'];
+  return typeof fromToolMeta === 'string' && fromToolMeta !== '' ? fromToolMeta : undefined;
+}
+
+/**
+ * #938 (ELITEA-2803) — "[Toolkit Name]: [tool_action]", not the bare tool
+ * name a `get_issue` call carries on its own. Falls back to the bare name
+ * when no toolkit identity is on the row (an MCP tool with no toolkit
+ * metadata, say) or when the toolkit name IS the tool name already.
+ */
 function stepLabel(step: MessageTraceStep): string {
-  if (step.kind === 'tool_call' && step.tool_name !== null && step.tool_name !== undefined) return step.tool_name;
+  if (step.kind === 'tool_call' && step.tool_name !== null && step.tool_name !== undefined) {
+    const toolkitName = toolkitNameFromAttrs(step.attrs);
+    if (toolkitName !== undefined && toolkitName !== step.tool_name) return `${toolkitName}: ${step.tool_name}`;
+    return step.tool_name;
+  }
   if (step.parent_agent_name !== null && step.parent_agent_name !== undefined) return step.parent_agent_name;
   return step.kind;
+}
+
+/** The `attrs.tool_output_chunks` progress a chunked tool_output row carries (#956/#938). */
+interface ChunkProgress {
+  readonly received: number;
+  readonly total: number;
+  readonly complete: boolean;
+}
+
+function chunkProgress(attrs: unknown): ChunkProgress | undefined {
+  const progress = attrsRecord(attrsRecord(attrs)?.['tool_output_chunks']);
+  if (progress === undefined) return undefined;
+  const received = progress['received'];
+  const total = progress['total'];
+  const complete = progress['complete'];
+  if (typeof received !== 'number' || typeof total !== 'number' || typeof complete !== 'boolean') return undefined;
+  return { received, total, complete };
 }
 
 /** The step list + selected step's detail — split out of `RunHistoryTrace` purely to keep that function's cyclomatic complexity under this codebase's gate (12). */
@@ -88,19 +140,139 @@ function StepList({
   );
 }
 
+/** JSON-stringifies `tool_inputs` for display; a non-object value (already a string, say) is shown as-is. */
+function formatToolInputs(toolInputs: unknown): string {
+  if (typeof toolInputs === 'string') return toolInputs;
+  try {
+    return JSON.stringify(toolInputs, null, 2);
+  } catch {
+    return String(toolInputs);
+  }
+}
+
+/** Non-null-or-blank guard shared by every optional string field this pane renders. */
+function definedString(value: string | null | undefined): string | undefined {
+  return value !== null && value !== undefined && value !== '' ? value : undefined;
+}
+
+/** The step's start/finish timing — absent entirely when the row carries neither timestamp. */
+function StepTiming({
+  startedAt,
+  finishedAt,
+}: {
+  readonly startedAt: string | null | undefined;
+  readonly finishedAt: string | null | undefined;
+}): ReactNode {
+  const hasTiming = definedString(startedAt) !== undefined || definedString(finishedAt) !== undefined;
+  if (!hasTiming) return null;
+  return (
+    <Typography variant="bodySmall" color="text.secondary" data-testid="run-history-trace-timing">
+      {t('entities.runHistory.trace.timing', 'Started {{startedAt}} · {{duration}}', {
+        startedAt: startedAt ?? '—',
+        duration: formatRunDuration(startedAt ?? undefined, finishedAt ?? undefined),
+      })}
+    </Typography>
+  );
+}
+
+function StepThinking({ thinking }: { readonly thinking: string | null | undefined }): ReactNode {
+  const text = definedString(thinking);
+  if (text === undefined) return null;
+  return (
+    <Typography
+      variant="bodySmall"
+      data-testid="run-history-trace-thinking"
+      sx={{ whiteSpace: 'pre-wrap', fontStyle: 'italic' }}
+    >
+      {text}
+    </Typography>
+  );
+}
+
+function StepToolInputs({ toolInputs }: { readonly toolInputs: unknown }): ReactNode {
+  if (toolInputs === null || toolInputs === undefined) return null;
+  return (
+    <Typography
+      variant="bodySmall"
+      component="pre"
+      data-testid="run-history-trace-tool-inputs"
+      sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}
+    >
+      {formatToolInputs(toolInputs)}
+    </Typography>
+  );
+}
+
+function StepText({ text }: { readonly text: string | null | undefined }): ReactNode {
+  const value = definedString(text);
+  if (value === undefined) return null;
+  return (
+    <Typography variant="bodySmall" sx={{ whiteSpace: 'pre-wrap' }}>
+      {value}
+    </Typography>
+  );
+}
+
+/**
+ * The tool call's output — chunk/partial-aware (#938/#956): a row still
+ * filling in from `attrs.tool_output_chunks` must never render as if it were
+ * the whole result, so the count is shown alongside it. Formatted (pretty
+ * JSON) rather than the previous raw single-line dump (ELITEA-2805).
+ */
+function StepToolOutput({
+  toolOutput,
+  attrs,
+}: {
+  readonly toolOutput: string | null | undefined;
+  readonly attrs: unknown;
+}): ReactNode {
+  const value = definedString(toolOutput);
+  if (value === undefined) return null;
+  const progress = chunkProgress(attrs);
+  const isPartial = progress !== undefined && !progress.complete;
+  return (
+    <>
+      {isPartial && (
+        <Typography
+          variant="bodySmall"
+          data-testid="run-history-trace-output-partial"
+          sx={{ color: 'warning.main', fontWeight: 600 }}
+        >
+          {t(
+            'entities.runHistory.trace.partialOutput',
+            'Partial output — some of this result did not arrive ({{received}}/{{total}} chunks).',
+            { received: progress?.received ?? 0, total: progress?.total ?? 0 },
+          )}
+        </Typography>
+      )}
+      <Typography
+        variant="bodySmall"
+        component="pre"
+        data-testid="run-history-trace-tool-output"
+        sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}
+      >
+        {toolPayloadText(value)}
+      </Typography>
+    </>
+  );
+}
+
+/**
+ * #938 (ELITEA-2802/2803/2805) — `tool_inputs`/`thinking` are fetched by the
+ * same `useGetMessageTrace` call `text`/`tool_output` already use; they were
+ * simply never read here. Rendered ahead of the OUTPUT, the order a "called
+ * with these parameters, thought this, produced this" trace reads naturally
+ * in. Split into one small component per field (rather than inline `&&`
+ * chains) to keep this function's own cyclomatic complexity under the gate.
+ */
 function StepDetail({ detail }: { readonly detail: MessageTraceStepDetail }): ReactNode {
   return (
     <Box sx={detailBoxSx} data-testid="run-history-trace-detail">
-      {detail.text !== null && detail.text !== undefined && detail.text !== '' && (
-        <Typography variant="bodySmall" sx={{ whiteSpace: 'pre-wrap' }}>
-          {detail.text}
-        </Typography>
-      )}
-      {detail.tool_output !== null && detail.tool_output !== undefined && detail.tool_output !== '' && (
-        <Typography variant="bodySmall" component="pre" sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
-          {detail.tool_output}
-        </Typography>
-      )}
+      <StepTiming startedAt={detail.started_at} finishedAt={detail.finished_at} />
+      <StepThinking thinking={detail.thinking} />
+      <StepToolInputs toolInputs={detail.tool_inputs} />
+      <StepText text={detail.text} />
+      <StepToolOutput toolOutput={detail.tool_output} attrs={detail.attrs} />
     </Box>
   );
 }

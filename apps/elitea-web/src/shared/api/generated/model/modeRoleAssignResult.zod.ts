@@ -48,7 +48,7 @@ export const ModeRoleAssignResult = zod
       .string()
       .describe("The composite id of the assignment that now exists."),
   })
-  .describe("NOTE(W2): internal\/api\/v2\/admin\/modes.go:222-225.\n");
+  .describe("NOTE(W2): internal/api/v2/admin/modes.go:222-225.\n");
 
 export type ModeRoleAssignResult = zod.input<typeof ModeRoleAssignResult>;
 export type ModeRoleAssignResultOutput = zod.output<

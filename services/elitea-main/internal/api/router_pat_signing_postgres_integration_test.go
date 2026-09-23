@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
 )
 
 // The seam between RouterConfig.PATSigner and the /api/v2/auth/token route.
@@ -161,6 +162,16 @@ func newPATSigningPool(t *testing.T) *pgxpool.Pool {
 	}
 	if _, err := pool.Exec(ctx, string(initial)); err != nil {
 		t.Fatalf("apply %s: %v", source, err)
+	}
+	// The create transaction also stamps elitea_identity.token_lifecycle
+	// (tokens.go Create → repos.RecordPATIssued), so the schema this pool holds
+	// has to include the migration that creates it or every POST is a 500.
+	lifecycle, err := platformmigrations.Files.ReadFile("shared/0125_token_lifecycle.sql")
+	if err != nil {
+		t.Fatalf("read the token lifecycle migration: %v", err)
+	}
+	if _, err := pool.Exec(ctx, string(lifecycle)); err != nil {
+		t.Fatalf("apply shared/0125_token_lifecycle.sql: %v", err)
 	}
 	// The token owner. authenticatedTestUser presents user 1.
 	if _, err := pool.Exec(ctx, `

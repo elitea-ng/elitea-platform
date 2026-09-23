@@ -62,7 +62,7 @@ export const ApplicationSkillAttachment = zod
     icon_meta: ProjectIconMeta.optional(),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/applicationskills\/handler.go:45-51, CurrentApplicationSkill.\n",
+    "NOTE(W2): internal/api/v2/applicationskills/handler.go:45-51, CurrentApplicationSkill.\n",
   );
 
 export type ApplicationSkillAttachment = zod.input<

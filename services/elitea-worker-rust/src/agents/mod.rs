@@ -1,5 +1,6 @@
 //! Language-neutral agent execution contracts.
 
+pub(crate) mod application_pipeline;
 pub(crate) mod application_tools;
 pub(crate) mod assembly;
 pub(crate) mod attachments;
@@ -26,8 +27,11 @@ mod runner_history;
 pub(crate) mod runtime;
 pub(crate) mod sensitive_tools;
 pub(crate) mod session;
+pub(crate) mod tool_namespacing;
 pub(crate) mod variables;
 
+#[cfg(test)]
+mod application_pipeline_tests;
 #[cfg(test)]
 mod assembly_tests;
 #[cfg(test)]
@@ -46,6 +50,8 @@ mod pipeline_tests;
 mod runtime_tests;
 #[cfg(test)]
 mod session_tests;
+#[cfg(test)]
+mod tool_namespacing_tests;
 
 pub use crate::protocol::ProtocolError as AgentProtocolError;
 pub use protocol::{AGENT_INPUT_SCHEMA_REVISION, parse_agent_execution_input, request_from};

@@ -197,7 +197,7 @@ export function deserializeMemoryBlocks(values: SettingsProfileFormValues): {
       enable_summarization: values.enable_summarization,
       summary_instructions: s.instructions,
       summary_model_name: s.model_name,
-      ...(s.model_name && s.model_project_id ? { summary_model_project_id: Number(s.model_project_id) } : {}),
+      ...(s.model_name ? projectIdField(s.model_project_id) : {}),
       ...numberField('target_summary_tokens', s.max_tokens),
     },
   };
@@ -205,6 +205,26 @@ export function deserializeMemoryBlocks(values: SettingsProfileFormValues): {
 
 function numberField(name: string, value: NumericFieldValue): Record<string, number> {
   return value === '' ? {} : { [name]: value };
+}
+
+/**
+ * `summary_model_project_id` is the one field in this whole form (#929) that
+ * the wire genuinely wants as an int (`MemorySummarization.summary_model_
+ * project_id` — `zod.int()`, `internal/domain/contextsettings/userdefaults.go`'s
+ * `*int`) even though project ids are STRINGS everywhere else in this app.
+ * `model_project_id` in Formik state stays the string id (it is read back
+ * and re-displayed as one, and `serializeSummarization`'s fallback is the
+ * route's string `projectId` prop) — only the OUTGOING PUT needs the numeric
+ * form, so the conversion happens here, at the wire boundary, not in the
+ * form's own type. A value that is not a numeric string (null, or a
+ * non-numeric project id this app never actually produces) is OMITTED
+ * rather than sent malformed — the server keeps the stored value for an
+ * absent key, which is the closest honest answer.
+ */
+function projectIdField(value: string | null): Record<string, number> {
+  if (value === null || value === '') return {};
+  const id = Number(value);
+  return Number.isInteger(id) ? { summary_model_project_id: id } : {};
 }
 
 /**

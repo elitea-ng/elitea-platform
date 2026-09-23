@@ -46,7 +46,7 @@ export const UnpublishRequest = zod
     reason: zod.string().optional(),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go:799-802 (optional, decode errors ignored).\n",
+    "NOTE(W2): internal/api/v2/eliteacore/handler.go:799-802 (optional, decode errors ignored).\n",
   );
 
 export type UnpublishRequest = zod.input<typeof UnpublishRequest>;

@@ -29,35 +29,40 @@
  * around it stays hand-written: this hook owns a five-minute `staleTime` and a
  * fail-open default that orval's generated query options know nothing about.
  *
- * ## What is still empty, and honestly so
+ * ## `components` — issue #892, closed
  *
- * `plugins` — the per-plugin version list in `ResourceVersionInfo`'s tooltip.
- * Its source is `GET /admin/system_info/prompt_lib`. In pylon that route reports
- * the versions of six named plugins, collected from the pylons that announced
- * themselves on the Arbiter bus in the last 60 seconds. This service loads no
- * plugins and has no such bus, so issue #219 made the route answer 501 with that
- * reason instead of the hardcoded `elitea_core`/`auth` map it used to invent.
+ * The per-component version list in `ResourceVersionInfo`'s tooltip used to be
+ * permanently empty. Its source, `GET /admin/system_info/prompt_lib`, answered
+ * 501 in every deployment: in pylon that route reports the versions of six
+ * named plugins, collected from the pylons that announced themselves on the
+ * Arbiter bus in the last 60 seconds, and this service loads no plugins and has
+ * no such bus (issue #219 made the route say so instead of inventing the
+ * hardcoded `elitea_core`/`auth` map it used to answer with).
  *
- * This hook therefore does NOT call it. A request whose only possible answer is
- * a refusal buys nothing and puts a 501 in the network log of every Help Center
- * visit. It returns an empty list, and `ResourceVersionInfo` keeps the tooltip
- * closed. The "Version: X (date)" label beside the icon is unaffected: it comes
- * from the administrator-owned resources section read below, which is real.
- *
- * Parity item API-178 asks this client to call `system_info`. Wire it up when the
- * service has a build version to report — see the `systemInfoUnavailable` comment
- * in `services/elitea-main/internal/api/v2/admin/handler.go` for what that needs.
+ * That 501 conflated two different gaps. The FLEET question — other
+ * processes' versions — genuinely has no answer here and still does not; this
+ * hook must never call a route hoping for one. But this service always has at
+ * least one real, local fact to report about ITSELF (its own build version),
+ * and a second when a database is reachable (the highest applied shared-scope
+ * migration). The route now reports exactly those two, under `components`, and
+ * nothing else — no plugin, worker or gateway entry, because none of those has
+ * a real source in this service (that gap is tracked separately, not faked
+ * here). This hook calls it and passes `components` straight through; a 401,
+ * a 403 or a network failure yields the same empty list `ResourceVersionInfo`
+ * has always tolerated, closing the tooltip rather than surfacing an error on
+ * a page load.
  */
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
 import { getResourcesConfigValues } from '@/shared/api/generated/resources/resources';
+import { getSystemInfo } from '@/shared/api/generated/admin/admin';
 import { unwrapBody } from '@/shared/api/unwrap';
 
 import { RESOURCE_CARD_CONFIGS } from './ResourceCardConfig';
 
-/** A single plugin's name/version, as shown in `ResourceVersionInfo`'s tooltip. */
-export interface ResourcesConfigPlugin {
+/** A single component's name/version, as shown in `ResourceVersionInfo`'s tooltip. */
+export interface ResourcesConfigComponent {
   readonly name: string;
   readonly version?: string;
 }
@@ -67,8 +72,8 @@ export interface ResourcesConfigResult {
   readonly configValues: Record<string, unknown>;
   /** Pre-formatted "Version: X (date)" label — `''` when neither is configured. */
   readonly versionLabel: string;
-  /** Per-plugin versions shown in `ResourceVersionInfo`'s tooltip. */
-  readonly plugins: ReadonlyArray<ResourcesConfigPlugin>;
+  /** This service's own known component versions, shown in `ResourceVersionInfo`'s tooltip. */
+  readonly components: ReadonlyArray<ResourcesConfigComponent>;
 }
 
 /**
@@ -121,12 +126,28 @@ export function useResourcesConfig(): ResourcesConfigResult {
     staleTime: 5 * 60 * 1000,
   });
 
+  const systemInfoQuery = useQuery({
+    queryKey: ['help-center', 'system-info'],
+    queryFn: async (): Promise<ResourcesConfigComponent[]> => {
+      // `eliteaFetch` resolves the `{data,status,headers}` envelope for every
+      // status — it never throws on a 401/403 — so the discriminant to read is
+      // `status`, not a caught error. Anything but 200 degrades to an empty
+      // list, the same fail-open choice `DEFAULT_CONFIG_VALUES` above makes:
+      // this tooltip is not worth a page-load error over.
+      const response = await getSystemInfo();
+      if (response.status !== 200) return [];
+      return response.data.components ?? [];
+    },
+    // Same reasoning as resources-config: this changes only on a new deploy.
+    staleTime: 5 * 60 * 1000,
+  });
+
   return useMemo((): ResourcesConfigResult => {
     const configValues = { ...DEFAULT_CONFIG_VALUES, ...query.data };
     return {
       configValues,
       versionLabel: resourcesVersionLabel(configValues),
-      plugins: [],
+      components: systemInfoQuery.data ?? [],
     };
-  }, [query.data]);
+  }, [query.data, systemInfoQuery.data]);
 }

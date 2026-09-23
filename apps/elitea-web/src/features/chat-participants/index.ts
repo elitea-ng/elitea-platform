@@ -20,6 +20,7 @@ export { useParticipantEntityIcon } from './lib/hooks/useParticipantEntityIcon';
 export { useActiveParticipantDetails } from './lib/hooks/useActiveParticipantDetails';
 /** Wave-2 unit C6 addition: needed directly (not just through `useActiveParticipantDetails`) to fetch a NEWLY selected version's details before persisting it — see `widgets/chat-box/ui/ChatBox.tsx`'s `handleSelectVersion`. */
 export { useFetchParticipantDetails } from './lib/hooks/useFetchParticipantDetails';
+export { useIsMcpVisible } from './api/useIsMcpVisible';
 
 // ── lib context ──
 export { ParticipantDetailsProvider } from './lib/context/ParticipantDetailsContext';

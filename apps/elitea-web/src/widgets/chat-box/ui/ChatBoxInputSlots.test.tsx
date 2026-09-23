@@ -22,25 +22,44 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
-import { AttachmentButton, ChatInternalToolsConfigButton, PlusChatButton } from '@/widgets/chat';
+import { AttachmentButton, ChatInternalToolsConfigButton, PlusChatButton, VoiceButton } from '@/widgets/chat';
+import { VoiceControlButton } from '@/features/chat-input';
 import { LLMModelSelector } from '@/widgets/llm-model-selector';
 
-import { buildChatBoxInputSlots } from './ChatBoxInputSlots';
+import { buildChatBoxAttachmentProps, buildChatBoxInputSlots } from './ChatBoxInputSlots';
 
 type ToolRow = { key: string; label: string; enabled: boolean };
+
+/** Minimal `VoicePlayerProps` stand-in — same shape `VoiceControlButton.test.tsx`'s own `baseProps()` uses. */
+function baseVoiceProps() {
+  return {
+    isPlaying: false,
+    onPlay: vi.fn(),
+    onStop: vi.fn(),
+    voiceConfig: { voiceName: null, voiceId: null, rate: 1, volume: 1 },
+    voices: [],
+    onVoiceConfigChange: vi.fn(),
+    ttsModel: null,
+    hasModelTTS: false,
+  };
+}
 
 function buildSlots(
   isAgentsPage: boolean,
   tools: ToolRow[] | undefined = [{ key: 'planner', label: 'Planner', enabled: true }],
   onToolChange: ((toolKey: string, enabled: boolean) => void) | undefined = vi.fn(),
   clearChat: { disabled: boolean; onClear: () => void } = { disabled: false, onClear: vi.fn() },
+  /** A17: a turn is open, so every attachment path is refused (ELITEA-2867). */
+  attachmentsDisabled = false,
 ) {
   return buildChatBoxInputSlots({
-    attachments: { attachments: [], onAttachFiles: vi.fn() },
+    attachments: { attachments: [], onAttachFiles: vi.fn(), disabled: attachmentsDisabled },
     internalTools: { disabled: false, tools, onToolChange },
     model: { llmSettings: undefined, onSetLLMSettings: undefined, selectedModel: undefined, onSelectModel: undefined, models: [] },
     clearChat,
     refs: { attachmentButtonRef: { current: null }, voiceButtonRef: { current: null }, voiceInputRef: { current: null } },
+    voice: baseVoiceProps(),
+    voiceInput: { onRecordingChange: vi.fn(), onError: vi.fn() },
     isAgentsPage,
     entitySubmenus: undefined,
     participants: undefined,
@@ -78,6 +97,19 @@ describe("buildChatBoxInputSlots — the composer's left-hand control", () => {
     expect(typeOf(selector)).toBe(LLMModelSelector);
     expect((selector.props as { showStepsLimit?: boolean }).showStepsLimit).toBe(true);
   });
+
+  it('mounts the TTS gear/settings control (VoiceControlButton) beside the ASR mic control in the voiceButton slot (A9)', () => {
+    // `VoiceControlButton` — the gear icon that opens `VoiceConfigDialog` —
+    // had no render site anywhere in `src/` (ELITEA-1312/1313/1315). This
+    // asserts the composition root now mounts it, not just that the
+    // component itself works (its own test file already covers that).
+    const slots = buildSlots(false);
+    const voiceButton = slots.voiceButton as ReactElement;
+    const children = (voiceButton.props as { children: ReactElement[] }).children;
+
+    expect(typeOf(children[0])).toBe(VoiceButton);
+    expect(typeOf(children[1])).toBe(VoiceControlButton);
+  });
 });
 
 describe('buildChatBoxInputSlots — drop/paste attachment handle', () => {
@@ -90,11 +122,13 @@ describe('buildChatBoxInputSlots — drop/paste attachment handle', () => {
     // every drop/paste on /chat discarded with no error.
     const attachmentButtonRef = { current: null };
     const slots = buildChatBoxInputSlots({
-      attachments: { attachments: [], onAttachFiles: vi.fn() },
+      attachments: { attachments: [], onAttachFiles: vi.fn(), disabled: false },
       internalTools: { disabled: false, tools: [], onToolChange: vi.fn() },
       model: { llmSettings: undefined, onSetLLMSettings: undefined, selectedModel: undefined, onSelectModel: undefined, models: [] },
       clearChat: { disabled: false, onClear: vi.fn() },
       refs: { attachmentButtonRef, voiceButtonRef: { current: null }, voiceInputRef: { current: null } },
+      voice: baseVoiceProps(),
+      voiceInput: { onRecordingChange: vi.fn(), onError: vi.fn() },
       isAgentsPage: false,
       entitySubmenus: undefined,
       participants: undefined,
@@ -214,5 +248,37 @@ describe('buildChatBoxInputSlots — the conversation-surface clear-history cont
     // beside the panel. Supplying one here too would put two clear controls
     // on the same screen — the mirror of the modules-gear case above.
     expect(buildSlots(true, undefined, undefined, { disabled: false, onClear: vi.fn() }).clearChat).toBeUndefined();
+  });
+});
+
+/*
+ * A17 (ELITEA-2867): attachments are refused for the whole of an open run, and
+ * `disableAttachments` is the ONE switch that covers every way in — the "+"
+ * menu's Attach Files row, the bare paperclip, and the drop/paste bridge, which
+ * delivers through `attachmentButtonRef.current.onDrop(...)` and is gated on
+ * the same flag inside `AttachmentButton`. Gating only the visible button would
+ * leave drag-and-drop and Ctrl+V attaching to a turn already in flight, which
+ * is precisely what the case calls a failure.
+ */
+describe('attachments while a turn is open', () => {
+  it('disables the chat surface "+" menu', () => {
+    const slots = buildSlots(false);
+    expect((slots.attachmentButton as ReactElement<{ disableAttachments?: boolean }>).props.disableAttachments).toBe(false);
+    const running = buildSlots(false, undefined, undefined, undefined, true);
+    expect((running.attachmentButton as ReactElement<{ disableAttachments?: boolean }>).props.disableAttachments).toBe(true);
+  });
+
+  it('disables the agents-page paperclip', () => {
+    const running = buildSlots(true, undefined, undefined, undefined, true);
+    expect((running.attachmentButton as ReactElement<{ disableAttachments?: boolean }>).props.disableAttachments).toBe(true);
+  });
+
+  it('tells the composer to refuse drop and paste too', () => {
+    const state = { attachments: [], onAttachFiles: vi.fn(), onDeleteAttachment: vi.fn() };
+    const upload = { isUploading: false, uploadProgress: 0 };
+    // `NewChatInput`'s `useNewChatInputAttachmentBridge` reads exactly this
+    // field; without it the bridge stays open while a run streams.
+    expect(buildChatBoxAttachmentProps({ state, upload }).disabled).toBe(false);
+    expect(buildChatBoxAttachmentProps({ state, upload }, true).disabled).toBe(true);
   });
 });

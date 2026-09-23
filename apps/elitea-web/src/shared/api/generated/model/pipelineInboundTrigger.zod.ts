@@ -60,7 +60,7 @@ export const PipelineInboundTrigger = zod
       .string()
       .optional()
       .describe(
-        "The credential itself. Present ONLY on the create\/rotate response and on the reveal response, both of which require the write permission. Absent — not empty — everywhere else.\n",
+        "The credential itself. Present ONLY on the create/rotate response and on the reveal response, both of which require the write permission. Absent — not empty — everywhere else.\n",
       ),
     secret_url: zod
       .string()
@@ -83,15 +83,33 @@ export const PipelineInboundTrigger = zod
       .datetime({ offset: true })
       .optional()
       .describe(
-        'When the trigger was revoked. The row is kept rather than deleted so \"was this live last Tuesday\" has an answer; the inbound path refuses any row where this is set.\n',
+        'When the trigger was revoked. The row is kept rather than deleted so "was this live last Tuesday" has an answer; the inbound path refuses any row where this is set.\n',
       ),
     last_used_at: zod.iso
       .datetime({ offset: true })
       .optional()
       .describe("When an inbound call last presented a correct secret."),
+    auth_mode: zod
+      .enum(["token", "hmac_sha256"])
+      .optional()
+      .describe(
+        "How this trigger's inbound calls are authenticated. `token` is the bearer secret in one of the three carriers. `hmac_sha256` verifies HMAC-SHA256 of the RAW request body under the same secret, read from `signature_header` — which is what a GitHub repository webhook sends, and it sends no `Authorization` header at all.\nThe mode is a property of the stored row. Nothing a caller sends can select it, and a signing trigger does NOT also accept the bearer secret: accepting both would mean the stricter setting bought nothing.\n",
+      ),
+    signature_header: zod
+      .string()
+      .optional()
+      .describe(
+        "The header the sender signs into, for `hmac_sha256` only. It is configuration, not a credential — the sender chooses to send it — so it is on the plain read as well, which is what lets the settings dialog say which header to configure without revealing anything.\n",
+      ),
+    provider: zod
+      .enum(["custom", "github"])
+      .optional()
+      .describe(
+        "The preset a create named, and the URL SUFFIX that follows from it (`github` gives a url ending in `/github`, which is the shape a GitHub webhook form expects). It selects nothing at call time: the inbound path checks a suffix it is given AGAINST this value and refuses a mismatch rather than reading a mode out of the URL.\n",
+      ),
   })
   .describe(
-    'One pipeline version\'s inbound trigger. `configured: false` with no other field is the answer for a pipeline that has none, and is a 200 rather than a 404 because \"no trigger yet\" is the normal state of almost every pipeline (triggers.go GetTrigger, :96-115).\n',
+    'One pipeline version\'s inbound trigger. `configured: false` with no other field is the answer for a pipeline that has none, and is a 200 rather than a 404 because "no trigger yet" is the normal state of almost every pipeline (triggers.go GetTrigger, :96-115).\n',
   );
 
 export type PipelineInboundTrigger = zod.input<typeof PipelineInboundTrigger>;

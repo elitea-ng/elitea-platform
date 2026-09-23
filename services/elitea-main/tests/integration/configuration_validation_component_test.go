@@ -546,7 +546,7 @@ func admitAndDispatchCorpus(t *testing.T, command *runtimev1.WorkerCommandV1, ma
 		EnvelopeSchemaRevision: "elitea.runtime.signed-worker-command.v1",
 		AllowTestOnlyHMAC:      true,
 		Limits: redisdispatch.Limits{
-			Revision:               "elitea.runtime.limits.conformance.v1",
+			Revision:               "elitea.runtime.limits.conformance.v2",
 			MaxWorkerCommandBytes:  32 * 1024,
 			MaxSignedEnvelopeBytes: 48 * 1024,
 			MaxRedisFieldBytes:     48 * 1024,
@@ -938,7 +938,7 @@ func newCorpusVerifier(t *testing.T) *controltransport.ConformanceCommandVerifie
 		EnvelopeSchemaRevision: "elitea.runtime.signed-worker-command.v1",
 		ProtocolRevision:       "elitea.runtime.v1",
 		CapabilityVersion:      "1",
-		LimitsRevision:         "elitea.runtime.limits.conformance.v1",
+		LimitsRevision:         "elitea.runtime.limits.conformance.v2",
 		KeyID:                  "elitea-runtime-v1-conformance-hmac",
 		HMACKey:                []byte("ELITEA_RUNTIME_V1_TEST_ONLY_NOT_A_SECRET"),
 		MaxWorkerCommandBytes:  32 * 1024,

@@ -15,24 +15,34 @@
  * platform switch, and J36f already holds the platform-flag lock that
  * flipping that switch needs.
  *
- * ## Why every one of them lands on Settings › Personalization
+ * ## Why V1-V4 land on Settings › Personalization
  *
  * The legacy suite drives the CHAT-side TTS dialog: read-out button → gear →
- * "Voice settings". This platform has that dialog
- * (`features/chat-input/ui/VoiceConfigDialog.tsx`) and it has the mini player
- * that opens it (`VoiceMiniPlayer` / `VoiceControlButton`) — and NOTHING
- * MOUNTS EITHER. `VoiceControlButton.tsx`'s own module doc says so in as many
- * words: "This component has no render site today — it and `VoiceMiniPlayer`
- * are exported from this slice's barrel and imported by nothing." The one
- * MOUNTED voice control on `/chat` is `widgets/chat`'s `VoiceButton`, which
- * is the microphone (ASR), not playback.
+ * "Voice settings". At the time V1-V4 were ported, this platform had that
+ * dialog (`features/chat-input/ui/VoiceConfigDialog.tsx`) built but NOTHING
+ * MOUNTED IT — `VoiceControlButton.tsx`'s own module doc said so in as many
+ * words. The one MOUNTED voice control on `/chat` was `widgets/chat`'s
+ * `VoiceButton`, the microphone (ASR), not playback. So V1-V4 assert the
+ * voice/speed/volume controls on `Settings › Personalization`'s Voice
+ * Personalization section instead — driving a dialog the product did not
+ * render would have been the "journey that passes against nothing" shape
+ * this suite has been bitten by. They stay here unchanged: this section is
+ * real, independent coverage (the Settings-page voice config, which
+ * `VoicePersonalizationSection.tsx` — a DIFFERENT component from the chat
+ * dialog — still owns), not a stand-in for the chat dialog.
  *
- * So the voice/speed/volume controls the legacy tests are about exist on
- * exactly one screen here — `Settings › Personalization`'s Voice
- * Personalization section — and that is where they are asserted. Driving the
- * chat dialog would mean asserting a surface the product does not render,
- * which is the "journey that passes against nothing" shape this suite has
- * been bitten by.
+ * ## A9 (ELITEA-1312/1313/1315): the chat-side dialog is now mounted
+ *
+ * `VoiceControlButton` (play/stop + the gear that opens `VoiceConfigDialog`)
+ * is composed into the chat composer now (`widgets/chat-box/ui/
+ * ChatBoxInputSlots.tsx`'s `voiceButton` slot, beside `widgets/chat`'s mic
+ * button), wired from `useReadAloud()`'s `voicePlayerProps` — see that
+ * hook's own doc comment for why its `useVoiceConfig` call is now
+ * `persist: true` (Apply from this dialog writes the SAME `chat-input.
+ * voice-config` localStorage key V1-V4 above read/write, so a change from
+ * either surface is visible on the other — asserted by the new tests below).
+ * The three cases the legacy suite's chat-dialog steps map to are ported
+ * directly against the REAL chat dialog now, not against Personalization.
  *
  * ## Why the browser voice list is stubbed
  *
@@ -384,4 +394,98 @@ test('V4: Preview Voice speaks, at the chosen speed and volume (legacy test_voic
   expect(utterance?.rate, 'the preview must play at the speed the slider shows').toBe(0.5);
   expect(utterance?.volume).toBe(1);
   expect(utterance?.text.toLowerCase()).toContain('preview');
+});
+
+/* ── A9 (F5): the chat-side Voice Settings dialog itself ─────────────────── */
+
+/** Opens the chat composer and its Voice Settings dialog (the gear beside the play/stop control — `VoiceControlButton.tsx`). */
+async function openChatVoiceSettings(page: Page): Promise<void> {
+  await page.goto(`${BASE_URL}/app/chat`, { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 20_000 });
+  const gear = page.getByTestId('chat-voice-settings-button');
+  await expect(gear, 'the composer must offer the voice-settings gear beside the play/stop control').toBeVisible({
+    timeout: 15_000,
+  });
+  await gear.click();
+  await expect(page.getByText('Voice settings')).toBeVisible({ timeout: 10_000 });
+}
+
+/* onetest: ELITEA-1312 — Voice Settings Dialog Opens and Displays All Controls Including Voice Selector */
+test('ELITEA-1312: the chat Voice Settings dialog opens with the voice selector, speed/volume sliders, and Apply/Cancel', async ({
+  page,
+}) => {
+  await openChatVoiceSettings(page);
+
+  // The voice selector — offered because `installBrowserVoices` seeded two
+  // browser voices; the dialog hides this control entirely when the list is
+  // empty (`VoiceConfigControls.tsx`'s `voiceOptions.length > 0` gate).
+  await expect(page.getByText('Voice', { exact: true })).toBeVisible();
+  await expect(page.getByRole('slider', { name: 'Speed' })).toBeVisible();
+  await expect(page.getByRole('slider', { name: 'Volume' })).toBeVisible();
+  await expect(page.getByTestId('voice-preview-button')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Apply' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Cancel' })).toBeVisible();
+});
+
+/* onetest: ELITEA-1313 — Voice Settings Dialog — Speed and Volume Sliders Adjust Playback */
+test('ELITEA-1313: the Speed and Volume sliders move to the value dragged, before Apply', async ({ page }) => {
+  await openChatVoiceSettings(page);
+
+  const speed = page.getByRole('slider', { name: 'Speed' });
+  const volume = page.getByRole('slider', { name: 'Volume' });
+  await expect(speed).toHaveAttribute('aria-valuenow', '1');
+  await expect(volume).toHaveAttribute('aria-valuenow', '1');
+
+  // Keyboard, not a pointer drag — MUI's `Slider` responds to arrow keys at
+  // its own `step`, which is the same commit path a drag produces and is
+  // exact rather than approximate under a headless mouse move.
+  await speed.focus();
+  await page.keyboard.press('ArrowRight'); // 1.0 -> 1.1 (step 0.1)
+  await expect(speed).toHaveAttribute('aria-valuenow', '1.1');
+
+  await volume.focus();
+  await page.keyboard.press('ArrowLeft'); // 1 -> 0.95 (step 0.05)
+  await expect(volume).toHaveAttribute('aria-valuenow', '0.95');
+
+  // Not yet on the wire — this dialog stages edits until Apply
+  // (`VoiceConfigDialog.tsx`'s `localConfig` state).
+  expect((await storedVoiceConfig(page))?.rate).not.toBe(1.1);
+});
+
+/* onetest: ELITEA-1315 — Apply Saves and Cancel Discards Voice Settings Changes */
+test('ELITEA-1315: Apply persists the staged change to the SAME store Settings › Personalization uses; Cancel discards it', async ({
+  page,
+}) => {
+  await page.goto(PERSONALIZATION_URL, { waitUntil: 'domcontentloaded' });
+  await page.evaluate((key: string) => localStorage.removeItem(key), VOICE_CONFIG_KEY);
+
+  // ── Cancel discards ──────────────────────────────────────────────────
+  await openChatVoiceSettings(page);
+  await page.getByRole('slider', { name: 'Speed' }).focus();
+  await page.keyboard.press('ArrowRight');
+  await page.getByRole('button', { name: 'Cancel' }).click();
+  await expect(page.getByText('Voice settings')).not.toBeVisible({ timeout: 10_000 });
+  expect(await storedVoiceConfig(page), 'Cancel must not write anything at all').toBeNull();
+
+  // ── Apply saves, to the key V1-V4 above read/write ──────────────────
+  await openChatVoiceSettings(page);
+  await page.getByRole('slider', { name: 'Speed' }).focus();
+  await page.keyboard.press('ArrowRight');
+  await page.getByRole('slider', { name: 'Volume' }).focus();
+  await page.keyboard.press('ArrowLeft');
+  await page.getByRole('button', { name: 'Apply' }).click();
+  await expect(page.getByText('Voice settings')).not.toBeVisible({ timeout: 10_000 });
+
+  await expect
+    .poll(async () => (await storedVoiceConfig(page))?.rate, { message: 'Apply must persist the staged rate' })
+    .toBe(1.1);
+  expect((await storedVoiceConfig(page))?.volume).toBe(0.95);
+
+  // The SAME store: Settings › Personalization reads this value back —
+  // proving Apply did not write a second, disconnected key.
+  await page.goto(PERSONALIZATION_URL, { waitUntil: 'domcontentloaded' });
+  const section = page.getByTestId('voice-personalization-section');
+  await expect(section).toBeVisible({ timeout: 30_000 });
+  const speedSlider = section.getByRole('slider', { name: 'Speed' });
+  await expect(speedSlider).toHaveAttribute('aria-valuenow', '1.1');
 });

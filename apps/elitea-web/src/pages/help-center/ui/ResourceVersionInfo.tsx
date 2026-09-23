@@ -5,12 +5,12 @@
  *
  * The baseline derives `versionLabel` and `plugins` internally from
  * `configValues`/`systemInfo` API responses; this component instead takes
- * the already-derived `versionLabel` string and `plugins` list as props, so
- * it stays a pure presentational component regardless of where that data
- * comes from. Today `HelpCenterPage` sources both from
- * `../lib/useResourcesConfig` — see that hook's module doc for why they are
- * currently always empty (backend OpenAPI gap, issue #26 Key Decision #2)
- * and what unblocks them.
+ * the already-derived `versionLabel` string and a `components` list as props,
+ * so it stays a pure presentational component regardless of where that data
+ * comes from. `HelpCenterPage` sources both from `../lib/useResourcesConfig`
+ * — see that hook's module doc for what `components` reports now that issue
+ * #892 gave `GET /admin/system_info/prompt_lib` a real 200 (this service's own
+ * build version, plus the migration head when a database answered).
  */
 import { memo, type ReactNode } from 'react';
 
@@ -23,14 +23,14 @@ import Typography from '@mui/material/Typography';
 import { CopyToClipboardButton } from '@/shared/ui/CopyToClipboardButton';
 import { InfoIcon } from '@/shared/ui/icons/info-icon';
 
-import type { ResourcesConfigPlugin } from '../lib/useResourcesConfig';
+import type { ResourcesConfigComponent } from '../lib/useResourcesConfig';
 
 /** Props consumed by ResourceVersionInfo. */
 interface ResourceVersionInfoProps {
   /** Pre-formatted "Version: X (date)" label. Defaults to the empty string (bar hidden). */
   versionLabel?: string;
-  /** Per-plugin versions shown in the info-icon tooltip. Defaults to none. */
-  plugins?: ReadonlyArray<ResourcesConfigPlugin>;
+  /** This service's own known component versions, shown in the info-icon tooltip. Defaults to none. */
+  components?: ReadonlyArray<ResourcesConfigComponent>;
 }
 
 /** Theme-aware sx values for the version info header. */
@@ -84,13 +84,13 @@ const tooltipRowSx: SxProps<Theme> = {
   alignItems: 'baseline',
 };
 
-/** Placeholder for a plugin with no reported version — matches the baseline's `'—'` fallback. */
+/** Placeholder for a component with no reported version — matches the baseline's `'—'` fallback. */
 const NO_VERSION_PLACEHOLDER = '—';
 
 /**
  * Header bar showing the "Help Center" title and optional version info.
  */
-const ResourceVersionInfo = memo(({ versionLabel = '', plugins = [] }: ResourceVersionInfoProps): ReactNode => {
+const ResourceVersionInfo = memo(({ versionLabel = '', components = [] }: ResourceVersionInfoProps): ReactNode => {
   const versionInfoText = versionLabel || '';
   const hasVersion = versionInfoText.length > 0;
 
@@ -114,15 +114,15 @@ const ResourceVersionInfo = memo(({ versionLabel = '', plugins = [] }: ResourceV
             <Tooltip
               placement="bottom-end"
               title={
-                plugins.length > 0 ? (
+                components.length > 0 ? (
                   <Box sx={tooltipContentSx}>
-                    {plugins.map(plugin => (
+                    {components.map(component => (
                       <Box
-                        key={plugin.name}
+                        key={component.name}
                         sx={tooltipRowSx}
                       >
                         <Typography variant="bodySmall">
-                          {plugin.name}: {plugin.version || NO_VERSION_PLACEHOLDER}
+                          {component.name}: {component.version || NO_VERSION_PLACEHOLDER}
                         </Typography>
                       </Box>
                     ))}

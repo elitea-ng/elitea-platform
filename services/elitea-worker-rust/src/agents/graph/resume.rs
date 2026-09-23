@@ -949,8 +949,65 @@ impl PipelineResume {
         Some((node.as_str(), action))
     }
 
+    /// One already checkpoint-proven resume state built outside this module.
+    ///
+    /// #973: an ordinary agent that calls a saved pipeline as a TOOL proves the
+    /// same three things this module's own resolvers prove — the card, the node
+    /// identity and the pending checkpoint — but against the pipeline child's
+    /// own pause rather than against a root graph thread, so it builds the
+    /// state with [`pipeline_hitl_resume_state`] and hands it here.
+    pub(crate) const fn from_state(state: State) -> Self {
+        Self {
+            state,
+            root_hitl_resume: true,
+        }
+    }
+
     pub(super) fn into_state(self) -> State {
         self.state
+    }
+}
+
+/// The exact HITL resume channel entry one browser decision places on a
+/// pipeline's own `hitl` node.
+///
+/// Shared with [`PipelineHitlDecision::resolve`] in shape so a pipeline chatted
+/// with directly and the same pipeline invoked as an agent's tool cannot
+/// disagree about what "approve" means. `graph_action` is the graph-side name
+/// (`block_with_comment` collapses to `reject`), and the digest is the one the
+/// stored node published on its card, so a node edited between the pause and
+/// the decision is refused by `HitlDecision::parse` rather than re-routed.
+#[must_use]
+pub(crate) fn pipeline_hitl_resume_state(
+    node_name: &str,
+    definition_digest: &str,
+    graph_action: &str,
+    value: &str,
+) -> State {
+    [(
+        HITL_RESUME_STATE_KEY.to_owned(),
+        json!({
+            node_name: {
+                "definition_digest": definition_digest,
+                "action": graph_action,
+                "value": value,
+            }
+        }),
+    )]
+    .into_iter()
+    .collect()
+}
+
+/// The graph-side action name one browser action selects, or `None` when the
+/// action is not one a pipeline `hitl` node routes.
+#[must_use]
+pub(crate) fn pipeline_hitl_graph_action(wire_action: &str) -> Option<&'static str> {
+    match wire_action {
+        "approve" => Some(PipelineHitlAction::Approve.graph_action()),
+        "reject" => Some(PipelineHitlAction::Reject.graph_action()),
+        "edit" => Some(PipelineHitlAction::Edit.graph_action()),
+        "block_with_comment" => Some(PipelineHitlAction::BlockWithComment.graph_action()),
+        _ => None,
     }
 }
 

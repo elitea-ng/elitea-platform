@@ -311,3 +311,83 @@ func currentReadRequest(method, path, remoteAddress string) *http.Request {
 	request.RemoteAddr = remoteAddress
 	return request
 }
+
+// TestCurrentConfigurationReadRouteWithholdsAnotherMembersUnsharedRow is the
+// route half of #922: a `shared: false` row belongs to the member who created
+// it, so the project page must not list it for anybody else and the detail
+// route must not serve it by id either.
+//
+// The two halves are asserted together on purpose. Filtering only the list
+// would leave the id as the whole access control, and these ids are small
+// consecutive integers.
+func TestCurrentConfigurationReadRouteWithholdsAnotherMembersUnsharedRow(t *testing.T) {
+	const viewer = int32(11)
+	other := int32(12)
+	own := viewer
+
+	var listViewer *int32
+	rows := map[int32]configurationapp.CurrentConfiguration{
+		// Another member's private row.
+		9: {ID: 9, ProjectID: 7, EliteaTitle: "member_private", Type: "aha", Section: "credentials", AuthorID: &other},
+		// Another member's SHARED row: a project credential, visible to all.
+		10: {ID: 10, ProjectID: 7, EliteaTitle: "team_shared", Type: "aha", Section: "credentials", AuthorID: &other, Shared: true},
+		// The viewer's own private row.
+		11: {ID: 11, ProjectID: 7, EliteaTitle: "my_private", Type: "aha", Section: "credentials", AuthorID: &own},
+		// A row nobody authored — the shape the seeds write.
+		12: {ID: 12, ProjectID: 7, EliteaTitle: "seeded", Type: "aha", Section: "credentials"},
+	}
+	reader := &currentConfigurationReaderStub{
+		list: func(_ context.Context, request configurationapp.CurrentConfigurationListRequest) (configurationapp.CurrentConfigurationListResult, error) {
+			listViewer = request.ViewerID
+			return configurationapp.CurrentConfigurationListResult{}, nil
+		},
+		get: func(_ context.Context, _, configurationID int32) (configurationapp.CurrentConfiguration, error) {
+			row, ok := rows[configurationID]
+			if !ok {
+				return configurationapp.CurrentConfiguration{}, configurationapp.ErrCurrentConfigurationNotFound
+			}
+			row.Data = map[string]any{}
+			row.Meta = map[string]any{}
+			return row, nil
+		},
+	}
+	permissions := permissionResolverFunc(func(context.Context, auth.User, string, string) (auth.PermissionResolution, error) {
+		return auth.PermissionResolution{UserID: 11, Permissions: []string{
+			handler.CurrentConfigurationListPermission,
+			handler.CurrentConfigurationGetPermission,
+		}}, nil
+	})
+	route := newCurrentConfigurationReadRoute(t, reader, permissions)
+
+	listResponse := httptest.NewRecorder()
+	route.ServeHTTP(listResponse, currentReadRequest(
+		http.MethodGet, "/api/v2/configurations/configurations/7", "10.0.0.8:43120"))
+	if listResponse.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", listResponse.Code, listResponse.Body.String())
+	}
+	if listViewer == nil || *listViewer != viewer {
+		t.Fatalf("list request carried viewer %v, want %d", listViewer, viewer)
+	}
+
+	for name, test := range map[string]struct {
+		configurationID string
+		wantStatus      int
+	}{
+		"another member's private row is not served": {configurationID: "9", wantStatus: http.StatusNotFound},
+		"a shared row is served":                     {configurationID: "10", wantStatus: http.StatusOK},
+		"the viewer's own private row is served":     {configurationID: "11", wantStatus: http.StatusOK},
+		"an unauthored row is served":                {configurationID: "12", wantStatus: http.StatusOK},
+	} {
+		t.Run(name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			route.ServeHTTP(response, currentReadRequest(
+				http.MethodGet,
+				"/api/v2/configurations/configuration/7/"+test.configurationID,
+				"10.0.0.8:43120",
+			))
+			if response.Code != test.wantStatus {
+				t.Fatalf("status=%d want=%d body=%s", response.Code, test.wantStatus, response.Body.String())
+			}
+		})
+	}
+}

@@ -64,7 +64,7 @@ export const AnalyticsDetailEnvelope = zod
     daily_usage: zod.array(zod.looseObject({})),
   })
   .describe(
-    "NOTE(W2): detail envelope, internal\/api\/v2\/analytics\/handler.go:76-87 (agents: users+tools), :101-112 (tools: users+agents), :126-137 (users: agents+tools). The pair of sibling arrays differs per entity, so the three sibling arrays (users\/agents\/tools) are declared optional; daily_usage is required — every variant emits it (:85, :110, :135).\n",
+    "NOTE(W2): detail envelope, internal/api/v2/analytics/handler.go:76-87 (agents: users+tools), :101-112 (tools: users+agents), :126-137 (users: agents+tools). The pair of sibling arrays differs per entity, so the three sibling arrays (users/agents/tools) are declared optional; daily_usage is required — every variant emits it (:85, :110, :135).\n",
   );
 
 export type AnalyticsDetailEnvelope = zod.input<typeof AnalyticsDetailEnvelope>;

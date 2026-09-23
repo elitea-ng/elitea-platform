@@ -49,6 +49,28 @@ function usageResponse(overrides: Partial<Record<string, unknown>> = {}): Record
 const COSTS_URL = `${BASE}/elitea_core/analytics_costs/prompt_lib/7`;
 
 /**
+ * The COST tile's text, formatted the way the component formats it.
+ *
+ * NOT a hardcoded "$12.50". `AnalyticsContainer`'s `currencyFormat` is
+ * `Intl.NumberFormat(undefined, {style: 'currency', currency: 'USD'})` — the
+ * FIRST argument is `undefined`, so the currency symbol is whatever the host's
+ * default locale renders USD as: "$12.50" under `en-US`, "US$12.50" under
+ * `en-CA`/`en-GB`, "12,50 $US" under `fr-FR`. The literal passed in CI (which
+ * runs `en-US`) and failed on any developer machine whose `LANG` is not, with
+ * the same DOM showing a `17/09/2026` date picker beside it as the tell.
+ *
+ * Re-deriving it here keeps the assertion exact — wrong digits, a wrong
+ * currency or an unformatted number all still fail — without asserting the
+ * host's locale, which this test is not about. The formatter is duplicated
+ * rather than exported: exporting it would make a `knip`-visible symbol whose
+ * only consumer is this line, and the contract being pinned is "the same
+ * Intl options", not "the same object".
+ */
+function expectedUsd(amount: number): string {
+  return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(amount);
+}
+
+/**
  * A cost breakdown. `spendAvailable` is the point: /analytics_costs ALWAYS
  * emits `total_cost` — `0.00000000` when the write-back path has persisted
  * nothing — and publishes `spend_available` so that "no spend yet" stays
@@ -88,7 +110,7 @@ describe('AnalyticsContainer', () => {
       );
       const { findByText } = renderScreen(<AnalyticsContainer projectId="7" />);
       expect(await findByText('COST')).toBeInTheDocument();
-      expect(await findByText('$12.50')).toBeInTheDocument();
+      expect(await findByText(expectedUsd(12.5))).toBeInTheDocument();
     });
 
     /**
@@ -107,7 +129,10 @@ describe('AnalyticsContainer', () => {
       // Wait for the row to paint before asserting an absence.
       await findByText('LLM CALLS');
       expect(queryByText('COST')).not.toBeInTheDocument();
-      expect(queryByText('$0.00')).not.toBeInTheDocument();
+      // Same reason as `expectedUsd`'s own comment: a hardcoded "$0.00" is
+      // absent under a non-`en-US` default locale whatever the tile renders,
+      // so the assertion would pass vacuously there.
+      expect(queryByText(expectedUsd(0))).not.toBeInTheDocument();
     });
 
     /**

@@ -53,7 +53,7 @@ export const ImportWizardResponse = zod
       skills: zod
         .array(ImportedSkill)
         .describe(
-          'One entry for each entity with entity \"skills\" that the import wrote (internal\/api\/v2\/eliteacore\/handler.go:2483-2489).\n',
+          'One entry for each entity with entity "skills" that the import wrote (internal/api/v2/eliteacore/handler.go:2483-2489).\n',
         ),
     }),
     errors: zod.object({
@@ -62,12 +62,12 @@ export const ImportWizardResponse = zod
       skills: zod
         .array(ImportError)
         .describe(
-          "Two faults report here, and both carry an index into the flat entity array the request sent. A skill entity the import could not write carries the index of that entity (internal\/api\/v2\/eliteacore\/handler.go:2466-2503). A `skills` reference on an agent version that the import could not attach carries the index of the AGENT, because that is the entity the user selected (:2886-2891, with the message text from import_skills.go:397-461).\n",
+          "Two faults report here, and both carry an index into the flat entity array the request sent. A skill entity the import could not write carries the index of that entity (internal/api/v2/eliteacore/handler.go:2466-2503). A `skills` reference on an agent version that the import could not attach carries the index of the AGENT, because that is the entity the user selected (:2886-2891, with the message text from import_skills.go:397-461).\n",
         ),
     }),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go:2907-2910 (the writeJSON of the {result, errors} envelope) and :2380-2385 (the empty-input fast path). BOTH answers build the same three channels on BOTH envelopes, through one helper (internal\/api\/v2\/eliteacore\/export_import.go:711-723), so no answer of this route can leave a channel out. The fast path used to carry the `agents` key alone. Status is 201 when all entities imported, 207 on partial failure, 400 when all failed (handler.go:2895-2905).\n",
+    "NOTE(W2): internal/api/v2/eliteacore/handler.go:2907-2910 (the writeJSON of the {result, errors} envelope) and :2380-2385 (the empty-input fast path). BOTH answers build the same three channels on BOTH envelopes, through one helper (internal/api/v2/eliteacore/export_import.go:711-723), so no answer of this route can leave a channel out. The fast path used to carry the `agents` key alone. Status is 201 when all entities imported, 207 on partial failure, 400 when all failed (handler.go:2895-2905).\n",
   );
 
 export type ImportWizardResponse = zod.input<typeof ImportWizardResponse>;

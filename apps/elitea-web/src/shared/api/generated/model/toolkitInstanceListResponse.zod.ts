@@ -48,7 +48,7 @@ export const ToolkitInstanceListResponse = zod
     total: zod.int(),
   })
   .describe(
-    "NOTE(W2): `{rows, total}` envelope (internal\/api\/v2\/toolkits\/handler.go:526-534). Repository failures are returned as a safe 500 error rather than an indistinguishable empty successful listing.\n",
+    "NOTE(W2): `{rows, total}` envelope (internal/api/v2/toolkits/handler.go:526-534). Repository failures are returned as a safe 500 error rather than an indistinguishable empty successful listing.\n",
   );
 
 export type ToolkitInstanceListResponse = zod.input<

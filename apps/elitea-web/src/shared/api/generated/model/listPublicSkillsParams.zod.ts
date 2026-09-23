@@ -41,7 +41,22 @@
  */
 import * as zod from "zod";
 
+export const listPublicSkillsParamsLimitDefault = 20;
+export const listPublicSkillsParamsLimitMax = 1000;
+
+export const listPublicSkillsParamsOffsetDefault = 0;
+export const listPublicSkillsParamsOffsetMin = 0;
+
 export const ListPublicSkillsParams = zod.object({
+  limit: zod
+    .int()
+    .min(1)
+    .max(listPublicSkillsParamsLimitMax)
+    .default(listPublicSkillsParamsLimitDefault),
+  offset: zod
+    .int()
+    .min(listPublicSkillsParamsOffsetMin)
+    .default(listPublicSkillsParamsOffsetDefault),
   query: zod.string().optional(),
   category: zod.string().optional(),
   tags: zod.string().optional(),

@@ -297,9 +297,10 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 			JOIN %[1]s.tags t ON t.id = ta.tag_id
 			WHERE tv.application_id = a.id), '{}')`, s)
 	query := fmt.Sprintf(`
-		SELECT a.id, a.name, COALESCE(a.description, ''), COALESCE(a.icon, ''),
+		SELECT DISTINCT ON (a.id) a.id, a.name, COALESCE(a.description, ''), COALESCE(a.icon, ''),
 			a.owner_id, a.created_at, a.updated_at, COALESCE(a.shared_id, 0),
 			COALESCE(a.meta, '{}'::jsonb)::text,
+			COALESCE(av.meta, '{}'::jsonb)::text,
 			COALESCE(av.agent_type, '`+defaultAgentType+`'),
 			COALESCE(u.id, 0), COALESCE(u.email, ''), COALESCE(u.name, ''),
 			`+statusExpr+`,
@@ -326,17 +327,17 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 	items := []applications.Application{}
 	for rows.Next() {
 		var (
-			app         applications.Application
-			sharedID    int
-			metaStr     string
-			authorID    int
-			authorEmail string
-			authorName  string
+			app            applications.Application
+			metaStr        string
+			versionMetaStr string
+			authorID       int
+			authorEmail    string
+			authorName     string
 		)
 		if err := rows.Scan(
 			&app.ID, &app.Name, &app.Description, &app.Icon,
-			&app.OwnerID, &app.CreatedAt, &app.UpdatedAt, &sharedID,
-			&metaStr, &app.AgentType,
+			&app.OwnerID, &app.CreatedAt, &app.UpdatedAt,
+			&metaStr, &versionMetaStr, &app.AgentType,
 			&authorID, &authorEmail, &authorName,
 			&app.Status, &app.Tags,
 		); err != nil {
@@ -346,8 +347,23 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 			app.Tags = []string{}
 		}
 		app.ProjectID = req.ProjectID
-		app.IsForked = sharedID > 0
 		app.Meta = decodeJSONObject(metaStr)
+		// #915 — `IsForked` used to read `a.shared_id`, a DIFFERENT (catalog
+		// publish/"shared copy") column `Fork` never writes; a forked agent's
+		// list row therefore always answered `is_forked: false`. The real
+		// signal — same one `fetchVersionDetails`'s `isForkedFromMeta` already
+		// uses — lives in the FIRST version's `meta` (`av.meta` above, the
+		// same version row the author join already keys on). When it is set,
+		// also surface the fork's origin ids on the already-permissive `meta`
+		// bag (`x-elitea-passthrough`, no OpenAPI shape change) so the list
+		// row itself — not just the entity's own editor — can link back to
+		// the source agent without a second round-trip.
+		versionMeta := decodeJSONObject(versionMetaStr)
+		app.IsForked = applications.IsForkedFromMeta(versionMeta)
+		if entityID, projectID, ok := applications.ForkOrigin(versionMeta); ok {
+			app.Meta["parent_entity_id"] = entityID
+			app.Meta["parent_project_id"] = projectID
+		}
 		app.Authors = []applications.Author{}
 		if authorID > 0 {
 			app.Authors = append(app.Authors, applications.Author{

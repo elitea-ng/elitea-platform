@@ -444,6 +444,61 @@ func TestApplicationsRepoPostgres_ListFiltersPaginatesAndAttributes(t *testing.T
 	}
 }
 
+// #915 — List's `is_forked` used to read `applications.shared_id`, a
+// catalog/publish "shared copy" column `Fork` never writes, so a forked
+// agent's list row always answered `is_forked: false` and the Agents/
+// Pipelines dashboard's card/table rows had no signal to hang a "Forked
+// from" indicator on. The real signal — the same one
+// `api/v2/applications/handler.go`'s `isForkedFromMeta` already uses for the
+// editor's own Information panel — lives in the first version's `meta`
+// (`parent_entity_id`/`parent_project_id`, both stamped together by
+// `eliteacore.Handler.Fork`). This proves List now reads THAT.
+func TestApplicationsRepoPostgres_ListReportsIsForkedFromVersionMetaAndSurfacesOrigin(t *testing.T) {
+	repo, pool := newApplicationsTestRepo(t)
+	ctx := testContext(t)
+	seedUser(t, pool, 5, "five@elitea.ai")
+
+	createTestApplication(t, repo, "original agent", 5, &applications.Version{Name: "base"})
+	createTestApplication(t, repo, "forked copy", 5, &applications.Version{
+		Name: "base",
+		Meta: map[string]any{"parent_entity_id": "42", "parent_project_id": "7"},
+	})
+	// A version whose meta names ONLY one of the two keys is not a fork —
+	// `IsForkedFromMeta`/`isForkedFromMeta` both require both, matching what
+	// pylon's own model tested (key presence, not truthiness).
+	createTestApplication(t, repo, "half-tagged", 5, &applications.Version{
+		Name: "base",
+		Meta: map[string]any{"parent_entity_id": "42"},
+	})
+
+	list, err := repo.List(ctx, applications.ListRequest{ProjectID: testProjectID, Page: 1, PageSize: 10})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	byName := map[string]applications.Application{}
+	for _, row := range list.Rows {
+		byName[row.Name] = row
+	}
+
+	if got := byName["original agent"]; got.IsForked {
+		t.Errorf("original agent: is_forked = true, want false")
+	}
+	if got := byName["half-tagged"]; got.IsForked {
+		t.Errorf("half-tagged: is_forked = true, want false (only one of the two keys present)")
+	}
+
+	forked := byName["forked copy"]
+	if !forked.IsForked {
+		t.Fatalf("forked copy: is_forked = false, want true")
+	}
+	if got := forked.Meta["parent_entity_id"]; got != "42" {
+		t.Errorf("forked copy: meta[parent_entity_id] = %v, want \"42\"", got)
+	}
+	if got := forked.Meta["parent_project_id"]; got != "7" {
+		t.Errorf("forked copy: meta[parent_project_id] = %v, want \"7\"", got)
+	}
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Get / Update / Delete
 // ─────────────────────────────────────────────────────────────────────────────

@@ -20,6 +20,8 @@ use adk_rust::{
 };
 use async_stream::try_stream;
 use async_trait::async_trait;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use bytes::Bytes;
 use http::header::{ACCEPT, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE};
 use http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, Version};
@@ -755,6 +757,14 @@ fn validate_openai_content(content: &Content) -> Result<(), AdkError> {
     match content.role.as_str() {
         "system" | "user" => content.parts.iter().try_for_each(|part| match part {
             Part::Text { text } if valid_part_text(text) => Ok(()),
+            // #981: an attached image, decoded from its `image_url` chunk by
+            // `agents/attachments.rs`. Admitted only in the shape that module
+            // produces — one of the four media types every provider documents,
+            // non-empty, and inside the per-image cap — so a part built
+            // anywhere else cannot widen what reaches the provider.
+            Part::InlineData {
+                mime_type, data, ..
+            } if valid_inline_image(mime_type, data) => Ok(()),
             _ => Err(invalid_llm_request()),
         }),
         "model" | "assistant" => content.parts.iter().try_for_each(|part| match part {
@@ -802,6 +812,23 @@ fn validate_openai_content(content: &Content) -> Result<(), AdkError> {
         }),
         _ => Err(invalid_llm_request()),
     }
+}
+
+/// The four media types every multimodal provider documents, and the ones
+/// elitea-main embeds (`inlineAttachmentImageMediaTypes`) — stated once so the
+/// validator and the serializer cannot come to disagree about what may be sent.
+const RENDERABLE_IMAGE_MEDIA_TYPES: [&str; 4] =
+    ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+/// One attachment image's decoded ceiling, mirroring elitea-main's
+/// `maxInlineAttachmentImageBytes` and this runtime's own
+/// `MAX_RENDERED_ATTACHMENT_IMAGE_BYTES` (agents/attachments.rs).
+const MAX_INLINE_IMAGE_BYTES: usize = 256 * 1024;
+
+fn valid_inline_image(mime_type: &str, data: &[u8]) -> bool {
+    RENDERABLE_IMAGE_MEDIA_TYPES.contains(&mime_type)
+        && !data.is_empty()
+        && data.len() <= MAX_INLINE_IMAGE_BYTES
 }
 
 fn valid_part_text(value: &str) -> bool {
@@ -858,10 +885,11 @@ fn append_openai_messages(
             messages.push(serde_json::json!({"role": system_role, "content": text}));
         }
         "user" => {
-            let value = if is_last && content.parts.len() == 1 {
-                let Part::Text { text } = &content.parts[0] else {
-                    return Err(invalid_llm_request());
-                };
+            // The bare-string form is for the ONE case it is right for: a last
+            // message that is a single text part. A turn carrying an attached
+            // image has an image part too, so it takes the array form — which
+            // is also the only form that can express one.
+            let value = if is_last && let [Part::Text { text }] = content.parts.as_slice() {
                 serde_json::Value::String(text.clone())
             } else {
                 serde_json::Value::Array(
@@ -871,6 +899,22 @@ fn append_openai_messages(
                         .map(|part| match part {
                             Part::Text { text } => {
                                 Ok(serde_json::json!({"type": "text", "text": text}))
+                            }
+                            // #981: the OpenAI-compatible image part, rebuilt
+                            // as the data URL the provider expects. The bytes
+                            // are re-encoded rather than the original URL
+                            // carried through, because what reaches here is a
+                            // decoded `Part` — the same part an artifact image
+                            // read would produce — and the wire shape must not
+                            // depend on which producer built it.
+                            Part::InlineData {
+                                mime_type, data, ..
+                            } if valid_inline_image(mime_type, data) => {
+                                let encoded = BASE64_STANDARD.encode(data);
+                                Ok(serde_json::json!({
+                                    "type": "image_url",
+                                    "image_url": {"url": format!("data:{mime_type};base64,{encoded}")},
+                                }))
                             }
                             _ => Err(invalid_llm_request()),
                         })

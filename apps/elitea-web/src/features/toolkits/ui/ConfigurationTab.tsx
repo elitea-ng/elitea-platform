@@ -54,6 +54,13 @@ export interface ToolkitDetailState {
    */
   readonly onChangeToolDetail: (updater: (prev: ToolkitFormEditDetail | null) => ToolkitFormEditDetail | null, options?: { readonly isAutoSelect?: boolean }) => void;
   readonly isToolDirty?: boolean;
+  /**
+   * #952: the server-fetched baseline, kept STABLE across live edits (unlike
+   * `editToolDetail`). `ToolkitForm`'s `formInitialValues` needs THIS, not
+   * `editToolDetail` again, or `useCredentialWarning`'s
+   * `hasCredentialConfigChanged` always diffs a value against itself.
+   */
+  readonly originalToolDetail?: ToolkitFormEditDetail | null;
 }
 
 /** The save-mutation trio, grouped for the same §3.5 reason as {@link ToolkitDetailState}. */
@@ -141,6 +148,15 @@ export interface ConfigurationTabProps {
   readonly updateKey?: string | number;
   readonly isMCP?: boolean;
   readonly projectId: string | undefined;
+  /**
+   * #952/ELITEA-1092,1094,1099: threaded straight to `ToolkitForm`'s own
+   * `isTeamProject`, which `useCredentialWarning.hooks.ts`'s `checkBeforeSave`
+   * gates the "Credential Configuration Change" modal on. Neither of
+   * `ToolkitForm`'s two real callers (this one and `CreateToolkit.tsx`) ever
+   * passed it before, so that prop stayed at its `false` default and the
+   * modal could never open for anyone, on any project.
+   */
+  readonly isTeamProject?: boolean;
   readonly onValidationStateChange?: (state: { readonly hasErrors: boolean; readonly triggerValidation: () => void }) => void;
   readonly saveHandlers: ToolkitSaveHandlers;
   readonly slots: ConfigurationTabSlots;
@@ -244,12 +260,13 @@ export function ConfigurationTab({
   updateKey,
   isMCP,
   projectId,
+  isTeamProject,
   onValidationStateChange,
   saveHandlers,
   slots,
 }: ConfigurationTabProps): ReactNode {
   const { renderTestPane, renderRunHistory, sharepointAuth, renderCredentialPicker, toolActionsExtra, mcpAuthStatus } = slots;
-  const { editToolDetail, onChangeToolDetail, isToolDirty } = toolDetailState;
+  const { editToolDetail, onChangeToolDetail, isToolDirty, originalToolDetail } = toolDetailState;
   const { saveToolkit, onSaveSuccess, onSaveError } = saveHandlers;
   /**
    * #613 — the server's per-field save refusal, owned here rather than by the
@@ -338,10 +355,11 @@ export function ConfigurationTab({
             hasNotSavedCredentials={hasNotSavedCredentials}
             updateKey={updateKey}
             isMCP={isMCP}
+            {...(isTeamProject === undefined ? {} : { isTeamProject })}
             onValidationStateChange={onValidationStateChange}
             projectId={projectId}
             formValues={editToolDetail}
-            formInitialValues={editToolDetail}
+            formInitialValues={originalToolDetail ?? editToolDetail}
             onSave={handleSave}
             onSaveSuccess={onSaveSuccess}
             onSaveError={onSaveError}

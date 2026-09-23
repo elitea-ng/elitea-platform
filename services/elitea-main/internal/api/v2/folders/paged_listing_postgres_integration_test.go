@@ -117,9 +117,24 @@ func bucketNamed(t *testing.T, buckets []pagedBucket, name string) pagedBucket {
 // seedTodayConversations seeds n conversations that all land in the "Today"
 // bucket, newest last, and returns their ids in the order the rail must serve
 // them: newest first.
+//
+// The handler's "Today" boundary (handler.go groupByDate) is midnight in
+// time.Now().Location() at request time. The fixture's created_at is a plain
+// timestamp: PostgreSQL stores the seed's own wall clock and hands it back
+// tagged with the server's zone (UTC). A seed in the host's local zone is
+// shifted by the host's UTC offset on that round trip and lands in
+// "Yesterday" on any host that is not UTC; a seed in UTC round-trips to the
+// same instant.
+//
+// So anchor at local noon, the middle of the local "Today" window, expressed
+// in UTC, and spread the rows up to n minutes before it. Every row stays
+// inside "Today" at any hour, on any host zone.
 func seedTodayConversations(t *testing.T, pool *pgxpool.Pool, prefix string, n int) []int {
 	t.Helper()
-	base := time.Now().UTC().Add(-2 * time.Hour)
+	now := time.Now()
+	localMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	anchor := localMidnight.Add(12 * time.Hour).UTC()
+	base := anchor.Add(-time.Duration(n) * time.Minute)
 	ids := make([]int, 0, n)
 	for i := range n {
 		id := seedPinnedListingConversationAt(t, pool, fmt.Sprintf("%s_%02d", prefix, i), base.Add(time.Duration(i)*time.Minute), nil)

@@ -134,7 +134,15 @@
 {{- end }}
 
 {{- /*
-  The public project must be named ONCE.
+   The pooler validates itself here, in a file that renders for every values
+   file, because a half-filled pgbouncer block with pgbouncer.enabled=false is
+   exactly the "looks configured and does nothing" state this file exists to
+   refuse. The component's own templates would never run to check it.
+*/ -}}
+{{- include "elitea-pgbouncer.validate" . }}
+
+{{- /*
+   The public project must be named ONCE.
 
   elitea.aiProjectId reads all four places the id can be set and fails the
   render when two of them disagree. It is called HERE as well as from the three

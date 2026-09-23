@@ -1,7 +1,8 @@
+import { within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
-import { renderWithTheme } from '@/shared/ui/lib/testTheme';
+import { remToPx, renderWithTheme } from '@/shared/ui/lib/testTheme';
 
 import type { AgentPipelineVersionOption } from '../lib/types';
 
@@ -81,11 +82,111 @@ describe('AgentPipelineVersionSelector', () => {
     );
     await user.click(getByTestId('version-selector-trigger'));
 
+    // Issue 940/A11 (ELITEA-3279) — each row's `textContent` now also carries
+    // a secondary "creator · timestamp" line when the version has one (none
+    // of this fixture's rows carry an `author`, so only the timestamp half
+    // shows — see `versionMetaLine`'s own doc comment). `.toContain` rather
+    // than an exact match keeps this assertion about ORDER and the PRIMARY
+    // label, not byte-exact text content.
     const items = getAllByRole('menuitem').map((el) => el.textContent);
-    expect(items).toEqual(['base', `v1 – ${formatDate('2026-02-01T12:00:00Z')}`, `v0 – ${formatDate('2026-01-15T12:00:00Z')}`]);
+    expect(items[0]).toContain('base');
+    expect(items[1]).toContain(`v1 – ${formatDate('2026-02-01T12:00:00Z')}`);
+    expect(items[2]).toContain(`v0 – ${formatDate('2026-01-15T12:00:00Z')}`);
 
     await user.click(getByText(`v1 – ${formatDate('2026-02-01T12:00:00Z')}`));
     expect(onSelectVersion).toHaveBeenCalledWith(expect.objectContaining({ id: 2, name: 'v1' }));
+  });
+
+  /**
+   * Issue 940/A11 (ELITEA-3278/3280) — the search box filters by name AND
+   * creator, preserving the newest-first sort order.
+   */
+  describe('search (issue 940/A11)', () => {
+    const versionsWithAuthors: readonly AgentPipelineVersionOption[] = [
+      { id: 1, name: 'base', created_at: '2026-01-01T12:00:00Z' },
+      { id: 2, name: 'Production-v1', created_at: '2026-02-01T12:00:00Z', author: { name: 'Alice Smith', email: 'alice@example.com' } },
+      { id: 3, name: 'staging-v2', created_at: '2026-01-15T12:00:00Z', author: { name: 'Bob Jones', email: 'bob@example.com' } },
+      { id: 4, name: 'dev-test', created_at: '2026-01-20T12:00:00Z', author: { name: 'Alice Johnson', email: 'alice.j@example.com' } },
+    ];
+
+    async function openMenu(user: ReturnType<typeof userEvent.setup>, versionsToRender: readonly AgentPipelineVersionOption[] = versionsWithAuthors) {
+      const utils = renderWithTheme(
+        <AgentPipelineVersionSelector
+          applicationVersionId={1}
+          versions={versionsToRender}
+          onSelectVersion={vi.fn()}
+        />,
+      );
+      await user.click(utils.getByTestId('version-selector-trigger'));
+      return utils;
+    }
+
+    /** No `onSetDefaultVersion`/`onDeleteVersion` is passed by `openMenu` above, so every `role="menuitem"` row here is a VERSION row — neither command item renders at all (see the "renders no set-default item at all" test above). */
+    function rowNames(getAllByRole: ReturnType<typeof renderWithTheme>['getAllByRole']): string[] {
+      return getAllByRole('menuitem').map((el) => el.textContent ?? '');
+    }
+
+    it('filters by version name, case-insensitively and partially, preserving newest-first order', async () => {
+      const user = userEvent.setup();
+      const { getAllByRole, getByTestId } = await openMenu(user);
+
+      const search = getByTestId('version-selector-search');
+      await user.type(search, 'PROD');
+
+      const names = rowNames(getAllByRole);
+      expect(names).toHaveLength(1);
+      expect(names[0]).toContain('Production-v1');
+    });
+
+    it('filters by creator name', async () => {
+      const user = userEvent.setup();
+      const { getAllByRole, getByTestId } = await openMenu(user);
+
+      const search = getByTestId('version-selector-search');
+      await user.type(search, 'alice');
+
+      const names = rowNames(getAllByRole);
+      expect(names).toHaveLength(2);
+      // Newest first (2026-02-01 before 2026-01-20), same order the caller's
+      // own timestamp sort already established before this search ran.
+      expect(names[0]).toContain('Production-v1');
+      expect(names[1]).toContain('dev-test');
+    });
+
+    it('filters by creator email', async () => {
+      const user = userEvent.setup();
+      const { getAllByRole, getByTestId } = await openMenu(user);
+
+      const search = getByTestId('version-selector-search');
+      await user.type(search, 'bob@example.com');
+
+      const names = rowNames(getAllByRole);
+      expect(names).toHaveLength(1);
+      expect(names[0]).toContain('staging-v2');
+    });
+
+    it('shows "No versions found" for a query that matches nothing, and restores the full list on clear', async () => {
+      const user = userEvent.setup();
+      const { getByTestId, getByText, queryByText, getByRole } = await openMenu(user);
+
+      const search = getByTestId('version-selector-search');
+      await user.type(search, 'nonexistent-xyz-123');
+      expect(getByText('No versions found')).toBeInTheDocument();
+
+      await user.clear(search);
+      expect(queryByText('No versions found')).not.toBeInTheDocument();
+      // `within` the menu: "base" also renders on the closed TRIGGER (the
+      // selected version's own label), so an unscoped `getByText('base')`
+      // finds two matches.
+      expect(within(getByRole('menu')).getByText('base')).toBeInTheDocument();
+    });
+
+    it('does not show the search box at all when there are no versions', async () => {
+      const user = userEvent.setup();
+      const { queryByTestId, getByText } = await openMenu(user, []);
+      expect(getByText('No versions available')).toBeInTheDocument();
+      expect(queryByTestId('version-selector-search')).not.toBeInTheDocument();
+    });
   });
 
   it('does not open the dropdown when disabled', async () => {
@@ -140,7 +241,10 @@ describe('AgentPipelineVersionSelector', () => {
     const menu = getByRole('menu');
     const computed = getComputedStyle(menu);
     expect(computed.overflowY).toBe('auto');
-    expect(computed.maxHeight).toBe('11.5rem');
+    // jsdom@30 resolves rem against the root font size before reporting a
+    // computed length (jsdom@29 echoed the declaration back), so the computed
+    // value is px. `remToPx` keeps the assertion pointed at the declaration.
+    expect(computed.maxHeight).toBe(remToPx('11.5rem'));
   });
 
   it('calls onRefreshVersions from the menu refresh button', async () => {

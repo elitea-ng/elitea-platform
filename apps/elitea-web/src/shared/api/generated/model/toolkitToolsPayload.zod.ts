@@ -48,7 +48,7 @@ export const ToolkitToolsPayload = zod
     total: zod.int(),
   })
   .describe(
-    "NOTE(#440): the `{tools, total}` envelope that both tool-catalogue reads write (internal\/api\/v2\/toolkits\/handler.go:522, 544). `total` is `len(tools)` of the SAME response, not a page count: neither operation pages. Both keys are always present, so an absent `tools` key is a transport fault, not an empty catalogue.\nAN EMPTY LIST IS A RESULT, NOT A FAULT (#381). A failed read gives 500 and a named reason. Only a toolkit with no tools gives 200 and an empty array. Render the two apart.\n",
+    "NOTE(#440): the `{tools, total}` envelope that both tool-catalogue reads write (internal/api/v2/toolkits/handler.go:522, 544). `total` is `len(tools)` of the SAME response, not a page count: neither operation pages. Both keys are always present, so an absent `tools` key is a transport fault, not an empty catalogue.\nAN EMPTY LIST IS A RESULT, NOT A FAULT (#381). A failed read gives 500 and a named reason. Only a toolkit with no tools gives 200 and an empty array. Render the two apart.\n",
   );
 
 export type ToolkitToolsPayload = zod.input<typeof ToolkitToolsPayload>;

@@ -2,6 +2,8 @@ package storage
 
 import (
 	"fmt"
+	"mime"
+	"path"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -160,4 +162,24 @@ func (r ObjectRef) BucketPrefix(keyPrefix string) string {
 		return fmt.Sprintf("p/%s/b/%s/o/", r.projectID, r.bucket)
 	}
 	return fmt.Sprintf("%s/p/%s/b/%s/o/", keyPrefix, r.projectID, r.bucket)
+}
+
+// MediaTypeFromKey derives an object's media type from its key's extension,
+// falling back to application/octet-stream.
+//
+// It is the one rule this platform applies to a stored object's content type,
+// and it lives here — beside the key validation — because there are now two
+// writers that must agree: the artifacts HTTP upload routes
+// (internal/api/v2/artifacts, which delegates here) and the claim-bound
+// runtime artifact write the native worker reaches (#906). The difference is
+// not cosmetic: a manifest written with application/octet-stream is invisible
+// in a browser though every API read of it passes, which is exactly how the
+// upload path's own content-type defect stayed hidden.
+func MediaTypeFromKey(key string) string {
+	if extension := path.Ext(key); extension != "" {
+		if mediaType := mime.TypeByExtension(extension); mediaType != "" {
+			return mediaType
+		}
+	}
+	return "application/octet-stream"
 }

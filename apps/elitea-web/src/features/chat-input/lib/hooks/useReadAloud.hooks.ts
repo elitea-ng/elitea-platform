@@ -78,7 +78,16 @@ export function useReadAloud(params: UseReadAloudParams): UseReadAloudResult {
   const ttsModel = useMemo(() => pickDefaultModel(ttsModelsData?.items), [ttsModelsData]);
   const hasModelTTS = !!(ttsModel && socket);
 
-  const { config: voiceConfig, setConfig: setVoiceConfig, browserVoices, resolvedBrowserVoice } = useVoiceConfig({ persist: false });
+  // `persist: true` (A9, ELITEA-1312/1313/1315): `voicePlayerProps.
+  // onVoiceConfigChange` is the ONLY way a caller can change this hook's
+  // `voiceConfig` — it is exposed for exactly one purpose, spreading onto
+  // `VoiceControlButton`'s gear-icon `VoiceConfigDialog` (Apply/Cancel).
+  // That dialog stages edits in its own local state and only calls this
+  // setter on Apply, so an explicit Apply is the only trigger that reaches
+  // storage — same `chat-input.voice-config` key `VoicePersonalizationSection`
+  // (Settings > Personalization) reads/writes, so a change from either
+  // surface is visible on the other.
+  const { config: voiceConfig, setConfig: setVoiceConfig, browserVoices, resolvedBrowserVoice } = useVoiceConfig({ persist: true });
   const ttsVoicesQuery = useTtsVoices(
     { projectId: ttsModel?.project_id ?? projectId, modelName: ttsModel?.name },
     { enabled: !!ttsModel },
@@ -124,6 +133,20 @@ export function useReadAloud(params: UseReadAloudParams): UseReadAloudResult {
     },
   });
 
+  /**
+   * Read one answer aloud: arm the player AND start speaking (issue 974).
+   *
+   * It used to arm only — `setSpeakableText` + `setShowPlayer(true)` — leaving
+   * playback to a separate press on the player's play control. That is what
+   * "Read out" DOES on this product: the control sits on the answer and says
+   * it will read it out, and a person who presses it and hears nothing has no
+   * way to know a second, unrelated-looking control in the composer is the one
+   * that speaks. The speaking-mode auto-read has the same requirement and no
+   * control at all to press.
+   *
+   * The player still appears, because stopping needs a control and the spoken
+   * word range needs somewhere to live.
+   */
   const onAutoSpeak = useCallback(
     (text: string, msgId?: string | number | null) => {
       if (!text) return;
@@ -133,8 +156,9 @@ export function useReadAloud(params: UseReadAloudParams): UseReadAloudResult {
       setSpeakingSegments(segments);
       setSpeakableText(convertedText);
       setShowPlayer(true);
+      speak(convertedText);
     },
-    [setShowPlayer, setSpeakableText],
+    [setShowPlayer, setSpeakableText, speak],
   );
 
   const onPlay = useCallback(() => {

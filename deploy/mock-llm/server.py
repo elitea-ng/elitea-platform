@@ -96,6 +96,7 @@ stops a tenant steering the gateway into the cluster.
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import json
 import math
@@ -363,6 +364,43 @@ def _system_text(messages: list[dict]) -> str:
     ).strip()
 
 
+# The per-entry cap on one journaled history message. Long enough that a test
+# marker and the sentence around it survive, short enough that a conversation
+# with a large transcript cannot turn one journal entry into a megabyte — the
+# journal is held in memory and capped by COUNT, not by size.
+MAX_JOURNAL_HISTORY_TEXT = 512
+
+
+def _history_digest(messages: list[dict]) -> list[dict]:
+    """The CONVERSATION this request carried, minus the system prompt.
+
+    The journal already records the system text (`_system_text`) and the tool
+    names, and that was enough while every journey asserted about one turn. It
+    is not enough for the two claims that are about what the model was GIVEN:
+
+      * a follow-up turn must carry the earlier exchange, or the agent cannot
+        answer "what did you just tell me" — and the reply is an echo of the
+        LAST user message, so the answer text can never show it;
+      * a sub-agent call must NOT carry the parent's `chat_history`, which is a
+        statement about the absence of exactly these rows.
+
+    Neither is observable from the reply, the system prompt or the tool list,
+    so both were unassertable before this field existed.
+
+    Roles are kept verbatim and text is truncated per message rather than
+    dropped: a test asks "does the second request contain the first answer",
+    and a digest that hashed or elided the text could not answer it.
+    """
+    digest: list[dict] = []
+    for message in messages or []:
+        role = message.get("role")
+        if role in ("system", "developer"):
+            continue
+        text = _message_text(message)
+        digest.append({"role": role, "text": text[:MAX_JOURNAL_HISTORY_TEXT]})
+    return digest
+
+
 def _last_user_text(messages: list[dict]) -> str | None:
     """The last user turn's text, or None when the request carries no user turn."""
     for message in reversed(messages or []):
@@ -421,6 +459,27 @@ def _tool_result_text_this_turn(messages: list[dict]) -> str | None:
         if role in ("tool", "function"):
             return _message_text(message)
     return None
+
+
+def _tool_results_this_turn(messages: list[dict]) -> list[str]:
+    """Every tool result belonging to the CURRENT turn, oldest first.
+
+    The plural of `_tool_result_text_this_turn`, for the same reason
+    `_call_tool_markers` is the plural of `_call_tool_marker`: a turn that
+    emitted several calls comes back carrying several results, and a resume
+    detector that reads only the newest one would answer as though the others
+    had never happened — which is exactly the difference a "the blocked call
+    did not stop the one beside it" assertion is made of.
+    """
+    results: list[str] = []
+    for message in reversed(messages or []):
+        role = message.get("role")
+        if role == "user":
+            break
+        if role in ("tool", "function"):
+            results.append(_message_text(message))
+    results.reverse()
+    return results
 
 
 class _ChatScript(NamedTuple):
@@ -527,6 +586,18 @@ def _marker_body(prompt: str, start: int) -> str | None:
     one, so every prompt written before this existed parses as it did — a
     stray `]]` in the trailing text is still past the end and still ignored.
     """
+    found = _marker_body_span(prompt, start)
+    return None if found is None else found[0]
+
+
+def _marker_body_span(prompt: str, start: int) -> tuple[str, int] | None:
+    """`_marker_body`, plus the index just past the marker's closing `]]`.
+
+    Split out so a prompt carrying SEVERAL markers can be scanned left to
+    right: the next scan starts where the previous marker ended, which is what
+    keeps a NESTED marker (the delegation shape, whose `]]` closes first) from
+    being read as a second top-level call.
+    """
     depth = 0
     index = start
     while index < len(prompt) - 1:
@@ -538,7 +609,7 @@ def _marker_body(prompt: str, start: int) -> str | None:
         if pair == "]]":
             depth -= 1
             if depth == 0:
-                return prompt[start + len(CALL_TOOL_MARKER_PREFIX):index]
+                return prompt[start + len(CALL_TOOL_MARKER_PREFIX):index], index + 2
             index += 2
             continue
         index += 1
@@ -587,7 +658,52 @@ def _call_tool_marker(prompt: str) -> tuple[str, str] | None:
     return operation, json.dumps(decoded)
 
 
-def _call_tool_call_id(operation: str, prompt: str) -> str:
+def _call_tool_markers(prompt: str) -> list[tuple[str, str]]:
+    """Every TOP-LEVEL `[[mock:call_tool …]]` marker, left to right.
+
+    One marker is the whole of what this mock scripted until the sensitive-tool
+    tail cases needed a turn that calls MORE THAN ONE tool: "the same sensitive
+    tool twice in one turn is authorized once", "two different sensitive tools
+    each raise their own pause", and "a blocked sensitive call does not stop the
+    non-sensitive call beside it" are all properties of ONE assistant message
+    carrying several `tool_calls`, and none of them is observable from a turn
+    that can only ever emit one.
+
+    Scanning resumes past each marker's own close rather than from the next
+    `[[`, so a marker NESTED inside another's arguments (the two-level
+    delegation shape) is still part of its parent and never counted as a second
+    top-level call. A prompt with exactly one marker therefore yields exactly
+    what `_call_tool_marker` yields, and every prompt written before this
+    existed is scripted byte for byte as it was.
+    """
+    markers: list[tuple[str, str]] = []
+    index = 0
+    while True:
+        start = prompt.find(CALL_TOOL_MARKER_PREFIX, index)
+        if start < 0:
+            return markers
+        found = _marker_body_span(prompt, start)
+        if found is None:
+            return markers
+        body, index = found
+        operation, _, raw_arguments = body.strip().partition(" ")
+        operation = operation.strip()
+        if not operation:
+            continue
+        raw_arguments = raw_arguments.strip()
+        if not raw_arguments:
+            markers.append((operation, CALL_TOOL_DEFAULT_ARGUMENTS))
+            continue
+        try:
+            decoded = json.loads(raw_arguments)
+        except ValueError:
+            continue
+        if not isinstance(decoded, dict):
+            continue
+        markers.append((operation, json.dumps(decoded)))
+
+
+def _call_tool_call_id(operation: str, prompt: str, ordinal: int = 0) -> str:
     """A call id that is stable for one prompt and distinct between prompts.
 
     A fixed literal would repeat inside one conversation, and the HITL journey
@@ -596,7 +712,7 @@ def _call_tool_call_id(operation: str, prompt: str) -> str:
     stale one. Deriving it from the prompt keeps a rerun reproducible while
     keeping two different turns apart.
     """
-    digest = hashlib.sha256(f"{operation}\0{prompt}".encode()).hexdigest()[:16]
+    digest = hashlib.sha256(f"{operation}\0{prompt}\0{ordinal}".encode()).hexdigest()[:16]
     return f"call_mock_tool_{digest}"
 
 
@@ -610,13 +726,25 @@ def _call_tool_calls(operation: str, arguments: str, prompt: str) -> list[dict]:
     arguments carries them verbatim — see CALL_TOOL_DEFAULT_ARGUMENTS for the
     tool class that cannot be called without them.
     """
+    return _call_tool_calls_for([(operation, arguments)], prompt)
+
+
+def _call_tool_calls_for(markers: list[tuple[str, str]], prompt: str) -> list[dict]:
+    """One `tool_calls` entry per marker, in the order the prompt named them.
+
+    The call id carries the marker's ORDINAL as well as its operation, because
+    the same operation may be named twice in one prompt and two calls that
+    share an id cannot be told apart by anything downstream — not the runtime's
+    per-call HITL decision map, not the transcript, not a test.
+    """
     return [
         {
-            "index": 0,
-            "id": _call_tool_call_id(operation, prompt),
+            "index": ordinal,
+            "id": _call_tool_call_id(operation, prompt, ordinal),
             "type": "function",
             "function": {"name": operation, "arguments": arguments},
         }
+        for ordinal, (operation, arguments) in enumerate(markers)
     ]
 
 
@@ -638,6 +766,114 @@ def _offered_tool_names(request: dict) -> list[str]:
         if isinstance(function, dict) and isinstance(function.get("name"), str):
             names.append(function["name"])
     return names
+
+
+# ── VISION: the mock can SEE an image, deterministically ──────────────────────
+#
+# The reply everywhere else in this file is an echo of the last user message,
+# which says nothing about an IMAGE the request carried — so every case that
+# needs the model to look at a picture (read an artifact image, caption an ADO
+# attachment, tell JPEG from PNG) had no mock to run against and no lane short
+# of a real multimodal provider.
+#
+# What this adds is the smallest thing those cases actually assert: that the
+# bytes reached the model, WHICH bytes they were, and what format they are in.
+# The description is derived from the bytes — a short MD5 prefix and the format
+# read out of the magic number — so it is deterministic, attributable, and
+# REPEATABLE: the same image always produces the same sentence, which is what
+# makes a caching claim ("the second read did not ask the model again")
+# provable from the journal rather than from a screenshot.
+#
+# It is not a vision model and does not pretend to be. A case that needs real
+# perception ("does the chart show a downward trend") belongs in an env-gated
+# live lane, exactly as `e2e/live/README.md` prescribes.
+_IMAGE_SIGNATURES = (
+    (b"\x89PNG\r\n\x1a\n", "PNG"),
+    (b"\xff\xd8\xff", "JPEG"),
+    (b"GIF87a", "GIF"),
+    (b"GIF89a", "GIF"),
+    (b"II*\x00", "TIFF"),
+    (b"MM\x00*", "TIFF"),
+    (b"BM", "BMP"),
+)
+
+
+def _image_format(raw: bytes) -> str:
+    """The image's format, read from its magic number rather than its name.
+
+    A file extension is what a caller SAYS the bytes are; these cases are about
+    what they ARE (one of them renames a text file to `.png` on purpose), so the
+    answer has to come from the content.
+    """
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return "WEBP"
+    for signature, name in _IMAGE_SIGNATURES:
+        if raw.startswith(signature):
+            return name
+    return "UNKNOWN"
+
+
+def _decode_image_part(part: dict) -> bytes | None:
+    """The bytes of one multimodal image part, or None when it carries none.
+
+    Both shapes in the wild are accepted: OpenAI's `image_url` (a `data:` URL
+    or a remote one) and Anthropic's `source.data`. A remote URL is NOT
+    fetched — the mock has no egress and the tests that matter attach bytes.
+    """
+    if part.get("type") == "image_url":
+        url = part.get("image_url")
+        if isinstance(url, dict):
+            url = url.get("url")
+        if isinstance(url, str) and url.startswith("data:"):
+            _, _, payload = url.partition(",")
+            try:
+                return base64.b64decode(payload, validate=False)
+            except (ValueError, binascii.Error):
+                return b""
+        return b"" if isinstance(url, str) else None
+    if part.get("type") == "image":
+        source = part.get("source")
+        if isinstance(source, dict) and isinstance(source.get("data"), str):
+            try:
+                return base64.b64decode(source["data"], validate=False)
+            except (ValueError, binascii.Error):
+                return b""
+    return None
+
+
+def _request_images(messages: list[dict]) -> list[dict]:
+    """Every image this request carries, newest message last.
+
+    Returned as `{md5, format, bytes}` records — the journal keeps them so a
+    test can assert WHAT the model was shown and how often, which is the whole
+    of the caching and dedup claims.
+    """
+    images: list[dict] = []
+    for message in messages or []:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            raw = _decode_image_part(part)
+            if raw is None:
+                continue
+            images.append({
+                "md5": hashlib.md5(raw).hexdigest(),
+                "format": _image_format(raw),
+                "bytes": len(raw),
+            })
+    return images
+
+
+def _vision_reply(images: list[dict]) -> str:
+    """One sentence per image, derived from the bytes and nothing else."""
+    described = " ".join(
+        f"image {index + 1} is {image['format']} md5 {image['md5'][:12]} ({image['bytes']} bytes)"
+        for index, image in enumerate(images)
+    )
+    return f"{PREFIX} looked at {len(images)} image(s): {described}".strip()
 
 
 def _script_for(messages: list[dict]) -> _ChatScript:
@@ -665,24 +901,32 @@ def _script_for(messages: list[dict]) -> _ChatScript:
             "ask_user_resumed",
         )
 
-    marker = _call_tool_marker(prompt)
-    if marker is not None:
-        operation, arguments = marker
-        answered = _tool_result_text_this_turn(messages)
-        if answered is None:
-            # First pass: invoke the tool the marker names.
+    markers = _call_tool_markers(prompt)
+    if markers:
+        answered = _tool_results_this_turn(messages)
+        if not answered:
+            # First pass: invoke every tool the prompt's markers name.
             return _ChatScript(
                 "",
-                _call_tool_calls(operation, arguments, prompt),
+                _call_tool_calls_for(markers, prompt),
                 CHUNK_DELAY_SECONDS,
                 "call_tool",
             )
-        # Resume: quote the tool result verbatim. That is what makes the
+        # Resume: quote the tool results verbatim. That is what makes the
         # answer discriminating — a run whose tool was never dispatched, or
         # whose call was BLOCKED, carries a different result string, and the
         # stored reply says which one happened without reading a single log.
+        #
+        # The single-marker sentence is emitted UNCHANGED, because ~30 specs
+        # assert on it; a multi-call turn appends one clause per result, in the
+        # order the results came back, so a blocked call and an executed one
+        # are both readable off the same reply.
+        if len(markers) == 1 and len(answered) == 1:
+            body = f"tool {markers[0][0]} said {answered[0]}"
+        else:
+            body = " ".join(f"tool result {index + 1} said {text}" for index, text in enumerate(answered))
         return _ChatScript(
-            f"{PREFIX} tool {operation} said {answered} {CALL_TOOL_SENTINEL}".strip(),
+            f"{PREFIX} {body} {CALL_TOOL_SENTINEL}".strip(),
             None,
             CHUNK_DELAY_SECONDS,
             "call_tool_resumed",
@@ -690,6 +934,15 @@ def _script_for(messages: list[dict]) -> _ChatScript:
 
     if SLOW_MARKER in prompt:
         return _ChatScript(_slow_reply(prompt), None, SLOW_CHUNK_DELAY_SECONDS, "slow")
+
+    # AN IMAGE IN THE REQUEST ANSWERS ITSELF. No marker: the paths that carry
+    # one (an artifact read with `is_capture_image`, a chat attachment, a
+    # toolkit captioning an attachment) compose their own prompt and cannot be
+    # asked to add one. The echo would have answered about the surrounding
+    # text and said nothing about the picture.
+    images = _request_images(messages)
+    if images:
+        return _ChatScript(_vision_reply(images), None, CHUNK_DELAY_SECONDS, "vision")
 
     return _ChatScript(_reply_for(messages), None, CHUNK_DELAY_SECONDS, "echo")
 
@@ -929,6 +1182,15 @@ class Handler(BaseHTTPRequestHandler):
             # The SYSTEM prompt this request carried, verbatim. Empty for
             # /v1/embeddings, which has no messages. See `_system_text`.
             "instructions": _system_text(request.get("messages") or []),
+            # THE CONVERSATION THIS REQUEST CARRIED (see `_history_digest`):
+            # what the model was GIVEN, as opposed to what it was told to be.
+            # Empty for /v1/embeddings, which has no messages.
+            "history": _history_digest(request.get("messages") or []),
+            # THE IMAGES THIS REQUEST CARRIED, by content digest. It is how a
+            # test proves the model was shown the picture at all, and — because
+            # the digest is of the BYTES — how it proves a cached description
+            # did NOT come back to the model a second time.
+            "images": _request_images(request.get("messages") or []),
             "at": time.time(),
         })
 

@@ -62,6 +62,59 @@ describe('CredentialsSelect', () => {
     expect(listbox.getByText('Shared Azure')).toBeInTheDocument();
   });
 
+  it('offers a search/filter field in the popup, that narrows the saved rows (issue 919/ELITEA-2534)', () => {
+    renderWithTheme(
+      <CredentialsSelect
+        value={null}
+        state={baseState()}
+        handlers={baseHandlers()}
+      />,
+    );
+    fireEvent.mouseDown(screen.getByRole('combobox'));
+    const listbox = within(screen.getByRole('listbox'));
+    const search = listbox.getByPlaceholderText('Search credentials');
+    expect(search).toBeInTheDocument();
+
+    fireEvent.change(search, { target: { value: 'azure' } });
+    expect(listbox.queryByText('My OpenAI')).not.toBeInTheDocument();
+    expect(listbox.getByText('Shared Azure')).toBeInTheDocument();
+    // The CREATE rows are not rows being searched — they stay offered.
+    expect(listbox.getByText('New private credentials')).toBeInTheDocument();
+  });
+
+  it('matching is case-insensitive and clearing the query restores every row', () => {
+    renderWithTheme(
+      <CredentialsSelect
+        value={null}
+        state={baseState()}
+        handlers={baseHandlers()}
+      />,
+    );
+    fireEvent.mouseDown(screen.getByRole('combobox'));
+    const listbox = within(screen.getByRole('listbox'));
+    const search = listbox.getByPlaceholderText('Search credentials');
+
+    fireEvent.change(search, { target: { value: 'OPENAI' } });
+    expect(listbox.getByText('My OpenAI')).toBeInTheDocument();
+    expect(listbox.queryByText('Shared Azure')).not.toBeInTheDocument();
+
+    fireEvent.change(search, { target: { value: '' } });
+    expect(listbox.getByText('My OpenAI')).toBeInTheDocument();
+    expect(listbox.getByText('Shared Azure')).toBeInTheDocument();
+  });
+
+  it('omits the search field entirely when there are no saved rows to filter', () => {
+    renderWithTheme(
+      <CredentialsSelect
+        value={null}
+        state={baseState({ configurations: [] })}
+        handlers={baseHandlers()}
+      />,
+    );
+    fireEvent.mouseDown(screen.getByRole('combobox'));
+    expect(screen.queryByPlaceholderText('Search credentials')).not.toBeInTheDocument();
+  });
+
   it('selecting a saved row calls onSelect with its identity', () => {
     const onSelect = vi.fn();
     renderWithTheme(

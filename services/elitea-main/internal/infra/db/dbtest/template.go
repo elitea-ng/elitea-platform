@@ -196,6 +196,12 @@ func EnsureTemplate(ctx context.Context, adminPool *pgxpool.Pool, spec Spec) (st
 }
 
 // buildTemplate creates the template under the advisory lock.
+//
+// The lock is transaction-scoped, held on a dedicated pooled connection for
+// the life of the build: a session-scoped lock can outlive the process that
+// took it. Once the owning process dies, a pooler returns the locked server
+// connection to its pool, and the lock sits there until the server connection
+// is recycled, blocking every template build that goes through the pooler.
 func buildTemplate(ctx context.Context, adminPool *pgxpool.Pool, spec Spec, templateName string) error {
 	lockKey := templateLockKey(templateName)
 	lockConn, err := adminPool.Acquire(ctx)
@@ -203,14 +209,20 @@ func buildTemplate(ctx context.Context, adminPool *pgxpool.Pool, spec Spec, temp
 		return fmt.Errorf("dbtest: acquire lock connection: %w", err)
 	}
 	defer lockConn.Release()
-	if _, err := lockConn.Exec(ctx, "SELECT pg_advisory_lock($1)", lockKey); err != nil {
-		return fmt.Errorf("dbtest: take template build lock: %w", err)
+	lockTx, err := lockConn.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("dbtest: begin lock transaction: %w", err)
 	}
+	// Roll back before releasing the connection: the transaction end is what
+	// releases the lock.
 	defer func() {
 		unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
-		_, _ = lockConn.Exec(unlockCtx, "SELECT pg_advisory_unlock($1)", lockKey)
+		_ = lockTx.Rollback(unlockCtx)
 	}()
+	if _, err := lockTx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", lockKey); err != nil {
+		return fmt.Errorf("dbtest: take template build lock: %w", err)
+	}
 
 	// Another process may have finished the build while this one waited.
 	exists, err := databaseExists(ctx, adminPool, templateName)

@@ -524,3 +524,55 @@ func TestUpdateVersion_OmittedVariablesLeavesMetaAlone(t *testing.T) {
 		t.Errorf("expected nil meta, got %v", repo.lastUpdate.Meta)
 	}
 }
+
+// #896/ELITEA-0093 — `conversation_starters` is a loosely-typed jsonb
+// passthrough field (api/openapi/v2.yaml's `ConversationStarters`); a caller
+// hitting the API directly (not through the web app's own editor, which only
+// ever sends strings) could previously persist a non-string entry verbatim
+// (crashing the agent-hub starter panel, #4932/#4933) or have it silently
+// filtered out, which let a malformed update overwrite previously-valid
+// starters with no refusal at all. The handler must now REJECT the whole
+// request with 400 and leave the stored version untouched.
+func TestUpdateVersion_ConversationStartersRejectsNonStringEntries(t *testing.T) {
+	repo := &recordingRepo{}
+	r := setupVersionRouter(repo)
+
+	body, _ := json.Marshal(map[string]any{
+		"conversation_starters": []any{"Hello", nil, 42, map[string]any{"bad": true}, "Hi there"},
+	})
+	req := httptest.NewRequest("PUT", "/version/prompt_lib/1/2/3", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if repo.lastUpdate.ConversationStarters != nil {
+		t.Errorf("a refused update must not reach the repository, got %#v", repo.lastUpdate.ConversationStarters)
+	}
+}
+
+// The mirror of the test above: an array of ONLY non-string entries is
+// refused the same way — there is no "all bad, so collapse to empty" special
+// case (see the conditional update in infra/db/repos/applications.go, which
+// this request must never reach).
+func TestUpdateVersion_ConversationStartersAllNonStringIsRejected(t *testing.T) {
+	repo := &recordingRepo{}
+	r := setupVersionRouter(repo)
+
+	body, _ := json.Marshal(map[string]any{
+		"conversation_starters": []any{nil, 42},
+	})
+	req := httptest.NewRequest("PUT", "/version/prompt_lib/1/2/3", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if repo.lastUpdate.ConversationStarters != nil {
+		t.Errorf("a refused update must not reach the repository, got %#v", repo.lastUpdate.ConversationStarters)
+	}
+}

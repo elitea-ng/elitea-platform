@@ -372,6 +372,25 @@ impl DelegatedAuthorizationRequirement {
             .map(Vec::as_slice)
     }
 
+    /// The notice shown when the requirement is discovered while the agent is
+    /// being ASSEMBLED, before any tool call exists to authorize against.
+    ///
+    /// It differs from [`Self::user_message`] on purpose: there is no
+    /// authorize/skip pair to offer here, so the text must say which connection
+    /// to authorize and what to do afterwards rather than name buttons that are
+    /// not on screen.
+    pub(crate) fn assembly_notice_message(&self) -> String {
+        let family = if self.toolkit_type == "mcp" {
+            "MCP"
+        } else {
+            "toolkit"
+        };
+        format!(
+            "The {family} connection \u{201c}{}\u{201d} ({}) requires authorization before it can be used. Authorize that connection, then send your message again.",
+            self.toolkit_name, self.server_url
+        )
+    }
+
     pub(crate) fn user_message(&self) -> String {
         let family = if self.toolkit_type == "mcp" {
             "MCP toolkit"

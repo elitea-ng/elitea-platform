@@ -68,6 +68,7 @@ const FEATURES_SPEC = 'e2e/journeys/admin/admin.features.spec.ts';
 const APP_REQUESTS_SPEC = 'e2e/journeys/admin/admin.app-requests.spec.ts';
 const SEED_SCRIPT = 'scripts/e2e-stack.sh';
 const WIDGET_SPEC = 'e2e/journeys/support/support.widget.spec.ts';
+const ENTRYPOINTS_SPEC = 'e2e/journeys/support/support.entrypoints.spec.ts';
 const CONTEXT_BUDGET_SPEC = 'e2e/journeys/chat/chat.contextBudget.spec.ts';
 
 /**
@@ -105,6 +106,7 @@ const FILE_LEVEL_SERIAL = [
   { path: 'e2e/journeys/admin/admin.configuration.spec.ts' },
   { path: APP_REQUESTS_SPEC },
   { path: WIDGET_SPEC, mustSay: /ONE WORKER, IN ORDER/ },
+  { path: ENTRYPOINTS_SPEC, mustSay: /ONE PLATFORM FLAG, IN ORDER/ },
   { path: CONTEXT_BUDGET_SPEC, mustSay: /ONE ACCOUNT, ONE WRITER/ },
 ];
 
@@ -883,5 +885,430 @@ describe("the seeded project's X-SECRET value is a property of the stack", () =>
         'await resolveProjectSecretHeader(page.request, DEFAULT_PROJECT_ID)',
       );
     expect(runtimeSecretHeaderSeeded(read(SEED_SCRIPT), setup)).toBe(false);
+  });
+});
+
+/* ── rule 9 ─────────────────────────────────────────────────────────────── */
+
+/**
+ * A journey that WRITES a platform-wide flag must run in the `platform-flags`
+ * projects, and nowhere else.
+ *
+ * ## The failure
+ *
+ * `withPlatformFlagLock` (e2e/fixtures/platformFlags.ts) is a mutex over rows
+ * that are ONE row for the whole deployment. Under `fullyParallel: true` and
+ * four workers, seven spec files queued for it, and every journey added to the
+ * set lengthened the queue. Two shapes came out of that, and both were read as
+ * product defects on PR #947 and #957:
+ *
+ *  - starvation, which raising the per-test budget to the lock's documented
+ *    worst case (210 s) moved rather than removed;
+ *  - MUTUAL EXCLUSION BREAKING. Measured on run 35278339078,
+ *    `E2E (webkit-1of2)`, 44 s in: ELITEA-0017 wrote "Block Agent Publishing"
+ *    on, reloaded, and read it back OFF, from INSIDE the lock. A queue cannot
+ *    produce that — only a second writer in the window can.
+ *
+ * The correction is a project per engine with `workers: 1`, so a CI leg never
+ * has a second writer for the lock to exclude. That is a property of the
+ * SUITE, not of any screen: no journey can state it, and the next flag-writing
+ * journey will be written by someone who has never read this file. Hence a
+ * rule rather than a comment.
+ *
+ * ## The four properties
+ *
+ *  1. every spec that calls `withPlatformFlagLock(` is matched by the config's
+ *     `PLATFORM_FLAG_JOURNEYS` list — the gate SCANS for the call rather than
+ *     trusting the list, so a new writer in a sharded project fails here and
+ *     not as somebody else's flaky journey;
+ *  2. both engine projects `testIgnore` that list, so nothing runs twice and
+ *     the sharded legs carry no writer at all;
+ *  3. each flag project pins `workers: 1`. `fullyParallel: false` alone does
+ *     not cap workers — Playwright still puts each FILE on its own worker,
+ *     which is the arrangement being corrected;
+ *  4. CI RUNS THEM. A project no workflow names is the dead-wiring shape this
+ *     repository keeps meeting, and it would read as "the flaky journeys went
+ *     away" — because they would simply have stopped running.
+ *
+ * Property 4 needs this file to RUN when that workflow changes, and ci-web.yml
+ * — which owns the `scripts` vitest project — does not fire on
+ * `.github/workflows/ci-web-e2e.yml`. So ci-web-e2e.yml runs this one file
+ * itself, as a step of every `e2e` leg: a leg that deleted itself cannot check
+ * anything, and the legs that remain can. The step carries the same note.
+ *
+ * The READERS (`readsPlatformFlags`) deliberately stay in the sharded
+ * projects: the shared side never waits for another reader, and with every
+ * writer moved out there is no writer to wait for. This rule says nothing
+ * about them on purpose.
+ */
+const E2E_WORKFLOW = '../../.github/workflows/ci-web-e2e.yml';
+const PLATFORM_FLAG_PROJECTS = ['platform-flags', 'platform-flags-webkit'];
+
+/** Every journey spec whose CODE takes the writer half of the lock. */
+export function platformFlagWriters(specs) {
+  return specs
+    .filter(([, source]) =>
+      source
+        .split('\n')
+        .map((line) => line.trim())
+        // A header that explains the lock is prose, not a call — and a rule
+        // that read prose could only be satisfied by deleting the account.
+        .filter((line) => !line.startsWith('*') && !line.startsWith('//') && !line.startsWith('/*'))
+        .some((line) => line.includes('withPlatformFlagLock(')),
+    )
+    .map(([path]) => path);
+}
+
+/**
+ * The `PLATFORM_FLAG_JOURNEYS` entries, as real RegExps.
+ *
+ * Built from the literals rather than compared as text: the config states the
+ * membership as a MATCH, and a gate that compared strings would pass a list
+ * whose regex cannot match the path it was written for.
+ */
+export function platformFlagProjectPatterns(configSource) {
+  const start = configSource.indexOf('const PLATFORM_FLAG_JOURNEYS = [');
+  if (start < 0) return [];
+  const block = configSource.slice(start, configSource.indexOf('];', start));
+  return [...block.matchAll(/\/(?:[^/\\\n]|\\.)+\//g)].map(
+    (match) => new RegExp(match[0].slice(1, -1)),
+  );
+}
+
+/** The writers the config leaves in the sharded projects. */
+export function writersOutsideTheFlagProjects(configSource, writers) {
+  const patterns = platformFlagProjectPatterns(configSource);
+  return writers.filter((path) => !patterns.some((pattern) => pattern.test(path)));
+}
+
+/** The lines inside one project's own block, or `[]` when it has no block. */
+function projectBlockLines(source, name) {
+  const lines = source.split('\n');
+  const start = lines.findIndex((line) => new RegExp(`name:\\s*'${name}'`).test(line));
+  if (start === -1) return [];
+  const indent = (lines[start].match(/^\s*/) ?? [''])[0].length;
+  const body = [];
+  for (let index = start; index < lines.length; index += 1) {
+    body.push(lines[index]);
+    const closes =
+      index > start &&
+      /^\s*\},?\s*$/.test(lines[index]) &&
+      (lines[index].match(/^\s*/) ?? [''])[0].length < indent;
+    if (closes) break;
+  }
+  return body;
+}
+
+/** Does every flag project exist, run the list, and cap itself at one worker? */
+export function flagProjectsAreSerial(configSource) {
+  return PLATFORM_FLAG_PROJECTS.every((name) => {
+    const block = projectBlockLines(configSource, name).join('\n');
+    if (block === '') return false;
+    return (
+      /testMatch:\s*PLATFORM_FLAG_JOURNEYS/.test(block) &&
+      /workers:\s*1\b/.test(block) &&
+      /fullyParallel:\s*false/.test(block)
+    );
+  });
+}
+
+/** Both engine projects must spread the list into their own `testIgnore`. */
+export function bothEnginesIgnoreTheFlagJourneys(configSource) {
+  return (
+    (configSource.match(/^\s*\.\.\.PLATFORM_FLAG_JOURNEYS,$/gm) ?? []).length === 2 &&
+    ['chromium', 'webkit'].every((name) =>
+      projectBlockLines(configSource, name).join('\n').includes('...PLATFORM_FLAG_JOURNEYS,'),
+    )
+  );
+}
+
+/** Which flag projects the E2E workflow actually runs as a matrix leg. */
+export function flagProjectsWiredIntoCI(workflowSource) {
+  return PLATFORM_FLAG_PROJECTS.filter((name) =>
+    new RegExp(`^\\s*- engine:\\s*${name}\\s*$`, 'm').test(workflowSource),
+  );
+}
+
+describe('#957 — a flag-writing journey must not queue behind three others', () => {
+  it('every writer is matched by the platform-flags project list', () => {
+    const writers = platformFlagWriters(journeySpecs());
+    // A rule whose input can be empty is a rule that passes by finding
+    // nothing: the writers exist, and this is what says so.
+    expect(writers.length).toBeGreaterThan(0);
+    expect(writersOutsideTheFlagProjects(read('playwright.config.ts'), writers)).toEqual([]);
+  });
+
+  it('both engine projects ignore that list, so nothing runs twice', () => {
+    expect(bothEnginesIgnoreTheFlagJourneys(read('playwright.config.ts'))).toBe(true);
+  });
+
+  it('each flag project caps itself at one worker', () => {
+    expect(flagProjectsAreSerial(read('playwright.config.ts'))).toBe(true);
+  });
+
+  it('ci-web-e2e.yml runs both flag projects as their own legs', () => {
+    expect(flagProjectsWiredIntoCI(read(E2E_WORKFLOW))).toEqual(PLATFORM_FLAG_PROJECTS);
+  });
+
+  it('rejects a new flag-writing journey left in the sharded projects', () => {
+    const newcomer = [
+      'test(\'J99: a new platform switch\', async ({ page }) => {',
+      '  await withPlatformFlagLock(async () => {',
+      '    await page.goto(BASE_URL + \'/admin/app/features\');',
+      '  });',
+      '});',
+    ].join('\n');
+    const writers = platformFlagWriters([['e2e/journeys/admin/admin.new-switch.spec.ts', newcomer]]);
+    expect(writers).toEqual(['e2e/journeys/admin/admin.new-switch.spec.ts']);
+    expect(writersOutsideTheFlagProjects(read('playwright.config.ts'), writers)).toEqual([
+      'e2e/journeys/admin/admin.new-switch.spec.ts',
+    ]);
+  });
+
+  it('reads the fixture header that explains the lock as prose', () => {
+    const commentOnly = [
+      '/**',
+      ' * Tests call withPlatformFlagLock( to take the writer half.',
+      ' */',
+      '// withPlatformFlagLock( is the writer; readsPlatformFlags is the reader.',
+    ].join('\n');
+    expect(platformFlagWriters([['e2e/journeys/admin/admin.prose.spec.ts', commentOnly]])).toEqual(
+      [],
+    );
+  });
+
+  it('rejects the shape the suite had, with the writers in chromium and webkit', () => {
+    const before = [
+      '      name: \'chromium\',',
+      '      testIgnore: [',
+      '        FIXTURE_ISOLATION_JOURNEY,',
+      '      ],',
+      '    },',
+      '    {',
+      '      name: \'webkit\',',
+      '      testIgnore: [',
+      '        FIXTURE_ISOLATION_JOURNEY,',
+      '      ],',
+      '    },',
+    ].join('\n');
+    expect(platformFlagProjectPatterns(before)).toEqual([]);
+    expect(bothEnginesIgnoreTheFlagJourneys(before)).toBe(false);
+    expect(flagProjectsAreSerial(before)).toBe(false);
+    expect(
+      writersOutsideTheFlagProjects(before, ['e2e/journeys/admin/admin.branding.spec.ts']),
+    ).toEqual(['e2e/journeys/admin/admin.branding.spec.ts']);
+  });
+
+  it('rejects a flag project that only turns fullyParallel off', () => {
+    const before = [
+      '    {',
+      '      name: \'platform-flags\',',
+      '      testMatch: PLATFORM_FLAG_JOURNEYS,',
+      '      fullyParallel: false,',
+      '    },',
+      '    {',
+      '      name: \'platform-flags-webkit\',',
+      '      testMatch: PLATFORM_FLAG_JOURNEYS,',
+      '      workers: 1,',
+      '      fullyParallel: false,',
+      '    },',
+    ].join('\n');
+    expect(flagProjectsAreSerial(before)).toBe(false);
+  });
+
+  it('rejects a list whose regex cannot match the spec it names', () => {
+    // The literal is present, and it is wrong: `admin/admin.branding` is not
+    // how the path reads. A gate that compared text would accept this.
+    const typo = [
+      'const PLATFORM_FLAG_JOURNEYS = [',
+      '  /journeys\\/admin\\/branding\\.spec\\.ts/,',
+      '];',
+    ].join('\n');
+    expect(platformFlagProjectPatterns(typo)).toHaveLength(1);
+    expect(
+      writersOutsideTheFlagProjects(typo, ['e2e/journeys/admin/admin.branding.spec.ts']),
+    ).toEqual(['e2e/journeys/admin/admin.branding.spec.ts']);
+  });
+
+  it('rejects a workflow that defines the projects and runs neither', () => {
+    const before = [
+      '      matrix:',
+      '        include:',
+      '          - engine: chromium',
+      '            leg: chromium',
+      '          - engine: webkit',
+      '            leg: webkit-1of2',
+    ].join('\n');
+    expect(flagProjectsWiredIntoCI(before)).toEqual([]);
+  });
+
+  it('rejects a workflow that wires only one of the two engines', () => {
+    const half = [
+      '          - engine: platform-flags',
+      '            leg: platform-flags',
+    ].join('\n');
+    expect(flagProjectsWiredIntoCI(half)).toEqual(['platform-flags']);
+  });
+});
+
+/* ── rule 10 ────────────────────────────────────────────────────────────── */
+
+/**
+ * Every sharded leg in ci-web-e2e.yml must carry as many shard weights as its
+ * shard denominator.
+ *
+ * ## Why this is a rule and not a comment
+ *
+ * The lanes are sharded by wall time, not by test count: `--shard` splits a
+ * project into equal-sized ranges of TESTS, and neither the journeys nor the
+ * chat lanes have anything like a uniform per-test cost. Measured on run
+ * 35606872334 (PR #984) the two webkit legs took 383 and 382 tests and then
+ * 23.2 and 83.1 minutes. `PWTEST_SHARD_WEIGHTS` moves the cut points, and the
+ * weights in the workflow are the ones a duration-balanced split needs.
+ *
+ * Those weights are a SPEED knob. A wrong one costs minutes and no coverage:
+ * every test still runs in exactly one shard, and a Playwright that stopped
+ * reading the variable would fall back to the count split. There is exactly
+ * one way to get it wrong loudly — `filterForShard` throws when the number of
+ * weights does not equal `shard.total` — and that way is also the easy one:
+ * changing a lane from three shards to four and leaving the weights alone.
+ * Playwright refuses before it runs a test, so the whole lane reports a
+ * harness error rather than a journey result.
+ *
+ * Checking it here costs nothing (the file is already parsed for rule 9) and
+ * it runs on every `e2e` leg, which is what makes it cover an edit to the
+ * workflow itself — ci-web.yml, which owns the `scripts` vitest project, does
+ * not fire on `.github/workflows/ci-web-e2e.yml`.
+ *
+ * The rule says nothing about the weight VALUES: they are measurements, they
+ * drift as specs are added, and a gate that pinned them would have to be
+ * edited by whoever re-measures them, which is the same as not having one.
+ */
+
+/**
+ * Every `shard: "i/N"` in a workflow, paired with the weights that are in
+ * scope for it — the entry's own `weights:` when the matrix carries one, else
+ * the job-level `PWTEST_SHARD_WEIGHTS`.
+ *
+ * Read line by line rather than by parsing YAML: this file already reads the
+ * workflow as text for rule 9, and the two shapes in use are both flat (a
+ * matrix `include:` entry, and a job `env:` key).
+ */
+export function shardLegsWithWeights(workflowSource) {
+  const resolved = [];
+  let pending = [];
+  let current = null;
+  let jobWeights = '';
+  // RESOLVED AT THE END OF EACH JOB, not at the end of the file. A job's
+  // `env:` block may be written after its `strategy:` (it is, on both chat
+  // lanes), so a leg's default is not known when its `shard:` line is read —
+  // and a single pass that resolved everything at EOF would hand every job
+  // the LAST job's weights, which is the same reading mistake this whole rule
+  // exists to catch.
+  const closeJob = () => {
+    for (const leg of pending) resolved.push({ ...leg, weights: leg.weights ?? jobWeights });
+    pending = [];
+    current = null;
+    jobWeights = '';
+  };
+  for (const line of workflowSource.split('\n')) {
+    if (/^ {2}[A-Za-z0-9_-]+:\s*$/.test(line)) closeJob();
+    // A NEW MATRIX ENTRY ENDS THE PREVIOUS ONE'S CLAIM ON `weights:`. Without
+    // this, the unsharded `platform-flags` entry's `weights: ""` was read as
+    // the webkit 3/3 leg's, because that leg was simply the last one with a
+    // `shard:` — the sharded leg then looked unweighted and this rule passed
+    // it. An entry that declares no `shard:` must not be able to answer for
+    // one that does.
+    if (/^\s*- /.test(line)) current = null;
+    const body = line.replace(/^(\s*)- /, '$1');
+    const env = body.match(/^\s*PWTEST_SHARD_WEIGHTS:\s*"([^"]*)"\s*$/);
+    if (env) jobWeights = env[1];
+    const shard = body.match(/^\s*shard:\s*"(\d+)\/(\d+)"\s*$/);
+    if (shard) {
+      current = { shard: `${shard[1]}/${shard[2]}`, total: Number(shard[2]), weights: null };
+      pending.push(current);
+    }
+    const entry = body.match(/^\s*weights:\s*"([^"]*)"\s*$/);
+    if (entry && current) current.weights = entry[1];
+  }
+  closeJob();
+  return resolved;
+}
+
+/** The legs whose weight count disagrees with their shard denominator. */
+export function shardWeightMismatches(workflowSource) {
+  return shardLegsWithWeights(workflowSource)
+    .filter((leg) => leg.weights !== '')
+    .filter((leg) => leg.weights.split(':').length !== leg.total)
+    .map((leg) => `${leg.shard} has ${leg.weights.split(':').length} weight(s)`);
+}
+
+describe('a sharded lane must carry one weight per shard', () => {
+  it('every sharded leg in ci-web-e2e.yml agrees with its own denominator', () => {
+    const workflow = read(E2E_WORKFLOW);
+    // A rule whose input can be empty passes by finding nothing: the sharded
+    // legs exist, and this is what says so.
+    expect(shardLegsWithWeights(workflow).length).toBeGreaterThan(0);
+    expect(shardWeightMismatches(workflow)).toEqual([]);
+  });
+
+  it('rejects a lane that grew a shard and kept the old weights', () => {
+    const grown = [
+      '    env:',
+      '      PWTEST_SHARD_WEIGHTS: "61:16:33"',
+      '    strategy:',
+      '      matrix:',
+      '        include:',
+      '          - leg: 1of4',
+      '            shard: "1/4"',
+    ].join('\n');
+    expect(shardWeightMismatches(grown)).toEqual(['1/4 has 3 weight(s)']);
+  });
+
+  it('reads a matrix entry\'s own weights in preference to the job default', () => {
+    const perEntry = [
+      '          - engine: webkit',
+      '            shard: "1/3"',
+      '            weights: "443:164:158"',
+    ].join('\n');
+    expect(shardWeightMismatches(perEntry)).toEqual([]);
+  });
+
+  it('says nothing about an unsharded leg', () => {
+    const plain = ['          - engine: platform-flags', '            shard: ""'].join('\n');
+    expect(shardLegsWithWeights(plain)).toEqual([]);
+    expect(shardWeightMismatches(plain)).toEqual([]);
+  });
+
+  it('does not let an unsharded entry answer for the sharded one above it', () => {
+    // The real matrix shape: three webkit legs, then `platform-flags` with an
+    // empty `weights:`. A reader that attached that empty string to the last
+    // leg with a `shard:` reported webkit 3/3 as unweighted and passed it,
+    // which is this rule finding nothing and calling it correct.
+    const matrix = [
+      '          - engine: webkit',
+      '            shard: "3/3"',
+      '            weights: "443:164:158"',
+      '          - engine: platform-flags',
+      '            shard: ""',
+      '            weights: ""',
+    ].join('\n');
+    expect(shardLegsWithWeights(matrix)).toEqual([
+      { shard: '3/3', total: 3, weights: '443:164:158' },
+    ]);
+  });
+
+  it('does not carry one job\'s weights into the next job', () => {
+    const twoJobs = [
+      '  chat-stream:',
+      '    env:',
+      '      PWTEST_SHARD_WEIGHTS: "50:28:6:26"',
+      '  chat-stream-rust:',
+      '    strategy:',
+      '      matrix:',
+      '        include:',
+      '          - shard: "1/3"',
+    ].join('\n');
+    expect(shardWeightMismatches(twoJobs)).toEqual([]);
   });
 });

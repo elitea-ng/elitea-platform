@@ -76,6 +76,31 @@ export { StyledShowContextModal } from './ui/StyledShowContextModal';
 export { AgentVersionControls } from './ui/AgentVersionControls';
 
 /**
+ * #917/ELITEA-3290,3291,3293,3294,3295,3296 — the SAME dropdown, now reachable
+ * by the skill editor.
+ *
+ * Skills drew their own version picker as a bare MUI `<Select>` of plain
+ * `<MenuItem>` rows: no checkmark on the selected row, no default marker, no
+ * search, no timestamp, no creator. The gap was not six separate defects but
+ * one — Skills did not use this component. It stayed intra-slice (see
+ * `AgentVersionControls` above) because its only callers were inside this
+ * slice; `pages/skills/SkillEditorHeader.tsx` is the first outside one, and a
+ * PAGE may import a feature barrel (the same direction `pages/toolkits`
+ * already takes to `features/credentials`), so exporting it here is the
+ * cheapest legal seam. Moving the five files to a shared slice instead would
+ * drag `AgentPipelineVersionOption` out of `features/agents/lib/types.ts` and
+ * touch the agent editor, the pipeline editor and the tool card for no
+ * behavioural gain.
+ *
+ * The MUTATION half stays caller-owned, as the component's own header
+ * documents: Skills passes its own `onSelectVersion`, and omits
+ * `onSetDefaultVersion`/`onDeleteVersion` because the skill editor already
+ * carries those as buttons beside the dropdown.
+ */
+export { AgentPipelineVersionSelector } from './ui/AgentPipelineVersionSelector';
+export type { AgentPipelineVersionOption } from './lib/types';
+
+/**
  * #307 — the agent editor's own delete and export affordances. Both were
  * fully ported, fully tested and imported by NOTHING: the issue lists them
  * among the "correctly-wired components with no mount point", and the page
@@ -136,12 +161,36 @@ export { ApplicationMcpAccessToggle } from './ui/ApplicationMcpAccessToggle';
  * API at 19 of its 20 §3.3 slots.
  *
  * `ApplicationEditorNotes` — its sibling in the same unmounted set — is
- * deliberately NOT exported with it. `version_details.notes` has no column on
- * `application_versions`, no property on `VersionWriteRequest`, and no branch
- * in `UpdateVersion`: mounting it would give a person a text box whose
- * content the very next save discards.
+ * exported just below, now that the gap this comment used to record is
+ * closed (#898).
  */
 export { ApplicationInformation } from './ui/ApplicationInformation';
+
+/**
+ * #898 — the "EDITOR NOTES" accordion. Written, unit-tested and mounted by
+ * NOBODY for the whole life of this app: this barrel's own comment used to
+ * record why ("`version_details.notes` has no column on
+ * `application_versions`, no property on `VersionWriteRequest`, and no branch
+ * in `UpdateVersion`: mounting it would give a person a text box whose
+ * content the very next save discards").
+ *
+ * All three halves of that are now closed, and none of them needed a
+ * migration — the field never wanted a column. It lives inside
+ * `application_versions.meta`, which is where pylon puts it too
+ * (elitea_issues #5410 chose the jsonb precisely to avoid a per-tenant schema
+ * change); `VersionMeta.notes` and a top-level `VersionWriteRequest.notes`
+ * are both declared in `api/openapi/v2.yaml` now, and every Go write path
+ * folds the top-level spelling into the same key.
+ *
+ * `pages/agents/ui/EditApplicationConfigurationPanel.tsx` is the first real
+ * call site — the agent editor, the screen the baseline writes this component
+ * for (`ApplicationConfigurationForm.jsx:68`, between Advanced Settings and
+ * Information). This barrel is over its §3.3 curation budget by the
+ * `AgentIconEditor` waiver already recorded in `scripts/lib/budgets-core.mjs`;
+ * there is still nothing left here to curate away, and one real external
+ * consumer is the same justification that waiver documents.
+ */
+export { ApplicationEditorNotes } from './ui/ApplicationEditorNotes';
 
 /**
  * Sub-unit A1a's ("Application data layer + version-lifecycle hooks")
@@ -222,3 +271,18 @@ export { agentEditorHooks } from './model/agentEditorHooks';
  * still 20/20 against the shared ≤20 budget.
  */
 export { useApplicationsStore } from './model/applicationsStore';
+
+/**
+ * `elitea_issues: #6627` addition: `AgentIconEditor` — the agent editor's
+ * `iconSlot` has stood empty at every call site since `CreateAgentForm.tsx`
+ * declared it (that file's own doc comment: "editable EntityIcon... a real
+ * gap, not a naming mismatch"). This barrel was already sitting at the 20/20
+ * cap before this symbol, with no smaller bundling available (unlike
+ * `agentEditorHooks` above, this is one component, not a hook cluster), so
+ * this is the SAME situation `notifications/index.ts`'s own waiver
+ * documents — one real external consumer
+ * (`pages/agents/ui/EditApplicationConfigurationPanel.tsx`), 20 → 21,
+ * recorded as a `scripts/lib/budgets-core.mjs` waiver rather than a
+ * curation debt (there is nothing left in this barrel to curate away).
+ */
+export { AgentIconEditor } from './ui/AgentIconEditor';

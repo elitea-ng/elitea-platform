@@ -47,7 +47,7 @@ export const PublicApplicationTag = zod
     name: zod.string(),
   })
   .describe(
-    "One tag of the published version, as the catalogue row carries it (internal\/api\/v2\/eliteacore\/public_applications.go). Only the id and the name are aggregated — the tag's `data` jsonb is not read here.\n",
+    "One tag of the published version, as the catalogue row carries it (internal/api/v2/eliteacore/public_applications.go). Only the id and the name are aggregated — the tag's `data` jsonb is not read here.\n",
   );
 
 export type PublicApplicationTag = zod.input<typeof PublicApplicationTag>;

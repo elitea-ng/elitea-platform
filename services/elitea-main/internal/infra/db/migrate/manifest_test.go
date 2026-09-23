@@ -546,13 +546,9 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// unwired because the settlement engine itself carries no notion of
 	// "this execution is a pipeline run". See the file's own header for why
 	// this lives outside elitea_runtime's claim-fence tables entirely.
-	// 125 adds the Rust read-only capability without removing Python tool runs.
-	// 126 preserves parameterized static MCP configuration from the Rust branch.
-	// 127 stores encrypted confidential DCR clients.
-	// Main owns 122 through 124. The branch migrations retain their SQL bytes.
-	// Existing rehearsal ledgers require explicit reconciliation before upgrade.
-
-	require.EqualValues(t, 127, Head(shared))
+	// Main owns token lifecycle at 125. Feature SQL remains byte-identical at 126 through 132.
+	// Feature rehearsal ledgers need explicit reconciliation before deployment.
+	require.EqualValues(t, 132, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -680,12 +676,22 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// `models.chat.conversation.details` for reads and
 	// `models.chat.conversation.update` for writes), so it has no shared
 	// sibling.
-	require.EqualValues(t, 137, Head(tenant))
+	// 138: tenant/0138_pipeline_trigger_auth_mode.sql, the provider SIGNATURE
+	// mode an inbound pipeline trigger had no way to express (#970). 0133
+	// gives a trigger one credential shape — a bearer secret compared against
+	// `token_hash` — and a GitHub repository webhook cannot send one: it signs
+	// the raw body and sends `X-Hub-Signature-256`. Three columns rather than
+	// a jsonb blob (the table has none, and all three are read on the inbound
+	// path), each with a DEFAULT that keeps every existing row on the bearer
+	// mode, and a CHECK on each vocabulary so an unknown value cannot fall
+	// through to the weaker branch. It introduces NO permission and no table,
+	// so it has no shared sibling.
+	require.EqualValues(t, 138, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own
 	// database, so its ledger advances independently of the tenant one.
 	agentState, err := LoadManifest(platformmigrations.Files, ScopeAgentState)
 	require.NoError(t, err)
-	require.EqualValues(t, 2, Head(agentState))
+	require.EqualValues(t, 3, Head(agentState))
 }

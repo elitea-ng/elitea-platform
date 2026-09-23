@@ -1,28 +1,30 @@
 /**
  * Ported from `apps/elitea-ui/src/common/convertChatConversationMessages.js`
- * (392 lines) — the full message-group → chat-history converter used by
- * a transcript pager (injected parameter, deviation
- * #3) and by playback mode (`PlaybackChatBox` / `PlaybackToolBar`).
+ * (392 lines) — the full message-group → chat-history converter used by a
+ * transcript pager (injected parameter, deviation #3) and by playback mode
+ * (`PlaybackChatBox` / `PlaybackToolBar`).
  *
  * `entities/message/lib/normalise.ts` already ports `convertTime`,
  * `normaliseUserMessage` and `normaliseAssistantMessage` (per-message-group
- * bodies of `convertToUserQuestion` / `convertToAIAnswer`). This slice owns
- * the list-level concerns the entity normaliser explicitly left out:
- * chronological sort, parent/child-row split, swarm-child `toolActions`
- * attachment — lines 315-387 of the source.
+ * bodies of `convertToUserQuestion` / `convertToAIAnswer`). This slice owns the
+ * list-level concerns it left out: chronological sort, parent/child-row split,
+ * swarm-child `toolActions` attachment — lines 315-387 of the source.
  *
- * Also ports `convertToPlayerQuestion` (backs playback mode),
- * `isUserMessage` (helper used during conversation iteration), and
+ * Also ports `convertToPlayerQuestion` (backs playback mode), `isUserMessage`
+ * (helper used during conversation iteration), and
  * `convertConversationToChatHistory` (convenience wrapper).
  *
  * `collapseSubAgentInvocationKeys` from `entities/message/lib/subAgentGrouping`
  * is imported for the persisted-reload path; the live-streaming grouping
  * functions (`partitionActionsIntoBlocks`, etc.) are built locally in
- * `./subAgentGrouping.ts` for the streaming accordion view.
+ * `./subAgentGrouping.ts`.
  *
  * Normalized trace summaries arrive separately from the message metadata.
  * The shared message reader attaches scoped `persisted_trace` references.
  * The answer carries these references to the lazy detail renderer.
+ * Trace-pin chips (`EL-5728`) come either from a turn's own
+ * `MessageGroupWire.meta` or, once the trace-step migration emptied it, from
+ * `persistedTraceStepsByGroup` (#951 — `entities/message/lib/traceSteps.ts`).
  *
  * Parity notes:
  * - `isUserMessage` (lines 9-15): ported verbatim.
@@ -36,6 +38,7 @@ import { ROLES } from '@/shared/lib/enums';
 import { ChatParticipantType, TOOL_ACTION_TYPES, ToolActionStatus } from '@/shared/lib/chat';
 
 import type { MessageGroupWire, MessageItemWire, MessageParticipantWire } from '@/entities/message/lib/wire';
+import type { PersistedTraceSteps } from '@/entities/message/lib/traceSteps';
 import { convertTime, isParticipant, normaliseAssistantMessage, normaliseUserMessage } from '@/entities/message/lib/normalise';
 import type { SubAgentGroupable } from '@/entities/message/lib/subAgentGrouping';
 
@@ -63,6 +66,7 @@ export interface ChatMessage {
   readonly avatar?: string | undefined;
   readonly content: string;
   readonly createdAt: string;
+  /** When the row was last REWRITTEN, present only when it has been (issue 975): a regeneration rewrites the answer in place and keeps `createdAt`, so this — preferred by the renderer, `createdAt` as the fallback — is when the text on screen actually arrived. */ readonly updatedAt?: string | undefined;
   readonly messageItems?: readonly MessageItemWire[] | undefined;
   readonly userId?: string | undefined;
   readonly participantId?: string | undefined;
@@ -97,6 +101,15 @@ export interface ChatMessage {
   readonly originalId?: string | number | undefined;
   /** How many persistent memories (#870) this turn's recall used — see `AssistantMessage.memoriesUsed`'s own comment. */
   readonly memoriesUsed?: number | undefined;
+  /**
+   * A17: this question was typed while a previous turn was still running and
+   * was delivered from the "Waiting messages" queue once that turn settled
+   * (ELITEA-2870). Not a wire field — the store has nowhere to put it — so it
+   * is stamped on by `widgets/chat-box`'s queue model from the question ids it
+   * recorded, which is why it survives a reload: the id is the client's own
+   * `question_id`, persisted as the question row's uuid.
+   */
+  readonly interjected?: boolean | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -208,9 +221,7 @@ export function convertToPlayerQuestion(
   };
 }
 
-// ---------------------------------------------------------------------------
-// SwarmChild tool action (source: convertChatConversationMessages.js:351-381)
-// ---------------------------------------------------------------------------
+// --- SwarmChild tool action (source: convertChatConversationMessages.js:351-381)
 
 /**
  * A swarm-child tool action embedded in an AI answer's `toolActions[]`.
@@ -291,6 +302,8 @@ export function convertMessagesToChatHistory(
   messageGroups: readonly MessageGroupWire[] = [],
   participants: readonly MessageParticipantWire[] = [],
   playerInfo?: PlayerInfo,
+  /** Persisted trace steps by message-group id — see `entities/message/lib/traceSteps.ts` (#951). */
+  persistedTraceStepsByGroup?: ReadonlyMap<string, PersistedTraceSteps>,
 ): readonly ChatMessage[] {
   const sortedMessages = [...(messageGroups ?? [])].sort((a, b) =>
     (a.created_at ?? '').toLowerCase().localeCompare((b.created_at ?? '').toLowerCase()),
@@ -351,8 +364,9 @@ export function convertMessagesToChatHistory(
     }
 
     // Convert AI answer using entities-level normaliser.
+    const persisted = persistedTraceStepsByGroup?.get(String(messageGroup.id));
     const aiMessage = splitPersistedReasoning(
-      normaliseAssistantMessage(messageGroup, sortedMessages, participants) as unknown as ChatMessage,
+      normaliseAssistantMessage(messageGroup, sortedMessages, participants, persisted) as unknown as ChatMessage,
     );
 
     if (messageGroup.persisted_trace) Object.assign(aiMessage, { persistedTrace: messageGroup.persisted_trace });

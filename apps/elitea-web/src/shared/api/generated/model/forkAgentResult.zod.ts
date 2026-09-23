@@ -70,7 +70,7 @@ export const ForkAgentResult = zod
     version_id: zod.string().optional(),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go:3375-3387 — version_details is required+nullable (always marshaled); only version_id is genuinely conditional (:3384-3386).\n",
+    "NOTE(W2): internal/api/v2/eliteacore/handler.go:3375-3387 — version_details is required+nullable (always marshaled); only version_id is genuinely conditional (:3384-3386).\n",
   );
 
 export type ForkAgentResult = zod.input<typeof ForkAgentResult>;

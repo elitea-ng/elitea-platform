@@ -1605,3 +1605,112 @@ async fn discarded_unaccepted_completion_can_be_replaced_but_consumed_cannot() {
     assert!(completion.discard_unaccepted().is_err());
     assert_eq!(captured.lock().unwrap().len(), 2);
 }
+
+/// #981: an attached image reaches the provider as an OpenAI-compatible image
+/// part, and a part this runtime will not send never leaves it.
+#[tokio::test(flavor = "current_thread")]
+async fn an_attached_image_is_sent_as_an_openai_image_part() {
+    let (client, captured) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(
+            test_model_gateway_response(Body::new(Full::new(Bytes::from(ordinary_sse())))),
+        )],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway client");
+    let bound = client
+        .bind_ordinary(
+            &ClaimScopedEliteaContext::fixture(17, TOKEN),
+            17,
+            test_model_facade_invocation(),
+        )
+        .expect("bound model");
+
+    let bytes = b"\x89PNG\r\n\x1a\nautotest".to_vec();
+    let mut request = tool_request(vec![Content::new("user").with_text("describe this")]);
+    request.contents = vec![Content {
+        role: "user".to_owned(),
+        parts: vec![
+            adk_rust::Part::Text {
+                text: "describe this".to_owned(),
+            },
+            adk_rust::Part::InlineData {
+                mime_type: "image/png".to_owned(),
+                data: bytes.clone(),
+                uri: None,
+                annotations: None,
+            },
+        ],
+    }];
+
+    drain(
+        bound
+            .generate_for_test(request)
+            .await
+            .expect("image request stream"),
+    )
+    .await
+    .expect("image response");
+
+    let captured = captured.lock().expect("captured requests");
+    let body: serde_json::Value =
+        serde_json::from_slice(&captured[0].body).expect("model request JSON");
+    let user = body["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .find(|message| message["role"] == "user")
+        .expect("a user message");
+    let content = &user["content"];
+    // The ARRAY form, never the bare string: a turn carrying an image cannot be
+    // expressed as one.
+    assert_eq!(content[0]["type"], "text");
+    assert_eq!(content[1]["type"], "image_url");
+    let expected = {
+        use base64::Engine as _;
+        format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&bytes)
+        )
+    };
+    assert_eq!(content[1]["image_url"]["url"], serde_json::json!(expected));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_image_part_this_runtime_will_not_send_refuses_the_request() {
+    // A media type no provider documents never reaches the wire: the request is
+    // refused HERE, before it is admitted and billed, which is the same posture
+    // every other malformed part takes.
+    let (client, captured) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(
+            test_model_gateway_response(Body::new(Full::new(Bytes::from(ordinary_sse())))),
+        )],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway client");
+    let bound = client
+        .bind_ordinary(
+            &ClaimScopedEliteaContext::fixture(17, TOKEN),
+            17,
+            test_model_facade_invocation(),
+        )
+        .expect("bound model");
+    let mut request = tool_request(vec![Content::new("user").with_text("describe this")]);
+    request.contents = vec![Content {
+        role: "user".to_owned(),
+        parts: vec![adk_rust::Part::InlineData {
+            mime_type: "image/bmp".to_owned(),
+            data: b"bytes".to_vec(),
+            uri: None,
+            annotations: None,
+        }],
+    }];
+
+    assert!(
+        bound.generate_for_test(request).await.is_err(),
+        "an unsupported image part must refuse the request"
+    );
+    assert!(
+        captured.lock().expect("captured requests").is_empty(),
+        "nothing may reach the provider"
+    );
+}

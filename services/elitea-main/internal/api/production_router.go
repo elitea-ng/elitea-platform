@@ -203,6 +203,13 @@ func mountReviewedProductionRoutes(r chi.Router, cfg RouterConfig) {
 			cfg.CurrentIndexMetaDelete,
 		)
 	}
+	if cfg.CurrentIndexConfiguration != nil {
+		r.Method(
+			indexingapi.CurrentIndexConfigurationMethod,
+			indexingapi.CurrentIndexConfigurationPath,
+			cfg.CurrentIndexConfiguration,
+		)
+	}
 	if cfg.CurrentIndexScheduleUpdate != nil {
 		r.Method(
 			indexingapi.SourceOnlyIndexScheduleMethod,

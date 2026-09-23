@@ -631,6 +631,7 @@ fn pipeline_runtime_from_responses_with_capture(
             max_response_bytes: 32 * 1_024,
             max_application_response_bytes: 1_024 * 1_024,
             max_attachment_response_bytes: 1_024 * 1_024,
+            max_artifact_response_bytes: 2 * 1_024 * 1_024,
         },
     )
     .expect("pipeline runtime-context fixture");
@@ -3202,6 +3203,7 @@ async fn pipeline_instruction_pause_proof(instructions: bool) {
             max_response_bytes: 32 * 1_024,
             max_application_response_bytes: 1_024 * 1_024,
             max_attachment_response_bytes: 1_024 * 1_024,
+            max_artifact_response_bytes: 2 * 1_024 * 1_024,
         },
     )
     .expect("ask_user runtime-context fixture");
@@ -3536,6 +3538,7 @@ fn delegated_authorization_llm_assembler(
             max_response_bytes: 32 * 1_024,
             max_application_response_bytes: 1_024 * 1_024,
             max_attachment_response_bytes: 1_024 * 1_024,
+            max_artifact_response_bytes: 2 * 1_024 * 1_024,
         },
     )
     .expect("pipeline runtime-context fixture");
@@ -3730,6 +3733,7 @@ fn sensitive_llm_node_assembler() -> (
             max_response_bytes: 32 * 1_024,
             max_application_response_bytes: 1_024 * 1_024,
             max_attachment_response_bytes: 1_024 * 1_024,
+            max_artifact_response_bytes: 2 * 1_024 * 1_024,
         },
     )
     .expect("pipeline runtime-context fixture");
@@ -4368,5 +4372,108 @@ async fn state_modifier_result_survives_common_runner_projection_and_eos_complet
         completed
             .iter()
             .all(|event| event["content"] == "Hello, current")
+    );
+}
+
+/// #990 review 3 — WHICH pause kinds a nested pipeline can raise.
+///
+/// An ordinary agent that calls a saved pipeline as a tool resumes the child's
+/// own `hitl` node and nothing else: a sensitive-tool approval, a clarifying
+/// question and an MCP authorization challenge are three further pause
+/// contracts, each with its own resume shape, and none of them is implemented
+/// for that parent. This function is what lets the child be refused at
+/// ADMISSION — before it can raise a card nothing could answer — so it has to
+/// name every kind from the STORED definition, never from the run.
+#[test]
+fn a_nested_pipeline_declares_every_pause_kind_it_can_raise() {
+    // A pipeline whose `llm` node selects a tool the live policy marks
+    // sensitive: the kind that pauses before a dispatch.
+    let request =
+        llm_pipeline_request("release_repository", &["list_branches"], &["list_branches"]);
+    let policy = runtime_tool_policy(&json!({
+        "toolkit_security": {
+            "sensitive_tools": {"gitlab_org": ["list_branches"]},
+            "sensitive_action_company_name": "Example Org"
+        }
+    }));
+    let mut sensitive = PipelineExecutionProfile::validate(&request, false).expect("profile");
+    let frozen = super::super::toolkits::FrozenToolSnapshot::from_version_details(
+        request
+            .payload
+            .application
+            .get("version_details")
+            .and_then(Value::as_object)
+            .expect("version details"),
+    )
+    .expect("frozen snapshot");
+    sensitive
+        .validate_tool_snapshot(&frozen, &policy)
+        .expect("admitted sensitive node");
+    assert_eq!(
+        super::pipeline::guarded_interrupt_kinds(
+            &sensitive,
+            &crate::toolkits::DelegatedAuthorizationCatalog::default()
+        ),
+        vec!["sensitive tool approval"],
+    );
+
+    // The same document with NO sensitive tool raises nothing, which is what
+    // makes the refusal above a decision rather than a blanket ban.
+    let plain_policy = runtime_tool_policy(&json!({}));
+    let mut plain = PipelineExecutionProfile::validate(&request, false).expect("profile");
+    plain
+        .validate_tool_snapshot(&frozen, &plain_policy)
+        .expect("admitted plain node");
+    assert!(
+        super::pipeline::guarded_interrupt_kinds(
+            &plain,
+            &crate::toolkits::DelegatedAuthorizationCatalog::default()
+        )
+        .is_empty(),
+        "a pipeline with no guarded tool must not be refused"
+    );
+
+    // An MCP toolkit that challenges for authorization is known from the
+    // catalog the materializer built, not from the definition.
+    let mut authorization = crate::toolkits::DelegatedAuthorizationCatalog::default();
+    authorization
+        .insert(
+            "lookup_release",
+            crate::toolkits::DelegatedAuthorizationRequirement::new(
+                "Remote MCP".to_owned(),
+                "mcp".to_owned(),
+                "https://mcp.example.invalid/v1/mcp".to_owned(),
+                None,
+                None,
+            )
+            .expect("authorization requirement"),
+        )
+        .expect("catalog entry");
+    assert_eq!(
+        super::pipeline::guarded_interrupt_kinds(&plain, &authorization),
+        vec!["MCP authorization"],
+    );
+}
+
+/// The clarifying-question kind comes from the child's own stored shell, so it
+/// is read the same way every other internal-tool toggle is.
+#[test]
+fn a_nested_pipeline_with_ask_user_declares_its_clarifying_pause() {
+    let mut request =
+        llm_pipeline_request("release_repository", &["list_branches"], &["list_branches"]);
+    let version = request
+        .payload
+        .application
+        .get_mut("version_details")
+        .and_then(Value::as_object_mut)
+        .expect("version details");
+    version.insert("internal_tools".to_owned(), json!(["ask_user"]));
+    let profile = PipelineExecutionProfile::validate(&request, false).expect("profile");
+    assert_eq!(
+        super::pipeline::guarded_interrupt_kinds(
+            &profile,
+            &crate::toolkits::DelegatedAuthorizationCatalog::default()
+        ),
+        vec!["clarifying questions"],
     );
 }

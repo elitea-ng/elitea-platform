@@ -49,7 +49,9 @@ export const ToolkitUpdateRequest = zod
     meta: zod
       .record(zod.string(), zod.unknown())
       .optional()
-      .describe("Toolkit metadata, including MCP sharing options."),
+      .describe(
+        "Toolkit metadata, including MCP sharing options and index schedules. This replaces the stored object; preserve other metadata when editing.\n",
+      ),
     settings: zod.record(zod.string(), zod.unknown()).optional(),
   })
   .describe(

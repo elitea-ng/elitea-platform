@@ -53,7 +53,7 @@ export const Tag = zod
     skill_count: zod.int().min(tagSkillCountMin).optional(),
     data: zod.unknown().nullable(),
   })
-  .describe("NOTE(W2): internal\/api\/v2\/tags\/handler.go:13-17.\n");
+  .describe("NOTE(W2): internal/api/v2/tags/handler.go:13-17.\n");
 
 export type Tag = zod.input<typeof Tag>;
 export type TagOutput = zod.output<typeof Tag>;

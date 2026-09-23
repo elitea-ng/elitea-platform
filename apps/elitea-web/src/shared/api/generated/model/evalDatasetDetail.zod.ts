@@ -53,7 +53,7 @@ export const EvalDatasetDetail = EvalDataset.and(
       ),
   }),
 ).describe(
-  'One dataset plus a page of its cases. `cases` is ALWAYS present, empty or not: a missing key reads as \"not loaded yet\" and a client waits for a load that already happened. The LIST answers `EvalDataset`, which carries no `cases` key at all, because `cases: []` on every row of a listing tells a client that a dataset with ten cases has none.\n',
+  'One dataset plus a page of its cases. `cases` is ALWAYS present, empty or not: a missing key reads as "not loaded yet" and a client waits for a load that already happened. The LIST answers `EvalDataset`, which carries no `cases` key at all, because `cases: []` on every row of a listing tells a client that a dataset with ten cases has none.\n',
 );
 
 export type EvalDatasetDetail = zod.input<typeof EvalDatasetDetail>;

@@ -50,17 +50,25 @@ CREATE TABLE IF NOT EXISTS centry.project (id INTEGER PRIMARY KEY)`); err != nil
 	}
 }
 
-// advisoryLocksHeld counts the backfill advisory locks the server holds now.
+// advisoryLocksHeld counts the backfill advisory locks this database holds now.
 //
 // It asks PostgreSQL, because the pass itself cannot answer: advisory locks are
 // re-entrant inside one session, so a second pass on the same pooled connection
 // sees a held lock as a free one.
+//
+// The count is scoped to the current database. pg_locks is a server-wide view,
+// and advisory locks are per-database, so a same-key lock held in ANOTHER
+// database by a concurrently running test is not this pass's lock and must not
+// be counted. A real leak is still in this database, so the scope cannot hide
+// one.
 func advisoryLocksHeld(t *testing.T, ctx context.Context, pool *pgxpool.Pool) int {
 	t.Helper()
 	var held int
 	if err := pool.QueryRow(ctx, `
 SELECT count(*) FROM pg_locks
-WHERE locktype = 'advisory' AND objid = ($1::bigint & 4294967295)::oid`,
+WHERE locktype = 'advisory'
+  AND objid = ($1::bigint & 4294967295)::oid
+  AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`,
 		backfillLockKey).Scan(&held); err != nil {
 		t.Fatalf("read pg_locks: %v", err)
 	}
@@ -204,16 +212,24 @@ func TestASkippedReplicaReportsWhyRatherThanReportingNothing(t *testing.T) {
 	seedProjectsWithVaults(t, pool, "1")
 	ctx := context.Background()
 
-	// Hold the lock the way a peer replica would: a session lock on its own
-	// pinned connection.
+	// Hold the lock the way a peer replica would: a transaction lock inside a
+	// transaction it keeps open on its own pinned connection.
 	holder, err := pool.Acquire(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer holder.Release()
+	holderTx, err := holder.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Ended after the pass under test returns, while holder is still pinned.
+	defer func() {
+		_ = holderTx.Rollback(context.Background())
+		holder.Release()
+	}()
 	var acquired bool
-	if err := holder.QueryRow(ctx,
-		`SELECT pg_catalog.pg_try_advisory_lock($1)`, backfillLockKey).Scan(&acquired); err != nil {
+	if err := holderTx.QueryRow(ctx,
+		`SELECT pg_catalog.pg_try_advisory_xact_lock($1)`, backfillLockKey).Scan(&acquired); err != nil {
 		t.Fatal(err)
 	}
 	if !acquired {
@@ -233,10 +249,9 @@ func TestASkippedReplicaReportsWhyRatherThanReportingNothing(t *testing.T) {
 }
 
 func TestTheLockIsReleasedSoTheNextStartCanRunThePass(t *testing.T) {
-	// A session lock held on a pooled connection outlives the function unless
-	// it is released explicitly — the connection goes back to the pool still
-	// holding it, and every later pass in this process is then locked out by
-	// its own predecessor.
+	// A lock transaction the pass does not end keeps the lock held: the
+	// connection goes back to the pool still inside it, and every later pass
+	// in this process is then locked out by its own predecessor.
 	pool := newSecretsPool(t)
 	seedProjectsWithVaults(t, pool, "1")
 	ctx := context.Background()
@@ -257,14 +272,7 @@ func TestTheLockIsReleasedSoTheNextStartCanRunThePass(t *testing.T) {
 	// forever. The first version of this test asserted only that a second pass
 	// ran, and it passed against a build whose unlock was replaced with
 	// another lock call.
-	var held int
-	if err := pool.QueryRow(ctx, `
-SELECT count(*) FROM pg_locks
-WHERE locktype = 'advisory' AND objid = ($1::bigint & 4294967295)::oid`,
-		backfillLockKey).Scan(&held); err != nil {
-		t.Fatalf("read pg_locks: %v", err)
-	}
-	if held != 0 {
+	if held := advisoryLocksHeld(t, ctx, pool); held != 0 {
 		t.Fatalf("the pass left %d advisory lock(s) held; every other replica is now locked out until this connection closes", held)
 	}
 

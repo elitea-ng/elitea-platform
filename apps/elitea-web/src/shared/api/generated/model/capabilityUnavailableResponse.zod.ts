@@ -61,7 +61,7 @@ export const CapabilityUnavailableResponse = zod
       ),
   })
   .describe(
-    'NOTE(W2): the 501 body issue 615 gave the two capability-gated compatibility handlers — internal\/api\/v2\/eliteacore\/handler.go (ProjectInfo) and internal\/api\/v2\/toolkits\/handler.go (IndexTypes). Both write `{error, code, detail}`, which is WIDER than ErrorResponse: a client that must tell \"this deployment does not run the capability\" from \"the request failed\" reads `code`, and ErrorResponse carries no such field.\nWHY 501 AND NOT 500. An absent producer is the server\'s final answer, and it will be the final answer to the next identical request. See internal\/api\/v2\/analytics\/handler.go for the argument in full.\n',
+    'NOTE(W2): the 501 body issue 615 gave the two capability-gated compatibility handlers — internal/api/v2/eliteacore/handler.go (ProjectInfo) and internal/api/v2/toolkits/handler.go (IndexTypes). Both write `{error, code, detail}`, which is WIDER than ErrorResponse: a client that must tell "this deployment does not run the capability" from "the request failed" reads `code`, and ErrorResponse carries no such field.\nWHY 501 AND NOT 500. An absent producer is the server\'s final answer, and it will be the final answer to the next identical request. See internal/api/v2/analytics/handler.go for the argument in full.\n',
   );
 
 export type CapabilityUnavailableResponse = zod.input<

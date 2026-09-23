@@ -1,0 +1,120 @@
+---
+title: "Backend services and workers"
+description: "Run elitea-main against the compose database, work with migrations, edit the OpenAPI spec, and test the workers."
+---
+
+This page covers the day-to-day loop for `elitea-main`, `elitea-llm-gateway`, `elitea-scheduler` and the two agent workers: running against a real database, writing a migration, editing the OpenAPI spec, and testing a worker in isolation.
+
+## Run elitea-main against the compose database
+
+Bring up just the infrastructure services from the [standalone stack](/development/standalone-stack) (`certs`, then `up`), then run `elitea-main` from source against them:
+
+```bash
+cd services/elitea-main
+DATABASE_URL="postgres://elitea:elitea@localhost:${STANDALONE_PG_PORT:-15433}/elitea?sslmode=disable" \
+  go run ./cmd/elitea-main
+```
+
+`task run` does the same thing without a custom `DATABASE_URL`, against whatever the process environment already points at.
+
+## Integration tests against a real database
+
+Tests gated on `ELITEA_TEST_DATABASE_URL` skip themselves (with a message naming the variable) when it is unset, so `task test` stays green without a database and exercises the real thing once you supply one:
+
+```bash
+ELITEA_TEST_DATABASE_URL="postgres://elitea:elitea@localhost:${STANDALONE_PG_PORT:-15433}/elitea?sslmode=disable" \
+  go test ./... -run TestPGXProvisionerRealPgVector
+```
+
+Point it at the standalone stack's PostgreSQL, or any disposable PostgreSQL with the `vector` extension available — most of these tests provision and drop their own per-run database or schema, so they do not need an empty server.
+
+## Migrations
+
+Migration files live under `services/elitea-main/migrations/`, in three independently ordered scopes: `shared/`, `tenant/` and `agentstate/` (embedded and loaded by the `internal/infra/db/migrate` package). A separate, single-file directory — `internal/infra/db/migrations/001_initial.sql` — carries only the legacy pylon-era initial schema, applied first when a database doesn't already have it. Each versioned file is named `NNNN_description.sql` and identified by a SHA-256 checksum of its contents — **a migration is checksum-immutable once it exists**: never edit an applied file, always add a new one with the next free number.
+
+<Steps>
+<Step title="Pick a free version number">
+
+```bash
+task migrations:check -- main
+```
+
+Reads the base branch as `origin` holds it now and fails if your new migration's number is not above its highest. This catches two authors picking the same free number independently — a collision that is only visible once both branches merge.
+
+</Step>
+<Step title="Add the file to the right scope">
+`shared/` for cross-tenant tables, `tenant/` for anything created once per project schema (`p_<id>`), `agentstate/` for the separate agent-state database. Mixing scopes in one file is not supported — `LoadManifest` rejects a nested directory or a filename that doesn't match `NNNN_name.sql`.
+</Step>
+<Step title="Update the pinned head, if the test names one">
+`TestEmbeddedHistoriesHaveExpectedHeads` in `internal/infra/db/migrate/manifest_test.go` pins the expected head version per scope. A new highest-numbered migration in a scope that test already covers needs the pin updated in the same change.
+</Step>
+</Steps>
+
+## Editing the OpenAPI spec
+
+`services/elitea-main/api/openapi/v2.yaml` is the single source both the Go server and the TypeScript client generate from. A change to it ripples through several checked gates, in this order:
+
+<Steps>
+<Step title="Regenerate the Go server interface">
+
+```bash
+task openapi
+```
+
+Runs `oapi-codegen` into `services/elitea-main/internal/api/generated/api.gen.go`. `ci-go.yml`'s "Verify generated OpenAPI server is current" step re-runs the same command and fails the build on any `git diff`.
+
+</Step>
+<Step title="Regenerate the TypeScript client">
+
+```bash
+cd apps/elitea-web && npx orval
+```
+
+Writes `src/shared/api/generated/**`. `scripts/check-generated-client.mjs` fails a stale client — see [elitea-web development](/development/frontend#gate-scripts).
+
+</Step>
+<Step title="Update the endpoint manifest">
+Add or amend the corresponding entry in `apps/elitea-web/src/shared/api/endpoints.manifest.json` by hand — it is asserted against the generated client, not generated from the spec itself.
+</Step>
+<Step title="Update the route's public/auth rule if its path changed">
+`TestCurrentMainRoutePublicRulesMatchPinnedCatalog` (`services/elitea-main/internal/api/main_public_rules_test.go`) pins every route pattern's authentication rule against a fixed catalog. A renamed or added public path needs an entry there too.
+</Step>
+</Steps>
+
+## The LLM gateway
+
+`services/elitea-llm-gateway` is a separate Go module (Go 1.26), deliberately outside the root `go.work`. Build and test it from inside its own directory, with the workspace explicitly disabled:
+
+```bash
+cd services/elitea-llm-gateway
+GOWORK=off go build ./...
+GOWORK=off go test ./...
+```
+
+`ci-gateway.yml` runs its own pipeline for this module; `task test`/`task vet`/`task lint` at the repository root never open it, and a green root-level run is not evidence about it.
+
+## Worker test recipes
+
+<Tabs>
+<Tab title="Python worker">
+
+```bash
+task worker:test
+```
+
+Runs `python -m pytest services/elitea-worker-python/tests` against whatever `elitea-sdk` build is installed in your environment. Plain `pip`, no `uv` lockfile. `ci-python.yml` runs a stricter recipe for SDK-conformance coverage: it clones `elitea-sdk` at a pinned revision, verifies that revision's archive checksum, cherry-picks four named patches onto it, and installs the result with one `pip install` pass — reproduce that only if you are changing SDK-compatibility behavior, not for an ordinary worker change.
+
+</Tab>
+<Tab title="Rust worker">
+
+```bash
+cd services/elitea-worker-rust
+cargo test --locked --all-targets --all-features
+```
+
+The toolchain is pinned in `rust-toolchain.toml`; `rustup` picks it up automatically inside the directory. `ci-rust.yml` runs the same command, plus `cargo build --locked --release`.
+
+</Tab>
+</Tabs>
+
+{/* source: services/elitea-main/internal/infra/pgvector/pgx_integration_test.go:19-23 (ELITEA_TEST_DATABASE_URL skip pattern); services/elitea-main/internal/infra/db/migrate/manifest.go:22-60 (three scopes, checksum, filename regex); services/elitea-main/internal/infra/db/migrate/manifest_test.go:93 (TestEmbeddedHistoriesHaveExpectedHeads); Taskfile.yml:9-30 (build/test/run), 187-200 (migrations:check); services/elitea-main/internal/api/main_public_rules_test.go:31-32 (TestCurrentMainRoutePublicRulesMatchPinnedCatalog); .github/workflows/ci-go.yml:228-234 (oapi-codegen verify step); apps/elitea-web/scripts/check-generated-client.mjs:3-25 (orval regeneration); services/elitea-llm-gateway/go.mod:3 (Go 1.26); deploy/docker-compose.standalone-full.yml:425-433 (GOWORK=off build); services/elitea-worker-python/README.md:11-16 (pinned SDK admission); .github/workflows/ci-python.yml:279-299 (pinned SDK clone, checksum, four cherry-picks, single pip install); services/elitea-worker-rust/rust-toolchain.toml:1-4; .github/workflows/ci-rust.yml:84,143 (cargo build/test --locked) */}

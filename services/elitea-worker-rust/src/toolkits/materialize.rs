@@ -3,8 +3,17 @@
 //! Main freezes toolkit identity and redeems schema-declared secrets before the
 //! worker receives the request. This boundary consumes only that immutable
 //! request snapshot, applies one deployment-policy generation, and constructs
-//! native ADK toolsets. MCP, nested applications and artifact-owning families
-//! have separate authority owners and therefore never fall through this map.
+//! native ADK toolsets. MCP and nested applications have separate authority
+//! owners and therefore never fall through this map.
+//!
+//! The `artifact` family (#906) is the one entry here whose authority is NOT in
+//! the snapshot: there is no third-party endpoint and no credential to redeem,
+//! only this platform's own storage reached under the live execution CLAIM. So
+//! it is materialized only when a caller LENDS that claim — see
+//! `materialize_configured_toolsets_with_artifact_authority` — and where none
+//! is in scope (pipelines, nested applications) it stays exactly what it was:
+//! skipped with `agent_toolkit_skipped`, which is the honest answer for a
+//! runtime that cannot serve it there.
 
 use std::fmt;
 use std::sync::Arc;
@@ -12,10 +21,11 @@ use std::sync::Arc;
 use adk_rust::Toolset;
 
 use super::DelegatedAuthorizationCatalog;
+use super::families::artifact::ArtifactToolAuthority;
 use super::families::{
-    azure, azure_search, elastic, gcp, github, gitlab_org, google_places, keycloak, kubernetes,
-    openapi, postman, rally, report_portal, salesforce, service_now, sharepoint, slack, sonar, sql,
-    yagmail, zephyr, zephyr_squad,
+    artifact, azure, azure_search, elastic, gcp, github, gitlab_org, google_places, keycloak,
+    kubernetes, openapi, postman, rally, report_portal, salesforce, service_now, sharepoint, slack,
+    sonar, sql, yagmail, zephyr, zephyr_squad,
 };
 use super::policy::ToolAdmissionPolicy;
 use super::snapshot::{AdmittedToolSnapshot, FrozenToolKind, FrozenToolReference};
@@ -77,6 +87,31 @@ pub(crate) async fn materialize_configured_toolsets_with_tokens_and_authorizatio
     policy: &Arc<ToolAdmissionPolicy>,
     delegated_tokens: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(Vec<Arc<dyn Toolset>>, DelegatedAuthorizationCatalog), ToolsetMaterializationError> {
+    materialize_configured_toolsets_with_artifact_authority(
+        snapshot,
+        policy,
+        delegated_tokens,
+        None,
+    )
+    .await
+}
+
+/// The same materialization, with the live execution claim LENT to the one
+/// family that needs it.
+///
+/// `artifacts` is an `Option` rather than a required argument because only the
+/// ordinary agent path holds a claim that outlives assembly. A caller with
+/// none passes `None` and gets exactly what it got before #906: an artifact
+/// toolkit skipped with a warning naming it. That is deliberately not an
+/// error — the toolkit is a real capability of the product that this runtime
+/// cannot serve in that position, and refusing the whole profile would turn
+/// one unavailable tool into an agent that stops answering.
+pub(crate) async fn materialize_configured_toolsets_with_artifact_authority(
+    snapshot: &AdmittedToolSnapshot<'_>,
+    policy: &Arc<ToolAdmissionPolicy>,
+    delegated_tokens: &serde_json::Map<String, serde_json::Value>,
+    artifacts: Option<&ArtifactToolAuthority>,
+) -> Result<(Vec<Arc<dyn Toolset>>, DelegatedAuthorizationCatalog), ToolsetMaterializationError> {
     if snapshot.len() > MAX_AGENT_TOOLSETS {
         return Err(resource_exhausted());
     }
@@ -86,7 +121,13 @@ pub(crate) async fn materialize_configured_toolsets_with_tokens_and_authorizatio
         .iter()
         .filter(|reference| reference.kind() == FrozenToolKind::Configured)
     {
-        let (toolset, authorization) = match materialize(reference, policy, delegated_tokens).await
+        let (toolset, authorization) = match materialize(
+            reference,
+            policy,
+            delegated_tokens,
+            artifacts,
+        )
+        .await
         {
             Ok(materialized) => materialized,
             Err(error) if error.code() == ToolsetMaterializationErrorCode::UnsupportedToolkit => {
@@ -113,12 +154,24 @@ async fn materialize(
     reference: &FrozenToolReference<'_>,
     policy: &Arc<ToolAdmissionPolicy>,
     delegated_tokens: &serde_json::Map<String, serde_json::Value>,
+    artifacts: Option<&ArtifactToolAuthority>,
 ) -> Result<(Arc<dyn Toolset>, DelegatedAuthorizationCatalog), ToolsetMaterializationError> {
     if reference.kind() != FrozenToolKind::Configured {
         return Err(unsupported_toolkit());
     }
     let settings = reference.settings().ok_or_else(invalid_configuration)?;
     let name = reference.toolkit_name();
+    if reference.tool_type() == "artifact" {
+        // No authority lent means no family: the toolkit is skipped with the
+        // warning the caller above logs, not bound to tools that would fail on
+        // every call.
+        let authority = artifacts.ok_or_else(unsupported_toolkit)?;
+        let config = artifact::config::ArtifactToolkitConfig::parse(settings)
+            .map_err(|error| artifact_config_materialization_error(error.code()))?;
+        let toolset = artifact::tools::build_artifact_toolset(name, &config, policy, authority)
+            .map_err(|error| artifact_toolset_materialization_error(error.code()))?;
+        return Ok((Arc::new(toolset), DelegatedAuthorizationCatalog::default()));
+    }
     if matches!(
         reference.tool_type(),
         "azure"
@@ -357,6 +410,25 @@ const fn unsupported_toolkit() -> ToolsetMaterializationError {
 const fn resource_exhausted() -> ToolsetMaterializationError {
     ToolsetMaterializationError {
         code: ToolsetMaterializationErrorCode::ResourceExhausted,
+    }
+}
+
+const fn artifact_config_materialization_error(
+    code: artifact::config::ArtifactConfigErrorCode,
+) -> ToolsetMaterializationError {
+    match code {
+        artifact::config::ArtifactConfigErrorCode::InvalidConfiguration => invalid_configuration(),
+        artifact::config::ArtifactConfigErrorCode::ResourceExhausted => resource_exhausted(),
+    }
+}
+
+const fn artifact_toolset_materialization_error(
+    code: artifact::tools::ArtifactToolsetErrorCode,
+) -> ToolsetMaterializationError {
+    match code {
+        artifact::tools::ArtifactToolsetErrorCode::InvalidConfiguration
+        | artifact::tools::ArtifactToolsetErrorCode::InvalidDefinition => invalid_configuration(),
+        artifact::tools::ArtifactToolsetErrorCode::ResourceExhausted => resource_exhausted(),
     }
 }
 

@@ -56,13 +56,13 @@ func TestCurrentModelContextLimitsUseAuthorizedCatalogue(t *testing.T) {
 	applicationInput, err := currentApplicationInput(validCurrentApplicationStartRequest(), CurrentApplicationTarget{
 		ApplicationID: 31, ApplicationVersionID: 41, VersionDetails: raw,
 		Variables: json.RawMessage(`[]`), ChatHistory: json.RawMessage(`[]`), InternalTools: json.RawMessage(`[]`),
-	}, json.RawMessage(`null`), json.RawMessage(`{}`), nil, "")
+	}, json.RawMessage(`null`), json.RawMessage(`{}`), nil, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	adhocInput, err := currentAdhocInput(validCurrentAdhocStartRequest(), CurrentAdhocTarget{
 		ConversationMeta: json.RawMessage(`{}`), ChatHistory: json.RawMessage(`[]`),
-	}, raw, json.RawMessage(`null`), json.RawMessage(`{}`), nil, "")
+	}, raw, json.RawMessage(`null`), json.RawMessage(`{}`), nil, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

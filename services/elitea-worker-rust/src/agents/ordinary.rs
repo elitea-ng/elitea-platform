@@ -14,9 +14,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tracing::Instrument as _;
 
-use super::application_tools::{ApplicationToolDependencies, materialize_application_toolset};
+use super::application_tools::{
+    ApplicationToolDependencies, materialize_application_toolset, skipped_application_children,
+};
 use super::assembly::{OrdinaryModelProvider, OrdinaryNoToolProfile, ReasoningEffort};
 use super::internal_tools::ASK_USER_TOOLSET_NAME;
+use super::internal_tools::BuilderToolAuthority;
 use super::runtime::{
     AdmittedNativeStart, AssembledNativeAgentInvocation, AuthorizedNativeAssembly,
     NativeAgentAssembler, NativeAgentAssemblyError, NativeAgentAssemblyErrorCode,
@@ -32,13 +35,14 @@ use super::session::{
     assemble_direct_hitl_resume_with_sessions_and_applications,
     assemble_ordinary_native_with_sessions_and_runtime_catalogs,
 };
+use super::tool_namespacing::RenamedTool;
 use crate::protocol::control::ClaimBoundRuntimeContextAuthority;
 use crate::state::SessionLimits;
 use crate::toolkits::{
-    AdkHttpMcpConnector, AdmittedToolSnapshot, FrozenToolKind, McpConnector,
+    AdkHttpMcpConnector, AdmittedToolSnapshot, ArtifactToolAuthority, FrozenToolKind, McpConnector,
     McpMaterializationError, McpMaterializationErrorCode, ToolAdmissionPolicy, ToolBindingError,
     ToolsetMaterializationError, ToolsetMaterializationErrorCode, bind_toolsets,
-    materialize_configured_toolsets_with_tokens_and_authorization,
+    materialize_configured_toolsets_with_artifact_authority,
     materialize_mcp_toolsets_with_tokens_and_authorization,
 };
 use crate::transport::model_facade::{
@@ -202,6 +206,7 @@ impl OrdinaryNativeAgentAssembler {
             model_scopes
         };
         let context = Arc::new(claim_context);
+        let runtime_context = Arc::new(runtime_context);
         tracing::Span::current().record("stage", "toolsets");
         let (runtime, fresh_execution_mode) = self
             .materialize_runtime(
@@ -212,6 +217,7 @@ impl OrdinaryNativeAgentAssembler {
                 &profile,
                 &tool_policy,
                 model_scopes,
+                plan.thread_id().to_owned(),
             )
             .await?;
         let output_continuation = matches!(&start, AdmittedNativeStart::OutputContinuation);
@@ -244,16 +250,17 @@ impl OrdinaryNativeAgentAssembler {
             .map_err(NativeAgentAssemblyError::from)
     }
 
-    #[allow(clippy::too_many_arguments)] // Keep claim authority, tool policy, and model storage explicit at assembly.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // Keep claim, policy, and model storage owners together.
     async fn materialize_runtime(
         &self,
         tool_snapshot: &AdmittedToolSnapshot<'_>,
         mcp_tokens: &serde_json::Map<String, serde_json::Value>,
-        runtime_context: &ClaimBoundRuntimeContextAuthority,
+        runtime_context: &Arc<ClaimBoundRuntimeContextAuthority>,
         context: Arc<ClaimScopedEliteaContext>,
         profile: &OrdinaryNoToolProfile,
         tool_policy: &Arc<ToolAdmissionPolicy>,
         model_scopes: super::model_scope::ModelScopeSessions,
+        conversation_thread_id: String,
     ) -> Result<(OrdinaryRuntimeBindings, NativeToolExecutionMode), NativeAgentAssemblyError> {
         let tool_reference_count = tool_snapshot.iter().count();
         let nested_application_count = tool_snapshot
@@ -264,21 +271,42 @@ impl OrdinaryNativeAgentAssembler {
             nested_application_count > 0 && nested_application_count == tool_reference_count;
         tracing::Span::current().record("tool_reference_count", tool_reference_count);
         tracing::Span::current().record("nested_application_count", nested_application_count);
-        let (mut toolsets, sensitive_tools, delegated_authorization) = materialize_direct_toolsets(
+        // The claim is lent to the `artifact` family here and nowhere else
+        // (#906): this is the one assembly path whose authority outlives
+        // assembly, which is exactly what a tool the model calls mid-run
+        // needs. The same authority the two builder tools take, for the same
+        // reason — see `internal_tools::BuilderToolAuthority`.
+        let artifact_authority =
+            ArtifactToolAuthority::new(Arc::clone(&self.platform), Arc::clone(runtime_context));
+        let DirectToolsets {
+            mut toolsets,
+            sensitive: sensitive_tools,
+            delegated_authorization,
+        } = materialize_direct_toolsets(
             tool_snapshot,
             self.mcp_connector.as_ref(),
             tool_policy,
             mcp_tokens,
+            &artifact_authority,
         )
         .await?;
         let internal_tools = profile.internal_tools();
-        toolsets.extend(internal_tools.toolsets());
+        toolsets.extend(internal_tools.toolsets(Some(&BuilderToolAuthority::new(
+            Arc::clone(&self.platform),
+            Arc::clone(runtime_context),
+        ))));
         toolsets.extend(profile.instruction_plan().toolsets());
         let mut application_runtime = ApplicationRuntimeProjection::default();
-        if let Some(materialized) = materialize_application_toolset(
+        // #973: read BEFORE materialization, off the same snapshot it reads.
+        // A saved PIPELINE child IS built here now, so the reference scan only
+        // reports the child TYPES this worker never executes — `predict`. A
+        // pipeline whose own build fails is added below from the materializer's
+        // own outcome (#990 review 4), because only the build knows that.
+        let mut skipped_applications = skipped_application_children(tool_snapshot, None, true);
+        let (materialized, skipped_pipelines) = materialize_application_toolset(
             tool_snapshot,
             self.platform.as_ref(),
-            runtime_context,
+            runtime_context.as_ref(),
             context,
             profile,
             ApplicationToolDependencies::new(
@@ -287,10 +315,16 @@ impl OrdinaryNativeAgentAssembler {
                 self.mcp_connector.clone(),
                 mcp_tokens,
             )
-            .with_model_scopes(model_scopes),
+            .with_model_scopes(model_scopes)
+            .with_conversation_thread(conversation_thread_id),
         )
-        .await?
-        {
+        .await?;
+        // #990 review 4: named whether or not a single child survived — an
+        // agent whose ONLY attached pipeline could not be built binds no
+        // application toolset at all, and that is exactly the case the notice
+        // exists for.
+        skipped_applications.extend(skipped_pipelines);
+        if let Some(materialized) = materialized {
             validate_nested_application_hitl_scope(application_only, &materialized.presentations)?;
             toolsets.push(materialized.toolset);
             application_runtime = ApplicationRuntimeProjection::streaming(
@@ -311,7 +345,22 @@ impl OrdinaryNativeAgentAssembler {
         let delegated_authorization = delegated_authorization
             .bind_provider_names(&binding)
             .map_err(|()| invalid_tool_authorization_catalog())?;
+        let renamed_tools = binding
+            .bindings()
+            .filter(|(_, original, exposed)| original != exposed)
+            .map(|(toolkit, original, exposed)| RenamedTool {
+                toolkit: toolkit.to_owned(),
+                original: original.to_owned(),
+                exposed: exposed.to_owned(),
+            })
+            .collect();
         let toolsets = binding.into_toolsets();
+        if !skipped_applications.is_empty() {
+            tracing::warn!(
+                skipped = skipped_applications.len(),
+                "attached application children this worker cannot build were skipped"
+            );
+        }
         tracing::Span::current().record("materialized_toolset_count", toolsets.len());
         let fresh_execution_mode = if application_only
             && sensitive_tools.is_empty()
@@ -331,7 +380,9 @@ impl OrdinaryNativeAgentAssembler {
                 application_runtime,
             )
             .with_internal_tools(internal_tools)
-            .with_instruction_plan(profile.instruction_plan().clone()),
+            .with_instruction_plan(profile.instruction_plan().clone())
+            .with_skipped_application_children(skipped_applications)
+            .with_renamed_tools(renamed_tools),
             fresh_execution_mode,
         ))
     }
@@ -534,23 +585,40 @@ fn assembly_span(assembly: &AuthorizedNativeAssembly<'_>, session_backend: &str)
     )
 }
 
+/// Everything one agent's configured and MCP toolkits contribute to the run.
+struct DirectToolsets {
+    toolsets: Vec<Arc<dyn adk_rust::Toolset>>,
+    sensitive: SensitiveToolCatalog,
+    delegated_authorization: crate::toolkits::DelegatedAuthorizationCatalog,
+}
+
+/// Materialize the configured and MCP toolkits, then decide what the model is
+/// allowed to CALL each tool.
+///
+/// The naming pass sits between materialization and every catalog built from
+/// it, and that order is the whole point (#983). ADK hands the model one flat
+/// list of function names and refuses the invocation when two toolsets
+/// contribute the same one — after assembly has already reported success, as
+/// an anonymous `native_agent.event_failed`. Planning the exposed names first
+/// and building the sensitive-tool and delegated-authorization catalogs from
+/// THOSE names keeps the three in agreement; building either catalog from the
+/// published name would leave a renamed tool silently unguarded.
 async fn materialize_direct_toolsets(
     snapshot: &AdmittedToolSnapshot<'_>,
     connector: &dyn McpConnector,
     policy: &Arc<ToolAdmissionPolicy>,
     mcp_tokens: &serde_json::Map<String, serde_json::Value>,
-) -> Result<
-    (
-        Vec<Arc<dyn adk_rust::Toolset>>,
-        SensitiveToolCatalog,
-        crate::toolkits::DelegatedAuthorizationCatalog,
-    ),
-    NativeAgentAssemblyError,
-> {
+    artifacts: &ArtifactToolAuthority,
+) -> Result<DirectToolsets, NativeAgentAssemblyError> {
     let (mut toolsets, mut delegated_authorization) =
-        materialize_configured_toolsets_with_tokens_and_authorization(snapshot, policy, mcp_tokens)
-            .await
-            .map_err(tool_materialization_error)?;
+        materialize_configured_toolsets_with_artifact_authority(
+            snapshot,
+            policy,
+            mcp_tokens,
+            Some(artifacts),
+        )
+        .await
+        .map_err(tool_materialization_error)?;
     let mut sensitive = sensitive_tools_for_kind(
         snapshot,
         FrozenToolKind::Configured,
@@ -558,26 +626,23 @@ async fn materialize_direct_toolsets(
         policy.as_ref(),
     )
     .await?;
-    let (mut mcp_toolsets, mcp_delegated_authorization) =
-        materialize_mcp_toolsets_with_tokens_and_authorization(
-            snapshot, connector, policy, mcp_tokens,
-        )
-        .await
-        .map_err(|error| mcp_materialization_error(&error))?;
-    delegated_authorization
-        .merge(mcp_delegated_authorization)
-        .map_err(|()| invalid_tool_authorization_catalog())?;
+    let (mut mcp, mcp_authorization) = materialize_mcp_toolsets_with_tokens_and_authorization(
+        snapshot, connector, policy, mcp_tokens,
+    )
+    .await
+    .map_err(|error| mcp_materialization_error(&error))?;
     sensitive.merge(
-        sensitive_tools_for_kind(
-            snapshot,
-            FrozenToolKind::Mcp,
-            &mcp_toolsets,
-            policy.as_ref(),
-        )
-        .await?,
+        sensitive_tools_for_kind(snapshot, FrozenToolKind::Mcp, &mcp, policy.as_ref()).await?,
     )?;
-    toolsets.append(&mut mcp_toolsets);
-    Ok((toolsets, sensitive, delegated_authorization))
+    delegated_authorization
+        .merge(mcp_authorization)
+        .map_err(|()| invalid_tool_authorization_catalog())?;
+    toolsets.append(&mut mcp);
+    Ok(DirectToolsets {
+        toolsets,
+        sensitive,
+        delegated_authorization,
+    })
 }
 
 fn invalid_tool_authorization_catalog() -> NativeAgentAssemblyError {
@@ -646,5 +711,8 @@ fn mcp_materialization_error(error: &McpMaterializationError) -> NativeAgentAsse
             NativeAgentAssemblyErrorCode::DependencyUnavailable
         }
     };
+    // #982: the requirement travels with the error so the lifecycle can name
+    // the toolkit that challenged instead of failing the turn anonymously.
     NativeAgentAssemblyError::new(code, "the native MCP toolsets could not be materialized")
+        .with_authorization(error.authorization().cloned())
 }

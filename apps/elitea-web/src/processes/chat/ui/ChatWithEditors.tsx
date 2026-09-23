@@ -4,13 +4,8 @@ import { useCallback } from 'react';
 import { useParams, useRouteContext } from '@tanstack/react-router';
 
 import Box from '@mui/material/Box';
-import Drawer from '@mui/material/Drawer';
 import Typography from '@mui/material/Typography';
 
-import { AgentEditor } from '@/features/agents';
-import { CanvasEditor } from '@/features/chat-messages';
-import { PipelineEditor } from '@/features/pipelines';
-import { ToolkitEditor } from '@/features/toolkits';
 import ChatPage from '@/pages/chat';
 import { t } from '@/shared/i18n';
 import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
@@ -19,11 +14,12 @@ import { useSelectedProject } from '@/widgets/app-shell';
 import { ChatConversationSidebar } from './ChatConversationSidebar';
 import { ChatPlayback } from './ChatPlayback';
 import { usePlaybackConversationId } from './usePlaybackConversationId';
-import { toCreatedResult } from './ChatWithEditors.helpers';
 import { usePlusMenuEntities } from '../model/usePlusMenuEntities';
 import { useChatWithEditors } from './ChatWithEditors.hooks';
-import { renderAgentEditorShell, renderPipelineEditorShell, renderToolkitEditorShell } from './EditorShell';
+import { ChatCanvasDrawer } from './ChatCanvasDrawer';
+import { ChatEditorColumn } from './ChatEditorColumn';
 import { useCanvasCreation } from './useCanvasCreation';
+import { useChatPipelineConfig } from './useChatPipelineConfig';
 import { useCreateChatReset } from './useCreateChatReset';
 import { FileCanvasDrawer } from './FileCanvasDrawer';
 import { useFileCanvas } from './useFileCanvas';
@@ -189,6 +185,25 @@ export function ChatWithEditors(): ReactNode {
   // travels through the URL rather than shared component state.
   const playbackConversationId = usePlaybackConversationId();
 
+  /*
+   * Whether the editor column exists at all. The canvas editors are NOT part
+   * of it — both are MUI `Drawer`s, which portal out of this tree entirely,
+   * so folding them in here would reserve a column for something that never
+   * renders in it.
+   */
+  const isAnyEditorOpen = isEditingAgent || isEditingPipeline || isEditingToolkit;
+
+  /*
+   * The pipeline editor's EDIT-mode Configuration tab and its Save
+   * (#940 A12, ELITEA-0928). Both deps come from one hook because they share
+   * one draft — see `useChatPipelineConfig`'s own module doc comment.
+   */
+  const pipelineConfig = useChatPipelineConfig({
+    projectId,
+    participant: editPipeline.editingPipeline,
+    enabled: isEditingPipeline && !editPipeline.isPipelineCreateMode,
+  });
+
   return (
     <>
       {/*
@@ -205,10 +220,46 @@ export function ChatWithEditors(): ReactNode {
         * flush against them. There is deliberately no right padding — the
         * conversation column supplies the gutter on its side, and the chat
         * column runs to the edge so the participants rail can dock there.
+        *
+        * A THIRD column appears while an entity editor is open (#940 A12).
+        * Before that, `<AgentEditor>`/`<PipelineEditor>`/`<ToolkitEditor>`
+        * were siblings of this row inside the same fragment, so each one
+        * rendered its own `height: 100%` block BELOW the chat inside a
+        * `main` that is `display: block; height: 100vh` with no overflow of
+        * its own (`widgets/app-shell/ui/AppShell.tsx`). The consequences are
+        * exactly the four cases this change answers: the editor's Save /
+        * Discard / Close header sat a viewport below the fold
+        * (ELITEA-0922), the shell's own `overflow: auto` content area never
+        * became the scroll container so the whole document scrolled instead
+        * and ran straight past the form into whatever followed it
+        * (ELITEA-0918, ELITEA-0928), and a form that grew — four
+        * conversation starters — pushed the page further rather than
+        * scrolling inside its own panel (ELITEA-0919, ELITEA-0920).
+        *
+        * As a bounded flex column it is `EditorShell`'s own layout that
+        * works: a fixed header carrying Close/Discard/Save, and one
+        * `overflow: auto` body under it. Nothing in `EditorShell` changed —
+        * it was always written for this, it was simply never given a parent
+        * with a height.
         */}
       <Box sx={{ display: 'flex', height: '100%', minHeight: 0, width: '100%', boxSizing: 'border-box', py: 2, pl: 3 }}>
         <ChatConversationSidebar />
-        <Box sx={{ flexGrow: 1, minWidth: 0, height: '100%' }}>
+        <Box
+          sx={{
+            flexGrow: 1,
+            minWidth: 0,
+            height: '100%',
+            /*
+             * Below `md` there is not room for both, and the editor is what
+             * the user just asked for — so the chat column yields rather than
+             * squeezing the form into an unusable width. It is hidden, not
+             * unmounted: unmounting `ChatPage` would drop the composer's
+             * draft and the transcript's scroll position every time an
+             * editor opened.
+             */
+            ...(isAnyEditorOpen ? { display: { xs: 'none', md: 'block' } } : {}),
+          }}
+        >
           {playbackConversationId !== undefined ? (
             <ChatPlayback conversationId={playbackConversationId} />
           ) : (
@@ -247,108 +298,33 @@ export function ChatWithEditors(): ReactNode {
           />
           )}
         </Box>
+        {/*
+          * The editor column. Rendered INSIDE the row (not as a sibling of
+          * it) so it inherits the row's height; see the row's own comment
+          * above for what the sibling placement cost. Its BODY lives in
+          * `./ChatEditorColumn.tsx` — this file is at its §3.5 400-line
+          * budget and the composition root's own branch count is at the
+          * complexity budget, both of which the three editors' props push
+          * over on their own.
+          */}
+        {isAnyEditorOpen && (
+          <ChatEditorColumn
+            agent={{ isEditing: isEditingAgent, agentForEditor, editAgent, agentCreation }}
+            pipeline={{ isEditing: isEditingPipeline, editPipeline, pipelineCreation, config: pipelineConfig }}
+            toolkit={{ isEditing: isEditingToolkit, editToolkit, toolkitCreation, toolkitWriteDeps }}
+          />
+        )}
       </Box>
 
-      {isEditingAgent && (
-        <AgentEditor
-          agent={agentForEditor}
-          isVisible={isEditingAgent}
-          isCreateMode={editAgent.isCreateMode}
-          onCloseAgentEditor={editAgent.onCloseAgentEditor}
-          onAgentCreated={(result) => void agentCreation.onAgentCreated(toCreatedResult(result))}
-          deps={{ renderShell: renderAgentEditorShell }}
-        />
-      )}
-
-      {isEditingPipeline && (
-        <PipelineEditor
-          pipeline={editPipeline.editingPipeline}
-          isVisible={isEditingPipeline}
-          isCreateMode={editPipeline.isPipelineCreateMode}
-          onClosePipelineEditor={editPipeline.onClosePipelineEditor}
-          onPipelineCreated={(result) => pipelineCreation.onPipelineCreated(toCreatedResult(result))}
-          deps={{ renderShell: renderPipelineEditorShell }}
-        />
-      )}
-
       {/*
-        * The canvas editor's mount — `CanvasEditor.tsx` was fully built and
-        * rendered by nothing, which is also what made `useEditorMutex`'s
-        * save-before-swap branch a no-op (see `useCanvasEditing`).
-        *
-        * Rendered as a right-hand drawer rather than the baseline's
-        * resizable split pane: `react-split` is not a dependency here, and
-        * the port's own module doc already states that trade.
+        * The canvas editor's mount, in its own file (`./ChatCanvasDrawer.tsx`)
+        * for this file's §3.5 400-line and complexity budgets — see that
+        * file's own doc comment for every prop it carries and why.
         */}
-      {canvas.isEditingCanvas && canvas.selectedCodeBlockInfo !== undefined && (
-        <Drawer
-          anchor="right"
-          open
-          /*
-           * `() => …`, not the handler itself. MUI calls `onClose(event,
-           * reason)`, and `onCloseCanvasEditor`'s own contract is
-           * `(hasChange, finalResult, language)` — handed the pair directly it
-           * would read the event as "there are changes" and the string
-           * `"backdropClick"` as the document to save, and write that over the
-           * user's canvas.
-           */
-          onClose={() => canvas.onCloseCanvasEditor()}
-          slotProps={{ paper: { sx: { width: { xs: '100%', md: '48rem' }, maxWidth: '100%', p: 2, boxSizing: 'border-box' } } }}
-          data-testid="chat-canvas-editor"
-        >
-          <CanvasEditor
-            ref={canvas.canvasEditorRef}
-            selectedCodeBlockInfo={canvas.selectedCodeBlockInfo}
-            onCloseCanvasEditor={canvas.onCloseCanvasEditor}
-            /*
-             * The language picker's own write. It was omitted, so
-             * `CanvasEditor`'s `onChangeLanguage` guard (`if (editCanvas &&
-             * …)`) was permanently false and switching a canvas's language
-             * changed the highlighting and nothing else.
-             */
-            editCanvas={canvas.editCanvas}
-            {...(canvas.projectId !== undefined ? { projectId: canvas.projectId } : {})}
-            /*
-             * Who is looking. It was omitted, and that is not a cosmetic gap:
-             * the presence roster the editor reads back from its OWN first
-             * beat contains this tab, so an editor with no viewer identity
-             * counted itself as "somebody else is editing this canvas" and
-             * mounted read-only — CodeMirror with `aria-readonly`, the table
-             * grid with every cell disabled. A single user could not type in
-             * their own canvas.
-             */
-            {...(viewerId !== undefined ? { viewer: { id: viewerId } } : {})}
-            /*
-             * "Save to artifacts" (issue #878) — offered here too, not only
-             * on a file-opened canvas: a canvas MADE from a turn has no
-             * artifact identity yet, so every save here is a "save as" (no
-             * `source` to pre-fill), and — deliberately NOT threaded through
-             * `canvas`'s own save (`editCanvas`, the `elitea_core` PUT) — the
-             * two are independent actions: this one additionally publishes
-             * the document as a browsable file, it does not replace the
-             * canvas's own storage.
-             */
-            {...(canvas.projectId !== undefined ? { saveToArtifacts: { onSaved: () => undefined } } : {})}
-          />
-        </Drawer>
-      )}
+      <ChatCanvasDrawer canvas={canvas} viewerId={viewerId} />
 
       {/* The FILE canvas (issue #878) — a message attachment opened for editing. See `FileCanvasDrawer`'s own doc for why it is a second, independent drawer. */}
       <FileCanvasDrawer fileCanvas={fileCanvas} projectId={projectId} viewerId={viewerId} />
-
-      {isEditingToolkit && (
-        <ToolkitEditor
-          toolkit={editToolkit.editingToolkit}
-          isVisible={isEditingToolkit}
-          onCloseToolkitEditor={editToolkit.onCloseToolkitEditor}
-          onToolkitCreated={(result) => void toolkitCreation.onToolkitCreated(result)}
-          deps={{
-            renderShell: renderToolkitEditorShell,
-            createToolkit: toolkitWriteDeps.createToolkit,
-            saveToolkit: toolkitWriteDeps.saveToolkit,
-          }}
-        />
-      )}
 
       {/* `useEditorMutex`'s own "another editor is open" queue-and-confirm flow (its own doc comment) — distinct from `EditorShell`'s own discard-confirm, which guards a single editor's own close/discard action. */}
       <DeleteEntityModal

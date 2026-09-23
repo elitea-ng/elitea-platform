@@ -22,12 +22,30 @@ import { unwrapList } from '@/shared/api/unwrap';
  * carries the identical "pragmatic single-page fetch, not real pagination"
  * caveat that file's own doc comment discloses.
  */
-const MAX_DETAIL_LOOKUP_PAGE_SIZE = 200;
+/**
+ * 100, the LARGEST page the server actually serves.
+ *
+ * It was 200, and that number was worse than a smaller one: the handler
+ * refuses an out-of-range limit by falling back to its DEFAULT rather than
+ * clamping — `if limit < 1 || limit > 100 { limit = 20 }`
+ * (`internal/api/v2/toolkits/handler.go`'s `List`). So asking for 200 got
+ * TWENTY rows, and this hook finds the toolkit by scanning the page it
+ * received: every toolkit past the twentieth opened an editor with no
+ * fields, no Tools section, no Indexes tab and no error anywhere — the
+ * detail was simply absent. Measured on a project with 30 toolkits.
+ *
+ * This is still a single-page fetch, not real pagination — the disclosed
+ * caveat this file's header already carries — but the page is now the one
+ * the server will give.
+ */
+const MAX_DETAIL_LOOKUP_PAGE_SIZE = 100;
 
 export interface UseToolkitDetailResult {
   readonly detail: ToolkitInstance | undefined;
   readonly isFetching: boolean;
   readonly isError: boolean;
+  /** True once this project's list has been fetched successfully at least once — the signal `EditToolkit.tsx` needs to tell "still loading" apart from "loaded, and this id genuinely isn't in this project" (elitea_issues #6081). */
+  readonly isSuccess: boolean;
 }
 
 export function useToolkitDetail(projectId: string | undefined, toolkitId: string | undefined): UseToolkitDetailResult {
@@ -41,5 +59,5 @@ export function useToolkitDetail(projectId: string | undefined, toolkitId: strin
   const rows = useMemo(() => unwrapList<ToolkitInstance>(query.data, 'listToolkitInstances'), [query.data]);
   const detail = useMemo(() => rows.find((row) => row.id === toolkitId), [rows, toolkitId]);
 
-  return { detail, isFetching: query.isFetching, isError: query.isError };
+  return { detail, isFetching: query.isFetching, isError: query.isError, isSuccess: query.isSuccess };
 }

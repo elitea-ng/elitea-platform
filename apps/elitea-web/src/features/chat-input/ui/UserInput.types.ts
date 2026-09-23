@@ -30,6 +30,16 @@ export interface UserInputHandle extends ChatInputHandle {
   reset(): void;
   getInputContent(): string;
   getCursorPosition(): number | null;
+  /**
+   * The caret position as of the last time the user actually EDITED the text
+   * (issue #933, ELITEA-1317), or `null` when they have not edited it in this
+   * composer instance. Distinct from `getCursorPosition()`, which reports
+   * wherever the caret happens to sit — including a position reached purely by
+   * a mouse click. Voice dictation inserts at the last EDITED position, so a
+   * bare click before reaching for the mic does not drop the transcript into
+   * the middle of a sentence the user had finished typing.
+   */
+  getLastEditPosition(): number | null;
   setValue(value: string, cursorPosition?: number): void;
   replaceRange(start: number, end: number, text: string): void;
   /**
@@ -55,11 +65,32 @@ export interface UserInputSendButtonConfig {
   readonly size?: string | undefined;
   /** Baseline: `NewChatInput.jsx`'s own `tooltipOfSendButton` prop, threaded through `UserInput`'s `tooltipOfSendButton` prop into `SendButton`. Folded into this existing config bag (rather than spending a new top-level `UserInput`/`NewChatInput` prop slot) since it travels the exact same path as the rest of this object. */
   readonly tooltipOfSendButton?: string | undefined;
+  /**
+   * A17 (ELITEA-2871): keep the send control on screen WHILE a turn is open,
+   * beside Stop rather than replaced by it — the host queues what is sent
+   * there ("Waiting messages") instead of putting a second turn on the wire.
+   *
+   * Off by default, so every host that has no queue keeps the baseline's
+   * either/or footer. Folded into this config bag for the reason
+   * `tooltipOfSendButton` above was: `UserInputProps` sits exactly on the §3.5
+   * 12-prop budget, and this travels the same path as the rest of the object.
+   */
+  readonly keepWhileStreaming?: boolean | undefined;
 }
 
 /** Everything the real `SendButton`/stop-button (baseline: `features/chat/ui/chat-button/SendButton.jsx`, unit C6) consumed — read from that file directly to build this bag. */
 export interface UserInputSendControlSlotProps {
   readonly isSpeakingMode: boolean;
+  /**
+   * A voice recording (dictation OR the speaking-mode loop) is capturing right
+   * now (#932, ELITEA-1295). Separate from `disabledSend` on purpose: it must
+   * block the control that would put the composer into a SECOND voice mode —
+   * the speaking-mode wave icon — without blocking Send itself, which is still
+   * a legitimate way to commit dictated text, and without blocking the
+   * imperative `sendQuestion()` the speaking-mode loop's own auto-send fires
+   * while recording (#931).
+   */
+  readonly isRecording: boolean;
   readonly question: string;
   readonly disabledSend: boolean;
   readonly onEnterSpeakingMode: (() => void) | undefined;

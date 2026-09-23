@@ -8,6 +8,7 @@ table and forwards the live events over SSE.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import threading
@@ -26,6 +27,33 @@ from elitea_worker.protocol.node_event import (
     decode_current_node_event_json,
 )
 
+
+# CHUNKED TOOL OUTPUT (#956).
+#
+# A tool result larger than one output frame used to be REFUSED by _emit below
+# — `RESOURCE_EXHAUSTED: The agent event exceeds its output limit` — which
+# reached the user as a failed tool call for a file the SDK's own toolkit had
+# read perfectly well (its agent-path cap is 200,000 characters, three times
+# this frame). The frame bound is not this module's to raise: it is
+# `max_output_frame_bytes` in the runtime limits conformance document, itself
+# under the Redis field bound every hop is sized against.
+#
+# So an oversized result is emitted as an ORDERED SEQUENCE of ordinary node
+# events that elitea-main reassembles onto the stored tool call. The contract
+# is stated in full in
+# services/elitea-main/internal/transport/runtimegrpc/nodeevent/
+# tool_output_chunk.go, and the native worker emits the identical shape
+# (services/elitea-worker-rust/src/agents/events.rs).
+#
+# THE BUDGET IS ON THE ENCODED SIZE. The text becomes a JSON string, so a chunk
+# of quotes or control characters doubles or sextuples on the way out; a fixed
+# character offset would produce a chunk that fits for ASCII and violates the
+# frame for the same number of control characters. The cut is also on a
+# CHARACTER boundary, so every chunk is independently valid UTF-8 — main
+# validates encoding on the way in.
+TOOL_OUTPUT_CHUNK_EVENT = "agent_tool_output_chunk"
+MAX_TOOL_OUTPUT_CHUNK_BUDGET_BYTES = MAX_CURRENT_NODE_EVENT_JSON_BYTES // 2
+MAX_TOOL_OUTPUT_CHUNKS = 64
 
 _HIERARCHY_KEYS = (
     "parent_agent_name",
@@ -746,6 +774,39 @@ class CurrentAgentNodeEventCallback(BaseCallbackHandler):
             entry["tool_output"] = public_output
             entry["error"] = _trace_text(value) if failed else None
             self._tools[selected] = entry
+        # An oversized SUCCESSFUL result is chunked rather than refused (#956).
+        # An error keeps the refusal it always had: it rides as a short
+        # diagnostic string by construction, so an oversized one is a malformed
+        # result rather than a large document.
+        chunks = None if failed else self._chunk_tool_output(selected, entry)
+        if chunks is not None:
+            digest = _tool_output_digest(entry["tool_output"] or "")
+            for index, text in enumerate(chunks):
+                self._emit(
+                    TOOL_OUTPUT_CHUNK_EVENT,
+                    content=text,
+                    response_metadata={
+                        "tool_output_chunk": {
+                            "tool_call_id": selected,
+                            "index": index,
+                            "total": len(chunks),
+                            "tool_output_sha256": digest,
+                        }
+                    },
+                )
+            # The entry keeps NO inline text — it could not, which is why the
+            # output was chunked — and names the count and digest instead, so
+            # main can tell a whole reassembly from a short one. It is stored
+            # in this shape as well, or every later partial message would try
+            # to carry the same oversized value again.
+            with self._lock:
+                entry = dict(entry)
+                entry["tool_output"] = ""
+                entry["tool_output_chunks"] = {
+                    "total": len(chunks),
+                    "tool_output_sha256": digest,
+                }
+                self._tools[selected] = entry
         self._emit(
             "agent_tool_error" if failed else "agent_tool_end",
             # Successful tool output already has one established owner in
@@ -926,6 +987,27 @@ class CurrentAgentNodeEventCallback(BaseCallbackHandler):
         }
         return projected
 
+    def _chunk_tool_output(self, selected: str, entry: dict[str, Any]) -> list[str] | None:
+        """Split one tool result when, and only when, it will not fit a frame.
+
+        The decision is made on the RENDERED event rather than on the output
+        alone: the entry also carries the call's inputs and hierarchy, so an
+        output comfortably under the bound can still produce an event over it.
+        A result that fits is left exactly as it was — chunking a small result
+        would change every existing consumer's shape for no reason.
+        """
+        output = entry.get("tool_output")
+        if not isinstance(output, str) or not output:
+            return None
+        rendered = self._event_json("agent_tool_end", response_metadata=entry)
+        if len(rendered) <= MAX_CURRENT_NODE_EVENT_JSON_BYTES:
+            return None
+        chunks = _split_tool_output(output)
+        if chunks is None:
+            raise ResourceExhausted("The agent event exceeds its output limit.")
+        _ = selected
+        return chunks
+
     def _emit_partial(
         self,
         *,
@@ -1051,6 +1133,53 @@ class CurrentAgentNodeEventCallback(BaseCallbackHandler):
             failure = self._failure
         if failure is not None:
             raise failure
+
+
+def _tool_output_digest(output: str) -> str:
+    return hashlib.sha256(output.encode("utf-8")).hexdigest()
+
+
+def _encoded_character_cost(character: str) -> int:
+    """What one character costs inside a JSON string, as json.dumps writes it.
+
+    `ensure_ascii=False` is what _event_json uses, so a non-ASCII character
+    costs its UTF-8 length rather than a six-character escape.
+    """
+    if character in '"\\':
+        return 2
+    if character in "\n\r\t\b\f":
+        return 2
+    if ord(character) < 0x20:
+        return 6
+    return len(character.encode("utf-8"))
+
+
+def _split_tool_output(output: str) -> list[str] | None:
+    """Cut one oversized tool result into frame-sized, UTF-8-whole chunks.
+
+    Returns None when the result cannot be carried at all (past the chunk
+    ceiling), which the caller turns back into the refusal this mechanism
+    replaces for everything smaller.
+    """
+    chunks: list[str] = []
+    start = 0
+    used = 0
+    for index, character in enumerate(output):
+        cost = _encoded_character_cost(character)
+        if used + cost > MAX_TOOL_OUTPUT_CHUNK_BUDGET_BYTES:
+            if index == start:
+                return None
+            chunks.append(output[start:index])
+            if len(chunks) >= MAX_TOOL_OUTPUT_CHUNKS:
+                return None
+            start = index
+            used = 0
+        used += cost
+    if start < len(output):
+        chunks.append(output[start:])
+    if not chunks or len(chunks) > MAX_TOOL_OUTPUT_CHUNKS:
+        return None
+    return chunks
 
 
 def nested_skill_registry_from_payload(

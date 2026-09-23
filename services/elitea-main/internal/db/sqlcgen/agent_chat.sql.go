@@ -259,13 +259,26 @@ WITH resolved AS MATERIALIZED (
                  -- agent_internal_tool_skipped — so a form toggle can no longer
                  -- make the resolver return zero rows and every send answer 422.
                  'ask_user', 'attachments', 'data_analysis', 'image_generation',
-                 'internal_mcp', 'lazy_tools_mode', 'planner', 'pyodide', 'swarm'
+                 'internal_mcp', 'lazy_tools_mode', 'planner', 'project_context_builder',
+                 'pyodide', 'skills_builder', 'swarm'
              )
       )
       AND COALESCE(
           conversation.meta #>> '{context_analytics,last_summarization,summary_content}',
           ''
       ) = ''
+      -- #946: the project_context ADMISSION GATE that used to live here is gone.
+      -- It read NOT EXISTS (SELECT 1 FROM configuration WHERE type = 'project_context'
+      -- AND enabled AND content <> ''), so a project whose Settings > Project Context
+      -- was enabled and non-empty resolved ZERO rows here and every send in it answered
+      -- 422 unsupported_agent_execution — including the send that would have edited the
+      -- context back off. It existed only because project-context INJECTION was
+      -- unimplemented, and failing closed was preferred to running a turn that silently
+      -- ignored the project's context. Injection now exists: the start path reads the
+      -- row (internal/infra/db/repos.ProjectContextRepo) and splices its content onto
+      -- the turn's instructions field — the same field memory recall rides
+      -- (internal/application/agentexecution/projectcontext.go) — so the gate has
+      -- nothing left to protect and is a refusal with no cause.
       AND NOT EXISTS (
           SELECT 1
           FROM chat_participant_mapping AS unsupported_mapping
@@ -336,7 +349,8 @@ WITH resolved AS MATERIALIZED (
                  -- agent_internal_tool_skipped — so a form toggle can no longer
                  -- make the resolver return zero rows and every send answer 422.
                  'ask_user', 'attachments', 'data_analysis', 'image_generation',
-                 'internal_mcp', 'lazy_tools_mode', 'planner', 'pyodide', 'swarm'
+                 'internal_mcp', 'lazy_tools_mode', 'planner', 'project_context_builder',
+                 'pyodide', 'skills_builder', 'swarm'
              )
                 )
             )
@@ -657,7 +671,8 @@ WITH resolved AS MATERIALIZED (
                  -- agent_internal_tool_skipped — so a form toggle can no longer
                  -- make the resolver return zero rows and every send answer 422.
                  'ask_user', 'attachments', 'data_analysis', 'image_generation',
-                 'internal_mcp', 'lazy_tools_mode', 'planner', 'pyodide', 'swarm'
+                 'internal_mcp', 'lazy_tools_mode', 'planner', 'project_context_builder',
+                 'pyodide', 'skills_builder', 'swarm'
              )
       )
       -- Admitted by the same rule as the conversation's own list: ` + "`" + `internal_mcp` + "`" + `
@@ -692,13 +707,26 @@ WITH resolved AS MATERIALIZED (
                  -- agent_internal_tool_skipped — so a form toggle can no longer
                  -- make the resolver return zero rows and every send answer 422.
                  'ask_user', 'attachments', 'data_analysis', 'image_generation',
-                 'internal_mcp', 'lazy_tools_mode', 'planner', 'pyodide', 'swarm'
+                 'internal_mcp', 'lazy_tools_mode', 'planner', 'project_context_builder',
+                 'pyodide', 'skills_builder', 'swarm'
              )
       )
       AND COALESCE(
           conversation.meta #>> '{context_analytics,last_summarization,summary_content}',
           ''
       ) = ''
+      -- #946: the project_context ADMISSION GATE that used to live here is gone.
+      -- It read NOT EXISTS (SELECT 1 FROM configuration WHERE type = 'project_context'
+      -- AND enabled AND content <> ''), so a project whose Settings > Project Context
+      -- was enabled and non-empty resolved ZERO rows here and every send in it answered
+      -- 422 unsupported_agent_execution — including the send that would have edited the
+      -- context back off. It existed only because project-context INJECTION was
+      -- unimplemented, and failing closed was preferred to running a turn that silently
+      -- ignored the project's context. Injection now exists: the start path reads the
+      -- row (internal/infra/db/repos.ProjectContextRepo) and splices its content onto
+      -- the turn's instructions field — the same field memory recall rides
+      -- (internal/application/agentexecution/projectcontext.go) — so the gate has
+      -- nothing left to protect and is a refusal with no cause.
       AND NOT EXISTS (
           SELECT 1
           FROM chat_participant_mapping AS toolkit_mapping
@@ -1144,7 +1172,8 @@ LEFT JOIN LATERAL (
                  -- agent_internal_tool_skipped — so a form toggle can no longer
                  -- make the resolver return zero rows and every send answer 422.
                  'ask_user', 'attachments', 'data_analysis', 'image_generation',
-                 'internal_mcp', 'lazy_tools_mode', 'planner', 'pyodide', 'swarm'
+                 'internal_mcp', 'lazy_tools_mode', 'planner', 'project_context_builder',
+                 'pyodide', 'skills_builder', 'swarm'
              )
           )
     ) AS current_tool
@@ -1240,6 +1269,24 @@ LEFT JOIN LATERAL (
                          ELSE '[]'::jsonb
                      END
                  ) WITH ORDINALITY AS attachment_chunk(value, ordinality)
+            -- AN EMBEDDED IMAGE IS NOT CARRIED FORWARD.
+            --
+            -- #979 appends an ` + "`" + `image_url` + "`" + ` chunk carrying the picture's base64
+            -- bytes to the attachment's stored ` + "`" + `content` + "`" + `. That chunk belongs
+            -- to the turn it was attached on — admission splices it into
+            -- ` + "`" + `input_attachments` + "`" + ` from memory (currentTurnInputAttachments)
+            -- and never reads it back from here.
+            --
+            -- Letting it ride this projection put a data URL into EVERY later
+            -- turn of the conversation. The bound above withholds a fourth
+            -- older attachment's text, which is 32 KiB; an image is up to a
+            -- third again of its raw cap once base64'd, so four of them alone
+            -- exceed the worker's whole 256 KiB fetch ceiling and the
+            -- conversation becomes unrecoverable — history only grows. It is
+            -- also the one chunk type whose omission costs nothing the model
+            -- can act on: the file's HEADER chunk still says a picture was
+            -- attached, names it, and says a file-reading tool can open it.
+            WHERE attachment_chunk.value ->> 'type' IS DISTINCT FROM 'image_url'
         ) AS item_chunk
         WHERE message_group.conversation_id = conversation.id
           AND message_group.created_at < COALESCE(
@@ -1314,13 +1361,26 @@ WHERE conversation.uuid = $5::uuid
                  -- agent_internal_tool_skipped — so a form toggle can no longer
                  -- make the resolver return zero rows and every send answer 422.
                  'ask_user', 'attachments', 'data_analysis', 'image_generation',
-                 'internal_mcp', 'lazy_tools_mode', 'planner', 'pyodide', 'swarm'
+                 'internal_mcp', 'lazy_tools_mode', 'planner', 'project_context_builder',
+                 'pyodide', 'skills_builder', 'swarm'
              )
   )
   AND COALESCE(
       conversation.meta #>> '{context_analytics,last_summarization,summary_content}',
       ''
   ) = ''
+  -- #946: the project_context ADMISSION GATE that used to live here is gone.
+  -- It read NOT EXISTS (SELECT 1 FROM configuration WHERE type = 'project_context'
+  -- AND enabled AND content <> ''), so a project whose Settings > Project Context
+  -- was enabled and non-empty resolved ZERO rows here and every send in it answered
+  -- 422 unsupported_agent_execution — including the send that would have edited the
+  -- context back off. It existed only because project-context INJECTION was
+  -- unimplemented, and failing closed was preferred to running a turn that silently
+  -- ignored the project's context. Injection now exists: the start path reads the
+  -- row (internal/infra/db/repos.ProjectContextRepo) and splices its content onto
+  -- the turn's instructions field — the same field memory recall rides
+  -- (internal/application/agentexecution/projectcontext.go) — so the gate has
+  -- nothing left to protect and is a refusal with no cause.
   AND NOT EXISTS (
       SELECT 1
       FROM chat_participant_mapping AS unsupported_mapping
@@ -1391,7 +1451,8 @@ WHERE conversation.uuid = $5::uuid
                  -- agent_internal_tool_skipped — so a form toggle can no longer
                  -- make the resolver return zero rows and every send answer 422.
                  'ask_user', 'attachments', 'data_analysis', 'image_generation',
-                 'internal_mcp', 'lazy_tools_mode', 'planner', 'pyodide', 'swarm'
+                 'internal_mcp', 'lazy_tools_mode', 'planner', 'project_context_builder',
+                 'pyodide', 'skills_builder', 'swarm'
              )
             )
         )
@@ -1974,6 +2035,24 @@ LEFT JOIN LATERAL (
                          ELSE '[]'::jsonb
                      END
                  ) WITH ORDINALITY AS attachment_chunk(value, ordinality)
+            -- AN EMBEDDED IMAGE IS NOT CARRIED FORWARD.
+            --
+            -- #979 appends an ` + "`" + `image_url` + "`" + ` chunk carrying the picture's base64
+            -- bytes to the attachment's stored ` + "`" + `content` + "`" + `. That chunk belongs
+            -- to the turn it was attached on — admission splices it into
+            -- ` + "`" + `input_attachments` + "`" + ` from memory (currentTurnInputAttachments)
+            -- and never reads it back from here.
+            --
+            -- Letting it ride this projection put a data URL into EVERY later
+            -- turn of the conversation. The bound above withholds a fourth
+            -- older attachment's text, which is 32 KiB; an image is up to a
+            -- third again of its raw cap once base64'd, so four of them alone
+            -- exceed the worker's whole 256 KiB fetch ceiling and the
+            -- conversation becomes unrecoverable — history only grows. It is
+            -- also the one chunk type whose omission costs nothing the model
+            -- can act on: the file's HEADER chunk still says a picture was
+            -- attached, names it, and says a file-reading tool can open it.
+            WHERE attachment_chunk.value ->> 'type' IS DISTINCT FROM 'image_url'
         ) AS item_chunk
         WHERE message_group.conversation_id = conversation.id
           AND message_group.created_at < COALESCE(
@@ -2079,7 +2158,8 @@ WHERE conversation.uuid = $4::uuid
                  -- agent_internal_tool_skipped — so a form toggle can no longer
                  -- make the resolver return zero rows and every send answer 422.
                  'ask_user', 'attachments', 'data_analysis', 'image_generation',
-                 'internal_mcp', 'lazy_tools_mode', 'planner', 'pyodide', 'swarm'
+                 'internal_mcp', 'lazy_tools_mode', 'planner', 'project_context_builder',
+                 'pyodide', 'skills_builder', 'swarm'
              )
   )
   -- The version's own internal-tool list, admitted by the SAME rule as the
@@ -2117,13 +2197,26 @@ WHERE conversation.uuid = $4::uuid
                  -- agent_internal_tool_skipped — so a form toggle can no longer
                  -- make the resolver return zero rows and every send answer 422.
                  'ask_user', 'attachments', 'data_analysis', 'image_generation',
-                 'internal_mcp', 'lazy_tools_mode', 'planner', 'pyodide', 'swarm'
+                 'internal_mcp', 'lazy_tools_mode', 'planner', 'project_context_builder',
+                 'pyodide', 'skills_builder', 'swarm'
              )
   )
   AND COALESCE(
       conversation.meta #>> '{context_analytics,last_summarization,summary_content}',
       ''
   ) = ''
+  -- #946: the project_context ADMISSION GATE that used to live here is gone.
+  -- It read NOT EXISTS (SELECT 1 FROM configuration WHERE type = 'project_context'
+  -- AND enabled AND content <> ''), so a project whose Settings > Project Context
+  -- was enabled and non-empty resolved ZERO rows here and every send in it answered
+  -- 422 unsupported_agent_execution — including the send that would have edited the
+  -- context back off. It existed only because project-context INJECTION was
+  -- unimplemented, and failing closed was preferred to running a turn that silently
+  -- ignored the project's context. Injection now exists: the start path reads the
+  -- row (internal/infra/db/repos.ProjectContextRepo) and splices its content onto
+  -- the turn's instructions field — the same field memory recall rides
+  -- (internal/application/agentexecution/projectcontext.go) — so the gate has
+  -- nothing left to protect and is a refusal with no cause.
   AND NOT EXISTS (
       SELECT 1
       FROM chat_participant_mapping AS toolkit_mapping
@@ -3518,6 +3611,94 @@ func (q *Queries) ResumeCurrentAgentOutputLimit(ctx context.Context, arg ResumeC
 	var i ResumeCurrentAgentOutputLimitRow
 	err := row.Scan(&i.ResponseMessageGroupID, &i.ResponseMessageID)
 	return i, err
+}
+
+const rewriteCurrentAgentQuestionText = `-- name: RewriteCurrentAgentQuestionText :one
+WITH resolved AS MATERIALIZED (
+    SELECT question.id
+    FROM chat_message_group AS question
+    JOIN chat_conversations AS conversation
+      ON conversation.id = question.conversation_id
+    JOIN chat_participants AS question_author
+      ON question_author.id = question.author_participant_id
+     AND question_author.entity_name = 'user'
+    WHERE conversation.uuid = $1::uuid
+      AND question.uuid = $2::uuid
+      AND (
+          conversation.author_id = $3::bigint
+          OR (question_author.entity_meta ->> 'id')::bigint = $3::bigint
+      )
+    FOR UPDATE OF question
+), target AS (
+    SELECT item.id
+    FROM chat_message_items AS item
+    JOIN resolved ON resolved.id = item.message_group_id
+    WHERE item.item_type = 'text_message'
+      AND (
+          $4::uuid = '00000000-0000-0000-0000-000000000000'::uuid
+          OR item.uuid = $4::uuid
+      )
+    ORDER BY item.order_index, item.id
+    LIMIT 1
+), rewritten AS (
+    UPDATE chat_messages_text AS text_item
+    SET content = $5::text
+    FROM target
+    WHERE text_item.id = target.id
+    RETURNING text_item.id
+), stamped AS (
+    UPDATE chat_message_group AS question
+    SET updated_at = clock_timestamp()
+    FROM resolved
+    WHERE question.id = resolved.id
+      AND (SELECT count(*) FROM rewritten) = 1
+    RETURNING question.id
+)
+SELECT rewritten.id AS question_item_id
+FROM rewritten
+`
+
+type RewriteCurrentAgentQuestionTextParams struct {
+	ConversationUuid pgtype.UUID `db:"conversation_uuid" json:"conversation_uuid"`
+	QuestionID       pgtype.UUID `db:"question_id" json:"question_id"`
+	ActorUserID      int64       `db:"actor_user_id" json:"actor_user_id"`
+	ItemUuid         pgtype.UUID `db:"item_uuid" json:"item_uuid"`
+	Content          string      `db:"content" json:"content"`
+}
+
+// Rewrite the text of a question that is being regenerated (issue 980), inside
+// the SAME admission transaction that resets its answer.
+//
+// WHY IT IS A SEPARATE STATEMENT rather than another CTE on
+// `ResetCurrentAgentResponse`: the reset is what every regeneration performs
+// and this is what only an EDITED one performs. Folding an optional write into
+// the statement that owns the mandatory one would make the ordinary retry pay
+// for — and be refusable by — a clause it never uses.
+//
+// The ownership gate is the reset's own, restated: the conversation must be
+// the one named, the question must be that conversation's, its author must be
+// a user, and the ACTOR must either own the conversation or be the question's
+// author. A caller that can regenerate a turn can rewrite the question it is
+// regenerating, and nothing else.
+//
+// WHICH ITEM. `item_uuid` is the item the browser is editing. When it names
+// one, that item must belong to THIS question group — a uuid from another
+// message matches nothing and the caller is refused rather than silently
+// rewriting the wrong row. When it is the zero uuid ("the message carries no
+// stored item", the ordinary shape of a question the browser is still holding
+// from the send that created it), the group's FIRST text item is rewritten,
+// which is the one `ListMessages` renders as the question.
+func (q *Queries) RewriteCurrentAgentQuestionText(ctx context.Context, arg RewriteCurrentAgentQuestionTextParams) (int32, error) {
+	row := q.db.QueryRow(ctx, rewriteCurrentAgentQuestionText,
+		arg.ConversationUuid,
+		arg.QuestionID,
+		arg.ActorUserID,
+		arg.ItemUuid,
+		arg.Content,
+	)
+	var question_item_id int32
+	err := row.Scan(&question_item_id)
+	return question_item_id, err
 }
 
 const updateCurrentAgentAttachmentContent = `-- name: UpdateCurrentAgentAttachmentContent :execrows

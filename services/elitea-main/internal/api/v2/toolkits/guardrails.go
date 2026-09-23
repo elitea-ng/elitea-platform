@@ -183,6 +183,14 @@ func withoutBlockedTools(
 		rebuiltSelectedTools[key] = value
 	}
 	rebuiltSelectedTools["args_schemas"] = kept
+	// The group map is keyed by tool name, so a blocked tool has to leave it
+	// too. A stale entry would not un-block anything — the tool is gone from
+	// `args_schemas`, which is the list the picker renders — but it WOULD put
+	// a blocked tool's name back in front of an operator reading the served
+	// catalogue, which is the one thing the block was for. See tool_groups.go.
+	if groups, ok := rebuiltSelectedTools["tool_groups"].(map[string]any); ok {
+		rebuiltSelectedTools["tool_groups"] = withoutBlockedToolGroups(groups, kept)
+	}
 
 	rebuiltProperties := make(map[string]any, len(properties))
 	for key, value := range properties {
@@ -246,4 +254,30 @@ func withoutBlockedArgumentSchemas(
 		// risk changing what is served.
 		return nil, false
 	}
+}
+
+// withoutBlockedToolGroups keeps only the group entries whose tool survived the
+// block. `kept` is the same value that was just written to `args_schemas`, in
+// either of the two concrete map types that node is built from.
+func withoutBlockedToolGroups(groups map[string]any, kept any) map[string]any {
+	survivors := map[string]struct{}{}
+	switch schemas := kept.(type) {
+	case map[string]map[string]any:
+		for name := range schemas {
+			survivors[name] = struct{}{}
+		}
+	case map[string]any:
+		for name := range schemas {
+			survivors[name] = struct{}{}
+		}
+	default:
+		return groups
+	}
+	filtered := make(map[string]any, len(survivors))
+	for name, group := range groups {
+		if _, found := survivors[name]; found {
+			filtered[name] = group
+		}
+	}
+	return filtered
 }

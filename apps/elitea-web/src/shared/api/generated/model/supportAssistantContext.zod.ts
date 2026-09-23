@@ -56,7 +56,7 @@ export const SupportAssistantContext = zod
     meta: zod.record(zod.string(), zod.unknown()).optional(),
   })
   .describe(
-    "The page context the widget collects — which screen the user is on, and what they are looking at. Ported field-for-field from legacy\/plugins\/support_assistant\/models\/pd\/support.py.\n",
+    "The page context the widget collects — which screen the user is on, and what they are looking at. Ported field-for-field from legacy/plugins/support_assistant/models/pd/support.py.\n",
   );
 
 export type SupportAssistantContext = zod.input<typeof SupportAssistantContext>;

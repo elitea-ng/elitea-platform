@@ -60,6 +60,15 @@ export interface EditApplicationVersionFields {
    * (`setTags`) instead of a case in `applyFieldChange`.
    */
   readonly tags: readonly Tag[];
+  /**
+   * `meta.notes` — the editor's free-text Editor Notes (#898). Held here with
+   * the other version-level fields, and stored where pylon stores it: inside
+   * the `meta` blob, not in a column of its own (elitea_issues #5410 chose
+   * that to avoid a per-tenant migration, and
+   * `internal/api/v2/applications/handler.go`'s `notesMetaKey` says the same
+   * on the Go side). It is documentation only — never sent to the model.
+   */
+  readonly notes: string;
 }
 
 export interface EditApplicationVersionFieldsState {
@@ -111,6 +120,7 @@ function fromVersion(version: ApplicationVersionDetail | undefined): EditApplica
     internalTools: toStringArray(metaRecord['internal_tools']),
     llmSettings: toAgentLlmSettings(version?.llm_settings),
     tags: toTags(version),
+    notes: typeof metaRecord['notes'] === 'string' ? metaRecord['notes'] : '',
   };
 }
 
@@ -118,6 +128,7 @@ function areEqual(a: EditApplicationVersionFields, b: EditApplicationVersionFiel
   if (a.instructions !== b.instructions) return false;
   if (a.welcomeMessage !== b.welcomeMessage) return false;
   if (a.stepLimit !== b.stepLimit) return false;
+  if (a.notes !== b.notes) return false;
   // Key by key, never by identity: the settings dialog hands back a fresh
   // object each time, so identity would report "dirty" from the first render.
   if (!areAgentLlmSettingsEqual(a.llmSettings, b.llmSettings)) return false;
@@ -215,6 +226,9 @@ export function useEditApplicationVersionFields(
         return true;
       case 'version_details.meta.internal_tools':
         setFields((previous) => ({ ...previous, internalTools: toStringArray(value) }));
+        return true;
+      case 'version_details.notes':
+        setFields((previous) => ({ ...previous, notes: typeof value === 'string' ? value : '' }));
         return true;
       case 'version_details.meta.step_limit':
         setFields((previous) => ({ ...previous, stepLimit: typeof value === 'number' ? value : undefined }));

@@ -1,26 +1,20 @@
 /**
  * Which optional backend surfaces this platform serves.
  *
- * The Go router registers no handler for one endpoint this SPA can build a
- * request for, and `api/openapi/v2.yaml` does not declare it either:
+ * Every capability here is now SERVED except `llmPredictStreaming`, whose
+ * transport (a socket.io `application_predict` event) does not exist in this
+ * stack at all. The module stays because the rule it enforces still applies:
+ * an affordance whose endpoint is not mounted produces a failure the user
+ * cannot repair, so a capability is turned on in the same change that mounts
+ * its routes — and off only for a MISSING SURFACE, never for a deployment
+ * condition an administrator can change.
  *
- *   GET  /elitea_core/pipeline_trigger/prompt_lib/{projectId}/pipeline/{v}/trigger
- *
- * chi answers `404 page not found` for it, in every profile. Its route group
- * was gated on a `RouterConfig` field nothing ever assigned, so it answered
- * 404 before #126 removed it as well. The affordance that calls it can
- * therefore never succeed, and the user reads a failure that no setting can
- * repair.
- *
- * Two entries have LEFT that list. `predict_llm` is served, but only in its
- * blocking mode — which is why the single `aiGeneration` flag that once
- * covered it had to be split (see the three capabilities below). The three
- * DRAFT endpoints are served too, as of #254 P1.
- *
- * The ported hooks, modals and API modules STAY. The backend gap is tracked
- * (#192 webhook trigger, #193 scheduled execution, #194 AI draft generation).
- * This module hides the affordances until the endpoints land. Turn a
- * capability on in the same change that mounts its routes.
+ * Three entries have LEFT the unserved list. `predict_llm` is served, but
+ * only in its blocking mode — which is why the single `aiGeneration` flag
+ * that once covered it had to be split (see the three capabilities below).
+ * The three DRAFT endpoints are served too, as of #254 P1. And
+ * `pipelineTriggers` is served as of #899 — see its own paragraph for what
+ * the flag had actually been pinned against.
  */
 
 /** One optional backend surface. */
@@ -67,9 +61,22 @@ export type BackendCapability =
  * transport is missing, which is the same "affordance the user cannot repair"
  * this module exists to prevent.
  *
- * `pipelineTriggers` covers the webhook and scheduled trigger types, and the
- * trigger read the application-information panel makes. The Chat Message
- * trigger type calls no endpoint and stays available.
+ * `pipelineTriggers` covers the pipeline editor's Schedule and Webhook
+ * entry points, and is ON as of #899 — `/pipeline_schedules/...` and
+ * `/pipeline_triggers/...` are served by
+ * `internal/api/v2/pipelinetriggers` and declared in v2.yaml. The flag
+ * was pinned off against a DIFFERENT, deleted route
+ * (`/elitea_core/pipeline_trigger/.../trigger`, pylon's single-resource
+ * shape); the client that called it is gone, and this app now speaks the
+ * two Go facilities through the generated client.
+ *
+ * The SETTINGS routes do not need the execution runtime — only STARTING a
+ * run does — so a deployment with `runtime.enabled` off still configures a
+ * schedule or a webhook, and the inbound POST answers 503 saying why
+ * (`cmd/elitea-main/main.go`, the same #899 change). That is a deployment
+ * fact a user's administrator can change, not a missing surface, so it
+ * does not turn the flag back off — the `llmPredictBlocking` distinction
+ * this module already makes.
  *
  * `deepwiki` gated the native wiki feature while it was being built, and is
  * now ON. It was off for a reason this module had not had before: the routes it
@@ -105,7 +112,7 @@ const SERVED: Readonly<Record<BackendCapability, boolean>> = {
   inventory: true,
   llmPredictBlocking: true,
   llmPredictStreaming: false,
-  pipelineTriggers: false,
+  pipelineTriggers: true,
 };
 
 /**

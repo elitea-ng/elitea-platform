@@ -48,7 +48,7 @@ export const TracingCollectResponse = zod
       .int()
       .describe("Total OTel spans created (parents + children)."),
   })
-  .describe("internal\/api\/v2\/tracing\/handler.go's Collect 200 response.");
+  .describe("internal/api/v2/tracing/handler.go's Collect 200 response.");
 
 export type TracingCollectResponse = zod.input<typeof TracingCollectResponse>;
 export type TracingCollectResponseOutput = zod.output<

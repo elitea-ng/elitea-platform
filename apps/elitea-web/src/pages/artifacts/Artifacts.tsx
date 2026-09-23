@@ -36,6 +36,7 @@ import { fetchArtifactBlob } from '@/shared/api/artifacts';
 import { getConfig } from '@/shared/config';
 import { t } from '@/shared/i18n';
 import { triggerBlobDownload } from '@/shared/lib/download';
+import { useIsTeamProject } from '@/pages/toolkits/lib/usePersonalProjectId'; // cross-page import (#901), see EliteaCatalog.tsx precedent
 
 import { useArtifactCanvas } from './lib/useArtifactCanvas';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
@@ -61,6 +62,7 @@ export function Artifacts(): ReactNode {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as ArtifactsRouteSearch;
   const projectId = useSelectedProjectId();
+  const isTeamProject = useIsTeamProject(projectId);
   const buckets = useArtifactBuckets(projectId);
   const storage = useArtifactStorageConfigurations(projectId);
   const selectedBucket = buckets.data?.find((bucket) => bucket.name === search.bucket);
@@ -197,6 +199,7 @@ export function Artifacts(): ReactNode {
       <Box sx={sidebarSx(bucketsCollapsed)}>
       <BucketSidebar
         projectId={projectId}
+        isTeamProject={isTeamProject}
         buckets={buckets.data ?? []}
         {...(selectedBucket === undefined ? {} : { selectedBucket: selectedBucket.name })}
         storageConfigurations={storage.data ?? []}

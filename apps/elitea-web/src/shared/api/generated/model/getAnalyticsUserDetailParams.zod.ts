@@ -43,6 +43,8 @@ import * as zod from "zod";
 
 export const GetAnalyticsUserDetailParams = zod.object({
   user_id: zod.string().optional(),
+  date_from: zod.iso.date().optional(),
+  date_to: zod.iso.date().optional(),
 });
 
 export type GetAnalyticsUserDetailParams = zod.input<

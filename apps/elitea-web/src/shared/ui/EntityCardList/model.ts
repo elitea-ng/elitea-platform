@@ -37,6 +37,15 @@ export interface EntityListItem {
   /** Table view's "Type" column, and the card's bottom row when the domain has no tags (credentials/toolkits). */
   readonly typeLabel?: string;
   readonly onClick?: () => void;
+  /**
+   * #915 — when set, both card and table views render a "Forked from" link
+   * beside the entity's name that navigates to the SOURCE entity instead of
+   * this one (`onClick`, above). Only the agent/pipeline list pages supply
+   * this today (`Application.is_forked`/`meta.parent_entity_id`, the same
+   * pair `ApplicationInformation.tsx`'s own "Forked from" row already reads,
+   * now surfaced on the LIST row too — see repos/applications.go's List).
+   */
+  readonly forkedFrom?: { readonly onClick: () => void };
 }
 
 /** `ViewOptions` (`apps/elitea-ui/src/common/constants.js`) — the `?view=` search-param vocabulary. */

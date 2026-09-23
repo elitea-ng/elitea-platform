@@ -82,6 +82,19 @@ function handlers() {
     http.get(`${BASE}/configurations/models/${PROJECT}`, () =>
       HttpResponse.json({ items: [{ id: 'model-1', name: 'model-1', project_id: PROJECT, default: true }] }),
     ),
+    // The attach control's allow-list (#940 A15). It is NOT noise-suppression:
+    // an unanswered request here is indistinguishable from a deployment that
+    // served an EMPTY list, which disables attachments entirely — the exact
+    // state ELITEA-0489 describes. Without this handler the chip assertion
+    // below fails for that reason, which is the feature working, not a flake.
+    http.get(`${BASE}/elitea_core/index_types/prompt_lib/${PROJECT}`, () =>
+      HttpResponse.json({
+        items: [], total: 0,
+        document_types: { '.txt': 'text/plain', '.pdf': 'application/pdf' },
+        image_types: { '.png': 'image/png' },
+        code_types: { '.sql': 'text/x-sql', '.sh': 'text/x-shellscript' },
+      }),
+    ),
   ];
 }
 

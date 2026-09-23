@@ -194,15 +194,22 @@ type SecretsHeaderBackfillReport struct {
 // here: two replicas share a database, and it is the database's rows they race
 // on.
 //
-// THIS LOCK REQUIRES A SESSION. A session-scoped advisory lock belongs to the
-// PostgreSQL backend that took it, and a connection pooler in transaction mode
-// hands that backend to somebody else between statements. Put a pgbouncer with
-// `pool_mode = transaction` in front of this deployment and the lock stops
-// serialising — not with an error, but by letting every replica through, which
-// is the exact defect it was added to close.
+// THE LOCK IS TRANSACTION-SCOPED. It is a pg_try_advisory_xact_lock taken
+// inside a transaction this pass keeps open for its whole run, on one
+// dedicated pool connection that does no other work. The pass itself is many
+// statements over its own pool connections and cannot run inside one
+// transaction, so the lock transaction and the work connections are
+// different. Ending the lock transaction releases the lock; there is no
+// explicit unlock.
 //
-// MEASURED, not inferred (2026-09-01), against this package's own Postgres
-// integration tests:
+// WHY IT IS NOT A SESSION LOCK. A session-scoped advisory lock belongs to the
+// PostgreSQL backend that took it, and a connection pooler in transaction
+// mode hands that backend to somebody else between statements. Put a pgbouncer
+// with `pool_mode = transaction` in front of this deployment and a session
+// lock stops serialising — not with an error, but by letting every replica
+// through, which is the exact defect the lock was added to close. Measured,
+// not inferred (2026-09-01), against this package's own Postgres integration
+// tests:
 //
 //	direct connection                                          PASS
 //	pgbouncer transaction mode, max_prepared_statements = 0     FAIL, 42P05
@@ -211,11 +218,14 @@ type SecretsHeaderBackfillReport struct {
 //	                                                            serialising
 //	pgbouncer session mode                                      PASS
 //
-// So a pooler is not free here. If one is ever introduced, either keep it in
-// session mode, or replace this lock first — a row in a locks table taken with
-// SELECT ... FOR UPDATE, or moving the whole pass out of the boot path into a
-// Job, which needs no lock at all. Do not simply add the pooler and watch this
-// package's tests, because they run against a direct connection.
+// WHY A TRANSACTION LOCK SURVIVES THE POOLER. A pooler in transaction mode
+// keeps a client pinned to one backend for the life of an open transaction —
+// splitting a transaction across backends is not an option it offers. So a
+// lock held by this open transaction stays on this backend for the whole
+// pass, on a direct connection or through the pooler. Issue #964 replaced
+// the session lock this way (rather than with a locks table or a Job) and
+// cleared the pooler's last blocker; the 42P05 half is carried by the
+// pooler's max_prepared_statements, measured above.
 const backfillLockKey int64 = 0x5EC5E7BF // "SECSETBF"
 
 // BackfillProjectSecretsHeaderValues writes an X-SECRET value into every
@@ -248,31 +258,41 @@ func (h *Handler) BackfillProjectSecretsHeaderValues(ctx context.Context) (Secre
 		return report, errors.New("backfill the secrets header values: there is no database pool")
 	}
 
-	conn, err := h.pool.Acquire(ctx)
+	lockConn, err := h.pool.Acquire(ctx)
 	if err != nil {
 		return report, fmt.Errorf("backfill the secrets header values: acquire connection: %w", err)
 	}
-	defer conn.Release()
+	defer lockConn.Release()
 
-	// A SESSION lock on a pinned connection: the pass is many statements over
-	// its own pool connections and cannot run inside one transaction.
+	// The lock lives in this open transaction, which outlives the pass and
+	// ends before lockConn goes back to the pool: ending it releases the
+	// lock even when ctx has already expired.
+	lockTx, err := lockConn.Begin(ctx)
+	if err != nil {
+		return report, fmt.Errorf("backfill the secrets header values: begin lock transaction: %w", err)
+	}
 	var acquired bool
-	if err := conn.QueryRow(ctx,
-		`SELECT pg_catalog.pg_try_advisory_lock($1)`, backfillLockKey).Scan(&acquired); err != nil {
+	if err := lockTx.QueryRow(ctx,
+		`SELECT pg_catalog.pg_try_advisory_xact_lock($1)`, backfillLockKey).Scan(&acquired); err != nil {
+		if rollErr := lockTx.Rollback(context.WithoutCancel(ctx)); rollErr != nil {
+			slog.WarnContext(ctx, "the secrets header backfill lock transaction was not ended", "error", rollErr)
+		}
 		return report, fmt.Errorf("backfill the secrets header values: lock: %w", err)
 	}
 	if !acquired {
 		// Reported, not silent. "Another replica is doing it" and "there was
 		// nothing to do" produce the same counts, and only this field tells
 		// them apart in a log.
+		if err := lockTx.Rollback(context.WithoutCancel(ctx)); err != nil {
+			slog.WarnContext(ctx, "the secrets header backfill lock transaction was not ended", "error", err)
+		}
 		report.SkippedLocked = true
 		return report, nil
 	}
 	defer func() {
-		if _, err := conn.Exec(context.WithoutCancel(ctx),
-			`SELECT pg_catalog.pg_advisory_unlock($1)`, backfillLockKey); err != nil {
+		if err := lockTx.Rollback(context.WithoutCancel(ctx)); err != nil {
 			slog.WarnContext(ctx,
-				"the secrets header backfill lock was not released; it clears when this connection closes",
+				"the secrets header backfill lock transaction was not ended; it clears when this connection closes",
 				"error", err)
 		}
 	}()

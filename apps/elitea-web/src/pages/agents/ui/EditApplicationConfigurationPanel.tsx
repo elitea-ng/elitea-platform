@@ -12,7 +12,7 @@ import { useCallback } from 'react';
 import Box from '@mui/material/Box';
 
 import type { Tag } from '@/entities/tag';
-import { AgentTagEditor, ApplicationInformation, ApplicationMcpAccessToggle, CreateAgentForm } from '@/features/agents';
+import { AgentIconEditor, AgentTagEditor, ApplicationEditorNotes, ApplicationInformation, ApplicationMcpAccessToggle, CreateAgentForm } from '@/features/agents';
 import { AgentSkillsPanel } from '@/features/agent-skills';
 import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import type { ApplicationVersionDetail } from '@/shared/api/generated/model';
@@ -78,6 +78,25 @@ function forkOrigin(activeVersion: ApplicationVersionDetail | undefined): {
   };
 }
 
+/**
+ * `elitea_issues: #6627` — `application_versions.meta.icon_meta`, narrowed to
+ * the `{name?, url}` shape `AgentIconEditor` binds. A local twin of
+ * `forkOrigin` above for the same reason (this panel's own `meta` read, not a
+ * shared export — `features/agents`' curated barrel has no room, see that
+ * barrel's own `AgentIconEditor` doc comment).
+ */
+function applicationIconMetaOf(
+  activeVersion: ApplicationVersionDetail | undefined,
+): { readonly name?: string | undefined; readonly url: string } | null {
+  const meta: Record<string, unknown> = activeVersion?.meta ?? {};
+  const iconMeta = meta['icon_meta'];
+  if (iconMeta === null || typeof iconMeta !== 'object') return null;
+  const url = (iconMeta as Record<string, unknown>)['url'];
+  if (typeof url !== 'string' || url === '') return null;
+  const name = (iconMeta as Record<string, unknown>)['name'];
+  return { url, ...(typeof name === 'string' ? { name } : {}) };
+}
+
 export function EditApplicationConfigurationPanel(props: EditApplicationConfigurationPanelProps): ReactNode {
   const { projectId, applicationId, activeVersion, editor, versionFields, isEditorDisabled, isDirty, isReadOnly, onModelSettingsChange } =
     props;
@@ -86,6 +105,13 @@ export function EditApplicationConfigurationPanel(props: EditApplicationConfigur
   const handleMcpAccessChange = useCallback((enabled: boolean) => setTags(withMcpExposure(tags, enabled)), [setTags, tags]);
   const mcpAccessEnabled = tags.some((tag) => tag.name === mcpTagName);
   const fork = forkOrigin(activeVersion);
+  const iconMeta = applicationIconMetaOf(activeVersion);
+  const onNotesChange = useCallback(
+    (value: string) => {
+      versionFields.applyFieldChange('version_details.notes', value);
+    },
+    [versionFields],
+  );
 
   return (
     <Box data-testid="edit-application-configuration-tab-panel">
@@ -97,6 +123,16 @@ export function EditApplicationConfigurationPanel(props: EditApplicationConfigur
            `toVersionSaveBody`'s `tags`, which `UpdateVersion` now
            writes as association rows. */
         instructionsAiEditSlot={props.instructionsAiEditSlot}
+        iconSlot={
+          <AgentIconEditor
+            projectId={projectId}
+            applicationId={applicationId}
+            versionId={activeVersion?.id}
+            agentName={editor.values.name ?? ''}
+            iconMeta={iconMeta}
+            disabled={isEditorDisabled}
+          />
+        }
         tagsSlot={
           <>
             <ApplicationMcpAccessToggle
@@ -150,6 +186,20 @@ export function EditApplicationConfigurationPanel(props: EditApplicationConfigur
         projectId={projectId}
         appVersionId={activeVersion?.id}
         disabled={isReadOnly}
+      />
+      {/*
+       * #898 — the EDITOR NOTES accordion. Free-text documentation for the
+       * author: never sent to the model, to chat or to execution, and stored
+       * in `meta.notes` (there is no column, by design — see the barrel's own
+       * export comment). Placed between SKILLS and INFORMATION because that is
+       * where the baseline puts it: `frontends/EliteaUI/.../
+       * ApplicationConfigurationForm.jsx:68` renders `<ApplicationEditorNotes/>`
+       * as the last child before `<ApplicationInformation/>`.
+       */}
+      <ApplicationEditorNotes
+        notes={versionFields.fields.notes}
+        onNotesChange={onNotesChange}
+        disabled={isEditorDisabled}
       />
       {/*
        * #846 — the Information accordion (agent id, version id, "Forked

@@ -47,7 +47,7 @@ export const SecretUpdateRequest = zod
     value: zod.string(),
   })
   .describe(
-    '`name` is the NEW name — sending a different one renames the secret addressed by the `{name}` path parameter. Omitting it (or sending \"\") keeps the path name (handler.go\'s Update).\n',
+    '`name` is the NEW name — sending a different one renames the secret addressed by the `{name}` path parameter. Omitting it (or sending "") keeps the path name (handler.go\'s Update).\n',
   );
 
 export type SecretUpdateRequest = zod.input<typeof SecretUpdateRequest>;

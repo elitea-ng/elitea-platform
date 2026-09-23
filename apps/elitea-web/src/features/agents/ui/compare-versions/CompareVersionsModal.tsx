@@ -14,6 +14,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { t } from '@/shared/i18n';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { BaseModal } from '@/shared/ui/BaseModal';
+import type { ApplicationVersionDetail } from '@/shared/api/generated/model';
 
 import { useVersionDetail } from '../../api/versionComparison';
 import { AGENT_COMPARE_STEPS, extractAgentCompareData, sortVersionsNewestFirst } from '../../lib/compareVersions';
@@ -40,12 +41,29 @@ import { CompareInstructionsStep, CompareToolsSkillsStep, CompareUserInteraction
  *    select`: `shared/ui` has no avatar-bearing select, and the description
  *    the baseline renders (`formatVersionMeta`) is the version's author and
  *    date, which this app's version list (`AgentPipelineVersionOption`) does
- *    not carry beyond `created_at`.
+ *    not carry beyond `created_at` — so the PICKER (before "Compare" is
+ *    clicked) still cannot show it. The comparison view can (elitea_issues
+ *    #6563): both sides' full `ApplicationVersionDetail` are fetched by then
+ *    and already carry `author`, appended onto the same version-name label
+ *    every pane header renders.
  *
  * The LEFT side is always the version the editor currently has open; only
  * the right side is chosen, matching the baseline's `leftVersionId` prop and
  * its `availableVersions` filter.
  */
+/**
+ * elitea_issues: #6563 — appends the version's author, when known, onto the
+ * plain name label every pane header already renders. Pulled out of the
+ * component so the two call sites (left/right) do not each add a branch to
+ * `CompareVersionsModal`'s own complexity budget.
+ */
+function versionLabelWithAuthor(name: string, detail: ApplicationVersionDetail | undefined): string {
+  const authorName = detail?.author?.name;
+  return authorName === undefined
+    ? name
+    : t('features.agents.compareVersions.versionByAuthor', '{{name}} · {{author}}', { name, author: authorName });
+}
+
 export interface CompareVersionsModalProps {
   readonly open: boolean;
   readonly onClose: () => void;
@@ -216,6 +234,20 @@ export function CompareVersionsModal(props: CompareVersionsModalProps): ReactNod
   const leftName = versions.find((version) => version.id === leftVersionId)?.name ?? '';
   const rightName = versions.find((version) => version.id === rightVersionId)?.name ?? '';
 
+  /*
+   * elitea_issues: #6563 — the version's creator is already on the wire
+   * (`ApplicationVersionDetail.author`, the same {id, email, name} object
+   * `useVersionDetail` fetches for every other field this modal compares)
+   * but nothing rendered it, unlike the baseline's `formatVersionMeta`
+   * (see this file's own DISCLOSED DEVIATIONS note above, which only covers
+   * the PICKER's list-level name — the comparison view has the real
+   * per-version detail loaded and can show it). Appended to the same label
+   * both `VersionSelection`'s pane headers and every `ComparisonRow` already
+   * render, so no new render slot is needed.
+   */
+  const leftVersionLabel = versionLabelWithAuthor(leftName, leftQuery.data);
+  const rightVersionLabel = versionLabelWithAuthor(rightName, rightQuery.data);
+
   const left = useMemo(() => extractAgentCompareData(leftQuery.data), [leftQuery.data]);
   const right = useMemo(() => extractAgentCompareData(rightQuery.data), [rightQuery.data]);
 
@@ -236,8 +268,8 @@ export function CompareVersionsModal(props: CompareVersionsModalProps): ReactNod
     <ComparisonWizard
       activeStep={activeStep}
       onStepChange={setActiveStep}
-      leftVersionName={leftName}
-      rightVersionName={rightName}
+      leftVersionName={leftVersionLabel}
+      rightVersionName={rightVersionLabel}
       left={left}
       right={right}
     />

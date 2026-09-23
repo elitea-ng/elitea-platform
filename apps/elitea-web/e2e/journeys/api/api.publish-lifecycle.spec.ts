@@ -56,6 +56,7 @@ import {
   AUTOTEST_PREFIX,
   createAgentWithVersion,
   deleteAgent,
+  PUBLISHABLE_TAGS,
   readApplicationVersions,
   readCatalogue,
   readVersion,
@@ -106,6 +107,9 @@ async function createPublishableAgent(
         'is still open.',
       welcomeMessage: 'Send me the commits and I will draft the notes.',
       conversationStarters: ['Summarise this release.', 'What is still open?'],
+      // #913 — an untagged version is a Critical now, and the publish route
+      // refuses a FAIL inline. See `PUBLISHABLE_TAGS`.
+      tags: PUBLISHABLE_TAGS,
     },
     projectId,
   );

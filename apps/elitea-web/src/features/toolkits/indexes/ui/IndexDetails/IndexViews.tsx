@@ -14,6 +14,20 @@ import { IndexHistory } from './IndexHistory';
  * Port of `apps/elitea-ui/src/[fsd]/features/toolkits/indexes/ui/
  * IndexDetails/IndexViews.jsx` (unit A4a) — switches between the
  * Run/Configuration/History tab bodies.
+ *
+ * THE CONFIGURATION TAB IS EDITABLE NOW (issue 940/A5). It used to pass a
+ * hardcoded `changesDisabled` — every field on it was read-only — and that
+ * was the correct state of affairs while there was nothing to save it with:
+ * the only writer of an index's stored `index_configuration` was an indexing
+ * RUN, so an editable field would have offered a change no button could
+ * persist, and a "Reindex" pressed afterwards would have run edits the stored
+ * configuration never received.
+ *
+ * With the Save / Save & Reindex pair (`IndexActionsParts.tsx`) there is a
+ * writer, and the read-only flag is what stands between a person and the
+ * feature. The hazard it was guarding against is handled where it belongs
+ * instead: "Reindex" is WITHDRAWN while the form is dirty, so a run can only
+ * ever be started from a configuration the server holds.
  */
 export interface IndexViewsProps {
   readonly activeView: string;
@@ -65,7 +79,6 @@ export function IndexViews(props: IndexViewsProps): ReactNode {
       <IndexConfig
         sx={{ '.index-config-field:first-of-type': { marginTop: 0 } }}
         {...commonConfigProps}
-        changesDisabled
       />
     );
   }

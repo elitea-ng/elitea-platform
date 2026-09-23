@@ -68,12 +68,12 @@ export const BulkInviteResult = zod
         "failed",
       ])
       .describe(
-        'The machine-readable reason. pylon returned one English log blob for the whole batch, so a console could not tell \"added\" from \"was already a member\" without matching on prose.\n',
+        'The machine-readable reason. pylon returned one English log blob for the whole batch, so a console could not tell "added" from "was already a member" without matching on prose.\n',
       ),
     msg: zod.string().describe("The same outcome in English, for a log pane."),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/admin\/invites_bulk.go:121-129. One (user, project) pair's outcome.\n",
+    "NOTE(W2): internal/api/v2/admin/invites_bulk.go:121-129. One (user, project) pair's outcome.\n",
   );
 
 export type BulkInviteResult = zod.input<typeof BulkInviteResult>;

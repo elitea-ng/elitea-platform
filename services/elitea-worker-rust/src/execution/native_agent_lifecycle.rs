@@ -219,7 +219,7 @@ where
             *native_assembly
         }
         AgentNativeAssemblyOutcome::Failed { run, error } => {
-            let run = *run;
+            let mut run = *run;
             let failure = assembly_failure(&error);
             tracing::warn!(
                 event = "agent_native_assembly_failed",
@@ -227,6 +227,34 @@ where
                 failure_reason = %error,
                 "native agent assembly failed after invocation authorization"
             );
+            // #982: a remote MCP server that answers the assembly dial with a
+            // `401` is not an anonymous runtime failure. The sanitized
+            // requirement names the connection, so the turn ANSWERS with that
+            // notice instead of ending as "The runtime operation failed." —
+            // which, with several MCP connections attached, told the person
+            // nothing they could act on. Any problem publishing it falls back
+            // to the ordinary failure terminal below: a notice is an
+            // improvement on the refusal, never a replacement for settling.
+            if let Some(requirement) = error.authorization()
+                && Box::pin(publish_assembly_authorization_notice(
+                    &mut run,
+                    requirement,
+                    clock.as_ref(),
+                ))
+                .await
+                .unwrap_or(false)
+            {
+                return Box::pin(finish_after_stream(
+                    run,
+                    None,
+                    FreshAgentTerminalSelection::Completed,
+                    control,
+                    retirer,
+                    clock,
+                    terminal_recovery,
+                ))
+                .await;
+            }
             return Box::pin(finalize(
                 run,
                 failure,
@@ -634,6 +662,24 @@ where
                 failure_diagnostic = %error.diagnostic_detail(),
                             "native agent event stream failed"
                         );
+                        // #982: a remote MCP server that answers the dial with
+                        // a `401` is not an anonymous runtime failure. The MCP
+                        // toolset is dialled LAZILY, so the challenge arrives
+                        // HERE — assembly completed 51ms earlier — and the
+                        // sanitized requirement names the connection, so the
+                        // turn ANSWERS with that notice instead of ending as
+                        // "The runtime operation failed.", which told a person
+                        // with several connections attached nothing they could
+                        // act on. Only when nothing else already failed: a
+                        // challenge that arrives after a cancellation or a
+                        // projection fault must not overwrite the real reason.
+                        if failure.is_none()
+                            && let Some(requirement) = error.delegated_authorization()
+                            && publish_authorization_notice(run, projector, &requirement, clock)
+                                .await
+                        {
+                            return NativeStreamOutcome::Eos;
+                        }
                         return NativeStreamOutcome::Failure(
                             failure.unwrap_or_else(|| model_failure(error.upstream_code())),
                         );
@@ -1196,6 +1242,95 @@ fn sampled_time<K: UnixMillisClock>(clock: &K) -> Result<(i64, DateTime<Utc>), &
         .flatten()
         .ok_or("agent_lifecycle.invalid_clock")?;
     Ok((now, time))
+}
+
+/// Publish the authorization notice as this turn's sole result event (#982).
+///
+/// `true` when it is durably acknowledged and the run may settle as COMPLETED;
+/// `false` when it could not be published at all and the caller must keep the
+/// ordinary failure terminal. A notice is an improvement on the refusal, never
+/// a replacement for settling.
+///
+/// It is built from the PROJECTOR's context rather than from the command,
+/// because by this point the projector exists and is the authority on the
+/// browser identity every other event in this turn was stamped with — a notice
+/// stamped differently would not join the conversation it belongs to.
+async fn publish_authorization_notice<C, K>(
+    run: &mut CursorBoundAuthorizedAgentRun<C>,
+    projector: &AgentEventProjector,
+    requirement: &crate::toolkits::DelegatedAuthorizationRequirement,
+    clock: &K,
+) -> bool
+where
+    C: AgentProgressConnector,
+    K: UnixMillisClock,
+{
+    let occurred_at_unix_millis = clock.now_unix_millis();
+    let Some(occurred_at) = (occurred_at_unix_millis > 0)
+        .then(|| DateTime::<Utc>::from_timestamp_millis(occurred_at_unix_millis))
+        .flatten()
+    else {
+        return false;
+    };
+    let Ok(event) = projector.delegated_authorization_notice(requirement, occurred_at) else {
+        return false;
+    };
+    match run
+        .publish_full_message(event, occurred_at_unix_millis)
+        .await
+    {
+        Ok(AgentProgressPublishOutcome::Acknowledged { .. }) => {
+            tracing::info!(
+                event = "agent_authorization_notice_published",
+                toolkit_type = requirement.toolkit_type(),
+            );
+            true
+        }
+        Ok(AgentProgressPublishOutcome::Rejected { .. }) | Err(_) => {
+            tracing::warn!(event = "agent_authorization_notice_unpublished");
+            false
+        }
+    }
+}
+
+/// Publish the assembly-time authorization notice as this turn's sole result
+/// event (#982).
+///
+/// `Some(true)` when the notice is durably acknowledged and the run may settle
+/// as COMPLETED. `Some(false)`/`None` when it could not be published at all and
+/// the caller must keep the ordinary failure terminal. It deliberately reports
+/// rather than recovers: the publisher is still untouched in that case, because
+/// nothing was bound.
+async fn publish_assembly_authorization_notice<C, K>(
+    run: &mut CursorBoundAuthorizedAgentRun<C>,
+    requirement: &crate::toolkits::DelegatedAuthorizationRequirement,
+    clock: &K,
+) -> Option<bool>
+where
+    C: AgentProgressConnector,
+    K: UnixMillisClock,
+{
+    let occurred_at_unix_millis = clock.now_unix_millis();
+    let occurred_at = (occurred_at_unix_millis > 0)
+        .then(|| DateTime::<Utc>::from_timestamp_millis(occurred_at_unix_millis))
+        .flatten()?;
+    let event = run.assembly_authorization_notice(requirement, occurred_at)?;
+    match run
+        .publish_full_message(event, occurred_at_unix_millis)
+        .await
+    {
+        Ok(AgentProgressPublishOutcome::Acknowledged { .. }) => {
+            tracing::info!(
+                event = "agent_assembly_authorization_notice_published",
+                toolkit_type = requirement.toolkit_type(),
+            );
+            Some(true)
+        }
+        Ok(AgentProgressPublishOutcome::Rejected { .. }) | Err(_) => {
+            tracing::warn!(event = "agent_assembly_authorization_notice_unpublished");
+            Some(false)
+        }
+    }
 }
 
 pub(super) fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailureKind {

@@ -49,7 +49,7 @@ export const ApplicationVersionDetailExpanded = ApplicationVersionDetail.and(
     attached_skills: zod.array(AttachedSkill).optional(),
   }),
 ).describe(
-  "NOTE(#336): the body-less PATCH response — the expanded, secret-resolved version detail elitea-sdk fetches through `get_app_version_details` (elitea_sdk\/runtime\/clients\/client.py:681-688). It adds `icon_meta` and `attached_skills` to the shared version detail, and its `tools[].settings` carry configurations already resolved against the project secret vault.\n",
+  "NOTE(#336): the body-less PATCH response — the expanded, secret-resolved version detail elitea-sdk fetches through `get_app_version_details` (elitea_sdk/runtime/clients/client.py:681-688). It adds `icon_meta` and `attached_skills` to the shared version detail, and its `tools[].settings` carry configurations already resolved against the project secret vault.\n",
 );
 
 export type ApplicationVersionDetailExpanded = zod.input<

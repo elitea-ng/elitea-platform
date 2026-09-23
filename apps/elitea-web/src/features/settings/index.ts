@@ -38,6 +38,7 @@ import { ProjectContextBody, ProjectContextToasts } from './ui/project-context/P
 import { AgentPipelineBuilder } from './ui/project-general/AgentPipelineBuilder';
 import { ProjectAIConfigurationSection } from './ui/project-general/ProjectAIConfigurationSection';
 import { hasSavedProjectContext } from './lib/project-context/hasSavedContent';
+import { readMarkdownImport } from './lib/project-context/readMarkdownImport';
 import { ProjectContextEmptyState } from './ui/project-context/ProjectContextEmptyState';
 import { ProjectParamsHeader } from './ui/project-context/ProjectParamsHeader';
 import { projectContextStyles } from './ui/project-context/ProjectContext.styles';
@@ -100,7 +101,7 @@ export const webhooksFeature = {
 };
 
 /** Project-context tab (`pages/settings/ProjectContext.tsx`). */
-export const projectContextFeature = { ProjectContextBody, ProjectContextEmptyState, ProjectContextToasts, ProjectParamsHeader, hasSavedProjectContext, projectContextStyles };
+export const projectContextFeature = { ProjectContextBody, ProjectContextEmptyState, ProjectContextToasts, ProjectParamsHeader, hasSavedProjectContext, projectContextStyles, readMarkdownImport };
 
 /**
  * General tab (`pages/settings/ProjectGeneral.tsx`) — the PROJECT section's

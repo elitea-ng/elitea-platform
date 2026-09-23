@@ -50,7 +50,7 @@ export const PredictToolCall = zod
     status: zod.string(),
     duration_ms: zod.int().optional(),
   })
-  .describe("NOTE(W2) internal\/domain\/predict\/types.go:30-37.");
+  .describe("NOTE(W2) internal/domain/predict/types.go:30-37.");
 
 export type PredictToolCall = zod.input<typeof PredictToolCall>;
 export type PredictToolCallOutput = zod.output<typeof PredictToolCall>;

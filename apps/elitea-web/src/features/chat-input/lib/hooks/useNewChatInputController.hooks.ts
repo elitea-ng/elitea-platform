@@ -40,6 +40,7 @@ export function useNewChatInputImperativeHandle(params: UseNewChatInputImperativ
       reset: () => userInputRef.current?.reset(),
       getInputContent: () => userInputRef.current?.getInputContent() ?? '',
       getCursorPosition: () => userInputRef.current?.getCursorPosition() ?? null,
+      getLastEditPosition: () => userInputRef.current?.getLastEditPosition() ?? null,
       setValue: (...args) => userInputRef.current?.setValue(...args),
       replaceRange: (...args) => userInputRef.current?.replaceRange(...args),
       removeSymbol: (...args) => userInputRef.current?.removeSymbol(...args),

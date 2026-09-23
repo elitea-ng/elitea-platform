@@ -47,7 +47,7 @@ export const AnalyticsToolsList = zod
     tool_dimension_available: zod
       .boolean()
       .describe(
-        'Whether this deployment was recording tool calls for the WHOLE of the requested window. False for a window that ends before shared migration 0119 created elitea_runtime.tool_call_records, and for a database that has not run it. It does NOT mean \"no tool ran\".\n',
+        'Whether this deployment was recording tool calls for the WHOLE of the requested window. False for a window that ends before shared migration 0119 created elitea_runtime.tool_call_records, and for a database that has not run it. It does NOT mean "no tool ran".\n',
       ),
     items: zod
       .array(ToolAnalytics)
@@ -63,7 +63,7 @@ export const AnalyticsToolsList = zod
       ),
   })
   .describe(
-    "The Tools tab's list. Source — internal\/api\/v2\/analytics\/handler.go's Tools. The availability flag decides the SHAPE, the way AnalyticsAgentsList's does and budgets' usage dimensions do.\n",
+    "The Tools tab's list. Source — internal/api/v2/analytics/handler.go's Tools. The availability flag decides the SHAPE, the way AnalyticsAgentsList's does and budgets' usage dimensions do.\n",
   );
 
 export type AnalyticsToolsList = zod.input<typeof AnalyticsToolsList>;

@@ -191,6 +191,7 @@ describe('toVersionWriteBody', () => {
       internalTools: [],
       llmSettings: { model_name: 'qwen3.5', model_project_id: 17, max_tokens: -1, temperature: 0.6 },
       tags: [],
+      notes: '',
     };
 
     expect(toVersionWriteBody(version, [], edits).llm_settings).toEqual({
@@ -219,6 +220,7 @@ describe('toVersionWriteBody', () => {
       internalTools: [],
       llmSettings: toVersionDraft(version, []).llmSettings,
       tags: [],
+      notes: '',
     };
 
     expect(toVersionWriteBody(version, [], edits).llm_settings).toEqual({
@@ -245,6 +247,7 @@ describe('toVersionWriteBody', () => {
       internalTools: [],
       llmSettings: undefined,
       tags: [],
+      notes: '',
     };
 
     expect(toVersionWriteBody(version, [], edits).llm_settings).toEqual({ model_name: 'gpt' });
@@ -285,6 +288,7 @@ describe('toVersionSaveBody', () => {
         // placeholder id, which must NOT reach the wire (#345).
         { id: -1712000000000, name: 'fresh', data: null },
       ],
+      notes: 'Ask the design team before changing the tone.',
     };
 
     const body = toVersionSaveBody(version, [], edits);
@@ -295,6 +299,8 @@ describe('toVersionSaveBody', () => {
     // The untouched keys ride along through the same merge.
     expect(parsed.meta?.step_limit).toBe(12);
     expect(parsed.meta?.category).toBe('sales');
+    // #898 — the Editor Notes field rides in the same `meta` blob.
+    expect(parsed.meta?.notes).toBe('Ask the design team before changing the tone.');
     // #345 — `tags` reaches the wire, keyed by name; a stored tag keeps its
     // id and a brand-new one sends none.
     expect(parsed.tags).toEqual([
@@ -320,6 +326,7 @@ describe('toVersionSaveBody', () => {
       internalTools: [],
       llmSettings: undefined,
       tags: [],
+      notes: '',
     });
 
     expect(body.tags).toEqual([]);

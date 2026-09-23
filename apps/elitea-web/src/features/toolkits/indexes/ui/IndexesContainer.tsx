@@ -181,6 +181,30 @@ export function IndexesContainer(props: IndexesContainerProps): ReactNode {
 
   const view = currentIndex?.id === NEW_INDEX_ID ? IndexViewsEnum.create : IndexViewsEnum.edit;
 
+  /**
+   * The SELECTED row as the overlay currently describes it, not as it looked
+   * when it was clicked.
+   *
+   * `currentIndex` is local state written at selection time, so every later
+   * change to that row — a progress patch, a terminal state, and since issue
+   * 940/A5 the `index_configuration` a successful Save writes — reached the
+   * LIST and not the detail panel. The auto-select effect above happens to
+   * re-select the first valid row when the overlay changes, which hid the
+   * gap for the common single-index case, but it bails out while the list is
+   * refetching — which is exactly when a just-saved configuration is in
+   * flight. Measured: "Save & Reindex" stored the new configuration and then
+   * dispatched the run with the one from before the save, because
+   * `useToolkitChat`'s `resolveRunInputVariables` reads
+   * `index.metadata.index_configuration` off this very prop.
+   *
+   * The fallback keeps the create stub (`new_index`, which is not in the
+   * list) and any row the list has not caught up with.
+   */
+  const selectedIndex = useMemo(
+    () => (currentIndex === null ? null : (overlaidIndexesList.find((row) => row.id === currentIndex.id) ?? currentIndex)),
+    [currentIndex, overlaidIndexesList],
+  );
+
   const indexesWithStub = (() => {
     if (currentIndex && currentIndex.id === NEW_INDEX_ID) {
       return mergeIndexesOverlay(indexesList, [currentIndex, ...tempIndexes], indexPatches);
@@ -283,11 +307,11 @@ export function IndexesContainer(props: IndexesContainerProps): ReactNode {
         // container owns only the query.
         error={listError}
       />
-      {currentIndex && (
+      {selectedIndex && (
         <IndexDetails
-          key={`${currentIndex.id}-${detailsKeyRef.current}`}
+          key={`${selectedIndex.id}-${detailsKeyRef.current}`}
           {...detailsProps}
-          index={currentIndex}
+          index={selectedIndex}
           traceNewIndex={traceNewIndex}
           view={view}
           refetchIndexesList={() => void handleRefetchIndexesList()}
@@ -296,6 +320,11 @@ export function IndexesContainer(props: IndexesContainerProps): ReactNode {
           selectedIndexTools={selectedIndexTools}
           toolkitId={toolkitId}
           values={values}
+          // Destructured out of `detailsProps` above (this container reports
+          // its own delete failures through it), so it has to be handed on
+          // explicitly — otherwise the configuration save's own failure
+          // notification would reach no Snackbar at all.
+          onError={onError}
         />
       )}
       {currentIndex && (

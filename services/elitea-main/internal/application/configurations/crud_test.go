@@ -253,3 +253,51 @@ func (s *currentConfigurationRepositoryStub) Delete(_ context.Context, projectID
 	s.deleteConfigurationID = configurationID
 	return nil
 }
+
+// TestCurrentCRUDListCarriesTheViewerOntoTheProjectPageOnly is the service
+// half of #922. The project page is the one page that can hold another
+// member's unshared row, so it is the page that takes the viewer; the public
+// shared page is `shared = true` by construction and must stay unrestricted,
+// or a viewer id would start narrowing rows the whole platform publishes.
+func TestCurrentCRUDListCarriesTheViewerOntoTheProjectPageOnly(t *testing.T) {
+	viewer := int32(11)
+	repository := &currentConfigurationRepositoryStub{counts: []int64{0, 0}}
+	service, err := NewCurrentCRUDService(repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := service.List(context.Background(), CurrentConfigurationListRequest{
+		ProjectID: 7, PublicProjectID: 1, IncludeShared: true, ViewerID: &viewer,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(repository.listFilters) != 2 {
+		t.Fatalf("list calls = %d, want 2", len(repository.listFilters))
+	}
+	current, shared := repository.listFilters[0], repository.listFilters[1]
+	if current.ViewerID == nil || *current.ViewerID != viewer {
+		t.Fatalf("project page viewer = %v, want %d", current.ViewerID, viewer)
+	}
+	if shared.ViewerID != nil {
+		t.Fatalf("public shared page carried a viewer: %v", *shared.ViewerID)
+	}
+	if repository.countFilters[0].ViewerID == nil || *repository.countFilters[0].ViewerID != viewer {
+		t.Fatalf("the count must see the same viewer as the page: %v", repository.countFilters[0].ViewerID)
+	}
+
+	// A caller with no user identity keeps the unrestricted page.
+	anonymous := &currentConfigurationRepositoryStub{counts: []int64{0}}
+	anonymousService, err := NewCurrentCRUDService(anonymous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := anonymousService.List(context.Background(), CurrentConfigurationListRequest{
+		ProjectID: 7, PublicProjectID: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if anonymous.listFilters[0].ViewerID != nil {
+		t.Fatalf("an absent viewer must not become a filter: %v", *anonymous.listFilters[0].ViewerID)
+	}
+}

@@ -120,6 +120,28 @@ export function EntityListTable({ items }: EntityListTableProps): ReactNode {
                     {item.description}
                   </Typography>
                 )}
+                {item.forkedFrom !== undefined && (
+                  <Box
+                    component="span"
+                    // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- same client-side-only-navigation reasoning as `EntityCard.tsx`'s own copy of this link.
+                    role="link"
+                    tabIndex={0}
+                    data-testid="entity-row-forked-from"
+                    sx={forkedFromSx}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      item.forkedFrom?.onClick();
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Enter' && event.key !== ' ') return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      item.forkedFrom?.onClick();
+                    }}
+                  >
+                    {t('shared.entityList.forkedFrom', 'Forked from')}
+                  </Box>
+                )}
               </Box>
             </Box>
             {showType && (
@@ -307,6 +329,16 @@ const clampSx: SxProps<Theme> = {
 const rowNameSx: SxProps<Theme> = (theme: Theme) => ({ ...clampSx, color: theme.vars.palette.text.secondary });
 
 const rowDescriptionSx: SxProps<Theme> = (theme: Theme) => ({ ...clampSx, color: theme.vars.palette.text.primary });
+
+/** #915's "Forked from" link, same treatment as `EntityCard.tsx`'s own copy. */
+const forkedFromSx: SxProps<Theme> = (theme: Theme) => ({
+  display: 'inline-block',
+  color: theme.vars.palette.text.link,
+  cursor: 'pointer',
+  fontSize: theme.typography.bodySmall.fontSize,
+  '&:hover': { textDecoration: 'underline' },
+  '&:focus-visible': { outline: `0.125rem solid ${theme.vars.palette.border.lines}`, outlineOffset: '0.125rem' },
+});
 
 const createdCellSx: SxProps<Theme> = (theme: Theme) => ({
   display: 'flex',

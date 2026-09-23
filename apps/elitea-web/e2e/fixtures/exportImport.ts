@@ -736,6 +736,12 @@ export async function forkBundle(
   // an empty array for an agent with no skills would ask for the second
   // message on a document that is complete.
   if ((bundle.skills ?? []).length > 0) body['skills'] = bundle.skills;
+  // #918 — the toolkits, carried for the same reason and with the same rule:
+  // an export of an agent with a toolkit attached has the array, and a fork
+  // that dropped it silently lost the attachment (not merely its credentials).
+  // `type: "application"` entries inside it are sub-agent stand-ins; the Go
+  // fork skips those, because the agent they name travels in `applications`.
+  if ((bundle.toolkits ?? []).length > 0) body['toolkits'] = bundle.toolkits;
   const resp = await request.post(url, { data: body });
   const text = await resp.text();
   let decoded: ImportWizardResult = {};

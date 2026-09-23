@@ -47,14 +47,20 @@ import type { Page } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL } from '../../../playwright.config';
-import { AUTOTEST_PREFIX, API_BASE, DEFAULT_PROJECT_ID, clickCreateButton } from '../../fixtures/api';
+import {
+  API_BASE,
+  AUTOTEST_PREFIX,
+  clickCreateButton,
+  DEFAULT_PROJECT_ID,
+  gotoAppRoute,
+} from '../../fixtures/api';
 import { readsPlatformFlags } from '../../fixtures/platformFlags';
 
 /** Unique to THIS file so concurrent journeys never collide on a name. */
 const toolkitName = (): string => `${AUTOTEST_PREFIX}tk${Date.now()}`;
 
 /*
- * J17.3 asserts the "Make tools available by MCP" field, which `ToolBase` draws
+ * J17.3 asserts the MCP access control, which `ToolBase` draws
  * only while `useIsMcpVisible()` is true — that is the platform-wide
  * `mcp_enabled` row, and `admin.features.spec.ts` turns it off and back on to
  * prove the platform obeys it. J17.3 failed inside that window in 2 local runs
@@ -187,9 +193,15 @@ test('J17.2: the create page offers real, server-supplied toolkit types', async 
  * So the CodeMirror assertions encoded a UI shape that only appears when the
  * backend is broken. They are replaced below by assertions against the form
  * the app actually renders — which is itself backend-derived: the Tools
- * section's "Make tools available by MCP" field is drawn by
- * `ToolBase.render.tsx:296-306`, reachable ONLY via the ToolBase branch, i.e.
- * only when the server supplied a typed `custom` schema.
+ * section's MCP access control is drawn by `ToolsSectionParts.tsx`'s
+ * `resolveMcpExposureField`, reachable ONLY via the ToolBase branch, i.e. only
+ * when the server supplied a typed `custom` schema.
+ *
+ * It is a SWITCH labelled "Enable MCP access for selected tools" since issue
+ * 940/A7 (ELITEA-2687); it was a checkbox labelled "Make tools available by
+ * MCP", above the chips rather than after them. Same field
+ * (`meta.mcp_options.available_by_mcp`), same backend-derived reachability,
+ * which is all this assertion ever used it for.
  */
 test('J17.3: create a toolkit, persist it, and reopen it from the list', async ({ page }) => {
   const name = toolkitName();
@@ -211,9 +223,9 @@ test('J17.3: create a toolkit, persist it, and reopen it from the list', async (
   // Backend-derived, per the header: this field is rendered only down the
   // ToolBase branch, which `getToolComponent` picks only because the server's
   // `custom` schema carries `"type": "object"`. Against the old {rows,total}
-  // envelope the app fell back to ToolCustom's JSON editor and this checkbox
+  // envelope the app fell back to ToolCustom's JSON editor and this control
   // did not exist.
-  await expect(page.getByRole('checkbox', { name: 'Make tools available by MCP' })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole('switch', { name: 'Enable MCP access for selected tools' })).toBeVisible({ timeout: 15_000 });
 
   // The form is seeded from the picked type's initial values, then renamed.
   const nameField = page.getByRole('textbox', { name: 'Toolkit Name' });
@@ -239,7 +251,11 @@ test('J17.3: create a toolkit, persist it, and reopen it from the list', async (
   await checkA11y(page);
 
   // ── Persistence: a FULL reload, so the 30 s-stale list cache cannot answer.
-  await page.goto(BASE_URL + '/app/toolkits/all');
+  //
+  // `gotoAppRoute`, not `page.goto`: saving routes the app to the new toolkit,
+  // and a plain `goto` issued while that is in flight is aborted by it — the
+  // webkit flake this test showed under `--repeat-each=4`. See the helper.
+  await gotoAppRoute(page, BASE_URL + '/app/toolkits/all');
   const card = page
     .getByTestId('toolkits-list-panel')
     .getByTestId('toolkit-card')
@@ -569,4 +585,37 @@ test('J17.8: editing a toolkit’s description and pressing Save persists it', a
 
   // And the control settles back: a saved toolkit has nothing left to save.
   await expect(saveButton).toBeDisabled({ timeout: 20_000 });
+});
+
+/*
+ * elitea_issues: #2589 — an enhancement request: after typing a Toolkit Name
+ * that already exists in the project and leaving the field, a warning
+ * should appear below it suggesting a rename (never blocking Save — just a
+ * heads-up). Reproduced: no client-side duplicate-name check exists anywhere
+ * in `features/toolkits`/`pages/toolkits` (grepped for
+ * duplicate/already-exists/nameExists — no hits); a name collision is only
+ * ever caught by the server on Save. Building the live on-blur check is a
+ * real, if small, new feature — out of this package's fix budget.
+ */
+test('elitea_issues: #2589 — product gap: no warning is shown when a typed Toolkit Name duplicates an existing one', async ({ page }) => {
+  const existingName = toolkitName();
+  const created = await page.request.post(`${API_BASE}/elitea_core/tools/prompt_lib/${DEFAULT_PROJECT_ID}`, {
+    data: { name: existingName, type: 'custom', settings: {} },
+  });
+  expect(created.status(), await created.text()).toBe(201);
+  const existingId = String(((await created.json()) as { id?: string | number }).id ?? '');
+  createdIds.push(existingId);
+
+  await page.goto(BASE_URL + '/app/toolkits/create');
+  await expect(typeSearchBox(page)).toBeVisible({ timeout: 15_000 });
+  await page.getByRole('button', { name: 'Custom', exact: true }).click();
+
+  const nameField = page.getByRole('textbox', { name: 'Toolkit Name' });
+  await expect(nameField).toBeVisible({ timeout: 15_000 });
+  await nameField.fill(existingName);
+  // Leave the field — the shortlisted case's own trigger.
+  await page.getByRole('textbox', { name: 'Description' }).click();
+
+  test.fail(true, '#2589: product gap — no live duplicate-toolkit-name check exists; typing an existing name and blurring shows no warning at all');
+  await expect(page.getByText(/already exists|duplicate/i), 'a duplicate-name warning should appear below the field').toBeVisible({ timeout: 5_000 });
 });

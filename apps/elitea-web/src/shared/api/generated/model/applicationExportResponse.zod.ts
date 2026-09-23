@@ -53,11 +53,11 @@ export const ApplicationExportResponse = zod
       .array(SkillExport)
       .optional()
       .describe(
-        "The content of every skill that a version of the exported application is attached to. The key is OMITTED when the application has no skill attachment, because the import wizard turns each top-level array into a group the user selects, and an empty group has nothing to select (internal\/api\/v2\/eliteacore\/handler.go:3535-3541). The array is built after the `?fork=true` branch drops the versions it does not export, so it names only the skills the exported versions use (:3490-3499).\n",
+        "The content of every skill that a version of the exported application is attached to. The key is OMITTED when the application has no skill attachment, because the import wizard turns each top-level array into a group the user selects, and an empty group has nothing to select (internal/api/v2/eliteacore/handler.go:3535-3541). The array is built after the `?fork=true` branch drops the versions it does not export, so it names only the skills the exported versions use (:3490-3499).\n",
       ),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/eliteacore\/handler.go:3530-3541. With ?as_file=true the same JSON is sent with a Content-Disposition attachment header (:3557-3570), and with ?format=md it is rendered as markdown instead (:3552-3555). A handler that holds no database pool answers 500 and no document at all (:3416-3420).\n",
+    "NOTE(W2): internal/api/v2/eliteacore/handler.go:3530-3541. With ?as_file=true the same JSON is sent with a Content-Disposition attachment header (:3557-3570), and with ?format=md it is rendered as markdown instead (:3552-3555). A handler that holds no database pool answers 500 and no document at all (:3416-3420).\n",
   );
 
 export type ApplicationExportResponse = zod.input<

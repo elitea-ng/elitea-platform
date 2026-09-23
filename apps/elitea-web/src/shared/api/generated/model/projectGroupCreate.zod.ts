@@ -46,7 +46,7 @@ export const ProjectGroupCreate = zod
     name: zod.string(),
   })
   .describe(
-    'NOTE(W2): internal\/api\/v2\/projects\/groups.go:57-59. `no_group` is rejected: it is the sentinel the listing uses for \"no group at all\".\n',
+    'NOTE(W2): internal/api/v2/projects/groups.go:57-59. `no_group` is rejected: it is the sentinel the listing uses for "no group at all".\n',
   );
 
 export type ProjectGroupCreate = zod.input<typeof ProjectGroupCreate>;

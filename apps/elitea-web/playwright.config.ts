@@ -6,6 +6,12 @@
  *   chromium      — every journey under e2e/journeys against the real
  *                   stack, chromium
  *   webkit        — the same journeys, webkit (spec §6.2)
+ *   platform-flags,
+ *   platform-flags-webkit
+ *                 — the journeys that WRITE a platform-wide flag, one worker
+ *                   each, `testIgnore`d out of chromium/webkit so the sharded
+ *                   legs never queue on the platform-flag mutex; see
+ *                   `PLATFORM_FLAG_JOURNEYS` below
  *
  * The count is deliberately NOT written here. It was "30" and had drifted:
  * journeys are discovered by the testMatch glob below, so a number in this
@@ -58,6 +64,16 @@ export const STORAGE_STATE = {
    * every other journey off project 1 (measured, see the seeder's note).
    */
   chat: path.join(STATE_DIR, 'chat.json'),
+  /**
+   * The restricted-viewer persona (issue #940 D4/D6): holds project 1's
+   * `viewer` role with the two permissions those cases are about
+   * (`models.project_context.edit`, `configuration.secrets.secret.create`)
+   * revoked — see `scripts/e2e-stack.sh seed`'s own note on why every other
+   * persona could not stand in for this one (project 1's per-project grant
+   * rows gave `viewer` the same broad permissions as `admin`/`editor`, because
+   * nothing had ever assigned a real user that role before).
+   */
+  viewer: path.join(STATE_DIR, 'viewer.json'),
 };
 
 /**
@@ -166,14 +182,30 @@ const WIKI_QUERY_JOURNEY = /journeys\/deepwiki\/deepwiki\.wiki-query\.spec\.ts/;
 const REAL_ENGINE_JOURNEY = /journeys\/deepwiki\/deepwiki\.real-engine\.spec\.ts/;
 
 /*
- * The Support Assistant journey — the first E2E coverage of the in-app
+ * The Support Assistant journeys — the first E2E coverage of the in-app
  * widget itself (`admin/admin.features.spec.ts` only ever drove its ADMIN
- * section). A real turn is an agent execution, so it needs the FULL
- * standalone stack the same way `chat-stream` does; it runs in the
+ * section). A real turn is an agent execution, so they need the FULL
+ * standalone stack the same way `chat-stream` does; they run in the
  * `support-stack` project only, against that stack
  * (`scripts/support-e2e.sh`).
+ *
+ * Matches `support.spec.ts` (the original file), `support.auto-enroll.
+ * spec.ts` (issue #940 D2 — a brand-new, never-before-seen user's first
+ * contact; that "send a message" step is a real Predict call, same as
+ * `support.spec.ts`'s test 2), and the two #939 group-7 files —
+ * `support.conversation.spec.ts` (a real turn: which agent answered, what the
+ * client sent, what the composer does while it waits) and
+ * `support.api-scoping.spec.ts` (no turn, but every route it calls is refused
+ * unless the assistant is READY, which is the platform-wide switch this stack
+ * owns for the length of a run).
+ *
+ * It does NOT match `support.entrypoints.spec.ts` or
+ * `support.widget.spec.ts`, which run in the ordinary `chromium`/`webkit`
+ * projects — see those files' own headers for why they do not need this
+ * stack.
  */
-const SUPPORT_JOURNEY = /journeys\/support\/support\.spec\.ts/;
+const SUPPORT_JOURNEY =
+  /journeys\/support\/support\.(?:auto-enroll\.|conversation\.|api-scoping\.)?spec\.ts/;
 
 /*
  * The one journey that needs the shared project to hold NO toolkits: J17.1,
@@ -218,6 +250,75 @@ const EMPTY_TOOLKIT_LIST_JOURNEY = /journeys\/toolkits\/toolkits\.emptyList\.spe
  * while being `setup`'s teardown is a cycle.
  */
 const FIXTURE_ISOLATION_JOURNEY = /journeys\/api\/api\.fixture-isolation\.spec\.ts/;
+
+/*
+ * ── THE PLATFORM-FLAG WRITERS, AND WHY THEY LEFT THE SHARDED PROJECTS ─────
+ *
+ * Every spec named below takes `withPlatformFlagLock` (e2e/fixtures/
+ * platformFlags.ts) — a PLATFORM-WIDE mutex, because the rows it writes
+ * (`mcp_enabled`, `support_assistant_enabled`, the branding pack, the
+ * guardrail maps, the Help Center cards, the publishing guardrails) are one
+ * row for the whole deployment. While one of them is inside its window the
+ * platform IS changed, for every other worker as well.
+ *
+ * `fullyParallel: true` + `workers: 4` put those writers on four workers that
+ * then queue for one lock, and every journey added to the set lengthened the
+ * queue. Two failure shapes came out of it, and BOTH were read as product
+ * defects on PR #947 and #957:
+ *
+ *  - starvation: the slowest writer on the shard exceeds any fixed budget.
+ *    Raising the per-test timeout to the lock's documented worst case
+ *    (210 s, set in each spec) moved the boundary and did not remove it.
+ *  - MUTUAL EXCLUSION ACTUALLY BREAKING. Measured on run 35278339078,
+ *    `E2E (webkit-1of2)`, 44 s into the run: ELITEA-0017 wrote "Block Agent
+ *    Publishing" on, reloaded, and found it OFF —
+ *    `expect(locator).toBeChecked() … Received: unchecked`, raised INSIDE
+ *    `withPlatformFlagLock`. A queue cannot produce that; only a second
+ *    writer inside the window can, and the lock has two ways to hand one out
+ *    (a beat that went stale while a holder's `onLastExit` was still writing
+ *    the flags back, and the `WAIT_LIMIT_MS` break a waiter takes at the
+ *    outer bound). The same run marked J38e, ELITEA-0029+0031 and one
+ *    unrelated journey flaky.
+ *
+ * The lock is still the right object — a local full-suite run has readers in
+ * `chromium`/`webkit` and writers here, on one machine, and that is exactly
+ * what it is for. What is wrong is making CI depend on it under load. These
+ * projects run the writers with `workers: 1`, so on a CI leg there is never a
+ * second writer to exclude: the lock is taken uncontended and the two shapes
+ * above cannot occur.
+ *
+ * THE READERS STAY. `readsPlatformFlags` (mcps.oauth, mcps.secret-field,
+ * toolkits.aha/catalogue/emptyList/lifecycle) takes the SHARED side, which
+ * never waits for another reader and only waits when a WRITER is held. With
+ * every writer moved out of the sharded projects, and each CI leg running one
+ * project on its own runner (the lock lives in `tmpdir()`, so a leg's lock
+ * directory is its own), no writer is ever held while those legs run: the
+ * read side costs one `stat` and one file. Moving them here too would only
+ * re-serialise six files for a lock nobody takes.
+ *
+ * ONE PROJECT PER ENGINE, and they are run by SEPARATE CI legs on purpose.
+ * Per-project `workers` caps a project, not the run: named in one command
+ * (`--project=platform-flags --project=platform-flags-webkit`) the two would
+ * get one worker EACH and contend over the same lock directory again, which
+ * is the thing this whole arrangement removes. `.github/workflows/
+ * ci-web-e2e.yml` gives each its own matrix leg, and
+ * `scripts/e2e-journey-shape.test.mjs` rule 9 asserts that both are wired.
+ *
+ * The list is the gate's input as well as the config's: rule 9 scans every
+ * journey spec for `withPlatformFlagLock(` and fails when one is not matched
+ * here, so a new flag-writing journey cannot land in a sharded project by
+ * default.
+ */
+const PLATFORM_FLAG_JOURNEYS = [
+  /journeys\/admin\/admin\.agent-publishing-guardrails\.spec\.ts/,
+  /journeys\/admin\/admin\.branding\.spec\.ts/,
+  /journeys\/admin\/admin\.features\.spec\.ts/,
+  /journeys\/admin\/admin\.guardrails\.spec\.ts/,
+  /journeys\/admin\/admin\.resources-help-center\.spec\.ts/,
+  /journeys\/shell\/shell\.resources-version-info\.spec\.ts/,
+  /journeys\/support\/support\.entrypoints\.spec\.ts/,
+  /journeys\/support\/support\.widget\.spec\.ts/,
+];
 /*
  * THE INVENTORY JOURNEYS (journeys/inventory, INV-001..010) HAVE NO CONSTANT
  * HERE, AND THAT IS THE DECISION.
@@ -279,6 +380,8 @@ const LIVE_TOOLKIT_SPECS: Record<LiveToolkitId, RegExp> = {
   gitlab: /live\/toolkits\.gitlab\.spec\.ts/,
   bitbucket: /live\/toolkits\.bitbucket\.spec\.ts/,
   confluence: /live\/toolkits\.confluence\.spec\.ts/,
+  aha: /live\/toolkits\.aha\.spec\.ts/,
+  sharepoint: /live\/toolkits\.sharepoint\.spec\.ts/,
 };
 
 /** Both GitHub-gated: the two legacy agent files use a GitHub toolkit. */
@@ -427,6 +530,7 @@ export default defineConfig({
         SUPPORT_JOURNEY,
         EMPTY_TOOLKIT_LIST_JOURNEY,
         FIXTURE_ISOLATION_JOURNEY,
+        ...PLATFORM_FLAG_JOURNEYS,
       ],
       use: {
         ...devices['Desktop Chrome'],
@@ -447,6 +551,7 @@ export default defineConfig({
         SUPPORT_JOURNEY,
         EMPTY_TOOLKIT_LIST_JOURNEY,
         FIXTURE_ISOLATION_JOURNEY,
+        ...PLATFORM_FLAG_JOURNEYS,
       ],
       use: {
         ...devices['Desktop Safari'],
@@ -454,6 +559,60 @@ export default defineConfig({
       },
       dependencies: ['setup', 'toolkits-empty'],
       testMatch: /journeys\/.+\.spec\.ts/,
+    },
+
+    /*
+     * ── platform-flags / platform-flags-webkit ────────────────────────────
+     *
+     * The journeys that WRITE a platform-wide flag, one worker, one engine
+     * per project. See `PLATFORM_FLAG_JOURNEYS` above for the measurement
+     * that put them here and for why the readers stayed behind.
+     *
+     * `workers: 1` IS THE MECHANISM, and `fullyParallel: false` alone is not:
+     * without a worker cap Playwright puts every FILE on its own worker and
+     * seven files then queue for one lock exactly as before. The same
+     * distinction is drawn on the `chat-stream` project below, which buys it
+     * with `--workers=1` on the command line because a per-project cap did
+     * not exist when it was written; `testProject.workers` (Playwright
+     * 1.62.1) caps THIS project without touching the sharded ones, so the
+     * cap lives in the config where the reason for it is.
+     *
+     * `fullyParallel: false` is kept for the files that are `serial` at file
+     * level (support.widget, support.entrypoints): it keeps a file's tests
+     * together in one worker in declaration order, which is the shape their
+     * headers describe. It does NOT put the other five files into serial
+     * mode, so a failure here still reports every test after it — the #539
+     * property `scripts/e2e-journey-shape.test.mjs` rule 1 exists to hold.
+     *
+     * `storageState` is the member state, the same default the engine
+     * projects carry: seven of the eight files call `.use({ storageState:
+     * STORAGE_STATE.admin })` themselves, and `admin.guardrails.spec.ts`
+     * drives the API as the project default. Changing the default here would
+     * silently re-authenticate that one file.
+     */
+    {
+      name: 'platform-flags',
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: STORAGE_STATE.member,
+        launchOptions: CHROMIUM_LAUNCH_OPTIONS,
+      },
+      dependencies: ['setup', 'toolkits-empty'],
+      testMatch: PLATFORM_FLAG_JOURNEYS,
+      workers: 1,
+      fullyParallel: false,
+    },
+
+    {
+      name: 'platform-flags-webkit',
+      use: {
+        ...devices['Desktop Safari'],
+        storageState: STORAGE_STATE.member,
+      },
+      dependencies: ['setup', 'toolkits-empty'],
+      testMatch: PLATFORM_FLAG_JOURNEYS,
+      workers: 1,
+      fullyParallel: false,
     },
 
     /*

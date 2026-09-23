@@ -48,7 +48,7 @@ export const TracingSpan = zod
     metadata: zod.record(zod.string(), zod.unknown()).optional(),
   })
   .describe(
-    "internal\/api\/v2\/tracing\/handler.go's spanData — one child span within a TracingTraceBatch.\n",
+    "internal/api/v2/tracing/handler.go's spanData — one child span within a TracingTraceBatch.\n",
   );
 
 export type TracingSpan = zod.input<typeof TracingSpan>;

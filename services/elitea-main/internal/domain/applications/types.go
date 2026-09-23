@@ -58,6 +58,37 @@ type Application struct {
 	Versions []Version `json:"versions,omitempty"`
 }
 
+// IsForkedFromMeta mirrors ApplicationVersionDetailModel.set_is_forked
+// (legacy/plugins/elitea_core/models/pd/version.py:282-287) and
+// api/v2/applications/handler.go's own private copy of the same rule: a
+// version was created by Fork exactly when its `meta` carries BOTH
+// `parent_entity_id` and `parent_project_id` (eliteacore/handler.go's Fork
+// handler stamps both together, always — see that file's `forkMeta` build).
+// Exported here, in the domain package both the applications API handler and
+// the repos layer already import, so #915 (List's own `is_forked` read the
+// WRONG signal — `applications.shared_id`, a catalog/publish "shared copy"
+// column Fork never writes — instead of this one) has exactly one rule to
+// share, not two copies that can drift.
+func IsForkedFromMeta(meta map[string]any) bool {
+	_, hasEntity := meta["parent_entity_id"]
+	_, hasProject := meta["parent_project_id"]
+	return hasEntity && hasProject
+}
+
+// ForkOrigin reads the fork-provenance keys `Fork` stamps onto a version's
+// `meta` (`parent_entity_id`/`parent_project_id` — see `IsForkedFromMeta`),
+// as the strings they were written as. `ok` is false whenever either key is
+// absent, not merely falsy, matching `IsForkedFromMeta`'s own presence-only
+// rule.
+func ForkOrigin(meta map[string]any) (entityID string, projectID string, ok bool) {
+	if !IsForkedFromMeta(meta) {
+		return "", "", false
+	}
+	entityID, _ = meta["parent_entity_id"].(string)
+	projectID, _ = meta["parent_project_id"].(string)
+	return entityID, projectID, true
+}
+
 type Version struct {
 	ID            string `json:"id"`
 	ApplicationID string `json:"application_id"`

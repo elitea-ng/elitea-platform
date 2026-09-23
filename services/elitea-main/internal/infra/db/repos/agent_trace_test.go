@@ -2,8 +2,11 @@ package repos
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/nodeevent"
 )
 
 func TestDecodeCurrentAgentTraceDeltaPreservesCurrentPartialMessageContract(t *testing.T) {
@@ -198,5 +201,283 @@ func TestCurrentAgentThinkingDeltaReplacesRunAndPreservesSeparateRuns(t *testing
 	if len(rows) != 2 || rows[0].kind != "thinking_step" ||
 		rows[0].thinking == nil || *rows[0].thinking != "private" {
 		t.Fatalf("thinking row mapping changed: %#v", rows)
+	}
+}
+
+// chunkedToolOutputEvent renders one chunk exactly as a worker emits it: an
+// ordinary node event, bound to the same turn as the partial messages around
+// it, whose content is a slice of one tool call's output.
+func chunkedToolOutputEvent(t *testing.T, chunk nodeevent.ToolOutputChunk) json.RawMessage {
+	t.Helper()
+	metadata, err := nodeevent.EncodeToolOutputChunkMetadata(chunk)
+	if err != nil {
+		t.Fatalf("encode chunk metadata: %v", err)
+	}
+	raw, err := json.Marshal(map[string]any{
+		"type":                 nodeevent.ToolOutputChunkEventType,
+		"stream_id":            "10000000-0000-4000-8000-000000000001",
+		"message_id":           "20000000-0000-4000-8000-000000000001",
+		"execution_generation": "30000000-0000-4000-8000-000000000001",
+		"sio_event":            "chat_predict",
+		"content":              chunk.Text,
+		"response_metadata":    json.RawMessage(metadata),
+	})
+	if err != nil {
+		t.Fatalf("encode chunk event: %v", err)
+	}
+	return raw
+}
+
+// A tool result too large for one output frame arrives as chunks and is
+// REASSEMBLED onto the row (#956) — and the completed tool call, which carries
+// the count and the digest instead of the text, must not wipe it out.
+func TestCurrentAgentTraceReassemblesChunkedToolOutput(t *testing.T) {
+	output := ""
+	for range 4_000 {
+		output += "AUTOTESTMED the quick brown fox jumps over the lazy dog 0123456789\n"
+	}
+	chunks, err := nodeevent.SplitToolOutput("tool-run", output)
+	if err != nil {
+		t.Fatalf("split tool output: %v", err)
+	}
+	if len(chunks) < 3 {
+		t.Fatalf("this case needs a multi-chunk output; got %d", len(chunks))
+	}
+
+	started := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	empty := ""
+	rows := []currentAgentTraceRow{{
+		id: 71, messageGroupID: 9, kind: "tool_call", runID: "tool-run",
+		startedAt: &started, hasVisibleContent: true, toolName: "read_file",
+		toolOutput: &empty,
+	}}
+
+	for _, chunk := range chunks {
+		delta, recognized, err := decodeCurrentAgentTraceDelta(chunkedToolOutputEvent(t, chunk))
+		if err != nil || !recognized {
+			t.Fatalf("chunk %d: recognized=%t err=%v", chunk.Index, recognized, err)
+		}
+		if delta.outputChunk == nil || delta.outputChunk.Index != chunk.Index {
+			t.Fatalf("chunk %d did not decode as a chunk delta: %#v", chunk.Index, delta)
+		}
+		desired, err := mergeCurrentAgentTraceRows(9, rows, delta)
+		if err != nil {
+			t.Fatalf("merge chunk %d: %v", chunk.Index, err)
+		}
+		if len(desired) != 1 {
+			t.Fatalf("a chunk created %d rows", len(desired))
+		}
+		rows = []currentAgentTraceRow{desired[0]}
+		rows[0].id = 71
+	}
+	if rows[0].toolOutput == nil || *rows[0].toolOutput != output {
+		t.Fatalf("the reassembled output is %d bytes, want %d",
+			len(stringOrEmpty(rows[0].toolOutput)), len(output))
+	}
+
+	// RE-PROJECTING an already-applied chunk must be a no-op: node events are
+	// replayable, and a blind append would duplicate the text.
+	replay, _, err := decodeCurrentAgentTraceDelta(chunkedToolOutputEvent(t, chunks[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterReplay, err := mergeCurrentAgentTraceRows(9, rows, replay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterReplay[0].toolOutput == nil || *afterReplay[0].toolOutput != output {
+		t.Fatalf("replaying a chunk changed the output (%d bytes, want %d)",
+			len(stringOrEmpty(afterReplay[0].toolOutput)), len(output))
+	}
+
+	// The COMPLETED call names the chunk count and digest and carries no text.
+	// The row must keep what the chunks delivered and record that it is whole.
+	completion := currentAgentTraceDelta{
+		streamID:            "10000000-0000-4000-8000-000000000001",
+		messageID:           "20000000-0000-4000-8000-000000000001",
+		executionGeneration: "30000000-0000-4000-8000-000000000001",
+		sioEvent:            "chat_predict",
+		toolCalls: []currentAgentToolCall{{
+			key: "tool-run",
+			entry: map[string]any{
+				"tool_name": "read_file", "tool_run_id": "tool-run", "run_id": "tool-run",
+				"tool_output":      "",
+				"finish_reason":    "stop",
+				"timestamp_start":  started.Format(time.RFC3339Nano),
+				"timestamp_finish": started.Add(time.Second).Format(time.RFC3339Nano),
+				"tool_output_chunks": map[string]any{
+					"total":              int64(len(chunks)),
+					"tool_output_sha256": nodeevent.ToolOutputDigest(output),
+				},
+			},
+		}},
+	}
+	desired, err := mergeCurrentAgentTraceRows(9, rows, completion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if desired[0].toolOutput == nil || *desired[0].toolOutput != output {
+		t.Fatalf("the completed call dropped the reassembled output (%d bytes, want %d)",
+			len(stringOrEmpty(desired[0].toolOutput)), len(output))
+	}
+	if desired[0].finishReason != "stop" || desired[0].finishedAt == nil {
+		t.Fatalf("the completion did not land: %#v", desired[0])
+	}
+	progress := currentAgentMap(desired[0].attrs, "tool_output_chunks")
+	if complete, _ := progress["complete"].(bool); !complete {
+		t.Fatalf("a whole reassembled output was not recorded as complete: %#v", progress)
+	}
+}
+
+// A chunk that never arrives leaves a row that SAYS the output is partial,
+// rather than one that looks like a complete short result.
+func TestCurrentAgentTraceMarksAnIncompleteChunkedOutput(t *testing.T) {
+	output := ""
+	for range 4_000 {
+		output += "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n"
+	}
+	chunks, err := nodeevent.SplitToolOutput("tool-run", output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	empty := ""
+	rows := []currentAgentTraceRow{{
+		id: 71, messageGroupID: 9, kind: "tool_call", runID: "tool-run",
+		startedAt: &started, hasVisibleContent: true, toolName: "read_file",
+		toolOutput: &empty,
+	}}
+	// Everything but the last chunk.
+	for _, chunk := range chunks[:len(chunks)-1] {
+		delta, _, err := decodeCurrentAgentTraceDelta(chunkedToolOutputEvent(t, chunk))
+		if err != nil {
+			t.Fatal(err)
+		}
+		desired, err := mergeCurrentAgentTraceRows(9, rows, delta)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows = []currentAgentTraceRow{desired[0]}
+		rows[0].id = 71
+	}
+	completion := currentAgentTraceDelta{
+		toolCalls: []currentAgentToolCall{{
+			key: "tool-run",
+			entry: map[string]any{
+				"tool_name": "read_file", "tool_run_id": "tool-run", "run_id": "tool-run",
+				"tool_output": "",
+				"tool_output_chunks": map[string]any{
+					"total":              int64(len(chunks)),
+					"tool_output_sha256": nodeevent.ToolOutputDigest(output),
+				},
+			},
+		}},
+	}
+	desired, err := mergeCurrentAgentTraceRows(9, rows, completion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	progress := currentAgentMap(desired[0].attrs, "tool_output_chunks")
+	if complete, _ := progress["complete"].(bool); complete {
+		t.Fatalf("a short output was recorded as complete: %#v", progress)
+	}
+	if desired[0].toolOutput == nil || len(*desired[0].toolOutput) >= len(output) {
+		t.Fatalf("the partial output was not kept as what it is: %#v", progress)
+	}
+}
+
+func stringOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+// #984: A NUL IN A CHUNK MUST NOT POISON THE ROW.
+//
+// Every inline tool output goes through `sanitizeCurrentAgentJSON` on its way
+// in. A CHUNK does not: `DecodeToolOutputChunk` checks only that the text is
+// valid UTF-8, and `\x00` is. A python tool that returned a large result
+// containing one therefore reached the `UPDATE ... SET tool_output` as-is,
+// Postgres answered `invalid byte sequence for encoding "UTF8": 0x00`, and the
+// node event was rejected NON-RETRYABLY — so every replay was rejected the
+// same way and the turn could not be recovered, over one invisible byte.
+//
+// The text is stripped instead, and the row SAYS so: the producer hashed the
+// bytes it sent, NUL included, so the digest can no longer be the completeness
+// test and the chunk arithmetic takes over.
+func TestCurrentAgentTraceStripsANULFromAChunkedToolOutput(t *testing.T) {
+	const withNUL = "before\x00after"
+	chunk := nodeevent.ToolOutputChunk{
+		ToolCallID: "tool-run",
+		Index:      0,
+		Total:      1,
+		Digest:     nodeevent.ToolOutputDigest(withNUL),
+		Text:       withNUL,
+	}
+	delta, recognized, err := decodeCurrentAgentTraceDelta(chunkedToolOutputEvent(t, chunk))
+	if err != nil || !recognized {
+		t.Fatalf("recognized=%t err=%v", recognized, err)
+	}
+
+	started := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	empty := ""
+	rows := []currentAgentTraceRow{{
+		id: 71, messageGroupID: 9, kind: "tool_call", runID: "tool-run",
+		startedAt: &started, hasVisibleContent: true, toolName: "read_file",
+		toolOutput: &empty,
+	}}
+	desired, err := mergeCurrentAgentTraceRows(9, rows, delta)
+	if err != nil {
+		t.Fatalf("merge chunk: %v", err)
+	}
+	got := stringOrEmpty(desired[0].toolOutput)
+	if strings.Contains(got, "\x00") {
+		t.Fatalf("the NUL reached the row: %q", got)
+	}
+	if got != "beforeafter" {
+		t.Fatalf("tool_output = %q, want the text with the NUL removed", got)
+	}
+	progress := currentAgentMap(desired[0].attrs, "tool_output_chunks")
+	if sanitized, _ := progress["sanitized"].(bool); !sanitized {
+		t.Fatalf("the row must record that the text was sanitized: %#v", progress)
+	}
+	// Every chunk arrived, so the output is whole — the digest cannot say so
+	// any more, and reporting it INCOMPLETE would be a second defect standing
+	// in for the first.
+	if complete, _ := progress["complete"].(bool); !complete {
+		t.Fatalf("a fully delivered sanitized output must still be complete: %#v", progress)
+	}
+
+	// THE CARRY HALF. The completed call carries no text of its own, so the
+	// row's accumulated value is moved onto it — and must arrive there clean.
+	completion := currentAgentTraceDelta{
+		streamID:            "10000000-0000-4000-8000-000000000001",
+		messageID:           "20000000-0000-4000-8000-000000000001",
+		executionGeneration: "30000000-0000-4000-8000-000000000001",
+		sioEvent:            "chat_predict",
+		toolCalls: []currentAgentToolCall{{
+			key: "tool-run",
+			entry: map[string]any{
+				"tool_name": "read_file", "tool_run_id": "tool-run", "run_id": "tool-run",
+				"tool_output":      "",
+				"finish_reason":    "stop",
+				"timestamp_start":  started.Format(time.RFC3339Nano),
+				"timestamp_finish": started.Add(time.Second).Format(time.RFC3339Nano),
+				"tool_output_chunks": map[string]any{
+					"total":              int64(1),
+					"tool_output_sha256": chunk.Digest,
+				},
+			},
+		}},
+	}
+	carried := []currentAgentTraceRow{desired[0]}
+	carried[0].id = 71
+	after, err := mergeCurrentAgentTraceRows(9, carried, completion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := stringOrEmpty(after[0].toolOutput); strings.Contains(out, "\x00") || out != "beforeafter" {
+		t.Fatalf("the completed call's output = %q, want the sanitized text", out)
 	}
 }

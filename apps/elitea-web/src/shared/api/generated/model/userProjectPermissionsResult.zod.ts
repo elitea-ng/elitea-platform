@@ -56,7 +56,7 @@ export const UserProjectPermissionsResult = zod
       ),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/admin\/user_project_permissions.go:180-187. `role_map` is the reference's own response field; the counters are what make a no-op distinguishable from a save.\n",
+    "NOTE(W2): internal/api/v2/admin/user_project_permissions.go:180-187. `role_map` is the reference's own response field; the counters are what make a no-op distinguishable from a save.\n",
   );
 
 export type UserProjectPermissionsResult = zod.input<

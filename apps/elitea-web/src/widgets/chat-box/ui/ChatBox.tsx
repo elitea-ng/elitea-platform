@@ -2,11 +2,7 @@
  * ChatBox — composition root for the chat experience. Composes entities/conversation
  * lifecycle + streaming, features/chat-messages ChatMessageList, features/chat-input
  * NewChatInput, Phase-2 button primitives, Phase-4 recommendation list, and TTS.
- * Port of the old 2300-line ChatBox.jsx — split across sibling hooks
- * (data/state/handlers/participant/model-selection/internal-tools/
- * versioning/mentions/actions — see ./hooks/) plus a pure-helpers module
- * (./ChatBox.helpers.ts) to stay under the §3.5 file-length/component-props/
- * use-effects/complexity budgets.
+ * Sibling hooks and ChatBox.helpers.ts keep this composition within §3.5 budgets.
  *
  * Lives in widgets/ (not features/) because a composition root that pulls
  * together chat-messages, chat-input, and chat-recommendations necessarily
@@ -22,7 +18,7 @@ import type { AttachmentButtonHandle, PlusChatButtonEntitySubmenus, VoiceButtonH
 import { ChatConversationStarters, NewChatInput, voiceHooks } from '@/features/chat-input';
 import { useSocketClient } from '@/shared/api/socket/client';
 import { ChatMessageList, useDeleteMessageAlert } from '@/features/chat-messages';
-import { getAllTokens, McpAuthModal } from '@/features/mcps';
+import { getAllTokens } from '@/features/mcps';
 import { conversationApi } from '@/entities/conversation';
 import { t } from '@/shared/i18n';
 
@@ -42,8 +38,13 @@ import type { ChatBoxEditorCallbacks } from './ChatBox.helpers';
 import type { ChatBoxAgentEventSink, ChatBoxConversationProp } from './ChatBox.props';
 import { unwrapChatBoxConversation } from './ChatBox.props';
 import type { ChatBoxHandle } from './ChatBox.types';
-import { buildChatBoxAttachmentProps, buildChatBoxInputSlots } from './ChatBoxInputSlots';
+import { buildChatBoxContinuationProps } from './ChatBoxContinuation';
+import { useChatBoxLlmSettingsDialog } from './ChatBoxLlmSettingsDialog';
+import { buildChatBoxAttachmentProps, buildChatBoxInputSlots, useChatBoxVoiceFeedback } from './ChatBoxInputSlots';
+import { ChatBoxQueuedMessages, chatBoxQueueKey, useChatBoxQueuedMessages } from './ChatBoxQueuedMessages';
+import { ChatBoxVoicePlayer } from './ChatBoxVoicePlayer';
 import { buildChatBoxPopupsProps, ChatBoxPopups } from './ChatBoxPopups';
+import { ChatBoxWithdrawnNotice } from './ChatBoxWithdrawnNotice';
 import { ChatBoxDeleteModal } from './ChatBoxDeleteModal';
 import { ChatEmptyGreeting } from './ChatEmptyGreeting';
 import { chatColumnSx, chatShellSx } from './ChatBox.layout';
@@ -64,7 +65,6 @@ import { useStableRef } from './hooks/useStableRef';
 
 /** `NewChatInputHandle` stays unexported from `features/chat-input`'s barrel — derived via `ComponentRef`, matching that barrel's own documented convention. */
 type NewChatInputHandle = ComponentRef<typeof NewChatInput>;
-
 
 /** @public Props for the ChatBox composition root. */
 export interface ChatBoxProps {
@@ -99,10 +99,6 @@ export interface ChatBoxProps {
 
 export type { ChatBoxHandle };
 
-/* ------------------------------------------------------------------ */
-/*  Component                                                           */
-/* ------------------------------------------------------------------ */
-
 const ChatBoxInner = memo(function ChatBox({
   ref,
   conversation,
@@ -129,9 +125,8 @@ const ChatBoxInner = memo(function ChatBox({
   const messages = data.messageList.messages;
 
   // Participant normalisation + details fetch
-  const { participantForEditor, normalisedParticipants, agentEditorParticipantDetails, isFetchingParticipantDetails, assistantName } = useChatBoxParticipant({
-    activeParticipant,
-    conversationParticipants,
+  const { participantForEditor, normalisedParticipants, agentEditorParticipantDetails, isFetchingParticipantDetails, assistantName, areAttachmentsGated } = useChatBoxParticipant({
+    activeParticipant, conversationParticipants, isAgentsPage,
   });
   const activeParticipantVersions = agentEditorParticipantDetails?.versions;
 
@@ -149,14 +144,13 @@ const ChatBoxInner = memo(function ChatBox({
     activeParticipantVersions,
   }));
 
-  const socketClient = useSocketClient();
-  const readAloud = voiceHooks.useReadAloud({
-    projectId: projectIdString,
-    socket: socketClient,
-  });
+  // Socket client + read-aloud (TTS)
+  const socketClient = useSocketClient(); const voiceFeedback = useChatBoxVoiceFeedback(); // #932/#934: VoiceButton's recording flag + its error messages, which had no caller at all
+  const readAloud = voiceHooks.useReadAloud({ projectId: projectIdString, socket: socketClient });
   const lifecycle = data.lifecycle;
 
-  // Mirror live history to the parent when supplied.
+  // Mirror the live, socket-synced history out to the parent's own mirror, when one
+  // is supplied (no live caller exists yet — the routing gap this unit operates under).
   useEffect(() => {
     setChatHistory?.(messages);
   }, [messages, setChatHistory]);
@@ -196,10 +190,11 @@ const ChatBoxInner = memo(function ChatBox({
   });
   // After `useChatBoxSend`: a "+" pick on a chat with no conversation has to create one first, and it reuses the adapter the first send would have used, so an eagerly created conversation is seeded exactly like a send-created one.
   const entityParticipantActions = useAddEntityParticipant({ projectId, conversationId, participants: normalisedParticipants, onChangeParticipant, createConversation: () => createConversationForSend(''), ...(onConversationCreated ? { onConversationCreated } : {}) });
-  // `isStreamingNow` is derived from the PERSISTED message groups, which carry
-  // no in-flight flag while an SSE turn runs — without the transport's own flag
-  // the composer never offers Stop for the very turn Stop exists to cancel (#328).
+  // `isStreamingNow` is derived from the PERSISTED message groups, which carry no
+  // in-flight flag while an SSE turn runs — without the transport's own flag the
+  // composer never offers Stop for the turn Stop exists to cancel (#328).
   const isStreaming = [data.streaming.isStreamingNow, data.messageList.isStreamingFromHistory, isStreamedExecution].some(Boolean);
+  const areAttachmentsDisabled = [isStreaming, areAttachmentsGated].some(Boolean); // #905 + A17 — see `useChatBoxParticipant`'s `areAttachmentsGated`.
 
   // Action handlers — real socket protocol (chat_predict / chat_continue_predict),
   // real REST mutations, real conversation-creation-first send ordering.
@@ -259,11 +254,13 @@ const ChatBoxInner = memo(function ChatBox({
     activeParticipantVersions,
   });
 
+  // A14 (ELITEA-0386): per-participant LLM-settings edit dialog
+  const llmSettingsDialog = useChatBoxLlmSettingsDialog({ projectId: projectIdString, conversationId, participant: participantForEditor });
   // "@" mention -> send-to-user/everyone routing, "~" skill selection
   const { handleMentionChange, handleSelectUserMention, handleSelectSkillTool } = useChatBoxMentions({ state, onChangeParticipant });
 
   // Input disable/loading derivation
-  const { isInputLoading, disabledSend } = deriveChatBoxInputState({
+  const { isInputLoading, isComposerBusy, disabledSend } = deriveChatBoxInputState({
     isLoadingConversation,
     isFetchingParticipantDetails,
     isUploadingAttachments: data.attachments.upload.isUploading,
@@ -274,12 +271,11 @@ const ChatBoxInner = memo(function ChatBox({
     isProcessingSymbols: state.keyDown.isProcessingSymbols,
     hasPendingHitlInterrupt: data.hasPendingHitlInterrupt,
     isActiveParticipantBroken: state.isActiveParticipantBroken,
+    isActiveParticipantWithdrawn: state.isActiveParticipantWithdrawn,
   });
 
-  // Action callbacks (send, regenerate, copy, delete, edit-resubmit, HITL
-  // resume, MCP/token-limit continue, clear chat, conversation-starter send)
-  const readAloudRef = useStableRef(readAloud);
-  const readAloudStop = useCallback(() => { readAloudRef.current.stop(); }, [readAloudRef]);
+  // Action callbacks (send, regenerate, copy, delete, edit-resubmit, HITL resume, MCP/token-limit continue, clear chat, starter send)
+  const readAloudRef = useStableRef(readAloud); const readAloudStop = useCallback(() => { readAloudRef.current.stop(); }, [readAloudRef]);
   const {
     handleSend,
     handleSendStarter,
@@ -292,6 +288,14 @@ const ChatBoxInner = memo(function ChatBox({
     handleContinueTokenLimit,
     handleClear,
   } = useChatBoxActions({ chatInputRef, data, state, handlers, deleteAlert, messages, isAgentsPage, readAloudStop, onConversationCreated });
+
+  // A17: while a turn is open the composer QUEUES instead of sending; the queue
+  // drains FIFO on settle down this same `sendQuestion` path, survives Stop and
+  // a reload, and stamps its deliveries so the transcript can label them.
+  const queued = useChatBoxQueuedMessages({
+    conversationKey: chatBoxQueueKey(conversationUuid, conversationId), isStreaming,
+    onSendNow: handleSend, send: handlers.sendQuestion, onConversationCreated,
+  });
 
   // Imperative handle (stable via refs, so identity never churns)
   const handleClearRef = useStableRef(handleClear);
@@ -324,20 +328,15 @@ const ChatBoxInner = memo(function ChatBox({
       <Box sx={chatColumnSx(isEmptyConversation)}>
         <ChatMessageList
           assistantName={assistantName} emptyState={<ChatEmptyGreeting userName={userName} />}
-          chatHistory={messages} isStreaming={isStreaming} userId={userId ?? ''} projectId={projectIdString}
+          chatHistory={queued.decorate(messages)} isStreaming={isStreaming} userId={userId ?? ''} projectId={projectIdString}
           messageActions={{
             onCopyToClipboard: handleCopy,
             onDeleteAnswer: handleDeleteAnswer,
             onRegenerateAnswer: handleRegenerate,
             onSubmitEditedMessage: handleSubmitEditedMessage,
           }}
-          continuation={{
-            onHitlResume: handleHitlResume,
-            onContinueMcpExecution: handleContinueMcpExecution,
-            onContinueTokenLimitExecution: handleContinueTokenLimit,
-            renderAuthModal: (props) => <McpAuthModal {...props} projectId={projectIdString} />,
-          }}
-          tts={buildTtsProps(readAloud)} canvas={buildCanvasProps(editorCallbacks)}
+          continuation={buildChatBoxContinuationProps({ onHitlResume: handleHitlResume, onContinueMcpExecution: handleContinueMcpExecution, onContinueTokenLimitExecution: handleContinueTokenLimit }, projectIdString)}
+          tts={buildTtsProps(readAloud, state.isSpeakingMode)} canvas={buildCanvasProps(editorCallbacks)}
         />
         {state.shouldShowStarters && (
           <ChatConversationStarters
@@ -347,6 +346,8 @@ const ChatBoxInner = memo(function ChatBox({
         )}
       </Box>
       <Box sx={{ p: 1 }}>
+        <ChatBoxVoicePlayer showPlayer={readAloud.showPlayer} voicePlayerProps={readAloud.voicePlayerProps} />
+        <ChatBoxQueuedMessages queue={queued} />
         <ChatBoxPopups
           {...buildChatBoxPopupsProps({
             state,
@@ -361,9 +362,9 @@ const ChatBoxInner = memo(function ChatBox({
         <NewChatInput
           ref={chatInputRef}
           conversationId={conversationId !== undefined ? String(conversationId) : undefined}
-          state={{ isLoading: isInputLoading, isStreaming, disabledSend, isCreatingConversation: data.lifecycle.isCreating }}
+          state={{ isLoading: isComposerBusy, isStreaming, disabledSend, isCreatingConversation: data.lifecycle.isCreating, allowSendWhileStreaming: true }}
           content={{ placeholder: t('widgets.chatBox.inputPlaceholder', 'Type your message...'), clearInputAfterSubmit: true, slashHighlights: state.combinedHighlightRanges }}
-          callbacks={{ onSend: handleSend, onStopGeneration: stopGeneration, onNormalKeyDown: state.onNormalKeyDown, onInputChange: state.onInputChange }}
+          callbacks={{ onSend: queued.onSend, onStopGeneration: stopGeneration, onNormalKeyDown: state.onNormalKeyDown, onInputChange: state.onInputChange }}
           agentEditor={buildAgentEditorProps({
             participantForEditor,
             activeParticipantDetails: agentEditorParticipantDetails,
@@ -371,24 +372,24 @@ const ChatBoxInner = memo(function ChatBox({
             selectSavedOrDefaultModel: data.selectSavedOrDefaultModel,
             onShowParticipantsList: () => state.setShowRecommendationList(!state.showRecommendationList),
             onSelectVersion: (version) => { void handleSelectVersion(version); },
-            editorCallbacks,
+            editorCallbacks, onEditLlmSettings: llmSettingsDialog.onEdit,
           })}
-          attachments={buildChatBoxAttachmentProps(data.attachments)}
+          attachments={buildChatBoxAttachmentProps(data.attachments, areAttachmentsDisabled)}
           mentions={{ users: state.users, onMentionChange: handleMentionChange }}
-          voice={{ isSpeakingMode: state.isSpeakingMode, onSpeakingModeToggle: () => state.setIsSpeakingMode(!state.isSpeakingMode), isTTSPlaying: readAloud.isPlaying }}
+          voice={{ isSpeakingMode: state.isSpeakingMode, onSpeakingModeToggle: () => state.setIsSpeakingMode(!state.isSpeakingMode), isTTSPlaying: readAloud.isPlaying, isRecording: voiceFeedback.isRecording }}
           slots={buildChatBoxInputSlots({
-            attachments: { attachments: data.attachments.state.attachments, onAttachFiles: data.attachments.state.onAttachFiles },
+            attachments: { attachments: data.attachments.state.attachments, onAttachFiles: data.attachments.state.onAttachFiles, disabled: areAttachmentsDisabled },
             internalTools: { disabled: isInputLoading, tools: internalToolsButtonTools, onToolChange: handleInternalToolChange },
             model: { llmSettings, onSetLLMSettings, selectedModel: selectedLlmModel, onSelectModel: handleSelectModel, models: modelsList },
             clearChat: { disabled: shouldDisableClearChat(isStreaming, messages.length), onClear: handleClear },
-            refs: { attachmentButtonRef, voiceButtonRef, voiceInputRef: chatInputRef },
+            refs: { attachmentButtonRef, voiceButtonRef, voiceInputRef: chatInputRef }, voice: readAloud.voicePlayerProps, voiceInput: { onRecordingChange: voiceFeedback.onRecordingChange, onError: voiceFeedback.onError },
             isAgentsPage: !!isAgentsPage, participants: normalisedParticipants,
             entitySubmenus: { ...entitySubmenus, onSelectParticipant: entityParticipantActions.onSelectParticipant, getParticipantMenuState: entityParticipantActions.getParticipantMenuState }, ...buildCreateHandlerProps(editorCallbacks),
           })}
           refs={{ attachmentButtonRef, voiceButtonRef }}
         />
       </Box>
-      <ChatBoxDeleteModal alert={deleteAlert} />
+      <ChatBoxWithdrawnNotice withdrawn={state.isActiveParticipantWithdrawn} /><ChatBoxDeleteModal alert={deleteAlert} />{llmSettingsDialog.dialog}{voiceFeedback.alert}
     </Box>
   );
 });

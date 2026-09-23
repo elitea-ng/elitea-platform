@@ -17,6 +17,11 @@ import { buildAuthorizationActions } from '@/entities/message';
 
 import { normalizeExecutionHierarchy } from './executionHierarchy';
 import {
+  TOOL_OUTPUT_CHUNKS_KEY,
+  chunkedCompletionOf,
+  finishChunkedToolOutput,
+} from './chatStreamToolOutputChunks';
+import {
   findToolAction,
   replaceAt,
   replaceToolAction,
@@ -185,8 +190,20 @@ export function reduceToolFrame(
           const assembled = chunk === undefined ? undefined : appendToolOutputChunk(previous, output, chunk, action['toolOutputChunk']);
           if (chunk !== undefined && assembled === undefined) return action;
           if (assembled && assembled.output === previous && assembled.chunk === action['toolOutputChunk']) return action;
+          // A CHUNKED result (#956) is finished from the chunks that preceded
+          // this frame, never from its `tool_output` — which is the empty
+          // string by construction, and would otherwise append nothing onto a
+          // pin that never received the text at all.
+          const chunked = chunkedCompletionOf(frame);
+          let chunkState: unknown;
+          let partial = false;
           if (assembled) {
             toolOutputs = assembled.output;
+          } else if (chunked) {
+            const finished = finishChunkedToolOutput(action, chunked);
+            toolOutputs = finished.toolOutputs;
+            chunkState = finished.state;
+            partial = finished.state.partial === true;
           } else if (typeof output === 'string') {
             toolOutputs = (typeof previous === 'string' ? previous : '') + convertJsonToString(output, true);
           } else if (typeof output === 'object' && output !== null) {
@@ -197,6 +214,7 @@ export function reduceToolFrame(
             ...hierarchy,
             toolOutputs,
             ...(assembled ? { toolOutputChunk: assembled.chunk } : {}),
+            ...(chunked ? { [TOOL_OUTPUT_CHUNKS_KEY]: chunkState, toolOutputPartial: partial } : {}),
             message: undefined,
             content: convertJsonToString(frame.content ?? ''),
             // An action awaiting approval stays awaiting it: the wrapper ending

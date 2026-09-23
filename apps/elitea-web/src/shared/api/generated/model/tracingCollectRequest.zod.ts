@@ -47,7 +47,7 @@ export const TracingCollectRequest = zod
     traces: zod.array(TracingTraceBatch).optional(),
   })
   .describe(
-    "internal\/api\/v2\/tracing\/handler.go's collectRequest (Collect). Each trace becomes a parent OTel span named `ui:<name>`, each nested span becomes a child span, both exported through the process TracerProvider (libs\/go\/observability) to the collector `otlp` proxies to.\n",
+    "internal/api/v2/tracing/handler.go's collectRequest (Collect). Each trace becomes a parent OTel span named `ui:<name>`, each nested span becomes a child span, both exported through the process TracerProvider (libs/go/observability) to the collector `otlp` proxies to.\n",
   );
 
 export type TracingCollectRequest = zod.input<typeof TracingCollectRequest>;

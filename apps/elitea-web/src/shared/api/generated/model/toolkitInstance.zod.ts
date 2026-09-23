@@ -53,7 +53,7 @@ export const ToolkitInstance = zod
     author_id: zod.int(),
   })
   .describe(
-    "NOTE(W2): ListToolkits row (internal\/api\/v2\/toolkits\/handler.go:811-860). id\/type\/name are `elitea_tools` columns (internal\/infra\/db\/migrations\/001_initial.sql:177-179); description is COALESCE'd to `''` (never null, handler.go:822). created_at and author_id match the migration's `created_at TIMESTAMP NOT NULL` \/ `author_id INTEGER NOT NULL` (migration :182-183). The listing query intentionally selects only those migrated columns.\n",
+    "NOTE(W2): ListToolkits row (internal/api/v2/toolkits/handler.go:811-860). id/type/name are `elitea_tools` columns (internal/infra/db/migrations/001_initial.sql:177-179); description is COALESCE'd to `''` (never null, handler.go:822). created_at and author_id match the migration's `created_at TIMESTAMP NOT NULL` / `author_id INTEGER NOT NULL` (migration :182-183). The listing query intentionally selects only those migrated columns.\n",
   );
 
 export type ToolkitInstance = zod.input<typeof ToolkitInstance>;

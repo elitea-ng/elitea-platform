@@ -55,7 +55,7 @@ export const ApplicationDetail = zod
     version_details: ApplicationVersionDetail.optional(),
   })
   .describe(
-    "NOTE(W2): Get response map, internal\/api\/v2\/applications\/handler.go:121-139. version_details is present only when the application has at least one version whose detail row loads (:132-137).\n",
+    "NOTE(W2): Get response map, internal/api/v2/applications/handler.go:121-139. version_details is present only when the application has at least one version whose detail row loads (:132-137).\n",
   );
 
 export type ApplicationDetail = zod.input<typeof ApplicationDetail>;

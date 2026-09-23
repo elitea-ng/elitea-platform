@@ -87,7 +87,7 @@ export const BackgroundJob = zod
       ),
   })
   .describe(
-    "One row of the admin Tasks table. `task_id`, `status`, `started_at` and `user` carry the legacy listing's names verbatim (legacy\/plugins\/admin\/api\/v2\/tasks.py:94-108); the rest are new, because pylon had one kind of task, one project, no completion time, and a stop button it always offered.\n",
+    "One row of the admin Tasks table. `task_id`, `status`, `started_at` and `user` carry the legacy listing's names verbatim (legacy/plugins/admin/api/v2/tasks.py:94-108); the rest are new, because pylon had one kind of task, one project, no completion time, and a stop button it always offered.\n",
   );
 
 export type BackgroundJob = zod.input<typeof BackgroundJob>;

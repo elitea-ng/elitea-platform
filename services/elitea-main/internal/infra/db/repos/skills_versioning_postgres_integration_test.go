@@ -191,6 +191,13 @@ func TestSkillsRepoPostgres_CompareTwoVersionsReadsIndependentPersistedContent(t
 	}
 }
 
+/*
+	elitea_issues: #6070 — a published skill version's name/description/tags/
+
+instructions cannot be saved through UpdateVersion; the write is refused
+with Conflict ("Unpublish first"), transactionally, before any column is
+touched.
+*/
 func TestSkillsRepoPostgres_UpdateVersionPersistsAndRefusesPublished(t *testing.T) {
 	pool := newSkillsTestPool(t)
 	repo := NewSkillsRepo(pool)
@@ -494,5 +501,51 @@ func TestSkillsRepoPostgres_WorkerReadPathUnchangedByVersioning(t *testing.T) {
 	}
 	if resolvedVersionName != "pinned" {
 		t.Errorf("resolved version_name=%q, want %q", resolvedVersionName, "pinned")
+	}
+}
+
+// #917/ELITEA-3294. The version selector names the creator beside each row
+// and searches by it, which a bare `author_id` cannot answer: the name a user
+// saw would become an id on the next read. getSkillWithVersions therefore
+// joins public.auth_core__user the same way applications' getVersions does.
+//
+// Asserted on a REAL read (Get), not on the write's own echo: the write path
+// builds its version struct in memory and would report an author it never
+// read back.
+func TestSkillsRepoPostgres_GetResolvesVersionAuthorFromUserTable(t *testing.T) {
+	pool := newSkillsTestPool(t)
+	repo := NewSkillsRepo(pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	// Both writers stamp author_id = 1 today (upsertBaseSkillVersion and
+	// CreateVersion both literal-1 it — a separate, pre-existing gap), so
+	// seeding user 1 is what makes the join resolvable at all.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO public.auth_core__user (id, email, name) VALUES (1, $1, $2)
+		 ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name`,
+		"author@example.com", "Version Author"); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+
+	sk := createSkillWithBase(t, repo, ctx, "Authored")
+	if _, err := repo.CreateVersion(ctx, "1", sk.ID, skills.VersionCreateInput{Name: "v1"}); err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+
+	reread, err := repo.Get(ctx, "1", sk.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(reread.Versions) != 2 {
+		t.Fatalf("expected base + v1, got %d versions", len(reread.Versions))
+	}
+	for _, v := range reread.Versions {
+		if v.Author == nil {
+			t.Fatalf("version %q carries no author; the join did not reach public.auth_core__user", v.Name)
+		}
+		if v.Author.ID != "1" || v.Author.Email != "author@example.com" || v.Author.Name != "Version Author" {
+			t.Fatalf("version %q author = %+v, want {1 author@example.com Version Author}", v.Name, *v.Author)
+		}
 	}
 }

@@ -27,6 +27,7 @@ import { server } from '@/test/setup';
 
 import { EliteaAssistant } from './EliteaAssistant';
 import type { TAssistantConfig, TEliteaAssistantRef } from './lib/types';
+import { setPersistedDraft } from '../lib/draftPersistence';
 
 const BASE = '/api/v2';
 
@@ -119,6 +120,15 @@ beforeEach(() => {
   // jsdom implements no scroll layout at all; the message list scrolls itself
   // to the newest message on every render, which is otherwise a hard throw.
   Element.prototype.scrollIntoView = vi.fn();
+  // #935/ELITEA-0623 made the composer draft survive a remount ON PURPOSE
+  // (`draftPersistence.ts`), which otherwise leaks across the independent
+  // `it()`s in this file: a prior test that types into the composer and
+  // never sends/clears it (e.g. "does not send on Shift+Enter, and does not
+  // clear the draft", by design) left a non-blank draft behind, so the NEXT
+  // test's fresh `renderAssistant()` seeded its Send button as already
+  // enabled. Each test gets a clean draft the same way a brand new tab
+  // would.
+  setPersistedDraft('');
 });
 
 afterEach(() => {

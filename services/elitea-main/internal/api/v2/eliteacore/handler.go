@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -70,6 +71,12 @@ type Handler struct {
 	// producers (#876's second half). nil leaves Publish/Unpublish exactly
 	// as before.
 	events EventEmitter
+	// publishModelClient backs the AI step of publish validation
+	// (publish_ai_validation.go, #940 A18). nil answers
+	// `ai_validation_available: false`, which is what every deployment
+	// answered before that step existed and is still the honest answer for
+	// one with no gateway.
+	publishModelClient PublishModelClient
 }
 
 // EventEmitter is the seam to internal/events.Publisher, declared locally so
@@ -1084,7 +1091,7 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 
 	// Validation gate: if no token provided, run inline validation
 	if body.ValidationToken == "" {
-		valResult, _ := h.runPublishValidation(ctx, s, versionID, body.VersionName)
+		valResult, _ := h.runPublishValidation(ctx, s, projectID, publishCallerID(r), versionID, body.VersionName)
 		if valResult != nil && valResult["status"] == "FAIL" {
 			criticals, _ := valResult["critical_issues"].([]map[string]any)
 			issues := make([]map[string]any, len(criticals))
@@ -1639,7 +1646,150 @@ func (h *Handler) Unpublish(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "deleted"})
 }
 
-func (h *Handler) runPublishValidation(ctx context.Context, s, versionID, versionName string) (map[string]any, int) {
+// placeholderTextMarkers are substrings (checked case-insensitively) that mark
+// a field as unfinished draft text rather than real content — #910/#911/#912.
+var placeholderTextMarkers = []string{
+	"todo", "tbd", "lorem ipsum", "placeholder", "xxx", "fixme",
+	"fill me in", "fill this in", "describe your agent", "n/a",
+}
+
+// isPlaceholderText reports whether value looks like draft/placeholder text
+// rather than real authored content.
+func isPlaceholderText(value string) bool {
+	v := strings.ToLower(strings.TrimSpace(value))
+	if v == "" {
+		return false
+	}
+	for _, marker := range placeholderTextMarkers {
+		if strings.Contains(v, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// genericSubAgentNames blocklists sub-agent names that carry no discovery
+// value on their own — #910.
+var genericSubAgentNames = map[string]bool{
+	"agent": true, "assistant": true, "bot": true, "chatbot": true,
+	"untitled": true, "new agent": true, "test agent": true, "my agent": true,
+}
+
+// incompleteModelSettings reports the ONE llm_settings shape #908 is about: a
+// model was chosen (the name is there) but the project it belongs to is not
+// recorded, so nothing downstream can resolve it.
+//
+// The no-model-at-all case is deliberately NOT this: pylon raises its own,
+// differently-worded "No LLM model configured" Critical for it
+// (legacy/plugins/elitea_core/utils/publish_utils.py:2984-2990), which this
+// port does not have — an agent published without naming a model still gets
+// the platform default, and promoting that to a refusal is a separate
+// behaviour change from the one #908 asks for.
+func incompleteModelSettings(llm map[string]any) bool {
+	name, _ := llm["model_name"].(string)
+	if strings.TrimSpace(name) == "" {
+		return false
+	}
+	mpid, ok := llm["model_project_id"]
+	if !ok || mpid == nil {
+		return true
+	}
+	// A present-but-empty id ("" from a form that submitted a blank select) is
+	// the same absence, one encoding over.
+	if s, isStr := mpid.(string); isStr && strings.TrimSpace(s) == "" {
+		return true
+	}
+	return false
+}
+
+// genericPublishTags is pylon's `GENERIC_TAG_SET`
+// (legacy/plugins/elitea_core/utils/publish_utils.py:112) verbatim — a tag set
+// that says nothing about what an agent is FOR, and so cannot make it findable
+// in the marketplace. #913.
+var genericPublishTags = map[string]bool{
+	"agent": true, "assistant": true, "ai": true, "bot": true, "helper": true,
+}
+
+// versionTagNames answers the names of the tags associated with a version, in
+// a stable order. An unreadable association table answers an EMPTY list, which
+// the tags rules read as "no tags" — the same thing the count-based query it
+// replaced did on failure.
+func (h *Handler) versionTagNames(ctx context.Context, schema, versionID string) []string {
+	names := make([]string, 0)
+	if h.pool == nil || schema == "" {
+		return names
+	}
+	rows, err := h.pool.Query(ctx, fmt.Sprintf(`
+		SELECT t.name
+		FROM %s.application_version_tag_association a
+		JOIN %s.tags t ON t.id = a.tag_id
+		WHERE a.version_id = $1
+		ORDER BY t.name`, schema, schema), versionID)
+	if err != nil {
+		slog.ErrorContext(ctx, "could not read the tag names of a version for publish validation",
+			"schema", schema, "version_id", versionID, "err", err)
+		return names
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			slog.ErrorContext(ctx, "could not scan a tag name for publish validation",
+				"schema", schema, "version_id", versionID, "err", err)
+			return names
+		}
+		names = append(names, name)
+	}
+	return names
+}
+
+// secretValuePrefixes are literal prefixes (checked case-sensitively, since
+// provider key formats are case-sensitive) that reliably identify a value as
+// an API key or credential rather than ordinary configuration — #909.
+var secretValuePrefixes = []string{
+	"sk-", "sk_live_", "sk_test_", "pk_live_", "pk_test_", "rk_live_",
+	"AKIA", "ASIA", "ghp_", "gho_", "ghu_", "ghs_", "ghr_", "glpat-",
+	"xoxb-", "xoxp-", "xoxa-", "xoxr-", "ya29.", "AIza", "Bearer ",
+	"-----BEGIN",
+}
+
+// secretVariableNamePattern flags variable NAMES that suggest their value is
+// a credential, so a shorter/less-distinctive secret value under such a name
+// is still caught — #909.
+var secretVariableNamePattern = regexp.MustCompile(`(?i)(api[_-]?key|secret|password|passwd|token|credential)`)
+
+// looksLikeSecret reports whether an application variable's name/value pair
+// looks like it stores a secret or API key that should not be published in
+// plain text — #909.
+func looksLikeSecret(name, value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return false
+	}
+	for _, prefix := range secretValuePrefixes {
+		if strings.HasPrefix(trimmed, prefix) {
+			return true
+		}
+	}
+	if secretVariableNamePattern.MatchString(name) && len(trimmed) >= 8 {
+		return true
+	}
+	return false
+}
+
+// semverPattern matches a plain semantic-version-shaped string (an optional
+// leading "v", MAJOR.MINOR.PATCH) — #914.
+var semverPattern = regexp.MustCompile(`^v?\d+\.\d+\.\d+$`)
+
+// runPublishValidation performs the pre-publish check for one version.
+//
+// projectID and callerID are threaded in for the AI step alone
+// (publish_ai_validation.go, #940 A18): the advisory turn is billed and
+// authorised against the CALLER asking for the validation, not against the
+// agent being validated. Every deterministic rule below is unchanged by them.
+func (h *Handler) runPublishValidation(
+	ctx context.Context, s, projectID, callerID, versionID, versionName string,
+) (map[string]any, int) {
 	criticalIssues := []map[string]any{}
 	warnings := []map[string]any{}
 	recommendations := []map[string]any{}
@@ -1667,8 +1817,47 @@ func (h *Handler) runPublishValidation(ctx context.Context, s, versionID, versio
 
 	// Check for generic version names
 	genericNames := map[string]bool{"v1": true, "v2": true, "v3": true, "latest": true, "new": true, "test": true}
-	if genericNames[strings.ToLower(versionName)] {
+	isGenericVersionName := genericNames[strings.ToLower(versionName)]
+	if isGenericVersionName {
 		warnings = append(warnings, map[string]any{"field": "version_name", "issue": fmt.Sprintf("'%s' is a generic version name — consider something more descriptive", versionName), "source": "deterministic"})
+	}
+
+	// Suggest semantic versioning for a valid, non-generic name that is not
+	// already semver-shaped — #914 (the one row ELITEA-0174 documents that had
+	// no implementation; format and uniqueness are enforced elsewhere).
+	if !isGenericVersionName && !nameExists && !semverPattern.MatchString(versionName) {
+		recommendations = append(recommendations, map[string]any{
+			"field":      "version_name",
+			"suggestion": fmt.Sprintf("consider a semantic version like 1.0.0 instead of '%s'", versionName),
+			"source":     "deterministic",
+		})
+	}
+
+	// Main agent's own Name and Description — #911. `runPublishValidation`
+	// otherwise only ever reads the VERSION row; the application row itself
+	// (name, description) was never checked at all.
+	var appName, appDescription string
+	_ = h.pool.QueryRow(ctx, fmt.Sprintf(
+		`SELECT COALESCE(name, ''), COALESCE(description, '') FROM %s.applications WHERE id = $1`, s), appID).
+		Scan(&appName, &appDescription) // failure leaves both empty, safe
+
+	// No upper-length warning here: names built from AUTOTEST_PREFIX (an
+	// operational fixture concern, not a product one) routinely run past any
+	// reasonable ceiling, and an upper bound is not what ELITEA-0169 tests for.
+	trimmedAppName := strings.TrimSpace(appName)
+	switch {
+	case isPlaceholderText(trimmedAppName):
+		criticalIssues = append(criticalIssues, map[string]any{"field": "name", "issue": "agent name looks like placeholder text and should be replaced with a descriptive name", "source": "deterministic"})
+	case len(trimmedAppName) < 3:
+		criticalIssues = append(criticalIssues, map[string]any{"field": "name", "issue": "agent name is too short (must be at least 3 characters)", "source": "deterministic"})
+	}
+
+	trimmedAppDescription := strings.TrimSpace(appDescription)
+	switch {
+	case isPlaceholderText(trimmedAppDescription):
+		criticalIssues = append(criticalIssues, map[string]any{"field": "description", "issue": "agent description looks like placeholder text and should be replaced with a real description", "source": "deterministic"})
+	case len(trimmedAppDescription) < 20:
+		warnings = append(warnings, map[string]any{"field": "description", "issue": "agent description is too short for meaningful discovery", "source": "deterministic"})
 	}
 
 	// Collect sub-agent references
@@ -1774,13 +1963,13 @@ func (h *Handler) runPublishValidation(ctx context.Context, s, versionID, versio
 	// Load version details for content validation
 	var instructions, welcomeMsg string
 	var conversationStarters []byte
-	var tagCount, toolCount int
+	var toolCount int
 	_ = h.pool.QueryRow(ctx, fmt.Sprintf(
 		`SELECT COALESCE(instructions, ''), COALESCE(welcome_message, ''), COALESCE(conversation_starters::text, '[]')::bytea FROM %s.application_versions WHERE id = $1`, s), versionID).Scan(&instructions, &welcomeMsg, &conversationStarters) // failure leaves empty strings
 	_ = h.pool.QueryRow(ctx, fmt.Sprintf(
 		`SELECT COUNT(*) FROM %s.entity_tool_mapping WHERE entity_version_id = $1`, s), versionID).Scan(&toolCount) // failure leaves toolCount=0
-	_ = h.pool.QueryRow(ctx, fmt.Sprintf(
-		`SELECT COUNT(*) FROM %s.application_version_tag_association WHERE version_id = $1`, s), versionID).Scan(&tagCount) // failure leaves tagCount=0
+	// The tag NAMES, not merely the count — #913's generic-tag rule reads them.
+	tagNames := h.versionTagNames(ctx, s, versionID)
 
 	// Parse conversation_starters
 	var starters []string
@@ -1796,9 +1985,57 @@ func (h *Handler) runPublishValidation(ctx context.Context, s, versionID, versio
 		warnings = append(warnings, map[string]any{"field": "conversation_starters", "issue": "no conversation starters — users won't know how to begin", "source": "deterministic"})
 	}
 
-	// Tag discoverability recommendation
-	if tagCount < 3 {
-		recommendations = append(recommendations, map[string]any{"field": "tags", "suggestion": "add more tags to improve discoverability in the marketplace", "source": "deterministic"})
+	// Tags — #913, the three rules pylon's `TagsChecker` has
+	// (legacy/plugins/elitea_core/utils/publish_utils.py:2824-2851), which this
+	// port had collapsed into a single "fewer than three tags" Recommendation
+	// that said the OPPOSITE of the first of them:
+	//
+	//   no tags at all      -> Critical  ("No tags defined")
+	//   every tag generic   -> Warning   ("All tags are generic")
+	//   more than two tags  -> Suggestion("Recommend 1-2 tags ...")
+	//
+	// The old rule fired a Recommendation for 0, 1 and 2 tags and stayed silent
+	// for the case pylon recommends about, so an author with no tags at all was
+	// told the same thing as an author with two good ones.
+	switch {
+	case len(tagNames) == 0:
+		criticalIssues = append(criticalIssues, map[string]any{"field": "tags", "issue": "no tags defined — add at least one relevant tag", "source": "deterministic"})
+	default:
+		allGeneric := true
+		for _, name := range tagNames {
+			if !genericPublishTags[strings.ToLower(strings.TrimSpace(name))] {
+				allGeneric = false
+				break
+			}
+		}
+		if allGeneric {
+			warnings = append(warnings, map[string]any{"field": "tags", "issue": "all tags are generic — add domain-specific tags", "source": "deterministic"})
+		}
+		if len(tagNames) > 2 {
+			recommendations = append(recommendations, map[string]any{"field": "tags", "suggestion": "recommend 1-2 tags for optimal discoverability in the marketplace", "source": "deterministic"})
+		}
+	}
+
+	// Secrets/API keys stored in application variables — #909.
+	// `runPublishValidation` never read this table at all before.
+	rows, varErr := h.pool.Query(ctx, fmt.Sprintf(
+		`SELECT name, COALESCE(value, '') FROM %s.application_variables WHERE application_version_id = $1`, s), versionID)
+	if varErr == nil {
+		for rows.Next() {
+			var varName, varValue string
+			if scanErr := rows.Scan(&varName, &varValue); scanErr != nil {
+				continue
+			}
+			if looksLikeSecret(varName, varValue) {
+				criticalIssues = append(criticalIssues, map[string]any{
+					"field":   "application_variables",
+					"issue":   fmt.Sprintf("variable '%s' appears to contain a secret or API key and should not be stored in application variables", varName),
+					"source":  "deterministic",
+					"context": fmt.Sprintf("variable: %s", varName),
+				})
+			}
+		}
+		rows.Close()
 	}
 
 	// Sub-agent validation (no cycle): check duplicates, skip pipelines, recurse
@@ -1849,7 +2086,21 @@ func (h *Handler) runPublishValidation(ctx context.Context, s, versionID, versio
 						"context": saContext,
 					})
 				}
-				if len(strings.TrimSpace(saDesc)) < 20 {
+
+				// Sub-agent Description — #912: a placeholder-text description is a
+				// Critical, worded "Sub-agent '[name]': ..." per the documented case;
+				// otherwise the existing <30-char Warning applies (raised from the
+				// prior undocumented 20-char threshold).
+				trimmedSaDesc := strings.TrimSpace(saDesc)
+				switch {
+				case isPlaceholderText(trimmedSaDesc):
+					criticalIssues = append(criticalIssues, map[string]any{
+						"field":   "description",
+						"issue":   fmt.Sprintf("Sub-agent '%s': Description contains placeholder text and must be replaced with a real description", saAppName),
+						"source":  "deterministic",
+						"context": saContext,
+					})
+				case len(trimmedSaDesc) < 30:
 					warnings = append(warnings, map[string]any{
 						"field":   "description",
 						"issue":   "sub-agent description is too short for meaningful discovery",
@@ -1857,6 +2108,51 @@ func (h *Handler) runPublishValidation(ctx context.Context, s, versionID, versio
 						"context": saContext,
 					})
 				}
+
+				// Sub-agent Name — #910: length floor, generic blocklist and
+				// placeholder text, beyond the existing duplicate-name uniqueness
+				// check above. No upper-length ceiling: AUTOTEST_PREFIX-based
+				// fixture names routinely run long for operational reasons that
+				// have nothing to do with this rule.
+				trimmedSaName := strings.TrimSpace(saAppName)
+				switch {
+				case isPlaceholderText(trimmedSaName):
+					warnings = append(warnings, map[string]any{"field": "name", "issue": "sub-agent name looks like placeholder text and should be replaced", "source": "deterministic", "context": saContext})
+				case len(trimmedSaName) < 3:
+					warnings = append(warnings, map[string]any{"field": "name", "issue": "sub-agent name is too short (must be at least 3 characters)", "source": "deterministic", "context": saContext})
+				case genericSubAgentNames[strings.ToLower(trimmedSaName)]:
+					warnings = append(warnings, map[string]any{"field": "name", "issue": fmt.Sprintf("'%s' is a generic sub-agent name — consider something more descriptive", trimmedSaName), "source": "deterministic", "context": saContext})
+				}
+
+				// Sub-agent's own model — #936: the identical private-model rule the
+				// MAIN agent already gets, applied to a sub-agent's llm_settings (the
+				// recursive walk previously never read this column at all).
+				var saLlmStr *string
+				_ = h.pool.QueryRow(ctx, fmt.Sprintf(`SELECT llm_settings::text FROM %s.application_versions WHERE id = $1`, s), ref.VersionID).Scan(&saLlmStr)
+				if saLlmStr != nil {
+					var saLlm map[string]any
+					_ = json.Unmarshal([]byte(*saLlmStr), &saLlm) // DB jsonb column; malformed means empty map
+					if incompleteModelSettings(saLlm) {
+						// #908, sub-agent half — the same rule, attributed to
+						// the sub-agent the settings belong to.
+						criticalIssues = append(criticalIssues, map[string]any{
+							"field":   "llm_settings",
+							"issue":   "LLM model settings are incomplete (missing model_project_id) — re-select the LLM model in the agent editor before publishing",
+							"source":  "deterministic",
+							"context": saContext,
+						})
+					} else if mpid, ok := saLlm["model_project_id"]; ok && mpid != nil {
+						if fmt.Sprintf("%v", mpid) != publicproject.IDString() {
+							criticalIssues = append(criticalIssues, map[string]any{
+								"field":   "llm_settings",
+								"issue":   "model is not shared and cannot be used in published agents",
+								"source":  "deterministic",
+								"context": saContext,
+							})
+						}
+					}
+				}
+
 				validateSubAgents(ref.VersionID, depth+1)
 			}
 		}
@@ -1870,7 +2166,20 @@ func (h *Handler) runPublishValidation(ctx context.Context, s, versionID, versio
 	if llmStr != nil {
 		var llm map[string]any
 		_ = json.Unmarshal([]byte(*llmStr), &llm) // DB jsonb column; malformed means empty map
-		if mpid, ok := llm["model_project_id"]; ok && mpid != nil {
+		if incomplete := incompleteModelSettings(llm); incomplete {
+			// #908 — the shape a cross-project import leaves behind: the model
+			// NAME survives, the project it came from does not. Both this check
+			// and Publish's own hard-check read the key only as
+			// `ok && mpid != nil`, so an ABSENT key skipped the whole rule and
+			// the agent published with settings nothing could resolve. Pylon's
+			// `LLMSharedModelChecker` raises this as a Critical
+			// (legacy/plugins/elitea_core/utils/publish_utils.py:2993-3001).
+			criticalIssues = append(criticalIssues, map[string]any{
+				"field":  "llm_settings",
+				"issue":  "LLM model settings are incomplete (missing model_project_id) — re-select the LLM model in the agent editor before publishing",
+				"source": "deterministic",
+			})
+		} else if mpid, ok := llm["model_project_id"]; ok && mpid != nil {
 			mpidStr := fmt.Sprintf("%v", mpid)
 			// One project, for the reason Publish's hard-check above states.
 			if mpidStr != publicproject.IDString() {
@@ -1915,6 +2224,17 @@ func (h *Handler) runPublishValidation(ctx context.Context, s, versionID, versio
 		}
 	}
 
+	// The AI step (#940 A18), AFTER `status` and the token are decided.
+	//
+	// That order is the rule, not an implementation detail: an advisory model
+	// pass must not be able to change the outcome of a publishing gate, nor
+	// which versions get a validation token. Its findings join
+	// `recommendations`, which no status branch reads. A model that is broken,
+	// absent or babbling answers `ai_validation_available: false` and leaves
+	// everything above exactly as it was — which is ELITEA-0146 itself.
+	aiFindings, aiAvailable := h.runPublishAIValidation(ctx, s, projectID, callerID, versionID)
+	recommendations = append(recommendations, aiFindings...)
+
 	resp := map[string]any{
 		"status":                  status,
 		"critical_issues":         criticalIssues,
@@ -1922,7 +2242,7 @@ func (h *Handler) runPublishValidation(ctx context.Context, s, versionID, versio
 		"recommendations":         recommendations,
 		"summary":                 fmt.Sprintf("Validation %s for version %s", status, versionID),
 		"counts":                  map[string]any{"critical": len(criticalIssues), "warnings": len(warnings), "suggestions": len(recommendations)},
-		"ai_validation_available": false,
+		"ai_validation_available": aiAvailable,
 		"validation_token":        token,
 	}
 
@@ -1977,7 +2297,7 @@ func (h *Handler) PublishValidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, httpStatus := h.runPublishValidation(ctx, s, versionID, body.VersionName)
+	resp, httpStatus := h.runPublishValidation(ctx, s, projectID, publishCallerID(r), versionID, body.VersionName)
 	if resp == nil {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "version not found"})
 		return
@@ -2217,7 +2537,133 @@ func (h *Handler) ApplicationRelation(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	// #894 — the question the route's NAME asks.
+	//
+	// Everything above answers the opposite one: the skills and tools THIS
+	// version uses. `check_version_in_use` is routed here, and the agent
+	// editor's delete flow needs the INVERSE — the parents that reference this
+	// version as a sub-agent, and the versions it could be replaced by. Pylon
+	// answers exactly that (`legacy/plugins/elitea_core/rpc/application.py:
+	// 1796-1868`: `in_use`, `referencing_parents`, `replacement_versions`,
+	// `version_name`, `application_id`), so the delete dialog could list the
+	// affected agents by name and offer a replacement. Without it the dialog
+	// could only be wired to data about the wrong relation, which is why it
+	// was never wired at all.
+	//
+	// `items` is kept beside the new keys rather than replaced: the same
+	// handler also serves GET /application_relation/..., and an existing
+	// reader of that list must not lose it.
+	parents, replacements, versionName, applicationID := h.versionUsage(ctx, s, versionID)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items":                items,
+		"in_use":               len(parents) > 0,
+		"referencing_parents":  parents,
+		"replacement_versions": replacements,
+		"version_name":         versionName,
+		"application_id":       applicationID,
+	})
+}
+
+// versionUsage answers the four inverse facts #894 needs about one version:
+// the parent versions that reference it as a sub-agent, the sibling versions
+// it could be replaced by, its own name and its application id.
+//
+// A reference is a row of `elitea_tools` (type='application') whose settings
+// name this version, JOINED to the parent through `entity_tool_mapping` — the
+// exact pair `application_relation.go` writes. The join is what makes the
+// answer trustworthy: pylon counts a tool row with NO valid parent mapping as
+// an ORPHAN and reports `in_use: false` for it (rpc/application.py:1861-1863),
+// because the delete cleans those up itself. Joining does the same thing, one
+// statement instead of two loops.
+//
+// Every read is best-effort in the way the rest of this handler is: a failure
+// answers "nothing references it", which is what the route answered for its
+// whole life before this. It never turns a delete into a 500.
+func (h *Handler) versionUsage(ctx context.Context, schema, versionID string) (parents []map[string]any, replacements []map[string]any, versionName string, applicationID string) {
+	parents = make([]map[string]any, 0)
+	replacements = make([]map[string]any, 0)
+	if h.pool == nil {
+		return parents, replacements, "", ""
+	}
+
+	var appID *int64
+	var name *string
+	if err := h.pool.QueryRow(ctx, fmt.Sprintf(
+		`SELECT application_id, name FROM %s.application_versions WHERE id = $1`, schema),
+		versionID).Scan(&appID, &name); err != nil {
+		slog.ErrorContext(ctx, "version usage: version read failed", "schema", schema, "version_id", versionID, "err", err)
+		return parents, replacements, "", ""
+	}
+	if name != nil {
+		versionName = *name
+	}
+	if appID != nil {
+		applicationID = strconv.FormatInt(*appID, 10)
+	}
+
+	rows, err := h.pool.Query(ctx, fmt.Sprintf(`
+		SELECT parentApp.id, parentApp.name,
+		       COALESCE(parentVersion.agent_type, ''),
+		       parentVersion.id, parentVersion.name, tool.id
+		FROM %s.elitea_tools AS tool
+		JOIN %s.entity_tool_mapping AS mapping ON mapping.tool_id = tool.id
+		JOIN %s.application_versions AS parentVersion ON parentVersion.id = mapping.entity_version_id
+		JOIN %s.applications AS parentApp ON parentApp.id = parentVersion.application_id
+		WHERE tool.type = 'application'
+		  AND %s = $1
+		ORDER BY parentApp.id, parentVersion.id, tool.id`,
+		schema, schema, schema, schema, applicationToolSettingsVersionSQL), versionID)
+	if err != nil {
+		slog.ErrorContext(ctx, "version usage: referencing parents read failed", "schema", schema, "version_id", versionID, "err", err)
+		return parents, replacements, versionName, applicationID
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var parentAppID, parentVersionID, toolID int64
+		var parentAppName, parentAgentType, parentVersionName string
+		if err := rows.Scan(&parentAppID, &parentAppName, &parentAgentType, &parentVersionID, &parentVersionName, &toolID); err != nil {
+			slog.ErrorContext(ctx, "version usage: referencing parent scan failed", "err", err)
+			break
+		}
+		parents = append(parents, map[string]any{
+			"application_id":   parentAppID,
+			"application_name": parentAppName,
+			"application_type": parentAgentType,
+			"version_id":       parentVersionID,
+			"version_name":     parentVersionName,
+			"tool_id":          toolID,
+		})
+	}
+
+	if applicationID == "" {
+		return parents, replacements, versionName, applicationID
+	}
+	versionRows, err := h.pool.Query(ctx, fmt.Sprintf(`
+		SELECT id, name, created_at
+		FROM %s.application_versions
+		WHERE application_id = $1 AND id <> $2
+		ORDER BY created_at, id`, schema), applicationID, versionID)
+	if err != nil {
+		slog.ErrorContext(ctx, "version usage: replacement versions read failed", "schema", schema, "version_id", versionID, "err", err)
+		return parents, replacements, versionName, applicationID
+	}
+	defer versionRows.Close()
+	for versionRows.Next() {
+		var id int64
+		var siblingName string
+		var createdAt *time.Time
+		if err := versionRows.Scan(&id, &siblingName, &createdAt); err != nil {
+			slog.ErrorContext(ctx, "version usage: replacement version scan failed", "err", err)
+			break
+		}
+		row := map[string]any{"id": id, "name": siblingName, "created_at": nil}
+		if createdAt != nil {
+			row["created_at"] = createdAt.Format(time.RFC3339)
+		}
+		replacements = append(replacements, row)
+	}
+	return parents, replacements, versionName, applicationID
 }
 
 func (h *Handler) Recommendations(w http.ResponseWriter, r *http.Request) {
@@ -3475,6 +3921,17 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 	errorAgents := make([]any, 0)
 	resultSkills := make([]map[string]any, 0)
 	errorSkills := make([]any, 0)
+	// #918 — the toolkits the forked versions are attached to.
+	//
+	// The fork used to forward `{applications, skills}` and nothing else, and
+	// never read a `toolkits` key at all, so a toolkit attached to a version
+	// was not merely credential-scrubbed on a cross-project fork — the
+	// reference was dropped outright and the copy came back with an empty
+	// `tools` array. The export has carried the array all along
+	// (`exportedToolkits`, import_uuid-keyed and credential-scrubbed); only
+	// this consumer of it was missing.
+	resultToolkits := make([]map[string]any, 0)
+	errorToolkits := make([]any, 0)
 
 	// The skills the forked versions are attached to, copied into the caller's
 	// project before the agents are written. The fork used to copy
@@ -3579,6 +4036,115 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 				"index": skillErrorIndex, "name": skillName, "msg": message,
 			})
 		}
+	}
+
+	// #918, the copy — before the agents, because the version links below
+	// resolve against the ids it records.
+	//
+	// TWO kinds of entry share this array, and only one of them belongs here:
+	//
+	//   - a real toolkit (github, mcp, custom, ...). Its row is copied into
+	//     the destination project and the version links point at the copy.
+	//   - a `type: "application"` entry, which is not a toolkit at all but a
+	//     SUB-AGENT stand-in. The export emits one for every agent-as-tool
+	//     reference, and the agent it names travels in the same document's
+	//     `applications` array. Copying it would write a second tool row whose
+	//     `settings.application_id` still names the SOURCE project's agent, so
+	//     the forked copy would carry a sub-agent reference pointing out of its
+	//     own project. The import resolves those through `import_uuid` against
+	//     the agents it just wrote; the fork has no such resolution step, so it
+	//     skips them and says so rather than writing a broken link.
+	//
+	// `entity_type` on the link rows is `'application'`, which is what the
+	// import's own link phase writes. The two spellings in this schema
+	// ('agent' from the relation route, 'application' from the import) are not
+	// interchangeable for SUB-AGENT references — `listApplicationToolReferences`
+	// filters on 'agent' — but no reader of a TOOLKIT link filters on the
+	// column at all (`fetchVersionDetails`, `exportedVersionTools`), so the
+	// fork follows the import it is a sibling of.
+	forkToolkitIDs := map[string]int{}
+	forkedToolkitByID := map[int]map[string]any{}
+	// The import_uuids of the `type: "application"` entries — the sub-agent
+	// stand-ins the copy loop skips. A version reference to one of them is a
+	// reference the `applications` array already carries, so the link loop must
+	// stay silent about it rather than report a lost toolkit.
+	subAgentToolkitUUIDs := map[string]bool{}
+	// Whether the CALLER sent a toolkits array at all. Same separation the
+	// skills half makes: "you sent no toolkits" is a different statement from
+	// "the toolkit you sent could not be linked", and a client that forwards
+	// the applications and drops the document's `toolkits` key must not be told
+	// its file is broken.
+	_, forkBodyNamesToolkits := body["toolkits"]
+	for toolkitPosition, raw := range toAnySlice(body["toolkits"]) {
+		toolkit, isMap := raw.(map[string]any)
+		if !isMap {
+			errorToolkits = append(errorToolkits, map[string]any{
+				"index": len(apps) + toolkitPosition, "name": "",
+				"msg": fmt.Sprintf("Fork function has been failed: toolkits entry %d is not a JSON object", toolkitPosition),
+			})
+			continue
+		}
+		toolkitName, _ := toolkit["name"].(string)
+		toolkitType, _ := toolkit["type"].(string)
+		if toolkitType == "" {
+			toolkitType = "custom"
+		}
+		importUUID, _ := toolkit["import_uuid"].(string)
+		if toolkitType == "application" {
+			// Not an error: the reference travels with the agent instead.
+			if importUUID != "" {
+				subAgentToolkitUUIDs[importUUID] = true
+			}
+			continue
+		}
+		if destinationOwnerErr != nil {
+			errorToolkits = append(errorToolkits, map[string]any{
+				"index": len(apps) + toolkitPosition, "name": toolkitName,
+				"msg": "Fork function has been failed: " + destinationOwnerErr.Error(),
+			})
+			continue
+		}
+		settings, hasSettings := toolkit["settings"].(map[string]any)
+		if !hasSettings {
+			if rawSettings, present := toolkit["settings"]; present && rawSettings != nil {
+				errorToolkits = append(errorToolkits, map[string]any{
+					"index": len(apps) + toolkitPosition, "name": toolkitName,
+					"msg": "Fork function has been failed: settings must be a JSON object",
+				})
+				continue
+			}
+			settings = map[string]any{}
+		}
+		settingsJSON, settingsErr := importedJSONEncode("settings", settings)
+		if settingsErr != nil {
+			errorToolkits = append(errorToolkits, map[string]any{
+				"index": len(apps) + toolkitPosition, "name": toolkitName,
+				"msg": "Fork function has been failed: " + settingsErr.Error(),
+			})
+			continue
+		}
+		toolkitDesc, _ := toolkit["description"].(string)
+		var toolID int
+		if err := h.pool.QueryRow(ctx, importToolkitInsertSQL(s),
+			toolkitName, toolkitType, settingsJSON,
+			destinationOwnerID.Int64(), userID.Int64(), toolkitDesc).Scan(&toolID); err != nil {
+			slog.ErrorContext(ctx, "fork: toolkit insert failed",
+				"schema", s, "name", toolkitName, "error", err)
+			errorToolkits = append(errorToolkits, map[string]any{
+				"index": len(apps) + toolkitPosition, "name": toolkitName,
+				"msg": "Fork function has been failed: " + err.Error(),
+			})
+			continue
+		}
+		if importUUID != "" {
+			forkToolkitIDs[importUUID] = toolID
+		}
+		forkedToolkitByID[toolID] = map[string]any{
+			"id": strconv.Itoa(toolID), "name": toolkitName, "type": toolkitType,
+		}
+		resultToolkits = append(resultToolkits, map[string]any{
+			"id": strconv.Itoa(toolID), "name": toolkitName, "type": toolkitType,
+		})
 	}
 
 	for entityIdx, appRaw := range apps {
@@ -3798,6 +4364,65 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
+			// #918 — attach the toolkits this version references, against the
+			// copies made above. A reference whose `import_uuid` names no
+			// copied toolkit is reported on the agent's own index rather than
+			// dropped: that is the shape of the defect itself, a fork that
+			// answered 201 with an empty `tools` array.
+			//
+			// A `type: "application"` entry is deliberately absent from
+			// `forkToolkitIDs` (see the copy loop), and its reference is
+			// therefore skipped in SILENCE — the sub-agent it stands for is
+			// carried by the document's own `applications` array, so reporting
+			// it would name a loss that did not happen.
+			versionToolResults := make([]any, 0)
+			for _, toolRaw := range toAnySlice(v["tools"]) {
+				toolRef, isMap := toolRaw.(map[string]any)
+				if !isMap {
+					continue
+				}
+				refUUID, _ := toolRef["import_uuid"].(string)
+				if refUUID == "" {
+					continue
+				}
+				toolID, copied := forkToolkitIDs[refUUID]
+				if !copied {
+					if !forkBodyNamesToolkits {
+						continue
+					}
+					if subAgentToolkitUUIDs[refUUID] {
+						continue
+					}
+					errorToolkits = append(errorToolkits, map[string]any{
+						"index": entityIdx, "name": name,
+						"msg": "Fork function has been failed: unable to link toolkit " + refUUID +
+							" of version " + vName + ": it is not among the forked toolkits",
+					})
+					continue
+				}
+				selectedJSON, selErr := importedJSONValue(toolRef, "selected_tools", "[]")
+				if selErr != nil {
+					errorToolkits = append(errorToolkits, map[string]any{
+						"index": entityIdx, "name": name,
+						"msg": "Fork function has been failed: unable to link toolkit " + refUUID + ": " + selErr.Error(),
+					})
+					continue
+				}
+				if _, err := h.pool.Exec(ctx, fmt.Sprintf(`
+					INSERT INTO %s.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, selected_tools)
+					VALUES ($1, $2, 'application', $3, $4::jsonb)`, s),
+					vID, appID, toolID, selectedJSON); err != nil {
+					slog.ErrorContext(ctx, "fork: tool link insert failed",
+						"schema", s, "version_id", vID, "tool_id", toolID, "error", err)
+					errorToolkits = append(errorToolkits, map[string]any{
+						"index": entityIdx, "name": name,
+						"msg": "Fork function has been failed: unable to link toolkit " + strconv.Itoa(toolID) + ": " + err.Error(),
+					})
+					continue
+				}
+				versionToolResults = append(versionToolResults, forkedToolkitByID[toolID])
+			}
+
 			// Attach the skills this version references. Every reference that
 			// cannot be attached is reported, on the agent's own index, so a
 			// fork that came back with fewer skills than the file says so.
@@ -3867,8 +4492,37 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 				"is_forked":             true,
 				"variables":             respVars,
 				"tags":                  respTags,
-				"tools":                 []any{},
+				// #918 — the toolkits this fork actually attached, named the
+				// way the import's own link phase names them. It was the
+				// literal `[]any{}`, which was true only because the fork
+				// copied no toolkit.
+				"tools": versionToolResults,
 			}
+		}
+
+		// #916 — an entry that named no version content AT ALL (an absent or
+		// empty `versions` array — the shape an unrecognised `entity` value
+		// takes, since nothing above ever refuses the TYPE itself) used to fall
+		// through to a "successful" fork anyway: the just-inserted `applications`
+		// row survived with `version_details: null, versions: []`, a broken
+		// shell no version ever populated. `/import_wizard` refuses the
+		// identical shape outright (IMP-05) for "carrying nothing an agent can
+		// be made of"; this is that same refusal, and the orphaned row is
+		// rolled back rather than left behind for a 201/207 caller to clean up.
+		//
+		// Deliberately keyed on the SOURCE `versions` array being empty, not on
+		// `createdVersions` — a `versions` array that named real content whose
+		// insert failed already reports its OWN per-version error above, and
+		// must not also get this second, generic one (`TestForkReportsAFailedVersionInsert`).
+		if len(versions) == 0 {
+			if _, delErr := h.pool.Exec(ctx, fmt.Sprintf(`DELETE FROM %s.applications WHERE id = $1`, s), appID); delErr != nil {
+				slog.ErrorContext(ctx, "fork: rollback of a versionless application failed", "schema", s, "app_id", appID, "error", delErr)
+			}
+			errorAgents = append(errorAgents, map[string]any{
+				"index": entityIdx, "name": name,
+				"msg": "Fork function has been failed: entity carries no version content to fork",
+			})
+			continue
 		}
 
 		agentResult := map[string]any{
@@ -3891,7 +4545,7 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 	// when all of it was. The wizard reads a 2xx body and a 400 body through
 	// the same branch, so an error entry reaches the user either way.
 	forkStatus := http.StatusCreated
-	if len(errorAgents)+len(errorSkills) > 0 {
+	if len(errorAgents)+len(errorSkills)+len(errorToolkits) > 0 {
 		if len(resultAgents)+len(resultSkills) == 0 {
 			forkStatus = http.StatusBadRequest
 		} else {
@@ -3900,10 +4554,11 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, forkStatus, map[string]any{
-		// A fork writes no toolkit, so its toolkits channel is always empty.
-		// It is still carried: see importChannels.
-		"result": importChannels(resultAgents, nil, resultSkills),
-		"errors": importChannels(errorAgents, nil, errorSkills),
+		// #918 — the toolkits channel carries what the fork copied. It was
+		// documented here as "always empty" because the fork wrote no toolkit
+		// at all; it writes them now.
+		"result": importChannels(resultAgents, resultToolkits, resultSkills),
+		"errors": importChannels(errorAgents, errorToolkits, errorSkills),
 	})
 }
 

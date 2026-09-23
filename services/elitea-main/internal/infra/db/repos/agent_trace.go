@@ -16,6 +16,7 @@ import (
 
 	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/nodeevent"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -101,6 +102,11 @@ type currentAgentTraceDelta struct {
 	toolCalls           []currentAgentToolCall
 	thinkingSteps       []map[string]any
 	invokedSkills       json.RawMessage
+	// outputChunk is one slice of a tool result too large to ride in a single
+	// output frame (#956). It arrives as its own node event, ahead of the
+	// completed tool call, and is APPENDED to the tool call's stored output
+	// rather than replacing it — see mergeCurrentAgentTraceRows.
+	outputChunk *nodeevent.ToolOutputChunk
 }
 
 type currentAgentToolCall struct {
@@ -284,7 +290,15 @@ func decodeCurrentAgentTraceDelta(
 	if err := json.Unmarshal(raw, &event); err != nil {
 		return currentAgentTraceDelta{}, false, errors.New("decode current agent trace event")
 	}
-	if event.Type != "partial_message" {
+	// A CHUNK carries the same correlation as a partial message (it is bound
+	// to the same turn and checked against the same immutable admission) and
+	// no tool-call or thinking delta of its own: its whole payload is a slice
+	// of one tool call's output.
+	chunk, isChunk, err := nodeevent.DecodeToolOutputChunk(raw)
+	if err != nil {
+		return currentAgentTraceDelta{}, false, errors.New("decode current agent tool output chunk")
+	}
+	if event.Type != "partial_message" && !isChunk {
 		return currentAgentTraceDelta{}, false, nil
 	}
 	if !validCurrentAgentCorrelation(event.StreamID) ||
@@ -292,6 +306,15 @@ func decodeCurrentAgentTraceDelta(
 		!validCurrentAgentCorrelation(event.ExecutionGeneration) ||
 		(event.SIOEvent != "chat_predict" && event.SIOEvent != "chat_continue_predict") {
 		return currentAgentTraceDelta{}, false, errors.New("current agent trace correlation is invalid")
+	}
+	if isChunk {
+		return currentAgentTraceDelta{
+			streamID:            event.StreamID,
+			messageID:           event.MessageID,
+			executionGeneration: event.ExecutionGeneration,
+			sioEvent:            event.SIOEvent,
+			outputChunk:         &chunk,
+		}, true, nil
 	}
 	var metadata struct {
 		ToolCalls     json.RawMessage   `json:"tool_calls"`
@@ -546,6 +569,11 @@ func mergeCurrentAgentTraceRows(
 	for index, toolCall := range toolCalls {
 		positions[toolCall.key] = index
 	}
+	if chunk := delta.outputChunk; chunk != nil {
+		if err := applyCurrentAgentOutputChunk(toolCalls, positions, *chunk); err != nil {
+			return nil, err
+		}
+	}
 	for _, incoming := range delta.toolCalls {
 		incoming.entry = sanitizeCurrentAgentJSON(incoming.entry).(map[string]any)
 		if index, ok := positions[incoming.key]; ok {
@@ -554,6 +582,13 @@ func mergeCurrentAgentTraceRows(
 				return nil, err
 			}
 			incoming.entry = merged
+			// A COMPLETED call whose output was chunked (#956) carries the
+			// chunk count instead of the text: its inline `tool_output` is
+			// empty by construction, and overwriting the accumulated text with
+			// it would throw away everything the chunks just delivered — the
+			// same "a truncated result reads like a complete one" failure the
+			// digest exists to prevent, arriving from the other direction.
+			carryCurrentAgentChunkedOutput(toolCalls[index].entry, incoming.entry)
 			toolCalls[index] = incoming
 		} else {
 			merged, err := mergeAgentToolOutputChunk(nil, incoming.entry)
@@ -625,6 +660,13 @@ func reconstructCurrentAgentTrace(
 			}
 			if toolMeta := currentAgentMap(row.attrs, "tool_meta"); toolMeta != nil {
 				entry["tool_meta"] = cloneCurrentAgentMap(toolMeta)
+			}
+			// The chunk progress travels back onto the entry so the NEXT
+			// chunk knows which index it is waiting for. Without it every
+			// chunk would look like index 0 against a fresh row and only the
+			// first would ever be applied.
+			if progress := currentAgentMap(row.attrs, currentAgentChunkProgressKey); progress != nil {
+				entry[currentAgentChunkProgressKey] = cloneCurrentAgentMap(progress)
 			}
 			toolCalls = append(toolCalls, currentAgentToolCall{key: row.runID, entry: entry})
 		case "thinking_step":
@@ -976,6 +1018,9 @@ func currentAgentToolCallAttrs(entry map[string]any) map[string]any {
 	}
 	if len(toolMeta) != 0 {
 		attrs["tool_meta"] = toolMeta
+	}
+	if progress := currentAgentChunkProgressAttrs(entry); progress != nil {
+		attrs[currentAgentChunkProgressKey] = progress
 	}
 	if len(attrs) == 0 {
 		return nil
@@ -1463,4 +1508,241 @@ func currentAgentNilIfEmpty(value string) any {
 		return nil
 	}
 	return value
+}
+
+// CHUNKED TOOL OUTPUT, THE REASSEMBLY HALF (#956).
+//
+// A tool result larger than one output frame is emitted as an ordered sequence
+// of `agent_tool_output_chunk` events ahead of the completed tool call
+// (services/elitea-main/internal/transport/runtimegrpc/nodeevent/
+// tool_output_chunk.go states the whole contract). Reassembly happens HERE —
+// on the row the trace is read back from — rather than in a buffer in front of
+// the projector, because every node event is durably appended and acked one at
+// a time: a buffer is state a crash loses in the middle of a value the sender
+// has already been told was accepted, while a row is what a replay converges
+// onto.
+//
+// PROGRESS IS PART OF THE ROW. `attrs.tool_output_chunks` records how many
+// chunks have been applied, how many are expected, and the digest of the whole
+// output. That is what makes the append IDEMPOTENT: a chunk is applied only
+// when its index is exactly the next one, so re-projecting an event that is
+// already in the row is a no-op rather than a second copy of its text — and
+// node-event projection is explicitly replayable (see
+// output.NodeEventService.IngestNodeEvent).
+const (
+	currentAgentChunkProgressKey = "tool_output_chunks"
+	currentAgentChunkDigestKey   = "tool_output_sha256"
+	currentAgentChunkReceivedKey = "received"
+	currentAgentChunkTotalKey    = "total"
+	currentAgentChunkCompleteKey = "complete"
+	// currentAgentChunkSanitizedKey records that a NUL was stripped out of at
+	// least one chunk — see `sanitizedCurrentAgentChunkText`.
+	currentAgentChunkSanitizedKey = "sanitized"
+)
+
+// sanitizedCurrentAgentChunkText removes the one byte a Postgres TEXT column
+// cannot hold, and says whether it had to.
+//
+// EVERY OTHER PATH ALREADY DOES THIS. An inline tool output arrives inside
+// `incoming.entry` and goes through `sanitizeCurrentAgentJSON` before anything
+// touches the row. A CHUNK does not: `DecodeToolOutputChunk` checks only that
+// the text is valid UTF-8, and `\x00` is valid UTF-8. A python tool that
+// returns a large result containing a NUL — a binary sniff, a grep over a
+// mixed file — therefore reached the UPDATE as-is, Postgres answered `invalid
+// byte sequence for encoding "UTF8": 0x00`, the node event was rejected
+// NON-RETRYABLY, and every replay of that event was rejected the same way. The
+// turn was unrecoverable over one byte nobody could see.
+//
+// The DIGEST is the cost, and it is recorded rather than hidden. The producer
+// hashed the text it sent, NUL included, so the assembled text can no longer
+// hash to what the entry declares. Completeness therefore falls back to the
+// chunk arithmetic (all `total` chunks applied in order) whenever this flag is
+// set, and the flag is kept in the progress object so a reader can tell a
+// genuine byte-for-byte reassembly from this one.
+func sanitizedCurrentAgentChunkText(text string) (string, bool) {
+	if !strings.Contains(text, "\x00") {
+		return text, false
+	}
+	return strings.ReplaceAll(text, "\x00", ""), true
+}
+
+// currentAgentChunksSanitized reports whether this row has already had a NUL
+// stripped out of an earlier chunk.
+func currentAgentChunksSanitized(progress map[string]any) bool {
+	if progress == nil {
+		return false
+	}
+	sanitized, _ := progress[currentAgentChunkSanitizedKey].(bool)
+	return sanitized
+}
+
+// applyCurrentAgentOutputChunk appends one chunk to the tool call it belongs
+// to.
+//
+// An UNKNOWN call id is not an error: the chunk names a tool call this message
+// group has no row for, which a replay of a partially projected turn can
+// produce, and failing the projection would fail the whole turn over a trace
+// detail. It is dropped, and the completion check below is what notices that
+// the assembled text is short — the digest is carried precisely so absence is
+// detectable rather than invisible.
+func applyCurrentAgentOutputChunk(
+	toolCalls []currentAgentToolCall,
+	positions map[string]int,
+	chunk nodeevent.ToolOutputChunk,
+) error {
+	index, ok := positions[chunk.ToolCallID]
+	if !ok {
+		return nil
+	}
+	entry := toolCalls[index].entry
+	if entry == nil {
+		return nil
+	}
+	progress := currentAgentMap(entry, currentAgentChunkProgressKey)
+	received := 0
+	if progress != nil {
+		count, ok := currentAgentChunkCount(progress[currentAgentChunkReceivedKey])
+		if !ok {
+			return errors.New("current agent tool output chunk progress is malformed")
+		}
+		received = int(count)
+		if digest := currentAgentString(progress[currentAgentChunkDigestKey]); digest != "" &&
+			digest != chunk.Digest {
+			// The row is accumulating a DIFFERENT value under the same call
+			// id — two outputs for one tool call. Refusing is the only honest
+			// answer: appending would interleave two results into one.
+			return errors.New("current agent tool output chunk belongs to another result")
+		}
+	}
+	if chunk.Index != received {
+		// Already applied (replay) or out of order. Either way the row is left
+		// exactly as it is: the index IS the position, so nothing is lost by
+		// ignoring a chunk that is not the next one — a later replay in order
+		// converges, and a genuinely missing one is caught at completion.
+		return nil
+	}
+	text := currentAgentString(entry["tool_output"])
+	chunkText, stripped := sanitizedCurrentAgentChunkText(chunk.Text)
+	sanitized := stripped || currentAgentChunksSanitized(progress)
+	assembled := text + chunkText
+	entry["tool_output"] = assembled
+	entry[currentAgentChunkProgressKey] = map[string]any{
+		currentAgentChunkReceivedKey:  int64(chunk.Index + 1),
+		currentAgentChunkTotalKey:     int64(chunk.Total),
+		currentAgentChunkDigestKey:    chunk.Digest,
+		currentAgentChunkSanitizedKey: sanitized,
+		currentAgentChunkCompleteKey: chunk.Index+1 == chunk.Total &&
+			(sanitized || nodeevent.ToolOutputDigest(assembled) == chunk.Digest),
+	}
+	return nil
+}
+
+// carryCurrentAgentChunkedOutput moves the accumulated text from the row onto
+// the completed entry that is about to replace it.
+//
+// The completed entry names the chunk count and digest and carries no text (it
+// could not — that is why the output was chunked), so without this the
+// replacement would silently empty the output. `complete` is recomputed here
+// rather than trusted from either side: it is true only when the row actually
+// holds every chunk AND the assembled text hashes to what the producer said it
+// would, so a lost chunk leaves a row that says so.
+func carryCurrentAgentChunkedOutput(existing, incoming map[string]any) {
+	if existing == nil || incoming == nil {
+		return
+	}
+	declared := currentAgentMap(incoming, currentAgentChunkProgressKey)
+	progress := currentAgentMap(existing, currentAgentChunkProgressKey)
+	if declared == nil && progress == nil {
+		return
+	}
+	accumulated := currentAgentString(existing["tool_output"])
+	if accumulated == "" {
+		return
+	}
+	// Stripped here too, not only on the append. The accumulated text is the
+	// row's own and is already clean, but the completed entry may carry inline
+	// text of its own and this value is written straight into `tool_output`.
+	accumulated, strippedHere := sanitizedCurrentAgentChunkText(accumulated)
+	if currentAgentString(incoming["tool_output"]) == "" {
+		incoming["tool_output"] = accumulated
+	}
+	total := int64(0)
+	digest := ""
+	for _, source := range []map[string]any{declared, progress} {
+		if source == nil {
+			continue
+		}
+		if total == 0 {
+			if value, ok := currentAgentPositiveInteger(source[currentAgentChunkTotalKey]); ok {
+				total = value
+			}
+		}
+		if digest == "" {
+			digest = currentAgentString(source[currentAgentChunkDigestKey])
+		}
+	}
+	received := int64(0)
+	if progress != nil {
+		if value, ok := currentAgentChunkCount(progress[currentAgentChunkReceivedKey]); ok {
+			received = value
+		}
+	}
+	sanitized := strippedHere || currentAgentChunksSanitized(progress) ||
+		currentAgentChunksSanitized(declared)
+	incoming[currentAgentChunkProgressKey] = map[string]any{
+		currentAgentChunkReceivedKey:  received,
+		currentAgentChunkTotalKey:     total,
+		currentAgentChunkDigestKey:    digest,
+		currentAgentChunkSanitizedKey: sanitized,
+		currentAgentChunkCompleteKey: total > 0 && received == total && digest != "" &&
+			(sanitized ||
+				nodeevent.ToolOutputDigest(currentAgentString(incoming["tool_output"])) == digest),
+	}
+}
+
+// currentAgentChunkProgressAttrs is the row-facing projection of the progress
+// object: bounded, typed, and small enough to sit beside the display metadata
+// under the attrs ceiling.
+// currentAgentChunkCount reads a chunk COUNT, which — unlike every other
+// number in this file — is legitimately zero: a row that has recorded a
+// declared total but received nothing yet says exactly that, and
+// currentAgentPositiveInteger would report it as malformed.
+func currentAgentChunkCount(value any) (int64, bool) {
+	switch typed := value.(type) {
+	case nil:
+		return 0, true
+	case json.Number:
+		integer, err := typed.Int64()
+		return integer, err == nil && integer >= 0
+	case int:
+		return int64(typed), typed >= 0
+	case int64:
+		return typed, typed >= 0
+	default:
+		return 0, false
+	}
+}
+
+func currentAgentChunkProgressAttrs(entry map[string]any) map[string]any {
+	progress := currentAgentMap(entry, currentAgentChunkProgressKey)
+	if progress == nil {
+		return nil
+	}
+	digest := boundedCurrentAgentString(currentAgentString(progress[currentAgentChunkDigestKey]))
+	received, _ := currentAgentChunkCount(progress[currentAgentChunkReceivedKey])
+	total, _ := currentAgentChunkCount(progress[currentAgentChunkTotalKey])
+	if digest == "" && received == 0 && total == 0 {
+		return nil
+	}
+	complete, _ := progress[currentAgentChunkCompleteKey].(bool)
+	return map[string]any{
+		currentAgentChunkReceivedKey: received,
+		currentAgentChunkTotalKey:    total,
+		currentAgentChunkDigestKey:   digest,
+		currentAgentChunkCompleteKey: complete,
+		// Carried onto the row so "complete, but the digest was not the test"
+		// is readable afterwards rather than inferable — see
+		// `sanitizedCurrentAgentChunkText`.
+		currentAgentChunkSanitizedKey: currentAgentChunksSanitized(progress),
+	}
 }

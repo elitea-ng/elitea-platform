@@ -612,6 +612,32 @@ ingest, index scheduling and configuration validation. It is **all-or-nothing**:
 refuses to start on a partial set. The chart exposes the whole block under
 `runtime:` and refuses a partial one at render time.
 
+#### SSE stream admission caps (issue #963)
+
+The execution-events stream endpoint admits a bounded number of open SSE
+streams per main replica. The cap is process-local by design: the durable
+repository stays authoritative, and the cap only bounds how many open
+streams this process holds. The chart renders the caps from `runtime.sse`:
+
+| values key | environment variable | default |
+| --- | --- | --- |
+| `runtime.sse.maxStreams` | `ELITEA_RUNTIME_SSE_MAX_STREAMS` | 16 |
+| `runtime.sse.maxStreamsPerPrincipal` | `ELITEA_RUNTIME_SSE_MAX_STREAMS_PER_PRINCIPAL` | 4 |
+| `runtime.sse.maxStreamsPerProject` | `ELITEA_RUNTIME_SSE_MAX_STREAMS_PER_PROJECT` | 8 |
+
+The cluster admits `maxStreams x replicas` streams at once. Measured on the
+standalone stack on 2026-09-20, one replica holds 16 streams at about 2 CPU.
+A deployment that serves 1000 concurrent agent flows needs about 1000 live
+streams. At the 16 cap that is 63 replicas. Raising `maxStreams` to 32 needs
+about 32 replicas, and 1000 needs one.
+
+The other side of that math is the Postgres connection budget. Each main
+replica opens its own pools, and 63 replicas do not fit a stock
+`max_connections` of 100. That budget is the scope of issue #964.
+
+A per-principal or per-project value above `maxStreams` fails `helm
+template`, and the same check fails the process at boot.
+
 Its material — the signing key, the verification keyring, the Redis password,
 the Redis CA and the three listener keypairs — comes from a **plain Kubernetes
 Secret**. Set `runtime.material.secretName`, and give the Secret one key for
@@ -855,6 +881,69 @@ JetStream service and set the key to exercise enforcement.
 Spend accounting needs the gateway but not the counter: the accumulators the
 Usage page reads are written by elitea-scheduler's write-back consumer from the
 gateway's billing deltas.
+
+## The Postgres pooler and the connection budget (#964)
+
+`elitea-main` opens a connection pool on every replica. Without a pooler, each
+replica's pools open straight at Postgres, so the read plane pins the server at
+`max_connections` as replicas grow. The `pgbouncer` component stops that: every
+main replica's pools share ONE server-side pool, so main's server-side cost is
+one constant no matter how many replicas the HPA takes.
+
+The pooler is a transaction-mode pooler on a non-Postgres port (`6432`), off by
+default in the chart and ON in the standalone compose stack. The compose stack
+mounts `deploy/runtime/pgbouncer.ini`; the chart renders the same settings from
+the `pgbouncer` values block. Pointing `elitea-main`'s `DATABASE_URL` at the
+pooler's service puts it in the path. The DSN stays in the operator's Secret,
+so the DSN switch is the operator's one-line change.
+
+### The connection math
+
+Two numbers, one on each side of the pooler:
+
+- **Client side, per replica.** `main.env.ELITEA_DATABASE_MAX_CONNS` bounds the
+  connections ONE replica opens toward the pooler. The six runtime pools add
+  their own `ELITEA_RUNTIME_DB_*_MAX_CONNS`. This is the per-replica number the
+  operator tunes.
+- **Server side, whole cluster.** `pgbouncer.poolSize` +
+  `pgbouncer.reservePoolSize` is the shared server pool every replica draws
+  from. The pooler never opens more than the two summed — the rendered
+  `max_db_connections` is their sum — so the server cost stays one constant as
+  replicas scale.
+
+The migration Job, the `dbInit` Job, the LLM gateway and the one-shots keep
+direct connections by design. Their connections are what
+`postgresql.reservedConnections` covers.
+
+`elitea-main.validateConnectionBudget` enforces both sides at render time. With
+`pgbouncer.enabled` set, the check splits into the two terms above: the
+server-side pool plus reserve must fit under `postgresql.maxConnections` minus
+`reservedConnections`, and the client-side pools times the replica count must
+fit under `pgbouncer.maxClientConn`. A half-configured pooler — enabled but
+missing `database`, `postgresHost` or `credentialsSecretName` — refuses to
+render, as does a budget that overruns either side.
+`deploy/helm/tests/render-connection-budget.sh` asserts all of it.
+
+### Measured on the standalone stack (2026-09-22)
+
+The read plane is a hot authenticated GET (the conversations list) hammered from
+inside the compose network. `pg_stat_activity` and the pooler's `SHOW POOLS`
+ran throughout every run.
+
+| configuration | vusers | RPS | p50 | Postgres connections | client waits | errors |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 main, pooler in path | 200 | 2936 | 64.5ms | steady ~31 | 0 | 0 |
+| 3 main, pooler in path | 200 | 2855 | 65.7ms | peak 31 | 0 | 0 |
+| 3 main, pooler in path | 400 | 2962 | 126.4ms | peak 31 | 0 | 0 |
+| 3 main, no pooler | 400 | 3105 | 104.8ms | pinned 90/100 | — | 0 |
+
+Three replicas through the pooler hold Postgres at ~31 connections — far under
+`max_connections` of 100 — and keep the read RPS at the single-replica rate
+(2855–2962 against 2936). The pooler's client wait queue (`cl_waiting`) stayed
+at 0 in every run, so the shared pool, not Postgres, bounds the read plane.
+Without the pooler the same three replicas pin the server at 90 of 100
+connections. The next component to connect — usually a migration Job — then
+fails with `sorry, too many clients already`.
 
 ## What a Kubernetes install does NOT give you
 

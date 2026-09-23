@@ -118,6 +118,13 @@ describe('AIAssistantInput', () => {
     expect(onInput).not.toHaveBeenCalled();
   });
   /*
+   * elitea_issues: #5305 — moot for the same reason: "Input AI assistant ...
+   * broken — 500 Internal Server Error" describes the legacy task-polling
+   * transport (`GET`/`DELETE .../task/prompt_lib/...`), which this app never
+   * calls (`aiAssistantPredict.ts` uses the streaming `predict_llm` +
+   * `application_predict` socket event instead) — and the trigger that would
+   * reach it is gated off below.
+   *
    * THE GATE LIVES ON THIS COMPONENT, not only on its call sites.
    *
    * The modal posts to `/elitea_core/predict_llm/...`, which the Go router

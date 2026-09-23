@@ -30,6 +30,9 @@ import type { Theme } from '@mui/material/styles';
 import CloseIcon from '@mui/icons-material/Close';
 
 import { t } from '@/shared/i18n';
+import { toolPayloadText } from '@/shared/lib/toolPayloadText';
+
+import { useTraceStepDetail } from '../model/traceStepDetail';
 
 import { ToolModalPane } from './ToolModalPane';
 
@@ -48,14 +51,14 @@ export interface ToolModalProps {
     readonly toolMeta?: Record<string, unknown>;
     readonly content?: string;
     readonly isError?: boolean;
+    /**
+     * Set only on a pin rebuilt from a persisted `chat_message_trace_step`
+     * row (#951). The listing that rebuilt it is deliberately light, so the
+     * body below is fetched for this one row when the modal opens.
+     */
+    readonly traceStepId?: number;
+    readonly traceMessageGroupId?: number;
   };
-}
-
-/** Strings pass through untouched; everything else is pretty-printed JSON (the baseline's own `input`/`output` shape). */
-function toEditorText(value: unknown): string {
-  if (value === undefined || value === null) return '';
-  if (typeof value === 'string') return value;
-  return JSON.stringify(value, null, 2);
 }
 
 /**
@@ -102,8 +105,13 @@ const styles = {
  * `INPUT` | `OUTPUT` across two read-only code editors.
  */
 export function ToolModal({ open, onClose, toolAction }: ToolModalProps): ReactNode {
-  const inputText = toEditorText(toolAction.toolInputs);
-  const outputText = toEditorText(toolAction.toolOutputs ?? toolAction.content);
+  const ownInput = toolPayloadText(toolAction.toolInputs);
+  const ownOutput = toolPayloadText(toolAction.toolOutputs ?? toolAction.content);
+  // Only a RESTORED pin with nothing of its own asks for anything: a live step
+  // carries its body and no row identity, so this never fires for one.
+  const detail = useTraceStepDetail(toolAction, open && ownInput === '' && ownOutput === '');
+  const inputText = ownInput === '' && detail !== undefined ? toolPayloadText(detail.toolInputs) : ownInput;
+  const outputText = ownOutput === '' && detail !== undefined ? detail.output : ownOutput;
 
   return (
     <Dialog

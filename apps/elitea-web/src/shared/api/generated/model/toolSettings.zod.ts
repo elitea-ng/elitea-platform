@@ -43,7 +43,7 @@ import * as zod from "zod";
 
 export const ToolSettings = zod
   .unknown()
-  .describe("Opaque tool\/toolkit settings blob — see marker.");
+  .describe("Opaque tool/toolkit settings blob — see marker.");
 
 export type ToolSettings = zod.input<typeof ToolSettings>;
 export type ToolSettingsOutput = zod.output<typeof ToolSettings>;

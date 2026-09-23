@@ -263,6 +263,58 @@ export function useUpdateIndexScheduleMutation(): UseMutationResult<unknown, Err
   });
 }
 
+/* ── saveIndexConfiguration — PUT elitea_core/index_meta/prompt_lib/{projectId}/{toolkitId}/{indexName}/configuration ── */
+
+/**
+ * The SAVE half of the Indexes tab's "Save" / "Save & Reindex" split
+ * (ELITEA-2880).
+ *
+ * Until this route existed, the ONLY writer of an index's stored
+ * `index_configuration` was an indexing RUN: `startIndexExecution` above sends
+ * the form as `tool_params`, and the run records them on the index metadata
+ * document on its way through. So the configuration tab could persist a
+ * changed `progress_step` only by re-indexing the whole collection — and a
+ * scheduled reindex, which reads that same stored field
+ * (`internal/runtimecomposition/index_schedule_inspector.go`), kept running the
+ * configuration of the last RUN rather than the one on screen.
+ *
+ * The body is the same object `startIndexExecution` sends as `tool_params`,
+ * under an `index_configuration` key, and it goes through the same
+ * `preserveExplicitClears` replacer for the same reason (#311): a cleared field
+ * must reach the server as `null`, not vanish and be re-defaulted on the way
+ * back.
+ */
+export interface SaveIndexConfigurationParams {
+  readonly projectId: string | number;
+  readonly toolkitId: string;
+  /** The index's `metadata.collection` — the key this route addresses, exactly as the schedule PATCH does. */
+  readonly indexName: string;
+  readonly configuration: Readonly<Record<string, unknown>>;
+}
+
+export async function saveIndexConfiguration(params: SaveIndexConfigurationParams): Promise<unknown> {
+  const { projectId, toolkitId, indexName, configuration } = params;
+  return fetchData<unknown>(
+    `/elitea_core/index_meta/prompt_lib/${String(projectId)}/${toolkitId}/${encodeURIComponent(indexName)}/configuration`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ index_configuration: configuration }, preserveExplicitClears),
+      headers: { 'Content-Type': 'application/json' },
+    },
+  );
+}
+
+export function useSaveIndexConfigurationMutation(): UseMutationResult<unknown, Error, SaveIndexConfigurationParams> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: saveIndexConfiguration,
+    // The list carries `metadata.index_configuration`, which this write
+    // changes: without the invalidation the rail keeps serving the
+    // pre-save configuration to the next index that is opened.
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: INDEXES_QUERY_ROOT }),
+  });
+}
+
 /* ── getIndexSchedule — GET elitea_core/tool/prompt_lib/{projectId}/{toolkitId} ── */
 
 export interface GetIndexScheduleParams {

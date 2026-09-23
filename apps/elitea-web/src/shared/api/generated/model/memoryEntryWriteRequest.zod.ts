@@ -54,7 +54,7 @@ export const MemoryEntryWriteRequest = zod
       ),
   })
   .describe(
-    "The body for both `createMemory` and `updateMemory`. `updateMemory` is a FULL-RECORD replace (matches the settings panel's edit dialog and its per-row enable\/disable Switch, which both send the whole record), so `content` is required on both.\n",
+    "The body for both `createMemory` and `updateMemory`. `updateMemory` is a FULL-RECORD replace (matches the settings panel's edit dialog and its per-row enable/disable Switch, which both send the whole record), so `content` is required on both.\n",
   );
 
 export type MemoryEntryWriteRequest = zod.input<typeof MemoryEntryWriteRequest>;

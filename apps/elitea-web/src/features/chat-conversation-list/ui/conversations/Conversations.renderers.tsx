@@ -8,7 +8,7 @@ import type { ControlsDropdownLeafItem } from '@/shared/ui/ControlsDropdown';
 import { useLatestRef } from '../../lib/hooks/useLatestRef';
 import type { RenderConversationItem } from '../groups/DateGroup';
 import { ConversationItem } from './ConversationItem';
-import type { ConversationExportFormat } from './ConversationItem.menu';
+import type { ConversationExportFormat } from './ConversationItem.types';
 import { renderFoldersSectionImpl } from './Conversations.folders';
 import type { RenderFoldersSectionParams } from './Conversations.folders';
 import type { ConversationsFolder } from './Conversations.types';
@@ -37,6 +37,8 @@ export interface UseRenderConversationItemParams {
   readonly onPlaybackConversation: (conversation: Conversation) => void;
   readonly onDeleteConversation: (conversation: Conversation) => void;
   readonly onPinConversation: (conversation: Conversation, shouldPin: boolean) => void;
+  /** Issue 940/A6 — clones a conversation (participants + settings) into a new, independent one. */
+  readonly onDuplicateConversation: (conversation: Conversation) => void;
   readonly onCreateConversation: (conversation: Conversation) => Promise<unknown>;
   readonly onCancelCreateConversation: () => void;
   readonly onChangeActiveConversationName: (name: string) => void;
@@ -69,6 +71,7 @@ export function useRenderConversationItem(params: UseRenderConversationItemParam
       onPlaybackConversation,
       onDeleteConversation,
       onPinConversation,
+      onDuplicateConversation,
       onCreateConversation,
       onCancelCreateConversation,
       onChangeActiveConversationName,
@@ -94,6 +97,7 @@ export function useRenderConversationItem(params: UseRenderConversationItemParam
         onPlayback={onPlaybackConversation}
         onDelete={onDeleteConversation}
         onPin={onPinConversation}
+        onDuplicate={onDuplicateConversation}
         onCreateConversation={onCreateConversation}
         onCancelCreate={onCancelCreateConversation}
         onChangeActiveConversationName={onChangeActiveConversationName}

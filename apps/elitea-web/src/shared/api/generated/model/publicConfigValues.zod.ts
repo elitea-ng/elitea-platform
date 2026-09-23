@@ -46,7 +46,7 @@ export const PublicConfigValues = zod
     values: zod.record(zod.string(), zod.unknown()),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/admin\/config_values.go:124-129 (configValuesResponse) minus the two keys this route deliberately omits — `fields_meta` and `requires_restart` are authoring concerns for the admin form, and this response is read by the product UI.\n",
+    "NOTE(W2): internal/api/v2/admin/config_values.go:124-129 (configValuesResponse) minus the two keys this route deliberately omits — `fields_meta` and `requires_restart` are authoring concerns for the admin form, and this response is read by the product UI.\n",
   );
 
 export type PublicConfigValues = zod.input<typeof PublicConfigValues>;

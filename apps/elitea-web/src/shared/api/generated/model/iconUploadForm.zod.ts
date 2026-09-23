@@ -44,7 +44,7 @@ import * as zod from "zod";
 export const IconUploadForm = zod
   .object({
     file: zod
-      .instanceof(File)
+      .instanceof(Blob)
       .describe("The image. 512 KB is the cap for both families."),
     width: zod
       .int()
@@ -58,7 +58,7 @@ export const IconUploadForm = zod
       .describe("The requested box height. Same defaults and clamps as width."),
   })
   .describe(
-    "NOTE(W2): the multipart form both upload routes read — internal\/api\/v2\/eliteacore\/skill_icon.go:245-283 and internal\/api\/v2\/eliteacore\/handler.go (CreateProjectIcon). The file part is named `file`; a request without it is a 400 and stores nothing.\n",
+    "NOTE(W2): the multipart form both upload routes read — internal/api/v2/eliteacore/skill_icon.go:245-283 and internal/api/v2/eliteacore/handler.go (CreateProjectIcon). The file part is named `file`; a request without it is a 400 and stores nothing.\n",
   );
 
 export type IconUploadForm = zod.input<typeof IconUploadForm>;

@@ -92,7 +92,7 @@ ARG TARGETARCH=amd64
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags="-s -w" -o /out/elitea-main ./cmd/elitea-main && \
+    go build -trimpath -ldflags="-s -w -X github.com/EliteaAI/elitea-platform/services/elitea-main/internal/buildinfo.Version=${VERSION}" -o /out/elitea-main ./cmd/elitea-main && \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/elitea-migrate ./cmd/elitea-migrate && \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \

@@ -96,7 +96,7 @@ describe('updateParticipantSettings', () => {
 });
 
 describe('updateParticipantLlmSettings', () => {
-  it('PATCHes elitea_core/entity_settings/prompt_lib/{projectId}/{conversationId} with a {llm_settings} object body (documented mismatch vs. the real array-expecting handler)', async () => {
+  it('PATCHes elitea_core/entity_settings/prompt_lib/{projectId}/{conversationId} with the one-element [{participant_id, llm_settings}] array BatchUpdateEntitySettings decodes (A14, ELITEA-0386)', async () => {
     let capturedBody: unknown;
     server.use(
       http.patch(`${BASE}/elitea_core/entity_settings/prompt_lib/7/conv-1`, async ({ request }) => {
@@ -107,9 +107,33 @@ describe('updateParticipantLlmSettings', () => {
     const result = await updateParticipantLlmSettings({
       projectId: 7,
       conversationId: 'conv-1',
+      participantId: 'p-1',
       llm_settings: { temperature: 0.5 },
     });
-    expect(capturedBody).toEqual({ llm_settings: { temperature: 0.5 } });
+    // Array, keyed by `participant_id` — matches `ConversationsRepo
+    // .BatchUpdateEntitySettings` reading `s["participant_id"]` (conversations
+    // .go:904), not the plain `{llm_settings}` object the old app sent.
+    expect(capturedBody).toEqual([{ participant_id: 'p-1', llm_settings: { temperature: 0.5 } }]);
     expect(result).toEqual({ ok: true });
+  });
+
+  it('spreads currentEntitySettings first so version_id/variables/icon_meta survive the full-replace repo write', async () => {
+    let capturedBody: unknown;
+    server.use(
+      http.patch(`${BASE}/elitea_core/entity_settings/prompt_lib/7/conv-1`, async ({ request }) => {
+        capturedBody = await request.json();
+        return HttpResponse.json({ ok: true });
+      }),
+    );
+    await updateParticipantLlmSettings({
+      projectId: 7,
+      conversationId: 'conv-1',
+      participantId: 'p-1',
+      currentEntitySettings: { version_id: 'v2', variables: [{ name: 'x' }], icon_meta: { url: 'i.png' } },
+      llm_settings: { temperature: 0.9 },
+    });
+    expect(capturedBody).toEqual([
+      { participant_id: 'p-1', version_id: 'v2', variables: [{ name: 'x' }], icon_meta: { url: 'i.png' }, llm_settings: { temperature: 0.9 } },
+    ]);
   });
 });

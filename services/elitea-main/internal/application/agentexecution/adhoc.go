@@ -144,7 +144,14 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
 	}
-	attachments, err := currentTurnAttachments(request.QuestionID, request.ConversationUUID, request.Attachments)
+	attachments, err := currentTurnAttachmentsWithImages(
+		ctx,
+		int64(request.ProjectID),
+		service.attachmentImages,
+		request.QuestionID,
+		request.ConversationUUID,
+		request.Attachments,
+	)
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
 	}
@@ -154,8 +161,15 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 		ctx, request.ProjectID, request.ActorUserID,
 		currentMemoryRecallUserInputText(request.UserInput),
 	)
+	// #946: same project-context read the application start path performs —
+	// see StartCurrentApplication's own comment and projectcontext.go's
+	// header. An adhoc turn runs in a project too, and the admission gate this
+	// replaced refused ResolveCurrentAdhocTurn exactly as it refused the
+	// selected-application path.
+	projectContextText := service.resolveCurrentProjectContextText(ctx, request.ProjectID)
 	input, err := currentAdhocInput(
 		request, target, frozen, suggestionPolicy, toolkitGuardrails, attachments, memoryRecall.Text,
+		projectContextText,
 	)
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, fmt.Errorf("build current ad-hoc execution input: %w", err)
@@ -294,6 +308,7 @@ func currentAdhocInput(
 	toolkitGuardrails json.RawMessage,
 	attachments []CurrentTurnAttachment,
 	memoryText string,
+	projectContextText string,
 ) (*runtimev1.AgentExecutionInputV1, error) {
 	var snapshot map[string]any
 	if err := decodeCurrentJSON(frozen, &snapshot); err != nil {
@@ -319,6 +334,10 @@ func currentAdhocInput(
 	// already uses for `default_instructions` (agent_chat.sql) — see
 	// appendCurrentInstructionsMemories's own comment.
 	instructions := appendCurrentInstructionsMemories(target.Instructions, memoryText)
+	// #946: and then the project's standing context, in the same position.
+	if !hasFrozenProjectContext(frozen) {
+		instructions = appendCurrentInstructionsProjectContext(instructions, projectContextText)
+	}
 	application, err := json.Marshal(map[string]string{"instructions": instructions})
 	if err != nil {
 		return nil, ErrUnsupportedCurrentAgentStart

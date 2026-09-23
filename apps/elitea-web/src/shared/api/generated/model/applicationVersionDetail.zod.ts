@@ -59,6 +59,12 @@ export const ApplicationVersionDetail = zod
     agent_type: zod.string().optional(),
     instructions: zod.string().optional(),
     welcome_message: zod.string().optional(),
+    notes: zod
+      .string()
+      .optional()
+      .describe(
+        'NOTE(#898): `meta.notes`, surfaced beside `meta` as pylon\'s `hydrate_notes_from_meta` surfaces it. Always a string on the version-detail read and on the two write echoes ("" when the version carries no notes); absent from the other version maps (import, fork, the public catalogue detail), which do not build their response through these two helpers.\n',
+      ),
     llm_settings: LlmSettings.optional(),
     meta: zod.union([VersionMeta, zod.null()]).optional(),
     conversation_starters: ConversationStarters.optional(),
@@ -71,7 +77,7 @@ export const ApplicationVersionDetail = zod
     is_forked: zod.boolean().optional(),
   })
   .describe(
-    'NOTE(W2): union of the version-detail maps the handlers emit. Field presence varies by endpoint (hence the minimal required set): fetchVersionDetails always adds created_at\/agent_type\/instructions\/ welcome_message\/llm_settings\/meta\/conversation_starters\/ pipeline_settings\/author_id\/author\/tools\/tags\/variables (internal\/api\/v2\/applications\/handler.go). The application and version create paths return that same stored pipeline-settings and tag state. The author object contains id, email, and name from auth_core__user. UpdateVersion emits a smaller subset without created_at, author, or tools. Fork adds is_forked and omits pipeline_settings. The import detail map has no is_forked and omits created_at, but carries meta, variables, and tags from the canonical stores. Public application details omit variables, created_at, author, and is_forked. Empty-vs-missing: instructions and welcome_message are always present as \"\" when the DB column is NULL (COALESCE \/ pointer deref to \"\" in applications\/handler.go).\n',
+    'NOTE(W2): union of the version-detail maps the handlers emit. Field presence varies by endpoint (hence the minimal required set): fetchVersionDetails always adds created_at/agent_type/instructions/ welcome_message/llm_settings/meta/conversation_starters/ pipeline_settings/author_id/author/tools/tags/variables (internal/api/v2/applications/handler.go). The application and version create paths return that same stored pipeline-settings and tag state. The author object contains id, email, and name from auth_core__user. UpdateVersion emits a smaller subset without created_at, author, or tools. Fork adds is_forked and omits pipeline_settings. The import detail map has no is_forked and omits created_at, but carries meta, variables, and tags from the canonical stores. Public application details omit variables, created_at, author, and is_forked. Empty-vs-missing: instructions and welcome_message are always present as "" when the DB column is NULL (COALESCE / pointer deref to "" in applications/handler.go).\n',
   );
 
 export type ApplicationVersionDetail = zod.input<

@@ -34,7 +34,11 @@ use ring::digest;
 use serde::Deserialize;
 use serde_json::Value;
 
+use super::application_pipeline::{
+    PipelinePauseError, PipelinePauseIdentity, PipelineToolResume, pipeline_pause_identity,
+};
 use super::events::{DESCENDANT_CONTAINER_INVOCATION_KEY, DESCENDANT_PARENT_CALL_KEY};
+use super::graph::resume::pipeline_hitl_graph_action;
 use super::internal_tools::{ASK_USER_METADATA_KEY, AskUserRequest, decode_ask_user_request};
 use super::request::AgentExecutionPayload;
 use super::sensitive_tools::SensitiveToolCatalog;
@@ -47,12 +51,25 @@ use crate::toolkits::{
 const MAX_IDENTITY_BYTES: usize = 512;
 const MAX_COMMENT_BYTES: usize = 2_000;
 const MAX_ANSWER_BYTES: usize = 16 * 1_024;
+/// The edit a child pipeline's `hitl` node writes onto its own state key,
+/// bounded exactly as `graph::resume` bounds the same value (#973).
+const MAX_EDIT_BYTES: usize = 64 * 1_024;
 const MAX_CALL_VALUE_BYTES: usize = 40 * 1_024;
 const MAX_JSON_DEPTH: usize = 64;
 const MAX_DIRECT_HITL_DECISIONS: usize = 16;
 const HITL_DIGEST_DOMAIN: &[u8] = b"elitea.sensitive-tool-interrupt.v1\0";
 const BLOCKED_TOOL_RESULT_TYPE: &str = "sensitive_tool_blocked";
 const BLOCKED_TOOL_DEFAULT_REASON: &str = "denied by user";
+/// Upper bound on the calls of one replayed assistant message, aligned with
+/// `events::MAX_TOOL_CALLS_PER_MODEL_TURN` so a message the projector admits is
+/// a message the replay can re-emit.
+const MAX_REPLAY_CALLS: usize = 16;
+const REPLAY_MARKER_PREFIX: &str = "[Elitea direct HITL ";
+const REPLAY_APPROVED_TEXT: &str =
+    "The pending tool call was approved. Continue the original request.";
+const REPLAY_REJECTED_TEXT: &str =
+    "The pending tool call was rejected. Continue without executing it.";
+const REPLAY_COMMENT_INFIX: &str = " Reviewer comment: ";
 
 /// Stable direct-HITL admission and resolution failures.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -115,6 +132,9 @@ impl std::error::Error for DirectHitlError {}
 enum DirectHitlAction {
     Approve,
     Reject,
+    /// #973: only a child PIPELINE's own `hitl` node offers this. It is
+    /// refused for every confirmation guardrail by `resolved_guardrail_decision`.
+    Edit,
     BlockWithComment,
     Authorize,
     Skip,
@@ -127,6 +147,10 @@ enum DirectGuardrailType {
     SensitiveTool,
     McpAuth,
     ClarifyingQuestion,
+    /// A child pipeline's own graph `hitl` node (#973). It is never a
+    /// `ToolConfirmationRequest`, so it is resolved before the confirmation
+    /// scan rather than through `resolved_guardrail_decision`.
+    PipelineHitl,
 }
 
 #[derive(Deserialize)]
@@ -303,7 +327,16 @@ impl DirectDelegatedAuthorizationContinuation {
             DirectDelegatedAuthorizationAction::Authorize => ToolConfirmationDecision::Approve,
             DirectDelegatedAuthorizationAction::Skip => ToolConfirmationDecision::Deny,
         };
-        let user_content = replay_user_content(&interrupt_id, decision);
+        let user_content = replay_user_content(&interrupt_id, decision, None);
+        // The delegated-authorization pause is raised by an MCP server's own
+        // requirement rather than by the guardrails policy, and is deliberately
+        // kept to the one call it names.
+        let replay_calls = vec![ReplayCall {
+            call_id: call_id.to_owned(),
+            tool_name: request.tool_name.clone(),
+            arguments: request.args.clone(),
+            settled: None,
+        }];
         let persisted = persisted_replay_state_with_confirmation(
             &events[confirmation_index + 1..],
             &user_content,
@@ -314,6 +347,7 @@ impl DirectDelegatedAuthorizationContinuation {
                 DirectDelegatedAuthorizationAction::Authorize => None,
                 DirectDelegatedAuthorizationAction::Skip => Some(ToolConfirmationDecision::Deny),
             },
+            &replay_calls,
         )?;
         Ok(ResolvedDirectHitlDecision {
             invocation_id: confirmation_event.invocation_id.clone(),
@@ -328,10 +362,12 @@ impl DirectDelegatedAuthorizationContinuation {
             user_content,
             resume_mode: persisted.mode,
             persisted_result: persisted.result,
+            replay_calls,
             application_route: None,
             delegated_authorization: Some(requirement),
             clarifying_question: None,
             prior_authorization_declines: authorization_scope(confirmation_event)?,
+            pipeline: None,
         })
     }
 }
@@ -446,6 +482,15 @@ impl DirectHitlDecisionSet {
         let events = session.events().all();
         let mut resolved = Vec::with_capacity(self.decisions.len());
         for decision in self.decisions {
+            // #973: a child PIPELINE's pause is a graph interrupt, not a
+            // `ToolConfirmationRequest`, so it is looked for first. Only an
+            // event this worker itself wrote carries the pending marker, so
+            // this cannot shadow a sensitive-tool card.
+            if let Some((index, pause)) = matching_pipeline_pause(&events, &decision.interrupt_id)?
+            {
+                resolved.push(decision.resolve_pipeline_at(&events, index, pause)?);
+                continue;
+            }
             let index = matching_confirmation_index(&events, &decision.interrupt_id)?;
             let nested = application_route(&events[index])?.is_some();
             resolved.push(decision.resolve_at(&events, index, nested)?);
@@ -556,12 +601,12 @@ impl DirectHitlDecision {
         }
         let value = if matches!(
             raw.action,
-            DirectHitlAction::BlockWithComment | DirectHitlAction::Answer
+            DirectHitlAction::BlockWithComment | DirectHitlAction::Answer | DirectHitlAction::Edit
         ) {
-            let maximum = if matches!(raw.action, DirectHitlAction::Answer) {
-                MAX_ANSWER_BYTES
-            } else {
-                MAX_COMMENT_BYTES
+            let maximum = match raw.action {
+                DirectHitlAction::Answer => MAX_ANSWER_BYTES,
+                DirectHitlAction::Edit => MAX_EDIT_BYTES,
+                _ => MAX_COMMENT_BYTES,
             };
             if raw.value.is_empty() || raw.value.len() > maximum || raw.value.contains('\0') {
                 return Err(DirectHitlError::new(DirectHitlErrorCode::InvalidInput));
@@ -653,35 +698,33 @@ impl DirectHitlDecision {
         let (decision, delegated_authorization, clarifying_question) =
             resolved_guardrail_decision(confirmation_event, self.guardrail_type, self.action)?;
         let is_delegated_authorization = delegated_authorization.is_some();
-        let user_content = replay_user_content(&interrupt_id, decision);
-        let persisted = if nested {
-            validate_unadvanced_nested_confirmation(
-                &events[confirmation_index + 1..],
-                confirmation_event,
-            )?;
-            PersistedReplayState {
-                mode: ReplayResumeMode::ExecuteCall,
-                result: None,
-            }
-        } else if is_delegated_authorization {
-            persisted_replay_state_with_confirmation(
-                &events[confirmation_index + 1..],
-                &user_content,
-                call_id,
-                &request.tool_name,
-                &request.args,
-                (decision == ToolConfirmationDecision::Deny).then_some(decision),
-            )?
+        let denial_comment = (decision == ToolConfirmationDecision::Deny)
+            .then_some(self.value.as_deref())
+            .flatten();
+        let user_content = replay_user_content(&interrupt_id, decision, denial_comment);
+        // The sensitive-tool pause replays its whole assistant message; the
+        // other two guardrails stay on the single call they name.
+        let replay_calls = if delegated_authorization.is_some() || clarifying_question.is_some() {
+            vec![ReplayCall {
+                call_id: call_id.to_owned(),
+                tool_name: request.tool_name.clone(),
+                arguments: request.args.clone(),
+                settled: None,
+            }]
         } else {
-            persisted_replay_state(
-                &events[confirmation_index + 1..],
-                &user_content,
-                call_id,
-                &request.tool_name,
-                &request.args,
-                decision,
-            )?
+            replay_calls_for(events, confirmation_index, call_id, &request.tool_name)?
         };
+        let persisted = resume_state(
+            events,
+            confirmation_index,
+            &user_content,
+            &replay_calls,
+            ResumeStateShape {
+                nested,
+                delegated_authorization: is_delegated_authorization,
+                decision,
+            },
+        )?;
         let application_route = application_route(confirmation_event)?;
         if nested != application_route.is_some() {
             return Err(DirectHitlError::new(DirectHitlErrorCode::CorruptSession));
@@ -699,12 +742,149 @@ impl DirectHitlDecision {
             user_content,
             resume_mode: persisted.mode,
             persisted_result: persisted.result,
+            replay_calls,
             application_route,
             delegated_authorization,
             clarifying_question,
             prior_authorization_declines: authorization_scope(confirmation_event)?,
+            pipeline: None,
         })
     }
+
+    /// Bind one decision to a child PIPELINE's persisted graph pause (#973).
+    ///
+    /// Nothing here replays: the decision is proven against the card the
+    /// browser saw (recomputed by the projection's own binding) and against the
+    /// pending checkpoint that pause persisted, and what comes out is the state
+    /// the child graph re-enters with. The route is built from the event's
+    /// descendant metadata directly rather than through `application_route`
+    /// because the pause identity is already proven by
+    /// `pipeline_pause_identity`; the branch is the child's own tier, which is
+    /// what hides its events from the parent's next turn and what bounds the
+    /// resume to one nesting level.
+    fn resolve_pipeline_at(
+        self,
+        events: &[Event],
+        index: usize,
+        pause: PipelinePauseIdentity,
+    ) -> Result<ResolvedDirectHitlDecision, DirectHitlError> {
+        if self.tool_call_id.is_some()
+            || self
+                .guardrail_type
+                .is_some_and(|guardrail| guardrail != DirectGuardrailType::PipelineHitl)
+        {
+            return Err(DirectHitlError::new(DirectHitlErrorCode::StaleDecision));
+        }
+        let event = events
+            .get(index)
+            .ok_or_else(|| DirectHitlError::new(DirectHitlErrorCode::CorruptSession))?;
+        // A pause the CHILD already advanced past is not resumable — bound by
+        // the child's own invocation id, exactly as the agent-child path binds
+        // its confirmation (#990 review 2). It cannot be "the pause must be
+        // the last event": one assistant message may call another tool beside
+        // the pipeline, and ADK persists that tool's response AFTER the
+        // forwarded pause, so a last-event rule makes such a card permanently
+        // unanswerable. The child's invocation id is derived from the parent's
+        // call id, so a second gate of the SAME call still supersedes the
+        // first, which is the staleness this rule exists to catch.
+        validate_unadvanced_nested_confirmation(&events[index + 1..], event)?;
+        let graph_action = pipeline_hitl_graph_action(self.action.as_str())
+            .ok_or_else(|| DirectHitlError::new(DirectHitlErrorCode::StaleDecision))?;
+        let decision = if graph_action == "reject" {
+            ToolConfirmationDecision::Deny
+        } else {
+            ToolConfirmationDecision::Approve
+        };
+        let interrupt_id = pause.interrupt_id.clone();
+        let call_id = pause.parent_call_id.clone();
+        let tool_name = pause.tool_name.clone();
+        let route = DirectHitlApplicationRoute {
+            container_invocation_id: pause.container_invocation_id.clone(),
+            parent_call_id: pause.parent_call_id.clone(),
+            branch: event.branch.clone(),
+        };
+        let resume =
+            pause
+                .into_resume(graph_action, self.raw_value())
+                .map_err(|error| match error {
+                    PipelinePauseError::Stale => {
+                        DirectHitlError::new(DirectHitlErrorCode::StaleDecision)
+                    }
+                    PipelinePauseError::Corrupt => {
+                        DirectHitlError::new(DirectHitlErrorCode::CorruptSession)
+                    }
+                })?;
+        Ok(ResolvedDirectHitlDecision {
+            invocation_id: event.invocation_id.clone(),
+            interrupt_id,
+            call_digest: String::new(),
+            call_id,
+            tool_name,
+            arguments: Value::Null,
+            fingerprint: String::new(),
+            decision,
+            decision_value: self.value,
+            user_content: Content::new("user"),
+            resume_mode: ReplayResumeMode::ExecuteCall,
+            persisted_result: None,
+            replay_calls: Vec::new(),
+            application_route: Some(route),
+            delegated_authorization: None,
+            clarifying_question: None,
+            pipeline: Some(Box::new(resume)),
+            prior_authorization_declines: authorization_scope(event)?,
+        })
+    }
+}
+
+/// Which of the three suffix contracts one resume is proven against.
+#[derive(Clone, Copy)]
+struct ResumeStateShape {
+    nested: bool,
+    delegated_authorization: bool,
+    decision: ToolConfirmationDecision,
+}
+
+/// What the session already holds for this decision: nothing yet, or an exact
+/// replay suffix a crash interrupted.
+fn resume_state(
+    events: &[Event],
+    confirmation_index: usize,
+    user_content: &Content,
+    replay_calls: &[ReplayCall],
+    shape: ResumeStateShape,
+) -> Result<PersistedReplayState, DirectHitlError> {
+    let confirmation_event = &events[confirmation_index];
+    let request = confirmation_event
+        .actions
+        .tool_confirmation
+        .as_ref()
+        .ok_or_else(|| DirectHitlError::new(DirectHitlErrorCode::CorruptSession))?;
+    let call_id = request
+        .function_call_id
+        .as_deref()
+        .ok_or_else(|| DirectHitlError::new(DirectHitlErrorCode::CorruptSession))?;
+    let later = &events[confirmation_index + 1..];
+    if shape.nested {
+        validate_unadvanced_nested_confirmation(later, confirmation_event)?;
+        return Ok(PersistedReplayState {
+            mode: ReplayResumeMode::ExecuteCall,
+            result: None,
+        });
+    }
+    persisted_replay_state_with_confirmation(
+        later,
+        user_content,
+        call_id,
+        &request.tool_name,
+        &request.args,
+        if shape.delegated_authorization {
+            (shape.decision == ToolConfirmationDecision::Deny).then_some(shape.decision)
+        } else {
+            Some(shape.decision)
+        },
+        replay_calls,
+    )
 }
 
 fn resolved_guardrail_decision(
@@ -762,12 +942,35 @@ impl DirectHitlAction {
         match self {
             Self::Approve => "approve",
             Self::Reject => "reject",
+            Self::Edit => "edit",
             Self::BlockWithComment => "block_with_comment",
             Self::Authorize => "authorize",
             Self::Skip => "skip",
             Self::Answer => "answer",
         }
     }
+}
+
+/// The persisted child-pipeline pause one submitted interrupt id names.
+///
+/// Scans from the end because only the LATEST pause is resumable, and stops at
+/// the first match: a pause identity is a digest of the event's own invocation
+/// id and card data, so two events cannot legitimately carry the same one.
+fn matching_pipeline_pause(
+    events: &[Event],
+    submitted_interrupt_id: &str,
+) -> Result<Option<(usize, PipelinePauseIdentity)>, DirectHitlError> {
+    for (index, event) in events.iter().enumerate().rev() {
+        let pause = match pipeline_pause_identity(event) {
+            Ok(Some(pause)) => pause,
+            Ok(None) => continue,
+            Err(_) => return Err(DirectHitlError::new(DirectHitlErrorCode::CorruptSession)),
+        };
+        if pause.interrupt_id == submitted_interrupt_id {
+            return Ok(Some((index, pause)));
+        }
+    }
+    Ok(None)
 }
 
 fn matching_confirmation_index(
@@ -839,6 +1042,33 @@ fn validate_unadvanced_nested_confirmation(
     Ok(())
 }
 
+/// One function call of the assistant message a pause belongs to.
+///
+/// A sensitive pause abandons the WHOLE message: ADK's confirmation pre-check
+/// (`llm_agent.rs`) breaks out of its scan and returns before ANY tool of that
+/// message is dispatched, so the non-sensitive calls beside the paused one are
+/// still unexecuted when the decision comes back. The replay therefore
+/// re-emits the whole message rather than the single decided call, and carries
+/// each call's already-taken decision with it so a message with two sensitive
+/// calls can be decided one card at a time without losing the first decision.
+#[derive(Clone)]
+struct ReplayCall {
+    call_id: String,
+    tool_name: String,
+    arguments: Value,
+    /// The decision an EARLIER resume of this same message already took for
+    /// this call. `None` for the call being decided now and for any call no
+    /// pause was ever raised for.
+    settled: Option<SettledDecision>,
+}
+
+/// A decision recovered from the durable replay marker of an earlier resume.
+#[derive(Clone)]
+struct SettledDecision {
+    decision: ToolConfirmationDecision,
+    comment: Option<String>,
+}
+
 /// Exact, session-proven call plus its one browser decision.
 ///
 /// This value does not grant execution and deliberately implements neither
@@ -857,10 +1087,17 @@ pub(crate) struct ResolvedDirectHitlDecision {
     user_content: Content,
     resume_mode: ReplayResumeMode,
     persisted_result: Option<Value>,
+    /// Every call of the paused assistant message, in the order the model
+    /// emitted them — see [`ReplayCall`].
+    replay_calls: Vec<ReplayCall>,
     application_route: Option<DirectHitlApplicationRoute>,
     delegated_authorization: Option<DelegatedAuthorizationRequirement>,
     clarifying_question: Option<AskUserRequest>,
     prior_authorization_declines: Vec<DelegatedAuthorizationRequirement>,
+    /// #973: set only when this decision answers a child PIPELINE's graph
+    /// pause. Every replay path below refuses it, because a graph is re-entered
+    /// from its checkpoint and never replayed.
+    pipeline: Option<Box<PipelineToolResume>>,
 }
 
 pub(crate) enum ResolvedDirectHitlStart {
@@ -880,15 +1117,19 @@ pub(crate) struct DirectHitlApplicationRoute {
 /// Construction permits an approved read or a denied call. A denied effect is
 /// safe here because the real tool is replaced before Runner construction.
 pub(crate) struct DirectHitlReplay {
+    /// The whole assistant message, in emission order.
+    calls: Vec<ReplayCall>,
+    /// The call this resume decided — the one the replay is proven against.
     call_id: String,
     tool_name: String,
     arguments: Value,
-    fingerprint: String,
     user_content: Content,
     resume_mode: ReplayResumeMode,
-    blocked_result: Option<Value>,
-    replacement_decision: Option<ToolConfirmationDecision>,
-    approve_confirmation: bool,
+    /// `call_id` -> ADK confirmation fingerprint, for every call that already
+    /// has a decision (this one and the ones earlier cards settled).
+    approvals: Vec<(String, String)>,
+    /// The locally served results that replace a declined call's dispatch.
+    blocked: Vec<BlockedToolReplay>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -920,6 +1161,25 @@ impl ResolvedDirectHitlDecision {
         self.clarifying_question.is_some()
     }
 
+    /// Whether this decision answers a child pipeline's own graph pause (#973).
+    pub(crate) const fn is_pipeline_node(&self) -> bool {
+        self.pipeline.is_some()
+    }
+
+    /// Whether this decision belongs to a guardrail the sensitive-tool replay
+    /// does not serve — authorization, a clarifying question, or a child
+    /// pipeline's graph pause, each of which has its own continuation.
+    const fn is_other_guardrail(&self) -> bool {
+        self.delegated_authorization.is_some()
+            || self.clarifying_question.is_some()
+            || self.pipeline.is_some()
+    }
+
+    /// Take the child-graph continuation this decision carries.
+    pub(crate) fn into_pipeline_resume(self) -> Option<Box<PipelineToolResume>> {
+        self.pipeline
+    }
+
     /// Narrow one resolved decision to the safe direct replay boundary.
     ///
     /// Approved calls must be read-only until durable effect ownership exists.
@@ -929,7 +1189,7 @@ impl ResolvedDirectHitlDecision {
         self,
         sensitive_tools: &SensitiveToolCatalog,
     ) -> Result<DirectHitlReplay, DirectHitlError> {
-        if self.delegated_authorization.is_some() || self.clarifying_question.is_some() {
+        if self.is_other_guardrail() {
             return Err(DirectHitlError::new(DirectHitlErrorCode::CorruptSession));
         }
         let policy = sensitive_tools
@@ -962,17 +1222,77 @@ impl ResolvedDirectHitlDecision {
         {
             return Err(DirectHitlError::new(DirectHitlErrorCode::StaleDecision));
         }
+        let mut approvals = vec![(self.call_id.clone(), self.fingerprint.clone())];
+        let mut blocked = Vec::with_capacity(1 + self.replay_calls.len());
+        if let Some(response) = blocked_result {
+            blocked.push(BlockedToolReplay {
+                call_id: self.call_id.clone(),
+                tool_name: self.tool_name.clone(),
+                arguments: self.arguments.clone(),
+                response,
+                confirmation_decision: ToolConfirmationDecision::Deny,
+            });
+        }
+        // The rest of the message travels with the decision. A call an earlier
+        // card already settled keeps that settlement; a REPEAT of a settled
+        // tool inherits it, which is the "one authorization per tool per turn"
+        // contract the same-tool-twice case is made of; anything else is left
+        // undecided so ADK raises its own card for it.
+        for call in &self.replay_calls {
+            if call.call_id == self.call_id {
+                continue;
+            }
+            let settled = call.settled.as_ref().map_or_else(
+                || {
+                    (call.tool_name == self.tool_name).then(|| SettledDecision {
+                        decision: self.decision,
+                        comment: self.decision_value.clone(),
+                    })
+                },
+                |settled| Some(settled.clone()),
+            );
+            let Some(settled) = settled else {
+                continue;
+            };
+            let policy = sensitive_tools
+                .policy_for(&call.tool_name)
+                .ok_or_else(|| DirectHitlError::new(DirectHitlErrorCode::UnsupportedCapability))?;
+            approvals.push((
+                call.call_id.clone(),
+                tool_call_fingerprint(&call.tool_name, &call.arguments),
+            ));
+            match settled.decision {
+                ToolConfirmationDecision::Approve => {
+                    if sensitive_tools.is_read_only(&call.tool_name) != Some(true) {
+                        return Err(DirectHitlError::new(
+                            DirectHitlErrorCode::UnsupportedCapability,
+                        ));
+                    }
+                }
+                ToolConfirmationDecision::Deny => blocked.push(BlockedToolReplay {
+                    call_id: call.call_id.clone(),
+                    tool_name: call.tool_name.clone(),
+                    arguments: call.arguments.clone(),
+                    response: blocked_tool_result(
+                        &call.tool_name,
+                        policy.toolkit_name(),
+                        policy.toolkit_type(),
+                        policy.action_name(),
+                        settled.comment.as_deref(),
+                    ),
+                    confirmation_decision: ToolConfirmationDecision::Deny,
+                }),
+            }
+        }
         Ok(DirectHitlReplay {
+            calls: self.replay_calls,
             call_id: self.call_id,
             tool_name: self.tool_name,
             arguments: self.arguments,
-            fingerprint: self.fingerprint,
             user_content: self.user_content,
             resume_mode: self.resume_mode,
-            blocked_result,
-            replacement_decision: (self.decision == ToolConfirmationDecision::Deny)
-                .then_some(ToolConfirmationDecision::Deny),
-            approve_confirmation: true,
+            approvals,
+            blocked,
         })
     }
 
@@ -1003,15 +1323,20 @@ impl ResolvedDirectHitlDecision {
             return Err(DirectHitlError::new(DirectHitlErrorCode::StaleDecision));
         }
         Ok(DirectHitlReplay {
+            approvals: vec![(self.call_id.clone(), self.fingerprint.clone())],
+            blocked: vec![BlockedToolReplay {
+                call_id: self.call_id.clone(),
+                tool_name: self.tool_name.clone(),
+                arguments: self.arguments.clone(),
+                response: result,
+                confirmation_decision: ToolConfirmationDecision::Approve,
+            }],
+            calls: self.replay_calls,
             call_id: self.call_id,
             tool_name: self.tool_name,
             arguments: self.arguments,
-            fingerprint: self.fingerprint,
             user_content: self.user_content,
             resume_mode: self.resume_mode,
-            blocked_result: Some(result),
-            replacement_decision: Some(ToolConfirmationDecision::Approve),
-            approve_confirmation: true,
         })
     }
 
@@ -1050,15 +1375,27 @@ impl ResolvedDirectHitlDecision {
             return Err(DirectHitlError::new(DirectHitlErrorCode::StaleDecision));
         }
         Ok(DirectHitlReplay {
+            approvals: blocked_result
+                .as_ref()
+                .map(|_| (self.call_id.clone(), self.fingerprint.clone()))
+                .into_iter()
+                .collect(),
+            blocked: blocked_result
+                .map(|response| BlockedToolReplay {
+                    call_id: self.call_id.clone(),
+                    tool_name: self.tool_name.clone(),
+                    arguments: self.arguments.clone(),
+                    response,
+                    confirmation_decision: self.decision,
+                })
+                .into_iter()
+                .collect(),
+            calls: self.replay_calls,
             call_id: self.call_id,
             tool_name: self.tool_name,
             arguments: self.arguments,
-            fingerprint: self.fingerprint,
             user_content: self.user_content,
             resume_mode: self.resume_mode,
-            approve_confirmation: blocked_result.is_some(),
-            replacement_decision: blocked_result.as_ref().map(|_| self.decision),
-            blocked_result,
         })
     }
 }
@@ -1083,44 +1420,80 @@ impl DirectHitlReplay {
         matches!(self.resume_mode, ReplayResumeMode::ExecuteCall)
     }
 
+    /// The call ids the replay re-emits, in the model's original order.
+    #[cfg(test)]
+    pub(crate) fn replay_call_ids(&self) -> Vec<&str> {
+        self.calls
+            .iter()
+            .map(|call| call.call_id.as_str())
+            .collect()
+    }
+
+    /// The call ids that resume with a decision already taken.
+    #[cfg(test)]
+    pub(crate) fn approved_call_ids(&self) -> Vec<&str> {
+        self.approvals
+            .iter()
+            .map(|(call_id, _)| call_id.as_str())
+            .collect()
+    }
+
+    /// The call ids served a local blocked result instead of a dispatch, with
+    /// the reason each one carries.
+    #[cfg(test)]
+    pub(crate) fn blocked_calls(&self) -> Vec<(&str, &str)> {
+        self.blocked
+            .iter()
+            .map(|blocked| {
+                (
+                    blocked.call_id.as_str(),
+                    blocked
+                        .response
+                        .get("denial_reason")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                )
+            })
+            .collect()
+    }
+
     /// Bind the one-shot replay model and exact ADK confirmation decision.
     pub(crate) fn bind(self, delegate: Arc<dyn Llm>) -> PreparedDirectHitlReplay {
         let hidden = self
-            .blocked_result
-            .as_ref()
-            .filter(|result| {
-                result["type"] == "mcp_auth_decision" && result["status"] == "authorized"
+            .blocked
+            .iter()
+            .filter(|blocked| {
+                blocked.response["type"] == "mcp_auth_decision"
+                    && blocked.response["status"] == "authorized"
             })
-            .map(|_| self.tool_name.clone())
-            .into_iter()
+            .map(|blocked| blocked.tool_name.clone())
             .collect();
         let delegate = crate::toolkits::hide_model_tools(delegate, hidden);
         let mut run_config = RunConfig::default();
         let state = match self.resume_mode {
             ReplayResumeMode::ExecuteCall => {
-                if self.approve_confirmation {
+                // Every already-decided call of the message, not only this
+                // card's: ADK keys its pre-check by function call id, so a
+                // decision left out here raises the same card a second time.
+                for (call_id, fingerprint) in self.approvals {
                     run_config
                         .tool_confirmation_decisions
-                        .insert(self.call_id.clone(), ToolConfirmationDecision::Approve);
+                        .insert(call_id.clone(), ToolConfirmationDecision::Approve);
                     run_config
                         .tool_confirmation_fingerprints
-                        .insert(self.call_id.clone(), self.fingerprint);
+                        .insert(call_id, fingerprint);
                 }
                 REPLAY_PENDING
             }
             ReplayResumeMode::ContinueAfterResult => REPLAY_EMITTED,
         };
-        let call_id = self.call_id;
-        let tool_name = self.tool_name;
-        let arguments = self.arguments;
-        let replacement_decision = self.replacement_decision;
         let model: Arc<dyn Llm> = Arc::new(DirectHitlReplayModel {
             delegate,
             state: AtomicU8::new(state),
-            call_id: call_id.clone(),
-            tool_name: tool_name.clone(),
-            arguments: arguments.clone(),
-            replay_marker: self.user_content.clone(),
+            calls: self.calls,
+            call_id: self.call_id,
+            tool_name: self.tool_name,
+            arguments: self.arguments,
         });
         PreparedDirectHitlReplay {
             model,
@@ -1128,14 +1501,7 @@ impl DirectHitlReplay {
                 user_content: self.user_content,
                 run_config,
             },
-            blocked_result: self.blocked_result.map(|response| BlockedToolReplay {
-                call_id,
-                tool_name,
-                arguments,
-                response,
-                confirmation_decision: replacement_decision
-                    .unwrap_or(ToolConfirmationDecision::Deny),
-            }),
+            blocked: self.blocked,
         }
     }
 }
@@ -1147,7 +1513,7 @@ impl DirectHitlReplay {
 pub(crate) struct PreparedDirectHitlReplay {
     model: Arc<dyn Llm>,
     run: DirectHitlRunInput,
-    blocked_result: Option<BlockedToolReplay>,
+    blocked: Vec<BlockedToolReplay>,
 }
 
 /// Opaque invocation input minted with the exact replay model.
@@ -1157,15 +1523,33 @@ pub(crate) struct DirectHitlRunInput {
 }
 
 impl PreparedDirectHitlReplay {
+    #[cfg(test)]
+    pub(crate) fn model(&self) -> Arc<dyn Llm> {
+        Arc::clone(&self.model)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn confirmed_call_ids(&self) -> Vec<&str> {
+        let mut ids = self
+            .run
+            .run_config
+            .tool_confirmation_decisions
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        ids
+    }
+
     pub(crate) fn into_parts(
         self,
         toolsets: Vec<Arc<dyn Toolset>>,
     ) -> (Arc<dyn Llm>, DirectHitlRunInput, Vec<Arc<dyn Toolset>>) {
         let mut toolsets = toolsets;
-        if let Some(blocked) = self.blocked_result.as_ref()
-            && blocked.response["type"] == "mcp_auth_decision"
-            && blocked.response["status"] == "authorized"
-        {
+        for blocked in self.blocked.iter().filter(|blocked| {
+            blocked.response["type"] == "mcp_auth_decision"
+                && blocked.response["status"] == "authorized"
+        }) {
             // A validated auth proxy resumes with a local decision result.
             // Protected operations are selected by the next model request.
             toolsets.push(Arc::new(adk_rust::tool::BasicToolset::new(
@@ -1175,18 +1559,20 @@ impl PreparedDirectHitlReplay {
                 })],
             )));
         }
-        let toolsets = match self.blocked_result {
-            None => toolsets,
-            Some(blocked) => toolsets
+        let toolsets = if self.blocked.is_empty() {
+            toolsets
+        } else {
+            let blocked = Arc::new(self.blocked);
+            toolsets
                 .into_iter()
                 .map(|inner| {
                     Arc::new(BlockedToolset {
                         name: format!("{}-blocked", inner.name()),
                         inner,
-                        blocked: blocked.clone(),
+                        blocked: Arc::clone(&blocked),
                     }) as Arc<dyn Toolset>
                 })
-                .collect(),
+                .collect()
         };
         (self.model, self.run, toolsets)
     }
@@ -1250,7 +1636,7 @@ impl Tool for AuthorizationReplayResult {
 struct BlockedToolset {
     name: String,
     inner: Arc<dyn Toolset>,
-    blocked: BlockedToolReplay,
+    blocked: Arc<Vec<BlockedToolReplay>>,
 }
 
 #[async_trait]
@@ -1267,10 +1653,14 @@ impl Toolset for BlockedToolset {
             tools
                 .into_iter()
                 .map(|inner| {
-                    if inner.name() == self.blocked.tool_name {
+                    if self
+                        .blocked
+                        .iter()
+                        .any(|blocked| blocked.tool_name == inner.name())
+                    {
                         Arc::new(BlockedTool {
                             inner,
-                            blocked: self.blocked.clone(),
+                            blocked: Arc::clone(&self.blocked),
                         }) as Arc<dyn Tool>
                     } else {
                         inner
@@ -1283,7 +1673,7 @@ impl Toolset for BlockedToolset {
 
 struct BlockedTool {
     inner: Arc<dyn Tool>,
-    blocked: BlockedToolReplay,
+    blocked: Arc<Vec<BlockedToolReplay>>,
 }
 
 #[async_trait]
@@ -1337,16 +1727,26 @@ impl Tool for BlockedTool {
         context: Arc<dyn ToolContext>,
         arguments: Value,
     ) -> adk_rust::Result<Value> {
-        if context.function_call_id() != self.blocked.call_id || arguments != self.blocked.arguments
-        {
+        // One tool can carry several calls of the same message. Only the exact
+        // call ids a decision blocked are served locally; any other call of
+        // this tool in the same message is a call no one declined and runs for
+        // real — ADK's own pre-check still holds it if it needs its own card.
+        let Some(blocked) = self
+            .blocked
+            .iter()
+            .find(|blocked| blocked.call_id == context.function_call_id())
+        else {
+            return self.inner.execute(context, arguments).await;
+        };
+        if arguments != blocked.arguments {
             return Err(AdkError::agent(
                 "the blocked result does not match this exact tool call",
             ));
         }
         let mut actions = context.actions();
-        actions.tool_confirmation_decision = Some(self.blocked.confirmation_decision);
+        actions.tool_confirmation_decision = Some(blocked.confirmation_decision);
         context.set_actions(actions);
-        Ok(self.blocked.response.clone())
+        Ok(blocked.response.clone())
     }
 }
 
@@ -1363,10 +1763,10 @@ const REPLAY_DELEGATING: u8 = 2;
 struct DirectHitlReplayModel {
     delegate: Arc<dyn Llm>,
     state: AtomicU8,
+    calls: Vec<ReplayCall>,
     call_id: String,
     tool_name: String,
     arguments: Value,
-    replay_marker: Content,
 }
 
 #[async_trait]
@@ -1395,21 +1795,17 @@ impl Llm for DirectHitlReplayModel {
             Ordering::Acquire,
         ) {
             Ok(_) => {
-                self.validate_pending_request(&request)?;
+                let parts = self.replay_parts(&request)?;
                 tracing::debug!(
                     tool.name = %self.tool_name,
                     tool.call_id = %self.call_id,
-                    "re-emitting one persisted direct tool call through ADK"
+                    replay.calls = parts.len(),
+                    "re-emitting the persisted direct tool calls through ADK"
                 );
                 let response = LlmResponse {
                     content: Some(Content {
                         role: "model".to_owned(),
-                        parts: vec![Part::FunctionCall {
-                            id: Some(self.call_id.clone()),
-                            name: self.tool_name.clone(),
-                            args: self.arguments.clone(),
-                            thought_signature: None,
-                        }],
+                        parts,
                     }),
                     finish_reason: Some(FinishReason::Stop),
                     turn_complete: true,
@@ -1453,20 +1849,36 @@ impl Llm for DirectHitlReplayModel {
                     );
                 }
                 let request =
-                    super::replay_history::model_continuation(request, &self.replay_marker)?;
+                    super::replay_history::model_history(without_replay_markers(request))?;
                 self.delegate
                     .generate_content(request, stream_response)
                     .await
             }
             Err(_) => {
                 let request =
-                    super::replay_history::model_continuation(request, &self.replay_marker)?;
+                    super::replay_history::model_history(without_replay_markers(request))?;
                 self.delegate
                     .generate_content(request, stream_response)
                     .await
             }
         }
     }
+}
+
+/// Drop every direct-HITL replay marker from a request.
+///
+/// Matched by PREFIX rather than by the one marker this resume wrote: a
+/// message decided one card at a time leaves one marker per decision behind,
+/// and none of them is model-facing content.
+fn without_replay_markers(mut request: LlmRequest) -> LlmRequest {
+    request.contents.retain(|content| {
+        content.role != "user"
+            || !matches!(
+                content.parts.first(),
+                Some(Part::Text { text }) if text.starts_with(REPLAY_MARKER_PREFIX)
+            )
+    });
+    request
 }
 
 impl DirectHitlReplayModel {
@@ -1494,6 +1906,42 @@ impl DirectHitlReplayModel {
             })
             .cloned()
             .collect())
+    }
+
+    /// The whole paused assistant message, re-emitted in its original order.
+    ///
+    /// The decided call is proven; a companion that is no longer replayable —
+    /// its tool withdrawn, or a result already persisted for it — is dropped
+    /// with a warning rather than failing the resume the user is waiting on.
+    fn replay_parts(&self, request: &LlmRequest) -> adk_rust::Result<Vec<Part>> {
+        self.validate_pending_request(request)?;
+        let mut parts = Vec::with_capacity(self.calls.len().max(1));
+        for call in &self.calls {
+            if call.call_id != self.call_id
+                && (!request.tools.contains_key(&call.tool_name)
+                    || latest_call_state(request, &call.call_id, &call.tool_name, &call.arguments)
+                        != LatestCallState::Pending)
+            {
+                tracing::warn!(
+                    tool.name = %call.tool_name,
+                    tool.call_id = %call.call_id,
+                    "dropping one call of the paused assistant message: it is no longer replayable"
+                );
+                continue;
+            }
+            parts.push(Part::FunctionCall {
+                name: call.tool_name.clone(),
+                args: call.arguments.clone(),
+                id: Some(call.call_id.clone()),
+                thought_signature: None,
+            });
+        }
+        if parts.is_empty() {
+            return Err(AdkError::agent(
+                "the persisted direct tool call is unavailable for exact replay",
+            ));
+        }
+        Ok(parts)
     }
 
     fn validate_pending_request(&self, request: &LlmRequest) -> adk_rust::Result<()> {
@@ -1638,34 +2086,158 @@ impl DirectHitlApplicationRoute {
     }
 }
 
-fn replay_user_content(interrupt_id: &str, decision: ToolConfirmationDecision) -> Content {
-    let prefix = format!("[Elitea direct HITL {interrupt_id}] ");
+/// The durable marker one resume writes into the session.
+///
+/// It carries the denial comment as well as the action because a message with
+/// two sensitive calls is decided one card at a time: the SECOND resume has to
+/// reconstruct the first call's blocked result — the reviewer's own words
+/// included — and the marker is the only place that decision survives. The
+/// marker never reaches the model: [`without_replay_markers`] strips every one
+/// of them from each request.
+fn replay_user_content(
+    interrupt_id: &str,
+    decision: ToolConfirmationDecision,
+    denial_comment: Option<&str>,
+) -> Content {
+    let prefix = format!("{REPLAY_MARKER_PREFIX}{interrupt_id}] ");
     match decision {
-        ToolConfirmationDecision::Approve => Content::new("user").with_text(format!(
-            "{prefix}The pending tool call was approved. Continue the original request."
-        )),
-        ToolConfirmationDecision::Deny => Content::new("user").with_text(format!(
-            "{prefix}The pending tool call was rejected. Continue without executing it."
-        )),
+        ToolConfirmationDecision::Approve => {
+            Content::new("user").with_text(format!("{prefix}{REPLAY_APPROVED_TEXT}"))
+        }
+        ToolConfirmationDecision::Deny => Content::new("user").with_text(match denial_comment {
+            Some(comment) => {
+                format!("{prefix}{REPLAY_REJECTED_TEXT}{REPLAY_COMMENT_INFIX}{comment}")
+            }
+            None => format!("{prefix}{REPLAY_REJECTED_TEXT}"),
+        }),
     }
 }
 
-fn persisted_replay_state(
+/// Read one durable replay marker back: its interrupt id, its decision and the
+/// reviewer comment a denial carried.
+fn replay_marker(event: &Event) -> Option<(&str, ToolConfirmationDecision, Option<&str>)> {
+    if event.author != "user" {
+        return None;
+    }
+    let content = event.llm_response.content.as_ref()?;
+    if content.role != "user" || content.parts.len() != 1 {
+        return None;
+    }
+    let Part::Text { text } = content.parts.first()? else {
+        return None;
+    };
+    let (interrupt_id, rest) = text.strip_prefix(REPLAY_MARKER_PREFIX)?.split_once("] ")?;
+    if !valid_identity(interrupt_id) {
+        return None;
+    }
+    if let Some(rest) = rest.strip_prefix(REPLAY_REJECTED_TEXT) {
+        let comment = rest.strip_prefix(REPLAY_COMMENT_INFIX);
+        if !rest.is_empty() && comment.is_none() {
+            return None;
+        }
+        return Some((interrupt_id, ToolConfirmationDecision::Deny, comment));
+    }
+    (rest == REPLAY_APPROVED_TEXT).then_some((
+        interrupt_id,
+        ToolConfirmationDecision::Approve,
+        None,
+    ))
+}
+
+/// Every call of the assistant message that carried `call_id`, in emission
+/// order, each with the decision an earlier resume already took for it.
+fn replay_calls_for(
     events: &[Event],
-    user_content: &Content,
+    confirmation_index: usize,
+    call_id: &str,
+    tool_name: &str,
+) -> Result<Vec<ReplayCall>, DirectHitlError> {
+    let confirmation = &events[confirmation_index];
+    let arguments = &confirmation
+        .actions
+        .tool_confirmation
+        .as_ref()
+        .ok_or_else(|| DirectHitlError::new(DirectHitlErrorCode::CorruptSession))?
+        .args;
+    let origin = events[..confirmation_index]
+        .iter()
+        .find(|event| {
+            event.invocation_id == confirmation.invocation_id
+                && event.tool_calls().iter().any(|call| {
+                    call.call_id == Some(call_id)
+                        && call.name == tool_name
+                        && call.args == arguments
+                })
+        })
+        .ok_or_else(|| DirectHitlError::new(DirectHitlErrorCode::CorruptSession))?;
+    let calls = origin.tool_calls();
+    if calls.is_empty() {
+        return Err(DirectHitlError::new(DirectHitlErrorCode::CorruptSession));
+    }
+    if calls.len() > MAX_REPLAY_CALLS {
+        return Err(DirectHitlError::new(DirectHitlErrorCode::ResourceExhausted));
+    }
+    let mut seen = HashSet::with_capacity(calls.len());
+    let mut replay = Vec::with_capacity(calls.len());
+    for call in calls {
+        let Some(id) = call.call_id.filter(|id| valid_identity(id)) else {
+            return Err(DirectHitlError::new(DirectHitlErrorCode::CorruptSession));
+        };
+        if !valid_identity(call.name) || encoded_value_len(call.args)? > MAX_CALL_VALUE_BYTES {
+            return Err(DirectHitlError::new(DirectHitlErrorCode::CorruptSession));
+        }
+        if !seen.insert(id.to_owned()) {
+            return Err(DirectHitlError::new(DirectHitlErrorCode::CorruptSession));
+        }
+        let settled = if id == call_id {
+            None
+        } else {
+            settled_decision(events, confirmation_index, id, call.name, call.args)?
+        };
+        replay.push(ReplayCall {
+            call_id: id.to_owned(),
+            tool_name: call.name.to_owned(),
+            arguments: call.args.clone(),
+            settled,
+        });
+    }
+    Ok(replay)
+}
+
+/// The decision an earlier resume of this same message already took for one
+/// call, proven by its own persisted confirmation event and replay marker.
+fn settled_decision(
+    events: &[Event],
+    confirmation_index: usize,
     call_id: &str,
     tool_name: &str,
     arguments: &Value,
-    decision: ToolConfirmationDecision,
-) -> Result<PersistedReplayState, DirectHitlError> {
-    persisted_replay_state_with_confirmation(
-        events,
-        user_content,
-        call_id,
-        tool_name,
-        arguments,
-        Some(decision),
-    )
+) -> Result<Option<SettledDecision>, DirectHitlError> {
+    let mut settled = None;
+    for (index, event) in events[..confirmation_index].iter().enumerate() {
+        let Some(request) = event.actions.tool_confirmation.as_ref() else {
+            continue;
+        };
+        if request.function_call_id.as_deref() != Some(call_id)
+            || request.tool_name != tool_name
+            || &request.args != arguments
+        {
+            continue;
+        }
+        let (interrupt_id, _) =
+            sensitive_call_identity(&event.invocation_id, call_id, tool_name, arguments)?;
+        if let Some((_, decision, comment)) = events[index + 1..]
+            .iter()
+            .filter_map(replay_marker)
+            .find(|marker| marker.0 == interrupt_id)
+        {
+            settled = Some(SettledDecision {
+                decision,
+                comment: comment.map(ToOwned::to_owned),
+            });
+        }
+    }
+    Ok(settled)
 }
 
 fn persisted_replay_state_with_confirmation(
@@ -1675,6 +2247,7 @@ fn persisted_replay_state_with_confirmation(
     tool_name: &str,
     arguments: &Value,
     confirmation_decision: Option<ToolConfirmationDecision>,
+    replay_calls: &[ReplayCall],
 ) -> Result<PersistedReplayState, DirectHitlError> {
     let mut replay_invocation = None;
     let mut call_pending = false;
@@ -1683,28 +2256,42 @@ fn persisted_replay_state_with_confirmation(
         if exact_replay_user_event(event, user_content) {
             replay_invocation = Some(event.invocation_id.as_str());
             call_pending = false;
+            result_persisted = None;
             continue;
         }
-        if result_persisted.is_some() {
-            return Err(DirectHitlError::new(DirectHitlErrorCode::StaleDecision));
-        }
-        if exact_replay_call(event, replay_invocation, call_id, tool_name, arguments) {
-            call_pending = true;
-            continue;
-        }
-        if call_pending {
-            let Some(result) = exact_replay_result(
+        if result_persisted.is_none()
+            && exact_replay_call(
                 event,
                 replay_invocation,
                 call_id,
                 tool_name,
-                confirmation_decision,
-            ) else {
-                return Err(DirectHitlError::new(DirectHitlErrorCode::StaleDecision));
-            };
-            result_persisted = Some(result.clone());
-            call_pending = false;
+                arguments,
+                replay_calls,
+            )
+        {
+            call_pending = true;
             continue;
+        }
+        if call_pending {
+            if result_persisted.is_none()
+                && let Some(result) = exact_replay_result(
+                    event,
+                    replay_invocation,
+                    call_id,
+                    tool_name,
+                    confirmation_decision,
+                )
+            {
+                result_persisted = Some(result.clone());
+                continue;
+            }
+            // A replayed message dispatches every call it carries and ADK
+            // yields one event per result, so the siblings of the decided call
+            // are an expected part of the suffix rather than a foreign
+            // advance.
+            if sibling_replay_result(event, replay_invocation, call_id, replay_calls) {
+                continue;
+            }
         }
         return Err(DirectHitlError::new(DirectHitlErrorCode::StaleDecision));
     }
@@ -1739,16 +2326,43 @@ fn exact_replay_call(
     call_id: &str,
     tool_name: &str,
     arguments: &Value,
+    replay_calls: &[ReplayCall],
 ) -> bool {
     let calls = event.tool_calls();
     replay_invocation == Some(event.invocation_id.as_str())
-        && calls.len() == 1
-        && calls[0].call_id == Some(call_id)
-        && calls[0].name == tool_name
-        && calls[0].args == arguments
+        && calls.iter().any(|call| {
+            call.call_id == Some(call_id) && call.name == tool_name && call.args == arguments
+        })
+        // Nothing beyond the message the decision was taken on may appear.
+        && calls.iter().all(|call| {
+            replay_calls.iter().any(|replay| {
+                call.call_id == Some(replay.call_id.as_str())
+                    && call.name == replay.tool_name
+                    && call.args == &replay.arguments
+            })
+        })
         && event.tool_results().is_empty()
         && event.actions.tool_confirmation.is_none()
         && event.actions.tool_confirmation_decision.is_none()
+}
+
+/// One persisted result of a call the replay carries BESIDE the decided one.
+fn sibling_replay_result(
+    event: &Event,
+    replay_invocation: Option<&str>,
+    call_id: &str,
+    replay_calls: &[ReplayCall],
+) -> bool {
+    let results = event.tool_results();
+    replay_invocation == Some(event.invocation_id.as_str())
+        && results.len() == 1
+        && results[0].call_id != Some(call_id)
+        && replay_calls.iter().any(|replay| {
+            results[0].call_id == Some(replay.call_id.as_str())
+                && results[0].name == replay.tool_name
+        })
+        && event.tool_calls().is_empty()
+        && event.actions.tool_confirmation.is_none()
 }
 
 fn exact_replay_result<'a>(

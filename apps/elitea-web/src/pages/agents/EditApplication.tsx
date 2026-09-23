@@ -2,7 +2,6 @@ import { useCallback, useMemo, type ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
-import type { SxProps, Theme } from '@mui/material/styles';
 
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { FormProvider } from 'react-hook-form';
@@ -13,6 +12,7 @@ import { t } from '@/shared/i18n';
 import { NoResultsMessage } from '@/shared/ui/NoResultsMessage';
 import { disarmUnsavedChangesNavBlocker, useUnsavedChangesNavBlocker } from '@/widgets/app-shell';
 
+import { contentSx, pageSx, tabBarSx } from './EditApplication.styles';
 import { applicationDetailDisplayName, toVersionSummaries } from './lib/editApplicationMappers';
 import { isPublicAgentsProject } from './lib/isPublicAgentsProject';
 import { useCorrectUserNameInUrl } from './lib/useCorrectUserNameInUrl';
@@ -27,20 +27,8 @@ import { EditApplicationActions } from './ui/EditApplicationActions';
 import { EditApplicationAiEditSlot } from './ui/EditApplicationAiEditSlot';
 import { EditApplicationConfigurationPanel } from './ui/EditApplicationConfigurationPanel';
 import { EditApplicationEditorTabs } from './ui/EditApplicationEditorTabs';
+import { EditApplicationHeader } from './ui/EditApplicationHeader';
 import { EditApplicationSaveBar } from './ui/EditApplicationSaveBar';
-
-const pageSx: SxProps<Theme> = { height: '100%', display: 'flex', flexDirection: 'column' };
-const tabBarSx: SxProps<Theme> = {
-  flexShrink: 0,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  borderBottom: 1,
-  borderColor: 'divider',
-  padding: '0 1.5rem',
-  minHeight: '3rem',
-};
-const contentSx: SxProps<Theme> = { flex: 1, minHeight: 0, overflowY: 'auto', padding: '1.5rem' };
 
 interface EditApplicationParams {
   readonly tab?: string;
@@ -55,6 +43,12 @@ interface EditApplicationSearch {
 function parseApplicationId(agentId: string | undefined): number | undefined {
   if (agentId === undefined || !/^\d+$/.test(agentId)) return undefined;
   return Number(agentId);
+}
+
+// elitea_issues #5107/#5922/#5987 — Save used to ignore `isDirty`. Extracted
+// so this condition stays out of this file's own complexity budget.
+function canSaveApplication(isValid: boolean, isSaving: boolean, isDirty: boolean): boolean {
+  return isValid && !isSaving && isDirty;
 }
 
 /**
@@ -265,6 +259,12 @@ export function EditApplication(): ReactNode {
     void navigate({ to: '/agents/$tab', params: { tab: params.tab ?? 'latest' } });
   }, [navigate, params.tab]);
 
+  // #897 — the header's own back arrow. Same target as Discard, but without
+  // the disarm: a dirty form still gets the unsaved-changes nav blocker.
+  const handleBack = useCallback(() => {
+    void navigate({ to: '/agents/$tab', params: { tab: params.tab ?? 'latest' } });
+  }, [navigate, params.tab]);
+
   if (isDetailNotFound) {
     return (
       <Box sx={pageSx}>
@@ -275,7 +275,6 @@ export function EditApplication(): ReactNode {
       </Box>
     );
   }
-
   if (isVersionMissing) {
     return (
       <Box sx={pageSx}>
@@ -291,9 +290,10 @@ export function EditApplication(): ReactNode {
     <FormProvider {...form}>
       <Box sx={pageSx}>
         <Box sx={tabBarSx}>
-          <Typography variant="headingSmall">
-            {detail ? applicationDetailDisplayName(detail) : t('pages.agents.editApplication.title', 'Agent')}
-          </Typography>
+          <EditApplicationHeader
+            title={detail ? applicationDetailDisplayName(detail) : t('pages.agents.editApplication.title', 'Agent')}
+            onBack={handleBack}
+          />
           {versionControls.showVersionControls && (
             <AgentVersionControls
               applicationId={versionControls.applicationIdText}
@@ -324,7 +324,7 @@ export function EditApplication(): ReactNode {
               />
               <EditApplicationSaveBar
                 onSave={handleSave}
-                canSave={form.formState.isValid && !isSaving}
+                canSave={canSaveApplication(form.formState.isValid, isSaving, isDirty)}
                 isSaving={isSaving}
                 onDiscarded={handleDiscarded}
               />
@@ -370,6 +370,7 @@ export function EditApplication(): ReactNode {
              * disagree with what the editor thinks is open.
              */
             applicationVersionId={versionControls.activeVersionId}
+            versions={versionControls.versionOptions}
             configurationPanel={
               <EditApplicationConfigurationPanel
                 projectId={projectId}

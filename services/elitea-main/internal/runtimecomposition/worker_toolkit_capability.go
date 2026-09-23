@@ -77,7 +77,7 @@ type rustWorkerToolkitCapabilityDocument struct {
 // The question has to be asked because the catalogue and the runtime disagree.
 // The pinned SDK snapshot holds 52 types. The Python worker image imports 43 of
 // them; the other 9 raise at import and fail at the first tool call. The Rust
-// worker materializes 22 families and SKIPS anything else with a warning
+// worker materializes 23 families and SKIPS anything else with a warning
 // (agent_toolkit_skipped), so an unsupported toolkit attaches to an agent and
 // then quietly does nothing.
 //

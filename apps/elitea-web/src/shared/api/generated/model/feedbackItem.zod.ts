@@ -52,7 +52,7 @@ export const FeedbackItem = zod
     created_at: zod.iso.datetime({ offset: true }),
   })
   .describe(
-    "NOTE(W2): ListFeedbacks row (internal\/api\/v2\/social\/handler.go:347-379, fields at :371-374) querying `p_{project_id}.social_feedbacks` — matches the `social_feedbacks` table shape in internal\/infra\/db\/migrations\/001_initial.sql:337-347 exactly.\n",
+    "NOTE(W2): ListFeedbacks row (internal/api/v2/social/handler.go:347-379, fields at :371-374) querying `p_{project_id}.social_feedbacks` — matches the `social_feedbacks` table shape in internal/infra/db/migrations/001_initial.sql:337-347 exactly.\n",
   );
 
 export type FeedbackItem = zod.input<typeof FeedbackItem>;

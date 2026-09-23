@@ -83,7 +83,7 @@ async fn run_at(
         for toolset in
             crate::agents::internal_tools::InternalToolCatalog::from_names(&["ask_user".to_owned()])
                 .unwrap()
-                .toolsets()
+                .toolsets(None)
         {
             builder = builder.toolset(toolset);
         }

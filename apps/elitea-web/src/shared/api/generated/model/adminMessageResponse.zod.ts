@@ -46,7 +46,7 @@ export const AdminMessageResponse = zod
     message: zod.string(),
   })
   .describe(
-    'NOTE(issue 151): every administration-mode message and error body is `{\"message\": \"...\"}` (internal\/api\/v2\/secrets\/admin.go), NOT the `{\"error\": \"...\"}` of ErrorResponse.\n',
+    'NOTE(issue 151): every administration-mode message and error body is `{"message": "..."}` (internal/api/v2/secrets/admin.go), NOT the `{"error": "..."}` of ErrorResponse.\n',
   );
 
 export type AdminMessageResponse = zod.input<typeof AdminMessageResponse>;

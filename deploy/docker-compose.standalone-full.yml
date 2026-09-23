@@ -126,8 +126,10 @@
 #   15433 postgres                  STANDALONE_PG_PORT
 #   16380 redis                     STANDALONE_REDIS_PORT
 #   8090  llm-mock journal          STANDALONE_MOCK_PORT — see the llm-mock comment
+#   8096  qtest-mock journal        STANDALONE_QTEST_PORT
+#   8097  ado-mock journal          STANDALONE_ADO_PORT — see the ado-mock comment
 #   (llm-real, the `real-llm` profile, publishes nothing — see its comment)
-#   9400  oidc-provider-mock        FIXED — see the oidc-mock comment
+#   9400  oidc-provider-mock        E2E_OIDC_PORT — see the oidc-mock comment
 #
 #   The runtime plane is NOT published to the host. runtime-redis:6380 and
 #   elitea-main:9443/9444/9445 are reachable only on the compose network, which
@@ -193,6 +195,42 @@ services:
       - standalone_pg_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U elitea"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  pgbouncer:
+    # The Postgres pooler elitea-main sits behind (issue #964).
+    #
+    # Transaction mode: main's client connections are NOT one per server
+    # connection. All replicas share the server pool in the config, so the
+    # read plane stops pinning Postgres at max_connections as main replicas
+    # grow. The connection math is in deploy/README.md.
+    #
+    # It is safe here only because elitea-main's three multi-statement
+    # serialisation locks are transaction-scoped locks held in a transaction
+    # the pooler keeps pinned to one backend (the secrets backfill,
+    # internal/api/v2/secrets; personal project provisioning,
+    # internal/application/personalproject; the support-assistant bootstrap,
+    # internal/api/v2/supportassistant). A session lock would stop
+    # serialising, and in transaction mode nothing resets the backend it
+    # leaks onto; the 2026-09-01 measurement is recorded in
+    # deploy/helm/elitea/values.yaml.
+    #
+    # The config is committed at deploy/runtime/pgbouncer.ini (the redis.conf
+    # precedent); the entrypoint uses the file as-is when it exists.
+    #
+    # No host port: the pooler is an internal hop, and pgbouncer's own console
+    # (SHOW POOLS / SHOW SERVERS) is reached through podman exec when needed.
+    image: edoburu/pgbouncer:v1.25.2-p0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./runtime/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
+      - ./runtime/pgbouncer-userlist.txt:/etc/pgbouncer/userlist.txt:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 6432 -U elitea"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -366,7 +404,7 @@ services:
       retries: 15
 
   rustfs-bucket-init:
-    image: docker.io/minio/mc:latest
+    image: quay.io/minio/mc:latest
     entrypoint: ["sh", "-c"]
     command:
       - |
@@ -395,10 +433,25 @@ services:
       default:
         aliases:
           - oidc.localhost
+    # The PORT moves, the published-equals-container rule does not: both sides
+    # read one variable, so the issuer this mock derives from the Host header is
+    # reachable under the same `oidc.localhost:<port>` inside the compose
+    # network and from the host browser.
+    #
+    # `E2E_OIDC_PORT` and not a name of this stack's own, because it is already
+    # the variable the E2E stack's compose file, its seeder
+    # (apps/elitea-web/scripts/e2e-stack.sh), `e2e/auth.setup.ts` and
+    # `e2e/fixtures/session.ts` all read. Two names for one port is how a stack
+    # comes up on 9402 while the browser waits for a redirect to 9400.
+    #
+    # DEFAULT 9400 — unset, this stack behaves exactly as it always has, and CI
+    # (which sets nothing) is unchanged. Set it only to run this stack beside
+    # another one, together with STANDALONE_PORT/PG/REDIS/MOCK.
+    command: ["--port", "${E2E_OIDC_PORT:-9400}"]
     ports:
-      - "9400:9400"
+      - "${E2E_OIDC_PORT:-9400}:${E2E_OIDC_PORT:-9400}"
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:9400/.well-known/openid-configuration')\""]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:${E2E_OIDC_PORT:-9400}/.well-known/openid-configuration')\""]
       interval: 2s
       timeout: 5s
       retries: 20
@@ -624,6 +677,83 @@ services:
       start_period: 3s
     restart: unless-stopped
 
+  # ── Fake qTest backend (issue #939, group 4) ────────────────────────────────
+  # The qTest toolkit's write surface (record a manual execution status, attach
+  # a file from an artifact bucket) had nowhere to run: qTest has no e2e/live
+  # lane in this repo and the mock LLM has no qTest-shaped API. This serves the
+  # four routes the SDK's wrapper actually calls, with the shapes its parsers
+  # read, and journals every request so a test can prove server-side what the
+  # toolkit did. Standard-library Python, built from deploy/qtest-mock.
+  #
+  # The toolkit reaches it at `http://qtest-mock:8096` on the compose network
+  # (a `qtest` CONFIGURATION's base_url); the published port below exists for
+  # the journal and state reads a test makes from the host, the same reason
+  # llm-mock publishes one.
+  qtest-mock:
+    image: ghcr.io/eliteaai/elitea-mock-qtest:standalone
+    build:
+      context: ./qtest-mock
+      dockerfile: Containerfile
+    environment:
+      QTEST_MOCK_PORT: "8096"
+      # The bearer every /api/v3 route demands. A test seeds the SAME value as
+      # the configuration's qtest_api_token, so a 401 in the journal means the
+      # credential did not reach the toolkit rather than that the mock is down.
+      QTEST_MOCK_TOKEN: "${STANDALONE_QTEST_TOKEN:-e2e-qtest-token}"
+    ports:
+      - "${STANDALONE_QTEST_PORT:-8096}:8096"
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8096/healthz').read()"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+    restart: unless-stopped
+
+  # ── Fake Azure DevOps (wave 4, package W1) ──────────────────────────────────
+  # Nineteen `toolkits-credentials` onetest cases (ELITEA-2590..2596,
+  # 2599..2610) are about the ADO toolkits' IMAGE pipeline — download an
+  # attachment, hand it to a vision model, cache the description — and wave 3
+  # had to ledger every one of them LIVE-ONLY because there was no ADO-shaped
+  # backend anywhere in this repo. This is it: the routes the `azure-devops`
+  # python client actually addresses (it asks by location GUID, so the mock's
+  # `OPTIONS /_apis` catalogue IS the route contract), seeded work items,
+  # comments, wiki pages, repositories and test plans, real image bytes in four
+  # formats plus the broken/oversized/forbidden ones the error cases need, and
+  # a journal of every request. Standard-library Python, built from
+  # deploy/ado-mock.
+  #
+  # The toolkit reaches it at `http://ado-mock:8097` on the compose network (an
+  # `ado` CONFIGURATION's organization_url), which is also what
+  # ADO_MOCK_PUBLIC_URL embeds in the seeded attachment URLs — a published-port
+  # URL there would resolve from the test runner and not from the worker. The
+  # published port below exists for the journal and state reads a test makes
+  # from the host, the same reason llm-mock and qtest-mock publish one.
+  ado-mock:
+    image: ghcr.io/eliteaai/elitea-mock-ado:standalone
+    build:
+      context: ./ado-mock
+      dockerfile: Containerfile
+    environment:
+      ADO_MOCK_PORT: "8097"
+      # The PAT every /_apis route demands, as Basic or Bearer. A test seeds the
+      # SAME value as the configuration's `token`, so a 401 in the journal means
+      # the credential did not reach the toolkit rather than that the mock is down.
+      ADO_MOCK_PAT: "${STANDALONE_ADO_PAT:-e2e-ado-pat}"
+      ADO_MOCK_PUBLIC_URL: "http://ado-mock:8097"
+      ADO_MOCK_PROJECT: "E2E"
+    ports:
+      - "${STANDALONE_ADO_PORT:-8097}:8097"
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8097/healthz').read()"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+    restart: unless-stopped
+
   # ── Real model upstream — the `real-llm` profile ─────────────────────────
   # A tiny REAL model next to the mock, never instead of it: llama.cpp in
   # router mode serving Qwen3-0.6B (chat, SSE, OpenAI tool calls; thinking off,
@@ -701,14 +831,22 @@ services:
       # admin-ui submodule checkout is required.
       target: e2e
     environment:
-      DATABASE_URL: "postgres://elitea:elitea@postgres:5432/elitea?sslmode=disable"
+      # main reaches Postgres through the pooler (issue #964); the pooler
+      # reaches Postgres directly. The migration jobs, db-init, the LLM
+      # gateway and the one-shots keep their direct connections on purpose.
+      DATABASE_URL: "postgres://elitea:elitea@pgbouncer:6432/elitea?sslmode=disable"
+      # main's product pool, explicit instead of the pgx default max(4, NumCPU):
+      # with the pooler, main's client-side budget is a stated number the
+      # connection math in deploy/README.md can count. The chart ships the
+      # same value (deploy/helm/elitea/values.yaml, main.env).
+      ELITEA_DATABASE_MAX_CONNS: "6"
       # Keep the gateway and Main on one vault-key source. Empty preserves the
       # unwrapped E2E seed; a restored deployment can supply its existing key.
       SECRETS_MASTER_KEY: "${SECRETS_MASTER_KEY-}"
       REDIS_URL: "redis:6379"
       ADMIN_UI_STATIC_DIR: "/data/admin_ui/static/dist"
       APPLICATION_SECRET_KEY: "changeme-standalone"
-      OIDC_ISSUER_URL: "http://oidc.localhost:9400"
+      OIDC_ISSUER_URL: "http://oidc.localhost:${E2E_OIDC_PORT:-9400}"
       OIDC_CLIENT_ID: "elitea-standalone-client"
       OIDC_CLIENT_SECRET: "elitea-standalone-secret"
       OIDC_REDIRECT_URI: "http://localhost:${STANDALONE_PORT:-8084}/forward-auth/auth_oidc/callback"
@@ -1047,7 +1185,9 @@ services:
       # public material, so a plain read-only bind mount is correct here.
       - ./runtime/auth.form.yml:/etc/elitea/auth.form.yml:ro
     depends_on:
-      postgres:
+      # main's only database path is the pooler; the pooler waits on
+      # postgres. The schema is guaranteed by elitea-migrate below.
+      pgbouncer:
         condition: service_healthy
       elitea-deepwiki:
         condition: service_healthy
@@ -1408,9 +1548,31 @@ services:
       # roots: every destination the worker dials — control, output, content,
       # platform_origin — is signed by that CA, and model traffic egresses
       # through elitea-main's /llm proxy rather than directly to a provider.
+      #
+      # THE BUNDLE, NOT THE RUNTIME CA ALONE (#983 trust half). A remote MCP
+      # server is the one destination on this stack that is NOT signed by the
+      # runtime CA: mcp-mock serves HTTPS with a certificate minted into its own
+      # image. Pointed at the runtime CA alone, the python leg cannot complete
+      # a TLS handshake with it at all — measured, before any MCP request:
+      # `mcp_adapter.py _preflight_auth_check` →
+      # `ClientConnectorCertificateError: self-signed certificate in
+      # certificate chain`, after which the toolkit has no tools and the turn
+      # answers a plain echo naming nothing. The native worker was given the
+      # same bundle for the same reason
+      # (deploy/docker-compose.standalone-rust-agent.yml).
+      #
+      # `worker-trust` below concatenates runtime CA + mcp-mock CA and NOTHING
+      # ELSE. Public roots are deliberately still absent, and the paragraph
+      # above this one says why they were absent before: every internal
+      # destination — control, output, content, platform_origin — is signed by
+      # the runtime CA, and model traffic egresses through elitea-main's /llm
+      # proxy rather than to a provider. No toolkit on this stack dials a
+      # publicly signed endpoint; a lane that adds one adds its own root here
+      # and says which tool needs it. These variables REPLACE the trust store
+      # rather than add to it, so every addition is a real widening.
       ELITEA_DISABLE_SYSTEM_CA: "1"
-      REQUESTS_CA_BUNDLE: /run/elitea-runtime/runtime-ca.crt
-      SSL_CERT_FILE: /run/elitea-runtime/runtime-ca.crt
+      REQUESTS_CA_BUNDLE: /run/elitea-worker-trust/worker-ca-bundle.pem
+      SSL_CERT_FILE: /run/elitea-worker-trust/worker-ca-bundle.pem
       # The one environment variable the worker itself reads. Mirrors the
       # hybrid's fail-safe snapshot: broader than the current
       # `artifact.delete_file` rule so metadata drift cannot bypass approval.
@@ -1418,6 +1580,9 @@ services:
     volumes:
       - ./runtime/worker-runtime.json:/run/elitea/runtime.json:ro
       - standalone_runtime_worker:/run/elitea-runtime:ro
+      # The combined bundle the two variables above name. Read-only: the worker
+      # consumes it, `worker-trust` is what writes it.
+      - standalone_worker_trust:/run/elitea-worker-trust:ro
       # 0700 and owned by uid 10001 — the worker contract requires a private
       # spool root. A fresh named volume starts 0755 owned by root, so it is
       # prepared by the init service rather than assumed.
@@ -1437,6 +1602,13 @@ services:
         condition: service_healthy
       platform-edge:
         condition: service_started
+      # The bundle both trust variables name must exist before the worker's
+      # first TLS dial — of ANY destination, not only the MCP one, because it
+      # is now the whole trust store. A late file would break only the runs
+      # that raced it, so the one-shot is waited on rather than hoped for
+      # (the same rule the native overlay applies to mcp-mock-trust).
+      worker-trust:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   worker-spool-init:
@@ -1515,6 +1687,46 @@ services:
         condition: service_completed_successfully
     restart: "no"
 
+  # The trust store the PYTHON worker runs on: runtime CA + mcp-mock CA (#983).
+  #
+  # A SECOND one-shot beside mcp-mock-trust, not a second file written by it,
+  # because the two bundles have different INPUTS and different owners.
+  # mcp-mock-trust concatenates the mock's certificate onto the image's public
+  # roots for a consumer (the native worker) whose internal destinations are
+  # trusted in code and whose other clients verify against public roots. The
+  # python worker is the opposite case: it has no code-level CA, every internal
+  # destination is signed by the runtime CA, and it must NOT gain public roots
+  # by accident. So this bundle is built from the runtime material the stack
+  # mints, which mcp-mock-trust does not mount and must not have to wait for.
+  #
+  # It runs the MOCK's image because that is where the mock's CA lives, as
+  # root because a fresh named volume starts 0755 root-owned and the worker
+  # runs non-root — the same reason worker-spool-init and mcp-mock-trust exist.
+  #
+  # The `-s` guard is the point of failing here rather than later: an empty or
+  # missing runtime CA would otherwise produce a syntactically valid bundle
+  # that trusts only the mock, and the worker would then fail every INTERNAL
+  # dial with a certificate error that reads like a platform outage.
+  worker-trust:
+    image: ghcr.io/eliteaai/elitea-mock-mcp:standalone
+    build:
+      context: ./mock-mcp
+      dockerfile: Containerfile
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - test -s /run/elitea-runtime/runtime-ca.crt
+        && cat /run/elitea-runtime/runtime-ca.crt /opt/mock-mcp/tls/ca.crt
+        > /trust/worker-ca-bundle.pem
+        && chmod 0644 /trust/worker-ca-bundle.pem
+    volumes:
+      - standalone_runtime_worker:/run/elitea-runtime:ro
+      - standalone_worker_trust:/trust
+    depends_on:
+      runtime-material:
+        condition: service_completed_successfully
+    restart: "no"
+
   # ── Traefik: routes /app → elitea-web, /api → elitea-main ──────────────────
   traefik:
     image: traefik:v3.4
@@ -1551,3 +1763,6 @@ volumes:
   # The trust bundle the native worker uses to verify mcp-mock's certificate.
   # Written by mcp-mock-trust; mounted read-only by whoever dials the mock.
   standalone_mcp_mock_trust:
+  # The PYTHON worker's whole trust store — runtime CA + mcp-mock CA, no public
+  # roots. Written by worker-trust; mounted read-only by the worker (#983).
+  standalone_worker_trust:

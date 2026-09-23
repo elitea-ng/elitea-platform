@@ -59,13 +59,13 @@ export const GlobalUserInviteResult = zod
     invitation_delivered: zod
       .boolean()
       .describe(
-        'True when an invitation e-mail was sent (ADR-0024 WP7: outbound e-mail configured through SMTP_HOST and the relay accepted the message). False on a deployment without SMTP, on a shadow deployment, or when the relay refused — `invitation_delivery` says which. A bare `{\"ok\": true}` would be rendered as \"invitation sent\", so the field is always present.\n',
+        'True when an invitation e-mail was sent (ADR-0024 WP7: outbound e-mail configured through SMTP_HOST and the relay accepted the message). False on a deployment without SMTP, on a shadow deployment, or when the relay refused — `invitation_delivery` says which. A bare `{"ok": true}` would be rendered as "invitation sent", so the field is always present.\n',
       ),
     invitation_delivery: zod
       .string()
       .describe("What happened to the e-mail, in full."),
   })
-  .describe("NOTE(W2): internal\/api\/v2\/admin\/user_invite.go:112-120.\n");
+  .describe("NOTE(W2): internal/api/v2/admin/user_invite.go:112-120.\n");
 
 export type GlobalUserInviteResult = zod.input<typeof GlobalUserInviteResult>;
 export type GlobalUserInviteResultOutput = zod.output<

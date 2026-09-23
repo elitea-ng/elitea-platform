@@ -176,3 +176,23 @@ describe('SendButton exposes the send action to keyboard and screen readers', ()
     expect(onSend).not.toHaveBeenCalled();
   });
 });
+
+describe('issue 932: an active voice recording blocks the speaking-mode wave icon only', () => {
+  it('disables the wave icon while a recording is capturing', async () => {
+    serveFlags(true, false);
+    render(<Harness><SendButton question="" isRecording /></Harness>);
+    await waitFor(() => expect(screen.getByTestId('chat-speaking-mode-button')).toBeDisabled());
+  });
+
+  it('leaves the wave icon live when nothing is recording', async () => {
+    serveFlags(true, false);
+    render(<Harness><SendButton question="" /></Harness>);
+    await waitFor(() => expect(screen.getByTestId('chat-speaking-mode-button')).toBeEnabled());
+  });
+
+  it('does NOT disable Send for text already in the composer', async () => {
+    serveFlags(true, false);
+    render(<Harness><SendButton question="dictated text" isRecording /></Harness>);
+    await waitFor(() => expect(screen.getByTestId('chat-send-button')).toBeEnabled());
+  });
+});

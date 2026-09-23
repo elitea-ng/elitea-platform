@@ -59,6 +59,19 @@ export interface ParticipantMeta {
   readonly userAvatar?: string;
   readonly isContainer?: boolean;
   readonly mcp?: boolean;
+  /**
+   * #972 — the SERVER's answer to "has the version this conversation is bound
+   * to been withdrawn from the catalogue?", resolved by
+   * `repos.ConversationsRepo.enrichAgentParticipantPublication` on the
+   * conversation read.
+   *
+   * `undefined` means NOT RESOLVED (a version that is gone, a tenant without
+   * the table), which is a different state from `false` and must not be
+   * rendered as "still published".
+   */
+  readonly versionWithdrawn?: boolean;
+  /** #972 — the raw `application_versions.status` beside the flag above. */
+  readonly versionStatus?: string;
 }
 
 export interface Participant {

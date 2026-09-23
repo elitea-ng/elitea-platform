@@ -1,7 +1,10 @@
 import type { ReactNode } from 'react';
 import { useCallback, useState } from 'react';
 
+import Box from '@mui/material/Box';
+
 import { BaseModal } from '../BaseModal';
+import { CharacterCounter } from '../CharacterCounter';
 import { InputBase, type InputBaseProps } from '../InputBase';
 import { t } from '@/shared/i18n';
 
@@ -9,6 +12,37 @@ import { t } from '@/shared/i18n';
 export interface StyledInputEnhancerProps extends InputBaseProps {
   /** Modal title; falls back to the string `label`, then a generic default. */
   fullScreenTitle?: string;
+}
+
+interface FullScreenEditorProps {
+  readonly value: InputBaseProps['value'];
+  readonly onChange: InputBaseProps['onChange'];
+  readonly ariaLabel: string;
+  readonly htmlInputProps: (Record<string, unknown> & { maxLength?: number }) | undefined;
+}
+
+/** The modal's own content — split out purely to keep `StyledInputEnhancer` under this codebase's complexity gate (12). */
+function FullScreenEditor({ value, onChange, ariaLabel, htmlInputProps }: FullScreenEditorProps): ReactNode {
+  const maxLength = typeof htmlInputProps?.maxLength === 'number' ? htmlInputProps.maxLength : undefined;
+  const stringValue = typeof value === 'string' ? value : '';
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <InputBase
+        value={value}
+        onChange={onChange}
+        expand={{ minRows: 15, maxRows: 15 }}
+        slotProps={{ htmlInput: { ...htmlInputProps, 'aria-label': ariaLabel } }}
+        sx={{ flex: 1, minHeight: 0 }}
+      />
+      {maxLength !== undefined && (
+        <CharacterCounter
+          value={stringValue}
+          maxLength={maxLength}
+          data-testid="styled-input-enhancer-fullscreen-counter"
+        />
+      )}
+    </Box>
+  );
 }
 
 /**
@@ -30,6 +64,15 @@ export interface StyledInputEnhancerProps extends InputBaseProps {
  * undiscoverable for keyboard/touch users and untestable without simulating
  * one. A caller can still pass `actions={{ forceShow: false }}` to restore
  * hover-only behaviour.
+ *
+ * #895 — the full-screen modal's own `InputBase` now carries the SAME
+ * `slotProps.htmlInput` a caller passed the collapsed field (so a
+ * `maxLength` contract survives into full screen, aria-label still
+ * overridden last), and a `CharacterCounter` renders beneath it whenever a
+ * `maxLength` is present — the collapsed field's OWN counter is still the
+ * caller's (`WelcomeMessageInput`/`ConversationStartersEditor`'s own JSX,
+ * gated on focus); this one is unconditionally visible, matching a
+ * full-screen editor having no adjacent "focused" cue to hide behind.
  */
 export function StyledInputEnhancer({
   fullScreenTitle,
@@ -37,6 +80,7 @@ export function StyledInputEnhancer({
   value,
   onChange,
   actions,
+  slotProps,
   ...rest
 }: StyledInputEnhancerProps): ReactNode {
   const [open, setOpen] = useState(false);
@@ -47,6 +91,8 @@ export function StyledInputEnhancer({
   const defaultTitle = t('shared.ui.styledInputEnhancer.title', 'Edit content');
   const modalTitle = fullScreenTitle ?? (typeof label === 'string' ? label : defaultTitle);
   const contentAriaLabel = typeof label === 'string' ? label : defaultTitle;
+
+  const htmlInputProps = slotProps?.htmlInput as (Record<string, unknown> & { maxLength?: number }) | undefined;
 
   return (
     <>
@@ -61,6 +107,7 @@ export function StyledInputEnhancer({
           showFullScreen: true,
         }}
         onFullScreen={handleOpen}
+        {...(slotProps !== undefined ? { slotProps } : {})}
         {...rest}
       />
       <BaseModal
@@ -70,12 +117,11 @@ export function StyledInputEnhancer({
         variant="complex"
         fullscreen
         content={
-          <InputBase
+          <FullScreenEditor
             value={value}
             onChange={onChange}
-            expand={{ minRows: 15, maxRows: 15 }}
-            slotProps={{ htmlInput: { 'aria-label': contentAriaLabel } }}
-            sx={{ height: '100%' }}
+            ariaLabel={contentAriaLabel}
+            htmlInputProps={htmlInputProps}
           />
         }
       />

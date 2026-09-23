@@ -85,8 +85,12 @@ export function IndexListItem(props: IndexListItemProps): ReactNode {
     );
   }
 
-  const state = index.metadata['state'];
-  const createdOn = index.metadata['created_on'] as number | undefined;
+  // `elitea_issues #2975`: a brand-new index row can reach this render before
+  // its `metadata` has arrived at all (not merely empty) — read defensively,
+  // the same guard `computeIndexingSummary` above already applies, instead
+  // of crashing with "Cannot read properties of undefined".
+  const state = index.metadata?.['state'];
+  const createdOn = index.metadata?.['created_on'] as number | undefined;
   const isProgressError = Boolean(index['stale']) && state === IndexStatuses.progress;
 
   return (
@@ -120,7 +124,7 @@ export function IndexListItem(props: IndexListItemProps): ReactNode {
         variant="bodyMedium"
         color="text.secondary"
       >
-        {toDisplayString(index.metadata['collection'])}
+        {toDisplayString(index.metadata?.['collection'])}
       </Typography>
       <Box sx={{ display: 'flex', gap: '0.5rem' }}>
         <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', flexShrink: 0, whiteSpace: 'nowrap', gap: '0.5rem' }}>

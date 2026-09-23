@@ -19,10 +19,17 @@ describe('resolveState', () => {
       disabledSend: false,
       isCreatingConversation: false,
       isEditorDirty: false,
+      allowSendWhileStreaming: false,
     });
   });
   it('passes through given values', () => {
     expect(resolveState({ isLoading: true, isStreaming: true })).toMatchObject({ isLoading: true, isStreaming: true });
+  });
+  // A17: the flag that keeps the send control beside Stop. Defaulting it to
+  // `true` would queue on every host that has no queue model, so the default
+  // is asserted above as well as the pass-through here.
+  it('passes allowSendWhileStreaming through', () => {
+    expect(resolveState({ allowSendWhileStreaming: true }).allowSendWhileStreaming).toBe(true);
   });
 });
 

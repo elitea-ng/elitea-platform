@@ -19,8 +19,14 @@ export function useForkTargetProjects(selectedProjectId: string | undefined): re
   const config = getConfig();
   const publicProjectId = config.status === 'ok' ? config.config.vite_public_project_id : '';
   const { projects } = useProjectOptions(publicProjectId, selectedProjectId);
+  // `selectedProjectId` is the entity's SOURCE project and is excluded from
+  // the result: forking "into" the project the entity already lives in is
+  // not a fork target at all (#954).
   return useMemo(
-    () => projects.map((project) => ({ id: String(project.id), name: project.name })),
-    [projects],
+    () =>
+      projects
+        .filter((project) => String(project.id) !== selectedProjectId)
+        .map((project) => ({ id: String(project.id), name: project.name })),
+    [projects, selectedProjectId],
   );
 }

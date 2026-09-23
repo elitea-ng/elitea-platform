@@ -16,13 +16,21 @@ import { useProjectOptions } from '@/widgets/sidebar';
  * default/{publicProjectId}`), not under the caller's own — the id below is
  * the public one, and it is `''` while config has not resolved, which leaves
  * the query disabled instead of sending a request with an empty path segment.
+ *
+ * `selectedProjectId` is the entity's SOURCE project (the fork dialog's own
+ * caller passes its own `projectId` straight through) — it is excluded from
+ * the result, because forking "into" the project the entity already lives in
+ * is not a fork target at all (#954).
  */
 export function useForkTargetProjects(selectedProjectId: string | undefined): readonly ForkTargetProject[] {
   const config = getConfig();
   const publicProjectId = config.status === 'ok' ? config.config.vite_public_project_id : '';
   const { projects } = useProjectOptions(publicProjectId, selectedProjectId);
   return useMemo(
-    () => projects.map((project) => ({ id: String(project.id), name: project.name })),
-    [projects],
+    () =>
+      projects
+        .filter((project) => String(project.id) !== selectedProjectId)
+        .map((project) => ({ id: String(project.id), name: project.name })),
+    [projects, selectedProjectId],
   );
 }

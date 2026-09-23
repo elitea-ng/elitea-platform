@@ -157,6 +157,32 @@ describe('the toolkit credential picker is supplied by the real composition root
     expect(within(listbox).getByText('CI Bot Token')).toBeInTheDocument();
   });
 
+  /*
+   * elitea_issues: #4138 — a toolkit whose credential field has no value yet
+   * (e.g. after the previously-used credential was deleted) used to have the
+   * first available saved credential silently preselected, activating Save
+   * with a choice the user never made. `ToolkitCredentialPicker` never opts
+   * into `CredentialsSelect`'s `autoSelectFirstShared` flag (that mechanism
+   * is reserved for the old-app `credentials`-section behaviour it is named
+   * after), so with exactly one saved credential available and no stored
+   * value, the picker must still start empty and require an explicit pick.
+   */
+  // oxlint-disable-next-line elitea/no-raw-color -- "#4138" is an elitea_issues issue number, not a colour literal.
+  it('elitea_issues: #4138 — does not preselect the only available saved credential when the field has no stored value', async () => {
+    mockEndpoints();
+
+    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit: vi.fn() }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+
+    await screen.findByText('My GitHub');
+    const picker = await screen.findByRole('combobox', { name: /Github Configuration/i });
+
+    // Give the batch-validation/auto-select effects a tick to run before
+    // asserting their absence.
+    await waitFor(() => {
+      expect(picker).not.toHaveTextContent('CI Bot Token');
+    });
+  });
+
   it('records the picked credential in the form, so the toolkit saves with it', async () => {
     mockEndpoints();
     const user = userEvent.setup();
@@ -189,6 +215,29 @@ describe('the toolkit credential picker is supplied by the real composition root
   });
 
   /*
+   * #953/ELITEA-2494, and NOT a regression of elitea_issues#4138's fix (the
+   * test right above the negative half below): #4138 found that silently
+   * preselecting the only saved credential on the EDIT page activated Save
+   * with a choice the user never made, and the test above this one pins that
+   * fix on `EditToolkit`. This is the DIFFERENT screen the onetest case is
+   * actually about — the fresh, still-unsaved CREATE page, where there is no
+   * existing choice to override — so `CreateToolkit.tsx` opts
+   * `ToolkitCredentialPicker`'s `isCreating` in specifically for this case.
+   */
+  it('pre-selects the only saved credential on the Create page (issue 953/ELITEA-2494)', async () => {
+    mockEndpoints();
+    const user = userEvent.setup();
+
+    renderToolkitsRoute(<CreateToolkit deps={{ createToolkit: vi.fn() }} />, '/toolkits/create', { projectId: 'proj-1' });
+
+    await user.click(await screen.findByText('GitHub'));
+
+    await waitFor(() => {
+      expect(screen.getByRole('combobox', { name: /Github Configuration/i })).toHaveTextContent('CI Bot Token');
+    });
+  });
+
+  /*
    * The negative half. Without the `$defs` block PR #352 adds, the property is
    * an ordinary one and NO credential picker belongs on the page. This pins
    * that the picker follows the served reference, not the property's name — so
@@ -211,6 +260,32 @@ describe('the toolkit credential picker is supplied by the real composition root
     await waitFor(() => {
       expect(screen.queryByRole('combobox', { name: /Github Configuration/i })).not.toBeInTheDocument();
     });
+  });
+
+  /*
+   * #927/ELITEA-1088,1090,1091,1093,1097: a toolkit whose stored credential
+   * reference matches no loaded row (deleted, or never resolved) must draw
+   * the styled `CredentialWarningBanner` ("Credential setup required:"), not
+   * the old plain `FormHelperText`. `ToolkitCredentialPicker` (the real
+   * composition root this file's whole suite exercises) used to hardcode
+   * `mismatchedPrivateCredential: false`.
+   */
+  it('shows the styled credential-mismatch banner when the stored reference matches no loaded row (#927)', async () => {
+    mockEndpoints({
+      toolkitRow: mockToolkitRow({
+        settings: { github_configuration: { elitea_title: 'ghost-cred', private: false }, selected_tools: ['index_data'] },
+      }),
+    });
+
+    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit: vi.fn() }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+
+    await screen.findByText('My GitHub');
+    await screen.findByRole('combobox', { name: /Github Configuration/i });
+
+    await waitFor(() => {
+      expect(screen.getByText('Credential setup required:')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Your configuration does not match any available configurations.')).not.toBeInTheDocument();
   });
 });
 

@@ -1,0 +1,83 @@
+---
+title: "elitea-web development"
+description: "Dev server modes, unit and Storybook tests, and the gate scripts a frontend change has to satisfy."
+---
+
+`apps/elitea-web` is a single Vite/React project that builds five separate outputs — the main app, the admin console, the maintenance page, the brand previewer, and this documentation site — from five entry points under `src/entries/`.
+
+## Dev server modes
+
+```bash
+npm run dev                        # the main app (src/entries/app), no --mode needed
+npm run dev -- --mode admin        # the admin console
+npm run dev -- --mode maintenance  # the maintenance page
+npm run dev -- --mode brand-preview
+npm run dev -- --mode docs         # this documentation site
+```
+
+`vite.config.ts` branches on `mode` to choose the entry root, the base path, and the build output directory (`dist/app`, `dist/admin`, `dist/maintenance`, `dist/brand-preview`, `dist/docs`) — the same five targets `npm run build` chains through in order.
+
+For the docs mode, `DOCS_BASE` sets the base path Vite serves and builds assets under. It defaults to `/docs/` (matching where nginx serves the built site in a deployment); the GitHub Pages workflow overrides it to the repository's Pages subpath instead. You will not normally need to set it locally — the default matches what the standalone stack's nginx expects.
+
+## Unit tests and Storybook
+
+```bash
+npm run test:unit        # vitest, node project
+npm run test:storybook   # component stories, through the Storybook Vitest addon
+npm run typecheck        # tsc --noEmit
+npm run lint             # oxlint -c .oxlintrc.json
+```
+
+There is no separate `npm run storybook` dev-server script in this repository yet — stories run through `test:storybook`'s Vitest project rather than a standalone Storybook UI.
+
+## End-to-end tests
+
+See [Run the browser test stack](/development/e2e-stack) for bringing up the stack Playwright needs and running `npm run e2e`, `npm run e2e:chat-stream`, and `npm run e2e:visual`.
+
+## Gate scripts
+
+CI runs each of these as its own step; run them locally before you push to catch the same failure sooner. None of them takes a flag to fix things beyond what's noted.
+
+<AccordionGroup>
+<Accordion title="Generated API client">
+`services/elitea-main/api/openapi/v2.yaml` is the source of truth. `orval.config.ts` reads it (`input.target: '../../services/elitea-main/api/openapi/v2.yaml'`) and writes `src/shared/api/generated/**` — hooks, Zod schemas, and MSW mock handlers. `node scripts/check-generated-client.mjs` regenerates into an empty directory and diffs it against the committed tree; a stale client fails **open** (it keeps exporting operations the API no longer has), which is why the gate compares full file trees rather than a `git status` after an in-place regeneration.
+
+**Regenerate:** `npx orval` (from `apps/elitea-web`), then commit the result.
+</Accordion>
+<Accordion title="Endpoint manifest">
+`src/shared/api/endpoints.manifest.json` is a hand-maintained catalogue (id, method, path, `operationId`, source, response schema, fixture, callers) of every network call the app makes. `node scripts/check-endpoint-manifest.mjs` checks each `source: generated` entry's `operationId` actually exists among the real generated hooks on disk — not just that the OpenAPI spec declares it, so drift between "orval was run" and "the spec says so" is caught too — plus duplicate-id and structural checks on hand-written entries.
+
+**Fix:** add or correct the manifest entry by hand; it is not generated.
+</Accordion>
+<Accordion title="MSW handler hygiene and i18n backfill">
+`node scripts/check-handlers.mjs` walks `src/test/msw/handlers/**` (the hand-authored mock handlers, as opposed to orval's own generated `.msw.ts` files) and flags a handler that answers with an inline literal instead of importing a fixture.
+
+`node scripts/i18n-backfill.mjs --check` walks every `t(key, fallback)` call site and fails if `src/shared/i18n/en.json` is missing a key a call site introduced, or if a call site's fallback text has drifted from what's already shipped. Run it without `--check` to have it write the missing keys into `en.json` for you.
+</Accordion>
+<Accordion title="Dead code (knip)">
+`node scripts/check-dead-code.mjs` wraps `npx knip`, reading `knip.json`'s `project`/`entry` globs and asserting they actually match files before trusting knip's zero-issues report — a glob that matches nothing gives knip nothing to analyze, and a bare `npx knip --max-issues 0` would pass either way.
+
+**Fix:** delete the unreached file/export knip names, or add it to `knip.json`'s `ignore` list if it's a deliberate false positive (dynamic import, entry point knip can't see).
+</Accordion>
+<Accordion title="Bundle budget">
+`node scripts/check-bundle-budget.mjs`, run after `npm run build`, measures `dist/`: each target's initial set (the entry `<script type="module">` plus its `<link rel="modulepreload">` chain — what a browser fetches before first paint) against `bundle-budget.json`'s 300 KB ceiling, and every other route chunk against a 250 KB ceiling.
+
+**Fix:** split a large module behind a dynamic `import()`, or trim what the initial chunk pulls in — the script only measures; it does not tell you which import to move.
+</Accordion>
+</AccordionGroup>
+
+<Note>
+All five run as steps inside `ci-web.yml`'s `gates-static` job (single checkout, single `npm ci`, no compose stack) except the bundle budget, which runs after the multi-target build step. Run `npm ci && npm run build` once locally and then each `node scripts/check-*.mjs` individually if you want the exact CI sequence.
+</Note>
+
+{/* source: apps/elitea-web/vite.config.ts:26-44,62,76-186 (five build targets, mode branching, DOCS_BASE) */}
+{/* source: apps/elitea-web/package.json:14-35 (dev/build/typecheck/lint/test scripts) */}
+{/* source: apps/elitea-web/package.json:104-140 (@storybook/addon-vitest, no standalone storybook script) */}
+{/* source: apps/elitea-web/orval.config.ts:149-154 (input.target, output.target) */}
+{/* source: apps/elitea-web/scripts/check-generated-client.mjs:1-40 (regenerate-into-empty-dir mechanism, the four-dead-operations incident) */}
+{/* source: apps/elitea-web/scripts/check-endpoint-manifest.mjs:1-20 (R-A5, manifest fields, hard-fail rules) */}
+{/* source: apps/elitea-web/scripts/check-handlers.mjs:1-20 (R-M2, hand-authored vs. orval-generated scope) */}
+{/* source: apps/elitea-web/scripts/i18n-backfill.mjs:1-20 (default mode merges, --check mode gates) */}
+{/* source: apps/elitea-web/scripts/check-dead-code.mjs:1-20 (knip wrapper, project/entry glob floor) */}
+{/* source: apps/elitea-web/scripts/check-bundle-budget.mjs:1-22 (initial vs. route-chunk measurement) */}
+{/* source: .github/workflows/ci-web.yml:436-445 (Generated client matches the spec), :499-524 (Endpoint manifest, MSW handler hygiene), :526-545 (i18n en.json sync, Fixture freshness), :558-570 (Dead code gate), :660-681 (Build + Bundle budget) */}

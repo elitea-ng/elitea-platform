@@ -46,7 +46,7 @@ export const ErrorResponse = zod
     error: zod.string().describe("Human-readable error message"),
   })
   .describe(
-    'NOTE(W2): wire truth from pkg\/apierr\/apierr.go:47-59 (apierr.Write encodes `{\"error\": message}`) and the handlers\' inline `map[string]any{\"error\": ...}` writes. No operation documented in this spec emits the pylon `ok` field via THIS schema; the five social\/handler.go 500 sites (:268, 301, 321, 341, 419) use the named `SocialActionErrorResponse` schema instead (see there), and five more UNDOCUMENTED sites remain on toolkits\/handler.go (:286, 312, 324, 350, 362).\n',
+    'NOTE(W2): wire truth from pkg/apierr/apierr.go:47-59 (apierr.Write encodes `{"error": message}`) and the handlers\' inline `map[string]any{"error": ...}` writes. No operation documented in this spec emits the pylon `ok` field via THIS schema; the five social/handler.go 500 sites (:268, 301, 321, 341, 419) use the named `SocialActionErrorResponse` schema instead (see there), and five more UNDOCUMENTED sites remain on toolkits/handler.go (:286, 312, 324, 350, 362).\n',
   );
 
 export type ErrorResponse = zod.input<typeof ErrorResponse>;

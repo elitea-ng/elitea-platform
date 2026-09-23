@@ -6,18 +6,37 @@
  * real `postMessage` to resolve the popup — same technique as
  * `oauthFlow.test.ts`'s header explains in full.
  */
+import type { ReactElement } from 'react';
+
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
-import { renderWithTheme } from '@/shared/ui/lib/testTheme';
+import { renderWithTheme as renderWithThemeImpl } from '@/shared/ui/lib/testTheme';
 
 import { server } from '../../../test/setup';
 import { getSavedCredentials } from '../lib/storage';
 
 import { McpAuthModal } from './McpAuthModal';
+
+/**
+ * A13: `McpAuthModal` renders `OAuthFormFields`, whose Client Secret field
+ * is now `SecretField` (`useSecretFieldOptions()`) — every render needs a
+ * `QueryClient` in context. No persisted project is written in this file,
+ * so both of that hook's queries stay `enabled: false` (same reasoning
+ * `OAuthFormFields.test.tsx`'s own non-secret-picker tests rely on) — this
+ * wrapper exists purely to satisfy the hook's `useQuery` context requirement,
+ * not to serve real data.
+ */
+function renderWithTheme(ui: ReactElement) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const wrap = (node: ReactElement) => <QueryClientProvider client={client}>{node}</QueryClientProvider>;
+  const result = renderWithThemeImpl(wrap(ui));
+  return { ...result, rerender: (next: ReactElement) => result.rerender(wrap(next)) };
+}
 
 interface FakePopup {
   closed: boolean;

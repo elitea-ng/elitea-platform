@@ -1,6 +1,6 @@
 {
   "buf": "1.71.0",
-  "grpcio": "1.76.0",
+  "grpcio": "1.84.0",
   "grpcio-tools": "1.76.0",
   "grpcio-tools-protoc": "31.1",
   "protobuf-python": "6.33.6",

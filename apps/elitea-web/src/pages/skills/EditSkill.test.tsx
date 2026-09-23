@@ -159,11 +159,14 @@ describe('EditSkill', () => {
     await waitFor(() => expect(defaulted).toBe(true));
   });
 
+  /* #917: the picker is `AgentPipelineVersionSelector` now, the same component
+     Agents and Pipelines use — a trigger box opening a `role="menu"` of
+     `role="menuitem"` rows, not a MUI `<Select>`'s combobox/option pair. */
   it('navigates when another version is selected', async () => {
     const user = userEvent.setup();
     const { router } = renderSkillsRoute(<EditSkill />, '/skills/all/skill-1');
-    await user.click(await screen.findByRole('combobox'));
-    await user.click(screen.getByRole('option', { name: 'second' }));
+    await user.click(await screen.findByTestId('version-selector-trigger'));
+    await user.click(screen.getByRole('menuitem', { name: /second/ }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/skills/all/skill-1/v2'));
   });
 
@@ -226,6 +229,12 @@ describe('EditSkill', () => {
     expect(screen.queryByRole('button', { name: 'Delete version' })).not.toBeInTheDocument();
   });
 
+  /* elitea_issues: #5416 — opening a Skill version URL directly (this
+     route's mount point, exactly what a shared link resolves to) loads that
+     version rather than answering "Skill version not found": GetVersion
+     (internal/infra/db/repos/skills.go) matches the numeric version id, not
+     a name, so the URL shape that fails for Agents/Skills alike in the
+     legacy app never diverges here. */
   it('offers restore and delete-version on a NAMED (non-base) version', async () => {
     renderSkillsRoute(<EditSkill />, '/skills/all/skill-1/v2');
     await screen.findByTestId('skill-name-input');
@@ -265,6 +274,10 @@ describe('EditSkill', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/skills/all/skill-1/v1'));
   });
 
+  /* elitea_issues: #5459 — deleting a named skill version shows the simple
+     "Delete version" confirmation (Cancel/Delete, no typed-name field) and
+     names the VERSION, not the whole skill: the modal below is confirmed
+     with a single click on "Delete", never a typed skill name. */
   it('deletes a named version and navigates back to base', async () => {
     const user = userEvent.setup();
     let deletedVersionId: string | undefined;

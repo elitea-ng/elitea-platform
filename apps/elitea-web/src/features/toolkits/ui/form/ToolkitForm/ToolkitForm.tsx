@@ -216,7 +216,7 @@ function ToolkitFormView({ props, state }: ToolkitFormViewProps): ReactNode {
           toolSchema={effectiveToolSchema}
           setShowValidation={setShowValidation}
           form={{ values: formValues, initialValues: formInitialValues, onReset: onResetForm ? () => onResetForm(formInitialValues ?? {}) : undefined }}
-          isTeamProject={isTeamProject}
+          isTeamProject={isTeamProject ?? false}
           save={{ onSave, onSuccess: onSaveSuccess, onError: onSaveError, onConfigurationCreated }}
           projectId={projectId}
           display={{ isDirty: isToolDirty, type: editToolDetail.type, configuration, isCreatingConfiguration, isTestingConnection, view, onChangeView: setView, hideViewToggle: !effectiveToolSchema }}

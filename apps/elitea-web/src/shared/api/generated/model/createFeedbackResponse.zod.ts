@@ -49,7 +49,7 @@ export const CreateFeedbackResponse = zod
       .describe("Numeric feedback id serialized as a string (intToStr)."),
   })
   .describe(
-    'NOTE(W2): CreateFeedback (internal\/api\/v2\/social\/handler.go:381-423). 201 with the real inserted id on success (:416-422). A degraded `{\"ok\": true, \"id\": \"0\"}` 200 shortcut also exists on the missing-auth-context and nil-pool branches (:386, 391) — both unreachable in production given the outer Auth middleware group (internal\/api\/router.go:221-222) requires a valid session before this handler runs at all; documented on the schema rather than as a competing response entry, matching this file\'s ApplicationExportResponse precedent for unreachable degraded shapes.\n',
+    'NOTE(W2): CreateFeedback (internal/api/v2/social/handler.go:381-423). 201 with the real inserted id on success (:416-422). A degraded `{"ok": true, "id": "0"}` 200 shortcut also exists on the missing-auth-context and nil-pool branches (:386, 391) — both unreachable in production given the outer Auth middleware group (internal/api/router.go:221-222) requires a valid session before this handler runs at all; documented on the schema rather than as a competing response entry, matching this file\'s ApplicationExportResponse precedent for unreachable degraded shapes.\n',
   );
 
 export type CreateFeedbackResponse = zod.input<typeof CreateFeedbackResponse>;

@@ -314,7 +314,7 @@ func submitValidationPrivate(t *testing.T, ctx context.Context, pool *pgxpool.Po
 		IsolationClass:    "shared-claim-scoped-authority",
 		Priority:          1,
 		DeadlineTTL:       time.Minute,
-		LimitsRevision:    "elitea.runtime.limits.conformance.v1",
+		LimitsRevision:    "elitea.runtime.limits.conformance.v2",
 		MaxOutstanding:    16,
 	})
 	if err != nil {

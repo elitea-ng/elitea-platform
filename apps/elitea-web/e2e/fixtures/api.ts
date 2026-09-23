@@ -12,6 +12,9 @@ import type { APIRequestContext, APIResponse, Locator, Page } from '@playwright/
 import { expect, request as playwrightRequest } from '@playwright/test';
 
 import { BASE_URL, STORAGE_STATE } from '../../playwright.config';
+// The journal-scope rule lives in `scripts/lib` so it can be unit-tested
+// without Playwright, a browser or a running stack — `scripts/mock-journal-scope.test.mjs`.
+import { mockLlmJournalScopeFailure } from '../../scripts/lib/mock-journal-scope.mjs';
 
 export const AUTOTEST_PREFIX = 'autotest_';
 
@@ -174,6 +177,22 @@ export async function resolvePublishAuthorProjectId(
   request: APIRequestContext,
 ): Promise<string> {
   return resolveProjectIdByName(request, PUBLISH_AUTHOR_PROJECT_NAME);
+}
+
+/**
+ * The seeded FRONTEND-public project (issue #940 D5): id 99, matching
+ * `deploy/docker-compose.e2e-standalone.yml`'s `VITE_PUBLIC_PROJECT_ID=99` —
+ * see that file's own comment on why it is deliberately NOT the same value
+ * as the backend's `ELITEA_AI_PROJECT_ID` (project 1). `entities/project`'s
+ * `isPublicProject` is a bare id comparison against this value, so any
+ * project seeded at id 99 renders as "public" in the sidebar/agents/
+ * pipelines pages — nothing else about it is special.
+ */
+export const PUBLIC_PROJECT_NAME = 'e2e-public';
+
+/** The seeded frontend-public project's id — see `PUBLIC_PROJECT_NAME`. */
+export async function resolvePublicProjectId(request: APIRequestContext): Promise<string> {
+  return resolveProjectIdByName(request, PUBLIC_PROJECT_NAME);
 }
 
 /**
@@ -342,6 +361,75 @@ export async function deleteConversation(
   await request.delete(`${API_BASE}/elitea_core/conversation/prompt_lib/${projectId}/${id}`);
 }
 
+/**
+ * Issue 940/A6 — flips a conversation's `is_private` flag, the same PUT the
+ * row menu's own "Make public" confirm sends. Seeding a PUBLIC original
+ * conversation through the UI would need a second confirm-dialog round trip
+ * per test; this is the one-call equivalent.
+ */
+export async function setConversationPrivacy(
+  request: APIRequestContext,
+  id: string,
+  isPrivate: boolean,
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<void> {
+  const url = `${API_BASE}/elitea_core/conversation/prompt_lib/${projectId}/${id}`;
+  const resp = await request.put(url, { data: { is_private: isPrivate } });
+  if (!resp.ok()) {
+    throw new Error(
+      `setConversationPrivacy: PUT ${url} -> ${resp.status()} ${resp.statusText()}${await describeRefusal(resp)}`,
+    );
+  }
+}
+
+/**
+ * Issue 940/A6 — seeds ONE participant onto a conversation, the same route
+ * (and body shape) the app's own `useAddParticipantMutation` posts through.
+ * Used to prove the Duplicate action copies participants: a `'user'`
+ * participant needs only `entity_meta.id`; an `'application'`/`'toolkit'`/
+ * `'pipeline'` participant additionally needs `entity_meta.id` naming the
+ * real entity — the route resolves display metadata from it, so a
+ * fabricated id would add a participant row that renders as "unavailable".
+ */
+export async function addConversationParticipant(
+  request: APIRequestContext,
+  conversationId: string,
+  participant: { readonly entity_name: string; readonly entity_meta?: Readonly<Record<string, unknown>>; readonly entity_settings?: Readonly<Record<string, unknown>> },
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<void> {
+  const url = `${API_BASE}/elitea_core/participants/prompt_lib/${projectId}/${conversationId}`;
+  const resp = await request.post(url, { data: [participant] });
+  if (!resp.ok()) {
+    throw new Error(
+      `addConversationParticipant: POST ${url} -> ${resp.status()} ${resp.statusText()}${await describeRefusal(resp)}`,
+    );
+  }
+}
+
+/** The conversation's own participants, as `GET .../conversation/...` embeds them. */
+export interface ConversationParticipantRow {
+  readonly id: number;
+  readonly entity_name: string;
+  readonly entity_meta?: Readonly<Record<string, unknown>>;
+}
+
+/** Issue 940/A6 — reads a conversation's `is_private` + `participants[]` straight from the server, the ground truth `chat.duplicate.spec.ts` checks the duplicate against. */
+export async function readConversationDetails(
+  request: APIRequestContext,
+  conversationId: string,
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<{ readonly is_private?: boolean; readonly participants: readonly ConversationParticipantRow[] }> {
+  const url = `${API_BASE}/elitea_core/conversation/prompt_lib/${projectId}/${conversationId}`;
+  const resp = await request.get(url);
+  if (!resp.ok()) {
+    throw new Error(
+      `readConversationDetails: GET ${url} -> ${resp.status()} ${resp.statusText()}${await describeRefusal(resp)}`,
+    );
+  }
+  const body = (await resp.json()) as { is_private?: boolean; participants?: readonly ConversationParticipantRow[] };
+  return { is_private: body.is_private, participants: body.participants ?? [] };
+}
+
 /** An agent created through the API, with the initial version it owns. */
 export interface CreatedAgent {
   /** `applications.id` — the SERIAL key every route addresses the agent by. */
@@ -400,6 +488,37 @@ export async function createAgent(
     );
   }
   return { id, versionId };
+}
+
+/**
+ * Withdraw every published version an agent carries (cleanup helper).
+ *
+ * A published version refuses `DELETE .../application/...` with 400
+ * "Unpublish first. Cannot delete application with published versions." — a
+ * spec that calls `POST .../publish/...` on an agent it will later delete
+ * must call this first, or `deleteAgent` silently no-ops (it does not check
+ * the response) and the row is left for `sweepAutotestEntities` to trip on
+ * (API-FX3, `e2e/journeys/api/api.fixture-isolation.spec.ts`).
+ */
+export async function unpublishAllVersions(
+  request: APIRequestContext,
+  id: string,
+  projectId: string = DEFAULT_PROJECT_ID,
+): Promise<void> {
+  const detail = await request.get(
+    `${API_BASE}/elitea_core/application/prompt_lib/${projectId}/${id}`,
+  );
+  if (!detail.ok()) return;
+  const body = await detail.json();
+  const versions: readonly { readonly id?: string; readonly status?: string }[] = body?.versions ?? [];
+  for (const version of versions) {
+    if (version.status === 'published') {
+      await request.post(
+        `${API_BASE}/elitea_core/unpublish/prompt_lib/${projectId}/${String(version.id)}`,
+        { data: {} },
+      );
+    }
+  }
 }
 
 /**
@@ -466,6 +585,22 @@ export interface VersionModelInput {
  * an omitted one is omitted from the body, which is the only way to write the
  * "leave the stored value alone" half of the contract.
  */
+/**
+ * The tag every publishable fixture carries (#913).
+ *
+ * Publish validation raises a Critical for a version with NO tags, and the
+ * publish route refuses a FAIL inline — pylon's own `TagsChecker` and publish
+ * gate behave the same way (`legacy/plugins/elitea_core/utils/
+ * publish_utils.py:2824-2833`, `api/v2/publish.py:82-92`). Before that rule
+ * was ported, every publish fixture here created an untagged agent and
+ * published it, which is a state the product does not actually allow.
+ *
+ * Deliberately NOT generic: `agent`/`assistant`/`ai`/`bot`/`helper` are the
+ * set the same checker raises an all-generic WARNING for, and a fixture that
+ * used one would turn every "well-formed agent" PASS into a WARN.
+ */
+export const PUBLISHABLE_TAGS: readonly VersionTagInput[] = [{ name: 'release-notes' }];
+
 export interface AgentVersionInput {
   readonly name?: string;
   readonly agentType?: string;
@@ -2368,6 +2503,15 @@ export interface MockToolJournalEntry {
 export interface MockLlmJournalEntry {
   readonly path: string;
   readonly mode: string | null;
+  /**
+   * A LABEL for the credential that reached the mock, never a secret — a
+   * seeded key is recorded verbatim (`mock-key-project-<id>`) because it is
+   * public, anything else as a digest prefix (`_credential_label`,
+   * `deploy/mock-llm/server.py`). It NAMES the project whose catalogue
+   * credential resolved, which is what lets a reader tell its own stack's
+   * journal from another one's.
+   */
+  readonly credential?: string;
   /** The function names this request offered the model. */
   readonly tools: readonly string[];
   /**
@@ -2379,6 +2523,19 @@ export interface MockLlmJournalEntry {
    * Read by `chat.variables.spec.ts`.
    */
   readonly instructions: string;
+  /**
+   * The CONVERSATION this request carried, system prompt excluded — one
+   * `{role, text}` per message, each text truncated by the mock
+   * (`_history_digest`, `deploy/mock-llm/server.py`).
+   *
+   * The only observable for what the model was GIVEN, as opposed to what it
+   * was told to be. Two claims need it and nothing else can answer either:
+   * that a follow-up turn carries the earlier exchange (the reply is an echo
+   * of the LAST user message, so the answer never shows it), and that a
+   * sub-agent call does NOT carry the parent's `chat_history` — a statement
+   * about the absence of exactly these rows.
+   */
+  readonly history: readonly { readonly role: string; readonly text: string }[];
 }
 
 async function readMockJournal<T>(page: Page, url: string): Promise<readonly T[]> {
@@ -2414,9 +2571,27 @@ export async function clearMockToolJournal(page: Page): Promise<void> {
   await clearMockJournal(page, `${MOCK_HOST}/tool/__journal`);
 }
 
-/** The MODEL requests the mock has served, newest last. */
-export async function readMockLlmJournal(page: Page): Promise<readonly MockLlmJournalEntry[]> {
-  return readMockJournal<MockLlmJournalEntry>(page, `${MOCK_HOST}/__journal`);
+/**
+ * The MODEL requests the mock has served, newest last.
+ *
+ * PASS `projectId` whenever the caller is about to assert on traffic it
+ * believes this run produced. It then refuses a journal that holds no request
+ * for that project — which is what a read against ANOTHER stack's mock looks
+ * like, and the failure otherwise reads as an accusation against the product
+ * rather than against the invocation. See `scripts/lib/mock-journal-scope.mjs`
+ * for the three journeys that were misread this way.
+ *
+ * Omitting it keeps the previous behaviour exactly, for the readers that
+ * assert about absence or do not know a project.
+ */
+export async function readMockLlmJournal(
+  page: Page,
+  projectId?: string | number,
+): Promise<readonly MockLlmJournalEntry[]> {
+  const entries = await readMockJournal<MockLlmJournalEntry>(page, `${MOCK_HOST}/__journal`);
+  const failure = mockLlmJournalScopeFailure({ entries, projectId, host: MOCK_HOST });
+  if (failure !== undefined) throw new Error(failure);
+  return entries;
 }
 
 /** Empty the MODEL journal. */
@@ -2646,6 +2821,167 @@ export async function attachToolkitThroughPicker(page: Page, toolkitName: string
   ).toBeLessThan(300);
 }
 
+/**
+ * A whole ready-to-drive tool-calling agent: an `openapi` toolkit pointing at
+ * the mock's own `/tool` API, an agent pinned to the deterministic model with
+ * that toolkit attached, and a conversation the agent participates in, opened
+ * in the browser.
+ *
+ * WHY OVER THE API RATHER THAN THROUGH THE FORMS.
+ * `createOpenApiToolkitThroughForm` + `createAgentThroughForm` +
+ * `attachToolkitThroughPicker` exist because the FORMS are what those journeys
+ * are about — the schema editor's parse, the picker's client-side paging. A
+ * journey whose subject is what happens DURING a turn does not exercise any of
+ * that, and paying for it costs minutes per test on a stack where a turn
+ * itself takes seconds. This builds the same three rows over their own routes
+ * and then READS THE ATTACH BACK, because a 200 on the relation route says the
+ * request was accepted, not that `version_details.tools[]` grew the row the
+ * runtime compiles from — and an agent with no tool answers normally, which
+ * looks exactly like a feature that did not fire.
+ *
+ * `openapi_configuration` is sent as `{}` rather than omitted: the type schema
+ * lists it as required, and the empty object is what the version freeze writes
+ * for an absent reference anyway (a JSON `null` there is what the native
+ * worker's `merged_auth_settings` refused — see `chat.toolkit-hitl.spec.ts`).
+ */
+export interface MockToolAgentFixture {
+  readonly projectId: string;
+  readonly toolkitId: string;
+  readonly toolkitName: string;
+  readonly agentId: string;
+  readonly versionId: string;
+  readonly agentName: string;
+  /** The first conversation, already open in the browser. */
+  readonly conversationId: string;
+  /** Open a FRESH conversation on the same agent, and return its id. */
+  readonly newConversation: (label: string) => Promise<string>;
+  /** Delete the agent and the toolkit. Best effort; safe to call twice. */
+  readonly dispose: () => Promise<void>;
+}
+
+export async function createMockToolAgent(page: Page, label: string): Promise<MockToolAgentFixture> {
+  const suffix = `${String(Date.now() % 1_000_000)}${label}`;
+  const toolkitName = `${AUTOTEST_PREFIX}mocktk-${suffix}`;
+  const agentName = `${AUTOTEST_PREFIX}mocktkagent-${suffix}`;
+  const modelName = process.env['E2E_MOCK_MODEL'] ?? 'vllm/E2E-MOCK-MODEL';
+
+  const spec = await fetchMockToolSpec(page);
+  const projectId = await readCallerPersonalProjectId(page.request);
+  expect(projectId, 'this persona must work inside its own project').not.toBe('');
+  const caller = await readCallerIdentity(page.request);
+
+  const toolkitCreated = await page.request.post(`${API_BASE}/elitea_core/tools/prompt_lib/${projectId}`, {
+    data: {
+      name: toolkitName,
+      type: 'openapi',
+      settings: {
+        spec: spec.text,
+        openapi_configuration: {},
+        selected_tools: [MOCK_TOOL_READ_OPERATION, MOCK_TOOL_EFFECTFUL_OPERATION],
+      },
+    },
+  });
+  expect(
+    toolkitCreated.status(),
+    `the openapi toolkit must be creatable: ${(await toolkitCreated.text()).slice(0, 300)}`,
+  ).toBe(201);
+  const toolkitId = String(((await toolkitCreated.json()) as { id?: unknown }).id ?? '');
+  expect(toolkitId, 'the created toolkit must carry an id').not.toBe('');
+
+  const agent = await createAgentWithVersion(
+    page.request,
+    agentName,
+    {
+      instructions: 'You are an autotest agent. Call the tools you are asked to call.',
+      model: { modelName },
+    },
+    projectId,
+  );
+
+  // The ONE real attach call the Tools panel's picker emits
+  // (`src/features/agents/lib/toolRelation.ts`), `selected_tools` deliberately
+  // OFF the wire — its PRESENCE, not its length, is what the handler keys on.
+  const attached = await page.request.patch(
+    `${API_BASE}/elitea_core/tool/prompt_lib/${projectId}/${toolkitId}`,
+    {
+      data: {
+        entity_version_id: Number(agent.versionId),
+        entity_id: Number(agent.id),
+        entity_type: 'agent',
+        has_relation: true,
+      },
+    },
+  );
+  expect(
+    attached.status(),
+    `the toolkit must attach to the agent version: ${(await attached.text()).slice(0, 300)}`,
+  ).toBeLessThan(300);
+
+  const storedAgent = await page.request.get(
+    `${API_BASE}/elitea_core/application/prompt_lib/${projectId}/${agent.id}`,
+  );
+  const tools =
+    ((await storedAgent.json()) as { version_details?: { tools?: readonly { name?: string }[] } })
+      .version_details?.tools ?? [];
+  expect(
+    tools.map((tool) => tool.name),
+    'the agent version carries no reference to the toolkit — the attach was a no-op',
+  ).toContain(toolkitName);
+
+  const newConversation = async (conversationLabel: string): Promise<string> => {
+    const created = await page.request.post(`${API_BASE}/elitea_core/conversations/prompt_lib/${projectId}`, {
+      data: { name: `${AUTOTEST_PREFIX}mocktkconv-${suffix}-${conversationLabel}`, is_private: true },
+    });
+    expect(
+      created.status(),
+      `the conversation must be created: ${(await created.text()).slice(0, 300)}`,
+    ).toBe(201);
+    const conversationId = String(((await created.json()) as { id?: unknown }).id ?? '');
+    expect(conversationId, 'the created conversation must carry an id').not.toBe('');
+
+    // BOTH participants, in one call. A conversation POSTed straight to the
+    // API carries neither (`Create` writes no participant row at all), and its
+    // first send 422s at admission because `ResolveCurrentAdhocTurn` returns
+    // zero rows — see `chat.pyodide-sandbox.spec.ts`'s header.
+    const participants = await page.request.post(
+      `${API_BASE}/elitea_core/participants/prompt_lib/${projectId}/${conversationId}`,
+      {
+        data: [
+          {
+            entity_name: 'application',
+            entity_meta: { id: agent.id, project_id: Number(projectId), name: agentName },
+            entity_settings: { version_id: agent.versionId },
+          },
+          { entity_name: 'user', entity_meta: { id: Number(caller.id) } },
+        ],
+      },
+    );
+    expect(
+      participants.status(),
+      `the participants must be added: ${(await participants.text()).slice(0, 300)}`,
+    ).toBe(200);
+
+    await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
+    await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 45_000 });
+    return conversationId;
+  };
+
+  return {
+    projectId,
+    toolkitId,
+    toolkitName,
+    agentId: agent.id,
+    versionId: agent.versionId,
+    agentName,
+    conversationId: await newConversation('a'),
+    newConversation,
+    dispose: async (): Promise<void> => {
+      await page.request.delete(`${API_BASE}/elitea_core/application/prompt_lib/${projectId}/${agent.id}`);
+      await page.request.delete(`${API_BASE}/elitea_core/tool/prompt_lib/${projectId}/${toolkitId}`);
+    },
+  };
+}
+
 /** The platform-wide toolkit security policy, as the admin route serves it. */
 export interface ToolkitGuardrailValues {
   readonly blocked_toolkits: readonly string[];
@@ -2716,6 +3052,19 @@ export interface StoredHitlInterrupt {
   readonly toolkit_name?: string;
   readonly toolkit_type?: string;
   readonly interrupt_id?: string;
+  /**
+   * The ARGUMENTS the paused call was about to be made with, as the card's
+   * Parameters section renders them. Read by the tail journeys that assert the
+   * dialog shows the real call rather than a placeholder — an approval taken
+   * against parameters the user never saw is the failure those cases name.
+   */
+  readonly tool_args?: unknown;
+  /** The interpolated policy sentence (`{company_name}` / `{action_name}`). */
+  readonly policy_message?: string;
+  /** The same sentence on the generic-pause branch. */
+  readonly message?: string;
+  /** `toolkit.tool`, the label the card shows in bold. */
+  readonly action_label?: string;
 }
 
 /**
@@ -2768,6 +3117,65 @@ export async function readStoredHitlInterrupt(
 }
 
 /**
+ * Every HITL interrupt on the newest stored assistant row, once there are at
+ * least `minimum` of them.
+ *
+ * The plural of `readStoredHitlInterrupt`, and it exists because a turn whose
+ * assistant message carried SEVERAL tool calls raises several pauses at once:
+ * elitea-main stores the first under `meta.hitl_interrupt` and the whole list
+ * under `meta.hitl_interrupts` (`agent_execution_results.go`), so the singular
+ * read cannot tell "two sensitive calls each paused" from "one did".
+ *
+ * `minimum` is a FLOOR that must be reached, never an equality settled early:
+ * the row is readable while it is still being written, so polling for
+ * "exactly two" would pass the instant the first of two landed if the caller
+ * happened to ask for one.
+ */
+export async function readStoredHitlInterrupts(
+  page: Page,
+  projectId: string,
+  conversationId: string | number,
+  minimum = 1,
+  timeout = 150_000,
+): Promise<readonly StoredHitlInterrupt[]> {
+  let interrupts: readonly StoredHitlInterrupt[] = [];
+  await expect
+    .poll(
+      async () => {
+        const stored = await page.request.get(
+          `${BASE_URL}/api/v2/elitea_core/messages/prompt_lib/${projectId}/${String(conversationId)}`,
+        );
+        if (!stored.ok()) return 0;
+        const body = (await stored.json()) as {
+          items?: readonly {
+            role?: string;
+            metadata?: {
+              hitl_interrupt?: StoredHitlInterrupt;
+              hitl_interrupts?: readonly StoredHitlInterrupt[];
+              is_error?: boolean;
+            };
+          }[];
+        };
+        const assistant = body.items?.find((item) => item.role === 'assistant');
+        expect(
+          assistant?.metadata?.is_error,
+          'the turn was refused instead of pausing — read the worker log for the assembly error code',
+        ).not.toBe(true);
+        const all = assistant?.metadata?.hitl_interrupts;
+        const single = assistant?.metadata?.hitl_interrupt;
+        interrupts = all ?? (single === undefined ? [] : [single]);
+        return interrupts.length;
+      },
+      {
+        timeout,
+        message: `the turn never parked on ${String(minimum)} sensitive-tool pause(s)`,
+      },
+    )
+    .toBeGreaterThanOrEqual(minimum);
+  return interrupts;
+}
+
+/**
  * Put `prompt` in the chat composer and hand back its Send control, ready to
  * click.
  *
@@ -2800,4 +3208,52 @@ export async function fillComposer(scope: Page | Locator, prompt: string) {
     await expect(sendButton).toBeEnabled({ timeout: 2_000 });
   }).toPass({ timeout: 30_000 });
   return sendButton;
+}
+
+/**
+ * `page.goto` for an `/app/*` route, retried when the SPA's OWN navigation
+ * aborts it.
+ *
+ * THE RACE, MEASURED (`--repeat-each=4 --workers=4`, journeys stack, webkit):
+ *
+ *   page.goto: Navigation to "/app/toolkits/all" is interrupted by another
+ *   navigation to "/app/toolkits/all/122"
+ *   page.goto: Frame load interrupted
+ *   page.goto: Navigation to "/app/toolkits/all/1" is interrupted by another
+ *   navigation to "/app/chat"
+ *
+ * Saving a toolkit routes the app to the new toolkit; landing on `/app/`
+ * routes it to the default screen. Both are correct product behaviour and
+ * both take a moment, so a `goto` issued while one is in flight is aborted by
+ * it — on webkit far more often than on chromium, which is why this reads as
+ * a cross-browser flake that retries away.
+ *
+ * WAITING IT OUT IS NOT ENOUGH, and that was the first attempt: the app
+ * navigates more than once (list, then detail), so a wait for "some /app
+ * route" returns on the first hop and the `goto` races the second. What is
+ * deterministic is the CONTRACT — "end up on this url" — and an interrupted
+ * `goto` means the app has just navigated, so the retry runs with the app
+ * already settled. Only the two interruption messages are retried; every
+ * other navigation failure is raised unchanged.
+ */
+export async function gotoAppRoute(
+  page: Page,
+  url: string,
+  options: { readonly waitUntil?: 'load' | 'domcontentloaded' | 'commit' } = {},
+): Promise<void> {
+  const attempts = 3;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await page.goto(url, options);
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const interrupted =
+        message.includes('interrupted by another navigation') || message.includes('Frame load interrupted');
+      if (!interrupted || attempt === attempts) throw error;
+      // The interrupting navigation is in flight; let it commit before asking
+      // for this one again.
+      await page.waitForLoadState('domcontentloaded').catch(() => {});
+    }
+  }
 }

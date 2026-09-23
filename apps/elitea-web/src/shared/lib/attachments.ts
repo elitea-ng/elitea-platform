@@ -25,6 +25,46 @@ function formatFileSize(bytes: number): string {
   return `${bytes}B`;
 }
 
+/**
+ * Lower-cases and guarantees the leading dot, so `PDF`, `.PDF` and `pdf` are
+ * one key. A local copy of `entities/attachment`'s `normaliseExtension`:
+ * `shared/` may not import upward from `entities/`, and the rule is two lines.
+ */
+function normaliseAttachmentExtension(raw: string): string {
+  const trimmed = raw.trim().toLowerCase();
+  if (trimmed === '') return '';
+  return trimmed.startsWith('.') ? trimmed : `.${trimmed}`;
+}
+
+/** The normalised extension of a file name; `''` when it has none. A dotfile (`.env`) counts as having none — its dot is at index 0. */
+function attachmentExtension(name: string): string {
+  const dot = name.lastIndexOf('.');
+  if (dot <= 0 || dot === name.length - 1) return '';
+  return normaliseAttachmentExtension(name.slice(dot));
+}
+
+/**
+ * The type check, as its own function: `validateAttachmentFiles` sits at the
+ * §3.5 cyclomatic-complexity-12 ceiling and this branch alone is three of its
+ * decisions.
+ *
+ * `null` means "accepted". `allowed === undefined` means the caller has no
+ * list and every file is accepted — see `validateAttachmentFiles`'s own doc
+ * comment for why that is NOT the same as an empty list.
+ */
+function allowedExtensionSet(allowedExtensions: readonly string[] | undefined): ReadonlySet<string> | undefined {
+  if (allowedExtensions === undefined) return undefined;
+  return new Set(allowedExtensions.map(normaliseAttachmentExtension));
+}
+
+function rejectByType(file: File, allowed: ReadonlySet<string> | undefined): string | null {
+  if (allowed === undefined) return null;
+  const extension = attachmentExtension(file.name);
+  if (extension === '') return `"${file.name}" has no file extension, so it cannot be attached.`;
+  if (!allowed.has(extension)) return `"${file.name}" is not a supported file type.`;
+  return null;
+}
+
 export interface RemainingAttachmentCapacity {
   readonly remainingAttachments: number;
   readonly isAtMaxCapacity: boolean;
@@ -52,25 +92,35 @@ export interface AttachmentValidationResult {
 /**
  * Validates newly-picked files against `ATTACHMENT_LIMITS` and whatever is
  * already attached: total count, total size, and per-file size (a lower cap
- * for images). New code, not a verbatim port — no `validateAttachmentFiles`
- * equivalent exists anywhere in this codebase yet (checked `entities/
- * attachment`, `shared/lib`; confirmed empty). Baseline
- * `common/attachmentValidationUtils.js`'s version ALSO validates file TYPE
- * against a dynamic backend allow-list (`useAllowedFileTypes`/
- * `useAllowedExtensions`) — no such data source exists anywhere in this
- * codebase yet either (no `useFileTypes` port), so type/extension
- * validation is a disclosed gap here, not silently invented.
+ * for images), and — since #940 A15 — file TYPE.
+ *
+ * Baseline `common/attachmentValidationUtils.js` validates the type against a
+ * dynamic backend allow-list (`useAllowedFileTypes`/`useAllowedExtensions`).
+ * That was a disclosed gap here: this port had no reader for the served list,
+ * so nothing checked extensions at all. `allowedExtensions` is that check —
+ * it comes from `entities/attachment`'s `useAllowedAttachmentTypes`, which
+ * reads `GET /elitea_core/index_types/prompt_lib/{projectId}`'s
+ * document/image/code maps (ELITEA-0484, 0486, 0487, 0488).
+ *
+ * `undefined` means "this caller has no list", NOT "no file is allowed":
+ * every file passes the type check, exactly as before. An EMPTY array is a
+ * different statement — the deployment served a list and it was empty — and
+ * rejects everything, which is the state ELITEA-0489's disabled control
+ * renders. The two must not collapse into one value; see `allowedTypes.ts`'s
+ * `isServed` for why.
  */
 export function validateAttachmentFiles(
   files: readonly File[],
   existingAttachments: readonly File[],
   limits: typeof ATTACHMENT_LIMITS = ATTACHMENT_LIMITS,
+  allowedExtensions?: readonly string[],
 ): AttachmentValidationResult {
   const remainingSlots = Math.max(0, limits.MAX_ATTACHMENTS - existingAttachments.length);
   if (remainingSlots === 0) {
     return { validFiles: [], errors: [`You've reached the ${limits.MAX_ATTACHMENTS}-file limit.`] };
   }
 
+  const allowed = allowedExtensionSet(allowedExtensions);
   const errors: string[] = [];
   const validFiles: File[] = [];
   let imageCount = existingAttachments.filter(isImageFile).length;
@@ -82,6 +132,15 @@ export function validateAttachmentFiles(
         `You've reached the ${limits.MAX_ATTACHMENTS}-file limit. Only the first ${limits.MAX_ATTACHMENTS} will be processed.`,
       );
       break;
+    }
+
+    // TYPE first, and before the size checks. A rejected .exe must be
+    // reported as the wrong KIND of file, not as one that is too large — the
+    // message is what tells the reader whether a smaller copy would work.
+    const typeRejection = rejectByType(file, allowed);
+    if (typeRejection !== null) {
+      errors.push(typeRejection);
+      continue;
     }
 
     const isImage = isImageFile(file);

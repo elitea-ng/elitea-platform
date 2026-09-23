@@ -378,3 +378,44 @@ describe('ApplicationAnswer "Open as document" action (issue #879)', () => {
     expect(screen.queryByTestId('answer-open-as-document')).not.toBeInTheDocument();
   });
 });
+
+/**
+ * issue 975: a REGENERATED answer must be captioned with the time it was
+ * regenerated. The row is rewritten in place and keeps its `createdAt`, so a
+ * caption reading that field alone put fresh text under the time the text it
+ * REPLACED had arrived.
+ */
+describe('ApplicationAnswer caption time', () => {
+  const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+  const justNow = new Date(Date.now() - 30 * 1000).toISOString();
+
+  it('captions a rewritten answer with its update time, not its creation time', () => {
+    const answer = {
+      id: 'answer-time-1',
+      role: 'assistant',
+      content: 'The regenerated answer.',
+      createdAt: twoDaysAgo,
+      updatedAt: justNow,
+    } as unknown as ChatMessage;
+
+    renderWithTheme(<ApplicationAnswer answer={answer} messageId={answer.id} author={{ participantName: 'Elitea' }} />);
+
+    // `formatDistanceToNow` rounds, so the assertion is on the DISTANCE being
+    // minutes rather than days — which is the claim — not on one wording.
+    expect(screen.getByText(/minute[s]? ago|less than a minute ago/)).toBeInTheDocument();
+    expect(screen.queryByText(/2 days ago/), 'the replaced text’s time must not caption the new text').toBeNull();
+  });
+
+  it('falls back to the creation time for an answer that was never rewritten', () => {
+    const answer = {
+      id: 'answer-time-2',
+      role: 'assistant',
+      content: 'The original answer.',
+      createdAt: twoDaysAgo,
+    } as unknown as ChatMessage;
+
+    renderWithTheme(<ApplicationAnswer answer={answer} messageId={answer.id} author={{ participantName: 'Elitea' }} />);
+
+    expect(screen.getByText(/2 days ago/)).toBeInTheDocument();
+  });
+});

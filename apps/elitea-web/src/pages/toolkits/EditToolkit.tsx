@@ -1,10 +1,10 @@
-import { type ComponentProps, type ReactNode, useCallback, useEffect, useState } from 'react';
+import { type ComponentProps, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
-import { useParams } from '@tanstack/react-router';
+import { useNavigate, useParams } from '@tanstack/react-router';
 
 import { ConfigurationTab, DeleteToolkitButton, ExportToolkitButton, IndexesTab, ToolkitsControls, type ToolkitEditorDeps, useToolkitEdit } from '@/features/toolkits';
 import type { ToolkitInstance } from '@/shared/api/generated/model';
@@ -12,6 +12,7 @@ import { t } from '@/shared/i18n';
 import { ViewMode } from '@/shared/lib/enums';
 import { BaseTab } from '@/shared/ui/BaseTab';
 import { BaseTabs } from '@/shared/ui/BaseTabs';
+import { useUnsavedChangesNavBlocker } from '@/widgets/app-shell';
 
 import { useScheduleCredentialsSelectSlot, useToolkitCredentialPickerSlot } from './lib/credentialPickerSlots';
 import { useCopyLinkMenuItem, useToolkitActionPermissions } from './lib/useToolkitHeaderActions';
@@ -19,6 +20,7 @@ import { useToolkitSaveControls } from './lib/useToolkitSaveControls';
 import { ToolkitSaveBar } from './ui/ToolkitSaveBar';
 import { useConfigurationTabSlots } from './lib/configurationTabSlots';
 import { useMcpLoadTools } from './lib/useMcpLoadTools';
+import { useIsTeamProject } from './lib/usePersonalProjectId';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 import { INDEXES_CHAT_UI } from './lib/indexesChatUI';
 import type { EditToolDetail } from './lib/toolkitFormTypes';
@@ -74,9 +76,10 @@ interface IndexesTabPanelProps {
   readonly toolkitId: string | undefined;
   readonly state: IndexesTabState;
   readonly renderCredentialsSelect: ComponentProps<typeof IndexesTab>['renderCredentialsSelect'];
+  readonly onConfigDirtyChange: (dirty: boolean) => void;
 }
 
-function IndexesTabPanel({ toolkitId, state, renderCredentialsSelect }: IndexesTabPanelProps): ReactNode {
+function IndexesTabPanel({ toolkitId, state, renderCredentialsSelect, onConfigDirtyChange }: IndexesTabPanelProps): ReactNode {
   if (toolkitId === undefined) return null;
   return (
     <Box
@@ -89,6 +92,7 @@ function IndexesTabPanel({ toolkitId, state, renderCredentialsSelect }: IndexesT
         selectedIndexTools={state.selectedIndexTools}
         chatUI={INDEXES_CHAT_UI}
         renderCredentialsSelect={renderCredentialsSelect}
+        onConfigDirtyChange={onConfigDirtyChange}
         // The worker-capability verdict off the served type schema. The KEY is
         // omitted when the worker can run this type (`exactOptionalPropertyTypes`),
         // and an empty string is a real verdict — see `IndexesTab`.
@@ -219,19 +223,58 @@ export function EditToolkit({ isMCP = false, deps }: EditToolkitProps): ReactNod
   const params = useParams({ strict: false }) as EditToolkitRouteParams;
   const toolkitId = params.toolkitId ?? params.mcpId ?? params.appId;
   const projectId = useSelectedProjectId();
+  // #952/ELITEA-1092,1094,1099: threaded to `ConfigurationTab`/`ToolkitForm`
+  // below, which gates the "Credential Configuration Change" modal on it.
+  const isTeamProject = useIsTeamProject(projectId);
 
-  const { detail, isFetching } = useToolkitDetail(projectId, toolkitId);
+  const { detail, isFetching, isSuccess } = useToolkitDetail(projectId, toolkitId);
   const { canExport, canDelete } = useToolkitActionPermissions(projectId);
   const copyLinkMenuItems = useCopyLinkMenuItem();
+  const navigate = useNavigate();
+
+  /*
+   * elitea_issues #6081 — switching projects (via the project switcher) from
+   * a toolkit/MCP detail page keeps this same route mounted with the OLD
+   * toolkitId. If that id doesn't exist in the NEWLY selected project's own
+   * list, `detail` resolves to `undefined` forever and the page rendered
+   * blank (or, worse, showed a same-numbered ROW FROM THE NEW PROJECT, since
+   * ids are only unique per project). `isSuccess` (not `isFetching`) is the
+   * right gate: it is false while the list is still loading OR before
+   * `projectId`/`toolkitId` have resolved, and only becomes true once THIS
+   * project's own list has genuinely been read — so this never fires on the
+   * ordinary loading path, only once we know for certain the id is absent.
+   */
+  useEffect(() => {
+    if (!isSuccess || detail !== undefined || toolkitId === undefined) return;
+    void navigate({ to: isMCP ? '/mcps/$tab' : '/toolkits/$tab', params: { tab: 'all' } });
+  }, [isSuccess, detail, toolkitId, isMCP, navigate]);
 
   const [editToolDetail, setEditToolDetail] = useState<EditToolDetail | null>(null);
   const [isToolDirty, setIsToolDirty] = useState(false);
   const [tab, setTab] = useState(0);
+  /*
+   * ELITEA-2885 — the index configuration form's unsaved edits arm the app's
+   * one navigation guard (`widgets/app-shell`'s `NavBlockerDialog`, mounted
+   * by `AppShell` under every page). The flag is reported UP from
+   * `features/toolkits`' index panel because a `features/**` file may not
+   * import `widgets/**`; this page may, and it is where the guard belongs.
+   */
+  const [isIndexConfigDirty, setIsIndexConfigDirty] = useState(false);
+  useUnsavedChangesNavBlocker(isIndexConfigDirty);
 
   useEffect(() => {
     setEditToolDetail(toEditDetail(detail));
     setIsToolDirty(false);
   }, [detail]);
+
+  // #952/ELITEA-1092,1094,1099: the STABLE server baseline, recomputed only
+  // when `detail` itself changes (a fresh fetch or a successful save) — never
+  // on every keystroke the way `editToolDetail` does. `ConfigurationTab`'s
+  // `originalToolDetail` needs exactly this so `useCredentialWarning`'s
+  // `hasCredentialConfigChanged` has something to diff `editToolDetail`
+  // against; passing `editToolDetail` for both sides (the previous shape)
+  // made the comparison always read a value against itself.
+  const originalToolDetail = useMemo(() => toEditDetail(detail), [detail]);
 
   const handleChangeToolDetail = useCallback((updater: (prev: EditToolDetail | null) => EditToolDetail | null) => {
     setIsToolDirty(true);
@@ -326,9 +369,10 @@ export function EditToolkit({ isMCP = false, deps }: EditToolkitProps): ReactNod
             isFetching={isFetching}
             applicationId={undefined}
             toolkitId={toolkitId}
-            toolDetailState={{ editToolDetail, onChangeToolDetail: handleChangeToolDetail, isToolDirty }}
+            toolDetailState={{ editToolDetail, onChangeToolDetail: handleChangeToolDetail, isToolDirty, originalToolDetail }}
             isMCP={isMCP}
             projectId={projectId}
+            isTeamProject={isTeamProject}
             onValidationStateChange={saveControls.onValidationStateChange}
             saveHandlers={{ saveToolkit: saveToolkitMutation, onSaveSuccess: saveControls.onSaveSuccess, onSaveError: saveControls.onSaveError }}
             slots={configurationTabSlots}
@@ -339,6 +383,7 @@ export function EditToolkit({ isMCP = false, deps }: EditToolkitProps): ReactNod
             toolkitId={toolkitId}
             state={indexesTab}
             renderCredentialsSelect={renderCredentialsSelect}
+            onConfigDirtyChange={setIsIndexConfigDirty}
           />
         )}
       </Box>

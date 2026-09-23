@@ -262,8 +262,18 @@ describe('useChatWithEditors', () => {
       });
 
       expect(seen.url).toBe('proj-1/convo-1');
+      // The NAME is part of the attach (#940 A12). Without it the rail draws a
+      // nameless row: `entity_meta.name` is what the participant list labels a
+      // row with and what `EditParticipantButton` builds its accessible name
+      // from, so an entity created from chat could neither be recognised nor
+      // re-opened — while the same entity added through the "+" menu's picker
+      // could, because that path has always sent it.
       expect(seen.body).toEqual([
-        { entity_name: 'application', entity_meta: { id: '99' }, entity_settings: { version_id: 'v9' } },
+        {
+          entity_name: 'application',
+          entity_meta: { id: '99', name: 'New Agent' },
+          entity_settings: { version_id: 'v9' },
+        },
       ]);
     });
 
@@ -282,7 +292,11 @@ describe('useChatWithEditors', () => {
       });
 
       expect(seen.body).toEqual([
-        { entity_name: 'toolkit', entity_meta: { id: '55' }, entity_settings: { version_id: 'v5' } },
+        {
+          entity_name: 'toolkit',
+          entity_meta: { id: '55', name: 'New Toolkit' },
+          entity_settings: { version_id: 'v5' },
+        },
       ]);
     });
 
@@ -304,7 +318,7 @@ describe('useChatWithEditors', () => {
       expect(seen.body).toEqual([
         {
           entity_name: 'application',
-          entity_meta: { id: '33' },
+          entity_meta: { id: '33', name: 'New Pipeline' },
           entity_settings: { agent_type: 'pipeline', version_id: 'v3' },
         },
       ]);

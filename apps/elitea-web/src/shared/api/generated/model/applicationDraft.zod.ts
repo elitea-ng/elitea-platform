@@ -64,7 +64,7 @@ export const ApplicationDraft = zod
     suggested_skills: zod.array(SuggestedResource),
   })
   .describe(
-    "The content half of legacy's draft, plus the five suggested_\* lists (issue #881) — always present, `[]` rather than absent\/null when nothing scored above zero or when a deployment composed no reader for that category.\n",
+    "The content half of legacy's draft, plus the five suggested_* lists (issue #881) — always present, `[]` rather than absent/null when nothing scored above zero or when a deployment composed no reader for that category.\n",
   );
 
 export type ApplicationDraft = zod.input<typeof ApplicationDraft>;

@@ -64,6 +64,7 @@ export function useToolkitFormState(props: ResolvedToolkitFormProps): ToolkitFor
     disabled,
     onSyntaxError,
     projectId,
+    isTeamProject,
     slots,
   } = props;
   const { view, setView, onManualViewChange, isValidSchema, effectiveToolSchema, toolListReadFailed, retryToolListRead, hasErrors, mergedToolErrors, editField, setToolErrors, showValidation, configurationErrors, setConfigurationErrors, configurationName, setConfigurationName, configuration, setConfiguration, toolType, ToolComponent } = core;
@@ -111,6 +112,9 @@ export function useToolkitFormState(props: ResolvedToolkitFormProps): ToolkitFor
     needToCheckSection: false,
     disabled,
     onSyntaxError,
+    // #902/ELITEA-0726: `ToolBase` folds this into its `credentialContext`, so
+    // a secret field's "Create new secret" entry can name the project scope.
+    isTeamProject,
     excludedFields: resolveExcludedFields(toolType),
     onCredentialReload,
     onCreateConfiguration,

@@ -57,4 +57,9 @@ describe('notificationErrorMessage', () => {
   it('falls back to String() for a non-Error, non-EliteaApiError value', () => {
     expect(notificationErrorMessage('oops')).toBe('oops');
   });
+
+  it('kind: <unknown> — the exhaustiveness fallback returns the failure itself (no HttpFailure kind reaches this in practice)', () => {
+    const error = new EliteaApiError({ kind: 'weird' } as never);
+    expect(notificationErrorMessage(error)).toEqual({ kind: 'weird' });
+  });
 });

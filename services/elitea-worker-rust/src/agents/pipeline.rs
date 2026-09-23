@@ -138,7 +138,7 @@ impl PipelineExecutionProfile {
         })
     }
 
-    fn from_nested_version(
+    pub(super) fn from_nested_version(
         version: &serde_json::Map<String, serde_json::Value>,
         fallback: &OrdinaryNoToolProfile,
     ) -> Result<Self, NativeAgentAssemblyError> {
@@ -440,7 +440,14 @@ impl PipelineNativeAgentAssembler {
             .map_err(|()| unsupported_pipeline_runtime())?;
         materialized.append(&mut mcp);
         let mut toolsets = toolsets_by_alias(materialized)?;
-        for toolset in profile.shell().internal_tools().toolsets() {
+        // `None`: a PIPELINE node does not bind the builder tools (#940 A8).
+        // Both cases the modules exist for are chat turns, and a pipeline's
+        // node profile carries no conversation the user toggled anything on
+        // for — the shell's internal tools here come from the stored version,
+        // not from a Modules menu. A toggle stored on a pipeline version is
+        // therefore not silently honoured with a project write nobody asked
+        // for in this run.
+        for toolset in profile.shell().internal_tools().toolsets(None) {
             if toolsets
                 .insert(toolset.name().to_owned(), toolset)
                 .is_some()
@@ -541,6 +548,9 @@ impl PipelineNativeAgentAssembler {
             Some(&direct_aliases),
         )
         .await?;
+        // The pipeline PARENT admits no pipeline CHILD through this path (it
+        // builds those itself), so the skipped list is always empty here.
+        let (direct_runtime, _) = direct_runtime;
         let (mut participants, mut projection) = direct_runtime.map_or_else(
             || Ok((BTreeMap::new(), ApplicationRuntimeProjection::default())),
             application_participants,
@@ -595,108 +605,48 @@ impl PipelineNativeAgentAssembler {
         runtime_context: &ClaimBoundRuntimeContextAuthority,
         runtime: &PipelineApplicationRuntime<'_>,
     ) -> Result<NativePipelineApplicationParticipant, NativeAgentAssemblyError> {
-        if reference
-            .project_id
-            .is_some_and(|project_id| project_id != runtime.context.resource_project_id())
-        {
-            return Err(invalid_pipeline_tool_scope());
-        }
         let platform = self
             .platform
             .as_ref()
             .ok_or_else(unsupported_pipeline_runtime)?;
-        let loaded = platform
-            .resolve_application_version(
-                runtime_context,
-                reference.application_id,
-                reference.version_id,
-            )
-            .await
-            .map_err(NativeAgentAssemblyError::from)?;
-        let version = loaded.into_version_details();
-        let mut child = PipelineExecutionProfile::from_nested_version(&version, fallback)?;
-        let frozen = FrozenToolSnapshot::from_version_details(&version)
-            .map_err(|_| invalid_pipeline_tool_scope())?;
-        child.validate_tool_snapshot(&frozen, runtime.tool_policy.as_ref())?;
-        if child.definition().has_application_nodes() {
-            // The recursive materializer must retain the same loaded-version
-            // cycle/hop owner before deeper saved participants activate.
-            return Err(unsupported_pipeline_runtime());
-        }
-        let admitted = frozen.apply_policy(runtime.tool_policy.as_ref());
-        let runtimes = self
-            .bind_nested_pipeline_runtimes(&child, admitted, runtime)
-            .await?;
+        // The SAME admission the ordinary parent's tool performs (#990 review
+        // 7). This parent keeps every pause kind the child can raise: it owns
+        // the graph checkpoint each of them resumes through, so it reads no
+        // guard surface here.
+        let (definition, bound) = admit_saved_pipeline_child(
+            platform,
+            runtime_context,
+            runtime,
+            self.mcp_connector.as_ref(),
+            fallback,
+            (reference.application_id, reference.version_id),
+            reference.project_id,
+        )
+        .await?;
         tracing::debug!(
             application_alias = reference.alias,
             "materialized saved pipeline participant"
         );
         Ok(NativePipelineApplicationParticipant::Pipeline {
-            definition: Box::new(child.into_definition()),
-            runtimes,
+            definition: Box::new(definition),
+            runtimes: bound.runtimes,
             events: runtime.node_events.clone(),
             display_name: reference.alias.to_owned(),
         })
     }
 
+    /// The pipeline PARENT's own nested participant, bound by the shared
+    /// admission below so the two callers cannot drift about what a nested
+    /// pipeline may run (#990 review 7).
     async fn bind_nested_pipeline_runtimes(
         &self,
         profile: &PipelineExecutionProfile,
         snapshot: AdmittedToolSnapshot<'_>,
         runtime: &PipelineApplicationRuntime<'_>,
     ) -> Result<PipelineNodeRuntimes, NativeAgentAssemblyError> {
-        let aliases = profile.definition().runtime_toolkit_aliases();
-        let selected = snapshot.retain_toolkit_names(&aliases);
-        let (mut materialized, mut delegated_authorization) =
-            materialize_configured_toolsets_with_tokens_and_authorization(
-                &selected,
-                &runtime.tool_policy,
-                runtime.mcp_tokens,
-            )
+        bind_saved_pipeline_runtimes(profile, snapshot, runtime, self.mcp_connector.as_ref())
             .await
-            .map_err(|_| unsupported_pipeline_runtime())?;
-        let (mut mcp, mcp_delegated_authorization) =
-            materialize_mcp_toolsets_with_tokens_and_authorization(
-                &selected,
-                self.mcp_connector.as_ref(),
-                &runtime.tool_policy,
-                runtime.mcp_tokens,
-            )
-            .await
-            .map_err(|_| unsupported_pipeline_runtime())?;
-        delegated_authorization
-            .merge(mcp_delegated_authorization)
-            .map_err(|()| unsupported_pipeline_runtime())?;
-        materialized.append(&mut mcp);
-        let mut toolsets = toolsets_by_alias(materialized)?;
-        for toolset in profile.shell().internal_tools().toolsets() {
-            if toolsets
-                .insert(toolset.name().to_owned(), toolset)
-                .is_some()
-            {
-                return Err(invalid_pipeline_tool_scope());
-            }
-        }
-        let toolsets = freeze_toolsets_by_alias(toolsets).await?;
-        let direct_tool_resolver = build_direct_tool_resolver(profile, &toolsets)?;
-        let llm_factory = profile.definition().has_llm_nodes().then(|| {
-            Arc::new(NativePipelineLlmAgentFactory {
-                profile: profile.shell().clone(),
-                context: Arc::clone(&runtime.context),
-                model_facade: Arc::clone(&runtime.model_facade),
-                toolsets,
-                sensitive_tools: profile.sensitive_llm_tools(),
-                delegated_authorization,
-                ask_user_enabled: profile.shell().internal_tools().ask_user_enabled(),
-                node_events: runtime.node_events.clone(),
-                model_scopes: runtime.model_scopes.clone(),
-            }) as Arc<dyn PipelineLlmAgentFactory>
-        });
-        Ok(PipelineNodeRuntimes::new(
-            llm_factory,
-            direct_tool_resolver,
-            None,
-        ))
+            .map(|bound| bound.runtimes)
     }
 }
 
@@ -1222,6 +1172,238 @@ impl Toolset for StrictNodeToolset {
             })
             .collect()
     }
+}
+
+/// Materialize one saved pipeline as a participant an ORDINARY agent can call
+/// as a tool (#973).
+///
+/// This is the same admission the pipeline parent performs for an `agent`
+/// node's pipeline participant — resolve the exact frozen version, admit its
+/// node/tool scope against the live policy, refuse a child that itself has
+/// Application nodes (depth stays one, exactly as it does there), and bind the
+/// invocation-owned LLM/direct-tool runtimes. What differs is only the caller:
+/// there the compiled graph becomes an ADK `SubgraphNode` of the parent graph,
+/// here it becomes the body of one `Tool` the parent model may call.
+// Every owner is an explicit authority boundary — the claim, the project
+// scope, the model facade, the tool policy and the child's own identity —
+// and bundling them would hide which of them the admission below checks.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn materialize_saved_pipeline_tool(
+    platform: &PlatformClient,
+    runtime_context: &ClaimBoundRuntimeContextAuthority,
+    context: Arc<ClaimScopedEliteaContext>,
+    model_facade: Arc<ModelFacade>,
+    mcp_connector: &dyn McpConnector,
+    mcp_tokens: &Map<String, Value>,
+    tool_policy: Arc<ToolAdmissionPolicy>,
+    fallback: &OrdinaryNoToolProfile,
+    node_events: PipelineNodeEventSender,
+    identity: (u64, u64),
+    project_id: Option<u64>,
+    model_scopes: ModelScopeSessions,
+) -> Result<(PipelineDefinition, PipelineNodeRuntimes), NativeAgentAssemblyError> {
+    let runtime = PipelineApplicationRuntime {
+        context,
+        model_facade,
+        node_events,
+        mcp_tokens,
+        tool_policy,
+        model_scopes,
+    };
+    let (definition, bound) = admit_saved_pipeline_child(
+        platform,
+        runtime_context,
+        &runtime,
+        mcp_connector,
+        fallback,
+        identity,
+        project_id,
+    )
+    .await?;
+    // #990 review 3. An ORDINARY parent resumes a child pipeline's `hitl` node
+    // and nothing else: a sensitive-tool approval, a clarifying question and
+    // an MCP authorization challenge are three further pause contracts, each
+    // with its own resume shape in `graph::resume`, and none of them is
+    // implemented for this parent. Admitting such a child anyway would show a
+    // card nothing could answer and lose the child's work when the decision
+    // came back — so the child is refused HERE, at admission, where the caller
+    // can skip it and SAY so, exactly as it does for any other child it cannot
+    // build. The pipeline PARENT keeps admitting them: it owns the graph
+    // checkpoint every one of them resumes through.
+    if !bound.guarded_interrupt_kinds.is_empty() {
+        tracing::debug!(
+            application_id = identity.0,
+            version_id = identity.1,
+            kinds = ?bound.guarded_interrupt_kinds,
+            "a saved pipeline child raises pause kinds an ordinary parent cannot resume"
+        );
+        return Err(unsupported_pipeline_child_pauses(
+            &bound.guarded_interrupt_kinds,
+        ));
+    }
+    Ok((definition, bound.runtimes))
+}
+
+/// The one refusal that names WHAT the child could pause on.
+///
+/// The message reaches the user through the skipped-child notice, so it says
+/// the capability rather than a code: "needs sensitive tool approval, which
+/// this worker cannot resume from inside an agent".
+fn unsupported_pipeline_child_pauses(kinds: &[&'static str]) -> NativeAgentAssemblyError {
+    tracing::debug!(?kinds, "pipeline child pause kinds refused");
+    NativeAgentAssemblyError::new(
+        NativeAgentAssemblyErrorCode::UnsupportedCapability,
+        "the attached pipeline pauses on a kind this worker cannot resume inside an agent",
+    )
+}
+
+/// Resolve and ADMIT one saved pipeline child, up to but not including what
+/// the caller will do with it (#990 review 7).
+///
+/// Both callers — the pipeline parent's `agent` node and the ordinary parent's
+/// tool — must perform the same five checks in the same order, and the order
+/// is the security property: project scope before any fetch, the frozen
+/// version before any profile, the node/tool scope against the LIVE policy
+/// before any credential, and the depth refusal before any runtime is bound.
+async fn admit_saved_pipeline_child(
+    platform: &PlatformClient,
+    runtime_context: &ClaimBoundRuntimeContextAuthority,
+    runtime: &PipelineApplicationRuntime<'_>,
+    mcp_connector: &dyn McpConnector,
+    fallback: &OrdinaryNoToolProfile,
+    identity: (u64, u64),
+    project_id: Option<u64>,
+) -> Result<(PipelineDefinition, BoundSavedPipeline), NativeAgentAssemblyError> {
+    if project_id.is_some_and(|project_id| project_id != runtime.context.resource_project_id()) {
+        return Err(invalid_pipeline_tool_scope());
+    }
+    let loaded = platform
+        .resolve_application_version(runtime_context, identity.0, identity.1)
+        .await
+        .map_err(NativeAgentAssemblyError::from)?;
+    let version = loaded.into_version_details();
+    let mut child = PipelineExecutionProfile::from_nested_version(&version, fallback)?;
+    let frozen = FrozenToolSnapshot::from_version_details(&version)
+        .map_err(|_| invalid_pipeline_tool_scope())?;
+    child.validate_tool_snapshot(&frozen, runtime.tool_policy.as_ref())?;
+    if child.definition().has_application_nodes() {
+        // Depth stays one for both callers: a deeper saved participant needs
+        // the same loaded-version cycle/hop owner, which neither has.
+        return Err(unsupported_pipeline_runtime());
+    }
+    let admitted = frozen.apply_policy(runtime.tool_policy.as_ref());
+    let bound = bind_saved_pipeline_runtimes(&child, admitted, runtime, mcp_connector).await?;
+    Ok((child.into_definition(), bound))
+}
+
+/// Bind the invocation-owned node runtimes of one saved pipeline participant.
+///
+/// Extracted from `PipelineNativeAgentAssembler::bind_nested_pipeline_runtimes`
+/// so the pipeline parent and the ordinary parent (#973) cannot drift about
+/// what a nested pipeline is allowed to run: same alias retention, same
+/// `None` for the builder tools, same direct-tool read-only gate.
+/// One nested pipeline's bound runtimes, plus what its own nodes may PAUSE on.
+///
+/// The guard surface travels with the runtimes because only the caller can
+/// decide what to do about it: a pipeline PARENT resumes every interrupt kind
+/// through its own graph checkpoint, while an ORDINARY parent (#973) resumes
+/// only the `hitl` node and must therefore refuse a child that could raise
+/// another kind rather than show a card nothing can answer.
+pub(super) struct BoundSavedPipeline {
+    pub(super) runtimes: PipelineNodeRuntimes,
+    /// The interrupt kinds this child's stored definition can raise besides
+    /// its own `hitl` nodes, in a stable order, empty for a child that can
+    /// raise none.
+    pub(super) guarded_interrupt_kinds: Vec<&'static str>,
+}
+
+async fn bind_saved_pipeline_runtimes(
+    profile: &PipelineExecutionProfile,
+    snapshot: AdmittedToolSnapshot<'_>,
+    runtime: &PipelineApplicationRuntime<'_>,
+    mcp_connector: &dyn McpConnector,
+) -> Result<BoundSavedPipeline, NativeAgentAssemblyError> {
+    let aliases = profile.definition().runtime_toolkit_aliases();
+    let selected = snapshot.retain_toolkit_names(&aliases);
+    let (mut materialized, mut delegated_authorization) =
+        materialize_configured_toolsets_with_tokens_and_authorization(
+            &selected,
+            &runtime.tool_policy,
+            runtime.mcp_tokens,
+        )
+        .await
+        .map_err(|_| unsupported_pipeline_runtime())?;
+    let (mut mcp, mcp_delegated_authorization) =
+        materialize_mcp_toolsets_with_tokens_and_authorization(
+            &selected,
+            mcp_connector,
+            &runtime.tool_policy,
+            runtime.mcp_tokens,
+        )
+        .await
+        .map_err(|_| unsupported_pipeline_runtime())?;
+    delegated_authorization
+        .merge(mcp_delegated_authorization)
+        .map_err(|()| unsupported_pipeline_runtime())?;
+    materialized.append(&mut mcp);
+    let mut toolsets = toolsets_by_alias(materialized)?;
+    // `None`, for the reason `bind_nested_pipeline_runtimes` states: a nested
+    // pipeline's shell carries no conversation the user toggled anything on for.
+    for toolset in profile.shell().internal_tools().toolsets(None) {
+        if toolsets
+            .insert(toolset.name().to_owned(), toolset)
+            .is_some()
+        {
+            return Err(invalid_pipeline_tool_scope());
+        }
+    }
+    let toolsets = freeze_toolsets_by_alias(toolsets).await?;
+    let direct_tool_resolver = build_direct_tool_resolver(profile, &toolsets)?;
+    let guarded_interrupt_kinds = guarded_interrupt_kinds(profile, &delegated_authorization);
+    let llm_factory = profile.definition().has_llm_nodes().then(|| {
+        Arc::new(NativePipelineLlmAgentFactory {
+            profile: profile.shell().clone(),
+            context: Arc::clone(&runtime.context),
+            model_facade: Arc::clone(&runtime.model_facade),
+            toolsets,
+            sensitive_tools: profile.sensitive_llm_tools(),
+            delegated_authorization,
+            ask_user_enabled: profile.shell().internal_tools().ask_user_enabled(),
+            node_events: runtime.node_events.clone(),
+            model_scopes: runtime.model_scopes.clone(),
+        }) as Arc<dyn PipelineLlmAgentFactory>
+    });
+    Ok(BoundSavedPipeline {
+        runtimes: PipelineNodeRuntimes::new(llm_factory, direct_tool_resolver, None),
+        guarded_interrupt_kinds,
+    })
+}
+
+/// The interrupt kinds one nested pipeline can raise besides its `hitl` nodes.
+///
+/// Read from the ADMITTED definition, never from the run: each of these is a
+/// pause with its own resume contract in `graph::resume`, and a caller that
+/// implements only the `hitl` one has to know BEFORE the child starts.
+pub(super) fn guarded_interrupt_kinds(
+    profile: &PipelineExecutionProfile,
+    delegated_authorization: &DelegatedAuthorizationCatalog,
+) -> Vec<&'static str> {
+    let mut kinds = Vec::new();
+    if !profile.sensitive_llm_tools().is_empty()
+        || profile
+            .definition()
+            .direct_tool_selections()
+            .any(|selection| profile.sensitive_direct_tool(selection).is_some())
+    {
+        kinds.push("sensitive tool approval");
+    }
+    if profile.shell().internal_tools().ask_user_enabled() {
+        kinds.push("clarifying questions");
+    }
+    if !delegated_authorization.is_empty() {
+        kinds.push("MCP authorization");
+    }
+    kinds
 }
 
 fn toolsets_by_alias(

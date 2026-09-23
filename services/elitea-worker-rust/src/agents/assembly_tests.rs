@@ -1464,3 +1464,66 @@ fn output_continuation_accepts_large_visible_partial() {
             .expect("a supported model answer remains eligible for continuation");
     }
 }
+
+// ── Project Context injection (#946) ────────────────────────────────────────
+//
+// elitea-main splices the project's Project Context onto the turn's
+// `version_details.instructions` as a delimited `<project_context>` block
+// (services/elitea-main/internal/application/agentexecution/projectcontext.go),
+// exactly where recalled memories already ride, precisely so that NO worker
+// change is needed: whatever is in `instructions` becomes this profile's
+// `instructions()`, which `application_tools.rs` hands over as the child call's
+// `system_instruction` and `ordinary.rs` sends as the system message.
+//
+// These pin the two properties Main's design depends on. They are the native
+// runtime's half of ELITEA-0951/0943/0945/0948/0952, provable without a stack.
+
+/// The injected block reaches the SYSTEM PROMPT verbatim, after the agent's own
+/// instructions, and the per-agent `ignore_project_context` flag Main consults
+/// does not itself make the profile unacceptable here.
+#[test]
+fn an_injected_project_context_block_becomes_the_system_prompt() {
+    const PHRASE: &str = "QA-TEST-PHRASE: Green heron dives at twilight";
+    let injected = format!("review carefully\n\n<project_context>\n{PHRASE}\n</project_context>");
+
+    let mut request = ordinary_request(AgentExecutionKind::Application);
+    set_application_instructions(&mut request, &injected);
+    let profile = OrdinaryNoToolProfile::validate(&request)
+        .expect("an agent whose instructions carry a project context is an ordinary agent");
+    assert_eq!(profile.instructions(), injected);
+    assert!(profile.instructions().contains(PHRASE));
+    assert!(profile.instructions().starts_with("review carefully"));
+
+    // ELITEA-0945: Main decides the opt-out and simply does not splice; the
+    // flag still travels on the version, so the runtime must admit it rather
+    // than refuse a turn for an unknown meta key.
+    let mut ignoring = ordinary_request(AgentExecutionKind::Application);
+    insert_application_meta(&mut ignoring, "ignore_project_context", json!(true));
+    set_application_instructions(&mut ignoring, "review carefully");
+    let profile = OrdinaryNoToolProfile::validate(&ignoring)
+        .expect("an agent that opts out of project context is still an agent");
+    assert_eq!(profile.instructions(), "review carefully");
+}
+
+/// WHY MAIN BUDGETS THE SPLICE. `bounded_instruction` REFUSES an instruction
+/// string past 64 KiB rather than trimming it, so an unbounded injection would
+/// have turned "this project has a long context" into "this project's chat is
+/// broken" — the same failure #946 removed from the admission SQL, one layer
+/// down. Main's ceiling (60 KiB combined) sits under this one; the assertion
+/// here is that the cliff is real and where Main thinks it is.
+#[test]
+fn an_over_long_injected_instruction_string_is_refused_by_the_runtime() {
+    let mut inside = ordinary_request(AgentExecutionKind::Application);
+    set_application_instructions(&mut inside, &"x".repeat(60 * 1_024));
+    OrdinaryNoToolProfile::validate(&inside)
+        .expect("Main's own 60 KiB ceiling must stay comfortably inside the runtime's");
+
+    let mut past = ordinary_request(AgentExecutionKind::Application);
+    set_application_instructions(&mut past, &"x".repeat(64 * 1_024 + 1));
+    assert_eq!(
+        OrdinaryNoToolProfile::validate(&past)
+            .expect_err("past 64 KiB the runtime refuses the profile outright")
+            .code(),
+        NativeAgentAssemblyErrorCode::InvalidInput
+    );
+}

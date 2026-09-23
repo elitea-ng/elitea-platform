@@ -27,6 +27,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
 import { parseColor } from '@/shared/brand/color';
+import { remToPx } from '@/shared/ui/lib/testTheme';
 
 import { installWebStorageShim } from '../../test/webstorage';
 import {
@@ -445,10 +446,13 @@ describe('collapsed state', () => {
     // rails stop sharing one definition rather than if a number changes.
     await mountAdmin();
     const nav = screen.getByTestId('admin-nav');
-    expect(getComputedStyle(nav).width).toBe(SIDE_BAR_WIDTH_REM);
+    // jsdom@30 resolves rem against the root font size before reporting a
+    // computed length (jsdom@29 echoed the declaration back), so the computed
+    // value is px. `remToPx` keeps the assertion pointed at the declaration.
+    expect(getComputedStyle(nav).width).toBe(remToPx(SIDE_BAR_WIDTH_REM));
 
     await userEvent.click(screen.getByTestId('admin-nav-collapse-toggle'));
-    expect(getComputedStyle(nav).width).toBe(COLLAPSED_SIDE_BAR_WIDTH_REM);
+    expect(getComputedStyle(nav).width).toBe(remToPx(COLLAPSED_SIDE_BAR_WIDTH_REM));
   });
 
   it('points the chevron at what the click will do', async () => {

@@ -47,7 +47,7 @@ TEST_KEY = b"ELITEA_RUNTIME_V1_TEST_ONLY_NOT_A_SECRET"
 PROTOCOL_REVISION = "elitea.runtime.v1"
 ENVELOPE_SCHEMA_REVISION = "elitea.runtime.signed-worker-command.v1"
 OUTPUT_SCHEMA_REVISION = "elitea.runtime.execution-output.v1"
-LIMITS_REVISION = "elitea.runtime.limits.conformance.v1"
+LIMITS_REVISION = "elitea.runtime.limits.conformance.v2"
 TEST_OCCURRED_AT_UNIX_MILLIS = 1700000000000
 CONFORMANCE_LIMITS = {
     "limits_revision": LIMITS_REVISION,

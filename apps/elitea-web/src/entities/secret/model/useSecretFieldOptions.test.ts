@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 
 import { PERMISSIONS } from '@/shared/lib/permissions';
 
-import { SECRETS_SETTINGS_PATH, buildSecretsSettingsHref, readSecretFieldGrants, secretReference, toSecretOptions } from './useSecretFieldOptions';
+import { SECRETS_SETTINGS_PATH, buildSecretsSettingsHref, readSecretFieldGrants, secretCreateLabel, secretReference, toSecretOptions } from './useSecretFieldOptions';
 
 describe('secretReference', () => {
   it('wraps a name in the reference syntax the backend expands', () => {
@@ -39,6 +39,21 @@ describe('buildSecretsSettingsHref', () => {
 
   it('carries the createSecret flag the settings route validates', () => {
     expect(buildSecretsSettingsHref('')).toContain('createSecret=1');
+  });
+});
+
+describe('secretCreateLabel', () => {
+  // #925/ELITEA-1069,1074: scope-aware "Create new secret" wording.
+  it('reads "New Project Secret" for a team project', () => {
+    expect(secretCreateLabel(true)).toBe('New Project Secret');
+  });
+
+  it('reads "New Private Secret" for a non-team (personal) project', () => {
+    expect(secretCreateLabel(false)).toBe('New Private Secret');
+  });
+
+  it('is undefined when the caller has no notion of project scope, so the generic fallback renders', () => {
+    expect(secretCreateLabel(undefined)).toBeUndefined();
   });
 });
 

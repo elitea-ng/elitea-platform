@@ -54,7 +54,7 @@ export const SkillIconBindRequest = zod
     resulting_file_size: zod.string().optional(),
   })
   .describe(
-    "NOTE(W2): internal\/api\/v2\/eliteacore\/skill_icon.go:353-380 (UpdateSkillIcon). The body is decoded as a free map and stored verbatim as meta.icon_meta, but `name` and `url` must both be strings or the request is a 400 — pylon's model declares them required, and an icon_meta without them is one the read path cannot render.\n",
+    "NOTE(W2): internal/api/v2/eliteacore/skill_icon.go:353-380 (UpdateSkillIcon). The body is decoded as a free map and stored verbatim as meta.icon_meta, but `name` and `url` must both be strings or the request is a 400 — pylon's model declares them required, and an icon_meta without them is one the read path cannot render.\n",
   );
 
 export type SkillIconBindRequest = zod.input<typeof SkillIconBindRequest>;

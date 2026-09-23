@@ -65,17 +65,17 @@ export const Error = zod
             .string()
             .optional()
             .describe(
-              "The only diagnostic key any artifact handler emits. Set solely by rejectCommit (internal\/api\/v2\/artifacts\/grants.go:333-343), when a commitTransferGrant verification failure (TooLarge \/ MediaTypeMismatch \/ DigestMismatch \/ QuotaExceeded — its five call sites at grants.go:438, 450, 462, 468, 504) is followed by a FAILED cleanup delete of the just-uploaded object; the value is that delete's error string. Every other error response goes through writeError (internal\/api\/v2\/artifacts\/handler.go:100-104), which emits code+message only and no details member at all.",
+              "The only diagnostic key any artifact handler emits. Set solely by rejectCommit (internal/api/v2/artifacts/grants.go:333-343), when a commitTransferGrant verification failure (TooLarge / MediaTypeMismatch / DigestMismatch / QuotaExceeded — its five call sites at grants.go:438, 450, 462, 468, 504) is followed by a FAILED cleanup delete of the just-uploaded object; the value is that delete's error string. Every other error response goes through writeError (internal/api/v2/artifacts/handler.go:100-104), which emits code+message only and no details member at all.",
             ),
         })
         .optional()
         .describe(
-          "Closed set — one optional key. Not an open map: `details` is populated at exactly one site in the service (internal\/api\/v2\/artifacts\/grants.go:339), so it is typed here rather than carrying an x-elitea-passthrough marker. Widen this schema, do not re-open it, if a future handler adds a second diagnostic key.\n",
+          "Closed set — one optional key. Not an open map: `details` is populated at exactly one site in the service (internal/api/v2/artifacts/grants.go:339), so it is typed here rather than carrying an x-elitea-passthrough marker. Widen this schema, do not re-open it, if a future handler adds a second diagnostic key.\n",
         ),
     }),
   })
   .describe(
-    'The artifact API\'s error envelope. Distinct from the legacy ErrorResponse ({\"error\": \"message\"} — a plain string) used by every other operation in this spec; this is a deliberately richer, typed shape scoped to the new artifact operations only.\n',
+    'The artifact API\'s error envelope. Distinct from the legacy ErrorResponse ({"error": "message"} — a plain string) used by every other operation in this spec; this is a deliberately richer, typed shape scoped to the new artifact operations only.\n',
   );
 
 export type Error = zod.input<typeof Error>;

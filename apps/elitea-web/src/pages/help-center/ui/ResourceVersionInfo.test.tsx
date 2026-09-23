@@ -25,26 +25,26 @@ describe('ResourceVersionInfo', () => {
     expect(screen.getByTestId('copy-version-info')).toBeInTheDocument();
   });
 
-  it("lists every plugin's name and version in the info-icon tooltip (finding #2)", async () => {
+  it("lists every component's name and version in the info-icon tooltip (finding #2)", async () => {
     const user = userEvent.setup();
     renderWithTheme(
       <ResourceVersionInfo
         versionLabel="Version: 2.3.0"
-        plugins={[
-          { name: 'jira', version: '1.4.2' },
-          { name: 'confluence' },
+        components={[
+          { name: 'elitea-main', version: '1.4.2' },
+          { name: 'migrations' },
         ]}
       />,
     );
 
     await user.hover(screen.getByTestId('resource-version-info-icon'));
 
-    expect(await screen.findByText('jira: 1.4.2')).toBeInTheDocument();
-    // A plugin with no reported version falls back to the em-dash placeholder.
-    expect(await screen.findByText('confluence: —')).toBeInTheDocument();
+    expect(await screen.findByText('elitea-main: 1.4.2')).toBeInTheDocument();
+    // A component with no reported version falls back to the em-dash placeholder.
+    expect(await screen.findByText('migrations: —')).toBeInTheDocument();
   });
 
-  it('shows no tooltip content when there are no plugins to list', async () => {
+  it('shows no tooltip content when there are no components to list', async () => {
     const user = userEvent.setup();
     renderWithTheme(<ResourceVersionInfo versionLabel="Version: 2.3.0" />);
 

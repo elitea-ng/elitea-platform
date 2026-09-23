@@ -11,8 +11,10 @@
  * a switch that works — so every assertion here is against a SECOND surface,
  * reached after a full reload, that only a wired flag can change.
  *
- * Four of this page's six sections are live, and each is proved through its own
- * consumer:
+ * Three of this page's FIVE sections are live (was four of six — Help Center
+ * moved back to Configuration, A2/ELITEA-0032; see `config_schemas.go`'s
+ * `resourcesSection` own doc comment for the full history), and each is
+ * proved through its own consumer:
  *
  *  - **MCP Configuration** → `GET /elitea_core/platform_settings/…` reports the
  *    flag, AND `POST /elitea_core/mcp_dcr_proxy/…` answers 403. The second is
@@ -29,11 +31,16 @@
  *    `ChatBox`'s slot bundle — reads them. It hardcoded both as module
  *    constants until this unit, so the admin switch named the control and could
  *    not change it.
- *  - **Help Center** (`resources`) → the round trip journey 34b used to own,
- *    moved here with the section. A link saved on this page is an anchor on
- *    `/help-center`, which is issue #26's end-to-end claim.
  *
- * The other two state a server-declared reason, and their endpoints refuse.
+ * **Help Center** (`resources`) — the round trip journey 34b used to own,
+ * then moved here with the section (issue #26's end-to-end claim: a link
+ * saved here is an anchor on `/help-center`) — stays IN THIS FILE (its
+ * `ownedCard`/serial-group/#539 machinery is local) but now opens the
+ * CONFIGURATION page (`openConfigurationForResources`), not Features, since
+ * A2 moved the section again.
+ *
+ * The other two (of five, on THIS page) state a server-declared reason, and
+ * their endpoints refuse.
  *
  * ## Per-engine partitioning
  *
@@ -367,19 +374,23 @@ adminTest(
     await openFeatures(page);
 
     await expect(page.getByText('Failed to load the feature sections.')).toHaveCount(0);
-    // All six of the reference's sections are offered, live or not. Omitting the
-    // unavailable ones would read as a page that lost features rather than a
-    // platform that does not have them.
+    // All five of the reference's sections are offered, live or not (was six —
+    // 'Help Center' moved back to Configuration, A2/ELITEA-0032; see
+    // `config_schemas.go`'s `resourcesSection` own doc comment for the full
+    // history and `admin.resources-help-center.spec.ts`'s own ELITEA-0032 test
+    // for where it is asserted present now). Omitting the unavailable ones
+    // would read as a page that lost features rather than a platform that
+    // does not have them.
     for (const section of [
       'MCP Configuration',
       'Agent Publishing',
       'Skill Publishing',
-      'Help Center',
       'Support Assistant',
       'Voice Features',
     ]) {
       await expect(page.getByRole('button', { name: new RegExp(section) })).toBeVisible();
     }
+    await expect(page.getByRole('button', { name: /Help Center/ }), 'Help Center moved to Configuration (A2)').toHaveCount(0);
     /*
      * THE MARKER IS ASSERTED AGAINST THE SERVER'S OWN ANSWER, not against a
      * standing assumption that some section is withheld.
@@ -789,7 +800,21 @@ adminTest(
   },
 );
 
-/* ── the Help Center round trip, moved here with its section ───────────── */
+/**
+ * A2 (ELITEA-0032): Help Center ("resources") moved back to Configuration —
+ * see `config_schemas.go`'s `resourcesSection` own doc comment for the full
+ * history. The round trip below stays IN THIS FILE (its helpers —
+ * `ownedCard`/`probeLink`/`probeTitle`/`restoreSection`/`putValues` — are
+ * local to it and the #539 serial-group reasoning is unchanged), but opens
+ * the CONFIGURATION page now, not Features.
+ */
+async function openConfigurationForResources(page: Page): Promise<void> {
+  const response = await page.goto(BASE_URL + '/admin/app/configuration', { waitUntil: 'domcontentloaded' });
+  expect(response?.status(), 'the admin SPA must serve the configuration route, not 404').toBeLessThan(400);
+  await expect(page.getByRole('button', { name: /Guardrails/ })).toBeVisible({ timeout: 20_000 });
+}
+
+/* ── the Help Center round trip, moved here with its section (now Configuration) ───────────── */
 
 adminTest.describe('the Help Center round trip', () => {
   /*
@@ -817,7 +842,7 @@ adminTest.describe('the Help Center round trip', () => {
       const card = ownedCard(testInfo.project.name);
       const link = probeLink(testInfo.project.name);
 
-      await openFeatures(page);
+      await openConfigurationForResources(page);
       // RETRY POISONING. The seed clears this card, so on a fresh stack the
       // baseline is the schema default. But a first attempt that fails AFTER
       // its PUT leaves the probe title in the platform-wide `resources`
@@ -835,7 +860,7 @@ adminTest.describe('the Help Center round trip', () => {
         [card.linksKey]: [],
       });
       await page.reload({ waitUntil: 'domcontentloaded' });
-      await openFeatures(page);
+      await openConfigurationForResources(page);
       await openSection(page, 'Help Center');
 
       const title = page.getByRole('textbox', { name: card.title });
@@ -864,7 +889,7 @@ adminTest.describe('the Help Center round trip', () => {
       expect(saved.status(), 'the configuration write must be authorised server-side').toBe(200);
 
       await page.reload({ waitUntil: 'domcontentloaded' });
-      await openFeatures(page);
+      await openConfigurationForResources(page);
       await openSection(page, 'Help Center');
       await expect(page.getByRole('textbox', { name: card.title })).toHaveValue(
         probeTitle(testInfo.project.name),
@@ -886,7 +911,7 @@ adminTest.describe('the Help Center round trip', () => {
   adminTest(
     'J36h: the server refuses a link URL that would run in a reader’s browser',
     async ({ page }, testInfo) => {
-      await openFeatures(page);
+      await openConfigurationForResources(page);
       const card = ownedCard(testInfo.project.name);
 
       // Forged, not typed. The form warns about the scheme, so typing it would only
@@ -919,7 +944,7 @@ adminTest.describe('the Help Center round trip', () => {
   adminTest(
     'J36j: the probe values are restored so the run is repeatable',
     async ({ page }, testInfo) => {
-      await openFeatures(page);
+      await openConfigurationForResources(page);
       await openSection(page, 'Help Center');
       const card = ownedCard(testInfo.project.name);
 
@@ -942,7 +967,7 @@ adminTest.describe('the Help Center round trip', () => {
       expect(saved.status()).toBe(200);
 
       await page.reload({ waitUntil: 'domcontentloaded' });
-      await openFeatures(page);
+      await openConfigurationForResources(page);
       await openSection(page, 'Help Center');
       await expect(page.getByRole('textbox', { name: card.title })).toHaveValue(card.cardName);
     },

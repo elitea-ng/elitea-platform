@@ -76,6 +76,10 @@ func TestServiceListPreservesCurrentIndexMetaContract(t *testing.T) {
 	}
 }
 
+// elitea_issues: #5867 — Toolkit Index Reindexation History must show one
+// row per (re)indexation operation, not two. The dual-writer bootstrap
+// (Main + SDK writing adjacent in_progress/completed entries for the same
+// run) is collapsed here to a single "created" entry in the served history.
 func TestServiceListProjectsExistingDualWriterBootstrapAsCreated(t *testing.T) {
 	t.Parallel()
 

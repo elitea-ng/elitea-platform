@@ -93,6 +93,7 @@ import type {
   RoleListParams,
   SendBrandingTestEmail200,
   SendBrandingTestEmailBody,
+  SystemInfo,
   UpdateUserProjectPermissionsParams,
   UploadBrandingAssetBody,
   UserDeleteParams,
@@ -386,8 +387,21 @@ export const userCreate = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<userCreateResponse>(getUserCreateUrl(projectId), {
     ...options,
@@ -611,8 +625,21 @@ export const userUpdate = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<userUpdateResponse>(getUserUpdateUrl(projectId), {
     ...options,
@@ -1274,8 +1301,21 @@ export const assignUserModeRole = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<assignUserModeRoleResponse>(getAssignUserModeRoleUrl(), {
     ...options,
@@ -1767,8 +1807,21 @@ export const inviteUserGlobally = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<inviteUserGloballyResponse>(getInviteUserGloballyUrl(), {
     ...options,
@@ -2020,8 +2073,21 @@ export const bulkInviteMembers = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<bulkInviteMembersResponse>(getBulkInviteMembersUrl(), {
     ...options,
@@ -2946,8 +3012,21 @@ export const saveBrandingSettings = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<saveBrandingSettingsResponse>(
     getSaveBrandingSettingsUrl(),
@@ -3466,8 +3545,21 @@ export const sendBrandingTestEmail = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<sendBrandingTestEmailResponse>(
     getSendBrandingTestEmailUrl(),
@@ -4883,8 +4975,21 @@ export const updateUserProjectPermissions = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<updateUserProjectPermissionsResponse>(
     getUpdateUserProjectPermissionsUrl(params),
@@ -5601,8 +5706,21 @@ export const createModerationRequest = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<createModerationRequestResponse>(
     getCreateModerationRequestUrl(projectId, entityId),
@@ -5869,8 +5987,21 @@ export const createProjectRequest = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return eliteaFetch<createProjectRequestResponse>(
     getCreateProjectRequestUrl(),
@@ -6893,6 +7024,11 @@ export function useListAdminPublishedAgents<
   return withQueryKey(query, queryOptions.queryKey);
 }
 
+export type getSystemInfoResponse200 = {
+  data: SystemInfo;
+  status: 200;
+};
+
 export type getSystemInfoResponse401 = {
   data: N401Response;
   status: 401;
@@ -6903,28 +7039,30 @@ export type getSystemInfoResponse403 = {
   status: 403;
 };
 
-export type getSystemInfoResponse501 = {
-  data: ErrorResponse;
-  status: 501;
+export type getSystemInfoResponseSuccess = getSystemInfoResponse200 & {
+  headers: Headers;
 };
-
 export type getSystemInfoResponseError = (
-  getSystemInfoResponse401 | getSystemInfoResponse403 | getSystemInfoResponse501
+  getSystemInfoResponse401 | getSystemInfoResponse403
 ) & {
   headers: Headers;
 };
 
-export type getSystemInfoResponse = getSystemInfoResponseError;
+export type getSystemInfoResponse =
+  getSystemInfoResponseSuccess | getSystemInfoResponseError;
 
 export const getGetSystemInfoUrl = () => {
   return `/admin/system_info/prompt_lib`;
 };
 
 /**
- * NOTE(W2): internal/api/v2/admin/handler.go:170 (SystemInfo). It answers
- * 501 and nothing else. There is no 200 to describe: this service reports
- * no per-plugin versions because it loads no plugins.
- * @summary Report the platform's component versions (not available here)
+ * NOTE(W2): internal/api/v2/admin/handler.go (SystemInfo). Reports this
+ * binary's own build version, always, and a `migrations` entry for the
+ * highest applied shared-scope migration when a database connection is
+ * available. Reports no plugin, worker or gateway versions: this
+ * service has no fleet telemetry for other processes (#219), and
+ * inventing one here would be that same defect again.
+ * @summary Report this service's own component versions
  */
 export const getSystemInfo = async (
   options?: Parameters<typeof eliteaFetch>[1],
@@ -6941,7 +7079,7 @@ export const getGetSystemInfoQueryKey = () => {
 
 export const getGetSystemInfoQueryOptions = <
   TData = Awaited<ReturnType<typeof getSystemInfo>>,
-  TError = N401Response | N403Response | ErrorResponse,
+  TError = N401Response | N403Response,
 >(options?: {
   query?: Partial<
     UseQueryOptions<Awaited<ReturnType<typeof getSystemInfo>>, TError, TData>
@@ -6966,12 +7104,11 @@ export const getGetSystemInfoQueryOptions = <
 export type GetSystemInfoQueryResult = NonNullable<
   Awaited<ReturnType<typeof getSystemInfo>>
 >;
-export type GetSystemInfoQueryError =
-  N401Response | N403Response | ErrorResponse;
+export type GetSystemInfoQueryError = N401Response | N403Response;
 
 export function useGetSystemInfo<
   TData = Awaited<ReturnType<typeof getSystemInfo>>,
-  TError = N401Response | N403Response | ErrorResponse,
+  TError = N401Response | N403Response,
 >(
   options: {
     query: Partial<
@@ -6993,7 +7130,7 @@ export function useGetSystemInfo<
 };
 export function useGetSystemInfo<
   TData = Awaited<ReturnType<typeof getSystemInfo>>,
-  TError = N401Response | N403Response | ErrorResponse,
+  TError = N401Response | N403Response,
 >(
   options?: {
     query?: Partial<
@@ -7015,7 +7152,7 @@ export function useGetSystemInfo<
 };
 export function useGetSystemInfo<
   TData = Awaited<ReturnType<typeof getSystemInfo>>,
-  TError = N401Response | N403Response | ErrorResponse,
+  TError = N401Response | N403Response,
 >(
   options?: {
     query?: Partial<
@@ -7028,12 +7165,12 @@ export function useGetSystemInfo<
   queryKey: DataTag<QueryKey, TData, TError>;
 };
 /**
- * @summary Report the platform's component versions (not available here)
+ * @summary Report this service's own component versions
  */
 
 export function useGetSystemInfo<
   TData = Awaited<ReturnType<typeof getSystemInfo>>,
-  TError = N401Response | N403Response | ErrorResponse,
+  TError = N401Response | N403Response,
 >(
   options?: {
     query?: Partial<

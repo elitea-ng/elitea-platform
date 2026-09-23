@@ -66,7 +66,7 @@ export const Webhook = zod
     updated_at: zod.iso.datetime({ offset: true }),
   })
   .describe(
-    "NOTE(issue 876): internal\/api\/webhook\/handler.go's `Webhook` — one row of the outbound webhook registry. `secret` carries the live value on every read; there is no separate reveal endpoint (see the \/webhooks path block's own note on why).\n",
+    "NOTE(issue 876): internal/api/webhook/handler.go's `Webhook` — one row of the outbound webhook registry. `secret` carries the live value on every read; there is no separate reveal endpoint (see the /webhooks path block's own note on why).\n",
   );
 
 export type Webhook = zod.input<typeof Webhook>;
