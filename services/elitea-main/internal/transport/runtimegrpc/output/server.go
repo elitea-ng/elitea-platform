@@ -1080,6 +1080,26 @@ func runtimeFailurePolicyFor(code runtimev1.RuntimeErrorCodeV1) (runtimeFailureP
 		return runtimeFailurePolicy{Code: "CANCELLED", SafeMessage: "Execution was cancelled."}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_OUTPUT_CONTINUATION_EXHAUSTED:
 		return runtimeFailurePolicy{Code: "OUTPUT_CONTINUATION_EXHAUSTED", SafeMessage: "Automatic continuation could not finish. The model response is incomplete."}, true
+	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_MODEL_TIMEOUT:
+		return runtimeFailurePolicy{Code: "MODEL_TIMEOUT", SafeMessage: "The model did not respond in time. Try again; if this continues, ask an administrator to check the model connection.", Retryable: true}, true
+	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_MODEL_RATE_LIMITED:
+		return runtimeFailurePolicy{Code: "MODEL_RATE_LIMITED", SafeMessage: "The model service reached its request limit. Wait briefly and try again, or select another model.", Retryable: true}, true
+	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_MODEL_ACCESS_DENIED:
+		return runtimeFailurePolicy{Code: "MODEL_ACCESS_DENIED", SafeMessage: "The model service denied access. Ask an administrator to check the model credentials and project permissions.", Retryable: false}, true
+	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_MODEL_BUDGET_EXHAUSTED:
+		return runtimeFailurePolicy{Code: "MODEL_BUDGET_EXHAUSTED", SafeMessage: "The model budget is exhausted. Ask an administrator to check the project budget or provider billing before retrying.", Retryable: false}, true
+	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_MODEL_REQUEST_REJECTED:
+		return runtimeFailurePolicy{Code: "MODEL_REQUEST_REJECTED", SafeMessage: "The model service rejected this request. Check the selected model and its settings, or ask an administrator to inspect the execution logs.", Retryable: false}, true
+	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_MODEL_RESPONSE_INVALID:
+		return runtimeFailurePolicy{Code: "MODEL_RESPONSE_INVALID", SafeMessage: "The model returned an incomplete or invalid response. Try again or select another model. Report repeated failures to an administrator.", Retryable: true}, true
+	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_CONTEXT_BUDGET_EXCEEDED:
+		return runtimeFailurePolicy{Code: "CONTEXT_BUDGET_EXCEEDED", SafeMessage: "The model input exceeds the available context budget. Enable compaction, reduce attached content, or select a model with a larger context window.", Retryable: false}, true
+	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_MODEL_REQUEST_TOO_LARGE:
+		return runtimeFailurePolicy{Code: "MODEL_REQUEST_TOO_LARGE", SafeMessage: "The model request exceeds the transport size limit. Reduce attached content or tool results. A larger token window alone may not resolve this.", Retryable: false}, true
+	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_MODEL_UNAVAILABLE:
+		return runtimeFailurePolicy{Code: "MODEL_UNAVAILABLE", SafeMessage: "The model service could not be reached or is temporarily unavailable. Try again; ask an administrator to check the connection if it persists.", Retryable: true}, true
+	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_MODEL_PROVIDER_FAILURE:
+		return runtimeFailurePolicy{Code: "MODEL_PROVIDER_FAILURE", SafeMessage: "The model service reported an error while generating the response. Try again or select another model. An administrator can inspect the execution logs.", Retryable: true}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INTERNAL:
 		return runtimeFailurePolicy{Code: "INTERNAL", SafeMessage: "The runtime operation failed."}, true
 	default:

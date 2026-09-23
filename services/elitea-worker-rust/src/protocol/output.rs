@@ -41,6 +41,17 @@ pub enum RuntimeFailureKind {
     DependencyUnavailable,
     DeadlineExceeded,
     OutputContinuationExhausted,
+    ModelTimeout,
+    ModelRateLimited,
+    ModelAccessDenied,
+    ModelBudgetExhausted,
+    ModelRequestRejected,
+    ModelResponseInvalid,
+    ContextBudgetExceeded,
+    ModelRequestTooLarge,
+    ModelUnavailable,
+    ModelProviderFailure,
+
     AuthorizationFailed,
     Cancelled,
     Internal,
@@ -581,8 +592,16 @@ pub(crate) fn build_toolkit_execute_read_terminal_output_frame(
     Ok(frame)
 }
 
-fn runtime_error(kind: RuntimeFailureKind) -> RuntimeErrorV1 {
-    let (code, safe_message, retryable) = match kind {
+impl RuntimeFailureKind {
+    pub(crate) fn safe_message(self) -> &'static str {
+        runtime_error_policy(self).1
+    }
+}
+
+// Keep every registered code/message/retry tuple in one exhaustive policy table.
+#[allow(clippy::too_many_lines)]
+fn runtime_error_policy(kind: RuntimeFailureKind) -> (RuntimeErrorCodeV1, &'static str, bool) {
+    match kind {
         RuntimeFailureKind::UnsupportedCapability => (
             RuntimeErrorCodeV1::UnsupportedCapability,
             "Configuration type is not supported.",
@@ -628,12 +647,66 @@ fn runtime_error(kind: RuntimeFailureKind) -> RuntimeErrorV1 {
             "Automatic continuation could not finish. The model response is incomplete.",
             false,
         ),
+        RuntimeFailureKind::ModelTimeout => (
+            RuntimeErrorCodeV1::ModelTimeout,
+            "The model did not respond in time. Try again; if this continues, ask an administrator to check the model connection.",
+            true,
+        ),
+        RuntimeFailureKind::ModelRateLimited => (
+            RuntimeErrorCodeV1::ModelRateLimited,
+            "The model service reached its request limit. Wait briefly and try again, or select another model.",
+            true,
+        ),
+        RuntimeFailureKind::ModelAccessDenied => (
+            RuntimeErrorCodeV1::ModelAccessDenied,
+            "The model service denied access. Ask an administrator to check the model credentials and project permissions.",
+            false,
+        ),
+        RuntimeFailureKind::ModelBudgetExhausted => (
+            RuntimeErrorCodeV1::ModelBudgetExhausted,
+            "The model budget is exhausted. Ask an administrator to check the project budget or provider billing before retrying.",
+            false,
+        ),
+        RuntimeFailureKind::ModelRequestRejected => (
+            RuntimeErrorCodeV1::ModelRequestRejected,
+            "The model service rejected this request. Check the selected model and its settings, or ask an administrator to inspect the execution logs.",
+            false,
+        ),
+        RuntimeFailureKind::ModelResponseInvalid => (
+            RuntimeErrorCodeV1::ModelResponseInvalid,
+            "The model returned an incomplete or invalid response. Try again or select another model. Report repeated failures to an administrator.",
+            true,
+        ),
+        RuntimeFailureKind::ContextBudgetExceeded => (
+            RuntimeErrorCodeV1::ContextBudgetExceeded,
+            "The model input exceeds the available context budget. Enable compaction, reduce attached content, or select a model with a larger context window.",
+            false,
+        ),
+        RuntimeFailureKind::ModelRequestTooLarge => (
+            RuntimeErrorCodeV1::ModelRequestTooLarge,
+            "The model request exceeds the transport size limit. Reduce attached content or tool results. A larger token window alone may not resolve this.",
+            false,
+        ),
+        RuntimeFailureKind::ModelUnavailable => (
+            RuntimeErrorCodeV1::ModelUnavailable,
+            "The model service could not be reached or is temporarily unavailable. Try again; ask an administrator to check the connection if it persists.",
+            true,
+        ),
+        RuntimeFailureKind::ModelProviderFailure => (
+            RuntimeErrorCodeV1::ModelProviderFailure,
+            "The model service reported an error while generating the response. Try again or select another model. An administrator can inspect the execution logs.",
+            true,
+        ),
         RuntimeFailureKind::Internal => (
             RuntimeErrorCodeV1::Internal,
             "The runtime operation failed.",
             false,
         ),
-    };
+    }
+}
+
+fn runtime_error(kind: RuntimeFailureKind) -> RuntimeErrorV1 {
+    let (code, safe_message, retryable) = runtime_error_policy(kind);
     RuntimeErrorV1 {
         code: code as i32,
         safe_message: safe_message.to_owned(),
@@ -652,6 +725,16 @@ fn canonical_runtime_failure(error: &RuntimeErrorV1) -> Option<RuntimeFailureKin
         RuntimeFailureKind::AuthorizationFailed,
         RuntimeFailureKind::Cancelled,
         RuntimeFailureKind::OutputContinuationExhausted,
+        RuntimeFailureKind::ModelTimeout,
+        RuntimeFailureKind::ModelRateLimited,
+        RuntimeFailureKind::ModelAccessDenied,
+        RuntimeFailureKind::ModelBudgetExhausted,
+        RuntimeFailureKind::ModelRequestRejected,
+        RuntimeFailureKind::ModelResponseInvalid,
+        RuntimeFailureKind::ContextBudgetExceeded,
+        RuntimeFailureKind::ModelRequestTooLarge,
+        RuntimeFailureKind::ModelUnavailable,
+        RuntimeFailureKind::ModelProviderFailure,
         RuntimeFailureKind::Internal,
     ]
     .into_iter()
@@ -985,6 +1068,32 @@ fn validate_fence(fence: &ExecutionFenceV1) -> Result<(), ProtocolError> {
 #[cfg(test)]
 mod continuation_failure_tests {
     use super::*;
+
+    #[test]
+    fn model_failure_contract_is_canonical_and_replayable() {
+        let policies: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../testdata/proto/runtime/v1/model_failure_policies.json"
+        ))
+        .unwrap();
+        for policy in policies.as_array().unwrap() {
+            let code = RuntimeErrorCodeV1::from_str_name(&format!(
+                "RUNTIME_ERROR_CODE_V1_{}",
+                policy["code"].as_str().unwrap()
+            ))
+            .unwrap();
+            let error = RuntimeErrorV1 {
+                code: code as i32,
+                safe_message: policy["message"].as_str().unwrap().to_owned(),
+                retryable: policy["retryable"].as_bool().unwrap(),
+            };
+            assert!(error.safe_message.len() <= 256);
+            let kind = canonical_runtime_failure(&error).expect("registered replay policy");
+            assert_eq!(runtime_error(kind), error);
+            let mut injected = error;
+            injected.safe_message = "raw provider secret".into();
+            assert!(canonical_runtime_failure(&injected).is_none());
+        }
+    }
 
     #[test]
     fn incomplete_output_has_a_restorable_registered_failure() {

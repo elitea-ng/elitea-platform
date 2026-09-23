@@ -1034,6 +1034,16 @@ const fn runtime_failure_code(failure: RuntimeFailureKind) -> &'static str {
         RuntimeFailureKind::AuthorizationFailed => "runtime.authorization_failed",
         RuntimeFailureKind::Cancelled => "runtime.cancelled",
         RuntimeFailureKind::OutputContinuationExhausted => "runtime.output_continuation_exhausted",
+        RuntimeFailureKind::ModelTimeout => "runtime.model_timeout",
+        RuntimeFailureKind::ModelRateLimited => "runtime.model_rate_limited",
+        RuntimeFailureKind::ModelAccessDenied => "runtime.model_access_denied",
+        RuntimeFailureKind::ModelBudgetExhausted => "runtime.model_budget_exhausted",
+        RuntimeFailureKind::ModelRequestRejected => "runtime.model_request_rejected",
+        RuntimeFailureKind::ModelResponseInvalid => "runtime.model_response_invalid",
+        RuntimeFailureKind::ContextBudgetExceeded => "runtime.context_budget_exceeded",
+        RuntimeFailureKind::ModelRequestTooLarge => "runtime.model_request_too_large",
+        RuntimeFailureKind::ModelUnavailable => "runtime.model_unavailable",
+        RuntimeFailureKind::ModelProviderFailure => "runtime.model_provider_failure",
         RuntimeFailureKind::Internal => "runtime.internal",
     }
 }

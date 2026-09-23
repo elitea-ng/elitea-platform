@@ -3276,7 +3276,20 @@ fn runtime_rejection(error: &RuntimeErrorV1) -> ControlSemanticError {
         Some(RuntimeErrorCodeV1::DependencyUnavailable | RuntimeErrorCodeV1::Internal) => {
             RuntimeControlRejectionKind::DependencyUnavailable
         }
-        Some(RuntimeErrorCodeV1::Unspecified | RuntimeErrorCodeV1::OutputContinuationExhausted)
+        Some(
+            RuntimeErrorCodeV1::Unspecified
+            | RuntimeErrorCodeV1::OutputContinuationExhausted
+            | RuntimeErrorCodeV1::ModelTimeout
+            | RuntimeErrorCodeV1::ModelRateLimited
+            | RuntimeErrorCodeV1::ModelAccessDenied
+            | RuntimeErrorCodeV1::ModelBudgetExhausted
+            | RuntimeErrorCodeV1::ModelRequestRejected
+            | RuntimeErrorCodeV1::ModelResponseInvalid
+            | RuntimeErrorCodeV1::ContextBudgetExceeded
+            | RuntimeErrorCodeV1::ModelRequestTooLarge
+            | RuntimeErrorCodeV1::ModelUnavailable
+            | RuntimeErrorCodeV1::ModelProviderFailure,
+        )
         | None => {
             return ControlSemanticError::InvalidInput(
                 "the runtime control response contains an unknown error",

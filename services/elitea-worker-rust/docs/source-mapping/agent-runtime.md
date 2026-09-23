@@ -382,6 +382,9 @@ Acceptance criteria:
 Treat the current platform as a behavior reference, not a logging implementation to copy.
 Update source mappings and verification evidence when this follow-up is implemented.
 
+The [model failure reason contract](model-failure-reasons-20260923.md) preserves known gateway reasons across worker and Main.
+Its deployment and browser acceptance remain open.
+
 ### Agent input field projection
 
 Every wire field is declared in `libs/proto/elitea/runtime/v1/agent.proto`,
