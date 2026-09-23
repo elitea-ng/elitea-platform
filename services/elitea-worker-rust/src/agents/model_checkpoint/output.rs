@@ -1,7 +1,7 @@
 //! Durable answer prefix for automatic child output continuation.
 
 use super::{ModelCheckpointWriter, invalid_checkpoint};
-use adk_rust::{AdkError, Content, LlmRequest};
+use adk_rust::{AdkError, Content, LlmRequest, Part};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -35,10 +35,15 @@ impl OutputContinuation {
         mut request: LlmRequest,
         segment: String,
     ) -> LlmRequest {
+        let mut parts = take_continuation_parts(&mut request, self.round.saturating_sub(1));
         if !segment.is_empty() {
-            request
-                .contents
-                .push(Content::new("model").with_text(segment));
+            parts.push(Part::Text { text: segment });
+        }
+        if !parts.is_empty() {
+            request.contents.push(Content {
+                role: "model".into(),
+                parts,
+            });
         }
         let prompt = if self.prefix.is_empty() {
             "The previous response exhausted its output allowance before producing visible text. Complete the original task now. Return the answer without referring to this retry.".to_owned()
@@ -54,6 +59,36 @@ impl OutputContinuation {
         request.previous_response_id = None;
         request
     }
+}
+
+// Replace only this loop's protocol messages. Keep unrelated history and any
+// compacted summary intact; never reinsert the full external answer prefix.
+fn take_continuation_parts(request: &mut LlmRequest, rounds: u32) -> Vec<Part> {
+    let mut segments = Vec::new();
+    for _ in 0..rounds {
+        let protocol = request.contents.last().is_some_and(|content| {
+            content.role == "user" && matches!(content.parts.as_slice(), [Part::Text { text }]
+                if text.starts_with("The previous answer reached its output allowance.")
+                || text.starts_with("The answer reached its output allowance.")
+                || text.starts_with("The previous response exhausted its output allowance before producing visible text."))
+        });
+        if !protocol {
+            break;
+        }
+        request.contents.pop();
+        if request
+            .contents
+            .last()
+            .is_some_and(|content| content.role == "model")
+        {
+            if let Some(content) = request.contents.pop() {
+                segments.push(content.parts);
+            }
+        } else {
+            break;
+        }
+    }
+    segments.into_iter().rev().flatten().collect()
 }
 
 impl ModelCheckpointWriter {
@@ -88,4 +123,58 @@ pub(in crate::agents) fn exhausted() -> AdkError {
         "model.output_continuation_failed",
         "The child model could not complete its answer within the continuation contract.",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request() -> LlmRequest {
+        serde_json::from_value(serde_json::json!({"model":"fixture","contents":[{"role":"user","parts":[{"text":"Original task"}]}]})).unwrap()
+    }
+
+    #[test]
+    fn repeated_continuation_keeps_one_answer_and_one_protocol_prompt() {
+        let mut request = request();
+        for round in 1..=3 {
+            let state = OutputContinuation {
+                prefix: "accepted ".repeat(round as usize),
+                round,
+            };
+            request = state.request(request, "accepted ".into());
+            assert_eq!(request.contents.len(), 3);
+            assert_eq!(
+                serde_json::to_value(&request.contents[0]).unwrap(),
+                serde_json::to_value(Content::new("user").with_text("Original task")).unwrap()
+            );
+            assert_eq!(request.contents[1].parts.len(), round as usize);
+            assert_eq!(request.contents[2].role, "user");
+        }
+    }
+
+    #[test]
+    fn continuation_does_not_restore_output_removed_by_compaction() {
+        let first = OutputContinuation {
+            prefix: "old output".into(),
+            round: 1,
+        };
+        let mut request = first.request(request(), "old output".into());
+        request.contents.remove(1);
+        request.contents[0] = Content::new("user").with_text("Verified compacted history");
+        let next = OutputContinuation {
+            prefix: "old output new output".into(),
+            round: 2,
+        };
+        let request = next.request(request, " new output".into());
+        assert_eq!(request.contents.len(), 3);
+        assert_eq!(
+            serde_json::to_value(&request.contents[0]).unwrap(),
+            serde_json::to_value(Content::new("user").with_text("Verified compacted history"))
+                .unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&request.contents[1]).unwrap(),
+            serde_json::to_value(Content::new("model").with_text(" new output")).unwrap()
+        );
+    }
 }

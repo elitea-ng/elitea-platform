@@ -275,3 +275,28 @@ Live acceptance and bounded repair of responses without an exact overlap remain 
 
 The final candidate passes all 405 agent tests with PostgreSQL enabled. Strict Clippy and formatting checks pass.
 This is component proof. The candidate still requires a new image and fresh browser acceptance.
+
+## Continuation request-history correction, 2026-09-23
+
+Image `sha256:04dc8b70a30942e09decee4530b22da430e86172653546692fe8e519518a70e4` contains commit `769909a9`.
+Chat 630, execution `9b39dca5a6da3c01fbe1efeeef6673f8`, persists round three and records through 119.
+Its accepted prefix ends with the partial text `RECORD`.
+A later response ends after 71 bytes without an exact overlap, so the worker rejects it.
+
+An authenticated gateway probe reuses the synthetic saved request and child instructions.
+Haiku returns `120: Cedar archive verification remains complete.` and the ending marker, without an anchor or leading space.
+Direct concatenation would produce `RECORD120`, changing the requested format.
+A comparison probe replaces earlier continuation exchanges with one accumulated answer and the latest protocol instruction.
+That response includes the exact anchor, correctly completes record 120, and ends with the required marker.
+This comparison supports correcting request construction rather than weakening boundary verification.
+
+SDK `_continue_nested_output` builds each continuation from original messages, accepted output, and one current protocol instruction.
+Rust `OutputContinuation::request` now collapses its own prior continuation exchanges into one assistant content entry.
+It retains the original history and keeps the latest continuation instruction only.
+The round count bounds removal of protocol exchanges, including checkpoints from the earlier implementation.
+It does not reinsert accepted text already removed from model history by compaction.
+The separate durable prefix still preserves the full user-visible answer.
+Tests cover repeated request construction and preservation of compacted history.
+The correction requires deployed browser verification before acceptance.
+
+The request-history correction passes 407 agent tests with PostgreSQL enabled, strict all-target Clippy, and formatting checks. The two focused history tests pass. Browser acceptance remains pending.
