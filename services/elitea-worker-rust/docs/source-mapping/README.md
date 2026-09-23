@@ -46,6 +46,8 @@ authorization, failure behavior, and recovery boundary.
 
 Detailed ledgers:
 
+- `document-memory-library-assessment-20260923.md` assesses native document engines, Xberg extraction, and YantrikDB memory against pinned sources.
+
 - `nested-pipeline-checkpoint-scope-20260923.md` maps admitted child checkpoint threads and claim-fenced recovery.
 
 - `customer-workflow-migration-20260923.md` maps customer workflow requirements, reuse candidates, and separate acceptance plans.

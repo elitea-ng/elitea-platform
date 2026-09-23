@@ -54,7 +54,8 @@ JavaScript and TypeScript Code actions have no sandboxed runtime in this inspect
 Do not expose these actions as supported because their configuration types exist.
 Do not enable broad retry defaults without Elitea failure classification and durable attempt state.
 
-Document MCP servers and the user-mentioned library require a separate identity, license, capability, and deployment assessment.
+The [library assessment](document-memory-library-assessment-20260923.md) identifies the supplied repositories and their native integration boundaries.
+Dependency builds, output fidelity, and deployed behavior still require verification.
 No verified DOCX, XLSX, slide, or diagram processing backend is selected by this record.
 Prefer existing supported engines through managed toolkits over a new document engine.
 Department deployments must retain project authorization, artifact access, and credential boundaries.

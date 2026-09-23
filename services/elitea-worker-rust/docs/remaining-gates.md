@@ -53,6 +53,7 @@ OpenAPI supports delegated OAuth and client credentials. DCR remains an MCP or o
 ## Customer workflow migration track
 
 The customer requests eight capabilities for migration from n8n.
+The [library assessment](source-mapping/document-memory-library-assessment-20260923.md) records native toolkit candidates and their verified limitations.
 See [the capability assessment](source-mapping/customer-workflow-migration-20260923.md) for source evidence and acceptance boundaries.
 Gates 5b, 5c, and 5d cover node recovery, data shaping, and HTTP actions.
 Gates 5, 7, 7a, and 8 retain their existing Code, artifact, module, and indexing scope.
