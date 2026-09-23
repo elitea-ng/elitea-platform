@@ -573,3 +573,23 @@ The tooltip correction passes all 57 context-budget UI tests.
 UI commit `bada7cde` runs as image `sha256:9d39544fce7bc383772824186d8a962dd34889e05833f6e136d73df62446f5b4`.
 A fresh read-only headed browser verifies the corrected text and the persisted disabled policy.
 Screenshot `elitea-disabled-tooltip.png` records this check. No additional model call is made.
+
+
+### Pipeline LLM-node continuation
+
+The current SDK reference `_continue_nested_output` explicitly completes truncated graph-node output before returning it to the graph.
+Rust `agents/pipeline.rs` now installs the existing model-scope checkpoint and continuation wrapper for each LLM node.
+Compaction remains optional. The provider allowance includes four continuation calls beyond the logical node step allowance.
+The node retains its output limit on each call and stops when the answer completes.
+ADK structured-output validation receives the completed answer before graph output projection.
+Graph data and deterministic nodes do not become compaction subjects.
+
+`agents/graph/llm.rs` waits for model completion before writing node output or scheduling downstream nodes.
+The existing bounded event bridge in `agents/graph/node_events.rs` carries a typed continuation-failure signal.
+This preserves `model.output_continuation_failed` across ADK graph error wrapping.
+Accepted partial text stays presentation evidence; exhaustion does not produce successful graph output.
+No new database schema or wire contract is introduced.
+
+New regressions cover a two-continuation answer followed by a deterministic node, and failure after four continuation calls.
+All 420 PostgreSQL-enabled agent tests pass, including both new pipeline regressions.
+Strict all-target Clippy passes. Deployed pipeline browser acceptance remains pending.

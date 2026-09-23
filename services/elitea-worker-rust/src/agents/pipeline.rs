@@ -967,7 +967,8 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
             max_tokens: self.profile.max_tokens(),
             reasoning_effort: self.profile.reasoning_effort().map(model_reasoning_effort),
             temperature: self.profile.temperature(),
-            max_model_turns: self.profile.step_limit(),
+            max_model_turns: self.profile.step_limit()
+                + crate::agents::request::MAX_OUTPUT_CONTINUATION_CALLS,
         };
         let adapter = match self.profile.model_provider() {
             OrdinaryModelProvider::OpenAiChat => ModelAdapterKind::OpenAiCompatible,
@@ -983,23 +984,23 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
                 self.profile.summary_model(),
             )
             .map_err(|_| LlmExecutionError::Unavailable)?;
-        let checkpoint = match self.profile.context_management() {
+        let plan = match self.profile.context_management() {
             ContextManagementPlan::Disabled => None,
-            ContextManagementPlan::Summarize(plan) => Some(
-                self.model_scopes
-                    .for_node(scope.identity())
-                    .checkpoint(
-                        Some(plan),
-                        model.request_budget(),
-                        model
-                            .summarization_model()
-                            .ok_or(LlmExecutionError::Unavailable)?,
-                        None,
-                        model.durable_completion(),
-                    )
-                    .with_replay_pending(replay.is_some()),
-            ),
+            ContextManagementPlan::Summarize(plan) => Some(plan),
         };
+        let checkpoint = self
+            .model_scopes
+            .for_node(scope.identity())
+            .checkpoint(
+                plan,
+                model.request_budget(),
+                model
+                    .summarization_model()
+                    .ok_or(LlmExecutionError::Unavailable)?,
+                None,
+                model.durable_completion(),
+            )
+            .with_replay_pending(replay.is_some());
         let binding = self.bind_selected_tools(definition)?;
         let mut guards = self.guards_for_binding(&binding)?;
         let mut authorization = DelegatedAuthorizationCatalog::default();
@@ -1051,7 +1052,7 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
         }
         let mut builder = LlmAgentBuilder::new(definition.id())
             .description("Elitea stored-pipeline LLM node")
-            .model(model)
+            .model(checkpoint.clone().delegation_model(model))
             .generate_content_config(GenerateContentConfig {
                 temperature: self.profile.temperature(),
                 max_output_tokens: self
@@ -1066,9 +1067,7 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
             .disallow_transfer_to_peers(true);
         let instruction_plan = self.profile.instruction_plan().for_pipeline_node();
         builder = instruction_plan.bind_builder(builder);
-        if let Some(checkpoint) = &checkpoint {
-            builder = checkpoint.clone().bind(builder);
-        }
+        builder = checkpoint.clone().bind(builder);
         if let Some(schema) = output_schema {
             builder = builder.output_schema(schema).output_max_retries(2);
         }
@@ -1082,10 +1081,7 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
             .build()
             .map(|agent| Arc::new(agent) as Arc<dyn Agent>)
             .map_err(|_| LlmExecutionError::Unavailable)?;
-        let agent = match checkpoint {
-            Some(checkpoint) => checkpoint.wrap(agent),
-            None => agent,
-        };
+        let agent = checkpoint.wrap(agent);
         Ok(
             PipelineLlmAgentBinding::new(instruction_plan.wrap(agent), guards)
                 .with_instruction_inheritance(

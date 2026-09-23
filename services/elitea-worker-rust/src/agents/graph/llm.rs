@@ -1360,7 +1360,20 @@ async fn run_model_agent(
     let mut pending_prefix = None;
     let mut pending_content = None;
     while let Some(event) = stream.next().await {
-        let mut event = event.map_err(|_| LlmExecutionError::Unavailable)?;
+        let mut event = match event {
+            Ok(event) => event,
+            Err(error) => {
+                if error.code == "model.output_continuation_failed"
+                    && let Some(sender) = factory.event_sender()
+                {
+                    sender
+                        .send_output_continuation_failure()
+                        .await
+                        .map_err(|_| LlmExecutionError::Unavailable)?;
+                }
+                return Err(LlmExecutionError::Unavailable);
+            }
+        };
         if let Some(request) = event.actions.tool_confirmation.clone() {
             let pending_content = pending_content
                 .take()

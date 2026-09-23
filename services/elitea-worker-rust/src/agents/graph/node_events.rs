@@ -37,7 +37,12 @@ pub(crate) const PIPELINE_NODE_EVENT_SCOPE_STATE_KEY: &str =
 pub(crate) const PIPELINE_NODE_EVENT_SCOPE_WRAPPER_KEY: &str = "elitea_event_scope";
 const MAX_EVENT_SCOPE_IDENTITY_BYTES: usize = 480;
 
-struct PipelineNodeEventSignal {
+enum PipelineNodeEventSignal {
+    Event(PipelineNodeEventData),
+    OutputContinuationFailed,
+}
+
+struct PipelineNodeEventData {
     node_name: Option<String>,
     scope: Option<PipelineNodeEventScope>,
     event: Box<Event>,
@@ -138,6 +143,14 @@ pub(crate) fn pipeline_node_event_channel() -> (PipelineNodeEventSender, Pipelin
 }
 
 impl PipelineNodeEventSender {
+    /// Preserve the registered continuation failure across ADK graph error wrapping.
+    pub(crate) async fn send_output_continuation_failure(&self) -> adk_rust::Result<()> {
+        self.inner
+            .send(PipelineNodeEventSignal::OutputContinuationFailed)
+            .await
+            .map_err(|_| pipeline_node_event_channel_error())
+    }
+
     /// Reuse the invocation-owned bridge for before-model progress. The outer
     /// wrapper supplies the agent identity; graph forwarding adds node scope.
     pub(crate) async fn send_context_status(&self, event: Event) -> adk_rust::Result<()> {
@@ -145,11 +158,11 @@ impl PipelineNodeEventSender {
             return Err(pipeline_node_event_channel_error());
         }
         self.inner
-            .send(PipelineNodeEventSignal {
+            .send(PipelineNodeEventSignal::Event(PipelineNodeEventData {
                 node_name: None,
                 scope: None,
                 event: Box::new(event),
-            })
+            }))
             .await
             .map_err(|_| pipeline_node_event_channel_error())
     }
@@ -178,11 +191,11 @@ impl PipelineNodeEventSender {
             .provider_metadata
             .remove(ADK_LLM_RESPONSE_METADATA_KEY);
         self.inner
-            .send(PipelineNodeEventSignal {
+            .send(PipelineNodeEventSignal::Event(PipelineNodeEventData {
                 node_name: Some(node_name.to_owned()),
                 scope: scope.cloned(),
                 event: Box::new(event),
-            })
+            }))
             .await
             .map_err(|_| pipeline_node_event_channel_error())
     }
@@ -235,11 +248,11 @@ impl PipelineNodeEventSender {
             return Err(pipeline_node_event_channel_error());
         }
         self.inner
-            .send(PipelineNodeEventSignal {
+            .send(PipelineNodeEventSignal::Event(PipelineNodeEventData {
                 node_name: None,
                 scope: None,
                 event: Box::new(event),
-            })
+            }))
             .await
             .map_err(|_| pipeline_node_event_channel_error())
     }
@@ -355,6 +368,12 @@ fn pipeline_node_signal_event(
     root_author: &str,
     root_branch: &str,
 ) -> adk_rust::Result<Event> {
+    let signal = match signal {
+        PipelineNodeEventSignal::Event(signal) => signal,
+        PipelineNodeEventSignal::OutputContinuationFailed => {
+            return Err(crate::agents::model_checkpoint::output::exhausted());
+        }
+    };
     let mut event = *signal.event;
     if let Some(node_name) = signal.node_name
         && (!valid_graph_id(&node_name)

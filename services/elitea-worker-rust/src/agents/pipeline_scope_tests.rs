@@ -201,3 +201,105 @@ async fn pipeline_model_compacts_tool_history_without_rewriting_graph_data() {
             .all(|event| !event.llm_response.partial)
     );
 }
+
+#[tokio::test]
+async fn pipeline_continues_limited_output_before_publishing_downstream_state() {
+    let mut request = pipeline_request();
+    request.payload.context_settings = json!({"enabled":false}).as_object().unwrap().clone();
+    request.payload.application["version_details"]["instructions"] = json!(
+        "state:\n  answer: str\n  final_text: str\n  messages: list\nentry_point: answer\nnodes:\n  - id: answer\n    type: llm\n    output: [answer, messages]\n    transition: finish\n  - id: finish\n    type: state_modifier\n    template: '{{ answer }}'\n    input: [answer]\n    output: [final_text]\n    transition: END\n"
+    );
+    let ((platform, facade, _, _), captured) = pipeline_runtime_from_responses_with_capture(
+        VecDeque::from([runtime_response(
+            &json!({"schema_version":"elitea.runtime.elitea-client-token.v1","project_id":17,"token":"ephemeral-pipeline-token"}),
+        )]),
+        vec![
+            TestModelGatewayOutcome::Response(limited_text_response("First segment")),
+            TestModelGatewayOutcome::Response(limited_text_response(
+                "First segment second segment",
+            )),
+            TestModelGatewayOutcome::Response(pipeline_text_response(
+                "First segment second segment complete",
+            )),
+        ],
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(Mutex::new(vec![])),
+    );
+    let graph = Arc::new(MemoryCheckpointer::new());
+    let assembler = PipelineNativeAgentAssembler::with_state(
+        Arc::new(InMemorySessionService::new()),
+        graph.clone(),
+    )
+    .with_runtime_clients(platform, facade);
+    let browser =
+        collect_pipeline_completion(assembler.assemble(authorized(&request)).await.unwrap()).await;
+    let expected = "First segment second segment complete";
+    assert!(browser.iter().any(|event| event["content"] == expected));
+    assert_eq!(captured.lock().unwrap().len(), 3);
+    let saved = graph
+        .load(&private_pipeline_session_id(&request))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.state.get("answer"), Some(&json!(expected)));
+    assert_eq!(saved.state.get("final_text"), Some(&json!(expected)));
+}
+
+fn limited_text_response(text: &str) -> Response<Body> {
+    let delta = json!({"choices":[{"delta":{"content":text},"finish_reason":null}]});
+    let end = json!({"choices":[{"delta":{},"finish_reason":"length"}]});
+    let wire = format!("data: {delta}\n\ndata: {end}\n\ndata: [DONE]\n\n");
+    test_model_gateway_response(Body::new(Full::<Bytes>::from(wire)))
+}
+
+#[tokio::test]
+async fn pipeline_continuation_exhaustion_keeps_downstream_state_unwritten() {
+    let mut request = pipeline_request();
+    request.payload.application["version_details"]["instructions"] = json!(
+        "state:\n  answer: str\n  final_text: str\n  messages: list\nentry_point: answer\nnodes:\n  - id: answer\n    type: llm\n    output: [answer, messages]\n    transition: finish\n  - id: finish\n    type: state_modifier\n    template: '{{ answer }}'\n    input: [answer]\n    output: [final_text]\n    transition: END\n"
+    );
+    let responses = ["a", "ab", "abc", "abcd", "abcde"]
+        .into_iter()
+        .map(|text| TestModelGatewayOutcome::Response(limited_text_response(text)))
+        .collect();
+    let ((platform, facade, _, _), captured) = pipeline_runtime_from_responses_with_capture(
+        VecDeque::from([runtime_response(
+            &json!({"schema_version":"elitea.runtime.elitea-client-token.v1","project_id":17,"token":"ephemeral-pipeline-token"}),
+        )]),
+        responses,
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(Mutex::new(vec![])),
+    );
+    let graph = Arc::new(MemoryCheckpointer::new());
+    let assembler = PipelineNativeAgentAssembler::with_state(
+        Arc::new(InMemorySessionService::new()),
+        graph.clone(),
+    )
+    .with_runtime_clients(platform, facade);
+    let (mut invocation, _, _) = assembler
+        .assemble(authorized(&request))
+        .await
+        .unwrap()
+        .start()
+        .unwrap();
+    let failure = loop {
+        match invocation.next_event().await {
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("incomplete node must fail"),
+            Err(error) => break error,
+        }
+    };
+    assert_eq!(
+        failure.upstream_code(),
+        Some("model.output_continuation_failed")
+    );
+    assert_eq!(captured.lock().unwrap().len(), 5);
+    if let Some(saved) = graph
+        .load(&private_pipeline_session_id(&request))
+        .await
+        .unwrap()
+    {
+        assert!(saved.state.get("answer").is_none_or(Value::is_null));
+        assert!(saved.state.get("final_text").is_none_or(Value::is_null));
+    }
+}

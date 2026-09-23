@@ -266,3 +266,10 @@ Nested confirmation and authorization replay regressions also pass.
 Fresh headed browser chat 641 verifies early completion, stable reload, and one completed child receipt with compaction disabled.
 The [continuation mapping](source-mapping/output-continuation-capacity-20260922.md#disabled-compaction-browser-acceptance) records the deployed worker and evidence.
 Gate 4 remains open.
+
+
+### Pipeline LLM-node output continuation
+
+The [continuation mapping](source-mapping/output-continuation-capacity-20260922.md#pipeline-llm-node-continuation) records the per-node wrapper and typed failure forwarding.
+All 420 PostgreSQL-enabled agent tests pass. Exhaustion leaves downstream graph output unwritten.
+Fresh deployed browser acceptance remains required. Gate 4 remains open.
