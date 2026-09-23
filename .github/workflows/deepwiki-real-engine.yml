@@ -114,12 +114,17 @@ jobs:
           driver-opts: image=ghcr.io/elitea-ng/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
 
       - name: Pre-pull the pinned Playwright container
-        # Bounded and NON-FATAL, for the reasons ci-web-e2e.yml's copies of this
-        # step spell out: the script's own `docker run` pulls the image inline if
-        # this fails, so a stalled pull costs the overlap and never the run.
+        # Bounded and NON-FATAL: a single attempt here is purely an overlap
+        # optimisation with the engine build below, not the last word on the
+        # image being present. This job delegates to chat-stream-e2e.sh
+        # (deepwiki-real-engine.sh -> chat-stream-e2e.sh), which waits for
+        # this pull's result and retries with a bounded backoff immediately
+        # before its `docker run` — what an unretried inline pull racing the
+        # registry does not get (the mcr.microsoft.com timeout that killed
+        # PR #1001's index-stream job).
         run: |
           timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble \
-            || echo "::warning::pull of the pinned Playwright image failed or timed out; the journey step will pull it inline"
+            || echo "::warning::pull of the pinned Playwright image failed or timed out; the journey step will retry it"
 
       - name: Build the engine image (bake, GHA layer cache)
         # `docker buildx bake elitea-deepwiki-engine` rather than a bare

@@ -291,9 +291,12 @@ jobs:
       - name: Pre-pull the pinned Playwright container (background)
         # Network-bound, so it overlaps the CPU-bound bake below. Started with
         # nohup and left running: the runner does not reap a step's background
-        # processes, and the test step's `docker run` pulls the image itself if
-        # this has not finished, so a slow or failed pull costs the overlap and
-        # never the run. Bounded so a stalled pull cannot outlive the job.
+        # processes. Fire-and-forget on purpose — nothing here waits on it or
+        # retries it; the "Playwright against the real stack" step below does
+        # that, immediately before the `docker run` that actually needs the
+        # image, which is the fix for the mcr.microsoft.com registry timeout
+        # that killed PR #1001's `index-stream` job (a single unretried pull
+        # with no wait for this background one to finish).
         run: |
           nohup timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble >/tmp/playwright-pull.log 2>&1 &
       - name: Build elitea-main:e2e, elitea-web:e2e and elitea-subapp-host:e2e
@@ -390,6 +393,11 @@ jobs:
         # leaving the browser on the runner's, which is the disagreement that
         # made journey 29 fail after midnight.
         run: |
+          # Wait for the background pre-pull, and retry with a bounded backoff
+          # if it failed or is still running: `image inspect` inside the
+          # script returns instantly once the background pull has won, so
+          # this only spends real time when it did not.
+          bash "${GITHUB_WORKSPACE}/scripts/ci/pull-third-party-images.sh" --image mcr.microsoft.com/playwright:v1.62.1-noble
           docker run --rm --network host \
             -v "$PWD":/work -w /work \
             -e CI=true \
@@ -560,9 +568,13 @@ jobs:
         run: npm ci
       - name: Pre-pull the pinned Playwright container (background)
         # Started with nohup and left running while the bake below uses the
-        # CPU: the runner does not reap a step's background processes, and
-        # compose / the test step pull inline if this has not finished, so a
-        # slow pull costs the overlap and never the run.
+        # CPU: the runner does not reap a step's background processes. This is
+        # fire-and-forget — nothing here waits on it. The script this job
+        # delegates to (chat-stream-e2e.sh / index-stream-e2e.sh) waits for it
+        # and retries with a bounded backoff immediately before the `docker
+        # run` that needs the image, so a slow or failed background pull
+        # costs only the overlap, never an unretried inline pull racing the
+        # registry (the mcr.microsoft.com timeout that killed PR #1001).
         run: |
           nohup bash -c 'timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble' >/tmp/prepull.log 2>&1 &
       - name: Build the stack images (shared cache)
@@ -700,9 +712,13 @@ jobs:
         run: npm ci
       - name: Pre-pull the pinned Playwright container (background)
         # Started with nohup and left running while the bake below uses the
-        # CPU: the runner does not reap a step's background processes, and
-        # compose / the test step pull inline if this has not finished, so a
-        # slow pull costs the overlap and never the run.
+        # CPU: the runner does not reap a step's background processes. This is
+        # fire-and-forget — nothing here waits on it. The script this job
+        # delegates to (chat-stream-e2e.sh / index-stream-e2e.sh) waits for it
+        # and retries with a bounded backoff immediately before the `docker
+        # run` that needs the image, so a slow or failed background pull
+        # costs only the overlap, never an unretried inline pull racing the
+        # registry (the mcr.microsoft.com timeout that killed PR #1001).
         run: |
           nohup bash -c 'timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble' >/tmp/prepull.log 2>&1 &
       - name: Build the stack images (shared cache)
@@ -856,9 +872,14 @@ jobs:
         run: npm ci
       - name: Pre-pull the pinned Playwright container and the model image (background)
         # Started with nohup and left running while the bake below uses the
-        # CPU: the runner does not reap a step's background processes, and
-        # compose / the test step pull inline if this has not finished, so a
-        # slow pull costs the overlap and never the run.
+        # CPU: the runner does not reap a step's background processes. This is
+        # fire-and-forget — nothing here waits on it. chat-stream-e2e.sh waits
+        # for the Playwright pull and retries with a bounded backoff
+        # immediately before the `docker run` that needs it, so a slow or
+        # failed background pull costs only the overlap, never an unretried
+        # inline pull racing the registry (the mcr.microsoft.com timeout that
+        # killed PR #1001). The model image has no such retry yet — compose
+        # still pulls it inline at `up` if this background pull loses.
         working-directory: ${{ github.workspace }}
         run: |
           nohup bash -c 'timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble ; timeout 900 docker compose -f deploy/docker-compose.standalone-full.yml --profile real-llm pull -q llm-real' >/tmp/prepull.log 2>&1 &
@@ -1115,9 +1136,13 @@ jobs:
         run: npm ci
       - name: Pre-pull the pinned Playwright container (background)
         # Started with nohup and left running while the bake below uses the
-        # CPU: the runner does not reap a step's background processes, and
-        # compose / the test step pull inline if this has not finished, so a
-        # slow pull costs the overlap and never the run.
+        # CPU: the runner does not reap a step's background processes. This is
+        # fire-and-forget — nothing here waits on it. The script this job
+        # delegates to (chat-stream-e2e.sh / index-stream-e2e.sh) waits for it
+        # and retries with a bounded backoff immediately before the `docker
+        # run` that needs the image, so a slow or failed background pull
+        # costs only the overlap, never an unretried inline pull racing the
+        # registry (the mcr.microsoft.com timeout that killed PR #1001).
         run: |
           nohup bash -c 'timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble' >/tmp/prepull.log 2>&1 &
       - name: Build the stack images (shared cache)
@@ -1184,9 +1209,13 @@ jobs:
         run: npm ci
       - name: Pre-pull the pinned Playwright container (background)
         # Started with nohup and left running while the bake below uses the
-        # CPU: the runner does not reap a step's background processes, and
-        # compose / the test step pull inline if this has not finished, so a
-        # slow pull costs the overlap and never the run.
+        # CPU: the runner does not reap a step's background processes. This is
+        # fire-and-forget — nothing here waits on it. The script this job
+        # delegates to (chat-stream-e2e.sh / index-stream-e2e.sh) waits for it
+        # and retries with a bounded backoff immediately before the `docker
+        # run` that needs the image, so a slow or failed background pull
+        # costs only the overlap, never an unretried inline pull racing the
+        # registry (the mcr.microsoft.com timeout that killed PR #1001).
         run: |
           nohup bash -c 'timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble' >/tmp/prepull.log 2>&1 &
       - name: Build the stack images (shared cache)
@@ -1296,12 +1325,15 @@ jobs:
         env:
           COMPOSE_BIN: docker compose
         run: |
-          # Bounded and non-fatal for the reason given on the `e2e` job's copy:
-          # the snapshot step's `docker run` pulls the image itself if this
-          # fails, so the optimisation can never cost the run.
+          # Bounded and non-fatal: a single attempt here is purely an overlap
+          # optimisation, not the last word on the image being present — the
+          # snapshot step below waits for this and retries with a bounded
+          # backoff before its `docker run`, which is what a bare inline pull
+          # racing the registry does not get (the mcr.microsoft.com timeout
+          # that killed PR #1001's index-stream job).
           (
             timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble \
-              || echo "::warning::background pull of the pinned Playwright image failed or timed out; the snapshot step will pull it inline"
+              || echo "::warning::background pull of the pinned Playwright image failed or timed out; the snapshot step will retry it"
           ) &
           pw_pull=$!
           # ONE COMMAND PER LINE, and not `up && seed` (issue #422).
@@ -1381,6 +1413,10 @@ jobs:
           # -e E2E_TZ: the browser must run in the same zone the seed anchored
           # its calendar-day fixtures in (issue #214). UTC on both sides by
           # default; see the `e2e` job's copy of this note.
+          #
+          # Wait for the earlier background pull, and retry with a bounded
+          # backoff if it failed or is still running — see that step's note.
+          bash "${GITHUB_WORKSPACE}/scripts/ci/pull-third-party-images.sh" --image mcr.microsoft.com/playwright:v1.62.1-noble
           docker run --rm --network host \
             -v "$PWD":/work -w /work \
             -e CI=1 -e E2E_REUSE_STACK=1 \
@@ -1517,9 +1553,13 @@ jobs:
         env:
           COMPOSE_BIN: docker compose
         run: |
+          # A single attempt here is purely an overlap optimisation, not the
+          # last word on the image being present — the seed step below waits
+          # for this and retries with a bounded backoff before its `docker
+          # run`, same as the `visual` job's identical step.
           (
             timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble \
-              || echo "::warning::background pull of the pinned Playwright image failed or timed out; the capture step will pull it inline"
+              || echo "::warning::background pull of the pinned Playwright image failed or timed out; the seed step will retry it"
           ) &
           pw_pull=$!
           # One command per line — see the `visual` job's identical note
@@ -1569,6 +1609,9 @@ jobs:
       # entry's route placeholder keeps resolving the way it always has.
       - name: Seed docs fixtures (pinned container, host network)
         run: |
+          # Wait for the earlier background pull, and retry with a bounded
+          # backoff if it failed or is still running.
+          bash "${GITHUB_WORKSPACE}/scripts/ci/pull-third-party-images.sh" --image mcr.microsoft.com/playwright:v1.62.1-noble
           docker run --rm --network host \
             -v "$PWD":/work -w /work \
             -e CI=true \

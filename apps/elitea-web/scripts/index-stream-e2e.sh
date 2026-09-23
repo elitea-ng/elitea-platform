@@ -122,6 +122,15 @@ REPEAT_ARGS=""
 # scans .github/workflows/, so a tag written here would escape the version gate.
 # shellcheck disable=SC2086 -- REPEAT_ARGS is deliberately word-split
 if [ -n "${PLAYWRIGHT_CONTAINER_IMAGE:-}" ]; then
+  # See chat-stream-e2e.sh's identical block: the workflow backgrounds a
+  # `docker pull` of this image earlier in the job but never waits on it or
+  # checks whether it won, so a stalled or failed pull would otherwise fall
+  # through to this `docker run` pulling inline once, unbounded and
+  # unretried — the failure mode behind PR #1001. This call waits: it returns
+  # instantly if the background pull already finished, and retries with a
+  # bounded backoff if it did not.
+  CONTAINER_BIN="${CONTAINER_BIN:-docker}" \
+    "${REPO_ROOT}/scripts/ci/pull-third-party-images.sh" --image "$PLAYWRIGHT_CONTAINER_IMAGE"
   "${CONTAINER_BIN:-docker}" run --rm --network host \
     -v "$WEB_DIR":/work -w /work \
     -e CI="${CI:-}" \
