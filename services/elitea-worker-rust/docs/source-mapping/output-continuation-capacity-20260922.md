@@ -498,3 +498,33 @@ first harness still searched the older `Thought for` control; this trace uses
 already preserves thinking-step display names. It now reads that existing field
 before falling back to the model name. No Main change or schema addition is needed.
 The two persisted-trace UI tests and TypeScript checking pass.
+
+### Partial-output browser acceptance
+
+Chat 640, execution `df3a8a2510712014fb722dba892d4581`, verifies the complete
+handoff with worker `d4cc90cc` / image
+`sha256:d4578aa5781d46f7e6336cccf40d55d4d537184c4e7c0bfb5b284744716a8317`
+and UI `06cbedca` / image
+`sha256:c877109a0372a7e73b46fca03d0cd6b7e8708a92cbf3286b59663cac299f29c0`.
+Fresh headed Playwright sends the request, observes the registered terminal error,
+and opens the live incomplete child step. The accepted 5,071-character text is
+identical when reopened through persisted `Execution details`. The live row title
+is separate presentation text and is excluded from content equality. The first
+combined harness flagged that title difference; a read-only browser follow-up
+compared the actual text successfully without another model invocation.
+The response contains no completion marker and the explicit failure stays visible.
+No browser runtime errors occurred. PostgreSQL confirms one child session and zero
+completed child-result receipts. Screenshots were inspected.
+
+Artifacts in the local temporary verification directory:
+`elitea-incomplete-result.json`, `elitea-incomplete-durable-proof.json`,
+`elitea-incomplete-partial-live.png`, `elitea-incomplete-partial-reloaded.png`.
+Earlier failed acceptance artifacts remain separately identified as chats 638/639.
+Final component coverage: 416 PostgreSQL-enabled agent tests, 143 execution tests,
+249 chat-message reducer tests, two persisted-trace UI tests, strict Clippy and UI
+TypeScript checking. No unrelated deferred HITL work was included.
+
+This accepts partial-output visibility for the bounded nested-child failure.
+It does not claim crash injection during partial-trace publication, live boundary
+repair, disabled-compaction child continuation, or bare pipeline-LLM continuation.
+Those boundaries remain separate from this browser acceptance.
