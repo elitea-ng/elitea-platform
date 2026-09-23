@@ -282,6 +282,16 @@ impl Seam {
                 event = "nested_output_anchor_mismatch",
                 anchor_bytes = self.anchor.len(),
                 incoming_bytes = self.pending.len(),
+                incoming_json_object = self.pending.trim_start().starts_with('{'),
+                incoming_quoted = self.pending.trim_start().starts_with('"'),
+                incoming_code_fence = self.pending.trim_start().starts_with("```"),
+                anchor_escape_newlines = self.anchor.matches(r"\n").count(),
+                incoming_literal_newlines = self.pending.matches('\n').count(),
+                first_difference = self
+                    .anchor
+                    .bytes()
+                    .zip(self.pending.bytes())
+                    .position(|(a, b)| a != b),
                 "The child continuation did not preserve its accepted boundary"
             );
             return Err(adk_rust::AdkError::new(

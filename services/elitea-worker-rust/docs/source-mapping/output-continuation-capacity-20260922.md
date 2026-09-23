@@ -671,3 +671,8 @@ Do not treat this run as structured continuation acceptance. The focused regress
 also uses literal JSON newline escapes and checks the decoded downstream answer; it passes.
 Further diagnosis must identify the rejected provider fragment shape without weakening
 exact boundary verification or claiming that increased call allowances solve the defect.
+
+Boundary diagnostics now record only response shape (object/quote/fence), escape/newline
+counts and first differing byte position. They do not log response text, anchors, or credentials.
+This is needed to distinguish provider formatting from an actual incorrect overlap in live
+structured continuation failures; existing byte-length-only events could not establish cause.
