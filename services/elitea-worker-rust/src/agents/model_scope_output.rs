@@ -91,6 +91,9 @@ pub(super) fn generate(
                     save_completion(&scope.output_completion, Some(prefix))?;
                 }
                 writer.checkpoint.set_output_continuation(None)?;
+                if state.is_some() && !has_tools && let Some(content) = terminal.content.take() {
+                    yield LlmResponse { content: Some(content), partial: true, ..LlmResponse::default() };
+                }
                 terminal.turn_complete = true;
                 terminal.partial = false;
                 yield terminal;

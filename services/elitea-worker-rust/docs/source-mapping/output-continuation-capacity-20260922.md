@@ -757,3 +757,13 @@ empty terminal event but leaves a nonempty terminal delta unchanged. The structu
 fragment buffer introduces a nonempty terminal delta, unlike the prior empty terminal
 frame. Verify terminal persistence and same-event-ID history handling with a focused
 regression before changing that boundary; this is not yet a proven fix.
+
+### Structured terminal receipt
+
+A focused scope test reproduces the persistence defect before the fix: the stream contains
+`{"answer":"First complete"}` but its durable receipt contains only ` complete"}`.
+`model_scope_output.rs` now emits final continuation content as a partial delta followed by
+an empty terminal frame. The existing `RunnerSessionService::durable_event` then enriches
+only the persisted terminal event from the joined completion snapshot. This restores the
+existing empty-terminal streaming contract, keeps live output unduplicated, and preserves
+provider finish/usage metadata on the terminal frame. The application schema is unchanged.

@@ -1591,3 +1591,52 @@ async fn child_without_compaction_continues_and_stops_after_first_complete_respo
             .is_none()
     );
 }
+
+#[tokio::test]
+async fn structured_continuation_terminal_receipt_contains_joined_answer() {
+    use adk_rust::FinishReason::{MaxTokens, Stop};
+    let storage = storage(ModelScopeBackend::Local(Arc::new(
+        InMemorySessionService::new(),
+    )));
+    let child = Context::child("structured-receipt");
+    let scope = checkpoint(&storage, Arc::new(Summary::default()));
+    let mut request = simple_request(&scope, &child).await;
+    request.config = Some(adk_rust::GenerateContentConfig {
+        response_schema: Some(
+            serde_json::json!({"type":"object","properties":{"answer":{"type":"string"}}}),
+        ),
+        ..Default::default()
+    });
+    let model = OutputModel::new(vec![
+        (r#"{"answer":"First"#, MaxTokens),
+        (r#"{"answer":"First complete"}"#, Stop),
+    ]);
+    let mut stream = output::generate(scope.clone(), model, request, true).unwrap();
+    let mut visible = String::new();
+    while let Some(response) = stream.next().await {
+        let response = response.unwrap();
+        if let Some(content) = &response.content {
+            for part in &content.parts {
+                if let adk_rust::Part::Text { text } = part {
+                    visible.push_str(text);
+                }
+            }
+        }
+        let mut event = Event::with_id("structured-turn", child.invocation_id());
+        event.author = child.agent_name().to_owned();
+        event.llm_response = response;
+        scope.append(&child, event).await.unwrap();
+    }
+    let saved = stored(&scope, &child).await;
+    let completed = scope
+        .completed_content(saved.as_ref(), child.agent_name())
+        .unwrap()
+        .unwrap();
+    let durable: String = completed
+        .parts
+        .iter()
+        .filter_map(adk_rust::Part::text)
+        .collect();
+    assert_eq!(visible, r#"{"answer":"First complete"}"#);
+    assert_eq!(durable, visible);
+}
