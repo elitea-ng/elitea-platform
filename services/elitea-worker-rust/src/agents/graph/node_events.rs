@@ -39,7 +39,7 @@ const MAX_EVENT_SCOPE_IDENTITY_BYTES: usize = 480;
 
 enum PipelineNodeEventSignal {
     Event(PipelineNodeEventData),
-    OutputContinuationFailed,
+    ModelFailed(&'static str),
 }
 
 struct PipelineNodeEventData {
@@ -143,10 +143,10 @@ pub(crate) fn pipeline_node_event_channel() -> (PipelineNodeEventSender, Pipelin
 }
 
 impl PipelineNodeEventSender {
-    /// Preserve the registered continuation failure across ADK graph error wrapping.
-    pub(crate) async fn send_output_continuation_failure(&self) -> adk_rust::Result<()> {
+    /// Preserve a data-free ADK code across graph wrapping; never forward its message or source.
+    pub(crate) async fn send_model_failure(&self, code: &'static str) -> adk_rust::Result<()> {
         self.inner
-            .send(PipelineNodeEventSignal::OutputContinuationFailed)
+            .send(PipelineNodeEventSignal::ModelFailed(code))
             .await
             .map_err(|_| pipeline_node_event_channel_error())
     }
@@ -370,8 +370,13 @@ fn pipeline_node_signal_event(
 ) -> adk_rust::Result<Event> {
     let signal = match signal {
         PipelineNodeEventSignal::Event(signal) => signal,
-        PipelineNodeEventSignal::OutputContinuationFailed => {
-            return Err(crate::agents::model_checkpoint::output::exhausted());
+        PipelineNodeEventSignal::ModelFailed(code) => {
+            return Err(AdkError::new(
+                ErrorComponent::Model,
+                ErrorCategory::Internal,
+                code,
+                "The pipeline model invocation failed.",
+            ));
         }
     };
     let mut event = *signal.event;
@@ -437,4 +442,32 @@ fn pipeline_node_event_channel_error() -> AdkError {
         "elitea_pipeline.node_event_channel_unavailable",
         "the pipeline node event channel is unavailable",
     )
+}
+
+#[cfg(test)]
+mod failure_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn model_failure_bridge_preserves_codes_without_provider_messages() {
+        for code in [
+            "context_budget_exceeded",
+            "model_gateway.rate_limited",
+            "model_gateway.provider_error",
+            "model.output_continuation_failed",
+            "unknown_static_code",
+        ] {
+            let (sender, receiver) = pipeline_node_event_channel();
+            sender
+                .send_model_failure(code)
+                .await
+                .expect("queued failure");
+            let mut channel = receiver.inner.lock().await.take().expect("receiver");
+            let signal = channel.recv().await.expect("failure signal");
+            let error = pipeline_node_signal_event(signal, "root", "agent", "")
+                .expect_err("failure must not become a successful graph event");
+            assert_eq!(error.code, code);
+            assert_eq!(error.message, "The pipeline model invocation failed.");
+        }
+    }
 }

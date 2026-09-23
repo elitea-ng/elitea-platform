@@ -1351,10 +1351,18 @@ async fn run_model_agent(
         binding.inherit_root_instructions,
     )?);
     tracing::Span::current().record("stage", "model_tool_loop");
-    let stream = agent
-        .run(invocation.clone())
-        .await
-        .map_err(|_| LlmExecutionError::Unavailable)?;
+    let stream = match agent.run(invocation.clone()).await {
+        Ok(stream) => stream,
+        Err(error) => {
+            if let Some(sender) = factory.event_sender() {
+                sender
+                    .send_model_failure(error.code)
+                    .await
+                    .map_err(|_| LlmExecutionError::Unavailable)?;
+            }
+            return Err(LlmExecutionError::Unavailable);
+        }
+    };
     tokio::pin!(stream);
     let mut events = Vec::new();
     let mut pending_prefix = None;
@@ -1363,11 +1371,9 @@ async fn run_model_agent(
         let mut event = match event {
             Ok(event) => event,
             Err(error) => {
-                if error.code == "model.output_continuation_failed"
-                    && let Some(sender) = factory.event_sender()
-                {
+                if let Some(sender) = factory.event_sender() {
                     sender
-                        .send_output_continuation_failure()
+                        .send_model_failure(error.code)
                         .await
                         .map_err(|_| LlmExecutionError::Unavailable)?;
                 }

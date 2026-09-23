@@ -137,7 +137,44 @@ to `src/execution/native_agent_lifecycle.rs` at the failed assembly boundary.
 its `Display` is safe for this log. No model/provider payload or source chain
 is formatted. This supplements the existing error code and execution span,
 without changing failure persistence, retryability, or authorization order.
-The 34 assembly-related component tests pass. Deployed proof is pending.
+The 34 assembly-related component tests and strict all-target Clippy pass.
+Commit `8cd212a0` was deployed as `elitea-worker-rust:assembly-reasons-20260923`
+(`3918796d6906`), retaining the previous environment and five mounts after the
+active-claim check passed.
+
+Fresh headed browser execution `ae540572b826d4b2ab86a9d4e0b2f06e` in chat 658
+verifies the warning and stable error reload, with zero browser runtime errors.
+The reason is `a pipeline LLM node references a tool outside its frozen scope`.
+The synthetic fixture had used `entity_type: pipeline` for its tool relation;
+the verified application/pipeline relation contract uses `entity_type: agent`.
+The fixture relation was corrected without changing production authorization or
+relaxing frozen-scope validation. This is diagnostic acceptance, not a model
+failure acceptance. Evidence:
+`/private/tmp/elitea-assembly-reasons-live-result.json` and
+`/private/tmp/elitea-assembly-reasons-live.log`.
+
+## Pipeline model failure propagation
+
+The corrected fixture reaches the model in execution
+`ca6c2c7eea7388d05ab8b5ff0444884e`, but ends as `INTERNAL`. Source inspection
+identified an independent propagation gap: `graph/llm.rs::run_pipeline_llm`
+replaced start/stream ADK errors with `LlmExecutionError::Unavailable` before
+the graph wrapper and lifecycle classifier could see their codes. Only
+`model.output_continuation_failed` had an explicit side-channel bridge.
+
+The existing invocation-owned channel in `graph/node_events.rs` now forwards
+the static ADK error code for both start and stream failures. It reconstructs
+a data-free error, with no provider message or source, for the outer lifecycle
+to classify. Known codes use the same canonical policy as ordinary agents;
+unknown codes still fail as Internal. The graph stops on the error; no retry,
+extra model call, or fabricated successful node output is introduced.
+
+The bridge regression covers context exhaustion, rate limiting, provider
+failure, continuation exhaustion, and an unknown static code. All 77 graph
+component tests pass. Deployed verification of the propagation change remains
+open. This is worker-owned error transport rather than a literal current-SDK
+port; the current platform's user-facing failure behavior remains the reference
+described at the start of this mapping.
 
 Source mapping: `src/execution/agent_preparation.rs::pre_invocation_terminal`
 consumes the existing `PreInvocationTerminalCause` produced by typed input
