@@ -140,3 +140,16 @@ Main's `runtimeFailurePolicy` enforces canonical messages for the current protoc
 A UI-only wording change cannot restore distinctions already lost upstream.
 The next contract slice must preserve safe reasons across worker, Main, persistence, replay, and UI.
 Raw provider text remains excluded from public messages.
+
+## Async source locations
+
+`src/diagnostics/failure.rs::capture_detail` now includes the target, file, and line for each active worker span.
+The implementation uses static tracing metadata. It never records span field values.
+The existing 8,192-byte, 32-span, and one-capture-per-second limits remain unchanged.
+Missing source metadata omits that location instead of inventing one.
+
+The async regression yields between parent and child spans, then verifies leaf-first ordering and both source locations.
+Secret sentinel fields remain absent. All four diagnostics tests, formatting, and strict library-and-test Clippy checks pass.
+This extends the current-platform traceback mapping above without exposing operator details to the browser.
+It does not reconstruct uninstrumented futures or relocate capture to the original dependency failure.
+Release-image verification of this metadata addition remains open.

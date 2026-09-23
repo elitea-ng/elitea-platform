@@ -182,3 +182,9 @@ The copied reference remains identical after reload. The browser reports no page
 The screenshot is inspected. The test uses no mocked requests and starts no additional model calls.
 Evidence files are `elitea-error-reference-browser.json` and `elitea-error-reference-browser.png` in the local test evidence directory.
 This verification uses the development UI. Container deployment is a separate acceptance step.
+
+The follow-up deploys UI revision `0e4557e4` as image `sha256:2303350b4a02b07d224816df6c539da0903886b187cc782783ebfaf9494d4f00`.
+Deployment preserves the existing environment, networks, and resource limits.
+Fresh headed Playwright verification passes on the deployed conversation 665, including clipboard contents and stable reload.
+There are no page errors or mocked requests. The deployed screenshot is inspected.
+Evidence files are `elitea-error-reference-deployed.json` and `elitea-error-reference-deployed.png` in the local test evidence directory.

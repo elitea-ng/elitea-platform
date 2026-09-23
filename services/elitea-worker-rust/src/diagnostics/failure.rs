@@ -50,7 +50,10 @@ fn admit(next: &AtomicU64, seconds: u64) -> bool {
 
 fn capture_detail() -> String {
     let mut output = BoundedText(String::with_capacity(MAX_BYTES));
-    let _ignored = writeln!(output, "async scope (names only, leaf first):");
+    let _ignored = writeln!(
+        output,
+        "async scope (source locations, leaf first; fields omitted):"
+    );
     tracing::Span::current().with_subscriber(|(id, dispatch)| {
         let Some(registry) = dispatch.downcast_ref::<tracing_subscriber::Registry>() else {
             return;
@@ -61,7 +64,14 @@ fn capture_detail() -> String {
         for span in span.scope().take(MAX_SPANS) {
             let metadata = span.metadata();
             if metadata.target().starts_with("elitea_worker_rust") {
-                let _ignored = writeln!(output, "{}", metadata.name());
+                let _ignored = writeln!(output, "{} [{}]", metadata.name(), metadata.target());
+                if let Some(file) = metadata.file() {
+                    let _ignored = write!(output, "    at {file}");
+                    if let Some(line) = metadata.line() {
+                        let _ignored = write!(output, ":{line}");
+                    }
+                    let _ignored = writeln!(output);
+                }
             }
         }
     });
@@ -132,10 +142,18 @@ mod tests {
         }
         .instrument(parent)
         .await;
-        assert!(
-            output.contains("diagnostic_child\ndiagnostic_parent"),
-            "{output}"
-        );
+        let child = output.find("diagnostic_child [").unwrap();
+        let parent = output.find("diagnostic_parent [").unwrap();
+        assert!(child < parent, "{output}");
+        let async_scope = output.split("synchronous stack:").next().unwrap();
+        assert_eq!(async_scope.matches(file!()).count(), 2, "{output}");
+        for frame in async_scope
+            .lines()
+            .filter(|line| line.starts_with("    at "))
+        {
+            let (_, line) = frame.rsplit_once(':').unwrap();
+            assert!(line.parse::<u32>().unwrap() > 0, "{frame}");
+        }
         assert!(output.contains("synchronous stack:"));
         assert!(!output.contains("SECRET_PROMPT"));
         assert!(!output.contains("SECRET_TOKEN"));

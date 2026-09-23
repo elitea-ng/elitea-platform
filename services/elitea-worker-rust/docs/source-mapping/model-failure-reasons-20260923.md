@@ -71,7 +71,8 @@ Rust verifies canonical replay and rejects injected messages.
 Main tests cross the output handler, preserve reason and retryability, and reject unregistered text.
 Taxonomy tests cover known gateway categories and retain the unknown-error fallback.
 
-Main and worker deployment is complete (rehearsal images below). New-category browser acceptance and a copyable UI correlation control remain open.
+Main and worker deployment is complete (rehearsal images below). New-category browser acceptance remains open.
+The [public error reference](continuation-diagnostics-20260923.md#public-error-reference) passes deployed browser clipboard and reload checks.
 Existing generic configuration and non-model failures still require further classification.
 This slice does not complete OBS-RUST-01 or Gate 4.
 
