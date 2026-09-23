@@ -300,3 +300,27 @@ Tests cover repeated request construction and preservation of compacted history.
 The correction requires deployed browser verification before acceptance.
 
 The request-history correction passes 407 agent tests with PostgreSQL enabled, strict all-target Clippy, and formatting checks. The two focused history tests pass. Browser acceptance remains pending.
+
+## Continuation parity audit, 2026-09-23
+
+Current SDK reference `elitea_sdk/runtime/tools/llm.py::_continue_nested_output` uses four automatic continuation rounds, one bounded retry for an invalid join, and explicit word-target/sentence-boundary completion. It never increases the caller's configured output allowance. Each request carries original messages, the accepted answer, and one latest continuation instruction. Provider errors, no progress, invalid joins, and exhausted attempts raise `OutputContinuationExhausted` with partial output.
+
+Current UI reference `src/[fsd]/features/chat/lib/helpers/continuationError.helpers.js::normalizeContinuationError` recognizes `output_continuation_exhausted`, preserves partial output, and provides an explicit incomplete-response message.
+
+The Rust request-history correction does not complete this parity requirement. Remaining checks and implementation are:
+
+- Resolve the automatic-round policy explicitly: the candidate currently follows admitted model-step capacity rather than the SDK's separate four-round bound.
+- Preserve the configured output cap, constrain the prompt to the remaining original task, and verify completion without repeated or expanded content.
+- Add bounded invalid-boundary repair without accepting or persisting an unverified suffix.
+- Project continuation exhaustion and no progress as an explicit incomplete-response result with accepted partial output, rather than the generic runtime error.
+- Prove the nested answer and completion receipt after normal execution and worker restart through a fresh browser.
+
+These are open requirements; component test success is not continuation acceptance.
+
+Commit `645ae550` is deployed as worker image `sha256:ea21cb72ececf63c2192869ffe21107bd4cde00368776267fa90a49d40c5d649`. Deployment preserves the existing environment, five mounts, networks, and resource limits. Fresh headed-browser chat 631 exercises the same 512-token child and 120-record request. Execution `ed3c901ec0f75142aba1234e8769f6f0` passes the headed-browser check: all 120 records appear once, the ending marker appears once, no terminal failure occurs, and reload preserves the rendered answer. PostgreSQL contains one completed child receipt with all 120 records and one marker. The parent adds an introductory sentence; its complete response is therefore not byte-identical to the child result. The child report itself is intact. The rendered final screenshot was inspected. Worker-restart verification remains open.
+
+### Worker loss during output continuation
+
+Fresh headed-browser chat 632, execution `f17862e94cbd79e0ca7db48a8ce2b900`, confirms output continuation round two in PostgreSQL before killing the rehearsal worker with SIGKILL and starting it again. The original browser session receives the recovered final answer: records 001–120 occur once in order, the ending marker occurs once, there are no browser errors or terminal execution failures, and reload preserves the rendered result. The final screenshot was inspected. PostgreSQL contains one completed child receipt with all 120 records and one marker. The parent adds an introductory sentence here too; the child report remains intact.
+
+This proves recovery after a persisted continuation boundary for this nested-agent fixture. It does not prove recovery from every provider-stream position or close the remaining continuation parity items above. No database schema change was required.
