@@ -47,3 +47,13 @@ The failed child does not create a completed model receipt.
 The parent can persist the error tool result through its existing checkpoint flow.
 Direct root continuation failure still uses the terminal failure contract.
 Other child failure categories and graph propagation require separate classification and acceptance.
+
+## Pipeline boundary clarification
+
+An LLM orchestrator can reason about failed child output.
+A direct graph Agent node cannot treat that output as valid downstream state.
+The invocation-owned pipeline application marker distinguishes these callers.
+A marked Agent node retains the typed fatal continuation signal and stops the graph.
+The existing direct LLM-node path also stops on continuation exhaustion.
+The focused suite includes downstream-state protection and the new Agent-node classification.
+Pipeline-as-child propagation remains a separate verification item.

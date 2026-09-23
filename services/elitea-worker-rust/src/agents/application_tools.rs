@@ -2263,6 +2263,7 @@ impl ApplicationAgentTool {
         child_context: Arc<ApplicationToolInvocationContext>,
     ) -> adk_rust::Result<Value> {
         let child_branch = child_context.branch().to_owned();
+        let pipeline_node = pipeline_application_container(ctx, self.name())?;
         let mut stream = agent.run(child_context.clone()).await?;
         let mut final_response = None;
         let mut last_text = None;
@@ -2271,7 +2272,9 @@ impl ApplicationAgentTool {
             let mut event = match result {
                 Ok(event) => event,
                 Err(error) => {
-                    if let Some(report) = child_continuation_report(&error, last_text.take()) {
+                    if let Some(report) =
+                        child_continuation_report(&error, last_text.take(), pipeline_node)
+                    {
                         tracing::error!(
                             event = "nested_application_failed",
                             application_id = self.identity.0,
@@ -2287,8 +2290,16 @@ impl ApplicationAgentTool {
                         );
                         return Ok(report);
                     }
-                    self.send_fatal(ApplicationEventFailure::ChildExecution)
-                        .await?;
+                    let failure = if error.code == "model.output_continuation_failed" {
+                        ApplicationEventFailure::OutputContinuation(
+                            super::model_checkpoint::output::failure_reason(&error).unwrap_or(
+                                super::model_checkpoint::output::ContinuationFailure::ChildFailure,
+                            ),
+                        )
+                    } else {
+                        ApplicationEventFailure::ChildExecution
+                    };
+                    self.send_fatal(failure).await?;
                     return Err(error);
                 }
             };
@@ -2419,8 +2430,12 @@ impl ApplicationAgentTool {
 
 /// A child-local output failure is data for the parent, not a root failure.
 /// Other errors keep their existing terminal/control handling.
-fn child_continuation_report(error: &AdkError, partial: Option<String>) -> Option<Value> {
-    if error.code != "model.output_continuation_failed" {
+fn child_continuation_report(
+    error: &AdkError,
+    partial: Option<String>,
+    pipeline_node: bool,
+) -> Option<Value> {
+    if pipeline_node || error.code != "model.output_continuation_failed" {
         return None;
     }
     let message = super::model_checkpoint::output::failure_reason(error)
@@ -3428,7 +3443,8 @@ mod tests {
         let error = crate::agents::model_checkpoint::output::failed(
             crate::agents::model_checkpoint::output::ContinuationFailure::CallLimit,
         );
-        let report = child_continuation_report(&error, Some("accepted prefix".into())).unwrap();
+        let report =
+            child_continuation_report(&error, Some("accepted prefix".into()), false).unwrap();
         assert!(report.get("response").is_none());
         assert!(report["error"].is_string());
         assert_eq!(report["failure"]["retryable"], false);
@@ -3436,6 +3452,14 @@ mod tests {
         assert_eq!(report["failure"]["partial_output"], "accepted prefix");
         assert_eq!(report["failure"]["partial_output_available"], true);
         assert_eq!(report["failure"]["code"], "OUTPUT_CONTINUATION_EXHAUSTED");
+    }
+
+    #[test]
+    fn pipeline_agent_node_continuation_failure_cannot_become_tool_data() {
+        let error = crate::agents::model_checkpoint::output::failed(
+            crate::agents::model_checkpoint::output::ContinuationFailure::CallLimit,
+        );
+        assert!(child_continuation_report(&error, Some("incomplete".into()), true).is_none());
     }
 
     #[test]
@@ -3452,7 +3476,7 @@ mod tests {
                 code,
                 "PRIVATE_PROVIDER_BODY",
             );
-            assert!(child_continuation_report(&error, None).is_none());
+            assert!(child_continuation_report(&error, None, false).is_none());
         }
         let error = AdkError::new(
             ErrorComponent::Model,
@@ -3460,7 +3484,7 @@ mod tests {
             "model.output_continuation_failed",
             "PRIVATE_PROVIDER_BODY",
         );
-        let report = child_continuation_report(&error, None).unwrap();
+        let report = child_continuation_report(&error, None, false).unwrap();
         assert!(!report.to_string().contains("PRIVATE_PROVIDER_BODY"));
         assert_eq!(report["failure"]["partial_output_available"], false);
     }
