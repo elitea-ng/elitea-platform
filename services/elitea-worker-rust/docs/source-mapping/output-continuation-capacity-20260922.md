@@ -707,3 +707,13 @@ bytes arrived; it was corrected to assert rejection at end of stream.
 
 All 422 PostgreSQL-backed agent regressions and strict all-target Clippy pass for the
 fenced-fragment change. Deployed browser retesting remains required.
+
+Browser follow-up for `58ccb6f1`, image
+`sha256:e07d90ef8d3eee06c6c5844a573d633ccc58893fc48572fc8d749313124fc086`:
+chat 647, execution `336893d16fa3e3a019a44c9325d92886`, still fails the exact
+boundary check. After envelope normalization both incoming fragments start with a JSON
+object, not a code fence, and differ at byte zero. Requests have distinct measured input
+sizes (281, 800, 859 tokens), ruling out an unchanged continuation request at that boundary.
+The fix removes the observed envelope but does not yet establish successful continuation;
+the model restarts an object. Inspect the retained ADK schema instruction versus the fragment
+contract before changing overlap acceptance. Browser acceptance remains open.
