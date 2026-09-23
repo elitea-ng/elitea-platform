@@ -387,18 +387,24 @@ services:
     restart: "no"
 
   rustfs:
-    image: docker.io/rustfs/rustfs:latest
+    image: docker.io/rustfs/rustfs:1.0.0
     environment:
       RUSTFS_ACCESS_KEY: elitea
       RUSTFS_SECRET_KEY: elitea-dev-secret
     volumes:
       - standalone_rustfs_data:/data
     healthcheck:
-      # Neither this image nor its dependents ship curl — only wget — and wget's
-      # exit code does not distinguish "reachable but 403" from "refused". Treat
-      # a captured "server returned error" as reachable. Kept in sync with the
-      # identical block in docker-compose.e2e-standalone.yml.
-      test: ["CMD-SHELL", "out=$$(wget -q -O /dev/null http://127.0.0.1:9000/ 2>&1); [ $$? -eq 0 ] || echo \"$$out\" | grep -q 'server returned error'"]
+      # `/` answers 403 as soon as the HTTP listener is up, WELL before the
+      # storage layer has formed quorum — that gap is exactly what made
+      # rustfs-bucket-init fail with "waiting for storage_quorum" even though
+      # this healthcheck already reported healthy (measured locally: `/` goes
+      # 503→403 about half a second before `/minio/health/cluster` goes
+      # 503→200). `/minio/health/cluster` (MinIO-compatible; this image has no
+      # curl, only wget) stays 503 until quorum is ready and only then answers
+      # 200, so a plain wget exit code is a true readiness signal — no need
+      # for the old "reachable but 403 counts" workaround. Kept in sync with
+      # the identical block in docker-compose.e2e-standalone.yml.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9000/minio/health/cluster"]
       interval: 2s
       timeout: 3s
       retries: 15
@@ -408,7 +414,16 @@ services:
     entrypoint: ["sh", "-c"]
     command:
       - |
-        mc alias set rustfs http://rustfs:9000 elitea elitea-dev-secret &&
+        i=0
+        until mc alias set rustfs http://rustfs:9000 elitea elitea-dev-secret; do
+          i=$((i + 1))
+          if [ "$i" -ge 30 ]; then
+            echo "rustfs alias set still failing after 30 attempts (60s) — giving up" >&2
+            exit 1
+          fi
+          echo "rustfs not ready yet (attempt $i/30), retrying in 2s..." >&2
+          sleep 2
+        done &&
         mc mb --ignore-existing rustfs/elitea-artifacts
     depends_on:
       rustfs:
