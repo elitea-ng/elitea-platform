@@ -11,6 +11,8 @@ pub(in crate::agents) struct OutputContinuation {
     pub round: u32,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub repair_used: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub structured_output: bool,
 }
 
 impl OutputContinuation {
@@ -158,6 +160,7 @@ mod tests {
                 prefix: "accepted ".repeat(round as usize),
                 round,
                 repair_used: false,
+                structured_output: false,
             };
             request = state.request(request, "accepted ".into());
             assert_eq!(request.contents.len(), 3);
@@ -176,6 +179,7 @@ mod tests {
             prefix: "old output".into(),
             round: 1,
             repair_used: false,
+            structured_output: false,
         };
         let mut request = first.request(request(), "old output".into());
         request.contents.remove(1);
@@ -184,6 +188,7 @@ mod tests {
             prefix: "old output new output".into(),
             round: 2,
             repair_used: false,
+            structured_output: false,
         };
         let request = next.request(request, " new output".into());
         assert_eq!(request.contents.len(), 3);

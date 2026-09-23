@@ -16,19 +16,8 @@ pub(super) fn generate(
     mut request: LlmRequest,
     stream: bool,
 ) -> adk_rust::Result<LlmResponseStream> {
+    let (saved, structured_output) = restore_output(&scope, &request)?;
     let writer = scope.writer.get().ok_or_else(invalid_scope)?;
-    let saved = writer.checkpoint.output_continuation()?;
-    save_completion(&scope.output_completion, None)?;
-    save_completion(
-        &scope.output_partial,
-        saved.as_ref().map(|state| state.prefix.clone()),
-    )?;
-    if saved
-        .as_ref()
-        .is_some_and(|state| state.round > MAX_OUTPUT_CONTINUATION_CALLS)
-    {
-        return Err(exhausted());
-    }
     let inner = writer.checkpoint.delegation_model(inner);
     Ok(Box::pin(async_stream::try_stream! {
         let writer = scope.writer.get().ok_or_else(invalid_scope)?;
@@ -45,7 +34,12 @@ pub(super) fn generate(
             let mut terminal = None;
             let mut has_tools = false;
             let mut invalid_boundary = false;
-            let mut responses = inner.generate_content(request.clone(), stream).await?;
+            let responses = inner.generate_content(request.clone(), stream).await?;
+            let mut responses = if structured_output && state.is_some() {
+                structured_fragments(responses)
+            } else {
+                responses
+            };
             while let Some(response) = responses.next().await {
                 let mut response = response?;
                 if response.error_code.is_some() || response.error_message.is_some() || response.interrupted {
@@ -108,7 +102,7 @@ pub(super) fn generate(
             let round = state.as_ref().map_or(1, |state| state.round.saturating_add(1));
             if round > MAX_OUTPUT_CONTINUATION_CALLS { Err(exhausted())?; }
             let next = OutputContinuation {
-                prefix: prefix.clone(), round,
+                prefix: prefix.clone(), round, structured_output,
                 repair_used: state.as_ref().is_some_and(|state| state.repair_used),
             };
             request = prepare_next(&scope, request, segment, &next).await?;
@@ -119,6 +113,76 @@ pub(super) fn generate(
             yield terminal;
         }
     }))
+}
+
+fn restore_output(
+    scope: &ScopedModelCheckpoint,
+    request: &LlmRequest,
+) -> adk_rust::Result<(Option<OutputContinuation>, bool)> {
+    let writer = scope.writer.get().ok_or_else(invalid_scope)?;
+    let saved = writer.checkpoint.output_continuation()?;
+    let structured_output = saved.as_ref().is_some_and(|state| state.structured_output)
+        || request
+            .config
+            .as_ref()
+            .is_some_and(|config| config.response_schema.is_some());
+    save_completion(&scope.output_completion, None)?;
+    save_completion(
+        &scope.output_partial,
+        saved.as_ref().map(|state| state.prefix.clone()),
+    )?;
+    if saved
+        .as_ref()
+        .is_some_and(|state| state.round > MAX_OUTPUT_CONTINUATION_CALLS)
+    {
+        return Err(exhausted());
+    }
+    Ok((saved, structured_output))
+}
+
+// Buffer only a structured continuation call, under the existing byte bound.
+// No unverified fragment or Markdown envelope is released to graph consumers.
+fn structured_fragments(mut responses: LlmResponseStream) -> LlmResponseStream {
+    Box::pin(async_stream::try_stream! {
+        let mut text = String::new();
+        while let Some(response) = responses.next().await {
+            let mut response = response?;
+            if response.error_code.is_some() || response.error_message.is_some() || response.interrupted {
+                yield response;
+                return;
+            }
+            if let Some(content) = &mut response.content {
+                for part in &mut content.parts {
+                    if let Part::Text { text: fragment } = part {
+                        extend(&mut text, fragment)?;
+                        fragment.clear();
+                    }
+                }
+            }
+            if response.turn_complete || response.finish_reason.is_some() {
+                let fragment = strip_fragment_fence(&text);
+                response.content.get_or_insert_with(|| Content::new("model"))
+                    .parts.push(Part::Text { text: fragment.to_owned() });
+                yield response;
+                return;
+            }
+            yield response;
+        }
+        Err(exhausted())?;
+    })
+}
+
+fn strip_fragment_fence(text: &str) -> &str {
+    let Some(body) = text
+        .strip_prefix("```json\n")
+        .or_else(|| text.strip_prefix("```\n"))
+    else {
+        return text;
+    };
+    // The closing fence may be absent when this call also hit its output cap.
+    body.strip_suffix("\n```\n")
+        .or_else(|| body.strip_suffix("\n```"))
+        .unwrap_or(body)
 }
 
 fn rewrite_content(
@@ -165,6 +229,7 @@ async fn prepare_repair(
         prefix: previous.prefix.clone(),
         round,
         repair_used: true,
+        structured_output: previous.structured_output,
     };
     let prepared = prepare_next(scope, request, String::new(), &next).await?;
     tracing::info!(
@@ -359,6 +424,21 @@ fn save_completion(target: &Mutex<Option<String>>, text: Option<String>) -> adk_
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_fragment_envelope_preserves_exact_content_and_rejects_prose() {
+        let fragment = r#"boundary\nnext"}"#;
+        assert_eq!(
+            strip_fragment_fence(&format!("```json\n{fragment}\n```\n")),
+            fragment
+        );
+        assert_eq!(strip_fragment_fence(&format!("```\n{fragment}")), fragment);
+        let prose = format!("Here is the JSON:\n```json\n{fragment}\n```");
+        assert_eq!(strip_fragment_fence(&prose), prose);
+        let mut seam = Seam::new("different boundary".into());
+        let _ = seam.accept(strip_fragment_fence(&format!("```json\n{fragment}\n```")));
+        assert!(seam.finish().is_err());
+    }
 
     #[test]
     fn seam_accepts_unicode_tail_split_across_chunks() {

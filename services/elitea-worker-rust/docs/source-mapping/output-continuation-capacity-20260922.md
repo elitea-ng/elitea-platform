@@ -686,3 +686,24 @@ the first mismatch, despite the fragment instruction forbidding fences. It does 
 that the text inside the fences has a valid overlap. The next fix must remove only the known
 wrapper for structured continuation, preserve exact interior bytes, and still validate overlap
 and the final joined schema. No acceptance is claimed for this run.
+
+### Fenced structured fragments
+
+`agents/model_scope_output.rs` buffers only structured continuation responses under the
+existing output byte bound, removes an exact leading Markdown JSON or unlabeled fence
+(and its closing fence when present), then performs the unchanged exact overlap check.
+Interior bytes are not decoded, trimmed, rewritten, or heuristically searched. Prose before
+a fence remains invalid. A missing closing fence is allowed for output-limited fragments;
+ADK still validates the final joined JSON before graph state updates. This normalization
+belongs to continuation, not the provider adapter or ordinary response rendering.
+
+`model_checkpoint/output.rs` persists a defaulted `structured_output` flag with continuation
+state, including repair attempts, so a replacement worker retains the normalization mode.
+Older checkpoint JSON remains readable. No database or wire schema changes are required.
+The structured pipeline regression includes a truncated fenced fragment and a closed fenced
+final fragment with escaped newlines. A negative regression retains rejection of a wrong
+interior overlap and prose wrappers. The first negative assertion checked before enough
+bytes arrived; it was corrected to assert rejection at end of stream.
+
+All 422 PostgreSQL-backed agent regressions and strict all-target Clippy pass for the
+fenced-fragment change. Deployed browser retesting remains required.
