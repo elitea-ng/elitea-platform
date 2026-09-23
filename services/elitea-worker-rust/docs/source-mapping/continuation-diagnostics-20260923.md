@@ -66,7 +66,7 @@ Use the execution boundary, not the application type name, to select behavior.
 | --- | --- | --- | --- |
 | Chat orchestrator | Agent child continuation | Return a failed tool report; let the parent decide | Local tests and deployed browser acceptance pass |
 | Direct pipeline | LLM node continuation | Stop before downstream state is written | Existing focused graph test passes |
-| Direct pipeline | Agent node calling an Agent application | Stop with the typed failure | Caller classification test passes; live graph acceptance remains |
+| Direct pipeline | Agent node calling an Agent application | Stop with the typed failure | Local classification and deployed graph acceptance pass |
 | Pipeline | Nested pipeline | Propagate failure; do not release partial state as success | Open |
 | Pipeline Agent node | Pipeline application | Propagate failure to the owning graph | Open |
 | Chat orchestrator | Pipeline child | Stop the child graph; report its contained failure to the parent | Open |
@@ -94,4 +94,30 @@ The event includes application, version, invocation, tool-call identity, and the
 The full PostgreSQL-enabled worker suite passes 1,212 tests before the pipeline-boundary refinement.
 The refinement passes 31 focused continuation tests and strict all-target Clippy.
 The refinement includes the direct Agent-node failure classifier and existing downstream graph-state checks.
-Live direct Agent-node and wider nested-pipeline acceptance remain open.
+The later direct Agent-node acceptance appears below. Wider nested-pipeline acceptance remains open.
+
+## Direct pipeline Agent-node acceptance
+
+Fresh headed-browser chat 663 runs a pipeline Agent node bound to the capped Agent application.
+Execution 50d5318156ddd7c45c073ec3e69aee95 stops with OUTPUT_CONTINUATION_EXHAUSTED.
+The friendly error persists after reload. No browser error occurs.
+PostgreSQL contains only the initial graph checkpoint at step zero, with delegate pending.
+The answer and final_text fields remain empty. The downstream finish node does not run.
+Local evidence: elitea-pipeline-agent-failure-live.json and elitea-pipeline-agent-failure-live.png.
+
+Direct-tool rejection tests also pass.
+Reject and block_with_comment do not execute the protected call.
+Authorization Skip reaches END with the pipeline-stopped explanation.
+These are component tests, not new browser acceptance of authorization controls.
+
+## Nested pipeline verification follow-up
+
+Conversation 665 exposes a child checkpoint scope mismatch before the child model starts.
+See [checkpoint scope mapping](nested-pipeline-checkpoint-scope-20260923.md) for the correction and verification status.
+
+Fresh headed-browser conversation 666 checks an ordinary orchestrator calling an LLM-only pipeline.
+The parent remains active and reports a child failure.
+The report contains only a generic LLM-node explanation.
+The expected continuation-specific reason is absent, so diagnostic acceptance fails.
+The screenshot is `elitea-orchestrator-pipeline-failure-failed.png` in the local test evidence directory.
+Do not count parent survival alone as complete error-contract verification.
