@@ -37,7 +37,7 @@ use super::llm::{
     LLM_TOOL_RESUME_STATE_KEY, LlmNode, LlmNodeDefinition, LlmToolkitSelection,
     PipelineLlmAgentFactory,
 };
-use super::node_events::PIPELINE_NODE_EVENT_SCOPE_STATE_KEY;
+use super::node_events::{PIPELINE_NODE_EVENT_SCOPE_STATE_KEY, PipelineNodeEventSender};
 use super::printer::{
     PrinterInputMapping, PrinterNode, PrinterNodeDefinition, PrinterPauseCatalog, PrinterResetNode,
 };
@@ -226,12 +226,18 @@ pub(crate) struct PipelineDefinition {
 /// Invocation-owned dependencies for executable pipeline node families.
 #[derive(Clone, Default)]
 pub(crate) struct PipelineNodeRuntimes {
+    events: Option<PipelineNodeEventSender>,
     llm: Option<Arc<dyn PipelineLlmAgentFactory>>,
     direct_tool: Option<Arc<dyn PipelineDirectToolResolver>>,
     application: Option<Arc<dyn PipelineApplicationResolver>>,
 }
 
 impl PipelineNodeRuntimes {
+    pub(crate) fn with_events(mut self, events: PipelineNodeEventSender) -> Self {
+        self.events = Some(events);
+        self
+    }
+
     #[must_use]
     pub(crate) const fn new(
         llm: Option<Arc<dyn PipelineLlmAgentFactory>>,
@@ -242,6 +248,7 @@ impl PipelineNodeRuntimes {
             llm,
             direct_tool,
             application,
+            events: None,
         }
     }
 }
@@ -881,11 +888,10 @@ impl PipelineDefinition {
                 };
                 let transition = node.transition().map(ToOwned::to_owned);
                 let node_id = node.id().to_owned();
-                let mut next = builder.node(DirectToolNode::new(
-                    node.clone(),
-                    self.state.clone(),
-                    resolver,
-                ));
+                let mut next = builder.node(
+                    DirectToolNode::new(node.clone(), self.state.clone(), resolver)
+                        .with_events(runtimes.events.clone()),
+                );
                 if let Some(transition) = transition {
                     let target = if transition == "END" {
                         END

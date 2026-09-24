@@ -1192,3 +1192,76 @@ async fn direct_tool_argument_limit_reports_input_stage_without_invoking_tool() 
     assert!(!error.contains("private"));
     assert_eq!(capture.lock().expect("capture").calls, 0);
 }
+
+#[tokio::test]
+async fn invalid_direct_result_reaches_runner_as_typed_pipeline_failure() {
+    use super::node_events::{PipelineNodeEventStreamingAgent, pipeline_node_event_channel};
+    let definition = PipelineDefinition::from_yaml(
+        r"
+state:
+  report: {type: dict, value: {}}
+entry_point: lookup
+nodes:
+  - id: lookup
+    type: toolkit
+    toolkit_name: Customer Support
+    tool: search_records
+    output: [report]
+    structured_output: true
+    transition: END
+",
+    )
+    .expect("pipeline");
+    let (resolver, capture) =
+        fixture_runtime(json!({"private_provider_body": "do-not-publish"}), true);
+    let (sender, receiver) = pipeline_node_event_channel();
+    let graph = definition
+        .compile_with_runtime(
+            "typed-tool-failure",
+            Arc::new(MemoryCheckpointer::new()),
+            None,
+            &PipelineNodeRuntimes::new(None, Some(resolver), None).with_events(sender),
+        )
+        .expect("graph");
+    let sessions = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: "elitea".into(),
+            user_id: "user-1".into(),
+            session_id: Some("typed-tool-failure-thread".into()),
+            state: HashMap::new(),
+        })
+        .await
+        .expect("session");
+    let agent =
+        PipelineNodeEventStreamingAgent::new(Arc::new(EliteaGraphAgent::new(graph)), receiver);
+    let runner = Runner::builder()
+        .app_name("elitea")
+        .agent(Arc::new(agent))
+        .session_service(sessions)
+        .build()
+        .expect("runner");
+    let mut running = NativeAgentInvocation::new(
+        runner,
+        UserId::new("user-1").unwrap(),
+        SessionId::new("typed-tool-failure-thread").unwrap(),
+        Content::new("user").with_text("lookup"),
+    )
+    .start()
+    .expect("invocation");
+    let error = loop {
+        match running.next_event().await {
+            Err(error) => break error,
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("invalid result cannot complete the pipeline"),
+        }
+    };
+    assert_eq!(error.upstream_code(), Some("pipeline.result_invalid"));
+    let kind = crate::protocol::output::model_failure(error.upstream_code());
+    assert_eq!(
+        kind,
+        crate::protocol::output::RuntimeFailureKind::PipelineResultInvalid
+    );
+    assert!(!kind.safe_message().contains("do-not-publish"));
+    assert_eq!(capture.lock().expect("capture").calls, 1);
+}

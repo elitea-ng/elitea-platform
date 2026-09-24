@@ -3544,6 +3544,18 @@ mod tests {
                 "revise_task",
             ),
             (
+                "pipeline.input_limit",
+                "PIPELINE_INPUT_LIMIT",
+                false,
+                "revise_task",
+            ),
+            (
+                "pipeline.result_invalid",
+                "PIPELINE_RESULT_INVALID",
+                false,
+                "revise_task",
+            ),
+            (
                 "anthropic_gateway.provider_error",
                 "MODEL_PROVIDER_FAILURE",
                 true,

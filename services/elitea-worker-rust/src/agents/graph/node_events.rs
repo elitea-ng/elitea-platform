@@ -39,6 +39,9 @@ const MAX_EVENT_SCOPE_IDENTITY_BYTES: usize = 480;
 
 enum PipelineNodeEventSignal {
     Event(PipelineNodeEventData),
+    DirectToolFailed {
+        code: &'static str,
+    },
     ModelFailed {
         code: &'static str,
         continuation: Option<super::super::model_checkpoint::output::ContinuationFailure>,
@@ -146,6 +149,16 @@ pub(crate) fn pipeline_node_event_channel() -> (PipelineNodeEventSender, Pipelin
 }
 
 impl PipelineNodeEventSender {
+    pub(crate) async fn send_direct_tool_failure(
+        &self,
+        code: &'static str,
+    ) -> adk_rust::Result<()> {
+        self.inner
+            .send(PipelineNodeEventSignal::DirectToolFailed { code })
+            .await
+            .map_err(|_| pipeline_node_event_channel_error())
+    }
+
     /// Preserve safe codes and typed continuation causes, never provider messages.
     pub(crate) async fn send_model_failure(&self, error: &AdkError) -> adk_rust::Result<()> {
         self.inner
@@ -433,6 +446,14 @@ fn pipeline_node_signal_event(
 ) -> adk_rust::Result<Event> {
     let signal = match signal {
         PipelineNodeEventSignal::Event(signal) => signal,
+        PipelineNodeEventSignal::DirectToolFailed { code } => {
+            return Err(AdkError::new(
+                ErrorComponent::Tool,
+                ErrorCategory::Internal,
+                code,
+                "The pipeline direct-tool node failed.",
+            ));
+        }
         PipelineNodeEventSignal::ModelFailed { code, continuation } => {
             if let Some(reason) = continuation {
                 return Err(super::super::model_checkpoint::output::failed(reason));

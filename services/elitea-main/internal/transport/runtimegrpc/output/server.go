@@ -1068,6 +1068,18 @@ func runtimeFailurePolicyFor(code runtimev1.RuntimeErrorCodeV1) (runtimeFailureP
 		return runtimeFailurePolicy{Code: "INCOMPATIBLE_VERSION", SafeMessage: "The requested contract version is not compatible."}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INVALID_INPUT:
 		return runtimeFailurePolicy{Code: "INVALID_INPUT", SafeMessage: "The execution input is invalid."}, true
+	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_INPUT_INVALID:
+		return runtimeFailurePolicy{Code: "PIPELINE_INPUT_INVALID", SafeMessage: "The pipeline stopped because a tool node has invalid input or a stale approval decision. Check its input mapping and restart only after reviewing completed actions."}, true
+	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_INPUT_LIMIT:
+		return runtimeFailurePolicy{Code: "PIPELINE_INPUT_LIMIT", SafeMessage: "The pipeline stopped because a tool node input exceeds its size limit. Reduce the mapped input or use smaller batches. This is not a model context limit."}, true
+	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_TOOL_UNAVAILABLE:
+		return runtimeFailurePolicy{Code: "PIPELINE_TOOL_UNAVAILABLE", SafeMessage: "The pipeline stopped because its selected tool cannot run. Check the toolkit binding, permissions, and supported operation. Share the support reference with your administrator."}, true
+	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_TOOL_FAILED:
+		return runtimeFailurePolicy{Code: "PIPELINE_TOOL_FAILED", SafeMessage: "A pipeline tool call failed. Later nodes did not run. Review the support reference and completed actions before retrying; the tool may have started work."}, true
+	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_RESULT_INVALID:
+		return runtimeFailurePolicy{Code: "PIPELINE_RESULT_INVALID", SafeMessage: "The pipeline stopped because a tool result does not match the node output mapping. Check the required fields and their types. Later nodes did not run."}, true
+	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_RESULT_LIMIT:
+		return runtimeFailurePolicy{Code: "PIPELINE_RESULT_LIMIT", SafeMessage: "The pipeline stopped because a tool result exceeds the node state size limit. Use smaller batches or reduce the returned data. Later nodes did not run."}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_OUTPUT_DELIVERY_LIMIT:
 		return runtimeFailurePolicy{Code: "OUTPUT_DELIVERY_LIMIT", SafeMessage: "The run stopped because its output exceeded the delivery limit. Some results may be missing. Share the support reference with your administrator before repeating actions."}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_RESOURCE_EXHAUSTED:

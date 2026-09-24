@@ -39,6 +39,13 @@ pub enum RuntimeFailureKind {
     InvalidInput,
     ResourceExhausted,
     OutputProjectionLimit,
+    PipelineInputInvalid,
+    PipelineInputLimit,
+    PipelineToolUnavailable,
+    PipelineToolFailed,
+    PipelineResultInvalid,
+    PipelineResultLimit,
+
     DependencyUnavailable,
     DeadlineExceeded,
     OutputContinuationExhausted,
@@ -595,6 +602,13 @@ pub(crate) fn build_toolkit_execute_read_terminal_output_frame(
 
 pub(crate) fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
     match upstream_code {
+        Some("pipeline.input_invalid") => RuntimeFailureKind::PipelineInputInvalid,
+        Some("pipeline.input_limit") => RuntimeFailureKind::PipelineInputLimit,
+        Some("pipeline.tool_unavailable") => RuntimeFailureKind::PipelineToolUnavailable,
+        Some("pipeline.tool_failed") => RuntimeFailureKind::PipelineToolFailed,
+        Some("pipeline.result_invalid") => RuntimeFailureKind::PipelineResultInvalid,
+        Some("pipeline.result_limit") => RuntimeFailureKind::PipelineResultLimit,
+
         Some("model.output_continuation_failed") => RuntimeFailureKind::OutputContinuationExhausted,
         Some(
             "model_gateway.response_header_timeout"
@@ -673,6 +687,36 @@ pub(crate) fn runtime_error_policy(
         RuntimeFailureKind::ResourceExhausted => (
             RuntimeErrorCodeV1::ResourceExhausted,
             "The execution exceeded an approved resource limit.",
+            false,
+        ),
+        RuntimeFailureKind::PipelineInputInvalid => (
+            RuntimeErrorCodeV1::PipelineInputInvalid,
+            "The pipeline stopped because a tool node has invalid input or a stale approval decision. Check its input mapping and restart only after reviewing completed actions.",
+            false,
+        ),
+        RuntimeFailureKind::PipelineInputLimit => (
+            RuntimeErrorCodeV1::PipelineInputLimit,
+            "The pipeline stopped because a tool node input exceeds its size limit. Reduce the mapped input or use smaller batches. This is not a model context limit.",
+            false,
+        ),
+        RuntimeFailureKind::PipelineToolUnavailable => (
+            RuntimeErrorCodeV1::PipelineToolUnavailable,
+            "The pipeline stopped because its selected tool cannot run. Check the toolkit binding, permissions, and supported operation. Share the support reference with your administrator.",
+            false,
+        ),
+        RuntimeFailureKind::PipelineToolFailed => (
+            RuntimeErrorCodeV1::PipelineToolFailed,
+            "A pipeline tool call failed. Later nodes did not run. Review the support reference and completed actions before retrying; the tool may have started work.",
+            false,
+        ),
+        RuntimeFailureKind::PipelineResultInvalid => (
+            RuntimeErrorCodeV1::PipelineResultInvalid,
+            "The pipeline stopped because a tool result does not match the node output mapping. Check the required fields and their types. Later nodes did not run.",
+            false,
+        ),
+        RuntimeFailureKind::PipelineResultLimit => (
+            RuntimeErrorCodeV1::PipelineResultLimit,
+            "The pipeline stopped because a tool result exceeds the node state size limit. Use smaller batches or reduce the returned data. Later nodes did not run.",
             false,
         ),
         RuntimeFailureKind::OutputProjectionLimit => (
@@ -779,6 +823,12 @@ fn canonical_runtime_failure(error: &RuntimeErrorV1) -> Option<RuntimeFailureKin
         RuntimeFailureKind::InvalidInput,
         RuntimeFailureKind::ResourceExhausted,
         RuntimeFailureKind::OutputProjectionLimit,
+        RuntimeFailureKind::PipelineInputInvalid,
+        RuntimeFailureKind::PipelineInputLimit,
+        RuntimeFailureKind::PipelineToolUnavailable,
+        RuntimeFailureKind::PipelineToolFailed,
+        RuntimeFailureKind::PipelineResultInvalid,
+        RuntimeFailureKind::PipelineResultLimit,
         RuntimeFailureKind::DependencyUnavailable,
         RuntimeFailureKind::DeadlineExceeded,
         RuntimeFailureKind::AuthorizationFailed,

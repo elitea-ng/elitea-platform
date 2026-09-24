@@ -53,5 +53,35 @@
     "code": "OUTPUT_DELIVERY_LIMIT",
     "message": "The run stopped because its output exceeded the delivery limit. Some results may be missing. Share the support reference with your administrator before repeating actions.",
     "retryable": false
+  },
+  {
+    "code": "PIPELINE_INPUT_INVALID",
+    "message": "The pipeline stopped because a tool node has invalid input or a stale approval decision. Check its input mapping and restart only after reviewing completed actions.",
+    "retryable": false
+  },
+  {
+    "code": "PIPELINE_INPUT_LIMIT",
+    "message": "The pipeline stopped because a tool node input exceeds its size limit. Reduce the mapped input or use smaller batches. This is not a model context limit.",
+    "retryable": false
+  },
+  {
+    "code": "PIPELINE_TOOL_UNAVAILABLE",
+    "message": "The pipeline stopped because its selected tool cannot run. Check the toolkit binding, permissions, and supported operation. Share the support reference with your administrator.",
+    "retryable": false
+  },
+  {
+    "code": "PIPELINE_TOOL_FAILED",
+    "message": "A pipeline tool call failed. Later nodes did not run. Review the support reference and completed actions before retrying; the tool may have started work.",
+    "retryable": false
+  },
+  {
+    "code": "PIPELINE_RESULT_INVALID",
+    "message": "The pipeline stopped because a tool result does not match the node output mapping. Check the required fields and their types. Later nodes did not run.",
+    "retryable": false
+  },
+  {
+    "code": "PIPELINE_RESULT_LIMIT",
+    "message": "The pipeline stopped because a tool result exceeds the node state size limit. Use smaller batches or reduce the returned data. Later nodes did not run.",
+    "retryable": false
   }
 ]

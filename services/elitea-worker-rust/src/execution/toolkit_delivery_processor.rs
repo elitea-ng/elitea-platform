@@ -1044,6 +1044,12 @@ const fn runtime_failure_code(failure: RuntimeFailureKind) -> &'static str {
         RuntimeFailureKind::ModelRequestTooLarge => "runtime.model_request_too_large",
         RuntimeFailureKind::ModelUnavailable => "runtime.model_unavailable",
         RuntimeFailureKind::ModelProviderFailure => "runtime.model_provider_failure",
+        RuntimeFailureKind::PipelineInputInvalid => "pipeline.input_invalid",
+        RuntimeFailureKind::PipelineInputLimit => "pipeline.input_limit",
+        RuntimeFailureKind::PipelineToolUnavailable => "pipeline.tool_unavailable",
+        RuntimeFailureKind::PipelineToolFailed => "pipeline.tool_failed",
+        RuntimeFailureKind::PipelineResultInvalid => "pipeline.result_invalid",
+        RuntimeFailureKind::PipelineResultLimit => "pipeline.result_limit",
         RuntimeFailureKind::OutputProjectionLimit => "runtime.output_delivery_limit",
         RuntimeFailureKind::Internal => "runtime.internal",
     }

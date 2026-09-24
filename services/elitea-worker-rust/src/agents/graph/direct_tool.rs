@@ -365,12 +365,21 @@ impl ResolvedDirectTool {
 
 /// Native graph node that invokes one exact ADK tool.
 pub(super) struct DirectToolNode {
+    events: Option<super::node_events::PipelineNodeEventSender>,
     definition: DirectToolNodeDefinition,
     state_types: BTreeMap<String, String>,
     resolver: Arc<dyn PipelineDirectToolResolver>,
 }
 
 impl DirectToolNode {
+    pub(super) fn with_events(
+        mut self,
+        events: Option<super::node_events::PipelineNodeEventSender>,
+    ) -> Self {
+        self.events = events;
+        self
+    }
+
     pub(super) fn new(
         definition: DirectToolNodeDefinition,
         state_types: BTreeMap<String, String>,
@@ -380,6 +389,7 @@ impl DirectToolNode {
             definition,
             state_types,
             resolver,
+            events: None,
         }
     }
 
@@ -722,6 +732,15 @@ impl Node for DirectToolNode {
                         "pipeline direct-tool node failed"
                     );
                 });
+                if let Some(events) = &self.events {
+                    events
+                        .send_direct_tool_failure(failure.public_code())
+                        .await
+                        .map_err(|_| GraphError::NodeExecutionFailed {
+                            node: self.name().to_owned(),
+                            message: "The pipeline failure channel closed.".to_owned(),
+                        })?;
+                }
                 Err(GraphError::NodeExecutionFailed {
                     node: self.name().to_owned(),
                     message: format!("{}: {}", failure.stage, failure.cause),
@@ -1354,6 +1373,22 @@ enum DirectNodeFailureCause {
 }
 
 impl DirectNodeFailure {
+    fn public_code(&self) -> &'static str {
+        match (&self.cause, self.stage) {
+            (DirectNodeFailureCause::Tool, _) => "pipeline.tool_failed",
+            (_, "tool_binding" | "authorization") => "pipeline.tool_unavailable",
+            (
+                DirectNodeFailureCause::Execution(DirectToolExecutionError::ResourceExhausted),
+                "state_projection",
+            ) => "pipeline.result_limit",
+            (_, "state_projection") => "pipeline.result_invalid",
+            (DirectNodeFailureCause::Execution(DirectToolExecutionError::ResourceExhausted), _) => {
+                "pipeline.input_limit"
+            }
+            _ => "pipeline.input_invalid",
+        }
+    }
+
     const fn new(stage: &'static str, cause: DirectToolExecutionError) -> Self {
         Self {
             stage,

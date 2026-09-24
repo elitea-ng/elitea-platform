@@ -486,7 +486,7 @@ impl PipelineNativeAgentAssembler {
                 sensitive_tools: profile.sensitive_llm_tools(),
                 delegated_authorization,
                 ask_user_enabled: profile.shell().internal_tools().ask_user_enabled(),
-                node_events: node_event_sender,
+                node_events: node_event_sender.clone(),
                 model_scopes,
             }) as Arc<dyn PipelineLlmAgentFactory>
         });
@@ -495,7 +495,8 @@ impl PipelineNativeAgentAssembler {
                 llm_factory,
                 direct_tool_resolver,
                 application_resolver,
-            ),
+            )
+            .with_events(node_event_sender),
             applications: application_runtime,
             node_events: Some(node_events),
         })
@@ -1364,7 +1365,8 @@ async fn bind_saved_pipeline_runtimes(
         }) as Arc<dyn PipelineLlmAgentFactory>
     });
     Ok(BoundSavedPipeline {
-        runtimes: PipelineNodeRuntimes::new(llm_factory, direct_tool_resolver, None),
+        runtimes: PipelineNodeRuntimes::new(llm_factory, direct_tool_resolver, None)
+            .with_events(runtime.node_events.clone()),
         guarded_interrupt_kinds,
     })
 }

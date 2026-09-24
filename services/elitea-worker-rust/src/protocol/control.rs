@@ -3279,6 +3279,12 @@ fn runtime_rejection(error: &RuntimeErrorV1) -> ControlSemanticError {
         Some(
             RuntimeErrorCodeV1::Unspecified
             | RuntimeErrorCodeV1::OutputDeliveryLimit
+            | RuntimeErrorCodeV1::PipelineInputInvalid
+            | RuntimeErrorCodeV1::PipelineInputLimit
+            | RuntimeErrorCodeV1::PipelineToolUnavailable
+            | RuntimeErrorCodeV1::PipelineToolFailed
+            | RuntimeErrorCodeV1::PipelineResultInvalid
+            | RuntimeErrorCodeV1::PipelineResultLimit
             | RuntimeErrorCodeV1::OutputContinuationExhausted
             | RuntimeErrorCodeV1::ModelTimeout
             | RuntimeErrorCodeV1::ModelRateLimited

@@ -417,3 +417,33 @@ Evidence: `elitea-direct-diagnostics-readback-result.json` and `elitea-direct-di
 The current UI still displays INTERNAL and the generic runtime message.
 Propagate the typed direct-node failure through the pipeline event bridge and registered public error contract.
 Do not parse arbitrary graph exception text to choose a public error.
+
+
+### Typed pipeline failure contract, 2026-09-24
+
+Direct-node failures now publish a safe category through the existing invocation-owned pipeline event bridge.
+`graph/direct_tool.rs` selects the category from its typed cause and static stage.
+`graph/compiler.rs` carries the event sender in `PipelineNodeRuntimes`.
+`agents/pipeline.rs` supplies that sender for root and nested pipeline bindings.
+`graph/node_events.rs` delivers the failure before the generic graph exception can replace its category.
+No exception-text parser or provider-payload projection is introduced.
+
+Protocol codes 25 through 30 distinguish invalid input, input capacity, unavailable tools, failed calls, invalid results, and result capacity.
+`protocol/output.rs` registers safe messages and durable replay checks.
+Main registers the same messages in `internal/transport/runtimegrpc/output/server.go`.
+The shared policy fixture checks exact registration and rejects substituted message text.
+Deploy Main before a worker that emits these new codes. No database migration is required.
+
+A direct pipeline failure still stops the graph. An ordinary parent receives the existing structured child failure report.
+The report does not permit an automatic identical retry. Pipeline-node callers retain fatal propagation.
+Existing approval, authorization, and exact toolkit identity behavior remain unchanged.
+The current SDK classification reference remains `FunctionTool` at commit `966526e8334354366dd161b606d73fe8e204b850`.
+Rust preserves its useful distinction between failure classes without copying raw exception or argument text into messages.
+
+The new runner test invokes a tool once and rejects its malformed result through the pipeline event bridge.
+It verifies `pipeline.result_invalid`, the registered public category, and exclusion of a synthetic private response body.
+Deployment, live streaming, and browser acceptance of these public categories remain open.
+
+Validation passes: 14 direct-tool tests, six model-failure contract tests, Main output-transport tests, and strict Rust Clippy.
+No tests are ignored in those Rust runs. Formatting and generated protocol checks pass.
+An initial narrow contract filter matches zero tests; the corrected `model_failure` filter supplies the six-test evidence above.
