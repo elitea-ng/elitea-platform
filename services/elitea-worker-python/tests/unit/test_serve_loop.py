@@ -804,8 +804,8 @@ def test_runtime_dependency_closes_share_one_global_deadline() -> None:
             await _close_runtime_resources(
                 supervisor=supervisor,  # type: ignore[arg-type]
                 http_client=http_client,  # type: ignore[arg-type]
-                control_channel=control_channel,  # type: ignore[arg-type]
-                output_channel=output_channel,  # type: ignore[arg-type]
+                control=control_channel,  # type: ignore[arg-type]
+                output=output_channel,  # type: ignore[arg-type]
                 redis_client=redis_client,  # type: ignore[arg-type]
                 budget=budget,
             )

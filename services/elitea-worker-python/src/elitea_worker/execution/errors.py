@@ -46,6 +46,11 @@ class DependencyUnavailable(WorkerError):
         super().__init__("DEPENDENCY_UNAVAILABLE", safe_message, exit_code=5, retryable=True)
 
 
+class ExecutionDraining(DependencyUnavailable):
+    def __init__(self, safe_message: str = "The execution is draining.") -> None:
+        super().__init__(safe_message)
+
+
 class DeadlineExceeded(WorkerError):
     def __init__(self, safe_message: str = "The execution deadline was exceeded.") -> None:
         super().__init__("DEADLINE_EXCEEDED", safe_message, exit_code=5, retryable=True)
