@@ -33,6 +33,22 @@ class ContinuationFixtureTest(unittest.TestCase):
         text = "".join(event["choices"][0]["delta"].get("content", "") for event in events)
         return text, events[-1]["choices"][0]["finish_reason"]
 
+    def test_large_tool_input_is_generated_from_short_prompt(self):
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{self.server.server_port}/v1/chat/completions",
+            data=json.dumps({"model": "fixture", "stream": True,
+                             "messages": [{"role": "user", "content": "[[mock:large_tool_input]]"}]}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            lines = response.read().decode().splitlines()
+        events = [json.loads(line[6:]) for line in lines if line.startswith("data: ") and line != "data: [DONE]"]
+        calls = [call for event in events for call in event["choices"][0]["delta"].get("tool_calls", [])]
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["function"]["name"], "lookup_record")
+        self.assertEqual(len(json.loads(calls[0]["function"]["arguments"])["probe"]), 48000)
+        self.assertEqual(events[-1]["choices"][0]["finish_reason"], "tool_calls")
+
     def test_bad_boundary_then_exact_repair_and_independent_requests(self):
         original = [{"role": "user", "content": "[[mock:continuation_repair]]"}]
         prefix, reason = self.stream(original)

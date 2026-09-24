@@ -61,6 +61,7 @@ PER-REQUEST MODES, SELECTED BY THE PROMPT (see `_script_for`):
                       truncate one answer, reject one boundary, then repair it.
                       Continuation fragments preserve exact whitespace.
                       Add [[mock:repair_slow]] to delay repair chunks for crash tests.
+  [[mock:large_tool_input]] emit a fixed 48 KB lookup_record argument for delivery-limit tests.
   [[mock:slow]]       stream a long, scripted reply one word at a time with a
                       per-chunk delay, so a test can act while the turn is
                       still open (press Stop, navigate away, drop the stream).
@@ -890,6 +891,10 @@ def _script_for(messages: list[dict]) -> _ChatScript:
     """
     user_text = _last_user_text(messages)
     prompt = user_text or ""
+
+    if "[[mock:large_tool_input]]" in prompt:
+        calls = _call_tool_calls("lookup_record", json.dumps({"probe": "X" * 48000}), prompt)
+        return _ChatScript("", calls, 0, "large_tool_input")
 
     # This mode is opt-in per transcript. It never changes unmarked requests.
     if any("[[mock:continuation_repair]]" in _message_text(message) for message in messages):

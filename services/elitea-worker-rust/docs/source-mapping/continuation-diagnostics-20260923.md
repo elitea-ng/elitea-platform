@@ -556,3 +556,11 @@ Evidence prefix: `elitea-resource-guidance` in the local acceptance directory.
 This verifies the generic message, not every underlying resource boundary. Gate 4 remains open.
 An earlier fixture submits an oversized application description and receives HTTP 500 before execution.
 Main request validation requires a separate follow-up for that rejected input. Its root cause is not yet established.
+
+
+### Output-delivery fixture correction, 2026-09-24
+
+Chat 693 sends a 48 KB synthetic user message. Main rejects it before creating an execution job; the UI shows the current-execution-path error. This does not exercise the worker output projector.
+`deploy/mock-llm/server.py` now supports the short `[[mock:large_tool_input]]` marker. It emits one fixed 48 KB `lookup_record` argument as a model tool call, with no large user message.
+The actual HTTP/SSE test checks the tool name, argument length, and `tool_calls` finish reason. Both fixture tests pass, including the existing continuation repair and unmarked-request isolation test.
+Deploying this fixture and observing `OUTPUT_DELIVERY_LIMIT` in the worker/UI remain pending. No production worker behavior changes in this fixture correction.
