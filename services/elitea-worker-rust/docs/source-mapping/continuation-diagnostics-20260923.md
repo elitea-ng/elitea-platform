@@ -564,3 +564,16 @@ Chat 693 sends a 48 KB synthetic user message. Main rejects it before creating a
 `deploy/mock-llm/server.py` now supports the short `[[mock:large_tool_input]]` marker. It emits one fixed 48 KB `lookup_record` argument as a model tool call, with no large user message.
 The actual HTTP/SSE test checks the tool name, argument length, and `tool_calls` finish reason. Both fixture tests pass, including the existing continuation repair and unmarked-request isolation test.
 Deploying this fixture and observing `OUTPUT_DELIVERY_LIMIT` in the worker/UI remain pending. No production worker behavior changes in this fixture correction.
+
+### Output-delivery browser acceptance, 2026-09-24
+
+The fixture image `sha256:4f087c39f159e771b575f8f6b075f48751848c80d240a2ebdba9899b7305d4a0` deploys the short-marker model response.
+Fresh headed-browser chat 695 uses application 107, version 114. Context summarization is disabled for this focused test.
+The previous fixture selected the shared summary model from the wrong project. Chats 693 and 694 created no worker job; their rejection does not prove a user-message size limit.
+The corrected fixture emits the 48 KB tool argument through the actual provider transport. No browser responses are mocked.
+Worker `agents/events.rs` bounds projected tool-event values. `execution/native_agent_lifecycle.rs::projection_failure` maps the exhausted projection to `OutputProjectionLimit`; `protocol/output.rs` publishes `OUTPUT_DELIVERY_LIMIT`.
+Execution `17f141838308caf06d2559f9830c6f9a` reaches `FAILED`. The browser receives the typed failure with `retryable=false`.
+The UI shows the delivery-limit explanation and support message ID `ad9bc999-846c-5977-8c16-851611defd37`. It states that detailed diagnostics are available to operators in service logs.
+The message survives reload. There are no browser page errors. The screenshot is inspected.
+Evidence prefix: `elitea-output-projection` in the local acceptance directory, chat 695.
+This closes live acceptance for this projection boundary. It does not prove every resource limit or complete Gate 4.

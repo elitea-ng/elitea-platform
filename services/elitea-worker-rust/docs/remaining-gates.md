@@ -365,6 +365,7 @@ A future rejection route must define its own valid downstream contract.
 - The live output-delivery error assertion fails at a different graph boundary. It does not close delivery-limit acceptance.
 - Direct-tool graph failures lose their specific cause in `node_failure`. Preserve a safe stage and typed cause before claiming useful operator diagnostics for this path.
 - Use a model-loop event fixture for output-delivery projection checks. Direct-tool graph nodes do not emit the tool-start event used by that proposed test.
+- Follow-up chat 695 closes that delivery-limit assertion with the model-loop fixture: actual `OUTPUT_DELIVERY_LIMIT` event, terminal failed job, friendly explanation, support reference, and stable reload. No browser mocks or page errors. Earlier failed attempts remain historical evidence, not successful verification.
 - Detailed deployment and evidence are in `source-mapping/continuation-diagnostics-20260923.md`.
 
 ### Continuation boundary repair and crash acceptance
