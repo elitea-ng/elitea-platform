@@ -13,7 +13,9 @@ Current-platform code defines business behavior, not a requirement to copy its i
 - Gate 2 is accepted for progression, with explicit verification debt. OAuth/DCR support is not a claim of complete provider coverage.
 - Gate 3 is accepted for progression. The final restricted chat-operation permission check passes on 2026-09-14.
 - Gate 4 is active for context management and current-platform runtime drift.
-- [Failure diagnostics](source-mapping/continuation-diagnostics-20260923.md) now have deployed operator guidance, copyable references, and verified async source locations. Known child model failures pass component propagation checks; their additional deployed category checks remain open.
+- [Failure diagnostics](source-mapping/continuation-diagnostics-20260923.md) now have deployed operator guidance, copyable references, and verified async source locations. Chat 668 verifies parent completion after a child context-budget failure. Other deployed model-failure categories remain open.
+- Output-delivery error code 24 is deployed in Main and Rust. Browser rendering passes with a response fixture; live emission remains open.
+- Public event metadata now omits instruction bodies. All 24 session tests pass; deployment and the live large-definition check remain open.
 - [Native history retention](source-mapping/context-native-history-retention-20260921.md) records repeated-loop component proof and earlier live defects.
 - [Model transport timeouts](source-mapping/model-transport-timeouts-20260922.md) records the separate model-wait limits and repeated live compaction.
 - [Terminal answer snapshots](source-mapping/terminal-answer-snapshot-20260922.md) records the successful 24-call, two-compaction run and stable browser reload.
@@ -353,3 +355,12 @@ Explicit sensitive-tool rejection and authorization Skip are not retryable failu
 A retry policy must never reinterpret either decision as permission.
 Preserve completed work for diagnosis, but do not treat partial state as the missing node result.
 A future rejection route must define its own valid downstream contract.
+
+
+### Gate 4 verification update, 2026-09-24
+
+- Public application metadata correction is deployed from `a4331b8fe`. Conversation 672 passes the previous assembly boundary.
+- The live output-delivery error assertion fails at a different graph boundary. It does not close delivery-limit acceptance.
+- Direct-tool graph failures lose their specific cause in `node_failure`. Preserve a safe stage and typed cause before claiming useful operator diagnostics for this path.
+- Use a model-loop event fixture for output-delivery projection checks. Direct-tool graph nodes do not emit the tool-start event used by that proposed test.
+- Detailed deployment and evidence are in `source-mapping/continuation-diagnostics-20260923.md`.

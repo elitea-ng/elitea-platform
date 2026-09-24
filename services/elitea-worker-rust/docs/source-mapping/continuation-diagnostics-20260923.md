@@ -352,3 +352,26 @@ The regression supplies large root and version instructions, checks retained ide
 Deployment and renewed live acceptance remain open for this correction.
 
 All 24 session tests pass without ignored tests. Strict library-and-test Clippy and formatting checks pass.
+
+
+### Public metadata deployment and live test outcome, 2026-09-24
+
+Worker image `sha256:3680886f9d49fc80f6cbc6f998fbf1d9ebc778d21cb854c671bea84b8ff6540d` is deployed from source `a4331b8fe`.
+The release build passes. The replacement preserves all five mounts and the existing environment, networks, and limits.
+
+Fresh headed Playwright conversation 672 uses application 84, version 91, with the corrected MCP relation.
+Execution `1379c1f6fef463a2bf03ae35b391ef68` reaches execution and fails.
+The worker records ERROR with `native_agent.event_failed`, upstream `agent.legacy`, and the generic runtime explanation.
+The browser assertion for `OUTPUT_DELIVERY_LIMIT` fails. No response is mocked.
+Do not count this run as delivery-limit acceptance.
+
+The fixture is unsuitable for the intended projection test.
+`agents/graph/direct_tool.rs::invoke_and_project` invokes the tool and projects graph state without a model-loop tool-start event.
+An oversized synthetic argument therefore does not test the model-loop tool-start projector.
+The direct-node implementation also collapses several distinct errors into `node_failure`, which becomes a generic graph failure.
+The precise failing stage in this execution is not established by the safe operator fields.
+Record that diagnostic loss separately; do not infer a provider, context, or delivery limit from it.
+
+The public metadata regression remains verified by its focused tests, and the deployed run passes the earlier assembly boundary.
+Live emission and operator-log acceptance of `OUTPUT_DELIVERY_LIMIT` remain open.
+Local evidence: `elitea-output-delivery-live-live.json`, `elitea-output-delivery-live-frames.json`, and `elitea-output-delivery-live-failed.png`.
