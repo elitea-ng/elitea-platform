@@ -45,6 +45,20 @@ operators return to the current durable recovery path.
 
 The check must be rerun after any additional durable reconciliation.
 
+### The reusable drain order
+
+A recreation of `elitea-main` inside one release does not need a versioned
+cutover. It needs the generic drain order. Stop the worker fleet. Recreate
+the main replica. Restore the worker fleet.
+
+`deploy/scripts/drain-workers.sh` runs those kubectl steps and prints each
+one. `deploy/README.md` states the order and the commands under "Scaling
+order with live workers (#968)". Stage A above is the versioned form of the
+same order.
+
+That order does not replace this cutover. A version change still needs this
+runbook's preflight and the versioned stream switch.
+
 ## Dedicated preflight service contract
 
 Use the exact candidate `elitea-main` image and override its entrypoint to
