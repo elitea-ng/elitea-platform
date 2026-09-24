@@ -365,3 +365,13 @@ A future rejection route must define its own valid downstream contract.
 - Direct-tool graph failures lose their specific cause in `node_failure`. Preserve a safe stage and typed cause before claiming useful operator diagnostics for this path.
 - Use a model-loop event fixture for output-delivery projection checks. Direct-tool graph nodes do not emit the tool-start event used by that proposed test.
 - Detailed deployment and evidence are in `source-mapping/continuation-diagnostics-20260923.md`.
+
+### Continuation boundary repair and crash acceptance
+
+Fresh headed-browser chats 681 and 682 verify repair with a deterministic provider.
+Chat 681 discards one bad boundary and completes after one repair.
+Chat 682 resumes the same pending repair after a worker SIGKILL.
+PostgreSQL retains the exact request hash, round 2, and the consumed repair allowance across claim takeover.
+The browser receives the complete result without duplicates and preserves it after reload.
+These cases close the tested repair boundaries. Broader Gate 4 acceptance remains open.
+See [repair recovery evidence](source-mapping/output-continuation-capacity-20260922.md#deployed-repair-crash-recovery-passes-2026-09-24).
