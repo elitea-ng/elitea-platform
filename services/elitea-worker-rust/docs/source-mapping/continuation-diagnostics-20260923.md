@@ -275,3 +275,37 @@ The new regression reproduces the failure with a 48 KiB text result before the f
 After the fix, it verifies exact chunk reassembly and the tool-end event.
 All 42 event-projection tests pass, with no ignored tests.
 Browser acceptance and the original child-model-failure verification remain open until the repaired worker runs.
+
+
+### Deployed child-failure acceptance
+
+Worker image `sha256:c6c0cc33b1eea7966ba6443eabc0f1fa271cbd1b58a315d99421deca38477e34` contains the projection fix from `8bee608b`.
+Conversation 668 completes with execution `b524870c517a17919e726686319f7e24` in state `SUCCEEDED`.
+The child reports `CONTEXT_BUDGET_EXCEEDED`, `retryable: false`, and `recovery_action: revise_task`.
+The parent explains the child failure and completes without another delegation.
+Captured events contain one child invocation, twelve record reads, and twenty-four output chunks.
+A fresh headed browser verifies the persisted report after reload. It reports no page errors and uses no response mocks.
+The screenshot is inspected. Local evidence is `elitea-child-model-failure-accepted.json` and `elitea-child-model-failure-observed.png`.
+The original browser assertion expected the request marker, but the parent follows its saved final-marker instruction instead.
+The follow-up assertion checks that saved marker and the actual failure report. No second execution is submitted.
+This proves the context-budget case. Deployed rate-limit and provider-access cases remain separate acceptance work.
+
+### Output-delivery failure explanation
+
+The user reports that the generic resource-limit message gives no useful recovery guidance.
+A new registered code, `OUTPUT_DELIVERY_LIMIT` (24), identifies terminal event-projection capacity failures.
+Its message explains the delivery failure, possible missing results, and administrator support reference.
+It does not tell users to repeat actions that may already have effects.
+`execution/native_agent_lifecycle.rs::projection_failure` selects this code.
+The same boundary now logs at ERROR with execution ID, generation, internal error code, and safe failure reason.
+`protocol/output.rs` and Main's `internal/transport/runtimegrpc/output/server.go` register the exact public contract.
+The shared fixture verifies Rust replay and Main ingestion. Unregistered message text remains rejected.
+Existing `RESOURCE_EXHAUSTED` records retain their original contract for durable replay.
+The protobuf generator updates Go and Python bindings. Rust generates its binding during compilation.
+No database migration is required. Deploy Main before a worker that can emit the new code.
+The existing UI displays the registered explanation and its support reference without a new component.
+This is a new replatform delivery distinction. Legacy business behavior does not define this worker transport boundary.
+Deployment and browser verification of the new explanation remain open.
+
+Main output-boundary tests pass. All three Rust output-policy tests pass, including historical replay and untrusted-message rejection.
+Strict Rust Clippy, formatting, and protobuf generation checks pass.

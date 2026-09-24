@@ -48,6 +48,7 @@ const (
 	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_MODEL_REQUEST_TOO_LARGE       RuntimeErrorCodeV1 = 21
 	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_MODEL_UNAVAILABLE             RuntimeErrorCodeV1 = 22
 	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_MODEL_PROVIDER_FAILURE        RuntimeErrorCodeV1 = 23
+	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_OUTPUT_DELIVERY_LIMIT         RuntimeErrorCodeV1 = 24
 )
 
 // Enum value maps for RuntimeErrorCodeV1.
@@ -77,6 +78,7 @@ var (
 		21: "RUNTIME_ERROR_CODE_V1_MODEL_REQUEST_TOO_LARGE",
 		22: "RUNTIME_ERROR_CODE_V1_MODEL_UNAVAILABLE",
 		23: "RUNTIME_ERROR_CODE_V1_MODEL_PROVIDER_FAILURE",
+		24: "RUNTIME_ERROR_CODE_V1_OUTPUT_DELIVERY_LIMIT",
 	}
 	RuntimeErrorCodeV1_value = map[string]int32{
 		"RUNTIME_ERROR_CODE_V1_UNSPECIFIED":                   0,
@@ -103,6 +105,7 @@ var (
 		"RUNTIME_ERROR_CODE_V1_MODEL_REQUEST_TOO_LARGE":       21,
 		"RUNTIME_ERROR_CODE_V1_MODEL_UNAVAILABLE":             22,
 		"RUNTIME_ERROR_CODE_V1_MODEL_PROVIDER_FAILURE":        23,
+		"RUNTIME_ERROR_CODE_V1_OUTPUT_DELIVERY_LIMIT":         24,
 	}
 )
 
@@ -203,7 +206,7 @@ const file_elitea_runtime_v1_errors_proto_rawDesc = "" +
 	"\x0eRuntimeErrorV1\x129\n" +
 	"\x04code\x18\x01 \x01(\x0e2%.elitea.runtime.v1.RuntimeErrorCodeV1R\x04code\x12!\n" +
 	"\fsafe_message\x18\x02 \x01(\tR\vsafeMessage\x12\x1c\n" +
-	"\tretryable\x18\x03 \x01(\bR\tretryableJ\x04\b\x04\x10\x10*\xec\b\n" +
+	"\tretryable\x18\x03 \x01(\bR\tretryableJ\x04\b\x04\x10\x10*\x9d\t\n" +
 	"\x12RuntimeErrorCodeV1\x12%\n" +
 	"!RUNTIME_ERROR_CODE_V1_UNSPECIFIED\x10\x00\x120\n" +
 	",RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY\x10\x01\x12.\n" +
@@ -229,7 +232,8 @@ const file_elitea_runtime_v1_errors_proto_rawDesc = "" +
 	"-RUNTIME_ERROR_CODE_V1_CONTEXT_BUDGET_EXCEEDED\x10\x14\x121\n" +
 	"-RUNTIME_ERROR_CODE_V1_MODEL_REQUEST_TOO_LARGE\x10\x15\x12+\n" +
 	"'RUNTIME_ERROR_CODE_V1_MODEL_UNAVAILABLE\x10\x16\x120\n" +
-	",RUNTIME_ERROR_CODE_V1_MODEL_PROVIDER_FAILURE\x10\x17BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	",RUNTIME_ERROR_CODE_V1_MODEL_PROVIDER_FAILURE\x10\x17\x12/\n" +
+	"+RUNTIME_ERROR_CODE_V1_OUTPUT_DELIVERY_LIMIT\x10\x18BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_errors_proto_rawDescOnce sync.Once

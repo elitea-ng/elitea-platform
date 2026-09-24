@@ -1068,6 +1068,8 @@ func runtimeFailurePolicyFor(code runtimev1.RuntimeErrorCodeV1) (runtimeFailureP
 		return runtimeFailurePolicy{Code: "INCOMPATIBLE_VERSION", SafeMessage: "The requested contract version is not compatible."}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INVALID_INPUT:
 		return runtimeFailurePolicy{Code: "INVALID_INPUT", SafeMessage: "The execution input is invalid."}, true
+	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_OUTPUT_DELIVERY_LIMIT:
+		return runtimeFailurePolicy{Code: "OUTPUT_DELIVERY_LIMIT", SafeMessage: "The run stopped because its output exceeded the delivery limit. Some results may be missing. Share the support reference with your administrator before repeating actions."}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_RESOURCE_EXHAUSTED:
 		return runtimeFailurePolicy{Code: "RESOURCE_EXHAUSTED", SafeMessage: "The execution exceeded an approved resource limit."}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE:

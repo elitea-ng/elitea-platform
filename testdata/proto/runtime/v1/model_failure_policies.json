@@ -48,5 +48,10 @@
     "code": "MODEL_PROVIDER_FAILURE",
     "message": "The model service reported an error while generating the response. Try again or select another model. An administrator can inspect the execution logs.",
     "retryable": true
+  },
+  {
+    "code": "OUTPUT_DELIVERY_LIMIT",
+    "message": "The run stopped because its output exceeded the delivery limit. Some results may be missing. Share the support reference with your administrator before repeating actions.",
+    "retryable": false
   }
 ]

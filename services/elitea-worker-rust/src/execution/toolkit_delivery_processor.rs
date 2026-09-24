@@ -1044,6 +1044,7 @@ const fn runtime_failure_code(failure: RuntimeFailureKind) -> &'static str {
         RuntimeFailureKind::ModelRequestTooLarge => "runtime.model_request_too_large",
         RuntimeFailureKind::ModelUnavailable => "runtime.model_unavailable",
         RuntimeFailureKind::ModelProviderFailure => "runtime.model_provider_failure",
+        RuntimeFailureKind::OutputProjectionLimit => "runtime.output_delivery_limit",
         RuntimeFailureKind::Internal => "runtime.internal",
     }
 }

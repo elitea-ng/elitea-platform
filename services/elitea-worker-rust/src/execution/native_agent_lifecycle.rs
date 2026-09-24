@@ -697,9 +697,10 @@ where
                 let batch = match projector.project(&event) {
                     Ok(batch) => batch,
                     Err(error) => {
-                        tracing::warn!(
+                        tracing::error!(
                             error = %error,
                             error_code = error.code().as_str(),
+                            failure_reason = projection_failure(&error).safe_message(),
                             "native agent event projection failed"
                         );
                         failure = Some(projection_failure(&error));
@@ -1362,7 +1363,9 @@ fn projection_failure(error: &AgentEventProjectionError) -> RuntimeFailureKind {
         AgentEventProjectionErrorCode::UnsupportedCapability => {
             RuntimeFailureKind::UnsupportedCapability
         }
-        AgentEventProjectionErrorCode::ResourceExhausted => RuntimeFailureKind::ResourceExhausted,
+        AgentEventProjectionErrorCode::ResourceExhausted => {
+            RuntimeFailureKind::OutputProjectionLimit
+        }
         AgentEventProjectionErrorCode::ProviderFailure
         | AgentEventProjectionErrorCode::InvalidState
         | AgentEventProjectionErrorCode::InvalidOutput => RuntimeFailureKind::Internal,

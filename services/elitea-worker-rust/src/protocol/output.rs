@@ -38,6 +38,7 @@ pub enum RuntimeFailureKind {
     IncompatibleVersion,
     InvalidInput,
     ResourceExhausted,
+    OutputProjectionLimit,
     DependencyUnavailable,
     DeadlineExceeded,
     OutputContinuationExhausted,
@@ -674,6 +675,11 @@ pub(crate) fn runtime_error_policy(
             "The execution exceeded an approved resource limit.",
             false,
         ),
+        RuntimeFailureKind::OutputProjectionLimit => (
+            RuntimeErrorCodeV1::OutputDeliveryLimit,
+            "The run stopped because its output exceeded the delivery limit. Some results may be missing. Share the support reference with your administrator before repeating actions.",
+            false,
+        ),
         RuntimeFailureKind::DependencyUnavailable => (
             RuntimeErrorCodeV1::DependencyUnavailable,
             "A required runtime dependency is unavailable.",
@@ -772,6 +778,7 @@ fn canonical_runtime_failure(error: &RuntimeErrorV1) -> Option<RuntimeFailureKin
         RuntimeFailureKind::IncompatibleVersion,
         RuntimeFailureKind::InvalidInput,
         RuntimeFailureKind::ResourceExhausted,
+        RuntimeFailureKind::OutputProjectionLimit,
         RuntimeFailureKind::DependencyUnavailable,
         RuntimeFailureKind::DeadlineExceeded,
         RuntimeFailureKind::AuthorizationFailed,
@@ -1120,6 +1127,28 @@ fn validate_fence(fence: &ExecutionFenceV1) -> Result<(), ProtocolError> {
 #[cfg(test)]
 mod continuation_failure_tests {
     use super::*;
+
+    #[test]
+    fn output_delivery_limit_has_actionable_replayable_guidance() {
+        let error = runtime_error(RuntimeFailureKind::OutputProjectionLimit);
+        assert_eq!(error.code, RuntimeErrorCodeV1::OutputDeliveryLimit as i32);
+        assert!(!error.retryable);
+        assert!(error.safe_message.len() <= MAX_SAFE_STRING_BYTES);
+        assert!(error.safe_message.contains("Some results may be missing"));
+        assert!(error.safe_message.contains("support reference"));
+        assert_eq!(
+            canonical_runtime_failure(&error),
+            Some(RuntimeFailureKind::OutputProjectionLimit)
+        );
+        // Historical generic failures must still replay after this update.
+        assert_eq!(
+            canonical_runtime_failure(&runtime_error(RuntimeFailureKind::ResourceExhausted)),
+            Some(RuntimeFailureKind::ResourceExhausted)
+        );
+        let mut injected = error;
+        injected.safe_message = "untrusted provider detail".into();
+        assert_eq!(canonical_runtime_failure(&injected), None);
+    }
 
     #[test]
     fn model_failure_contract_is_canonical_and_replayable() {
