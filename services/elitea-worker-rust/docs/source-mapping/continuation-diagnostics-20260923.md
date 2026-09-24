@@ -599,3 +599,18 @@ The provider-body canary is absent from the rendered page and the worker log sam
 Worker logs contain `model_gateway.unauthorized`, `model_gateway.rate_limited`, and `model_gateway.unavailable` at ERROR level.
 Evidence prefixes: `elitea-provider-401`, `elitea-provider-429`, and `elitea-provider-503` in the local acceptance directory.
 This verifies these compatible-provider HTTP boundaries. Other provider protocols, malformed streams, timeout injection, and broader diagnostic redaction/correlation remain separate checks.
+
+### Incomplete provider stream investigation, 2026-09-24
+
+The `[[mock:incomplete_stream]]` fixture emits valid partial text, then ends its chunked HTTP response without a model terminal event or `[DONE]`.
+Four fixture tests pass. The new HTTP test verifies the partial text and absent finish reason.
+Fixture image `sha256:96b4f364f7d927e77823d5174c2ad89e44751f8b4b383e3943ac211048654f54` is deployed.
+Fresh headed-browser chat 699, application 111/version 118, receives `VALID_PARTIAL_OUTPUT`.
+The expected invalid-response assertion times out at 90 seconds while the execution remains RUNNING. That observation timeout does not restart the execution.
+Execution `63e17c6841878d2f699e51cca50a47da` later reaches FAILED. Worker logs identify `model_gateway.stream_idle_timeout`.
+A fresh readback browser verifies `MODEL_TIMEOUT`, its guidance and support reference, retained partial text, and stable reload with no page errors.
+This proves bounded timeout and partial-output persistence, not prompt detection of provider EOF.
+Rust `OpenAiAccumulator::finish` already rejects absent terminal model data with `model_gateway.incomplete_stream`.
+Gateway `internal/llmproxy/handler.go::streamOpenAI` waits for its router channel before writing `[DONE]`; the provider-to-router termination boundary needs further investigation.
+Do not infer the precise cause from this observation alone. No production fix is made in this test slice.
+Evidence prefix: `elitea-incomplete` in the local acceptance directory. The readback result is not a live failure-event assertion.

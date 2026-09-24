@@ -68,6 +68,11 @@ class ContinuationFixtureTest(unittest.TestCase):
         self.assertEqual(text, "MOCK: healthy request ")
         self.assertEqual(reason, "stop")
 
+    def test_incomplete_stream_preserves_partial_text_without_terminal_reason(self):
+        text, reason = self.stream([{"role": "user", "content": "[[mock:incomplete_stream]]"}])
+        self.assertEqual(text, "VALID_PARTIAL_OUTPUT")
+        self.assertIsNone(reason)
+
     def test_bad_boundary_then_exact_repair_and_independent_requests(self):
         original = [{"role": "user", "content": "[[mock:continuation_repair]]"}]
         prefix, reason = self.stream(original)

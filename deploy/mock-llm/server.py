@@ -63,6 +63,7 @@ PER-REQUEST MODES, SELECTED BY THE PROMPT (see `_script_for`):
                       Add [[mock:repair_slow]] to delay repair chunks for crash tests.
   [[mock:large_tool_input]] emit a fixed 48 KB lookup_record argument for delivery-limit tests.
   [[mock:http_401]], [[mock:http_429]], [[mock:http_503]] return synthetic provider errors.
+  [[mock:incomplete_stream]] end after partial text without a terminal model event.
   [[mock:slow]]       stream a long, scripted reply one word at a time with a
                       per-chunk delay, so a test can act while the turn is
                       still open (press Stop, navigate away, drop the stream).
@@ -893,6 +894,9 @@ def _script_for(messages: list[dict]) -> _ChatScript:
     user_text = _last_user_text(messages)
     prompt = user_text or ""
 
+    if "[[mock:incomplete_stream]]" in prompt:
+        return _ChatScript("", None, 0, "incomplete_stream")
+
     if "[[mock:large_tool_input]]" in prompt:
         calls = _call_tool_calls("lookup_record", json.dumps({"probe": "X" * 48000}), prompt)
         return _ChatScript("", calls, 0, "large_tool_input")
@@ -1439,6 +1443,11 @@ class Handler(BaseHTTPRequestHandler):
         # nothing downstream can act on it because the reader is already gone.
         try:
             event({**base, "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]})
+            if script.mode == "incomplete_stream":
+                event({**base, "choices": [{"index": 0, "delta": {"content": "VALID_PARTIAL_OUTPUT"}, "finish_reason": None}]})
+                self.wfile.write(b"0\r\n\r\n")
+                self.wfile.flush()
+                return
             if script.tool_calls is not None:
                 # The whole call in ONE delta. OpenAI may split `arguments`
                 # across chunks and a client must reassemble either way, but a
