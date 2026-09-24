@@ -39,3 +39,25 @@ Execution `6c8d9d11219086b08acfbf7f563ac0d5` is `SUCCEEDED` in PostgreSQL.
 
 The local acceptance artifacts are `elitea-toolkit-legacy-result.json`, `elitea-toolkit-legacy-frames.json`, and `elitea-toolkit-legacy.png` in the temporary evidence directory. The screenshot was inspected.
 This closes deployed legacy-name acceptance for a direct MCP node. Live collision and LLM-loop compatibility acceptance remain open. Component checks do not close Gate 4.
+
+
+### LLM-loop acceptance is not yet proved
+
+Chats 684 and 685 terminate successfully but do not call the MCP tool.
+Their `agent_llm_start` events name `vllm/CONTINUATION-REPAIR-FIXTURE`; the final answer is the fixture echo.
+Chat 685 selects Haiku in the browser before submission, but the execution still names the fixture model.
+Do not count either run as toolkit acceptance. Trace selection through the chat request and admitted model before retrying.
+The relevant UI entry point is `apps/elitea-web/src/widgets/chat-box/ui/hooks/useChatBoxModelSelection.ts::handleSelectModel`.
+The test saved the display label `eu.anthropic.claude-haiku`, but the catalog identity is `eu.anthropic.claude-haiku-4-5-20251001-v1:0` in project 1.
+`internal/application/agentexecution/tools.go` falls back to the catalog default when the requested identity is absent. The default for these runs was the continuation fixture.
+The application execution contract deliberately omits chat-picker model overrides (`useChatBoxSend.helpers.ts`); the saved version selects the model. This is a test setup error, not evidence of a picker mutation failure.
+Use the catalog identity when creating the replacement acceptance version.
+
+
+### Real-provider LLM binding and persisted output
+
+Chat 686 uses application 98, version 105, with the catalog-verified Haiku identity.
+The LLM node selects `RUST-_COMPACTION-_RECORDS`. Its observed events name Haiku and show `read_compaction_record` with index 1, followed by a successful tool-end event with two output chunks.
+Execution `c5495bd58932e2b5694a6e9d7cf18be5` is `SUCCEEDED`.
+The first live-page final-answer assertion did not pass. A separate fresh-browser readback shows `CEDAR-731` and `blue`, and a second reload preserves the answer with no page errors. The rendered screenshot was inspected.
+This proves real-provider LLM binding and persisted output. It does not prove the original live-page final-answer assertion. Live same-operation collision acceptance remains open.
