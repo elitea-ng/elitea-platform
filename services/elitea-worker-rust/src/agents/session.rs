@@ -2595,6 +2595,7 @@ fn public_application_details(
     application: &Map<String, Value>,
 ) -> Result<Value, NativeAgentAssemblyError> {
     let mut application = application.clone();
+    application.remove("instructions");
     if let Some(Value::Object(version)) = application.get_mut("version_details")
         && let Some(Value::Array(skills)) = version.get_mut("skills")
     {
@@ -2605,6 +2606,7 @@ fn public_application_details(
         }
     }
     if let Some(Value::Object(version)) = application.get_mut("version_details") {
+        version.remove("instructions");
         version.remove("project_context");
     }
     let application = Value::Object(application);
@@ -2743,4 +2745,46 @@ fn pipeline_configuration_error(code: &str) -> NativeAgentAssemblyError {
         _ => NativeAgentAssemblyErrorCode::InvalidConfiguration,
     };
     NativeAgentAssemblyError::new(code, "the stored pipeline could not be compiled")
+}
+
+#[cfg(test)]
+mod public_application_metadata_tests {
+    use super::*;
+
+    #[test]
+    fn large_instructions_do_not_consume_public_event_metadata_capacity() {
+        let instructions = "private pipeline instructions ".repeat(4096);
+        let application = serde_json::json!({
+            "id": 83,
+            "name": "Inspection pipeline",
+            "instructions": instructions,
+            "version_details": {
+                "id": 90,
+                "agent_type": "pipeline",
+                "instructions": instructions,
+                "skills": [{"id": 7, "version_id": 8, "instructions": "skill body"}],
+                "project_context": {"instructions": "project body"}
+            }
+        });
+        let original = application.as_object().expect("application");
+        let projected = public_application_details(original).expect("bounded public metadata");
+        assert_eq!(projected["id"], 83);
+        assert_eq!(projected["version_details"]["id"], 90);
+        assert_eq!(projected["version_details"]["agent_type"], "pipeline");
+        assert_eq!(projected["version_details"]["skills"][0]["version_id"], 8);
+        assert!(projected.get("instructions").is_none());
+        assert!(projected["version_details"].get("instructions").is_none());
+        assert!(
+            projected["version_details"]
+                .get("project_context")
+                .is_none()
+        );
+        assert!(
+            projected["version_details"]["skills"][0]
+                .get("instructions")
+                .is_none()
+        );
+        assert_eq!(original["version_details"]["instructions"], instructions);
+        assert_eq!(original["instructions"], instructions);
+    }
 }

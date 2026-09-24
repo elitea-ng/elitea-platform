@@ -327,3 +327,28 @@ The screenshot is inspected, and the final browser run exits successfully withou
 This is rendering evidence only. It does not prove live emission of `OUTPUT_DELIVERY_LIMIT` or its corresponding operator log.
 Those live acceptance checks remain open. Protocol tests separately prove registered Main ingestion and Rust replay.
 The screenshot also shows an invalid negative thinking duration in historical chat 667. Record that UI issue for separate investigation.
+
+
+### Public application metadata boundary, 2026-09-24
+
+Live output-limit testing exposes a separate assembly rejection in conversation 671.
+The saved pipeline contains 48 KB of synthetic fixed arguments. Its public application details exceed the 32 KiB metadata limit.
+The assembly failure occurs before tool execution. It does not verify `OUTPUT_DELIVERY_LIMIT`.
+Earlier fixture attempts 669 and 670 use the wrong relation type and provide no runtime proof.
+Saved pipeline toolkit relations use `entity_type: agent`, matching `apps/elitea-web/src/features/agents/lib/toolRelation.ts`.
+The MCP-backed fixture requires a direct `mcp` node. Both the relation type and exact toolkit identity must match.
+
+`src/agents/session.rs::public_application_details` previously copied application instructions into terminal display metadata.
+The function now removes root and version instructions from that public copy.
+Execution retains the original frozen definition. Skill identities, version identities, names, and agent type remain available.
+The existing removal of skill bodies and project context remains unchanged.
+The public metadata bound remains 32 KiB. This change does not raise execution or transport limits.
+
+Rust emits the metadata in `agents/events.rs::finish_after_eos` through `full_message`.
+Main consumes `application_details.agent_type` or `version_details.agent_type` in `agent_execution_results.go::decodeCurrentAgentFullMessage`.
+Current and new UI source searches find no reader of application instructions from this message field.
+This is a replatform projection correction, not a change to legacy instruction execution or persistence.
+The regression supplies large root and version instructions, checks retained identities, and verifies that the original definition remains intact.
+Deployment and renewed live acceptance remain open for this correction.
+
+All 24 session tests pass without ignored tests. Strict library-and-test Clippy and formatting checks pass.
