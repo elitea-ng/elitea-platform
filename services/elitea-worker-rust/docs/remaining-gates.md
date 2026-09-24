@@ -14,7 +14,7 @@ Current-platform code defines business behavior, not a requirement to copy its i
 - Gate 3 is accepted for progression. The final restricted chat-operation permission check passes on 2026-09-14.
 - Gate 4 is active for context management and current-platform runtime drift.
 - [Failure diagnostics](source-mapping/continuation-diagnostics-20260923.md) now have deployed operator guidance, copyable references, and verified async source locations. Chat 668 verifies parent completion after a child context-budget failure. Other deployed model-failure categories remain open.
-- Typed pipeline input-limit, result-mapping, and tool-call errors pass live browser and reload acceptance in chats 673, 675, and 674. Chat 676 verifies successful direct execution.
+- Typed pipeline input-limit, result-mapping, and tool-call errors pass live browser and reload acceptance in chats 673, 675, and 674. Chat 676 verifies successful direct execution. Chats 677 and 678 verify downstream suppression and parent recovery for a saved child pipeline failure.
 - Output-delivery error code 24 is deployed in Main and Rust. Browser rendering passes with a response fixture; live emission remains open.
 - Public event metadata omits instruction bodies. All 24 session tests pass. The fix is deployed; chat 672 passes the previous assembly boundary.
 - [Native history retention](source-mapping/context-native-history-retention-20260921.md) records repeated-loop component proof and earlier live defects.
@@ -26,7 +26,7 @@ Current-platform code defines business behavior, not a requirement to copy its i
 - [Pipeline LLM-node acceptance](source-mapping/pipeline-model-compaction-live-20260922.md) verifies two compactions, 24 reads, exact graph state, and stable reload in chat 621.
 - [Output continuation capacity](source-mapping/output-continuation-capacity-20260922.md) tracks the 64 KiB correction, admitted model restoration, and continued-answer fragment rendering.
 - Direct Continue and exact history reload pass in chat 625. Nested output-exhaustion continuation passes fresh-browser chat 631; chat 632 passes worker loss after persisted continuation round two, complete child-result receipt, and stable reload. Chat 634 verifies the explicit incomplete-response error and stable reload without a false child completion receipt. The four-call automatic policy (including repair) passes component tests and fresh browser chats 636/637: early completion after two continuations and exhaustion at four. Chat 640 verifies inspectable incomplete child output live and after reload, with zero false completion receipts. Live bounded-repair acceptance and partial-trace publication crash injection remain open; see the output-continuation mapping.
-- Graph recovery and additional crash boundaries remain unverified.
+- Chat 653 verifies process recovery during structured LLM-node continuation, followed by a deterministic node. Other graph frontiers and crash boundaries remain open.
 - The [point 3 audit](source-mapping/point3-audit-20260913.md) records the completed acceptance cases and their limits.
 - Production Rust capability registration remains disabled.
 
@@ -153,7 +153,7 @@ The [prepared-request history projection](source-mapping/context-runner-history-
 Chat 606 uses two claims and retains its answer after reload.
 Later chat 616 verifies repeated child compaction and nested browser recovery after whole-worker loss.
 Chat 619 also verifies concurrent sibling and grandchild recovery with completed-sibling reuse.
-Graph recovery and broader in-process history bounds remain open.
+Structured LLM-node continuation recovery passes in chat 653. Other graph frontiers and broader in-process history bounds remain open.
 The [native history retention candidate](source-mapping/context-native-history-retention-20260921.md) passes 374 agent tests with PostgreSQL.
 It retains prepared model history and avoids accumulating partial stream events.
 Clippy and formatting checks pass. Chat 607 passes deployed compaction and fresh-browser reload.
@@ -184,7 +184,7 @@ real profile saves, ordinary model-loop measurements, and fresh-browser reload
 without intercepted requests. Threshold compaction and recovery acceptance remain
 open, as does durable nested activity beyond replay retention.
 Main chat shows detailed usage; nested agents show brief compaction activity text, with separate model scopes and no combined parent/child meter.
-Nested and graph-model recovery coordination and actual compaction browser acceptance remain open.
+The later acceptance records above verify nested compaction and worker recovery, plus structured LLM-node continuation recovery. Other graph frontiers remain open.
 The [compatible-provider correction](source-mapping/context-summary-compatibility-20260918.md)
 accepts one validated summary object inside presentation text and aligns input fetching with Main's existing 1 MiB contract.
 It now requests native structured output and applies bounded evidence-only correction without rewriting summary facts.

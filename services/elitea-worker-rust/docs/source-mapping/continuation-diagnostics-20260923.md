@@ -67,8 +67,8 @@ Use the execution boundary, not the application type name, to select behavior.
 | Chat orchestrator | Agent child continuation | Return a failed tool report; let the parent decide | Local tests and deployed browser acceptance pass |
 | Direct pipeline | LLM node continuation | Stop before downstream state is written | Existing focused graph test passes |
 | Direct pipeline | Agent node calling an Agent application | Stop with the typed failure | Local classification and deployed graph acceptance pass |
-| Pipeline | Nested pipeline | Propagate failure; do not release partial state as success | Open |
-| Pipeline Agent node | Pipeline application | Propagate failure to the owning graph | Deployed continuation code and downstream suppression pass; exact cause remains open |
+| Pipeline | Saved child pipeline through an Agent node | Propagate failure; do not release partial state as success | Chat 677 verifies typed direct-tool failure and unchanged downstream state |
+| Pipeline Agent node | Pipeline application | Propagate failure to the owning graph | Chats 665 and 677 verify continuation and direct-tool failure paths; other categories require separate proof |
 | Chat orchestrator | Pipeline child | Stop the child graph; report its contained failure to the parent | Deployed continuation failure report and parent completion pass |
 | Any scope | Cancellation or execution-wide limit | Preserve control semantics; do not offer automatic retry | Existing handling retained; combination tests remain |
 
@@ -505,3 +505,24 @@ All three browser runs use no response mocks and report no page errors. Screensh
 Local evidence prefixes are `elitea-result-invalid`, `elitea-direct-success`, and `elitea-tool-failure`.
 The result files distinguish the observed live failure events from the successful response.
 Output-delivery-limit acceptance and other Gate 4 verification remain open.
+
+
+### Nested direct-tool error propagation acceptance, 2026-09-24
+
+The deployed worker remains `caa621d36`; no new runtime change is required.
+Fresh headed-browser chat 677 runs application 89, version 96, with a saved pipeline child through an Agent node.
+The child is application 87, version 94, whose result mapping deliberately requires a missing field.
+Execution `2adf6ee5ae037cf311c218caffbb0a03` fails with `PIPELINE_RESULT_INVALID`.
+The live browser and reload preserve the exact public category and support reference.
+PostgreSQL retains only graph step zero with `delegate` pending. The `answer` and `final_text` fields remain empty.
+The downstream state modifier does not run.
+
+Fresh chat 678 runs an ordinary Agent parent with the same child.
+Execution `738449893c03ee4c183daff15473378a` succeeds.
+The parent reports `PIPELINE_RESULT_INVALID`, retryable=false, `revise_task`, and no available partial output.
+It completes with `PARENT_HANDLED_PIPELINE_FAILURE`. Live output and reload checks pass.
+Captured events contain one child tool start, one tool error, and a terminal pipeline-finish event.
+The parent does not repeat the child call.
+Both browser sessions use real responses, no mocks, and report no page errors. Screenshots are inspected.
+Evidence prefixes: `elitea-nested-direct-failure` and `elitea-parent-direct-failure` in the local evidence directory.
+This proves these caller boundaries for invalid direct-tool results, not every possible nested failure or recovery state.
