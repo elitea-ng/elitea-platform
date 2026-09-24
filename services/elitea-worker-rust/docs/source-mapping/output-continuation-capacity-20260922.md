@@ -963,3 +963,15 @@ The rehearsal uses a private synthetic model and one temporary egress entry for 
 No default model or real credential changes. The fixture has no published host ports.
 The first runtime case stops during admission because the synthetic model lacks context limits.
 Explicit limits are then added to the synthetic model. Deployed repair verification continues.
+
+### Deployed boundary repair passes, 2026-09-24
+
+Fresh headed-browser chat 681 runs application 93, version 100, against the isolated synthetic provider.
+Execution `ba84dc7d4fe7ab22335c2c4fefb946a6` reaches `SUCCEEDED`.
+The provider journal records exactly three requests: `continuation_prefix`, `continuation_bad_boundary`, and `continuation_repaired`.
+The final browser answer contains each of the 12 records once and the `REPAIR_COMPLETE` marker.
+The rejected fragment does not appear. Reload preserves the answer. No failure events or browser page errors occur.
+The screenshot is inspected. Browser responses are not mocked; the provider is explicitly synthetic.
+The deployed worker and Main use their normal gateway, checkpoint, streaming, and persistence paths.
+Evidence prefix: `elitea-repair-runtime` in the local acceptance directory.
+This closes successful deployed boundary repair for this pipeline LLM scope. Crash recovery during repair remains open.
