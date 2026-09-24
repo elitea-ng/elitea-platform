@@ -577,3 +577,25 @@ The UI shows the delivery-limit explanation and support message ID `ad9bc999-846
 The message survives reload. There are no browser page errors. The screenshot is inspected.
 Evidence prefix: `elitea-output-projection` in the local acceptance directory, chat 695.
 This closes live acceptance for this projection boundary. It does not prove every resource limit or complete Gate 4.
+
+### Provider HTTP failure acceptance, 2026-09-24
+
+The deterministic provider now supports explicit latest-user-message markers for HTTP 401, 429, and 503.
+Each response contains a fixed synthetic body canary. It contains no request data or real credentials.
+Three HTTP/SSE fixture tests pass, including isolation from previous-message error markers and the existing continuation/delivery cases.
+Fixture image `sha256:b4ccf411d5e023c9ded598ac188fdbc3f50ffda89cda203883c6424ae8c74d8b` is deployed with unchanged environment and isolation settings.
+Rust `transport/openai_compatible_facade.rs::validate_response_head` classifies gateway HTTP status before reading error bodies.
+`protocol/output.rs` maps the typed cause to the public category and guidance. Existing Main persistence and UI failure references carry that result.
+
+| Chat | Provider status | Public code | Browser result |
+| --- | --- | --- | --- |
+| 696 | 401 | `MODEL_ACCESS_DENIED` | Credentials/project-permission guidance, support reference, stable reload |
+| 697 | 429 | `MODEL_RATE_LIMITED` | Wait or change model guidance, support reference, stable reload |
+| 698 | 503 | `MODEL_UNAVAILABLE` | Retry/connection guidance, support reference, stable reload |
+
+Each run uses a fresh headed browser and actual worker/gateway/provider transport. Browser responses are not mocked.
+All three runs receive the expected typed live failure. There are no page errors; screenshots are inspected.
+The provider-body canary is absent from the rendered page and the worker log sample.
+Worker logs contain `model_gateway.unauthorized`, `model_gateway.rate_limited`, and `model_gateway.unavailable` at ERROR level.
+Evidence prefixes: `elitea-provider-401`, `elitea-provider-429`, and `elitea-provider-503` in the local acceptance directory.
+This verifies these compatible-provider HTTP boundaries. Other provider protocols, malformed streams, timeout injection, and broader diagnostic redaction/correlation remain separate checks.

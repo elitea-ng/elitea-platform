@@ -62,6 +62,7 @@ PER-REQUEST MODES, SELECTED BY THE PROMPT (see `_script_for`):
                       Continuation fragments preserve exact whitespace.
                       Add [[mock:repair_slow]] to delay repair chunks for crash tests.
   [[mock:large_tool_input]] emit a fixed 48 KB lookup_record argument for delivery-limit tests.
+  [[mock:http_401]], [[mock:http_429]], [[mock:http_503]] return synthetic provider errors.
   [[mock:slow]]       stream a long, scripted reply one word at a time with a
                       per-chunk delay, so a test can act while the turn is
                       still open (press Stop, navigate away, drop the stream).
@@ -1220,6 +1221,19 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/v1/embeddings":
             self._embeddings(request)
             return
+
+        # Opt in only from the latest user message; never echo request data.
+        prompt = _last_user_text(request.get("messages") or []) or ""
+        for status, error_type in ((401, "authentication_error"),
+                                   (429, "rate_limit_error"),
+                                   (503, "server_error")):
+            if f"[[mock:http_{status}]]" in prompt:
+                self._send(status, {"error": {
+                    "type": error_type,
+                    "message": "SYNTHETIC_PROVIDER_BODY_MUST_NOT_REACH_UI",
+                    "code": f"fixture_{status}",
+                }})
+                return
 
         # The model echoed back is whatever was asked for, minus any
         # `provider/` prefix bifrost may not have stripped, so a client

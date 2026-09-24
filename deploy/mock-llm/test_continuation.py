@@ -3,6 +3,7 @@ import json
 import threading
 import unittest
 import urllib.request
+import urllib.error
 from http.server import ThreadingHTTPServer
 
 from server import Handler
@@ -48,6 +49,24 @@ class ContinuationFixtureTest(unittest.TestCase):
         self.assertEqual(calls[0]["function"]["name"], "lookup_record")
         self.assertEqual(len(json.loads(calls[0]["function"]["arguments"])["probe"]), 48000)
         self.assertEqual(events[-1]["choices"][0]["finish_reason"], "tool_calls")
+
+    def test_provider_errors_are_http_failures_and_do_not_leak_into_next_request(self):
+        for status, category in ((401, "authentication_error"),
+                                 (429, "rate_limit_error"), (503, "server_error")):
+            with self.subTest(status=status):
+                with self.assertRaises(urllib.error.HTTPError) as caught:
+                    self.stream([{"role": "user", "content": f"[[mock:http_{status}]]"}])
+                with caught.exception as response:
+                    self.assertEqual(response.code, status)
+                    body = json.load(response)
+                self.assertEqual(body["error"]["type"], category)
+                self.assertEqual(body["error"]["message"], "SYNTHETIC_PROVIDER_BODY_MUST_NOT_REACH_UI")
+        text, reason = self.stream([
+            {"role": "user", "content": "[[mock:http_401]]"},
+            {"role": "user", "content": "healthy request"},
+        ])
+        self.assertEqual(text, "MOCK: healthy request ")
+        self.assertEqual(reason, "stop")
 
     def test_bad_boundary_then_exact_repair_and_independent_requests(self):
         original = [{"role": "user", "content": "[[mock:continuation_repair]]"}]
