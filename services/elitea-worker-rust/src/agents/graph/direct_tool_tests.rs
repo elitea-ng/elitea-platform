@@ -620,7 +620,12 @@ async fn effect_or_wrong_structured_shape_fails_without_checkpoint_corruption() 
             0,
         ))
         .await;
-    assert!(effect.is_err());
+    let effect_error = effect
+        .err()
+        .expect("unsafe direct tool must fail")
+        .to_string();
+    assert!(effect_error.contains("tool_binding"));
+    assert!(effect_error.contains("does not permit direct pipeline execution"));
     assert_eq!(effect_capture.lock().expect("capture lock").calls, 0);
 
     let (wrong_resolver, _) = fixture_runtime(json!({"report": []}), true);
@@ -634,7 +639,9 @@ async fn effect_or_wrong_structured_shape_fails_without_checkpoint_corruption() 
             0,
         ))
         .await;
-    assert!(wrong.is_err());
+    let projection_error = wrong.err().expect("invalid result must fail").to_string();
+    assert!(projection_error.contains("state_projection"));
+    assert!(projection_error.contains("result is invalid"));
 }
 
 #[tokio::test]
@@ -1157,4 +1164,31 @@ fn mcp_resume_payload(server_url: &str, action: &str, thread: &str) -> AgentExec
             .push(json!({"server_url": server_url}));
     }
     payload
+}
+
+#[tokio::test]
+async fn direct_tool_argument_limit_reports_input_stage_without_invoking_tool() {
+    let definition = DirectToolNodeDefinition::from_yaml(TOOLKIT_NODE).expect("node");
+    let (resolver, capture) = fixture_runtime(json!({"report": {}}), true);
+    let result = DirectToolNode::new(definition, state_types(), resolver)
+        .execute(&NodeContext::new(
+            HashMap::from([
+                ("ticket_id".to_owned(), json!(42)),
+                (
+                    "filters".to_owned(),
+                    json!({"private": "x".repeat(513 * 1024)}),
+                ),
+            ]),
+            ExecutionConfig::new("argument-limit"),
+            0,
+        ))
+        .await;
+    let error = result
+        .err()
+        .expect("oversized arguments must fail")
+        .to_string();
+    assert!(error.contains("input_mapping"));
+    assert!(error.contains("resource bound"));
+    assert!(!error.contains("private"));
+    assert_eq!(capture.lock().expect("capture").calls, 0);
 }

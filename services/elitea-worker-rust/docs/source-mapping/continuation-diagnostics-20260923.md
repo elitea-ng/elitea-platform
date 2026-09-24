@@ -375,3 +375,24 @@ Record that diagnostic loss separately; do not infer a provider, context, or del
 The public metadata regression remains verified by its focused tests, and the deployed run passes the earlier assembly boundary.
 Live emission and operator-log acceptance of `OUTPUT_DELIVERY_LIMIT` remain open.
 Local evidence: `elitea-output-delivery-live-live.json`, `elitea-output-delivery-live-frames.json`, and `elitea-output-delivery-live-failed.png`.
+
+
+### Direct-tool failure stage preservation, 2026-09-24
+
+Reference SDK commit: `966526e8334354366dd161b606d73fe8e204b850`.
+`elitea_sdk/runtime/langchain/langraph_agent.py` binds direct Toolkit and MCP nodes through `FunctionTool`.
+`elitea_sdk/runtime/tools/function.py` classifies local failures and records tool outcomes, including retry information.
+That implementation can return raw arguments and exception text in messages. Rust does not copy that behavior.
+The replatform contract stops a direct pipeline node when its required operation fails.
+
+`agents/graph/direct_tool.rs` now retains a typed cause and static stage until the graph boundary.
+Stages distinguish input mapping, identity binding, authorization, confirmation, argument digest, tool execution, and state projection.
+The node emits an ERROR event within its execution span. It includes the safe cause and static upstream error code.
+The event excludes arguments, results, and provider exception messages.
+The graph error retains the safe stage and cause. It does not add retries or change authorization decisions.
+The root runtime still maps this graph error to a generic public failure. Public contract propagation remains open.
+
+All 13 direct-tool tests pass without ignored tests.
+Tests verify distinct binding and result errors, plus argument-capacity rejection before tool execution.
+Strict library-and-test Clippy and formatting checks pass.
+Deployment and live diagnostic acceptance remain open.

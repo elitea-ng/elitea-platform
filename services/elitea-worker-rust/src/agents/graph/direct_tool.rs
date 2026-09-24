@@ -383,19 +383,22 @@ impl DirectToolNode {
         }
     }
 
-    async fn execute_mapped(&self, context: &NodeContext) -> Result<NodeOutput, GraphError> {
+    async fn execute_mapped(&self, context: &NodeContext) -> Result<NodeOutput, DirectNodeFailure> {
         tracing::Span::current().record("stage", "input_mapping");
         let arguments = self
             .definition
             .map_arguments(&context.state)
-            .map_err(|_| node_failure(self.name()))?;
+            .map_err(|cause| DirectNodeFailure::new("input_mapping", cause))?;
         tracing::Span::current().record("stage", "tool_binding");
         let ResolvedDirectTool { tool, sensitive } = self
             .resolver
             .resolve(self.definition.selection())
-            .map_err(|_| node_failure(self.name()))?;
+            .map_err(|cause| DirectNodeFailure::new("tool_binding", cause))?;
         if !tool.is_read_only() {
-            return Err(node_failure(self.name()));
+            return Err(DirectNodeFailure::policy(
+                "tool_binding",
+                "The selected tool does not permit direct pipeline execution.",
+            ));
         }
         let tool_context = pipeline_tool_context(context, self.name(), tool.name());
         let granted_scopes = tool_context.user_scopes();
@@ -404,12 +407,15 @@ impl DirectToolNode {
             .iter()
             .any(|required| !granted_scopes.iter().any(|granted| granted == required))
         {
-            return Err(node_failure(self.name()));
+            return Err(DirectNodeFailure::policy(
+                "authorization",
+                "The execution does not have the required tool permissions.",
+            ));
         }
         if self.has_mcp_authorization_resume(context)
             && let Some(decision) = self
                 .mcp_authorization_decision(context, &arguments, tool_context.function_call_id())
-                .map_err(|_| node_failure(self.name()))?
+                .map_err(|cause| DirectNodeFailure::new("authorization_resume", cause))?
         {
             return match decision {
                 McpAuthorizationDecision::Authorize(remaining) => {
@@ -438,7 +444,10 @@ impl DirectToolNode {
             .and_then(Value::as_object)
             .is_some_and(|resumes| resumes.contains_key(self.name()))
         {
-            return Err(node_failure(self.name()));
+            return Err(DirectNodeFailure::policy(
+                "authorization_resume",
+                "The saved tool decision does not match this node invocation.",
+            ));
         }
         self.invoke_and_project(tool.as_ref(), tool_context, arguments, None, false)
             .await
@@ -451,11 +460,11 @@ impl DirectToolNode {
         tool_context: Arc<dyn ToolContext>,
         arguments: Value,
         policy: &SensitiveToolPolicy,
-    ) -> Result<NodeOutput, GraphError> {
+    ) -> Result<NodeOutput, DirectNodeFailure> {
         tracing::Span::current().record("stage", "tool_confirmation");
         match self
             .sensitive_decision(context, &arguments, tool_context.function_call_id(), policy)
-            .map_err(|_| node_failure(self.name()))?
+            .map_err(|cause| DirectNodeFailure::new("tool_confirmation", cause))?
         {
             SensitiveDirectToolDecision::Pause(data) => Ok(NodeOutput::interrupt_with_data(
                 policy.policy_message(),
@@ -492,16 +501,16 @@ impl DirectToolNode {
         arguments: Value,
         remaining: Option<Value>,
         authorization_refresh: bool,
-    ) -> Result<NodeOutput, GraphError> {
+    ) -> Result<NodeOutput, DirectNodeFailure> {
         tracing::Span::current().record("stage", "tool_execution");
         let call_id = tool_context.function_call_id().to_owned();
         let argument_digest = argument_digest(&call_id, tool.name(), &arguments)
-            .map_err(|_| node_failure(self.name()))?;
+            .map_err(|cause| DirectNodeFailure::new("argument_digest", cause))?;
         let result = match tool.execute(tool_context, arguments).await {
             Ok(result) => result,
             Err(error) => {
                 let Some(requirement) = delegated_authorization_requirement(&error) else {
-                    return Err(node_failure(self.name()));
+                    return Err(DirectNodeFailure::tool(error.code));
                 };
                 if authorization_refresh {
                     return Ok(self
@@ -519,7 +528,7 @@ impl DirectToolNode {
         let updates = self
             .definition
             .project_result(result, &self.state_types)
-            .map_err(|_| node_failure(self.name()))?;
+            .map_err(|cause| DirectNodeFailure::new("state_projection", cause))?;
         let mut output = NodeOutput::new();
         if let Some(remaining) = remaining {
             output = output.with_update(DIRECT_TOOL_RESUME_STATE_KEY, remaining);
@@ -697,13 +706,28 @@ impl Node for DirectToolNode {
             error_code = tracing::field::Empty,
         );
         let result = self.execute_mapped(context).instrument(span.clone()).await;
-        if result.is_ok() {
-            span.record("outcome", "completed");
-        } else {
-            span.record("outcome", "failed");
-            span.record("error_code", "pipeline.toolkit_node.failed");
+        match result {
+            Ok(output) => {
+                span.record("outcome", "completed");
+                Ok(output)
+            }
+            Err(failure) => {
+                span.record("outcome", "failed");
+                span.record("error_code", "pipeline.toolkit_node.failed");
+                span.in_scope(|| {
+                    tracing::error!(
+                        stage = failure.stage,
+                        failure_reason = %failure.cause,
+                        upstream_error_code = failure.upstream_code.unwrap_or("none"),
+                        "pipeline direct-tool node failed"
+                    );
+                });
+                Err(GraphError::NodeExecutionFailed {
+                    node: self.name().to_owned(),
+                    message: format!("{}: {}", failure.stage, failure.cause),
+                })
+            }
         }
-        result
     }
 }
 
@@ -1312,10 +1336,46 @@ fn ensure_bounded_value(value: &Value) -> Result<(), DirectToolExecutionError> {
     Ok(())
 }
 
-fn node_failure(node: &str) -> GraphError {
-    GraphError::NodeExecutionFailed {
-        node: node.to_owned(),
-        message: "the pipeline direct-tool node failed".to_owned(),
+/// Static diagnostic context. Never retains tool arguments, results, or provider messages.
+struct DirectNodeFailure {
+    stage: &'static str,
+    cause: DirectNodeFailureCause,
+    upstream_code: Option<&'static str>,
+}
+
+#[derive(Debug, Error)]
+enum DirectNodeFailureCause {
+    #[error("{0}")]
+    Execution(DirectToolExecutionError),
+    #[error("{0}")]
+    Policy(&'static str),
+    #[error("The tool call failed. Inspect its error code before repeating actions.")]
+    Tool,
+}
+
+impl DirectNodeFailure {
+    const fn new(stage: &'static str, cause: DirectToolExecutionError) -> Self {
+        Self {
+            stage,
+            cause: DirectNodeFailureCause::Execution(cause),
+            upstream_code: None,
+        }
+    }
+
+    const fn policy(stage: &'static str, message: &'static str) -> Self {
+        Self {
+            stage,
+            cause: DirectNodeFailureCause::Policy(message),
+            upstream_code: None,
+        }
+    }
+
+    const fn tool(code: &'static str) -> Self {
+        Self {
+            stage: "tool_execution",
+            cause: DirectNodeFailureCause::Tool,
+            upstream_code: Some(code),
+        }
     }
 }
 
