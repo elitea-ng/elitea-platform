@@ -542,3 +542,17 @@ Specific context, provider, pipeline, and output-delivery messages remain unchan
 This fallback does not claim a token, memory, billing, or output cause without evidence.
 Application tests cover presentation and unchanged worker receipts. Transport tests retain canonical message validation.
 Deployed browser acceptance remains pending for this presentation change. Existing stored messages are not rewritten.
+
+
+### Resource-limit browser acceptance, 2026-09-24
+
+Main image `sha256:62e860aad599b4b9fdf51134a18a640d1ea6f73a8099b72ebde77c7a94d02d7c` deploys commit `3eb156329`.
+The deployment preserves all six mounts, environment values, and service settings.
+Fresh headed-browser chat 679 uses application 91, version 98, with synthetic version metadata above the public metadata bound.
+The worker emits `RESOURCE_EXHAUSTED`. Main projects the new guidance without changing the worker protocol.
+The browser receives the live failure event, displays its support reference, and retains the message after reload.
+The screenshot is inspected. No response mocks or browser page errors occur.
+Evidence prefix: `elitea-resource-guidance` in the local acceptance directory.
+This verifies the generic message, not every underlying resource boundary. Gate 4 remains open.
+An earlier fixture submits an oversized application description and receives HTTP 500 before execution.
+Main request validation requires a separate follow-up for that rejected input. Its root cause is not yet established.
