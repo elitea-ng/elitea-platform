@@ -2286,6 +2286,12 @@ This page is a seeded fixture. It exists so the DeepWiki journey can read a
 wiki page that a provider would have written, on a stack that runs no provider.
 WIKI_PAGE
 
+    # mktemp -d creates WIKI_TMP mode 0700, owned by this user. The rc
+    # image runs as non-root (uid 100), which cannot read a 0700 dir
+    # owned by another uid, so `rc cp` would fail with "Permission
+    # denied" on the bind mount. Make the fixture tree readable first.
+    chmod -R a+rX "${WIKI_TMP}"
+
     # `rc` is the tool the compose file already uses to create the S3 bucket
     # (rustfs-bucket-init), so this adds no new dependency to the stack.
     $EXEC_BIN run --rm --network "${E2E_PROJECT}_default" \
