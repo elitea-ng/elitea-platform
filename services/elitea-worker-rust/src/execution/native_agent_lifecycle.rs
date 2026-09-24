@@ -37,7 +37,7 @@ use crate::agents::runtime::{
 use crate::protocol::control::AgentControlClient;
 use crate::protocol::elitea::runtime::v1::NodeEventV1;
 use crate::protocol::node_event::encode_current_node_event_json;
-use crate::protocol::output::RuntimeFailureKind;
+use crate::protocol::output::{RuntimeFailureKind, model_failure};
 use crate::transport::ControlRpc;
 use crate::transport::redis_commands::{RedisCommandRetirer, RedisRetirementClient};
 
@@ -1366,56 +1366,6 @@ fn projection_failure(error: &AgentEventProjectionError) -> RuntimeFailureKind {
         AgentEventProjectionErrorCode::ProviderFailure
         | AgentEventProjectionErrorCode::InvalidState
         | AgentEventProjectionErrorCode::InvalidOutput => RuntimeFailureKind::Internal,
-    }
-}
-
-fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
-    match upstream_code {
-        Some("model.output_continuation_failed") => RuntimeFailureKind::OutputContinuationExhausted,
-        Some(
-            "model_gateway.response_header_timeout"
-            | "model_gateway.stream_idle_timeout"
-            | "model_gateway.upstream_timeout"
-            | "anthropic_gateway.response_header_timeout",
-        ) => RuntimeFailureKind::ModelTimeout,
-        Some("model_gateway.rate_limited") => RuntimeFailureKind::ModelRateLimited,
-        Some("model_gateway.unauthorized" | "model_gateway.forbidden") => {
-            RuntimeFailureKind::ModelAccessDenied
-        }
-        Some("model_gateway.budget_exhausted") => RuntimeFailureKind::ModelBudgetExhausted,
-        Some(
-            "model_gateway.rejected"
-            | "model_gateway.invalid_request"
-            | "anthropic_gateway.invalid_request"
-            | "anthropic_gateway.sampling_unsupported",
-        ) => RuntimeFailureKind::ModelRequestRejected,
-        Some("context_budget_exceeded") => RuntimeFailureKind::ContextBudgetExceeded,
-        Some(
-            "model_request_bytes_exceeded"
-            | "model_gateway.request_too_large"
-            | "anthropic_gateway.request_too_large",
-        ) => RuntimeFailureKind::ModelRequestTooLarge,
-        Some(
-            "model_gateway.transport"
-            | "model_gateway.stream_transport"
-            | "model_gateway.unavailable"
-            | "model_gateway.conflict"
-            | "model_gateway.http_version"
-            | "anthropic_gateway.transport",
-        ) => RuntimeFailureKind::ModelUnavailable,
-        Some("model_gateway.provider_error" | "anthropic_gateway.provider_error") => {
-            RuntimeFailureKind::ModelProviderFailure
-        }
-        Some(
-            "model_gateway.incomplete_stream"
-            | "model_gateway.invalid_sse"
-            | "model_gateway.response_type"
-            | "model_gateway.done_before_completion"
-            | "model_gateway.event_after_completion"
-            | "anthropic_gateway.invalid_stream"
-            | "anthropic_gateway.incomplete_stream",
-        ) => RuntimeFailureKind::ModelResponseInvalid,
-        _ => RuntimeFailureKind::Internal,
     }
 }
 

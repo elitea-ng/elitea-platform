@@ -1964,6 +1964,75 @@ fn assert_resumed_model_requests(captured: &Arc<Mutex<Vec<CapturedModelRequest>>
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn child_model_failure_returns_typed_report_and_parent_completes() {
+    for (status, code, retryable) in [
+        (429, "MODEL_RATE_LIMITED", true),
+        (403, "MODEL_ACCESS_DENIED", false),
+        (503, "MODEL_UNAVAILABLE", true),
+    ] {
+        let mut request = ordinary_request(AgentExecutionKind::Application);
+        attach_nested_agent(&mut request);
+        let (runtime_context, _, _) = runtime_context_with_child();
+        let mut failed =
+            test_model_gateway_response(Body::new(Full::<Bytes>::from("SECRET_PROVIDER_BODY")));
+        *failed.status_mut() = http::StatusCode::from_u16(status).unwrap();
+        let (model_gateway, captured) = test_model_gateway_client(
+            vec![
+                TestModelGatewayOutcome::Response(nested_agent_call_response()),
+                TestModelGatewayOutcome::Response(failed),
+                TestModelGatewayOutcome::Response(text_response("parent handles child failure")),
+            ],
+            test_model_gateway_config(),
+        )
+        .unwrap();
+        let assembler = OrdinaryNativeAgentAssembler::new(
+            platform_client(runtime_context),
+            Arc::new(ModelFacade::from_gateway(model_gateway)),
+            empty_tool_policy(),
+        );
+        let mut invocation = assembler
+            .assemble(AuthorizedNativeAssembly::new(
+                &request,
+                test_runtime_context_authority(),
+                AuthorizedNativeCommandBinding::fixture(),
+            ))
+            .await
+            .unwrap();
+        invocation.project_start(chrono::Utc::now()).unwrap();
+        let (mut native, mut projector, completion) = invocation.start().unwrap();
+        while let Some(event) = native
+            .next_event()
+            .await
+            .expect("child failure must not terminate parent")
+        {
+            projector.project(&event).unwrap();
+        }
+        let finish = projector
+            .finish_after_eos(completion.select().await.unwrap(), chrono::Utc::now())
+            .unwrap();
+        assert!(
+            finish
+                .into_iter()
+                .any(|event| event.r#type == "full_message")
+        );
+        let requests = captured.lock().unwrap();
+        assert_eq!(requests.len(), 3, "no automatic child retry");
+        let parent: serde_json::Value = serde_json::from_slice(&requests[2].body).unwrap();
+        let tool = parent["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["role"] == "tool")
+            .unwrap();
+        let report: serde_json::Value =
+            serde_json::from_str(tool["content"].as_str().unwrap()).unwrap();
+        assert_eq!(report["failure"]["code"], code);
+        assert_eq!(report["failure"]["retryable"], retryable);
+        assert!(!report.to_string().contains("SECRET_PROVIDER_BODY"));
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn saved_agent_is_resolved_once_and_runs_as_an_adk_agent_tool() {
     let mut request = ordinary_request(AgentExecutionKind::Application);
     attach_nested_agent(&mut request);

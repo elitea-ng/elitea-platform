@@ -592,6 +592,56 @@ pub(crate) fn build_toolkit_execute_read_terminal_output_frame(
     Ok(frame)
 }
 
+pub(crate) fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
+    match upstream_code {
+        Some("model.output_continuation_failed") => RuntimeFailureKind::OutputContinuationExhausted,
+        Some(
+            "model_gateway.response_header_timeout"
+            | "model_gateway.stream_idle_timeout"
+            | "model_gateway.upstream_timeout"
+            | "anthropic_gateway.response_header_timeout",
+        ) => RuntimeFailureKind::ModelTimeout,
+        Some("model_gateway.rate_limited") => RuntimeFailureKind::ModelRateLimited,
+        Some("model_gateway.unauthorized" | "model_gateway.forbidden") => {
+            RuntimeFailureKind::ModelAccessDenied
+        }
+        Some("model_gateway.budget_exhausted") => RuntimeFailureKind::ModelBudgetExhausted,
+        Some(
+            "model_gateway.rejected"
+            | "model_gateway.invalid_request"
+            | "anthropic_gateway.invalid_request"
+            | "anthropic_gateway.sampling_unsupported",
+        ) => RuntimeFailureKind::ModelRequestRejected,
+        Some("context_budget_exceeded") => RuntimeFailureKind::ContextBudgetExceeded,
+        Some(
+            "model_request_bytes_exceeded"
+            | "model_gateway.request_too_large"
+            | "anthropic_gateway.request_too_large",
+        ) => RuntimeFailureKind::ModelRequestTooLarge,
+        Some(
+            "model_gateway.transport"
+            | "model_gateway.stream_transport"
+            | "model_gateway.unavailable"
+            | "model_gateway.conflict"
+            | "model_gateway.http_version"
+            | "anthropic_gateway.transport",
+        ) => RuntimeFailureKind::ModelUnavailable,
+        Some("model_gateway.provider_error" | "anthropic_gateway.provider_error") => {
+            RuntimeFailureKind::ModelProviderFailure
+        }
+        Some(
+            "model_gateway.incomplete_stream"
+            | "model_gateway.invalid_sse"
+            | "model_gateway.response_type"
+            | "model_gateway.done_before_completion"
+            | "model_gateway.event_after_completion"
+            | "anthropic_gateway.invalid_stream"
+            | "anthropic_gateway.incomplete_stream",
+        ) => RuntimeFailureKind::ModelResponseInvalid,
+        _ => RuntimeFailureKind::Internal,
+    }
+}
+
 impl RuntimeFailureKind {
     pub(crate) fn safe_message(self) -> &'static str {
         runtime_error_policy(self).1
@@ -600,7 +650,9 @@ impl RuntimeFailureKind {
 
 // Keep every registered code/message/retry tuple in one exhaustive policy table.
 #[allow(clippy::too_many_lines)]
-fn runtime_error_policy(kind: RuntimeFailureKind) -> (RuntimeErrorCodeV1, &'static str, bool) {
+pub(crate) fn runtime_error_policy(
+    kind: RuntimeFailureKind,
+) -> (RuntimeErrorCodeV1, &'static str, bool) {
     match kind {
         RuntimeFailureKind::UnsupportedCapability => (
             RuntimeErrorCodeV1::UnsupportedCapability,

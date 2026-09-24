@@ -411,7 +411,7 @@ impl Tool for ApplicationPipelineTool {
         match result {
             Err(error) => {
                 if let Some(report) =
-                    super::application_tools::child_continuation_report(&error, None, false)
+                    super::application_tools::child_failure_report(&error, None, false)
                 {
                     tracing::error!(
                         event = "nested_pipeline_failed",
@@ -419,8 +419,8 @@ impl Tool for ApplicationPipelineTool {
                         function_call_id = %ctx.function_call_id(),
                         error_code = error.code,
                         cause_message = report["failure"]["message"].as_str(),
-                        recovery = "revise_task",
-                        "child pipeline answer is incomplete; returning failure to the orchestrator"
+                        recovery = report["failure"]["recovery_action"].as_str(),
+                        "child pipeline model failed; returning failure to the orchestrator"
                     );
                     Ok(report)
                 } else {

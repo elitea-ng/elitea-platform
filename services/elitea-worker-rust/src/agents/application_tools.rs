@@ -109,6 +109,7 @@ pub(super) enum ApplicationEventSignal {
 #[derive(Clone, Copy)]
 pub(super) enum ApplicationEventFailure {
     ChildExecution,
+    Model(&'static str),
     OutputContinuation(super::model_checkpoint::output::ContinuationFailure),
 }
 
@@ -2273,7 +2274,7 @@ impl ApplicationAgentTool {
                 Ok(event) => event,
                 Err(error) => {
                     if let Some(report) =
-                        child_continuation_report(&error, last_text.take(), pipeline_node)
+                        child_failure_report(&error, last_text.take(), pipeline_node)
                     {
                         tracing::error!(
                             event = "nested_application_failed",
@@ -2283,10 +2284,10 @@ impl ApplicationAgentTool {
                             function_call_id = %ctx.function_call_id(),
                             error_code = error.code,
                             cause_message = report["failure"]["message"].as_str(),
-                            recovery = "revise_task",
+                            recovery = report["failure"]["recovery_action"].as_str(),
                             failure_diagnostic = %crate::diagnostics::failure::capture()
                                 .as_deref().unwrap_or("disabled_or_rate_limited"),
-                            "child answer is incomplete; returning failure to the orchestrator"
+                            "child model failed; returning failure to the orchestrator"
                         );
                         return Ok(report);
                     }
@@ -2296,6 +2297,10 @@ impl ApplicationAgentTool {
                                 super::model_checkpoint::output::ContinuationFailure::ChildFailure,
                             ),
                         )
+                    } else if crate::protocol::output::model_failure(Some(error.code))
+                        != crate::protocol::output::RuntimeFailureKind::Internal
+                    {
+                        ApplicationEventFailure::Model(error.code)
                     } else {
                         ApplicationEventFailure::ChildExecution
                     };
@@ -2428,29 +2433,47 @@ impl ApplicationAgentTool {
     }
 }
 
-/// A child-local output failure is data for the parent, not a root failure.
+/// A known child model failure is data for the parent, not a root failure.
 /// Other errors keep their existing terminal/control handling.
-pub(super) fn child_continuation_report(
+pub(super) fn child_failure_report(
     error: &AdkError,
     partial: Option<String>,
     pipeline_node: bool,
 ) -> Option<Value> {
-    if pipeline_node || error.code != "model.output_continuation_failed" {
+    use crate::protocol::output::{RuntimeFailureKind, model_failure, runtime_error_policy};
+    if pipeline_node {
         return None;
     }
-    let message = super::model_checkpoint::output::failure_reason(error)
-        .unwrap_or(super::model_checkpoint::output::ContinuationFailure::ChildFailure)
-        .to_string();
+    let kind = model_failure(Some(error.code));
+    if kind == RuntimeFailureKind::Internal {
+        return None;
+    }
+    let (code, safe_message, retryable) = runtime_error_policy(kind);
+    let continuation = kind == RuntimeFailureKind::OutputContinuationExhausted;
+    let message = if continuation {
+        super::model_checkpoint::output::failure_reason(error)
+            .unwrap_or(super::model_checkpoint::output::ContinuationFailure::ChildFailure)
+            .to_string()
+    } else {
+        safe_message.to_owned()
+    };
+    let recovery = match kind {
+        RuntimeFailureKind::ModelAccessDenied | RuntimeFailureKind::ModelBudgetExhausted => {
+            "ask_administrator"
+        }
+        _ if retryable => "verify_before_retry",
+        _ => "revise_task",
+    };
     let partial = partial.filter(|text| !text.is_empty());
     Some(json!({
         "error": message,
         "failure": {
-            "code": "OUTPUT_CONTINUATION_EXHAUSTED",
+            "code": code.as_str_name().trim_start_matches("RUNTIME_ERROR_CODE_V1_"),
             "message": message,
             "recoverable": true,
-            "retryable": false,
-            "recovery_action": "revise_task",
-            "guidance": "The child task is incomplete. Use verified partial output or split the remaining work into smaller tasks. Do not repeat the identical call automatically. Prior tool side effects may exist; verify them before repeating any action.",
+            "retryable": retryable,
+            "recovery_action": recovery,
+            "guidance": "The child task failed. Use only verified partial output. Follow the failure message and recovery action. Do not repeat the identical call automatically. Prior tool side effects may exist; verify them before repeating any action.",
             "partial_output_available": partial.is_some(),
             "partial_output": partial,
         }
@@ -2922,6 +2945,12 @@ pub(super) fn application_signal_event(signal: ApplicationEventSignal) -> adk_ru
         ApplicationEventSignal::Fatal(ApplicationEventFailure::ChildExecution) => {
             Err(child_execution_error())
         }
+        ApplicationEventSignal::Fatal(ApplicationEventFailure::Model(code)) => Err(AdkError::new(
+            ErrorComponent::Model,
+            ErrorCategory::Internal,
+            code,
+            "child model execution failed",
+        )),
     }
 }
 
@@ -3443,8 +3472,7 @@ mod tests {
         let error = crate::agents::model_checkpoint::output::failed(
             crate::agents::model_checkpoint::output::ContinuationFailure::CallLimit,
         );
-        let report =
-            child_continuation_report(&error, Some("accepted prefix".into()), false).unwrap();
+        let report = child_failure_report(&error, Some("accepted prefix".into()), false).unwrap();
         assert!(report.get("response").is_none());
         assert!(report["error"].is_string());
         assert_eq!(report["failure"]["retryable"], false);
@@ -3459,13 +3487,12 @@ mod tests {
         let error = crate::agents::model_checkpoint::output::failed(
             crate::agents::model_checkpoint::output::ContinuationFailure::CallLimit,
         );
-        assert!(child_continuation_report(&error, Some("incomplete".into()), true).is_none());
+        assert!(child_failure_report(&error, Some("incomplete".into()), true).is_none());
     }
 
     #[test]
     fn child_control_failures_do_not_become_recoverable_reports() {
         for code in [
-            "context_budget_exceeded",
             "cancelled",
             "tool.authorization_required",
             "runtime.invalid_state",
@@ -3476,7 +3503,7 @@ mod tests {
                 code,
                 "PRIVATE_PROVIDER_BODY",
             );
-            assert!(child_continuation_report(&error, None, false).is_none());
+            assert!(child_failure_report(&error, None, false).is_none());
         }
         let error = AdkError::new(
             ErrorComponent::Model,
@@ -3484,9 +3511,65 @@ mod tests {
             "model.output_continuation_failed",
             "PRIVATE_PROVIDER_BODY",
         );
-        let report = child_continuation_report(&error, None, false).unwrap();
+        let report = child_failure_report(&error, None, false).unwrap();
         assert!(!report.to_string().contains("PRIVATE_PROVIDER_BODY"));
         assert_eq!(report["failure"]["partial_output_available"], false);
+    }
+
+    #[test]
+    fn known_child_model_failures_preserve_policy_without_provider_text() {
+        for (code, public_code, retryable, recovery) in [
+            (
+                "model_gateway.rate_limited",
+                "MODEL_RATE_LIMITED",
+                true,
+                "verify_before_retry",
+            ),
+            (
+                "model_gateway.forbidden",
+                "MODEL_ACCESS_DENIED",
+                false,
+                "ask_administrator",
+            ),
+            (
+                "model_gateway.budget_exhausted",
+                "MODEL_BUDGET_EXHAUSTED",
+                false,
+                "ask_administrator",
+            ),
+            (
+                "context_budget_exceeded",
+                "CONTEXT_BUDGET_EXCEEDED",
+                false,
+                "revise_task",
+            ),
+            (
+                "anthropic_gateway.provider_error",
+                "MODEL_PROVIDER_FAILURE",
+                true,
+                "verify_before_retry",
+            ),
+        ] {
+            let error = AdkError::new(
+                ErrorComponent::Model,
+                ErrorCategory::Internal,
+                code,
+                "SECRET_PROVIDER_BODY",
+            );
+            let report = child_failure_report(&error, Some("partial".into()), false).unwrap();
+            assert_eq!(report["failure"]["code"], public_code);
+            assert_eq!(report["failure"]["retryable"], retryable);
+            assert_eq!(report["failure"]["recovery_action"], recovery);
+            assert!(report.get("response").is_none());
+            assert!(!report.to_string().contains("SECRET_PROVIDER_BODY"));
+            assert!(child_failure_report(&error, None, true).is_none());
+            let terminal = application_signal_event(ApplicationEventSignal::Fatal(
+                ApplicationEventFailure::Model(code),
+            ))
+            .unwrap_err();
+            assert_eq!(terminal.code, code);
+            assert!(!terminal.to_string().contains("SECRET_PROVIDER_BODY"));
+        }
     }
 
     fn application_call_event(

@@ -227,3 +227,33 @@ The operator-only explanation is deployed from `bfbebfd4` in UI image `sha256:63
 Fresh headed browser verification checks the visible explanation, exact clipboard reference, and stable reload in conversation 665.
 The screenshot is inspected. The browser reports no page errors and uses no mocked requests.
 Evidence: `elitea-operator-guidance-deployed.json` and `elitea-operator-guidance-deployed.png` in the local test evidence directory.
+
+## Known child model failures, 2026-09-24
+
+Ordinary child-agent model failures previously published a fatal application event, except for continuation exhaustion.
+This could terminate the orchestrator after a child received a rate limit or denied model access.
+
+`src/protocol/output.rs::model_failure` now owns the shared root-and-child classification.
+The lifecycle imports this existing classification instead of maintaining another table.
+`application_tools.rs::child_failure_report` returns the canonical code, safe explanation, retryability, recovery action, and available partial text.
+`application_pipeline.rs` uses the same report for known child-pipeline model failures.
+No raw provider message enters the report.
+
+Recoverable means that the orchestrator can handle the report. It does not guarantee that the failed child can retry successfully.
+Access and budget failures require administrator action. Transient failures require verification before retry. Input and continuation failures require task revision.
+No automatic child retry is added. Prior tool effects require verification before another action.
+Direct pipeline Agent nodes still fail terminally and now retain the known model code on their fatal event.
+Unknown failures, cancellation, authorization controls, and invalid runtime state keep their existing terminal or control behavior.
+
+Current-platform references are `elitea_sdk/runtime/tools/application.py` and `elitea_sdk/runtime/tool_outcome.py`.
+The former preserves graph interrupts as control flow. The latter defines typed tool outcomes with retry information.
+The Rust implementation follows those distinctions through its existing report and event contracts.
+No database schema or protobuf changes are required.
+Deployed acceptance of these additional child failure categories remains open.
+
+The assembled-agent regression injects HTTP 429, 403, and 503 at the child model gateway boundary.
+Each case completes the parent, preserves the expected report, and makes exactly three model requests without a child retry.
+The report excludes a provider-body secret sentinel.
+Additional checks preserve terminal direct-node handling and reject conversion of cancellation, authorization, or invalid-state errors.
+All 1,217 Rust library tests pass with PostgreSQL available and no ignored tests.
+Formatting and strict library-and-test Clippy checks pass.
