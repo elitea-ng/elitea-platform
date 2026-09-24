@@ -13,7 +13,7 @@ Current-platform code defines business behavior, not a requirement to copy its i
 - Gate 2 is accepted for progression, with explicit verification debt. OAuth/DCR support is not a claim of complete provider coverage.
 - Gate 3 is accepted for progression. The final restricted chat-operation permission check passes on 2026-09-14.
 - Gate 4 is active for context management and current-platform runtime drift.
-- [Legacy toolkit names](source-mapping/toolkit-name-compatibility-20260924.md) pass 51 pipeline tests and deployed direct MCP browser acceptance in chat 683. Exact names take precedence; ambiguous compatibility matches fail before connection. Real Haiku LLM-loop acceptance passes in chat 688, including final live output and reload. Live collision acceptance remains open.
+- [Legacy toolkit names](source-mapping/toolkit-name-compatibility-20260924.md) pass 51 pipeline tests and deployed direct MCP browser acceptance in chat 683. Exact names take precedence; ambiguous compatibility matches fail before connection. Real Haiku LLM-loop acceptance passes in chat 688, including final live output and reload. Same-operation collision acceptance passes direct-node chat 691 and real-Haiku LLM-loop chat 692, with distinct endpoint markers, live final output, and stable reload.
 - [Failure diagnostics](source-mapping/continuation-diagnostics-20260923.md) now have deployed operator guidance, copyable references, and verified async source locations. Chat 668 verifies parent completion after a child context-budget failure. Other deployed model-failure categories remain open.
 - Typed pipeline input-limit, result-mapping, and tool-call errors pass live browser and reload acceptance in chats 673, 675, and 674. Chat 676 verifies successful direct execution. Chats 677 and 678 verify downstream suppression and parent recovery for a saved child pipeline failure.
 - Output-delivery error code 24 is deployed in Main and Rust. Browser rendering passes with a response fixture; live emission remains open.
@@ -376,3 +376,10 @@ PostgreSQL retains the exact request hash, round 2, and the consumed repair allo
 The browser receives the complete result without duplicates and preserves it after reload.
 These cases close the tested repair boundaries. Broader Gate 4 acceptance remains open.
 See [repair recovery evidence](source-mapping/output-continuation-capacity-20260922.md#deployed-repair-crash-recovery-passes-2026-09-24).
+
+
+### Gate 5 zero-argument direct tools
+
+Audit omitted versus explicit empty `input_mapping` for direct Toolkit/MCP nodes.
+The current Rust default inserts `messages`, which a strict zero-argument MCP schema rejects (collision setup chats 689/690).
+Verify current-platform behavior and define an explicit no-argument contract without silently changing existing message-mapping behavior.

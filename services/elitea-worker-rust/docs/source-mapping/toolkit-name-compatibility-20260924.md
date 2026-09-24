@@ -79,3 +79,23 @@ This closes direct MCP and LLM-loop legacy-name acceptance. Live same-operation 
 This provides independent execution evidence for the SDK toolkit-identity contract described above. It performs no external reads or writes, bounds requests to 4096 bytes, and requires explicit test-only enablement.
 Focused checks prove distinct source markers and unknown-path refusal. The fixture runs from stdin in the rehearsal emulator because its root filesystem is read-only. No image, credential, or filesystem policy was changed.
 Registration of the two test toolkits and browser acceptance remain pending. Fixture readiness is not runtime binding acceptance.
+
+
+### Collision setup findings
+
+Test toolkits 90 (`collision release`) and 91 (`collision audit`) use the TLS fixture on port 8445. An exact-host rehearsal egress rule admits that endpoint.
+Chats 689 and 690 reach the release endpoint, but the zero-argument fixture rejects a `messages` argument. `graph/direct_tool.rs::validate_input_mapping` supplies that argument for an empty mapping.
+This does not prove a toolkit identity error. Use an explicit fixture input for collision acceptance. Gate 5 must separately assess explicit empty mappings and zero-argument direct tool calls against current-platform behavior. Do not silently drop that case.
+
+
+### Deployed same-operation collision acceptance
+
+The fixture now requires `probe: identity`. This isolates toolkit routing from the separately recorded empty-mapping case.
+
+- Chat 691, application 103/version 110: two direct MCP nodes call `lookup_record` on toolkits 90 and 91. The final deterministic node renders both source markers in separate fields.
+- Chat 692, application 104/version 111: real Haiku calls `collisionaudit__lookup_record` and `collisionrelease__lookup_record`, each with the explicit probe. The endpoint log confirms one successful call to each source. The final answer pairs audit with `AUDIT-942` and release with `RELEASE-731`.
+
+Both fresh headed-browser checks wait for pipeline completion, verify both markers, and reload successfully. There are no page errors or execution failures and no mocked browser responses. Both screenshots were inspected.
+PostgreSQL records execution `554fded1ca9993aba2d4dc454c455807` (direct) and `d1adff4db907a6aabed0fb94326fcb67` (LLM loop) as `SUCCEEDED`.
+Local evidence uses the `elitea-collision-direct` and `elitea-collision-llm` result, frames, and screenshot files.
+These checks close the tested Gate 4 legacy-name and same-operation toolkit binding acceptance. They do not close other Gate 4 requirements or the Gate 5 zero-argument follow-up.
