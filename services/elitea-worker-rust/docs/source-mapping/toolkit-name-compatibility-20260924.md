@@ -61,3 +61,13 @@ The LLM node selects `RUST-_COMPACTION-_RECORDS`. Its observed events name Haiku
 Execution `c5495bd58932e2b5694a6e9d7cf18be5` is `SUCCEEDED`.
 The first live-page final-answer assertion did not pass. A separate fresh-browser readback shows `CEDAR-731` and `blue`, and a second reload preserves the answer with no page errors. The rendered screenshot was inspected.
 This proves real-provider LLM binding and persisted output. It does not prove the original live-page final-answer assertion. Live same-operation collision acceptance remains open.
+
+
+### Final live-page acceptance
+
+Chat 687 exposed a test ordering error: the answer locator matched the tool trace before model completion, then reloaded. Its reload assertion timed out after 30 seconds.
+The corrected test waits for `pipeline_finish` before checking the final answer and reloading.
+Fresh chat 688 (application 100, version 107) passes with real Haiku, one `read_compaction_record(index=1)` call, one `pipeline_finish`, `CEDAR-731`, and `blue`.
+The final answer appears on the original page and remains after reload. There are no browser page errors or execution failures. No browser responses are mocked.
+Execution `e27485e321f3b1644a9bd7090337c2a4` is `SUCCEEDED`. The live screenshot was inspected.
+This closes direct MCP and LLM-loop legacy-name acceptance. Live same-operation collision coverage remains open.
