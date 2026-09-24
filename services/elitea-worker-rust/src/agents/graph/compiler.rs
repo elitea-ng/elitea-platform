@@ -572,6 +572,23 @@ impl PipelineDefinition {
         )
     }
 
+    pub(crate) fn resolve_legacy_toolkit_aliases(&mut self, aliases: &BTreeMap<String, String>) {
+        for node in &mut self.nodes {
+            match node {
+                PipelineNodeDefinition::DirectTool(node) => {
+                    node.resolve_legacy_toolkit_aliases(aliases);
+                }
+                PipelineNodeDefinition::Llm(node) => node.resolve_legacy_toolkit_aliases(aliases),
+                PipelineNodeDefinition::Application(_)
+                | PipelineNodeDefinition::Decision(_)
+                | PipelineNodeDefinition::Hitl(_)
+                | PipelineNodeDefinition::Printer(_)
+                | PipelineNodeDefinition::Router(_)
+                | PipelineNodeDefinition::StateModifier(_) => {}
+            }
+        }
+    }
+
     /// Exact node-scoped toolkit selections, retained without credentials.
     pub(crate) fn llm_tool_selections(&self) -> impl Iterator<Item = &LlmToolkitSelection> {
         self.nodes.iter().flat_map(|node| match node {

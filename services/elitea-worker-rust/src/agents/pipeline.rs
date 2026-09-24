@@ -176,6 +176,35 @@ impl PipelineExecutionProfile {
         snapshot: &FrozenToolSnapshot<'_>,
         policy: &ToolAdmissionPolicy,
     ) -> Result<(), NativeAgentAssemblyError> {
+        let mut aliases = BTreeMap::new();
+        for alias in self
+            .definition
+            .llm_tool_selections()
+            .map(super::graph::LlmToolkitSelection::alias)
+            .chain(
+                self.definition
+                    .direct_tool_selections()
+                    .map(super::graph::DirectToolSelection::alias),
+            )
+        {
+            if alias == ASK_USER_TOOLSET_NAME
+                || snapshot
+                    .iter()
+                    .any(|reference| reference.toolkit_name() == alias)
+            {
+                continue;
+            }
+            let key = legacy_toolkit_key(alias);
+            let mut matches = snapshot.iter().filter(|reference| {
+                !key.is_empty() && legacy_toolkit_key(reference.toolkit_name()) == key
+            });
+            let canonical = matches.next().ok_or_else(invalid_pipeline_tool_scope)?;
+            if matches.next().is_some() {
+                return Err(invalid_pipeline_tool_scope());
+            }
+            aliases.insert(alias.to_owned(), canonical.toolkit_name().to_owned());
+        }
+        self.definition.resolve_legacy_toolkit_aliases(&aliases);
         self.sensitive_direct_tools.clear();
         self.sensitive_llm_tools.clear();
         for selection in self.definition.llm_tool_selections() {
@@ -1396,6 +1425,15 @@ pub(super) fn guarded_interrupt_kinds(
         kinds.push("MCP authorization");
     }
     kinds
+}
+
+// Match the SDK's historical whitespace/underscore spelling only within admitted toolkits.
+fn legacy_toolkit_key(value: &str) -> String {
+    value
+        .chars()
+        .filter(|value| !value.is_whitespace() && *value != '_')
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 fn toolsets_by_alias(

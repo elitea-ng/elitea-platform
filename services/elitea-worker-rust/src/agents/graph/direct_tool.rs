@@ -130,6 +130,12 @@ pub(crate) struct DirectToolNodeDefinition {
 }
 
 impl DirectToolNodeDefinition {
+    pub(super) fn resolve_legacy_toolkit_aliases(&mut self, aliases: &BTreeMap<String, String>) {
+        if let Some(canonical) = aliases.get(&self.selection.alias) {
+            self.selection.alias.clone_from(canonical);
+        }
+    }
+
     pub(super) fn from_yaml(yaml: &str) -> Result<Self, DirectToolConfigurationError> {
         if yaml.is_empty() || yaml.len() > MAX_NODE_YAML_BYTES {
             return Err(DirectToolConfigurationError::ResourceExhausted);

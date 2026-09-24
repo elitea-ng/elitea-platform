@@ -2712,6 +2712,12 @@ async fn toolkit_node_materializes_read_only_action_but_rejects_remote_effect() 
         .await
         .expect("read-only direct Toolkit assembly");
 
+    let legacy = toolkit_pipeline_request("Release Repository", &["get_issues"], "get_issues");
+    assembler
+        .assemble(authorized(&legacy))
+        .await
+        .expect("legacy direct Toolkit identity");
+
     let effect =
         toolkit_pipeline_request("release_repository", &["create_branch"], "create_branch");
     let result = assembler.assemble(authorized(&effect)).await;
@@ -2821,6 +2827,28 @@ async fn pipeline_llm_node_binds_same_named_tools_to_exact_toolkit_implementatio
     }));
 }
 
+#[test]
+fn pipeline_llm_legacy_alias_resolves_before_tool_policy_admission() {
+    let mut request = colliding_llm_mcp_pipeline_request();
+    let yaml = request.payload.application["version_details"]["instructions"]
+        .as_str()
+        .expect("fixture YAML")
+        .replace("release intelligence:", "release_intelligence:");
+    assert!(yaml.contains("release_intelligence:"));
+    request.payload.application["version_details"]["instructions"] = json!(yaml);
+    let admitted = authorized(&request)
+        .admit_pipeline_with_policy(&runtime_tool_policy(&json!({})))
+        .expect("legacy LLM binding");
+    let aliases = admitted
+        .profile()
+        .definition()
+        .llm_tool_selections()
+        .map(super::graph::LlmToolkitSelection::alias)
+        .collect::<Vec<_>>();
+    assert!(aliases.contains(&"release intelligence"));
+    assert!(!aliases.contains(&"release_intelligence"));
+}
+
 fn colliding_direct_mcp_pipeline_request() -> super::request::AgentExecutionRequest {
     let mut request = colliding_llm_mcp_pipeline_request();
     request.payload.application["version_details"]["instructions"] = json!(
@@ -2894,6 +2922,106 @@ async fn direct_mcp_nodes_keep_same_named_operations_scoped_to_each_toolkit() {
 }
 
 #[tokio::test]
+async fn direct_mcp_nodes_prefer_exact_alias_over_legacy_collision() {
+    let connections = Arc::new(AtomicUsize::new(0));
+    let tool_calls = Arc::new(Mutex::new(Vec::new()));
+    let checkpointer = Arc::new(MemoryCheckpointer::new());
+    let assembler = PipelineNativeAgentAssembler::with_state(
+        Arc::new(InMemorySessionService::new()),
+        Arc::clone(&checkpointer) as Arc<dyn Checkpointer>,
+    )
+    .with_mcp_connector(Arc::new(CollidingPipelineMcpConnector {
+        connections: Arc::clone(&connections),
+        tool_calls: Arc::clone(&tool_calls),
+        missing_source: None,
+    }));
+    let mut request = colliding_direct_mcp_pipeline_request();
+    request.payload.application["version_details"]["tools"][1]["toolkit_name"] =
+        json!("release_intelligence");
+    let yaml = request.payload.application["version_details"]["instructions"]
+        .as_str()
+        .expect("fixture YAML")
+        .replace(
+            "toolkit_name: audit intelligence",
+            "toolkit_name: release_intelligence",
+        );
+    request.payload.application["version_details"]["instructions"] = json!(yaml);
+    let invocation = assembler
+        .assemble(authorized(&request))
+        .await
+        .expect("same-name direct MCP nodes assemble without a model");
+    collect_pipeline_completion(invocation).await;
+    assert_eq!(connections.load(Ordering::Acquire), 2);
+    assert_eq!(
+        *tool_calls.lock().expect("scoped calls"),
+        ["release intelligence", "audit intelligence"]
+    );
+    let checkpoint = checkpointer
+        .load(&private_pipeline_session_id(&request))
+        .await
+        .expect("checkpoint read")
+        .expect("terminal direct-tool checkpoint");
+    for (key, source) in [
+        ("release_records", "release intelligence"),
+        ("audit_records", "audit intelligence"),
+    ] {
+        assert_eq!(
+            checkpoint.state.get(key),
+            Some(&json!({"release": "1.2", "source": source}))
+        );
+    }
+}
+
+#[tokio::test]
+async fn direct_mcp_nodes_accept_unambiguous_legacy_toolkit_names() {
+    let connections = Arc::new(AtomicUsize::new(0));
+    let tool_calls = Arc::new(Mutex::new(Vec::new()));
+    let checkpointer = Arc::new(MemoryCheckpointer::new());
+    let assembler = PipelineNativeAgentAssembler::with_state(
+        Arc::new(InMemorySessionService::new()),
+        Arc::clone(&checkpointer) as Arc<dyn Checkpointer>,
+    )
+    .with_mcp_connector(Arc::new(CollidingPipelineMcpConnector {
+        connections: Arc::clone(&connections),
+        tool_calls: Arc::clone(&tool_calls),
+        missing_source: None,
+    }));
+    let mut request = colliding_direct_mcp_pipeline_request();
+    let instructions = request.payload.application["version_details"]["instructions"]
+        .as_str()
+        .expect("fixture YAML")
+        .replace(
+            "toolkit_name: release intelligence",
+            "toolkit_name: release_intelligence",
+        );
+    request.payload.application["version_details"]["instructions"] = json!(instructions);
+    let invocation = assembler
+        .assemble(authorized(&request))
+        .await
+        .expect("same-name direct MCP nodes assemble without a model");
+    collect_pipeline_completion(invocation).await;
+    assert_eq!(connections.load(Ordering::Acquire), 2);
+    assert_eq!(
+        *tool_calls.lock().expect("scoped calls"),
+        ["release intelligence", "audit intelligence"]
+    );
+    let checkpoint = checkpointer
+        .load(&private_pipeline_session_id(&request))
+        .await
+        .expect("checkpoint read")
+        .expect("terminal direct-tool checkpoint");
+    for (key, source) in [
+        ("release_records", "release intelligence"),
+        ("audit_records", "audit intelligence"),
+    ] {
+        assert_eq!(
+            checkpoint.state.get(key),
+            Some(&json!({"release": "1.2", "source": source}))
+        );
+    }
+}
+
+#[tokio::test]
 async fn direct_mcp_nodes_never_fall_back_to_another_toolkits_operation() {
     let connections = Arc::new(AtomicUsize::new(0));
     let tool_calls = Arc::new(Mutex::new(Vec::new()));
@@ -2913,6 +3041,37 @@ async fn direct_mcp_nodes_never_fall_back_to_another_toolkits_operation() {
         "missing scoped operation must refuse assembly"
     );
     assert!(tool_calls.lock().expect("scoped calls").is_empty());
+}
+
+#[tokio::test]
+async fn direct_mcp_nodes_reject_ambiguous_legacy_names_before_connecting() {
+    let connections = Arc::new(AtomicUsize::new(0));
+    let assembler = PipelineNativeAgentAssembler::with_state(
+        Arc::new(InMemorySessionService::new()),
+        Arc::new(MemoryCheckpointer::new()),
+    )
+    .with_mcp_connector(Arc::new(CollidingPipelineMcpConnector {
+        connections: Arc::clone(&connections),
+        tool_calls: Arc::new(Mutex::new(Vec::new())),
+        missing_source: None,
+    }));
+    let mut request = colliding_direct_mcp_pipeline_request();
+    request.payload.application["version_details"]["tools"][1]["toolkit_name"] =
+        json!("release_intelligence");
+    let yaml = request.payload.application["version_details"]["instructions"]
+        .as_str()
+        .expect("fixture YAML")
+        .replace(
+            "toolkit_name: release intelligence",
+            "toolkit_name: RELEASEINTELLIGENCE",
+        )
+        .replace(
+            "toolkit_name: audit intelligence",
+            "toolkit_name: release_intelligence",
+        );
+    request.payload.application["version_details"]["instructions"] = json!(yaml);
+    assert!(assembler.assemble(authorized(&request)).await.is_err());
+    assert_eq!(connections.load(Ordering::Acquire), 0);
 }
 
 struct PipelineMcpConnector {

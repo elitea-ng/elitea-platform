@@ -131,6 +131,14 @@ pub(crate) struct LlmNodeDefinition {
 }
 
 impl LlmNodeDefinition {
+    pub(super) fn resolve_legacy_toolkit_aliases(&mut self, aliases: &BTreeMap<String, String>) {
+        for selection in &mut self.tool_selections {
+            if let Some(canonical) = aliases.get(&selection.alias) {
+                selection.alias.clone_from(canonical);
+            }
+        }
+    }
+
     pub(super) fn from_yaml(yaml: &str) -> Result<Self, LlmConfigurationError> {
         if yaml.is_empty() || yaml.len() > MAX_NODE_YAML_BYTES {
             return Err(LlmConfigurationError::ResourceExhausted);

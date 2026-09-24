@@ -52,9 +52,9 @@ pub(crate) use direct_tool::{
     ResolvedDirectTool,
 };
 pub(crate) use llm::{
-    LlmExecutionError, LlmExecutionInput, LlmNodeDefinition, PipelineLlmAgentBinding,
-    PipelineLlmAgentFactory, PipelineLlmReplayEnvelope, PipelineModelScope, PipelineToolGuard,
-    prepare_pipeline_llm_replay,
+    LlmExecutionError, LlmExecutionInput, LlmNodeDefinition, LlmToolkitSelection,
+    PipelineLlmAgentBinding, PipelineLlmAgentFactory, PipelineLlmReplayEnvelope,
+    PipelineModelScope, PipelineToolGuard, prepare_pipeline_llm_replay,
 };
 pub(crate) use node_events::{
     PIPELINE_NODE_EVENT_SCOPE_STATE_KEY, PIPELINE_NODE_METADATA_KEY, PipelineNodeEventReceiver,
