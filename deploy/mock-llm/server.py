@@ -60,6 +60,7 @@ PER-REQUEST MODES, SELECTED BY THE PROMPT (see `_script_for`):
   [[mock:continuation_repair]]
                       truncate one answer, reject one boundary, then repair it.
                       Continuation fragments preserve exact whitespace.
+                      Add [[mock:repair_slow]] to delay repair chunks for crash tests.
   [[mock:slow]]       stream a long, scripted reply one word at a time with a
                       per-chunk delay, so a test can act while the turn is
                       still open (press Stop, navigate away, drop the stream).
@@ -897,7 +898,8 @@ def _script_for(messages: list[dict]) -> _ChatScript:
                 return _ChatScript("REJECTED_BOUNDARY_MUST_NOT_APPEAR", None, 0, "continuation_bad_boundary")
             encoded = prompt.split("Exact anchor: ", 1)[1]
             anchor, _ = json.JSONDecoder().raw_decode(encoded)
-            return _ChatScript(anchor + "\nREPAIR_COMPLETE", None, 0, "continuation_repaired")
+            delay = 1 if any("[[mock:repair_slow]]" in _message_text(message) for message in messages) else 0
+            return _ChatScript(anchor + "\nREPAIR_COMPLETE", None, delay, "continuation_repaired")
         prefix = "\n".join(f"RECORD {index:03d}: accepted fixture output." for index in range(1, 13))
         return _ChatScript(prefix, None, 0, "continuation_prefix", "length")
 

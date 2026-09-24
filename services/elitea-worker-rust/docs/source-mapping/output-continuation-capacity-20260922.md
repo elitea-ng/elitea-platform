@@ -975,3 +975,21 @@ The screenshot is inspected. Browser responses are not mocked; the provider is e
 The deployed worker and Main use their normal gateway, checkpoint, streaming, and persistence paths.
 Evidence prefix: `elitea-repair-runtime` in the local acceptance directory.
 This closes successful deployed boundary repair for this pipeline LLM scope. Crash recovery during repair remains open.
+
+### Deployed repair crash recovery passes, 2026-09-24
+
+The provider fixture adds `[[mock:repair_slow]]` to delay only repair chunks.
+The existing HTTP/SSE regression still passes. Product runtime code does not change.
+Fresh headed-browser chat 682 uses application 94, version 101.
+Before the crash, PostgreSQL records phase `model_pending`, continuation round 2, and `repair_used=true`.
+The test confirms that no other execution has an active claim. It then kills the worker with SIGKILL and starts it again.
+Execution `87d52d54db8e8779095a3533b632e52c` resumes under claim attempt 2 and reaches `SUCCEEDED`.
+Persisted events retain round 2 and `repair_used=true` across both claims.
+The pending request hash remains `017c7632802a64074b8df8366fc5ff6c` across takeover.
+The provider journal records one initial call, one bad continuation, and two attempts at the same repair.
+The first repair attempt is interrupted. Recovery does not repeat the initial generation or reset the repair allowance.
+The open browser receives the completed answer without a manual refresh.
+Each record appears once. The rejected text is absent, and reload preserves the result.
+No failure event or browser page error occurs. The screenshot is inspected.
+Evidence prefixes are `elitea-repair-recovery` and `elitea-repair-crash-proof` in the local acceptance directory.
+This is real worker crash recovery with a synthetic provider, not proof for every provider or interruption state.
