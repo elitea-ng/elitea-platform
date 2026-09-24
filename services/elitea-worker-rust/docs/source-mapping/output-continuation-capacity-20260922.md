@@ -948,3 +948,18 @@ The screenshot confirms that the warning and partial-output controls are readabl
 Evidence: `/private/tmp/elitea-continuation-ui-nested.json`, `elitea-continuation-ui-fresh.log`, and `elitea-continuation-ui-nested.png`.
 This closes deployed acceptance for the new continuation-error presentation.
 It does not close bounded-repair, old-history rejection, or the other point 4 requirements.
+
+### Deterministic boundary-repair fixture, 2026-09-24
+
+The earlier live provider case did not trigger a boundary mismatch. It proves ordinary continuation only.
+The existing `deploy/mock-llm/server.py` adds the opt-in transcript marker `[[mock:continuation_repair]]`.
+The fixture ends its first response with `length`. It then emits one incorrect boundary and repairs the next request.
+Repair output starts with the exact JSON-decoded anchor from `model_checkpoint/output.rs::OutputContinuation::request`.
+The fixture splits text into exact fragments. It does not insert whitespace into continuation boundaries.
+Unmarked requests retain their existing behavior. No product runtime logic changes for this fixture.
+`deploy/mock-llm/test_continuation.py` verifies all three responses over HTTP/SSE and checks an independent unmarked request.
+This fixture test passes. It does not prove deployed repair or crash recovery.
+The rehearsal uses a private synthetic model and one temporary egress entry for its isolated container address.
+No default model or real credential changes. The fixture has no published host ports.
+The first runtime case stops during admission because the synthetic model lacks context limits.
+Explicit limits are then added to the synthetic model. Deployed repair verification continues.

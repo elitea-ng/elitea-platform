@@ -57,6 +57,9 @@ PER-REQUEST MODES, SELECTED BY THE PROMPT (see `_script_for`):
   [[mock:ask_user]]   answer with a CALL to the runtime's `ask_user` internal
                       tool instead of with text, then — once the tool result
                       comes back — with a normal answer quoting it.
+  [[mock:continuation_repair]]
+                      truncate one answer, reject one boundary, then repair it.
+                      Continuation fragments preserve exact whitespace.
   [[mock:slow]]       stream a long, scripted reply one word at a time with a
                       per-chunk delay, so a test can act while the turn is
                       still open (press Stop, navigate away, drop the stream).
@@ -494,6 +497,7 @@ class _ChatScript(NamedTuple):
     # spec whose marker is silently dropped (a composer that trims it, a prompt
     # rewritten upstream) would otherwise read as "the feature did not happen".
     mode: str
+    finish_reason: str = "stop"
 
 
 def _slow_reply(user_text: str) -> str:
@@ -885,6 +889,18 @@ def _script_for(messages: list[dict]) -> _ChatScript:
     """
     user_text = _last_user_text(messages)
     prompt = user_text or ""
+
+    # This mode is opt-in per transcript. It never changes unmarked requests.
+    if any("[[mock:continuation_repair]]" in _message_text(message) for message in messages):
+        if prompt.startswith("The previous answer reached its output allowance."):
+            if "The previous continuation was rejected" not in prompt:
+                return _ChatScript("REJECTED_BOUNDARY_MUST_NOT_APPEAR", None, 0, "continuation_bad_boundary")
+            encoded = prompt.split("Exact anchor: ", 1)[1]
+            anchor, _ = json.JSONDecoder().raw_decode(encoded)
+            return _ChatScript(anchor + "\nREPAIR_COMPLETE", None, 0, "continuation_repaired")
+        prefix = "\n".join(f"RECORD {index:03d}: accepted fixture output." for index in range(1, 13))
+        return _ChatScript(prefix, None, 0, "continuation_prefix", "length")
+
 
     if ASK_USER_MARKER in prompt:
         answered = _tool_result_text(messages)
@@ -1355,7 +1371,7 @@ class Handler(BaseHTTPRequestHandler):
         # `tool_calls`. Sending both would be a shape no provider produces, and
         # a client that reads content first would never dispatch the call.
         message: dict = {"role": "assistant", "content": reply or None}
-        finish_reason = "stop"
+        finish_reason = script.finish_reason
         if script.tool_calls is not None:
             message = {"role": "assistant", "content": None, "tool_calls": script.tool_calls}
             finish_reason = "tool_calls"
@@ -1418,11 +1434,15 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 # One word per chunk: a consumer that only ever sees a single
                 # chunk is not actually exercising incremental streaming.
-                for word in script.reply.split(" "):
-                    event({**base, "choices": [{"index": 0, "delta": {"content": word + " "}, "finish_reason": None}]})
+                if script.mode.startswith("continuation_"):
+                    chunks = (script.reply[index:index + 17] for index in range(0, len(script.reply), 17))
+                else:
+                    chunks = (word + " " for word in script.reply.split(" "))
+                for chunk in chunks:
+                    event({**base, "choices": [{"index": 0, "delta": {"content": chunk}, "finish_reason": None}]})
                     if script.delay:
                         time.sleep(script.delay)
-                event({**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                event({**base, "choices": [{"index": 0, "delta": {}, "finish_reason": script.finish_reason}],
                        "usage": _usage_for(script.reply)})
             done = b"data: [DONE]\n\n"
             self.wfile.write(f"{len(done):X}\r\n".encode() + done + b"\r\n")
