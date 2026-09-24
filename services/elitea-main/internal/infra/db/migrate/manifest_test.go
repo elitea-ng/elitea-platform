@@ -554,7 +554,15 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// notification's own recipient cannot delete). Pylon owns
 	// auth_core__token, so this is a side table, the same shape and for the
 	// same reason as 0071.
-	require.EqualValues(t, 125, Head(shared))
+	//
+	// 126: shared/0126_agent_admission_reservations.sql, the durable slot
+	// marker for two-phase agent admission (#965). A start reserves its slot in
+	// a short synchronous-commit-off transaction, then materializes the
+	// execution rows in a second one. This table holds the reservation; a
+	// BEFORE INSERT guard trigger recomputes the live cap and raises typed
+	// codes E9650, E9651 and E9652. A background reaper reclaims a slot a
+	// start leaks between the two commits.
+	require.EqualValues(t, 126, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

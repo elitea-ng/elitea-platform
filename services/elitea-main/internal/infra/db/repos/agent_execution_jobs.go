@@ -7,6 +7,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
@@ -16,6 +17,7 @@ import (
 	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenant"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -227,12 +229,208 @@ func (r *AgentExecutionJobsRepository) AdmitAgentExecution(
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("load agent idempotency binding: %w", err)
 	}
 
+	// Phase 1 reserves the durable slot behind the capability policy row lock
+	// in a short, synchronous-commit-off transaction. Phase 2 then writes the
+	// heavy durable rows without holding that lock (issue 965).
+	if err := r.reserveAgentAdmission(ctx, admission); err != nil {
+		return executionapp.AdmissionOutcome{}, err
+	}
+	outcome, err := r.materializeAgentAdmission(ctx, admission, resourceProject, projectionProject)
+	if err != nil || !outcome.Created {
+		// The reserve committed but this call did not commit a new job: an
+		// error, a cancelled request, or a replay resolved against the durable
+		// job. Release the slot now instead of leaving it to the reaper's
+		// stale window, where it would refuse other starts for up to 90s.
+		// Best effort: the reaper remains the backstop if this fails.
+		r.releaseAgentAdmission(context.WithoutCancel(ctx), admission)
+	}
+	return outcome, err
+}
+
+// releaseAgentAdmission deletes the admission's reservation if it is still
+// unmaterialized. It is a no-op after a successful materialize and after a
+// replay whose reservation was materialized by the original start.
+func (r *AgentExecutionJobsRepository) releaseAgentAdmission(
+	ctx context.Context,
+	admission agentexecutionapp.Admission,
+) {
+	_, _ = sqlcgen.New(r.pool).ReleaseAgentAdmissionReservation(
+		ctx,
+		sqlcgen.ReleaseAgentAdmissionReservationParams{
+			CapabilityID:     admission.Record.Job.CapabilityID,
+			IdempotencyScope: admission.Record.IdempotencyScope,
+			IdempotencyKey:   admission.Record.IdempotencyKey,
+		},
+	)
+}
+
+// reserveAgentAdmission claims the admission's durable slot. It runs in its own
+// short transaction that disables synchronous_commit for the commit, and the
+// agent_admission_reservations BEFORE INSERT trigger serializes concurrent
+// starts on the capability policy row while re-computing the live cap. A replay
+// (an identical reservation already present) is not an error: the insert's
+// ON CONFLICT DO NOTHING drops the row and materialize reconciles against the
+// durable job.
+func (r *AgentExecutionJobsRepository) reserveAgentAdmission(
+	ctx context.Context,
+	admission agentexecutionapp.Admission,
+) error {
+	capabilityID := admission.Record.Job.CapabilityID
+	err := r.reserveAgentAdmissionOnce(ctx, admission)
+	if err == nil {
+		return nil
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "E9650" {
+		return r.reserveAgentAdmissionError(capabilityID, err)
+	}
+	// E9650 means the capability policy row is missing. The guard trigger raised
+	// it inside the reserve transaction, which is now aborted, so the row cannot
+	// be created there. It is created out-of-band as an idempotent upsert, then
+	// the reserve is retried in a fresh transaction where the mismatch (E9651)
+	// and cap (E9652) checks apply as usual. This runs only before the first
+	// start for a capability, not on the steady-state path (issue 965).
+	if ensureErr := sqlcgen.New(r.pool).EnsureRuntimeAdmissionPolicy(
+		ctx,
+		sqlcgen.EnsureRuntimeAdmissionPolicyParams{
+			CapabilityID:   capabilityID,
+			MaxOutstanding: r.policy.MaxOutstanding,
+		},
+	); ensureErr != nil {
+		return fmt.Errorf("ensure agent admission policy: %w", ensureErr)
+	}
+	if err = r.reserveAgentAdmissionOnce(ctx, admission); err != nil {
+		return r.reserveAgentAdmissionError(capabilityID, err)
+	}
+	return nil
+}
+
+// reserveAgentAdmissionOnce runs the reservation in a single short transaction
+// with synchronous_commit off and returns the raw reserve error so the caller
+// can distinguish the policy-missing (E9650) case. A successful insert or a
+// replay (an identical reservation already present) returns nil.
+func (r *AgentExecutionJobsRepository) reserveAgentAdmissionOnce(
+	ctx context.Context,
+	admission agentexecutionapp.Admission,
+) error {
 	tx, err := r.pool.BeginTx(
 		ctx,
 		pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite},
 	)
 	if err != nil {
-		return executionapp.AdmissionOutcome{}, fmt.Errorf("begin agent admission transaction: %w", err)
+		return fmt.Errorf("begin agent admission reserve: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(context.WithoutCancel(ctx))
+		}
+	}()
+	// The slot marker is durable only to the extent the reaper and the live cap
+	// re-computation need it; skipping the commit fsync is what keeps this
+	// transaction off the start-path critical section (issue 965).
+	if _, err := tx.Exec(ctx, "SET LOCAL synchronous_commit = off"); err != nil {
+		return fmt.Errorf("set agent reserve synchronous commit: %w", err)
+	}
+	_, err = sqlcgen.New(tx).ReserveAgentAdmission(
+		ctx,
+		sqlcgen.ReserveAgentAdmissionParams{
+			CapabilityID:     admission.Record.Job.CapabilityID,
+			IdempotencyScope: admission.Record.IdempotencyScope,
+			IdempotencyKey:   admission.Record.IdempotencyKey,
+			ExecutionID:      admission.Record.Job.ID,
+			ConfiguredMax:    r.policy.MaxOutstanding,
+		},
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit agent admission reserve replay: %w", err)
+		}
+		committed = true
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit agent admission reserve: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+// reserveAgentAdmissionError maps the reservation trigger's custom SQLSTATEs to
+// the typed admission errors the API surface already reports. E9651 fails
+// closed on a policy mismatch; E9652 is the transient capacity exhaustion;
+// E9650 is an internal invariant (the policy row is missing).
+func (r *AgentExecutionJobsRepository) reserveAgentAdmissionError(
+	capabilityID string,
+	err error,
+) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "E9651":
+			return fmt.Errorf(
+				"%w: capability %q configured=%d",
+				ErrAdmissionPolicyMismatch,
+				capabilityID,
+				r.policy.MaxOutstanding,
+			)
+		case "E9652":
+			return &executionapp.AdmissionCapacityError{
+				CapabilityID:   capabilityID,
+				MaxOutstanding: r.policy.MaxOutstanding,
+			}
+		case "E9650":
+			return fmt.Errorf("agent admission policy missing for capability %q: %w", capabilityID, err)
+		}
+	}
+	return fmt.Errorf("reserve agent admission: %w", err)
+}
+
+// ReapAgentAdmissionReservations removes two kinds of row: unmaterialized
+// reservations older than staleSeconds, the slots a start leaked by dying
+// between its reserve commit and its materialize commit, and materialized
+// reservations older than gcSeconds, which are replay shortcuts only —
+// execution_jobs owns idempotency. The DELETE is idempotent, so every replica
+// may run its own reaper without fencing.
+func (r *AgentExecutionJobsRepository) ReapAgentAdmissionReservations(
+	ctx context.Context,
+	staleSeconds, gcSeconds int64,
+) (int64, error) {
+	rows, err := sqlcgen.New(r.pool).ReapAgentAdmissionReservations(
+		ctx,
+		sqlcgen.ReapAgentAdmissionReservationsParams{
+			StaleSeconds: staleSeconds,
+			GcSeconds:    gcSeconds,
+		},
+	)
+	if err != nil {
+		return 0, fmt.Errorf("reap agent admission reservations: %w", err)
+	}
+	return rows, nil
+}
+
+// materializeAgentAdmission writes the input bundle, execution job, binding,
+// current turn and command outbox, then marks the reserved slot materialized in
+// the same commit. It runs without the capability policy row lock: the slot was
+// already reserved in phase 1. It re-checks the idempotency anchor under this
+// transaction's own view so a concurrent start that committed between the pool
+// pre-check and here is reported as a replay, never a second job.
+func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
+	ctx context.Context,
+	admission agentexecutionapp.Admission,
+	resourceProject,
+	projectionProject int64,
+) (executionapp.AdmissionOutcome, error) {
+	capabilityID := admission.Record.Job.CapabilityID
+	tx, err := r.pool.BeginTx(
+		ctx,
+		pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite},
+	)
+	if err != nil {
+		return executionapp.AdmissionOutcome{}, fmt.Errorf("begin agent admission materialize: %w", err)
 	}
 	committed := false
 	defer func() {
@@ -280,31 +478,8 @@ func (r *AgentExecutionJobsRepository) AdmitAgentExecution(
 			return executionapp.AdmissionOutcome{}, fmt.Errorf("lock current agent conversation: %w", err)
 		}
 	}
-	capabilityID := admission.Record.Job.CapabilityID
-	if err := txQueries.EnsureRuntimeAdmissionPolicy(
-		ctx,
-		sqlcgen.EnsureRuntimeAdmissionPolicyParams{
-			CapabilityID:   capabilityID,
-			MaxOutstanding: r.policy.MaxOutstanding,
-		},
-	); err != nil {
-		return executionapp.AdmissionOutcome{}, fmt.Errorf("ensure agent admission policy: %w", err)
-	}
-	persistedMax, err := txQueries.LockRuntimeAdmissionPolicy(ctx, capabilityID)
-	if err != nil {
-		return executionapp.AdmissionOutcome{}, fmt.Errorf("lock agent admission policy: %w", err)
-	}
-	if persistedMax != r.policy.MaxOutstanding {
-		return executionapp.AdmissionOutcome{}, fmt.Errorf(
-			"%w: capability %q configured=%d persisted=%d",
-			ErrAdmissionPolicyMismatch,
-			capabilityID,
-			r.policy.MaxOutstanding,
-			persistedMax,
-		)
-	}
 
-	existing, digest, err = loadAgentAdmission(
+	existing, digest, err := loadAgentAdmission(
 		ctx,
 		txQueries,
 		admission.Record.IdempotencyScope,
@@ -324,37 +499,15 @@ func (r *AgentExecutionJobsRepository) AdmitAgentExecution(
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("reload agent idempotency binding: %w", err)
 	}
 
-	active, err := txQueries.CountActiveRuntimeExecutionsUpTo(
-		ctx,
-		sqlcgen.CountActiveRuntimeExecutionsUpToParams{
-			CapabilityID:   capabilityID,
-			MaxOutstanding: r.policy.MaxOutstanding,
-		},
-	)
-	if err != nil {
-		return executionapp.AdmissionOutcome{}, fmt.Errorf("count active agent executions: %w", err)
-	}
-	if active >= r.policy.MaxOutstanding {
-		if err := tx.Commit(ctx); err != nil {
-			return executionapp.AdmissionOutcome{}, fmt.Errorf("commit agent capacity observation: %w", err)
-		}
-		committed = true
-		return executionapp.AdmissionOutcome{}, &executionapp.AdmissionCapacityError{
-			CapabilityID:   capabilityID,
-			MaxOutstanding: r.policy.MaxOutstanding,
-		}
-	}
-
-	timingRow, err := txQueries.LoadRuntimeAdmissionTiming(
-		ctx,
-		r.policy.DeadlineTTL.Milliseconds(),
-	)
-	if err != nil {
-		return executionapp.AdmissionOutcome{}, fmt.Errorf("load agent admission timing: %w", err)
-	}
-	timing, err := decodeAdmissionTiming(timingRow, r.policy.DeadlineTTL)
-	if err != nil {
-		return executionapp.AdmissionOutcome{}, err
+	// The admission timing is a pure clock read (admitted_at = now, deadline
+	// = admitted_at + TTL). Computing it here instead of issuing a dedicated
+	// SELECT removes one round trip from the durable materialize transaction
+	// (issue 965). The invariant decodeAdmissionTiming enforces
+	// (deadline - admitted_at == TTL) holds by construction.
+	admittedAt := time.Now().UTC().Truncate(time.Millisecond)
+	timing := admissionTiming{
+		AdmittedAt: admittedAt,
+		Deadline:   admittedAt.Add(r.policy.DeadlineTTL),
 	}
 	if err := insertRuntimeInputBundle(
 		ctx,
@@ -487,6 +640,38 @@ func (r *AgentExecutionJobsRepository) AdmitAgentExecution(
 		},
 	); err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("insert agent command outbox: %w", err)
+	}
+	// Mark the reserved slot materialized in the same commit as the job.
+	marked, err := txQueries.MarkAgentAdmissionMaterialized(
+		ctx,
+		sqlcgen.MarkAgentAdmissionMaterializedParams{
+			CapabilityID:     capabilityID,
+			IdempotencyScope: admission.Record.IdempotencyScope,
+			IdempotencyKey:   admission.Record.IdempotencyKey,
+		},
+	)
+	if err != nil {
+		return executionapp.AdmissionOutcome{}, fmt.Errorf("mark agent admission materialized: %w", err)
+	}
+	if marked == 0 {
+		// The reaper reclaimed the reservation as stale while this materialize
+		// was still running (a >60s wait on the conversation lock or the
+		// pooler), and the guard may already have admitted another start into
+		// the freed slot. Re-check the cap under the policy row lock, counting
+		// this transaction's own job, before committing over it (issue 965).
+		if _, err := txQueries.LockRuntimeAdmissionPolicy(ctx, capabilityID); err != nil {
+			return executionapp.AdmissionOutcome{}, fmt.Errorf("lock agent admission policy after reap: %w", err)
+		}
+		slots, err := txQueries.CountAgentAdmissionSlots(ctx, capabilityID)
+		if err != nil {
+			return executionapp.AdmissionOutcome{}, fmt.Errorf("count agent admission slots after reap: %w", err)
+		}
+		if slots > r.policy.MaxOutstanding {
+			return executionapp.AdmissionOutcome{}, &executionapp.AdmissionCapacityError{
+				CapabilityID:   capabilityID,
+				MaxOutstanding: r.policy.MaxOutstanding,
+			}
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("commit agent admission: %w", err)

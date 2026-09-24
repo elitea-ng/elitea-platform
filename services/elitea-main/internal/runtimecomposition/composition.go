@@ -694,6 +694,28 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if err != nil {
 			return nil, fmt.Errorf("compose agent execution publisher: %w", err)
 		}
+		// #965: the reservation reaper reclaims the slot a start leaks by
+		// dying between its reserve commit and its materialize commit. The
+		// reservations live on the admission pool, the same pool agentJobs
+		// writes them through.
+		agentReservationReaper, reaperErr := newAgentAdmissionReservationReaper(
+			agentJobs,
+			agentAdmissionReservationReaperPollInterval,
+			func(err error) {
+				dependencies.Logger.Error(
+					"agent admission reservation reaper cycle failed",
+					"err",
+					err,
+				)
+			},
+		)
+		if reaperErr != nil {
+			return nil, fmt.Errorf("construct agent admission reservation reaper: %w", reaperErr)
+		}
+		publisherRoot, err = newPublisherSet(publisherRoot, agentReservationReaper)
+		if err != nil {
+			return nil, fmt.Errorf("compose agent admission reservation reaper: %w", err)
+		}
 	}
 	var nodeEvents *repos.NodeEventsRepository
 	var replayWake *redisExecutionReplayWakeBus
