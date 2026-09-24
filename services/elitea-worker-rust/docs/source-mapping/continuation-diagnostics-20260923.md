@@ -479,3 +479,29 @@ This is a replatform boundary correction; the current SDK is a behavior referenc
 Deployment and live acceptance of the capacity correction remain open.
 
 All 15 direct-tool tests pass without ignored tests. Strict library-and-test Clippy, formatting, and diff checks pass.
+
+
+### Direct-tool acceptance and capacity deployment, 2026-09-24
+
+Fresh headed browser cases 675 and 676 run on worker image `056c29a65183678ae0e57a509c30f51a6a9b09b1298efddd4fdc2e215a997e7d`.
+Chat 675 calls the read-only fixture with valid input and an invalid output mapping.
+Execution `b01672da0d821b564baa69d8d6701c13` fails with `PIPELINE_RESULT_INVALID`.
+The live event, visible explanation, support reference, and reload checks pass.
+Chat 676 uses a valid mapping and returns the fictional Cedar record.
+Execution `d4154b62bb7b82d287f1bab810872d53` succeeds. The live answer and reload checks pass without a failure event.
+These cases use no model call or external write.
+
+Worker image `sha256:892896db8db7ca99da1ff16ea730a98713b5a782facf810255457bcc0dd27bd8` then deploys from `caa621d36`.
+All five mounts and service settings remain unchanged.
+Fresh browser chat 674 submits the 48 KB input previously rejected during digest calculation.
+Execution `fdc4eb777c38e1bc7d9f9f66460500ff` reaches `tool_execution`, as verified by the ERROR event.
+Its upstream code is `tool.execution.internal`; the browser receives `PIPELINE_TOOL_FAILED`.
+The specific explanation, support reference, and reload checks pass.
+This proves passage through the corrected digest boundary, not successful execution of a large-input tool.
+The fixture accepts only an index and caps HTTP request bodies at 4096 bytes; the oversized synthetic request is deliberately invalid.
+The component regression separately proves successful ordinary execution with 48 KiB of input.
+
+All three browser runs use no response mocks and report no page errors. Screenshots are inspected.
+Local evidence prefixes are `elitea-result-invalid`, `elitea-direct-success`, and `elitea-tool-failure`.
+The result files distinguish the observed live failure events from the successful response.
+Output-delivery-limit acceptance and other Gate 4 verification remain open.
