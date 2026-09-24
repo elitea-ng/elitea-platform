@@ -309,3 +309,21 @@ Deployment and browser verification of the new explanation remain open.
 
 Main output-boundary tests pass. All three Rust output-policy tests pass, including historical replay and untrusted-message rejection.
 Strict Rust Clippy, formatting, and protobuf generation checks pass.
+
+
+### Output-delivery deployment, 2026-09-24
+
+Main image `sha256:aa69047c6b68f2c809ae73f72edc5476adcee0116e59a28840c6f74a39f7075a` is deployed before the worker.
+Worker image `sha256:3b2a75b4d1575c5b22c7fe0d9d9e91d256728d3e7ec418013378ee192e4171f1` follows it.
+Both images use source commit `e66c99eb6`.
+The deployment retains service environments, networks, resource settings, and all six Main mounts and five worker mounts.
+The deployment checks that no execution claim is active before replacement.
+Conversation 668 still displays its persisted child-failure report in a fresh browser without response mocks.
+
+A separate controlled browser test verifies the new explanation, support panel, clipboard reference, and reload.
+It replaces one historical failure response in browser memory. It does not change persisted messages.
+Evidence is `elitea-output-guidance-rendering.json` and `elitea-output-guidance-rendering.png` in the local evidence directory.
+The screenshot is inspected, and the final browser run exits successfully without page errors.
+This is rendering evidence only. It does not prove live emission of `OUTPUT_DELIVERY_LIMIT` or its corresponding operator log.
+Those live acceptance checks remain open. Protocol tests separately prove registered Main ingestion and Rust replay.
+The screenshot also shows an invalid negative thinking duration in historical chat 667. Record that UI issue for separate investigation.
