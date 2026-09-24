@@ -257,3 +257,21 @@ The report excludes a provider-body secret sentinel.
 Additional checks preserve terminal direct-node handling and reject conversion of cancellation, authorization, or invalid-state errors.
 All 1,217 Rust library tests pass with PostgreSQL available and no ignored tests.
 Formatting and strict library-and-test Clippy checks pass.
+
+## Tool-result projection boundary, 2026-09-24
+
+Live child-failure verification in conversation 667 stops at `agent_event.resource_exhausted` before the expected child model failure.
+The persisted child result contains about 49 KB. It fits the transport frame but exceeds the 40 KiB inline-value bound.
+The previous chunk decision checks only the rendered frame. The subsequent inline check rejects this valid result.
+
+`src/agents/events.rs::completed_tool_entry` now chunks results that exceed either bound.
+The existing chunk protocol, digest, total-result limit, and exact tool identity remain unchanged.
+No schema change or resource-limit increase is required.
+The replatform Python reference is `services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py::_chunk_tool_output`.
+It preserves tool results through bounded transport chunks. Rust also enforces its explicit inline-value limit.
+This transport correction does not change current-platform tool behavior.
+
+The new regression reproduces the failure with a 48 KiB text result before the fix.
+After the fix, it verifies exact chunk reassembly and the tool-end event.
+All 42 event-projection tests pass, with no ignored tests.
+Browser acceptance and the original child-model-failure verification remain open until the repaired worker runs.

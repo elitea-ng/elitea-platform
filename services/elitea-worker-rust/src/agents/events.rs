@@ -2391,7 +2391,10 @@ impl AgentEventProjector {
             error,
         );
         let chunks = match output.as_deref() {
-            Some(text) if !self.tool_events_fit(id, &inline_entry, event.timestamp) => {
+            Some(text)
+                if text.len() > MAX_TOOL_EVENT_VALUE_BYTES
+                    || !self.tool_events_fit(id, &inline_entry, event.timestamp) =>
+            {
                 Some(split_tool_output(text)?)
             }
             _ => {

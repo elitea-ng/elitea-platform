@@ -2198,6 +2198,65 @@ fn a_tool_result_that_fits_is_not_chunked() {
     assert!(projected[0]["response_metadata"]["tool_output_chunks"].is_null());
 }
 
+#[test]
+fn a_tool_result_between_inline_limit_and_frame_limit_is_chunked() {
+    let mut projector = AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({})))
+        .expect("projector");
+    projector.start(timestamp(0)).expect("start");
+    projector
+        .project(&event(
+            "llm-tool",
+            1,
+            false,
+            true,
+            vec![Part::FunctionCall {
+                name: "read_file".to_owned(),
+                args: json!({"filename": "small.txt"}),
+                id: Some("call-1".to_owned()),
+                thought_signature: None,
+            }],
+        ))
+        .expect("tool start");
+    let mut result = Event::with_id("tool-result", "invocation-1");
+    result.timestamp = timestamp(2);
+    result.author = "root-agent".to_owned();
+    result.llm_response.content = Some(Content {
+        role: "function".to_owned(),
+        parts: vec![Part::FunctionResponse {
+            function_response: adk_rust::FunctionResponseData::new(
+                "read_file",
+                json!({"text": "x".repeat(48 * 1024)}),
+            ),
+            id: Some("call-1".to_owned()),
+            annotations: None,
+        }],
+    });
+    let projected = projector
+        .project(&result)
+        .expect("tool result")
+        .into_iter()
+        .map(|event| current(&event))
+        .collect::<Vec<_>>();
+    let chunks = projected
+        .iter()
+        .filter(|event| event["type"] == "agent_tool_output_chunk")
+        .collect::<Vec<_>>();
+    assert!(!chunks.is_empty());
+    let reassembled = chunks
+        .iter()
+        .map(|event| event["content"].as_str().expect("chunk text"))
+        .collect::<String>();
+    assert_eq!(
+        reassembled,
+        serde_json::to_string(&json!({"text": "x".repeat(48 * 1024)})).expect("json")
+    );
+    assert!(
+        projected
+            .iter()
+            .any(|event| event["type"] == "agent_tool_end")
+    );
+}
+
 /// The assembly-time authorization notice NAMES the connection that challenged
 /// (#982).
 ///
