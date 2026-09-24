@@ -526,3 +526,19 @@ The parent does not repeat the child call.
 Both browser sessions use real responses, no mocks, and report no page errors. Screenshots are inspected.
 Evidence prefixes: `elitea-nested-direct-failure` and `elitea-parent-direct-failure` in the local evidence directory.
 This proves these caller boundaries for invalid direct-tool results, not every possible nested failure or recovery state.
+
+
+### Generic resource-limit presentation, 2026-09-24
+
+The legacy message does not identify the exhausted resource or give a useful next step.
+Rust `protocol/output.rs::runtime_error_policy` retains its canonical worker message for receipt and replay compatibility.
+Python workers and Main transport validation retain the same contract.
+Main `application/output/runtime_failure.go::IngestFailure` maps `RESOURCE_EXHAUSTED` to product guidance after binding and fence validation.
+The message states that a platform processing limit stopped the run. It warns that the task may be incomplete.
+It directs users to share the support reference before repeating actions.
+The projection uses this message for browser events, persisted failure details, and the failure observer.
+The original worker bytes, digest, error code, and retry policy remain unchanged.
+Specific context, provider, pipeline, and output-delivery messages remain unchanged.
+This fallback does not claim a token, memory, billing, or output cause without evidence.
+Application tests cover presentation and unchanged worker receipts. Transport tests retain canonical message validation.
+Deployed browser acceptance remains pending for this presentation change. Existing stored messages are not rewritten.

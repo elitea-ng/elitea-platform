@@ -280,3 +280,44 @@ func TestFailureObserverPanicCannotAffectIngestFailure(t *testing.T) {
 	// pass.
 	time.Sleep(50 * time.Millisecond)
 }
+
+func TestResourceLimitPresentationPreservesWorkerReceipt(t *testing.T) {
+	frame, expected := validRuntimeFailureOutput(t, executiondomain.AgentAdhocCapability)
+	frame.Failure.Code = "RESOURCE_EXHAUSTED"
+	frame.Failure.SafeMessage = "The execution exceeded an approved resource limit."
+	payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(&runtimev1.RuntimeErrorV1{
+		Code:        runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_RESOURCE_EXHAUSTED,
+		SafeMessage: frame.Failure.SafeMessage,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame.EncodedFailure = payload
+	frame.PayloadDigest = runtimedomain.SHA256(payload)
+	frame.Settlement.TerminalPayloadDigest = frame.PayloadDigest
+	original := string(frame.EncodedFailure)
+	projector := &runtimeFailureProjectorStub{}
+	service, err := NewRuntimeFailureService(&runtimeFailureBindingStub{expected: expected}, fenceVerifierStub{expected: &frame.Fence}, projector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.IngestFailure(context.Background(), frame); err != nil {
+		t.Fatal(err)
+	}
+	projection := projector.projections[0]
+	if string(projection.Frame.EncodedFailure) != original || projection.Frame.PayloadDigest != frame.PayloadDigest {
+		t.Fatal("presentation changed the worker receipt")
+	}
+	var message struct {
+		Code        string `json:"code"`
+		SafeMessage string `json:"safe_message"`
+		Retryable   bool   `json:"retryable"`
+	}
+	if err := json.Unmarshal(projection.BrowserData, &message); err != nil {
+		t.Fatal(err)
+	}
+	browser := RuntimeFailure{Code: message.Code, SafeMessage: message.SafeMessage, Retryable: message.Retryable}
+	if browser != projection.Frame.Failure || browser.Code != "RESOURCE_EXHAUSTED" || browser.Retryable || !strings.Contains(browser.SafeMessage, "platform processing limit") || !strings.Contains(browser.SafeMessage, "support reference") {
+		t.Fatalf("incorrect public failure: %+v", browser)
+	}
+}
