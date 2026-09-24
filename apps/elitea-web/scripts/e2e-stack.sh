@@ -2286,13 +2286,13 @@ This page is a seeded fixture. It exists so the DeepWiki journey can read a
 wiki page that a provider would have written, on a stack that runs no provider.
 WIKI_PAGE
 
-    # `mc` is the tool the compose file already uses to create the S3 bucket
+    # `rc` is the tool the compose file already uses to create the S3 bucket
     # (rustfs-bucket-init), so this adds no new dependency to the stack.
     $EXEC_BIN run --rm --network "${E2E_PROJECT}_default" \
       -v "${WIKI_TMP}:/wiki:ro" \
-      --entrypoint sh quay.io/minio/mc:latest -c "
-        mc alias set rustfs http://rustfs:9000 elitea elitea-dev-secret >/dev/null &&
-        mc cp --recursive /wiki/${WIKI_ID} rustfs/elitea-artifacts/p/90200/b/wiki-artifacts/o/ >/dev/null
+      --entrypoint sh rustfs/rc:latest -c "
+        rc alias set rustfs http://rustfs:9000 elitea elitea-dev-secret >/dev/null &&
+        rc cp --recursive /wiki/${WIKI_ID} rustfs/elitea-artifacts/p/90200/b/wiki-artifacts/o/${WIKI_ID}/ >/dev/null
       " || {
         echo "ERROR: could not write the seeded wiki objects into rustfs." >&2
         echo "  The DeepWiki journey would then find an empty bucket, which is" >&2
@@ -2304,20 +2304,20 @@ WIKI_PAGE
 
     # ── postcondition: the objects are READABLE through the API's own layout ──
     #
-    # Not "mc reported success": a copy into the wrong prefix succeeds and
+    # Not "rc reported success": a copy into the wrong prefix succeeds and
     # leaves the browser empty. This lists the exact prefix elitea-main derives
     # for (project 1, bucket wiki-artifacts) and requires the manifest in it.
     WIKI_OBJECTS=$($EXEC_BIN run --rm --network "${E2E_PROJECT}_default" \
-      --entrypoint sh quay.io/minio/mc:latest -c "
-        mc alias set rustfs http://rustfs:9000 elitea elitea-dev-secret >/dev/null &&
-        mc ls --recursive rustfs/elitea-artifacts/p/90200/b/wiki-artifacts/o/ 2>/dev/null
+      --entrypoint sh rustfs/rc:latest -c "
+        rc alias set rustfs http://rustfs:9000 elitea elitea-dev-secret >/dev/null &&
+        rc ls --recursive rustfs/elitea-artifacts/p/90200/b/wiki-artifacts/o/ 2>/dev/null
       " || true)
     case "$WIKI_OBJECTS" in
       *wiki_manifest_1.json*) ;;
       *)
         echo "ERROR: the seeded wiki manifest is not under the prefix elitea-main reads." >&2
         echo "  Expected p/90200/b/wiki-artifacts/o/${WIKI_ID}/wiki_manifest_1.json" >&2
-        echo "  mc listed: ${WIKI_OBJECTS:-<nothing>}" >&2
+        echo "  rc listed: ${WIKI_OBJECTS:-<nothing>}" >&2
         exit 1
         ;;
     esac

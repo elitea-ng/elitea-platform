@@ -85,12 +85,12 @@ services:
       retries: 15
 
   rustfs-bucket-init:
-    image: quay.io/minio/mc:latest
+    image: rustfs/rc:latest
     entrypoint: ["sh", "-c"]
     command:
       - |
         i=0
-        until mc alias set rustfs http://rustfs:9000 elitea elitea-dev-secret; do
+        until rc alias set rustfs http://rustfs:9000 elitea elitea-dev-secret; do
           i=$((i + 1))
           if [ "$i" -ge 30 ]; then
             echo "rustfs alias set still failing after 30 attempts (60s) — giving up" >&2
@@ -99,7 +99,7 @@ services:
           echo "rustfs not ready yet (attempt $i/30), retrying in 2s..." >&2
           sleep 2
         done &&
-        mc mb --ignore-existing rustfs/elitea-artifacts
+        rc mb --ignore-existing rustfs/elitea-artifacts
     depends_on:
       rustfs:
         condition: service_healthy
