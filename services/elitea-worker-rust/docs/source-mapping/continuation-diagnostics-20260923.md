@@ -222,3 +222,8 @@ An authorized operator trace viewer remains a separate UI improvement.
 
 Read-only rehearsal verification resolves message `f92c39ca-4578-5f94-932f-2143432a000d` to execution `085934c4898fb780acc1f8b580a7bec0`, generation 1.
 The retained worker log contains the matching cause and diagnostic fields.
+
+The operator-only explanation is deployed from `bfbebfd4` in UI image `sha256:6300dc7b7064053e3b352d2b4a6fedb506de7df201b3b81b7f356da70271497c`.
+Fresh headed browser verification checks the visible explanation, exact clipboard reference, and stable reload in conversation 665.
+The screenshot is inspected. The browser reports no page errors and uses no mocked requests.
+Evidence: `elitea-operator-guidance-deployed.json` and `elitea-operator-guidance-deployed.png` in the local test evidence directory.

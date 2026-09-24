@@ -152,4 +152,17 @@ The async regression yields between parent and child spans, then verifies leaf-f
 Secret sentinel fields remain absent. All four diagnostics tests, formatting, and strict library-and-test Clippy checks pass.
 This extends the current-platform traceback mapping above without exposing operator details to the browser.
 It does not reconstruct uninstrumented futures or relocate capture to the original dependency failure.
-Release-image verification of this metadata addition remains open.
+Release-image verification of this metadata addition passes below.
+
+### Deployed async source verification, 2026-09-24
+
+Worker revision `9e8ec04d` runs as image `sha256:f6489a00cc96d976e2f50d62a21e47b390dc1641f42df327974fccbacf4789a8`.
+Deployment preserves the environment, networks, resource limits, and all five mounts.
+A fresh headed browser executes the nested pipeline in conversation 665.
+The run stops with `OUTPUT_CONTINUATION_EXHAUSTED`, suppresses downstream output, and retains the error after reload.
+The worker records the failure at ERROR level with the four-call exhaustion reason.
+The async scope identifies `agent.native_lifecycle` and its `native_agent_lifecycle.rs` source line.
+The native stack resolves `diagnostics/failure.rs` to its source line.
+The test detects one diagnostic capture and prints only the verification flags.
+Evidence: `elitea-diagnostic-locations-proof.json` and `elitea-pipeline-nested-failure-live.json` in the local test evidence directory.
+The instrumented-span and capture-boundary limits above still apply.
