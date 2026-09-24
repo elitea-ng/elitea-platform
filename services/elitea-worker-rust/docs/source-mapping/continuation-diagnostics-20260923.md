@@ -447,3 +447,35 @@ Deployment, live streaming, and browser acceptance of these public categories re
 Validation passes: 14 direct-tool tests, six model-failure contract tests, Main output-transport tests, and strict Rust Clippy.
 No tests are ignored in those Rust runs. Formatting and generated protocol checks pass.
 An initial narrow contract filter matches zero tests; the corrected `model_failure` filter supplies the six-test evidence above.
+
+
+### Typed pipeline input-limit browser acceptance, 2026-09-24
+
+Main image `sha256:ff487d7dfa0c2776d15062daab01d30a3f9d9836635da9ec05d050a4946dfb46` deploys before the worker.
+Worker image `sha256:056c29a65183678ae0e57a509c30f51a6a9b09b1298efddd4fdc2e215a997e7d` deploys from `810b8ad8c`.
+Configuration and all six Main mounts and five worker mounts remain unchanged.
+
+Fresh headed Playwright conversation 673 uses application 85, version 92. No response is mocked.
+The browser receives `execution.failed` with `PIPELINE_INPUT_LIMIT` and the registered explanation.
+It displays that explanation and the support code before reload. Both remain after reload.
+The screenshot is inspected. It explains the input size limit and distinguishes it from model context capacity.
+The support panel explains that detailed diagnostics are available to operators. No browser page errors occur.
+Evidence: `elitea-pipeline-input-limit-result.json`, `elitea-pipeline-input-limit-frames.json`, and `elitea-pipeline-input-limit.png`.
+This closes live input-limit propagation acceptance. It does not prove the other five new categories or output-delivery projection.
+
+### Confirmation capacity ownership correction
+
+The live test identifies a misplaced bound in `graph/direct_tool.rs::argument_digest`.
+Hashing applies the 40 KiB confirmation bound to ordinary direct calls before tool invocation.
+The digest now uses the existing 512 KiB direct-node value bound. The digest output remains fixed in size.
+`sensitive_decision` retains the 40 KiB input bound before it creates or resumes a confirmation.
+Ordinary calls do not include the full arguments in a confirmation event. MCP authorization uses the digest for correlation.
+This correction does not increase the direct-node value bound or the browser confirmation bound.
+It does not change digest contents, authorization decisions, or exact tool identity.
+
+The regression sends 48 KiB through an ordinary node and verifies one tool call.
+The same input through a sensitive node fails before tool invocation.
+This is a replatform boundary correction; the current SDK is a behavior reference, not the source of these transport bounds.
+Deployment and live acceptance of the capacity correction remain open.
+
+All 15 direct-tool tests pass without ignored tests. Strict library-and-test Clippy, formatting, and diff checks pass.

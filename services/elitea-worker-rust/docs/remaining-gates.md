@@ -14,6 +14,7 @@ Current-platform code defines business behavior, not a requirement to copy its i
 - Gate 3 is accepted for progression. The final restricted chat-operation permission check passes on 2026-09-14.
 - Gate 4 is active for context management and current-platform runtime drift.
 - [Failure diagnostics](source-mapping/continuation-diagnostics-20260923.md) now have deployed operator guidance, copyable references, and verified async source locations. Chat 668 verifies parent completion after a child context-budget failure. Other deployed model-failure categories remain open.
+- Typed pipeline input-limit errors pass live browser and reload acceptance in chat 673. Other new direct-node categories retain component proof only.
 - Output-delivery error code 24 is deployed in Main and Rust. Browser rendering passes with a response fixture; live emission remains open.
 - Public event metadata omits instruction bodies. All 24 session tests pass. The fix is deployed; chat 672 passes the previous assembly boundary.
 - [Native history retention](source-mapping/context-native-history-retention-20260921.md) records repeated-loop component proof and earlier live defects.

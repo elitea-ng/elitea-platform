@@ -1265,3 +1265,39 @@ nodes:
     assert!(!kind.safe_message().contains("do-not-publish"));
     assert_eq!(capture.lock().expect("capture").calls, 1);
 }
+
+#[tokio::test]
+async fn confirmation_capacity_does_not_restrict_ordinary_tool_input() {
+    let definition = DirectToolNodeDefinition::from_yaml(TOOLKIT_NODE).expect("node");
+    let state = HashMap::from([
+        ("ticket_id".to_owned(), json!(42)),
+        (
+            "filters".to_owned(),
+            json!({"document": "x".repeat(48 * 1024)}),
+        ),
+    ]);
+    let response = json!({"report": {}, "messages": [{"role":"assistant", "content":"ok"}]});
+    let (resolver, capture) = fixture_runtime(response.clone(), true);
+    DirectToolNode::new(definition.clone(), state_types(), resolver)
+        .execute(&NodeContext::new(
+            state.clone(),
+            ExecutionConfig::new("large-input"),
+            0,
+        ))
+        .await
+        .expect("ordinary admitted input must run");
+    assert_eq!(capture.lock().expect("capture").calls, 1);
+
+    let (resolver, capture) = sensitive_fixture_runtime(response);
+    let failure = DirectToolNode::new(definition, state_types(), resolver)
+        .execute(&NodeContext::new(
+            state,
+            ExecutionConfig::new("large-confirmation"),
+            0,
+        ))
+        .await
+        .err()
+        .expect("oversized confirmation must fail before invocation");
+    assert!(failure.to_string().contains("tool_confirmation"));
+    assert_eq!(capture.lock().expect("capture").calls, 0);
+}

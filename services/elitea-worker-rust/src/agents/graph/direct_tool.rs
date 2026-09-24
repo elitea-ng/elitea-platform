@@ -789,6 +789,14 @@ impl DirectToolNode {
         {
             return Err(DirectToolExecutionError::ResourceExhausted);
         }
+        // Confirmation carries arguments in a browser event; ordinary calls do not.
+        if serde_json::to_vec(arguments)
+            .map_err(|_| DirectToolExecutionError::InvalidArguments)?
+            .len()
+            > MAX_CONFIRMATION_ARGUMENT_BYTES
+        {
+            return Err(DirectToolExecutionError::ResourceExhausted);
+        }
         let argument_digest =
             argument_digest(call_id, self.definition.selection().tool(), arguments)?;
         let definition_digest = self.definition.digest_label();
@@ -934,7 +942,7 @@ fn argument_digest(
     let canonical = canonical_value(arguments, 0)?;
     let encoded =
         serde_json::to_vec(&canonical).map_err(|_| DirectToolExecutionError::InvalidArguments)?;
-    if encoded.len() > MAX_CONFIRMATION_ARGUMENT_BYTES {
+    if encoded.len() > MAX_RESULT_BYTES {
         return Err(DirectToolExecutionError::ResourceExhausted);
     }
     let mut context = digest::Context::new(&digest::SHA256);
