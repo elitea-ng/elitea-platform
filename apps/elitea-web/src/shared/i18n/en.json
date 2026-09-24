@@ -4403,5 +4403,6 @@
   "chatMessages.continuation.showPartial": "Show partial response",
   "chatMessages.continuation.copyPartial": "Copy partial response",
   "chatMessages.error.supportDetails": "Details for support",
-  "chatMessages.error.copyReference": "Copy error reference"
+  "chatMessages.error.copyReference": "Copy error reference",
+  "chatMessages.error.operatorDiagnostics": "Share this reference with your administrator. Detailed diagnostics are available to operators in service logs."
 }

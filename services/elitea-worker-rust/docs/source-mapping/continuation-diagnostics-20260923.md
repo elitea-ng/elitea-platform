@@ -188,3 +188,37 @@ Deployment preserves the existing environment, networks, and resource limits.
 Fresh headed Playwright verification passes on the deployed conversation 665, including clipboard contents and stable reload.
 There are no page errors or mocked requests. The deployed screenshot is inspected.
 Evidence files are `elitea-error-reference-deployed.json` and `elitea-error-reference-deployed.png` in the local test evidence directory.
+
+### Operator lookup
+
+The UI explains that detailed diagnostics are available to operators in service logs.
+It does not offer a stack-trace viewer or grant log access to ordinary users.
+The error reference is a locator, not an access credential.
+
+Use the copied message ID with the affected project and actor in an authorized, read-only database session.
+The following psql query uses supplied variables:
+
+```sql
+SELECT binding.execution_id, binding.generation
+FROM elitea_runtime.agent_execution_jobs AS binding
+JOIN elitea_runtime.execution_jobs AS job
+  ON job.execution_id = binding.execution_id
+ AND job.generation = binding.generation
+ AND job.capability_id = binding.capability_id
+WHERE binding.client_message_id = :'message_id'
+  AND job.resource_project_id = :'project_id'::integer
+  AND job.actor_id = :'actor_id';
+```
+
+Filter retained worker logs by the returned execution ID and generation.
+Inspect `error_code`, `upstream_error_code`, `cause_message`, `failure_reason`, and `failure_diagnostic` where present.
+Use the log platform's event view to retain multiline diagnostic text.
+Do not publish raw log records into chat or support tickets without review.
+
+`ELITEA_RUST_FAILURE_DIAGNOSTICS=on` enables bounded stack capture before the failure occurs.
+Disabled or rate-limited capture does not contain a stack. Enabling capture later cannot reconstruct an earlier stack.
+Container replacement can remove local logs. Production operators need retained logs for historical lookup.
+An authorized operator trace viewer remains a separate UI improvement.
+
+Read-only rehearsal verification resolves message `f92c39ca-4578-5f94-932f-2143432a000d` to execution `085934c4898fb780acc1f8b580a7bec0`, generation 1.
+The retained worker log contains the matching cause and diagnostic fields.

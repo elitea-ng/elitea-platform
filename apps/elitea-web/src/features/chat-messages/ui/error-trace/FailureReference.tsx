@@ -20,6 +20,9 @@ export function FailureReference({ messageId, code }: FailureReferenceProps): Re
       <Typography component="pre" variant="caption" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', my: 1 }}>
         {reference}
       </Typography>
+      <Typography variant="body2" color="text.secondary">
+        {t('chatMessages.error.operatorDiagnostics', 'Share this reference with your administrator. Detailed diagnostics are available to operators in service logs.')}
+      </Typography>
       <Button size="small" onClick={() => { void handleCopy(reference); }}>
         {t('chatMessages.error.copyReference', 'Copy error reference')}
       </Button>
