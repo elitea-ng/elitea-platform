@@ -396,3 +396,24 @@ All 13 direct-tool tests pass without ignored tests.
 Tests verify distinct binding and result errors, plus argument-capacity rejection before tool execution.
 Strict library-and-test Clippy and formatting checks pass.
 Deployment and live diagnostic acceptance remain open.
+
+
+### Direct-tool diagnostic deployment and acceptance, 2026-09-24
+
+Release image `sha256:03985774d329bfdfcfa0cd46164877e801ddf863a286ae8128c39c73d658ae09` is deployed from `9441cdf42`.
+The build succeeds. Deployment preserves the five mounts and existing service configuration.
+Conversation 672 runs again through a fresh headed Playwright browser, without response mocks.
+Execution `99e73a259bb0d3fcfa5fc97b59154033` reaches FAILED.
+Its ERROR event identifies `argument_digest` with cause `the direct-tool node exceeds its resource bound`.
+`argument_digest` enforces `MAX_CONFIRMATION_ARGUMENT_BYTES`, which is 40 KiB.
+The 48 KB fixture fails before tool invocation. This proves the operator diagnostic, not output-delivery projection.
+The placement of the confirmation bound on ordinary calls requires review before changing any capacity limit.
+
+The submission browser check does not observe the expected failure before its assertion times out.
+A separate fresh browser readback verifies the latest persisted failure, expanded support reference, and stable reload.
+The screenshot is inspected. It shows operator-only diagnostic guidance and a message ID, without internal stack details.
+No browser page error occurs during readback. Live streaming acceptance remains open.
+Evidence: `elitea-direct-diagnostics-readback-result.json` and `elitea-direct-diagnostics-readback.png`.
+The current UI still displays INTERNAL and the generic runtime message.
+Propagate the typed direct-node failure through the pipeline event bridge and registered public error contract.
+Do not parse arbitrary graph exception text to choose a public error.

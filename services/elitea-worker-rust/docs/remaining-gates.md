@@ -15,7 +15,7 @@ Current-platform code defines business behavior, not a requirement to copy its i
 - Gate 4 is active for context management and current-platform runtime drift.
 - [Failure diagnostics](source-mapping/continuation-diagnostics-20260923.md) now have deployed operator guidance, copyable references, and verified async source locations. Chat 668 verifies parent completion after a child context-budget failure. Other deployed model-failure categories remain open.
 - Output-delivery error code 24 is deployed in Main and Rust. Browser rendering passes with a response fixture; live emission remains open.
-- Public event metadata now omits instruction bodies. All 24 session tests pass; deployment and the live large-definition check remain open.
+- Public event metadata omits instruction bodies. All 24 session tests pass. The fix is deployed; chat 672 passes the previous assembly boundary.
 - [Native history retention](source-mapping/context-native-history-retention-20260921.md) records repeated-loop component proof and earlier live defects.
 - [Model transport timeouts](source-mapping/model-transport-timeouts-20260922.md) records the separate model-wait limits and repeated live compaction.
 - [Terminal answer snapshots](source-mapping/terminal-answer-snapshot-20260922.md) records the successful 24-call, two-compaction run and stable browser reload.
