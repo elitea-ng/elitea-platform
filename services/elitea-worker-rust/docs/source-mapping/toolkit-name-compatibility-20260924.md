@@ -25,4 +25,17 @@ Saved YAML, database schema, tool operation names, and application participant n
 The direct MCP legacy-name regression failed before the fix with `InvalidInput`.
 After the fix, all 51 `agents::pipeline_tests` pass. Coverage includes direct MCP execution, exact-name precedence, ambiguous-name rejection before connection, LLM selection admission, and static toolkit compatibility. Strict library/test Clippy and formatting checks pass.
 
-Deployment and fresh browser acceptance remain pending. Component checks do not close Gate 4.
+## Deployed acceptance
+
+Commit `78a8dc80b` is deployed as worker image `sha256:e65812f7cdb3c543db5fa4c32024f1559ca6b498391db5f70b2b527592458bb5`.
+The clean-commit release build passes and retains debug line tables and symbols.
+The deployment preserves the worker environment, five mounts, network, and resource limits.
+
+Fresh headed Playwright chat 683 uses saved pipeline 95, version 102.
+Its direct MCP node requests `RUST-_COMPACTION-_RECORDS`; admitted toolkit 71 remains `rust-compaction-records`.
+The real read-only `read_compaction_record` call returns `CEDAR-731`.
+The browser renders the result and preserves it after reload, with no page errors or execution failures. No browser responses are mocked.
+Execution `6c8d9d11219086b08acfbf7f563ac0d5` is `SUCCEEDED` in PostgreSQL.
+
+The local acceptance artifacts are `elitea-toolkit-legacy-result.json`, `elitea-toolkit-legacy-frames.json`, and `elitea-toolkit-legacy.png` in the temporary evidence directory. The screenshot was inspected.
+This closes deployed legacy-name acceptance for a direct MCP node. Live collision and LLM-loop compatibility acceptance remain open. Component checks do not close Gate 4.
