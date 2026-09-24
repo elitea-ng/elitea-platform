@@ -71,3 +71,11 @@ Fresh chat 688 (application 100, version 107) passes with real Haiku, one `read_
 The final answer appears on the original page and remains after reload. There are no browser page errors or execution failures. No browser responses are mocked.
 Execution `e27485e321f3b1644a9bd7090337c2a4` is `SUCCEEDED`. The live screenshot was inspected.
 This closes direct MCP and LLM-loop legacy-name acceptance. Live same-operation collision coverage remains open.
+
+
+### Collision acceptance fixture
+
+`tests/acceptance/toolkit_collision_mcp_fixture.py` exposes two TLS MCP paths, `/release` and `/audit`, with the same read-only `lookup_record` operation. Each returns its own fixed source and marker.
+This provides independent execution evidence for the SDK toolkit-identity contract described above. It performs no external reads or writes, bounds requests to 4096 bytes, and requires explicit test-only enablement.
+Focused checks prove distinct source markers and unknown-path refusal. The fixture runs from stdin in the rehearsal emulator because its root filesystem is read-only. No image, credential, or filesystem policy was changed.
+Registration of the two test toolkits and browser acceptance remain pending. Fixture readiness is not runtime binding acceptance.
