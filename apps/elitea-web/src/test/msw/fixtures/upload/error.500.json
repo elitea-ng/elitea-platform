@@ -1,7 +1,7 @@
 {
-  "recordedAt": "2026-08-25",
+  "recordedAt": "2026-09-24",
   "synthetic": true,
-  "note": "Synthetic (unit S6): server-error ack for the upload-failure probe. Re-verified under R-M4: the attachment handler's failures go through apierr.Write (pkg/apierr/apierr.go:47-52) — a FLAT {\"error\": string}. upload.ts resolves any non-2xx to {kind:'http', status} without parsing the body (upload.ts:161-164), so the body shape is asserted here and nowhere else.",
+  "note": "Synthetic (unit S6): server-error ack for the upload-failure probe. Re-verified under R-M4: the attachment handler's failures go through apierr.Write (pkg/apierr/apierr.go:47-52) — a FLAT {\"error\": string}. upload.ts resolves any non-2xx to {kind:'http', status} without parsing the body (upload.ts:161-164), so the body shape is asserted here and nowhere else. RE-READ 2026-09-24 (R-M4): the attachment failures still go through apierr.Write, which now sits at pkg/apierr/apierr.go:58-70 and still writes the flat {\"error\": string}.",
   "body": {
     "error": "internal error"
   }

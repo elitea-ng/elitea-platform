@@ -1,7 +1,7 @@
 {
-  "recordedAt": "2026-08-25",
+  "recordedAt": "2026-09-24",
   "synthetic": true,
-  "note": "Synthetic (unit S6): intermediate-chunk ack for POST /api/v2/elitea_core/attachments/prompt_lib/{projectId}/{conversationId}. DERIVED FROM THE GO HANDLER, not captured: services/elitea-main/internal/api/v2/conversations/attachments.go:348 writes exactly these five keys at 202 Accepted while `received < totalChunks`. It replaces a body of {in_progress: true}, which was the legacy Python shape and which no backend has sent since the Go attachments port (S20a) landed. `upload.ts:90-91` reaches its 'in_progress' state through the not-an-array branch either way, so the CLIENT is unaffected — the fixture was describing a server that no longer exists, which is what R-M4 exists to catch.",
+  "note": "Synthetic (unit S6): intermediate-chunk ack for POST /api/v2/elitea_core/attachments/prompt_lib/{projectId}/{conversationId}. DERIVED FROM THE GO HANDLER, not captured: services/elitea-main/internal/api/v2/conversations/attachments.go:348 writes exactly these five keys at 202 Accepted while `received < totalChunks`. It replaces a body of {in_progress: true}, which was the legacy Python shape and which no backend has sent since the Go attachments port (S20a) landed. `upload.ts:90-91` reaches its 'in_progress' state through the not-an-array branch either way, so the CLIENT is unaffected — the fixture was describing a server that no longer exists, which is what R-M4 exists to catch. RE-READ 2026-09-24 (R-M4): the 202 Accepted write now sits at conversations/attachments.go:408-415 under the same received < totalChunks guard (:407) and still carries exactly the five keys.",
   "body": {
     "status": "chunk_received",
     "file_id": "6f1f0f6a-6d3a-4a1a-9f2f-2a1b3c4d5e6f",

@@ -358,7 +358,7 @@ dbInit:
 # stack's own topology) is exactly the case where turning this on is safe and
 # useful, so it is opt-in per install rather than assumed.
 #
-# Backend support: S3-compatible only (the same `mc` tool compose uses).
+# Backend support: S3-compatible only (the same `rc` tool compose uses — the RustFS CLI).
 # Azure/GCS container creation is not implemented here; enabling this with
 # main.env.STORAGE_BACKEND set to "azure" or "gcs" fails the Job on purpose
 # rather than silently skipping, so a mis-set flag is caught at install time.
@@ -366,12 +366,12 @@ objectInit:
   enabled: false
 
   image:
-    repository: quay.io/minio/mc
+    repository: rustfs/rc
     tag: "latest"
     pullPolicy: IfNotPresent
 
-  # Credentials for the `mc alias set` used to create the bucket. Static keys
-  # only — `mc` does not perform the ambient workload-identity credential
+  # Credentials for the `rc alias set` used to create the bucket. Static keys
+  # only — `rc` does not perform the ambient workload-identity credential
   # chains internal/infra/storage/s3 falls back to, so a cluster running S3
   # via workload identity (no S3_ACCESS_KEY/S3_SECRET_KEY Secret) cannot use
   # this Job and must pre-create the bucket out-of-band instead.
