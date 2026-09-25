@@ -638,6 +638,55 @@ replica opens its own pools, and 63 replicas do not fit a stock
 A per-principal or per-project value above `maxStreams` fails `helm
 template`, and the same check fails the process at boot.
 
+#### The agent worker's delivery cap and replica sizing (issue #967)
+
+Each worker replica runs `delivery_max_concurrency` deliveries at once.
+The standalone stack and the chart start at 2. This change raises both
+to 32. The cap is configuration, not CPU.
+
+Two caps bound the same delivery in series. The serve loop admits
+`delivery_max_concurrency` deliveries at once. Each delivery then runs
+its agent in the synchronous SDK pool, which admits
+`sync_max_in_flight` calls at once on `sync_max_workers` threads. The
+lower cap wins. The chart raises all three together, and the comment
+above `worker.runtime.limits` names the coupling. Raise one without the
+others, and the unraised cap becomes the limit.
+
+The sizing formula is:
+
+    worker count = ceil(concurrent flows / delivery_max_concurrency)
+
+One worker's rate is `cap / flow duration`. Measured on the standalone
+stack on 2026-09-20 with the 2.5 s mock echo flow:
+
+| configuration | measured | formula |
+| --- | --- | --- |
+| 1 worker, cap 2 | 0.78 flows/s | 0.80 flows/s |
+| 3 workers, cap 2 | 2.15 flows/s | 2.40 flows/s |
+
+The formula reproduces both runs within 20%. A deployment that serves
+1000 concurrent flows needs `1000 / 32`, so about 32 workers at the
+raised cap. At the cap of 2 it needed 500.
+
+Two CI tests pin the caps at 32 on every run of the worker suite.
+`test_serve_loop_sustains_the_configured_delivery_cap` proves the serve
+loop runs 32 deliveries at once.
+`test_sync_pool_sustains_the_configured_in_flight_bound` proves the
+synchronous pool holds 32 in-flight calls.
+
+The cap is not free. Each active delivery holds a claim, a spool
+directory and one SDK thread. The chart sizes the pod for 32 at once:
+`worker.resources` requests 2 CPU and 4 Gi, and limits 8 CPU and 16 Gi.
+The measured worker CPU was about 0.4 at cap 2.
+
+`redis_read_batch` stays at 4. The KEDA scaler targets one delivery cap of
+pending entries per replica: `targetPendingEntries` is 32. One replica holds
+32 in-flight and 64 queued entries. The scaler adds a replica only when one
+cannot drain the backlog.
+
+The default `maxReplicas` of 10 caps a KEDA fleet at 320 concurrent flows.
+A manual fleet has no such ceiling. Raise `maxReplicas` when you serve more.
+
 Its material — the signing key, the verification keyring, the Redis password,
 the Redis CA and the three listener keypairs — comes from a **plain Kubernetes
 Secret**. Set `runtime.material.secretName`, and give the Secret one key for
