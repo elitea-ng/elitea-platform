@@ -945,6 +945,122 @@ Without the pooler the same three replicas pin the server at 90 of 100
 connections. The next component to connect — usually a migration Job — then
 fails with `sorry, too many clients already`.
 
+## Scaling order with live workers (#968)
+
+The agent worker consumes commands from the Redis command stream. The worker
+has no consumption-pause. Its only drain is SIGTERM. On SIGTERM the worker
+stops intake and finishes in-flight work up to its 30 second shutdown
+deadline.
+
+It creates no shutdown ACK. Unfinished stream entries stay PENDING and
+remain reclaimable. Stopping the worker fleet loses no durable work.
+PostgreSQL stays the source of truth for execution state.
+
+Recreating one `elitea-main` replica drops the execution streams that
+replica holds. Client sessions must reconnect and replay. A worker execution
+that crosses that drop risks a failed turn and a PENDING retry. The drain
+order below stops a worker execution from crossing a main recreation.
+
+### Scale-down and recreation: drain, recreate, restore
+
+Run this order for every planned main scale-down or recreation with a live
+worker fleet:
+
+1. Stop worker consumption.
+2. Recreate or scale the `elitea-main` replica.
+3. Restore worker capacity.
+
+```bash
+# 1. Stop worker consumption. Idempotent. Prints each step.
+deploy/scripts/drain-workers.sh drain
+
+# 2. Recreate the main replica fleet, or scale it down and back up.
+kubectl rollout restart deployment/elitea-main -n elitea
+# or, to take the whole plane down:
+# Suspend the HPA for the window.
+# An active HPA owns spec.replicas and scales the plane back up.
+# Restore the HPA after the plane is back.
+kubectl scale deployment/elitea-main -n elitea --replicas=0
+kubectl scale deployment/elitea-main -n elitea --replicas=2
+
+# 3. Restore worker capacity.
+deploy/scripts/drain-workers.sh restore
+```
+
+`drain` scales the worker Deployment to 0 and waits until no worker pod
+remains. With KEDA enabled, it pauses the worker ScaledObject with
+`autoscaling.keda.sh/paused=true` and
+`autoscaling.keda.sh/paused-replicas="0"` instead. This stops KEDA from
+rescaling the fleet during the main replica recreation.
+
+`restore` removes the pause. A manual fleet returns to `worker.replicaCount`
+(1 by default). A KEDA fleet resumes the ScaledObject, which holds the fleet
+at `minReplicas`. Pass `--replicas N` to restore another count on a manual
+fleet. Run `status` at any point to see the current state.
+
+The kubectl sequence behind the drain order:
+
+Lines marked `# script` run by `deploy/scripts/drain-workers.sh`. Lines
+marked `# operator` run by the operator.
+
+```bash
+# manual fleet (no KEDA)
+# script
+kubectl scale deployment/elitea-worker -n elitea --replicas=0
+# operator
+kubectl rollout status deployment/elitea-main -n elitea
+# script
+kubectl scale deployment/elitea-worker -n elitea --replicas=1
+# script
+kubectl rollout status deployment/elitea-worker -n elitea
+
+# KEDA fleet
+# script
+kubectl annotate scaledobject/elitea-worker -n elitea --overwrite \
+  autoscaling.keda.sh/paused=true autoscaling.keda.sh/paused-replicas=0
+# operator
+kubectl rollout status deployment/elitea-main -n elitea
+# script
+kubectl annotate scaledobject/elitea-worker -n elitea \
+  autoscaling.keda.sh/paused- autoscaling.keda.sh/paused-replicas-
+```
+
+The `elitea-main` HPA ships enabled: 2 to 10 replicas, 70% CPU and 80%
+memory. An automatic scale-down drops execution streams mid-recreation,
+exactly like a manual one. Raise the HPA floor to the current main replica
+count before the drain order. The raised floor stops the HPA from scaling
+down during the window:
+
+```bash
+# 3 stands for the current main replica count
+kubectl patch hpa/elitea-main -n elitea --type merge \
+  -p '{"spec":{"minReplicas":3}}'
+```
+
+Restore the floor after `deploy/scripts/drain-workers.sh restore`. A GitOps
+deployment raises `main.autoscaling.minReplicas` in the Application values
+instead.
+
+### Scale-up: raise main first, then the workers
+
+Adding a main replica adds stream capacity. It does not drop existing
+streams. Raise `elitea-main` first. Raise the worker fleet when the pending
+queue depth needs it. An install without the pooler must read
+[The Postgres pooler and the connection budget (#964)](#the-postgres-pooler-and-the-connection-budget-964)
+before it raises the main replica count. With the pooler in the path, the
+same scale-up stays within the connection budget.
+
+```bash
+# 1. Add a main replica.
+kubectl scale deployment/elitea-main -n elitea --replicas=3
+
+# 2. Raise worker capacity when the queue needs it.
+kubectl scale deployment/elitea-worker -n elitea --replicas=2
+```
+
+A GitOps deployment changes `main.replicaCount` or `worker.replicaCount` in
+the Application values instead. The order is the same.
+
 ## What a Kubernetes install does NOT give you
 
 Stated plainly, because the gap between compose and Helm is where deploys break:

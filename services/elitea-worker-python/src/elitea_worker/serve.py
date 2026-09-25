@@ -13,11 +13,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-import grpc
 import httpx
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from elitea.runtime.v1 import command_pb2, control_pb2_grpc, output_pb2_grpc
+from elitea.runtime.v1 import command_pb2
 
 from elitea_worker.agent_current_runtime_capabilities import (
     require_agent_current_runtime_capabilities,
@@ -40,6 +39,7 @@ from elitea_worker.constants import (
 from elitea_worker.execution.delivery import (
     AgentExecutionDeliveryProcessor,
     ConfigurationValidationDeliveryProcessor,
+    ControlPlane,
     DeliveryDisposition,
     DeliveryResult,
     IndexClientContextFactory,
@@ -66,15 +66,18 @@ from elitea_worker.protocol.codec import (
     parse_and_verify_signed_command,
 )
 from elitea_worker.security import RuntimeTrustMaterial
-from elitea_worker.transport.control_grpc import (
-    ExecutionControlClient,
-    secure_control_channel,
-)
 from elitea_worker.transport.input_content import (
     ClaimBoundInputRequestBuilder,
     ScopedInputContentClient,
 )
-from elitea_worker.transport.output_grpc import OutputGrpcSession, secure_output_channel
+from elitea_worker.transport.output_grpc import (
+    GeneratedOutputStub,
+    OutputGrpcSession,
+)
+from elitea_worker.transport.reconnect_channel import (
+    ReconnectableControlPlane,
+    ReconnectableOutputStub,
+)
 from elitea_worker.transport.output_spool import EncryptedOutputSpool
 from elitea_worker.transport.redis_asyncio import RedisAsyncioControlClient
 from elitea_worker.transport.redis_quarantine import SharedQuarantineStore
@@ -693,10 +696,10 @@ class ProductionDeliveryProcessor:
         trust: RuntimeTrustMaterial,
         supervisor: ExecutionSupervisor,
         handler: ConfigurationValidationHandler,
-        control: ExecutionControlClient,
+        control: ControlPlane,
         command_acker: RedisCommandConsumer,
         input_client: ScopedInputContentClient,
-        output_stub: output_pb2_grpc.ExecutionOutputServiceStub,
+        output_stub: GeneratedOutputStub,
         index_client_context_factory: IndexClientContextFactory | None = None,
         agent_checkpoint_factory: CurrentAgentCheckpointFactory | None = None,
     ) -> None:
@@ -921,8 +924,8 @@ async def _serve_deployment_inner(
         name="elitea-shutdown-deadline",
     )
     redis_client: RedisAsyncioControlClient | None = None
-    control_channel: grpc.aio.Channel | None = None
-    output_channel: grpc.aio.Channel | None = None
+    control: ReconnectableControlPlane | None = None
+    output: ReconnectableOutputStub | None = None
     http_client: httpx.AsyncClient | None = None
     supervisor: ExecutionSupervisor | None = None
     try:
@@ -965,22 +968,19 @@ async def _serve_deployment_inner(
             ("x-elitea-workload-session", config.workload_session_id),
             ("x-elitea-producer-id", config.producer_id),
         )
-        control_channel = secure_control_channel(
-            config.control_target,
+        control = ReconnectableControlPlane(
+            target=config.control_target,
             root_certificates=trust.ca_bytes,
             certificate_chain=trust.certificate_bytes,
             private_key=trust.private_key_bytes,
-        )
-        output_channel = secure_output_channel(
-            config.output_target,
-            root_certificates=trust.ca_bytes,
-            certificate_chain=trust.certificate_bytes,
-            private_key=trust.private_key_bytes,
-        )
-        control = ExecutionControlClient(
-            control_pb2_grpc.RuntimeControlServiceStub(control_channel),
             metadata=lambda: metadata,
             deadline_seconds=limits.grpc_deadline_millis / 1000,
+        )
+        output = ReconnectableOutputStub(
+            target=config.output_target,
+            root_certificates=trust.ca_bytes,
+            certificate_chain=trust.certificate_bytes,
+            private_key=trust.private_key_bytes,
         )
         http_client = httpx.AsyncClient(
             verify=trust.http_client_context(),
@@ -1037,7 +1037,7 @@ async def _serve_deployment_inner(
             control=control,
             command_acker=consumer,
             input_client=content,
-            output_stub=output_pb2_grpc.ExecutionOutputServiceStub(output_channel),
+            output_stub=output,
             index_client_context_factory=index_client_context_factory,
             agent_checkpoint_factory=agent_checkpoint_factory,
         )
@@ -1062,8 +1062,8 @@ async def _serve_deployment_inner(
         await _close_runtime_resources(
             supervisor=supervisor,
             http_client=http_client,
-            control_channel=control_channel,
-            output_channel=output_channel,
+            control=control,
+            output=output,
             redis_client=redis_client,
             budget=shutdown_budget,
         )
@@ -1119,8 +1119,8 @@ async def _close_runtime_resources(
     *,
     supervisor: ExecutionSupervisor | None,
     http_client: httpx.AsyncClient | None,
-    control_channel: grpc.aio.Channel | None,
-    output_channel: grpc.aio.Channel | None,
+    control: ReconnectableControlPlane | None,
+    output: ReconnectableOutputStub | None,
     redis_client: RedisAsyncioControlClient | None,
     budget: _ShutdownBudget,
 ) -> None:
@@ -1134,8 +1134,8 @@ async def _close_runtime_resources(
         for resource in (
             supervisor,
             http_client,
-            control_channel,
-            output_channel,
+            control,
+            output,
             redis_client,
         )
     ):
@@ -1152,10 +1152,10 @@ async def _close_runtime_resources(
         closers.append(supervisor.shutdown(timeout_seconds=remaining))
     if http_client is not None:
         closers.append(http_client.aclose())
-    if control_channel is not None:
-        closers.append(control_channel.close(grace=remaining))
-    if output_channel is not None:
-        closers.append(output_channel.close(grace=remaining))
+    if control is not None:
+        closers.append(control.close(grace=remaining))
+    if output is not None:
+        closers.append(output.close(grace=remaining))
     if redis_client is not None:
         closers.append(redis_client.aclose())
 
