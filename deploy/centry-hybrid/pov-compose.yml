@@ -276,12 +276,12 @@ services:
       - centry
 
   runtime-artifacts-bucket-init:
-    image: quay.io/minio/mc:latest
+    image: rustfs/rc:latest
     entrypoint: ["sh", "-c"]
     command:
       - |
-        mc alias set runtime-artifacts http://runtime-artifacts:9000 elitea elitea-dev-secret &&
-        mc mb --ignore-existing runtime-artifacts/elitea-artifacts
+        rc alias set runtime-artifacts http://runtime-artifacts:9000 elitea elitea-dev-secret &&
+        rc mb --ignore-existing runtime-artifacts/elitea-artifacts
     depends_on:
       runtime-artifacts:
         condition: service_healthy
