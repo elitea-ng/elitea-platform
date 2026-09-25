@@ -229,7 +229,9 @@ class _ReconnectablePublishCall:
 
     async def __anext__(self) -> output_pb2.ExecutionOutputAckV1:
         try:
-            ack = await self._call.__anext__()
+            # A grpc stream call object exposes its iterator only through
+            # __aiter__. The call object has no __anext__ attribute.
+            ack = await self._call.__aiter__().__anext__()
         except grpc.aio.AioRpcError as error:
             if (
                 error.code() is not grpc.StatusCode.UNAVAILABLE
@@ -237,7 +239,7 @@ class _ReconnectablePublishCall:
             ):
                 raise
             await self._recover()
-            ack = await self._call.__anext__()
+            ack = await self._call.__aiter__().__anext__()
         self._established = True
         return ack
 

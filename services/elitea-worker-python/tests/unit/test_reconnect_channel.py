@@ -372,11 +372,45 @@ def test_control_plane_re_resolve_adopts_concurrent_generation(
 
 
 class _OutputBehavior:
-    """Scripted write failures per underlying stream call."""
+    """Scripted write failures and ACK results per underlying stream call."""
 
-    def __init__(self, write_errors: list[grpc.aio.AioRpcError | None]) -> None:
+    def __init__(
+        self,
+        write_errors: list[grpc.aio.AioRpcError | None],
+        ack_script: list[grpc.aio.AioRpcError | output_pb2.ExecutionOutputAckV1] = (),
+    ) -> None:
         self.write_errors = write_errors
+        self.ack_script = list(ack_script)
         self.calls: list[_FakeOutputCall] = []
+
+
+class _FakeStreamIterator:
+    """Owns `__anext__` for one stream call, mirroring grpcio 1.84.0.
+
+    The call object exposes its iterator only through `__aiter__`. This
+    object consumes the scripted sequence. An exhausted sequence raises
+    `StopAsyncIteration`.
+    """
+
+    def __init__(
+        self,
+        script: list[grpc.aio.AioRpcError | output_pb2.ExecutionOutputAckV1],
+    ) -> None:
+        self._script = script
+        self._index = 0
+
+    def __aiter__(self) -> _FakeStreamIterator:
+        return self
+
+    async def __anext__(self) -> output_pb2.ExecutionOutputAckV1:
+        if self._index >= len(self._script):
+            raise StopAsyncIteration
+        entry = self._script[self._index]
+        self._index += 1
+        if isinstance(entry, grpc.aio.AioRpcError):
+            raise entry
+        assert isinstance(entry, output_pb2.ExecutionOutputAckV1)
+        return entry
 
 
 class _FakeOutputCall:
@@ -385,12 +419,13 @@ class _FakeOutputCall:
         self.written: list[output_pb2.ExecutionOutputFrameV1] = []
         self.cancelled = False
         self._write_index = 0
+        self._ack_iterator: _FakeStreamIterator | None = None
 
-    def __aiter__(self) -> _FakeOutputCall:
-        return self
-
-    async def __anext__(self) -> output_pb2.ExecutionOutputAckV1:
-        raise StopAsyncIteration
+    def __aiter__(self) -> _FakeStreamIterator:
+        # Mirror grpcio memoization: one call owns one stream iterator.
+        if self._ack_iterator is None:
+            self._ack_iterator = _FakeStreamIterator(self.behavior.ack_script)
+        return self._ack_iterator
 
     async def write(self, frame: output_pb2.ExecutionOutputFrameV1) -> None:
         error = self.behavior.write_errors[self._write_index]
@@ -652,5 +687,56 @@ def test_output_stub_close_closes_channel_and_refuses_calls(
         with pytest.raises(DependencyUnavailable):
             stub.Publish(timeout=300.0, metadata=_METADATA)
         assert len(factory.channels) == 1
+
+    asyncio.run(run())
+
+
+def test_output_stub_yields_ack_through_wrapper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def run() -> None:
+        ack = output_pb2.ExecutionOutputAckV1(committed_contiguous_sequence=1)
+        stub, factory = _output_stub(
+            monkeypatch,
+            [_OutputBehavior([], ack_script=[ack])],
+        )
+        call = stub.Publish(timeout=300.0, metadata=_METADATA)
+
+        received = await call.__anext__()
+
+        assert received == ack
+        assert len(factory.channels) == 1
+        assert factory.channels[0].closed is False
+        assert factory.channels[0].behavior.calls[0].written == []
+
+    asyncio.run(run())
+
+
+def test_output_stub_re_publishes_ack_stream_after_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def run() -> None:
+        unavailable = grpc.aio.AioRpcError(
+            grpc.StatusCode.UNAVAILABLE,
+            details="main replica moved",
+        )
+        ack = output_pb2.ExecutionOutputAckV1(committed_contiguous_sequence=1)
+        stub, factory = _output_stub(
+            monkeypatch,
+            [
+                _OutputBehavior([], ack_script=[unavailable]),
+                _OutputBehavior([], ack_script=[ack]),
+            ],
+        )
+        call = stub.Publish(timeout=300.0, metadata=_METADATA)
+
+        received = await call.__anext__()
+
+        assert received == ack
+        assert len(factory.channels) == 2
+        assert factory.channels[0].closed is True
+        assert factory.channels[1].closed is False
+        assert len(factory.channels[1].behavior.calls) == 1
+        assert factory.channels[1].behavior.calls[0].written == []
 
     asyncio.run(run())
