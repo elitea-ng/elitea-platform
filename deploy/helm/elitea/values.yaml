@@ -3165,11 +3165,10 @@ worker:
     # Entries pending in the consumer group, per replica. KEDA divides the
     # observed depth by this to get a replica count.
     #
-    # 4 rather than 1: a worker claims a small batch at a time
-    # (limits.redis_read_batch is 4 in values-standalone), so a target of 1
-    # would add a replica for a backlog one existing replica is already about
-    # to take.
-    targetPendingEntries: 4
+    # 32 = limits.delivery_max_concurrency: one replica drains a full cap of
+    # pending entries before the scaler wants a second. A smaller target adds
+    # replicas while the first still has free delivery slots.
+    targetPendingEntries: 32
 
     pollingIntervalSeconds: 15
 
@@ -3316,21 +3315,25 @@ worker:
     # Broader than the current `artifact.delete_file` rule, so metadata drift
     # cannot bypass approval.
     sensitiveTools: '{"*":["delete_file"]}'
+    # The delivery cap and the synchronous SDK pool cap the same executions in
+    # series. Raise delivery_max_concurrency together with sync_max_workers and
+    # sync_max_in_flight, or the pool bounds the delivery cap. The queue holds
+    # one item per delivery slot. redis_read_batch stays at 4.
     limits:
       redis_read_batch: 4
       redis_block_millis: 1000
       redis_reclaim_idle_millis: 60000
       redis_reclaim_interval_millis: 5000
       dependency_retry_millis: 250
-      delivery_max_concurrency: 2
-      delivery_queue_capacity: 4
-      sync_max_workers: 2
-      sync_max_in_flight: 2
+      delivery_max_concurrency: 32
+      delivery_queue_capacity: 64
+      sync_max_workers: 32
+      sync_max_in_flight: 32
       admission_timeout_millis: 5000
       grpc_deadline_millis: 5000
       content_timeout_millis: 15000
-      http_max_connections: 8
-      http_max_keepalive_connections: 4
+      http_max_connections: 32
+      http_max_keepalive_connections: 16
       output_max_queued_frames: 2
       output_max_queued_bytes: 131072
       output_max_sessions: 2
@@ -3369,11 +3372,11 @@ worker:
 
   resources:
     requests:
-      cpu: 200m
-      memory: 512Mi
-    limits:
       cpu: "2"
       memory: 4Gi
+    limits:
+      cpu: "8"
+      memory: 16Gi
 
   podSecurityContext:
     runAsNonRoot: true

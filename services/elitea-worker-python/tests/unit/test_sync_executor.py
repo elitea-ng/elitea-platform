@@ -443,3 +443,47 @@ def test_unused_reserved_slot_is_released_without_submit() -> None:
         await supervisor.shutdown()
 
     asyncio.run(run())
+
+
+def test_sync_pool_sustains_the_configured_in_flight_bound() -> None:
+    """The synchronous pool runs the full in-flight bound on distinct threads.
+
+    Pair with `test_serve_loop_sustains_the_configured_delivery_cap`: the
+    delivery cap and this pool cap the same executions in series, so raising
+    one without the other bounds the other. All 32 slots must hold a blocked
+    handler at once, or the 32nd delivery stalls in admission.
+    """
+
+    async def run() -> None:
+        bound = 32
+        release = threading.Event()
+        lock = threading.Lock()
+        in_flight = 0
+        peak = 0
+
+        def blocking() -> None:
+            nonlocal in_flight, peak
+            with lock:
+                in_flight += 1
+                peak = max(peak, in_flight)
+            assert release.wait(timeout=2)
+            with lock:
+                in_flight -= 1
+
+        supervisor = ExecutionSupervisor(
+            max_workers=bound,
+            max_in_flight=bound,
+            admission_timeout_seconds=5,
+            drain_timeout_seconds=5,
+        )
+        tasks = [
+            asyncio.create_task(supervisor.run_sync(blocking)) for _ in range(bound)
+        ]
+        await _wait_until(lambda: peak >= bound, timeout_seconds=5)
+        assert peak == bound
+
+        release.set()
+        await asyncio.gather(*tasks)
+        await supervisor.shutdown()
+
+    asyncio.run(run())

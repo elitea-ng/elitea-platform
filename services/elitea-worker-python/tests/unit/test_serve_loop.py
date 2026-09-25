@@ -128,6 +128,80 @@ def test_serve_loop_bounds_workers_and_drains() -> None:
     asyncio.run(run())
 
 
+def test_serve_loop_sustains_the_configured_delivery_cap() -> None:
+    """The serve loop runs the full delivery cap at once, not a queue behind it.
+
+    Pinning the cap in CI is the load check for issue #967: a regression that
+    serialized the slots would make 96 flows of 0.1 s take 9.6 s instead of
+    three 0.1 s waves. `peak == cap` proves the slots run together; the
+    elapsed bound keeps the waves from hiding behind one another.
+    """
+
+    async def run() -> None:
+        cap = 32
+        flow_seconds = 0.1
+        waves = 3
+        total = cap * waves
+        deliveries = tuple(
+            RedisCommandDelivery(
+                "commands.v1",
+                f"{index}-0",
+                {"signed_envelope": b"reference"},
+            )
+            for index in range(1, total + 1)
+        )
+
+        class NoReclaim(FakeConsumer):
+            async def reclaim_page(
+                self,
+                *,
+                min_idle_ms: int,
+                start_id: str = "0-0",
+                count: int | None = None,
+            ):
+                del min_idle_ms, count
+                self.reclaim_calls += 1
+                return start_id, ()
+
+        consumer = NoReclaim(deliveries)
+        stop = asyncio.Event()
+        active = 0
+        peak = 0
+        processed: list[str] = []
+
+        async def process(delivery: RedisCommandDelivery) -> DeliveryResult:
+            nonlocal active, peak
+            active += 1
+            peak = max(peak, active)
+            await asyncio.sleep(flow_seconds)
+            processed.append(delivery.entry_id)
+            active -= 1
+            if len(processed) == total:
+                stop.set()
+            return DeliveryResult(DeliveryDisposition.RETRY_LATER_NOACK)
+
+        started = asyncio.get_running_loop().time()
+        runtime = WorkerServeLoop(
+            consumer=consumer,
+            process_delivery=process,
+            max_concurrency=cap,
+            queue_capacity=2 * cap,
+            reclaim_idle_millis=60_000,
+            reclaim_interval_millis=100,
+            dependency_retry_millis=1,
+            shutdown_timeout_millis=5_000,
+        )
+        await asyncio.wait_for(runtime.run(stop), timeout=2.0)
+        elapsed = asyncio.get_running_loop().time() - started
+
+        assert len(processed) == total
+        assert set(processed) == {f"{index}-0" for index in range(1, total + 1)}
+        assert peak == cap
+        assert elapsed <= 1.2 * (waves * flow_seconds) + 0.5
+
+    asyncio.run(run())
+
+
 def test_serve_loop_reports_settled_execution_error_to_event_sink() -> None:
     async def run() -> None:
         delivery = RedisCommandDelivery(
