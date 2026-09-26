@@ -18,7 +18,7 @@ http = "=1.5.0"
 http-body-util = "=0.1.5"
 hmac = "=0.13.0"
 hyper = { version = "=1.11.1", default-features = false, features = ["client", "http1", "http2"] }
-hyper-rustls = { version = "=0.27.9", default-features = false, features = ["http1", "http2", "native-tokio", "ring"] }
+hyper-rustls = { version = "=0.27.10", default-features = false, features = ["http1", "http2", "native-tokio", "ring"] }
 hyper-util = { version = "=0.1.20", default-features = false, features = ["client-legacy", "http1", "http2", "tokio"] }
 md-5 = "=0.11.0"
 minijinja = { version = "=2.24.0", default-features = false, features = ["builtins", "fuel", "serde"] }
