@@ -231,6 +231,17 @@ Do not require users to convert existing definitions to a new request envelope.
 Keep deployment limits and resource enforcement outside node YAML unless a specific user control requires them.
 Language support must remain capability-gated until its backend passes execution acceptance.
 
+The editor now supplies `CodeLanguageSelect` beside the existing code mapping.
+It displays Python for omitted language without writing a default into legacy YAML.
+Selecting JavaScript or Rust updates only the language field.
+Focused Code-node tests pass: 14 tests, with the pre-existing Debug-toggle case still marked as an expected failure.
+TypeScript validation passes.
+A fresh headed browser verifies the legacy Python default and the Rust selection in the real development editor.
+The YAML view retains source, inputs, outputs, and transition after selection.
+The test changes an unsaved fixture only. It does not save or execute the unsupported Code node.
+The existing admission controls still block save and execution for this node family.
+This verifies editor behavior, not backend language support.
+
 The current SDK constructs these nodes in `runtime/langchain/langraph_agent.py`, in the `node_type == 'code'` branch.
 It maps `code` through `FunctionTool.input_mapping`, defaults `input` to `['messages']`, and supplies the platform client.
 It disables the sandbox tool's sensitive-action middleware for saved Code nodes.
@@ -269,6 +280,37 @@ Continue the bounded OCI execution probe, and assess NsJail where delegated cgro
 Keep Bubblewrap as an isolation option when an external supervisor owns resource limits.
 Do not select bwrapbox until reuse permission and deployment support are established.
 These choices do not change the Code-node YAML contract or its language selector.
+
+### Products built on Bubblewrap
+
+Bubblewrap explicitly delegates security policy to its caller in its [upstream README](https://github.com/containers/bubblewrap/blob/main/README.md).
+The absence of integrated quota controls does not disqualify this composition model.
+[Flatpak](https://github.com/flatpak/flatpak) supplies a desktop application runtime and distribution system around sandboxing.
+Its desktop scope does not match the worker's job lifecycle directly.
+[Anthropic sandbox-runtime](https://github.com/anthropic-experimental/sandbox-runtime) uses Bubblewrap on Linux with filesystem policies and filtered network proxies.
+This is a closer policy-layer candidate for agent code execution.
+Its reviewed README does not establish per-job cgroup quotas or durable recovery after supervisor failure.
+Do not infer those guarantees from its filesystem and network controls.
+Evaluate it with an external resource supervisor before treating it as a complete worker backend.
+
+### Deno and Python package compatibility
+
+The current SDK's `infra/data/sandbox/main.ts` hosts `npm:pyodide@0.29.0` in Deno.
+Its `install_imports` function finds missing Python imports and calls `micropip.install` before `runPythonAsync` executes user code.
+It also supports explicit `import micropip` and top-level `await micropip.install(...)` within user code.
+Package preparation can therefore occur both before and during execution.
+The current wrapper reports unavailable packages before user execution when automatic preparation fails.
+Preserve this behavior in compatibility tests instead of assuming a native CPython environment is equivalent.
+
+Assess Deno/Pyodide as the Python compatibility backend before replacing it.
+Deno can also execute JavaScript, but each language requires its own state and result adapter.
+The [Pyodide package documentation](https://pyodide.org/en/stable/usage/loading-packages.html) defines which packages can run in its WebAssembly environment.
+Do not promise arbitrary native CPython extension compatibility.
+The [Deno permission model](https://docs.deno.com/runtime/fundamentals/security/) restricts I/O; it does not replace the outer job resource supervisor.
+Apply resource limits during package installation as well as execution.
+Keep package downloads within approved egress and isolate writable package caches between untrusted jobs.
+Use preloaded immutable runtime assets to avoid downloading the Python runtime for every invocation.
+Do not carry the current SDK's serialized interpreter session into authoritative graph checkpoints.
 
 ## Disposable OCI resource proof
 

@@ -2019,6 +2019,7 @@
   "pipelines.flowEditor.autoArrange": "Auto-arrange",
   "pipelines.flowEditor.baseToolNode.outputLabel": "Output",
   "pipelines.flowEditor.baseToolNode.toolLabel": "Tool",
+  "pipelines.flowEditor.codeNode.language": "Language",
   "pipelines.flowEditor.codeNode.inputLabel": "Input",
   "pipelines.flowEditor.codeNode.outputLabel": "Output",
   "pipelines.flowEditor.connectionDropdown.createNewNode": "Create new node",
