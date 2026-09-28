@@ -34,6 +34,7 @@ func (noopCurrentAgentTextProjector) projectAgentTextDelta(
 type postgresCurrentAgentTextProjector struct{}
 
 type currentAgentTextDelta struct {
+	resetProvisional    bool
 	streamID            string
 	messageID           string
 	executionGeneration string
@@ -58,7 +59,7 @@ func (postgresCurrentAgentTextProjector) projectAgentTextDelta(
 	frame outputapp.NodeEventFrame,
 ) error {
 	delta, recognized, err := decodeCurrentAgentTextDelta(frame.BrowserData)
-	if err != nil || !recognized || delta.content == "" {
+	if err != nil || !recognized || (delta.content == "" && !delta.resetProvisional) {
 		return err
 	}
 	projectDatabaseID, ok := currentAgentDatabaseID(projectID)
@@ -97,6 +98,9 @@ func (postgresCurrentAgentTextProjector) projectAgentTextDelta(
 	if err != nil {
 		return err
 	}
+	if delta.resetProvisional {
+		return resetCurrentAgentProvisionalText(ctx, tx, schema, messageGroupID, frame.Fence.ExecutionID, frame.Fence.Generation)
+	}
 	if len(delta.resultChunk) != 0 {
 		return appendCurrentAgentResultChunk(ctx, tx, schema, messageGroupID, frame.Fence.ExecutionID, frame.Fence.Generation, delta.content, delta.resultChunk)
 	}
@@ -121,9 +125,10 @@ func decodeCurrentAgentTextDelta(raw json.RawMessage) (currentAgentTextDelta, bo
 		Content             json.RawMessage `json:"content"`
 		ResponseMetadata    struct {
 			currentAgentTextOwner
-			ResultChunk json.RawMessage       `json:"result_chunk_v1"`
-			Metadata    currentAgentTextOwner `json:"metadata"`
-			ToolMeta    struct {
+			ShouldContinue *bool                 `json:"should_continue"`
+			ResultChunk    json.RawMessage       `json:"result_chunk_v1"`
+			Metadata       currentAgentTextOwner `json:"metadata"`
+			ToolMeta       struct {
 				Metadata currentAgentTextOwner `json:"metadata"`
 			} `json:"tool_meta"`
 		} `json:"response_metadata"`
@@ -131,7 +136,8 @@ func decodeCurrentAgentTextDelta(raw json.RawMessage) (currentAgentTextDelta, bo
 	if err := json.Unmarshal(raw, &event); err != nil {
 		return currentAgentTextDelta{}, false, errors.New("decode current agent text event")
 	}
-	if event.Type != "agent_llm_chunk" && event.Type != "agent_result_chunk" {
+	reset := event.Type == "agent_start" && event.ResponseMetadata.ShouldContinue != nil && !*event.ResponseMetadata.ShouldContinue
+	if !reset && event.Type != "agent_llm_chunk" && event.Type != "agent_result_chunk" {
 		return currentAgentTextDelta{}, false, nil
 	}
 	if event.Type == "agent_result_chunk" && len(event.ResponseMetadata.ResultChunk) == 0 {
@@ -150,6 +156,13 @@ func decodeCurrentAgentTextDelta(raw json.RawMessage) (currentAgentTextDelta, bo
 		!validCurrentAgentCorrelation(event.ExecutionGeneration) ||
 		(event.SIOEvent != "chat_predict" && event.SIOEvent != "chat_continue_predict") {
 		return currentAgentTextDelta{}, false, errors.New("current agent text correlation is invalid")
+	}
+	if reset {
+		return currentAgentTextDelta{
+			streamID: event.StreamID, messageID: event.MessageID,
+			executionGeneration: event.ExecutionGeneration, sioEvent: event.SIOEvent,
+			resetProvisional: true,
+		}, true, nil
 	}
 	if string(event.Content) == "null" {
 		if event.Type == "agent_result_chunk" {
@@ -177,6 +190,30 @@ func decodeCurrentAgentTextDelta(raw json.RawMessage) (currentAgentTextDelta, bo
 		content:             content,
 		resultChunk:         event.ResponseMetadata.ResultChunk,
 	}, true, nil
+}
+
+// The worker replays the complete accepted prefix after checkpoint recovery.
+// Match the live browser's replacement start inside the fenced event transaction.
+func resetCurrentAgentProvisionalText(
+	ctx context.Context, tx sqlExecutor, schema string, messageGroupID int64,
+	executionID string, generation uint64,
+) error {
+	_, err := tx.Exec(ctx, fmt.Sprintf(`
+UPDATE %s AS text_item
+SET content = ''
+FROM %s AS item
+WHERE text_item.id = item.id
+  AND item.message_group_id = $1
+  AND item.item_type = 'text_message'
+  AND item.meta ->> 'runtime_stream_execution_id' = $2
+  AND item.meta ->> 'runtime_stream_generation' = $3
+  AND item.meta ->> 'runtime_stream_provisional' = 'true'`,
+		schema+".chat_messages_text", schema+".chat_message_items"),
+		messageGroupID, executionID, fmt.Sprint(generation))
+	if err != nil {
+		return fmt.Errorf("reset current agent provisional text: %w", err)
+	}
+	return nil
 }
 
 func appendCurrentAgentProvisionalText(

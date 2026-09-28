@@ -76,6 +76,21 @@ func TestPostgresCurrentAgentTextSurvivesAWorkerFailure(t *testing.T) {
 		}
 	}
 
+	// Recovery replays the complete accepted prefix. The new root start must
+	// replace this execution's provisional text before the replay arrives.
+	start := currentAgentTextFrame(admitted.ExecutionID, conversationID, responseID, clientGeneration, "")
+	start.BrowserData = []byte(fmt.Sprintf(`{"type":"agent_start","stream_id":%q,"message_id":%q,
+"execution_generation":%q,"sio_event":"chat_predict","content":null,
+"response_metadata":{"should_continue":false}}`, conversationID, responseID, clientGeneration))
+	replay := currentAgentTextFrame(admitted.ExecutionID, conversationID, responseID, clientGeneration, "durable partial answer")
+	for _, frame := range []outputapp.NodeEventFrame{start, replay} {
+		if err := store.WithinTx(t.Context(), pgx.TxOptions{}, func(tx sqlExecutor) error {
+			return projector.projectAgentTextDelta(t.Context(), tx, 1, frame)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	err = store.WithinTx(
 		t.Context(),
 		pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite},

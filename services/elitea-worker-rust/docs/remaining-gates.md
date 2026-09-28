@@ -435,3 +435,9 @@ The worker now checkpoints the accepted partial answer and terminal cause before
 Local repeated recovery and PostgreSQL claim takeover pass, including stale-writer rejection.
 See [source mapping and compatibility](source-mapping/output-continuation-capacity-20260922.md#terminal-continuation-checkpoint-2026-09-28).
 Deployed publication-crash and fresh browser acceptance remain open. Gate 4 remains active.
+
+The deployed terminal checkpoint passes uninterrupted browser copy and reload in chat 714.
+A real worker crash in chat 715 preserves the terminal failure without another provider call.
+That run exposes doubled provisional text after reload; it is not accepted yet.
+Main now handles the worker's replacement-start event in its persisted text projection.
+PostgreSQL regression coverage passes. Deploy Main and repeat crash/browser acceptance before closing this boundary.

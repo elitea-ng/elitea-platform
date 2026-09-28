@@ -57,6 +57,7 @@ PER-REQUEST MODES, SELECTED BY THE PROMPT (see `_script_for`):
   [[mock:ask_user]]   answer with a CALL to the runtime's `ask_user` internal
                       tool instead of with text, then — once the tool result
                       comes back — with a normal answer quoting it.
+  [[mock:continuation_exhaust]] emit five bounded partial segments, each ending at its output limit.
   [[mock:continuation_repair]]
                       truncate one answer, reject one boundary, then repair it.
                       Continuation fragments preserve exact whitespace.
@@ -901,6 +902,19 @@ def _script_for(messages: list[dict]) -> _ChatScript:
         calls = _call_tool_calls("lookup_record", json.dumps({"probe": "X" * 48000}), prompt)
         return _ChatScript("", calls, 0, "large_tool_input")
 
+    if any("[[mock:continuation_exhaust]]" in _message_text(message) for message in messages):
+        # Count accepted segments, not requests. Replaying a pending request must
+        # return the same bytes without consuming a process-global counter.
+        accepted = "".join(_message_text(message) for message in messages if message.get("role") == "assistant")
+        number = accepted.count("EXHAUST_SEGMENT_") + 1
+        anchor = ""
+        if prompt.startswith("The previous answer reached its output allowance."):
+            anchor, _ = json.JSONDecoder().raw_decode(prompt.split("Exact anchor: ", 1)[1])
+        segment = f"EXHAUST_SEGMENT_{number}\n" + "".join(
+            f"RECORD {number}.{index:04d}: accepted incomplete fixture text.\n" for index in range(1, 401)
+        )
+        return _ChatScript(anchor + segment, None, 0, "continuation_exhaust", "length")
+
     # This mode is opt-in per transcript. It never changes unmarked requests.
     if any("[[mock:continuation_repair]]" in _message_text(message) for message in messages):
         if prompt.startswith("The previous answer reached its output allowance."):
@@ -1464,7 +1478,9 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 # One word per chunk: a consumer that only ever sees a single
                 # chunk is not actually exercising incremental streaming.
-                if script.mode.startswith("continuation_"):
+                if script.mode == "continuation_exhaust":
+                    chunks = (script.reply[index:index + 1024] for index in range(0, len(script.reply), 1024))
+                elif script.mode.startswith("continuation_"):
                     chunks = (script.reply[index:index + 17] for index in range(0, len(script.reply), 17))
                 else:
                     chunks = (word + " " for word in script.reply.split(" "))

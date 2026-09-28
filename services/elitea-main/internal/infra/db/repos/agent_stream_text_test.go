@@ -87,3 +87,29 @@ func TestDecodeCurrentAgentResultChunkRequiresDistinctTypeAndNonemptyContent(t *
 		}
 	}
 }
+
+func TestDecodeCurrentAgentReplacementStartRequiresExplicitRootDecision(t *testing.T) {
+	for _, test := range []struct {
+		name, metadata string
+		reset          bool
+	}{
+		{"replacement", `{"should_continue":false}`, true},
+		{"continuation", `{"should_continue":true}`, false},
+		{"legacy", `{}`, false},
+		{"null", `{"should_continue":null}`, false},
+		{"child", `{"should_continue":false,"parent_agent_name":"child"}`, false},
+		{"child path", `{"should_continue":false,"parent_agent_path":[{"call_id":"child"}]}`, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			raw := fmt.Sprintf(`{"type":"agent_start","stream_id":"conversation-1","message_id":"message-1",
+"execution_generation":"generation-1","sio_event":"chat_predict","content":null,"response_metadata":%s}`, test.metadata)
+			delta, recognized, err := decodeCurrentAgentTextDelta([]byte(raw))
+			if err != nil || recognized != test.reset || delta.resetProvisional != test.reset {
+				t.Fatalf("reset=%t recognized=%t err=%v", delta.resetProvisional, recognized, err)
+			}
+		})
+	}
+	if _, _, err := decodeCurrentAgentTextDelta([]byte(`{"type":"agent_start","response_metadata":{"should_continue":false}}`)); err == nil {
+		t.Fatal("uncorrelated reset accepted")
+	}
+}

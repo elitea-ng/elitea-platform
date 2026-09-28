@@ -73,6 +73,25 @@ class ContinuationFixtureTest(unittest.TestCase):
         self.assertEqual(text, "VALID_PARTIAL_OUTPUT")
         self.assertIsNone(reason)
 
+    def test_exhaustion_replay_keeps_exact_prefix_and_is_transcript_scoped(self):
+        original = [{"role": "user", "content": "[[mock:continuation_exhaust]]"}]
+        accepted = ""
+        for number in range(1, 6):
+            messages = original
+            if accepted:
+                prompt = "The previous answer reached its output allowance. Exact anchor: " + json.dumps(accepted[-256:])
+                messages = original + [{"role": "assistant", "content": accepted}, {"role": "user", "content": prompt}]
+            fragment, reason = self.stream(messages)
+            self.assertEqual(reason, "length")
+            self.assertEqual(self.stream(messages), (fragment, reason))
+            anchor = accepted[-256:]
+            self.assertTrue(fragment.startswith(anchor))
+            accepted += fragment[len(anchor):]
+            self.assertEqual(accepted.count(f"EXHAUST_SEGMENT_{number}\n"), 1)
+        self.assertLess(len(accepted), 120000)
+        self.assertTrue(accepted.endswith("RECORD 5.0400: accepted incomplete fixture text.\n"))
+        self.assertEqual(self.stream([{"role": "user", "content": "healthy"}]), ("MOCK: healthy ", "stop"))
+
     def test_bad_boundary_then_exact_repair_and_independent_requests(self):
         original = [{"role": "user", "content": "[[mock:continuation_repair]]"}]
         prefix, reason = self.stream(original)

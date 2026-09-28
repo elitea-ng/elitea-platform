@@ -1061,3 +1061,36 @@ Provider transport failures and other terminal categories retain their separate 
 
 The broader agent suite passes: 492 tests with PostgreSQL enabled and no reported skips.
 Strict library/test Clippy passes with warnings denied. `git diff --check` passes.
+
+### Deployed terminal recovery exposes provisional-text duplication, 2026-09-28
+
+Worker image `sha256:84cadce56ffb64d8725098292cb652c21ac97066dd709fab33eef5902292c542` contains commit `a7e3d1702`.
+Its replacement retains the environment, five mounts, networks, and resource limits.
+The synthetic provider adds transcript-scoped `continuation_exhaust` behavior. Five real HTTP/SSE fixture tests pass.
+Each request replay produces identical bytes. Unmarked requests retain their previous behavior.
+
+Fresh headed-browser chat 714 executes five provider calls and fails with `OUTPUT_CONTINUATION_EXHAUSTED`.
+Execution `db0d5b920b58c8d467d1409f76a4e015` retains terminal phase `output_failed`, round 4, cause `call_limit`, and 98,090 partial bytes.
+The browser shows incomplete-response guidance and supports Show and Copy actions.
+Each of five segments appears once. Reload preserves the copied bytes. The screenshot is inspected.
+
+Chat 715 tests worker loss at that boundary.
+Execution `1acdbc469a06286be0aeecfa44fda04e` commits the same terminal checkpoint before SIGKILL.
+Main still reports `RUNNING` immediately after the kill. The worker restarts and later publishes the original failure.
+The provider journal records five calls for each chat, with no additional recovery call.
+The live browser retains the correct partial answer, but reload copies 196,180 bytes: two complete copies.
+This crash case is not accepted until the reload defect is corrected.
+
+Rust `src/agents/events.rs::start` emits `agent_start` with `should_continue=false` for replacement recovery.
+The browser replaces its interrupted stream, but Main's provisional-text projector ignores that start event.
+It appends the replayed prefix to the old persisted text. Successful finalization previously masks this error by replacing provisional text.
+A PostgreSQL regression reproduces the doubled partial answer before the correction.
+
+Main `internal/infra/db/repos/agent_stream_text.go` now applies the same replacement start to its provisional text.
+It resets only text owned by the exact message group, execution, and generation.
+The event must contain an explicit false continuation decision and valid correlation fields.
+Child, legacy, and continuation starts cannot reset parent text. Completed and unrelated text remain outside the reset predicate.
+The reset runs inside the existing fenced, deduplicated node-event transaction, before acknowledgement.
+No schema, protobuf, or UI change is required. Rust remains the checkpoint owner.
+All 23 selected Main tests pass with PostgreSQL enabled and no skips. Package `go vet` passes.
+Main deployment and a fresh publication-crash retest remain open.
