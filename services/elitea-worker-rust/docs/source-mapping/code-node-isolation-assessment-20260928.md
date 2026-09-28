@@ -834,3 +834,34 @@ ordering, renewal/reconciliation loop, cancellation and service-process crash
 tests, Kubernetes Jobs, language/dependency integration and UI acceptance.
 Docker logs surviving a client reconnect are not a substitute for the PostgreSQL
 receipt when the container is removed or its node is lost.
+
+### Reconnected supervisor termination and cleanup
+
+The ADK Docker extension now exposes `terminate_code_job` and `remove_code_job`
+by the same durable job identity used for dispatch and receipt retrieval. These
+operations do not require the original client's session map. Both verify the
+job and request labels, then act on the immutable container ID from inspection.
+Termination confirms that this container stopped or no longer exists. An
+unconfirmed result remains an error that requires reconciliation. Cleanup is
+non-forced and rejects a running container. Repeated cleanup of an absent
+container is safe. Each Docker operation has a bounded timeout.
+
+The supervisor must hold the current ledger lease before termination and must
+persist the terminal receipt before removal. These methods do not implement
+that ordering by themselves. The current-platform remote sandbox provides the
+separate execution boundary described above; this extension adds runtime
+identity recovery needed by the new worker's durable job contract.
+
+Implementation: `vendor/adk-sandbox/src/workspace/docker_code_jobs.rs`.
+Verification: `live_recovered_client_terminates_and_removes_named_job` used the
+cached Linux runner image and a disposable Docker container. It verified new
+client recovery, rejection of conflicting identity, refusal to remove a live
+job, confirmed termination, and repeated cleanup. The focused live test passed;
+86 component tests passed, with six live tests excluded from the component run.
+This is not proof of service-process crash recovery, Kubernetes execution, or
+Code-node browser execution. Those integration gates remain open.
+
+Library Clippy passed with `workspace-docker` and default features disabled.
+The broader all-target Clippy command did not compile: upstream integration
+fixtures import `ProcessBackend` without gating on the disabled `process`
+feature. No all-target Clippy pass is claimed for this feature combination.

@@ -129,6 +129,83 @@ impl DockerClient {
 }
 
 impl DockerClient {
+    /// The caller must hold the current durable lease. Keep the container and
+    /// its logs until the terminal ledger write is acknowledged.
+    pub async fn terminate_code_job(&self, identity: &CodeJobIdentity) -> Result<(), SandboxError> {
+        let Some(job) = self.observe_code_job(identity).await? else {
+            return Ok(());
+        };
+        let terminate = async {
+            if job.running {
+                // Target the inspected immutable ID, never a name that can be reused.
+                let _ = self
+                    .client
+                    .kill_container(
+                        &job.container_id,
+                        Some(KillContainerOptions { signal: "SIGKILL" }),
+                    )
+                    .await;
+            }
+            match self.client.inspect_container(&job.container_id, None).await {
+                Ok(info) if info.state.as_ref().and_then(|state| state.running) == Some(false) => {
+                    Ok(())
+                }
+                Err(bollard::errors::Error::DockerResponseServerError {
+                    status_code: 404, ..
+                }) => Ok(()),
+                _ => Err(SandboxError::ExecutionFailed(
+                    "Code job termination is unconfirmed; reconciliation required".into(),
+                )),
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(10), terminate)
+            .await
+            .map_err(|_| {
+                SandboxError::ExecutionFailed(
+                    "Code job termination timed out; reconciliation required".into(),
+                )
+            })?
+    }
+
+    /// Remove a stopped runtime only after the supervisor persists its terminal
+    /// receipt. This does not force termination or depend on an in-memory session.
+    pub async fn remove_code_job(&self, identity: &CodeJobIdentity) -> Result<(), SandboxError> {
+        let Some(job) = self.observe_code_job(identity).await? else {
+            return Ok(());
+        };
+        if job.running {
+            return Err(SandboxError::ExecutionFailed(
+                "Code job is still running; termination must be confirmed before cleanup".into(),
+            ));
+        }
+        let removed = tokio::time::timeout(
+            Duration::from_secs(10),
+            self.client.remove_container(
+                &job.container_id,
+                Some(RemoveContainerOptions {
+                    force: false,
+                    v: true,
+                    ..Default::default()
+                }),
+            ),
+        )
+        .await
+        .map_err(|_| {
+            SandboxError::ExecutionFailed(
+                "Code job cleanup timed out; reconciliation required".into(),
+            )
+        })?;
+        match removed {
+            Ok(())
+            | Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, ..
+            }) => Ok(()),
+            Err(_) => Err(SandboxError::ExecutionFailed(
+                "Code job cleanup failed; retry cleanup without replaying code".into(),
+            )),
+        }
+    }
+
     /// Call only after the supervisor durably records dispatch. Re-signaling
     /// cannot execute code twice: the container's main process consumes the
     /// marker once and execs the runner; an exited container is never restarted.

@@ -301,3 +301,63 @@ async fn live_pid1_receipt_is_recovered_by_a_new_client() {
     client.stop(&handle).await.unwrap();
     verified.unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires Docker and ELITEA_CODE_RUNNER_TEST_IMAGE"]
+async fn live_recovered_client_terminates_and_removes_named_job() {
+    let image = std::env::var("ELITEA_CODE_RUNNER_TEST_IMAGE").unwrap();
+    let client = DockerClient::with_image(image.clone())
+        .await
+        .unwrap()
+        .with_resource_limits(Some(64 * 1024 * 1024), Some(0.25))
+        .with_code_job_policy(Duration::from_secs(15))
+        .unwrap();
+    let key = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    let identity = CodeJobIdentity::new(key.clone(), "c".repeat(64)).unwrap();
+    let handle = client
+        .provision_code_job(&identity, &Manifest::new(vec![]))
+        .await
+        .unwrap();
+    let verified = AssertUnwindSafe(async {
+        let recovered = DockerClient::with_image(image).await.unwrap();
+        assert!(recovered.remove_code_job(&identity).await.is_err());
+        let conflict = CodeJobIdentity::new(key, "b".repeat(64)).unwrap();
+        assert!(recovered.terminate_code_job(&conflict).await.is_err());
+        assert!(recovered.remove_code_job(&conflict).await.is_err());
+        assert!(
+            recovered
+                .observe_code_job(&identity)
+                .await
+                .unwrap()
+                .unwrap()
+                .running
+        );
+        recovered.terminate_code_job(&identity).await.unwrap();
+        assert!(
+            !recovered
+                .observe_code_job(&identity)
+                .await
+                .unwrap()
+                .unwrap()
+                .running
+        );
+        recovered.terminate_code_job(&identity).await.unwrap();
+        recovered.remove_code_job(&identity).await.unwrap();
+        recovered.remove_code_job(&identity).await.unwrap();
+        assert!(
+            recovered
+                .observe_code_job(&identity)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    })
+    .catch_unwind()
+    .await;
+    client.stop(&handle).await.unwrap();
+    verified.unwrap();
+}
