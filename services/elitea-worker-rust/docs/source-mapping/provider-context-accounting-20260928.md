@@ -1,6 +1,6 @@
 # Provider context accounting
 
-Status: provider usage retention and context-meter integration implemented. Deployed acceptance remains open.
+Status: provider usage retention and context-meter integration implemented. Focused deployed browser acceptance passes in chat 717.
 
 ## Source mapping
 
@@ -61,14 +61,47 @@ Older closed-schema Main consumers reject the extension. No protobuf field numbe
 ## Acceptance boundary
 
 All 32 compatible-facade tests pass for the transport correction.
-The integration passes 493 Rust agent tests with PostgreSQL enabled and 26 native Anthropic transport tests.
+The integration passes 494 Rust agent tests with PostgreSQL enabled and 26 native Anthropic transport tests.
 Strict Rust library and test Clippy checks pass.
 Main context-domain tests, vet, and the PostgreSQL context projection test pass.
 The projection test covers provider counts, child exclusion, fresh reads, and replacement by the next request estimate.
 All 59 context UI tests, TypeScript, and the application build pass.
-These are local transport checks, not deployed browser acceptance.
+These are component checks, separate from the deployed acceptance below.
 Focused transport tests cover usage on finish frames and trailing usage frames.
 They cover repeated cumulative snapshots, cached-input breakdowns, reasoning breakdowns, and exclusion of arbitrary provider fields.
 Malformed and absent usage must preserve successful completion without invented counts.
-Deployed provider-accounting and browser acceptance remain open.
-Those checks must cover native Anthropic, compatible providers, regeneration, model switching, child isolation, continuation, and reload.
+
+## Deployed browser acceptance
+
+Main and Web deploy from `e86222c85`. Rust deploys from root-callback correction `488061706`.
+The deployment preserves existing credentials, database selection, mounts, networks, and resource limits.
+Main and Web deploy before the producer starts sending the optional fields.
+
+Fresh headed Playwright sessions use chat 717. They do not intercept or mock browser responses.
+The compatible case uses the private synthetic provider. The native case calls the configured Anthropic Haiku provider.
+
+| Case | Provider input | Provider output | Displayed occupancy | Execution |
+| --- | ---: | ---: | --- | --- |
+| Compatible fixture | 1 | 5 | 6 / 126,720 | `b25c4e847af8ecc63581fd91cc3e060d` |
+| Switch to native Haiku | 113 | 198 | 311 / 126,720 | `ec64ecac45da7969514100dd8d16dbf3` |
+| Regenerate native response | 113 | 119 | 232 / 126,720 | `92746162d626c50e1434e8b48793cd40` |
+| Fresh browser reload | 113 | 119 | 232 / 126,720 | Same regenerated execution |
+
+The combined window is 128,000 tokens. The safety margin is 1,280 tokens.
+The 256-token output cap is not subtracted again from completed-call occupancy.
+Six live status events contain one estimate and one provider reading for each of the three executions.
+The persisted read model and rendered panel agree with those events.
+Regeneration has a new execution identity. Reload retains that identity and its counts.
+Browser page errors remain empty. The final popup screenshot is inspected after its opening animation.
+The native model refuses the synthetic marker request; this check proves accounting, not successful fulfillment of that request.
+
+Evidence uses `/private/tmp/elitea-provider-meter-live-*` and `elitea-provider-meter-verified-reload.png`.
+The initial missing-root observation remains under `elitea-provider-meter-root-missing-*`.
+Deployment images:
+
+- Main: `sha256:070655cd7dc93d29a7191aba7167fb880c26ea5d2f833a99622df4fcf1f0a238`.
+- Web: `sha256:db8c59a73b03820f9e1ce694c4fe593bdf85b6bf380a35fef32f2c6984926eb3`.
+- Rust: `sha256:d0bedbd7e3a269dacdc596df720f7173f15120f8966d16467ce170152999ecd9`.
+
+Live cached-input reuse, provider measurements during continuation recovery, and large-window accounting acceptance remain separate checks.
+Child isolation and per-continuation counts have component coverage. This acceptance does not close all Gate 4 requirements.
