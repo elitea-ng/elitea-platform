@@ -185,7 +185,7 @@ func (r *AgentExecutionJobsRepository) AdmitAgentExecution(
 			turn.TargetParticipantID > math.MaxInt32 ||
 			turn.ApplicationID > math.MaxInt32 || turn.ApplicationVersionID > math.MaxInt32 ||
 			turn.ProjectID != resourceProjectIDUnchecked(admission.Record.Job.ResourceProjectID) ||
-			turn.ResponseMessageID != admission.Binding.ClientMessageID ||
+			turn.ProjectionResponseID() != admission.Binding.ClientMessageID ||
 			turn.ConversationUUID != admission.Binding.ClientStreamID ||
 			turn.ExecutionGeneration != admission.Binding.ClientExecutionGeneration ||
 			admission.Binding.SIOEvent != "chat_continue_predict" ||
@@ -668,7 +668,7 @@ func resumeCurrentAgentHITL(
 	if row.ResponseMessageGroupID <= 0 || row.ResponseMessageID != responseMessageID {
 		return errors.New("current agent continuation returned an invalid response binding")
 	}
-	return nil
+	return segmentCurrentPipelineHITL(ctx, queries, executionID, turn, row)
 }
 
 func resumeCurrentAgentOutputLimit(

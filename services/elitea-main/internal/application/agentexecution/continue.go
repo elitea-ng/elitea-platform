@@ -439,6 +439,22 @@ type CurrentContinueTurn struct {
 	OutputLimitSequence  int64
 }
 
+// PipelineDecisionID is stable for retries of one direct review occurrence.
+func (turn CurrentContinueTurn) PipelineDecisionID() string {
+	if turn.PipelineHITLReview == nil {
+		return ""
+	}
+	return currentTurnUUID(turn.ResponseMessageID, "pipeline-hitl-decision:"+turn.PipelineHITLReview.InterruptID)
+}
+
+// ProjectionResponseID keeps nested resumes in their existing response.
+func (turn CurrentContinueTurn) ProjectionResponseID() string {
+	if turn.PipelineHITLReview == nil {
+		return turn.ResponseMessageID
+	}
+	return currentTurnUUID(turn.PipelineDecisionID(), "response-message")
+}
+
 func (turn CurrentContinueTurn) Validate() error {
 	if turn.ProjectID <= 0 || turn.ActorUserID <= 0 || turn.TargetParticipantID <= 0 ||
 		!validUUID(turn.ConversationUUID) || !validUUID(turn.QuestionID) ||
@@ -612,7 +628,7 @@ func (service *CurrentApplicationStartService) ContinueCurrentAgent(
 		},
 		IdempotencyKey: idempotencyKey,
 		CapabilityID:   capabilityID, ClientStreamID: request.ConversationUUID,
-		ClientMessageID: request.ResponseMessageID, SIOEvent: "chat_continue_predict",
+		ClientMessageID: turn.ProjectionResponseID(), SIOEvent: "chat_continue_predict",
 		Input: input, CurrentContinueTurn: turn,
 	})
 	if err != nil {
@@ -620,7 +636,7 @@ func (service *CurrentApplicationStartService) ContinueCurrentAgent(
 	}
 	return CurrentApplicationStartOutcome{
 		ExecutionID: outcome.ExecutionID, CommandID: outcome.CommandID,
-		ResponseMessageID: request.ResponseMessageID, Created: outcome.Created,
+		ResponseMessageID: turn.ProjectionResponseID(), Created: outcome.Created,
 	}, nil
 }
 

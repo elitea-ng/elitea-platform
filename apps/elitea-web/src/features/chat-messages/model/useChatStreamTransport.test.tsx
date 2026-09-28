@@ -156,6 +156,55 @@ const START = {
 };
 
 describe("useChatStreamTransport", () => {
+  it('reconciles direct review and decision before replaying the new response', async () => {
+    const decisionId = 'decision-1';
+    server.use(
+      http.post(`${BASE}/elitea_core/continue_predict/prompt_lib/7/uuid-1`, () =>
+        HttpResponse.json({ events_url: EVENTS_URL, response_message_id: RESPONSE_MESSAGE_ID })),
+      http.get(`${BASE}/elitea_core/conversation/prompt_lib/7/uuid-1`, () => HttpResponse.json({
+        id: 1, name: 'Review', participants: [], message_groups: [
+          { id: 2, uuid: MESSAGE_ID, role: 'assistant', content: 'Static review', reply_to_id: 1, created_at: '2026-08-13T00:00:01Z', is_streaming: false },
+          { id: 3, uuid: decisionId, role: 'user', content: '  Change the joke.  ', created_at: '2026-08-13T00:00:02Z' },
+          { id: 4, uuid: RESPONSE_MESSAGE_ID, role: 'assistant', reply_to_id: 3, content: 'Partial server output', created_at: '2026-08-13T00:00:03Z', is_streaming: true },
+        ],
+      })),
+    );
+    const { api, history, Probe } = harness([userQuestion(), { ...pendingAssistant(), questionId: QUESTION_ID }]);
+    render(<Probe />);
+    await act(async () => {
+      expect(await api.current?.resume({ projectId: 7, conversationUuid: 'uuid-1', contract: 'agent.continue.hitl.v1', body: { message_id: MESSAGE_ID } })).toBe(true);
+    });
+    expect(history.current.map((message) => message.content)).toEqual(['hi', 'Static review', '  Change the joke.  ']);
+    expect(history.current[1]?.isStreaming).toBe(false);
+    expect(history.current[1]?.questionId).toBe(QUESTION_ID);
+    await waitFor(() => expect(registry.getOpen()).toHaveLength(1));
+    act(() => {
+      registry.emit('execution.node_event', nodeEvent({ type: 'agent_llm_chunk', message_id: RESPONSE_MESSAGE_ID, content: 'New joke' }));
+    });
+    expect(history.current.find((message) => message.id === RESPONSE_MESSAGE_ID)?.questionId).toBe(decisionId);
+    expect(history.current.filter((message) => message.id === decisionId)).toHaveLength(1);
+  });
+
+  it('keeps an accepted resume live when history refresh fails', async () => {
+    let admissions = 0;
+    server.use(
+      http.post(`${BASE}/elitea_core/continue_predict/prompt_lib/7/uuid-1`, () => {
+        admissions += 1;
+        return HttpResponse.json({ events_url: EVENTS_URL, response_message_id: RESPONSE_MESSAGE_ID });
+      }),
+      http.get(`${BASE}/elitea_core/conversation/prompt_lib/7/uuid-1`, () => new HttpResponse(null, { status: 503 })),
+    );
+    const { api, history, errors, Probe } = harness();
+    render(<Probe />);
+    await act(async () => {
+      expect(await api.current?.resume({ projectId: 7, conversationUuid: 'uuid-1', contract: 'agent.continue.hitl.v1', body: { message_id: MESSAGE_ID } })).toBe(true);
+    });
+    await waitFor(() => expect(registry.getOpen()).toHaveLength(1));
+    expect(admissions).toBe(1);
+    expect(history.current[0]?.isStreaming).toBe(false);
+    expect(errors[0]).toContain('decision was saved');
+  });
+
   it.each([null, "", undefined])("preserves the original question after a resume with an absent frame link: %s", async (questionId) => {
     server.use(http.post(`${BASE}/elitea_core/continue_predict/prompt_lib/7/uuid-1`, () =>
       HttpResponse.json({ task_id: "exec-1", events_url: EVENTS_URL, response_message_id: MESSAGE_ID }),

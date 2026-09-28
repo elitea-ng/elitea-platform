@@ -1,10 +1,64 @@
 package agentexecution
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
+
+	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 )
+
+func TestPipelineHITLContinuationBindsNewResponseOnlyForDirectReview(t *testing.T) {
+	for _, direct := range []bool{false, true} {
+		name := "nested"
+		if direct {
+			name = "direct"
+		}
+		t.Run(name, func(t *testing.T) {
+			target := pipelineHITLTarget()
+			if !direct {
+				target.PipelineHITLReview = nil
+			}
+			resolver := &currentApplicationResolverStub{
+				continuationTarget: target,
+				target: CurrentApplicationTarget{ApplicationID: 31, ApplicationVersionID: 41,
+					Variables: json.RawMessage(`[]`), ChatHistory: json.RawMessage(`[]`),
+					VersionDetails: json.RawMessage(`{"id":41,"application_id":31,"agent_type":"pipeline","instructions":"Review the joke","llm_settings":{"model_name":"test","model_project_id":7,"openai_compatible":false},"meta":{},"tools":[]}`)},
+			}
+			admissions := &currentApplicationAdmissionStub{outcome: executionapp.AdmissionOutcome{
+				ExecutionID: "execution-review", CommandID: "command-review", Created: true,
+			}}
+			service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, resolver,
+				&currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := CurrentContinuationRequest{ProjectID: 7, ActorUserID: 11,
+				ConversationUUID:  "8bc66e50-46c4-4e2c-94ec-daec6c596ac0",
+				ResponseMessageID: "30e0913e-10d4-43db-b8d0-c7b79480935a",
+				ThreadID:          target.ThreadID, Action: "approve"}
+			outcome, err := service.ContinueCurrentAgent(context.Background(), request)
+			if err != nil || len(admissions.requests) != 1 {
+				t.Fatalf("continuation error=%v admissions=%d", err, len(admissions.requests))
+			}
+			admission := admissions.requests[0]
+			turn := admission.CurrentContinueTurn
+			if turn == nil || turn.ResponseMessageID != request.ResponseMessageID {
+				t.Fatal("continuation lost its paused response identity")
+			}
+			if outcome.ResponseMessageID != admission.ClientMessageID || outcome.ResponseMessageID != turn.ProjectionResponseID() {
+				t.Fatal("browser and execution projection target different responses")
+			}
+			if (outcome.ResponseMessageID != request.ResponseMessageID) != direct {
+				t.Fatal("response segmentation does not match direct review scope")
+			}
+			if admission.Input.GetThreadId() != target.ThreadID || admission.Input.GetExecutionGeneration() != target.ExecutionGeneration {
+				t.Fatal("history segmentation changed the graph checkpoint identity")
+			}
+		})
+	}
+}
 
 func TestPipelineHITLReviewRequiresMatchingApplicationInterrupt(t *testing.T) {
 	for _, tc := range []struct {

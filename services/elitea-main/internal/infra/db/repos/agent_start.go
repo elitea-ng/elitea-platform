@@ -961,6 +961,9 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentContinuation(
 				AvailableActions: append([]string(nil), interrupt.AvailableActions...),
 				HITLInterrupts:   targetInterrupts,
 			}
+			target.PipelineHITLReview = directPipelineHITLReview(
+				row.AgentType, []byte(row.ResponseMetadataJson), rawInterrupts,
+			)
 			if uuid.UUID(row.ConversationUuid.Bytes).String() != request.ConversationUUID ||
 				target.Validate() != nil {
 				return agentexecutionapp.ErrUnsupportedCurrentAgentStart

@@ -47,6 +47,8 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import {
+  conversationDetails,
+  type ContinueAgentExecutionParams,
   type AgentExecutionStart,
   type StopChatTaskParams,
   stopChatTask,
@@ -74,7 +76,8 @@ import {
   type ChatStreamRunStarters,
 } from "./useChatStreamRunStarters";
 
-import type { ChatMessage } from "../lib/convertMessagesToChatHistory";
+import { convertMessagesToChatHistory, type ChatMessage } from "../lib/convertMessagesToChatHistory";
+import type { MessageGroupWire, MessageParticipantWire } from "@/entities/message/lib/wire";
 
 type SetChatHistory = (
   updater: (prev: readonly ChatMessage[]) => readonly ChatMessage[],
@@ -346,7 +349,46 @@ export function useChatStreamTransport(
     [openStream, refreshContext],
   );
 
-  const starters = useChatStreamRunStarters(subscribeToRun);
+  const reconcileResume = useCallback(async (
+    accepted: AgentExecutionStart, params: ContinueAgentExecutionParams,
+  ): Promise<string | undefined> => {
+    const previousId = nonEmptyString(params.body['message_id']);
+    const responseId = nonEmptyString(accepted.response_message_id);
+    if (!previousId || !responseId || previousId === responseId) return undefined;
+    if (activeConversationRef.current !== undefined && activeConversationRef.current !== params.conversationUuid) return undefined;
+    setChatHistory((previous) => previous.map((message) => message.id === previousId
+      ? { ...message, isStreaming: false, isLoading: false, hitlInterrupt: undefined, hitlInterrupts: undefined }
+      : message));
+    try {
+      const snapshot = await conversationDetails({
+        projectId: params.projectId, id: params.conversationUuid,
+        messages_limit: 50, sort_order: 'desc',
+      }, AbortSignal.timeout(10_000));
+      if (activeConversationRef.current !== undefined && activeConversationRef.current !== params.conversationUuid) return undefined;
+      const groups = snapshot['message_groups'];
+      if (!Array.isArray(groups)) throw new Error('Missing continuation history');
+      const messages = convertMessagesToChatHistory(groups as MessageGroupWire[], snapshot.participants as readonly MessageParticipantWire[] | undefined);
+      const response = messages.find((message) => message.id === responseId);
+      const review = messages.find((message) => message.id === previousId);
+      const decision = messages.find((message) => message.id === response?.questionId && message.role === 'user');
+      if (!review || !decision) throw new Error('Missing continuation segments');
+      setChatHistory((previous) => {
+        const settled = previous.map((message) => message.id === previousId
+          ? { ...message, ...review, questionId: message.questionId, toolActions: review.toolActions?.length ? review.toolActions : message.toolActions }
+          : message);
+        return settled.some((message) => message.id === decision.id) ? settled : [...settled, decision];
+      });
+      // Replay starts from the beginning. Do not seed partially generated response text here.
+      return decision.id;
+    } catch {
+      if (activeConversationRef.current === undefined || activeConversationRef.current === params.conversationUuid) {
+        onStreamErrorRef.current?.('The decision was saved, but its chat history could not be refreshed. Reload the chat to view it.');
+      }
+      // Admission succeeded. A history-read failure must never send the decision again.
+      return undefined;
+    }
+  }, [setChatHistory]);
+  const starters = useChatStreamRunStarters(subscribeToRun, reconcileResume);
 
   const stop = useCallback(() => {
     // Nothing of this hook's is running — the run was already stopped, already

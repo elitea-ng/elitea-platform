@@ -217,6 +217,7 @@ export interface ChatStreamRunStarters {
 
 export function useChatStreamRunStarters(
   subscribeToRun: SubscribeToChatRun,
+  reconcileResume?: (accepted: AgentExecutionStart, params: ContinueAgentExecutionParams) => Promise<string | undefined>,
 ): ChatStreamRunStarters {
   const startDetailed = useCallback(
     async (
@@ -260,15 +261,16 @@ export function useChatStreamRunStarters(
       }
       // The route ACCEPTED the resume. The run is live again whether or not the
       // answer named a stream, so the caller must not resume it a second time.
+      const questionId = await reconcileResume?.(resumed, resumeParams);
       subscribeToRun(
         resumed,
         resumeParams.conversationUuid,
         resumeParams.projectId,
-        nonEmptyString(resumeParams.body["question_id"]),
+        questionId ?? nonEmptyString(resumeParams.body["question_id"]),
       );
       return true;
     },
-    [subscribeToRun],
+    [subscribeToRun, reconcileResume],
   );
 
   const regenerateDetailed = useCallback(

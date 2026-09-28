@@ -682,6 +682,10 @@ type Querier interface {
 	// which is the one `ListMessages` renders as the question.
 	RewriteCurrentAgentQuestionText(ctx context.Context, arg RewriteCurrentAgentQuestionTextParams) (int32, error)
 	ScheduledDatabaseNow(ctx context.Context) (pgtype.Timestamptz, error)
+	// The admission transaction already locks the conversation and consumes the
+	// exact pending decision with ResumeCurrentAgentHITL. The repository rechecks
+	// direct scope from that statement's pre-update metadata before this write.
+	SegmentCurrentPipelineHITL(ctx context.Context, arg SegmentCurrentPipelineHITLParams) (SegmentCurrentPipelineHITLRow, error)
 	SetArtifactBucketPinned(ctx context.Context, arg SetArtifactBucketPinnedParams) (EliteaStorageBucket, error)
 	// Configuration lifecycle internal effects. Unqualified tenant tables are
 	// intentional: every such statement runs inside an authorized project

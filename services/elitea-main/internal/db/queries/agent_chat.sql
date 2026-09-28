@@ -1625,6 +1625,8 @@ SELECT conversation.uuid AS conversation_uuid,
            WHEN 'dummy' THEN 'adhoc'
        END::text AS continuation_kind,
        question_text.content::text AS user_input,
+       COALESCE(application_version.agent_type, '')::text AS agent_type,
+       response.meta::text AS response_metadata_json,
        COALESCE(response.meta ->> 'thread_id', '')::text AS thread_id,
        COALESCE(response.meta ->> 'execution_generation', '')::text AS execution_generation,
        (response.meta -> 'hitl_interrupt')::text AS hitl_interrupt_json,
@@ -1641,6 +1643,13 @@ JOIN chat_participants AS question_author
 JOIN chat_participants AS response_author
   ON response_author.id = response.author_participant_id
  AND response_author.entity_name IN ('application', 'dummy')
+LEFT JOIN chat_participant_mapping AS application_mapping
+  ON application_mapping.conversation_id = conversation.id
+ AND application_mapping.participant_id = response_author.id
+LEFT JOIN application_versions AS application_version
+  ON application_version.id = (application_mapping.entity_settings ->> 'version_id')::integer
+ AND application_version.application_id = (response_author.entity_meta ->> 'id')::integer
+ AND response_author.entity_name = 'application'
 JOIN chat_participant_mapping AS actor_mapping
   ON actor_mapping.conversation_id = conversation.id
 JOIN chat_participants AS actor_participant
@@ -1835,7 +1844,9 @@ FROM updated;
 
 -- name: ResumeCurrentAgentHITL :one
 WITH resolved AS MATERIALIZED (
-    SELECT response.id, response.uuid, submitted.value AS decisions
+    SELECT response.id, response.uuid, submitted.value AS decisions,
+           response.meta::text AS previous_metadata_json, response.task_id AS previous_task_id,
+           COALESCE(application_version.agent_type, '')::text AS agent_type
     FROM chat_message_group AS response
     JOIN chat_conversations AS conversation
       ON conversation.id = response.conversation_id
@@ -1956,8 +1967,9 @@ WITH resolved AS MATERIALIZED (
     RETURNING response.id, response.uuid
 )
 SELECT updated.id AS response_message_group_id,
-       updated.uuid AS response_message_id
-FROM updated;
+       updated.uuid AS response_message_id,
+       resolved.previous_metadata_json, resolved.previous_task_id, resolved.agent_type
+FROM updated JOIN resolved ON resolved.id = updated.id;
 
 -- name: ResolveCurrentAuthorizationContinuation :one
 SELECT conversation.uuid AS conversation_uuid,
