@@ -139,3 +139,47 @@ Its evidence remains under `elitea-provider-meter-continuation-*`.
 
 This check closes uninterrupted pipeline continuation accounting only.
 Cached-input reuse, accounting across process recovery, and large-window accounting remain open.
+
+
+## Native repeated-prefix check and cache boundary
+
+Fresh headed Playwright chat 721 uses native Haiku and a synthetic 300-record instruction prefix.
+Both requests complete. Browser reload preserves the second measurement and answer.
+No browser responses are mocked. Browser page errors remain empty.
+
+| Request | Execution | Input | Output | Cache reads |
+| --- | --- | ---: | ---: | ---: |
+| First | `0f07ac4cd558e46983acd0aa1afc87c1` | 7,275 | 53 | 0 |
+| Repeated prefix | `1d8dcefd4e4bb8c55e1a06def70c4f45` | 7,350 | 20 | 0 |
+
+Persisted ADK `usage_metadata` matches both browser measurements.
+The second panel shows 7,370 / 126,720 tokens and 6% occupancy.
+The screenshot is inspected after the popup animation.
+This proves repeated-prefix accounting, but not a live cache hit. The provider reports zero cache reads.
+Evidence uses `elitea-native-cache-meter-bounded-*` and `elitea-native-cache-meter-usage.json` in the local temporary directory.
+
+Gateway `internal/llmproxy/anthropic_usage_test.go` adds a separate protocol regression.
+It exercises the actual HTTP handler and Bifrost converter with a synthetic router response.
+Both unary and streamed responses preserve 500 uncached, 8,000 cache-read, and 1,500 cache-write tokens.
+The 23 output tokens produce combined occupancy of 10,023 when the Rust facade reconstructs input.
+Bifrost stores cache-inclusive input. Its Anthropic converter subtracts cache reads and writes before emitting `input_tokens`.
+Rust `transport/anthropic_facade.rs` adds those separate wire counters exactly once.
+The full gateway `internal/llmproxy` test package and `go vet` pass.
+This component test does not replace the still-open live cache-hit check.
+
+### Saved instruction limit finding
+
+The initial 800-record fixture in chat 720 fails before any model invocation.
+Execution `a9c60832dd5bd3c3028d6a4fde0228c5` reaches authoritative state `FAILED`.
+Operator diagnostics identify `agent_input.resource_exhausted`: a JSON string exceeds its allowed limit.
+`agents/protocol.rs` limits generic decoded strings to 64 KiB.
+`agents/assembly.rs::bounded_instruction` and `bounded_adhoc_instruction` independently enforce the same instruction bound.
+Main `application/agentexecution/projectcontext.go` uses a 60 KiB injection allowance against that worker contract.
+Thus, changing only the JSON parser would still reject these instructions during assembly.
+The history allowance is separate. A large model context window does not currently raise the saved-instruction allowance.
+No instruction, parser, or context limits change during this verification.
+
+The browser only shows a generic platform processing-limit explanation.
+Gate 4 must resolve instruction-size admission and actionable field-specific diagnostics before closing this finding.
+The smaller chat 721 fixture validates provider accounting within the current contract; it does not close this admission finding.
+Preserve chat 720 and its `elitea-native-cache-meter-*` evidence as the failed case.
