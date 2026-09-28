@@ -1624,7 +1624,9 @@ fn parse_sse_event(bytes: &[u8]) -> Result<ParsedSseEvent, AdkError> {
     let content = optional_string(delta.get("content"))?.map(str::to_owned);
     let reasoning_content = optional_string(delta.get("reasoning_content"))?;
     let reasoning = optional_string(delta.get("reasoning"))?;
-    if reasoning_content.is_some() && reasoning.is_some() {
+    // Bifrost emits both spellings from one value, including an empty start delta.
+    // Consume identical aliases once; conflicting values remain ambiguous.
+    if reasoning_content.is_some() && reasoning.is_some() && reasoning_content != reasoning {
         return Err(invalid_sse());
     }
     let reasoning = reasoning_content.or(reasoning).map(str::to_owned);

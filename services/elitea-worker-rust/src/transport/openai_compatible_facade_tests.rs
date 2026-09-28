@@ -205,6 +205,59 @@ async fn exact_sdk_request_and_fragmented_sse_are_preserved() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn matching_reasoning_aliases_are_consumed_once_and_conflicts_fail() {
+    for (left, right, accepted) in [
+        ("", "", true),
+        ("check", "check", true),
+        ("check", "other", false),
+    ] {
+        let frame = serde_json::json!({"choices":[{"delta":{
+            "role":"assistant", "content":"", "reasoning":left, "reasoning_content":right
+        },"finish_reason":null}]});
+        let wire = format!(
+            "data: {frame}\n\ndata: {{\"choices\":[{{\"delta\":{{\"content\":\"OK\"}},\"finish_reason\":\"stop\"}}]}}\n\ndata: [DONE]\n\n"
+        );
+        let (client, _) = test_model_gateway_client(
+            vec![TestModelGatewayOutcome::Response(
+                test_model_gateway_response(stream_body(vec![Bytes::from(wire)])),
+            )],
+            test_model_gateway_config(),
+        )
+        .unwrap();
+        let bound = client
+            .bind_ordinary(
+                &ClaimScopedEliteaContext::fixture(17, TOKEN),
+                23,
+                test_model_facade_invocation(),
+            )
+            .unwrap();
+        let result = drain(
+            bound
+                .generate_for_test(test_model_request("reply briefly"))
+                .await
+                .unwrap(),
+        )
+        .await;
+        if accepted {
+            let responses = result.expect("identical aliases are one value");
+            let thoughts: Vec<_> = responses
+                .iter()
+                .filter_map(|r| r.content.as_ref())
+                .flat_map(|c| &c.parts)
+                .filter_map(|p| match p {
+                    Part::Thinking { thinking, .. } => Some(thinking.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(thoughts, if left.is_empty() { vec![] } else { vec![left] });
+            assert_eq!(bound.take_completion_for_test().unwrap(), "OK");
+        } else {
+            assert_eq!(result.unwrap_err().code, "model_gateway.invalid_sse");
+        }
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn automatic_max_tokens_omits_the_openai_wire_limit() {
     let (client, captured) = test_model_gateway_client(
         vec![TestModelGatewayOutcome::Response(
