@@ -18,6 +18,7 @@ Current-platform code defines business behavior, not a requirement to copy its i
 - Typed pipeline input-limit, result-mapping, and tool-call errors pass live browser and reload acceptance in chats 673, 675, and 674. Chat 676 verifies successful direct execution. Chats 677 and 678 verify downstream suppression and parent recovery for a saved child pipeline failure.
 - Output-delivery error code 24 is deployed in Main and Rust. Chat 695 verifies live emission, the support reference, and stable reload through a synthetic provider with no browser response mocks.
 - Chat 699 verifies retained partial output and persisted timeout guidance after a provider ends without a terminal model event. Prompt EOF detection remains open: the worker reaches its idle timeout instead of receiving stream termination.
+- [Gateway egress startup](source-mapping/gateway-egress-startup-20260928.md) records the older deployed provider client and a startup synchronization defect found when deploying the branch gateway. Its regression and race tests pass; deployment and truncated-stream retesting remain open.
 - Public event metadata omits instruction bodies. All 24 session tests pass. The fix is deployed; chat 672 passes the previous assembly boundary.
 - [Native history retention](source-mapping/context-native-history-retention-20260921.md) records repeated-loop component proof and earlier live defects.
 - [Model transport timeouts](source-mapping/model-transport-timeouts-20260922.md) records the separate model-wait limits and repeated live compaction.

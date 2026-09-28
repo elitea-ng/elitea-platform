@@ -34,7 +34,6 @@ import (
 	"log/slog"
 	"time"
 
-	bifrost "github.com/maximhq/bifrost/core"
 	"github.com/maximhq/bifrost/core/schemas"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/account"
@@ -66,7 +65,7 @@ type egressPlane struct {
 	source account.EgressSource
 	// core is the bifrost client whose provider workers latch
 	// AllowPrivateNetwork. nil skips the rebuild half.
-	core *bifrost.Bifrost
+	core providerRefresher
 	// logger receives the mode transitions.
 	logger *slog.Logger
 	// interval overrides egressWatchInterval in tests.
@@ -87,8 +86,20 @@ func startEgressAllowlistPlane(ctx context.Context, p egressPlane) {
 		logger = slog.Default()
 	}
 
+	previousPrivateNetwork := p.account.EgressPrivateNetworkAllowed()
 	p.account.SetEgressSource(p.source)
 	rep := p.account.EgressReport()
+	// Bifrost has already initialized provider workers from the environment
+	// floor. Apply the initial authored decision before serving requests; the
+	// watcher below only observes subsequent changes.
+	if p.core != nil && previousPrivateNetwork != rep.PrivateNetwork {
+		for _, provider := range privateNetworkProviders {
+			if err := p.core.UpdateProvider(provider); err != nil {
+				logger.Error("egress: initial provider dialer synchronization failed",
+					"provider", string(provider), "err", err)
+			}
+		}
+	}
 	logger.Info("EGRESS ALLOWLIST PLANE ARMED: authored egress_allowlist rows are unioned with the "+
 		"GATEWAY_EGRESS_ALLOWLIST floor",
 		"env_entries", len(rep.Env),
