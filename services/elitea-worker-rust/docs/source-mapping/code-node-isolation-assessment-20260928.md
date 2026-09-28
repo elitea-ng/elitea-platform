@@ -921,3 +921,40 @@ warnings denied. This check exposed missing public error-contract documentation
 in the optional ledger module; those contracts are now documented. Runtime
 identity hex encoding now writes into one allocated string without per-byte
 format allocations, preserving the same digest representation.
+
+### Prepared request fingerprint and admission boundary
+
+`src/sandbox/request.rs` adds a typed prepared-job contract. Its domain-separated
+SHA-256 fingerprint binds the protocol revision, language, exact source,
+normalized input object, immutable runtime image digest, policy revision, and
+execution timeout. The job activation key remains stable across reconnects;
+changed execution material changes its request fingerprint and therefore
+conflicts with a receipt for the original request. Input object insertion order
+does not change identity. The constructor sorts nested objects before hashing.
+The runtime image and policy are selected by trusted deployment composition,
+not by the code or a model-generated command. Runtime wrappers and fixed
+dependencies must be covered by those revisions.
+
+Source is limited to 256 KiB. Input has at most 256 selected fields, 64 nested
+levels and 100,000 visited values. A capped JSON writer rejects a serialized
+request above 1 MiB before allocating an unbounded output buffer. Timeouts must
+be 1..3600 seconds and mutable image tags are rejected. Source/input do not have
+a Debug implementation. The new constructor derives the content fingerprint
+itself rather than accepting a caller-provided digest.
+
+This contract is not an authorization grant. Inspection of Main's
+`internal/transport/runtimegrpc/control/server.go::ObserveDesiredState` and
+`internal/transport/workloadauth/authorizer.go` confirms that an execution fence
+is bound to the original worker's verified mTLS identity and persisted workload
+session. A separate supervisor cannot forward that fence as if it were the
+worker. The future admission RPC must authorize that delegation explicitly;
+no network service or permissive fallback has been enabled by this change.
+Current-platform source/input selection remains the `_prepare_pyodide_input`
+reference described above; neither the legacy static remote headers nor full
+worker credentials are passed to the sandbox.
+
+Four focused request tests passed: changed execution material changes identity;
+map insertion order does not; mutable image tags and invalid timeouts are
+rejected; oversized/deep input is rejected before fingerprinting. This proves
+request construction and replay-conflict inputs, not network admission or
+end-to-end Code execution.

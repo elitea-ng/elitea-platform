@@ -1,0 +1,253 @@
+//! Content identity for an admitted sandbox job. This is not authorization.
+use std::collections::BTreeMap;
+
+use serde::Serialize;
+
+use super::ledger::{JobScope, LedgerError};
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Language {
+    Python,
+    JavaScript,
+    TypeScript,
+    Rust,
+}
+
+/// Deployment-selected runtime, never an image or command selected by code.
+/// No Debug: the input and source may contain private user data.
+#[derive(Serialize)]
+pub struct PreparedJob {
+    revision: u8,
+    language: Language,
+    source: String,
+    input: BTreeMap<String, serde_json::Value>,
+    image_digest: String,
+    policy_revision: String,
+    timeout_seconds: u32,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("sandbox request has invalid code, input, runtime identity, or limits")]
+pub struct InvalidRequest;
+
+impl PreparedJob {
+    /// Construct only after runtime selection and invocation authorization.
+    /// Dependencies and wrappers must be fixed by the runtime image/policy revision.
+    ///
+    /// # Errors
+    /// Returns `InvalidRequest` if a field or serialized request exceeds its bound.
+    pub fn new(
+        language: Language,
+        source: String,
+        mut input: BTreeMap<String, serde_json::Value>,
+        image_digest: String,
+        policy_revision: String,
+        timeout_seconds: u32,
+    ) -> Result<Self, InvalidRequest> {
+        let digest = image_digest.strip_prefix("sha256:").ok_or(InvalidRequest)?;
+        if source.trim().is_empty()
+            || source.len() > 256 * 1024
+            || source.contains('\0')
+            || input.len() > 256
+            || digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            || policy_revision.is_empty()
+            || policy_revision.len() > 128
+            || !policy_revision
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+            || !(1..=3600).contains(&timeout_seconds)
+        {
+            return Err(InvalidRequest);
+        }
+        let mut remaining = 100_000;
+        for value in input.values_mut() {
+            validate_shape(value, 0, &mut remaining)?;
+            value.sort_all_objects();
+        }
+        let job = Self {
+            revision: 1,
+            language,
+            source,
+            input,
+            image_digest,
+            policy_revision,
+            timeout_seconds,
+        };
+        job.bytes()?;
+        Ok(job)
+    }
+
+    fn bytes(&self) -> Result<Vec<u8>, InvalidRequest> {
+        let mut writer = CappedBytes(Vec::new());
+        serde_json::to_writer(&mut writer, self).map_err(|_| InvalidRequest)?;
+        Ok(writer.0)
+    }
+
+    /// Bind a caller-authorized scope to the actual request content. The caller
+    /// supplies the stable activation key, but cannot supply its request digest.
+    ///
+    /// # Errors
+    /// Returns `Invalid` for an invalid scope or serialization failure.
+    pub fn scope(
+        &self,
+        tenant: String,
+        project: i32,
+        activation_key: [u8; 32],
+    ) -> Result<JobScope, LedgerError> {
+        let bytes = self.bytes().map_err(|_| LedgerError::Invalid)?;
+        let mut hash = ring::digest::Context::new(&ring::digest::SHA256);
+        hash.update(b"elitea.sandbox.prepared-job.v1\0");
+        hash.update(&(bytes.len() as u64).to_be_bytes());
+        hash.update(&bytes);
+        let digest = hash.finish();
+        let mut content_digest = [0; 32];
+        content_digest.copy_from_slice(digest.as_ref());
+        JobScope::new(tenant, project, activation_key, content_digest)
+    }
+}
+
+fn validate_shape(
+    value: &serde_json::Value,
+    depth: usize,
+    remaining: &mut usize,
+) -> Result<(), InvalidRequest> {
+    if depth > 64 || *remaining == 0 {
+        return Err(InvalidRequest);
+    }
+    *remaining -= 1;
+    match value {
+        serde_json::Value::Array(values) => {
+            for value in values {
+                validate_shape(value, depth + 1, remaining)?;
+            }
+        }
+        serde_json::Value::Object(values) => {
+            for value in values.values() {
+                validate_shape(value, depth + 1, remaining)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+struct CappedBytes(Vec<u8>);
+impl std::io::Write for CappedBytes {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.len() > (1024 * 1024_usize).saturating_sub(self.0.len()) {
+            return Err(std::io::Error::other(
+                "sandbox request exceeds its size bound",
+            ));
+        }
+        self.0.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn job() -> PreparedJob {
+        PreparedJob::new(
+            Language::Python,
+            "print(42)".into(),
+            BTreeMap::new(),
+            format!("sha256:{}", "a".repeat(64)),
+            "python-v1".into(),
+            30,
+        )
+        .unwrap()
+    }
+
+    fn identity(job: &PreparedJob) -> adk_sandbox::workspace::docker::CodeJobIdentity {
+        job.scope("tenant".into(), 2, [1; 32])
+            .unwrap()
+            .runtime_identity()
+            .unwrap()
+    }
+
+    #[test]
+    fn changed_execution_material_cannot_reuse_a_cached_receipt() {
+        let original = identity(&job());
+        for field in 0..6 {
+            let mut changed = job();
+            match field {
+                0 => changed.source = "print(43)".into(),
+                1 => {
+                    changed.input.insert("value".into(), serde_json::json!(42));
+                }
+                2 => changed.language = Language::Rust,
+                3 => changed.image_digest = format!("sha256:{}", "b".repeat(64)),
+                4 => changed.policy_revision = "python-v2".into(),
+                _ => changed.timeout_seconds = 31,
+            }
+            assert_ne!(identity(&changed), original);
+        }
+        assert_eq!(identity(&job()), original);
+    }
+
+    #[test]
+    fn map_insertion_order_does_not_change_request_identity() {
+        let mut a = job();
+        a.input.insert("a".into(), serde_json::json!({"z":1,"a":2}));
+        a.input.insert("b".into(), serde_json::json!(3));
+        let mut b = job();
+        b.input.insert("b".into(), serde_json::json!(3));
+        b.input.insert("a".into(), serde_json::json!({"a":2,"z":1}));
+        assert_eq!(identity(&a), identity(&b));
+    }
+
+    #[test]
+    fn rejects_oversized_and_deep_input_before_fingerprinting() {
+        let make = |value| {
+            PreparedJob::new(
+                Language::Python,
+                "pass".into(),
+                BTreeMap::from([("value".into(), value)]),
+                format!("sha256:{}", "a".repeat(64)),
+                "v1".into(),
+                30,
+            )
+        };
+        assert!(make(serde_json::Value::String("x".repeat(1024 * 1024))).is_err());
+        let mut deep = serde_json::Value::Null;
+        for _ in 0..66 {
+            deep = serde_json::Value::Array(vec![deep]);
+        }
+        assert!(make(deep).is_err());
+    }
+
+    #[test]
+    fn rejects_mutable_image_and_unbounded_timeout() {
+        assert!(
+            PreparedJob::new(
+                Language::Python,
+                "pass".into(),
+                BTreeMap::new(),
+                "python:latest".into(),
+                "v1".into(),
+                30
+            )
+            .is_err()
+        );
+        assert!(
+            PreparedJob::new(
+                Language::Python,
+                "pass".into(),
+                BTreeMap::new(),
+                format!("sha256:{}", "a".repeat(64)),
+                "v1".into(),
+                3601
+            )
+            .is_err()
+        );
+    }
+}
