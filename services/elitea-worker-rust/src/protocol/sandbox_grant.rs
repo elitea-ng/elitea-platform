@@ -19,8 +19,16 @@ pub struct GrantVerifier<R> {
 /// An authenticated scope, without the delegation signature or worker credentials.
 pub struct AuthorizedJob {
     scope: JobScope,
+    fingerprint: [u8; 32],
+    expires_at_unix_millis: i64,
 }
 impl AuthorizedJob {
+    pub(crate) fn permits(&self, request: &PreparedJob, now_unix_millis: i64) -> bool {
+        now_unix_millis < self.expires_at_unix_millis
+            && request
+                .fingerprint()
+                .is_ok_and(|digest| digest == self.fingerprint)
+    }
     #[must_use]
     pub fn scope(&self) -> &JobScope {
         &self.scope
@@ -113,7 +121,11 @@ impl<R: Ed25519PublicKeyResolver> GrantVerifier<R> {
         activation.copy_from_slice(hash.finish().as_ref());
         let scope = JobScope::new(claims.tenant_id, claims.project_id, activation, fingerprint)
             .map_err(|_| GrantRejected)?;
-        Ok(AuthorizedJob { scope })
+        Ok(AuthorizedJob {
+            scope,
+            fingerprint,
+            expires_at_unix_millis: claims.expires_at_unix_millis,
+        })
     }
 }
 

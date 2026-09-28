@@ -1040,3 +1040,42 @@ passed for a new client removing the runtime followed by the original client
 clearing its stale local mapping. The component suite passed 86 tests (six live
 tests excluded), and ADK library Clippy passed. No production Code runtime,
 Kubernetes execution or browser acceptance is claimed by these checks.
+
+
+### Authorized submission and fixed image adapter boundary
+
+`src/protocol/sandbox_grant.rs::AuthorizedJob` retains the verified request
+fingerprint and expiry. `src/sandbox/docker_supervisor.rs::submit_authorized`
+checks both again and binds the prepared image digest and policy to the trusted
+supervisor configuration before reserving a ledger row. Admission is bounded.
+A claimed lease is renewed throughout preparation, dispatch and observation.
+Existing terminal receipts are returned without another execution. Existing
+partial preparation is observed, never overwritten; expired incomplete
+preparation is terminated before recording failure. Dispatch is recorded before
+signaling the existing runtime. Lost dispatch acknowledgement remains a
+reconciliation case, not permission to create another workload.
+
+`src/sandbox/request.rs::manifest` maps the bounded source, language and selected
+state to `.elitea-code.json`. The fixed runner command invokes the image-owned
+`/usr/local/bin/elitea-code-execute`; callers cannot choose executable arguments.
+This replaces the legacy SDK sandbox launch boundary described above, while the
+worker retains graph state ownership. It does not yet implement the legacy
+Python/Pyodide language behavior or platform-client integration.
+
+Verification: the disposable PostgreSQL/Docker test
+`sandbox_supervisor_submits_only_the_authorized_request_once` passed. Missing
+admission policy and altered request are rejected before ledger insertion; an
+authorized request executes, persists its receipt, removes its stopped runtime,
+and a repeat returns the identical saved result. The helper obtains the fixture
+image identity through Docker image inspection, not commit command output.
+`services/elitea-code-runner/tests/fixtures/code-execute.py` is strictly a test
+adapter using native Python, not the product Python implementation. Nine focused
+worker tests and worker-library Clippy passed; three live tests are intentionally
+excluded from the default test invocation (the submission test ran separately).
+
+Docker deployment image preparation and Kubernetes digest-pinned node warming
+remain distinct from job execution. Cached layers are reused across isolated
+jobs; user workspaces and installed untrusted dependencies must not be reused
+between jobs. Kubernetes execution, production language adapters, live service
+mTLS admission, cancellation, graph integration and browser acceptance remain
+open. These checks do not claim service-process crash or live-cluster proof.

@@ -81,6 +81,30 @@ impl PreparedJob {
         Ok(job)
     }
 
+    pub(crate) fn matches_runtime(&self, image: &str, policy: &str) -> bool {
+        let configured_digest = image.rsplit_once('@').map_or(image, |(_, digest)| digest);
+        self.image_digest == configured_digest && self.policy_revision == policy
+    }
+
+    /// The image owns the language adapter; no caller supplies executable argv.
+    pub(crate) fn manifest(&self) -> Result<adk_sandbox::workspace::Manifest, InvalidRequest> {
+        use adk_sandbox::workspace::{Manifest, ManifestEntry};
+        let runner = serde_json::json!({
+            "argv": ["/usr/local/bin/elitea-code-execute", "/workspace/.elitea-code.json"],
+            "timeout_seconds": self.timeout_seconds,
+        });
+        Ok(Manifest::new(vec![
+            ManifestEntry::File {
+                path: ".elitea-code.json".into(),
+                content: self.bytes()?,
+            },
+            ManifestEntry::File {
+                path: ".elitea-job.json".into(),
+                content: serde_json::to_vec(&runner).map_err(|_| InvalidRequest)?,
+            },
+        ]))
+    }
+
     fn bytes(&self) -> Result<Vec<u8>, InvalidRequest> {
         let mut writer = CappedBytes(Vec::new());
         serde_json::to_writer(&mut writer, self).map_err(|_| InvalidRequest)?;

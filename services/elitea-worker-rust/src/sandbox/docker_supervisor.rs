@@ -1,10 +1,12 @@
 //! Reconcile dispatched jobs without executing their code again.
-use std::time::Duration;
+use super::request::PreparedJob;
+use crate::protocol::sandbox_grant::AuthorizedJob;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use adk_sandbox::workspace::docker::DockerClient;
 use tokio::sync::Semaphore;
 
-use super::ledger::{JobLedger, JobRecord, JobScope, LedgerError, Phase};
+use super::ledger::{JobLease, JobLedger, JobRecord, JobScope, LedgerError, Phase};
 
 const LEASE_SECONDS: i32 = 60;
 const MAX_JOB_AGE_SECONDS: i64 = 3660;
@@ -14,6 +16,7 @@ pub struct DockerSupervisor {
     runtime: DockerClient,
     owner: String,
     capacity: Semaphore,
+    admission_policy: Option<String>,
 }
 
 /// Receipts contain untrusted code output. Graph state projection remains a
@@ -63,7 +66,68 @@ impl DockerSupervisor {
             runtime,
             owner,
             capacity: Semaphore::new(concurrency),
+            admission_policy: None,
         })
+    }
+
+    /// Enable submission for one deployment-selected immutable policy revision.
+    /// # Errors
+    /// Returns `Invalid` for a malformed policy revision.
+    pub fn with_admission_policy(mut self, revision: String) -> Result<Self, SupervisorError> {
+        if revision.is_empty()
+            || revision.len() > 128
+            || !revision
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        {
+            return Err(SupervisorError::Invalid);
+        }
+        self.admission_policy = Some(revision);
+        Ok(self)
+    }
+
+    /// Submit only the exact request covered by a freshly verified grant.
+    /// The grant's expiry gates admission, not the lifetime of an admitted job.
+    /// # Errors
+    /// Returns `Invalid` for an expired/mismatched grant or runtime policy,
+    /// `Busy` for admission overload, or a persistence/runtime reconciliation error.
+    pub async fn submit_authorized(
+        &self,
+        authorization: &AuthorizedJob,
+        request: &PreparedJob,
+    ) -> Result<Reconciliation, SupervisorError> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .and_then(|time| i64::try_from(time.as_millis()).ok())
+            .ok_or(SupervisorError::Invalid)?;
+        if !authorization.permits(request, now) {
+            return Err(SupervisorError::Invalid);
+        }
+        if !self
+            .admission_policy
+            .as_deref()
+            .is_some_and(|policy| request.matches_runtime(&self.runtime.base_image, policy))
+        {
+            return Err(SupervisorError::Invalid);
+        }
+        let _permit = self
+            .capacity
+            .try_acquire()
+            .map_err(|_| SupervisorError::Busy)?;
+        let scope = authorization.scope();
+        let record = self.ledger.reserve(scope).await?;
+        if !matches!(record.phase, Phase::Reserved | Phase::Dispatched) {
+            return self.terminal(scope, record).await;
+        }
+        let Some(lease) = self
+            .ledger
+            .claim(scope, self.owner.clone(), LEASE_SECONDS)
+            .await?
+        else {
+            return Ok(Reconciliation::OwnedElsewhere);
+        };
+        self.run_owned(scope, &lease, Some(request)).await
     }
 
     /// Bounded admission prevents unbounded tasks waiting on the Docker daemon.
@@ -96,8 +160,66 @@ impl DockerSupervisor {
         if lease.observed_phase != Phase::Dispatched {
             return Err(SupervisorError::Receipt);
         }
+        self.run_owned(scope, &lease, None).await
+    }
+
+    async fn run_owned(
+        &self,
+        scope: &JobScope,
+        lease: &JobLease,
+        request: Option<&PreparedJob>,
+    ) -> Result<Reconciliation, SupervisorError> {
         let identity = scope.runtime_identity()?;
         let observe = async {
+            if lease.observed_phase == Phase::Reserved {
+                let request = request.ok_or(SupervisorError::Invalid)?;
+                if self
+                    .runtime
+                    .observe_code_job(&identity)
+                    .await
+                    .map_err(SupervisorError::Runtime)?
+                    .is_none()
+                {
+                    let manifest = request.manifest().map_err(|_| SupervisorError::Invalid)?;
+                    self.runtime
+                        .provision_code_job(&identity, &manifest)
+                        .await
+                        .map_err(SupervisorError::Runtime)?;
+                }
+                // Do not overwrite a partial workspace: an earlier preparation
+                // request may still be completing remotely after loss of its owner.
+                while !self
+                    .runtime
+                    .code_job_prepared(&identity)
+                    .await
+                    .map_err(SupervisorError::Runtime)?
+                {
+                    if self.ledger.age_seconds(scope).await? >= 60 {
+                        self.ledger.renew(lease, LEASE_SECONDS).await?;
+                        self.runtime
+                            .terminate_code_job(&identity)
+                            .await
+                            .map_err(SupervisorError::Runtime)?;
+                        self.ledger
+                            .finish(
+                                lease,
+                                Phase::Failed,
+                                None,
+                                Some("sandbox.preparation_incomplete"),
+                            )
+                            .await?;
+                        return self.terminal(scope, self.ledger.read(scope).await?).await;
+                    }
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+                self.ledger.mark_dispatched(lease).await?;
+                // Uncertain acknowledgement leaves the durable dispatched row;
+                // recovery reads the existing runtime, never creates another one.
+                self.runtime
+                    .dispatch_code_job(&identity)
+                    .await
+                    .map_err(SupervisorError::Runtime)?;
+            }
             loop {
                 if let Some(bytes) = self
                     .runtime
@@ -111,19 +233,19 @@ impl DockerSupervisor {
                     } else {
                         None
                     };
-                    self.ledger.finish(&lease, phase, result, failure).await?;
+                    self.ledger.finish(lease, phase, result, failure).await?;
                     return self.terminal(scope, self.ledger.read(scope).await?).await;
                 }
                 // Database time keeps the deadline stable across supervisor restarts.
                 if self.ledger.age_seconds(scope).await? >= MAX_JOB_AGE_SECONDS {
-                    self.ledger.renew(&lease, LEASE_SECONDS).await?;
+                    self.ledger.renew(lease, LEASE_SECONDS).await?;
                     self.runtime
                         .terminate_code_job(&identity)
                         .await
                         .map_err(SupervisorError::Runtime)?;
                     self.ledger
                         .finish(
-                            &lease,
+                            lease,
                             Phase::Failed,
                             None,
                             Some("sandbox.deadline_exceeded"),
@@ -141,7 +263,7 @@ impl DockerSupervisor {
         loop {
             tokio::select! {
                 result = &mut observe => return result,
-                _ = heartbeat.tick() => self.ledger.renew(&lease, LEASE_SECONDS).await?,
+                _ = heartbeat.tick() => self.ledger.renew(lease, LEASE_SECONDS).await?,
             }
         }
     }

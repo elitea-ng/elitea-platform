@@ -949,3 +949,173 @@ async fn sandbox_supervisor_recovers_dispatched_job_and_persists_before_cleanup(
     );
     isolated.pool.close().await;
 }
+
+#[cfg(feature = "sandbox-supervisor")]
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL, Docker and the test-only adapter image"]
+async fn sandbox_supervisor_submits_only_the_authorized_request_once() {
+    use crate::{
+        protocol::{
+            command::Ed25519PublicKeyResolver,
+            elitea::runtime::v1::{SandboxJobGrantClaimsV1, SignedSandboxJobGrantV1},
+            sandbox_grant::GrantVerifier,
+        },
+        sandbox::{
+            docker_supervisor::{DockerSupervisor, Reconciliation},
+            ledger::{JobLedger, LedgerError, Phase},
+            request::{Language, PreparedJob},
+        },
+    };
+    use adk_sandbox::workspace::DockerClient;
+    use prost::Message;
+    use ring::signature::{Ed25519KeyPair, KeyPair};
+    struct Keys([u8; 32]);
+    impl Ed25519PublicKeyResolver for Keys {
+        fn resolve_ed25519_public_key(&self, id: &str) -> Option<[u8; 32]> {
+            (id == "fixture-key").then_some(self.0)
+        }
+    }
+    let isolated = IsolatedPostgres::create(&env::var(TEST_DATABASE_URL).unwrap()).await;
+    sqlx::raw_sql("CREATE SCHEMA elitea_runtime")
+        .execute(&isolated.pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../elitea-main/migrations/agentstate/0004_sandbox_jobs.sql"
+    ))
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
+    let image = env::var("ELITEA_CODE_RUNNER_TEST_IMAGE").unwrap();
+    let request = PreparedJob::new(
+        Language::Python,
+        "import uuid; print('authorized-result-' + str(uuid.uuid4()))".into(),
+        Default::default(),
+        image.clone(),
+        "fixture-v1".into(),
+        5,
+    )
+    .unwrap();
+    let changed = PreparedJob::new(
+        Language::Python,
+        "print('different')".into(),
+        Default::default(),
+        image.clone(),
+        "fixture-v1".into(),
+        5,
+    )
+    .unwrap();
+    let now = i64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap();
+    let key = Ed25519KeyPair::from_seed_unchecked(&[7; 32]).unwrap();
+    let mut public = [0; 32];
+    public.copy_from_slice(key.public_key().as_ref());
+    let claims = SandboxJobGrantClaimsV1 {
+        revision: 1,
+        tenant_id: "fixture-tenant".into(),
+        project_id: 2,
+        execution_id: format!("fixture-execution-{now}"),
+        activation_id: "node-1".into(),
+        request_digest: request.fingerprint().unwrap().to_vec(),
+        submitter_workload_identity: "fixture-worker".into(),
+        audience: "fixture-supervisor".into(),
+        issued_at_unix_millis: now,
+        expires_at_unix_millis: now + 30000,
+        generation: 1,
+    };
+    let bytes = claims.encode_to_vec();
+    let mut signing = b"elitea.sandbox.job-grant.ed25519.v1\0".to_vec();
+    signing.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+    signing.extend_from_slice(&bytes);
+    let grant = SignedSandboxJobGrantV1 {
+        key_id: "fixture-key".into(),
+        claims_bytes: bytes,
+        signature: key.sign(&signing).as_ref().to_vec(),
+    };
+    let authorized = GrantVerifier::new(Keys(public), "fixture-supervisor".into())
+        .unwrap()
+        .verify(&grant, "fixture-worker", &request, now)
+        .unwrap();
+    let runtime = DockerClient::with_image(image.clone())
+        .await
+        .unwrap()
+        .with_resource_limits(Some(64 * 1024 * 1024), Some(0.25))
+        .with_code_job_policy(Duration::from_secs(15))
+        .unwrap();
+    let supervisor = DockerSupervisor::new(
+        JobLedger::new(isolated.pool.clone()),
+        runtime,
+        "fixture-owner".into(),
+        2,
+    )
+    .unwrap();
+    let ledger = JobLedger::new(isolated.pool.clone());
+    assert!(
+        supervisor
+            .submit_authorized(&authorized, &request)
+            .await
+            .is_err()
+    );
+    assert!(matches!(
+        ledger.read(authorized.scope()).await,
+        Err(LedgerError::Missing)
+    ));
+    let supervisor = supervisor
+        .with_admission_policy("fixture-v1".into())
+        .unwrap();
+    assert!(
+        supervisor
+            .submit_authorized(&authorized, &changed)
+            .await
+            .is_err()
+    );
+    assert!(matches!(
+        ledger.read(authorized.scope()).await,
+        Err(LedgerError::Missing)
+    ));
+    let result = tokio::time::timeout(
+        Duration::from_secs(20),
+        supervisor.submit_authorized(&authorized, &request),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let Reconciliation::Terminal {
+        record,
+        cleanup_pending,
+    } = result
+    else {
+        panic!("terminal receipt expected")
+    };
+    assert_eq!(record.phase, Phase::Completed);
+    assert!(!cleanup_pending);
+    let stored = record.result_json.unwrap();
+    assert!(stored.contains("authorized-result-"));
+    let repeated = supervisor
+        .submit_authorized(&authorized, &request)
+        .await
+        .unwrap();
+    let Reconciliation::Terminal {
+        record,
+        cleanup_pending,
+    } = repeated
+    else {
+        panic!("saved receipt expected")
+    };
+    assert_eq!(record.result_json.as_deref(), Some(stored.as_str()));
+    assert!(!cleanup_pending);
+    let observer = DockerClient::with_image(image).await.unwrap();
+    assert!(
+        observer
+            .observe_code_job(&authorized.scope().runtime_identity().unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    isolated.pool.close().await;
+}
