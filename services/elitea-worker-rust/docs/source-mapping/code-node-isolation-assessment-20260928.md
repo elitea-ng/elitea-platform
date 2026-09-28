@@ -221,3 +221,31 @@ Validate every result in the worker, regardless of the language adapter's checks
 Use explicit artifact references for binary data. Define numeric precision before exposing large integers to JavaScript.
 Language-specific platform clients must use the same execution authority and operation contracts.
 No language bypasses preparation limits, execution limits, output validation, or effect recovery rules.
+
+## YAML compatibility decision
+
+Keep existing Code-node YAML valid. An omitted `language` means Python.
+Add an optional `language` field for the editor dropdown: `python`, `javascript`, or `rust`.
+Keep `code`, `input`, `output`, `structured_output`, `debug`, and existing graph transition fields unchanged.
+Do not require users to convert existing definitions to a new request envelope.
+Keep deployment limits and resource enforcement outside node YAML unless a specific user control requires them.
+Language support must remain capability-gated until its backend passes execution acceptance.
+
+The current SDK constructs these nodes in `runtime/langchain/langraph_agent.py`, in the `node_type == 'code'` branch.
+It maps `code` through `FunctionTool.input_mapping`, defaults `input` to `['messages']`, and supplies the platform client.
+It disables the sandbox tool's sensitive-action middleware for saved Code nodes.
+Model-generated sandbox calls use a separate guarded path.
+Preserve this distinction without bypassing downstream authorization or private-secret permissions.
+Do not assume all saved nodes contain fixed source: the existing `code` mapping can select variable content.
+Resolve source provenance before applying any policy exception intended for fixed, editor-authored code.
+
+## bwrapbox dependency assessment
+
+The inspected source revision is `236cca9a29b551335444a1e902012e8b0e55293f`.
+GitHub reports no detected license and a last push date of 2024-04-03.
+The inspected `bwrapbox.nelua` and generated `bwrapbox.c` contain no license or copyright declaration.
+No code from this repository is copied into the product.
+Its implementation rejects failed cgroup creation, limit writes, and process migration.
+That source inspection does not prove non-root deployment or descendant cleanup on our target.
+Resolve reuse permission and runtime acceptance before selecting this dependency.
+An OCI runtime with enforced job limits remains an alternative; it does not require copying the wrapper.
