@@ -55,3 +55,29 @@ Do not extrapolate these measurements to 5,000 users or 1,000 concurrent agents.
 Local evidence uses the `elitea-auto-memory` prefix.
 The samples and browser result identify chat 711; the earlier unsuccessful collector used chat 710.
 No database schema or production runtime behavior changes in this measurement.
+
+## Equal-workload repeats
+
+Two additional Full-window runs use equal synthetic history without restarting the worker.
+The harness checks both container identity and process start time after each run.
+Each run uses a fresh headed browser and verifies the final answer after reload.
+Both reload screenshots are visually checked.
+
+| Chat | Execution | Baseline median MiB | Active peak MiB | After median MiB | Sampled CPU peak percent |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 712 | `a2721e872f6fd4900d978dfaf0087e8d` | 142.0 | 176.2 | 157.8 | 3.38 |
+| 713 | `40f81b077c60bcc40ca769fc9d841c97` | 157.7 | 167.0 | 146.3 | 5.57 |
+
+Chat 712 collects 127 samples; chat 713 collects 137 samples.
+Both retain all four project facts and compact to approximately 49,000 estimated input tokens.
+The sampled PID maximum remains 18; final samples return to 17.
+Memory falls below the original run's post-completion value before the first repeat starts.
+It falls again during the second repeat.
+This sequence does not show accumulating container-memory growth from equal workloads.
+It does not identify allocator behavior or prove that every execution allocation is released.
+No allocator or runtime optimization is justified by these samples alone.
+
+The immediate repeated-run comparison is complete.
+Concurrent workloads, long-duration observation, and process allocation attribution remain production-capacity checks.
+Do not interpret a sampled CPU peak as an instantaneous CPU bound.
+Evidence is retained separately under `elitea-auto-memory-run1`, `elitea-auto-memory-run2`, and `elitea-auto-memory-run3`.
