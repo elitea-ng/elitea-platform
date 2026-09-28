@@ -1009,3 +1009,34 @@ unknown/duplicate signed fields. Worker-library Clippy passed with the optional
 supervisor feature. Buf lint and breaking-change comparison against the prior
 HEAD passed. These are component tests; a live Main-to-supervisor mTLS exchange
 has not yet been implemented or verified.
+
+### Final preparation marker before dispatch
+
+The ADK Docker extension now records `.elitea-ready` only after every manifest
+entry has been prepared successfully. The marker contains the exact request
+fingerprint. Both lifecycle marker names are reserved against manifest input.
+`code_job_prepared` lets a replacement supervisor inspect completion without
+repeating preparation. `dispatch_code_job` requires both the runner request file
+and the matching final marker before it writes the dispatch signal. A request
+file alone was insufficient: it could exist while source/input copying was
+still incomplete. A partial or absent marker is not dispatch authority.
+
+This supports the durable reserved-to-dispatched boundary without introducing
+a product database schema change. The supervisor still must own the ledger
+lease and persist dispatch before signaling. Preparation recovery and the
+admission/dispatch service are not complete solely because this marker exists.
+
+Named jobs also use their stable opaque name as the local session-map key.
+Removal clears that key, including an already-absent runtime after a lost
+cleanup acknowledgement. This prevents the long-lived supervisor from retaining
+one local session entry per completed named job. Anonymous ADK sessions retain
+their original handle behavior.
+
+The focused Linux Docker receipt test passed with a new client observing the
+marker, an incomplete marker rejecting dispatch despite request-file presence,
+and successful execution/receipt recovery after the valid marker was restored.
+It also rejected manifest attempts to supply lifecycle paths. The cleanup test
+passed for a new client removing the runtime followed by the original client
+clearing its stale local mapping. The component suite passed 86 tests (six live
+tests excluded), and ADK library Clippy passed. No production Code runtime,
+Kubernetes execution or browser acceptance is claimed by these checks.

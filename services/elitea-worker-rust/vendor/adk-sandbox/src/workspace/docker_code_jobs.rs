@@ -56,9 +56,12 @@ impl DockerClient {
                 | ManifestEntry::Directory { path }
                 | ManifestEntry::GitRepo { path, .. } => path,
             };
-            if path.split('/').any(|part| part == ".elitea-dispatch") {
+            if path
+                .split('/')
+                .any(|part| matches!(part, ".elitea-dispatch" | ".elitea-ready"))
+            {
                 return Err(SandboxError::ExecutionFailed(
-                    "Code manifest contains a reserved dispatch path".into(),
+                    "Code manifest contains a reserved lifecycle path".into(),
                 ));
             }
         }
@@ -171,6 +174,10 @@ impl DockerClient {
     /// receipt. This does not force termination or depend on an in-memory session.
     pub async fn remove_code_job(&self, identity: &CodeJobIdentity) -> Result<(), SandboxError> {
         let Some(job) = self.observe_code_job(identity).await? else {
+            self.sessions
+                .write()
+                .await
+                .remove(&identity.container_name());
             return Ok(());
         };
         if job.running {
@@ -199,11 +206,51 @@ impl DockerClient {
             Ok(())
             | Err(bollard::errors::Error::DockerResponseServerError {
                 status_code: 404, ..
-            }) => Ok(()),
+            }) => {
+                self.sessions
+                    .write()
+                    .await
+                    .remove(&identity.container_name());
+                Ok(())
+            }
             Err(_) => Err(SandboxError::ExecutionFailed(
                 "Code job cleanup failed; retry cleanup without replaying code".into(),
             )),
         }
+    }
+
+    /// A prepared marker is written only after every manifest entry succeeds.
+    /// A new supervisor can inspect it before crossing the durable dispatch fence.
+    pub async fn code_job_prepared(
+        &self,
+        identity: &CodeJobIdentity,
+    ) -> Result<bool, SandboxError> {
+        let Some(job) = self.observe_code_job(identity).await? else {
+            return Ok(false);
+        };
+        if !job.running {
+            return Ok(false);
+        }
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            self.exec_in_container(
+                &job.container_id,
+                vec![
+                    "sh",
+                    "-c",
+                    "test -f /workspace/.elitea-ready && cat /workspace/.elitea-ready",
+                ],
+                None,
+                None,
+            ),
+        )
+        .await
+        .map_err(|_| {
+            SandboxError::ExecutionFailed(
+                "Code preparation observation timed out; reconciliation required".into(),
+            )
+        })??;
+        Ok(result.2 == 0 && result.0 == identity.request_digest)
     }
 
     /// Call only after the supervisor durably records dispatch. Re-signaling
@@ -225,7 +272,9 @@ impl DockerClient {
                 vec![
                     "sh",
                     "-c",
-                    "test -f /workspace/.elitea-job.json && : > /workspace/.elitea-dispatch",
+                    "test -f /workspace/.elitea-job.json && test \"$(cat /workspace/.elitea-ready)\" = \"$1\" && : > /workspace/.elitea-dispatch",
+                    "sandbox-dispatch",
+                    &identity.request_digest,
                 ],
                 None,
                 None,

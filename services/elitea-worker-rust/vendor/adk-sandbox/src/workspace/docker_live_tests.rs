@@ -257,6 +257,24 @@ async fn live_pid1_receipt_is_recovered_by_a_new_client() {
         path: ".elitea-job.json".into(),
         content: serde_json::to_vec(&request).unwrap(),
     }]);
+    for path in [
+        ".elitea-ready",
+        ".elitea-dispatch",
+        "dir/.elitea-ready/file",
+    ] {
+        assert!(
+            client
+                .provision_code_job(
+                    &identity,
+                    &Manifest::new(vec![ManifestEntry::File {
+                        path: path.into(),
+                        content: vec![],
+                    }])
+                )
+                .await
+                .is_err()
+        );
+    }
     let handle = client
         .provision_code_job(&identity, &manifest)
         .await
@@ -269,6 +287,43 @@ async fn live_pid1_receipt_is_recovered_by_a_new_client() {
                 .unwrap()
                 .is_none()
         );
+        let recovered_preparation = DockerClient::with_image(image.clone()).await.unwrap();
+        assert!(
+            recovered_preparation
+                .code_job_prepared(&identity)
+                .await
+                .unwrap()
+        );
+        // Model a missing/incomplete final preparation marker. Request presence
+        // alone must not authorize dispatch after reconnect.
+        let session = client.start(&handle).await.unwrap();
+        session
+            .write_file(".elitea-ready", b"incomplete")
+            .await
+            .unwrap();
+        assert!(
+            !recovered_preparation
+                .code_job_prepared(&identity)
+                .await
+                .unwrap()
+        );
+        assert!(
+            recovered_preparation
+                .dispatch_code_job(&identity)
+                .await
+                .is_err()
+        );
+        assert!(
+            recovered_preparation
+                .read_code_job_receipt(&identity)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        session
+            .write_file(".elitea-ready", identity.request_digest.as_bytes())
+            .await
+            .unwrap();
         client.dispatch_code_job(&identity).await.unwrap();
         // Repeated signals do not restart the container's main process.
         client.dispatch_code_job(&identity).await.unwrap();
@@ -358,6 +413,7 @@ async fn live_recovered_client_terminates_and_removes_named_job() {
     })
     .catch_unwind()
     .await;
-    client.stop(&handle).await.unwrap();
+    client.remove_code_job(&identity).await.unwrap();
+    assert!(!client.sessions.read().await.contains_key(handle.as_str()));
     verified.unwrap();
 }

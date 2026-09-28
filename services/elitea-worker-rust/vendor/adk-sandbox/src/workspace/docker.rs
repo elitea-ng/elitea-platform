@@ -553,6 +553,27 @@ impl DockerClient {
                 }
             }
 
+            if let Some(identity) = identity {
+                let (_, _, status) = self
+                    .exec_in_container(
+                        &container_id,
+                        vec![
+                            "sh",
+                            "-c",
+                            "printf '%s' \"$1\" > /workspace/.elitea-ready",
+                            "sandbox-ready",
+                            &identity.request_digest,
+                        ],
+                        None,
+                        None,
+                    )
+                    .await?;
+                if status != 0 {
+                    return Err(SandboxError::ExecutionFailed(
+                        "Code preparation readiness could not be recorded".into(),
+                    ));
+                }
+            }
             Ok::<(), SandboxError>(())
         };
         let outcome = tokio::time::timeout(self.command_timeout, provision).await;
@@ -597,7 +618,8 @@ impl DockerClient {
         }
 
         // Generate session handle and store the mapping
-        let session_id = Self::generate_session_id();
+        let session_id =
+            identity.map_or_else(Self::generate_session_id, CodeJobIdentity::container_name);
         let handle = SessionHandle::new(&session_id);
 
         let mut sessions = self.sessions.write().await;
