@@ -78,13 +78,14 @@ The deployment preserves existing credentials, database selection, mounts, netwo
 Main and Web deploy before the producer starts sending the optional fields.
 
 Fresh headed Playwright sessions use chat 717. They do not intercept or mock browser responses.
-The compatible case uses the private synthetic provider. The native case calls the configured Anthropic Haiku provider.
+The synthetic case uses the private compatible provider. The Haiku case calls the configured model.
+Those initial browser assertions identify model names, not the actual worker adapter.
 
 | Case | Provider input | Provider output | Displayed occupancy | Execution |
 | --- | ---: | ---: | --- | --- |
 | Compatible fixture | 1 | 5 | 6 / 126,720 | `b25c4e847af8ecc63581fd91cc3e060d` |
-| Switch to native Haiku | 113 | 198 | 311 / 126,720 | `ec64ecac45da7969514100dd8d16dbf3` |
-| Regenerate native response | 113 | 119 | 232 / 126,720 | `92746162d626c50e1434e8b48793cd40` |
+| Switch to Haiku | 113 | 198 | 311 / 126,720 | `ec64ecac45da7969514100dd8d16dbf3` |
+| Regenerate Haiku response | 113 | 119 | 232 / 126,720 | `92746162d626c50e1434e8b48793cd40` |
 | Fresh browser reload | 113 | 119 | 232 / 126,720 | Same regenerated execution |
 
 The combined window is 128,000 tokens. The safety margin is 1,280 tokens.
@@ -93,7 +94,7 @@ Six live status events contain one estimate and one provider reading for each of
 The persisted read model and rendered panel agree with those events.
 Regeneration has a new execution identity. Reload retains that identity and its counts.
 Browser page errors remain empty. The final popup screenshot is inspected after its opening animation.
-The native model refuses the synthetic marker request; this check proves accounting, not successful fulfillment of that request.
+The Haiku model refuses the synthetic marker request; this check proves accounting, not successful fulfillment of that request.
 
 Evidence uses `/private/tmp/elitea-provider-meter-live-*` and `elitea-provider-meter-verified-reload.png`.
 The initial missing-root observation remains under `elitea-provider-meter-root-missing-*`.
@@ -141,9 +142,9 @@ This check closes uninterrupted pipeline continuation accounting only.
 Cached-input reuse, accounting across process recovery, and large-window accounting remain open.
 
 
-## Native repeated-prefix check and cache boundary
+## Haiku repeated-prefix check and cache boundary
 
-Fresh headed Playwright chat 721 uses native Haiku and a synthetic 300-record instruction prefix.
+Fresh headed Playwright chat 721 uses the configured Haiku model and a synthetic 300-record instruction prefix.
 Both requests complete. Browser reload preserves the second measurement and answer.
 No browser responses are mocked. Browser page errors remain empty.
 
@@ -177,9 +178,41 @@ Operator diagnostics identify `agent_input.resource_exhausted`: a JSON string ex
 Main `application/agentexecution/projectcontext.go` uses a 60 KiB injection allowance against that worker contract.
 Thus, changing only the JSON parser would still reject these instructions during assembly.
 The history allowance is separate. A large model context window does not currently raise the saved-instruction allowance.
-No instruction, parser, or context limits change during this verification.
+No instruction, parser, or context limits change during that initial verification.
+The subsequent [instruction correction](instruction-content-capacity-20260928.md) closes the admission failure.
 
 The browser only shows a generic platform processing-limit explanation.
 Gate 4 must resolve instruction-size admission and actionable field-specific diagnostics before closing this finding.
 The smaller chat 721 fixture validates provider accounting within the current contract; it does not close this admission finding.
 Preserve chat 720 and its `elitea-native-cache-meter-*` evidence as the failed case.
+
+
+## Confirmed native adapter acceptance
+
+A routing audit finds public Haiku configuration 3 has `openai_compatible=true`.
+The earlier chat 717/721 model labels alone do not prove native adapter use.
+Keep their provider accounting evidence, but exclude them from native transport acceptance.
+
+Fresh headed Playwright verifies chat 720 through the native adapter on 2026-09-28.
+The bounded test temporarily changes only configuration 3's adapter flag and restores it in `finally`.
+Worker request logs explicitly identify `transport::anthropic_facade` and `model_adapter=anthropic` for both calls.
+No credentials, model limits, source instructions, or provider endpoints change.
+
+| Execution | Provider input | Provider output |
+| --- | ---: | ---: |
+| `96f72f115db92690d30753ba294049e7` | 19,275 | 54 |
+| `cd37604350923884cce9f6c715863ef1` | 19,275 | 62 |
+
+Reload preserves the final answer and 19,337 / 126,720 reading, or 15% occupancy.
+The screenshot is inspected. Browser page errors remain empty and browser responses are not mocked.
+The final persisted ADK event agrees with the browser and reports zero cache reads and writes.
+Regeneration replaces the first session evidence; the first measurement remains in browser evidence and worker logs.
+Evidence uses `elitea-native-verified-720-*` in the local temporary directory.
+
+The gateway regression now also checks system cache-control preservation before provider routing, for unary and streamed requests.
+The real Bifrost conversion preserves `cache_control.type=ephemeral` at that boundary.
+A live cache hit remains unproven. Do not infer one from repeated input or a successful request.
+
+The earlier private fixture configuration 21 does not pass admission and is removed through the API.
+Chat 722 selects the synthetic fallback; its two runs are excluded from native and real-provider acceptance.
+Its evidence remains under `elitea-native-adapter-cache-*` for that failed setup.

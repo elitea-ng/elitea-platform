@@ -39,13 +39,21 @@ func TestMessagesCacheUsageDoesNotDoubleCountInput(t *testing.T) {
 					}},
 				)
 			}
-			body := `{"model":"claude-haiku","max_tokens":128,"messages":[{"role":"user","content":"hello"}]`
+			body := `{"model":"claude-haiku","max_tokens":128,"system":[{"type":"text","text":"stable instructions","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"hello"}]`
 			if streaming {
 				body += `,"stream":true`
 			}
 			rec := postJSON(t, NewHandler(fake, nil, nil).route(), "/llm/v1/messages", body+"}")
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d; body = %s", rec.Code, rec.Body.String())
+			}
+			if fake.lastResponsesReq == nil || len(fake.lastResponsesReq.Input) < 2 {
+				t.Fatal("system instructions were not forwarded")
+			}
+			content := fake.lastResponsesReq.Input[0].Content
+			if content == nil || len(content.ContentBlocks) != 1 || content.ContentBlocks[0].CacheControl == nil ||
+				content.ContentBlocks[0].CacheControl.Type != schemas.CacheControlTypeEphemeral {
+				t.Fatal("system cache control was lost before provider routing")
 			}
 			payload := rec.Body.String()
 			if streaming {
