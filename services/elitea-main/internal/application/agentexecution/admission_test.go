@@ -200,6 +200,23 @@ func TestAdmissionServiceAcceptsOnlyOneBoundCurrentContinuation(t *testing.T) {
 		t.Fatalf("admission=%+v", store.admission)
 	}
 
+	request.CurrentContinueTurn.PipelineHITLReview = &CurrentPipelineHITLReview{
+		InterruptID: "interrupt-root-1", NodeName: "review", Message: "Review the joke.",
+	}
+	service = testAdmissionService(t, store)
+	if _, err := service.Submit(context.Background(), request); !errors.Is(err, ErrInvalidAgentAdmission) {
+		t.Fatalf("direct review bound to paused response: %v", err)
+	}
+	request.ClientMessageID = request.CurrentContinueTurn.ProjectionResponseID()
+	service = testAdmissionService(t, store)
+	if _, err := service.Submit(context.Background(), request); err != nil {
+		t.Fatalf("direct review bound to new response: %v", err)
+	}
+	if store.admission.Binding.ClientMessageID != request.ClientMessageID ||
+		store.admission.CurrentContinueTurn.ResponseMessageID != responseID {
+		t.Fatal("direct review lost its projection or paused-response identity")
+	}
+
 	request.CurrentRegenerateTurn = &CurrentRegenerateTurn{}
 	invalidService := testAdmissionService(t, successfulRecordingStore())
 	if _, err := invalidService.Submit(context.Background(), request); !errors.Is(err, ErrInvalidAgentAdmission) {

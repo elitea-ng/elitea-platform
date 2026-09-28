@@ -69,6 +69,29 @@ The existing `TestApplicationsRepoPostgres_List` suite passes against isolated P
 That suite covers filters, folder isolation, pagination, tags, author attribution, and fork metadata.
 The corrected Main image and HITL browser decisions still require verification.
 
+### First live review and admission correction
+
+Main `1e930fbb5` deploys as `sha256:0d5e257f32770b2c6bcd063c4fc92dcb71a77cb41a4dd2d9a3ce387f21a23905`.
+The fresh browser now loads the pipeline list and opens the existing `Hitl_node` application.
+Its saved node IDs contain spaces, which the current graph validator rejects.
+Application 130, version 137, copies that graph with normalized node IDs for isolated history verification.
+The original application remains unchanged.
+Legacy graph-ID compatibility remains a gate 5 requirement.
+
+The editor Test chat reaches a real HITL pause in conversation 745 through the deployed worker and synthetic provider.
+Execution `0aa41023436a76455ffc2acffa66e77b` supplies the static review and decision controls.
+This proves test-chat wiring, not real-model quality.
+The composer creates its test conversation on first focus; the browser waits for provisioning before submitting.
+
+Approval returns HTTP 400 before decision consumption.
+The admission service still compares the execution target with the paused response ID.
+It must use `ProjectionResponseID`, as the repository admission check already does.
+The corrected admission test exercises the real admission service, not only the continuation service's recording stub.
+It rejects the old projection for direct review and accepts the new projection while retaining the paused identity.
+Focused admission and HITL tests pass.
+Deployment and another approval check remain pending.
+The UI's socket fallback after this refusal produces misleading connection guidance and also needs correction.
+
 ## Remaining implementation
 
 Consume the pending interrupt and create all history segments in the same admission transaction.
