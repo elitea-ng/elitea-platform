@@ -430,3 +430,46 @@ The user-facing Rust dependency declaration remains open; no custom inline manif
 Python retains the verified Pyodide and inline `micropip` behavior described above.
 All languages require the same outer resource, authority, result-validation, and recovery contracts.
 No production adapter or Code capability is enabled by these probes.
+
+## Rust user-state boundary
+
+`src/agents/graph/code_state.rs` implements the first language-neutral data boundary.
+It is not connected to sandbox execution or pipeline admission yet.
+
+| Current SDK behavior | Rust implementation |
+| --- | --- |
+| `_prepare_pyodide_input` selects input variables and removes messages. | `CodeStateBoundary::input_json` serializes selected declared user values. |
+| Empty input or only `messages` selects remaining state. | The same selection exports declared user state and the user input channel. |
+| Runtime state can accompany legacy all-variable selection. | A declaration allowlist excludes undeclared runtime fields, including future metadata. |
+| `_handle_pyodide_output` merges structured results. | `validate_updates` accepts only declared user destinations with matching types. |
+| Declared outputs constrain ordinary result mapping. | Non-structured patches must target the configured output selection. |
+
+The boundary reuses the compiler's reserved-field and normalized-type checks.
+It borrows input values during serialization instead of copying the checkpoint.
+The input writer stops at 512 KiB, including JSON escaping.
+Result parsing checks the byte bound first and retains the JSON parser's recursion limit.
+Validation returns one complete patch. An invalid field returns an error without a partial patch or checkpoint mutation.
+Errors contain no source values, identifiers, or raw parser diagnostics.
+
+Assistant messages and built-in result channels require separate trusted projection.
+The legacy result envelope, source mapping, platform client, and sandbox adapter remain unfinished.
+The graph compiler continues to reject Code execution until those contracts are connected and verified.
+
+Verification: `cargo test --locked --lib agents::graph:: -j 2` passes all 92 graph tests, including 11 Code-state tests.
+These are component tests. They do not prove sandbox execution, deployed UI behavior, or worker recovery.
+
+## Optional systemd resource supervisor
+
+The user supplied a `systemd-run --user --scope` wrapper around Bubblewrap.
+This is a valid composition to assess on hosts with an available systemd user manager and delegated controllers.
+The wrapper creates a transient scope. Systemd supplies cgroup resource controls; Bubblewrap supplies its configured isolation.
+`CPUQuota=50%` means half of one CPU, not half of all host CPUs.
+`MemoryMax` sets the memory boundary. Swap and task-count limits require their own settings.
+The [upstream resource-control documentation](https://github.com/systemd/systemd/blob/main/man/systemd.resource-control.xml) describes these controls and delegation requirements.
+The [systemd-run documentation](https://github.com/systemd/systemd/blob/main/man/systemd-run.xml) describes transient scopes and user-manager selection.
+
+This option does not require adding systemd to the Rust worker image.
+Do not assume that a non-root application container provides a user manager or delegated controllers.
+Select this supervisor only when the deployment supports it and the enforcement probes pass.
+The ADK adapter still needs execution identity, cancellation, cleanup, diagnostics, and durable terminal-result handling.
+No systemd service, host configuration, or sandbox dependency is installed by this assessment.

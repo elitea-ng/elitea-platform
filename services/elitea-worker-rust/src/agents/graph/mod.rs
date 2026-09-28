@@ -8,6 +8,9 @@ mod agent;
 mod application;
 #[cfg(test)]
 mod application_tests;
+mod code_state;
+#[cfg(test)]
+mod code_state_tests;
 pub(crate) mod compiler;
 #[cfg(test)]
 mod compiler_tests;

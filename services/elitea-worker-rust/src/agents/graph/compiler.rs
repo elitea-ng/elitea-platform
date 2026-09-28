@@ -1641,7 +1641,7 @@ fn default_state_value(kind: &str) -> serde_json::Value {
     }
 }
 
-fn state_value_matches(kind: &str, value: &serde_json::Value) -> bool {
+pub(super) fn state_value_matches(kind: &str, value: &serde_json::Value) -> bool {
     match kind {
         "str" => value.is_string(),
         "int" => value.as_i64().is_some() || value.as_u64().is_some(),
@@ -1673,7 +1673,7 @@ fn builtin_state_key(key: &str) -> bool {
     )
 }
 
-fn reserved_user_state_key(key: &str) -> bool {
+pub(super) fn reserved_user_state_key(key: &str) -> bool {
     key == HITL_RESUME_STATE_KEY
         || key == DIRECT_TOOL_RESUME_STATE_KEY
         || key == LLM_TOOL_RESUME_STATE_KEY
