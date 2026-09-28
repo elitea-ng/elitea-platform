@@ -614,3 +614,15 @@ Rust `OpenAiAccumulator::finish` already rejects absent terminal model data with
 Gateway `internal/llmproxy/handler.go::streamOpenAI` waits for its router channel before writing `[DONE]`; the provider-to-router termination boundary needs further investigation.
 Do not infer the precise cause from this observation alone. No production fix is made in this test slice.
 Evidence prefix: `elitea-incomplete` in the local acceptance directory. The readback result is not a live failure-event assertion.
+
+### Budget and request-rejection fixture, 2026-09-28
+
+The synthetic provider adds latest-message markers for HTTP 402 and HTTP 400.
+They use a fixed synthetic body canary and contain no request or credential data.
+The existing HTTP fixture test verifies both statuses, categories, and healthy-request isolation.
+All six provider fixture tests pass.
+
+Rust ownership remains `openai_compatible_facade.rs::validate_response_head` and `protocol/output.rs::model_failure`.
+The existing mappings produce `MODEL_BUDGET_EXHAUSTED` and `MODEL_REQUEST_REJECTED` before consuming provider error bodies.
+No production worker or Main behavior changes in this fixture extension.
+Fresh browser acceptance through the deployed transport remains pending.

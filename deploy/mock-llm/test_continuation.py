@@ -81,7 +81,9 @@ class ContinuationFixtureTest(unittest.TestCase):
         self.assertEqual(events[-1]["choices"][0]["finish_reason"], "tool_calls")
 
     def test_provider_errors_are_http_failures_and_do_not_leak_into_next_request(self):
-        for status, category in ((401, "authentication_error"),
+        for status, category in ((400, "invalid_request_error"),
+                                 (401, "authentication_error"),
+                                 (402, "insufficient_quota"),
                                  (429, "rate_limit_error"), (503, "server_error")):
             with self.subTest(status=status):
                 with self.assertRaises(urllib.error.HTTPError) as caught:

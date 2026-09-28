@@ -63,7 +63,8 @@ PER-REQUEST MODES, SELECTED BY THE PROMPT (see `_script_for`):
                       Continuation fragments preserve exact whitespace.
                       Add [[mock:repair_slow]] to delay repair chunks for crash tests.
   [[mock:large_tool_input]] emit a fixed 48 KB lookup_record argument for delivery-limit tests.
-  [[mock:http_401]], [[mock:http_429]], [[mock:http_503]] return synthetic provider errors.
+  [[mock:http_400]], [[mock:http_401]], [[mock:http_402]], [[mock:http_429]],
+#                      [[mock:http_503]] return synthetic provider errors.
   [[mock:incomplete_stream]] end after partial text without a terminal model event.
   [[mock:cached_usage]] report fixed cache and reasoning usage for accounting tests.
   [[mock:slow]]       stream a long, scripted reply one word at a time with a
@@ -1251,7 +1252,9 @@ class Handler(BaseHTTPRequestHandler):
 
         # Opt in only from the latest user message; never echo request data.
         prompt = _last_user_text(request.get("messages") or []) or ""
-        for status, error_type in ((401, "authentication_error"),
+        for status, error_type in ((400, "invalid_request_error"),
+                                   (401, "authentication_error"),
+                                   (402, "insufficient_quota"),
                                    (429, "rate_limit_error"),
                                    (503, "server_error")):
             if f"[[mock:http_{status}]]" in prompt:
