@@ -21,6 +21,14 @@ func normalizeParticipantSettings(body map[string]any) error {
 	return nil
 }
 func participantPositiveID(raw any) (int64, error) {
+	value, err := participantInteger(raw)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("invalid ID")
+	}
+	return value, nil
+}
+
+func participantInteger(raw any) (int64, error) {
 	text := ""
 	switch value := raw.(type) {
 	case string:
@@ -40,8 +48,8 @@ func participantPositiveID(raw any) (int64, error) {
 		return 0, fmt.Errorf("invalid ID")
 	}
 	value, err := strconv.ParseInt(text, 10, 32)
-	if err != nil || value <= 0 {
-		return 0, fmt.Errorf("invalid ID")
+	if err != nil {
+		return 0, fmt.Errorf("invalid integer")
 	}
 	return value, nil
 }
@@ -74,7 +82,15 @@ func normalizeParticipantLLM(raw any, read bool) (map[string]any, error) {
 					return nil, fmt.Errorf("model_name must be a string")
 				}
 			}
-		case "max_tokens", "model_project_id":
+		case "max_tokens":
+			if value != nil {
+				tokens, err := participantInteger(value)
+				if err != nil || (tokens <= 0 && tokens != -1) {
+					return nil, fmt.Errorf("max_tokens must be a positive integer or -1 for Auto")
+				}
+				value = tokens
+			}
+		case "model_project_id":
 			if value != nil {
 				id, err := participantPositiveID(value)
 				if err != nil {

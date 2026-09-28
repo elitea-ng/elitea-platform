@@ -60,7 +60,7 @@ Provider usage arrives after dispatch and cannot alone admit newly added content
 The status contract adds optional `auto_output`; absent means the existing fixed reservation.
 Main validates this field and preserves it in the existing context read model.
 The UI distinguishes minimum Auto allowance from a fixed output reservation.
-Deployment and browser acceptance remain open.
+The coordinated rehearsal deployment completes. Browser acceptance remains open.
 The separate Full-window test in chat 706 uses an explicit 8,192-token cap and does not prove this Auto policy.
 
 ## Native and UI verification
@@ -82,3 +82,16 @@ Main must accept the optional status field before the new worker emits it.
 Older Rust workers do not understand the new frozen Auto marker.
 Retain the numeric fallback for SDK workers, which read the existing numeric setting.
 This change adds no database tables or migrations.
+
+## Chat settings admission
+
+The UI sends `max_tokens: -1` for Auto through `agentLlmSettings.ts::toLlmSettingsBody`.
+The first deployed Auto fixture exposes HTTP 400 before execution starts.
+Main incorrectly applies positive identity validation to this output control.
+`conversations/participant_settings.go::normalizeParticipantLLM` now admits `-1` only for `max_tokens`.
+Project and version identities remain positive integers.
+Explicit output caps retain the existing signed 32-bit integer bound.
+Zero, other negatives, fractions, booleans, and invalid strings remain invalid.
+Both read and write normalization preserve the Auto sentinel for downstream Rust assembly.
+The focused conversation package tests pass.
+This admission correction still requires deployment and browser verification.
