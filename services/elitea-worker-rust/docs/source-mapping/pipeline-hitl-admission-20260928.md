@@ -142,3 +142,19 @@ The editor correctly displays the saved Haiku model.
 The test composer still displays the project default, although the saved pipeline model executes.
 This model-display mismatch remains open. It does not invalidate the verified provider output.
 Repeated edit, nested-scope isolation, concurrent decisions, and restart acceptance remain open.
+
+## Main-chat acceptance and test-surface scope
+
+Main chat is the primary acceptance surface for persisted history and recovery.
+The pipeline editor test chat is ephemeral. It must retain run history separately, without requiring a permanent user conversation.
+Execution checkpoints and pending decisions still need durable state for recovery during the test.
+
+A fresh headed browser starts another Haiku turn in main chat 748 with marker `MAIN_HITL_20260928`.
+The run generates a database joke, pauses for review, and accepts approval.
+The final joke appears immediately. Reload preserves the review, user decision, and final joke.
+This extends the earlier editor checks to the main-chat surface.
+
+`usePipelineTestConversation.ts` currently creates a private conversation through the ordinary conversation API.
+That implementation is not proof of the intended ephemeral lifecycle.
+Gate 5 must separate test transcript retention from durable run history and recovery state.
+The model-display mismatch also remains open.

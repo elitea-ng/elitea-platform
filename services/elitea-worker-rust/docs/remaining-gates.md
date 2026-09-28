@@ -45,7 +45,7 @@ Current-platform code defines business behavior, not a requirement to copy its i
 | 3c | Toolkit discovery and Test | Implement shared `toolkit.available_tools.v1` and `toolkit.call_tool.v1` in Rust. Preserve exact selection, authority, result shape, cancellation, and recovery. |
 | 3d | External MCP | Complete dynamic instance schemas and saved-agent/pipeline autonomous terminal, failure, pause refusal, and transport replay proofs. |
 | 4 | Current-platform runtime drift | Complete context management, pipeline summaries, dedicated summary models, SDK/UI continuation parity, provider errors and diagnostics, and same-name toolkit binding. Preserve authoritative skills and project context across compaction. |
-| 5 | Remaining graph capabilities | Complete deeper pipeline composition, child variables, static pauses, and isolated Code nodes. |
+| 5 | Remaining graph capabilities | Complete deeper pipeline composition, child variables, static pauses, and isolated Code nodes. Verify persistent main-chat execution and ephemeral editor testing with separate durable run history. |
 | 5a | New parallel and map nodes | Implement the separate fixed-branch and data-driven designs with durable child state, bounded concurrency, reducers, and recovery. |
 | 5b | Pipeline node recovery policies | Add explicit retry conditions, attempt limits, backoff, failure routes, and operator recovery controls. Persist attempts and prevent unsafe repetition of external effects. |
 | 5c | Data shaping nodes | Define SplitOut and Aggregate contracts, item identity, ordering, empty inputs, bounded output, and YAML/editor parity. |
