@@ -1,6 +1,6 @@
 # Input admission diagnostics
 
-Status: implementation in verification. Deployment and browser acceptance remain open.
+Status: focused checks and deployed browser acceptance pass. The message-capacity mismatch remains a separate correction.
 
 ## Source mapping
 
@@ -48,3 +48,30 @@ This change does not close other gate 4 accounting or field-level diagnostic wor
 Focused verification passes 19 Rust preparation tests and three canonical failure-policy tests.
 Main output transport and projection suites pass, including unchanged signed receipt bytes.
 Main vet passes for both affected packages.
+
+
+## Deployed browser acceptance
+
+Main deploys before Rust from revision `92f089835`.
+Main image: `sha256:f025f46d30c88779d9462a90616b0523d59d890e1f50fd2563af7f4f7cc38bc4`.
+Worker image: `sha256:9a974ad42aa7ec427e6fe06fff68d8779b0716f45e6c0c51751bc8479767f441`.
+Deployment retains six Main mounts, five worker mounts, credentials, databases, networks, and resource limits.
+
+Fresh headed Playwright submits a synthetic 70 KiB message in chat 723.
+Main admits the message, but Rust's generic 64 KiB JSON-string bound rejects it before model invocation.
+Execution `445e051391a027326557130024ebf3fd` emits `EXECUTION_INPUT_LIMIT` with the registered message.
+The browser shows the specific guidance, error code, message reference, and operator-only diagnostics guidance.
+Reload preserves the failure. Browser page errors remain empty and browser responses are not mocked.
+The screenshot is inspected. Worker logs use ERROR and include the safe validation reason and execution identity.
+No model-request event occurs during the isolated check.
+Evidence uses `elitea-input-admission-ui-*` in the local temporary directory.
+Strict Rust library and test Clippy checks also pass.
+
+### Separate admitted-message mismatch
+
+Main `application/agentexecution/start.go` allows user messages up to 256 KiB.
+Rust `agents/protocol.rs` parses user input with a generic 64 KiB decoded-string bound.
+Rust `agents/assembly.rs` already allows text up to 512 KiB.
+The test proves the new diagnostic path, not an acceptable long-message contract.
+Align Rust parsing with the admitted data-plane content before closing this remaining limit issue.
+Preserve metadata bounds and model-context admission; do not increase arbitrary control strings.
