@@ -394,8 +394,11 @@ The user requests higher limits for rehearsal Public-project configuration 26,
 The settings UI now stores 1,000,000 combined context tokens and 128,000 maximum output tokens.
 The previous limits were 272,000 and 32,000 tokens.
 Reopening the saved form verifies both values; the separate maximum-input field is blank.
-This supersedes the earlier catalogue-availability blocker, but is configuration
-evidence only: near-million-token provider acceptance and compaction remain open.
+This supersedes the earlier catalogue-availability blocker.
+The deployed Full-window test now passes with 852,726 provider-reported summarization input tokens.
+Chat 706 preserves the revised decision, completed work, and pending action after compaction and browser reload.
+See [reasoning stream acceptance](source-mapping/reasoning-stream-aliases-20260928.md) for evidence and test limits.
+Representative concurrency and memory acceptance remain open.
 
 Rust source: `src/agents/context_budget.rs::RequestContextBudget::admit` reserves
 the selected per-call output cap, falling back to the catalogue maximum when

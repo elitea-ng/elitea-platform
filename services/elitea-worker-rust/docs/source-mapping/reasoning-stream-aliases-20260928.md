@@ -35,10 +35,35 @@ All 29 compatible-facade tests pass after the change.
 Strict library and test Clippy checks pass with warnings denied.
 Coverage includes identical empty values, identical nonempty values, and conflicting values.
 The test verifies that reasoning is not duplicated and final text remains `OK`.
-Deployed compaction acceptance remains pending.
+Deployed compaction acceptance passes on 2026-09-28, as detailed below.
 
 Chat 704 is an invalid synthetic fixture, not product failure evidence.
 Its imported responses lack reply links to user messages.
 Chat 705 verifies a short Luna request with the same model settings.
 Chat 706 corrects those reply links and reaches the provider.
 The provider probe proves large-input acceptance, not completed structured compaction.
+
+## Deployed Full-window acceptance
+
+Worker image `elitea-worker-rust:reasoning-alias-20260928` contains commit `51f665b52`.
+Its image digest is `sha256:d401123037902f41ec5492e0a8a93a8c0656c43e2d32e08b2bed2818ed2fe01d`.
+Chat 706 regenerates successfully with execution `124c35faeced1c700a21fceafbfd66fa`.
+The authoritative execution state is `SUCCEEDED`.
+
+Fresh headed Playwright observes compaction from 956,801 to 48,595 estimated input tokens.
+The provider reports 852,726 input tokens and 384 output tokens for summarization.
+The resumed answer uses 41,984 input tokens and 42 output tokens.
+Both gateway requests return HTTP 200.
+This tests a one-million-token configured window, not one million actual input tokens.
+The explicit per-call output cap is 8,192 tokens.
+
+A second fresh browser verifies the saved answer after page load.
+It preserves delivery code `CEDAR-731`, the revised color `Teal`, and completed archive verification.
+It identifies the handoff note as pending work.
+The rendered context indicator shows 5%.
+The browser reports no page errors, and no requests are mocked.
+Local evidence is `elitea-luna-million-reload-verified.png` and `elitea-luna-million-reload-result.json` under the temporary evidence directory.
+
+The initial observer does not complete its terminal-event predicate despite successful execution.
+This result uses authoritative execution state and independent browser verification, not an observer pass.
+Synthetic history tests fact retention; it does not establish representative production load or concurrency capacity.
