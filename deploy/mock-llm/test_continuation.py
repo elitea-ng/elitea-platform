@@ -34,6 +34,36 @@ class ContinuationFixtureTest(unittest.TestCase):
         text = "".join(event["choices"][0]["delta"].get("content", "") for event in events)
         return text, events[-1]["choices"][0]["finish_reason"]
 
+    def test_cached_usage_is_complete_and_request_scoped(self):
+        for streaming in [False, True]:
+            for prompt in ["[[mock:cached_usage]]", "healthy"]:
+                with self.subTest(streaming=streaming, prompt=prompt):
+                    request = urllib.request.Request(
+                        f"http://127.0.0.1:{self.server.server_port}/v1/chat/completions",
+                        data=json.dumps({"model": "fixture", "stream": streaming,
+                                         "messages": [{"role": "user", "content": prompt}]}).encode(),
+                        headers={"Content-Type": "application/json"},
+                    )
+                    with urllib.request.urlopen(request, timeout=5) as response:
+                        raw = response.read().decode()
+                    if streaming:
+                        events = [json.loads(line[6:]) for line in raw.splitlines()
+                                  if line.startswith("data: ") and line != "data: [DONE]"]
+                        usages = [event["usage"] for event in events if event.get("usage")]
+                        self.assertEqual(len(usages), 1)
+                        usage = usages[0]
+                    else:
+                        usage = json.loads(raw)["usage"]
+                    if prompt == "healthy":
+                        self.assertEqual(usage["prompt_tokens"], 1)
+                        self.assertNotIn("prompt_tokens_details", usage)
+                    else:
+                        self.assertEqual(usage, {
+                            "prompt_tokens": 10000, "completion_tokens": 23, "total_tokens": 10023,
+                            "prompt_tokens_details": {"cached_tokens": 8000},
+                            "completion_tokens_details": {"reasoning_tokens": 7},
+                        })
+
     def test_large_tool_input_is_generated_from_short_prompt(self):
         request = urllib.request.Request(
             f"http://127.0.0.1:{self.server.server_port}/v1/chat/completions",

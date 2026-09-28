@@ -257,3 +257,14 @@ Evidence uses `elitea-meter-full-708-*` in the local temporary directory.
 This closes the Full-window latest-call accounting check after durable compaction.
 The earlier [Auto acceptance](auto-output-budget-20260928.md#deployed-auto-acceptance) supplies the separate near-window compaction evidence.
 This follow-up does not repeat that expensive summarization or establish a live cache hit. The provider reports zero cache reads.
+
+## Nonzero cached-usage provider fixture
+
+`deploy/mock-llm/server.py` adds the explicit `[[mock:cached_usage]]` test mode.
+It returns 10,000 input tokens, including 8,000 cached tokens, and 23 output tokens, including seven reasoning tokens.
+Both detail counters are subsets. Correct combined occupancy is 10,023, not 18,030.
+The mode affects only the synthetic provider and leaves normal fixture usage unchanged.
+Six HTTP fixture tests pass, including unary/streamed counters and request isolation.
+The gateway and worker accounting mappings above remain the production source references. No production runtime behavior changes here.
+Deployed browser acceptance remains pending for these nonzero counters.
+This fixture does not establish a real-provider cache hit or its performance benefit.

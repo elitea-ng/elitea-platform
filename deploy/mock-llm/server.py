@@ -65,6 +65,7 @@ PER-REQUEST MODES, SELECTED BY THE PROMPT (see `_script_for`):
   [[mock:large_tool_input]] emit a fixed 48 KB lookup_record argument for delivery-limit tests.
   [[mock:http_401]], [[mock:http_429]], [[mock:http_503]] return synthetic provider errors.
   [[mock:incomplete_stream]] end after partial text without a terminal model event.
+  [[mock:cached_usage]] report fixed cache and reasoning usage for accounting tests.
   [[mock:slow]]       stream a long, scripted reply one word at a time with a
                       per-chunk delay, so a test can act while the turn is
                       still open (press Stop, navigate away, drop the stream).
@@ -1075,6 +1076,14 @@ def _encode_embedding(values: list[float], encoding_format: str) -> object:
 
 def _usage_for(reply: str) -> dict:
     """Deterministic, non-zero token counts. The gateway bills against these."""
+    if "[[mock:cached_usage]]" in reply:
+        return {
+            "prompt_tokens": 10000,
+            "completion_tokens": 23,
+            "total_tokens": 10023,
+            "prompt_tokens_details": {"cached_tokens": 8000},
+            "completion_tokens_details": {"reasoning_tokens": 7},
+        }
     completion = max(1, len(reply.split()))
     return {
         "prompt_tokens": 1,
