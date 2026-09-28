@@ -1017,3 +1017,7 @@ mod tests {
         assert!(CONTAINER_WORKSPACE_ROOT.starts_with('/'));
     }
 }
+
+#[cfg(test)]
+#[path = "docker_live_tests.rs"]
+mod live_tests;

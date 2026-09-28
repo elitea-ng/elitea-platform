@@ -614,3 +614,27 @@ and invalid UTF-8 expansion coverage. These are component tests, not Docker
 termination/recovery proof. Pending: cancellation-safe ownership, durable job
 registry/receipts, lost-acknowledgement reconciliation, Kubernetes backend,
 real-container tests, and UI execution acceptance. Code nodes remain gated.
+
+## ADK backend real-container verification
+
+Two opt-in tests in `vendor/adk-sandbox/src/workspace/docker_live_tests.rs` passed
+against Docker Desktop's Linux engine using cached immutable Python image
+`sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c`.
+No image pull was performed.
+
+The tests exercise the Rust ADK backend itself, not equivalent Docker CLI flags:
+UID 10001, 64 MiB memory with no extra swap, 0.25 CPU, 128 PIDs, network disabled,
+read-only root configuration, and no Docker socket. In-container cgroup reads
+confirm the memory and CPU settings. Quoted file paths round-trip literally.
+Timeout and combined-output overflow stop the actual container. A 256 MiB
+allocation fails with exit 137 under the memory bound. Two concurrent containers
+retain different values for the same state filename. All test-owned containers
+are removed through the backend after each case, including assertion failures
+inside the verification body.
+
+Run with a cached immutable image in `ELITEA_SANDBOX_TEST_IMAGE`:
+`cargo test --manifest-path services/elitea-worker-rust/vendor/adk-sandbox/Cargo.toml --no-default-features --features workspace-docker --lib live_tests -- --ignored --nocapture`.
+
+Both tests passed in 13.32 seconds including several isolated container lifecycles.
+This is functional local-container evidence, not a throughput benchmark, Kubernetes
+verification, cancellation/restart recovery, or deployed UI Code-node acceptance.
