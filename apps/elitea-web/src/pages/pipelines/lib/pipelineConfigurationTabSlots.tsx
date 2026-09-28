@@ -78,7 +78,7 @@ export function buildPipelineConfigurationTabSlots(
     renderChat: ({ settings, disableChat, ref }) => (
       <PipelineTestChat
         settings={settings}
-        disableChat={disableChat}
+        disableChat={disableChat || panel.isDirty}
         slotRef={ref}
         identity={chat.identity}
         user={chat.user}
