@@ -1,6 +1,7 @@
 //! Contract tests for the OpenAI-compatible facade and shared Elitea gateway transport.
 
 use std::convert::Infallible;
+use std::fmt::Write as _;
 use std::time::Duration;
 
 use adk_rust::{
@@ -23,6 +24,110 @@ use super::runtime_context::ClaimScopedEliteaContext;
 use crate::agents::session::BoundOrdinaryAgentModel as _;
 
 const TOKEN: &str = "ephemeral-model-fixture-token";
+
+#[tokio::test(flavor = "current_thread")]
+async fn invalid_or_absent_usage_does_not_invent_counts_or_fail_the_answer() {
+    for usage in [
+        serde_json::Value::Null,
+        serde_json::json!({"prompt_tokens": -1, "completion_tokens": 2}),
+        serde_json::json!({"prompt_tokens": 1.5, "completion_tokens": 2}),
+        serde_json::json!({"prompt_tokens": 2_147_483_647, "completion_tokens": 2}),
+        serde_json::json!({"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 1}),
+        serde_json::json!({"prompt_tokens": 1}),
+    ] {
+        let finish = serde_json::json!({"choices":[{"delta":{"content":"answer"},"finish_reason":"stop"}], "usage":usage});
+        let raw = format!("data: {finish}\n\ndata: [DONE]\n\n");
+        let (client, _) = test_model_gateway_client(
+            vec![TestModelGatewayOutcome::Response(
+                test_model_gateway_response(stream_body(vec![Bytes::from(raw)])),
+            )],
+            test_model_gateway_config(),
+        )
+        .unwrap();
+        let bound = client
+            .bind_ordinary(
+                &ClaimScopedEliteaContext::fixture(17, TOKEN),
+                23,
+                test_model_facade_invocation(),
+            )
+            .unwrap();
+        let responses = drain(
+            bound
+                .generate_for_test(test_model_request("hello"))
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        let terminal = responses.last().unwrap();
+        assert!(terminal.turn_complete);
+        assert!(terminal.usage_metadata.is_none());
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn provider_usage_survives_terminal_stream_without_adding_cached_tokens() {
+    for trailing in [false, true] {
+        let usage = serde_json::json!({
+            "prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120,
+            "prompt_tokens_details": {"cached_tokens": 80},
+            "completion_tokens_details": {"reasoning_tokens": 10},
+            "private_vendor_detail": "must not be copied"
+        });
+        let mut finish =
+            serde_json::json!({"choices":[{"delta":{"content":"answer"},"finish_reason":"stop"}]});
+        if !trailing {
+            finish["usage"] = usage.clone();
+        }
+        let mut raw = format!("data: {finish}\n\n");
+        if trailing {
+            // Repeated cumulative snapshots must not be added together.
+            for _ in 0..2 {
+                write!(
+                    raw,
+                    "data: {}\n\n",
+                    serde_json::json!({"choices":[],"usage":usage})
+                )
+                .unwrap();
+            }
+        }
+        raw.push_str("data: [DONE]\n\n");
+        let (client, _) = test_model_gateway_client(
+            vec![TestModelGatewayOutcome::Response(
+                test_model_gateway_response(stream_body(vec![Bytes::from(raw)])),
+            )],
+            test_model_gateway_config(),
+        )
+        .unwrap();
+        let bound = client
+            .bind_ordinary(
+                &ClaimScopedEliteaContext::fixture(17, TOKEN),
+                23,
+                test_model_facade_invocation(),
+            )
+            .unwrap();
+        let responses = drain(
+            bound
+                .generate_for_test(test_model_request("hello"))
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        let terminal = responses.last().unwrap();
+        let usage = terminal
+            .usage_metadata
+            .as_ref()
+            .expect("provider usage retained");
+        assert_eq!(usage.prompt_token_count, 100);
+        assert_eq!(usage.candidates_token_count, 20);
+        assert_eq!(usage.total_token_count, 120);
+        assert_eq!(usage.cache_read_input_token_count, Some(80));
+        assert_eq!(usage.thinking_token_count, Some(10));
+        assert!(usage.provider_usage.is_none());
+        assert!(terminal.turn_complete);
+    }
+}
 
 #[tokio::test(flavor = "current_thread")]
 async fn auto_output_uses_remaining_window_and_explicit_caps_stay_fixed() {

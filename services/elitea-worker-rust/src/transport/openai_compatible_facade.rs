@@ -1310,8 +1310,8 @@ fn model_response_stream(
                         }
                         saw_done = true;
                     }
-                    ParsedSseEvent::Usage if !saw_done => {}
-                    ParsedSseEvent::Usage => Err(model_error(
+                    ParsedSseEvent::Usage(usage) if !saw_done => state.record_usage(usage),
+                    ParsedSseEvent::Usage(_) => Err(model_error(
                         ErrorCategory::Unavailable,
                         "model_gateway.event_after_completion",
                         "the model gateway emitted an event after completion",
@@ -1580,11 +1580,12 @@ impl SseParser {
 
 enum ParsedSseEvent {
     Delta(OpenAiDelta),
-    Usage,
+    Usage(Option<adk_rust::UsageMetadata>),
     Done,
 }
 
 struct OpenAiDelta {
+    usage: Option<adk_rust::UsageMetadata>,
     content: Option<String>,
     reasoning: Option<String>,
     tool_calls: Vec<OpenAiToolDelta>,
@@ -1624,9 +1625,12 @@ fn parse_sse_event(bytes: &[u8]) -> Result<ParsedSseEvent, AdkError> {
         .get("choices")
         .and_then(serde_json::Value::as_array)
         .ok_or_else(invalid_sse)?;
+    // Usage is optional telemetry. Invalid counters cannot invalidate an answer
+    // or become an authoritative context measurement.
+    let usage = parse_openai_usage(object.get("usage")).ok().flatten();
     if choices.is_empty() {
         return if object.get("usage").is_some_and(|usage| !usage.is_null()) {
-            Ok(ParsedSseEvent::Usage)
+            Ok(ParsedSseEvent::Usage(usage))
         } else {
             Err(invalid_sse())
         };
@@ -1652,14 +1656,55 @@ fn parse_sse_event(bytes: &[u8]) -> Result<ParsedSseEvent, AdkError> {
     let finish_reason = optional_string(choice.get("finish_reason"))?;
     if finish_reason.is_none() && content.is_none() && reasoning.is_none() && tool_calls.is_empty()
     {
-        return Ok(ParsedSseEvent::Usage);
+        return Ok(ParsedSseEvent::Usage(usage));
     }
     let finish_reason = finish_reason.map(parse_finish_reason).transpose()?;
     Ok(ParsedSseEvent::Delta(OpenAiDelta {
+        usage,
         content,
         reasoning,
         tool_calls,
         finish: finish_reason,
+    }))
+}
+
+// Compatible usage counters are cumulative per request. Cached and reasoning
+// tokens are breakdowns, not additional prompt or completion tokens.
+fn parse_openai_usage(
+    value: Option<&serde_json::Value>,
+) -> Result<Option<adk_rust::UsageMetadata>, AdkError> {
+    let Some(value) = value.filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    let count = |value: Option<&serde_json::Value>| {
+        value
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| i32::try_from(value).ok())
+            .ok_or_else(invalid_sse)
+    };
+    let prompt = count(value.get("prompt_tokens"))?;
+    let output = count(value.get("completion_tokens"))?;
+    let total = prompt.checked_add(output).ok_or_else(invalid_sse)?;
+    if let Some(reported) = value.get("total_tokens").filter(|value| !value.is_null())
+        && count(Some(reported))? != total
+    {
+        return Err(invalid_sse());
+    }
+    let detail = |parent: &str, key: &str| {
+        value
+            .get(parent)
+            .and_then(|value| value.get(key))
+            .filter(|value| !value.is_null())
+            .map(|value| count(Some(value)))
+            .transpose()
+    };
+    Ok(Some(adk_rust::UsageMetadata {
+        prompt_token_count: prompt,
+        candidates_token_count: output,
+        total_token_count: total,
+        cache_read_input_token_count: detail("prompt_tokens_details", "cached_tokens")?,
+        thinking_token_count: detail("completion_tokens_details", "reasoning_tokens")?,
+        ..adk_rust::UsageMetadata::default()
     }))
 }
 
@@ -1747,6 +1792,7 @@ struct OpenAiToolCallBuilder {
 }
 
 struct OpenAiStreamState {
+    usage: Option<adk_rust::UsageMetadata>,
     allowed_tools: std::collections::HashSet<String>,
     tool_calls: Vec<Option<OpenAiToolCallBuilder>>,
     accumulated_text: String,
@@ -1758,6 +1804,7 @@ struct OpenAiStreamState {
 impl OpenAiStreamState {
     fn new(allowed_tools: std::collections::HashSet<String>) -> Self {
         Self {
+            usage: None,
             allowed_tools,
             tool_calls: Vec::new(),
             accumulated_text: String::new(),
@@ -1775,6 +1822,7 @@ impl OpenAiStreamState {
         if self.terminal.is_some() {
             return Err(invalid_sse());
         }
+        self.record_usage(delta.usage);
         let mut parts = Vec::with_capacity(delta.tool_calls.len().saturating_add(2));
         if let Some(reasoning) = delta.reasoning.filter(|value| !value.is_empty()) {
             self.add_semantic_bytes(reasoning.len())?;
@@ -1829,6 +1877,12 @@ impl OpenAiStreamState {
             ..LlmResponse::default()
         });
         Ok(None)
+    }
+
+    fn record_usage(&mut self, usage: Option<adk_rust::UsageMetadata>) {
+        if let Some(usage) = usage {
+            self.usage = Some(usage);
+        }
     }
 
     fn add_semantic_bytes(&mut self, bytes: usize) -> Result<(), AdkError> {
@@ -1912,13 +1966,14 @@ impl OpenAiStreamState {
     }
 
     fn finish(mut self) -> Result<(LlmResponse, Option<String>), AdkError> {
-        let terminal = self.terminal.take().ok_or_else(|| {
+        let mut terminal = self.terminal.take().ok_or_else(|| {
             model_error(
                 ErrorCategory::Unavailable,
                 "model_gateway.incomplete_stream",
                 "the model gateway stream ended before completion",
             )
         })?;
+        terminal.usage_metadata = self.usage.take();
         Ok((terminal, self.completed_text.take()))
     }
 }
