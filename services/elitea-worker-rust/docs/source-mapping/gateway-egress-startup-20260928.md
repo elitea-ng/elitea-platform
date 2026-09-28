@@ -31,5 +31,15 @@ The startup regression fails before the correction: zero provider refreshes inst
 It passes after the correction, including unchanged-decision behavior.
 Focused gateway startup and account egress tests pass. The egress race tests pass.
 The normal image build times out while resolving the Dockerfile frontend, before compilation.
-The image build retry and deployed browser retest are pending at this checkpoint.
-Stream-truncation acceptance remains open until the actual gateway/worker/UI path passes.
+The retry uses Docker's bundled frontend and completes the existing Go-container build.
+The final image is `sha256:021117533df84f88a63466da757579068a838823112704e490fdd18878e8d3b3`, tagged `elitea-llm-gateway:egress-startup-20260928`.
+Deployment preserves the three mounts, environment, published port, network aliases, health check, and resource settings.
+A synthetic-model probe returns HTTP 200 after the startup correction, instead of the earlier HTTP 502 before dispatch.
+
+Fresh headed-browser chat 702 verifies the temporary cross-compiled image; chat 703 repeats the acceptance on the final container-built image.
+Both receive `MODEL_PROVIDER_FAILURE` promptly, retain `VALID_PARTIAL_OUTPUT`, and show the support reference after reload.
+No browser responses are mocked and no page errors occur. The chat 702 screenshot is inspected; chat 703 repeats the same browser assertions.
+The gateway ledger records a 7 ms stream for chat 702, compared with 120016 ms for chat 699. This is a local observation, not a performance benchmark.
+The stream has HTTP status 200 because headers precede the terminal error; the worker failure event is the terminal outcome, not that HTTP status.
+The correction closes this incomplete-stream termination case. It does not establish every provider protocol, malformed-stream variant, or Gate 4 requirement.
+Evidence prefix: `elitea-incomplete`; the latest result is chat 703. Earlier chat 699 evidence uses prefix `elitea-incomplete-699`.
