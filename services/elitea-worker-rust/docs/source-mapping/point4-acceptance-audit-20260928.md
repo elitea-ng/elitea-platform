@@ -37,6 +37,8 @@ The 2026-09-28 combined regression now exercises both source types through the a
 It preserves original bodies and revisions, removes old bulk history, and admits edited context only on a fresh turn.
 See [instruction-authority verification](instruction-authority.md#verification).
 The combined deployed workflow remains open.
+Its isolated-project setup exposes [restored-schema and provisioning prerequisites](instruction-live-project-prerequisite-20260928.md).
+The project insert is fixed and deployed. Vector-store provisioning still prevents fixture creation.
 
 Optional tool-output clearing remains deferred by user direction.
 HITL history, general graph composition, and new pipeline nodes remain gate 5 work.
