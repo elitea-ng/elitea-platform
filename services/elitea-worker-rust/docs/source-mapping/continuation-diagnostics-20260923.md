@@ -673,3 +673,30 @@ Eight HTTP fixture tests pass. No production routing changes are necessary.
 The error-only Responses fixture fails before Bifrost establishes a stream and therefore becomes an HTTP failure.
 The fixture now emits `response.created` before `response.failed` to exercise the intended mid-stream boundary.
 The eight HTTP tests still pass and verify that ordering.
+
+### Deployed streamed-error acceptance, 2026-09-28
+
+Worker `c47cae56e` runs as image `sha256:4ad1965bf036d86fc019009418b43a879a20f28a78babce420c97b60b2b21f45`.
+The deployment retains all five mounts, environment, networks, and resource limits.
+Fixture `ee3788ec9` runs as image `sha256:a75b5702cc4d763e3bec87a2cbc8b2b19509732ec93c53c40e7cf0d6019f3bd8`.
+
+| Chat | Execution | Verified adapter | Terminal cause |
+| --- | --- | --- | --- |
+| 731 | `3bcb94326b489d7c93e1400049cb0df1` | OpenAI compatible | `model_gateway.provider_error` |
+| 732 | `1444f90ccc6a281b35899d9e0b399059` | Native Anthropic | `anthropic_gateway.provider_error` |
+
+Fresh headed browsers verify `MODEL_PROVIDER_FAILURE`, support references, readable messages, and stable reloads.
+There are no page errors or browser response mocks. Screenshots receive visual inspection.
+The compatible fixture emits partial output, which remains visible after failure and reload.
+The native fixture emits no answer text before failure; no partial-output claim applies to that case.
+Correlated worker logs confirm both adapters and terminal ERROR-level reports.
+Neither displayed messages nor correlated worker logs contain the synthetic provider-body canary.
+
+The initial native attempts are excluded from acceptance because they test fixture routing and pre-stream errors.
+The final attempt uses the existing failed chat after the fixture corrections.
+No observer timeout alone causes a repeated execution.
+
+Evidence: `/private/tmp/elitea-stream-error-result.json`, `elitea-stream-error-native-result.json`, and `elitea-stream-error-log-proof.json`.
+Matching live and reload screenshots use the `elitea-stream-error-{compatible,native}-20260928` prefix.
+The native test model uses private project configuration 22 and its isolated picker entry 23.
+It reuses the synthetic provider credential and contains no real provider secret.

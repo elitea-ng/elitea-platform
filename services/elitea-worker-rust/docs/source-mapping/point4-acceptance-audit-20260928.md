@@ -23,8 +23,10 @@ The linked mappings retain source ownership, implementation history, and individ
 
 ## Remaining closure work
 
-1. Reconcile every public model-failure category with its component and deployed evidence.
-2. Deploy and verify the native streamed provider-error classification correction found during this audit.
+1. Finish deployed verification for request-byte and malformed-response categories.
+2. Review the final point 4 acceptance against its requirements before advancing.
+
+The [model-failure matrix](point4-model-failure-acceptance-20260928.md) records the exact evidence for every category.
 
 ## Diagnostic capture disposition
 
@@ -52,7 +54,7 @@ Both preserve public guidance and support references after reload, without brows
 Worker logs report terminal failures at ERROR and exclude the synthetic provider-body canary.
 The native stream regression finds a wire-to-ADK tag mismatch: `error` versus `stream_error`.
 The parser correction passes all 60 provider-facade tests and the canonical public-error contract test.
-Its deployed native-stream acceptance remains open.
+Its deployed native-stream acceptance passes in chat 732. Chat 731 verifies the compatible path.
 See [continuation diagnostics](continuation-diagnostics-20260923.md#native-streamed-provider-error-classification-2026-09-28) for implementation details.
 
 Instruction-authority tests already preserve an original skill snapshot after transcript loss and changed resume input.
