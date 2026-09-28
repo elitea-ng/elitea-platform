@@ -1460,6 +1460,13 @@ fn parse_pipeline_node(
     let encoded = serde_yaml_ng::to_string(raw_node)
         .map_err(|source| PipelineConfigurationError::MalformedYaml { source })?;
     match node_type {
+        "code" => {
+            super::code::CodeNodeDefinition::from_yaml(&encoded)
+                .map_err(PipelineConfigurationError::Invalid)?;
+            Err(PipelineConfigurationError::Unsupported(
+                "Code execution requires an admitted sandbox backend",
+            ))
+        }
         "decision" => DecisionNodeDefinition::from_yaml(&encoded)
             .map(PipelineNodeDefinition::Decision)
             .map_err(|_| PipelineConfigurationError::Invalid("a Decision node is invalid")),

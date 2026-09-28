@@ -473,3 +473,53 @@ Do not assume that a non-root application container provides a user manager or d
 Select this supervisor only when the deployment supports it and the enforcement probes pass.
 The ADK adapter still needs execution identity, cancellation, cleanup, diagnostics, and durable terminal-result handling.
 No systemd service, host configuration, or sandbox dependency is installed by this assessment.
+
+## Existing Pyodide resource controls
+
+Source inspection confirms existing SDK protections at revision `966526e`.
+Do not describe the current Python runner as unlimited.
+
+| Source | Existing control | Scope |
+| --- | --- | --- |
+| `runtime/tools/sandbox.py::_read_sandbox_limits_from_env` | Default timeout: 55 seconds. Default WASM memory cap: 512 MiB. | Configured invocation limits. |
+| `runtime/langchain/pyodide_sandbox.py::_build_command` | Converts MiB into WASM pages for `--wasm-max-mem-pages`. | WASM linear memory, not total Deno process memory. |
+| Async and synchronous execution methods | Timeout handling terminates the subprocess. | Wall-clock duration, not a CPU bandwidth quota. |
+| `runtime/tools/sandbox.py` admission checks | Default concurrent-execution threshold: 16. | Process-count observation before starting work. |
+| `_cgroup_memory_pressure_pct` and admission checks | Default pressure threshold: 85 percent. | Existing container memory pressure; the probe can fail open. |
+
+Configuration can disable the concurrency and pressure gates with zero.
+These are source defaults, not verified values in every deployed container.
+No per-invocation CPU cgroup quota appears in the inspected Python execution path.
+Preserve the useful runtime limits while adding whole-job enforcement for package preparation, host bindings, and native compilation.
+WASM isolation does not exempt Python from the outer execution boundary.
+
+Indexer plugin revision `c048daa` confirms the configuration wiring.
+`pylon_indexer/plugins/indexer_worker/config.yml` declares the four `SANDBOX_*` limits under `env_vars`.
+`module.py` copies configured environment values into `os.environ` during startup.
+The SDK reads those values through `_read_sandbox_limits_from_env`.
+This verifies the configuration-to-enforcement source path without claiming live container settings were inspected.
+
+## Code YAML admission and source provenance
+
+`src/agents/graph/code.rs` parses the stored node contract before the compiler rejects unavailable sandbox execution.
+The parser preserves omitted-language Python behavior, fixed mappings, variable mappings, and the UI's legacy bare-source strings.
+It recognizes explicit Python, JavaScript, TypeScript, and Rust values without advertising backend availability.
+It retains input, output, structured-output, debug, and transition settings in the configuration digest.
+Equivalent explicit and implicit Python settings produce the same digest.
+Language changes and source mapping changes produce different digests.
+
+Variable source resolution requires a declared string variable or the user input channel.
+Missing, non-string, empty, null-containing, and oversized source values fail before execution.
+Resolved source retains its origin: saved literal or state variable.
+Admission must not treat a variable's current value as trusted saved source merely because its mapping is saved.
+The parser permits up to 256 KiB source within a 512 KiB node document.
+It borrows resolved source instead of copying source from checkpoint state.
+Malformed-field errors do not echo source or parser payloads.
+
+The compiler still returns an unsupported-capability error for valid Code nodes.
+No Code node executes through an unrestricted process fallback.
+Backend admission, dependency declarations, trusted result projection, platform-client calls, and runtime verification remain open.
+
+Verification: all 99 graph component tests pass, including seven Code-definition tests and 11 Code-state tests.
+The test command is `cargo test --locked --lib agents::graph:: -j 2`.
+No deployment or browser execution is claimed for this parser change.
