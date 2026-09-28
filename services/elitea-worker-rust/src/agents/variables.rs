@@ -111,7 +111,7 @@ const MAX_VARIABLE_NAME_BYTES: usize = 256;
 const MAX_VARIABLE_VALUE_BYTES: usize = 64 * 1_024;
 /// Rendering may legitimately grow the prompt (a loop over a value), but not
 /// without bound: the rendered string becomes a provider request body.
-const MAX_RENDERED_BYTES: usize = 256 * 1_024;
+const MAX_RENDERED_BYTES: usize = super::request::MAX_AGENT_INSTRUCTION_BYTES;
 const TEMPLATE_FUEL: u64 = 250_000;
 
 /// The captured `{name: value}` context for one version's instructions.

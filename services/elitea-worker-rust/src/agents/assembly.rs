@@ -1113,11 +1113,18 @@ fn bounded_runtime_identity(value: &str) -> bool {
 /// graph YAML, and an empty graph is not an unconstrained agent — it is a
 /// pipeline with nothing to run.
 fn bounded_instruction(value: &str, allow_empty: bool) -> bool {
-    (allow_empty || !value.is_empty()) && value.len() <= 64 * 1_024 && !value.contains('\0')
+    (allow_empty || !value.is_empty())
+        && value.len()
+            <= if allow_empty {
+                super::request::MAX_AGENT_INSTRUCTION_BYTES
+            } else {
+                64 * 1_024
+            }
+        && !value.contains('\0')
 }
 
 fn bounded_adhoc_instruction(value: &str) -> bool {
-    value.len() <= 64 * 1_024 && !value.contains('\0')
+    value.len() <= super::request::MAX_AGENT_INSTRUCTION_BYTES && !value.contains('\0')
 }
 
 fn bounded_text(value: &str, maximum: usize) -> bool {

@@ -1,3 +1,6 @@
+/// Instruction content shares the bounded execution data-plane capacity.
+pub(super) const MAX_AGENT_INSTRUCTION_BYTES: usize = 8 * 1_024 * 1_024;
+
 /// Additional calls for one truncated answer, including its one boundary repair.
 pub(crate) const MAX_OUTPUT_CONTINUATION_CALLS: u32 = 4;
 

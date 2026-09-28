@@ -1534,25 +1534,43 @@ fn an_injected_project_context_block_becomes_the_system_prompt() {
     assert_eq!(profile.instructions(), "review carefully");
 }
 
-/// WHY MAIN BUDGETS THE SPLICE. `bounded_instruction` REFUSES an instruction
-/// string past 64 KiB rather than trimming it, so an unbounded injection would
-/// have turned "this project has a long context" into "this project's chat is
-/// broken" — the same failure #946 removed from the admission SQL, one layer
-/// down. Main's ceiling (60 KiB combined) sits under this one; the assertion
-/// here is that the cliff is real and where Main thinks it is.
+/// Instruction content reaches model-context admission under the data-plane cap.
 #[test]
-fn an_over_long_injected_instruction_string_is_refused_by_the_runtime() {
-    let mut inside = ordinary_request(AgentExecutionKind::Application);
-    set_application_instructions(&mut inside, &"x".repeat(60 * 1_024));
-    OrdinaryNoToolProfile::validate(&inside)
-        .expect("Main's own 60 KiB ceiling must stay comfortably inside the runtime's");
+fn large_instructions_survive_agent_assembly_and_variable_rendering() {
+    let instruction = format!("{}{{{{ current_date }}}}", "reference ".repeat(40_000));
+    let mut saved = ordinary_request(AgentExecutionKind::Application);
+    set_application_instructions(&mut saved, &instruction);
+    let profile = OrdinaryNoToolProfile::validate(&saved).expect("large saved instructions");
+    assert!(profile.instructions().starts_with("reference "));
+    assert!(profile.instructions().len() > 256 * 1024);
+    assert!(!profile.instructions().contains("{{ current_date }}"));
+
+    let version = saved.payload.application["version_details"]
+        .as_object()
+        .unwrap();
+    let nested = OrdinaryNoToolProfile::from_nested_version(version, &profile)
+        .expect("large nested agent instructions");
+    assert_eq!(nested.instructions(), profile.instructions());
+    let mut pipeline_version = version.clone();
+    pipeline_version.insert("agent_type".to_owned(), json!("pipeline"));
+    assert!(
+        OrdinaryNoToolProfile::from_nested_pipeline_version(&pipeline_version, &profile).is_err()
+    );
+
+    let mut adhoc = ordinary_request(AgentExecutionKind::Adhoc);
+    adhoc
+        .payload
+        .application
+        .insert("instructions".to_owned(), json!(instruction));
+    OrdinaryNoToolProfile::validate(&adhoc).expect("large chat instructions");
 
     let mut past = ordinary_request(AgentExecutionKind::Application);
-    set_application_instructions(&mut past, &"x".repeat(64 * 1_024 + 1));
+    set_application_instructions(
+        &mut past,
+        &"x".repeat(super::request::MAX_AGENT_INSTRUCTION_BYTES + 1),
+    );
     assert_eq!(
-        OrdinaryNoToolProfile::validate(&past)
-            .expect_err("past 64 KiB the runtime refuses the profile outright")
-            .code(),
+        OrdinaryNoToolProfile::validate(&past).unwrap_err().code(),
         NativeAgentAssemblyErrorCode::InvalidInput
     );
 }

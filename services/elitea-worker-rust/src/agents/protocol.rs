@@ -5,7 +5,7 @@ use serde_json::{Map, Value};
 
 use super::request::{
     AgentExecutionKind, AgentExecutionPayload, AgentExecutionRequest, AgentInputBinding,
-    NextInputSuggestionPolicy, UserInput,
+    MAX_AGENT_INSTRUCTION_BYTES, NextInputSuggestionPolicy, UserInput,
 };
 use crate::protocol::{
     ProtocolError as AgentProtocolError, elitea::runtime::v1::AgentExecutionInputV1,
@@ -85,10 +85,7 @@ pub fn request_from(
         }
     };
     let tools = json_list(&message.tools, "the agent tools must be a list")?;
-    let application = json_object(
-        &message.application,
-        "the agent application must be an object",
-    )?;
+    let application = application_object(&message.application)?;
     let internal_tools = string_list(
         &message.internal_tools,
         "the agent internal tools must contain only strings",
@@ -308,6 +305,42 @@ pub(crate) fn parse_bounded_json_value(
     Ok(value)
 }
 
+// Only instruction values use the content budget. Identifiers, keys, and
+// arbitrary metadata retain the control-string limit.
+fn application_object(raw: &[u8]) -> Result<Map<String, Value>, AgentProtocolError> {
+    if raw.is_empty() || raw.len() > MAX_AGENT_INPUT_BYTES {
+        return Err(AgentProtocolError::ResourceExhausted(
+            "the agent application snapshot exceeds the input limit",
+        ));
+    }
+    let value = serde_json::from_slice(raw).map_err(|_| malformed_json())?;
+    JsonLimits::new(raw).validate_scope(JsonTextScope::Application)?;
+    match value {
+        Value::Object(value) => Ok(value),
+        _ => Err(AgentProtocolError::InvalidInput(
+            "the agent application must be an object",
+        )),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum JsonTextScope {
+    Control,
+    Application,
+    Version,
+    Instruction,
+}
+
+impl JsonTextScope {
+    fn member(self, key: &str) -> Self {
+        match (self, key) {
+            (Self::Application, "version_details") => Self::Version,
+            (Self::Application | Self::Version, "instructions") => Self::Instruction,
+            _ => Self::Control,
+        }
+    }
+}
+
 fn json_object(
     raw: &[u8],
     shape_error: &'static str,
@@ -507,9 +540,13 @@ impl<'a> JsonLimits<'a> {
         }
     }
 
-    fn validate(mut self) -> Result<(), AgentProtocolError> {
+    fn validate(self) -> Result<(), AgentProtocolError> {
+        self.validate_scope(JsonTextScope::Control)
+    }
+
+    fn validate_scope(mut self, scope: JsonTextScope) -> Result<(), AgentProtocolError> {
         self.skip_whitespace();
-        self.value(0)?;
+        self.value(0, scope)?;
         self.skip_whitespace();
         if self.cursor != self.raw.len() {
             return Err(malformed_json());
@@ -517,7 +554,7 @@ impl<'a> JsonLimits<'a> {
         Ok(())
     }
 
-    fn value(&mut self, depth: usize) -> Result<(), AgentProtocolError> {
+    fn value(&mut self, depth: usize, scope: JsonTextScope) -> Result<(), AgentProtocolError> {
         if depth > MAX_JSON_DEPTH {
             return Err(AgentProtocolError::ResourceExhausted(
                 "the agent JSON input exceeds the nesting limit",
@@ -525,9 +562,15 @@ impl<'a> JsonLimits<'a> {
         }
         self.skip_whitespace();
         match self.peek() {
-            Some(b'{') => self.object(depth),
+            Some(b'{') => self.object(depth, scope),
             Some(b'[') => self.array(depth),
-            Some(b'\"') => self.string().map(|_| ()),
+            Some(b'\"') => self
+                .string(if matches!(scope, JsonTextScope::Instruction) {
+                    MAX_AGENT_INSTRUCTION_BYTES
+                } else {
+                    self.max_string_bytes
+                })
+                .map(|_| ()),
             Some(b't') => self.literal(b"true"),
             Some(b'f') => self.literal(b"false"),
             Some(b'n') => self.literal(b"null"),
@@ -536,7 +579,7 @@ impl<'a> JsonLimits<'a> {
         }
     }
 
-    fn object(&mut self, depth: usize) -> Result<(), AgentProtocolError> {
+    fn object(&mut self, depth: usize, scope: JsonTextScope) -> Result<(), AgentProtocolError> {
         self.cursor += 1;
         self.skip_whitespace();
         if self.take(b'}') {
@@ -544,7 +587,8 @@ impl<'a> JsonLimits<'a> {
         }
         let mut keys = HashSet::new();
         loop {
-            let key = self.string()?;
+            let key = self.string(self.max_string_bytes)?;
+            let member_scope = scope.member(&key);
             if !keys.insert(key) {
                 return Err(AgentProtocolError::InvalidInput(
                     "the agent JSON input contains a duplicate member",
@@ -554,7 +598,7 @@ impl<'a> JsonLimits<'a> {
             if !self.take(b':') {
                 return Err(malformed_json());
             }
-            self.value(depth + 1)?;
+            self.value(depth + 1, member_scope)?;
             self.skip_whitespace();
             if self.take(b'}') {
                 return Ok(());
@@ -573,7 +617,7 @@ impl<'a> JsonLimits<'a> {
             return Ok(());
         }
         loop {
-            self.value(depth + 1)?;
+            self.value(depth + 1, JsonTextScope::Control)?;
             self.skip_whitespace();
             if self.take(b']') {
                 return Ok(());
@@ -585,7 +629,7 @@ impl<'a> JsonLimits<'a> {
         }
     }
 
-    fn string(&mut self) -> Result<String, AgentProtocolError> {
+    fn string(&mut self, maximum: usize) -> Result<String, AgentProtocolError> {
         let start = self.cursor;
         if !self.take(b'\"') {
             return Err(malformed_json());
@@ -600,7 +644,7 @@ impl<'a> JsonLimits<'a> {
             } else if byte == b'\"' {
                 let value: String = serde_json::from_slice(&self.raw[start..self.cursor])
                     .map_err(|_| malformed_json())?;
-                if value.len() > self.max_string_bytes {
+                if value.len() > maximum {
                     return Err(AgentProtocolError::ResourceExhausted(
                         "an agent JSON string exceeds the approved limit",
                     ));

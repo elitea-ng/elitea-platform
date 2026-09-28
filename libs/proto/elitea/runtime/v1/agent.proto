@@ -37,6 +37,9 @@ message AgentExecutionInputV1 {
   optional string checkpoint_id = 6;
   bool debug = 7;
   bytes tools = 8;
+  // Instruction strings at instructions and version_details.instructions use
+  // the bounded execution-content allowance. Other strings remain control data.
+  // Model-context admission must still include all instruction content.
   bytes application = 9;
   bytes internal_tools = 10;
   optional int32 steps_limit = 11;

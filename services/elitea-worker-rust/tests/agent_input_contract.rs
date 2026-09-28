@@ -267,6 +267,58 @@ fn admitted_history_reaches_compaction_without_control_field_limits() {
 }
 
 #[test]
+fn instruction_content_reaches_context_admission_without_relaxing_metadata_strings() {
+    use prost::Message;
+    let text = "reference material ".repeat(30_000);
+    for nested in [false, true] {
+        let mut message = application_message();
+        let mut app = serde_json::json!({"id": 11, "version_id": 22});
+        if nested {
+            app["version_details"] = serde_json::json!({"instructions": text});
+        } else {
+            app["instructions"] = serde_json::json!(text);
+        }
+        message.application = serde_json::to_vec(&app).unwrap();
+        let decoded = parse_agent_execution_input(&message.encode_to_vec()).unwrap();
+        let request = request_from(decoded, AgentExecutionKind::Application, binding()).unwrap();
+        let actual = if nested {
+            &request.payload.application["version_details"]["instructions"]
+        } else {
+            &request.payload.application["instructions"]
+        };
+        assert_eq!(actual.as_str(), Some(text.as_str()));
+    }
+    for app in [
+        serde_json::json!({"id":11,"version_id":22,"description":text}),
+        serde_json::json!({"id":11,"version_id":22,"meta":{"instructions":text}}),
+        serde_json::json!({"id":11,"version_id":22,"version_details":{"meta":{"instructions":text}}}),
+        serde_json::json!({"id":11,"version_id":22,"instructions":[text]}),
+    ] {
+        let mut message = application_message();
+        message.application = serde_json::to_vec(&app).unwrap();
+        assert!(matches!(
+            request_from(message, AgentExecutionKind::Application, binding()),
+            Err(AgentProtocolError::ResourceExhausted(_))
+        ));
+    }
+    let mut message = application_message();
+    message.application =
+        br#"{"id":11,"version_id":22,"instructions":"a","\u0069nstructions":"b"}"#.to_vec();
+    assert!(matches!(
+        request_from(message, AgentExecutionKind::Application, binding()),
+        Err(AgentProtocolError::InvalidInput(_))
+    ));
+    let mut message = application_message();
+    message.application = serde_json::to_vec(&serde_json::json!({"id":11,"version_id":22,
+        "instructions":"x".repeat(8 * 1024 * 1024)}))
+    .unwrap();
+    assert!(matches!(
+        parse_agent_execution_input(&message.encode_to_vec()),
+        Err(AgentProtocolError::ResourceExhausted(_))
+    ));
+}
+
+#[test]
 fn json_boundary_preserves_python_sized_integers_without_rounding() {
     let mut message = application_message();
     message.llm =
