@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """Verify sandbox receipts using disposable PostgreSQL; never read deployment secrets."""
 import os
+import argparse
 from pathlib import Path
 import secrets
 import subprocess
 import time
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--test-filter", choices=["sandbox_receipts_fence", "sandbox_supervisor_recovers"], default="sandbox_receipts_fence")
+args = parser.parse_args()
 
 root = Path(__file__).resolve().parents[2]
 name = "elitea-sandbox-ledger-test-" + secrets.token_hex(5)
@@ -39,7 +44,7 @@ try:
     result = subprocess.run(
         ["cargo", "test", "--locked", "--offline", "--manifest-path",
          "services/elitea-worker-rust/Cargo.toml", "--features",
-         "sandbox-supervisor", "--lib", "sandbox_receipts_fence", "-j", "2",
+         "sandbox-supervisor", "--lib", args.test_filter, "-j", "2",
          "--", "--ignored", "--nocapture"],
         cwd=root, env=env, timeout=600,
     )

@@ -865,3 +865,59 @@ Library Clippy passed with `workspace-docker` and default features disabled.
 The broader all-target Clippy command did not compile: upstream integration
 fixtures import `ProcessBackend` without gating on the disabled `process`
 feature. No all-target Clippy pass is claimed for this feature combination.
+
+### Docker supervisor receipt reconciliation
+
+`src/sandbox/docker_supervisor.rs` composes the Docker lifecycle and PostgreSQL
+receipt ledger for already-dispatched jobs. It does not dispatch or replay code.
+Reserved jobs return `NeedsDispatch`; a job with a current owner returns
+`OwnedElsewhere`. A semaphore bounds concurrent reconciliation and rejects excess
+admission instead of building an unbounded wait queue. Ownership has a 60-second
+lease, renewed every 20 seconds in the same future. Dropping the future leaves
+the runtime available for recovery after lease expiry; no detached renewal task
+survives the request.
+
+A fresh supervisor reads the named container's terminal envelope, saves its
+terminal state under the lease fence, then removes the stopped runtime. Failed
+cleanup leaves the saved receipt intact and returns an explicit cleanup-pending
+flag. A later reconciliation returns the saved result and retries cleanup. The
+worker must still validate the result against declared graph outputs before it
+updates graph state. This module never writes graph checkpoints.
+
+`JobLedger::age_seconds` uses database time and the existing `created_at` column.
+The supervisor's outer 3660-second age bound allows the runner's maximum
+3600-second execution plus preparation, and does not reset after reconnect.
+After that bound it renews ownership, confirms runtime termination, and writes
+a deadline failure. A runtime or database outage leaves the receipt unresolved
+for later reconciliation. A malformed or missing runtime receipt never causes
+a second execution. No new migration is needed for this age check.
+
+The existing ledger's 512-KiB result bound is enforced before persistence. An
+oversized envelope becomes an explicit `sandbox.receipt_limit` failure, not a
+truncated JSON result. Runner failure statuses map to separate stable failure
+codes. Rich failed-output artifact retention and user-facing messages still
+need the execution service contract; this is not the final Code-node UI flow.
+
+Current-platform reference remains the remote-sandbox execution boundary and
+`runtime/tools/sandbox.py` result/error interpretation documented above. The new
+supervisor adds durable receipt and ownership semantics rather than reproducing
+the legacy synchronous HTTP session contract. Authenticated service admission,
+initial preparation/dispatch, cancellation, Kubernetes Jobs, dependency/runtime
+images, and browser execution remain required integration work.
+
+Verification used `scripts/runtime/test_sandbox_ledger.py --test-filter
+sandbox_supervisor_recovers` with a cached runner image. The helper creates its
+own PostgreSQL container with generated test-only credentials and removes it
+on exit; it does not read deployment credentials. The integration test passed
+against real PostgreSQL and Docker. It verified expired-owner recovery, durable
+result read-back after runtime removal, repeated terminal reconciliation, stale
+owner fencing, and termination/cleanup of a prepared job whose dispatch signal
+was lost and whose persisted deadline had expired. The test changes timestamps
+only in its isolated database. Two focused receipt-classification tests passed.
+This is a component integration test with a new supervisor object and an expired
+lease, not a service-process kill test or Kubernetes/browser acceptance.
+The worker library also passed Clippy with `sandbox-supervisor` enabled and
+warnings denied. This check exposed missing public error-contract documentation
+in the optional ledger module; those contracts are now documented. Runtime
+identity hex encoding now writes into one allocated string without per-byte
+format allocations, preserving the same digest representation.

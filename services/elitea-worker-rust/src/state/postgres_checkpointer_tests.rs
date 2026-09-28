@@ -802,3 +802,150 @@ async fn sandbox_receipts_fence_stale_owners_and_preserve_terminal_results() {
     );
     isolated.pool.close().await;
 }
+
+#[cfg(feature = "sandbox-supervisor")]
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL, Docker, and ELITEA_CODE_RUNNER_TEST_IMAGE"]
+async fn sandbox_supervisor_recovers_dispatched_job_and_persists_before_cleanup() {
+    use crate::sandbox::{
+        docker_supervisor::{DockerSupervisor, Reconciliation},
+        ledger::{JobLedger, JobScope, Phase},
+    };
+    use adk_sandbox::workspace::{DockerClient, Manifest, ManifestEntry};
+    let isolated = IsolatedPostgres::create(&env::var(TEST_DATABASE_URL).unwrap()).await;
+    sqlx::raw_sql("CREATE SCHEMA elitea_runtime")
+        .execute(&isolated.pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../elitea-main/migrations/agentstate/0004_sandbox_jobs.sql"
+    ))
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
+    let image = env::var("ELITEA_CODE_RUNNER_TEST_IMAGE").unwrap();
+    let runtime = DockerClient::with_image(image.clone())
+        .await
+        .unwrap()
+        .with_resource_limits(Some(64 * 1024 * 1024), Some(0.25))
+        .with_code_job_policy(Duration::from_secs(15))
+        .unwrap();
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let scope = JobScope::new(format!("supervisor-test-{unique}"), 2, [7; 32], [8; 32]).unwrap();
+    let identity = scope.runtime_identity().unwrap();
+    let ledger = JobLedger::new(isolated.pool.clone());
+    ledger.reserve(&scope).await.unwrap();
+    let lease = ledger
+        .claim(&scope, "old-process".into(), 60)
+        .await
+        .unwrap()
+        .unwrap();
+    let request = json!({"argv":["python","-c","import time;time.sleep(1);print('durable-result')"],"timeout_seconds":5});
+    runtime
+        .provision_code_job(
+            &identity,
+            &Manifest::new(vec![ManifestEntry::File {
+                path: ".elitea-job.json".into(),
+                content: serde_json::to_vec(&request).unwrap(),
+            }]),
+        )
+        .await
+        .unwrap();
+    // Persist dispatch before signaling the runtime, then simulate expired ownership.
+    ledger.mark_dispatched(&lease).await.unwrap();
+    runtime.dispatch_code_job(&identity).await.unwrap();
+    sqlx::query(
+        "UPDATE elitea_runtime.sandbox_jobs SET lease_until=clock_timestamp()-interval '1 second'",
+    )
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
+    let supervisor = DockerSupervisor::new(
+        JobLedger::new(isolated.pool.clone()),
+        DockerClient::with_image(image).await.unwrap(),
+        "recovered-process".into(),
+        2,
+    )
+    .unwrap();
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(20),
+        supervisor.reconcile_dispatched(&scope),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let Reconciliation::Terminal {
+        record,
+        cleanup_pending,
+    } = outcome
+    else {
+        panic!("expected terminal receipt")
+    };
+    assert!(!cleanup_pending);
+    assert_eq!(record.phase, Phase::Completed);
+    let receipt: serde_json::Value =
+        serde_json::from_str(record.result_json.as_deref().unwrap()).unwrap();
+    assert_eq!(receipt["stdout"], "durable-result\n");
+    assert!(runtime.observe_code_job(&identity).await.unwrap().is_none());
+    assert_eq!(
+        ledger.read(&scope).await.unwrap().result_json,
+        record.result_json
+    );
+    assert!(matches!(
+        supervisor.reconcile_dispatched(&scope).await.unwrap(),
+        Reconciliation::Terminal {
+            cleanup_pending: false,
+            ..
+        }
+    ));
+    assert!(ledger.renew(&lease, 60).await.is_err());
+    // Lost dispatch acknowledgement must not reset the outer job deadline.
+    let abandoned =
+        JobScope::new(format!("supervisor-test-{unique}"), 2, [9; 32], [10; 32]).unwrap();
+    let abandoned_identity = abandoned.runtime_identity().unwrap();
+    ledger.reserve(&abandoned).await.unwrap();
+    let abandoned_lease = ledger
+        .claim(&abandoned, "lost-dispatch".into(), 60)
+        .await
+        .unwrap()
+        .unwrap();
+    runtime
+        .provision_code_job(&abandoned_identity, &Manifest::new(vec![]))
+        .await
+        .unwrap();
+    ledger.mark_dispatched(&abandoned_lease).await.unwrap();
+    // Test-only time adjustment; no signal was sent to the prepared container.
+    sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET created_at=clock_timestamp()-interval '2 hours', lease_until=clock_timestamp()-interval '1 second' WHERE phase='dispatched'")
+        .execute(&isolated.pool).await.unwrap();
+    let deadline = tokio::time::timeout(
+        Duration::from_secs(20),
+        supervisor.reconcile_dispatched(&abandoned),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let Reconciliation::Terminal {
+        record,
+        cleanup_pending,
+    } = deadline
+    else {
+        panic!("expected deadline receipt")
+    };
+    assert_eq!(record.phase, Phase::Failed);
+    assert_eq!(
+        record.failure_code.as_deref(),
+        Some("sandbox.deadline_exceeded")
+    );
+    assert!(!cleanup_pending);
+    assert!(
+        runtime
+            .observe_code_job(&abandoned_identity)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    isolated.pool.close().await;
+}

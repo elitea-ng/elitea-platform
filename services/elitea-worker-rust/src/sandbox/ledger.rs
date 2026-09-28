@@ -10,6 +10,8 @@ pub struct JobScope {
 }
 
 impl JobScope {
+    /// # Errors
+    /// Returns `Invalid` for an invalid tenant or project identity.
     pub fn new(
         tenant: String,
         project: i32,
@@ -29,6 +31,8 @@ impl JobScope {
 
     /// Names are globally unique within a runtime even when callers reuse an
     /// execution-local key across projects. No tenant text enters runtime metadata.
+    /// # Errors
+    /// Returns `Invalid` if runtime identity construction fails.
     pub fn runtime_identity(
         &self,
     ) -> Result<adk_sandbox::workspace::docker::CodeJobIdentity, LedgerError> {
@@ -38,9 +42,6 @@ impl JobScope {
         hash.update(self.tenant.as_bytes());
         hash.update(&self.project.to_be_bytes());
         hash.update(&self.key);
-        fn hex(bytes: &[u8]) -> String {
-            bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-        }
         adk_sandbox::workspace::docker::CodeJobIdentity::new(
             hex(hash.finish().as_ref()),
             hex(&self.digest),
@@ -111,11 +112,14 @@ pub struct JobLedger {
 }
 
 impl JobLedger {
+    #[must_use]
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 
     /// Insert once. Repeated submissions read the existing terminal or in-flight receipt.
+    /// # Errors
+    /// Returns a database error or a conflict with an existing request digest.
     pub async fn reserve(&self, scope: &JobScope) -> Result<JobRecord, LedgerError> {
         sqlx::query("INSERT INTO elitea_runtime.sandbox_jobs (tenant_id,project_id,job_key,request_digest) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING")
             .bind(&scope.tenant).bind(scope.project).bind(scope.key.as_slice()).bind(scope.digest.as_slice())
@@ -123,6 +127,8 @@ impl JobLedger {
         self.read(scope).await
     }
 
+    /// # Errors
+    /// Returns `Missing`, `Conflict`, or a database/record decoding error.
     pub async fn read(&self, scope: &JobScope) -> Result<JobRecord, LedgerError> {
         let row = sqlx::query("SELECT request_digest,phase,result_json,failure_code FROM elitea_runtime.sandbox_jobs WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3")
             .bind(&scope.tenant).bind(scope.project).bind(scope.key.as_slice())
@@ -138,8 +144,19 @@ impl JobLedger {
         })
     }
 
+    /// Use database time so reconnects do not reset a running job's deadline.
+    /// # Errors
+    /// Returns `Missing` for an unknown request identity or a database error.
+    pub async fn age_seconds(&self, scope: &JobScope) -> Result<i64, LedgerError> {
+        sqlx::query_scalar("SELECT GREATEST(0, EXTRACT(EPOCH FROM (clock_timestamp()-created_at))::bigint) FROM elitea_runtime.sandbox_jobs WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4")
+            .bind(&scope.tenant).bind(scope.project).bind(scope.key.as_slice()).bind(scope.digest.as_slice())
+            .fetch_optional(&self.pool).await?.ok_or(LedgerError::Missing)
+    }
+
     /// Reclaiming a dispatched job grants reconciliation, never permission to replay.
     /// Database time and a monotonically increasing epoch fence previous owners.
+    /// # Errors
+    /// Returns an invalid input, identity conflict, or database error.
     pub async fn claim(
         &self,
         scope: &JobScope,
@@ -165,6 +182,8 @@ impl JobLedger {
         .transpose()
     }
 
+    /// # Errors
+    /// Returns `Invalid`, `Fenced`, or a database error.
     pub async fn renew(&self, lease: &JobLease, ttl_seconds: i32) -> Result<(), LedgerError> {
         validate_ttl(ttl_seconds)?;
         let count = sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET lease_until=clock_timestamp()+make_interval(secs => $7),updated_at=clock_timestamp() WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND lease_epoch=$6 AND lease_until > clock_timestamp() AND phase IN ('reserved','dispatched')")
@@ -175,6 +194,8 @@ impl JobLedger {
 
     /// Persist before launching code. Exactly one caller can cross this boundary.
     /// If dispatch acknowledgement is lost, read/reconcile instead of retrying code.
+    /// # Errors
+    /// Returns `Fenced` if ownership or phase changed, or a database error.
     pub async fn mark_dispatched(&self, lease: &JobLease) -> Result<(), LedgerError> {
         let count = sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET phase='dispatched',updated_at=clock_timestamp() WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND lease_epoch=$6 AND lease_until > clock_timestamp() AND phase='reserved'")
             .bind(&lease.scope.tenant).bind(lease.scope.project).bind(lease.scope.key.as_slice()).bind(lease.scope.digest.as_slice())
@@ -182,7 +203,9 @@ impl JobLedger {
         changed(count)
     }
 
-    /// Terminal rows are immutable. A lost finish acknowledgement is recovered by read().
+    /// Terminal rows are immutable. A lost finish acknowledgement is recovered by `read()`.
+    /// # Errors
+    /// Returns an invalid receipt, `Fenced`, or a database error.
     pub async fn finish(
         &self,
         lease: &JobLease,
@@ -241,4 +264,14 @@ fn changed(count: u64) -> Result<(), LedgerError> {
     } else {
         Err(LedgerError::Fenced)
     }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        output.push(char::from(DIGITS[usize::from(byte & 15)]));
+    }
+    output
 }
