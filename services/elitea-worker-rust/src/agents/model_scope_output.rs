@@ -29,6 +29,9 @@ pub(super) fn generate(
         for text in chunks(&prefix) {
             yield LlmResponse { content: Some(Content::new("model").with_text(text)), partial: true, ..LlmResponse::default() };
         }
+        if let Some(reason) = state.as_ref().and_then(|state| state.failure) {
+            Err(failed(reason))?;
+        }
         loop {
             let anchor = state.as_ref().map_or("", OutputContinuation::anchor).to_owned();
             let mut seam = Seam::new(anchor);
@@ -86,7 +89,7 @@ pub(super) fn generate(
                 extend(&mut segment, &boundary_tail)?;
                 yield LlmResponse { content: Some(Content::new("model").with_text(boundary_tail)), partial: true, ..LlmResponse::default() };
             }
-            if state.is_some() && segment.is_empty() { Err(failed(Failure::NoProgress))?; }
+            if state.is_some() && segment.is_empty() { Err(persist_failure(&scope, &request, state.as_ref(), &prefix, Failure::NoProgress).await?)?; }
             if terminal.finish_reason != Some(FinishReason::MaxTokens) {
                 if !has_tools && matches!(terminal.finish_reason, None | Some(FinishReason::Stop)) {
                     extend(&mut prefix, &segment)?;
@@ -105,9 +108,9 @@ pub(super) fn generate(
             extend(&mut prefix, &segment)?;
             save_completion(&scope.output_partial, Some(prefix.clone()))?;
             let round = state.as_ref().map_or(1, |state| state.round.saturating_add(1));
-            if round > MAX_OUTPUT_CONTINUATION_CALLS { Err(failed(Failure::CallLimit))?; }
+            if round > MAX_OUTPUT_CONTINUATION_CALLS { Err(persist_failure(&scope, &request, state.as_ref(), &prefix, Failure::CallLimit).await?)?; }
             let next = OutputContinuation {
-                prefix: prefix.clone(), round, structured_output,
+                prefix: prefix.clone(), round, structured_output, failure: None,
                 repair_used: state.as_ref().is_some_and(|state| state.repair_used),
             };
             request = prepare_next(&scope, request, segment, &next).await?;
@@ -223,10 +226,24 @@ async fn prepare_repair(
     let previous = previous.ok_or_else(|| failed(Failure::MissingRepairState))?;
     let round = previous.round.saturating_add(1);
     if previous.repair_used {
-        return Err(failed(Failure::BoundaryRepairFailed));
+        return Err(persist_failure(
+            scope,
+            &request,
+            Some(previous),
+            &previous.prefix,
+            Failure::BoundaryRepairFailed,
+        )
+        .await?);
     }
     if round > MAX_OUTPUT_CONTINUATION_CALLS {
-        return Err(failed(Failure::RepairCallLimit));
+        return Err(persist_failure(
+            scope,
+            &request,
+            Some(previous),
+            &previous.prefix,
+            Failure::RepairCallLimit,
+        )
+        .await?);
     }
     if let Some(completion) = &scope.completion {
         completion.discard_unaccepted()?;
@@ -236,6 +253,7 @@ async fn prepare_repair(
         round,
         repair_used: true,
         structured_output: previous.structured_output,
+        failure: None,
     };
     let prepared = prepare_next(scope, request, String::new(), &next).await?;
     tracing::info!(
@@ -244,6 +262,35 @@ async fn prepare_repair(
         "One continuation boundary repair was durably prepared"
     );
     Ok((prepared, next))
+}
+
+// Commit the terminal disposition before the caller publishes failure evidence.
+async fn persist_failure(
+    scope: &ScopedModelCheckpoint,
+    request: &LlmRequest,
+    previous: Option<&OutputContinuation>,
+    prefix: &str,
+    reason: Failure,
+) -> adk_rust::Result<adk_rust::AdkError> {
+    let writer = scope.writer.get().ok_or_else(invalid_scope)?;
+    let output = OutputContinuation {
+        prefix: prefix.to_owned(),
+        round: previous.map_or(1, |state| state.round),
+        repair_used: previous.is_some_and(|state| state.repair_used),
+        structured_output: previous.is_some_and(|state| state.structured_output),
+        failure: Some(reason),
+    };
+    writer
+        .checkpoint
+        .output_failed(
+            writer.identity.clone(),
+            &writer.invocation_id,
+            request,
+            output,
+        )
+        .await?;
+    save_completion(&scope.output_partial, Some(prefix.to_owned()))?;
+    Ok(failed(reason))
 }
 
 async fn prepare_next(

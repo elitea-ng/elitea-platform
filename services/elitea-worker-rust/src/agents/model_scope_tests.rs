@@ -1182,6 +1182,207 @@ async fn child_output_never_dispatches_a_fifth_continuation() {
 }
 
 #[tokio::test]
+async fn exhausted_output_recovery_keeps_final_partial_and_never_calls_provider_again() {
+    use crate::agents::model_checkpoint::output::ContinuationFailure as Failure;
+    use adk_rust::FinishReason::{MaxTokens, Stop};
+    for (segments, expected, reason) in [
+        (
+            vec![
+                ("a", MaxTokens),
+                ("ab", MaxTokens),
+                ("abc", MaxTokens),
+                ("abcd", MaxTokens),
+                ("abcde", MaxTokens),
+            ],
+            "abcde",
+            Failure::CallLimit,
+        ),
+        (
+            vec![("a", MaxTokens), ("a", Stop)],
+            "a",
+            Failure::NoProgress,
+        ),
+        (
+            vec![("a", MaxTokens), ("INVALID", Stop), ("INVALID", Stop)],
+            "a",
+            Failure::BoundaryRepairFailed,
+        ),
+        (
+            vec![
+                ("a", MaxTokens),
+                ("ab", MaxTokens),
+                ("abc", MaxTokens),
+                ("abcd", MaxTokens),
+                ("INVALID", Stop),
+            ],
+            "abcd",
+            Failure::RepairCallLimit,
+        ),
+    ] {
+        let call_count = segments.len();
+        let storage = storage(ModelScopeBackend::Local(Arc::new(
+            InMemorySessionService::new(),
+        )));
+        let child = Context::child("exhausted-output-recovery");
+        let summary = Arc::new(Summary::default());
+        let first = checkpoint(&storage, summary.clone());
+        let request = simple_request(&first, &child).await;
+        let model = OutputModel::new(segments);
+        let output = first
+            .clone()
+            .delegation_model(model.clone())
+            .generate_content(request, true)
+            .await
+            .unwrap();
+        assert_eq!(
+            collect_output(output).await.unwrap_err().code,
+            "model.output_continuation_failed"
+        );
+        assert_eq!(model.requests.lock().unwrap().len(), call_count);
+        for _ in 0..2 {
+            assert_terminal_output_recovery(&storage, &child, summary.clone(), expected, reason)
+                .await;
+        }
+    }
+}
+
+async fn assert_terminal_output_recovery(
+    storage: &ModelScopeSessions,
+    child: &Context,
+    summary: Arc<Summary>,
+    expected: &str,
+    reason: crate::agents::model_checkpoint::output::ContinuationFailure,
+) {
+    use crate::agents::model_checkpoint::output::failure_reason;
+    let replacement = checkpoint(
+        &storage.clone().with_pending_model_recovery(),
+        summary.clone(),
+    );
+    let request = simple_request(&replacement, child).await;
+    let unexpected = OutputModel::new(vec![("abcdef", adk_rust::FinishReason::Stop)]);
+    let mut output = replacement
+        .delegation_model(unexpected.clone())
+        .generate_content(request, true)
+        .await
+        .unwrap();
+    let mut restored = String::new();
+    let mut failure = None;
+    while let Some(item) = output.next().await {
+        match item {
+            Ok(response) => {
+                assert!(response.partial);
+                assert!(!response.turn_complete);
+                if let Some(content) = response.content {
+                    for part in content.parts {
+                        if let adk_rust::Part::Text { text } = part {
+                            restored.push_str(&text);
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                failure = Some(error);
+                break;
+            }
+        }
+    }
+    assert!(
+        unexpected.requests.lock().unwrap().is_empty(),
+        "terminal failure must not dispatch another provider call"
+    );
+    assert_eq!(restored, expected);
+    assert_eq!(
+        serde_json::to_value(failure_reason(&failure.unwrap())).unwrap(),
+        serde_json::to_value(reason).unwrap()
+    );
+    assert_eq!(summary.0.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn postgres_terminal_output_survives_claim_takeover_without_model_dispatch() {
+    use crate::agents::model_checkpoint::output::ContinuationFailure;
+    use crate::state::postgres_session_tests::{IsolatedPostgres, authority_for, install_schema};
+    use adk_rust::FinishReason::MaxTokens;
+    let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("skipping terminal output PostgreSQL test: set ELITEA_TEST_DATABASE_URL");
+        return;
+    };
+    let database = IsolatedPostgres::create(&url).await;
+    install_schema(&database.pool).await;
+    let root = Arc::new(
+        PostgresSessionService::activate(
+            database.pool.clone(),
+            authority_for("claim-1", 1, 1, [1; 32]),
+            SessionLimits::default(),
+            Arc::new(TestStateWriterLease::current()),
+        )
+        .await
+        .unwrap(),
+    );
+    let first_storage = storage(ModelScopeBackend::Postgres(root));
+    let child = Context::child("postgres-terminal-output");
+    let summary = Arc::new(Summary::default());
+    let first = checkpoint(&first_storage, summary.clone());
+    let request = simple_request(&first, &child).await;
+    let model = OutputModel::new(vec![
+        ("a", MaxTokens),
+        ("ab", MaxTokens),
+        ("abc", MaxTokens),
+        ("abcd", MaxTokens),
+        ("abcde", MaxTokens),
+    ]);
+    let output = first
+        .clone()
+        .delegation_model(model.clone())
+        .generate_content(request, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        collect_output(output).await.unwrap_err().code,
+        "model.output_continuation_failed"
+    );
+    assert_eq!(model.requests.lock().unwrap().len(), 5);
+    let replacement_root = Arc::new(
+        PostgresSessionService::activate(
+            database.pool.clone(),
+            authority_for("claim-2", 2, 2, [2; 32]),
+            SessionLimits::default(),
+            Arc::new(TestStateWriterLease::current()),
+        )
+        .await
+        .unwrap(),
+    );
+    let old_writer = first.writer.get().unwrap();
+    let stale = old_writer
+        .checkpoint
+        .output_failed(
+            old_writer.identity.clone(),
+            &old_writer.invocation_id,
+            &LlmRequest::new("output-fixture", vec![child.input.clone()]),
+            old_writer
+                .checkpoint
+                .output_continuation()
+                .unwrap()
+                .unwrap(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(stale.code, "session.writer_not_current");
+    let replacement_storage = storage(ModelScopeBackend::Postgres(replacement_root));
+    for _ in 0..2 {
+        assert_terminal_output_recovery(
+            &replacement_storage,
+            &child,
+            summary.clone(),
+            "abcde",
+            ContinuationFailure::CallLimit,
+        )
+        .await;
+    }
+    database.pool.close().await;
+}
+
+#[tokio::test]
 async fn child_output_repair_consumes_one_of_four_continuations() {
     use adk_rust::FinishReason::{MaxTokens, Stop};
     let storage = storage(ModelScopeBackend::Local(Arc::new(

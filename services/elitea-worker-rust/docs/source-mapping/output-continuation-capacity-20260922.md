@@ -1023,3 +1023,41 @@ The next crash check must inspect the model checkpoint, not only frame replay.
 At exhaustion, that branch returns before `prepare_next` writes another durable model boundary.
 Determine whether recovery preserves the final partial prefix and terminal failure without repeating the last model call.
 The transport regression above does not establish that property.
+
+### Terminal continuation checkpoint, 2026-09-28
+
+The recovery regression reproduces an extra provider call after four continuation calls exhaust their output allowances.
+The live stream retains `abcde`, but the durable checkpoint retains `abcd` and authorizes the last request again.
+A replacement model can therefore convert the exhausted failure into a completed answer.
+
+The current SDK reference remains revision `966526e8334354366dd161b606d73fe8e204b850`.
+`elitea_sdk/runtime/tools/llm.py::_continue_nested_output` bounds continuation and retains partial output in `OutputContinuationExhausted`.
+That reference defines the functional outcome. The Rust worker adds durable recovery of that outcome.
+
+| Rust source | Responsibility |
+| --- | --- |
+| `src/agents/model_scope_output.rs::persist_failure` | Commit the accepted prefix and typed terminal cause before forwarding failure. |
+| `src/agents/model_checkpoint/output.rs::OutputContinuation` | Store the optional terminal cause without provider text or credentials. |
+| `src/agents/model_checkpoint.rs::output_failed` | Write phase `output_failed` through the existing fenced session service. |
+| `src/agents/model_checkpoint.rs::restore_validated` | Require agreement between the terminal phase and stored failure. |
+| `src/agents/model_checkpoint.rs::before_model` | Preserve terminal authority without compaction or another provider operation. |
+| `src/agents/model_scope_output.rs::generate` | Replay accepted partial text, then return the original typed failure. |
+
+The correction covers exhausted calls, no progress, exhausted repair allowance, and failed boundary repair.
+Recovery does not mark the partial answer complete or grant downstream graph completion authority.
+Two repeated recoveries retain the same text and failure in each local regression case.
+The PostgreSQL test replaces the root claim, rejects the stale writer, and recovers the exhausted result twice.
+It asserts zero replacement-provider calls and zero summary calls.
+All 39 scoped-model tests pass with PostgreSQL enabled. All 12 checkpoint tests pass.
+
+No database migration, application table, or public protocol field changes.
+Existing nonterminal checkpoint JSON omits the new optional failure field and remains readable.
+Older workers cannot read `output_failed`; use a coordinated deployment and drain affected executions before rollback.
+The terminal checkpoint remains worker-owned. Main receives the existing failure and partial-output events.
+
+These tests prove component recovery and PostgreSQL fencing, not deployed publication-crash acceptance.
+The worker-process crash and fresh browser verification remain open.
+Provider transport failures and other terminal categories retain their separate recovery checks.
+
+The broader agent suite passes: 492 tests with PostgreSQL enabled and no reported skips.
+Strict library/test Clippy passes with warnings denied. `git diff --check` passes.

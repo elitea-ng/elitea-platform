@@ -23,6 +23,7 @@ pub(super) mod output;
 enum Phase {
     ContextPending,
     ModelPending,
+    OutputFailed,
     ToolMayHaveStarted,
     DelegationPending,
 }
@@ -252,7 +253,10 @@ impl ModelCheckpointWriter {
         }
         if !matches!(
             checkpoint.phase,
-            Phase::ModelPending | Phase::ContextPending | Phase::DelegationPending
+            Phase::ModelPending
+                | Phase::ContextPending
+                | Phase::DelegationPending
+                | Phase::OutputFailed
         ) || matches!(checkpoint.phase, Phase::ContextPending) && !allow_context_preparation
         {
             return Err(invalid_checkpoint());
@@ -292,6 +296,14 @@ impl ModelCheckpointWriter {
             delegation::validate_calls(&content, |name| model.tools.contains_key(name))?;
             self.replay_delegation = Some(Arc::new(Mutex::new(Some(content))));
         } else if checkpoint.delegation.is_some() {
+            return Err(invalid_checkpoint());
+        }
+        if matches!(checkpoint.phase, Phase::OutputFailed)
+            != checkpoint
+                .output_continuation
+                .as_ref()
+                .is_some_and(|output| output.failure.is_some())
+        {
             return Err(invalid_checkpoint());
         }
         if let Some(output) = checkpoint.output_continuation {
@@ -404,6 +416,23 @@ impl ModelCheckpointWriter {
         request: LlmRequest,
     ) -> adk_rust::Result<BeforeModelResult> {
         let request = self.prepare_request(request)?;
+        if self
+            .output_continuation()?
+            .is_some_and(|output| output.failure.is_some())
+        {
+            // Replay the saved partial and failure locally. Do not summarize or
+            // authorize another provider operation after terminal exhaustion.
+            self.persist(
+                identity,
+                invocation_id,
+                Phase::OutputFailed,
+                Some(&request),
+                None,
+                None,
+            )
+            .await?;
+            return Ok(BeforeModelResult::Continue(request));
+        }
         if let Some(content) = self.pending_delegation()? {
             delegation::validate_calls(&content, |name| self.application_tools.contains(name))?;
             self.persist_delegation(identity, invocation_id, &request, &content)
@@ -474,6 +503,28 @@ impl ModelCheckpointWriter {
             .await?;
         }
         Ok(BeforeModelResult::Continue(request))
+    }
+
+    pub(super) async fn output_failed(
+        &self,
+        identity: AdkIdentity,
+        invocation_id: &str,
+        request: &LlmRequest,
+        output: output::OutputContinuation,
+    ) -> adk_rust::Result<()> {
+        if output.failure.is_none() {
+            return Err(invalid_checkpoint());
+        }
+        self.set_output_continuation(Some(output))?;
+        self.persist(
+            identity,
+            invocation_id,
+            Phase::OutputFailed,
+            Some(request),
+            None,
+            None,
+        )
+        .await
     }
 
     pub(super) async fn before_tool(
@@ -561,6 +612,71 @@ mod tests {
     use adk_rust::{Content, Llm, LlmResponse, LlmResponseStream, Part, Tool, ToolContext};
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn terminal_failure_phase_and_disposition_must_agree() {
+        for (phase, failure, accepted) in [
+            (Phase::ModelPending, None, true),
+            (Phase::OutputFailed, None, false),
+            (
+                Phase::ModelPending,
+                Some(output::ContinuationFailure::CallLimit),
+                false,
+            ),
+            (
+                Phase::OutputFailed,
+                Some(output::ContinuationFailure::CallLimit),
+                true,
+            ),
+        ] {
+            let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+            let session = sessions
+                .create(CreateRequest {
+                    app_name: "checkpoint-test".into(),
+                    user_id: "user".into(),
+                    session_id: Some("session".into()),
+                    state: HashMap::new(),
+                })
+                .await
+                .unwrap();
+            let writer =
+                ModelCheckpointWriter::new(sessions.clone(), "execution".into(), 7, [7; 32]);
+            writer
+                .set_output_continuation(Some(output::OutputContinuation {
+                    prefix: "accepted partial".into(),
+                    round: 4,
+                    repair_used: false,
+                    structured_output: false,
+                    failure,
+                }))
+                .unwrap();
+            writer
+                .persist(
+                    session.try_identity().unwrap(),
+                    "invocation",
+                    phase,
+                    Some(&LlmRequest::new(
+                        "model",
+                        vec![Content::new("user").with_text("original task")],
+                    )),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+            let stored = sessions
+                .get(GetRequest {
+                    app_name: "checkpoint-test".into(),
+                    user_id: "user".into(),
+                    session_id: "session".into(),
+                    num_recent_events: None,
+                    after: None,
+                })
+                .await
+                .unwrap();
+            assert_eq!(writer.restore(stored.as_ref()).is_ok(), accepted);
+        }
+    }
 
     #[tokio::test]
     async fn prepared_and_legacy_checkpoints_restore_one_authoritative_instruction_block() {

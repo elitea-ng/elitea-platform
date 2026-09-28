@@ -13,6 +13,8 @@ pub(in crate::agents) struct OutputContinuation {
     pub repair_used: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub structured_output: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<ContinuationFailure>,
 }
 
 impl OutputContinuation {
@@ -154,7 +156,8 @@ impl ModelCheckpointWriter {
 }
 
 /// This cause contains no provider text, arguments, or credentials.
-#[derive(Clone, Copy, Debug, thiserror::Error)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, thiserror::Error)]
+#[serde(rename_all = "snake_case")]
 pub(in crate::agents) enum ContinuationFailure {
     #[error("The child could not finish its answer; its detailed cause is unavailable.")]
     ChildFailure,
@@ -251,6 +254,7 @@ mod tests {
                 round,
                 repair_used: false,
                 structured_output: false,
+                failure: None,
             };
             request = state.request(request, "accepted ".into());
             assert_eq!(request.contents.len(), 3);
@@ -270,6 +274,7 @@ mod tests {
             round: 1,
             repair_used: false,
             structured_output: false,
+            failure: None,
         };
         let mut request = first.request(request(), "old output".into());
         request.contents.remove(1);
@@ -279,6 +284,7 @@ mod tests {
             round: 2,
             repair_used: false,
             structured_output: false,
+            failure: None,
         };
         let request = next.request(request, " new output".into());
         assert_eq!(request.contents.len(), 3);

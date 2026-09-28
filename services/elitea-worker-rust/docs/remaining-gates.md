@@ -427,3 +427,11 @@ The Full run preserves all four project facts after compaction. Chat 709 verifie
 The first summary returns HTTP 503; a new user request succeeds from retained history.
 The source mapping records both outcomes and provider usage.
 Do not use the explicit-cap chat 706 result as Auto-policy acceptance.
+
+## Terminal continuation recovery follow-up (2026-09-28)
+
+A new regression proves that exhausted continuation can call the provider again after recovery.
+The worker now checkpoints the accepted partial answer and terminal cause before publishing failure evidence.
+Local repeated recovery and PostgreSQL claim takeover pass, including stale-writer rejection.
+See [source mapping and compatibility](source-mapping/output-continuation-capacity-20260922.md#terminal-continuation-checkpoint-2026-09-28).
+Deployed publication-crash and fresh browser acceptance remain open. Gate 4 remains active.
