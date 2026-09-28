@@ -190,8 +190,8 @@ func createProjectModel(ctx context.Context, p *Provisioner, state *provisionSta
 	// create_success stays FALSE until every step has succeeded. See the
 	// package comment for why that ordering is load-bearing.
 	if err := transaction.QueryRow(ctx, `
-INSERT INTO centry.project (name, owner_id, plugins, create_success)
-VALUES ($1, $2, $3, false)
+INSERT INTO centry.project (name, owner_id, plugins, create_success, keycloak_groups)
+VALUES ($1, $2, $3, false, '{}')
 RETURNING id`,
 		state.request.Name, state.request.OwnerID, plugins,
 	).Scan(&state.projectID); err != nil {
