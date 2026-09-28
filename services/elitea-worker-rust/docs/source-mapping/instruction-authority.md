@@ -186,3 +186,34 @@ Local evidence:
 
 The first observer stops on an ambiguous text locator after execution completion.
 A fresh read-only browser verifies the same answer and reload. It does not repeat the execution.
+
+### Deployed activation correction
+
+Worker revision `42c1ac823` runs in rehearsal.
+Image digest: `sha256:d4cf1a69c869ea3f30582bf23202c3f2165d0edaa72d86781f15ec57c05cd066`.
+The replacement preserves all five mounts, credentials, networks, and resource limits.
+No execution claim is active at replacement.
+
+A fresh headed browser submits project 118, chat 2.
+Execution: `d416b4202534d3a4e5a23398599eb4e5`.
+Both source documents change during the observed compaction phase.
+Estimated input falls from 121,585 to 7,027 tokens.
+Haiku then calls both instruction tools in one model response.
+The final answer retains the original values and survives browser reload without page errors.
+The final provider usage is 7,327 input tokens and 26 output tokens.
+The UI displays their combined 7,353 tokens at 6% context usage.
+
+Persisted instruction events 30 and 31 both retain the skill and project-context activation flags.
+Both content hashes match the original source bytes. Neither event admits an edited source.
+This readback reproduces the previous batch shape and verifies that the later delta no longer removes the skill.
+The focused combined regression additionally compacts after both activations and checks the resulting model checkpoint.
+
+Evidence:
+
+- `/private/tmp/elitea-authority-fixed-result.json`
+- `/private/tmp/elitea-authority-fixed-edits.json`
+- `/private/tmp/elitea-authority-fixed-state-proof.json`
+- `/private/tmp/elitea-authority-fixed-reload.png`
+
+The tested live source-edit boundary is accepted.
+This does not claim every child topology, graph crash frontier, or production concurrency target.

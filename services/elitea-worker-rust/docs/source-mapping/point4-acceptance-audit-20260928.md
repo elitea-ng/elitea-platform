@@ -23,10 +23,9 @@ The linked mappings retain source ownership, implementation history, and individ
 
 ## Remaining closure work
 
-1. Verify exact skill and project-context revisions after source edits during an active compacted execution.
-2. Reconcile every public model-failure category with its component and deployed evidence.
-3. Record the diagnostic capture boundary explicitly, including original dependency locations and uninstrumented async work.
-4. Resolve the real-provider cache-hit check without confusing it with verified cache-counter transport.
+1. Reconcile every public model-failure category with its component and deployed evidence.
+2. Record the diagnostic capture boundary explicitly, including original dependency locations and uninstrumented async work.
+3. Resolve the real-provider cache-hit check without confusing it with verified cache-counter transport.
 
 Instruction-authority tests already preserve an original skill snapshot after transcript loss and changed resume input.
 `instruction_authority_tests.rs::activation_survives_transcript_loss_and_changed_resume_snapshot` owns that component case.
@@ -36,13 +35,17 @@ These tests do not establish the combined live source-edit, compaction, and brow
 The 2026-09-28 combined regression now exercises both source types through the actual compactor and model checkpoint writer.
 It preserves original bodies and revisions, removes old bulk history, and admits edited context only on a fresh turn.
 See [instruction-authority verification](instruction-authority.md#verification).
-The combined deployed workflow remains open.
+The combined deployed workflow now passes; see the acceptance below.
 Its isolated-project setup exposes [restored-schema and provisioning prerequisites](instruction-live-project-prerequisite-20260928.md).
 The project insert is fixed and deployed. The rehearsal PgVector bootstrap is corrected.
 The live test preserves frozen source revisions and adopts edited sources on a new turn.
 Its event audit finds a batched instruction activation overwrite.
 The Rust correction passes the focused regression, 496 agent tests, and strict Clippy.
-Deployed acceptance of the activation correction remains open.
+Worker `42c1ac823` passes fresh headed browser acceptance in project 118, chat 2.
+Execution `d416b4202534d3a4e5a23398599eb4e5` retains both original revisions after edits during compaction.
+Persisted events retain both activation flags after the paired tool calls.
+The answer and provider-derived context meter survive reload.
+See [deployed activation correction](instruction-authority.md#deployed-activation-correction).
 
 Optional tool-output clearing remains deferred by user direction.
 HITL history, general graph composition, and new pipeline nodes remain gate 5 work.
