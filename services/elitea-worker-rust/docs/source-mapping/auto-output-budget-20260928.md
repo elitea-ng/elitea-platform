@@ -112,11 +112,36 @@ Synthetic history is inserted only into new acceptance chats.
   The resumed call reports 41,968 input tokens and 42 output tokens.
   The answer retains CEDAR-731, teal, completed archive verification, and the pending handoff note.
   Reload retains the answer, 5% context display, and the Auto allowance explanation.
-- Chat 709 does not prove native Anthropic acceptance.
+- The first chat 709 execution does not prove native Anthropic acceptance.
   The browser submits the configured default fixture model instead of the intended Haiku model.
   Gateway metadata confirms `CONTINUATION-REPAIR-FIXTURE`; its terminal success is not a native-provider pass.
-  Investigate model selection before another native run.
+  The test used a shortened alias absent from the shared catalogue.
+  Correcting it to `eu.anthropic.claude-haiku-4-5-20251001-v1:0` restores the intended native selection.
+  Native Auto then succeeds with stable answer and context-indicator reload.
+  Its estimated input is 111,577 tokens against 125,696 usable tokens.
+  Provider usage reports 98,796 input tokens and 70 output tokens.
 
 The Full summary takes 27,781 milliseconds; the resumed call takes 4,224 milliseconds.
 These synthetic checks do not establish concurrency capacity or tokenizer accuracy.
 Provider usage and pre-dispatch estimates remain distinct measurements.
+
+### Native threshold and separate summarizer
+
+A follow-up in chat 709 crosses the native Auto compaction threshold.
+The first summary request returns HTTP 503 with `server_error` from Luna.
+Execution `49b5b78ba731eeca0890f3251ef899b0` fails before summary completion.
+The browser preserves the availability message and support details after reload.
+
+A new short user request retries from the preserved history after that confirmed terminal failure.
+Execution `ccaaff493662e385c3bc89e1d2b18790` succeeds.
+Estimated input falls from 114,953 to 9,289 tokens.
+Luna summary usage reports 100,433 input tokens and 565 output tokens in 7,785 milliseconds.
+Native Haiku continuation reports 7,723 input tokens and 62 output tokens in 1,705 milliseconds.
+The answer preserves all four required facts; reload retains the answer and 7% context indicator.
+This verifies a separate compatible summarizer with a native operating model.
+It proves a successful user retry after provider failure, not automatic provider retry.
+
+All three Auto scenarios have live browser and reload evidence.
+Full and native follow-up scenarios also exercise actual compaction.
+Balanced Luna ordinary execution stays below its threshold.
+The earlier alias mismatch remains an invalid native test, not an implementation pass.

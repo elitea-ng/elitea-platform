@@ -421,5 +421,7 @@ Main preserves Auto for inferred OpenAI model names without the compatibility fl
 See [source mapping and verification scope](source-mapping/auto-output-budget-20260928.md).
 Native Anthropic Auto identity and UI guidance now have component coverage.
 Coordinated deployment completes. Chats 707/708 verify Balanced Auto and Full Auto compaction with stable browser reload.
-The Full run preserves all four project facts after compaction. Native Auto acceptance is recorded in the source mapping.
+The Full run preserves all four project facts after compaction. Chat 709 verifies native Auto and threshold compaction with Luna as a separate summarizer.
+The first summary returns HTTP 503; a new user request succeeds from retained history.
+The source mapping records both outcomes and provider usage.
 Do not use the explicit-cap chat 706 result as Auto-policy acceptance.
