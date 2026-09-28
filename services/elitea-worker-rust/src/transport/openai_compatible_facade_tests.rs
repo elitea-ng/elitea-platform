@@ -24,6 +24,70 @@ use crate::agents::session::BoundOrdinaryAgentModel as _;
 
 const TOKEN: &str = "ephemeral-model-fixture-token";
 
+#[tokio::test(flavor = "current_thread")]
+async fn auto_output_uses_remaining_window_and_explicit_caps_stay_fixed() {
+    use crate::agents::{context_budget::RequestContextBudget, request::ModelContextLimits};
+    for (mode, input_tokens, selected, expected_cap) in [
+        ("balanced", 1_000, None, Some(128_000)),
+        ("balanced", 240_000, None, None),
+        ("full", 900_000, None, None),
+        ("balanced", 240_000, Some(4_000), Some(4_000)),
+    ] {
+        let (client, captured) = test_model_gateway_client(
+            vec![TestModelGatewayOutcome::Response(
+                test_model_gateway_response(stream_body(vec![Bytes::from(ordinary_sse())])),
+            )],
+            test_model_gateway_config(),
+        )
+        .unwrap();
+        let mut invocation = test_model_facade_invocation();
+        invocation.max_tokens = selected;
+        invocation.context_budget = RequestContextBudget::resolve(
+            Some(ModelContextLimits {
+                context_window_tokens: 1_000_000,
+                max_output_tokens: 128_000,
+                context_window_fallback: false,
+                max_output_fallback: false,
+                max_input_tokens: None,
+            }),
+            serde_json::json!({"budget_mode": mode})
+                .as_object()
+                .unwrap(),
+            selected,
+        )
+        .unwrap();
+        let mut request = test_model_request(&"x".repeat(input_tokens * 4));
+        request.config.as_mut().unwrap().max_output_tokens =
+            selected.map(|value| i32::try_from(value).unwrap());
+        let bound = client
+            .bind_ordinary(
+                &ClaimScopedEliteaContext::fixture(17, TOKEN),
+                23,
+                invocation,
+            )
+            .unwrap();
+        let usage = bound.request_budget().unwrap().measure(&request).unwrap();
+        assert!(usage.fits());
+        drain(bound.generate_for_test(request).await.unwrap())
+            .await
+            .unwrap();
+        let captured = captured.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        let body: serde_json::Value = serde_json::from_slice(&captured[0].body).unwrap();
+        let cap = body["max_completion_tokens"].as_u64().unwrap();
+        if let Some(expected) = expected_cap {
+            assert_eq!(cap, expected);
+        } else {
+            assert!((1_024..128_000).contains(&cap));
+        }
+        assert!(
+            usage.estimated_input + cap + u64::from(usage.budget.margin_tokens)
+                <= u64::from(usage.budget.total_tokens)
+        );
+        assert_eq!(usage.budget.output_reservation, selected.unwrap_or(1_024));
+    }
+}
+
 fn stream_body(chunks: Vec<Bytes>) -> Body {
     let frames = chunks
         .into_iter()

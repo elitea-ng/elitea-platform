@@ -693,7 +693,13 @@ fn encode_request_body(
         "stream_options".to_owned(),
         serde_json::json!({"include_usage": true}),
     );
-    if let Some(max_tokens) = invocation.max_tokens {
+    let auto_budget = invocation
+        .context_budget
+        .filter(|_| invocation.max_tokens.is_none());
+    if let Some(max_tokens) = invocation
+        .max_tokens
+        .or_else(|| auto_budget.map(|budget| budget.limits.max_output_tokens))
+    {
         body.insert(
             "max_completion_tokens".to_owned(),
             serde_json::Value::from(max_tokens),
@@ -711,13 +717,25 @@ fn encode_request_body(
             serde_json::Value::String(reasoning_effort.as_str().to_owned()),
         );
     }
-    serde_json::to_vec(&body).map_err(|_| {
+    let encoding_error = |_| {
         model_error(
             ErrorCategory::InvalidInput,
             "model_gateway.request_encoding",
             "the model gateway request is malformed",
         )
-    })
+    };
+    let mut encoded = serde_json::to_vec(&body).map_err(encoding_error)?;
+    if let Some(budget) = auto_budget {
+        let cap = budget.auto_output_limit(&encoded)?;
+        if cap < budget.limits.max_output_tokens {
+            body.insert("max_completion_tokens".to_owned(), cap.into());
+            // Reuse the buffer. The smaller number cannot increase its size or
+            // the input estimate used to derive this output cap.
+            encoded.clear();
+            serde_json::to_writer(&mut encoded, &body).map_err(encoding_error)?;
+        }
+    }
+    Ok(encoded)
 }
 
 pub(super) fn validate_llm_request<'a>(

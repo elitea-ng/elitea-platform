@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -583,19 +584,21 @@ func TestCurrentApplicationToolSnapshotValidatesConstruction(t *testing.T) {
 func TestCurrentApplicationToolSnapshotPreservesProviderAutoMaxTokens(t *testing.T) {
 	tests := []struct {
 		name              string
+		modelName         string
 		compatible        bool
 		supportsReasoning bool
 		wantMaxTokens     int64
 	}{
-		{name: "OpenAI-compatible model", compatible: true, wantMaxTokens: -1},
-		{name: "native Anthropic model", supportsReasoning: true, wantMaxTokens: 32_000},
+		{name: "OpenAI-compatible model", modelName: "claude-compatible", compatible: true, wantMaxTokens: -1},
+		{name: "OpenAI inferred dialect", modelName: "global.openai.gpt-5.6-luna", wantMaxTokens: -1},
+		{name: "native Anthropic model", modelName: "eu.anthropic.claude-haiku", supportsReasoning: true, wantMaxTokens: 32_000},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			maxOutputTokens := 32_000
 			models := &currentAgentModelCatalogStub{response: configurationapp.CurrentModelCatalogResponse{
 				Items: []configurationapp.CurrentModelCatalogItem{{
-					Name: "model", ProjectID: 7, OpenAICompatible: &test.compatible,
+					Name: test.modelName, ProjectID: 7, OpenAICompatible: &test.compatible,
 					SupportsReasoning: &test.supportsReasoning, MaxOutputTokens: &maxOutputTokens,
 				}},
 			}}
@@ -609,7 +612,7 @@ func TestCurrentApplicationToolSnapshotPreservesProviderAutoMaxTokens(t *testing
 			result, err := service.FreezeCurrentApplicationVersion(
 				context.Background(), CurrentApplicationVersionFreezeRequest{
 					ProjectID: 7, ActorUserID: 11,
-					VersionDetails: json.RawMessage(`{"llm_settings":{"model_name":"model","max_tokens":-1},"tools":[]}`),
+					VersionDetails: json.RawMessage(fmt.Sprintf(`{"llm_settings":{"model_name":%q,"max_tokens":-1},"tools":[]}`, test.modelName)),
 				},
 			)
 			if err != nil {

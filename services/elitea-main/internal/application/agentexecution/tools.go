@@ -610,7 +610,9 @@ func (service *CurrentApplicationToolSnapshotService) resolveCurrentAgentModel(
 		// OpenAI-compatible providers define Auto by omission. Keep the sentinel
 		// in the immutable snapshot so the worker can omit the wire field. Native
 		// Anthropic requires max_tokens, so Auto uses the configured model limit.
-		if maxTokens == -1 && !compatible {
+		lowerModelName := strings.ToLower(selected.Name)
+		nativeAnthropic := !compatible && (strings.Contains(lowerModelName, "anthropic") || strings.Contains(lowerModelName, "claude"))
+		if maxTokens == -1 && nativeAnthropic {
 			if selected.MaxOutputTokens == nil || *selected.MaxOutputTokens <= 0 ||
 				*selected.MaxOutputTokens > math.MaxInt32 {
 				return unsupportedStart("the native model has no valid maximum output token configuration")

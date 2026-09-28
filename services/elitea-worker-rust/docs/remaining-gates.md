@@ -412,3 +412,13 @@ Native Anthropic Auto resolves to the catalogue maximum in
 `services/elitea-main/internal/application/agentexecution/tools.go`.
 Reducing its reservation also requires changing the effective request cap.
 Keep reservation and provider request limits consistent.
+
+
+## Auto output policy follow-up (2026-09-28)
+
+The compatible Auto implementation now uses remaining combined capacity, with a small minimum output allowance.
+Explicit caps and summary reservations remain independent.
+Main preserves Auto for inferred OpenAI model names without the compatibility flag.
+See [source mapping and verification scope](source-mapping/auto-output-budget-20260928.md).
+Native Anthropic Auto identity, UI guidance, and deployed browser acceptance remain open.
+Do not use the explicit-cap chat 706 result as Auto-policy acceptance.

@@ -7,6 +7,7 @@ use super::request::ModelContextLimits;
 use super::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
 
 const BALANCED_TOKENS: u32 = 272_000;
+const AUTO_OUTPUT_FLOOR: u32 = 1_024;
 
 /// The compaction boundary consumes measurements of the actual provider body.
 /// Implementations must not dispatch, consume a model turn, or change completion state.
@@ -165,8 +166,11 @@ impl RequestContextBudget {
         {
             return Err(invalid());
         }
-        let output_reservation = selected_output.unwrap_or(limits.max_output_tokens);
-        if output_reservation == 0
+        // Auto shares the combined window with input. The transport caps its
+        // output to the remaining space on each call before dispatch.
+        let output_reservation =
+            selected_output.unwrap_or_else(|| limits.max_output_tokens.min(AUTO_OUTPUT_FLOOR));
+        if selected_output == Some(0)
             || (output_reservation > limits.max_output_tokens && !limits.max_output_fallback)
         {
             return Err(invalid());
@@ -195,6 +199,19 @@ impl RequestContextBudget {
             limits,
             selection,
         })
+    }
+
+    /// Auto can use the remaining combined window, up to the model maximum.
+    /// Keep one token in an overfull measurement; admission rejects that body
+    /// after compaction has had the opportunity to replace its history.
+    pub(crate) fn auto_output_limit(self, encoded: &[u8]) -> adk_rust::Result<u32> {
+        let input = estimate_provider_request(encoded)?;
+        u32::try_from(
+            u64::from(self.total_tokens.saturating_sub(self.margin_tokens))
+                .saturating_sub(input)
+                .clamp(1, u64::from(self.limits.max_output_tokens)),
+        )
+        .map_err(|_| budget_error())
     }
 
     /// Check the completed provider document, including static instructions,
@@ -267,10 +284,13 @@ mod tests {
             (128_000, 16_000, "balanced", 128_000, 112_000),
         ] {
             let settings = json!({"budget_mode": mode}).as_object().unwrap().clone();
-            let budget =
-                RequestContextBudget::resolve(Some(limits(window, output)), &settings, None)
-                    .unwrap()
-                    .unwrap();
+            let budget = RequestContextBudget::resolve(
+                Some(limits(window, output)),
+                &settings,
+                Some(output),
+            )
+            .unwrap()
+            .unwrap();
             assert_eq!(budget.total_tokens, total);
             assert_eq!(budget.input_limit + budget.margin_tokens, before_margin);
             assert_eq!(budget.output_reservation, output);
@@ -309,7 +329,7 @@ mod tests {
                 .unwrap();
         let child = parent.for_model(limits(400_000, 64_000), None).unwrap();
         assert_eq!(child.total_tokens, 400_000);
-        assert_eq!(child.input_limit + child.margin_tokens, 336_000);
+        assert_eq!(child.input_limit + child.margin_tokens, 398_976);
     }
 
     #[test]
@@ -324,12 +344,12 @@ mod tests {
         let child = parent.for_model(limits(128_000, 16_000), None).unwrap();
         assert_eq!(parent.compaction_trigger(), 184_752);
         assert_eq!(parent.compaction_target(), 30_792);
-        assert_eq!(child.compaction_trigger(), 99_648);
-        assert_eq!(child.compaction_target(), 16_608);
+        assert_eq!(child.compaction_trigger(), 113_127);
+        assert_eq!(child.compaction_target(), 18_854);
 
         let request = RequestContextUsage {
             budget: parent,
-            estimated_input: 100_000,
+            estimated_input: 115_000,
             request_bytes: 400_000,
             request_byte_limit: 1_048_576,
         };
