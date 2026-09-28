@@ -15,13 +15,13 @@ use super::attachments;
 use super::context_management::ContextManagementPlan;
 use super::internal_tools::{InternalToolCatalog, InternalToolError};
 use super::request::{
-    AgentExecutionKind, AgentExecutionRequest, MAX_OUTPUT_CONTINUATION_BYTES, UserInput,
+    AgentExecutionKind, AgentExecutionRequest, MAX_AGENT_USER_INPUT_BYTES,
+    MAX_OUTPUT_CONTINUATION_BYTES, UserInput,
 };
 use super::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
 use super::variables::{self, AgentVariables};
 
 const MAX_MODEL_NAME_BYTES: usize = 256;
-const MAX_USER_INPUT_BYTES: usize = 512 * 1_024;
 const MAX_CHAT_HISTORY_MESSAGES: usize = 999;
 pub(super) const DEFAULT_AGENT_STEP_LIMIT: u32 = 25;
 pub(crate) const MAX_AGENT_STEP_LIMIT: u32 = 1_024;
@@ -515,7 +515,7 @@ fn validate_common_profile(
         UserInput::Text(text) if text.is_empty() || text.contains('\0') => {
             return Err(invalid_profile());
         }
-        UserInput::Text(text) if text.len() > MAX_USER_INPUT_BYTES => {
+        UserInput::Text(text) if text.len() > MAX_AGENT_USER_INPUT_BYTES => {
             return Err(resource_exhausted_profile());
         }
         UserInput::Text(_) => {}

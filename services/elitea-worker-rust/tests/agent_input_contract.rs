@@ -641,3 +641,37 @@ fn large_output_continuation_survives_wire_and_rejects_oversized_text() {
         assert!(request_from(decoded, AgentExecutionKind::Application, binding()).is_err());
     }
 }
+
+#[test]
+fn admitted_user_text_keeps_its_data_budget_without_expanding_metadata() {
+    use prost::Message;
+    for text in [
+        "x".repeat(512 * 1024),
+        "x".repeat(256 * 1024),
+        "\n".repeat(256 * 1024),
+        "界".repeat(80 * 1024),
+    ] {
+        let mut message = application_message();
+        message.user_input = serde_json::to_vec(&text).unwrap();
+        let decoded = parse_agent_execution_input(&message.encode_to_vec()).unwrap();
+        let request = request_from(decoded, AgentExecutionKind::Application, binding()).unwrap();
+        assert!(matches!(request.payload.user_input, UserInput::Text(actual) if actual == text));
+    }
+    let mut message = application_message();
+    message.user_input = serde_json::to_vec(&"x".repeat(512 * 1024 + 1)).unwrap();
+    assert!(matches!(
+        request_from(message, AgentExecutionKind::Application, binding()),
+        Err(AgentProtocolError::ResourceExhausted(_))
+    ));
+    for value in [
+        serde_json::json!({"untrusted": "x".repeat(64 * 1024 + 1)}),
+        serde_json::json!([{"untrusted": "x".repeat(64 * 1024 + 1)}]),
+    ] {
+        let mut message = application_message();
+        message.user_input = serde_json::to_vec(&value).unwrap();
+        assert!(matches!(
+            request_from(message, AgentExecutionKind::Application, binding()),
+            Err(AgentProtocolError::ResourceExhausted(_))
+        ));
+    }
+}

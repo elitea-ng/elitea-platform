@@ -1,6 +1,6 @@
 # Input admission diagnostics
 
-Status: focused checks and deployed browser acceptance pass. The message-capacity mismatch remains a separate correction.
+Status: focused checks and deployed browser acceptance pass. The message-capacity correction below awaits deployed verification.
 
 ## Source mapping
 
@@ -75,3 +75,22 @@ Rust `agents/assembly.rs` already allows text up to 512 KiB.
 The test proves the new diagnostic path, not an acceptable long-message contract.
 Align Rust parsing with the admitted data-plane content before closing this remaining limit issue.
 Preserve metadata bounds and model-context admission; do not increase arbitrary control strings.
+
+## Admitted user-message capacity correction
+
+Main continues to admit user messages up to 256 KiB.
+Rust now parses root user text against its existing 512 KiB assembly capacity.
+Both boundaries use decoded UTF-8 byte lengths.
+Escaped JSON can exceed 256 KiB without exceeding the admitted decoded message size.
+The complete encoded execution input remains bounded at 8 MiB.
+Object metadata and nested array values retain their 64 KiB string bound.
+Model context admission and compaction remain unchanged. No database or provider configuration changes are required.
+
+`agents/request.rs` owns the shared user-text capacity.
+`agents/protocol.rs::parse_user_input` applies that capacity only to root text.
+`agents/assembly.rs::validate_common_profile` uses the same constant.
+The existing source mapping above supplies the current-platform business behavior reference.
+This correction concerns the replatform transport boundary, which must preserve a message already admitted by Main.
+
+Contract tests cover the inclusive worker boundary, Main's boundary, escaped text, multibyte text, oversize rejection, and unchanged metadata rejection.
+Deployed acceptance must regenerate chat 723 with its original 70 KiB user message.

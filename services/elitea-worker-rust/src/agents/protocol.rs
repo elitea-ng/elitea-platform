@@ -5,7 +5,7 @@ use serde_json::{Map, Value};
 
 use super::request::{
     AgentExecutionKind, AgentExecutionPayload, AgentExecutionRequest, AgentInputBinding,
-    MAX_AGENT_INSTRUCTION_BYTES, NextInputSuggestionPolicy, UserInput,
+    MAX_AGENT_INSTRUCTION_BYTES, MAX_AGENT_USER_INPUT_BYTES, NextInputSuggestionPolicy, UserInput,
 };
 use crate::protocol::{
     ProtocolError as AgentProtocolError, elitea::runtime::v1::AgentExecutionInputV1,
@@ -75,7 +75,7 @@ pub fn request_from(
             "the agent chat history must be a list",
         ));
     };
-    let user_input = match parse_json_value(&message.user_input)? {
+    let user_input = match parse_user_input(&message.user_input)? {
         Value::String(value) => UserInput::Text(value),
         Value::Array(value) => UserInput::ContentBlocks(value),
         _ => {
@@ -274,6 +274,19 @@ pub(crate) fn parse_json_value(raw: &[u8]) -> Result<Value, AgentProtocolError> 
     parse_bounded_json_value(raw, MAX_JSON_VALUE_BYTES)
 }
 
+// User text is data-plane content. Escaped JSON may exceed the decoded
+// text limit, but the complete encoded execution input stays bounded.
+fn parse_user_input(raw: &[u8]) -> Result<Value, AgentProtocolError> {
+    if raw.is_empty() || raw.len() > MAX_AGENT_INPUT_BYTES {
+        return Err(AgentProtocolError::ResourceExhausted(
+            "the agent user input exceeds the input limit",
+        ));
+    }
+    let value = serde_json::from_slice(raw).map_err(|_| malformed_json())?;
+    JsonLimits::new(raw).validate_scope(JsonTextScope::UserText)?;
+    Ok(value)
+}
+
 fn parse_history(raw: &[u8]) -> Result<Value, AgentProtocolError> {
     if raw.is_empty() || raw.len() > MAX_AGENT_INPUT_BYTES {
         return Err(AgentProtocolError::ResourceExhausted(
@@ -329,6 +342,7 @@ enum JsonTextScope {
     Application,
     Version,
     Instruction,
+    UserText,
 }
 
 impl JsonTextScope {
@@ -565,10 +579,10 @@ impl<'a> JsonLimits<'a> {
             Some(b'{') => self.object(depth, scope),
             Some(b'[') => self.array(depth),
             Some(b'\"') => self
-                .string(if matches!(scope, JsonTextScope::Instruction) {
-                    MAX_AGENT_INSTRUCTION_BYTES
-                } else {
-                    self.max_string_bytes
+                .string(match scope {
+                    JsonTextScope::Instruction => MAX_AGENT_INSTRUCTION_BYTES,
+                    JsonTextScope::UserText => MAX_AGENT_USER_INPUT_BYTES,
+                    _ => self.max_string_bytes,
                 })
                 .map(|_| ()),
             Some(b't') => self.literal(b"true"),
