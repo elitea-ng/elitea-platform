@@ -47,5 +47,10 @@ New assembly coverage checks saved, ad-hoc, and nested agents, plus variable ren
 It also checks oversized instructions and preserves the pipeline YAML bound.
 All 494 agent tests pass with PostgreSQL enabled. Strict library and test Clippy checks pass.
 The final assembly regression also passes with its pipeline-bound assertion.
-Deployment and chat 720 regeneration remain pending.
+Deployment exposes a second 64 KiB bound in shared model binding.
+Execution `0eef389f287f4b4923328ad0e8322e31` fails there before provider dispatch.
+The shared facade validator now uses the same 8 MiB instruction ceiling.
+Both native Anthropic and compatible adapters call this validator.
+Regression coverage checks the boundary, null rejection, and complete compatible request serialization.
+Deployed acceptance remains open until this second correction passes the same browser case.
 Do not count the earlier smaller-prefix chat 721 as acceptance of this correction.

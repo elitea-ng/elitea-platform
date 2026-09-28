@@ -25,6 +25,28 @@ use crate::agents::session::BoundOrdinaryAgentModel as _;
 
 const TOKEN: &str = "ephemeral-model-fixture-token";
 
+#[test]
+fn model_binding_uses_the_instruction_content_budget() {
+    use super::openai_compatible_facade::validate_invocation;
+    use crate::agents::request::MAX_AGENT_INSTRUCTION_BYTES;
+
+    let mut invocation = test_model_facade_invocation();
+    invocation.system_instruction = "x".repeat(100 * 1_024);
+    assert!(validate_invocation(&invocation).is_ok());
+    invocation.system_instruction = "x".repeat(MAX_AGENT_INSTRUCTION_BYTES);
+    assert!(validate_invocation(&invocation).is_ok());
+    invocation.system_instruction.push('x');
+    assert!(matches!(
+        validate_invocation(&invocation),
+        Err(ModelFacadeError::InvalidInvocation)
+    ));
+    invocation.system_instruction = "invalid\0instruction".to_owned();
+    assert!(matches!(
+        validate_invocation(&invocation),
+        Err(ModelFacadeError::InvalidInvocation)
+    ));
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn invalid_or_absent_usage_does_not_invent_counts_or_fail_the_answer() {
     for usage in [
@@ -543,6 +565,44 @@ async fn empty_system_instruction_is_omitted_from_openai_messages() {
     assert_eq!(body["messages"].as_array().map(Vec::len), Some(1));
     assert_eq!(body["messages"][0]["role"], "user");
     assert_eq!(body["messages"][0]["content"], "explain this");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn large_system_instruction_reaches_openai_messages_intact() {
+    let (client, captured) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(
+            test_model_gateway_response(Body::new(Full::new(Bytes::from(ordinary_sse())))),
+        )],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway client");
+    let mut invocation = test_model_facade_invocation();
+    let instructions = "inventory fact; ".repeat(8_000);
+    invocation.system_instruction = instructions.clone();
+    let bound = client
+        .bind_ordinary(
+            &ClaimScopedEliteaContext::fixture(17, TOKEN),
+            17,
+            invocation,
+        )
+        .expect("bound model with large instructions");
+
+    drain(
+        bound
+            .generate_for_test(test_model_request("explain this"))
+            .await
+            .expect("model response stream"),
+    )
+    .await
+    .expect("valid SSE");
+
+    let captured = captured.lock().expect("captured requests");
+    let body: serde_json::Value =
+        serde_json::from_slice(&captured[0].body).expect("model request JSON");
+    assert_eq!(body["messages"].as_array().map(Vec::len), Some(2));
+    assert_eq!(body["messages"][0]["role"], "system");
+    assert_eq!(body["messages"][0]["content"], instructions);
+    assert_eq!(body["messages"][1]["content"], "explain this");
 }
 
 #[tokio::test(flavor = "current_thread")]
