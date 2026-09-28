@@ -556,3 +556,61 @@ CPU and memory support alone does not prove these requirements.
 Use separate bounded admission and per-job limits so concurrent pipelines cannot consume unbounded executor resources.
 Reuse pinned images and immutable dependency/build artifacts. Do not reuse another invocation's mutable interpreter or workspace.
 Measure cold and warm execution independently before claiming performance or platform capacity.
+
+## Required Docker and Kubernetes deployment support
+
+Both deployments are required for Gate 5 acceptance, not alternative future options.
+The trusted supervisor uses Docker containers on Docker deployments and native Kubernetes
+Jobs on Kubernetes. Neither the worker nor user-code containers receive a runtime socket.
+The same durable invocation identity, cancellation, bounded output, and terminal receipt
+contract must apply to both backends. Kubernetes automatic retry of user code must be
+disabled by default: reconciliation inspects the existing invocation before deciding
+whether a new attempt is safe. A missing workload without a terminal receipt is not proof
+that its external effects did not happen.
+
+Runtime image preparation is a deployment operation, not a per-invocation build:
+
+- Publish separate digest-pinned language runtime images with their standard dependencies
+  already installed. Share base layers where practical; the worker image stays independent.
+- Docker preparation pulls and verifies configured digests before the supervisor admits
+  that language. Normal job creation uses the local image; missing images return the
+  executor to preparation rather than starting unrestricted fallback execution.
+- Kubernetes uses explicit `imagePullPolicy: IfNotPresent` with immutable digests.
+  An optional pre-pull DaemonSet warms the configured images on sandbox nodes, including
+  newly added nodes. Image caches are node-local and subject to eviction; cache misses
+  must remain a supported, bounded preparation path with visible status.
+- Air-gapped installations may use preloaded images and `Never`, but must verify image
+  availability on every eligible node. This is a deployment mode, not the default.
+- Keep image/preparation deadlines separate from the user-code execution deadline, with
+  an overall job deadline. Distinguish preparation failure from code timeout in results.
+- Cache dependency/build artifacts by runtime digest, architecture, and resolved dependency
+  identity. Publish artifacts atomically and mount completed shared artifacts read-only;
+  mutable environments and output directories remain invocation-local.
+
+Image caching avoids repeated downloads, not container/process startup cost. Warm-pool
+complexity is deferred until measurements establish a need. Verify cold pull, warm spawn,
+cache eviction, registry outage, new-node admission, and supervisor restart for both
+deployment paths before claiming support. These are design requirements; the supervisor,
+Kubernetes backend, image preparation, and deployment acceptance remain unimplemented.
+
+References: [Docker pull policy](https://docs.docker.com/reference/cli/docker/container/run/#set-the-pull-policy---pull)
+and [Kubernetes images and pull policy](https://kubernetes.io/docs/concepts/containers/images/).
+
+
+## Initial optional ADK Docker hardening implementation
+
+The worker manifest now patches optional `adk-sandbox = 2.2.0` to the vendored
+source, enabled only by `sandbox-supervisor`. Provenance is in `vendor/README.md`.
+`vendor/adk-sandbox/src/workspace/docker.rs` implements the explicit offline
+non-root policy, combined 1 MiB decoded output cap, stream/input failure handling,
+command-error/timeout termination, bounded preparation with attempted cleanup,
+and cleanup-handle retention after removal failure. Policy is revalidated at
+provisioning because upstream resource fields remain mutable. Code-policy
+snapshot/resume is rejected rather than silently losing tmpfs state.
+
+Verification: the vendored crate's 85 library tests pass with
+`--no-default-features --features workspace-docker`, including output boundary
+and invalid UTF-8 expansion coverage. These are component tests, not Docker
+termination/recovery proof. Pending: cancellation-safe ownership, durable job
+registry/receipts, lost-acknowledgement reconciliation, Kubernetes backend,
+real-container tests, and UI execution acceptance. Code nodes remain gated.
