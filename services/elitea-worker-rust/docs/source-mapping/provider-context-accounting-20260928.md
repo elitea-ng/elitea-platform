@@ -139,7 +139,7 @@ That fixture does not implement the direct-chat continuation prompt. Do not use 
 Its evidence remains under `elitea-provider-meter-continuation-*`.
 
 This check closes uninterrupted pipeline continuation accounting only.
-Cached-input reuse, accounting across process recovery, and large-window accounting remain open.
+Cached-input reuse, recovery, and large-window accounting are pending at this stage. The later sections record additional acceptance.
 
 
 ## Haiku repeated-prefix check and cache boundary
@@ -216,3 +216,44 @@ A live cache hit remains unproven. Do not infer one from repeated input or a suc
 The earlier private fixture configuration 21 does not pass admission and is removed through the API.
 Chat 722 selects the synthetic fallback; its two runs are excluded from native and real-provider acceptance.
 Its evidence remains under `elitea-native-adapter-cache-*` for that failed setup.
+
+## Provider accounting across worker recovery
+
+Fresh headed Playwright verifies chat 724 on worker revision `6d5e2adf9`.
+The first request establishes a completed baseline measurement. The next request selects the fixture's slow-stream behavior.
+After partial text appears, the test confirms that this execution owns the only active worker claim.
+The test sends SIGKILL to the rehearsal worker and starts the same container. Main and the browser remain running.
+
+Execution `833851524c38a73434826c33ffcdcbc6` retains its identity and reaches `SUCCEEDED` under claim attempt 2.
+Both claims release. The completed ADK event stores one input token and 84 output tokens.
+The browser shows 85 / 126,720 tokens, with the same input and output breakdown.
+It does not add the baseline request or interrupted attempt to the latest-call occupancy.
+The final response contains each checked stream sentinel once. Reload preserves the measurement and execution identity.
+The reload screenshot is inspected. Browser page errors and failure events remain empty.
+
+Evidence uses `elitea-meter-recovery-*` in the local temporary directory.
+The browser uses real application endpoints without response interception.
+The provider is a synthetic HTTP fixture with deterministic usage, not a real-model token accuracy test.
+This check proves root-agent latest-call accounting across in-flight worker loss and lease takeover.
+It does not establish provider billing deduplication for an interrupted model call.
+
+## Full-window accounting after compaction
+
+Fresh headed Playwright submits a short follow-up in existing chat 708 on worker revision `6d5e2adf9`.
+The saved Luna model uses Full mode with a 1,000,000-token window and Auto output.
+The test preserves the previous large history and durable compaction state. It does not regenerate or reseed that history.
+Execution `35832e2e52084f42bb1007fca0589a8d` returns all four required project facts.
+These are delivery code CEDAR-731, approved color teal, completed archive verification, and the pending handoff note.
+
+The provider reports 42,040 input tokens and 42 output tokens.
+Persisted ADK usage contains the same counts and a combined total of 42,082.
+The UI displays 42,082 / 991,808 tokens, or 4%.
+The denominator subtracts the 8,192-token safety margin from the full window without subtracting output twice.
+The Auto minimum allowance remains 1,024 tokens for request admission.
+Reload preserves the exact measurement and execution identity.
+The screenshot is inspected. Browser page errors and execution failure events remain empty, without browser-response mocks.
+Evidence uses `elitea-meter-full-708-*` in the local temporary directory.
+
+This closes the Full-window latest-call accounting check after durable compaction.
+The earlier [Auto acceptance](auto-output-budget-20260928.md#deployed-auto-acceptance) supplies the separate near-window compaction evidence.
+This follow-up does not repeat that expensive summarization or establish a live cache hit. The provider reports zero cache reads.

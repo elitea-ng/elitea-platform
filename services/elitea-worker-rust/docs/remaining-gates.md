@@ -464,3 +464,14 @@ See [source mapping and deployed evidence](source-mapping/input-admission-diagno
 The correction retains metadata bounds and model-context admission.
 Field-specific public diagnostics and the remaining provider-accounting acceptance checks stay open.
 Gate 4 remains active.
+
+
+## Provider accounting acceptance follow-up (2026-09-28)
+
+Chat 724 verifies latest-call context accounting across worker SIGKILL and lease takeover.
+The same execution completes under claim attempt 2. The UI and persisted ADK usage agree before browser reload and afterwards.
+Chat 708 verifies real Luna accounting in Full mode after its earlier durable compaction.
+All four project facts remain available, and the UI correctly uses the one-million-token combined window.
+See [recovery and Full-window evidence](source-mapping/provider-context-accounting-20260928.md#provider-accounting-across-worker-recovery).
+Live cache-hit acceptance remains unproven because tested providers report zero cache reads.
+Component tests cover nonzero cache counters and their conversion. Gate 4 remains active.
