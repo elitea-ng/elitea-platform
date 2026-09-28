@@ -351,6 +351,10 @@ metrics and Kubernetes activation remain deployment-owned.
 Status: required gate 4 work, confirmed by user steering on 2026-09-14.
 This work does not replace the remaining authorization or production-activation gates.
 
+Current status, 2026-09-28: deployed release capture and async source-location checks pass in chats 654 and 665.
+The [acceptance audit](point4-acceptance-audit-20260928.md) distinguishes completed diagnostics from remaining verification.
+The following baseline describes the initial slice. Later sections in the linked release mapping supersede its pending capture status.
+
 The browser can show `The runtime operation failed` without enough information to identify the failed boundary.
 The current slice adds the static upstream ADK error code to the existing lifecycle log.
 Full span traces, stack backtraces, and richer public error projection are not implemented by that change.
