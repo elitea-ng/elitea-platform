@@ -1,6 +1,6 @@
 # Instruction content capacity
 
-Status: implementation and focused verification pass. Deployed acceptance remains open.
+Status: instruction admission passes focused checks and deployed browser acceptance. Field-specific rejection diagnostics remain separate.
 
 ## Confirmed failure
 
@@ -52,5 +52,25 @@ Execution `0eef389f287f4b4923328ad0e8322e31` fails there before provider dispatc
 The shared facade validator now uses the same 8 MiB instruction ceiling.
 Both native Anthropic and compatible adapters call this validator.
 Regression coverage checks the boundary, null rejection, and complete compatible request serialization.
-Deployed acceptance remains open until this second correction passes the same browser case.
+The following deployed check validates the second correction.
 Do not count the earlier smaller-prefix chat 721 as acceptance of this correction.
+
+
+## Deployed acceptance
+
+Worker revision `8bbecd3b1` passes the original chat 720 case in fresh headed Playwright.
+The test keeps the original 800-record instructions and clicks Regenerate once after deployment.
+Execution `202b136b513bad52266bee45741453fa` completes with the correct inventory answer.
+Worker logs confirm Haiku uses the OpenAI-compatible adapter for this regenerated request.
+This test does not establish native Anthropic cache reuse.
+Provider counts are 19,275 input tokens and 45 output tokens.
+The panel shows 19,320 / 126,720 tokens, or 15% occupancy.
+Reload preserves the answer, execution identity, and provider counts.
+Both context events arrive. Browser page errors remain empty; browser responses are not mocked.
+The live and reload screenshots are inspected.
+Evidence uses `elitea-instruction-binding-720-*` in the local temporary directory.
+The release image is `sha256:08d21d9e3682e292ef4da4bbd45871422966282aa5fc40e6df81edaa53e3ec22`.
+Deployment retains all five worker mounts, credentials, database selection, networks, and resource limits.
+All 34 compatible facade tests and strict library/test Clippy checks pass for the final correction.
+This closes instruction admission for this case. It does not prove cache reuse or production capacity.
+The earlier failed runs remain recorded above; generic rejection diagnostics remain an open gate 4 concern.
