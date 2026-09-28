@@ -67,6 +67,7 @@ PER-REQUEST MODES, SELECTED BY THE PROMPT (see `_script_for`):
 #                      [[mock:http_503]] return synthetic provider errors.
   [[mock:incomplete_stream]] end after partial text without a terminal model event.
   [[mock:stream_error]] emit partial text followed by a provider error event.
+  [[mock:wrong_model]] emit a Responses start event with the wrong model identity.
   [[mock:cached_usage]] report fixed cache and reasoning usage for accounting tests.
   [[mock:slow]]       stream a long, scripted reply one word at a time with a
                       per-chunk delay, so a test can act while the turn is
@@ -1210,7 +1211,8 @@ class Handler(BaseHTTPRequestHandler):
             # Bifrost uses Responses upstream for the native Anthropic dialect.
             # This route supports only the explicit error fixture, not inference.
             _record({"path": path, "model": request.get("model"), "mode": "responses_error_fixture", "at": time.time()})
-            if not request.get("stream") or "[[mock:stream_error]]" not in json.dumps(request.get("input")):
+            fixture_input = json.dumps(request.get("input"))
+            if not request.get("stream") or not any(marker in fixture_input for marker in ("[[mock:stream_error]]", "[[mock:wrong_model]]")):
                 self._send(400, {"error": {"message": "unsupported fixture", "type": "invalid_request_error"}})
                 return
             payload = {"type": "response.failed", "sequence_number": 0, "response": {
@@ -1224,6 +1226,8 @@ class Handler(BaseHTTPRequestHandler):
                 "status": "in_progress", "output": [],
                 "usage": {"input_tokens": 1, "output_tokens": 0, "total_tokens": 1},
             }}
+            if "[[mock:wrong_model]]" in fixture_input:
+                started["response"]["model"] = "unexpected-fixture-model"
             payload["sequence_number"] = 1
             raw = f"data: {json.dumps(started)}\n\ndata: {json.dumps(payload)}\n\n".encode()
             self.send_response(200)

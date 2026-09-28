@@ -700,3 +700,9 @@ Evidence: `/private/tmp/elitea-stream-error-result.json`, `elitea-stream-error-n
 Matching live and reload screenshots use the `elitea-stream-error-{compatible,native}-20260928` prefix.
 The native test model uses private project configuration 22 and its isolated picker entry 23.
 It reuses the synthetic provider credential and contains no real provider secret.
+
+The Responses fixture adds `[[mock:wrong_model]]` for malformed-response acceptance.
+It emits a valid response-start shape with an unexpected model identity.
+The worker must reject that identity before accepting any answer content.
+The HTTP fixture test verifies the incorrect identity and preserves the existing healthy-request rejection checks.
+Eight fixture tests pass.

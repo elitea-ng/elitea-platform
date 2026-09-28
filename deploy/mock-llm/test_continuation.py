@@ -101,7 +101,7 @@ class ContinuationFixtureTest(unittest.TestCase):
         self.assertEqual(reason, "stop")
 
     def test_responses_error_fixture_requires_explicit_stream_marker(self):
-        for prompt in ("[[mock:stream_error]]", "healthy"):
+        for prompt in ("[[mock:stream_error]]", "[[mock:wrong_model]]", "healthy"):
             request = urllib.request.Request(
                 f"http://127.0.0.1:{self.server.server_port}/v1/responses",
                 data=json.dumps({"model": "fixture", "stream": True,
@@ -117,6 +117,8 @@ class ContinuationFixtureTest(unittest.TestCase):
             with urllib.request.urlopen(request, timeout=5) as response:
                 events = [json.loads(line[6:]) for line in response.read().decode().splitlines() if line.startswith("data: ")]
             self.assertEqual(events[0]["type"], "response.created")
+            expected_model = "unexpected-fixture-model" if prompt == "[[mock:wrong_model]]" else "vllm/fixture"
+            self.assertEqual(events[0]["response"]["model"], expected_model)
             event = events[-1]
             self.assertEqual(event["type"], "response.failed")
             self.assertEqual(event["response"]["error"]["message"], "SYNTHETIC_PROVIDER_BODY_MUST_NOT_REACH_UI")
