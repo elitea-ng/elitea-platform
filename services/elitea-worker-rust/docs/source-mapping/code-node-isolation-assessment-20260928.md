@@ -54,3 +54,79 @@ Pure computations and effectful code need distinct retry rules.
 - Measure concurrent sandbox admission against the platform capacity target.
 
 Bubblewrap, container isolation, WASM, and other backends remain candidates. No backend is selected or accepted yet.
+
+## Exact upstream inspection
+
+The inspected ADK revision is `3b946c1949b28545f992c631ad167441a36e4e66`.
+This inspection does not change the worker dependency lockfile.
+
+| Source | Verified behavior | Required integration work |
+| --- | --- | --- |
+| [`adk-code/src/rust_executor.rs`](https://github.com/zavora-ai/adk-rust/blob/3b946c1949b28545f992c631ad167441a36e4e66/adk-code/src/rust_executor.rs) | Checks and builds Rust before sandbox execution. Check and build launch `rustc` with `tokio::process::Command`. | Isolate compilation as well as the resulting program. Bound compiler output and terminate descendant processes. |
+| [`adk-code/src/container.rs`](https://github.com/zavora-ai/adk-rust/blob/3b946c1949b28545f992c631ad167441a36e4e66/adk-code/src/container.rs) | Provides Python and Node images, package setup, and container execution. Inspected `DockerConfig` lacks CPU, memory, and process limits. | Enforce these limits before setup starts. Do not accept the default container configuration as sufficient isolation. |
+| Same container source | Package helpers compose shell setup commands. | Validate dependency declarations. Keep credentials outside command text and diagnostic output. |
+| [`adk-code/README.md`](https://github.com/zavora-ai/adk-rust/blob/3b946c1949b28545f992c631ad167441a36e4e66/adk-code/README.md) | Describes typed executor and policy contracts. Its WASM guest executor remains a placeholder. | Reuse established contracts where compatible. Verify each backend implementation before advertising its capability. |
+| [Monty limitations](https://pydantic.dev/docs/monty/limitations/) | Monty does not support third-party Python packages. | Do not select Monty as the only Python backend for package-capable Code nodes. |
+
+The Rust graph compiler currently dispatches supported node types in `src/agents/graph/compiler.rs::parse_pipeline_node`.
+The inspected dispatch has no Code-node branch.
+The new implementation must map the SDK input selection and output mapping behavior at this boundary.
+No existing Code-node implementation is implied by this assessment.
+
+## Resource enforcement candidate
+
+[bwrapbox](https://github.com/edubart/bwrapbox) matches the requested bubblewrap wrapper with cgroup v2 limits.
+Its README describes memory, CPU time, elapsed time, and process-count controls.
+The separate [BubbleBox project](https://github.com/RalfJung/bubblebox) targets application sandbox profiles.
+Do not treat these project names as interchangeable.
+
+Evaluate bwrapbox as an existing implementation before writing equivalent process supervision.
+Verify controller delegation, process-tree termination, exit classification, maintenance, and licensing before dependency selection.
+Reject sandbox admission when required limits cannot be installed or verified.
+Do not silently downgrade to unrestricted execution inside Docker or Kubernetes.
+Keep CPU rate limits, total CPU time, and wall-clock deadlines distinct.
+Keep aggregate writable-storage limits separate from per-file limits.
+
+Prefer an implementation of the existing ADK sandbox trait over a replacement trait or parallel execution framework.
+Verify that dependency preparation and Rust compilation use this implementation, not only final program execution.
+Package the launcher and required runtimes in a dedicated sandbox image with pinned versions.
+Keep cgroup administration in the trusted supervisor. Do not grant that authority to executed code.
+Verify deployment permissions on Linux before enabling the capability in the worker catalog.
+
+## Proposed lifecycle and ownership
+
+The Rust worker owns graph state, authorization, invocation identity, and result validation.
+A separately bounded sandbox owns language processes, dependency setup, compilation, and temporary files.
+Python package support remains required. Rust-only execution does not close this compatibility gap.
+JavaScript support requires an explicit runtime and package contract.
+
+1. Validate the immutable node definition, input selection, dependency declarations, and authorized execution policy.
+2. Persist invocation intent using the existing execution durability mechanism.
+3. Admit the sandbox against project and host capacity before allocating its workspace.
+4. Install dependencies inside enforced resource limits, with authorized registry access.
+5. Compile when necessary, within the same isolation boundary and a bounded preparation deadline.
+6. Execute with a separate deadline, bounded output, and the permitted network policy.
+7. Validate output variables and artifact ownership before publishing graph state.
+8. Persist the terminal receipt, then remove temporary resources through an idempotent cleanup operation.
+
+Dependency installation is executable work. Python build hooks, Node install scripts, and Rust build scripts require isolation.
+Use resolved dependency versions and a runtime image digest for reproducible environments.
+Cache immutable dependency content by dependency digest, runtime, architecture, and policy.
+Scope private dependencies to their authorized tenant or project.
+Never share writable execution environments between unrelated invocations.
+Keep package acquisition access separate from execution network access.
+
+## Recovery and acceptance boundaries
+
+Worker recovery must inspect the existing invocation before launching another sandbox.
+Completed receipts permit result recovery without repeated execution.
+Lost contact with effectful code produces an explicit uncertain outcome unless the effect supports deduplication.
+A failed Code node must not publish partially validated output variables to downstream nodes.
+Future node resilience controls must not retry authorization rejection automatically.
+
+The first backend proof must install a real library and execute code that imports it.
+Run resource-exhaustion tests during installation, compilation, and execution.
+Verify limits across all descendants, not only the initial process.
+Verify worker restart, supervisor restart, cleanup, and durable result recovery separately.
+Measure admission and resource use under concurrent execution before claiming platform capacity.
+This document records the implementation assessment. Backend selection and runtime acceptance remain open.
