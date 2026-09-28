@@ -34,6 +34,19 @@ const CONTAINER_WORKSPACE_ROOT: &str = "/workspace";
 const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_CAPTURE_BYTES: usize = 1024 * 1024;
 
+fn immutable_image_reference(image: &str) -> bool {
+    let digest = image.strip_prefix("sha256:").or_else(|| {
+        let (name, digest) = image.split_once("@sha256:")?;
+        (!name.is_empty() && !name.chars().any(char::is_whitespace)).then_some(digest)
+    });
+    digest.is_some_and(|value| {
+        value.len() == 64
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+
 // Bound combined stdout/stderr, including replacement characters for invalid UTF-8.
 fn append_capture(target: &mut String, other: &str, bytes: &[u8]) -> Result<(), SandboxError> {
     let remaining = MAX_CAPTURE_BYTES.saturating_sub(target.len().saturating_add(other.len()));
@@ -172,6 +185,39 @@ impl DockerClient {
         Ok(())
     }
 
+    /// Check the local image cache without registry access or an implicit pull.
+    /// A deployment preparation step must preload the pinned image first.
+    /// Call this for readiness and again at provisioning, since images can be evicted.
+    pub async fn check_code_image_ready(&self) -> Result<String, SandboxError> {
+        if !immutable_image_reference(&self.base_image) {
+            return Err(SandboxError::ExecutionFailed(
+                "Code runtime image must be pinned to a SHA-256 digest".into(),
+            ));
+        }
+        let image = tokio::time::timeout(
+            Duration::from_secs(10),
+            self.client.inspect_image(&self.base_image),
+        )
+        .await
+        .map_err(|_| {
+            SandboxError::ExecutionFailed("Code runtime image readiness check timed out".into())
+        })?
+        .map_err(|_| {
+            SandboxError::ExecutionFailed(
+                "Code runtime image is unavailable locally; preload it before accepting jobs"
+                    .into(),
+            )
+        })?;
+        image
+            .id
+            .filter(|id| immutable_image_reference(id))
+            .ok_or_else(|| {
+                SandboxError::ExecutionFailed(
+                    "Code runtime image has no immutable local identity".into(),
+                )
+            })
+    }
+
     /// Generates a unique session handle ID.
     fn generate_session_id() -> String {
         format!("docker-session-{}", uuid::Uuid::new_v4())
@@ -297,14 +343,17 @@ impl DockerClient {
 #[async_trait]
 impl SandboxClient for DockerClient {
     async fn provision(&self, manifest: &Manifest) -> Result<SessionHandle, SandboxError> {
-        if self.code_job_policy {
+        let image = if self.code_job_policy {
             self.validate_code_job_policy()?;
-        }
+            self.check_code_image_ready().await?
+        } else {
+            self.base_image.clone()
+        };
         // Create container from base image with resource limits
         let host_config = self.build_host_config();
 
         let config = Config {
-            image: Some(self.base_image.clone()),
+            image: Some(image),
             user: self.code_job_policy.then(|| "10001:10001".to_owned()),
             // Keep container running with a long-lived process
             cmd: Some(vec!["sleep".to_string(), "infinity".to_string()]),
@@ -980,6 +1029,27 @@ impl std::fmt::Debug for DockerSession {
 mod tests {
     use super::*;
     use std::fmt::Debug;
+
+    #[test]
+    fn runtime_images_require_complete_immutable_identity() {
+        let digest = "a".repeat(64);
+        assert!(immutable_image_reference(&format!("sha256:{digest}")));
+        assert!(immutable_image_reference(&format!(
+            "registry/runtime@sha256:{digest}"
+        )));
+        for bad in [
+            "runtime:latest",
+            "runtime:1.2",
+            "sha256:abc",
+            "@sha256:abc",
+            "sha256:",
+        ] {
+            assert!(!immutable_image_reference(bad));
+        }
+        assert!(!immutable_image_reference(&format!(
+            "registry/ runtime@sha256:{digest}"
+        )));
+    }
 
     #[test]
     fn capture_enforces_combined_limit_without_partial_append() {

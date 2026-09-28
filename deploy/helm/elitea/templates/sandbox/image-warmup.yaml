@@ -1,0 +1,76 @@
+{{- if .Values.sandboxImageWarmup.enabled }}
+{{- $w := .Values.sandboxImageWarmup }}
+{{- if not $w.images }}{{ fail "sandboxImageWarmup.images must contain pinned runtime images" }}{{ end }}
+{{- if not $w.nodeSelector }}{{ fail "sandboxImageWarmup.nodeSelector must select sandbox nodes explicitly" }}{{ end }}
+{{- $seen := dict }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: elitea-sandbox-image-warmup
+  labels:
+    {{- include "elitea.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox-image-warmup
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: sandbox-image-warmup
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: sandbox-image-warmup
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 5
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      {{- include "elitea.imagePullSecrets" (dict "local" $w.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
+      nodeSelector:
+        {{- toYaml $w.nodeSelector | nindent 8 }}
+      {{- with $w.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        {{- range $w.images }}
+        {{- if not (regexMatch "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$" .name) }}{{ fail "sandbox warmup image name must be a DNS label" }}{{ end }}
+        {{- if hasKey $seen .name }}{{ fail "sandbox warmup image names must be unique" }}{{ end }}
+        {{- $_ := set $seen .name true }}
+        {{- if not (regexMatch "^[^[:space:]@]+@sha256:[a-f0-9]{64}$" .image) }}{{ fail "sandbox warmup images must use registry SHA-256 digests" }}{{ end }}
+        - name: {{ .name }}
+          image: {{ .image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sleep", "infinity"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 1m
+              memory: 8Mi
+            limits:
+              cpu: 25m
+              memory: 16Mi
+        {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: elitea-sandbox-image-warmup
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: sandbox-image-warmup
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: ["Ingress", "Egress"]
+  ingress: []
+  egress: []
+{{- end }}

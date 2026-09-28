@@ -638,3 +638,31 @@ Run with a cached immutable image in `ELITEA_SANDBOX_TEST_IMAGE`:
 Both tests passed in 13.32 seconds including several isolated container lifecycles.
 This is functional local-container evidence, not a throughput benchmark, Kubernetes
 verification, cancellation/restart recovery, or deployed UI Code-node acceptance.
+
+## Pinned-image readiness and Kubernetes warming
+
+`DockerClient::check_code_image_ready` inspects only the local image cache,
+requires a complete SHA-256 identity, and bounds the daemon lookup to ten seconds.
+Code provisioning rechecks readiness and uses the returned immutable local image
+ID. It does not perform registry pulls; missing images require deployment
+preparation. This closes mutable-tag drift and makes readiness available to the
+future supervisor. It is not yet a supervisor health endpoint.
+
+The optional `sandboxImageWarmup` Helm values and
+`deploy/helm/elitea/templates/sandbox/image-warmup.yaml` preload digest-pinned
+runtime images on explicitly selected sandbox nodes. Each image must provide
+`/bin/sleep`. The DaemonSet keeps a minimal non-root idle process in each image;
+it is not a pool of reusable user environments. Its pods mount no runtime socket
+or service-account token and have deny-all ingress/egress NetworkPolicy.
+Registry downloads are performed by the node runtime, outside pod networking.
+Use Linux sandbox nodes and the same node selection for eventual execution Jobs.
+
+`deploy/helm/tests/render-sandbox-images.sh` verifies disabled-by-default behavior,
+rendered pod isolation, cache policy, node selection, and rejection of mutable
+images/missing node selection. It requires Helm, ripgrep, Python and PyYAML.
+Rendering passed. Kubernetes scheduling, cache eviction, new-node warming, and
+runtime behavior remain unverified.
+
+The vendored crate's 86 component tests pass (two live tests ignored by default).
+Both opt-in real Docker tests also pass after the readiness change. No product
+database, worker deployment, or UI execution was changed.

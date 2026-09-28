@@ -3571,3 +3571,14 @@ otelCollector:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+
+# Optional image preparation only; this does not enable Code-node execution.
+# Images must provide /bin/sleep and be pinned by registry digest.
+# Use the same nodeSelector for the future sandbox Jobs and this warmer.
+sandboxImageWarmup:
+  enabled: false
+  images: []
+  # Example: [{name: python, image: "registry/runtime@sha256:<64 hex digits>"}]
+  nodeSelector: {}
+  tolerations: []
+  imagePullSecrets: []
