@@ -239,6 +239,7 @@ const ChatBoxInner = memo(function ChatBox({
   const { modelsList, selectedLlmModel, handleSelectModel } = useChatBoxModelSelection({
     projectId,
     selectedModelName: data.selectedModel?.name,
+    llm,
     setSelectedModel: data.setSelectedModel,
   });
 

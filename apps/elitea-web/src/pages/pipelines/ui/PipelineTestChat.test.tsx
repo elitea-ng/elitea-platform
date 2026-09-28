@@ -95,6 +95,22 @@ afterEach(() => {
 });
 
 describe('PipelineTestChat', () => {
+  it('displays the pipeline model before creating a test conversation', async () => {
+    const routes = installConversationRoutes();
+    server.use(http.get('*/configurations/models/:projectId', () => HttpResponse.json({
+      items: [
+        { id: 'default', name: 'gpt-4o', display_name: 'GPT-4o', project_id: '9', default: true },
+        { id: 'pipeline', name: 'pipeline-model', display_name: 'Saved pipeline model', project_id: '1' },
+      ], default_model_name: 'gpt-4o',
+    })));
+    renderPane(<PipelineTestChat
+      settings={{ llmSettings: { model_name: 'pipeline-model', model_project_id: '1' } }}
+      disableChat={false} slotRef={undefined} identity={IDENTITY} user={USER}
+    />);
+    expect(await screen.findByRole('button', { name: /Saved pipeline model/ })).toBeInTheDocument();
+    expect(routes.creates).toBe(0);
+  });
+
   it('creates no conversation until the pane is actually used', async () => {
     const routes = installConversationRoutes();
     renderPane(
