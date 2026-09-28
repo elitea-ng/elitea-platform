@@ -22,11 +22,11 @@ The corpus includes all ten model/context categories below, plus delivery, pipel
 | `MODEL_REQUEST_REJECTED` | HTTP 400 and native unsupported-sampling classification | Chat 730 verifies live failure, support reference, reload, and ERROR-level logging. |
 | `MODEL_RESPONSE_INVALID` | Malformed SSE, premature DONE, incomplete native stream, and terminal-order checks | Chat 733 rejects a native response with the wrong model identity. Live failure, support reference, reload, and ERROR-level logging pass. |
 | `CONTEXT_BUDGET_EXCEEDED` | Full-request context tests cover each input component before dispatch; lifecycle mapping | Chat 668 verifies a child context failure without terminating its healthy parent. Root admission has component evidence. |
-| `MODEL_REQUEST_TOO_LARGE` | `request_profile_and_local_bounds_fail_before_network` verifies serialized request rejection before transport; lifecycle mapping | No direct deployed browser proof for this exact local request-byte category. Input and delivery limits are different categories. |
+| `MODEL_REQUEST_TOO_LARGE` | `request_profile_and_local_bounds_fail_before_network` verifies serialized request rejection before transport; lifecycle mapping | Chat 740 verifies the serialized model request limit, typed live event, support reference, reload, and ERROR-level logging. |
 | `MODEL_UNAVAILABLE` | HTTP 409/503, transport failure, and protocol-version classification | Chat 698 verifies provider HTTP 503. |
 | `MODEL_PROVIDER_FAILURE` | Compatible SSE error and native wire-error conversion; provider text exclusion | Chats 731/732 verify compatible/native streamed errors, typed UI guidance, support references, and reload. Chats 702/703 also verify gateway EOF propagation. |
 
-The request-byte category remains a deployed verification gap.
+All ten categories now have the deployed evidence and explicit scope limits listed above.
 Do not use chat 695's delivery limit or chat 725's settings limit as substitutes.
 The accepted native execution is `1444f90ccc6a281b35899d9e0b399059`; worker logs confirm the native adapter and `anthropic_gateway.provider_error`.
 
@@ -81,3 +81,33 @@ The run reports continuation exhaustion, not request-byte exhaustion.
 This fixture does not prove the request-byte category.
 A future acceptance fixture must verify actual provider-request growth before it asserts the byte-limit result.
 No production limits or real model settings change for these tests.
+
+## Serialized request-byte acceptance
+
+Chat 740 enables the internal tool catalog and uses a synthetic Full-window model.
+The model window is 4,000,000 tokens to isolate the byte limit from token admission.
+This is fixture metadata, not a claim about a real model's capacity.
+The first run admits 8,320,720 bytes of synthetic history and completes successfully.
+Its provider journal records 21 history messages and 53 tool declarations.
+The fixture then adds 2,500 bytes to each of the 20 synthetic history entries.
+The new history contains 8,370,720 bytes. Production limits remain unchanged.
+A fresh headed Playwright browser regenerates the completed response.
+
+Execution `b65cbd1acb9ca509b420b0dbb3af9ff5` fails before model dispatch with `model_request_bytes_exceeded`.
+The serialized request includes tool declarations and framing beyond the admitted history.
+Worker logs report the failure at ERROR level with the same execution identity.
+The UI receives `MODEL_REQUEST_TOO_LARGE`, retryable false, and specific transport-size guidance.
+The support reference and error remain available after reload.
+The reloaded screenshot is visually inspected. Browser errors and response mocks remain absent.
+No partial response exists for this pre-dispatch failure.
+Context analytics remain unavailable because no model call completes; zero values are not provider measurements.
+
+Local evidence:
+
+- `/private/tmp/elitea-request-bytes-catalog-result.json`
+- `/private/tmp/elitea-request-bytes-catalog-regenerate.mjs`
+- `/private/tmp/elitea-request-bytes-catalog-bytes-20260928-live.png`
+- `/private/tmp/elitea-request-bytes-catalog-bytes-20260928-reload.png`
+
+The unsuccessful child fixture in chat 739 reaches configuration loading limits before model dispatch.
+It does not establish a request-byte failure. Its execution is `6f98a74bcddff80da3543fc43d027c28`.

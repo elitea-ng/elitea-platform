@@ -1,6 +1,6 @@
 # Point 4 acceptance audit
 
-Status: active. Audit baseline: `8a2d5c25b`.
+Status: accepted for progression on 2026-09-28. Final audit baseline: `728ab82f6`.
 
 This table consolidates later evidence that supersedes historical pending notes.
 It does not convert component coverage into deployed acceptance.
@@ -21,12 +21,34 @@ The linked mappings retain source ownership, implementation history, and individ
 | Release stack information and async locations | [Release diagnostics](release-diagnostics-20260923.md), chats 654 and 665 | Capture is optional and bounded. Instrumented async spans do not reconstruct every suspended dependency frame. |
 | Input and output boundary guidance | [Input diagnostics](input-admission-diagnostics-20260928.md), chats 723 and 725; diagnostics chat 695 | Four input-section contracts pass component checks. Agent-settings rejection has deployed section-specific proof. |
 
-## Remaining closure work
+## Final requirement review
 
-1. Finish deployed verification for the request-byte category. Native malformed-response acceptance passes in chat 733.
-2. Review the final point 4 acceptance against its requirements before advancing.
+The review checks the gate 4 requirements in `remaining-gates.md` against source mappings and deployed evidence.
+Historical pending notes remain implementation history. This review supplies their current disposition.
 
-The [model-failure matrix](point4-model-failure-acceptance-20260928.md) records the exact evidence for every category.
+| Requirement | Acceptance evidence |
+| --- | --- |
+| UI/Main/Rust context settings, occupancy, and compaction status | Provider accounting chats 717, 720, 724, and 726; full-window continuation chat 708. |
+| Balanced and Full capacity, including a million-token window | Full-context capacity chat 600; runtime-memory chats 711–713 compact approximately 956,800 estimated input tokens. |
+| Platform-owned structured summaries and additive user guidance | Summary work-order chat 604; native-history chat 612 performs two compactions and retains required facts. |
+| Dedicated summary model and bounded summary work | Pipeline compaction chat 621 uses a separate Luna summary model; Full-window and recovery mappings retain its independent limits. |
+| Authoritative skill/project identities and revisions | Instruction-authority project 118, chat 2 preserves both frozen revisions through compaction and source edits. |
+| Independent child settings, summaries, and recovery | Nested acceptance chats 616 and 619 cover worker replacement, siblings, and grandchildren. |
+| Model-local pipeline compaction with exact graph state | Chat 621 performs two compactions and preserves the exact graph marker and downstream output. |
+| SDK/UI continuation, bounded retries, partial output, and recovery | Continuation chats 625, 632, 636, 637, 640, 653, 662, 681, 682, and 716. |
+| Exact toolkit identity and legacy name compatibility | Direct-node chats 683/691 and model-loop chats 688/692. |
+| Public errors, Main projection, operator logs, and release diagnostics | The model-failure matrix covers all ten categories; chats 654/665 verify bounded stack and async-location diagnostics. |
+| Child failure isolation and pipeline failure propagation | Chats 668, 727, and 728 retain parent progress; chats 673–678 cover direct failures and downstream suppression. |
+| Optional tool-output clearing | Deferred by explicit user direction; its separate source mapping records the scope. |
+
+The [model-failure matrix](point4-model-failure-acceptance-20260928.md) records exact category boundaries.
+Chat 733 closes native malformed-response acceptance. Chat 740 closes serialized request-byte acceptance.
+Both use fresh headed browser sessions, typed live events, support references, and reload checks.
+
+No gate 4 implementation or required acceptance item remains open in this review.
+This disposition does not close the overall Rust-worker goal or the later gates.
+The limitations below remain explicit: provider cache savings, uninstrumented async frames, and production concurrency are not proven.
+General graph/HITL work and the preserved pending edits move to gate 5.
 
 ## Diagnostic capture disposition
 
