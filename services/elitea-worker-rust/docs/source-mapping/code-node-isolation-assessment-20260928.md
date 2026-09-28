@@ -523,3 +523,36 @@ Backend admission, dependency declarations, trusted result projection, platform-
 Verification: all 99 graph component tests pass, including seven Code-definition tests and 11 Code-state tests.
 The test command is `cargo test --locked --lib agents::graph:: -j 2`.
 No deployment or browser execution is claimed for this parser change.
+
+## ADK workspace container backend and supervisor placement
+
+The exact `adk-sandbox` 2.2.0 package also contains `workspace/docker.rs`.
+This is separate from the previously inspected `adk-code` executor and the minimal `SandboxBackend` interface.
+Its `DockerClient::with_resource_limits` sets container memory and fractional CPU limits.
+The `SandboxClient` interface supplies provision, start, stop, snapshot, and resume operations.
+Reuse these existing lifecycle concepts before introducing another sandbox framework.
+
+`DockerClient::new` calls Bollard's `connect_with_local_defaults` and pings a Docker daemon.
+It requires daemon access. It does not require nested Docker daemons.
+Keep daemon access in a dedicated trusted sandbox executor, not the general worker or user-code container.
+A Kubernetes deployment must not assume that its nodes expose Docker sockets.
+Its supervisor needs a native workload backend with the same execution and result contracts.
+
+The current SDK already demonstrates a remote execution boundary in `runtime/langchain/remote_sandbox.py`.
+It delegates Python execution to a sandbox service and classifies admission and transport failures.
+Use that separation as a behavior reference, without copying its static-token or serialized-session contracts.
+
+The upstream workspace backend needs these changes before production activation:
+
+- Enforce non-root identity, process limits, swap policy, read-only root, and explicit writable mounts.
+- Enforce network policy and keep dependency preparation distinct from user execution.
+- Bound captured output before appending it to strings.
+- Terminate the workload on timeout; the inspected `exec_command` timeout only stops waiting for its output.
+- Clean up containers after partial provisioning failures.
+- Preserve invocation-to-container identity outside the client's in-memory session map.
+- Make cleanup recoverable when container removal fails after the session-map entry is removed.
+
+CPU and memory support alone does not prove these requirements.
+Use separate bounded admission and per-job limits so concurrent pipelines cannot consume unbounded executor resources.
+Reuse pinned images and immutable dependency/build artifacts. Do not reuse another invocation's mutable interpreter or workspace.
+Measure cold and warm execution independently before claiming performance or platform capacity.
