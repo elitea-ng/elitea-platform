@@ -98,6 +98,12 @@ impl PreparedJob {
         project: i32,
         activation_key: [u8; 32],
     ) -> Result<JobScope, LedgerError> {
+        JobScope::new(tenant, project, activation_key, self.fingerprint()?)
+    }
+
+    /// # Errors
+    /// Returns `Invalid` if the bounded serialization fails.
+    pub fn fingerprint(&self) -> Result<[u8; 32], LedgerError> {
         let bytes = self.bytes().map_err(|_| LedgerError::Invalid)?;
         let mut hash = ring::digest::Context::new(&ring::digest::SHA256);
         hash.update(b"elitea.sandbox.prepared-job.v1\0");
@@ -106,7 +112,7 @@ impl PreparedJob {
         let digest = hash.finish();
         let mut content_digest = [0; 32];
         content_digest.copy_from_slice(digest.as_ref());
-        JobScope::new(tenant, project, activation_key, content_digest)
+        Ok(content_digest)
     }
 }
 

@@ -4,6 +4,7 @@ import grpc
 import warnings
 
 from elitea.runtime.v1 import control_pb2 as elitea_dot_runtime_dot_v1_dot_control__pb2
+from elitea.runtime.v1 import sandbox_pb2 as elitea_dot_runtime_dot_v1_dot_sandbox__pb2
 
 GRPC_GENERATED_VERSION = '1.76.0'
 GRPC_VERSION = grpc.__version__
@@ -34,6 +35,11 @@ class RuntimeControlServiceStub(object):
         Args:
             channel: A grpc.Channel.
         """
+        self.AuthorizeSandboxJob = channel.unary_unary(
+                '/elitea.runtime.v1.RuntimeControlService/AuthorizeSandboxJob',
+                request_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.AuthorizeSandboxJobRequestV1.SerializeToString,
+                response_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.AuthorizeSandboxJobResponseV1.FromString,
+                _registered_method=True)
         self.ClaimCommand = channel.unary_unary(
                 '/elitea.runtime.v1.RuntimeControlService/ClaimCommand',
                 request_serializer=elitea_dot_runtime_dot_v1_dot_control__pb2.ClaimCommandRequestV1.SerializeToString,
@@ -73,6 +79,12 @@ class RuntimeControlServiceStub(object):
 
 class RuntimeControlServiceServicer(object):
     """Missing associated documentation comment in .proto file."""
+
+    def AuthorizeSandboxJob(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
 
     def ClaimCommand(self, request, context):
         """Missing associated documentation comment in .proto file."""
@@ -119,6 +131,11 @@ class RuntimeControlServiceServicer(object):
 
 def add_RuntimeControlServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
+            'AuthorizeSandboxJob': grpc.unary_unary_rpc_method_handler(
+                    servicer.AuthorizeSandboxJob,
+                    request_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.AuthorizeSandboxJobRequestV1.FromString,
+                    response_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.AuthorizeSandboxJobResponseV1.SerializeToString,
+            ),
             'ClaimCommand': grpc.unary_unary_rpc_method_handler(
                     servicer.ClaimCommand,
                     request_deserializer=elitea_dot_runtime_dot_v1_dot_control__pb2.ClaimCommandRequestV1.FromString,
@@ -164,6 +181,33 @@ def add_RuntimeControlServiceServicer_to_server(servicer, server):
  # This class is part of an EXPERIMENTAL API.
 class RuntimeControlService(object):
     """Missing associated documentation comment in .proto file."""
+
+    @staticmethod
+    def AuthorizeSandboxJob(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/elitea.runtime.v1.RuntimeControlService/AuthorizeSandboxJob',
+            elitea_dot_runtime_dot_v1_dot_sandbox__pb2.AuthorizeSandboxJobRequestV1.SerializeToString,
+            elitea_dot_runtime_dot_v1_dot_sandbox__pb2.AuthorizeSandboxJobResponseV1.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
 
     @staticmethod
     def ClaimCommand(request,

@@ -15,3 +15,6 @@ pub mod generated {
 
 pub use error::{InputLimitField, ProtocolError};
 pub use generated::elitea;
+
+#[cfg(feature = "sandbox-supervisor")]
+pub mod sandbox_grant;

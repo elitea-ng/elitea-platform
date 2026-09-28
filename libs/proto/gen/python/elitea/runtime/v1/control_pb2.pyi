@@ -3,6 +3,7 @@ from elitea.runtime.v1 import envelope_pb2 as _envelope_pb2
 from elitea.runtime.v1 import errors_pb2 as _errors_pb2
 from elitea.runtime.v1 import input_pb2 as _input_pb2
 from elitea.runtime.v1 import output_pb2 as _output_pb2
+from elitea.runtime.v1 import sandbox_pb2 as _sandbox_pb2
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message

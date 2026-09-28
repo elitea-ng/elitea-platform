@@ -958,3 +958,54 @@ map insertion order does not; mutable image tags and invalid timeouts are
 rejected; oversized/deep input is rejected before fingerprinting. This proves
 request construction and replay-conflict inputs, not network admission or
 end-to-end Code execution.
+
+### Explicit Main-to-supervisor admission grant
+
+`libs/proto/elitea/runtime/v1/sandbox.proto` now defines job admission and signed
+grant claims. `RuntimeControlService.AuthorizeSandboxJob` is additive. Generated
+Go and Python bindings were regenerated with the repository's pinned generation
+script; Rust includes the new schema through its build script.
+
+Main's `internal/transport/runtimegrpc/control/sandbox_grant.go` reuses verified
+workload-session authentication, the active execution fence and desired-state
+check, and the existing signed-command verifier. This last check matters:
+`fenceDomain` binds execution/claim ownership but does not carry tenant/project
+scope. The handler derives tenant/project from Main's verified signed command,
+checks the request scope matches it, and accepts only agent execution commands.
+The configured supervisor audience must match exactly. An optional issuer in
+`ServerConfig` keeps the endpoint disabled by default. No production composition
+or deployment is enabled yet.
+
+Grants contain no fence token, code, input, or credentials. Ed25519 signs a
+sandbox-specific domain, explicit byte length and the exact protobuf claims
+bytes. Lifetime is at most 30 seconds. The grant binds verified submitting
+workload identity, supervisor audience, request fingerprint, tenant/project,
+execution, activation, and generation. Key and audience configuration are copied
+at construction. The sandbox receives neither the grant nor signing material.
+
+`src/protocol/sandbox_grant.rs` verifies with the existing exact-key-ID resolver.
+It verifies the signature before parsing and uses the protocol wire scanner to
+reject unknown fields and duplicate singular fields. Admission also checks the
+verified mTLS peer, local audience, request fingerprint, positive project and
+generation, field bounds and expiry. The resulting job scope derives its stable
+activation key from execution plus activation identity. Worker generation is
+not part of that key, so recovery cannot accidentally create a new job solely
+because a lease/generation changed. Tenant/project remain bound in the runtime
+identity. A valid grant never bypasses the durable receipt's replay fence.
+
+This is a new delegation contract for the separate supervisor. The legacy
+remote-sandbox static-header/session transport is only a business-boundary
+reference. Production issuer configuration, the supervisor's authenticated RPC
+listener, dispatch and cancellation wiring, and deployed acceptance remain
+open. No independent sandbox bearer credential or worker-identity impersonation
+fallback was introduced.
+
+Verification: the Main control-package tests passed, including valid signature
+and scope bindings plus rejection of mismatched scope/audience, stale fence,
+cancelled execution, invalid command signature, non-agent capability and disabled
+issuer. Two Rust verifier tests passed for peer/request/audience/time binding,
+stable activation identity across generation changes, invalid signatures and
+unknown/duplicate signed fields. Worker-library Clippy passed with the optional
+supervisor feature. Buf lint and breaking-change comparison against the prior
+HEAD passed. These are component tests; a live Main-to-supervisor mTLS exchange
+has not yet been implemented or verified.

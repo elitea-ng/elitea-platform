@@ -7,6 +7,7 @@ import "elitea/runtime/v1/envelope.proto";
 import "elitea/runtime/v1/errors.proto";
 import "elitea/runtime/v1/input.proto";
 import "elitea/runtime/v1/output.proto";
+import "elitea/runtime/v1/sandbox.proto";
 
 option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
 
@@ -176,6 +177,7 @@ message PrepareSettlementResponseV1 {
 }
 
 service RuntimeControlService {
+  rpc AuthorizeSandboxJob(AuthorizeSandboxJobRequestV1) returns (AuthorizeSandboxJobResponseV1);
   rpc ClaimCommand(ClaimCommandRequestV1) returns (ClaimCommandResponseV1);
   rpc BeginExecution(BeginExecutionRequestV1) returns (BeginExecutionResponseV1);
   rpc AuthorizeInvocation(AuthorizeInvocationRequestV1) returns (AuthorizeInvocationResponseV1);

@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package elitea.runtime.v1;
+
+import "elitea/runtime/v1/common.proto";
+import "elitea/runtime/v1/errors.proto";
+import "elitea/runtime/v1/envelope.proto";
+
+option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
+
+// Main checks the original worker's verified mTLS session and active execution
+// fence. The audience is an exact configured supervisor identity, not a URL.
+// Request digests bind a deployment-selected runtime, policy, code and input.
+message AuthorizeSandboxJobRequestV1 {
+  ExecutionIdentityV1 identity = 1;
+  ExecutionFenceV1 fence = 2;
+  string activation_id = 3;
+  bytes request_digest = 4;
+  string audience = 5;
+  // Signed Main command is the authority for tenant and resource project.
+  SignedWorkerCommandEnvelopeV1 signed_command = 6;
+  reserved 7 to 15;
+}
+
+// No fence token, credential, source code or state enters the signed claims.
+// Lifetime is at most 30 seconds. The submitter must also match the verified
+// mTLS peer at the supervisor. A signature is not authority to replay a job.
+message SandboxJobGrantClaimsV1 {
+  uint32 revision = 1;
+  string tenant_id = 2;
+  int32 project_id = 3;
+  string execution_id = 4;
+  string activation_id = 5;
+  bytes request_digest = 6;
+  string submitter_workload_identity = 7;
+  string audience = 8;
+  int64 issued_at_unix_millis = 9;
+  int64 expires_at_unix_millis = 10;
+  uint64 generation = 11;
+  reserved 12 to 31;
+}
+
+// Ed25519 signs domain "elitea.sandbox.job-grant.ed25519.v1\x00", followed by
+// uint64 big-endian claims length and exact claims_bytes. Verify before decode.
+// There is no HMAC/test-profile fallback. Claims are bounded to 4096 bytes.
+message SignedSandboxJobGrantV1 {
+  string key_id = 1;
+  bytes claims_bytes = 2;
+  bytes signature = 3;
+  reserved 4 to 15;
+}
+
+message AuthorizeSandboxJobResponseV1 {
+  SignedSandboxJobGrantV1 grant = 1;
+  RuntimeErrorV1 rejection = 2;
+  reserved 3 to 15;
+}

@@ -1227,7 +1227,7 @@ var File_elitea_runtime_v1_control_proto protoreflect.FileDescriptor
 
 const file_elitea_runtime_v1_control_proto_rawDesc = "" +
 	"\n" +
-	"\x1felitea/runtime/v1/control.proto\x12\x11elitea.runtime.v1\x1a\x1eelitea/runtime/v1/common.proto\x1a elitea/runtime/v1/envelope.proto\x1a\x1eelitea/runtime/v1/errors.proto\x1a\x1delitea/runtime/v1/input.proto\x1a\x1eelitea/runtime/v1/output.proto\"\x8e\x02\n" +
+	"\x1felitea/runtime/v1/control.proto\x12\x11elitea.runtime.v1\x1a\x1eelitea/runtime/v1/common.proto\x1a elitea/runtime/v1/envelope.proto\x1a\x1eelitea/runtime/v1/errors.proto\x1a\x1delitea/runtime/v1/input.proto\x1a\x1eelitea/runtime/v1/output.proto\x1a\x1felitea/runtime/v1/sandbox.proto\"\x8e\x02\n" +
 	"\x15ClaimCommandRequestV1\x12.\n" +
 	"\x13workload_session_id\x18\x01 \x01(\tR\x11workloadSessionId\x12\x1f\n" +
 	"\vproducer_id\x18\x02 \x01(\tR\n" +
@@ -1323,8 +1323,9 @@ const file_elitea_runtime_v1_control_proto_rawDesc = "" +
 	" AuthorizeInvocationDispositionV1\x123\n" +
 	"/AUTHORIZE_INVOCATION_DISPOSITION_V1_UNSPECIFIED\x10\x00\x126\n" +
 	"2AUTHORIZE_INVOCATION_DISPOSITION_V1_AUTHORIZED_NOW\x10\x01\x12:\n" +
-	"6AUTHORIZE_INVOCATION_DISPOSITION_V1_ALREADY_AUTHORIZED\x10\x022\xc7\x06\n" +
-	"\x15RuntimeControlService\x12c\n" +
+	"6AUTHORIZE_INVOCATION_DISPOSITION_V1_ALREADY_AUTHORIZED\x10\x022\xc1\a\n" +
+	"\x15RuntimeControlService\x12x\n" +
+	"\x13AuthorizeSandboxJob\x12/.elitea.runtime.v1.AuthorizeSandboxJobRequestV1\x1a0.elitea.runtime.v1.AuthorizeSandboxJobResponseV1\x12c\n" +
 	"\fClaimCommand\x12(.elitea.runtime.v1.ClaimCommandRequestV1\x1a).elitea.runtime.v1.ClaimCommandResponseV1\x12i\n" +
 	"\x0eBeginExecution\x12*.elitea.runtime.v1.BeginExecutionRequestV1\x1a+.elitea.runtime.v1.BeginExecutionResponseV1\x12x\n" +
 	"\x13AuthorizeInvocation\x12/.elitea.runtime.v1.AuthorizeInvocationRequestV1\x1a0.elitea.runtime.v1.AuthorizeInvocationResponseV1\x12\x96\x01\n" +
@@ -1378,6 +1379,8 @@ var file_elitea_runtime_v1_control_proto_goTypes = []any{
 	(*ExecutionInputBundleV1)(nil),                  // 26: elitea.runtime.v1.ExecutionInputBundleV1
 	(DesiredExecutionStateV1)(0),                    // 27: elitea.runtime.v1.DesiredExecutionStateV1
 	(*RuntimeErrorV1)(nil),                          // 28: elitea.runtime.v1.RuntimeErrorV1
+	(*AuthorizeSandboxJobRequestV1)(nil),            // 29: elitea.runtime.v1.AuthorizeSandboxJobRequestV1
+	(*AuthorizeSandboxJobResponseV1)(nil),           // 30: elitea.runtime.v1.AuthorizeSandboxJobResponseV1
 }
 var file_elitea_runtime_v1_control_proto_depIdxs = []int32{
 	19, // 0: elitea.runtime.v1.ClaimCommandRequestV1.signed_command:type_name -> elitea.runtime.v1.SignedWorkerCommandEnvelopeV1
@@ -1421,22 +1424,24 @@ var file_elitea_runtime_v1_control_proto_depIdxs = []int32{
 	21, // 38: elitea.runtime.v1.PrepareSettlementRequestV1.proposal_digest:type_name -> elitea.runtime.v1.DigestV1
 	22, // 39: elitea.runtime.v1.PrepareSettlementResponseV1.outcome:type_name -> elitea.runtime.v1.ExecutionOutcomeV1
 	28, // 40: elitea.runtime.v1.PrepareSettlementResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	3,  // 41: elitea.runtime.v1.RuntimeControlService.ClaimCommand:input_type -> elitea.runtime.v1.ClaimCommandRequestV1
-	7,  // 42: elitea.runtime.v1.RuntimeControlService.BeginExecution:input_type -> elitea.runtime.v1.BeginExecutionRequestV1
-	9,  // 43: elitea.runtime.v1.RuntimeControlService.AuthorizeInvocation:input_type -> elitea.runtime.v1.AuthorizeInvocationRequestV1
-	11, // 44: elitea.runtime.v1.RuntimeControlService.AuthorizeAgentModelCheckpoint:input_type -> elitea.runtime.v1.AuthorizeAgentModelCheckpointRequestV1
-	13, // 45: elitea.runtime.v1.RuntimeControlService.RenewLease:input_type -> elitea.runtime.v1.RenewLeaseRequestV1
-	15, // 46: elitea.runtime.v1.RuntimeControlService.ObserveDesiredState:input_type -> elitea.runtime.v1.ObserveDesiredStateRequestV1
-	17, // 47: elitea.runtime.v1.RuntimeControlService.PrepareSettlement:input_type -> elitea.runtime.v1.PrepareSettlementRequestV1
-	6,  // 48: elitea.runtime.v1.RuntimeControlService.ClaimCommand:output_type -> elitea.runtime.v1.ClaimCommandResponseV1
-	8,  // 49: elitea.runtime.v1.RuntimeControlService.BeginExecution:output_type -> elitea.runtime.v1.BeginExecutionResponseV1
-	10, // 50: elitea.runtime.v1.RuntimeControlService.AuthorizeInvocation:output_type -> elitea.runtime.v1.AuthorizeInvocationResponseV1
-	12, // 51: elitea.runtime.v1.RuntimeControlService.AuthorizeAgentModelCheckpoint:output_type -> elitea.runtime.v1.AuthorizeAgentModelCheckpointResponseV1
-	14, // 52: elitea.runtime.v1.RuntimeControlService.RenewLease:output_type -> elitea.runtime.v1.RenewLeaseResponseV1
-	16, // 53: elitea.runtime.v1.RuntimeControlService.ObserveDesiredState:output_type -> elitea.runtime.v1.ObserveDesiredStateResponseV1
-	18, // 54: elitea.runtime.v1.RuntimeControlService.PrepareSettlement:output_type -> elitea.runtime.v1.PrepareSettlementResponseV1
-	48, // [48:55] is the sub-list for method output_type
-	41, // [41:48] is the sub-list for method input_type
+	29, // 41: elitea.runtime.v1.RuntimeControlService.AuthorizeSandboxJob:input_type -> elitea.runtime.v1.AuthorizeSandboxJobRequestV1
+	3,  // 42: elitea.runtime.v1.RuntimeControlService.ClaimCommand:input_type -> elitea.runtime.v1.ClaimCommandRequestV1
+	7,  // 43: elitea.runtime.v1.RuntimeControlService.BeginExecution:input_type -> elitea.runtime.v1.BeginExecutionRequestV1
+	9,  // 44: elitea.runtime.v1.RuntimeControlService.AuthorizeInvocation:input_type -> elitea.runtime.v1.AuthorizeInvocationRequestV1
+	11, // 45: elitea.runtime.v1.RuntimeControlService.AuthorizeAgentModelCheckpoint:input_type -> elitea.runtime.v1.AuthorizeAgentModelCheckpointRequestV1
+	13, // 46: elitea.runtime.v1.RuntimeControlService.RenewLease:input_type -> elitea.runtime.v1.RenewLeaseRequestV1
+	15, // 47: elitea.runtime.v1.RuntimeControlService.ObserveDesiredState:input_type -> elitea.runtime.v1.ObserveDesiredStateRequestV1
+	17, // 48: elitea.runtime.v1.RuntimeControlService.PrepareSettlement:input_type -> elitea.runtime.v1.PrepareSettlementRequestV1
+	30, // 49: elitea.runtime.v1.RuntimeControlService.AuthorizeSandboxJob:output_type -> elitea.runtime.v1.AuthorizeSandboxJobResponseV1
+	6,  // 50: elitea.runtime.v1.RuntimeControlService.ClaimCommand:output_type -> elitea.runtime.v1.ClaimCommandResponseV1
+	8,  // 51: elitea.runtime.v1.RuntimeControlService.BeginExecution:output_type -> elitea.runtime.v1.BeginExecutionResponseV1
+	10, // 52: elitea.runtime.v1.RuntimeControlService.AuthorizeInvocation:output_type -> elitea.runtime.v1.AuthorizeInvocationResponseV1
+	12, // 53: elitea.runtime.v1.RuntimeControlService.AuthorizeAgentModelCheckpoint:output_type -> elitea.runtime.v1.AuthorizeAgentModelCheckpointResponseV1
+	14, // 54: elitea.runtime.v1.RuntimeControlService.RenewLease:output_type -> elitea.runtime.v1.RenewLeaseResponseV1
+	16, // 55: elitea.runtime.v1.RuntimeControlService.ObserveDesiredState:output_type -> elitea.runtime.v1.ObserveDesiredStateResponseV1
+	18, // 56: elitea.runtime.v1.RuntimeControlService.PrepareSettlement:output_type -> elitea.runtime.v1.PrepareSettlementResponseV1
+	49, // [49:57] is the sub-list for method output_type
+	41, // [41:49] is the sub-list for method input_type
 	41, // [41:41] is the sub-list for extension type_name
 	41, // [41:41] is the sub-list for extension extendee
 	0,  // [0:41] is the sub-list for field type_name
@@ -1452,6 +1457,7 @@ func file_elitea_runtime_v1_control_proto_init() {
 	file_elitea_runtime_v1_errors_proto_init()
 	file_elitea_runtime_v1_input_proto_init()
 	file_elitea_runtime_v1_output_proto_init()
+	file_elitea_runtime_v1_sandbox_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

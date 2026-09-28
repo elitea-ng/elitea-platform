@@ -25,6 +25,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "elitea/runtime/v1/limits.proto",
         "elitea/runtime/v1/node_event.proto",
         "elitea/runtime/v1/output.proto",
+        "elitea/runtime/v1/sandbox.proto",
         "elitea/runtime/v1/toolkit.proto",
         "elitea/runtime/v1/validation.proto",
     ]

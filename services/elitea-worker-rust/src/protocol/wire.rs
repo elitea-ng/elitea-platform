@@ -70,6 +70,8 @@ mod merge_contract_tests {
 #[derive(Clone, Copy)]
 pub(crate) enum Schema {
     SignedCommandEnvelope,
+    #[cfg(feature = "sandbox-supervisor")]
+    SandboxGrant,
     Digest,
     WorkerCommand,
     InputBundleReference,
@@ -203,6 +205,12 @@ fn read_varint(raw: &[u8], position: &mut usize) -> Result<u64, ProtocolError> {
 
 const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
     match schema {
+        #[cfg(feature = "sandbox-supervisor")]
+        Schema::SandboxGrant => match field {
+            1 | 3 | 9..=11 => Some(varint()),
+            2 | 4..=8 => Some(length()),
+            _ => None,
+        },
         Schema::SignedCommandEnvelope => match field {
             1 | 3 | 4 | 5 | 6 => Some(length()),
             2 => Some(varint()),
