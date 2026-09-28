@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
@@ -117,6 +118,142 @@ func TestPostgresDirectPipelineHITLHistoryAtomicSegments(t *testing.T) {
 			}
 			if static != review || decision != want || thread != "pipeline-thread" || task != "execution-resumed" || !streaming || oldTask != "execution-paused" || oldStreaming || count != 4 {
 				t.Fatalf("incorrect segmentation static=%q decision=%q thread=%q task=%q streaming=%v old=%q/%v groups=%d", static, decision, thread, task, streaming, oldTask, oldStreaming, count)
+			}
+		})
+	}
+}
+
+// Competing decisions must serialize on the persisted pause. Observe the real
+// PostgreSQL lock before releasing the first transaction, rather than assuming
+// goroutine scheduling produced an overlap.
+func TestPostgresDirectPipelineHITLHistoryCompetingDecisions(t *testing.T) {
+	for _, commitFirst := range []bool{true, false} {
+		name := "first_commits"
+		if !commitFirst {
+			name = "first_rolls_back"
+		}
+		t.Run(name, func(t *testing.T) {
+			pool := newMigratedPostgresIntegrationPool(t)
+			seedCurrentAgentContinuationSchema(t, pool)
+			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+			defer cancel()
+			begin := func() pgx.Tx {
+				tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
+				if err := tenant.BindProject(ctx, tx, tenant.Project{ID: 1}); err != nil {
+					t.Fatal(err)
+				}
+				return tx
+			}
+			setup := begin()
+			conversation := "10000000-0000-4000-8000-000000000031"
+			question := "20000000-0000-4000-8000-000000000061"
+			response := "40000000-0000-4000-8000-000000000061"
+			responseID := insertPostgresCurrentApplicationTurn(t, sqlcgen.New(setup), mustCurrentPGUUID(t, conversation), question,
+				"30000000-0000-4000-8000-000000000061", response, "Create a joke.", "execution-paused")
+			review := "Static review for competing decisions."
+			metadata, err := json.Marshal(map[string]any{"thread_id": "pipeline-thread", "execution_generation": question,
+				"hitl_interrupt": map[string]any{"interaction_type": "pipeline_hitl_node", "history_contract_version": 1,
+					"interrupt_id": "review-1", "node_name": "review", "message": review, "available_actions": []string{"approve", "reject", "edit"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := setup.Exec(ctx, `UPDATE application_versions SET agent_type='pipeline' WHERE id=41`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := setup.Exec(ctx, `UPDATE chat_message_group SET is_streaming=false,meta=$2::jsonb WHERE uuid=$1`, responseID, metadata); err != nil {
+				t.Fatal(err)
+			}
+			if err := setup.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			turn := agentexecutionapp.CurrentContinueTurn{ProjectID: 1, ActorUserID: 11, ConversationUUID: conversation, TargetParticipantID: 21,
+				Kind: agentexecutionapp.CurrentRegenerationApplication, ApplicationID: 31, ApplicationVersionID: 41,
+				QuestionID: question, ResponseMessageID: response, ExecutionGeneration: question, ThreadID: "pipeline-thread", InterruptID: "review-1",
+				Action: "approve", HITLDecisions: json.RawMessage(`[{"interrupt_id":"review-1","action":"approve","value":""}]`),
+				PipelineHITLReview: &agentexecutionapp.CurrentPipelineHITLReview{InterruptID: "review-1", NodeName: "review", Message: review}}
+			first, second := begin(), begin()
+			firstPID, secondPID := first.Conn().PgConn().PID(), second.Conn().PgConn().PID()
+			if err := resumeCurrentAgentHITL(ctx, sqlcgen.New(first), "execution-first", turn); err != nil {
+				t.Fatal(err)
+			}
+			contender := turn.Clone()
+			contender.Action = "reject"
+			contender.HITLDecisions = json.RawMessage(`[{"interrupt_id":"review-1","action":"reject","value":""}]`)
+			result := make(chan error, 1)
+			go func() {
+				err := resumeCurrentAgentHITL(ctx, sqlcgen.New(second), "execution-second", *contender)
+				if err == nil {
+					err = second.Commit(ctx)
+				} else {
+					_ = second.Rollback(context.Background())
+				}
+				result <- err
+			}()
+			// On any assertion failure, release the first lock and join the contender.
+			joined := false
+			defer func() {
+				cancel()
+				_ = first.Rollback(context.Background())
+				if !joined {
+					<-result
+				}
+			}()
+			ticker := time.NewTicker(10 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				var blocked bool
+				if err := pool.QueryRow(ctx, `SELECT $1::int=ANY(pg_blocking_pids($2::int))`, firstPID, secondPID).Scan(&blocked); err != nil {
+					t.Fatal(err)
+				}
+				if blocked {
+					break
+				}
+				select {
+				case err := <-result:
+					joined = true
+					t.Fatalf("contender completed before observing the first transaction lock: %v", err)
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				case <-ticker.C:
+				}
+			}
+			var releaseErr error
+			if commitFirst {
+				releaseErr = first.Commit(ctx)
+			} else {
+				releaseErr = first.Rollback(ctx)
+			}
+			if releaseErr != nil {
+				t.Fatal(releaseErr)
+			}
+			contenderErr := <-result
+			joined = true
+			if commitFirst && !errors.Is(contenderErr, agentexecutionapp.ErrCurrentAgentHITLAlreadyResolved) {
+				t.Fatalf("losing decision error=%v", contenderErr)
+			}
+			if !commitFirst && contenderErr != nil {
+				t.Fatalf("decision after rollback error=%v", contenderErr)
+			}
+			var groups int
+			var decision, task string
+			err = pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM p_1.chat_message_group WHERE conversation_id=1),dt.content,c.task_id
+    FROM p_1.chat_message_group d JOIN p_1.chat_message_items di ON di.message_group_id=d.id
+    JOIN p_1.chat_messages_text dt ON dt.id=di.id
+    JOIN p_1.chat_message_group c ON c.reply_to_id=d.id
+    WHERE d.uuid=$1 AND c.uuid=$2`, uuid.MustParse(turn.PipelineDecisionID()), uuid.MustParse(turn.ProjectionResponseID())).Scan(&groups, &decision, &task)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantDecision, wantTask := "Approved", "execution-first"
+			if !commitFirst {
+				wantDecision, wantTask = "Rejected", "execution-second"
+			}
+			if groups != 4 || decision != wantDecision || task != wantTask {
+				t.Fatalf("groups=%d decision=%q task=%q; want 4, %q, %q", groups, decision, task, wantDecision, wantTask)
 			}
 		})
 	}

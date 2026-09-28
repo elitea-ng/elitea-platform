@@ -173,3 +173,18 @@ This proves restart recovery from a persisted pause. It does not prove recovery 
 
 The editor test transcript may disappear on browser reload. This is an accepted lifecycle, not a defect.
 Both chat surfaces require functional tests. Main chat retains priority for history and recovery verification.
+
+## Competing decision transactions
+
+`TestPostgresDirectPipelineHITLHistoryCompetingDecisions` verifies two independent transactions against real PostgreSQL.
+The test observes `pg_blocking_pids` before releasing the first transaction.
+This proves lock contention rather than relying on goroutine scheduling.
+
+- If the first approval commits, the competing rejection returns `ErrCurrentAgentHITLAlreadyResolved`.
+- If the first approval rolls back, the competing rejection commits successfully.
+- Both cases retain four message groups: original question, static review, one decision, and one continuation response.
+- The continuation task binding belongs to the committed decision.
+
+The new test and existing atomic segmentation tests pass with `go test -race` on 2026-09-28.
+Tests use isolated temporary databases. The rehearsal product database remains unchanged.
+This evidence covers repository transactions. Concurrent HTTP admission and worker dispatch require separate end-to-end proof.
