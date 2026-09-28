@@ -30,6 +30,35 @@ fn object(value: Value) -> Map<String, Value> {
 }
 
 #[test]
+fn frozen_native_auto_marker_preserves_selection_for_both_entry_points() {
+    for kind in [AgentExecutionKind::Application, AgentExecutionKind::Adhoc] {
+        for marker in [json!(true), json!(false), json!("auto")] {
+            let mut input = ordinary_request(kind);
+            let settings = match kind {
+                AgentExecutionKind::Application => input
+                    .payload
+                    .application
+                    .get_mut("version_details")
+                    .unwrap()
+                    .get_mut("llm_settings")
+                    .unwrap(),
+                AgentExecutionKind::Adhoc => input.payload.llm.get_mut("kwargs").unwrap(),
+            }
+            .as_object_mut()
+            .unwrap();
+            settings.insert("max_tokens".to_owned(), json!(4000));
+            settings.insert("max_tokens_auto".to_owned(), marker.clone());
+            let profile = OrdinaryNoToolProfile::validate(&input);
+            match marker.as_bool() {
+                Some(true) => assert_eq!(profile.unwrap().max_tokens(), None),
+                Some(false) => assert_eq!(profile.unwrap().max_tokens(), Some(4000)),
+                None => assert!(profile.is_err()),
+            }
+        }
+    }
+}
+
+#[test]
 fn summary_model_admission_keeps_limits_separate_and_rejects_authored_controls() {
     use super::request::{ModelContextLimits, SummaryModelSnapshot};
     for kind in [AgentExecutionKind::Application, AgentExecutionKind::Adhoc] {

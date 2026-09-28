@@ -420,5 +420,6 @@ The compatible Auto implementation now uses remaining combined capacity, with a 
 Explicit caps and summary reservations remain independent.
 Main preserves Auto for inferred OpenAI model names without the compatibility flag.
 See [source mapping and verification scope](source-mapping/auto-output-budget-20260928.md).
-Native Anthropic Auto identity, UI guidance, and deployed browser acceptance remain open.
+Native Anthropic Auto identity and UI guidance now have component coverage.
+Coordinated deployment and browser acceptance remain open.
 Do not use the explicit-cap chat 706 result as Auto-policy acceptance.

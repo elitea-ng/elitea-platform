@@ -17,6 +17,7 @@ type Measurement struct {
 	TotalTokens             uint32 `json:"total_tokens"`
 	UsableInputTokens       uint32 `json:"usable_input_tokens"`
 	ReservedOutputTokens    uint32 `json:"reserved_output_tokens"`
+	AutoOutput              bool   `json:"auto_output,omitempty"`
 	SafetyMarginTokens      uint32 `json:"safety_margin_tokens"`
 	EstimatedInputTokens    uint64 `json:"estimated_input_tokens"`
 	CompactionTriggerTokens uint64 `json:"compaction_trigger_tokens"`

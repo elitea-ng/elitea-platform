@@ -35,8 +35,12 @@ Admission still checks input and transport bounds before dispatch.
 
 Main now matches SDK and Rust dialect selection when resolving Auto.
 An OpenAI model without the compatibility flag no longer receives Anthropic normalization.
-Native Anthropic still resolves Auto to its catalogue maximum.
-Preserving native Auto identity and applying an adaptive native cap remain open.
+Main retains the native numeric fallback and adds `max_tokens_auto: true` to frozen settings.
+Rust reads that marker for saved applications and ad-hoc chat.
+Native Anthropic calculates its numeric cap from remaining combined capacity.
+Legacy reasoning reserves at least its thinking budget plus one output token.
+Adaptive thinking keeps the ordinary minimum output allowance.
+Explicit native caps retain the existing reasoning-padding behavior.
 
 ## Verification and limits
 
@@ -53,5 +57,28 @@ The permitted toolkit rerun passes all 372 tests, including those seven cases.
 
 This change does not replace estimation with a tokenizer or provider usage.
 Provider usage arrives after dispatch and cannot alone admit newly added content.
-UI explanation, native Auto parity, deployment, and browser acceptance remain open.
+The status contract adds optional `auto_output`; absent means the existing fixed reservation.
+Main validates this field and preserves it in the existing context read model.
+The UI distinguishes minimum Auto allowance from a fixed output reservation.
+Deployment and browser acceptance remain open.
 The separate Full-window test in chat 706 uses an explicit 8,192-token cap and does not prove this Auto policy.
+
+## Native and UI verification
+
+All 1,232 Rust library tests pass; one manual diagnostic benchmark remains ignored.
+The 26 native-facade tests also pass after the model-family update.
+Native tests cover short requests, near-boundary requests, adaptive thinking, legacy thinking, and overfull histories.
+Overfull histories remain measurable for compaction and cannot dispatch before admission passes.
+The 58 context-widget tests and UI typecheck pass.
+Focused Go tests cover marker preservation in saved and ad-hoc settings, plus optional status-field validation.
+
+The native facade now recognizes Fable 5 and Fable 5.1 as adaptive-thinking models at the user's request.
+Opus 5.5 already matches the Opus 5 family rule.
+Regression cases verify adaptive thinking and sampling rejection for hyphen, dot, and underscore version spellings.
+These tests establish local request behavior, not live availability of those model names.
+
+Use a coordinated rehearsal rollout with no active executions.
+Main must accept the optional status field before the new worker emits it.
+Older Rust workers do not understand the new frozen Auto marker.
+Retain the numeric fallback for SDK workers, which read the existing numeric setting.
+This change adds no database tables or migrations.

@@ -27,6 +27,9 @@ message AgentExecutionCommandV1 {
 // data-plane content and must never be embedded in WorkerCommandV1.
 message AgentExecutionInputV1 {
   string schema_revision = 1;
+  // Main can add max_tokens_auto=true to frozen model settings. This preserves
+  // Auto when max_tokens carries the required numeric fallback for older workers.
+  // Rust applies the marker to llm.kwargs and application.version_details.llm_settings.
   bytes llm = 2;
   bytes chat_history = 3;
   bytes user_input = 4;

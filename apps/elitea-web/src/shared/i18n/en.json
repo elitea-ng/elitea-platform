@@ -2751,6 +2751,8 @@
   "widgets.contextBudget.statLabel": "{{label}}:",
   "widgets.contextBudget.strategy": "Strategy",
   "widgets.contextBudget.summaries": "Summaries",
+  "widgets.contextBudget.autoOutput": "Minimum output allowance (Auto)",
+  "widgets.contextBudget.autoEstimateHelp": "Estimated input for the latest model call. Auto lets output use remaining window space, up to the model maximum. A minimum output allowance and safety margin are reserved. When enabled, automatic compaction starts at 90% of usable input.",
   "widgets.contextBudget.title": "Context Budget",
   "widgets.contextBudget.tokens": "{{tokens}} tokens",
   "widgets.createButton.chooseEntity": "Choose what to create",

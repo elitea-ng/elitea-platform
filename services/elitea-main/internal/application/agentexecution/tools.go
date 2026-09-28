@@ -618,6 +618,9 @@ func (service *CurrentApplicationToolSnapshotService) resolveCurrentAgentModel(
 				return unsupportedStart("the native model has no valid maximum output token configuration")
 			}
 			maxTokens = int64(*selected.MaxOutputTokens)
+			// Preserve Auto for runtimes that budget each provider request.
+			// The numeric value remains available to older SDK workers.
+			settings["max_tokens_auto"] = true
 		}
 		settings["max_tokens"] = maxTokens
 	}

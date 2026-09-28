@@ -32,6 +32,7 @@ export interface ContextBudgetStats {
     readonly legacy: boolean;
     readonly totalTokens: number;
     readonly reservedOutputTokens: number;
+    readonly autoOutput: boolean;
     readonly safetyMarginTokens: number;
   };
   readonly usageAvailable: boolean;
@@ -115,6 +116,7 @@ function readRuntime(value: unknown): ContextBudgetStats['runtime'] {
     legacy: m.budget_mode === 'legacy',
     totalTokens: readNumber(m, 'total_tokens'),
     reservedOutputTokens: readNumber(m, 'reserved_output_tokens'),
+    autoOutput: m.auto_output === true,
     safetyMarginTokens: readNumber(m, 'safety_margin_tokens'),
   };
 }

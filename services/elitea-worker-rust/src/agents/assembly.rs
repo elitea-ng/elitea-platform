@@ -963,6 +963,7 @@ impl ModelFieldNames {
             "temperature",
             "stream",
             "openai_compatible",
+            "max_tokens_auto",
         ],
     };
     const APPLICATION: Self = Self {
@@ -974,6 +975,7 @@ impl ModelFieldNames {
             "reasoning_effort",
             "temperature",
             "openai_compatible",
+            "max_tokens_auto",
         ],
     };
 }
@@ -1017,7 +1019,12 @@ fn validate_model(
         .ok_or_else(invalid_profile)?
         .to_owned();
     let model_project_id = positive_u32(settings.get("model_project_id"))?;
-    let max_tokens = normalized_max_tokens(settings.get("max_tokens"))?;
+    let selected_tokens = normalized_max_tokens(settings.get("max_tokens"))?;
+    let max_tokens = match settings.get("max_tokens_auto") {
+        Some(Value::Bool(true)) => None,
+        None | Some(Value::Bool(false)) => selected_tokens,
+        Some(_) => return Err(invalid_profile()),
+    };
     let reasoning_effort = settings
         .get("reasoning_effort")
         .filter(|value| !value.is_null())

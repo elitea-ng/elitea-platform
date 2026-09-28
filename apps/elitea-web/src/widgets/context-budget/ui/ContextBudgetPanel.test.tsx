@@ -22,10 +22,23 @@ function statsFrom(overrides: Readonly<Record<string, unknown>> = {}): ContextBu
 }
 
 describe('ContextBudgetPanel', () => {
+  it('distinguishes Auto minimum allowance from a fixed output reservation', () => {
+    const stats = statsFrom({ runtime_context: { active: false, measurement: {
+      version: 1, phase: 'measured', budget_mode: 'balanced', total_tokens: 272000,
+      reserved_output_tokens: 1024, safety_margin_tokens: 2720, auto_output: true,
+    } } });
+    const { getByTestId, getByText, rerender } = renderWithTheme(<ContextBudgetPanel stats={stats} />);
+    expect(getByTestId('context-budget-stat-output').textContent).toBe(`Minimum output allowance (Auto):1${NBSP}024`);
+    expect(getByText(/Auto lets output use remaining window space/)).toBeTruthy();
+    if (!stats.runtime) throw new Error('missing runtime fixture');
+    rerender(<ContextBudgetPanel stats={{ ...stats, runtime: { ...stats.runtime, autoOutput: false } }} />);
+    expect(getByTestId('context-budget-stat-output').textContent).toBe(`Reserved for output:1${NBSP}024`);
+  });
+
   it('explains a provider input ceiling below the combined window allocation', () => {
     const stats: ContextBudgetStats = {
       ...statsFrom({ max_tokens: 272000 }),
-      runtime: { phase: 'measured', active: false, legacy: false, totalTokens: 400000, reservedOutputTokens: 8192, safetyMarginTokens: 4000 },
+      runtime: { autoOutput: false, phase: 'measured', active: false, legacy: false, totalTokens: 400000, reservedOutputTokens: 8192, safetyMarginTokens: 4000 },
     };
     const { getByTestId, rerender, queryByTestId } = renderWithTheme(<ContextBudgetPanel stats={stats} />);
     expect(getByTestId('context-budget-stat-input-limit').textContent).toBe(`Provider input limit:272${NBSP}000`);

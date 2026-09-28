@@ -627,6 +627,16 @@ func TestCurrentApplicationToolSnapshotPreservesProviderAutoMaxTokens(t *testing
 			if !valid || maxTokens != test.wantMaxTokens {
 				t.Fatalf("max_tokens=%v, want %d", settings["max_tokens"], test.wantMaxTokens)
 			}
+			if (settings["max_tokens_auto"] == true) != (test.wantMaxTokens > 0) {
+				t.Fatalf("Auto identity differs from the native normalization: %v", settings["max_tokens_auto"])
+			}
+			adhoc, err := currentAdhocRuntimeLLM(settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(adhoc, []byte(`"max_tokens_auto":true`)) != (test.wantMaxTokens > 0) {
+				t.Fatal("ad-hoc input loses Auto identity")
+			}
 		})
 	}
 }

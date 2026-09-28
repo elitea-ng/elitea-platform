@@ -9,6 +9,19 @@ import (
 
 const validMeasurement = `{"version":1,"phase":"compacting","budget_mode":"balanced","total_tokens":272000,"usable_input_tokens":205280,"reserved_output_tokens":64000,"safety_margin_tokens":2720,"estimated_input_tokens":190000,"compaction_trigger_tokens":184752,"compaction_target_tokens":143696}`
 
+func TestMeasurementPreservesOptionalAutoOutput(t *testing.T) {
+	for _, suffix := range []string{"", `,"auto_output":false`, `,"auto_output":true`} {
+		raw := strings.TrimSuffix(validMeasurement, "}") + suffix + "}"
+		measurement, err := DecodeMeasurement([]byte(raw))
+		if err != nil || measurement.AutoOutput != strings.Contains(suffix, "true") {
+			t.Fatalf("Auto output mode: %v, %v", measurement.AutoOutput, err)
+		}
+	}
+	if _, err := DecodeMeasurement([]byte(strings.TrimSuffix(validMeasurement, "}") + `,"auto_output":"true"}`)); err == nil {
+		t.Fatal("accepted an invalid Auto marker")
+	}
+}
+
 func TestMeasurementRejectsContentAndImpossibleBudgets(t *testing.T) {
 	for _, raw := range []string{
 		strings.Replace(validMeasurement, `"version":1`, `"version":1,"prompt":"secret"`, 1),

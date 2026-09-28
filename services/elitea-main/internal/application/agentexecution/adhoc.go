@@ -416,7 +416,7 @@ func currentAdhocRuntimeLLM(settings map[string]any) ([]byte, error) {
 	kwargs := map[string]any{
 		"model": model, "stream": true, "openai_compatible": compatible,
 	}
-	for _, key := range []string{"model_project_id", "max_tokens", "reasoning_effort", "temperature"} {
+	for _, key := range []string{"model_project_id", "max_tokens", "max_tokens_auto", "reasoning_effort", "temperature"} {
 		if value, exists := settings[key]; exists {
 			kwargs[key] = value
 		}

@@ -82,9 +82,9 @@ impl ModelGatewayClient {
         invocation: ModelFacadeInvocation,
     ) -> Result<BoundAnthropicFacade, ModelFacadeError> {
         validate_invocation(&invocation)?;
-        if invocation.max_tokens.is_none() {
-            // Anthropic Messages requires max_tokens. Main resolves Auto to
-            // the configured model maximum before it freezes a native model.
+        if invocation.max_tokens.is_none() && invocation.context_budget.is_none() {
+            // Auto requires authoritative catalogue limits before a numeric
+            // native wire cap can be computed for each request.
             return Err(ModelFacadeError::InvalidInvocation);
         }
         let token = context.model_facade_token();
@@ -462,7 +462,25 @@ fn encode_anthropic_body(
     }
     params.tools = anthropic_tools(&request.tools)?;
     params.validate().map_err(|_| invalid_anthropic_request())?;
-    serde_json::to_vec(&params).map_err(|_| invalid_anthropic_request())
+    let mut encoded = serde_json::to_vec(&params).map_err(|_| invalid_anthropic_request())?;
+    if invocation.max_tokens.is_none()
+        && let Some(budget) = native_context_budget(invocation)?
+    {
+        // Keep the thinking floor during measurement, even before compaction
+        // has replaced an overfull input. Dispatch still checks that input.
+        let cap = budget
+            .auto_output_limit(&encoded)?
+            .max(budget.output_reservation);
+        if cap < params.max_tokens {
+            // Only this scalar changes. Its lower bound already includes the
+            // validated thinking budget; do not revalidate all message text.
+            params.max_tokens = cap;
+            encoded.clear();
+            serde_json::to_writer(&mut encoded, &params)
+                .map_err(|_| invalid_anthropic_request())?;
+        }
+    }
+    Ok(encoded)
 }
 
 /// The Anthropic media type for one of the four image types this runtime
@@ -601,10 +619,22 @@ fn native_context_budget(
     invocation
         .context_budget
         .map(|budget| {
-            let output = native_generation(invocation)?.max_tokens;
-            budget
+            let generation = native_generation(invocation)?;
+            let output = if invocation.max_tokens.is_none() {
+                match generation.thinking {
+                    Some(ThinkingConfig::Enabled { budget_tokens, .. }) => budget
+                        .output_reservation
+                        .max(budget_tokens.saturating_add(1)),
+                    _ => budget.output_reservation,
+                }
+            } else {
+                generation.max_tokens
+            };
+            let mut resolved = budget
                 .for_model(budget.limits, Some(output))
-                .map_err(|_| invalid_output_budget())
+                .map_err(|_| invalid_output_budget())?;
+            resolved.auto_output = invocation.max_tokens.is_none();
+            Ok(resolved)
         })
         .transpose()
 }
@@ -621,6 +651,11 @@ fn invalid_output_budget() -> AdkError {
 fn native_generation(invocation: &ModelFacadeInvocation) -> Result<NativeGeneration, AdkError> {
     let max_tokens = invocation
         .max_tokens
+        .or_else(|| {
+            invocation
+                .context_budget
+                .map(|budget| budget.limits.max_output_tokens)
+        })
         .ok_or_else(invalid_anthropic_request)?;
     if rejects_explicit_sampling(&invocation.model_name) && invocation.temperature.is_some() {
         return Err(anthropic_error(
@@ -700,6 +735,8 @@ fn anthropic_effort(effort: ModelReasoningEffort) -> Result<EffortLevel, AdkErro
 fn adaptive_thinking_model(model_name: &str) -> bool {
     let name = model_name.to_ascii_lowercase();
     [
+        "fable-5",
+        "fable_5",
         "opus-4-7",
         "opus_4_7",
         "opus-4.7",

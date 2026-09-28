@@ -25,6 +25,8 @@ pub(super) struct ModelContextStatus {
     total_tokens: u32,
     usable_input_tokens: u32,
     reserved_output_tokens: u32,
+    #[serde(default)]
+    auto_output: bool,
     safety_margin_tokens: u32,
     estimated_input_tokens: u64,
     compaction_trigger_tokens: u64,
@@ -40,6 +42,7 @@ impl ModelContextStatus {
             total_tokens: usage.budget.total_tokens,
             usable_input_tokens: usage.budget.input_limit,
             reserved_output_tokens: usage.budget.output_reservation,
+            auto_output: usage.budget.auto_output,
             safety_margin_tokens: usage.budget.margin_tokens,
             estimated_input_tokens: usage.estimated_input,
             compaction_trigger_tokens: usage.budget.compaction_trigger(),

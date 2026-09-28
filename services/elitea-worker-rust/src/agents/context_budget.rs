@@ -74,6 +74,7 @@ enum BudgetSelection {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RequestContextBudget {
+    pub(crate) auto_output: bool,
     pub(crate) total_tokens: u32,
     pub(crate) output_reservation: u32,
     pub(crate) margin_tokens: u32,
@@ -192,6 +193,7 @@ impl RequestContextBudget {
             .ok_or_else(invalid)?
             .min(limits.max_input_tokens.unwrap_or(u32::MAX));
         Ok(Self {
+            auto_output: selected_output.is_none(),
             total_tokens,
             output_reservation,
             margin_tokens,
