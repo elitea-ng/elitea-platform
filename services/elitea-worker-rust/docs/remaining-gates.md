@@ -162,7 +162,8 @@ The [native history retention candidate](source-mapping/context-native-history-r
 It retains prepared model history and avoids accumulating partial stream events.
 Clippy and formatting checks pass. Chat 607 passes deployed compaction and fresh-browser reload.
 Repeated live compaction passes in the later ordinary and nested runs linked above.
-Comparative process memory measurements remain open.
+[Container memory observation](source-mapping/context-runtime-memory-20260928.md) records a measured Full-window run.
+Memory remains above baseline afterward; repeated-run plateaus and allocation ownership remain open.
 The [summary work-order correction](source-mapping/context-summary-work-order-20260921.md) passes deployed compaction and fresh-browser reload in chat 604.
 
 The [2026-09-17 toolkit binding audit](source-mapping/toolkit-binding-drift-20260917.md)
