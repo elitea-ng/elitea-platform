@@ -330,7 +330,9 @@ fn parse_json(raw: &[u8], maximum: usize) -> Result<Value, DirectToolkitRequestE
 
 fn protocol_error(error: ProtocolError) -> DirectToolkitRequestError {
     match error {
-        ProtocolError::ResourceExhausted(_) => resource_exhausted(),
+        ProtocolError::ResourceExhausted(_) | ProtocolError::InputFieldLimit { .. } => {
+            resource_exhausted()
+        }
         ProtocolError::IncompatibleVersion(_) => incompatible_version(),
         ProtocolError::InvalidInput(_)
         | ProtocolError::AuthorizationFailed(_)

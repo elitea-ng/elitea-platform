@@ -88,5 +88,25 @@
     "code": "EXECUTION_INPUT_LIMIT",
     "message": "The request cannot start because its input exceeds a platform size limit. Reduce the message, instructions, or attached context. This is not a model token limit. Share the support reference if the cause is unclear.",
     "retryable": false
+  },
+  {
+    "code": "EXECUTION_INPUT_LIMIT",
+    "message": "The request cannot start because the user message exceeds a platform size limit. Shorten the message or attach the content as a file. This is not a model token limit.",
+    "retryable": false
+  },
+  {
+    "code": "EXECUTION_INPUT_LIMIT",
+    "message": "The request cannot start because the conversation history exceeds a platform input limit before compaction can run. Start a new chat with the required context. Share the support reference if this repeats.",
+    "retryable": false
+  },
+  {
+    "code": "EXECUTION_INPUT_LIMIT",
+    "message": "The request cannot start because the agent instructions or settings exceed a platform input limit. Reduce the saved content or ask an administrator to inspect the support reference. This is not a model token limit.",
+    "retryable": false
+  },
+  {
+    "code": "EXECUTION_INPUT_LIMIT",
+    "message": "The request cannot start because the attached tool configuration exceeds a platform input limit. Reduce the attached tools or ask an administrator to inspect their schemas using the support reference.",
+    "retryable": false
   }
 ]

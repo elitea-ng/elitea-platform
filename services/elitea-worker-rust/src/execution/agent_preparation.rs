@@ -1403,9 +1403,9 @@ impl PreInvocationTerminalCause {
             Self::Cancelled(_) => "agent_preparation.cancelled",
             Self::InputContent(error) => error.code(),
             Self::InputProtocol(ProtocolError::InvalidInput(_)) => "agent_input.invalid_input",
-            Self::InputProtocol(ProtocolError::ResourceExhausted(_)) => {
-                "agent_input.resource_exhausted"
-            }
+            Self::InputProtocol(
+                ProtocolError::ResourceExhausted(_) | ProtocolError::InputFieldLimit { .. },
+            ) => "agent_input.resource_exhausted",
             Self::InputProtocol(ProtocolError::IncompatibleVersion(_)) => {
                 "agent_input.incompatible_version"
             }
@@ -1428,6 +1428,9 @@ impl PreInvocationTerminalCause {
             Self::InputContent(InputContentError::InvalidInput(_))
             | Self::InputProtocol(ProtocolError::InvalidInput(_)) => {
                 RuntimeFailureKind::InvalidInput
+            }
+            Self::InputProtocol(ProtocolError::InputFieldLimit { field, .. }) => {
+                RuntimeFailureKind::ExecutionInputFieldLimit(*field)
             }
             Self::InputContent(InputContentError::ResourceExhausted(_))
             | Self::InputProtocol(ProtocolError::ResourceExhausted(_)) => {
@@ -1830,6 +1833,7 @@ fn pre_invocation_terminal(
     if matches!(
         cause.runtime_failure_kind(),
         crate::protocol::output::RuntimeFailureKind::ExecutionInputLimit
+            | crate::protocol::output::RuntimeFailureKind::ExecutionInputFieldLimit(_)
     ) {
         tracing::error!(
             event = "agent_preparation_terminal",

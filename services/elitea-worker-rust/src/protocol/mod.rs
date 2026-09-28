@@ -13,5 +13,5 @@ pub mod generated {
     include!(concat!(env!("OUT_DIR"), "/elitea.rs"));
 }
 
-pub use error::ProtocolError;
+pub use error::{InputLimitField, ProtocolError};
 pub use generated::elitea;

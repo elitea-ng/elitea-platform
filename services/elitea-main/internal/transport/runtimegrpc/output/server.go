@@ -623,7 +623,7 @@ func (s *Server) runtimeFailureFrame(message *runtimev1.ExecutionOutputFrameV1, 
 	if err != nil || !matchesDigest(message.GetPayloadDigest(), encodedFailure) {
 		return outputapp.RuntimeFailureFrame{}, outputapp.ErrInvalidValidationOutput
 	}
-	policy, ok := runtimeFailurePolicyFor(payload.GetCode())
+	policy, ok := runtimeFailurePolicyForError(payload)
 	if !ok || payload.GetSafeMessage() != policy.SafeMessage || payload.GetRetryable() != policy.Retryable {
 		return outputapp.RuntimeFailureFrame{}, outputapp.ErrInvalidValidationOutput
 	}
@@ -1058,6 +1058,20 @@ type runtimeFailurePolicy struct {
 	Code        string
 	SafeMessage string
 	Retryable   bool
+}
+
+// Input sections use fixed public messages. Never accept an arbitrary worker reason.
+func runtimeFailurePolicyForError(payload *runtimev1.RuntimeErrorV1) (runtimeFailurePolicy, bool) {
+	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_EXECUTION_INPUT_LIMIT {
+		switch payload.GetSafeMessage() {
+		case "The request cannot start because the user message exceeds a platform size limit. Shorten the message or attach the content as a file. This is not a model token limit.",
+			"The request cannot start because the conversation history exceeds a platform input limit before compaction can run. Start a new chat with the required context. Share the support reference if this repeats.",
+			"The request cannot start because the agent instructions or settings exceed a platform input limit. Reduce the saved content or ask an administrator to inspect the support reference. This is not a model token limit.",
+			"The request cannot start because the attached tool configuration exceeds a platform input limit. Reduce the attached tools or ask an administrator to inspect their schemas using the support reference.":
+			return runtimeFailurePolicy{Code: "EXECUTION_INPUT_LIMIT", SafeMessage: payload.GetSafeMessage()}, true
+		}
+	}
+	return runtimeFailurePolicyFor(payload.GetCode())
 }
 
 func runtimeFailurePolicyFor(code runtimev1.RuntimeErrorCodeV1) (runtimeFailurePolicy, bool) {

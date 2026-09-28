@@ -113,3 +113,24 @@ Evidence uses `elitea-user-input-723-*` in the local temporary directory.
 All 19 input-contract tests pass, including the exact 512 KiB worker boundary.
 Strict Rust library and test Clippy checks, formatting, and diff checks pass.
 This closes the admitted-message mismatch. Field-specific public diagnostics remain a separate open boundary.
+
+## Input section guidance
+
+Four typed input sections now select registered messages under `EXECUTION_INPUT_LIMIT`.
+They identify the user message, conversation history, agent instructions/settings, or attached tool configuration.
+Each message explains a corrective action without exposing input values or caller-defined field names.
+Unknown sections and whole-envelope limits retain the historical generic admission message.
+The current SDK/UI behavioral reference remains the diagnostic mapping linked above.
+
+Rust `protocol/error.rs::InputLimitField` defines the fixed sections and public messages.
+`agents/protocol.rs::request_from` adds section identity only to size failures at those parsing boundaries.
+Malformed JSON and authorization errors keep their original classifications.
+`execution/agent_preparation.rs` carries the section into the terminal failure and logs the static validator reason at ERROR.
+`protocol/output.rs` registers every exact code/message/retry tuple for durable replay.
+Main `transport/runtimegrpc/output/server.go::runtimeFailurePolicyForError` admits only those additional registered messages.
+The shared `model_failure_policies.json` fixture checks both language implementations and rejects substituted private text.
+Signed receipt bytes remain unchanged during Main projection. No protobuf fields, database schemas, or size limits change.
+
+Deploy Main before Rust because older consumers reject the new message tuples.
+Focused contract tests pass. Deployed browser acceptance for the new section messages remains pending.
+Do not treat earlier chat 723 as evidence for these new messages.

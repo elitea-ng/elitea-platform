@@ -8,7 +8,8 @@ use super::request::{
     MAX_AGENT_INSTRUCTION_BYTES, MAX_AGENT_USER_INPUT_BYTES, NextInputSuggestionPolicy, UserInput,
 };
 use crate::protocol::{
-    ProtocolError as AgentProtocolError, elitea::runtime::v1::AgentExecutionInputV1,
+    InputLimitField, ProtocolError as AgentProtocolError,
+    elitea::runtime::v1::AgentExecutionInputV1,
 };
 use crate::toolkits::{ToolAdmissionPolicy, ToolAdmissionPolicyErrorCode};
 
@@ -70,12 +71,16 @@ pub fn request_from(
     let llm = json_object(&message.llm, "the agent llm must be an object")?;
     // History is data-plane content. Let the model context policy compact it
     // after admission; do not apply the smaller control-field budget here.
-    let Value::Array(chat_history) = parse_history(&message.chat_history)? else {
+    let Value::Array(chat_history) = parse_history(&message.chat_history)
+        .map_err(|error| error.in_input_field(InputLimitField::ChatHistory))?
+    else {
         return Err(AgentProtocolError::InvalidInput(
             "the agent chat history must be a list",
         ));
     };
-    let user_input = match parse_user_input(&message.user_input)? {
+    let user_input = match parse_user_input(&message.user_input)
+        .map_err(|error| error.in_input_field(InputLimitField::UserMessage))?
+    {
         Value::String(value) => UserInput::Text(value),
         Value::Array(value) => UserInput::ContentBlocks(value),
         _ => {
@@ -84,8 +89,10 @@ pub fn request_from(
             ));
         }
     };
-    let tools = json_list(&message.tools, "the agent tools must be a list")?;
-    let application = application_object(&message.application)?;
+    let tools = json_list(&message.tools, "the agent tools must be a list")
+        .map_err(|error| error.in_input_field(InputLimitField::ToolConfiguration))?;
+    let application = application_object(&message.application)
+        .map_err(|error| error.in_input_field(InputLimitField::AgentSettings))?;
     let internal_tools = string_list(
         &message.internal_tools,
         "the agent internal tools must contain only strings",

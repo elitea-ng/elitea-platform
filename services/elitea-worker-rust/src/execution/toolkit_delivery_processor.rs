@@ -1029,7 +1029,8 @@ const fn runtime_failure_code(failure: RuntimeFailureKind) -> &'static str {
         RuntimeFailureKind::IncompatibleVersion => "runtime.incompatible_version",
         RuntimeFailureKind::InvalidInput => "runtime.invalid_input",
         RuntimeFailureKind::ResourceExhausted => "runtime.resource_exhausted",
-        RuntimeFailureKind::ExecutionInputLimit => "runtime.execution_input_limit",
+        RuntimeFailureKind::ExecutionInputLimit
+        | RuntimeFailureKind::ExecutionInputFieldLimit(_) => "runtime.execution_input_limit",
         RuntimeFailureKind::DependencyUnavailable => "runtime.dependency_unavailable",
         RuntimeFailureKind::DeadlineExceeded => "runtime.deadline_exceeded",
         RuntimeFailureKind::AuthorizationFailed => "runtime.authorization_failed",

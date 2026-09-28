@@ -35,9 +35,9 @@ impl AgentDeliveryError {
     pub const fn code(&self) -> &'static str {
         match self {
             Self::Protocol(ProtocolError::InvalidInput(_)) => "agent_delivery.invalid_input",
-            Self::Protocol(ProtocolError::ResourceExhausted(_)) => {
-                "agent_delivery.resource_exhausted"
-            }
+            Self::Protocol(
+                ProtocolError::ResourceExhausted(_) | ProtocolError::InputFieldLimit { .. },
+            ) => "agent_delivery.resource_exhausted",
             Self::Protocol(ProtocolError::IncompatibleVersion(_)) => {
                 "agent_delivery.incompatible_version"
             }

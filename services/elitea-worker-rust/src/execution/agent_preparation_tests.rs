@@ -1284,3 +1284,35 @@ fn input_size_failures_are_distinct_from_runtime_resource_exhaustion() {
         );
     }
 }
+
+#[test]
+fn input_section_reaches_public_failure_without_exposing_validator_reason() {
+    use crate::protocol::{InputLimitField, ProtocolError};
+    for field in [
+        InputLimitField::UserMessage,
+        InputLimitField::ChatHistory,
+        InputLimitField::AgentSettings,
+        InputLimitField::ToolConfiguration,
+    ] {
+        let cause = PreInvocationTerminalCause::InputProtocol(ProtocolError::InputFieldLimit {
+            field,
+            reason: "operator-only validation boundary",
+        });
+        assert_eq!(
+            cause.runtime_failure_kind(),
+            RuntimeFailureKind::ExecutionInputFieldLimit(field)
+        );
+        assert_eq!(cause.code(), "agent_input.resource_exhausted");
+        assert!(
+            cause
+                .to_string()
+                .contains("operator-only validation boundary")
+        );
+        assert!(
+            !cause
+                .runtime_failure_kind()
+                .safe_message()
+                .contains("operator-only")
+        );
+    }
+}

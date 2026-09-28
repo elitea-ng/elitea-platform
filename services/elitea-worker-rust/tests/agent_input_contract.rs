@@ -298,7 +298,10 @@ fn instruction_content_reaches_context_admission_without_relaxing_metadata_strin
         message.application = serde_json::to_vec(&app).unwrap();
         assert!(matches!(
             request_from(message, AgentExecutionKind::Application, binding()),
-            Err(AgentProtocolError::ResourceExhausted(_))
+            Err(AgentProtocolError::InputFieldLimit {
+                field: elitea_worker_rust::protocol::InputLimitField::AgentSettings,
+                ..
+            })
         ));
     }
     let mut message = application_message();
@@ -661,7 +664,10 @@ fn admitted_user_text_keeps_its_data_budget_without_expanding_metadata() {
     message.user_input = serde_json::to_vec(&"x".repeat(512 * 1024 + 1)).unwrap();
     assert!(matches!(
         request_from(message, AgentExecutionKind::Application, binding()),
-        Err(AgentProtocolError::ResourceExhausted(_))
+        Err(AgentProtocolError::InputFieldLimit {
+            field: elitea_worker_rust::protocol::InputLimitField::UserMessage,
+            ..
+        })
     ));
     for value in [
         serde_json::json!({"untrusted": "x".repeat(64 * 1024 + 1)}),
@@ -671,7 +677,41 @@ fn admitted_user_text_keeps_its_data_budget_without_expanding_metadata() {
         message.user_input = serde_json::to_vec(&value).unwrap();
         assert!(matches!(
             request_from(message, AgentExecutionKind::Application, binding()),
-            Err(AgentProtocolError::ResourceExhausted(_))
+            Err(AgentProtocolError::InputFieldLimit {
+                field: elitea_worker_rust::protocol::InputLimitField::UserMessage,
+                ..
+            })
         ));
     }
+}
+
+#[test]
+fn input_limit_sections_preserve_reasons_without_exposing_values() {
+    use elitea_worker_rust::protocol::InputLimitField;
+    for field in [
+        InputLimitField::ChatHistory,
+        InputLimitField::ToolConfiguration,
+    ] {
+        let mut message = application_message();
+        match field {
+            InputLimitField::ChatHistory => message.chat_history = vec![b' '; 8 * 1024 * 1024 + 1],
+            InputLimitField::ToolConfiguration => {
+                message.tools = serde_json::to_vec(&serde_json::json!([
+                    {"description": "PRIVATE_PAYLOAD".repeat(6000)}
+                ]))
+                .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let error = request_from(message, AgentExecutionKind::Application, binding())
+            .err()
+            .expect("input limit");
+        assert!(
+            matches!(error, AgentProtocolError::InputFieldLimit { field: actual, .. } if actual == field)
+        );
+        assert!(!error.to_string().contains("PRIVATE_PAYLOAD"));
+        assert!(!field.safe_message().contains("PRIVATE_PAYLOAD"));
+    }
+    let error = AgentProtocolError::InvalidInput("malformed JSON");
+    assert_eq!(error.in_input_field(InputLimitField::UserMessage), error);
 }

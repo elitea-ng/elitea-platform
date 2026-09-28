@@ -96,7 +96,8 @@ where
 const fn protocol_error_code(error: &crate::protocol::ProtocolError) -> &'static str {
     match error {
         crate::protocol::ProtocolError::InvalidInput(_) => "execution_delivery.invalid_input",
-        crate::protocol::ProtocolError::ResourceExhausted(_) => {
+        crate::protocol::ProtocolError::ResourceExhausted(_)
+        | crate::protocol::ProtocolError::InputFieldLimit { .. } => {
             "execution_delivery.resource_exhausted"
         }
         crate::protocol::ProtocolError::IncompatibleVersion(_) => {
