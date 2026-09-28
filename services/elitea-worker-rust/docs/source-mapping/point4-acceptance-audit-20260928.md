@@ -23,7 +23,7 @@ The linked mappings retain source ownership, implementation history, and individ
 
 ## Remaining closure work
 
-1. Finish deployed verification for request-byte and malformed-response categories.
+1. Finish deployed verification for the request-byte category. Native malformed-response acceptance passes in chat 733.
 2. Review the final point 4 acceptance against its requirements before advancing.
 
 The [model-failure matrix](point4-model-failure-acceptance-20260928.md) records the exact evidence for every category.
