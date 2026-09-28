@@ -340,9 +340,12 @@ impl DockerClient {
     }
 }
 
-#[async_trait]
-impl SandboxClient for DockerClient {
-    async fn provision(&self, manifest: &Manifest) -> Result<SessionHandle, SandboxError> {
+impl DockerClient {
+    async fn provision_inner(
+        &self,
+        manifest: &Manifest,
+        identity: Option<&CodeJobIdentity>,
+    ) -> Result<SessionHandle, SandboxError> {
         let image = if self.code_job_policy {
             self.validate_code_job_policy()?;
             self.check_code_image_ready().await?
@@ -354,6 +357,15 @@ impl SandboxClient for DockerClient {
 
         let config = Config {
             image: Some(image),
+            labels: identity.map(|identity| {
+                HashMap::from([
+                    ("io.elitea.code.job".into(), identity.job_key.clone()),
+                    (
+                        "io.elitea.code.request".into(),
+                        identity.request_digest.clone(),
+                    ),
+                ])
+            }),
             user: self.code_job_policy.then(|| "10001:10001".to_owned()),
             // Keep container running with a long-lived process
             cmd: Some(vec!["sleep".to_string(), "infinity".to_string()]),
@@ -364,7 +376,13 @@ impl SandboxClient for DockerClient {
 
         let container = self
             .client
-            .create_container(None::<CreateContainerOptions<String>>, config)
+            .create_container(
+                identity.map(|identity| CreateContainerOptions {
+                    name: identity.container_name(),
+                    platform: None,
+                }),
+                config,
+            )
             .await
             .map_err(|e| SandboxError::ProvisionFailed {
                 resource: self.base_image.clone(),
@@ -530,6 +548,18 @@ impl SandboxClient for DockerClient {
             )),
         };
         if let Some(error) = failure {
+            if identity.is_some() {
+                // Keep the name as a reconciliation tombstone until the supervisor
+                // persists a terminal receipt and explicitly removes the workload.
+                DockerSession {
+                    container_id: container_id.clone(),
+                    client: self.client.clone(),
+                    command_timeout: self.command_timeout,
+                }
+                .kill_workload()
+                .await?;
+                return Err(error);
+            }
             let removal = self
                 .client
                 .remove_container(
@@ -558,6 +588,13 @@ impl SandboxClient for DockerClient {
         sessions.insert(session_id, container_id);
 
         Ok(handle)
+    }
+}
+
+#[async_trait]
+impl SandboxClient for DockerClient {
+    async fn provision(&self, manifest: &Manifest) -> Result<SessionHandle, SandboxError> {
+        self.provision_inner(manifest, None).await
     }
 
     async fn start(&self, handle: &SessionHandle) -> Result<Box<dyn SandboxSession>, SandboxError> {
@@ -1091,3 +1128,7 @@ mod tests {
 #[cfg(test)]
 #[path = "docker_live_tests.rs"]
 mod live_tests;
+
+#[path = "docker_code_jobs.rs"]
+mod code_jobs;
+pub use code_jobs::{CodeJobIdentity, CodeJobObservation};

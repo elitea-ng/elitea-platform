@@ -666,3 +666,42 @@ runtime behavior remain unverified.
 The vendored crate's 86 component tests pass (two live tests ignored by default).
 Both opt-in real Docker tests also pass after the readiness change. No product
 database, worker deployment, or UI execution was changed.
+
+## Stable runtime identity for supervisor reconciliation
+
+The existing graph durability boundary remains
+`src/state/postgres_checkpointer.rs` and its execution-bound writer authority.
+Current SDK `runtime/langchain/remote_sandbox.py` supplies the remote-execution
+behavior reference, but its request/session transport is not a durable job ledger.
+
+The ADK extension `vendor/adk-sandbox/src/workspace/docker_code_jobs.rs` adds:
+`CodeJobIdentity`, `provision_code_job`, and `observe_code_job`.
+The trusted caller supplies a validated opaque job key and request fingerprint;
+the supervisor must derive these from its authorized persisted invocation,
+including tenant/project scope, activation, code/input, runtime, policy and
+dependency revisions. Docker names contain only the opaque key, and labels
+bind the request fingerprint. Concurrent creates are arbitrated by Docker's
+unique-name constraint.
+
+Observation is bounded and never starts commands or reconstructs an executable
+session. Only an actual Docker 404 means the container is absent; transport
+failure means unknown. A request fingerprint mismatch is a hard conflict.
+Existing names require reconciliation, not reexecution. Named preparation
+failure terminates the container and retains its name for reconciliation;
+anonymous legacy workspaces retain cleanup-on-failure behavior.
+
+This is runtime identity persistence, not complete supervisor durability.
+The caller must retain durable attempt/terminal receipts across container
+deletion and daemon/node loss. An absent container does not establish that
+code had no effects. Execution claim fencing, cancellation ownership,
+receipt persistence, and the supervisor service/API remain open. No graph
+checkpoint schema or product database was changed.
+
+Verification: four real Docker tests pass (13.41 seconds). They cover
+concurrent same-identity creation with exactly one winner, new-client
+observation of the same container, no reexecution, fingerprint conflict,
+failed preparation retaining a stopped identity, and the previous limits/
+termination/concurrent-state cases. All test-owned workloads were removed.
+A worker library check with `sandbox-supervisor` also passed before the final
+preparation-termination refinement; the live suite compiled that refinement.
+No process-kill/failover service test or Kubernetes recovery claim is made.

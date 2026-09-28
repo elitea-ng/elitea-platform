@@ -2,7 +2,8 @@
 
 These packages preserve the published ADK 2.2.0 dependency graph.
 History extensions change `adk-agent/src/llm_agent.rs` and `adk-runner/src/runner.rs`.
-The optional sandbox supervisor extension changes `adk-sandbox/src/workspace/docker.rs`.
+The optional sandbox supervisor extension changes `adk-sandbox/src/workspace/docker.rs` and adds
+`docker_code_jobs.rs` with opt-in real-container tests in `docker_live_tests.rs`.
 Each package includes the upstream Apache 2.0 license.
 
 Upstream repository: https://github.com/zavora-ai/adk-rust
@@ -45,3 +46,13 @@ not gain Docker access. The upstream in-memory session map is not a durable job
 registry. Caller cancellation, lost create acknowledgements, supervisor restart,
 persistent receipts, and Kubernetes execution still require supervisor ownership
 and integration tests before production admission.
+
+
+Named Code jobs carry a validated opaque identity and request fingerprint as
+Docker metadata. Concurrent creation is arbitrated by Docker's unique name
+constraint. A recreated client can observe an existing workload without
+repopulating a session or rerunning code. Existing names require reconciliation;
+fingerprint mismatch fails. Failed named preparation retains the container/name
+for reconciliation after termination. Durable terminal receipts and supervisor
+authorization remain required; absence of a container alone never proves that
+execution did not happen.

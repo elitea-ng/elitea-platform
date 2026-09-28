@@ -110,3 +110,125 @@ async fn live_concurrent_jobs_keep_independent_state() {
     rc.unwrap();
     verified.unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires local Docker and ELITEA_SANDBOX_TEST_IMAGE"]
+async fn live_named_job_survives_client_recreation_without_reexecution() {
+    let image = std::env::var("ELITEA_SANDBOX_TEST_IMAGE").unwrap();
+    let client = DockerClient::with_image(image.clone())
+        .await
+        .unwrap()
+        .with_resource_limits(Some(64 * 1024 * 1024), Some(0.25))
+        .with_code_job_policy(Duration::from_secs(15))
+        .unwrap();
+    let key = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    let identity = CodeJobIdentity::new(key.clone(), "a".repeat(64)).unwrap();
+    let manifest = Manifest::new(vec![]);
+    let (first, second) = tokio::join!(
+        client.provision_code_job(&identity, &manifest),
+        client.provision_code_job(&identity, &manifest)
+    );
+    assert_ne!(
+        first.is_ok(),
+        second.is_ok(),
+        "exactly one concurrent create must win"
+    );
+    let handle = first.or(second).unwrap();
+    let checked = AssertUnwindSafe(async {
+        let session = client.start(&handle).await.unwrap();
+        assert_eq!(
+            session
+                .exec_command("echo one > effect.txt", None)
+                .await
+                .unwrap()
+                .exit_code,
+            0
+        );
+        let before = client.observe_code_job(&identity).await.unwrap().unwrap();
+        // Recreate the Docker client with no retained in-memory sessions.
+        let recovered = DockerClient::with_image(image)
+            .await
+            .unwrap()
+            .with_resource_limits(Some(64 * 1024 * 1024), Some(0.25))
+            .with_code_job_policy(Duration::from_secs(15))
+            .unwrap();
+        assert!(recovered.sessions.read().await.is_empty());
+        let after = recovered
+            .observe_code_job(&identity)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(before.container_id, after.container_id);
+        assert!(after.running);
+        assert!(
+            recovered
+                .provision_code_job(&identity, &manifest)
+                .await
+                .is_err()
+        );
+        let conflicting = CodeJobIdentity::new(key, "b".repeat(64)).unwrap();
+        assert!(recovered.observe_code_job(&conflicting).await.is_err());
+        assert_eq!(session.read_file("effect.txt").await.unwrap(), b"one\n");
+    })
+    .catch_unwind()
+    .await;
+    client.stop(&handle).await.unwrap();
+    assert!(client.observe_code_job(&identity).await.unwrap().is_none());
+    checked.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires local Docker and ELITEA_SANDBOX_TEST_IMAGE"]
+async fn live_failed_preparation_retains_stopped_identity() {
+    let image = std::env::var("ELITEA_SANDBOX_TEST_IMAGE").unwrap();
+    let client = DockerClient::with_image(image)
+        .await
+        .unwrap()
+        .with_resource_limits(Some(64 * 1024 * 1024), Some(0.25))
+        .with_code_job_policy(Duration::from_secs(15))
+        .unwrap();
+    let key = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    let identity = CodeJobIdentity::new(key, "c".repeat(64)).unwrap();
+    let manifest = Manifest::new(vec![ManifestEntry::File {
+        path: "../escape".into(),
+        content: vec![],
+    }]);
+    assert!(
+        client
+            .provision_code_job(&identity, &manifest)
+            .await
+            .is_err()
+    );
+    let observed = client.observe_code_job(&identity).await.unwrap().unwrap();
+    let checked = AssertUnwindSafe(async {
+        assert!(!observed.running);
+        assert!(
+            client
+                .provision_code_job(&identity, &Manifest::new(vec![]))
+                .await
+                .is_err()
+        );
+    })
+    .catch_unwind()
+    .await;
+    client
+        .client
+        .remove_container(
+            &observed.container_id,
+            Some(RemoveContainerOptions {
+                force: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+    checked.unwrap();
+}
