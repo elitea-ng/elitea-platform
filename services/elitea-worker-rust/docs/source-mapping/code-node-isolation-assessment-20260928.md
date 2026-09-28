@@ -753,3 +753,40 @@ tenant isolation, terminal-result recovery and terminal uncertain-state behavior
 Go migration manifest/history checks passed with agent-state head 4. The worker
 library compiled with the optional supervisor feature. This remains component
 persistence evidence, not end-to-end crash recovery or UI acceptance.
+
+## In-container terminal receipt runner
+
+Connection-attached Docker exec output is not recoverable merely because the
+supervisor has a durable database row. The execution process must outlive that
+connection and publish a bounded terminal receipt independently.
+
+`src/bin/elitea-code-runner.rs` is the initial container-main-process runner,
+built explicitly with `sandbox-runner`. Default worker builds do not include this
+binary. It reads a bounded supervisor-written request file, validates argument/
+timeout limits, launches the selected runtime with separate captured pipes,
+enforces a combined 512 KiB raw output cap and wall-clock deadline, and emits one
+revisioned JSON receipt with status, exit code and captured stdout/stderr.
+The supervisor, not ordinary user input, must select runtime arguments.
+Captured content remains untrusted and needs the Code-state boundary validation
+before graph-state projection.
+
+Current-platform reference remains
+`elitea-sdk/runtime/langchain/pyodide_sandbox.py` for subprocess timeouts and
+output behavior; this is a language-independent outer runner, not a literal
+port of the Deno/Pyodide implementation. Python compatibility, dependency
+preparation and platform-client bridging still have their separate requirements.
+
+The runner uses a single-thread Tokio runtime. Child pipe output is bounded
+before retention; JSON escaping can expand the final receipt, so the eventual
+container-log reader must bound its envelope separately (and state receipts still
+have the ledger's own 512 KiB validation boundary). CPU, memory, PIDs, network and
+filesystem limits are supplied by the admitted container, not this executable.
+As the container's main process exits, the container PID namespace must terminate
+remaining descendants. That behavior still requires Linux-container verification;
+local subprocess tests do not prove it.
+
+Three focused tests verify exit-status/output retention, output-limit handling,
+timeout handling, and rejection before launch. Pending: Linux image packaging,
+main-process named dispatch, bounded durable-log receipt recovery, supervisor
+ownership/heartbeat/cancellation, and both deployment acceptance paths. The
+runner is not yet wired to Code-node execution or deployed.
