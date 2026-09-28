@@ -321,3 +321,44 @@ func TestResourceLimitPresentationPreservesWorkerReceipt(t *testing.T) {
 		t.Fatalf("incorrect public failure: %+v", browser)
 	}
 }
+
+func TestInputLimitPresentationPreservesSpecificGuidanceAndReceipt(t *testing.T) {
+	frame, expected := validRuntimeFailureOutput(t, executiondomain.AgentAdhocCapability)
+	frame.Failure.Code = "EXECUTION_INPUT_LIMIT"
+	frame.Failure.SafeMessage = "The request cannot start because its input exceeds a platform size limit. Reduce the message, instructions, or attached context. This is not a model token limit. Share the support reference if the cause is unclear."
+	payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(&runtimev1.RuntimeErrorV1{
+		Code:        runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_EXECUTION_INPUT_LIMIT,
+		SafeMessage: frame.Failure.SafeMessage,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame.EncodedFailure = payload
+	frame.PayloadDigest = runtimedomain.SHA256(payload)
+	frame.Settlement.TerminalPayloadDigest = frame.PayloadDigest
+	original := string(frame.EncodedFailure)
+	projector := &runtimeFailureProjectorStub{}
+	service, err := NewRuntimeFailureService(&runtimeFailureBindingStub{expected: expected}, fenceVerifierStub{expected: &frame.Fence}, projector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.IngestFailure(context.Background(), frame); err != nil {
+		t.Fatal(err)
+	}
+	projection := projector.projections[0]
+	if string(projection.Frame.EncodedFailure) != original || projection.Frame.PayloadDigest != frame.PayloadDigest {
+		t.Fatal("presentation changed the worker receipt")
+	}
+	var message struct {
+		Code        string `json:"code"`
+		SafeMessage string `json:"safe_message"`
+		Retryable   bool   `json:"retryable"`
+	}
+	if err := json.Unmarshal(projection.BrowserData, &message); err != nil {
+		t.Fatal(err)
+	}
+	browser := RuntimeFailure{Code: message.Code, SafeMessage: message.SafeMessage, Retryable: message.Retryable}
+	if browser != projection.Frame.Failure || browser.Code != "EXECUTION_INPUT_LIMIT" || browser.Retryable || !strings.Contains(browser.SafeMessage, "input exceeds a platform size limit") || !strings.Contains(browser.SafeMessage, "support reference") {
+		t.Fatalf("incorrect public failure: %+v", browser)
+	}
+}

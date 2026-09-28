@@ -55,6 +55,8 @@ const (
 	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_TOOL_FAILED          RuntimeErrorCodeV1 = 28
 	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_RESULT_INVALID       RuntimeErrorCodeV1 = 29
 	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_RESULT_LIMIT         RuntimeErrorCodeV1 = 30
+	// Input admission failed before the worker authorized model execution.
+	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_EXECUTION_INPUT_LIMIT RuntimeErrorCodeV1 = 31
 )
 
 // Enum value maps for RuntimeErrorCodeV1.
@@ -91,6 +93,7 @@ var (
 		28: "RUNTIME_ERROR_CODE_V1_PIPELINE_TOOL_FAILED",
 		29: "RUNTIME_ERROR_CODE_V1_PIPELINE_RESULT_INVALID",
 		30: "RUNTIME_ERROR_CODE_V1_PIPELINE_RESULT_LIMIT",
+		31: "RUNTIME_ERROR_CODE_V1_EXECUTION_INPUT_LIMIT",
 	}
 	RuntimeErrorCodeV1_value = map[string]int32{
 		"RUNTIME_ERROR_CODE_V1_UNSPECIFIED":                   0,
@@ -124,6 +127,7 @@ var (
 		"RUNTIME_ERROR_CODE_V1_PIPELINE_TOOL_FAILED":          28,
 		"RUNTIME_ERROR_CODE_V1_PIPELINE_RESULT_INVALID":       29,
 		"RUNTIME_ERROR_CODE_V1_PIPELINE_RESULT_LIMIT":         30,
+		"RUNTIME_ERROR_CODE_V1_EXECUTION_INPUT_LIMIT":         31,
 	}
 )
 
@@ -224,7 +228,7 @@ const file_elitea_runtime_v1_errors_proto_rawDesc = "" +
 	"\x0eRuntimeErrorV1\x129\n" +
 	"\x04code\x18\x01 \x01(\x0e2%.elitea.runtime.v1.RuntimeErrorCodeV1R\x04code\x12!\n" +
 	"\fsafe_message\x18\x02 \x01(\tR\vsafeMessage\x12\x1c\n" +
-	"\tretryable\x18\x03 \x01(\bR\tretryableJ\x04\b\x04\x10\x10*\xc8\v\n" +
+	"\tretryable\x18\x03 \x01(\bR\tretryableJ\x04\b\x04\x10\x10*\xf9\v\n" +
 	"\x12RuntimeErrorCodeV1\x12%\n" +
 	"!RUNTIME_ERROR_CODE_V1_UNSPECIFIED\x10\x00\x120\n" +
 	",RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY\x10\x01\x12.\n" +
@@ -257,7 +261,8 @@ const file_elitea_runtime_v1_errors_proto_rawDesc = "" +
 	"/RUNTIME_ERROR_CODE_V1_PIPELINE_TOOL_UNAVAILABLE\x10\x1b\x12.\n" +
 	"*RUNTIME_ERROR_CODE_V1_PIPELINE_TOOL_FAILED\x10\x1c\x121\n" +
 	"-RUNTIME_ERROR_CODE_V1_PIPELINE_RESULT_INVALID\x10\x1d\x12/\n" +
-	"+RUNTIME_ERROR_CODE_V1_PIPELINE_RESULT_LIMIT\x10\x1eBSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"+RUNTIME_ERROR_CODE_V1_PIPELINE_RESULT_LIMIT\x10\x1e\x12/\n" +
+	"+RUNTIME_ERROR_CODE_V1_EXECUTION_INPUT_LIMIT\x10\x1fBSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_errors_proto_rawDescOnce sync.Once

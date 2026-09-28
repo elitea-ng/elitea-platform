@@ -38,6 +38,7 @@ pub enum RuntimeFailureKind {
     IncompatibleVersion,
     InvalidInput,
     ResourceExhausted,
+    ExecutionInputLimit,
     OutputProjectionLimit,
     PipelineInputInvalid,
     PipelineInputLimit,
@@ -684,6 +685,11 @@ pub(crate) fn runtime_error_policy(
             "The execution input is invalid.",
             false,
         ),
+        RuntimeFailureKind::ExecutionInputLimit => (
+            RuntimeErrorCodeV1::ExecutionInputLimit,
+            "The request cannot start because its input exceeds a platform size limit. Reduce the message, instructions, or attached context. This is not a model token limit. Share the support reference if the cause is unclear.",
+            false,
+        ),
         RuntimeFailureKind::ResourceExhausted => (
             RuntimeErrorCodeV1::ResourceExhausted,
             "The execution exceeded an approved resource limit.",
@@ -822,6 +828,7 @@ fn canonical_runtime_failure(error: &RuntimeErrorV1) -> Option<RuntimeFailureKin
         RuntimeFailureKind::IncompatibleVersion,
         RuntimeFailureKind::InvalidInput,
         RuntimeFailureKind::ResourceExhausted,
+        RuntimeFailureKind::ExecutionInputLimit,
         RuntimeFailureKind::OutputProjectionLimit,
         RuntimeFailureKind::PipelineInputInvalid,
         RuntimeFailureKind::PipelineInputLimit,

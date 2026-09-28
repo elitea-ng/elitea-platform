@@ -1082,6 +1082,8 @@ func runtimeFailurePolicyFor(code runtimev1.RuntimeErrorCodeV1) (runtimeFailureP
 		return runtimeFailurePolicy{Code: "PIPELINE_RESULT_LIMIT", SafeMessage: "The pipeline stopped because a tool result exceeds the node state size limit. Use smaller batches or reduce the returned data. Later nodes did not run."}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_OUTPUT_DELIVERY_LIMIT:
 		return runtimeFailurePolicy{Code: "OUTPUT_DELIVERY_LIMIT", SafeMessage: "The run stopped because its output exceeded the delivery limit. Some results may be missing. Share the support reference with your administrator before repeating actions."}, true
+	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_EXECUTION_INPUT_LIMIT:
+		return runtimeFailurePolicy{Code: "EXECUTION_INPUT_LIMIT", SafeMessage: "The request cannot start because its input exceeds a platform size limit. Reduce the message, instructions, or attached context. This is not a model token limit. Share the support reference if the cause is unclear."}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_RESOURCE_EXHAUSTED:
 		return runtimeFailurePolicy{Code: "RESOURCE_EXHAUSTED", SafeMessage: "The execution exceeded an approved resource limit."}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE:

@@ -1265,3 +1265,22 @@ async fn recovery_lifecycle_selects_checkpoint_assembly_and_retains_cleanup() {
     drop(reservation);
     assert_eq!(admission.available_capacity(), 1);
 }
+
+#[test]
+fn input_size_failures_are_distinct_from_runtime_resource_exhaustion() {
+    for cause in [
+        PreInvocationTerminalCause::InputContent(InputContentError::ResourceExhausted(
+            "the input body is too large",
+        )),
+        PreInvocationTerminalCause::InputProtocol(
+            crate::protocol::ProtocolError::ResourceExhausted(
+                "the agent JSON input exceeds its limit",
+            ),
+        ),
+    ] {
+        assert_eq!(
+            cause.runtime_failure_kind(),
+            RuntimeFailureKind::ExecutionInputLimit
+        );
+    }
+}

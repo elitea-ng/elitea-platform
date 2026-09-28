@@ -1431,7 +1431,7 @@ impl PreInvocationTerminalCause {
             }
             Self::InputContent(InputContentError::ResourceExhausted(_))
             | Self::InputProtocol(ProtocolError::ResourceExhausted(_)) => {
-                RuntimeFailureKind::ResourceExhausted
+                RuntimeFailureKind::ExecutionInputLimit
             }
             Self::InputContent(InputContentError::AuthorizationFailed(_))
             | Self::InputProtocol(ProtocolError::AuthorizationFailed(_)) => {
@@ -1827,12 +1827,24 @@ fn pre_invocation_terminal(
     // These Display implementations contain static, data-free reasons and
     // redact transport causes. Never substitute Debug or the source chain:
     // those may contain connection details or caller-controlled payloads.
-    tracing::warn!(
-        event = "agent_preparation_terminal",
-        error_code = cause.code(),
-        failure_reason = %cause,
-        "agent execution stopped before model invocation"
-    );
+    if matches!(
+        cause.runtime_failure_kind(),
+        crate::protocol::output::RuntimeFailureKind::ExecutionInputLimit
+    ) {
+        tracing::error!(
+            event = "agent_preparation_terminal",
+            error_code = cause.code(),
+            failure_reason = %cause,
+            "agent input exceeds its admission limit before model invocation"
+        );
+    } else {
+        tracing::warn!(
+            event = "agent_preparation_terminal",
+            error_code = cause.code(),
+            failure_reason = %cause,
+            "agent execution stopped before model invocation"
+        );
+    }
     AgentPreparationOutcome::PreInvocationTerminal(Box::new(PreInvocationTerminal {
         delivery,
         verified,

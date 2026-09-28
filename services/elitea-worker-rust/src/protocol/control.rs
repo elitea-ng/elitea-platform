@@ -3278,6 +3278,7 @@ fn runtime_rejection(error: &RuntimeErrorV1) -> ControlSemanticError {
         }
         Some(
             RuntimeErrorCodeV1::Unspecified
+            | RuntimeErrorCodeV1::ExecutionInputLimit
             | RuntimeErrorCodeV1::OutputDeliveryLimit
             | RuntimeErrorCodeV1::PipelineInputInvalid
             | RuntimeErrorCodeV1::PipelineInputLimit

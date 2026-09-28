@@ -60,10 +60,17 @@ const (
 // These fragments use the existing execution, generation, and message fences.
 // Consumers must deploy before producers emit these versioned members.
 // agent_context_status uses response_metadata.context_status version 1.
+// Optional auto_output distinguishes a minimum output allowance from a fixed cap.
+// Absent means fixed for existing persisted events. Deploy consumers first.
 // compaction_target_tokens is floor(usable_input_tokens * 15 / 100).
 // Consumers also accept the legacy 70-percent target for persisted events.
 // The target is advisory. Protected instructions and active tool groups can exceed it.
 // The trigger remains ceil(usable_input_tokens * 90 / 100).
+// Optional provider_usage contains input_tokens and output_tokens for one call.
+// Input includes cached tokens. Output includes reasoning tokens. Never add these
+// breakdowns again. Absent means a prepared-request estimate, not zero usage.
+// Provider occupancy is (input + output) / (total_tokens - safety_margin_tokens).
+// Estimates retain the usable_input_tokens denominator. Deploy consumers first.
 type NodeEventV1 struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	Type             string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`

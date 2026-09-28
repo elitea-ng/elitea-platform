@@ -156,31 +156,37 @@ func (x *AgentExecutionCommandV1) GetSioEvent() string {
 // null and arbitrary toolkit shapes survive cross-language transport. They are
 // data-plane content and must never be embedded in WorkerCommandV1.
 type AgentExecutionInputV1 struct {
-	state                  protoimpl.MessageState `protogen:"open.v1"`
-	SchemaRevision         string                 `protobuf:"bytes,1,opt,name=schema_revision,json=schemaRevision,proto3" json:"schema_revision,omitempty"`
-	Llm                    []byte                 `protobuf:"bytes,2,opt,name=llm,proto3" json:"llm,omitempty"`
-	ChatHistory            []byte                 `protobuf:"bytes,3,opt,name=chat_history,json=chatHistory,proto3" json:"chat_history,omitempty"`
-	UserInput              []byte                 `protobuf:"bytes,4,opt,name=user_input,json=userInput,proto3" json:"user_input,omitempty"`
-	ThreadId               *string                `protobuf:"bytes,5,opt,name=thread_id,json=threadId,proto3,oneof" json:"thread_id,omitempty"`
-	CheckpointId           *string                `protobuf:"bytes,6,opt,name=checkpoint_id,json=checkpointId,proto3,oneof" json:"checkpoint_id,omitempty"`
-	Debug                  bool                   `protobuf:"varint,7,opt,name=debug,proto3" json:"debug,omitempty"`
-	Tools                  []byte                 `protobuf:"bytes,8,opt,name=tools,proto3" json:"tools,omitempty"`
-	Application            []byte                 `protobuf:"bytes,9,opt,name=application,proto3" json:"application,omitempty"`
-	InternalTools          []byte                 `protobuf:"bytes,10,opt,name=internal_tools,json=internalTools,proto3" json:"internal_tools,omitempty"`
-	StepsLimit             *int32                 `protobuf:"varint,11,opt,name=steps_limit,json=stepsLimit,proto3,oneof" json:"steps_limit,omitempty"`
-	McpTokens              []byte                 `protobuf:"bytes,12,opt,name=mcp_tokens,json=mcpTokens,proto3" json:"mcp_tokens,omitempty"`
-	IgnoredMcpServers      []byte                 `protobuf:"bytes,13,opt,name=ignored_mcp_servers,json=ignoredMcpServers,proto3" json:"ignored_mcp_servers,omitempty"`
-	UserDeclinedMcpServers []byte                 `protobuf:"bytes,14,opt,name=user_declined_mcp_servers,json=userDeclinedMcpServers,proto3" json:"user_declined_mcp_servers,omitempty"`
-	ShouldContinue         bool                   `protobuf:"varint,15,opt,name=should_continue,json=shouldContinue,proto3" json:"should_continue,omitempty"`
-	HitlResume             bool                   `protobuf:"varint,16,opt,name=hitl_resume,json=hitlResume,proto3" json:"hitl_resume,omitempty"`
-	HitlAction             *string                `protobuf:"bytes,17,opt,name=hitl_action,json=hitlAction,proto3,oneof" json:"hitl_action,omitempty"`
-	HitlValue              *string                `protobuf:"bytes,18,opt,name=hitl_value,json=hitlValue,proto3,oneof" json:"hitl_value,omitempty"`
-	HitlDecisions          []byte                 `protobuf:"bytes,19,opt,name=hitl_decisions,json=hitlDecisions,proto3" json:"hitl_decisions,omitempty"`
-	ExecutionGeneration    *string                `protobuf:"bytes,20,opt,name=execution_generation,json=executionGeneration,proto3,oneof" json:"execution_generation,omitempty"`
-	IsRegenerate           bool                   `protobuf:"varint,21,opt,name=is_regenerate,json=isRegenerate,proto3" json:"is_regenerate,omitempty"`
-	Meta                   []byte                 `protobuf:"bytes,22,opt,name=meta,proto3" json:"meta,omitempty"`
-	ConversationId         *string                `protobuf:"bytes,23,opt,name=conversation_id,json=conversationId,proto3,oneof" json:"conversation_id,omitempty"`
-	Persona                string                 `protobuf:"bytes,24,opt,name=persona,proto3" json:"persona,omitempty"`
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	SchemaRevision string                 `protobuf:"bytes,1,opt,name=schema_revision,json=schemaRevision,proto3" json:"schema_revision,omitempty"`
+	// Main can add max_tokens_auto=true to frozen model settings. This preserves
+	// Auto when max_tokens carries the required numeric fallback for older workers.
+	// Rust applies the marker to llm.kwargs and application.version_details.llm_settings.
+	Llm          []byte  `protobuf:"bytes,2,opt,name=llm,proto3" json:"llm,omitempty"`
+	ChatHistory  []byte  `protobuf:"bytes,3,opt,name=chat_history,json=chatHistory,proto3" json:"chat_history,omitempty"`
+	UserInput    []byte  `protobuf:"bytes,4,opt,name=user_input,json=userInput,proto3" json:"user_input,omitempty"`
+	ThreadId     *string `protobuf:"bytes,5,opt,name=thread_id,json=threadId,proto3,oneof" json:"thread_id,omitempty"`
+	CheckpointId *string `protobuf:"bytes,6,opt,name=checkpoint_id,json=checkpointId,proto3,oneof" json:"checkpoint_id,omitempty"`
+	Debug        bool    `protobuf:"varint,7,opt,name=debug,proto3" json:"debug,omitempty"`
+	Tools        []byte  `protobuf:"bytes,8,opt,name=tools,proto3" json:"tools,omitempty"`
+	// Instruction strings at instructions and version_details.instructions use
+	// the bounded execution-content allowance. Other strings remain control data.
+	// Model-context admission must still include all instruction content.
+	Application            []byte  `protobuf:"bytes,9,opt,name=application,proto3" json:"application,omitempty"`
+	InternalTools          []byte  `protobuf:"bytes,10,opt,name=internal_tools,json=internalTools,proto3" json:"internal_tools,omitempty"`
+	StepsLimit             *int32  `protobuf:"varint,11,opt,name=steps_limit,json=stepsLimit,proto3,oneof" json:"steps_limit,omitempty"`
+	McpTokens              []byte  `protobuf:"bytes,12,opt,name=mcp_tokens,json=mcpTokens,proto3" json:"mcp_tokens,omitempty"`
+	IgnoredMcpServers      []byte  `protobuf:"bytes,13,opt,name=ignored_mcp_servers,json=ignoredMcpServers,proto3" json:"ignored_mcp_servers,omitempty"`
+	UserDeclinedMcpServers []byte  `protobuf:"bytes,14,opt,name=user_declined_mcp_servers,json=userDeclinedMcpServers,proto3" json:"user_declined_mcp_servers,omitempty"`
+	ShouldContinue         bool    `protobuf:"varint,15,opt,name=should_continue,json=shouldContinue,proto3" json:"should_continue,omitempty"`
+	HitlResume             bool    `protobuf:"varint,16,opt,name=hitl_resume,json=hitlResume,proto3" json:"hitl_resume,omitempty"`
+	HitlAction             *string `protobuf:"bytes,17,opt,name=hitl_action,json=hitlAction,proto3,oneof" json:"hitl_action,omitempty"`
+	HitlValue              *string `protobuf:"bytes,18,opt,name=hitl_value,json=hitlValue,proto3,oneof" json:"hitl_value,omitempty"`
+	HitlDecisions          []byte  `protobuf:"bytes,19,opt,name=hitl_decisions,json=hitlDecisions,proto3" json:"hitl_decisions,omitempty"`
+	ExecutionGeneration    *string `protobuf:"bytes,20,opt,name=execution_generation,json=executionGeneration,proto3,oneof" json:"execution_generation,omitempty"`
+	IsRegenerate           bool    `protobuf:"varint,21,opt,name=is_regenerate,json=isRegenerate,proto3" json:"is_regenerate,omitempty"`
+	Meta                   []byte  `protobuf:"bytes,22,opt,name=meta,proto3" json:"meta,omitempty"`
+	ConversationId         *string `protobuf:"bytes,23,opt,name=conversation_id,json=conversationId,proto3,oneof" json:"conversation_id,omitempty"`
+	Persona                string  `protobuf:"bytes,24,opt,name=persona,proto3" json:"persona,omitempty"`
 	// Context strategy JSON. budget_mode admits "balanced" and "full".
 	// max_context_tokens preserves an explicit combined-window override.
 	// Output reservation stays inside that window; it is not additional capacity.
