@@ -662,3 +662,11 @@ The provider fixture adds `[[mock:stream_error]]` for deployed verification.
 It emits partial text, then a provider error, without a success terminal or DONE marker.
 Its HTTP test verifies event order and isolation from the next healthy request.
 All seven provider fixture tests pass. This fixture does not change production execution behavior.
+
+Chat 731 verifies the compatible streamed-error path, partial output, and reload.
+The first native fixture attempt in chat 732 reaches the native worker adapter but receives an upstream HTTP 400.
+Bifrost routes this credential through `/v1/responses`; the initial fixture supports only `/v1/chat/completions`.
+This attempt is not native streamed-error acceptance.
+The fixture now supports an explicit Responses `response.failed` event, matching Bifrost's provider regression scenario.
+It rejects requests without the stream-error marker and records the route without request content.
+Eight HTTP fixture tests pass. No production routing changes are necessary.

@@ -1192,7 +1192,7 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/v1/images/generations", "/openai/v1/images/generations"):
             self._images_generations()
             return
-        if path not in ("/v1/chat/completions", "/v1/completions", "/v1/embeddings"):
+        if path not in ("/v1/chat/completions", "/v1/completions", "/v1/embeddings", "/v1/responses"):
             self._send(404, {"error": {"message": "not found", "type": "invalid_request_error"}})
             return
 
@@ -1204,6 +1204,27 @@ class Handler(BaseHTTPRequestHandler):
             request = json.loads(self.rfile.read(length) or b"{}")
         except json.JSONDecodeError:
             self._send(400, {"error": {"message": "invalid JSON", "type": "invalid_request_error"}})
+            return
+
+        if path == "/v1/responses":
+            # Bifrost uses Responses upstream for the native Anthropic dialect.
+            # This route supports only the explicit error fixture, not inference.
+            _record({"path": path, "model": request.get("model"), "mode": "responses_error_fixture", "at": time.time()})
+            if not request.get("stream") or "[[mock:stream_error]]" not in json.dumps(request.get("input")):
+                self._send(400, {"error": {"message": "unsupported fixture", "type": "invalid_request_error"}})
+                return
+            payload = {"type": "response.failed", "sequence_number": 0, "response": {
+                "id": "fixture-response", "object": "response", "created_at": 1,
+                "model": request.get("model"), "status": "failed",
+                "error": {"code": "engine_error", "message": "SYNTHETIC_PROVIDER_BODY_MUST_NOT_REACH_UI"},
+            }}
+            raw = f"data: {json.dumps(payload)}\n\n".encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+            self.wfile.flush()
             return
 
         # Recorded BEFORE the request is served, and recorded for every POST,

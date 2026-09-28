@@ -100,6 +100,25 @@ class ContinuationFixtureTest(unittest.TestCase):
         self.assertEqual(text, "MOCK: healthy request ")
         self.assertEqual(reason, "stop")
 
+    def test_responses_error_fixture_requires_explicit_stream_marker(self):
+        for prompt in ("[[mock:stream_error]]", "healthy"):
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{self.server.server_port}/v1/responses",
+                data=json.dumps({"model": "fixture", "stream": True,
+                                 "input": [{"role": "user", "content": prompt}]}).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            if prompt == "healthy":
+                with self.assertRaises(urllib.error.HTTPError) as caught:
+                    urllib.request.urlopen(request, timeout=5)
+                caught.exception.close()
+                self.assertEqual(caught.exception.code, 400)
+                continue
+            with urllib.request.urlopen(request, timeout=5) as response:
+                event = json.loads(response.read().decode().strip()[6:])
+            self.assertEqual(event["type"], "response.failed")
+            self.assertEqual(event["response"]["error"]["message"], "SYNTHETIC_PROVIDER_BODY_MUST_NOT_REACH_UI")
+
     def test_stream_error_follows_partial_output_without_success_terminal(self):
         request = urllib.request.Request(
             f"http://127.0.0.1:{self.server.server_port}/v1/chat/completions",
