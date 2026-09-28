@@ -188,3 +188,27 @@ This proves lock contention rather than relying on goroutine scheduling.
 The new test and existing atomic segmentation tests pass with `go test -race` on 2026-09-28.
 Tests use isolated temporary databases. The rehearsal product database remains unchanged.
 This evidence covers repository transactions. Concurrent HTTP admission and worker dispatch require separate end-to-end proof.
+
+## Test-pane model controls
+
+The real-model HITL checks exposed an incorrect model label in the editor test pane.
+`PipelineTestChat` omitted the editor's `llmSettings` and `onSetLLMSettings` when mounting `ChatBox`.
+The model selector therefore displayed and changed chat-local state instead of the saved pipeline configuration.
+
+Commit `26ba7bbd1` connects the settings and update callback through the existing `ChatBox.llm` contract.
+`useChatBoxModelSelection` resolves configured model name and project together.
+Model changes update the editor through its callback. Ordinary chat retains its existing local model selection.
+Missing configured model identities do not select a same-named model from another project.
+
+Browser verification confirms the saved Haiku label on the deployed editor.
+It also reveals that the test guard originally checked unsaved YAML only.
+Commit `9ee8c7fd9` includes the editor's form-dirty state in that guard.
+The editor, test-pane, and model-selection suites pass: 49 tests across three files.
+TypeScript checking passes for the model-selection wiring.
+The final guard also passes TypeScript checking and a fresh headed Playwright check.
+Rehearsal web image `sha256:7bb3192016cbf3e3f6521ec64b3e2d078eeb55e4fcbf73f9d57c6cec2875e0db` contains source `9ee8c7fd9`.
+The browser shows the saved Haiku model in pipeline 130's test pane.
+Selecting another model updates the editor and displays the save-required notice.
+The check records zero browser page errors. The rendered screenshot is inspected.
+The test leaves this model change unsaved and closes the browser. The saved pipeline remains on Haiku.
+This check verifies editor controls. It does not add another model-execution or crash-recovery proof.

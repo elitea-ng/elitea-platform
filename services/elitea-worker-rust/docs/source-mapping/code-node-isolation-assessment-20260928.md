@@ -194,3 +194,30 @@ Apply the granted network and artifact policy to that execution, and document th
 
 Code-node acceptance must include two users resolving distinct personal values, denied sharing, and no cross-project fallback.
 Also test artifact writes and tool calls across worker loss before enabling automatic retries for effectful code.
+
+## Graph state access
+
+`tools/function.py::_prepare_pyodide_input` copies state before constructing `elitea_state`.
+It removes `messages` and applies the configured input-variable selection.
+An absent selection, an empty selection, or a selection containing only `messages` supplies all remaining state.
+The legacy alias `alita_state` receives another copy.
+`_handle_pyodide_output` maps declared output variables and can merge structured results into graph state.
+This is input and output transformation, not evidence that sandbox code directly owns the checkpoint database.
+
+The target must separate user graph variables from runtime control metadata before serialization.
+Expose selected data values, not checkpoint handles, grants, claims, resume tokens, or internal execution fields.
+Validate returned keys, types, size, and declared destinations before committing outputs atomically.
+Reject attempts to write reserved runtime fields, including through structured-result merging.
+Input copying prevents shared-memory mutation. It does not protect secrets already included in the copied data.
+Legacy all-variable selection requires explicit compatibility handling and reserved-field filtering.
+Keep code-side changes local until successful output validation. Failure must leave the prior graph state intact.
+
+Acceptance must cover undeclared output keys, reserved keys, nested oversized values, failed execution, and exact selected-input behavior.
+Verify that authorized user variables survive execution while internal runtime state remains inaccessible.
+
+Use one language-neutral JSON input and result contract for Python, JavaScript, and Rust.
+Language adapters expose dictionaries, objects, or JSON values without exposing the supervisor's memory or checkpoint client.
+Validate every result in the worker, regardless of the language adapter's checks.
+Use explicit artifact references for binary data. Define numeric precision before exposing large integers to JavaScript.
+Language-specific platform clients must use the same execution authority and operation contracts.
+No language bypasses preparation limits, execution limits, output validation, or effect recovery rules.
