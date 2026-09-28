@@ -249,3 +249,53 @@ Its implementation rejects failed cgroup creation, limit writes, and process mig
 That source inspection does not prove non-root deployment or descendant cleanup on our target.
 Resolve reuse permission and runtime acceptance before selecting this dependency.
 An OCI runtime with enforced job limits remains an alternative; it does not require copying the wrapper.
+
+## Updated sandbox shortlist
+
+The 2024 date above applies to bwrapbox, not Bubblewrap.
+The upstream latest release resolves to [Bubblewrap 0.13.0](https://github.com/containers/bubblewrap/releases/tag/v0.13.0) during this assessment.
+Its [versioned command reference](https://github.com/containers/bubblewrap/blob/v0.13.0/bwrap.xml) includes cgroup namespace isolation, but no CPU, memory, or process-count quota controls.
+A cgroup namespace does not allocate or enforce these quotas.
+[Kernel documentation](https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html) requires suitable delegation for unprivileged cgroup management.
+An updated Bubblewrap binary therefore does not remove the deployment requirement.
+
+[NsJail](https://github.com/google/nsjail/blob/master/README.md) provides namespace isolation, seccomp, and cgroup resource controls in one existing implementation.
+It remains a candidate, not a selected backend.
+Its documented privileged Docker example does not prove compatibility with our non-root deployment.
+Test delegation, namespace availability, descendant cleanup, and resource enforcement before selection.
+
+Prefer an existing resource supervisor over adding a custom cgroup wrapper.
+Continue the bounded OCI execution probe, and assess NsJail where delegated cgroups are available.
+Keep Bubblewrap as an isolation option when an external supervisor owns resource limits.
+Do not select bwrapbox until reuse permission and deployment support are established.
+These choices do not change the Code-node YAML contract or its language selector.
+
+## Disposable OCI resource proof
+
+Run the reproducible deployment probe from the repository root:
+
+```sh
+python3 scripts/runtime/probe_code_sandbox_limits.py --image python:3.12-slim-bookworm
+```
+
+The probe resolves an existing local image to its immutable ID. It does not pull images.
+The verified image ID is `sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c`.
+Each case uses a separate container with UID/GID 10001, no network, a read-only root, and no capabilities.
+The supervisor assigns 64 MiB memory, no additional swap, 0.25 CPU, 16 processes, and an 8 MiB temporary filesystem.
+No host files, credentials, or runtime socket enter the sandbox.
+
+The Linux container probe passes these checks:
+
+- Python executes a JSON state transformation as UID 10001.
+- The sandbox reads the expected cgroup limits and cannot write the cgroup root.
+- Process creation fails after 15 child processes.
+- Memory exhaustion exits with status 137 and a confirmed runtime OOM flag.
+- Consuming 0.75 CPU seconds takes 3.000 wall seconds and records 30 throttled periods.
+- The supervisor times out a live workload with a child process and removes its container.
+- Every case verifies that its uniquely named container no longer exists after cleanup.
+
+This proves local runtime enforcement, not the production sandbox contract.
+The host test harness controls Docker. The Rust worker receives no Docker socket.
+The test does not prove rootless runtime deployment, Kubernetes delegation, package installation, or recovery after supervisor failure.
+It does not enable Code nodes or verify their platform-client authorization.
+Connect the selected supervisor through the ADK execution boundary only after its deployment and lifecycle contracts are defined.
