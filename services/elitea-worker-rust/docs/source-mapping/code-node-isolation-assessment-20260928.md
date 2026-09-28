@@ -312,6 +312,44 @@ Keep package downloads within approved egress and isolate writable package cache
 Use preloaded immutable runtime assets to avoid downloading the Python runtime for every invocation.
 Do not carry the current SDK's serialized interpreter session into authoritative graph checkpoints.
 
+#### Executed compatibility evidence
+
+`scripts/runtime/probe_deno_pyodide.mjs` exercises the real Pyodide interpreter through Deno.
+The local run uses Deno 2.5.4 and Pyodide 0.29.0, matching the current SDK's Pyodide version.
+It installs `idna==3.10` through top-level `await micropip.install(...)` and verifies the encoded domain result.
+It also verifies literal escapes, 160 KiB source, and Python exception propagation.
+These checks pass again with Deno network access denied after the first package download.
+
+The first attempt fails because Pyodide tries to write wheels beside its runtime assets.
+Setting `packageCacheDir` to a separate writable directory resolves that failure.
+The successful run grants write access only to that wheel directory.
+This confirms the need to separate immutable runtime assets from mutable package storage.
+
+Example invocation after preparing a temporary cache directory:
+
+```sh
+DENO_DIR=/tmp/elitea-code-cache deno run --no-prompt \
+  --allow-read=/tmp/elitea-code-cache,/tmp/elitea-code-wheels \
+  --allow-write=/tmp/elitea-code-wheels \
+  --allow-net=cdn.jsdelivr.net,pypi.org,files.pythonhosted.org \
+  --allow-env=NODE_DEBUG scripts/runtime/probe_deno_pyodide.mjs /tmp/elitea-code-wheels
+```
+
+For the offline repeat, add `--cached-only` and replace `--allow-net=...` with `--deny-net`.
+This macOS compatibility probe does not prove Linux isolation or worker integration.
+The large-source test covers the interpreter boundary, not operating-system stdin transport.
+
+#### Pinned ADK integration contract
+
+The worker pins ADK 2.2.0. Inspection of published `adk-sandbox` 2.2.0 confirms `SandboxBackend::execute(ExecRequest)` returns `ExecResult`.
+Its language enum already includes Python, JavaScript, TypeScript, and Rust.
+The request includes source, optional stdin, timeout, memory limit, and an explicit environment map.
+The trait does not own durable lifecycle or restart recovery.
+Its capability report has no CPU or process-count enforcement fields.
+Reuse this execution interface, but retain explicit deployment checks for those required controls.
+Do not substitute the plain process backend when the configured sandbox cannot enforce them.
+No ADK dependency or lockfile change is made by this assessment.
+
 ## Disposable OCI resource proof
 
 Run the reproducible deployment probe from the repository root:
