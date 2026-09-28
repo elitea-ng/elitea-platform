@@ -132,5 +132,28 @@ The shared `model_failure_policies.json` fixture checks both language implementa
 Signed receipt bytes remain unchanged during Main projection. No protobuf fields, database schemas, or size limits change.
 
 Deploy Main before Rust because older consumers reject the new message tuples.
-Focused contract tests pass. Deployed browser acceptance for the new section messages remains pending.
+Focused contract tests pass. The deployed section-message acceptance below verifies the agent-settings case.
 Do not treat earlier chat 723 as evidence for these new messages.
+
+### Input section deployed acceptance
+
+Main and Rust deploy revision `5179b5429`, in that order.
+Main image: `sha256:b7aa9a20d10c73b92aef6576755dcddef8653a2aabbdfc9c38da7a46db746821`.
+Worker image: `sha256:40566856c50d61a326a36b2047933af7c141bbd5785d79f88664027da7217e61`.
+The clean build archive excludes deferred changes. Deployment preserves configuration, credentials, storage, network, and resource limits.
+
+Fresh headed Playwright creates isolated agent 119, version 126, with an oversized synthetic metadata value.
+Chat 725 runs that agent as its direct participant.
+Execution `68f1fca7d709dda2208a491b14c51184` reaches `FAILED` with the registered agent-settings message.
+The UI shows corrective guidance, distinguishes model limits, and provides the message reference and operator-only diagnostic guidance.
+Reload preserves the error. Browser page errors remain empty, with no browser-response mocks.
+The screenshot is inspected. Logs contain ERROR, `AgentSettings`, the static validator reason, and the execution identity.
+No model request starts for this execution. The oversized metadata value is absent from public and operator diagnostics.
+The first browser attempt does not submit because initial chat loading clears the composer. No execution exists for that attempt.
+After initial loading completes, the same fixture submits once and passes.
+Evidence uses `elitea-input-section-ui-*` and `elitea-input-section-fixture.json` in the local temporary directory.
+
+All 20 input-contract tests, three replay-policy tests, and the section-to-terminal test pass.
+Main transport/projection tests, Main vet, strict Rust library/test Clippy, and formatting checks pass.
+Contract coverage includes all four sections. Deployed browser coverage is the agent-settings case.
+Whole-envelope failures and unclassified sections retain the generic message; do not infer more precise field information.

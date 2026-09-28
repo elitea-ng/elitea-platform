@@ -1,6 +1,6 @@
 # Rust worker remaining gates
 
-Updated: 2026-09-24. Main integration baseline: `6537ca30`.
+Updated: 2026-09-28. Main integration baseline: `6537ca30`.
 
 This register orders implementation work. The [testing register](testing-gaps.md) owns detailed proof requirements.
 Source mappings remain the behavioral evidence for each capability.
@@ -13,7 +13,7 @@ Current-platform code defines business behavior, not a requirement to copy its i
 - Gate 2 is accepted for progression, with explicit verification debt. OAuth/DCR support is not a claim of complete provider coverage.
 - Gate 3 is accepted for progression. The final restricted chat-operation permission check passes on 2026-09-14.
 - Gate 4 is active for context management and current-platform runtime drift.
-- [Provider context accounting](source-mapping/provider-context-accounting-20260928.md) records provider usage retention, native cache normalization, and the combined-window context meter. Chat 717 passes fresh-browser synthetic/Haiku measurements, model switching, regeneration, and reload. Chat 719 verifies per-call pipeline continuation and repair measurements without replacing the root meter. Chat 721 verifies repeated Haiku input accounting without proving its adapter. Confirmed native-adapter regeneration and reload pass in chat 720; cache counters remain zero. Chat 720 exposes generic diagnostics for the separate 64 KiB instruction limit. The [instruction capacity correction](source-mapping/instruction-content-capacity-20260928.md) passes chat 720 regeneration and reload with the original large instructions. [Input-admission diagnostics](source-mapping/input-admission-diagnostics-20260928.md) add a separate public failure code; chat 723 verifies deployment, live UI, support details, reload, and ERROR logs. The Main/Rust user-message bound mismatch and field-specific UI diagnostics remain open. Broader accounting checks remain explicit in the mapping.
+- [Provider context accounting](source-mapping/provider-context-accounting-20260928.md) records provider usage retention, native cache normalization, and the combined-window context meter. Chat 717 passes fresh-browser synthetic/Haiku measurements, model switching, regeneration, and reload. Chat 719 verifies per-call pipeline continuation and repair measurements without replacing the root meter. Chat 721 verifies repeated Haiku input accounting without proving its adapter. Confirmed native-adapter regeneration and reload pass in chat 720; cache counters remain zero. Chat 720 exposes generic diagnostics for the separate 64 KiB instruction limit. The [instruction capacity correction](source-mapping/instruction-content-capacity-20260928.md) passes chat 720 regeneration and reload with the original large instructions. [Input-admission diagnostics](source-mapping/input-admission-diagnostics-20260928.md) add a separate public failure code; chat 723 verifies deployment, live UI, support details, reload, and ERROR logs. The user-message bound correction passes regeneration in chat 723. Recovery accounting passes in chat 724. Full-window accounting after compaction passes in chat 708. Section-specific input guidance passes deployed agent-settings rejection and reload in chat 725. Live cache-hit verification remains open.
 - [Legacy toolkit names](source-mapping/toolkit-name-compatibility-20260924.md) pass 51 pipeline tests and deployed direct MCP browser acceptance in chat 683. Exact names take precedence; ambiguous compatibility matches fail before connection. Real Haiku LLM-loop acceptance passes in chat 688, including final live output and reload. Same-operation collision acceptance passes direct-node chat 691 and real-Haiku LLM-loop chat 692, with distinct endpoint markers, live final output, and stable reload.
 - [Failure diagnostics](source-mapping/continuation-diagnostics-20260923.md) now have deployed operator guidance, copyable references, and verified async source locations. Chat 668 verifies parent completion after a child context-budget failure. Chats 696–698 verify compatible-provider HTTP 401/429/503 categories, guidance, reload, ERROR logs, and synthetic-body redaction. Other deployed model-failure categories remain open.
 - Typed pipeline input-limit, result-mapping, and tool-call errors pass live browser and reload acceptance in chats 673, 675, and 674. Chat 676 verifies successful direct execution. Chats 677 and 678 verify downstream suppression and parent recovery for a saved child pipeline failure.
@@ -475,3 +475,12 @@ All four project facts remain available, and the UI correctly uses the one-milli
 See [recovery and Full-window evidence](source-mapping/provider-context-accounting-20260928.md#provider-accounting-across-worker-recovery).
 Live cache-hit acceptance remains unproven because tested providers report zero cache reads.
 Component tests cover nonzero cache counters and their conversion. Gate 4 remains active.
+
+
+## Input section diagnostics acceptance (2026-09-28)
+
+Four registered input-section messages preserve safe errors and historical replay.
+Chat 725 verifies the agent-settings message, support details, reload, and ERROR logs before any model invocation.
+Contract tests cover user message, history, settings, and tool configuration.
+See [source mapping and acceptance](source-mapping/input-admission-diagnostics-20260928.md#input-section-deployed-acceptance).
+This closes the tested section-guidance defect. Whole-envelope and other unclassified failures retain generic admission guidance.
