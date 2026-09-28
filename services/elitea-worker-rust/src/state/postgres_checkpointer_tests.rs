@@ -671,3 +671,134 @@ async fn postgres_application_subgraph_threads_are_admitted_fenced_and_durable()
     lease.revoke();
     assert!(family.load("thread-1/delegate").await.is_err());
 }
+
+#[cfg(feature = "sandbox-supervisor")]
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
+async fn sandbox_receipts_fence_stale_owners_and_preserve_terminal_results() {
+    use crate::sandbox::ledger::{JobLedger, JobScope, LedgerError, Phase};
+    let database_url = env::var(TEST_DATABASE_URL)
+        .expect("ELITEA_TEST_DATABASE_URL is required for sandbox ledger verification");
+    let isolated = IsolatedPostgres::create(&database_url).await;
+    sqlx::raw_sql("CREATE SCHEMA elitea_runtime")
+        .execute(&isolated.pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../elitea-main/migrations/agentstate/0004_sandbox_jobs.sql"
+    ))
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
+    let ledger = JobLedger::new(isolated.pool.clone());
+    let scope = JobScope::new("sandbox-test".into(), 2, [1; 32], [2; 32]).unwrap();
+    assert_eq!(ledger.reserve(&scope).await.unwrap().phase, Phase::Reserved);
+    let conflict = JobScope::new("sandbox-test".into(), 2, [1; 32], [3; 32]).unwrap();
+    assert!(matches!(
+        ledger.reserve(&conflict).await,
+        Err(LedgerError::Conflict)
+    ));
+    let foreign = JobScope::new("other-tenant".into(), 2, [1; 32], [2; 32]).unwrap();
+    assert!(matches!(
+        ledger.read(&foreign).await,
+        Err(LedgerError::Missing)
+    ));
+    let (a, b) = tokio::join!(
+        ledger.claim(&scope, "supervisor-a".into(), 30),
+        ledger.claim(&scope, "supervisor-b".into(), 30)
+    );
+    let (a, b) = (a.unwrap(), b.unwrap());
+    assert_ne!(a.is_some(), b.is_some());
+    let old = a.or(b).unwrap();
+    assert!(matches!(
+        ledger
+            .finish(&old, Phase::Completed, Some("{}"), None)
+            .await,
+        Err(LedgerError::Fenced)
+    ));
+    ledger.renew(&old, 30).await.unwrap();
+    ledger.mark_dispatched(&old).await.unwrap();
+    assert!(matches!(
+        ledger.mark_dispatched(&old).await,
+        Err(LedgerError::Fenced)
+    ));
+    // Expire only the isolated test row, without sleeping or changing server time.
+    sqlx::query(
+        "UPDATE elitea_runtime.sandbox_jobs SET lease_until=clock_timestamp()-interval '1 second'",
+    )
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
+    let recovered = JobLedger::new(isolated.pool.clone());
+    let current = recovered
+        .claim(&scope, "supervisor-recovered".into(), 30)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.observed_phase, Phase::Dispatched);
+    assert!(matches!(
+        ledger.renew(&old, 30).await,
+        Err(LedgerError::Fenced)
+    ));
+    assert!(matches!(
+        ledger
+            .finish(&old, Phase::Completed, Some("{}"), None)
+            .await,
+        Err(LedgerError::Fenced)
+    ));
+    assert!(matches!(
+        recovered.mark_dispatched(&current).await,
+        Err(LedgerError::Fenced)
+    ));
+    let result = r#"{"result":{"value":42}}"#;
+    recovered
+        .finish(&current, Phase::Completed, Some(result), None)
+        .await
+        .unwrap();
+    let terminal = recovered.reserve(&scope).await.unwrap();
+    assert_eq!(terminal.phase, Phase::Completed);
+    assert_eq!(terminal.result_json.as_deref(), Some(result));
+    assert!(
+        recovered
+            .claim(&scope, "another-owner".into(), 30)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(
+        recovered
+            .finish(&current, Phase::Failed, None, Some("sandbox.failure"))
+            .await,
+        Err(LedgerError::Fenced)
+    ));
+
+    let uncertain_scope = JobScope::new("sandbox-test".into(), 2, [4; 32], [5; 32]).unwrap();
+    ledger.reserve(&uncertain_scope).await.unwrap();
+    let lease = ledger
+        .claim(&uncertain_scope, "owner".into(), 30)
+        .await
+        .unwrap()
+        .unwrap();
+    ledger.mark_dispatched(&lease).await.unwrap();
+    ledger
+        .finish(
+            &lease,
+            Phase::Uncertain,
+            None,
+            Some("sandbox.completion_unknown"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        ledger.reserve(&uncertain_scope).await.unwrap().phase,
+        Phase::Uncertain
+    );
+    assert!(
+        ledger
+            .claim(&uncertain_scope, "retry".into(), 30)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    isolated.pool.close().await;
+}

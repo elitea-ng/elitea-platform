@@ -705,3 +705,51 @@ termination/concurrent-state cases. All test-owned workloads were removed.
 A worker library check with `sandbox-supervisor` also passed before the final
 preparation-termination refinement; the live suite compiled that refinement.
 No process-kill/failover service test or Kubernetes recovery claim is made.
+
+## Supervisor receipt ledger in agent-state storage
+
+The existing native graph/session tables were inspected before adding storage.
+They bind graph state to checkpoint/session writer authority and have separate
+retention semantics; reusing them as a remote sandbox job queue would mix owners
+and allow graph-history pruning to erase replay protection. The current SDK
+remote-sandbox request/session API supplies no durable job receipt equivalent.
+
+`services/elitea-main/migrations/agentstate/0004_sandbox_jobs.sql` therefore adds
+one table in the existing separate agent-state database. It changes no product,
+tenant, or legacy public tables. Main's migration corpus owns schema creation;
+the optional sandbox supervisor owns the records. The migration is not applied
+to rehearsal by this implementation.
+
+`src/sandbox/ledger.rs` supplies a concrete PostgreSQL ledger with:
+tenant/project/job scope and immutable request fingerprint; idempotent reservation;
+database-timed leases and increasing ownership epochs; a one-time reserved-to-
+dispatched transition; and immutable completed/failed/cancelled/uncertain receipts.
+Only a current unexpired owner can mutate a job. Reclaiming dispatched work grants
+reconciliation only. Terminal receipt retention must cover the parent execution's
+replay horizon; there is intentionally no automatic deletion API.
+
+Result JSON is bounded to 512 KiB and validated before persistence. Failure
+receipts carry bounded machine codes, not arbitrary error text. Results and
+scoped identities have no Debug implementation. Docker identity derives from a
+domain-separated tenant/project/job hash so execution-local keys cannot collide
+across tenants in the shared runtime namespace. The request fingerprint remains
+separate so a changed request cannot reuse an existing runtime job.
+
+This ledger is not yet an authenticated supervisor service. The caller must bind
+scope to the execution authority, persist dispatch before code launch, coordinate
+leases with runtime observation, and store a verified receipt before cleanup.
+Runtime disappearance after dispatch remains uncertain, never automatic replay.
+RPC integration, workload reconciliation, bounded admission and Kubernetes remain
+open.
+
+Verification helper `scripts/runtime/test_sandbox_ledger.py` starts only a
+disposable resource-bounded PostgreSQL container, generates fresh test-only
+credentials, runs the explicitly ignored integration test and removes that test
+container/volumes. It does not inspect or reuse deployment credentials.
+
+Verified: the isolated PostgreSQL integration test selected and passed one test,
+covering concurrent ownership, epoch fencing, single dispatch, request conflict,
+tenant isolation, terminal-result recovery and terminal uncertain-state behavior.
+Go migration manifest/history checks passed with agent-state head 4. The worker
+library compiled with the optional supervisor feature. This remains component
+persistence evidence, not end-to-end crash recovery or UI acceptance.

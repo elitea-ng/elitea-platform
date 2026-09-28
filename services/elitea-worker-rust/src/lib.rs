@@ -20,6 +20,8 @@ pub mod diagnostics;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod execution;
 pub mod protocol;
+#[cfg(feature = "sandbox-supervisor")]
+pub mod sandbox;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod security;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

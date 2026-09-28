@@ -693,5 +693,5 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// database, so its ledger advances independently of the tenant one.
 	agentState, err := LoadManifest(platformmigrations.Files, ScopeAgentState)
 	require.NoError(t, err)
-	require.EqualValues(t, 3, Head(agentState))
+	require.EqualValues(t, 4, Head(agentState))
 }
