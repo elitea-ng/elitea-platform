@@ -130,3 +130,15 @@ The reducer now consumes the terminal snapshot when the response is empty.
 Existing nonempty continuation content remains unchanged.
 The regression checks immediate rendering, settled controls, and duplicate terminal delivery.
 Deployment and another fresh browser decision remain required for this renderer fix.
+
+### Deployed renderer acceptance
+
+Web revision `7dd806f81` passes all 98 focused reducer tests.
+The deployed image is `sha256:37076c2e4729698888ba4bfe05c7bf64e1da99f8583d03cc09c419e9359d9ff2`.
+Fresh headed Playwright runs generate real Haiku jokes, then exercise Approve and Reject in the pipeline test chat.
+Both show the static review, separate user decision, and preserved final joke without reload.
+The markers are `GATE5_HAIKU_FINAL_20260928` and `GATE5_HAIKU_REJECT_20260928`.
+The editor correctly displays the saved Haiku model.
+The test composer still displays the project default, although the saved pipeline model executes.
+This model-display mismatch remains open. It does not invalidate the verified provider output.
+Repeated edit, nested-scope isolation, concurrent decisions, and restart acceptance remain open.
