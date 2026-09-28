@@ -130,3 +130,33 @@ Verify limits across all descendants, not only the initial process.
 Verify worker restart, supervisor restart, cleanup, and durable result recovery separately.
 Measure admission and resource use under concurrent execution before claiming platform capacity.
 This document records the implementation assessment. Backend selection and runtime acceptance remain open.
+
+## Non-root deployment inspection
+
+Read-only Docker inspection on 2026-09-28 confirms the rehearsal worker runs as `10001:10001`.
+It uses a private cgroup namespace, without privileged mode or added capabilities.
+Docker reports `Memory=0` and `NanoCpus=0` for this container.
+These values mean no explicit limits at this container boundary. They do not describe host or ancestor limits.
+This deployment does not prove per-Code-node resource enforcement.
+
+The worker `Containerfile` uses a distroless runtime and sets `USER 10001:10001`.
+The Helm worker deployment takes its UID and GID from worker values.
+Do not add compilers or package managers to this orchestration image as an incidental sandbox change.
+
+The upstream [`SandboxBackend`](https://github.com/zavora-ai/adk-rust/blob/main/adk-sandbox/src/backend.rs) inspection on 2026-09-28 confirms three methods:
+`name`, `capabilities`, and asynchronous `execute`.
+The trait has no start, stop, or recovery methods.
+Its enforcement flags cover timeout, memory, network, filesystem reads and writes, and environment isolation.
+They do not describe CPU, process-count, or storage quotas.
+The platform must verify these additional requirements independently of the upstream capability flags.
+Pin the selected interface revision before implementation.
+
+Two deployment paths require separate proof:
+
+- A trusted non-root supervisor receives a delegated cgroup v2 subtree. Executed code cannot access that subtree.
+- An external container runtime enforces per-job resources when subtree delegation is unavailable.
+
+Container UID configuration alone does not establish either path.
+Do not mount the host cgroup tree writable into the general worker or user-code environment.
+Do not enable a fallback that discards required resource limits.
+The initial runtime probe must verify controllers, namespace support, enforcement, and descendant cleanup on the actual deployment target.
