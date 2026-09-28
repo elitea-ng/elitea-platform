@@ -266,5 +266,24 @@ Both detail counters are subsets. Correct combined occupancy is 10,023, not 18,0
 The mode affects only the synthetic provider and leaves normal fixture usage unchanged.
 Six HTTP fixture tests pass, including unary/streamed counters and request isolation.
 The gateway and worker accounting mappings above remain the production source references. No production runtime behavior changes here.
-Deployed browser acceptance remains pending for these nonzero counters.
+The deployed acceptance below verifies these nonzero counters.
 This fixture does not establish a real-provider cache hit or its performance benefit.
+
+### Nonzero cached-usage deployed acceptance
+
+The fixture deploys revision `86cc3b7b3` with image `sha256:944c891050107c0fbe12f3ef32a0bdc54ddaa183af4f81ac195e29fe7532e8b8`.
+The prior fixture container remains stopped and preserved. The replacement retains its private address and resource constraints, without host ports.
+Main and Rust remain at revision `5179b5429`; the gateway and web deployment remain unchanged.
+
+Fresh headed Playwright verifies chat 726 through the real application, gateway, and worker.
+The first execution is `ea8ff9f51cfdb04cb75c8b17c70c92dd`.
+Regeneration produces `fbf7b5f9b1d79e203187435f9d1981a4`.
+Both display 10,023 / 126,720 tokens, or 8%. Reload preserves the regenerated measurement and identity.
+The persisted ADK event contains 10,000 prompt tokens, 23 output tokens, 8,000 cached input tokens, and seven reasoning tokens.
+Thus, both detail counters survive processing without being added again to occupancy.
+The final panel screenshot is inspected after its animation. Browser page errors remain empty and browser responses are not mocked.
+An initial login attempt fails with an invalid state cookie before creating a fixture or execution. A fresh login succeeds.
+Evidence uses `elitea-cache-meter-*` in the local temporary directory.
+
+This proves deployed compatible-provider cached/reasoning accounting. Native counter conversion retains its separate handler and worker contract tests.
+A real-provider cache hit and its performance benefit remain unproven; repeated real requests report zero cache reads.

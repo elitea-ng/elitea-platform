@@ -484,3 +484,12 @@ Chat 725 verifies the agent-settings message, support details, reload, and ERROR
 Contract tests cover user message, history, settings, and tool configuration.
 See [source mapping and acceptance](source-mapping/input-admission-diagnostics-20260928.md#input-section-deployed-acceptance).
 This closes the tested section-guidance defect. Whole-envelope and other unclassified failures retain generic admission guidance.
+
+
+## Nonzero provider-detail accounting (2026-09-28)
+
+Chat 726 verifies nonzero cached-input and reasoning counters through the deployed gateway, worker, persistence, and UI.
+The synthetic provider reports 10,000 input tokens including 8,000 cached, and 23 output tokens including seven reasoning.
+The UI correctly shows 10,023 total through regeneration and reload.
+See [deployed evidence and limits](source-mapping/provider-context-accounting-20260928.md#nonzero-cached-usage-deployed-acceptance).
+This does not establish an actual cache hit from the real provider. That separate check remains open.
