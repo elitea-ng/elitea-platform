@@ -657,3 +657,8 @@ The regression fails before the correction: invalid stream instead of provider e
 Compatible transport tests also cover streamed provider errors and HTTP 408/504.
 Both stream tests assert that provider-body canaries and execution tokens stay absent from returned diagnostics.
 Deployed native-stream acceptance remains pending for this correction.
+
+The provider fixture adds `[[mock:stream_error]]` for deployed verification.
+It emits partial text, then a provider error, without a success terminal or DONE marker.
+Its HTTP test verifies event order and isolation from the next healthy request.
+All seven provider fixture tests pass. This fixture does not change production execution behavior.

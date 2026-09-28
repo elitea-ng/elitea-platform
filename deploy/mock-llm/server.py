@@ -66,6 +66,7 @@ PER-REQUEST MODES, SELECTED BY THE PROMPT (see `_script_for`):
   [[mock:http_400]], [[mock:http_401]], [[mock:http_402]], [[mock:http_429]],
 #                      [[mock:http_503]] return synthetic provider errors.
   [[mock:incomplete_stream]] end after partial text without a terminal model event.
+  [[mock:stream_error]] emit partial text followed by a provider error event.
   [[mock:cached_usage]] report fixed cache and reasoning usage for accounting tests.
   [[mock:slow]]       stream a long, scripted reply one word at a time with a
                       per-chunk delay, so a test can act while the turn is
@@ -897,6 +898,8 @@ def _script_for(messages: list[dict]) -> _ChatScript:
     user_text = _last_user_text(messages)
     prompt = user_text or ""
 
+    if "[[mock:stream_error]]" in prompt:
+        return _ChatScript("", None, 0, "stream_error")
     if "[[mock:incomplete_stream]]" in prompt:
         return _ChatScript("", None, 0, "incomplete_stream")
 
@@ -1469,8 +1472,10 @@ class Handler(BaseHTTPRequestHandler):
         # nothing downstream can act on it because the reader is already gone.
         try:
             event({**base, "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]})
-            if script.mode == "incomplete_stream":
+            if script.mode in ("incomplete_stream", "stream_error"):
                 event({**base, "choices": [{"index": 0, "delta": {"content": "VALID_PARTIAL_OUTPUT"}, "finish_reason": None}]})
+                if script.mode == "stream_error":
+                    event({"error": {"type": "server_error", "message": "SYNTHETIC_PROVIDER_BODY_MUST_NOT_REACH_UI"}})
                 self.wfile.write(b"0\r\n\r\n")
                 self.wfile.flush()
                 return

@@ -100,6 +100,22 @@ class ContinuationFixtureTest(unittest.TestCase):
         self.assertEqual(text, "MOCK: healthy request ")
         self.assertEqual(reason, "stop")
 
+    def test_stream_error_follows_partial_output_without_success_terminal(self):
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{self.server.server_port}/v1/chat/completions",
+            data=json.dumps({"model": "fixture", "stream": True,
+                             "messages": [{"role": "user", "content": "[[mock:stream_error]]"}]}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            raw = response.read().decode()
+        events = [json.loads(line[6:]) for line in raw.splitlines() if line.startswith("data: ")]
+        self.assertEqual(events[-2]["choices"][0]["delta"]["content"], "VALID_PARTIAL_OUTPUT")
+        self.assertEqual(events[-1]["error"]["message"], "SYNTHETIC_PROVIDER_BODY_MUST_NOT_REACH_UI")
+        self.assertNotIn("[DONE]", raw)
+        self.assertTrue(all(event["choices"][0]["finish_reason"] is None for event in events[:-1]))
+        self.assertEqual(self.stream([{"role": "user", "content": "healthy"}]), ("MOCK: healthy ", "stop"))
+
     def test_incomplete_stream_preserves_partial_text_without_terminal_reason(self):
         text, reason = self.stream([{"role": "user", "content": "[[mock:incomplete_stream]]"}])
         self.assertEqual(text, "VALID_PARTIAL_OUTPUT")
