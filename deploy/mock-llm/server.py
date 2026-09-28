@@ -1218,7 +1218,14 @@ class Handler(BaseHTTPRequestHandler):
                 "model": request.get("model"), "status": "failed",
                 "error": {"code": "engine_error", "message": "SYNTHETIC_PROVIDER_BODY_MUST_NOT_REACH_UI"},
             }}
-            raw = f"data: {json.dumps(payload)}\n\n".encode()
+            started = {"type": "response.created", "sequence_number": 0, "response": {
+                "id": "fixture-response", "object": "response", "created_at": 1,
+                "model": "vllm/" + str(request.get("model", "")).removeprefix("vllm/"),
+                "status": "in_progress", "output": [],
+                "usage": {"input_tokens": 1, "output_tokens": 0, "total_tokens": 1},
+            }}
+            payload["sequence_number"] = 1
+            raw = f"data: {json.dumps(started)}\n\ndata: {json.dumps(payload)}\n\n".encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Content-Length", str(len(raw)))

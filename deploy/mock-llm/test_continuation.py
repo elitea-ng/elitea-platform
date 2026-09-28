@@ -115,7 +115,9 @@ class ContinuationFixtureTest(unittest.TestCase):
                 self.assertEqual(caught.exception.code, 400)
                 continue
             with urllib.request.urlopen(request, timeout=5) as response:
-                event = json.loads(response.read().decode().strip()[6:])
+                events = [json.loads(line[6:]) for line in response.read().decode().splitlines() if line.startswith("data: ")]
+            self.assertEqual(events[0]["type"], "response.created")
+            event = events[-1]
             self.assertEqual(event["type"], "response.failed")
             self.assertEqual(event["response"]["error"]["message"], "SYNTHETIC_PROVIDER_BODY_MUST_NOT_REACH_UI")
 

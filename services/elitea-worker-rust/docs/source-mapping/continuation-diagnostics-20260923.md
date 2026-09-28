@@ -670,3 +670,6 @@ This attempt is not native streamed-error acceptance.
 The fixture now supports an explicit Responses `response.failed` event, matching Bifrost's provider regression scenario.
 It rejects requests without the stream-error marker and records the route without request content.
 Eight HTTP fixture tests pass. No production routing changes are necessary.
+The error-only Responses fixture fails before Bifrost establishes a stream and therefore becomes an HTTP failure.
+The fixture now emits `response.created` before `response.failed` to exercise the intended mid-stream boundary.
+The eight HTTP tests still pass and verify that ordering.
