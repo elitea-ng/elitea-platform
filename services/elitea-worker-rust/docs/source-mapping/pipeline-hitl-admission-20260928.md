@@ -158,3 +158,18 @@ This extends the earlier editor checks to the main-chat surface.
 That implementation is not proof of the intended ephemeral lifecycle.
 Gate 5 must separate test transcript retention from durable run history and recovery state.
 The model-display mismatch also remains open.
+
+## Paused-worker restart and repeated edit
+
+Main chat 748 starts a real Haiku review with marker `HITL_RESTART_20260928`.
+The rehearsal worker restarts after the database confirms zero active claims.
+The worker start time changes from 14:18:58 UTC to 16:26:21 UTC on 2026-09-28. Its image remains unchanged.
+A fresh browser submits an edit requesting a penguin joke.
+Execution `c3398f51c5979476585b9293ae609605` produces the revision and returns to HITL.
+A second edit requests two short lines. Execution `09560fd3df713a23c48d5370fe8cd56d` returns to HITL again.
+Reject completes through execution `3f8c9cfac9cb4cbdbbe5d97962aa1645`.
+The browser shows both exact edit requests, separate reviews, the rejection, and the preserved final answer.
+This proves restart recovery from a persisted pause. It does not prove recovery during an active model request.
+
+The editor test transcript may disappear on browser reload. This is an accepted lifecycle, not a defect.
+Both chat surfaces require functional tests. Main chat retains priority for history and recovery verification.

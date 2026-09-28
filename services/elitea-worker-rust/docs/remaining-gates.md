@@ -60,6 +60,9 @@ Read-only runtime tool binding already works for supported native families.
 It does not close standalone editor discovery or toolkit Test.
 OpenAPI supports delegated OAuth and client credentials. DCR remains an MCP or other explicitly supported toolkit flow.
 
+Code-node backend selection is tracked in the [isolation assessment](source-mapping/code-node-isolation-assessment-20260928.md).
+The assessment is a proposal, not an enabled or verified runtime.
+
 ## Customer workflow migration track
 
 The customer requests eight capabilities for migration from n8n.
