@@ -105,3 +105,37 @@ Deployment images:
 
 Live cached-input reuse, provider measurements during continuation recovery, and large-window accounting acceptance remain separate checks.
 Child isolation and per-continuation counts have component coverage. This acceptance does not close all Gate 4 requirements.
+
+
+## Pipeline continuation accounting acceptance
+
+Fresh headed Playwright chat 719 verifies the deployed pipeline model scope on 2026-09-28.
+It uses existing application 93, version 100, and the isolated synthetic provider.
+Browser responses are not mocked. No deployment or model default changes are required.
+
+The browser receives six ordered context events for node `generate`:
+
+| Call | Prepared input estimate | Provider input | Provider output |
+| --- | ---: | ---: | ---: |
+| Initial truncated response | 69 | 1 | 60 |
+| Rejected continuation boundary | 489 | 1 | 1 |
+| Successful repair | 549 | 1 | 36 |
+
+Each estimate precedes its provider measurement. Counters describe individual calls, not accumulated usage.
+All six events identify `model_scope=pipeline_node` and `node_name=generate`.
+The execution generation is `24574d2a-010a-41cd-a4cf-bdd049608bd3`.
+The root context indicator remains without a numeric measurement in the inspected screenshot.
+This preserves the distinction between graph execution and each model-local context.
+The final answer contains all 12 records once and `REPAIR_COMPLETE`.
+It excludes the rejected fragment. Reload preserves the completed answer.
+No failure events or browser page errors occur.
+Evidence uses `elitea-provider-continuation-scope-*` in the local temporary directory.
+
+The preceding chat 718 uses direct chat rather than a pipeline model scope.
+It stops at the output cap, retains provider counts, and shows the user-driven Continue action.
+The automatic-repair assertion fails because it targets the wrong execution scope.
+That fixture does not implement the direct-chat continuation prompt. Do not use it to validate that action.
+Its evidence remains under `elitea-provider-meter-continuation-*`.
+
+This check closes uninterrupted pipeline continuation accounting only.
+Cached-input reuse, accounting across process recovery, and large-window accounting remain open.
