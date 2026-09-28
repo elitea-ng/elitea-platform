@@ -232,3 +232,72 @@ async fn live_failed_preparation_retains_stopped_identity() {
         .unwrap();
     checked.unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires local Docker and ELITEA_CODE_RUNNER_TEST_IMAGE"]
+async fn live_pid1_receipt_is_recovered_by_a_new_client() {
+    let image = std::env::var("ELITEA_CODE_RUNNER_TEST_IMAGE").unwrap();
+    let client = DockerClient::with_image(image.clone())
+        .await
+        .unwrap()
+        .with_resource_limits(Some(64 * 1024 * 1024), Some(0.25))
+        .with_code_job_policy(Duration::from_secs(15))
+        .unwrap();
+    let key = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    let identity = CodeJobIdentity::new(key, "d".repeat(64)).unwrap();
+    let request = serde_json::json!({
+        "argv": ["python", "-c", "import time;time.sleep(0.5);print('recovered-result')"],
+        "timeout_seconds": 5
+    });
+    let manifest = Manifest::new(vec![ManifestEntry::File {
+        path: ".elitea-job.json".into(),
+        content: serde_json::to_vec(&request).unwrap(),
+    }]);
+    let handle = client
+        .provision_code_job(&identity, &manifest)
+        .await
+        .unwrap();
+    let verified = AssertUnwindSafe(async {
+        assert!(
+            client
+                .read_code_job_receipt(&identity)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        client.dispatch_code_job(&identity).await.unwrap();
+        // Repeated signals do not restart the container's main process.
+        client.dispatch_code_job(&identity).await.unwrap();
+        let recovered = DockerClient::with_image(image).await.unwrap();
+        let receipt = tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                if let Some(receipt) = recovered.read_code_job_receipt(&identity).await.unwrap() {
+                    break receipt;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&receipt).unwrap();
+        assert_eq!(value["status"], "completed");
+        assert_eq!(value["stdout"], "recovered-result\n");
+        assert_eq!(
+            recovered
+                .read_code_job_receipt(&identity)
+                .await
+                .unwrap()
+                .unwrap(),
+            receipt
+        );
+        assert!(recovered.dispatch_code_job(&identity).await.is_err());
+    })
+    .catch_unwind()
+    .await;
+    client.stop(&handle).await.unwrap();
+    verified.unwrap();
+}

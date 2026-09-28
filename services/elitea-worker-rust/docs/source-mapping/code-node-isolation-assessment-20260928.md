@@ -790,3 +790,47 @@ timeout handling, and rejection before launch. Pending: Linux image packaging,
 main-process named dispatch, bounded durable-log receipt recovery, supervisor
 ownership/heartbeat/cancellation, and both deployment acceptance paths. The
 runner is not yet wired to Code-node execution or deployed.
+
+## Linux runner image and named-container receipt recovery
+
+The runner moved from the worker binary directory into the independent
+`services/elitea-code-runner` crate. This supersedes the initial
+`sandbox-runner` worker feature above. Its locked dependency set contains only
+the runner's serde/JSON/Tokio requirements; it imports no worker, database,
+Docker client, credentials, or toolkit code. The existing worker CLI/build remains
+unchanged. The new Containerfile uses pinned base digests and cargo-auditable.
+
+The initial verification image contains Python plus the runner. It does not
+claim Deno/Pyodide compatibility or complete JS/Rust language images. Build:
+`docker build -f services/elitea-code-runner/Containerfile -t elitea-code-runner:gate5-receipts services/elitea-code-runner`.
+Verified local image identity:
+`sha256:c5248d3c1d855d274979059549c2789bb6cbe4e10cfc514134a649616b19ae7d`.
+
+Named ADK Docker jobs now wait for a reserved dispatch marker, then exec the
+runner as container PID 1 exactly once. The supervisor writes the request during
+preparation and must persist dispatch in the ledger before calling
+`dispatch_code_job`. User manifests cannot supply the dispatch marker.
+Repeated signals cannot restart an exited container or reexecute its main process.
+Preparation still runs inside the resource-limited non-root container.
+
+Named jobs retain one bounded local Docker log file (8 MiB, compression disabled).
+`read_code_job_receipt` waits for terminal container state, reads at most 4 MiB
+within ten seconds, parses one revisioned receipt and validates its vocabulary/
+output bounds. The envelope and user output remain untrusted; graph-state
+projection must validate them before mutation. Missing/malformed logs, missing
+runtime identity and transport failure require reconciliation. No result is
+fabricated and no code is replayed.
+
+`scripts/runtime/probe_code_runner_container.py` passed five Linux PID-1 cases:
+success, nonzero exit, output overflow, timeout, and child exit with a background
+process holding an inherited output pipe. Each container terminated (no running
+PID) and a fresh Docker client read the identical terminal receipt from logs.
+The named ADK API test also passed: request provisioning, repeated dispatch,
+new-client terminal result recovery and rejection of dispatch after completion.
+These tests used fresh test-owned containers and cleaned them up.
+
+Still open: authenticated supervisor/API, database receipt commit and cleanup
+ordering, renewal/reconciliation loop, cancellation and service-process crash
+tests, Kubernetes Jobs, language/dependency integration and UI acceptance.
+Docker logs surviving a client reconnect are not a substitute for the PostgreSQL
+receipt when the container is removed or its node is lost.

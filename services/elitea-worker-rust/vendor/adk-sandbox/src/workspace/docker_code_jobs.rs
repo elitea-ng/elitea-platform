@@ -50,6 +50,18 @@ impl DockerClient {
         identity: &CodeJobIdentity,
         manifest: &Manifest,
     ) -> Result<SessionHandle, SandboxError> {
+        for entry in &manifest.entries {
+            let path = match entry {
+                ManifestEntry::File { path, .. }
+                | ManifestEntry::Directory { path }
+                | ManifestEntry::GitRepo { path, .. } => path,
+            };
+            if path.split('/').any(|part| part == ".elitea-dispatch") {
+                return Err(SandboxError::ExecutionFailed(
+                    "Code manifest contains a reserved dispatch path".into(),
+                ));
+            }
+        }
         if !self.code_job_policy {
             return Err(SandboxError::ExecutionFailed(
                 "Code jobs require the isolated resource policy".into(),
@@ -114,4 +126,128 @@ impl DockerClient {
             running,
         }))
     }
+}
+
+impl DockerClient {
+    /// Call only after the supervisor durably records dispatch. Re-signaling
+    /// cannot execute code twice: the container's main process consumes the
+    /// marker once and execs the runner; an exited container is never restarted.
+    pub async fn dispatch_code_job(&self, identity: &CodeJobIdentity) -> Result<(), SandboxError> {
+        let job = self.observe_code_job(identity).await?.ok_or_else(|| {
+            SandboxError::ExecutionFailed("Code job is absent; reconcile before dispatch".into())
+        })?;
+        if !job.running {
+            return Err(SandboxError::ExecutionFailed(
+                "Code job already stopped; read its receipt".into(),
+            ));
+        }
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            self.exec_in_container(
+                &job.container_id,
+                vec![
+                    "sh",
+                    "-c",
+                    "test -f /workspace/.elitea-job.json && : > /workspace/.elitea-dispatch",
+                ],
+                None,
+                None,
+            ),
+        )
+        .await
+        .map_err(|_| {
+            SandboxError::ExecutionFailed(
+                "Code dispatch acknowledgement timed out; reconcile the existing job".into(),
+            )
+        })??;
+        if result.2 != 0 {
+            return Err(SandboxError::ExecutionFailed(
+                "Code job request is not prepared".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Read one terminal envelope after reconnect. No user code is launched.
+    /// Runtime absence or malformed/missing output is uncertainty, not success.
+    /// The returned envelope is untrusted and must pass state projection validation.
+    pub async fn read_code_job_receipt(
+        &self,
+        identity: &CodeJobIdentity,
+    ) -> Result<Option<Vec<u8>>, SandboxError> {
+        let job = self.observe_code_job(identity).await?.ok_or_else(|| {
+            SandboxError::ExecutionFailed(
+                "Code job is absent; durable receipt reconciliation required".into(),
+            )
+        })?;
+        if job.running {
+            return Ok(None);
+        }
+        let read = async {
+            let mut stream = self.client.logs(
+                &job.container_id,
+                Some(bollard::container::LogsOptions::<String> {
+                    stdout: true,
+                    stderr: false,
+                    follow: false,
+                    tail: "all".into(),
+                    ..Default::default()
+                }),
+            );
+            let mut bytes = Vec::new();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|_| {
+                    SandboxError::ExecutionFailed("Code receipt log read failed".into())
+                })?;
+                let data = chunk.into_bytes();
+                if bytes.len().saturating_add(data.len()) > 4 * 1024 * 1024 {
+                    return Err(SandboxError::ExecutionFailed(
+                        "Code receipt envelope exceeds its limit".into(),
+                    ));
+                }
+                bytes.extend_from_slice(&data);
+            }
+            let receipt: ReceiptEnvelope = serde_json::from_slice(&bytes).map_err(|_| {
+                SandboxError::ExecutionFailed(
+                    "Code terminal receipt is missing or invalid; completion is unconfirmed".into(),
+                )
+            })?;
+            if receipt.revision != 1
+                || receipt.stdout.len().saturating_add(receipt.stderr.len()) > 3 * 512 * 1024
+                || !matches!(
+                    receipt.status.as_str(),
+                    "completed"
+                        | "failed"
+                        | "timeout"
+                        | "output_limit"
+                        | "capture_failed"
+                        | "launch_failed"
+                        | "invalid_request"
+                )
+                || (receipt.status == "completed" && receipt.exit_code != Some(0))
+            {
+                return Err(SandboxError::ExecutionFailed(
+                    "Code terminal receipt violates its contract".into(),
+                ));
+            }
+            Ok(Some(bytes))
+        };
+        tokio::time::timeout(Duration::from_secs(10), read)
+            .await
+            .map_err(|_| {
+                SandboxError::ExecutionFailed(
+                    "Code receipt read timed out; reconciliation required".into(),
+                )
+            })?
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReceiptEnvelope {
+    revision: u8,
+    status: String,
+    exit_code: Option<i32>,
+    stdout: String,
+    stderr: String,
 }

@@ -353,7 +353,17 @@ impl DockerClient {
             self.base_image.clone()
         };
         // Create container from base image with resource limits
-        let host_config = self.build_host_config();
+        let mut host_config = self.build_host_config();
+        if identity.is_some() {
+            host_config.log_config = Some(bollard::models::HostConfigLogConfig {
+                typ: Some("local".into()),
+                config: Some(HashMap::from([
+                    ("max-size".into(), "8m".into()),
+                    ("max-file".into(), "1".into()),
+                    ("compress".into(), "false".into()),
+                ])),
+            });
+        }
 
         let config = Config {
             image: Some(image),
@@ -367,8 +377,14 @@ impl DockerClient {
                 ])
             }),
             user: self.code_job_policy.then(|| "10001:10001".to_owned()),
-            // Keep container running with a long-lived process
-            cmd: Some(vec!["sleep".to_string(), "infinity".to_string()]),
+            // Named jobs execute exactly once as PID 1 after durable dispatch.
+            entrypoint: identity.map(|_| Vec::<String>::new()),
+            cmd: Some(if identity.is_some() {
+                vec!["sh".into(), "-c".into(),
+                    "while [ ! -f /workspace/.elitea-dispatch ]; do sleep 0.1; done; exec /usr/local/bin/elitea-code-runner".into()]
+            } else {
+                vec!["sleep".into(), "infinity".into()]
+            }),
             working_dir: Some(CONTAINER_WORKSPACE_ROOT.to_string()),
             host_config: Some(host_config),
             ..Default::default()
