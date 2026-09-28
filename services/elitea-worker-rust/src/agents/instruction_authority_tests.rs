@@ -375,3 +375,199 @@ fn fresh_nested_scope_does_not_inherit_parent_activation_or_catalog() {
     assert!(child.active.is_empty() && child.catalog.is_empty());
     assert!(child.start(None, "new-child-scope".to_owned()).is_ok());
 }
+
+struct InstructionBudget;
+impl crate::agents::context_budget::ModelRequestBudget for InstructionBudget {
+    fn measure(
+        &self,
+        request: &LlmRequest,
+    ) -> adk_rust::Result<crate::agents::context_budget::RequestContextUsage> {
+        crate::agents::context_budget::RequestContextBudget::resolve(
+            Some(crate::agents::request::ModelContextLimits {
+                context_window_tokens: 8000,
+                max_output_tokens: 1000,
+                context_window_fallback: false,
+                max_output_fallback: false,
+                max_input_tokens: None,
+            }),
+            &serde_json::Map::new(),
+            Some(1000),
+        )
+        .unwrap()
+        .unwrap()
+        .measure_provider_request(&serde_json::to_vec(request).unwrap(), 1_048_576)
+    }
+}
+
+#[derive(Default)]
+struct InstructionSummary(Mutex<usize>);
+#[async_trait]
+impl Llm for InstructionSummary {
+    fn name(&self) -> &'static str {
+        "instruction-summary"
+    }
+    async fn generate_content(
+        &self,
+        _: LlmRequest,
+        _: bool,
+    ) -> adk_rust::Result<LlmResponseStream> {
+        *self.0.lock().unwrap() += 1;
+        let mut summary: Value =
+            serde_json::from_str(&crate::agents::context_summary::fixture()).unwrap();
+        summary["references"] = json!([]);
+        summary["completed_work"] = json!([]);
+        Ok(Box::pin(adk_rust::futures::stream::iter([Ok(
+            LlmResponse::new(Content::new("model").with_text(summary.to_string())),
+        )])))
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // Exercise authority, compaction, and checkpoint composition together.
+async fn compaction_keeps_original_skill_and_project_revisions_after_source_edits() {
+    use crate::agents::context_compaction::DurableContextCompaction;
+    use crate::agents::context_management::ContextCompactionPlan;
+    use crate::agents::model_checkpoint::{CHECKPOINT_KEY, ModelCheckpointWriter};
+    use adk_rust::session::AppendEventRequest;
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let identity = sessions
+        .create(CreateRequest {
+            app_name: "test".into(),
+            user_id: "user".into(),
+            session_id: Some("session".into()),
+            state: std::collections::HashMap::default(),
+        })
+        .await
+        .unwrap()
+        .try_identity()
+        .unwrap();
+    let context = |text: &str| crate::agents::request::ProjectContextSnapshot {
+        id: "project:1".into(),
+        revision: content_digest(text),
+        scope: "project:1".into(),
+        content: text.into(),
+        activation_description: String::new(),
+    };
+    let mut original = plan("Original skill: preserve CEDAR-731 exactly.\n");
+    original
+        .add_project_context(&context("Original project: use teal.\n"))
+        .unwrap();
+    run(
+        &original,
+        sessions.clone(),
+        Arc::new(RecordingModel {
+            requests: Mutex::new(Vec::new()),
+            load: true,
+            pause: false,
+        }),
+    )
+    .await;
+    for _ in 0..3 {
+        let mut event = Event::new("prior-work");
+        event.author = "assistant".into();
+        event.set_content(Content::new("model").with_text("Old work detail. ".repeat(1200)));
+        sessions
+            .append_event_for_identity(AppendEventRequest {
+                identity: identity.clone(),
+                event,
+            })
+            .await
+            .unwrap();
+    }
+    let load = || GetRequest {
+        app_name: "test".into(),
+        user_id: "user".into(),
+        session_id: "session".into(),
+        num_recent_events: None,
+        after: None,
+    };
+    let stored = sessions.get(load()).await.unwrap();
+    let authority_key = stored
+        .state()
+        .all()
+        .keys()
+        .find(|key| key.starts_with(STATE_PREFIX))
+        .unwrap()
+        .clone();
+    let authority_before = stored.state().get(&authority_key).unwrap();
+    let mut changed = plan("Changed skill: use AMBER-999 instead.");
+    changed
+        .add_project_context(&context("Changed project: use orange."))
+        .unwrap();
+    changed.resume = true;
+    changed.run_id = "replacement-run".into();
+    let summary = Arc::new(InstructionSummary::default());
+    let compactor = Arc::new(
+        DurableContextCompaction::new(
+            ContextCompactionPlan {
+                max_context_tokens: 8000,
+                preserve_recent_messages: 2,
+                preserve_system_messages: true,
+                summary_instructions: String::new(),
+            },
+            Arc::new(InstructionBudget),
+            summary.clone(),
+            [7; 32],
+            stored.as_ref(),
+        )
+        .unwrap(),
+    );
+    let writer = ModelCheckpointWriter::new(sessions.clone(), "execution".into(), 7, [7; 32])
+        .with_request_budget(Some(Arc::new(InstructionBudget)))
+        .with_context_compaction(Some(compactor));
+    let model = Arc::new(RecordingModel {
+        requests: Mutex::new(Vec::new()),
+        load: false,
+        pause: false,
+    });
+    let builder = changed.bind_builder(LlmAgentBuilder::new("assistant").model(model.clone()));
+    let runner = adk_rust::runner::Runner::builder()
+        .app_name("test")
+        .agent(changed.wrap(Arc::new(writer.bind(builder).build().unwrap())))
+        .session_service(sessions.clone())
+        .build()
+        .unwrap();
+    let mut events = runner
+        .run(
+            "user".try_into().unwrap(),
+            "session".try_into().unwrap(),
+            Content::new("user").with_text("Continue the original work."),
+        )
+        .await
+        .unwrap();
+    while let Some(event) = events.next().await {
+        event.unwrap();
+    }
+    assert!(*summary.0.lock().unwrap() > 0, "must actually compact");
+    {
+        let requests = model.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        let dispatched = serde_json::to_string(&requests[0]).unwrap();
+        for source in original.catalog.values() {
+            assert!(dispatched.contains(&source.revision));
+            assert!(dispatched.contains(&source.id));
+            assert!(
+                requests[0]
+                    .contents
+                    .iter()
+                    .any(|content| content.parts.iter().any(|part| part
+                        .text()
+                        .is_some_and(|text| text.contains(&source.content))))
+            );
+        }
+        assert!(!dispatched.contains("AMBER-999"));
+        assert!(!dispatched.contains("orange"));
+        assert!(!dispatched.contains(&"Old work detail. ".repeat(100)));
+    }
+    let after = sessions.get(load()).await.unwrap();
+    assert_eq!(after.state().get(&authority_key).unwrap(), authority_before);
+    let checkpoint = after.state().get(CHECKPOINT_KEY).unwrap();
+    assert!(checkpoint.to_string().contains("CEDAR-731"));
+    assert!(!checkpoint.to_string().contains("AMBER-999"));
+    // Only a fresh independent turn may adopt edited source revisions.
+    changed.resume = false;
+    let scope = authority_before["scope"].as_str().unwrap().to_owned();
+    let fresh = changed.start(Some(authority_before), scope).unwrap();
+    assert!(fresh.render().contains("orange"));
+    assert!(!fresh.render().contains("use teal"));
+}

@@ -66,6 +66,20 @@ It also covers eager Project Context, description-driven availability, independe
 The state-only service reload test removes every transcript event before recovery.
 That test is component evidence. It is not process replacement evidence.
 
+The 2026-09-28 compaction regression composes the instruction callback, ADK Runner, real compactor, and model checkpoint writer.
+It activates a skill and eager Project Context, then supplies changed source snapshots on continuation.
+Large historical messages force a summary call before the next task-model dispatch.
+Both original bodies, identities, and content revisions remain in model input.
+The authoritative state remains unchanged, and the saved model checkpoint excludes the changed skill.
+Old bulk history disappears from the dispatched request.
+A fresh independent turn adopts the changed project context.
+The test is `compaction_keeps_original_skill_and_project_revisions_after_source_edits` in `instruction_authority_tests.rs`.
+It uses in-memory storage and a deterministic structured summary model.
+It does not replace the live source-edit, compaction, and browser acceptance case.
+The focused instruction suite passes five ordinary tests, including the new regression.
+The PostgreSQL replacement test skips without `ELITEA_TEST_DATABASE_URL`; its child-process entry does no standalone verification.
+Strict library-and-test Clippy, formatting, and whitespace checks pass.
+
 `ordinary_tests.rs` exercises application and ad-hoc loading through native Runner, provider projection, and browser event projection.
 Its nested test loads a child skill and verifies that parent and child system instructions remain separate.
 `pipeline_tests.rs` mutates an invoked skill after a private pause and verifies the original revision on continuation.

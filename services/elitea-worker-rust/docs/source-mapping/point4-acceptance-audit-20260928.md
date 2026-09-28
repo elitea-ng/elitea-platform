@@ -33,6 +33,11 @@ Instruction-authority tests already preserve an original skill snapshot after tr
 `postgres_instruction_pause_survives_process_replacement` adds database-backed process replacement coverage when PostgreSQL is available.
 These tests do not establish the combined live source-edit, compaction, and browser workflow.
 
+The 2026-09-28 combined regression now exercises both source types through the actual compactor and model checkpoint writer.
+It preserves original bodies and revisions, removes old bulk history, and admits edited context only on a fresh turn.
+See [instruction-authority verification](instruction-authority.md#verification).
+The combined deployed workflow remains open.
+
 Optional tool-output clearing remains deferred by user direction.
 HITL history, general graph composition, and new pipeline nodes remain gate 5 work.
 Long-term memory and customer workflow additions do not block point 4.
