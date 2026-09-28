@@ -347,7 +347,10 @@ export function reduceTurnFrame(
       const finishActions = (current.toolActions ?? []) as readonly ToolAction[];
       // Rust sends the persisted final snapshot on this terminal event.
       // A null body refers to previously assembled result chunks.
-      const snapshot = frame.response_metadata?.should_continue === false && typeof frame.content === 'string';
+      // A direct HITL decision starts a new response. Approve/reject can reach
+      // END without any model chunks, so the terminal snapshot is its only text.
+      const snapshot = (frame.response_metadata?.should_continue === false || current.content === '')
+        && typeof frame.content === 'string';
       const final = snapshot
         ? splitWholeResponse(current.id, frameText(frame, true), finishActions, frame.created_at)
         : { answer: current.content, actions: finishActions };

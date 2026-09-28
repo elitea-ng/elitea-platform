@@ -92,7 +92,9 @@ Focused admission and HITL tests pass.
 Deployment and another approval check remain pending.
 The UI's socket fallback after this refusal produces misleading connection guidance and also needs correction.
 
-## Remaining implementation
+## Original implementation checklist
+
+The admission and segmentation items below are implemented. Full browser acceptance remains open.
 
 Consume the pending interrupt and create all history segments in the same admission transaction.
 Preserve the existing response as the static review.
@@ -104,3 +106,27 @@ Verify Approve, Reject, and repeated Edit through direct participants and epheme
 Verify that nested interrupts retain their existing parent response.
 Test competing decisions, duplicate delivery, rollback, restart, and reload before accepting this history contract.
 No database migration is required by the current design.
+
+## Real-model browser verification
+
+Main revision `6d78ce4b2` fixes continuation admission. A fresh headed browser accepts approval in chat 745.
+The synthetic result persists, but the live response stays empty until reload.
+
+The isolated pipeline initially stored Haiku's display label instead of its canonical identifier.
+Model resolution therefore selected the project's fixture default.
+Selecting and saving Haiku through the pipeline editor corrects the saved identity.
+The canonical model is `eu.anthropic.claude-haiku-4-5-20251001-v1:0`, owned by project 1.
+
+Chat 748 uses the real model. It produces a computer joke.
+The user edit requests a polar-bear joke. The resumed LLM produces that joke and returns to review.
+The exact edit text appears as a separate user message. Approval then persists the revised joke as the final answer.
+Reload shows review, edit, revised review, approval, and final result in order.
+No browser responses are mocked.
+
+The live final response remains empty before reload.
+`chatStreamTurnFrames.ts` ignores terminal snapshot text when `should_continue` is true.
+A direct HITL resume creates an empty response and can reach END without model chunks.
+The reducer now consumes the terminal snapshot when the response is empty.
+Existing nonempty continuation content remains unchanged.
+The regression checks immediate rendering, settled controls, and duplicate terminal delivery.
+Deployment and another fresh browser decision remain required for this renderer fix.

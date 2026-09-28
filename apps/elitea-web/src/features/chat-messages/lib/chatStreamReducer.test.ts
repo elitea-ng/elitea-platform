@@ -36,6 +36,16 @@ function frame(type: string, extra: Record<string, unknown> = {}) {
 }
 
 describe('applyChatStreamFrame', () => {
+  it('shows the reused HITL result in a new response before the stream closes', () => {
+    const terminal = frame(SocketMessageType.PipelineFinish, {
+      content: 'A gummy bear!', response_metadata: { should_continue: true },
+    });
+    const settled = applyChatStreamFrame([pendingAssistant()], terminal, CONTEXT);
+    expect(settled[0]?.content).toBe('A gummy bear!');
+    expect(settled[0]?.isStreaming).toBe(false);
+    expect(settled[0]?.isLoading).toBe(false);
+    expect(applyChatStreamFrame(settled, terminal, CONTEXT)[0]?.content).toBe('A gummy bear!');
+  });
   it('settles the explicit terminal snapshot without retaining intermediate narration', () => {
     const history = [{ ...pendingAssistant(), content: 'Pass one. Pass two. Final result.' }];
     const terminal = frame(SocketMessageType.PipelineFinish, {
