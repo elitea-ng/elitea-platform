@@ -993,3 +993,33 @@ Each record appears once. The rejected text is absent, and reload preserves the 
 No failure event or browser page error occurs. The screenshot is inspected.
 Evidence prefixes are `elitea-repair-recovery` and `elitea-repair-crash-proof` in the local acceptance directory.
 This is real worker crash recovery with a synthetic provider, not proof for every provider or interruption state.
+
+
+### Partial-output acknowledgement-loss coverage, 2026-09-28
+
+`agents/events.rs::preserve_incomplete_output` projects accepted incomplete text as chunked trace evidence.
+`execution/native_agent_lifecycle.rs::publish_batch` publishes each frame before selecting the terminal failure.
+`execution/output_delivery.rs::FreshAgentProgressPublisher` persists each frame before transport publication.
+Uncertain acknowledgements reopen the encrypted spool and replay the same canonical frame.
+These responsibilities retain the current SDK's inspectable incomplete response without claiming successful completion.
+
+The new output-delivery regression projects 20,000 UTF-8 bytes across multiple chunks.
+It injects a persisted-frame transport failure at every position in that batch.
+Each case verifies ordered acknowledgements, exact projected bytes, one replay, and complete text reconstruction.
+No frame becomes `full_message`, `agent_response`, or `pipeline_finish`.
+The publisher acquires no completed-answer artifact authority.
+
+All 65 output-delivery module tests pass, including loopback transport fixtures.
+The new case uses the real projector, publisher, and encrypted spool with a scripted acknowledgement transport.
+It does not kill a worker process or prove browser persistence during publication interruption.
+The deployed publication-crash gate therefore remains open.
+Existing successful full worker-loss tests at model and continuation checkpoints retain their separate scope.
+
+Strict library/test Clippy passes after removing repeated Anthropic test fixture data.
+All 26 native Anthropic facade tests pass with the same model cases.
+
+The next crash check must inspect the model checkpoint, not only frame replay.
+`agents/model_scope_output.rs::generate` stores the latest partial prefix in memory before checking the four-call bound.
+At exhaustion, that branch returns before `prepare_next` writes another durable model boundary.
+Determine whether recovery preserves the final partial prefix and terminal failure without repeating the last model call.
+The transport regression above does not establish that property.

@@ -555,9 +555,20 @@ async fn current_anthropic_models_reject_explicit_sampling_before_network_io() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn adaptive_and_disabled_reasoning_follow_provider_contracts() {
-    for (model, effort, temperature, expected) in [
+    let adaptive = [
+        "claude-fable-5",
+        "claude-fable-5-1",
+        "eu.anthropic.claude-fable-5.1",
+        "claude_fable_5_1",
+        "claude-opus-5-5",
+        "eu.anthropic.claude-opus-5.5",
+        "claude_opus_5_5",
+        "claude-opus-4-7",
+    ]
+    .into_iter()
+    .map(|model| {
         (
-            "claude-fable-5",
+            model,
             Some(ModelReasoningEffort::High),
             None,
             serde_json::json!({
@@ -565,77 +576,9 @@ async fn adaptive_and_disabled_reasoning_follow_provider_contracts() {
                 "thinking": {"type": "adaptive", "display": "summarized"},
                 "output_config": {"effort": "high"},
             }),
-        ),
-        (
-            "claude-fable-5-1",
-            Some(ModelReasoningEffort::High),
-            None,
-            serde_json::json!({
-                "max_tokens": 4000,
-                "thinking": {"type": "adaptive", "display": "summarized"},
-                "output_config": {"effort": "high"},
-            }),
-        ),
-        (
-            "eu.anthropic.claude-fable-5.1",
-            Some(ModelReasoningEffort::High),
-            None,
-            serde_json::json!({
-                "max_tokens": 4000,
-                "thinking": {"type": "adaptive", "display": "summarized"},
-                "output_config": {"effort": "high"},
-            }),
-        ),
-        (
-            "claude_fable_5_1",
-            Some(ModelReasoningEffort::High),
-            None,
-            serde_json::json!({
-                "max_tokens": 4000,
-                "thinking": {"type": "adaptive", "display": "summarized"},
-                "output_config": {"effort": "high"},
-            }),
-        ),
-        (
-            "claude-opus-5-5",
-            Some(ModelReasoningEffort::High),
-            None,
-            serde_json::json!({
-                "max_tokens": 4000,
-                "thinking": {"type": "adaptive", "display": "summarized"},
-                "output_config": {"effort": "high"},
-            }),
-        ),
-        (
-            "eu.anthropic.claude-opus-5.5",
-            Some(ModelReasoningEffort::High),
-            None,
-            serde_json::json!({
-                "max_tokens": 4000,
-                "thinking": {"type": "adaptive", "display": "summarized"},
-                "output_config": {"effort": "high"},
-            }),
-        ),
-        (
-            "claude_opus_5_5",
-            Some(ModelReasoningEffort::High),
-            None,
-            serde_json::json!({
-                "max_tokens": 4000,
-                "thinking": {"type": "adaptive", "display": "summarized"},
-                "output_config": {"effort": "high"},
-            }),
-        ),
-        (
-            "claude-opus-4-7",
-            Some(ModelReasoningEffort::High),
-            None,
-            serde_json::json!({
-                "max_tokens": 4000,
-                "thinking": {"type": "adaptive", "display": "summarized"},
-                "output_config": {"effort": "high"},
-            }),
-        ),
+        )
+    });
+    for (model, effort, temperature, expected) in adaptive.chain([
         (
             "claude-sonnet-4-6",
             Some(ModelReasoningEffort::Medium),
@@ -663,7 +606,7 @@ async fn adaptive_and_disabled_reasoning_follow_provider_contracts() {
                 "temperature": 0.7,
             }),
         ),
-    ] {
+    ]) {
         let (client, captured) = test_model_gateway_client(
             vec![TestModelGatewayOutcome::Response(
                 test_model_gateway_response(Body::new(Full::new(Bytes::from(native_sse(model))))),

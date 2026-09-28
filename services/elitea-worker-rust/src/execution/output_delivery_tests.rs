@@ -1900,6 +1900,79 @@ async fn uncertain_live_progress_reopens_and_replays_the_exact_durable_frame() {
 }
 
 #[tokio::test]
+async fn incomplete_output_chunks_survive_each_uncertain_ack_without_completion_authority() {
+    let text = "é".repeat(10_000);
+    let mut projector =
+        AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({}))).unwrap();
+    let timestamp = Utc.timestamp_millis_opt(NOW).single().unwrap();
+    projector.start(timestamp).unwrap();
+    let mut partial = Event::with_id("partial-output", "invocation-1");
+    partial.timestamp = timestamp;
+    partial.author = "root-agent".to_owned();
+    partial.llm_response.partial = true;
+    partial.set_content(Content::new("model").with_text(&text));
+    projector.project(&partial).unwrap();
+    let batch: Vec<_> = projector
+        .preserve_incomplete_output(timestamp)
+        .unwrap()
+        .into_iter()
+        .collect();
+    assert!(batch.len() > 2, "fixture must cross chunk boundaries");
+
+    for interrupted in 0..batch.len() {
+        let actions = (0..batch.len()).map(|index| {
+            if index == interrupted {
+                LiveProgressAction::PersistThenUnavailable
+            } else {
+                LiveProgressAction::Acknowledge
+            }
+        });
+        let state = FakeProgressState::new(actions, [ReplayProgressAction::Acknowledge]);
+        let (_temporary, verified, mut publisher) =
+            fresh_progress_publisher(Arc::clone(&state), batch.len() + 1).await;
+        for (index, event) in batch.iter().enumerate() {
+            let outcome = publisher
+                .publish(&verified, event.clone(), NOW)
+                .await
+                .unwrap();
+            assert_eq!(
+                outcome,
+                AgentProgressPublishOutcome::Acknowledged {
+                    sequence: 5 + u64::try_from(index).unwrap(),
+                }
+            );
+        }
+        assert_eq!(state.replays.load(Ordering::SeqCst), 1);
+        let frames = state.frames.lock().unwrap();
+        assert_eq!(frames.len(), batch.len());
+        let mut restored = String::new();
+        for (frame, expected) in frames.iter().zip(&batch) {
+            let Some(execution_output_frame_v1::Payload::NodeEvent(actual)) =
+                frame.payload.as_ref()
+            else {
+                panic!("partial output must remain a node event");
+            };
+            assert_eq!(
+                actual, expected,
+                "replay changes neither identity nor bytes"
+            );
+            assert!(!matches!(
+                actual.r#type.as_str(),
+                "full_message" | "agent_response" | "pipeline_finish"
+            ));
+            if actual.r#type == "partial_message" {
+                let metadata: serde_json::Value =
+                    serde_json::from_slice(&actual.response_metadata).unwrap();
+                restored.push_str(metadata["thinking_steps"][0]["text"].as_str().unwrap());
+            }
+        }
+        assert_eq!(restored, text);
+        drop(frames);
+        assert!(publisher.into_test_acked_full_message().is_none());
+    }
+}
+
+#[tokio::test]
 async fn changed_durable_progress_is_rejected_before_a_replay_session_starts() {
     let state = FakeProgressState::new(
         [LiveProgressAction::PersistChangedFrameThenUnavailable],
