@@ -37,6 +37,9 @@ Do not infer the convention by comparing the sizes of counters.
 Prepared-request estimates still control admission before provider usage exists.
 `model_checkpoint.rs` retains only the small numeric admission measurement for the current call.
 `model_scope_output.rs` publishes provider counts at each completed response, including output-limited continuation responses.
+Root agents use the ADK after-model callback in `ModelCheckpointWriter::bind` instead of the nested scope wrapper.
+The first deployed check in chat 717 exposes this distinct root path: execution succeeds, but only its estimate appears.
+The root callback correction adds a dedicated Runner regression. It emits the estimate and then the provider measurement.
 It does not serialize the request again or retain another copy of its contents.
 Summary calls bypass this ordinary model scope and cannot replace its occupancy.
 Existing event envelopes carry execution, generation, and child scope.

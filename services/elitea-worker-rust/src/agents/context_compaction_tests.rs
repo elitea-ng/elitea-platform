@@ -15,6 +15,82 @@ use crate::agents::model_checkpoint::{CHECKPOINT_KEY, ModelCheckpointWriter};
 use crate::agents::request::ModelContextLimits;
 
 struct Budget;
+
+struct ProviderUsageModel;
+#[async_trait]
+impl Llm for ProviderUsageModel {
+    fn name(&self) -> &'static str {
+        "provider-usage-fixture"
+    }
+    async fn generate_content(
+        &self,
+        _: LlmRequest,
+        _: bool,
+    ) -> adk_rust::Result<LlmResponseStream> {
+        Ok(Box::pin(stream::once(async {
+            Ok(LlmResponse {
+                content: Some(Content::new("model").with_text("completed")),
+                turn_complete: true,
+                finish_reason: Some(adk_rust::FinishReason::Stop),
+                usage_metadata: Some(adk_rust::UsageMetadata {
+                    prompt_token_count: 120,
+                    candidates_token_count: 7,
+                    total_token_count: 127,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+        })))
+    }
+}
+
+#[tokio::test]
+async fn root_agent_publishes_provider_usage_through_its_adk_callback() {
+    use adk_rust::futures::StreamExt as _;
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    create(sessions.as_ref()).await;
+    let (sender, receiver) = crate::agents::graph::pipeline_node_event_channel();
+    let writer = ModelCheckpointWriter::new(sessions.clone(), "execution".into(), 7, [7; 32])
+        .with_request_budget(Some(Arc::new(Budget)))
+        .with_context_events(sender);
+    let builder =
+        adk_rust::agent::LlmAgentBuilder::new("agent").model(Arc::new(ProviderUsageModel));
+    let agent = crate::agents::graph::PipelineNodeEventStreamingAgent::new(
+        Arc::new(writer.bind(builder).build().unwrap()),
+        receiver,
+    );
+    let runner = adk_rust::runner::Runner::builder()
+        .app_name("elitea-agent-v1")
+        .agent(Arc::new(agent))
+        .session_service(sessions)
+        .build()
+        .unwrap();
+    let mut events = runner
+        .run(
+            "user-1".try_into().unwrap(),
+            "session-1".try_into().unwrap(),
+            Content::new("user").with_text("hello"),
+        )
+        .await
+        .unwrap();
+    let mut statuses = Vec::new();
+    while let Some(event) = events.next().await {
+        let event = event.unwrap();
+        if let Some(status) =
+            crate::agents::context_status::ModelContextStatus::from_event(&event).unwrap()
+        {
+            assert_eq!(event.author, "agent");
+            statuses.push(serde_json::to_value(status).unwrap());
+        }
+    }
+    assert_eq!(statuses.len(), 2);
+    assert!(statuses[0].get("provider_usage").is_none());
+    assert_eq!(
+        statuses[1]["provider_usage"],
+        json!({"input_tokens":120,"output_tokens":7})
+    );
+}
+
 impl ModelRequestBudget for Budget {
     fn measure(&self, request: &LlmRequest) -> adk_rust::Result<RequestContextUsage> {
         RequestContextBudget::resolve(

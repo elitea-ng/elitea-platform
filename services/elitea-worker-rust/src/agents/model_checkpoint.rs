@@ -411,6 +411,7 @@ impl ModelCheckpointWriter {
 
     pub(super) fn bind(self, builder: LlmAgentBuilder) -> LlmAgentBuilder {
         let model = self.clone();
+        let response = self.clone();
         builder
             .retain_prepared_history(
                 self.context_compaction.is_some() || self.replay_delegation.is_some(),
@@ -426,6 +427,15 @@ impl ModelCheckpointWriter {
                             request,
                         )
                         .await
+                })
+            }))
+            .after_model_callback(Box::new(move |_, chunk| {
+                let writer = response.clone();
+                Box::pin(async move {
+                    if chunk.turn_complete || chunk.finish_reason.is_some() {
+                        writer.provider_usage(chunk.usage_metadata.as_ref()).await?;
+                    }
+                    Ok(None)
                 })
             }))
             .before_tool_callback(Box::new(move |context| {
