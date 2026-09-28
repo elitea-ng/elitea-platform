@@ -452,3 +452,15 @@ Claim attempt 2 publishes the original incomplete-response failure without anoth
 The fresh browser retains exactly 98,090 partial bytes before and after reload, with no duplicated segment.
 This closes the tested publication-crash boundary. Other Gate 4 checks remain open.
 See [deployed acceptance](source-mapping/output-continuation-capacity-20260922.md#publication-crash-browser-acceptance-passes-2026-09-28).
+
+
+## Input admission follow-up (2026-09-28)
+
+Input admission now has a distinct safe error, separate from model token limits.
+Chat 723 verifies the failure message and support guidance before the capacity correction.
+The corrected worker then accepts the same 70 KiB message on regeneration.
+Live output, reload, and authoritative completion pass with the synthetic provider.
+See [source mapping and deployed evidence](source-mapping/input-admission-diagnostics-20260928.md).
+The correction retains metadata bounds and model-context admission.
+Field-specific public diagnostics and the remaining provider-accounting acceptance checks stay open.
+Gate 4 remains active.

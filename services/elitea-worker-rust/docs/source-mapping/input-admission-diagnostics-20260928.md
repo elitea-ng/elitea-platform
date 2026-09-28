@@ -1,6 +1,6 @@
 # Input admission diagnostics
 
-Status: focused checks and deployed browser acceptance pass. The message-capacity correction below awaits deployed verification.
+Status: focused checks and deployed browser acceptance pass. The message-capacity correction also passes deployed verification.
 
 ## Source mapping
 
@@ -41,7 +41,7 @@ The repository generator also refreshes existing instruction and context-account
 
 Deploy Main before Rust. Older consumers do not admit the new code.
 The current web client displays the supplied safe message through its existing failure block.
-Browser verification is still required for live failure, support reference, and reload.
+The deployed verification below covers live failure, support reference, and reload.
 Check that no provider invocation occurs for the rejected request.
 This change does not close other gate 4 accounting or field-level diagnostic work.
 
@@ -94,3 +94,22 @@ This correction concerns the replatform transport boundary, which must preserve 
 
 Contract tests cover the inclusive worker boundary, Main's boundary, escaped text, multibyte text, oversize rejection, and unchanged metadata rejection.
 Deployed acceptance must regenerate chat 723 with its original 70 KiB user message.
+
+### Admitted-message deployed acceptance
+
+Worker revision `6d5e2adf9` deploys from a clean Git archive.
+Worker image: `sha256:7b5e7c595b6a5adc146a18f5eb19902eb3b42de8d15a849366c4bb0cedef4229`.
+Deployment preserves credentials, configuration, five mounts, databases, network, and resource limits. Main and web remain unchanged.
+
+Fresh headed Playwright regenerates chat 723 once with the original 70 KiB message unchanged.
+Execution `cbe66fe88857c933343cb281c87d6e68` reaches authoritative database state `SUCCEEDED`.
+The UI shows the synthetic provider response live and after reload. The old input-limit failure is absent.
+Reload preserves the execution identity. Browser page errors and execution failures remain empty.
+The reload screenshot is inspected. Browser responses are not mocked.
+The selected provider is the existing synthetic continuation fixture, which returns fixed usage counters.
+This test proves input transport, invocation, completion, and browser persistence. It does not prove real-model token accounting.
+Evidence uses `elitea-user-input-723-*` in the local temporary directory.
+
+All 19 input-contract tests pass, including the exact 512 KiB worker boundary.
+Strict Rust library and test Clippy checks, formatting, and diff checks pass.
+This closes the admitted-message mismatch. Field-specific public diagnostics remain a separate open boundary.
