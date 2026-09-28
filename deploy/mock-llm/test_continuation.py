@@ -34,6 +34,12 @@ class ContinuationFixtureTest(unittest.TestCase):
         text = "".join(event["choices"][0]["delta"].get("content", "") for event in events)
         return text, events[-1]["choices"][0]["finish_reason"]
 
+    def test_request_growth_prefix_is_bounded_and_output_limited(self):
+        text, reason = self.stream([{"role": "user", "content": "[[mock:request_growth]]"}])
+        self.assertEqual(len(text.encode()), 512 * 1024)
+        self.assertTrue(text.startswith("BYTE_GROWTH_PARTIAL\n"))
+        self.assertEqual(reason, "length")
+
     def test_cached_usage_is_complete_and_request_scoped(self):
         for streaming in [False, True]:
             for prompt in ["[[mock:cached_usage]]", "healthy"]:

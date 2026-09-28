@@ -706,3 +706,8 @@ It emits a valid response-start shape with an unexpected model identity.
 The worker must reject that identity before accepting any answer content.
 The HTTP fixture test verifies the incorrect identity and preserves the existing healthy-request rejection checks.
 Eight fixture tests pass.
+
+The request-byte fixture adds `[[mock:request_growth]]`.
+It returns a fixed 512 KiB partial answer with an output-limit stop reason.
+The test verifies exact length, marker, and stop reason. Nine HTTP fixture tests pass.
+This permits testing request growth after admission, without increasing production transport limits or calling a real model.

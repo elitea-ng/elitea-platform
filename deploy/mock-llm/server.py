@@ -68,6 +68,7 @@ PER-REQUEST MODES, SELECTED BY THE PROMPT (see `_script_for`):
   [[mock:incomplete_stream]] end after partial text without a terminal model event.
   [[mock:stream_error]] emit partial text followed by a provider error event.
   [[mock:wrong_model]] emit a Responses start event with the wrong model identity.
+  [[mock:request_growth]] emit a bounded 512 KiB output-limited continuation prefix.
   [[mock:cached_usage]] report fixed cache and reasoning usage for accounting tests.
   [[mock:slow]]       stream a long, scripted reply one word at a time with a
                       per-chunk delay, so a test can act while the turn is
@@ -899,6 +900,9 @@ def _script_for(messages: list[dict]) -> _ChatScript:
     user_text = _last_user_text(messages)
     prompt = user_text or ""
 
+    if "[[mock:request_growth]]" in prompt:
+        prefix = "BYTE_GROWTH_PARTIAL\n"
+        return _ChatScript(prefix + "X" * (512 * 1024 - len(prefix)), None, 0, "request_growth", "length")
     if "[[mock:stream_error]]" in prompt:
         return _ChatScript("", None, 0, "stream_error")
     if "[[mock:incomplete_stream]]" in prompt:
@@ -1527,7 +1531,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 # One word per chunk: a consumer that only ever sees a single
                 # chunk is not actually exercising incremental streaming.
-                if script.mode == "continuation_exhaust":
+                if script.mode in ("continuation_exhaust", "request_growth"):
                     chunks = (script.reply[index:index + 1024] for index in range(0, len(script.reply), 1024))
                 elif script.mode.startswith("continuation_"):
                     chunks = (script.reply[index:index + 17] for index in range(0, len(script.reply), 17))
