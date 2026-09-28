@@ -386,3 +386,26 @@ See [repair recovery evidence](source-mapping/output-continuation-capacity-20260
 Audit omitted versus explicit empty `input_mapping` for direct Toolkit/MCP nodes.
 The current Rust default inserts `messages`, which a strict zero-argument MCP schema rejects (collision setup chats 689/690).
 Verify current-platform behavior and define an explicit no-argument contract without silently changing existing message-mapping behavior.
+
+## Luna Full-window rehearsal configuration (2026-09-28)
+
+The user requests higher limits for rehearsal Public-project configuration 26,
+`global.openai.gpt-5.6-luna`.
+The settings UI now stores 1,000,000 combined context tokens and 128,000 maximum output tokens.
+The previous limits were 272,000 and 32,000 tokens.
+Reopening the saved form verifies both values; the separate maximum-input field is blank.
+This supersedes the earlier catalogue-availability blocker, but is configuration
+evidence only: near-million-token provider acceptance and compaction remain open.
+
+Rust source: `src/agents/context_budget.rs::RequestContextBudget::admit` reserves
+the selected per-call output cap, falling back to the catalogue maximum when
+none is selected. Balanced and Full already select combined windows. The user's
+request to avoid unnecessarily reserving the full model output maximum is under
+review; no reservation-policy change was made with this configuration edit.
+Request occupancy currently uses a serialized-request estimate, not exclusively
+provider-reported usage or cumulative billed tokens.
+
+Native Anthropic Auto resolves to the catalogue maximum in
+`services/elitea-main/internal/application/agentexecution/tools.go`.
+Reducing its reservation also requires changing the effective request cap.
+Keep reservation and provider request limits consistent.

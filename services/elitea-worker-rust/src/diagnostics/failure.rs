@@ -126,6 +126,62 @@ mod tests {
         assert_eq!(output.0.len(), MAX_BYTES - 1);
     }
 
+    #[test]
+    fn concurrent_failures_share_one_capture_allowance() {
+        let next = AtomicU64::new(0);
+        let barrier = std::sync::Barrier::new(16);
+        let admitted = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..16)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        admit(&next, 42)
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| usize::from(handle.join().unwrap()))
+                .sum::<usize>()
+        });
+        assert_eq!(admitted, 1);
+        assert!(!admit(&next, 42));
+        assert!(admit(&next, 43));
+    }
+
+    #[test]
+    #[ignore = "manual release-profile timing probe; no portable latency threshold"]
+    fn measure_failure_capture_cost() {
+        let subscriber = tracing_subscriber::registry();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let span = tracing::info_span!("capture_cost_probe", secret = "REDACTION_CANARY");
+        let _entered = span.enter();
+        let mut nanos = Vec::with_capacity(201);
+        let mut max_bytes = 0;
+        for _ in 0..201 {
+            let start = Instant::now();
+            let output = std::hint::black_box(capture_detail());
+            nanos.push(start.elapsed().as_nanos());
+            max_bytes = max_bytes.max(output.len());
+            assert!(output.len() <= MAX_BYTES);
+            assert!(!output.contains("REDACTION_CANARY"));
+        }
+        let cold = nanos.remove(0);
+        nanos.sort_unstable();
+        let next = AtomicU64::new(1);
+        let start = Instant::now();
+        for _ in 0..100_000 {
+            assert!(!std::hint::black_box(admit(&next, 0)));
+        }
+        eprintln!(
+            "failure_capture cold_ns={cold} warm_p50_ns={} warm_p95_ns={} warm_max_ns={} max_bytes={max_bytes} rejected_mean_ns={}",
+            nanos[100],
+            nanos[190],
+            nanos[199],
+            start.elapsed().as_nanos() / 100_000
+        );
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn async_ancestry_survives_yield_without_recording_payload_fields() {
         let subscriber = tracing_subscriber::registry();

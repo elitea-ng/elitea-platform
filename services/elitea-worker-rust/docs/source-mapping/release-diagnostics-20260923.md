@@ -103,6 +103,35 @@ Capture remains disabled by default until release overhead and deployed behavior
 Release capture, nested correlation, provider-specific causes, and browser error acceptance remain open.
 This slice does not complete OBS-RUST-01.
 
+### Local release timing and concurrent capture (2026-09-28)
+
+`src/diagnostics/failure.rs` adds a 16-thread barrier test for the shared capture allowance.
+Exactly one caller receives permission within the same second.
+The next second admits another capture.
+All five focused tests pass; the manual timing test stays ignored during ordinary tests.
+
+Run the timing test with:
+
+```sh
+cargo test --locked --release diagnostics::failure::tests::measure_failure_capture_cost -- --ignored --exact --nocapture
+```
+
+Three fresh processes use the same optimized macOS ARM64 test binary.
+Each process measures one first capture and 200 warmed captures.
+
+| Process | First capture | Warm median | Warm p95 | Warm maximum | Maximum text |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 106.83 ms | 42.38 us | 48.92 us | 97.33 us | 5,478 bytes |
+| 2 | 127.31 ms | 42.17 us | 52.54 us | 150.83 us | 5,478 bytes |
+| 3 | 91.70 ms | 41.46 us | 45.25 us | 170.79 us | 5,478 bytes |
+
+Each capture checks the 8 KiB bound and excludes a synthetic secret span field.
+The rejected-call timing reports integer nanoseconds and rounds to zero in these samples.
+This does not establish zero cost or a portable latency guarantee.
+These measurements exclude deployed Linux behavior, service concurrency, and end-to-end failure handling.
+First-capture latency remains material; capture stays disabled by default.
+No production capture behavior changes in this test addition.
+
 ## Deployed capture verification
 
 The rehearsal worker runs source `49e8ab2e` with capture enabled.
