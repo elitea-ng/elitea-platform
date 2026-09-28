@@ -38,7 +38,11 @@ It preserves original bodies and revisions, removes old bulk history, and admits
 See [instruction-authority verification](instruction-authority.md#verification).
 The combined deployed workflow remains open.
 Its isolated-project setup exposes [restored-schema and provisioning prerequisites](instruction-live-project-prerequisite-20260928.md).
-The project insert is fixed and deployed. Vector-store provisioning still prevents fixture creation.
+The project insert is fixed and deployed. The rehearsal PgVector bootstrap is corrected.
+The live test preserves frozen source revisions and adopts edited sources on a new turn.
+Its event audit finds a batched instruction activation overwrite.
+The Rust correction passes the focused regression, 496 agent tests, and strict Clippy.
+Deployed acceptance of the activation correction remains open.
 
 Optional tool-output clearing remains deferred by user direction.
 HITL history, general graph composition, and new pipeline nodes remain gate 5 work.

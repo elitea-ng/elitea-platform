@@ -15,6 +15,7 @@ fn plan(content: &str) -> InstructionPlan {
 struct RecordingModel {
     requests: Mutex<Vec<LlmRequest>>,
     load: bool,
+    load_context: bool,
     pause: bool,
 }
 #[async_trait]
@@ -30,14 +31,23 @@ impl Llm for RecordingModel {
         let mut requests = self.requests.lock().unwrap();
         requests.push(request);
         let content = if self.load && requests.len() == 1 {
+            let mut parts = vec![Part::FunctionCall {
+                name: "load_skill".to_owned(),
+                args: json!({"skill":"review"}),
+                id: Some("load-1".to_owned()),
+                thought_signature: None,
+            }];
+            if self.load_context {
+                parts.push(Part::FunctionCall {
+                    name: "read_project_context".to_owned(),
+                    args: json!({}),
+                    id: Some("context-1".to_owned()),
+                    thought_signature: None,
+                });
+            }
             Content {
                 role: "model".to_owned(),
-                parts: vec![Part::FunctionCall {
-                    name: "load_skill".to_owned(),
-                    args: json!({"skill":"review"}),
-                    id: Some("load-1".to_owned()),
-                    thought_signature: None,
-                }],
+                parts,
             }
         } else if self.pause {
             Content {
@@ -129,6 +139,7 @@ async fn activation_survives_transcript_loss_and_changed_resume_snapshot() {
     let first = Arc::new(RecordingModel {
         requests: Mutex::new(Vec::new()),
         load: true,
+        load_context: false,
         pause: false,
     });
     run(
@@ -182,6 +193,7 @@ async fn activation_survives_transcript_loss_and_changed_resume_snapshot() {
     let second = Arc::new(RecordingModel {
         requests: Mutex::new(Vec::new()),
         load: false,
+        load_context: false,
         pause: false,
     });
     run(&resumed, replacement, second.clone()).await;
@@ -287,6 +299,7 @@ async fn postgres_replacement_child() {
         let model = Arc::new(RecordingModel {
             requests: Mutex::new(Vec::new()),
             load: true,
+            load_context: false,
             pause: true,
         });
         let events = run_at(
@@ -310,6 +323,7 @@ async fn postgres_replacement_child() {
         let model = Arc::new(RecordingModel {
             requests: Mutex::new(Vec::new()),
             load: false,
+            load_context: false,
             pause: false,
         });
         run_at(
@@ -458,6 +472,7 @@ async fn compaction_keeps_original_skill_and_project_revisions_after_source_edit
         Arc::new(RecordingModel {
             requests: Mutex::new(Vec::new()),
             load: true,
+            load_context: true,
             pause: false,
         }),
     )
@@ -490,6 +505,12 @@ async fn compaction_keeps_original_skill_and_project_revisions_after_source_edit
         .unwrap()
         .clone();
     let authority_before = stored.state().get(&authority_key).unwrap();
+    let before: InstructionState = serde_json::from_value(authority_before.clone()).unwrap();
+    assert_eq!(
+        before.active.len(),
+        2,
+        "both tools in one model response must remain active"
+    );
     let mut changed = plan("Changed skill: use AMBER-999 instead.");
     changed
         .add_project_context(&context("Changed project: use orange."))
@@ -518,6 +539,7 @@ async fn compaction_keeps_original_skill_and_project_revisions_after_source_edit
     let model = Arc::new(RecordingModel {
         requests: Mutex::new(Vec::new()),
         load: false,
+        load_context: false,
         pause: false,
     });
     let builder = changed.bind_builder(LlmAgentBuilder::new("assistant").model(model.clone()));
@@ -570,4 +592,30 @@ async fn compaction_keeps_original_skill_and_project_revisions_after_source_edit
     let fresh = changed.start(Some(authority_before), scope).unwrap();
     assert!(fresh.render().contains("orange"));
     assert!(!fresh.render().contains("use teal"));
+}
+
+#[test]
+fn activation_delta_rejects_another_run_or_catalog() {
+    let original = plan("Original instruction")
+        .start(None, "scope".into())
+        .unwrap();
+    for changed in [
+        InstructionState {
+            activated_run_id: "other-run".into(),
+            ..original.clone()
+        },
+        plan("Changed instruction")
+            .start(None, "scope".into())
+            .unwrap(),
+        InstructionState {
+            scope: "other-scope".into(),
+            ..original.clone()
+        },
+    ] {
+        let mut value = serde_json::to_value(changed).unwrap();
+        assert!(
+            merge_activation_delta(&mut value, Some(serde_json::to_value(&original).unwrap()))
+                .is_err()
+        );
+    }
 }

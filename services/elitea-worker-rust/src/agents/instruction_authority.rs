@@ -457,14 +457,46 @@ impl Agent for InstructionAgent {
         if let Some((key, value)) = owner_state {
             event.actions.state_delta.insert(key, value);
         }
+        let authority_keys: Vec<_> = event.actions.state_delta.keys().cloned().collect();
         Ok(Box::pin(async_stream::stream! {
             yield Ok(event);
-            match inner.run(ctx).await {
-                Ok(mut events) => while let Some(event) = events.next().await { yield event; },
+            match inner.run(ctx.clone()).await {
+                Ok(mut events) => while let Some(event) = events.next().await {
+                    yield event.and_then(|mut event| {
+                        for key in &authority_keys {
+                            if let Some(value) = event.actions.state_delta.get_mut(key) {
+                                merge_activation_delta(value, ctx.session().state().get(key))?;
+                            }
+                        }
+                        Ok(event)
+                    });
+                },
                 Err(error) => yield Err(error),
             }
         }))
     }
+}
+
+// ADK dispatches a model's tool batch before publishing its result events.
+// Each instruction tool therefore starts from the same active set. Merge at
+// the publication boundary, after Runner persisted the preceding event.
+fn merge_activation_delta(value: &mut Value, previous: Option<Value>) -> adk_rust::Result<()> {
+    let Some(previous) = previous else {
+        return Err(corrupt());
+    };
+    let mut next: InstructionState =
+        serde_json::from_value(value.clone()).map_err(|_| corrupt())?;
+    let previous: InstructionState = serde_json::from_value(previous).map_err(|_| corrupt())?;
+    next.validate(&previous.scope)?;
+    previous.validate(&previous.scope)?;
+    if next.activated_run_id != previous.activated_run_id || next.catalog != previous.catalog {
+        return Err(corrupt());
+    }
+    if !previous.active.is_subset(&next.active) {
+        next.active.extend(previous.active);
+        *value = serde_json::to_value(next).map_err(|_| corrupt())?;
+    }
+    Ok(())
 }
 
 struct InstructionTool {

@@ -57,3 +57,24 @@ Private and Public project contexts remain unchanged.
 
 The remaining isolated-project prerequisite is vector-store provisioning.
 The planned live compaction verification remains open.
+
+## Bootstrap correction and live fixture
+
+A read-only probe opens the public vault with the deployed master key.
+The configured PgVector credential fails PostgreSQL authentication with SQLSTATE `28P01`.
+Its configured `vectors` database is also absent in rehearsal.
+The failure is an environment mismatch, not a compaction or master-key failure.
+
+The rehearsal correction adds one encrypted bootstrap secret through the existing vault codec.
+It changes only the public PgVector configuration reference in the same transaction.
+The original secret remains intact. The old reference is retained locally for rollback.
+No credential value enters this document, logs, or tracked files.
+The corrected bootstrap uses the existing rehearsal PostgreSQL service and administrative database.
+
+The authenticated project-create API now provisions isolated project 118 successfully.
+The fixture creates skill 1, application 1, and chat 1 in that project.
+The test leaves Private and Public project contexts unchanged.
+Local correction procedure: `/private/tmp/elitea-endpoint-repair.py`.
+
+A separate Secrets HTTP read returns 500 although the configuration vault reader succeeds.
+This observation does not establish its root cause. It remains a Main compatibility follow-up.

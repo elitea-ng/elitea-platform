@@ -135,3 +135,54 @@ Logs: `elitea-point4-prepared-instructions-regression.log`, `elitea-point4-rust-
 This is component and PostgreSQL process-replacement evidence.
 The new checkpoint ordering has no deployed browser acceptance yet.
 Full-request budgets, durable summaries, provider measurements, and UI/Main context wiring remain gate 4 requirements.
+
+## Batched instruction activation, 2026-09-28
+
+A fresh headed browser runs the isolated source-edit test in project 118, chat 1.
+The test seeds 22 synthetic history messages. It mocks no browser response.
+Haiku uses a 128,000-token window and a configured 1,000-token output allowance.
+Luna supplies the structured compaction summary.
+
+Execution `6dec52ab6f77312f9becd70ac735afff` starts compaction at an estimated 121,595 input tokens.
+Both source documents change through authenticated APIs while compaction is active.
+Compaction reduces estimated input to 6,932 tokens.
+The final answer retains the original skill and project-context values after browser reload.
+Persisted catalog content hashes match the original source bytes.
+
+A new user turn, execution `1734abd006ef11f80e05d0d223717eff`, adopts both edited sources.
+Its answer also survives browser reload.
+These successful answers alone do not establish durable instruction activation.
+
+The event audit finds a lost activation flag within both executions.
+Haiku calls `load_skill` and `read_project_context` in one model response.
+ADK dispatches the complete tool batch before publishing its result events.
+Both tools read the same initial active set.
+The second result then overwrites the first result's activation.
+The original bodies remain in the frozen catalog, which masks this defect in the answer.
+
+`InstructionAgent` now merges activation sets when it publishes each instruction-state event.
+Runner persists the preceding event before the wrapper processes the next result.
+The merge requires matching execution identity, scope, and complete frozen catalog.
+It cannot admit changed source content or authority from another run.
+This uses existing ADK events and session persistence. It adds no table, lock, or background task.
+
+The combined compaction regression now requests both instruction tools in one model response.
+Before the fix, its active-source count is one instead of two.
+It then verifies retained activation through compaction, checkpoint writing, and edited resume input.
+A separate check rejects cross-run, cross-scope, and changed-catalog merges.
+The focused instruction suite and all 496 agent tests pass.
+The database process-replacement test skips without its database variable; its child entry performs no standalone check.
+Strict library-and-test Clippy, formatting, and whitespace checks pass.
+Deployed verification of this correction remains pending.
+
+Local evidence:
+
+- `/private/tmp/elitea-authority-live-run.mjs`
+- `/private/tmp/elitea-authority-live-edits.json`
+- `/private/tmp/elitea-authority-live-readback.json`
+- `/private/tmp/elitea-authority-next-turn-result.json`
+- `/private/tmp/elitea-authority-state-proof.json`
+- `/private/tmp/elitea-authority-live-reload.png`
+
+The first observer stops on an ambiguous text locator after execution completion.
+A fresh read-only browser verifies the same answer and reload. It does not repeat the execution.
