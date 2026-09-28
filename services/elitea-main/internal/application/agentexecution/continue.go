@@ -89,9 +89,31 @@ type CurrentContinuationTarget struct {
 	ToolCallID            string
 	AvailableActions      []string
 	HITLInterrupts        []CurrentHITLInterrupt
+	PipelineHITLReview    *CurrentPipelineHITLReview
 	AuthorizationRequests []CurrentAuthorizationRequest
 	TruncatedContent      string
 	OutputLimitSequence   int64
+}
+
+// CurrentPipelineHITLReview identifies a direct pipeline review from persisted state.
+// Nested interrupts must not create separate chat turns.
+type CurrentPipelineHITLReview struct {
+	InterruptID string
+	NodeName    string
+	Message     string
+}
+
+func (review *CurrentPipelineHITLReview) valid() bool {
+	return review != nil && validCurrentAgentText(review.InterruptID, 512) &&
+		validCurrentAgentText(review.NodeName, 256) && validCurrentAgentText(review.Message, 4*1024*1024)
+}
+
+func (review *CurrentPipelineHITLReview) clone() *CurrentPipelineHITLReview {
+	if review == nil {
+		return nil
+	}
+	copy := *review
+	return &copy
 }
 
 type CurrentHITLInterrupt struct {
@@ -126,6 +148,13 @@ func (target CurrentContinuationTarget) Validate() error {
 		(kind != CurrentContinuationHITL && kind != CurrentContinuationAuthorization &&
 			kind != CurrentContinuationOutputLimit) {
 		return ErrUnsupportedCurrentAgentStart
+	}
+	if review := target.PipelineHITLReview; review != nil {
+		if kind != CurrentContinuationHITL || target.Kind != CurrentRegenerationApplication ||
+			!review.valid() || len(target.HITLInterrupts) != 1 ||
+			review.InterruptID != target.HITLInterrupts[0].InterruptID {
+			return ErrUnsupportedCurrentAgentStart
+		}
 	}
 	if kind == CurrentContinuationOutputLimit {
 		if len(target.TruncatedContent) > maxCurrentOutputContinuationBytes ||
@@ -406,6 +435,7 @@ type CurrentContinueTurn struct {
 	Action               string
 	ContinuationKind     CurrentContinuationKind
 	HITLDecisions        json.RawMessage
+	PipelineHITLReview   *CurrentPipelineHITLReview
 	OutputLimitSequence  int64
 }
 
@@ -423,6 +453,17 @@ func (turn CurrentContinueTurn) Validate() error {
 	if kind != CurrentContinuationHITL && kind != CurrentContinuationAuthorization &&
 		kind != CurrentContinuationOutputLimit {
 		return ErrInvalidCurrentAgentStart
+	}
+	if review := turn.PipelineHITLReview; review != nil {
+		var decisions []CurrentHITLDecision
+		if kind != CurrentContinuationHITL || turn.Kind != CurrentRegenerationApplication ||
+			!review.valid() || review.InterruptID != turn.InterruptID ||
+			json.Unmarshal(turn.HITLDecisions, &decisions) != nil || len(decisions) != 1 ||
+			decisions[0].InterruptID != review.InterruptID || decisions[0].ToolCallID != "" ||
+			decisions[0].Action != turn.Action ||
+			(turn.Action != "approve" && turn.Action != "reject" && turn.Action != "edit") {
+			return ErrInvalidCurrentAgentStart
+		}
 	}
 	if kind == CurrentContinuationOutputLimit {
 		if len(turn.HITLDecisions) != 0 || turn.InterruptID != "" || turn.Action != "" ||
@@ -499,6 +540,7 @@ func (turn *CurrentContinueTurn) Clone() *CurrentContinueTurn {
 	}
 	clone := *turn
 	clone.HITLDecisions = bytes.Clone(turn.HITLDecisions)
+	clone.PipelineHITLReview = turn.PipelineHITLReview.clone()
 	return &clone
 }
 
@@ -605,6 +647,7 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 		ExecutionGeneration: target.ExecutionGeneration, ThreadID: target.ThreadID,
 		ContinuationKind:    request.normalizedKind(),
 		OutputLimitSequence: target.OutputLimitSequence,
+		PipelineHITLReview:  target.PipelineHITLReview.clone(),
 	}
 	var input *runtimev1.AgentExecutionInputV1
 	var capabilityID string
