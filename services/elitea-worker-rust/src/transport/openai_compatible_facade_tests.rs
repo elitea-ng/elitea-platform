@@ -944,6 +944,16 @@ async fn request_profile_and_local_bounds_fail_before_network() {
 async fn status_metadata_and_transport_errors_are_stable_and_secret_safe() {
     for (status, expected_category, expected_code) in [
         (
+            StatusCode::REQUEST_TIMEOUT,
+            ErrorCategory::Timeout,
+            "model_gateway.upstream_timeout",
+        ),
+        (
+            StatusCode::GATEWAY_TIMEOUT,
+            ErrorCategory::Timeout,
+            "model_gateway.upstream_timeout",
+        ),
+        (
             StatusCode::UNAUTHORIZED,
             ErrorCategory::Unauthorized,
             "model_gateway.unauthorized",
@@ -1088,6 +1098,10 @@ async fn response_metadata_and_header_timeout_are_dependency_failures() {
 async fn sse_protocol_resource_and_tool_shapes_fail_closed() {
     for (raw, expected_code) in [
         (
+            "data: {\"error\":{\"type\":\"server_error\",\"message\":\"SYNTHETIC_PROVIDER_BODY_MUST_NOT_REACH_UI\"}}\n\n".to_owned(),
+            "model_gateway.provider_error",
+        ),
+        (
             "data: [DONE]\n\n".to_owned(),
             "model_gateway.done_before_completion",
         ),
@@ -1121,6 +1135,8 @@ async fn sse_protocol_resource_and_tool_shapes_fail_closed() {
             .expect("response head");
         let error = drain(stream).await.expect_err("invalid SSE");
         assert_eq!(error.code, expected_code);
+        assert!(!error.to_string().contains("SYNTHETIC_PROVIDER_BODY_MUST_NOT_REACH_UI"));
+        assert!(!error.to_string().contains(TOKEN));
     }
 }
 

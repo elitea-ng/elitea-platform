@@ -625,4 +625,35 @@ All six provider fixture tests pass.
 Rust ownership remains `openai_compatible_facade.rs::validate_response_head` and `protocol/output.rs::model_failure`.
 The existing mappings produce `MODEL_BUDGET_EXHAUSTED` and `MODEL_REQUEST_REJECTED` before consuming provider error bodies.
 No production worker or Main behavior changes in this fixture extension.
-Fresh browser acceptance through the deployed transport remains pending.
+Fresh headed browser acceptance passes for chats 729 (HTTP 402) and 730 (HTTP 400).
+Both show the correct public message, typed error code, and copyable support reference.
+The message remains unchanged after reload. Both runs report zero page errors and zero browser response mocks.
+Visual inspection confirms readable messages and one error card per response.
+Worker logs contain one ERROR-level terminal report for each category.
+The checked log records exclude the synthetic provider-body canary.
+
+Evidence: `/private/tmp/elitea-provider-categories-result.json` and the matching `elitea-provider-{400,402}-20260928-{live,reload}.png` files.
+The deployed fixture is `df28737b2`; the deployed Rust worker is `42c1ac823`.
+
+### Native streamed provider-error classification, 2026-09-28
+
+The error audit finds a native transport mismatch.
+Anthropic sends an SSE event named `error`, with JSON type `error`.
+ADK 2.2.0 names this enum variant `StreamError`, with the serialized tag `stream_error`.
+ADK's own SSE parser translates the wire event into that variant.
+Our bounded parser deserializes directly and previously reports `anthropic_gateway.invalid_stream`.
+
+`transport/anthropic_facade.rs::parse_anthropic_event` now translates the tag after validating the wire event name and JSON type.
+Typed ADK deserialization still validates the error object.
+The existing accumulator returns `anthropic_gateway.provider_error` without copying provider text.
+`protocol/output.rs::model_failure` maps this cause to `MODEL_PROVIDER_FAILURE`.
+No schema, retry, or continuation policy changes.
+
+The behavior reference remains SDK model-error propagation in `elitea_sdk/runtime/tools/llm.py`.
+ADK's `src/sse.rs` and `types/message_stream_event.rs` define the native wire-to-enum mapping.
+This correction uses the existing ADK type and existing bounded worker decoder.
+
+The regression fails before the correction: invalid stream instead of provider error.
+Compatible transport tests also cover streamed provider errors and HTTP 408/504.
+Both stream tests assert that provider-body canaries and execution tokens stay absent from returned diagnostics.
+Deployed native-stream acceptance remains pending for this correction.

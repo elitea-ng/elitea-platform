@@ -24,8 +24,36 @@ The linked mappings retain source ownership, implementation history, and individ
 ## Remaining closure work
 
 1. Reconcile every public model-failure category with its component and deployed evidence.
-2. Record the diagnostic capture boundary explicitly, including original dependency locations and uninstrumented async work.
-3. Resolve the real-provider cache-hit check without confusing it with verified cache-counter transport.
+2. Deploy and verify the native streamed provider-error classification correction found during this audit.
+
+## Diagnostic capture disposition
+
+Release diagnostics retain source line information for captured synchronous frames and instrumented worker async spans.
+Capture occurs at the runner failure boundary. It does not guarantee the original dependency failure location.
+Uninstrumented suspended futures do not appear as reconstructed async stacks.
+Chats 654 and 665 verify the documented capture behavior and operator logs.
+Capture remains optional and bounded, with user-facing correlation references instead of raw stacks.
+See [release diagnostics](release-diagnostics-20260923.md) for the source mapping, bounds, and deployed evidence.
+This boundary is explicit. It is not a claim of complete dependency-level asynchronous backtraces.
+
+## Cache acceptance disposition
+
+Stable instruction prefixes and provider cache directives pass transport verification.
+Nonzero cached-token accounting passes component tests and full-stack synthetic verification in chat 726.
+Repeated real-provider calls report zero cache hits. They do not establish cache savings or performance improvements.
+The implementation preserves cache eligibility; the provider controls actual cache creation and reuse.
+Real-provider cache-hit performance remains unverified and must not appear as an accepted performance claim.
+See [provider accounting](provider-context-accounting-20260928.md) for the exact adapter and gateway evidence.
+
+## Latest error audit
+
+Fresh headed browser cases 729 and 730 verify HTTP 402 and HTTP 400 respectively.
+Both preserve public guidance and support references after reload, without browser mocks or page errors.
+Worker logs report terminal failures at ERROR and exclude the synthetic provider-body canary.
+The native stream regression finds a wire-to-ADK tag mismatch: `error` versus `stream_error`.
+The parser correction passes all 60 provider-facade tests and the canonical public-error contract test.
+Its deployed native-stream acceptance remains open.
+See [continuation diagnostics](continuation-diagnostics-20260923.md#native-streamed-provider-error-classification-2026-09-28) for implementation details.
 
 Instruction-authority tests already preserve an original skill snapshot after transcript loss and changed resume input.
 `instruction_authority_tests.rs::activation_survives_transcript_loss_and_changed_resume_snapshot` owns that component case.

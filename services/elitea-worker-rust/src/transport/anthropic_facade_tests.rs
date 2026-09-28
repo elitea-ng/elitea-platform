@@ -649,6 +649,10 @@ async fn adaptive_and_disabled_reasoning_follow_provider_contracts() {
 async fn event_name_order_tool_and_citation_surfaces_fail_closed() {
     for (replacement, expected_code) in [
         (
+            "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"SYNTHETIC_PROVIDER_BODY_MUST_NOT_REACH_UI\"}}\n\n".to_owned(),
+            "anthropic_gateway.provider_error",
+        ),
+        (
             "event: wrong\ndata: {\"type\":\"message_start\"}\n\n".to_owned(),
             "anthropic_gateway.invalid_stream",
         ),
@@ -697,6 +701,7 @@ async fn event_name_order_tool_and_citation_surfaces_fail_closed() {
         .await
         .expect_err("unsupported native stream");
         assert_eq!(error.code, expected_code);
+        assert!(!error.to_string().contains("SYNTHETIC_PROVIDER_BODY_MUST_NOT_REACH_UI"));
         assert!(!error.to_string().contains(TOKEN));
     }
 }

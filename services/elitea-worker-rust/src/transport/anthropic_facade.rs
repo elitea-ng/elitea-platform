@@ -1217,10 +1217,14 @@ fn anthropic_response_stream(
 fn parse_anthropic_event(event: BoundedSseEvent) -> Result<MessageStreamEvent, AdkError> {
     let event_name = event.event_type.ok_or_else(invalid_anthropic_stream)?;
     let event_name = std::str::from_utf8(&event_name).map_err(|_| invalid_anthropic_stream())?;
-    let value: serde_json::Value =
+    let mut value: serde_json::Value =
         serde_json::from_slice(&event.data).map_err(|_| invalid_anthropic_stream())?;
     if value.get("type").and_then(serde_json::Value::as_str) != Some(event_name) {
         return Err(invalid_anthropic_stream());
+    }
+    // ADK names the native wire error event differently in its typed enum.
+    if event_name == "error" {
+        value["type"] = serde_json::Value::String("stream_error".to_owned());
     }
     serde_json::from_value(value).map_err(|_| invalid_anthropic_stream())
 }
