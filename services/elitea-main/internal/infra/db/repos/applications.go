@@ -265,10 +265,8 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 	// field client-side (`pages/agents/PrivateAgentsList.tsx`), so all five
 	// were permanently empty and no publish could ever fill one.
 	//
-	// It is an EXISTS over the versions, not `av.status`: the row `DISTINCT ON
-	// (a.id)` keeps is whichever version the plan happens to reach first, so
-	// reading its status would make the tab an agent appears under depend on
-	// row order. An agent is published when ANY of its versions is, which is
+	// The stable list version does not determine publication status.
+	// An agent is published when ANY of its versions is, which is
 	// the same rule the editor's own publish/unpublish pair enforces.
 	//
 	// `embedded` is deliberately not published: those clones exist only to
@@ -282,9 +280,8 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 	// Every tag of every version of the application, by name, deduplicated
 	// and sorted.
 	//
-	// It is a correlated subquery and not a join, for two reasons. `DISTINCT
-	// ON (a.id)` keeps ONE version row per application, so a joined
-	// aggregate would only ever describe that one version; and legacy takes
+	// The lateral join selects one version per application. A joined
+	// aggregate would only describe that version, but legacy takes
 	// the UNION of the tags of all versions, keyed by name
 	// (`ApplicationListModel.parse_versions_data`).
 	//
@@ -297,8 +294,8 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 			JOIN %[1]s.tags t ON t.id = ta.tag_id
 			WHERE tv.application_id = a.id), '{}')`, s)
 	query := fmt.Sprintf(`
-		SELECT DISTINCT ON (a.id) a.id, a.name, COALESCE(a.description, ''), COALESCE(a.icon, ''),
-			a.owner_id, a.created_at, a.updated_at, COALESCE(a.shared_id, 0),
+		SELECT a.id, a.name, COALESCE(a.description, ''), COALESCE(a.icon, ''),
+			a.owner_id, a.created_at, a.updated_at,
 			COALESCE(a.meta, '{}'::jsonb)::text,
 			COALESCE(av.meta, '{}'::jsonb)::text,
 			COALESCE(av.agent_type, '`+defaultAgentType+`'),

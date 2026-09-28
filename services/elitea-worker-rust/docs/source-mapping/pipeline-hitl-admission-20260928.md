@@ -52,6 +52,23 @@ A failed refresh reports reload guidance and still subscribes to the accepted ex
 All 43 transport tests pass, including direct segmentation and failed-refresh coverage.
 These are component tests with HTTP fixtures, not browser acceptance.
 
+### Deployment and browser checkpoint
+
+Commit `e90e1bef0` contains the Main transaction and UI reconciliation changes.
+Main and web build from a clean archive of that commit and deploy to rehearsal with existing configuration preserved.
+Main image: `sha256:1c2a555bc7d8c0f55321bb2d09980fe99e33f4f0b1b58037b45732a06a2bd1a4`.
+Web image: `sha256:6f8d67e831c29d5d860ec0b40312ddeddb9ea28a72417676fdf3c61086cd5e2d`.
+A fresh headed Playwright browser reaches the pipeline page without request mocks.
+The application-list request returns HTTP 500 before a pipeline can be selected.
+
+`infra/db/repos/applications.go` contains two stale query fragments.
+The lateral join already selects one version, but `DISTINCT ON` conflicts with name or date ordering.
+The query also selects `shared_id` after the corresponding scan destination was removed.
+Removing both fragments restores the existing list contract without schema changes.
+The existing `TestApplicationsRepoPostgres_List` suite passes against isolated PostgreSQL databases after this correction.
+That suite covers filters, folder isolation, pagination, tags, author attribution, and fork metadata.
+The corrected Main image and HITL browser decisions still require verification.
+
 ## Remaining implementation
 
 Consume the pending interrupt and create all history segments in the same admission transaction.
