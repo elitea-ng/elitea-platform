@@ -789,6 +789,12 @@ impl Llm for OutputModel {
             Ok(LlmResponse {
                 finish_reason: Some(finish_reason),
                 turn_complete: true,
+                usage_metadata: Some(adk_rust::UsageMetadata {
+                    prompt_token_count: 100,
+                    candidates_token_count: 20,
+                    total_token_count: 120,
+                    ..Default::default()
+                }),
                 ..LlmResponse::default()
             }),
         ])))
@@ -844,12 +850,40 @@ async fn child_output_continues_without_repeating_the_anchor() {
         collect_output(output).await.unwrap(),
         "First part and ending"
     );
-    let requests = model.requests.lock().unwrap();
-    assert_eq!(requests.len(), 2);
-    assert!(
-        serde_json::to_string(&requests[1])
+    {
+        let requests = model.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(
+            serde_json::to_string(&requests[1])
+                .unwrap()
+                .contains("First part")
+        );
+    }
+    let mut events = scope
+        .context_receiver
+        .drain(child.invocation_id(), child.agent_name(), child.branch())
+        .await
+        .unwrap();
+    let mut measured = 0;
+    while let Some(event) = events.try_recv() {
+        let event = event.unwrap();
+        assert_eq!(event.author, child.agent_name());
+        assert_eq!(event.branch, child.branch());
+        let status = crate::agents::context_status::ModelContextStatus::from_event(&event)
             .unwrap()
-            .contains("First part")
+            .unwrap();
+        let json = serde_json::to_value(status).unwrap();
+        if let Some(usage) = json.get("provider_usage") {
+            measured += 1;
+            assert_eq!(
+                usage,
+                &serde_json::json!({"input_tokens":100,"output_tokens":20})
+            );
+        }
+    }
+    assert_eq!(
+        measured, 2,
+        "each continuation has its own provider reading"
     );
 }
 

@@ -1081,7 +1081,23 @@ impl AnthropicStreamState {
         if tool_turn == self.tool_calls.is_empty() {
             return Err(invalid_anthropic_stream());
         }
-        let input_tokens = event.usage.input_tokens.unwrap_or(self.input_tokens);
+        let cache_read = event
+            .usage
+            .cache_read_input_tokens
+            .or(self.cache_read_tokens);
+        let cache_creation = event
+            .usage
+            .cache_creation_input_tokens
+            .or(self.cache_creation_tokens);
+        // Anthropic reports uncached input separately. Normalize to the whole
+        // prompt, matching the compatible transport and ADK's prompt contract.
+        let input_tokens = event
+            .usage
+            .input_tokens
+            .unwrap_or(self.input_tokens)
+            .checked_add(cache_read.unwrap_or(0))
+            .and_then(|value| value.checked_add(cache_creation.unwrap_or(0)))
+            .ok_or_else(invalid_anthropic_stream)?;
         let usage = UsageMetadata {
             prompt_token_count: input_tokens,
             candidates_token_count: event.usage.output_tokens,

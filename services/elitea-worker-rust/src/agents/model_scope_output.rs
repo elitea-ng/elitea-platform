@@ -59,8 +59,8 @@ pub(super) fn generate(
                     }
                     Err(error) => Err(error)?,
                 }
-                let ended = response.turn_complete || response.finish_reason.is_some();
-                if ended {
+                if response.turn_complete || response.finish_reason.is_some() {
+                    writer.checkpoint.provider_usage(response.usage_metadata.as_ref()).await?;
                     if response.finish_reason == Some(FinishReason::MaxTokens) {
                         let content = response.content.take();
                         if content.is_some() {

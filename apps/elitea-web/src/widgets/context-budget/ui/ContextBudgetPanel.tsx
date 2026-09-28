@@ -47,6 +47,10 @@ function visibleStatRows(stats: ContextBudgetStats): readonly { readonly key: st
   if (stats.runtime) return [
     mode,
     { key: 'window', label: t('widgets.contextBudget.window', 'Total window'), value: formatNumberWithSpaces(stats.runtime.totalTokens) },
+    ...(stats.runtime.providerUsage ? [
+      { key: 'provider-input', label: t('widgets.contextBudget.providerInput', 'Input used'), value: formatNumberWithSpaces(stats.runtime.providerUsage.inputTokens) },
+      { key: 'provider-output', label: t('widgets.contextBudget.providerOutput', 'Output used'), value: formatNumberWithSpaces(stats.runtime.providerUsage.outputTokens) },
+    ] : []),
     { key: 'output', label: stats.runtime.autoOutput ? t('widgets.contextBudget.autoOutput', 'Minimum output allowance (Auto)') : t('widgets.contextBudget.output', 'Reserved for output'), value: formatNumberWithSpaces(stats.runtime.reservedOutputTokens) },
     { key: 'margin', label: t('widgets.contextBudget.margin', 'Safety margin'), value: formatNumberWithSpaces(stats.runtime.safetyMarginTokens) },
     ...(stats.maxTokens < stats.runtime.totalTokens - stats.runtime.reservedOutputTokens - stats.runtime.safetyMarginTokens
@@ -145,7 +149,9 @@ export function ContextBudgetPanel({ stats, onEdit }: ContextBudgetPanelProps): 
       </Box>
 
       {stats.runtime && <Typography variant="bodySmall2" sx={{ paddingX: 2, paddingBottom: 1 }}>
-        {stats.runtime.autoOutput
+        {stats.runtime.providerUsage
+          ? t('widgets.contextBudget.providerHelp', 'Provider-reported input and output for the latest model call, including cached input and reasoning. The safety margin is excluded from the available window. The next request is estimated separately for automatic compaction.')
+          : stats.runtime.autoOutput
           ? t('widgets.contextBudget.autoEstimateHelp', 'Estimated input for the latest model call. Auto lets output use remaining window space, up to the model maximum. A minimum output allowance and safety margin are reserved. When enabled, automatic compaction starts at 90% of usable input.')
           : t('widgets.contextBudget.estimateHelp', 'Estimated input for the latest model call, within the usable input budget. Output and the safety margin are reserved separately. When enabled, automatic compaction starts at 90%.')}
       </Typography>}

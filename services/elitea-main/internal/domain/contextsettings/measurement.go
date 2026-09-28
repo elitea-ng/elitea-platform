@@ -8,20 +8,27 @@ import (
 	"time"
 )
 
-// Measurement is the content-free estimate emitted by the worker after it
-// prepares a provider request. It is not cumulative billing or a tokenizer count.
+// Measurement describes one prepared request and optional provider response.
+// It is never cumulative billing usage.
 type Measurement struct {
-	Version                 uint8  `json:"version"`
-	Phase                   string `json:"phase"`
-	BudgetMode              string `json:"budget_mode"`
-	TotalTokens             uint32 `json:"total_tokens"`
-	UsableInputTokens       uint32 `json:"usable_input_tokens"`
-	ReservedOutputTokens    uint32 `json:"reserved_output_tokens"`
-	AutoOutput              bool   `json:"auto_output,omitempty"`
-	SafetyMarginTokens      uint32 `json:"safety_margin_tokens"`
-	EstimatedInputTokens    uint64 `json:"estimated_input_tokens"`
-	CompactionTriggerTokens uint64 `json:"compaction_trigger_tokens"`
-	CompactionTargetTokens  uint64 `json:"compaction_target_tokens"`
+	Version                 uint8          `json:"version"`
+	Phase                   string         `json:"phase"`
+	BudgetMode              string         `json:"budget_mode"`
+	TotalTokens             uint32         `json:"total_tokens"`
+	UsableInputTokens       uint32         `json:"usable_input_tokens"`
+	ReservedOutputTokens    uint32         `json:"reserved_output_tokens"`
+	AutoOutput              bool           `json:"auto_output,omitempty"`
+	SafetyMarginTokens      uint32         `json:"safety_margin_tokens"`
+	EstimatedInputTokens    uint64         `json:"estimated_input_tokens"`
+	ProviderUsage           *ProviderUsage `json:"provider_usage,omitempty"`
+	CompactionTriggerTokens uint64         `json:"compaction_trigger_tokens"`
+	CompactionTargetTokens  uint64         `json:"compaction_target_tokens"`
+}
+
+// ProviderUsage includes cached input and reasoning output exactly once.
+type ProviderUsage struct {
+	InputTokens  *uint32 `json:"input_tokens"`
+	OutputTokens *uint32 `json:"output_tokens"`
 }
 
 // DecodeMeasurement enforces the same versioned arithmetic as the Rust worker.
@@ -45,6 +52,8 @@ func DecodeMeasurement(raw []byte) (Measurement, error) {
 func (m Measurement) Valid() bool {
 	input := uint64(m.UsableInputTokens)
 	return m.Version == 1 &&
+		(m.ProviderUsage == nil || (m.Phase == "measured" && m.ProviderUsage.InputTokens != nil && m.ProviderUsage.OutputTokens != nil &&
+			uint64(*m.ProviderUsage.InputTokens)+uint64(*m.ProviderUsage.OutputTokens) <= 2_147_483_647)) &&
 		(m.Phase == "measured" || m.Phase == "compacting" || m.Phase == "compacted") &&
 		(m.BudgetMode == "balanced" || m.BudgetMode == "full" || m.BudgetMode == "legacy") &&
 		input > 0 && m.ReservedOutputTokens > 0 && m.SafetyMarginTokens > 0 &&
@@ -79,6 +88,10 @@ func WithRuntimeContext(status Status, raw []byte) Status {
 	status.RuntimeContext = &runtime
 	status.CurrentTokens = int(runtime.Measurement.EstimatedInputTokens)
 	status.MaxTokens = int(runtime.Measurement.UsableInputTokens)
+	if usage := runtime.Measurement.ProviderUsage; usage != nil {
+		status.CurrentTokens = int(uint64(*usage.InputTokens) + uint64(*usage.OutputTokens))
+		status.MaxTokens = int(runtime.Measurement.TotalTokens - runtime.Measurement.SafetyMarginTokens)
+	}
 	status.Utilization = float64(status.CurrentTokens) / float64(status.MaxTokens)
 	status.ContextAnalyticsAvailable = true
 	status.UnavailableReason = "Message and summary counts are not reported by this runtime."

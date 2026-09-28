@@ -34,6 +34,7 @@ export interface ContextBudgetStats {
     readonly reservedOutputTokens: number;
     readonly autoOutput: boolean;
     readonly safetyMarginTokens: number;
+    readonly providerUsage?: { readonly inputTokens: number; readonly outputTokens: number };
   };
   readonly usageAvailable: boolean;
   readonly currentTokens: number;
@@ -110,7 +111,13 @@ function readRuntime(value: unknown): ContextBudgetStats['runtime'] {
   const source = value as Record<string, unknown>;
   const m = source.measurement as Record<string, unknown> | undefined;
   if (!m || m.version !== 1 || !['measured', 'compacting', 'compacted'].includes(String(m.phase))) return undefined;
+  const usage = m.provider_usage as Record<string, unknown> | undefined;
+  const validUsage = usage && m.phase === 'measured' &&
+    typeof usage.input_tokens === 'number' && Number.isSafeInteger(usage.input_tokens) && usage.input_tokens >= 0 &&
+    typeof usage.output_tokens === 'number' && Number.isSafeInteger(usage.output_tokens) && usage.output_tokens >= 0 &&
+    usage.input_tokens + usage.output_tokens <= 2_147_483_647;
   return {
+    ...(validUsage ? { providerUsage: { inputTokens: usage.input_tokens as number, outputTokens: usage.output_tokens as number } } : {}),
     phase: m.phase as 'measured' | 'compacting' | 'compacted',
     active: source.active === true,
     legacy: m.budget_mode === 'legacy',

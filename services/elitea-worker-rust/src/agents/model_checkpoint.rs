@@ -142,6 +142,7 @@ pub(super) struct ModelCheckpointWriter {
     request_budget: Option<Arc<dyn super::context_budget::ModelRequestBudget>>,
     context_compaction: Option<Arc<super::context_compaction::DurableContextCompaction>>,
     context_events: Option<super::graph::PipelineNodeEventSender>,
+    context_measurement: Arc<Mutex<Option<super::context_budget::RequestContextUsage>>>,
     application_tools: Arc<HashSet<String>>,
     replay_delegation: Option<Arc<Mutex<Option<adk_rust::Content>>>>,
     output_continuation: Arc<Mutex<Option<output::OutputContinuation>>>,
@@ -164,6 +165,7 @@ impl ModelCheckpointWriter {
             request_budget: None,
             context_compaction: None,
             context_events: None,
+            context_measurement: Arc::default(),
             application_tools: Arc::default(),
             replay_delegation: None,
             output_continuation: Arc::default(),
@@ -183,12 +185,39 @@ impl ModelCheckpointWriter {
         phase: super::context_status::ContextPhase,
         usage: super::context_budget::RequestContextUsage,
     ) -> adk_rust::Result<()> {
+        if phase != super::context_status::ContextPhase::Compacting {
+            *self
+                .context_measurement
+                .lock()
+                .map_err(|_| invalid_checkpoint())? = Some(usage);
+        }
         if let Some(events) = &self.context_events {
             events
                 .send_context_status(
                     super::context_status::ModelContextStatus::new(phase, usage).event()?,
                 )
                 .await?;
+        }
+        Ok(())
+    }
+
+    pub(super) async fn provider_usage(
+        &self,
+        usage: Option<&adk_rust::UsageMetadata>,
+    ) -> adk_rust::Result<()> {
+        let Some(usage) = usage else { return Ok(()) };
+        let measurement = *self
+            .context_measurement
+            .lock()
+            .map_err(|_| invalid_checkpoint())?;
+        if let (Some(events), Some(measurement)) = (&self.context_events, measurement)
+            && let Some(status) = super::context_status::ModelContextStatus::new(
+                super::context_status::ContextPhase::Measured,
+                measurement,
+            )
+            .with_provider_usage(usage)
+        {
+            events.send_context_status(status.event()?).await?;
         }
         Ok(())
     }

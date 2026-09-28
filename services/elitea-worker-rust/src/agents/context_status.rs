@@ -16,6 +16,13 @@ pub(super) enum ContextPhase {
     Compacted,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ProviderUsage {
+    input_tokens: u32,
+    output_tokens: u32,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ModelContextStatus {
@@ -29,6 +36,8 @@ pub(super) struct ModelContextStatus {
     auto_output: bool,
     safety_margin_tokens: u32,
     estimated_input_tokens: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provider_usage: Option<ProviderUsage>,
     compaction_trigger_tokens: u64,
     compaction_target_tokens: u64,
 }
@@ -45,9 +54,25 @@ impl ModelContextStatus {
             auto_output: usage.budget.auto_output,
             safety_margin_tokens: usage.budget.margin_tokens,
             estimated_input_tokens: usage.estimated_input,
+            provider_usage: None,
             compaction_trigger_tokens: usage.budget.compaction_trigger(),
             compaction_target_tokens: usage.budget.compaction_target(),
         }
+    }
+
+    pub(super) fn with_provider_usage(mut self, usage: &adk_rust::UsageMetadata) -> Option<Self> {
+        let input_tokens = u32::try_from(usage.prompt_token_count).ok()?;
+        let output_tokens = u32::try_from(usage.candidates_token_count).ok()?;
+        if input_tokens.checked_add(output_tokens)?
+            != u32::try_from(usage.total_token_count).ok()?
+        {
+            return None;
+        }
+        self.provider_usage = Some(ProviderUsage {
+            input_tokens,
+            output_tokens,
+        });
+        Some(self)
     }
 
     pub(super) fn event(&self) -> adk_rust::Result<Event> {
@@ -83,6 +108,11 @@ impl ModelContextStatus {
     fn validate(&self) -> adk_rust::Result<()> {
         let input = u64::from(self.usable_input_tokens);
         if self.version != 1
+            || self.provider_usage.is_some_and(|usage| {
+                self.phase != ContextPhase::Measured
+                    || u64::from(usage.input_tokens) + u64::from(usage.output_tokens)
+                        > i32::MAX as u64
+            })
             || !matches!(self.budget_mode.as_str(), "balanced" | "full" | "legacy")
             || input == 0
             || self.reserved_output_tokens == 0
@@ -133,6 +163,34 @@ mod tests {
                 request_byte_limit: 1_048_576,
             },
         )
+    }
+
+    #[test]
+    fn provider_counts_are_scoped_numeric_metadata_not_an_admission_estimate() {
+        let usage = adk_rust::UsageMetadata {
+            prompt_token_count: 150_000,
+            candidates_token_count: 8_000,
+            total_token_count: 158_000,
+            cache_read_input_token_count: Some(100_000),
+            thinking_token_count: Some(4_000),
+            ..Default::default()
+        };
+        let event = status()
+            .with_provider_usage(&usage)
+            .unwrap()
+            .event()
+            .unwrap();
+        let parsed = ModelContextStatus::from_event(&event).unwrap().unwrap();
+        assert_eq!(parsed.estimated_input_tokens, 100_000);
+        let provider = parsed.provider_usage.unwrap();
+        assert_eq!(provider.input_tokens, 150_000);
+        assert_eq!(provider.output_tokens, 8_000);
+        assert!(!event.provider_metadata[METADATA_KEY].contains("cache_read"));
+        let mut invalid = usage;
+        invalid.total_token_count = 1;
+        assert!(status().with_provider_usage(&invalid).is_none());
+        invalid.prompt_token_count = -1;
+        assert!(status().with_provider_usage(&invalid).is_none());
     }
 
     #[test]

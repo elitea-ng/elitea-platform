@@ -49,6 +49,11 @@ option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elite
 // Consumers also accept the legacy 70-percent target for persisted events.
 // The target is advisory. Protected instructions and active tool groups can exceed it.
 // The trigger remains ceil(usable_input_tokens * 90 / 100).
+// Optional provider_usage contains input_tokens and output_tokens for one call.
+// Input includes cached tokens. Output includes reasoning tokens. Never add these
+// breakdowns again. Absent means a prepared-request estimate, not zero usage.
+// Provider occupancy is (input + output) / (total_tokens - safety_margin_tokens).
+// Estimates retain the usable_input_tokens denominator. Deploy consumers first.
 message NodeEventV1 {
   string type = 1;
   optional string stream_id = 2;

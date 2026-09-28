@@ -9,6 +9,41 @@ import (
 
 const validMeasurement = `{"version":1,"phase":"compacting","budget_mode":"balanced","total_tokens":272000,"usable_input_tokens":205280,"reserved_output_tokens":64000,"safety_margin_tokens":2720,"estimated_input_tokens":190000,"compaction_trigger_tokens":184752,"compaction_target_tokens":143696}`
 
+func TestProviderMeasurementUsesCombinedWindowWithoutDoubleReservation(t *testing.T) {
+	for _, usage := range []string{`{"input_tokens":100000,"output_tokens":20000}`, `{"input_tokens":0,"output_tokens":0}`} {
+		base := strings.Replace(validMeasurement, `"compacting"`, `"measured"`, 1)
+		raw := strings.TrimSuffix(base, "}") + `,"provider_usage":` + usage + `}`
+		measurement, err := DecodeMeasurement([]byte(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		record, err := json.Marshal(RuntimeContext{Measurement: measurement, ExecutionID: "e", Generation: 1, ExecutionGeneration: "g", ResponseMessageID: "r", RecordedAt: time.Now()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		status := WithRuntimeContext(BuildStatus(DefaultStrategy(), nil, 0), record)
+		want := int(*measurement.ProviderUsage.InputTokens + *measurement.ProviderUsage.OutputTokens)
+		if status.CurrentTokens != want || status.MaxTokens != 269280 {
+			t.Fatalf("provider occupancy: %+v", status)
+		}
+		if measurement.EstimatedInputTokens != 190000 {
+			t.Fatal("provider usage replaced the admission estimate")
+		}
+	}
+}
+
+func TestProviderMeasurementRejectsIncompleteOrUnscopedCounters(t *testing.T) {
+	base := strings.Replace(validMeasurement, `"compacting"`, `"measured"`, 1)
+	for _, usage := range []string{`{}`, `{"input_tokens":1}`, `{"input_tokens":null,"output_tokens":2}`, `{"input_tokens":-1,"output_tokens":2}`, `{"input_tokens":2147483647,"output_tokens":2}`, `{"input_tokens":1,"output_tokens":2,"prompt":"private"}`} {
+		if _, err := DecodeMeasurement([]byte(strings.TrimSuffix(base, "}") + `,"provider_usage":` + usage + `}`)); err == nil {
+			t.Fatalf("accepted invalid counters: %s", usage)
+		}
+	}
+	if _, err := DecodeMeasurement([]byte(strings.TrimSuffix(validMeasurement, "}") + `,"provider_usage":{"input_tokens":1,"output_tokens":2}}`)); err == nil {
+		t.Fatal("compacting estimate accepted provider counts")
+	}
+}
+
 func TestMeasurementPreservesOptionalAutoOutput(t *testing.T) {
 	for _, suffix := range []string{"", `,"auto_output":false`, `,"auto_output":true`} {
 		raw := strings.TrimSuffix(validMeasurement, "}") + suffix + "}"

@@ -22,6 +22,19 @@ function statsFrom(overrides: Readonly<Record<string, unknown>> = {}): ContextBu
 }
 
 describe('ContextBudgetPanel', () => {
+  it('labels provider counts separately and preserves the combined-window denominator', () => {
+    const stats = statsFrom({ current_tokens: 120000, max_tokens: 269280, runtime_context: { active: false, measurement: {
+      version: 1, phase: 'measured', budget_mode: 'balanced', total_tokens: 272000,
+      reserved_output_tokens: 64000, safety_margin_tokens: 2720,
+      provider_usage: { input_tokens: 100000, output_tokens: 20000 },
+    } } });
+    const { getByTestId, getByText, queryByText } = renderWithTheme(<ContextBudgetPanel stats={stats} />);
+    expect(getByTestId('context-budget-tokens').textContent).toBe(`120${NBSP}000 / 269${NBSP}280 tokens`);
+    expect(getByTestId('context-budget-stat-provider-input').textContent).toBe(`Input used:100${NBSP}000`);
+    expect(getByTestId('context-budget-stat-provider-output').textContent).toBe(`Output used:20${NBSP}000`);
+    expect(getByText(/Provider-reported input and output/)).toBeTruthy();
+    expect(queryByText(/Estimated input for the latest model call/)).toBeNull();
+  });
   it('distinguishes Auto minimum allowance from a fixed output reservation', () => {
     const stats = statsFrom({ runtime_context: { active: false, measurement: {
       version: 1, phase: 'measured', budget_mode: 'balanced', total_tokens: 272000,

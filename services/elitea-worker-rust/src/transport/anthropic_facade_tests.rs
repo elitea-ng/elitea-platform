@@ -304,7 +304,8 @@ async fn native_messages_request_preserves_cache_thinking_identity_and_completio
         .usage_metadata
         .as_ref()
         .expect("native usage metadata");
-    assert_eq!(usage.prompt_token_count, 5);
+    assert_eq!(usage.prompt_token_count, 10);
+    assert_eq!(usage.total_token_count, 14);
     assert_eq!(usage.candidates_token_count, 4);
     assert_eq!(usage.cache_creation_input_token_count, Some(3));
     assert_eq!(usage.cache_read_input_token_count, Some(2));

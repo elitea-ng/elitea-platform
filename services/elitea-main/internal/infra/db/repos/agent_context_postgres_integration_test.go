@@ -66,6 +66,8 @@ func TestPostgresCurrentAgentContextSurvivesRefreshAndSettlesWithResponse(t *tes
 	}
 	// Child, pipeline-node and cross-admission data cannot change the root meter.
 	measurement["estimated_input_tokens"] = 120000
+	measurement["phase"] = "measured"
+	measurement["provider_usage"] = map[string]any{"input_tokens": 110000, "output_tokens": 15000}
 	metadata["parent_agent_call_id"] = "child-call"
 	if err := project(encode()); err != nil {
 		t.Fatal(err)
@@ -83,6 +85,20 @@ func TestPostgresCurrentAgentContextSurvivesRefreshAndSettlesWithResponse(t *tes
 	event["message_id"] = responseID
 	if read().CurrentTokens != 190000 {
 		t.Fatal("another scope replaced the root measurement")
+	}
+	if err := project(encode()); err != nil {
+		t.Fatal(err)
+	}
+	provider := read()
+	if provider.CurrentTokens != 125000 || provider.MaxTokens != 269280 || provider.RuntimeContext.Measurement.ProviderUsage == nil {
+		t.Fatalf("persisted provider measurement: %+v", provider)
+	}
+	// A new prepared request replaces the previous provider reading.
+	delete(measurement, "provider_usage")
+	measurement["phase"] = "compacting"
+	measurement["estimated_input_tokens"] = 190000
+	if err := project(encode()); err != nil {
+		t.Fatal(err)
 	}
 	// A terminal failure leaves the truthful pre-compaction estimate, but no
 	// longer claims that compaction is running after refresh.
