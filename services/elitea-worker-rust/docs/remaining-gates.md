@@ -28,7 +28,7 @@ Current-platform code defines business behavior, not a requirement to copy its i
 - Chat 619 verifies concurrent siblings, a delegated grandchild, and completed-sibling reuse after worker loss.
 - [Pipeline LLM-node acceptance](source-mapping/pipeline-model-compaction-live-20260922.md) verifies two compactions, 24 reads, exact graph state, and stable reload in chat 621.
 - [Output continuation capacity](source-mapping/output-continuation-capacity-20260922.md) tracks the 64 KiB correction, admitted model restoration, and continued-answer fragment rendering.
-- Direct Continue and exact history reload pass in chat 625. Nested output-exhaustion continuation passes fresh-browser chat 631; chat 632 passes worker loss after persisted continuation round two, complete child-result receipt, and stable reload. Chat 634 verifies the explicit incomplete-response error and stable reload without a false child completion receipt. The four-call automatic policy (including repair) passes component tests and fresh browser chats 636/637: early completion after two continuations and exhaustion at four. Chat 640 verifies inspectable incomplete child output live and after reload, with zero false completion receipts. Chats 681 and 682 verify bounded repair and recovery of the pending repair after worker loss. Partial-trace publication crash injection remains open; see the output-continuation mapping.
+- Direct Continue and exact history reload pass in chat 625. Nested output-exhaustion continuation passes fresh-browser chat 631; chat 632 passes worker loss after persisted continuation round two, complete child-result receipt, and stable reload. Chat 634 verifies the explicit incomplete-response error and stable reload without a false child completion receipt. The four-call automatic policy (including repair) passes component tests and fresh browser chats 636/637: early completion after two continuations and exhaustion at four. Chat 640 verifies inspectable incomplete child output live and after reload, with zero false completion receipts. Chats 681 and 682 verify bounded repair and recovery of the pending repair after worker loss. Chat 716 verifies terminal-continuation publication recovery after worker loss, with one exact partial answer after reload; see the output-continuation mapping.
 - Chat 653 verifies process recovery during structured LLM-node continuation, followed by a deterministic node. Other graph frontiers and crash boundaries remain open.
 - The [point 3 audit](source-mapping/point3-audit-20260913.md) records the completed acceptance cases and their limits.
 - Production Rust capability registration remains disabled.
@@ -441,3 +441,13 @@ A real worker crash in chat 715 preserves the terminal failure without another p
 That run exposes doubled provisional text after reload; it is not accepted yet.
 Main now handles the worker's replacement-start event in its persisted text projection.
 PostgreSQL regression coverage passes. Deploy Main and repeat crash/browser acceptance before closing this boundary.
+
+
+### Terminal continuation publication-crash acceptance
+
+Chat 716 passes with worker `a7e3d1702` and Main `150d15ae4` deployed.
+A SIGKILL follows the committed terminal checkpoint while Main still records a running job.
+Claim attempt 2 publishes the original incomplete-response failure without another provider call.
+The fresh browser retains exactly 98,090 partial bytes before and after reload, with no duplicated segment.
+This closes the tested publication-crash boundary. Other Gate 4 checks remain open.
+See [deployed acceptance](source-mapping/output-continuation-capacity-20260922.md#publication-crash-browser-acceptance-passes-2026-09-28).

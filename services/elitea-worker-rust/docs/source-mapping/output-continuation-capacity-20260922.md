@@ -1094,3 +1094,29 @@ The reset runs inside the existing fenced, deduplicated node-event transaction, 
 No schema, protobuf, or UI change is required. Rust remains the checkpoint owner.
 All 23 selected Main tests pass with PostgreSQL enabled and no skips. Package `go vet` passes.
 Main deployment and a fresh publication-crash retest remain open.
+
+### Publication-crash browser acceptance passes, 2026-09-28
+
+Main commit `150d15ae4` deploys as image `sha256:612cddd780efcc5a162070c97403a029d435ec3232b3d229e4f5989a2f8c5d39`.
+The replacement retains its environment, six mounts, networks, and limits. No execution has an active claim during deployment.
+Worker image remains `sha256:84cadce56ffb64d8725098292cb652c21ac97066dd709fab33eef5902292c542`.
+The synthetic fixture image is `sha256:f86c1da0b64df43182de3b33c241961d6f5d9c9c2330dcdee445e66559fb39e4`.
+Its old container is retained, stopped and disconnected, for rollback. No application database is replaced.
+
+Fresh headed-browser chat 716 uses application 118, version 125.
+Execution `83ae6e6eeb33223e3544db25ed0fb782` commits `output_failed`, round 4, `call_limit`, and all 98,090 accepted partial bytes.
+The crash watcher then sends SIGKILL. Main still reports `RUNNING` immediately after the kill.
+The worker restarts. Claim attempt 2 publishes `OUTPUT_CONTINUATION_EXHAUSTED`; the execution finishes as `FAILED`.
+Both claims are released. No extra provider call occurs: the three acceptance chats use exactly 15 calls in total.
+
+The open browser receives the failure without a manual refresh.
+Show and Copy controls retain all five segments exactly once. Reload preserves the same 98,090 bytes.
+No browser page error occurs. Browser responses are not mocked. The rendered screenshot is inspected.
+The existing synthetic provider supplies model output through the normal gateway and worker transport.
+Evidence prefixes are `elitea-terminal-recovery`, `elitea-terminal-crash-proof`, and `elitea-terminal-baseline` in the local acceptance directory.
+
+This closes the tested terminal-continuation publication-crash boundary.
+It does not establish every provider-failure category, arbitrary graph frontier, or production concurrency capacity.
+Gate 4 remains active for the other documented checks.
+A separate fresh browser also opens Show partial response and waits for the final record to render.
+It confirms the same byte count and segment counts through Copy. Its screenshot is inspected.
