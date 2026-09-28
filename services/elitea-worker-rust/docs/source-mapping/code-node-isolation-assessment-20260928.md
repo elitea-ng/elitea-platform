@@ -160,3 +160,37 @@ Container UID configuration alone does not establish either path.
 Do not mount the host cgroup tree writable into the general worker or user-code environment.
 Do not enable a fallback that discards required resource limits.
 The initial runtime probe must verify controllers, namespace support, enforcement, and descendant cleanup on the actual deployment target.
+
+## Platform client and credential compatibility
+
+The SDK revision `966526e` supplies more than state transformation inside Code nodes.
+`elitea_sdk/runtime/tools/sandbox.py::_prepare_pyodide_input` injects the simplified platform client and token or session authentication.
+`elitea_sdk/runtime/clients/sandbox_client.py::SandboxClient` exposes these behaviors:
+
+| Current client operation | Required target behavior |
+| --- | --- |
+| `unsecret` | Read an authorized secret in the execution project. Keep plaintext outside durable execution metadata. |
+| `get_private_project_secret` | Resolve the executing user's personal project. Enforce external-sharing permission. Never substitute a same-named project secret. |
+| `get_mcp_toolkits`, `mcp_tool_call` | Preserve authorized discovery and calls through existing tool admission. Retain toolkit identity and guard decisions. |
+| Application and version reads | Preserve project visibility and exact version selection. |
+| Artifact and bucket operations | Preserve scoped reads and writes through existing artifact services. Record effect outcomes for recovery. |
+
+Personal-secret failures distinguish missing personal project, missing secret, and denied external access.
+An explicit caller default is separate from fallback to another secret scope.
+Unattended execution must not invent a human identity to resolve a personal secret.
+The target Code-node client is not implemented yet. These rows define required compatibility, not completed source mappings.
+
+The source also contains direct HTTP calls with disabled TLS verification.
+Do not preserve that transport behavior. Use the platform's verified transport and execution authorization contracts.
+Preserve legitimate secret access without copying a broad user token into generated source.
+Keep any sandbox credential scoped to the admitted execution and unavailable during dependency installation.
+Inspect existing grants before adding another credential mechanism.
+
+`tools/function.py::_build_client_preamble` uses a token placeholder for exported debug code.
+Preserve this separation between executable authentication and debug artifacts.
+Do not put live credentials in generated source artifacts, package caches, compiler diagnostics, or persisted graph state.
+Authorized code can use a returned secret. Redaction alone cannot make arbitrary code unable to disclose a secret it receives.
+Apply the granted network and artifact policy to that execution, and document this trust boundary explicitly.
+
+Code-node acceptance must include two users resolving distinct personal values, denied sharing, and no cross-project fallback.
+Also test artifact writes and tool calls across worker loss before enabling automatic retries for effectful code.
