@@ -379,3 +379,54 @@ The host test harness controls Docker. The Rust worker receives no Docker socket
 The test does not prove rootless runtime deployment, Kubernetes delegation, package installation, or recovery after supervisor failure.
 It does not enable Code nodes or verify their platform-client authorization.
 Connect the selected supervisor through the ADK execution boundary only after its deployment and lifecycle contracts are defined.
+
+## JavaScript, TypeScript, and Rust package proof
+
+`scripts/runtime/probe_code_packages.py` checks trusted fixtures with actual language runtimes and public packages.
+It creates disposable source files. It keeps dependency and compiler caches outside the repository.
+Run preparation once, then repeat with cached packages:
+
+```sh
+python3 scripts/runtime/probe_code_packages.py --cache /tmp/elitea-code-package-cache --prepare
+python3 scripts/runtime/probe_code_packages.py --cache /tmp/elitea-code-package-cache
+```
+
+Both runs pass locally on 2026-09-28 with Deno 2.5.4 and Cargo/Rust 1.97.1.
+
+- JavaScript imports `npm:semver@7.7.2` and produces the expected JSON result.
+- TypeScript executes a type-annotated version through the same Deno runtime.
+- Rust uses a normal Cargo manifest with `serde_json = "=1.0.151"`.
+- Cargo generates a lockfile, compiles, and executes the Rust fixture.
+- A second Rust execution uses `--frozen` and produces the same result.
+- The cached probe uses Deno `--cached-only` and Cargo `--offline`.
+
+These results prove package compatibility on macOS. They do not prove Linux isolation or worker integration.
+The fixture's two compiler jobs limit local test pressure. They do not constitute production CPU enforcement.
+The probe owns its subprocess groups and terminates them after a timeout.
+
+### Proposed package contract
+
+Use standard Deno package imports for JavaScript and TypeScript.
+The [Deno package documentation](https://docs.deno.com/runtime/fundamentals/node/) describes npm imports and compatibility limits.
+Native addons and package lifecycle scripts need separate policy and image support.
+Do not enable them implicitly for every Code node.
+
+Deno can fetch static imports despite `--deny-net`. This flag does not isolate package acquisition.
+Resolve packages under the preparation egress policy. Execute the resolved package graph with acquisition disabled.
+Retain the resolved dependency identity for recovery. Do not treat an import's version range as immutable execution intent.
+
+Use stable Cargo manifests for the first Rust adapter.
+The inspected ADK Rust executor invokes `rustc` directly and does not supply general Cargo dependency resolution.
+Run dependency preparation, build scripts, procedural macros, compilation, and execution inside the outer sandbox.
+Store generated source files and build outputs in its private filesystem.
+Record the lockfile and toolchain identity before an effectful execution.
+
+[Cargo single-file scripts](https://doc.rust-lang.org/cargo/reference/unstable.html#script) remain documented as an unstable feature at this assessment.
+They use `cargo +nightly -Zscript file.rs`, not ordinary `cargo run file.rs`.
+Do not add a nightly requirement solely to hide manifest preparation.
+The UI can retain one code editor while the adapter prepares the required files.
+The user-facing Rust dependency declaration remains open; no custom inline manifest parser is introduced.
+
+Python retains the verified Pyodide and inline `micropip` behavior described above.
+All languages require the same outer resource, authority, result-validation, and recovery contracts.
+No production adapter or Code capability is enabled by these probes.
