@@ -125,7 +125,8 @@ Use the installed ADK-Rust primitives where they fit these ownership requirement
 The local `context-continuation-design.md` draft records the proposed implementation and replacement proof.
 Its verification and delivery remain point 4 work.
 Balanced defaults to a 272,000-token total budget, capped by the model's supported context window.
-Full uses that supported window. Reserve the admitted maximum output inside either budget.
+Full uses that supported window. Explicit output caps reserve their admitted allowance inside either budget.
+Auto retains a minimum allowance and limits each response to remaining capacity. See the Auto policy follow-up below.
 Track current context use separately from cumulative input/output consumption.
 The platform owns the predefined structured summary prompt and validates its JSON contract, including facts, outcomes, unresolved work, next-step hints, and verified references.
 User-authored summary text is optional additional guidance, not a replacement prompt or schema.
@@ -408,10 +409,8 @@ review; no reservation-policy change was made with this configuration edit.
 Request occupancy currently uses a serialized-request estimate, not exclusively
 provider-reported usage or cumulative billed tokens.
 
-Native Anthropic Auto resolves to the catalogue maximum in
-`services/elitea-main/internal/application/agentexecution/tools.go`.
-Reducing its reservation also requires changing the effective request cap.
-Keep reservation and provider request limits consistent.
+The original native Anthropic Auto path resolves to the catalogue maximum.
+The follow-up below replaces that reservation with a dynamic request cap.
 
 
 ## Auto output policy follow-up (2026-09-28)
@@ -421,5 +420,6 @@ Explicit caps and summary reservations remain independent.
 Main preserves Auto for inferred OpenAI model names without the compatibility flag.
 See [source mapping and verification scope](source-mapping/auto-output-budget-20260928.md).
 Native Anthropic Auto identity and UI guidance now have component coverage.
-Coordinated deployment and browser acceptance remain open.
+Coordinated deployment completes. Chats 707/708 verify Balanced Auto and Full Auto compaction with stable browser reload.
+The Full run preserves all four project facts after compaction. Native Auto acceptance is recorded in the source mapping.
 Do not use the explicit-cap chat 706 result as Auto-policy acceptance.

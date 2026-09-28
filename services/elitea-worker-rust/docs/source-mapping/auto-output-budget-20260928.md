@@ -94,4 +94,29 @@ Explicit output caps retain the existing signed 32-bit integer bound.
 Zero, other negatives, fractions, booleans, and invalid strings remain invalid.
 Both read and write normalization preserve the Auto sentinel for downstream Rust assembly.
 The focused conversation package tests pass.
-This admission correction still requires deployment and browser verification.
+The admission correction is deployed. Chat 707 saves Auto settings successfully.
+
+## Deployed Auto acceptance
+
+Commit `bc46563b2` deploys the chat-settings correction after `bc898d0df` deploys Main, Rust, and UI Auto support.
+Fresh headed Playwright sessions use real rehearsal endpoints without browser response mocks.
+Synthetic history is inserted only into new acceptance chats.
+
+- Chat 707 succeeds with Balanced Auto and preserves all four project facts after reload.
+  Its estimated input is 239,637 tokens against 268,256 usable tokens.
+  This stays below the 241,431 compaction trigger and verifies ordinary Auto execution.
+  Provider usage reports 206,230 input tokens and 42 output tokens.
+- Chat 708 succeeds with Full Auto and the configured 1,000,000-token window.
+  Compaction reduces estimated input from 956,800 to 48,570 tokens.
+  Provider summary usage reports 852,726 input tokens and 396 output tokens.
+  The resumed call reports 41,968 input tokens and 42 output tokens.
+  The answer retains CEDAR-731, teal, completed archive verification, and the pending handoff note.
+  Reload retains the answer, 5% context display, and the Auto allowance explanation.
+- Chat 709 does not prove native Anthropic acceptance.
+  The browser submits the configured default fixture model instead of the intended Haiku model.
+  Gateway metadata confirms `CONTINUATION-REPAIR-FIXTURE`; its terminal success is not a native-provider pass.
+  Investigate model selection before another native run.
+
+The Full summary takes 27,781 milliseconds; the resumed call takes 4,224 milliseconds.
+These synthetic checks do not establish concurrency capacity or tokenizer accuracy.
+Provider usage and pre-dispatch estimates remain distinct measurements.
