@@ -1781,3 +1781,21 @@ The first execution settles through Main with terminal sequence 9 and `agent_del
 
 This verifies live Python execution through the editor test chat, worker, authenticated supervisor, and receipt ledger.
 It does not prove restart recovery, cancellation, other languages, or main-chat execution.
+
+## Four-language and persistent-chat acceptance — 2026-09-29
+
+The same isolated fixture is edited and saved through the language selector and Code field.
+JavaScript returns `GATE5_CODE_JAVASCRIPT_20260929: 42` through the pipeline test chat.
+TypeScript declares a `number` variable and returns `GATE5_CODE_TYPESCRIPT_20260929: 42`.
+Rust compiles its `run(serde_json::Value)` function and returns `GATE5_CODE_RUST_20260929: 42` through the separate Rust supervisor.
+Each test displays completion. The receipt ledger then contains five completed jobs, including the initial Python null-result fixture.
+
+The pipeline's Chat action opens a persistent conversation with the pipeline as a direct participant.
+Chat 754 returns the Rust marker and creates the sixth completed receipt.
+Reloading that chat preserves the user request and the exact result.
+This verifies persistent-chat execution and history reload, not process-restart recovery.
+
+Browser interaction also exposes inconsistent mouse activation of the language selector inside the flow canvas.
+Keyboard selection succeeds; an arrow key also moves the selected graph node.
+Inspect canvas event propagation before closing editor interaction acceptance.
+Cancellation, process recovery, Kubernetes, and the remaining gate requirements stay open.
