@@ -15,6 +15,10 @@ Set these deployment inputs:
 | `ELITEA_SANDBOX_RUST_MATERIAL` | Prepared Rust supervisor material directory |
 | `ELITEA_SANDBOX_WORKER_CONFIG` | Existing worker configuration with four sandbox runtime profiles |
 
+Run `bash deploy/scripts/gen-sandbox-certs.sh <runtime-ca-directory> <private-output-directory>` to issue server certificates.
+The script preserves existing files and verifies their CA, hostname, expiry, and key pairing on rerun.
+It does not install certificates or change PostgreSQL settings. Install material with the deployment UID before starting services.
+
 Use `sandbox-supervisor.example.json` as the configuration schema example.
 Store each supervisor configuration as `config.json` in its material directory.
 Set a distinct stable owner for each instance. Do not share an owner between concurrent replicas.

@@ -1690,3 +1690,16 @@ Required material paths fail interpolation when missing; bind mounts cannot crea
 `scripts/runtime/test_sandbox_compose.py` renders the overlay and checks its isolation properties without starting containers.
 The render test passes. Material provisioning, merged deployment, live execution, and browser verification remain open.
 This Docker packaging does not implement Kubernetes sandbox execution.
+
+
+## Rehearsal trust provisioning — 2026-09-29
+
+The running rehearsal still uses the earlier worker and Main images. No supervisor is running yet.
+Read-only inspection confirms PostgreSQL has TLS disabled; its TLS settings support configuration reload.
+The supervisor keeps `verify-full` database verification. Deployment must supply a verified database server certificate.
+
+`deploy/scripts/gen-sandbox-certs.sh` issues Deno, Rust, and PostgreSQL server certificates under the existing runtime CA.
+It preserves existing material and checks CA, hostname, expiration, and key pairing before reuse.
+Disposable-CA issuance, hostname verification, and rerun preservation tests pass. Shell syntax validation passes.
+Rehearsal certificates are prepared in the ignored certificate directory; no secret enters tracked files.
+No database setting, service image, or running workload changes during this provisioning step.
