@@ -73,8 +73,8 @@ The open persistent chat receives its result without a reload.
 The initial UI Stop test fails: chat stops while its container continues and its receipt remains dispatched.
 Commit `b9a31a4d0` fixes worker Stop delivery and settlement ordering. Deployed browser Stop now terminates the original container.
 A second browser run verifies pending Stop recovery across worker replacement, with the original dispatch identity and no new execution container.
-The UI still detaches immediately and hides the cancelled turn after reload. Cancellation status and observer continuity remain open.
-Gate 5 remains open for that UI correction, Kubernetes execution, and the remaining pipeline requirements.
+The UI observer correction keeps the stream attached until terminal confirmation and reports failed Stop requests. All 44 focused tests and typechecking pass. Deployed browser acceptance passes in chat 755. Main deliberately removes empty cancelled turns on reload; this is a separate existing history policy.
+Gate 5 remains open for Kubernetes execution and the remaining pipeline requirements.
 Package/workspace authorization and compilation-cache performance remain tracked in the assessment.
 Gate 7a reuses this execution foundation for agent tools, with separate module admission and browser acceptance.
 

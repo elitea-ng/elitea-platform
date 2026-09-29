@@ -54,11 +54,12 @@ import {
   stopChatTask,
 } from "@/entities/conversation/api/conversationApi";
 import type { ExecutionEventData } from "@/shared/api/sse";
+import { EliteaApiError } from "@/shared/api/generated/mutator";
+import { t } from "@/shared/i18n";
 
 import {
   recordStreamFailure,
   runtimeFailureReason,
-  settleInFlight,
 } from "../lib/chatStreamSettle";
 import {
   applyChatStreamFrame,
@@ -131,8 +132,8 @@ export interface UseChatStreamTransportResult extends ChatStreamRunStarters {
   /**
    * The user pressed Stop. Cancels the run SERVER-SIDE (`DELETE
    * /elitea_core/task/prompt_lib/{projectId}/{responseMessageId}` — the id the
-   * start endpoint returned), settles the message, and closes the stream
-   * without reconnecting.
+   * start endpoint returned). Observe the terminal event before settling
+   * the message. Keep reconnecting while cancellation is pending.
    */
   readonly stop: () => void;
 }
@@ -173,6 +174,7 @@ export function useChatStreamTransport(
 
   /** What Stop has to cancel server-side, from the start endpoint's answer. */
   const cancelRef = useRef<StopChatTaskParams | null>(null);
+  const stopRequestRef = useRef<StopChatTaskParams | null>(null);
   /**
    * The user-message identity from the request that started this run.
    *
@@ -391,25 +393,23 @@ export function useChatStreamTransport(
   const starters = useChatStreamRunStarters(subscribeToRun, reconcileResume);
 
   const stop = useCallback(() => {
-    // Nothing of this hook's is running — the run was already stopped, already
-    // finished, or belonged to a conversation the user has left (which
-    // detached it). Settling here would clear the spinner on somebody else's
-    // in-flight message.
     if (!ownsRun()) return;
     const target = cancelRef.current;
-    detach();
-    setChatHistory((prev) => settleInFlight(prev));
-    // Closing the client stream does not stop the agent: the execution exists
-    // server-side and would keep burning tokens against the user's budget
-    // while nobody watches. The DELETE is what actually ends it; its failure
-    // is not surfaced because the run is already off this user's screen and a
-    // 409 ("not active or cannot be stopped") is the expected answer when the
-    // turn finished between the click and the request.
-    if (target) {
-      const notify = onContextChangedRef.current;
-      void stopChatTask(target).catch(() => undefined).finally(() => notify?.(target.projectId));
-    }
-  }, [detach, setChatHistory, ownsRun]);
+    if (!target || stopRequestRef.current === target) return;
+    stopRequestRef.current = target;
+    // Stop admission is not termination. Keep the durable observer and its
+    // reconnect path alive until the worker confirms the terminal outcome.
+    void stopChatTask(target).catch((error: unknown) => {
+      if (cancelRef.current !== target) return;
+      // Completion can win the race with Stop; its terminal event still owns
+      // the outcome. Other request failures remain visible and retryable.
+      if (error instanceof EliteaApiError && error.failure.kind === 'http' && error.failure.status === 409) return;
+      onStreamErrorRef.current?.(t('chatMessages.stream.stopFailed', 'The stop request could not be confirmed. The run may still be active. Try Stop again.'));
+    }).finally(() => {
+      if (stopRequestRef.current === target) stopRequestRef.current = null;
+      onContextChangedRef.current?.(target.projectId);
+    });
+  }, [ownsRun]);
 
   return useMemo(
     () => ({

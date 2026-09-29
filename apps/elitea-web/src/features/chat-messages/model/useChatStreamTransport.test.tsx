@@ -968,7 +968,7 @@ describe("stream ownership (#328)", () => {
 /* ------------------------------------------------------------------ */
 
 describe("stop (#328)", () => {
-  it("cancels the run server-side, closes the stream, and applies nothing further", async () => {
+  it("observes the run until server-side cancellation is confirmed", async () => {
     okStart();
     const cancelled: string[] = [];
     server.use(
@@ -992,10 +992,15 @@ describe("stop (#328)", () => {
       api.current?.stop();
     });
 
-    await waitFor(() => expect(registry.getOpen()).toHaveLength(0));
-    // Closing the client stream would leave the agent running and billing;
-    // the DELETE addresses the response message the start endpoint named.
     await waitFor(() => expect(cancelled).toEqual([RESPONSE_MESSAGE_ID]));
+    expect(registry.getOpen()).toHaveLength(1);
+    expect(history.current[0]?.isStreaming).toBe(true);
+    act(() => {
+      registry.emit("execution.failed", JSON.stringify({
+        code: "CANCELLED", safe_message: "Execution was cancelled.",
+      }));
+    });
+    expect(registry.getOpen()).toHaveLength(0);
     expect(history.current[0]?.isStreaming).toBe(false);
     expect(history.current[0]?.isLoading).toBe(false);
 
@@ -1010,7 +1015,30 @@ describe("stop (#328)", () => {
     expect(history.current[0]?.content).toBe("half an ans");
   });
 
-  it("does not reconnect after a stop", async () => {
+  it("reports a failed Stop request, retains observation, and allows retry", async () => {
+    okStart();
+    let requests = 0;
+    server.use(http.delete(`${BASE}/elitea_core/task/prompt_lib/7/:id`, () => {
+      requests += 1;
+      return new HttpResponse(null, { status: 503 });
+    }));
+    const { api, history, errors, Probe } = harness();
+    render(<Probe />);
+    await started(api);
+    act(() => {
+      api.current?.stop();
+      api.current?.stop();
+    });
+    await waitFor(() => expect(errors).toHaveLength(1));
+    expect(requests).toBe(1);
+    expect(errors[0]).toContain("run may still be active");
+    expect(registry.getOpen()).toHaveLength(1);
+    expect(history.current[0]?.isStreaming).toBe(true);
+    act(() => api.current?.stop());
+    await waitFor(() => expect(requests).toBe(2));
+  });
+
+  it("reconnects while Stop awaits terminal confirmation", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       okStart();
@@ -1027,10 +1055,10 @@ describe("stop (#328)", () => {
       act(() => {
         api.current?.stop();
         registry.fail();
-        vi.advanceTimersByTime(60_000);
       });
+      act(() => { vi.advanceTimersByTime(1_000); });
 
-      expect(registry.getSources()).toHaveLength(1);
+      await waitFor(() => expect(registry.getSources().length).toBeGreaterThan(1));
     } finally {
       vi.useRealTimers();
     }

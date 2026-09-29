@@ -2075,3 +2075,14 @@ Browser acceptance exposes a separate presentation gap.
 It settles the local message and ignores Stop request errors. The stopped turn disappears from chat history after reload.
 The local screenshot `elitea-sandbox-stop-recovery-20260929.png` records the empty assistant entry.
 Keep cancellation-status rendering, retained observation, and durable history verification open. Kubernetes execution also remains open.
+
+
+### UI Stop observer correction (2026-09-29)
+
+The deployed cancellation checks exposed premature client detachment. `apps/elitea-web/src/features/chat-messages/model/useChatStreamTransport.ts` now keeps observing after Stop admission, reconnects during pending cancellation, deduplicates concurrent Stop requests, and reports request failures with retry guidance. Only the canonical terminal event settles the response. Completion racing with Stop (HTTP 409) leaves the terminal observer in control.
+
+The existing Main policy in `internal/infra/db/repos/agent_cancel.go` and `configuration_validation_results.go` intentionally removes empty cancelled question/answer pairs. Their disappearance after reload is not evidence of lost runtime receipts. No product schema or history-policy change is required. The worker-to-supervisor mapping above remains unchanged.
+
+Validation: 44 focused transport tests pass, including confirmed cancellation, pending-cancellation reconnect, and failed Stop retry. Typechecking and the production image build also pass.
+
+Deployed image: `sha256:cf2428daaa0827ac436a83d76d707a4639c60ec1e9f5ce7d0f59e245e6a6b205`. Browser acceptance passes in persistent chat 755. Stop remains available while cancellation awaits confirmation. The terminal event displays “Execution was cancelled” and releases the composer. Receipt `e3d0ec1f6e25f5ba8c1e637441e35f4e5304fcdf8d4d9c938ecd3614f13ad403` becomes cancelled at `2026-09-29T19:39:26.075030Z`.
