@@ -1444,12 +1444,59 @@ async fn sandbox_submission(over_tls: bool) {
                 .unwrap()
                 .starts_with("authorized-result-")
         );
-        let SandboxOutcome::Completed(repeated) =
-            transport.submit_granted(grant, &request).await.unwrap()
+        let SandboxOutcome::Completed(repeated) = transport
+            .submit_granted(grant.clone(), &request)
+            .await
+            .unwrap()
         else {
             panic!("saved receipt expected");
         };
         assert_eq!(repeated, result);
+        use crate::protocol::elitea::runtime::v1::{CancelSandboxJobRequestV1, SandboxJobStatusV1};
+        // A submission grant cannot invoke the stop endpoint.
+        assert!(matches!(
+            transport.cancel_granted(grant.clone()).await,
+            Err(crate::sandbox::client::SandboxCallError::Submission {
+                code: tonic::Code::PermissionDenied
+            })
+        ));
+        let mut stop_claims = claims.clone();
+        stop_claims.revision = 2;
+        stop_claims.cancel_only = true;
+        stop_claims.activation_id = "stop-before-submit".into();
+        let bytes = stop_claims.encode_to_vec();
+        let mut signing = b"elitea.sandbox.job-grant.ed25519.v1\0".to_vec();
+        signing.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+        signing.extend_from_slice(&bytes);
+        let stop_grant = SignedSandboxJobGrantV1 {
+            key_id: "fixture-key".into(),
+            claims_bytes: bytes,
+            signature: key.sign(&signing).as_ref().to_vec(),
+        };
+        assert_eq!(
+            wrong
+                .cancel_sandbox_job(CancelSandboxJobRequestV1 {
+                    grant: Some(stop_grant.clone())
+                })
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::PermissionDenied
+        );
+        assert!(matches!(
+            transport.submit_granted(stop_grant.clone(), &request).await,
+            Err(crate::sandbox::client::SandboxCallError::Submission {
+                code: tonic::Code::PermissionDenied
+            })
+        ));
+        assert_eq!(
+            transport.cancel_granted(stop_grant.clone()).await.unwrap(),
+            SandboxJobStatusV1::Cancelled
+        );
+        assert_eq!(
+            transport.cancel_granted(stop_grant).await.unwrap(),
+            SandboxJobStatusV1::Cancelled
+        );
         drop(transport);
         stop.send(()).unwrap();
         drop(client);

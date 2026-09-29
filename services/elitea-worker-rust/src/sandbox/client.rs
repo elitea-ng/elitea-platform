@@ -5,8 +5,8 @@ mod disconnect_tests;
 use super::request::PreparedJob;
 use crate::{
     protocol::elitea::runtime::v1::{
-        AuthorizeSandboxJobRequestV1, SandboxJobStatusV1, SignedSandboxJobGrantV1,
-        SubmitSandboxJobRequestV1, SubmitSandboxJobResponseV1,
+        AuthorizeSandboxJobRequestV1, CancelSandboxJobRequestV1, SandboxJobStatusV1,
+        SignedSandboxJobGrantV1, SubmitSandboxJobRequestV1, SubmitSandboxJobResponseV1,
         sandbox_supervisor_service_client::SandboxSupervisorServiceClient,
     },
     transport::control_grpc::{ControlGrpcClient, ControlGrpcError, ControlRpc},
@@ -89,12 +89,69 @@ impl SandboxClient {
             .map_err(|_| SandboxCallError::Invalid)?
             .to_vec();
         authorization.audience.clone_from(&self.audience);
+        authorization.cancel_only = false;
         let response = control.authorize_sandbox_job(authorization).await?;
         if response.rejection.is_some() {
             return Err(SandboxCallError::Rejected);
         }
         let grant = response.grant.ok_or(SandboxCallError::Rejected)?;
         self.submit_granted(grant, job).await
+    }
+
+    /// Request stop authority for the same immutable job. Never dispatch code.
+    /// # Errors
+    /// Returns authorization, transport, or malformed response errors.
+    pub async fn cancel<R: ControlRpc>(
+        &self,
+        control: &ControlGrpcClient<R>,
+        mut authorization: AuthorizeSandboxJobRequestV1,
+        job: &PreparedJob,
+    ) -> Result<SandboxJobStatusV1, SandboxCallError> {
+        authorization.request_digest = job
+            .fingerprint()
+            .map_err(|_| SandboxCallError::Invalid)?
+            .to_vec();
+        authorization.audience.clone_from(&self.audience);
+        authorization.cancel_only = true;
+        let response = control.authorize_sandbox_job(authorization).await?;
+        if response.rejection.is_some() {
+            return Err(SandboxCallError::Rejected);
+        }
+        self.cancel_granted(response.grant.ok_or(SandboxCallError::Rejected)?)
+            .await
+    }
+
+    pub(crate) async fn cancel_granted(
+        &self,
+        grant: SignedSandboxJobGrantV1,
+    ) -> Result<SandboxJobStatusV1, SandboxCallError> {
+        if grant.signature.len() != 64
+            || grant.claims_bytes.is_empty()
+            || grant.claims_bytes.len() > 4096
+            || grant.key_id.is_empty()
+            || grant.key_id.len() > 256
+        {
+            return Err(SandboxCallError::Rejected);
+        }
+        let mut request = Request::new(CancelSandboxJobRequestV1 { grant: Some(grant) });
+        request.set_timeout(self.deadline);
+        let response =
+            tokio::time::timeout(self.deadline, self.rpc.clone().cancel_sandbox_job(request))
+                .await
+                .map_err(|_| SandboxCallError::Submission {
+                    code: Code::DeadlineExceeded,
+                })?
+                .map_err(|status| SandboxCallError::Submission {
+                    code: submission_code(&status),
+                })?
+                .into_inner();
+        match SandboxJobStatusV1::try_from(response.status) {
+            Ok(SandboxJobStatusV1::Pending) if response.cleanup_pending => {
+                Err(SandboxCallError::InvalidReceipt)
+            }
+            Ok(SandboxJobStatusV1::Unspecified) | Err(_) => Err(SandboxCallError::InvalidReceipt),
+            Ok(status) => Ok(status),
+        }
     }
 
     pub(crate) async fn submit_granted(

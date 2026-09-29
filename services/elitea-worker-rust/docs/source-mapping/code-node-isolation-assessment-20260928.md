@@ -1934,3 +1934,17 @@ Generated Go and Python contracts use the repository's pinned generator.
 Focused Main grant tests and three Rust grant tests pass.
 These tests cover purpose separation, cancelled executions, stale fences, peer binding, expiry, and signature validation.
 Live cancellation RPC and UI acceptance remain required.
+
+## Cancellation transport mTLS verification — 2026-09-29
+
+`src/sandbox/client.rs` requests stop-only Main grants and calls the cancellation endpoint without code or state.
+It validates the returned status and distinguishes durable Pending from a terminal result.
+The submission method always requests submission authority, regardless of the caller's input flag.
+
+The isolated `sandbox_supervisor_mtls_submission` test passes with real certificates, PostgreSQL, and the cached Deno/Pyodide runner.
+The worker first executes code and reads its saved receipt through mTLS.
+The test then rejects cancellation with a submission grant and rejects a different certificate peer.
+It also rejects submission with a stop grant.
+Authorized cancellation before dispatch returns Cancelled; repeating it returns the same terminal status.
+This is component transport evidence, not live Main grant issuance or deployed chat Stop acceptance.
+The worker lifecycle and durable pending-stop delivery remain open.
