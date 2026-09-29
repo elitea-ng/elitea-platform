@@ -21,14 +21,20 @@ It does not install certificates or change PostgreSQL settings. Install material
 
 Use `sandbox-supervisor.example.json` as the configuration schema example.
 Store each supervisor configuration as `config.json` in its material directory.
-Set a distinct stable owner for each instance. Do not share an owner between concurrent replicas.
+Set a distinct stable owner for each instance. Preserve that owner and Docker daemon across process replacement.
+Do not share an owner between concurrent replicas. Pending stops are partitioned by this owner.
+The listener checks at most 32 unleased or expired stop records every two seconds and resumes termination.
+A disconnected worker is not a stop request; only an authenticated, persisted stop enables this cleanup.
 Set audiences to `dns:elitea-sandbox-deno` and `dns:elitea-sandbox-rust`, respectively.
 Use server certificates with the corresponding Compose service DNS name.
 The worker CA must verify these certificates; the supervisor CA must verify the worker certificate.
 Copy the current Main signing verification keyring. Never give the supervisor Main's private signing key.
 
 Provision a TLS database connection for the agentstate receipt ledger.
-Apply agentstate migration `0004` before startup. Do not apply it to the product database.
+Apply agentstate migrations `0004` through `0006` before starting the cancellation-capable supervisor.
+Migration `0005` persists cancellation intent; `0006` assigns its stable reconciliation owner.
+The new supervisor requires both fields.
+Do not apply these migrations to the product database.
 Private key and database URL files require owner-only permissions and must be readable by UID 10001.
 Use regular files, not symlinks. On hosts with UID remapping, install material into a dedicated volume with the correct ownership.
 Do not weaken file permissions to work around UID mapping.
@@ -52,3 +58,13 @@ Docker access makes the supervisor a trusted deployment component, despite its n
 Service startup is not an acceptance test. Verify Main grant issuance, Code execution, cancellation, and restart recovery through the deployed worker.
 Verify the chat and pipeline testing interfaces before closing gate 5.
 Kubernetes execution requires a separate backend and deployment; this Docker overlay does not provide it.
+
+## Kubernetes acceptance requirements
+
+Deploy the supervisor as a service that creates isolated execution Jobs on demand.
+Use a scoped service account for Job management; the worker and execution Pods must not receive that authority.
+Runtime images must be pinned and warmed on eligible nodes. Image warmup alone does not provide execution support.
+Apply per-job CPU, memory, process/runtime restrictions, and bounded concurrency.
+Reconcile the original Job identity and durable receipt after supervisor or worker replacement.
+Persist cancellation intent before deleting or terminating a Job, and confirm termination before reporting cancellation complete.
+Verify execution, Stop, lost acknowledgements, and restart recovery through the deployed UI before closing this gate.

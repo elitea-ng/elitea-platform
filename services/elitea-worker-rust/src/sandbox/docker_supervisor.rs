@@ -161,12 +161,40 @@ impl DockerSupervisor {
             return Err(SupervisorError::Invalid);
         }
         self.ledger
-            .request_cancellation(authorization.scope())
+            .request_cancellation(authorization.scope(), &self.owner)
             .await?;
         // An active owner observes the durable intent. Capacity does not erase it.
         match self.reconcile_dispatched(authorization.scope()).await {
             Err(SupervisorError::Busy) => Ok(Reconciliation::OwnedElsewhere),
             result => result,
+        }
+    }
+
+    /// Resume previously authorized stops after process loss, without a client retry.
+    /// The stable deployment owner partitions discovery; leases still fence cleanup.
+    /// # Errors
+    /// Returns a persistence error while discovering the bounded batch.
+    pub async fn reconcile_cancellations(&self) -> Result<(), SupervisorError> {
+        for scope in self.ledger.pending_cancellations(&self.owner, 32).await? {
+            match self.reconcile_dispatched(&scope).await {
+                Ok(_) => {}
+                Err(SupervisorError::Busy) => break,
+                Err(error) => {
+                    tracing::error!(error = %error, "sandbox stop remains pending; reconciliation will retry");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) async fn recover_cancellations(&self) {
+        let mut interval = tokio::time::interval(Duration::from_secs(2));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            if let Err(error) = self.reconcile_cancellations().await {
+                tracing::error!(error = %error, "sandbox pending stops could not be read; reconciliation will retry");
+            }
         }
     }
 

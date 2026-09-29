@@ -57,10 +57,11 @@ impl<R: Ed25519PublicKeyResolver + 'static> SupervisorService<R> {
         shutdown: impl Future<Output = ()> + Send + 'static,
     ) -> Result<(), SupervisorServeError> {
         crate::diagnostics::install_tls_crypto_provider()?;
+        let supervisor = Arc::clone(&self.supervisor);
         let service = SandboxSupervisorServiceServer::new(self)
             .max_decoding_message_size(1024 * 1024 + 8192)
             .max_encoding_message_size(512 * 1024 + 8192);
-        Server::builder()
+        let server = Server::builder()
             .tls_config(
                 ServerTlsConfig::new()
                     .identity(identity)
@@ -73,8 +74,13 @@ impl<R: Ed25519PublicKeyResolver + 'static> SupervisorService<R> {
             .serve_with_incoming_shutdown(
                 tokio_stream::wrappers::TcpListenerStream::new(listener),
                 shutdown,
-            )
-            .await?;
+            );
+        // Both futures are owned by the listener. Shutdown drops recovery; its
+        // durable intent and lease remain available to the replacement process.
+        tokio::select! {
+            result = server => { result?; },
+            () = supervisor.recover_cancellations() => {},
+        }
         Ok(())
     }
 }

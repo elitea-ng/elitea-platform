@@ -158,10 +158,20 @@ impl JobLedger {
     /// A missing job is reserved to prevent a later submission from starting it.
     /// # Errors
     /// Returns an identity conflict or database error.
-    pub async fn request_cancellation(&self, scope: &JobScope) -> Result<JobRecord, LedgerError> {
+    pub async fn request_cancellation(
+        &self,
+        scope: &JobScope,
+        cancellation_owner: &str,
+    ) -> Result<JobRecord, LedgerError> {
+        if cancellation_owner.is_empty()
+            || cancellation_owner.len() > 128
+            || cancellation_owner.contains('\0')
+        {
+            return Err(LedgerError::Invalid);
+        }
         self.reserve(scope).await?;
-        sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET cancellation_requested=TRUE,updated_at=clock_timestamp() WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND phase IN ('reserved','dispatched') AND NOT cancellation_requested")
-            .bind(&scope.tenant).bind(scope.project).bind(scope.key.as_slice()).bind(scope.digest.as_slice())
+        sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET cancellation_requested=TRUE,cancellation_owner=COALESCE(cancellation_owner,$5),updated_at=clock_timestamp() WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND phase IN ('reserved','dispatched') AND (NOT cancellation_requested OR cancellation_owner IS NULL)")
+            .bind(&scope.tenant).bind(scope.project).bind(scope.key.as_slice()).bind(scope.digest.as_slice()).bind(cancellation_owner)
             .execute(&self.pool).await?;
         self.read(scope).await
     }
@@ -172,6 +182,38 @@ impl JobLedger {
         sqlx::query_scalar("SELECT cancellation_requested FROM elitea_runtime.sandbox_jobs WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4")
             .bind(&scope.tenant).bind(scope.project).bind(scope.key.as_slice()).bind(scope.digest.as_slice())
             .fetch_optional(&self.pool).await?.ok_or(LedgerError::Missing)
+    }
+
+    /// Bounded recovery of stop intents admitted by this stable supervisor owner.
+    /// This discovers no executable work and never authorizes a new dispatch.
+    /// # Errors
+    /// Returns invalid bounds, corrupt identities, or a database error.
+    pub async fn pending_cancellations(
+        &self,
+        owner: &str,
+        limit: i64,
+    ) -> Result<Vec<JobScope>, LedgerError> {
+        if owner.is_empty()
+            || owner.len() > 128
+            || owner.contains('\0')
+            || !(1..=32).contains(&limit)
+        {
+            return Err(LedgerError::Invalid);
+        }
+        let rows = sqlx::query("SELECT tenant_id,project_id,job_key,request_digest FROM elitea_runtime.sandbox_jobs WHERE cancellation_owner=$1 AND cancellation_requested AND phase IN ('reserved','dispatched') AND (lease_until IS NULL OR lease_until <= clock_timestamp()) ORDER BY updated_at,tenant_id,project_id,job_key LIMIT $2")
+            .bind(owner).bind(limit).fetch_all(&self.pool).await?;
+        rows.into_iter()
+            .map(|row| {
+                let key: Vec<u8> = row.try_get("job_key")?;
+                let digest: Vec<u8> = row.try_get("request_digest")?;
+                JobScope::new(
+                    row.try_get("tenant_id")?,
+                    row.try_get("project_id")?,
+                    key.try_into().map_err(|_| LedgerError::Invalid)?,
+                    digest.try_into().map_err(|_| LedgerError::Invalid)?,
+                )
+            })
+            .collect()
     }
 
     /// Reclaiming a dispatched job grants reconciliation, never permission to replay.

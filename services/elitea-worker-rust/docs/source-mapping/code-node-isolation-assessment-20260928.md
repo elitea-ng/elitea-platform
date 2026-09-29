@@ -1948,3 +1948,31 @@ It also rejects submission with a stop grant.
 Authorized cancellation before dispatch returns Cancelled; repeating it returns the same terminal status.
 This is component transport evidence, not live Main grant issuance or deployed chat Stop acceptance.
 The worker lifecycle and durable pending-stop delivery remain open.
+
+
+### 2026-09-29: Supervisor-owned stop reconciliation
+
+The current SDK reference remains `elitea_sdk/runtime/langchain/pyodide_sandbox.py::PyodideSandbox.execute`:
+local timeout handling kills and waits for its process. It does not establish durable remote cleanup after owner loss.
+The new implementation extends the durable supervisor receipt rather than adopting process-local cancellation.
+
+- `sandbox/ledger.rs::request_cancellation` persists the accepting supervisor's stable owner with stop intent.
+  A retry cannot redirect existing intent. Completed receipts remain immutable.
+- Agentstate migration `0006_sandbox_stop_reconciliation.sql` adds the reconciliation owner and partial pending-stop index.
+  Product tables are unchanged. Existing owned stop intents are backfilled; any old intent with no owner needs an authenticated retry.
+- `JobLedger::pending_cancellations` selects at most 32 pending stops for this owner, ordered by update time and identity.
+  Live leases and terminal records are excluded. Stop-before-dispatch is discoverable even without a dispatch owner.
+- `DockerSupervisor::reconcile_cancellations` uses existing fenced termination and receipt handling.
+  `SupervisorService::serve` owns a two-second recovery loop alongside the TLS listener; no detached cleanup task is introduced.
+  A process replacement with the same owner and runtime daemon can finish a previously authorized stop without a new client RPC or grant.
+- Discovery does not grant execution or treat disconnect as cancellation. Worker-side delivery of stop intent remains a separate open integration requirement.
+
+Verification: the disposable PostgreSQL receipt test passes, including owner partitioning, immutable stop routing,
+lease fencing, terminal immutability, and the completion/stop race. The real Docker recovery test passes:
+a replacement supervisor discovers persisted intent, terminates the existing runtime, persists Cancelled, and removes the container.
+The mTLS listener test also passes, including automatic recovery of a pre-existing stop without a cancellation RPC,
+wrong-peer rejection, grant-purpose isolation, and repeated-stop idempotency.
+Commands: `test_sandbox_ledger.py --test-filter sandbox_receipts_fence`,
+`--test-filter sandbox_supervisor_recovers`, and `--test-filter sandbox_supervisor_mtls --adapter-image`.
+All use disposable PostgreSQL; the latter two use cached test/runtime images.
+This is not deployed UI Stop acceptance and does not close Kubernetes execution.

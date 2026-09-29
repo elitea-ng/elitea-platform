@@ -696,6 +696,12 @@ async fn sandbox_receipts_fence_stale_owners_and_preserve_terminal_results() {
     .execute(&isolated.pool)
     .await
     .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../elitea-main/migrations/agentstate/0006_sandbox_stop_reconciliation.sql"
+    ))
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
     let ledger = JobLedger::new(isolated.pool.clone());
     let scope = JobScope::new("sandbox-test".into(), 2, [1; 32], [2; 32]).unwrap();
     assert_eq!(ledger.reserve(&scope).await.unwrap().phase, Phase::Reserved);
@@ -808,9 +814,46 @@ async fn sandbox_receipts_fence_stale_owners_and_preserve_terminal_results() {
     );
     // Stop before dispatch survives a new ledger instance and forbids execution.
     let stop_scope = JobScope::new("sandbox-test".into(), 2, [6; 32], [7; 32]).unwrap();
-    ledger.request_cancellation(&stop_scope).await.unwrap();
+    ledger
+        .request_cancellation(&stop_scope, "recovered-process")
+        .await
+        .unwrap();
     let recovered = JobLedger::new(isolated.pool.clone());
     assert!(recovered.cancellation_requested(&stop_scope).await.unwrap());
+    // Recovery is bounded, owner-scoped, and cannot be redirected by a retry.
+    assert_eq!(
+        recovered
+            .pending_cancellations("recovered-process", 1)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        recovered
+            .pending_cancellations("other-supervisor", 32)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    recovered
+        .request_cancellation(&stop_scope, "other-supervisor")
+        .await
+        .unwrap();
+    assert!(
+        recovered
+            .pending_cancellations("other-supervisor", 32)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(
+        recovered
+            .pending_cancellations("recovered-process", 33)
+            .await,
+        Err(LedgerError::Invalid)
+    ));
+
     let stopped = recovered
         .claim(&stop_scope, "stop-owner".into(), 30)
         .await
@@ -831,7 +874,7 @@ async fn sandbox_receipts_fence_stale_owners_and_preserve_terminal_results() {
     // A late stop cannot replace a completed result.
     assert_eq!(
         ledger
-            .request_cancellation(&scope)
+            .request_cancellation(&scope, "recovered-process")
             .await
             .unwrap()
             .result_json
@@ -850,7 +893,7 @@ async fn sandbox_receipts_fence_stale_owners_and_preserve_terminal_results() {
     ledger.mark_dispatched(&lease).await.unwrap();
     let (finish, cancel) = tokio::join!(
         ledger.finish(&lease, Phase::Completed, Some(result), None),
-        ledger.request_cancellation(&race),
+        ledger.request_cancellation(&race, "recovered-process"),
     );
     cancel.unwrap();
     if finish.is_ok() {
@@ -889,6 +932,12 @@ async fn sandbox_supervisor_recovers_dispatched_job_and_persists_before_cleanup(
     .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../elitea-main/migrations/agentstate/0005_sandbox_cancellation.sql"
+    ))
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../elitea-main/migrations/agentstate/0006_sandbox_stop_reconciliation.sql"
     ))
     .execute(&isolated.pool)
     .await
@@ -1038,7 +1087,10 @@ async fn sandbox_supervisor_recovers_dispatched_job_and_persists_before_cleanup(
         )
         .await
         .unwrap();
-    ledger.request_cancellation(&stopped).await.unwrap();
+    ledger
+        .request_cancellation(&stopped, "recovered-process")
+        .await
+        .unwrap();
     let stopped_result = supervisor.reconcile_dispatched(&stopped).await.unwrap();
     let Reconciliation::Terminal {
         record,
@@ -1080,25 +1132,29 @@ async fn sandbox_supervisor_recovers_dispatched_job_and_persists_before_cleanup(
         .unwrap();
     ledger.mark_dispatched(&running_lease).await.unwrap();
     runtime.dispatch_code_job(&running_identity).await.unwrap();
-    ledger.request_cancellation(&running).await.unwrap();
+    ledger
+        .request_cancellation(&running, "recovered-process")
+        .await
+        .unwrap();
     sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET lease_until=clock_timestamp()-interval '1 second' WHERE phase='dispatched'")
         .execute(&isolated.pool).await.unwrap();
-    let outcome = tokio::time::timeout(
+    // The replacement discovers persisted intent; no repeated client RPC or
+    // still-valid grant is needed to finish this already-authorized stop.
+    tokio::time::timeout(
         Duration::from_secs(10),
-        supervisor.reconcile_dispatched(&running),
+        supervisor.reconcile_cancellations(),
     )
     .await
     .unwrap()
     .unwrap();
-    let Reconciliation::Terminal {
-        record,
-        cleanup_pending,
-    } = outcome
-    else {
-        panic!("expected stopped runtime")
-    };
-    assert_eq!(record.phase, Phase::Cancelled);
-    assert!(!cleanup_pending);
+    assert_eq!(ledger.read(&running).await.unwrap().phase, Phase::Cancelled);
+    assert!(
+        ledger
+            .pending_cancellations("recovered-process", 32)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     assert!(
         runtime
             .observe_code_job(&running_identity)
@@ -1205,6 +1261,12 @@ async fn sandbox_submission(over_tls: bool) {
     .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../elitea-main/migrations/agentstate/0005_sandbox_cancellation.sql"
+    ))
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../elitea-main/migrations/agentstate/0006_sandbox_stop_reconciliation.sql"
     ))
     .execute(&isolated.pool)
     .await
@@ -1344,6 +1406,19 @@ async fn sandbox_submission(over_tls: bool) {
         let read = |name: &str| std::fs::read(dir.join(name)).unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
+        // Emulate an authenticated stop committed before the supervisor died.
+        // The listener must discover it without receiving any cancellation RPC.
+        let pending_stop = crate::sandbox::ledger::JobScope::new(
+            "listener-stop-recovery".into(),
+            2,
+            [91; 32],
+            [92; 32],
+        )
+        .unwrap();
+        ledger
+            .request_cancellation(&pending_stop, "fixture-owner")
+            .await
+            .unwrap();
         let service = SupervisorService::new(
             GrantVerifier::new(Keys(public), "fixture-supervisor".into()).unwrap(),
             std::sync::Arc::new(supervisor),
@@ -1497,6 +1572,13 @@ async fn sandbox_submission(over_tls: bool) {
             transport.cancel_granted(stop_grant).await.unwrap(),
             SandboxJobStatusV1::Cancelled
         );
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while ledger.read(&pending_stop).await.unwrap().phase != Phase::Cancelled {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
         drop(transport);
         stop.send(()).unwrap();
         drop(client);
