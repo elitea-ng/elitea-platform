@@ -1891,3 +1891,22 @@ Make stop delivery recoverable when either worker or supervisor fails during can
 Cover cancellation before dispatch, during execution, after completion, and after restart.
 Use the same contract for Docker and Kubernetes; keep graph checkpoint ownership in the worker.
 No product database schema change is justified by this defect.
+
+## Durable cancellation intent foundation — 2026-09-29
+
+Agentstate migration `0005_sandbox_cancellation.sql` adds one Boolean to the existing sandbox receipt table.
+The field separates a requested stop from confirmed termination. No product table changes.
+`src/sandbox/ledger.rs::request_cancellation` preserves immutable terminal receipts and reserves missing activations before recording stop intent.
+The dispatch update rejects stopped activations. Completion cannot replace a stop intent that commits first.
+The current lease owner remains responsible for terminating its exact runtime identity.
+
+`src/sandbox/docker_supervisor.rs::stop_if_requested` renews ownership, confirms runtime termination, and then persists the cancelled receipt.
+Preparation, execution polling, and recovered reserved activations check durable stop intent.
+A restart between intent and termination retains the request for the next owner.
+The existing ADK Docker termination method targets the inspected immutable container ID and verifies its stopped state.
+
+The isolated PostgreSQL receipt test passes cancellation-before-dispatch, persisted intent, immutable completion, and concurrent completion-versus-stop checks.
+The real-container recovery test passes persisted stop before and after dispatch, with replacement lease ownership and confirmed container removal.
+The authenticated cancellation transport and worker stop-delivery integration remain pending.
+Do not enable stop delivery until the migration and all supervisor owners support this field.
+Do not call this foundation a passing UI cancellation fix.

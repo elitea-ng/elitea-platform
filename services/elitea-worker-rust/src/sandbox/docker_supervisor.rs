@@ -165,7 +165,10 @@ impl DockerSupervisor {
             .map_err(|_| SupervisorError::Busy)?;
         let record = self.ledger.read(scope).await?;
         match record.phase {
-            Phase::Reserved => return Ok(Reconciliation::NeedsDispatch),
+            Phase::Reserved if !self.ledger.cancellation_requested(scope).await? => {
+                return Ok(Reconciliation::NeedsDispatch);
+            }
+            Phase::Reserved => {}
             Phase::Dispatched => {}
             _ => return self.terminal(scope, record).await,
         }
@@ -177,7 +180,9 @@ impl DockerSupervisor {
             return Ok(Reconciliation::OwnedElsewhere);
         };
         // The claim is the authoritative phase observation, not the earlier read.
-        if lease.observed_phase != Phase::Dispatched {
+        if lease.observed_phase != Phase::Dispatched
+            && !self.ledger.cancellation_requested(scope).await?
+        {
             return Err(SupervisorError::Receipt);
         }
         self.run_owned(scope, &lease, None).await
@@ -191,6 +196,9 @@ impl DockerSupervisor {
     ) -> Result<Reconciliation, SupervisorError> {
         let identity = scope.runtime_identity()?;
         let observe = async {
+            if let Some(stopped) = self.stop_if_requested(scope, lease).await? {
+                return Ok(stopped);
+            }
             if lease.observed_phase == Phase::Reserved {
                 let request = request.ok_or(SupervisorError::Invalid)?;
                 if self
@@ -214,6 +222,9 @@ impl DockerSupervisor {
                     .await
                     .map_err(SupervisorError::Runtime)?
                 {
+                    if let Some(stopped) = self.stop_if_requested(scope, lease).await? {
+                        return Ok(stopped);
+                    }
                     if self.ledger.age_seconds(scope).await? >= 60 {
                         self.ledger.renew(lease, LEASE_SECONDS).await?;
                         self.runtime
@@ -242,6 +253,9 @@ impl DockerSupervisor {
             }
             let mut recover_signal = lease.observed_phase == Phase::Dispatched;
             loop {
+                if let Some(stopped) = self.stop_if_requested(scope, lease).await? {
+                    return Ok(stopped);
+                }
                 if let Some(bytes) = self
                     .runtime
                     .read_code_job_receipt(&identity)
@@ -291,6 +305,29 @@ impl DockerSupervisor {
                 _ = heartbeat.tick() => self.ledger.renew(lease, LEASE_SECONDS).await?,
             }
         }
+    }
+
+    async fn stop_if_requested(
+        &self,
+        scope: &JobScope,
+        lease: &JobLease,
+    ) -> Result<Option<Reconciliation>, SupervisorError> {
+        if !self.ledger.cancellation_requested(scope).await? {
+            return Ok(None);
+        }
+        // Keep the stop intent nonterminal until runtime termination is confirmed.
+        // A crash at either boundary leaves the same job eligible for recovery.
+        self.ledger.renew(lease, LEASE_SECONDS).await?;
+        self.runtime
+            .terminate_code_job(&scope.runtime_identity()?)
+            .await
+            .map_err(SupervisorError::Runtime)?;
+        self.ledger
+            .finish(lease, Phase::Cancelled, None, Some("sandbox.cancelled"))
+            .await?;
+        Ok(Some(
+            self.terminal(scope, self.ledger.read(scope).await?).await?,
+        ))
     }
 
     async fn persist_receipt(

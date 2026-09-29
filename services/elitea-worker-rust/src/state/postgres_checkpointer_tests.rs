@@ -690,6 +690,12 @@ async fn sandbox_receipts_fence_stale_owners_and_preserve_terminal_results() {
     .execute(&isolated.pool)
     .await
     .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../elitea-main/migrations/agentstate/0005_sandbox_cancellation.sql"
+    ))
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
     let ledger = JobLedger::new(isolated.pool.clone());
     let scope = JobScope::new("sandbox-test".into(), 2, [1; 32], [2; 32]).unwrap();
     assert_eq!(ledger.reserve(&scope).await.unwrap().phase, Phase::Reserved);
@@ -800,6 +806,64 @@ async fn sandbox_receipts_fence_stale_owners_and_preserve_terminal_results() {
             .unwrap()
             .is_none()
     );
+    // Stop before dispatch survives a new ledger instance and forbids execution.
+    let stop_scope = JobScope::new("sandbox-test".into(), 2, [6; 32], [7; 32]).unwrap();
+    ledger.request_cancellation(&stop_scope).await.unwrap();
+    let recovered = JobLedger::new(isolated.pool.clone());
+    assert!(recovered.cancellation_requested(&stop_scope).await.unwrap());
+    let stopped = recovered
+        .claim(&stop_scope, "stop-owner".into(), 30)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        recovered.mark_dispatched(&stopped).await,
+        Err(LedgerError::Fenced)
+    ));
+    recovered
+        .finish(&stopped, Phase::Cancelled, None, Some("sandbox.cancelled"))
+        .await
+        .unwrap();
+    assert_eq!(
+        recovered.read(&stop_scope).await.unwrap().phase,
+        Phase::Cancelled
+    );
+    // A late stop cannot replace a completed result.
+    assert_eq!(
+        ledger
+            .request_cancellation(&scope)
+            .await
+            .unwrap()
+            .result_json
+            .as_deref(),
+        Some(result)
+    );
+    assert!(!ledger.cancellation_requested(&scope).await.unwrap());
+    // Completion and stop contend on the same row. Exactly one outcome wins.
+    let race = JobScope::new("sandbox-test".into(), 2, [8; 32], [9; 32]).unwrap();
+    ledger.reserve(&race).await.unwrap();
+    let lease = ledger
+        .claim(&race, "race-owner".into(), 30)
+        .await
+        .unwrap()
+        .unwrap();
+    ledger.mark_dispatched(&lease).await.unwrap();
+    let (finish, cancel) = tokio::join!(
+        ledger.finish(&lease, Phase::Completed, Some(result), None),
+        ledger.request_cancellation(&race),
+    );
+    cancel.unwrap();
+    if finish.is_ok() {
+        assert_eq!(ledger.read(&race).await.unwrap().phase, Phase::Completed);
+        assert!(!ledger.cancellation_requested(&race).await.unwrap());
+    } else {
+        assert!(matches!(finish, Err(LedgerError::Fenced)));
+        assert!(ledger.cancellation_requested(&race).await.unwrap());
+        ledger
+            .finish(&lease, Phase::Cancelled, None, Some("sandbox.cancelled"))
+            .await
+            .unwrap();
+    }
     isolated.pool.close().await;
 }
 
@@ -819,6 +883,12 @@ async fn sandbox_supervisor_recovers_dispatched_job_and_persists_before_cleanup(
         .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../elitea-main/migrations/agentstate/0004_sandbox_jobs.sql"
+    ))
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../elitea-main/migrations/agentstate/0005_sandbox_cancellation.sql"
     ))
     .execute(&isolated.pool)
     .await
@@ -953,6 +1023,90 @@ async fn sandbox_supervisor_recovers_dispatched_job_and_persists_before_cleanup(
             .is_none()
     );
     assert!(ledger.renew(&unsignaled_lease, 60).await.is_err());
+    // A durable stop survives owner loss before the execution signal.
+    let stopped =
+        JobScope::new(format!("supervisor-test-{unique}"), 2, [21; 32], [22; 32]).unwrap();
+    let stopped_identity = stopped.runtime_identity().unwrap();
+    ledger.reserve(&stopped).await.unwrap();
+    runtime
+        .provision_code_job(
+            &stopped_identity,
+            &Manifest::new(vec![ManifestEntry::File {
+                path: ".elitea-job.json".into(),
+                content: serde_json::to_vec(&request).unwrap(),
+            }]),
+        )
+        .await
+        .unwrap();
+    ledger.request_cancellation(&stopped).await.unwrap();
+    let stopped_result = supervisor.reconcile_dispatched(&stopped).await.unwrap();
+    let Reconciliation::Terminal {
+        record,
+        cleanup_pending,
+    } = stopped_result
+    else {
+        panic!("expected confirmed cancellation");
+    };
+    assert_eq!(record.phase, Phase::Cancelled);
+    assert_eq!(record.failure_code.as_deref(), Some("sandbox.cancelled"));
+    assert!(!cleanup_pending);
+    assert!(
+        runtime
+            .observe_code_job(&stopped_identity)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    // Stop a dispatched runtime, then recover with a replacement lease owner.
+    let running =
+        JobScope::new(format!("supervisor-test-{unique}"), 2, [23; 32], [24; 32]).unwrap();
+    let running_identity = running.runtime_identity().unwrap();
+    ledger.reserve(&running).await.unwrap();
+    let running_lease = ledger
+        .claim(&running, "lost-stop-owner".into(), 60)
+        .await
+        .unwrap()
+        .unwrap();
+    let slow = json!({"argv":["python","-c","import time;time.sleep(30)"],"timeout_seconds":15});
+    runtime
+        .provision_code_job(
+            &running_identity,
+            &Manifest::new(vec![ManifestEntry::File {
+                path: ".elitea-job.json".into(),
+                content: serde_json::to_vec(&slow).unwrap(),
+            }]),
+        )
+        .await
+        .unwrap();
+    ledger.mark_dispatched(&running_lease).await.unwrap();
+    runtime.dispatch_code_job(&running_identity).await.unwrap();
+    ledger.request_cancellation(&running).await.unwrap();
+    sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET lease_until=clock_timestamp()-interval '1 second' WHERE phase='dispatched'")
+        .execute(&isolated.pool).await.unwrap();
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(10),
+        supervisor.reconcile_dispatched(&running),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let Reconciliation::Terminal {
+        record,
+        cleanup_pending,
+    } = outcome
+    else {
+        panic!("expected stopped runtime")
+    };
+    assert_eq!(record.phase, Phase::Cancelled);
+    assert!(!cleanup_pending);
+    assert!(
+        runtime
+            .observe_code_job(&running_identity)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
     // Lost dispatch acknowledgement must not reset the outer job deadline.
     let abandoned =
         JobScope::new(format!("supervisor-test-{unique}"), 2, [9; 32], [10; 32]).unwrap();
@@ -1045,6 +1199,12 @@ async fn sandbox_submission(over_tls: bool) {
         .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../elitea-main/migrations/agentstate/0004_sandbox_jobs.sql"
+    ))
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../elitea-main/migrations/agentstate/0005_sandbox_cancellation.sql"
     ))
     .execute(&isolated.pool)
     .await

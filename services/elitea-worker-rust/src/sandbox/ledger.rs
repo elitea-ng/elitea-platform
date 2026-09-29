@@ -153,6 +153,27 @@ impl JobLedger {
             .fetch_optional(&self.pool).await?.ok_or(LedgerError::Missing)
     }
 
+    /// Persist an authenticated stop request without claiming that the runtime stopped.
+    /// The caller must authorize this exact scope before calling this method.
+    /// A missing job is reserved to prevent a later submission from starting it.
+    /// # Errors
+    /// Returns an identity conflict or database error.
+    pub async fn request_cancellation(&self, scope: &JobScope) -> Result<JobRecord, LedgerError> {
+        self.reserve(scope).await?;
+        sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET cancellation_requested=TRUE,updated_at=clock_timestamp() WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND phase IN ('reserved','dispatched') AND NOT cancellation_requested")
+            .bind(&scope.tenant).bind(scope.project).bind(scope.key.as_slice()).bind(scope.digest.as_slice())
+            .execute(&self.pool).await?;
+        self.read(scope).await
+    }
+
+    /// # Errors
+    /// Returns `Missing` for an unknown scope or a database error.
+    pub async fn cancellation_requested(&self, scope: &JobScope) -> Result<bool, LedgerError> {
+        sqlx::query_scalar("SELECT cancellation_requested FROM elitea_runtime.sandbox_jobs WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4")
+            .bind(&scope.tenant).bind(scope.project).bind(scope.key.as_slice()).bind(scope.digest.as_slice())
+            .fetch_optional(&self.pool).await?.ok_or(LedgerError::Missing)
+    }
+
     /// Reclaiming a dispatched job grants reconciliation, never permission to replay.
     /// Database time and a monotonically increasing epoch fence previous owners.
     /// # Errors
@@ -197,7 +218,7 @@ impl JobLedger {
     /// # Errors
     /// Returns `Fenced` if ownership or phase changed, or a database error.
     pub async fn mark_dispatched(&self, lease: &JobLease) -> Result<(), LedgerError> {
-        let count = sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET phase='dispatched',updated_at=clock_timestamp() WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND lease_epoch=$6 AND lease_until > clock_timestamp() AND phase='reserved'")
+        let count = sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET phase='dispatched',updated_at=clock_timestamp() WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND lease_epoch=$6 AND lease_until > clock_timestamp() AND phase='reserved' AND NOT cancellation_requested")
             .bind(&lease.scope.tenant).bind(lease.scope.project).bind(lease.scope.key.as_slice()).bind(lease.scope.digest.as_slice())
             .bind(&lease.owner).bind(lease.epoch).execute(&self.pool).await?.rows_affected();
         changed(count)
@@ -244,7 +265,7 @@ impl JobLedger {
             }
             Phase::Reserved | Phase::Dispatched => return Err(LedgerError::Invalid),
         };
-        let count = sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET phase=$7,result_json=$8,failure_code=$9,updated_at=clock_timestamp() WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND lease_epoch=$6 AND lease_until > clock_timestamp() AND (phase='dispatched' OR (phase='reserved' AND $7 <> 'completed'))")
+        let count = sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET phase=$7,result_json=$8,failure_code=$9,updated_at=clock_timestamp() WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND lease_epoch=$6 AND lease_until > clock_timestamp() AND (phase='dispatched' OR (phase='reserved' AND $7 <> 'completed')) AND (NOT cancellation_requested OR $7='cancelled')")
             .bind(&lease.scope.tenant).bind(lease.scope.project).bind(lease.scope.key.as_slice()).bind(lease.scope.digest.as_slice())
             .bind(&lease.owner).bind(lease.epoch).bind(phase).bind(result).bind(failure).execute(&self.pool).await?.rows_affected();
         changed(count)
