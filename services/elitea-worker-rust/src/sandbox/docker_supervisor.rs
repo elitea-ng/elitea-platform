@@ -3,7 +3,7 @@ use super::request::{Language, PreparedJob};
 use crate::protocol::sandbox_grant::{AuthorizedCancellation, AuthorizedJob};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use adk_sandbox::workspace::docker::DockerClient;
+use super::runtime::CodeJobRuntime;
 use tokio::sync::Semaphore;
 
 use super::ledger::{JobLease, JobLedger, JobRecord, JobScope, LedgerError, Phase};
@@ -13,7 +13,7 @@ const MAX_JOB_AGE_SECONDS: i64 = 3660;
 
 pub struct DockerSupervisor {
     ledger: JobLedger,
-    runtime: DockerClient,
+    runtime: Box<dyn CodeJobRuntime>,
     owner: String,
     capacity: Semaphore,
     stop_capacity: Semaphore,
@@ -50,7 +50,7 @@ impl DockerSupervisor {
     /// Returns `Invalid` for an invalid owner or concurrency bound.
     pub fn new(
         ledger: JobLedger,
-        runtime: DockerClient,
+        runtime: impl CodeJobRuntime + 'static,
         owner: String,
         concurrency: usize,
     ) -> Result<Self, SupervisorError> {
@@ -64,7 +64,7 @@ impl DockerSupervisor {
         }
         Ok(Self {
             ledger,
-            runtime,
+            runtime: Box::new(runtime),
             owner,
             capacity: Semaphore::new(concurrency),
             stop_capacity: Semaphore::new(concurrency.min(16)),
@@ -128,7 +128,7 @@ impl DockerSupervisor {
             .admission_policy
             .as_ref()
             .is_some_and(|(policy, languages)| {
-                request.matches_runtime(&self.runtime.base_image, policy, languages)
+                request.matches_runtime(self.runtime.image_digest(), policy, languages)
             })
         {
             return Err(SupervisorError::Invalid);
@@ -264,16 +264,15 @@ impl DockerSupervisor {
             }
             if lease.observed_phase == Phase::Reserved {
                 let request = request.ok_or(SupervisorError::Invalid)?;
-                if self
+                if !self
                     .runtime
-                    .observe_code_job(&identity)
+                    .exists(&identity)
                     .await
                     .map_err(SupervisorError::Runtime)?
-                    .is_none()
                 {
                     let manifest = request.manifest().map_err(|_| SupervisorError::Invalid)?;
                     self.runtime
-                        .provision_code_job(&identity, &manifest)
+                        .prepare(&identity, &manifest)
                         .await
                         .map_err(SupervisorError::Runtime)?;
                 }
@@ -281,7 +280,7 @@ impl DockerSupervisor {
                 // request may still be completing remotely after loss of its owner.
                 while !self
                     .runtime
-                    .code_job_prepared(&identity)
+                    .prepared(&identity)
                     .await
                     .map_err(SupervisorError::Runtime)?
                 {
@@ -299,7 +298,7 @@ impl DockerSupervisor {
                 // Uncertain acknowledgement leaves the durable dispatched row;
                 // recovery reads the existing runtime, never creates another one.
                 self.runtime
-                    .dispatch_code_job(&identity)
+                    .dispatch(&identity)
                     .await
                     .map_err(SupervisorError::Runtime)?;
             }
@@ -310,7 +309,7 @@ impl DockerSupervisor {
                 }
                 if let Some(bytes) = self
                     .runtime
-                    .read_code_job_receipt(&identity)
+                    .receipt(&identity)
                     .await
                     .map_err(SupervisorError::Runtime)?
                 {
@@ -328,7 +327,7 @@ impl DockerSupervisor {
                     // or recreates a container. Check receipt/deadline first.
                     self.ledger.renew(lease, LEASE_SECONDS).await?;
                     self.runtime
-                        .dispatch_code_job(&identity)
+                        .dispatch(&identity)
                         .await
                         .map_err(SupervisorError::Runtime)?;
                     recover_signal = false;
@@ -356,7 +355,7 @@ impl DockerSupervisor {
     ) -> Result<Reconciliation, SupervisorError> {
         self.ledger.renew(lease, LEASE_SECONDS).await?;
         self.runtime
-            .terminate_code_job(&scope.runtime_identity()?)
+            .terminate(&scope.runtime_identity()?)
             .await
             .map_err(SupervisorError::Runtime)?;
         self.ledger
@@ -377,7 +376,7 @@ impl DockerSupervisor {
         // A crash at either boundary leaves the same job eligible for recovery.
         self.ledger.renew(lease, LEASE_SECONDS).await?;
         self.runtime
-            .terminate_code_job(&scope.runtime_identity()?)
+            .terminate(&scope.runtime_identity()?)
             .await
             .map_err(SupervisorError::Runtime)?;
         self.ledger
@@ -412,7 +411,7 @@ impl DockerSupervisor {
         // A durable receipt is sufficient for recovery even when cleanup fails.
         // Never force-remove a live workload or discard the persisted result.
         let identity = scope.runtime_identity()?;
-        let cleanup_pending = self.runtime.remove_code_job(&identity).await.is_err();
+        let cleanup_pending = self.runtime.cleanup(&identity).await.is_err();
         if cleanup_pending {
             tracing::warn!(
                 operation = "sandbox.runtime_cleanup",

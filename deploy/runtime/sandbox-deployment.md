@@ -63,10 +63,15 @@ Kubernetes execution requires a separate backend and deployment; this Docker ove
 
 ## Kubernetes acceptance requirements
 
-Deploy the supervisor as a service that creates isolated execution Jobs on demand.
-Use a scoped service account for Job management; the worker and execution Pods must not receive that authority.
+Deploy the supervisor as a service that creates isolated execution Pods on demand.
+Use a scoped service account for Pod management; the worker and execution Pods must not receive that authority.
 Runtime images must be pinned and warmed on eligible nodes. Image warmup alone does not provide execution support.
 Apply per-job CPU, memory, process/runtime restrictions, and bounded concurrency.
-Reconcile the original Job identity and durable receipt after supervisor or worker replacement.
-Persist cancellation intent before deleting or terminating a Job, and confirm termination before reporting cancellation complete.
+Reconcile the original Pod identity and durable receipt after supervisor or worker replacement.
+Persist cancellation intent before deleting or terminating a Pod, and confirm termination before reporting cancellation complete.
 Verify execution, Stop, lost acknowledgements, and restart recovery through the deployed UI before closing this gate.
+
+Use one Pod per durable job with `restartPolicy: Never`. Do not add a controller that automatically replaces failed Pods.
+Keep the receipt finalizer until the terminal receipt is durable.
+Confirm the original Pod UID and terminated container status before completing cancellation.
+A missing Pod or deletion acknowledgement does not prove that an unreachable node stopped executing code.

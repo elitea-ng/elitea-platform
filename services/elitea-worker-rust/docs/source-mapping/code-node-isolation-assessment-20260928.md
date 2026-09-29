@@ -2086,3 +2086,37 @@ The existing Main policy in `internal/infra/db/repos/agent_cancel.go` and `confi
 Validation: 44 focused transport tests pass, including confirmed cancellation, pending-cancellation reconnect, and failed Stop retry. Typechecking and the production image build also pass.
 
 Deployed image: `sha256:cf2428daaa0827ac436a83d76d707a4639c60ec1e9f5ce7d0f59e245e6a6b205`. Browser acceptance passes in persistent chat 755. Stop remains available while cancellation awaits confirmation. The terminal event displays “Execution was cancelled” and releases the composer. Receipt `e3d0ec1f6e25f5ba8c1e637441e35f4e5304fcdf8d4d9c938ecd3614f13ad403` becomes cancelled at `2026-09-29T19:39:26.075030Z`.
+
+### Kubernetes runtime boundary (2026-09-29)
+
+`src/sandbox/runtime.rs` defines the runtime boundary below the durable supervisor.
+The Docker adapter delegates to the existing ADK extension without changing dispatch, receipt, or cancellation semantics.
+`docker_supervisor.rs` now consumes that boundary. Its existing name remains until the Kubernetes adapter is connected.
+The supervisor still owns database leases and receipts. The worker still owns graph checkpoints.
+
+`src/sandbox/kubernetes/mod.rs` adds the execution Pod policy and termination identity checks.
+Each durable job uses one Pod with `restartPolicy: Never`, without a Job or Deployment retry controller.
+Controller retries could execute code again after an uncertain result. The supervisor must reconcile the original identity instead.
+The Pod retains a receipt finalizer. Cleanup must remove it only after receipt persistence.
+Deletion acknowledgement and Pod phase alone do not confirm runtime termination.
+The runtime must check the original UID, full job fingerprint, request fingerprint, and terminated container status.
+A missing Pod after dispatch remains uncertain. Never recreate it automatically.
+
+The policy pins a registry digest and uses `imagePullPolicy: Never`.
+Deployment warmup must install that digest on eligible sandbox nodes before execution.
+The policy also requires explicit node selection, a RuntimeClass, CPU limits, memory limits, and a deadline.
+Execution Pods have no service-account token, host namespaces, privilege escalation, or writable root filesystem.
+Code and input must use authenticated exec stdin. They must not enter Pod metadata, environment variables, or ConfigMaps.
+The deployment still needs enforced network isolation and node-level process limits.
+
+This extends the remote-sandbox behavior mapped earlier. The current platform does not provide this durable Kubernetes lifecycle.
+The Kubernetes API adapter, UID persistence, deployment RBAC, and live acceptance remain open.
+The configured local minikube API refuses connections during this check. No cluster configuration changes occur.
+
+Kubernetes references:
+- [Pod lifecycle](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/)
+- [Finalizers](https://kubernetes.io/docs/concepts/overview/working-with-objects/finalizers/)
+
+Validation: all 22 focused sandbox tests pass. The local minikube profile reports all control-plane components stopped.
+The first restricted test run cannot bind its loopback listener. The authorized rerun passes without ignored tests.
+Library Clippy passes with warnings denied. These checks do not prove Kubernetes execution or deployment.
