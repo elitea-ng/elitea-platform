@@ -1101,3 +1101,54 @@ shared receipt persistence operation. This tests replacement ownership at the
 specific crash boundary, not a killed production supervisor service or Kubernetes
 execution. No current-platform remote-sandbox replay behavior was copied; its
 lack of durable job receipts is the business/runtime gap this boundary closes.
+
+
+### Python image adapter contract (2026-09-29)
+
+Current SDK `infra/data/sandbox/main.ts::runPython` uses Pyodide's last expression
+as the result and prepares missing imports. `runtime/tools/function.py::_prepare_pyodide_input`
+provides selected state and the legacy `alita_state` copy. The new
+`services/elitea-code-runner/adapters/python.mjs::executePython` preserves those
+behaviors using pinned Pyodide 0.29.0 and a Deno lockfile. State is passed as JSON
+data, never interpolated into executable source. Interpreter sessions are fresh
+per job; serialized Python sessions do not enter graph checkpoints.
+
+Prints and package diagnostics stream to stderr under the parent runner's bound.
+Stdout contains a single revisioned JSON result envelope. Non-finite/non-JSON and
+oversized results fail instead of silently truncating state. The worker must
+still validate typed output destinations. The adapter has no platform token or
+client injected; scoped platform access remains separate integration work.
+Automatic package preparation uses import names; an explicit micropip import
+delegates installation ordering and versions to the code, so preprocessing does
+not defeat a pinned install. Distributions with different names require explicit
+micropip installation. The default network-isolated
+container can only use prepared assets until approved package egress is wired.
+
+Four real, offline Pyodide tests passed: state/final-expression/top-level-await
+and escaping, exception propagation, inline micropip installation of cached
+idna 3.10, and invalid/oversized result rejection. A CLI subprocess check verified
+stdout parses as exactly one result envelope while diagnostic/package messages
+appear only on stderr. Deno lint passed. These are local interpreter/transport
+checks, not an enabled product Code node, Linux image integration, Kubernetes or
+browser acceptance. Image assembly and JS/TS/Rust adapters remain open.
+
+
+### Repository workspace access requirement (2026-09-29)
+
+Code execution against a codebase requires an authorized repository/workspace
+reference, not a caller-selected host path. The target container layout is a
+fixed `/workspace/repo` plus job-local writable scratch/output. Kubernetes may
+use a PVC-backed cache or an explicitly persistent workspace; Docker may use a
+supervisor-managed volume or staged copy. A mutable checkout must not be shared
+between concurrent untrusted jobs. Default access should use a pinned revision
+and read-only source, with an isolated writable checkout when modifications are
+required. Changes return as patches/artifacts unless publishing is separately
+authorized. HostPath mounts and Docker socket access are not code capabilities.
+
+This requirement is not implemented by the current two-file manifest. Before
+adding mounts, extend admission to bind repository identity, immutable revision,
+access mode and workspace lifecycle to the request fingerprint. Recovery must
+reuse that identity rather than silently checking out a newer branch head.
+Persistent workspace ownership, locking/cleanup, size limits and tenant access
+must be resolved alongside both deployment backends. Image warming remains
+separate from repository preparation and never grants repository access.
