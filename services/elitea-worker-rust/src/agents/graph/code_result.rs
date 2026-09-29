@@ -113,7 +113,7 @@ mod tests {
         .unwrap()
     }
 
-    fn receipt(result: Value) -> Vec<u8> {
+    fn receipt(result: &Value) -> Vec<u8> {
         serde_json::to_vec(&json!({"revision":1,"status":"completed","exit_code":0,
             "stdout":json!({"revision":1,"result":result}).to_string(),
             "stderr":"private diagnostic"}))
@@ -124,7 +124,7 @@ mod tests {
     fn ordinary_output_maps_whole_result_and_constructs_only_assistant_messages() {
         let result = json!({"count":7});
         let update = project_code_receipt(
-            &receipt(result.clone()),
+            &receipt(&result),
             &boundary(),
             &["payload".into(), "messages".into()],
             false,
@@ -145,10 +145,10 @@ mod tests {
             json!({"count":7,"messages":[]}),
             json!({"count":"wrong type"}),
         ] {
-            assert!(project_code_receipt(&receipt(result), &boundary(), &[], true).is_err());
+            assert!(project_code_receipt(&receipt(&result), &boundary(), &[], true).is_err());
         }
         let updates = project_code_receipt(
-            &receipt(json!({"count":7})),
+            &receipt(&json!({"count":7})),
             &boundary(),
             &["count".into()],
             true,
@@ -160,17 +160,17 @@ mod tests {
     #[test]
     fn structured_json_string_preserves_named_projection() {
         for value in [json!({"count":7}), json!("{\"count\":7}")] {
-            let updates = project_code_receipt(&receipt(value), &boundary(), &[], true).unwrap();
+            let updates = project_code_receipt(&receipt(&value), &boundary(), &[], true).unwrap();
             assert_eq!(updates["count"], 7);
         }
         let updates =
-            project_code_receipt(&receipt(json!([1, 2])), &boundary(), &[], true).unwrap();
+            project_code_receipt(&receipt(&json!([1, 2])), &boundary(), &[], true).unwrap();
         assert_eq!(updates["result"], "[1,2]");
     }
 
     #[test]
     fn failed_or_ambiguous_receipts_never_become_updates() {
-        let valid = receipt(json!(7));
+        let valid = receipt(&json!(7));
         for field in ["status", "exit_code", "revision", "stdout"] {
             let mut value: Value = serde_json::from_slice(&valid).unwrap();
             value[field] = Value::Null;
@@ -197,7 +197,7 @@ mod tests {
 
     #[test]
     fn repeated_outputs_are_bounded_before_cloning_large_values() {
-        let bytes = receipt(json!({"text":"x".repeat(200_000)}));
+        let bytes = receipt(&json!({"text":"x".repeat(200_000)}));
         let outputs = vec!["payload".into(); 4];
         assert_eq!(
             project_code_receipt(&bytes, &boundary(), &outputs, false),

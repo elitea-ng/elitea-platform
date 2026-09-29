@@ -1622,3 +1622,21 @@ These tests provide regression evidence, not live nested sandbox acceptance.
 Live Main grants, nested execution, cancellation, crash recovery, and browser acceptance still require deployed verification.
 
 Default-library Clippy also passes with warnings denied.
+
+
+## Agent tool reuse and recovery investigation — 2026-09-29
+
+The sandbox is shared infrastructure for Code nodes and the future ordinary-agent code tool.
+Gate 7a owns that tool, including the main chat agent module. Gate 5 does not close the module requirement.
+The tool needs tool-call activation identity, model-generated-source admission, and bounded tool-result projection.
+It reuses deployment profiles, Main grants, supervisor receipts, and execution limits.
+
+Recovery inspection finds that `PipelineDefinition::recovery_frontier_supported` still rejects Code nodes.
+ADK restores the saved graph step and pending nodes, which preserves Code activation identity.
+However, ADK does not save an initial frontier before executing the first graph node.
+Do not treat a replay allowlist change alone as complete crash recovery.
+A focused graph test covers a lost response after a simulated remote effect and before graph state commitment.
+It uses a saved frontier and a receipt fixture; it does not simulate a process or database restart.
+
+The focused lost-response test passes. Library and test Clippy pass with warnings denied.
+The receipt test helper now borrows its JSON value, removing an unnecessary clone.

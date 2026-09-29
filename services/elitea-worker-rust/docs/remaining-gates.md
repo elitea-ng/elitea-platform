@@ -235,6 +235,11 @@ Built-in modules are distinct from the internal MCP entity-management tools comp
 The [module ledger](source-mapping/builtin-runtime-modules.md) records their source owners, current runtime limits, and required proofs.
 Attachments depend on gate 7 artifact authority; Python execution depends on the gate 5 sandbox boundary.
 Share these implementations instead of adding a second artifact store or sandbox.
+The 2026-09-29 clarification also requires a code-execution tool for ordinary agents and the main chat agent.
+Gate 5 supplies the shared sandbox foundation; gate 7a supplies module discovery, model-call binding, and UI controls.
+The tool must use stable tool-call activation identities, approved language profiles, and the same durable supervisor receipts.
+Model-generated source requires its own admission contract; it must not bypass the saved Code-node source boundary.
+Verify tool results, cancellation, restart recovery, and parallel calls through the chat UI before closing gate 7a.
 Swarm is excluded from this scope.
 
 The [follow-up sync ledger](source-mapping/main-sync-20260909-followup.md) records the latest merge and migration boundary.

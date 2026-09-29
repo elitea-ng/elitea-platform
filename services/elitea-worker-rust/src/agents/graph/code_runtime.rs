@@ -257,4 +257,98 @@ mod tests {
             assert_eq!(runtime.visits.lock().unwrap().len(), 1);
         }
     }
+    #[tokio::test]
+    async fn lost_response_recovery_reuses_activation_and_terminal_checkpoint_skips_dispatch() {
+        use adk_rust::graph::{Checkpoint, Checkpointer};
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct LostResponse {
+            runtime: Runtime,
+            started: tokio::sync::Notify,
+            first: AtomicBool,
+            receipt: Mutex<Option<Vec<u8>>>,
+            activations: Mutex<Vec<[u8; 32]>>,
+        }
+        #[async_trait]
+        impl CodeSandboxRuntime for LostResponse {
+            async fn execute(&self, invocation: CodeInvocation<'_>) -> Result<Vec<u8>, GraphError> {
+                self.activations.lock().unwrap().push(invocation.activation);
+                if self.first.swap(false, Ordering::SeqCst) {
+                    let receipt = self.runtime.execute(invocation).await?;
+                    *self.receipt.lock().unwrap() = Some(receipt);
+                    self.started.notify_one();
+                    std::future::pending::<()>().await;
+                    unreachable!();
+                }
+                Ok(self.receipt.lock().unwrap().clone().unwrap())
+            }
+        }
+        let runtime = Arc::new(LostResponse {
+            runtime: Runtime::default(),
+            started: tokio::sync::Notify::new(),
+            first: AtomicBool::new(true),
+            receipt: Mutex::new(None),
+            activations: Mutex::new(Vec::new()),
+        });
+        let definition = PipelineDefinition::from_yaml(&format!(
+            "state:\n  count: int\nentry_point: run\nnodes:\n  - {}",
+            YAML.replace('\n', "\n    ")
+        ))
+        .unwrap();
+        let checkpoints = Arc::new(MemoryCheckpointer::new());
+        checkpoints
+            .save(&Checkpoint::new(
+                "child-code",
+                State::from([("count".into(), json!(2))]),
+                3,
+                vec!["run".into()],
+            ))
+            .await
+            .unwrap();
+        let bindings = PipelineNodeRuntimes::default().with_code(runtime.clone());
+        {
+            let graph = definition
+                .compile_subgraph_with_runtime(checkpoints.clone(), &bindings)
+                .unwrap();
+            let execution = graph.invoke(State::new(), ExecutionConfig::new("child-code"));
+            tokio::pin!(execution);
+            tokio::select! {
+                result = &mut execution => panic!("execution unexpectedly completed: {result:?}"),
+                () = runtime.started.notified() => {}
+            }
+            // Drop the caller after the remote effect, before its receipt arrives.
+        }
+        assert_eq!(
+            checkpoints.load("child-code").await.unwrap().unwrap().step,
+            3
+        );
+        let recovered = definition
+            .compile_subgraph_with_runtime(checkpoints.clone(), &bindings)
+            .unwrap();
+        assert_eq!(
+            recovered
+                .invoke(State::new(), ExecutionConfig::new("child-code"))
+                .await
+                .unwrap()["count"],
+            7
+        );
+        let activations = runtime.activations.lock().unwrap().clone();
+        assert_eq!(activations.len(), 2);
+        assert_eq!(activations[0], activations[1]);
+        assert_eq!(runtime.runtime.visits.lock().unwrap().len(), 1);
+        assert!(
+            checkpoints
+                .load("child-code")
+                .await
+                .unwrap()
+                .unwrap()
+                .pending_nodes
+                .is_empty()
+        );
+        recovered
+            .invoke(State::new(), ExecutionConfig::new("child-code"))
+            .await
+            .unwrap();
+        assert_eq!(runtime.activations.lock().unwrap().len(), 2);
+    }
 }
