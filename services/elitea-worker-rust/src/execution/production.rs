@@ -225,6 +225,7 @@ impl ProductionAgentRuntime {
             platform,
             model_facade,
             agentstate,
+            sandbox,
         } = bundle;
         let limits = deployment.limits;
         let output_config = OutputGrpcConfig {
@@ -282,14 +283,17 @@ impl ProductionAgentRuntime {
                 .map_err(|_| ProductionRuntimeBuildError)?;
         let terminal_recovery = AgentTerminalRecoveryConfig::new(limits.output_max_sessions)
             .map_err(|_| ProductionRuntimeBuildError)?;
-        let assembler = Arc::new(NativeRuntimeAssembler::postgres(
-            platform,
-            model_facade,
-            tool_policy,
-            agentstate,
-            SessionLimits::default(),
-            CheckpointLimits::default(),
-        ));
+        let assembler = Arc::new(
+            NativeRuntimeAssembler::postgres(
+                platform,
+                model_facade,
+                tool_policy,
+                agentstate,
+                SessionLimits::default(),
+                CheckpointLimits::default(),
+            )
+            .with_sandbox(sandbox),
+        );
         let clock = Arc::new(SystemUnixMillisClock);
         let agent: ProductionAgentProcessor = native_agent_delivery_processor(
             Arc::clone(&command_authenticator),

@@ -12,6 +12,7 @@ mod code;
 mod code_result;
 mod code_runtime;
 mod code_remote;
+pub(crate) use code_remote::CodeRuntimeFactory;
 #[cfg(test)]
 mod code_tests;
 mod code_state;

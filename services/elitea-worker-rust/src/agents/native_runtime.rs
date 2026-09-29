@@ -91,6 +91,14 @@ impl<D, P> NativeRuntimeAssembler<D, P> {
 }
 
 impl NativeRuntimeAssembler<OrdinaryNativeAgentAssembler, PipelineNativeAgentAssembler> {
+    pub(crate) fn with_sandbox(
+        mut self,
+        sandbox: Option<Arc<super::graph::CodeRuntimeFactory>>,
+    ) -> Self {
+        self.pipeline = self.pipeline.with_sandbox(sandbox);
+        self
+    }
+
     /// Compose both native modes over the same authorized `agentstate` pool.
     ///
     /// Direct agents consume only the session writer. Pipelines consume a

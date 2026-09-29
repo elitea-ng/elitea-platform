@@ -1,5 +1,4 @@
 //! Invocation-bound supervisor execution; graph state never selects the runtime.
-#![allow(dead_code)] // Deployment configuration is wired in the production composition.
 
 use super::{
     code::{CodeLanguage, CodeProvenance},
@@ -28,7 +27,47 @@ pub(super) struct CodeRuntimeProfile {
 pub(super) struct RemoteCodeRuntime {
     pub(super) control: Arc<AgentControlClient<TonicControlRpc>>,
     pub(super) authority: Arc<ClaimBoundSandboxAuthority>,
-    pub(super) profiles: Vec<CodeRuntimeProfile>,
+    pub(super) profiles: Arc<[CodeRuntimeProfile]>,
+}
+
+pub(crate) struct CodeRuntimeFactory {
+    control: Arc<AgentControlClient<TonicControlRpc>>,
+    profiles: Arc<[CodeRuntimeProfile]>,
+}
+impl CodeRuntimeFactory {
+    pub(crate) fn new(
+        control: Arc<AgentControlClient<TonicControlRpc>>,
+        profiles: Vec<(crate::config::SandboxRuntimeConfig, SandboxClient)>,
+    ) -> Self {
+        let profiles = profiles
+            .into_iter()
+            .map(|(config, client)| CodeRuntimeProfile {
+                language: match config.language {
+                    Language::Python => CodeLanguage::Python,
+                    Language::JavaScript => CodeLanguage::JavaScript,
+                    Language::TypeScript => CodeLanguage::TypeScript,
+                    Language::Rust => CodeLanguage::Rust,
+                },
+                image_digest: config.image_digest,
+                policy_revision: config.policy_revision,
+                timeout_seconds: config.timeout_seconds,
+                client,
+            })
+            .collect::<Vec<_>>()
+            .into();
+        Self { control, profiles }
+    }
+    pub(crate) fn attach(
+        &self,
+        nodes: super::compiler::PipelineNodeRuntimes,
+        authority: Arc<ClaimBoundSandboxAuthority>,
+    ) -> super::compiler::PipelineNodeRuntimes {
+        nodes.with_code(Arc::new(RemoteCodeRuntime {
+            control: self.control.clone(),
+            authority,
+            profiles: self.profiles.clone(),
+        }))
+    }
 }
 
 #[async_trait]

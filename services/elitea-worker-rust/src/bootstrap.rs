@@ -108,6 +108,7 @@ pub(crate) struct ProductionTransportBundle {
     pub(crate) platform: Arc<PlatformClient>,
     pub(crate) model_facade: Arc<ModelFacade>,
     pub(crate) agentstate: PgPool,
+    pub(crate) sandbox: Option<Arc<crate::agents::graph::CodeRuntimeFactory>>,
 }
 
 impl ProductionTransportBundle {
@@ -173,6 +174,30 @@ impl ProductionTransportBundle {
 
         let control = AgentControlClient::from_channel(control, profiles.control)
             .map_err(|error| map_agent_control_error(&error))?;
+        let control = Arc::new(control);
+        let mut sandbox_profiles = Vec::with_capacity(deployment.sandbox_runtimes.len());
+        for profile in &deployment.sandbox_runtimes {
+            let channel = connect_private_grpc(
+                &profile.target,
+                profiles.grpc_connect_timeout,
+                trust.private_ca(),
+                trust.client_identity(),
+            )
+            .await?;
+            let client = crate::sandbox::client::SandboxClient::from_channel(
+                channel,
+                profile.audience.clone(),
+                Duration::from_secs(u64::from(profile.timeout_seconds) + 60),
+            )
+            .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?;
+            sandbox_profiles.push((profile.clone(), client));
+        }
+        let sandbox = (!sandbox_profiles.is_empty()).then(|| {
+            Arc::new(crate::agents::graph::CodeRuntimeFactory::new(
+                control.clone(),
+                sandbox_profiles,
+            ))
+        });
         let platform = Arc::new(PlatformClient::new(Arc::new(runtime_context)));
         Ok(Self {
             command_authenticator: trust.command_authenticator(),
@@ -180,7 +205,8 @@ impl ProductionTransportBundle {
             deployment,
             spool_root,
             redis,
-            control: Arc::new(control),
+            control,
+            sandbox,
             output,
             input: Arc::new(input),
             platform,

@@ -1571,3 +1571,31 @@ rejection, and another workload being rejected before network submission.
 Default-worker Clippy passed with warnings denied after simplifying equivalent
 retry match patterns. No deployment or live Main-to-supervisor grant test is
 claimed by the library suite.
+
+
+## Production runtime selection and direct pipeline assembly — 2026-09-29
+
+The current platform selects its local or remote code backend through deployment configuration.
+The behavioral reference remains `elitea_sdk/runtime/tools/function.py`, described above.
+Pipeline YAML supplies code and state selections, not infrastructure authority.
+
+The Rust mapping now connects these boundaries:
+
+- `src/config.rs` accepts up to four optional `sandbox_runtimes`, with one profile per language.
+- Each profile requires a private gRPC target, audience, immutable image digest, policy revision, and bounded timeout.
+- `src/bootstrap.rs` creates supervisor channels with the existing private CA and worker certificate.
+- `src/agents/graph/code_remote.rs` shares immutable profiles through `CodeRuntimeFactory`.
+- `src/agents/runtime.rs` exposes the already admitted sandbox authority to pipeline assembly.
+- `src/agents/pipeline.rs` binds that authority before compiling a direct pipeline.
+- `src/agents/native_runtime.rs` and `src/execution/production.rs` carry the factory through production composition.
+
+An absent profile list preserves disabled Code execution. Duplicate language profiles fail startup validation.
+Model output and graph state cannot select a supervisor, image, audience, or policy.
+Each invocation receives its own authority; the shared factory does not retain invocation claims.
+
+This change does not finish nested pipeline binding, supervisor cancellation, or Code checkpoint recovery.
+It does not prove deployment, live Main grant issuance, Kubernetes execution, or browser acceptance.
+Those gates remain open. The product database schema does not change.
+
+Verification: default-library compilation passes. Seven configuration tests and 108 graph tests pass.
+Default-library Clippy passes with warnings denied. These checks do not prove live supervisor execution.

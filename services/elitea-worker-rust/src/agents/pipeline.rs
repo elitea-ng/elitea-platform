@@ -332,6 +332,7 @@ impl PipelineExecutionProfile {
 
 /// Authorized assembler for stored pipelines backed by ADK `GraphAgent`.
 pub(crate) struct PipelineNativeAgentAssembler {
+    sandbox: Option<Arc<super::graph::CodeRuntimeFactory>>,
     state: NativePipelineStateBackend,
     tool_policy: Arc<ToolAdmissionPolicy>,
     platform: Option<Arc<PlatformClient>>,
@@ -340,6 +341,13 @@ pub(crate) struct PipelineNativeAgentAssembler {
 }
 
 impl PipelineNativeAgentAssembler {
+    pub(crate) fn with_sandbox(
+        mut self,
+        sandbox: Option<Arc<super::graph::CodeRuntimeFactory>>,
+    ) -> Self {
+        self.sandbox = sandbox;
+        self
+    }
     /// Use the shared `agentstate` database for both ADK sessions and graph
     /// checkpoints, with separate claim-fenced tables and one immutable lease.
     #[must_use]
@@ -352,6 +360,7 @@ impl PipelineNativeAgentAssembler {
         model_facade: Arc<ModelFacade>,
     ) -> Self {
         Self {
+            sandbox: None,
             state: NativePipelineStateBackend::postgres(pool, session_limits, checkpoint_limits),
             tool_policy,
             platform: Some(platform),
@@ -371,6 +380,7 @@ impl PipelineNativeAgentAssembler {
                 .expect("empty tool policy"),
         );
         Self {
+            sandbox: None,
             state: NativePipelineStateBackend::injected(sessions, checkpointer),
             tool_policy,
             platform: None,
@@ -771,6 +781,7 @@ impl PipelineNativeAgentAssembler {
                 }
                 None => assembly,
             };
+            let sandbox_authority = assembly.sandbox_authority();
             let admitted = assembly.admit_pipeline_with_policy(tool_policy.as_ref())?;
             let (profile, plan, toolsets, mcp_tokens, start, runtime_context, session, lease) =
                 admitted.into_parts();
@@ -793,7 +804,7 @@ impl PipelineNativeAgentAssembler {
             } else {
                 start
             };
-            let node_runtimes = self
+            let mut node_runtimes = self
                 .bind_node_runtimes(
                     &profile,
                     toolsets,
@@ -803,6 +814,9 @@ impl PipelineNativeAgentAssembler {
                     state.model_scopes.clone(),
                 )
                 .await?;
+            if let (Some(factory), Some(authority)) = (&self.sandbox, sandbox_authority) {
+                node_runtimes.nodes = factory.attach(node_runtimes.nodes, authority);
+            }
             tracing::Span::current().record("stage", "state");
             let assembled = assemble_pipeline_native(
                 plan,

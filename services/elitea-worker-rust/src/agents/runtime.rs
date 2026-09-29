@@ -227,6 +227,11 @@ pub(crate) struct AuthorizedNativeAssembly<'a> {
 }
 
 impl<'a> AuthorizedNativeAssembly<'a> {
+    pub(crate) fn sandbox_authority(
+        &self,
+    ) -> Option<Arc<crate::protocol::control::ClaimBoundSandboxAuthority>> {
+        self.sandbox.clone()
+    }
     pub(crate) fn bind_sandbox(
         mut self,
         verified: &crate::protocol::command::VerifiedAgentCommand,

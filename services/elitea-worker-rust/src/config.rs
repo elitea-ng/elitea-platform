@@ -91,7 +91,21 @@ pub struct RuntimeDeployConfig {
     pub agent_checkpoint_connection_path: Option<PathBuf>,
     #[serde(default)]
     pub agent_model_checkpoint_recovery: bool,
+    #[serde(default)]
+    pub sandbox_runtimes: Vec<SandboxRuntimeConfig>,
     pub limits: RuntimeLimits,
+}
+
+/// Deployment-selected Code backend; never supplied by YAML or model output.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SandboxRuntimeConfig {
+    pub language: crate::sandbox::request::Language,
+    pub target: String,
+    pub audience: String,
+    pub image_digest: String,
+    pub policy_revision: String,
+    pub timeout_seconds: u32,
 }
 
 impl RuntimeDeployConfig {
@@ -113,6 +127,34 @@ impl RuntimeDeployConfig {
         validate_redis_url(&self.redis_url)?;
         validate_grpc_target(&self.control_target)?;
         validate_grpc_target(&self.output_target)?;
+        if self.sandbox_runtimes.len() > 4 {
+            return Err(invalid_config());
+        }
+        for (index, profile) in self.sandbox_runtimes.iter().enumerate() {
+            validate_grpc_target(&profile.target)?;
+            if profile.audience.is_empty()
+                || profile.audience.len() > 256
+                || profile
+                    .audience
+                    .chars()
+                    .any(|c| c.is_control() || c.is_whitespace())
+                || self.sandbox_runtimes[..index]
+                    .iter()
+                    .any(|other| other.language == profile.language)
+            {
+                return Err(invalid_config());
+            }
+            crate::sandbox::request::PreparedJob::new(
+                profile.language,
+                "validate".into(),
+                std::collections::BTreeMap::new(),
+                profile.image_digest.clone(),
+                profile.policy_revision.clone(),
+                profile.timeout_seconds,
+            )
+            .map_err(|_| invalid_config())?;
+        }
+
         self.content_origin = canonical_https_origin(&self.content_origin)?;
         self.platform_origin = canonical_https_origin(&self.platform_origin)?;
         for path in [
@@ -563,6 +605,46 @@ mod tests {
         value["agent_checkpoint_connection_path"] = Value::Null;
         let loaded: super::RuntimeDeployConfig = serde_json::from_value(value).expect("no storage");
         assert!(loaded.validate().is_err());
+    }
+
+    #[test]
+    fn sandbox_profiles_are_optional_and_require_bounded_unique_runtime_identity() {
+        let base = config(Path::new("/runtime"));
+        let loaded: super::RuntimeDeployConfig = serde_json::from_value(base.clone()).unwrap();
+        assert!(loaded.sandbox_runtimes.is_empty());
+        assert!(loaded.validate().is_ok());
+        let profile = json!({
+            "language": "python",
+            "target": "sandbox.internal:9446",
+            "audience": "sandbox-code",
+            "image_digest": format!("sha256:{}", "a".repeat(64)),
+            "policy_revision": "code-v1",
+            "timeout_seconds": 60
+        });
+        let mut valid = base.clone();
+        valid["sandbox_runtimes"] = json!([profile.clone()]);
+        let loaded: super::RuntimeDeployConfig = serde_json::from_value(valid.clone()).unwrap();
+        assert!(loaded.validate().is_ok());
+        for (field, value) in [
+            ("target", json!("http://sandbox.internal:9446")),
+            ("audience", json!("")),
+            ("audience", json!("sandbox other")),
+            ("image_digest", json!("runner:latest")),
+            ("policy_revision", json!("")),
+            ("timeout_seconds", json!(0)),
+            ("timeout_seconds", json!(3601)),
+        ] {
+            let mut invalid = valid.clone();
+            invalid["sandbox_runtimes"][0][field] = value;
+            let loaded: super::RuntimeDeployConfig = serde_json::from_value(invalid).unwrap();
+            assert!(loaded.validate().is_err(), "accepted invalid {field}");
+        }
+        valid["sandbox_runtimes"] = json!([profile.clone(), profile]);
+        let loaded: super::RuntimeDeployConfig = serde_json::from_value(valid).unwrap();
+        assert!(
+            loaded.validate().is_err(),
+            "duplicate language must not select an arbitrary backend"
+        );
     }
 
     #[test]
