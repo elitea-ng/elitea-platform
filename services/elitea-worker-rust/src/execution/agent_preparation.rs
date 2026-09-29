@@ -964,6 +964,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
         );
         let assembly_result = lease
             .run_cancellation_safe_phase(async {
+                let assembly = assembly.bind_sandbox(&verified)?;
                 match checkpoint.take() {
                     Some(authorization) => assembler
                         .assemble_checkpoint(assembly)

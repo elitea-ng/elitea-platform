@@ -205,6 +205,7 @@ pub(crate) trait NativeAgentCompletionSelector: Send {
 /// through the hardened client, but cannot extract or retain raw claim/fence
 /// authority independently.
 pub(crate) struct AuthorizedNativeAssembly<'a> {
+    sandbox: Option<Arc<crate::protocol::control::ClaimBoundSandboxAuthority>>,
     request: &'a AgentExecutionRequest,
     runtime_context: ClaimBoundRuntimeContextAuthority,
     session: ClaimBoundSessionAuthority,
@@ -226,6 +227,23 @@ pub(crate) struct AuthorizedNativeAssembly<'a> {
 }
 
 impl<'a> AuthorizedNativeAssembly<'a> {
+    pub(crate) fn bind_sandbox(
+        mut self,
+        verified: &crate::protocol::command::VerifiedAgentCommand,
+    ) -> Result<Self, NativeAgentAssemblyError> {
+        self.sandbox = Some(Arc::new(
+            self.runtime_context
+                .take_sandbox_authority(verified)
+                .map_err(|_| {
+                    NativeAgentAssemblyError::new(
+                        NativeAgentAssemblyErrorCode::InvalidConfiguration,
+                        "the sandbox invocation authority does not match the authorized command",
+                    )
+                })?,
+        ));
+        Ok(self)
+    }
+
     #[must_use]
     pub(crate) fn from_authorized(
         request: &'a AgentExecutionRequest,
@@ -235,6 +253,7 @@ impl<'a> AuthorizedNativeAssembly<'a> {
         command: AuthorizedNativeCommandBinding,
     ) -> Self {
         Self {
+            sandbox: None,
             attachments: request.payload.input_attachments.clone(),
             request,
             runtime_context,

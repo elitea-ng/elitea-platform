@@ -14,6 +14,10 @@ pub(crate) use model_checkpoint_inspection::{
 mod toolkit_invocation;
 pub(crate) use toolkit_invocation::{AuthorizedToolkitExecution, ToolkitInvocationPayload};
 
+#[path = "sandbox_authority.rs"]
+mod sandbox_authority;
+pub(crate) use sandbox_authority::ClaimBoundSandboxAuthority;
+
 use std::fmt;
 
 use prost::Message;
@@ -856,6 +860,7 @@ pub(crate) struct ClaimBoundInputAuthority<'a> {
 /// is neither cloneable nor formattable, and zeroizes its duplicated fence bytes on drop.
 /// It cannot submit ADK work, publish output, or settle the Redis delivery.
 pub(crate) struct ClaimBoundRuntimeContextAuthority {
+    sandbox: Option<Box<sandbox_authority::SandboxClaimBinding>>,
     execution_id: String,
     generation: u64,
     claim_id: String,
@@ -920,6 +925,9 @@ impl ClaimBoundRuntimeContextAuthority {
     #[must_use]
     fn from_claim(claim: &AcceptedAgentClaim) -> Self {
         Self {
+            sandbox: Some(Box::new(
+                sandbox_authority::SandboxClaimBinding::from_claim(claim),
+            )),
             execution_id: claim.identity.execution_id.clone(),
             generation: claim.identity.generation,
             claim_id: claim.claim_id.clone(),
@@ -1480,6 +1488,7 @@ pub(crate) fn test_lease_monitored_input_execution(
 #[cfg(test)]
 pub(crate) fn test_runtime_context_authority() -> ClaimBoundRuntimeContextAuthority {
     ClaimBoundRuntimeContextAuthority {
+        sandbox: None,
         execution_id: "execution/one".to_owned(),
         generation: 2,
         claim_id: "claim-1".to_owned(),

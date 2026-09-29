@@ -1530,3 +1530,44 @@ Verification: all 108 graph tests passed. After extracting the Code binding help
 for the compiler lint, all four Code-runtime tests passed again and default-worker
 Clippy passed with warnings denied. These include real ADK graph invocation using
 a fixture runtime, not a live supervisor or a browser test.
+
+### Claim-bound remote Code submission (2026-09-29)
+
+`src/protocol/sandbox_authority.rs` narrows the existing post-authorization
+runtime-context authority into a one-time sandbox binding. It checks the exact
+signed-command digest and complete execution identity, retains the original
+fence, and zeroizes its copied fence token on drop. Graph code cannot construct
+this authority or choose another tenant/project/execution. Each remote submission
+also checks the control client's workload and producer before requesting a fresh
+Main grant. This does not bypass Main's live claim and desired-state checks.
+
+`execution/agent_preparation.rs` attaches that authority inside the authorized,
+cancellation-safe assembly phase. `agents/graph/code_remote.rs` prepares the
+immutable source/input request from deployment-selected image/policy settings.
+It reconciles pending jobs and transient transport loss under the same activation
+and fingerprint with a fresh grant per attempt. Waiting is bounded by the runtime
+timeout plus lease-recovery allowance, not an extension of code execution time.
+Failed, cancelled, malformed, or uncertain results stop graph execution; none
+becomes a successful state update. Dropping the caller drops its request future;
+supervisor-side job cancellation remains a separate unfinished integration.
+
+Dynamic state-supplied code remains explicitly rejected by the remote binding
+until its approval contract is available. The production assembler still needs
+to carry this authority into a configured remote-runtime factory (including
+nested pipeline contexts), and startup must create verified mTLS channels.
+This implementation alone does not enable Code execution in the deployed UI.
+
+An initial full-library run exposed a debug-test stack overflow after adding the
+inline claim binding to nested async frames. The claim payload was moved behind
+an owned Box (with the same token-zeroizing drop), and the affected lifecycle
+test then passed. A subsequent run completed with 1,270 passes, seven localhost
+socket-binding failures under the tool sandbox, and one ignored infrastructure
+test; the network-enabled rerun is recorded below.
+
+Network-enabled full default-library verification passed: 1,278 tests, zero
+failures, one ignored infrastructure test. The new authority tests cover exact
+command/fence preservation, one-time extraction, changed binding/identity
+rejection, and another workload being rejected before network submission.
+Default-worker Clippy passed with warnings denied after simplifying equivalent
+retry match patterns. No deployment or live Main-to-supervisor grant test is
+claimed by the library suite.

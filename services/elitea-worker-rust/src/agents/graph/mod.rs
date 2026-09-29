@@ -11,6 +11,7 @@ mod application_tests;
 mod code;
 mod code_result;
 mod code_runtime;
+mod code_remote;
 #[cfg(test)]
 mod code_tests;
 mod code_state;
