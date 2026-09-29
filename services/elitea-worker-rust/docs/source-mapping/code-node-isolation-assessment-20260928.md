@@ -1768,3 +1768,16 @@ Language selection maps `features/pipelines/ui/nodes/CodeLanguageSelect.tsx` to 
 Three focused UI suites report 68 passing tests and one pre-existing expected failure.
 The expected failure tracks the missing Debug artifact-capture toggle, issue 5203; it is not a passing feature check.
 The acceptance fixture is saved as pipeline 131. Execution remains unverified while the updated UI image builds.
+
+## Python Code browser execution — 2026-09-29
+
+The updated UI image builds and replaces the rehearsal UI with its existing configuration preserved.
+Reloading pipeline 131 removes the obsolete Code-type refusal and displays the Python language selector.
+The first test returns null because its source ends with an assignment.
+The Pyodide adapter returns the final expression value; the corrected fixture ends with the marker expression.
+The pipeline test chat displays `GATE5_CODE_PYTHON_20260929: 42` and reports completion.
+The agentstate ledger records two completed receipts, corresponding to these two deliberate runs.
+The first execution settles through Main with terminal sequence 9 and `agent_delivery.executed_retired`.
+
+This verifies live Python execution through the editor test chat, worker, authenticated supervisor, and receipt ledger.
+It does not prove restart recovery, cancellation, other languages, or main-chat execution.
