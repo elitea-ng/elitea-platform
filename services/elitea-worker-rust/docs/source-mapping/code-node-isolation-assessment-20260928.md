@@ -1703,3 +1703,21 @@ It preserves existing material and checks CA, hostname, expiration, and key pair
 Disposable-CA issuance, hostname verification, and rerun preservation tests pass. Shell syntax validation passes.
 Rehearsal certificates are prepared in the ignored certificate directory; no secret enters tracked files.
 No database setting, service image, or running workload changes during this provisioning step.
+
+
+## Rehearsal database TLS activation — 2026-09-29
+
+The deployed worker CA matches the local runtime CA byte-for-byte.
+The PostgreSQL server certificate verifies against that CA with hostname `postgres`.
+The prior PostgreSQL auto configuration is preserved before changing TLS settings.
+Server key ownership and permissions are restricted to the PostgreSQL account.
+TLS is enabled through configuration reload; PostgreSQL is not restarted.
+
+A live PostgreSQL-protocol handshake negotiates TLS 1.3 and verifies the server hostname and certificate chain.
+PostgreSQL reports TLS enabled and nine active client backends immediately after the reload.
+The rehearsal Main and PostgreSQL health checks remain healthy, with their existing uptime preserved.
+No product tables, runtime identities, or service images change in this step.
+
+The rehearsal agentstate database has a migration ledger but no `sandbox_jobs` table yet.
+Apply the existing agentstate migration through the migration runner before starting supervisors.
+Supervisor startup, full Main grant execution, and browser acceptance remain open.
