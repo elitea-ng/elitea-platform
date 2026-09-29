@@ -56,6 +56,7 @@ const MAX_STATIC_INTERRUPTS: usize = 128;
 const PIPELINE_RECURSION_LIMIT: usize = 100;
 const MAX_PIPELINE_RESULT_BYTES: usize = 512 * 1024;
 const SUBGRAPH_RESULT_NODE: &str = "__elitea_subgraph_result_v1";
+const SUBGRAPH_ENTRY_NODE: &str = "__elitea_subgraph_entry_v1";
 const PIPELINE_DIGEST_DOMAIN: &[u8] = b"elitea.graph.pipeline.config.v1\0";
 
 type ValidatedState = (
@@ -829,7 +830,12 @@ impl PipelineDefinition {
     ) -> Result<CompiledGraph, PipelineConfigurationError> {
         let state_schema = self.state_schema(self.runtime_channels());
         let result_policy = self.result_policy();
-        let graph = StateGraph::new(state_schema).add_edge(START, &self.entry_point);
+        // A completed no-op step persists initialized child input before any
+        // business node starts. Existing checkpoints retain their own frontier.
+        let graph = StateGraph::new(state_schema)
+            .add_node(PipelineSubgraphEntryNode)
+            .add_edge(START, SUBGRAPH_ENTRY_NODE)
+            .add_edge(SUBGRAPH_ENTRY_NODE, &self.entry_point);
         let mut builder = PipelineGraphBuilder::Subgraph {
             graph,
             terminal: SUBGRAPH_RESULT_NODE,
@@ -1270,6 +1276,19 @@ pub(super) struct PipelineResultPolicy {
     pub(super) fallback_data_keys: Vec<String>,
 }
 
+struct PipelineSubgraphEntryNode;
+
+#[async_trait]
+impl Node for PipelineSubgraphEntryNode {
+    fn name(&self) -> &str {
+        SUBGRAPH_ENTRY_NODE
+    }
+
+    async fn execute(&self, _: &NodeContext) -> Result<NodeOutput, GraphError> {
+        Ok(NodeOutput::new())
+    }
+}
+
 struct PipelineSubgraphResultNode {
     result_policy: PipelineResultPolicy,
 }
@@ -1486,7 +1505,7 @@ fn parse_pipeline_nodes(
     let mut node_ids = BTreeSet::new();
     for raw_node in raw_nodes {
         let node = parse_pipeline_node(&raw_node)?;
-        if node.id() == SUBGRAPH_RESULT_NODE {
+        if matches!(node.id(), SUBGRAPH_RESULT_NODE | SUBGRAPH_ENTRY_NODE) {
             return Err(PipelineConfigurationError::Invalid(
                 "a pipeline node identifier is reserved",
             ));
@@ -1737,6 +1756,7 @@ pub(super) fn reserved_user_state_key(key: &str) -> bool {
                 | APPLICATION_MESSAGES_STATE_KEY
                 | APPLICATION_RESULT_STATE_KEY
                 | SUBGRAPH_RESULT_NODE
+                | SUBGRAPH_ENTRY_NODE
         )
         || matches!(
             key,

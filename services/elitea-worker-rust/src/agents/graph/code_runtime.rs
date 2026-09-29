@@ -259,7 +259,7 @@ mod tests {
     }
     #[tokio::test]
     async fn lost_response_recovery_reuses_activation_and_terminal_checkpoint_skips_dispatch() {
-        use adk_rust::graph::{Checkpoint, Checkpointer};
+        use adk_rust::graph::Checkpointer;
         use std::sync::atomic::{AtomicBool, Ordering};
 
         struct LostResponse {
@@ -296,21 +296,15 @@ mod tests {
         ))
         .unwrap();
         let checkpoints = Arc::new(MemoryCheckpointer::new());
-        checkpoints
-            .save(&Checkpoint::new(
-                "child-code",
-                State::from([("count".into(), json!(2))]),
-                3,
-                vec!["run".into()],
-            ))
-            .await
-            .unwrap();
         let bindings = PipelineNodeRuntimes::default().with_code(runtime.clone());
         {
             let graph = definition
                 .compile_subgraph_with_runtime(checkpoints.clone(), &bindings)
                 .unwrap();
-            let execution = graph.invoke(State::new(), ExecutionConfig::new("child-code"));
+            let execution = graph.invoke(
+                State::from([("count".into(), json!(2))]),
+                ExecutionConfig::new("child-code"),
+            );
             tokio::pin!(execution);
             tokio::select! {
                 result = &mut execution => panic!("execution unexpectedly completed: {result:?}"),
@@ -320,7 +314,7 @@ mod tests {
         }
         assert_eq!(
             checkpoints.load("child-code").await.unwrap().unwrap().step,
-            3
+            1
         );
         let recovered = definition
             .compile_subgraph_with_runtime(checkpoints.clone(), &bindings)

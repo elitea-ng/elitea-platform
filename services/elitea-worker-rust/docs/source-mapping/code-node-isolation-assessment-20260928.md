@@ -1656,3 +1656,23 @@ Together with the lost-response test, this covers graph initialization and stabl
 It does not prove a deployed worker restart or child-subgraph recovery.
 
 Verification passes: 110 graph tests, plus library and test Clippy with warnings denied.
+
+
+## Child-subgraph initial frontier — 2026-09-29
+
+`compile_subgraph_with_runtime` now inserts the internal `__elitea_subgraph_entry_v1` node before the stored entry point.
+This node performs no external operation and changes no state.
+ADK checkpoints the initialized child state after this step, before any stored node executes.
+Checkpoint-save failure stops execution before the business node can dispatch.
+The compiler reserves the internal node name against user node and state declarations.
+
+Existing checkpoints still restore their recorded frontier and step. They do not execute the new entry node.
+Fresh child runs spend one graph step on this persistence boundary.
+The stored YAML and product database schema remain unchanged.
+
+The lost-response test now starts with an empty checkpoint store.
+It drops execution after the simulated remote effect, reconstructs the graph, and verifies the same activation identity.
+It also verifies one simulated effect and no dispatch after the terminal checkpoint.
+This remains an in-process receipt test; deployed process-loss acceptance remains open.
+
+Verification passes: 525 agent tests, plus library and test Clippy with warnings denied.
