@@ -61,6 +61,13 @@ It does not close standalone editor discovery or toolkit Test.
 OpenAPI supports delegated OAuth and client credentials. DCR remains an MCP or other explicitly supported toolkit flow.
 
 Code-node backend selection is tracked in the [isolation assessment](source-mapping/code-node-isolation-assessment-20260928.md).
+Python/Pyodide, JavaScript, TypeScript and Rust adapters now have isolated Linux
+container checks. Real Pyodide also passes authorized durable receipt reuse.
+Gate 5 remains open for supervisor runtime profiles/service wiring, cancellation,
+worker graph projection, Kubernetes jobs and browser acceptance. Additional
+package/workspace authorization and compilation-cache performance remain tracked
+in that assessment; language smoke tests do not close the product gate.
+
 The assessment is a proposal, not an enabled or verified runtime.
 
 ## Customer workflow migration track

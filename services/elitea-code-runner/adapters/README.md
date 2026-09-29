@@ -41,7 +41,7 @@ DENO_DIR=/path/to/deno-cache ELITEA_TEST_WHEEL_CACHE=/path/to/wheels \
 
 These interpreter tests do not prove Linux isolation or deployment. The
 `deno-runtime` image target supplies the fixed `elitea-code-execute` launcher.
-Scoped platform-client access, the Rust adapter, graph binding and browser
+Scoped platform-client access, runtime-profile selection, graph binding and browser
 acceptance remain integration work. Do not enable Code nodes based only on these tests.
 
 
@@ -94,3 +94,35 @@ network/subprocess calls and timeout termination. Tests create only fresh named
 containers with read-only fixture mounts, UID 10001, 512 MiB memory/swap ceiling,
 one CPU, 64 PIDs, read-only root, dropped capabilities and no network. They clean
 up their containers afterward. This does not deploy or enable product Code nodes.
+
+## Rust
+
+The `rust-runtime` image target contains the pinned Rust toolchain, fixed Cargo
+project and vendored dependencies. User source supplies this module function:
+
+```rust
+pub fn run(state: serde_json::Value)
+    -> Result<serde_json::Value, Box<dyn std::error::Error>>
+{
+    Ok(serde_json::json!({"count": state["count"].as_i64().unwrap() + 1}))
+}
+```
+
+The image-owned adapter stages only that module and selected input, compiles with
+`cargo build --locked --offline -j 2`, and runs the resulting binary. Compilation,
+build scripts and execution all consume the same container resources and runner
+deadline. Compiler/program output streams to stderr. A bounded result file is
+parsed before the adapter emits the standard result envelope on stdout. A result
+file is untrusted input, not authority to modify graph state.
+
+The initial dependency profile contains pinned serde_json only. Arbitrary Cargo
+manifest changes and downloads are not enabled. Additional dependencies require
+a separately prepared immutable runtime profile. The immutable source cache is
+shared through image layers; compiled outputs are job-local and are currently
+rebuilt for each job. Cross-job compiled-artifact caching is not implemented.
+
+Rust needs an executable job-local workspace for build scripts and binaries;
+Deno jobs do not. The container probe selects this explicitly with `--runtime
+rust`. Supervisor runtime-profile selection for this permission remains open.
+The root filesystem remains read-only, UID remains non-root, network is disabled,
+and CPU/memory/PID/time limits cover both compilation and execution.

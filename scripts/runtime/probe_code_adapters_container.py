@@ -9,6 +9,7 @@ import tempfile
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--image", required=True, help="already built immutable local image ID")
+parser.add_argument("--runtime", choices=["deno", "rust"], default="deno")
 args = parser.parse_args()
 if not args.image.startswith("sha256:"):
     parser.error("use a local immutable sha256 image ID")
@@ -22,6 +23,14 @@ cases = [
     ("process_denied", "javascript", "await new Deno.Command('/bin/sh').output(); export default null;", 15, "failed"),
     ("timeout", "javascript", "while (true) {} export default null;", 1, "timeout"),
 ]
+
+if args.runtime == "rust":
+    cases = [
+        ("rust", "rust", 'pub fn run(state: serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>> { println!("diagnostic"); Ok(serde_json::json!({"answer":state["count"].as_i64().unwrap()+1})) }', 15, "completed"),
+        ("rust_compile_error", "rust", 'this is not valid Rust', 15, "failed"),
+        ("rust_error", "rust", 'pub fn run(_: serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>> { Err("expected-code-error".into()) }', 15, "failed"),
+        ("rust_timeout", "rust", 'pub fn run(_: serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>> { println!("entered-user-code"); loop { std::hint::spin_loop(); } }', 15, "timeout"),
+    ]
 
 for name, language, source, timeout, expected in cases:
     container = "elitea-code-runner-test-" + secrets.token_hex(6)
@@ -40,7 +49,7 @@ for name, language, source, timeout, expected in cases:
                 "--user", "10001:10001", "--memory", "512m", "--memory-swap", "512m",
                 "--cpus", "1", "--pids-limit", "64", "--network", "none",
                 "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
-                "--tmpfs", "/workspace:rw,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700",
+                "--tmpfs", f"/workspace:rw,{'exec' if args.runtime == 'rust' else 'noexec'},nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700",
                 "--mount", f"type=bind,source={request},target=/workspace/.elitea-job.json,readonly",
                 "--mount", f"type=bind,source={code_request},target=/workspace/.elitea-code.json,readonly",
                 "--log-driver", "local", "--log-opt", "max-size=256m", "--log-opt", "max-file=1", "--log-opt", "compress=false",
@@ -58,10 +67,14 @@ for name, language, source, timeout, expected in cases:
             assert len(receipt["stdout"].encode()) + len(receipt["stderr"].encode()) <= 524288
             if expected == "completed":
                 assert json.loads(receipt["stdout"]) == {"revision": 1, "result": {"answer": 42}}, receipt
-            if name == "python_error":
+            if name in ("python_error", "rust_error"):
                 assert "expected-code-error" in receipt["stderr"], receipt
             if name in ("network_denied", "process_denied"):
                 assert "NotCapable" in receipt["stderr"], receipt
+            if name == "rust_compile_error":
+                assert "error:" in receipt["stderr"], receipt
+            if name == "rust_timeout":
+                assert "entered-user-code" in receipt["stderr"], receipt
             # A fresh client reads the same terminal envelope after execution.
             assert subprocess.check_output(["docker", "logs", container], timeout=10) == first
             state = json.loads(subprocess.check_output([

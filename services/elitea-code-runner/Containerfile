@@ -9,7 +9,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/target \
     CARGO_TARGET_DIR=/target cargo auditable build --locked --release -j 2 && \
     cp /target/release/elitea-code-runner /usr/local/bin/elitea-code-runner && \
-    cp /target/release/elitea-code-execute /usr/local/bin/elitea-code-execute
+    cp /target/release/elitea-code-execute /usr/local/bin/elitea-code-execute && \
+    cp /target/release/elitea-code-rust /usr/local/bin/elitea-code-rust
 
 # Minimal runner verification target. The Deno language target extends it below.
 FROM python:3.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c AS verification
@@ -34,3 +35,22 @@ RUN mkdir -p /opt/elitea-wheels && \
       --allow-net=cdn.jsdelivr.net /opt/elitea-code/preload.mjs && \
     chmod -R a+rX /opt/deno-cache /opt/elitea-wheels /opt/elitea-code
 USER 10001:10001
+
+
+FROM builder AS rust-dependencies
+COPY adapters/rust /opt/elitea-rust
+RUN mkdir -p /opt/elitea-rust/.cargo && \
+    cargo vendor --locked --manifest-path /opt/elitea-rust/Cargo.toml /opt/rust-vendor > /opt/elitea-rust/.cargo/config.toml
+
+FROM rust:1.97.1-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97 AS rust-runtime
+COPY --from=builder /usr/local/bin/elitea-code-runner /usr/local/bin/elitea-code-runner
+COPY --from=builder /usr/local/bin/elitea-code-execute /usr/local/bin/elitea-code-execute
+COPY --from=builder /usr/local/bin/elitea-code-rust /usr/local/bin/elitea-code-rust
+COPY --from=rust-dependencies /opt/elitea-rust /opt/elitea-rust
+COPY --from=rust-dependencies /opt/rust-vendor /opt/rust-vendor
+WORKDIR /workspace
+USER 10001:10001
+CMD ["/usr/local/bin/elitea-code-runner"]
+
+# Preserve the default build as the Python/JavaScript/TypeScript runtime.
+FROM deno-runtime AS default

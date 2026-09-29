@@ -21,3 +21,7 @@ panic = "abort"
 [[bin]]
 name = "elitea-code-execute"
 path = "src/execute.rs"
+
+[[bin]]
+name = "elitea-code-rust"
+path = "src/rust_execute.rs"

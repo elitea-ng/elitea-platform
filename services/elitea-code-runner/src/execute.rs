@@ -14,6 +14,11 @@ fn adapter(language: &str) -> Result<&'static str, &'static str> {
 }
 
 fn command(language: &str) -> Result<Command, &'static str> {
+    if language == "rust" {
+        let mut command = Command::new("/usr/local/bin/elitea-code-rust");
+        command.env_clear();
+        return Ok(command);
+    }
     let mut command = Command::new("/usr/local/bin/deno");
     command
         .env_clear()
@@ -112,6 +117,10 @@ mod tests {
         );
         assert!(adapter("../../bin/sh").is_err());
         assert!(adapter("rust").is_err());
+        assert_eq!(
+            command("rust").unwrap().get_program(),
+            "/usr/local/bin/elitea-code-rust"
+        );
     }
     #[test]
     fn launch_disables_network_and_subprocesses_and_uses_fixed_request() {

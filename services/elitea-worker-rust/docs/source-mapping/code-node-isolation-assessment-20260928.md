@@ -1213,3 +1213,37 @@ with rustc and executes under the same resource enforcer, including compilation.
 Its direct rustc path does not itself provide the requested Cargo dependency and
 Elitea state/result contract. Keep compilation inside the outer sandbox when
 completing that adapter; do not compile user source on the worker host.
+
+
+### Offline Rust language image (2026-09-29)
+
+`services/elitea-code-runner/src/rust_execute.rs` and `adapters/rust` now implement
+the requested Rust extension to the current Python Code-node behavior. User code
+supplies `pub fn run(serde_json::Value) -> Result<serde_json::Value,
+Box<dyn std::error::Error>>`. The fixed image-owned Cargo project supplies input
+and a bounded result wrapper. The adapter stages selected state separately from
+source, compiles with locked offline dependencies and two build jobs, streams
+diagnostics to stderr, then validates a bounded result file before emitting the
+same envelope used by the other language adapters. Result content is untrusted;
+worker typed state projection remains mandatory.
+
+The Containerfile `rust-runtime` target uses the existing pinned Rust 1.97.1
+base and vendored serde_json dependencies. This extends the ADK compile-then-run
+pattern with the product state/result and dependency contracts; it relies on the
+existing outer ADK/Docker resource boundary and PID-1 runner deadline rather than
+adding a second resource enforcer. Compilation and user execution both remain
+inside the container. No arbitrary manifest, Cargo download or host compiler is
+exposed. Additional dependencies need immutable runtime profiles. Compiled
+artifacts are currently rebuilt per job; no cross-job compiled cache is claimed.
+
+Live image `sha256:1817e5f46c373a29e7a3830df3216290b451b8bc7d4eb1b1169c41253c5516af`
+passed successful structured execution, compile failure, runtime failure and
+timeout after the user-code entry marker. Initial verification found two concrete
+requirements: compiler temporary files must use job-local writable storage, and
+Rust build scripts/binaries require an executable workspace. The Rust probe
+explicitly enables that mount option while retaining UID 10001, read-only root,
+no network, dropped capabilities and CPU/memory/PID/time limits. Deno workspaces
+can remain non-executable. Supervisor profile selection for executable workspace
+is still pending; do not globally relax workspace permissions for all languages.
+Five runner/launcher tests and Clippy passed. These are Linux image proofs, not
+service integration, Kubernetes execution or browser acceptance.
