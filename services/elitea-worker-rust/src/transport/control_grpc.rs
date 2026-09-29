@@ -16,10 +16,11 @@ use tonic::{Request, Response, Status};
 
 use crate::protocol::elitea::runtime::v1::{
     AuthorizeAgentModelCheckpointRequestV1, AuthorizeAgentModelCheckpointResponseV1,
-    AuthorizeInvocationRequestV1, AuthorizeInvocationResponseV1, BeginExecutionRequestV1,
-    BeginExecutionResponseV1, ClaimCommandRequestV1, ClaimCommandResponseV1,
-    ObserveDesiredStateRequestV1, ObserveDesiredStateResponseV1, PrepareSettlementRequestV1,
-    PrepareSettlementResponseV1, RenewLeaseRequestV1, RenewLeaseResponseV1,
+    AuthorizeInvocationRequestV1, AuthorizeInvocationResponseV1, AuthorizeSandboxJobRequestV1,
+    AuthorizeSandboxJobResponseV1, BeginExecutionRequestV1, BeginExecutionResponseV1,
+    ClaimCommandRequestV1, ClaimCommandResponseV1, ObserveDesiredStateRequestV1,
+    ObserveDesiredStateResponseV1, PrepareSettlementRequestV1, PrepareSettlementResponseV1,
+    RenewLeaseRequestV1, RenewLeaseResponseV1,
     runtime_control_service_client::RuntimeControlServiceClient,
 };
 
@@ -98,6 +99,13 @@ pub trait ControlRpc: Send + Sync {
         ))
     }
 
+    async fn authorize_sandbox_job(
+        &self,
+        _request: Request<AuthorizeSandboxJobRequestV1>,
+    ) -> Result<Response<AuthorizeSandboxJobResponseV1>, Status> {
+        Err(Status::unimplemented("sandbox grants are unavailable"))
+    }
+
     async fn renew_lease(
         &self,
         request: Request<RenewLeaseRequestV1>,
@@ -161,6 +169,13 @@ impl ControlRpc for TonicControlRpc {
             .clone()
             .authorize_agent_model_checkpoint(request)
             .await
+    }
+
+    async fn authorize_sandbox_job(
+        &self,
+        request: Request<AuthorizeSandboxJobRequestV1>,
+    ) -> Result<Response<AuthorizeSandboxJobResponseV1>, Status> {
+        self.client.clone().authorize_sandbox_job(request).await
     }
 
     async fn renew_lease(
@@ -301,6 +316,38 @@ impl<R: ControlRpc> ControlGrpcClient<R> {
         Ok(response)
     }
 
+    /// Request one scoped sandbox grant using the verified workload session.
+    /// # Errors
+    /// Returns a bounded transport error or an explicit authorization rejection.
+    pub async fn authorize_sandbox_job(
+        &self,
+        message: AuthorizeSandboxJobRequestV1,
+    ) -> Result<AuthorizeSandboxJobResponseV1, ControlGrpcError> {
+        let request = self.request(message)?;
+        let response = timeout(
+            self.config.deadline,
+            self.rpc.authorize_sandbox_job(request),
+        )
+        .await
+        .map_err(|_| unavailable())?
+        .map_err(|status| match status.code() {
+            tonic::Code::PermissionDenied
+            | tonic::Code::Unauthenticated
+            | tonic::Code::InvalidArgument
+            | tonic::Code::FailedPrecondition
+            | tonic::Code::Unimplemented => {
+                ControlGrpcError::InvalidConfiguration("Main did not authorize this sandbox job")
+            }
+            tonic::Code::ResourceExhausted => {
+                ControlGrpcError::ResourceExhausted("sandbox grant service is at capacity")
+            }
+            _ => unavailable(),
+        })?
+        .into_inner();
+        validate_response(&response)?;
+        Ok(response)
+    }
+
     /// Perform one idempotent lease-renewal attempt without retry.
     ///
     /// # Errors
@@ -427,6 +474,7 @@ mod tests {
         claim_response: Mutex<ClaimCommandResponseV1>,
         begin_response: Mutex<BeginExecutionResponseV1>,
         authorize_response: Mutex<AuthorizeInvocationResponseV1>,
+        sandbox_response: Mutex<AuthorizeSandboxJobResponseV1>,
         renew_response: Mutex<RenewLeaseResponseV1>,
         observe_response: Mutex<ObserveDesiredStateResponseV1>,
         settlement_response: Mutex<PrepareSettlementResponseV1>,
@@ -528,6 +576,15 @@ mod tests {
             }))
         }
 
+        async fn authorize_sandbox_job(
+            &self,
+            request: Request<AuthorizeSandboxJobRequestV1>,
+        ) -> Result<Response<AuthorizeSandboxJobResponseV1>, Status> {
+            self.record("sandbox", &request)?;
+            self.delay().await;
+            Ok(Response::new(self.sandbox_response.lock().unwrap().clone()))
+        }
+
         async fn renew_lease(
             &self,
             request: Request<RenewLeaseRequestV1>,
@@ -582,6 +639,18 @@ mod tests {
             assert!(matches!(result, Err(ControlGrpcError::Unavailable(_))));
             assert_eq!(client.rpc.calls.lock().expect("calls").len(), 1);
         }
+    }
+
+    #[tokio::test]
+    async fn sandbox_grant_uses_workload_metadata_and_deadline() {
+        let client = ControlGrpcClient::new(FakeRpc::default(), config()).unwrap();
+        client
+            .authorize_sandbox_job(AuthorizeSandboxJobRequestV1::default())
+            .await
+            .unwrap();
+        assert_eq!(*client.rpc.calls.lock().unwrap(), vec!["sandbox"]);
+        assert_eq!(client.rpc.metadata.lock().unwrap().len(), 2);
+        assert!(client.rpc.timeout.lock().unwrap().is_some());
     }
 
     fn config() -> ControlGrpcConfig {

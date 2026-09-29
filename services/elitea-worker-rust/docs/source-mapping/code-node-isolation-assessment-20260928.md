@@ -1427,3 +1427,35 @@ passed, including invalid resource profiles and the deployment timeout boundary.
 The new image target has not been built or deployed in this step.
 Worker dispatch wiring and mandatory deployed UI verification remain open.
 The final focused sandbox suite passed all sixteen tests after composition refactoring.
+
+### Worker sandbox client boundary (2026-09-29)
+
+The prepared request is now shared with the default worker build.
+Docker runtime, receipt database, and supervisor service modules remain feature-gated.
+The default dependency graph excludes `adk-sandbox`.
+
+`src/transport/control_grpc.rs` requests sandbox grants with the existing workload
+session metadata, producer identity, response bounds, and control deadline.
+Authorization rejection remains distinct from transient service unavailability.
+`src/sandbox/client.rs` derives the fingerprint and configured audience itself.
+It requests a fresh grant before one bounded submission attempt.
+The caller owns durable retry policy and must retain the activation identity.
+Transport failure never authorizes a replacement activation.
+
+The client returns typed pending, completed, failed, cancelled, or uncertain outcomes.
+Completed receipts require a successful runner envelope and bounded JSON.
+Code output remains untrusted and still requires graph state projection.
+No Docker socket or receipt database is exposed to the worker client.
+
+The live mTLS fixture now uses this client for successful submission and replay.
+It still supplies a fixture grant; it does not exercise Main grant composition.
+Worker production channel configuration, graph execution, deployment, and browser
+acceptance remain pending. This transport is not yet reachable from a Code node.
+
+The default worker library check passed. Its dependency graph excludes the
+Docker sandbox crate. The live Pyodide mTLS test passed through `SandboxClient`,
+including repeat retrieval of the identical persisted receipt.
+This fixture uses a signed test grant, not a running Main issuer.
+Default-worker Clippy passed. The final focused suite passed twenty-one tests.
+Four infrastructure tests were ignored in that invocation; the mTLS test ran
+separately and passed. No deployed UI acceptance is claimed.

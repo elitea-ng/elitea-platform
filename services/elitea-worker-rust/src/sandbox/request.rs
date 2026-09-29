@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "sandbox-supervisor")]
 use super::ledger::{JobScope, LedgerError};
 
 #[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -120,10 +121,12 @@ impl PreparedJob {
         self.bytes()
     }
 
+    #[cfg(feature = "sandbox-supervisor")]
     pub(crate) fn within_timeout(&self, maximum: std::time::Duration) -> bool {
         std::time::Duration::from_secs(self.timeout_seconds.into()) <= maximum
     }
 
+    #[cfg(feature = "sandbox-supervisor")]
     pub(crate) fn matches_runtime(
         &self,
         image: &str,
@@ -137,6 +140,7 @@ impl PreparedJob {
     }
 
     /// The image owns the language adapter; no caller supplies executable argv.
+    #[cfg(feature = "sandbox-supervisor")]
     pub(crate) fn manifest(&self) -> Result<adk_sandbox::workspace::Manifest, InvalidRequest> {
         use adk_sandbox::workspace::{Manifest, ManifestEntry};
         let runner = serde_json::json!({
@@ -166,19 +170,25 @@ impl PreparedJob {
     ///
     /// # Errors
     /// Returns `Invalid` for an invalid scope or serialization failure.
+    #[cfg(feature = "sandbox-supervisor")]
     pub fn scope(
         &self,
         tenant: String,
         project: i32,
         activation_key: [u8; 32],
     ) -> Result<JobScope, LedgerError> {
-        JobScope::new(tenant, project, activation_key, self.fingerprint()?)
+        JobScope::new(
+            tenant,
+            project,
+            activation_key,
+            self.fingerprint().map_err(|_| LedgerError::Invalid)?,
+        )
     }
 
     /// # Errors
     /// Returns `Invalid` if the bounded serialization fails.
-    pub fn fingerprint(&self) -> Result<[u8; 32], LedgerError> {
-        let bytes = self.bytes().map_err(|_| LedgerError::Invalid)?;
+    pub fn fingerprint(&self) -> Result<[u8; 32], InvalidRequest> {
+        let bytes = self.bytes()?;
         let mut hash = ring::digest::Context::new(&ring::digest::SHA256);
         hash.update(b"elitea.sandbox.prepared-job.v1\0");
         hash.update(&(bytes.len() as u64).to_be_bytes());
@@ -231,7 +241,7 @@ impl std::io::Write for CappedBytes {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sandbox-supervisor"))]
 mod tests {
     use super::*;
 

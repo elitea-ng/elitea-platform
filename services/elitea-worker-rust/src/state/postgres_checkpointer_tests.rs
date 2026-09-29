@@ -1174,7 +1174,7 @@ async fn sandbox_submission(over_tls: bool) {
     if over_tls {
         crate::diagnostics::install_tls_crypto_provider().unwrap();
         use crate::protocol::elitea::runtime::v1::{
-            SandboxJobStatusV1, SubmitSandboxJobRequestV1,
+            SubmitSandboxJobRequestV1,
             sandbox_supervisor_service_client::SandboxSupervisorServiceClient,
         };
         use crate::sandbox::service::SupervisorService;
@@ -1248,8 +1248,8 @@ async fn sandbox_submission(over_tls: bool) {
                 .code(),
             tonic::Code::PermissionDenied
         );
-        let mut client =
-            SandboxSupervisorServiceClient::new(connect("worker").connect().await.unwrap());
+        let worker_channel = connect("worker").connect().await.unwrap();
+        let mut client = SandboxSupervisorServiceClient::new(worker_channel.clone());
         let mut altered = wire.clone();
         altered.prepared_job_json = changed.to_transport().unwrap();
         assert_eq!(
@@ -1260,13 +1260,21 @@ async fn sandbox_submission(over_tls: bool) {
             ledger.read(authorized.scope()).await,
             Err(LedgerError::Missing)
         ));
-        let result = client
-            .submit_sandbox_job(wire.clone())
+        use crate::sandbox::client::{SandboxClient, SandboxOutcome};
+        let transport = SandboxClient::from_channel(
+            worker_channel,
+            "fixture-supervisor".into(),
+            Duration::from_secs(25),
+        )
+        .unwrap();
+        let SandboxOutcome::Completed(result) = transport
+            .submit_granted(grant.clone(), &request)
             .await
             .unwrap()
-            .into_inner();
-        assert_eq!(result.status, SandboxJobStatusV1::Completed as i32);
-        let receipt: serde_json::Value = serde_json::from_slice(&result.result_json).unwrap();
+        else {
+            panic!("completed receipt expected");
+        };
+        let receipt: serde_json::Value = serde_json::from_slice(&result).unwrap();
         let output: serde_json::Value =
             serde_json::from_str(receipt["stdout"].as_str().unwrap()).unwrap();
         assert!(
@@ -1275,9 +1283,13 @@ async fn sandbox_submission(over_tls: bool) {
                 .unwrap()
                 .starts_with("authorized-result-")
         );
-        let repeated = client.submit_sandbox_job(wire).await.unwrap().into_inner();
-        assert_eq!(repeated.result_json, result.result_json);
-        assert!(!result.cleanup_pending);
+        let SandboxOutcome::Completed(repeated) =
+            transport.submit_granted(grant, &request).await.unwrap()
+        else {
+            panic!("saved receipt expected");
+        };
+        assert_eq!(repeated, result);
+        drop(transport);
         stop.send(()).unwrap();
         drop(client);
         drop(wrong);
