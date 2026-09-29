@@ -61,14 +61,17 @@ It does not close standalone editor discovery or toolkit Test.
 OpenAPI supports delegated OAuth and client credentials. DCR remains an MCP or other explicitly supported toolkit flow.
 
 Code-node backend selection is tracked in the [isolation assessment](source-mapping/code-node-isolation-assessment-20260928.md).
-Python/Pyodide, JavaScript, TypeScript and Rust adapters now have isolated Linux
-container checks. Real Pyodide also passes authorized durable receipt reuse.
-Gate 5 remains open for supervisor runtime profiles/service wiring, cancellation,
-worker graph projection, Kubernetes jobs and browser acceptance. Additional
-package/workspace authorization and compilation-cache performance remain tracked
-in that assessment; language smoke tests do not close the product gate.
+The deployed Docker path passes Python/Pyodide, JavaScript, TypeScript, and Rust execution through the pipeline test chat.
+Rust also passes persistent-chat execution, history reload, and worker-restart receipt recovery.
+Each invocation starts a separate bounded container from a cached runtime image.
+The long-running supervisors own container dispatch and receipts; the worker owns graph checkpoints.
 
-The assessment is a proposal, not an enabled or verified runtime.
+Supervisor crash acceptance exposes an interrupted-transport classification defect.
+Commit `a78fe82a7` fixes the classification and passes three focused client tests.
+Deployed supervisor crash recovery remains unverified until the UI test passes.
+Gate 5 also remains open for cancellation, Kubernetes execution, and the remaining pipeline requirements.
+Package/workspace authorization and compilation-cache performance remain tracked in the assessment.
+Gate 7a reuses this execution foundation for agent tools, with separate module admission and browser acceptance.
 
 ## Customer workflow migration track
 
