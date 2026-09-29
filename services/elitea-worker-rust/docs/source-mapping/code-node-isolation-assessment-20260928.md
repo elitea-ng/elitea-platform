@@ -1799,3 +1799,29 @@ Browser interaction also exposes inconsistent mouse activation of the language s
 Keyboard selection succeeds; an arrow key also moves the selected graph node.
 Inspect canvas event propagation before closing editor interaction acceptance.
 Cancellation, process recovery, Kubernetes, and the remaining gate requirements stay open.
+
+## Worker interruption during Code execution — 2026-09-29
+
+The Rust fixture sleeps for 35 seconds before returning `GATE5_WORKER_RECOVERY_20260929`.
+Persistent chat 755 starts the run through the UI.
+The receipt ledger confirms dispatch before an immediate worker restart.
+Job `b5a68f1355ad3918ea4620f0e0f115ab9535d68c5cffe431246ac27d22ca62d7` subsequently completes under lease epoch 2.
+The worker settles execution `259a50a88cf520368934c7ceb0e063f6` with terminal sequence 10.
+The open chat receives the expected marker without manual reload.
+
+This verifies worker interruption and receipt reconciliation through the deployed stack.
+Docker returns no creation events for the queried interval, so that history cannot prove dispatch count.
+The durable job identity remains unchanged. Separate supervisor crash and cancellation checks remain required.
+
+## Supervisor crash acceptance failure — 2026-09-29
+
+A second slow run in chat 755 confirms dispatch before `SIGKILL` stops the Rust supervisor.
+The supervisor restarts while the isolated Code container remains intact.
+Container `036e62a32907` exits successfully, but job `fadf48390036f6da1a1b4c8cd2ce3a069c264eabb1295eacea9d88cc44c67749` remains dispatched.
+The worker prematurely settles execution `2f7dbb26afacbf6c29bb4b1186e07b53` at terminal sequence 2.
+Its error reaches the UI through the generic `agent.legacy` failure classification.
+
+This is a failed acceptance check, not a successful recovery.
+Inspect the interrupted RPC status before changing retry classification.
+Preserve the original activation and fingerprint during reconciliation; do not rerun code under a replacement identity.
+Retain the completed container and receipt row for diagnosis until reconciliation is verified.
