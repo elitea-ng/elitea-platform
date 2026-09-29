@@ -41,7 +41,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     tonic_prost_build::configure()
-        .build_server(false)
+        .build_server(env::var_os("CARGO_FEATURE_SANDBOX_SUPERVISOR").is_some())
         .include_file("elitea.rs")
         .compile_with_config(prost_config, &protos, &[proto_root])?;
 

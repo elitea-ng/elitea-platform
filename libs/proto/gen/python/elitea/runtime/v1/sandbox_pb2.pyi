@@ -1,12 +1,28 @@
 from elitea.runtime.v1 import common_pb2 as _common_pb2
 from elitea.runtime.v1 import errors_pb2 as _errors_pb2
 from elitea.runtime.v1 import envelope_pb2 as _envelope_pb2
+from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
 from collections.abc import Mapping as _Mapping
 from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
+
+class SandboxJobStatusV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    SANDBOX_JOB_STATUS_V1_UNSPECIFIED: _ClassVar[SandboxJobStatusV1]
+    SANDBOX_JOB_STATUS_V1_PENDING: _ClassVar[SandboxJobStatusV1]
+    SANDBOX_JOB_STATUS_V1_COMPLETED: _ClassVar[SandboxJobStatusV1]
+    SANDBOX_JOB_STATUS_V1_FAILED: _ClassVar[SandboxJobStatusV1]
+    SANDBOX_JOB_STATUS_V1_CANCELLED: _ClassVar[SandboxJobStatusV1]
+    SANDBOX_JOB_STATUS_V1_UNCERTAIN: _ClassVar[SandboxJobStatusV1]
+SANDBOX_JOB_STATUS_V1_UNSPECIFIED: SandboxJobStatusV1
+SANDBOX_JOB_STATUS_V1_PENDING: SandboxJobStatusV1
+SANDBOX_JOB_STATUS_V1_COMPLETED: SandboxJobStatusV1
+SANDBOX_JOB_STATUS_V1_FAILED: SandboxJobStatusV1
+SANDBOX_JOB_STATUS_V1_CANCELLED: SandboxJobStatusV1
+SANDBOX_JOB_STATUS_V1_UNCERTAIN: SandboxJobStatusV1
 
 class AuthorizeSandboxJobRequestV1(_message.Message):
     __slots__ = ("identity", "fence", "activation_id", "request_digest", "audience", "signed_command")
@@ -67,3 +83,23 @@ class AuthorizeSandboxJobResponseV1(_message.Message):
     grant: SignedSandboxJobGrantV1
     rejection: _errors_pb2.RuntimeErrorV1
     def __init__(self, grant: _Optional[_Union[SignedSandboxJobGrantV1, _Mapping]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...
+
+class SubmitSandboxJobRequestV1(_message.Message):
+    __slots__ = ("grant", "prepared_job_json")
+    GRANT_FIELD_NUMBER: _ClassVar[int]
+    PREPARED_JOB_JSON_FIELD_NUMBER: _ClassVar[int]
+    grant: SignedSandboxJobGrantV1
+    prepared_job_json: bytes
+    def __init__(self, grant: _Optional[_Union[SignedSandboxJobGrantV1, _Mapping]] = ..., prepared_job_json: _Optional[bytes] = ...) -> None: ...
+
+class SubmitSandboxJobResponseV1(_message.Message):
+    __slots__ = ("status", "result_json", "failure_code", "cleanup_pending")
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    RESULT_JSON_FIELD_NUMBER: _ClassVar[int]
+    FAILURE_CODE_FIELD_NUMBER: _ClassVar[int]
+    CLEANUP_PENDING_FIELD_NUMBER: _ClassVar[int]
+    status: SandboxJobStatusV1
+    result_json: bytes
+    failure_code: str
+    cleanup_pending: bool
+    def __init__(self, status: _Optional[_Union[SandboxJobStatusV1, str]] = ..., result_json: _Optional[bytes] = ..., failure_code: _Optional[str] = ..., cleanup_pending: bool = ...) -> None: ...

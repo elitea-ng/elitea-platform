@@ -55,3 +55,35 @@ message AuthorizeSandboxJobResponseV1 {
   RuntimeErrorV1 rejection = 2;
   reserved 3 to 15;
 }
+
+// Supervisor-only transport. Each retry needs a fresh Main grant and the same
+// prepared request. It reconciles the existing activation; it never restarts it.
+service SandboxSupervisorService {
+  rpc SubmitSandboxJob(SubmitSandboxJobRequestV1) returns (SubmitSandboxJobResponseV1);
+}
+
+message SubmitSandboxJobRequestV1 {
+  SignedSandboxJobGrantV1 grant = 1;
+  // Bounded PreparedJob revision 1 JSON, at most 1 MiB. Source and selected state
+  // travel only over mTLS, never through a shared queue or a log field.
+  bytes prepared_job_json = 2;
+  reserved 3 to 15;
+}
+
+enum SandboxJobStatusV1 {
+  SANDBOX_JOB_STATUS_V1_UNSPECIFIED = 0;
+  SANDBOX_JOB_STATUS_V1_PENDING = 1;
+  SANDBOX_JOB_STATUS_V1_COMPLETED = 2;
+  SANDBOX_JOB_STATUS_V1_FAILED = 3;
+  SANDBOX_JOB_STATUS_V1_CANCELLED = 4;
+  SANDBOX_JOB_STATUS_V1_UNCERTAIN = 5;
+}
+
+message SubmitSandboxJobResponseV1 {
+  SandboxJobStatusV1 status = 1;
+  // Untrusted output, at most 512 KiB. The worker validates state projection.
+  bytes result_json = 2;
+  string failure_code = 3;
+  bool cleanup_pending = 4;
+  reserved 5 to 15;
+}

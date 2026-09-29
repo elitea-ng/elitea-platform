@@ -21,6 +21,64 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type SandboxJobStatusV1 int32
+
+const (
+	SandboxJobStatusV1_SANDBOX_JOB_STATUS_V1_UNSPECIFIED SandboxJobStatusV1 = 0
+	SandboxJobStatusV1_SANDBOX_JOB_STATUS_V1_PENDING     SandboxJobStatusV1 = 1
+	SandboxJobStatusV1_SANDBOX_JOB_STATUS_V1_COMPLETED   SandboxJobStatusV1 = 2
+	SandboxJobStatusV1_SANDBOX_JOB_STATUS_V1_FAILED      SandboxJobStatusV1 = 3
+	SandboxJobStatusV1_SANDBOX_JOB_STATUS_V1_CANCELLED   SandboxJobStatusV1 = 4
+	SandboxJobStatusV1_SANDBOX_JOB_STATUS_V1_UNCERTAIN   SandboxJobStatusV1 = 5
+)
+
+// Enum value maps for SandboxJobStatusV1.
+var (
+	SandboxJobStatusV1_name = map[int32]string{
+		0: "SANDBOX_JOB_STATUS_V1_UNSPECIFIED",
+		1: "SANDBOX_JOB_STATUS_V1_PENDING",
+		2: "SANDBOX_JOB_STATUS_V1_COMPLETED",
+		3: "SANDBOX_JOB_STATUS_V1_FAILED",
+		4: "SANDBOX_JOB_STATUS_V1_CANCELLED",
+		5: "SANDBOX_JOB_STATUS_V1_UNCERTAIN",
+	}
+	SandboxJobStatusV1_value = map[string]int32{
+		"SANDBOX_JOB_STATUS_V1_UNSPECIFIED": 0,
+		"SANDBOX_JOB_STATUS_V1_PENDING":     1,
+		"SANDBOX_JOB_STATUS_V1_COMPLETED":   2,
+		"SANDBOX_JOB_STATUS_V1_FAILED":      3,
+		"SANDBOX_JOB_STATUS_V1_CANCELLED":   4,
+		"SANDBOX_JOB_STATUS_V1_UNCERTAIN":   5,
+	}
+)
+
+func (x SandboxJobStatusV1) Enum() *SandboxJobStatusV1 {
+	p := new(SandboxJobStatusV1)
+	*p = x
+	return p
+}
+
+func (x SandboxJobStatusV1) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SandboxJobStatusV1) Descriptor() protoreflect.EnumDescriptor {
+	return file_elitea_runtime_v1_sandbox_proto_enumTypes[0].Descriptor()
+}
+
+func (SandboxJobStatusV1) Type() protoreflect.EnumType {
+	return &file_elitea_runtime_v1_sandbox_proto_enumTypes[0]
+}
+
+func (x SandboxJobStatusV1) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SandboxJobStatusV1.Descriptor instead.
+func (SandboxJobStatusV1) EnumDescriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_sandbox_proto_rawDescGZIP(), []int{0}
+}
+
 // Main checks the original worker's verified mTLS session and active execution
 // fence. The audience is an exact configured supervisor identity, not a URL.
 // Request digests bind a deployment-selected runtime, policy, code and input.
@@ -351,6 +409,129 @@ func (x *AuthorizeSandboxJobResponseV1) GetRejection() *RuntimeErrorV1 {
 	return nil
 }
 
+type SubmitSandboxJobRequestV1 struct {
+	state protoimpl.MessageState   `protogen:"open.v1"`
+	Grant *SignedSandboxJobGrantV1 `protobuf:"bytes,1,opt,name=grant,proto3" json:"grant,omitempty"`
+	// Bounded PreparedJob revision 1 JSON, at most 1 MiB. Source and selected state
+	// travel only over mTLS, never through a shared queue or a log field.
+	PreparedJobJson []byte `protobuf:"bytes,2,opt,name=prepared_job_json,json=preparedJobJson,proto3" json:"prepared_job_json,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *SubmitSandboxJobRequestV1) Reset() {
+	*x = SubmitSandboxJobRequestV1{}
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubmitSandboxJobRequestV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubmitSandboxJobRequestV1) ProtoMessage() {}
+
+func (x *SubmitSandboxJobRequestV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubmitSandboxJobRequestV1.ProtoReflect.Descriptor instead.
+func (*SubmitSandboxJobRequestV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_sandbox_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *SubmitSandboxJobRequestV1) GetGrant() *SignedSandboxJobGrantV1 {
+	if x != nil {
+		return x.Grant
+	}
+	return nil
+}
+
+func (x *SubmitSandboxJobRequestV1) GetPreparedJobJson() []byte {
+	if x != nil {
+		return x.PreparedJobJson
+	}
+	return nil
+}
+
+type SubmitSandboxJobResponseV1 struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Status SandboxJobStatusV1     `protobuf:"varint,1,opt,name=status,proto3,enum=elitea.runtime.v1.SandboxJobStatusV1" json:"status,omitempty"`
+	// Untrusted output, at most 512 KiB. The worker validates state projection.
+	ResultJson     []byte `protobuf:"bytes,2,opt,name=result_json,json=resultJson,proto3" json:"result_json,omitempty"`
+	FailureCode    string `protobuf:"bytes,3,opt,name=failure_code,json=failureCode,proto3" json:"failure_code,omitempty"`
+	CleanupPending bool   `protobuf:"varint,4,opt,name=cleanup_pending,json=cleanupPending,proto3" json:"cleanup_pending,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *SubmitSandboxJobResponseV1) Reset() {
+	*x = SubmitSandboxJobResponseV1{}
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubmitSandboxJobResponseV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubmitSandboxJobResponseV1) ProtoMessage() {}
+
+func (x *SubmitSandboxJobResponseV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubmitSandboxJobResponseV1.ProtoReflect.Descriptor instead.
+func (*SubmitSandboxJobResponseV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_sandbox_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *SubmitSandboxJobResponseV1) GetStatus() SandboxJobStatusV1 {
+	if x != nil {
+		return x.Status
+	}
+	return SandboxJobStatusV1_SANDBOX_JOB_STATUS_V1_UNSPECIFIED
+}
+
+func (x *SubmitSandboxJobResponseV1) GetResultJson() []byte {
+	if x != nil {
+		return x.ResultJson
+	}
+	return nil
+}
+
+func (x *SubmitSandboxJobResponseV1) GetFailureCode() string {
+	if x != nil {
+		return x.FailureCode
+	}
+	return ""
+}
+
+func (x *SubmitSandboxJobResponseV1) GetCleanupPending() bool {
+	if x != nil {
+		return x.CleanupPending
+	}
+	return false
+}
+
 var File_elitea_runtime_v1_sandbox_proto protoreflect.FileDescriptor
 
 const file_elitea_runtime_v1_sandbox_proto_rawDesc = "" +
@@ -385,7 +566,25 @@ const file_elitea_runtime_v1_sandbox_proto_rawDesc = "" +
 	"\tsignature\x18\x03 \x01(\fR\tsignatureJ\x04\b\x04\x10\x10\"\xa8\x01\n" +
 	"\x1dAuthorizeSandboxJobResponseV1\x12@\n" +
 	"\x05grant\x18\x01 \x01(\v2*.elitea.runtime.v1.SignedSandboxJobGrantV1R\x05grant\x12?\n" +
-	"\trejection\x18\x02 \x01(\v2!.elitea.runtime.v1.RuntimeErrorV1R\trejectionJ\x04\b\x03\x10\x10BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"\trejection\x18\x02 \x01(\v2!.elitea.runtime.v1.RuntimeErrorV1R\trejectionJ\x04\b\x03\x10\x10\"\x8f\x01\n" +
+	"\x19SubmitSandboxJobRequestV1\x12@\n" +
+	"\x05grant\x18\x01 \x01(\v2*.elitea.runtime.v1.SignedSandboxJobGrantV1R\x05grant\x12*\n" +
+	"\x11prepared_job_json\x18\x02 \x01(\fR\x0fpreparedJobJsonJ\x04\b\x03\x10\x10\"\xce\x01\n" +
+	"\x1aSubmitSandboxJobResponseV1\x12=\n" +
+	"\x06status\x18\x01 \x01(\x0e2%.elitea.runtime.v1.SandboxJobStatusV1R\x06status\x12\x1f\n" +
+	"\vresult_json\x18\x02 \x01(\fR\n" +
+	"resultJson\x12!\n" +
+	"\ffailure_code\x18\x03 \x01(\tR\vfailureCode\x12'\n" +
+	"\x0fcleanup_pending\x18\x04 \x01(\bR\x0ecleanupPendingJ\x04\b\x05\x10\x10*\xef\x01\n" +
+	"\x12SandboxJobStatusV1\x12%\n" +
+	"!SANDBOX_JOB_STATUS_V1_UNSPECIFIED\x10\x00\x12!\n" +
+	"\x1dSANDBOX_JOB_STATUS_V1_PENDING\x10\x01\x12#\n" +
+	"\x1fSANDBOX_JOB_STATUS_V1_COMPLETED\x10\x02\x12 \n" +
+	"\x1cSANDBOX_JOB_STATUS_V1_FAILED\x10\x03\x12#\n" +
+	"\x1fSANDBOX_JOB_STATUS_V1_CANCELLED\x10\x04\x12#\n" +
+	"\x1fSANDBOX_JOB_STATUS_V1_UNCERTAIN\x10\x052\x8b\x01\n" +
+	"\x18SandboxSupervisorService\x12o\n" +
+	"\x10SubmitSandboxJob\x12,.elitea.runtime.v1.SubmitSandboxJobRequestV1\x1a-.elitea.runtime.v1.SubmitSandboxJobResponseV1BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_sandbox_proto_rawDescOnce sync.Once
@@ -399,28 +598,36 @@ func file_elitea_runtime_v1_sandbox_proto_rawDescGZIP() []byte {
 	return file_elitea_runtime_v1_sandbox_proto_rawDescData
 }
 
-var file_elitea_runtime_v1_sandbox_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_elitea_runtime_v1_sandbox_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_elitea_runtime_v1_sandbox_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_elitea_runtime_v1_sandbox_proto_goTypes = []any{
-	(*AuthorizeSandboxJobRequestV1)(nil),  // 0: elitea.runtime.v1.AuthorizeSandboxJobRequestV1
-	(*SandboxJobGrantClaimsV1)(nil),       // 1: elitea.runtime.v1.SandboxJobGrantClaimsV1
-	(*SignedSandboxJobGrantV1)(nil),       // 2: elitea.runtime.v1.SignedSandboxJobGrantV1
-	(*AuthorizeSandboxJobResponseV1)(nil), // 3: elitea.runtime.v1.AuthorizeSandboxJobResponseV1
-	(*ExecutionIdentityV1)(nil),           // 4: elitea.runtime.v1.ExecutionIdentityV1
-	(*ExecutionFenceV1)(nil),              // 5: elitea.runtime.v1.ExecutionFenceV1
-	(*SignedWorkerCommandEnvelopeV1)(nil), // 6: elitea.runtime.v1.SignedWorkerCommandEnvelopeV1
-	(*RuntimeErrorV1)(nil),                // 7: elitea.runtime.v1.RuntimeErrorV1
+	(SandboxJobStatusV1)(0),               // 0: elitea.runtime.v1.SandboxJobStatusV1
+	(*AuthorizeSandboxJobRequestV1)(nil),  // 1: elitea.runtime.v1.AuthorizeSandboxJobRequestV1
+	(*SandboxJobGrantClaimsV1)(nil),       // 2: elitea.runtime.v1.SandboxJobGrantClaimsV1
+	(*SignedSandboxJobGrantV1)(nil),       // 3: elitea.runtime.v1.SignedSandboxJobGrantV1
+	(*AuthorizeSandboxJobResponseV1)(nil), // 4: elitea.runtime.v1.AuthorizeSandboxJobResponseV1
+	(*SubmitSandboxJobRequestV1)(nil),     // 5: elitea.runtime.v1.SubmitSandboxJobRequestV1
+	(*SubmitSandboxJobResponseV1)(nil),    // 6: elitea.runtime.v1.SubmitSandboxJobResponseV1
+	(*ExecutionIdentityV1)(nil),           // 7: elitea.runtime.v1.ExecutionIdentityV1
+	(*ExecutionFenceV1)(nil),              // 8: elitea.runtime.v1.ExecutionFenceV1
+	(*SignedWorkerCommandEnvelopeV1)(nil), // 9: elitea.runtime.v1.SignedWorkerCommandEnvelopeV1
+	(*RuntimeErrorV1)(nil),                // 10: elitea.runtime.v1.RuntimeErrorV1
 }
 var file_elitea_runtime_v1_sandbox_proto_depIdxs = []int32{
-	4, // 0: elitea.runtime.v1.AuthorizeSandboxJobRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
-	5, // 1: elitea.runtime.v1.AuthorizeSandboxJobRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
-	6, // 2: elitea.runtime.v1.AuthorizeSandboxJobRequestV1.signed_command:type_name -> elitea.runtime.v1.SignedWorkerCommandEnvelopeV1
-	2, // 3: elitea.runtime.v1.AuthorizeSandboxJobResponseV1.grant:type_name -> elitea.runtime.v1.SignedSandboxJobGrantV1
-	7, // 4: elitea.runtime.v1.AuthorizeSandboxJobResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	5, // [5:5] is the sub-list for method output_type
-	5, // [5:5] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	7,  // 0: elitea.runtime.v1.AuthorizeSandboxJobRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
+	8,  // 1: elitea.runtime.v1.AuthorizeSandboxJobRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
+	9,  // 2: elitea.runtime.v1.AuthorizeSandboxJobRequestV1.signed_command:type_name -> elitea.runtime.v1.SignedWorkerCommandEnvelopeV1
+	3,  // 3: elitea.runtime.v1.AuthorizeSandboxJobResponseV1.grant:type_name -> elitea.runtime.v1.SignedSandboxJobGrantV1
+	10, // 4: elitea.runtime.v1.AuthorizeSandboxJobResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	3,  // 5: elitea.runtime.v1.SubmitSandboxJobRequestV1.grant:type_name -> elitea.runtime.v1.SignedSandboxJobGrantV1
+	0,  // 6: elitea.runtime.v1.SubmitSandboxJobResponseV1.status:type_name -> elitea.runtime.v1.SandboxJobStatusV1
+	5,  // 7: elitea.runtime.v1.SandboxSupervisorService.SubmitSandboxJob:input_type -> elitea.runtime.v1.SubmitSandboxJobRequestV1
+	6,  // 8: elitea.runtime.v1.SandboxSupervisorService.SubmitSandboxJob:output_type -> elitea.runtime.v1.SubmitSandboxJobResponseV1
+	8,  // [8:9] is the sub-list for method output_type
+	7,  // [7:8] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_elitea_runtime_v1_sandbox_proto_init() }
@@ -436,13 +643,14 @@ func file_elitea_runtime_v1_sandbox_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_elitea_runtime_v1_sandbox_proto_rawDesc), len(file_elitea_runtime_v1_sandbox_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   4,
+			NumEnums:      1,
+			NumMessages:   6,
 			NumExtensions: 0,
-			NumServices:   0,
+			NumServices:   1,
 		},
 		GoTypes:           file_elitea_runtime_v1_sandbox_proto_goTypes,
 		DependencyIndexes: file_elitea_runtime_v1_sandbox_proto_depIdxs,
+		EnumInfos:         file_elitea_runtime_v1_sandbox_proto_enumTypes,
 		MessageInfos:      file_elitea_runtime_v1_sandbox_proto_msgTypes,
 	}.Build()
 	File_elitea_runtime_v1_sandbox_proto = out.File

@@ -1301,3 +1301,42 @@ Three focused tests passed. They cover metadata spoofing, DNS/SPIFFE validation,
 real DER fixtures, mixed SANs, missing SANs, email SANs, and trailing DER data.
 Worker-library Clippy passed with `sandbox-supervisor` enabled and warnings denied.
 No runtime deployment or browser acceptance is claimed for this boundary alone.
+
+### Supervisor RPC and bounded transport (2026-09-29)
+
+`libs/proto/elitea/runtime/v1/sandbox.proto` now defines `SandboxSupervisorService`.
+`SubmitSandboxJob` carries the signed grant and bounded prepared-job JSON.
+Retries use the same activation and inputs with a fresh Main grant.
+A retry reconciles the durable job through `DockerSupervisor::submit_authorized`.
+It does not create a replacement activation after an uncertain response.
+
+`src/sandbox/request.rs` decodes transport data through the existing constructor.
+It rejects unknown and duplicate top-level fields, unsupported revisions,
+invalid runtime fields, and requests larger than one MiB.
+Nested state receives the existing shape, size, and normalization checks.
+Transport serialization preserves the fingerprint used by the signed grant.
+
+`src/sandbox/service.rs` combines verified TLS identity, grant verification,
+and supervisor submission. Its listener requires a server identity and client CA.
+It has no plaintext serving method. Request and response decoding limits include
+bounded protocol overhead. Connection concurrency and RPC duration are bounded.
+The RPC returns pending or a terminal receipt. Output remains untrusted and
+requires worker state projection. Cleanup failure does not discard a receipt.
+Errors distinguish capacity, conflicting inputs, lost ownership, unavailable
+persistence, and invalid receipts. Responses never include raw dependency errors.
+
+This maps the current SDK remote-sandbox request/response boundary to an
+authenticated, durable protocol. It does not port remote-sandbox static headers
+or session bytes. The prior current-platform source references remain applicable.
+Rust server bindings are generated only with the supervisor feature enabled.
+Go and Python bindings use the repository generation script.
+
+Production configuration, Main grant issuer composition, worker dispatch,
+live mTLS submission, Kubernetes execution, cancellation, and UI acceptance remain open.
+The service composition alone does not prove these deployment gates.
+
+Validation: 14 focused sandbox tests passed. The two service tests also passed
+after the Clippy ownership correction. Worker-library Clippy passed with warnings denied.
+Protocol generation, Buf lint, and Buf compatibility against the preceding commit passed.
+The generated Go runtime package compiled; it contains no tests.
+These checks do not establish a live TLS handshake or deployed job submission.

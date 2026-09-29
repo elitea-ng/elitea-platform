@@ -1,11 +1,11 @@
 //! Content identity for an admitted sandbox job. This is not authorization.
 use std::collections::BTreeMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::ledger::{JobScope, LedgerError};
 
-#[derive(Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Language {
     Python,
@@ -79,6 +79,45 @@ impl PreparedJob {
         };
         job.bytes()?;
         Ok(job)
+    }
+
+    /// Decode bounded transport input and reapply every constructor invariant.
+    /// # Errors
+    /// Returns `InvalidRequest` for malformed, unknown, duplicate top-level, or invalid fields.
+    pub fn from_transport(bytes: &[u8]) -> Result<Self, InvalidRequest> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct WireJob {
+            revision: u8,
+            language: Language,
+            source: String,
+            input: BTreeMap<String, serde_json::Value>,
+            image_digest: String,
+            policy_revision: String,
+            timeout_seconds: u32,
+        }
+        if bytes.len() > 1024 * 1024 {
+            return Err(InvalidRequest);
+        }
+        let wire: WireJob = serde_json::from_slice(bytes).map_err(|_| InvalidRequest)?;
+        if wire.revision != 1 {
+            return Err(InvalidRequest);
+        }
+        Self::new(
+            wire.language,
+            wire.source,
+            wire.input,
+            wire.image_digest,
+            wire.policy_revision,
+            wire.timeout_seconds,
+        )
+    }
+
+    /// Serialize the exact prepared request for authenticated supervisor transport.
+    /// # Errors
+    /// Returns `InvalidRequest` if serialization exceeds the request limit.
+    pub fn to_transport(&self) -> Result<Vec<u8>, InvalidRequest> {
+        self.bytes()
     }
 
     pub(crate) fn matches_runtime(
@@ -202,6 +241,37 @@ mod tests {
             30,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn transport_roundtrip_keeps_signed_fingerprint() {
+        let original = job();
+        let decoded = PreparedJob::from_transport(&original.to_transport().unwrap()).unwrap();
+        assert_eq!(
+            original.fingerprint().unwrap(),
+            decoded.fingerprint().unwrap()
+        );
+    }
+
+    #[test]
+    fn transport_rejects_schema_and_constructor_bypasses() {
+        let original = job().to_transport().unwrap();
+        for (field, value) in [
+            ("revision", serde_json::json!(2)),
+            ("language", serde_json::json!("shell")),
+            ("source", serde_json::json!("")),
+            ("timeout_seconds", serde_json::json!(3601)),
+            ("extra", serde_json::json!(true)),
+        ] {
+            let mut value_map: serde_json::Value = serde_json::from_slice(&original).unwrap();
+            value_map[field] = value;
+            assert!(PreparedJob::from_transport(&serde_json::to_vec(&value_map).unwrap()).is_err());
+        }
+        let duplicate = String::from_utf8(original)
+            .unwrap()
+            .replacen("{", "{\"revision\":1,", 1);
+        assert!(PreparedJob::from_transport(duplicate.as_bytes()).is_err());
+        assert!(PreparedJob::from_transport(&vec![b' '; 1024 * 1024 + 1]).is_err());
     }
 
     fn identity(job: &PreparedJob) -> adk_sandbox::workspace::docker::CodeJobIdentity {
