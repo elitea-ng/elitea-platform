@@ -1633,10 +1633,26 @@ It reuses deployment profiles, Main grants, supervisor receipts, and execution l
 
 Recovery inspection finds that `PipelineDefinition::recovery_frontier_supported` still rejects Code nodes.
 ADK restores the saved graph step and pending nodes, which preserves Code activation identity.
-However, ADK does not save an initial frontier before executing the first graph node.
+ADK itself does not save an initial frontier before executing the first graph node.
+The direct-pipeline compiler already adds this through `with_initial_checkpoint`; the first investigation missed that wrapper.
+The separate child-subgraph path still requires its own entry-frontier audit.
 Do not treat a replay allowlist change alone as complete crash recovery.
 A focused graph test covers a lost response after a simulated remote effect and before graph state commitment.
 It uses a saved frontier and a receipt fixture; it does not simulate a process or database restart.
 
 The focused lost-response test passes. Library and test Clippy pass with warnings denied.
 The receipt test helper now borrows its JSON value, removing an unnecessary clone.
+
+
+## Direct Code checkpoint admission — 2026-09-29
+
+`compiler.rs::with_initial_checkpoint` already persists initialized state before the direct graph calls any node.
+The Code recovery allowlist now permits reconciliation through the invocation-bound sandbox runtime.
+Unknown node identities and other unsupported frontiers remain rejected.
+
+The new direct-graph test inspects the persisted frontier from inside the sandbox runtime fixture.
+It checks execution metadata, step zero, pending Code node, and initial user input before returning a receipt.
+Together with the lost-response test, this covers graph initialization and stable receipt reconciliation boundaries.
+It does not prove a deployed worker restart or child-subgraph recovery.
+
+Verification passes: 110 graph tests, plus library and test Clippy with warnings denied.

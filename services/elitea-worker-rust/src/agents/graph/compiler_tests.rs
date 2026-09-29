@@ -737,3 +737,65 @@ async fn fresh_run_text(
     }
     last
 }
+
+#[tokio::test]
+async fn direct_code_dispatch_observes_its_durable_initial_frontier() {
+    use super::code_runtime::{CodeInvocation, CodeSandboxRuntime};
+    use super::compiler::PipelineNodeRuntimes;
+    use adk_rust::graph::GraphError;
+    use async_trait::async_trait;
+
+    struct InspectFrontier(Arc<dyn Checkpointer>);
+    #[async_trait]
+    impl CodeSandboxRuntime for InspectFrontier {
+        async fn execute(&self, _: CodeInvocation<'_>) -> Result<Vec<u8>, GraphError> {
+            let checkpoint = self.0.load(THREAD).await?.expect("persist before dispatch");
+            assert_eq!(checkpoint.step, 0);
+            assert_eq!(checkpoint.pending_nodes, ["run"]);
+            assert_eq!(
+                checkpoint.metadata["elitea.pipeline.execution.v1"],
+                json!(["code-first", 1])
+            );
+            assert_eq!(checkpoint.state["input"], "run code");
+            Ok(serde_json::to_vec(&json!({
+                "revision":1,"status":"completed","exit_code":0,
+                "stdout":"{\"revision\":1,\"result\":7}","stderr":""
+            }))
+            .unwrap())
+        }
+    }
+    let definition = PipelineDefinition::from_yaml(
+        "state:\n  count: int\nentry_point: run\nnodes:\n  - id: run\n    type: code\n    code: '7'\n    output: [count]\n    transition: END\n"
+    ).unwrap();
+    let checkpoints: Arc<dyn Checkpointer> = Arc::new(MemoryCheckpointer::new());
+    let sessions = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: APP.into(),
+            user_id: USER.into(),
+            session_id: Some(THREAD.into()),
+            state: HashMap::new(),
+        })
+        .await
+        .unwrap();
+    let graph = definition
+        .compile_with_runtime(
+            ROOT,
+            Arc::new(super::turn_checkpointer::TurnCheckpointer::new(
+                checkpoints.clone(),
+                "code-first",
+                1,
+                false,
+            )),
+            None,
+            &PipelineNodeRuntimes::default()
+                .with_code(Arc::new(InspectFrontier(checkpoints.clone()))),
+        )
+        .unwrap();
+    run_graph(graph, sessions, "run code").await;
+    let terminal = checkpoints.load(THREAD).await.unwrap().unwrap();
+    assert!(terminal.pending_nodes.is_empty());
+    assert_eq!(terminal.state["count"], 7);
+    assert!(definition.recovery_frontier_supported(&["run".into()]));
+    assert!(!definition.recovery_frontier_supported(&["missing".into()]));
+}

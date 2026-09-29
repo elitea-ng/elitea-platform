@@ -548,7 +548,7 @@ impl PipelineDefinition {
     }
 
     #[must_use]
-    /// Replay only nodes with model-local recovery or deterministic state updates.
+    /// Recover deterministic nodes, model checkpoints, or durable sandbox receipts.
     pub(crate) fn recovery_frontier_supported(&self, pending: &[String]) -> bool {
         pending.iter().all(|id| {
             self.nodes.iter().any(|node| {
@@ -556,6 +556,7 @@ impl PipelineDefinition {
                     && matches!(
                         node,
                         PipelineNodeDefinition::Llm(_)
+                            | PipelineNodeDefinition::Code(_)
                             | PipelineNodeDefinition::StateModifier(_)
                             | PipelineNodeDefinition::Decision(_)
                             | PipelineNodeDefinition::Router(_)
