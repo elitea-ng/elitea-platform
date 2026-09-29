@@ -1271,3 +1271,33 @@ not make a user-supplied runtime flag authoritative or grant filesystem mounts.
 
 The real Pyodide image also passed the same live submission/result-reuse test
 with the explicit default `noexec` workspace policy.
+
+### Supervisor certificate identity boundary (2026-09-29)
+
+The current SDK remote sandbox uses configured HTTP headers. It does not supply
+an authenticated workload certificate identity or a durable execution grant.
+The new supervisor instead uses the platform workload identity contract from
+`services/elitea-main/internal/auth/workloadidentity/identity.go`.
+
+`src/sandbox/peer_identity.rs` extracts the leaf certificate from tonic TLS
+connection data. Request headers cannot supply this identity. The parser accepts
+one DNS SAN or one SPIFFE URI SAN. It rejects missing, mixed, and multiple SANs.
+Common Name is never a fallback. DNS identities use lowercase without a final dot.
+The optional supervisor feature enables pinned `x509-parser` 0.18.1 for DER parsing.
+Existing dependencies retain their locked versions.
+
+The supervisor rejects escaped or URL-normalized SPIFFE forms rather than
+changing the bytes used for grant identity comparison. It also rejects other SAN
+types instead of ignoring them. These restrictions are stricter than Main's
+parser. Deployment certificates must use the shared, unambiguous subset.
+
+Certificate parsing does not prove trust. The service listener must require
+client certificates and verify their chain before calling this boundary.
+The listener, RPC routing, and live mTLS admission tests remain pending.
+Test certificates contain public fixture data only. Their temporary private keys
+were discarded. Certificate parser tests do not check TLS trust or expiry.
+
+Three focused tests passed. They cover metadata spoofing, DNS/SPIFFE validation,
+real DER fixtures, mixed SANs, missing SANs, email SANs, and trailing DER data.
+Worker-library Clippy passed with `sandbox-supervisor` enabled and warnings denied.
+No runtime deployment or browser acceptance is claimed for this boundary alone.
