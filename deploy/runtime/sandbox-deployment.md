@@ -1,0 +1,48 @@
+# Docker sandbox deployment
+
+Apply `docker-compose.sandbox.yml` after the full standalone and Rust-agent overlays.
+This adds separate Deno and Rust supervisor instances. Each instance admits one fixed runtime image and policy.
+The worker never mounts the Docker socket. Sandbox containers receive neither the socket nor supervisor trust material.
+
+Set these deployment inputs:
+
+| Variable | Required value |
+| --- | --- |
+| `ELITEA_SANDBOX_SUPERVISOR_IMAGE` | Built supervisor image, preferably pinned by digest |
+| `ELITEA_SANDBOX_DOCKER_SOCKET` | Host Docker socket path |
+| `ELITEA_SANDBOX_DOCKER_GID` | Socket group accessible to supervisor UID 10001 |
+| `ELITEA_SANDBOX_DENO_MATERIAL` | Prepared Deno supervisor material directory |
+| `ELITEA_SANDBOX_RUST_MATERIAL` | Prepared Rust supervisor material directory |
+| `ELITEA_SANDBOX_WORKER_CONFIG` | Existing worker configuration with four sandbox runtime profiles |
+
+Use `sandbox-supervisor.example.json` as the configuration schema example.
+Store each supervisor configuration as `config.json` in its material directory.
+Set a distinct stable owner for each instance. Do not share an owner between concurrent replicas.
+Set audiences to `dns:elitea-sandbox-deno` and `dns:elitea-sandbox-rust`, respectively.
+Use server certificates with the corresponding Compose service DNS name.
+The worker CA must verify these certificates; the supervisor CA must verify the worker certificate.
+Copy the current Main signing verification keyring. Never give the supervisor Main's private signing key.
+
+Provision a TLS database connection for the agentstate receipt ledger.
+Apply agentstate migration `0004` before startup. Do not apply it to the product database.
+Private key and database URL files require owner-only permissions and must be readable by UID 10001.
+Use regular files, not symlinks. On hosts with UID remapping, install material into a dedicated volume with the correct ownership.
+Do not weaken file permissions to work around UID mapping.
+
+Set the Deno profile languages to `python`, `javascript`, and `typescript`.
+Set the Rust profile languages to `rust` only.
+Both image digests must already exist in the supervisor's Docker daemon.
+The supervisor validates cached images and does not pull a runtime image for each job.
+Use the same image digest, policy revision, and supported timeout in worker and supervisor profiles.
+
+Add four `sandbox_runtimes` entries to a private copy of the current worker runtime configuration.
+Each entry contains `language`, `target`, `audience`, `image_digest`, `policy_revision`, and `timeout_seconds`.
+Use `elitea-sandbox-deno:9446` for Python, JavaScript, and TypeScript.
+Use `elitea-sandbox-rust:9446` for Rust. Preserve the existing worker identity and trust paths.
+Do not replace deployment secrets or regenerate unrelated runtime material.
+
+The overlay publishes no supervisor port to the host.
+Docker access makes the supervisor a trusted deployment component, despite its nonroot UID.
+Service startup is not an acceptance test. Verify Main grant issuance, Code execution, cancellation, and restart recovery through the deployed worker.
+Verify the chat and pipeline testing interfaces before closing gate 5.
+Kubernetes execution requires a separate backend and deployment; this Docker overlay does not provide it.

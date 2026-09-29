@@ -1676,3 +1676,17 @@ It also verifies one simulated effect and no dispatch after the terminal checkpo
 This remains an in-process receipt test; deployed process-loss acceptance remains open.
 
 Verification passes: 525 agent tests, plus library and test Clippy with warnings denied.
+
+
+## Docker supervisor packaging — 2026-09-29
+
+`deploy/docker-compose.sandbox.yml` composes separate Deno and Rust supervisor services.
+Only supervisors mount the Docker socket. They use nonroot UID 10001, dropped capabilities, and a read-only root filesystem.
+Their own CPU, memory, and process limits are separate from each sandbox job's limits.
+The overlay sets the two Main grant audiences and replaces only the worker runtime configuration mount.
+Required material paths fail interpolation when missing; bind mounts cannot create missing source directories.
+
+`deploy/runtime/sandbox-deployment.md` documents certificate identities, file ownership, cached images, and the separate agentstate ledger.
+`scripts/runtime/test_sandbox_compose.py` renders the overlay and checks its isolation properties without starting containers.
+The render test passes. Material provisioning, merged deployment, live execution, and browser verification remain open.
+This Docker packaging does not implement Kubernetes sandbox execution.

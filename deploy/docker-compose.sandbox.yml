@@ -1,0 +1,72 @@
+# Add after standalone-full and standalone-rust-agent. No ports are published.
+# Prepare private material and runtime.json before starting this overlay.
+x-sandbox: &sandbox
+  image: ${ELITEA_SANDBOX_SUPERVISOR_IMAGE:?Set the built supervisor image}
+  build:
+    context: ..
+    dockerfile: services/elitea-worker-rust/Containerfile
+    target: supervisor
+  user: "10001:10001"
+  group_add:
+    - ${ELITEA_SANDBOX_DOCKER_GID:?Set the Docker socket group ID}
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  pids_limit: 256
+  mem_limit: 512m
+  cpus: 1.0
+  restart: unless-stopped
+  stop_grace_period: 20s
+  command: ["--config", "/run/elitea-sandbox/config.json"]
+  depends_on:
+    elitea-agentstate-migrate:
+      condition: service_completed_successfully
+
+services:
+  elitea-main:
+    environment:
+      ELITEA_RUNTIME_SANDBOX_AUDIENCES: "dns:elitea-sandbox-deno,dns:elitea-sandbox-rust"
+
+  elitea-worker:
+    volumes:
+      - type: bind
+        source: ${ELITEA_SANDBOX_WORKER_CONFIG:?Set the prepared worker runtime JSON path}
+        target: /run/elitea/runtime.json
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      elitea-sandbox-deno:
+        condition: service_started
+      elitea-sandbox-rust:
+        condition: service_started
+
+  elitea-sandbox-deno:
+    <<: *sandbox
+    volumes:
+      - type: bind
+        source: ${ELITEA_SANDBOX_DENO_MATERIAL:?Set the Deno supervisor material directory}
+        target: /run/elitea-sandbox
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${ELITEA_SANDBOX_DOCKER_SOCKET:?Set the Docker socket path}
+        target: /var/run/docker.sock
+        bind:
+          create_host_path: false
+
+  elitea-sandbox-rust:
+    <<: *sandbox
+    volumes:
+      - type: bind
+        source: ${ELITEA_SANDBOX_RUST_MATERIAL:?Set the Rust supervisor material directory}
+        target: /run/elitea-sandbox
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${ELITEA_SANDBOX_DOCKER_SOCKET:?Set the Docker socket path}
+        target: /var/run/docker.sock
+        bind:
+          create_host_path: false
