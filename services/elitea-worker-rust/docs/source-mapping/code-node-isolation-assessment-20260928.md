@@ -1459,3 +1459,40 @@ This fixture uses a signed test grant, not a running Main issuer.
 Default-worker Clippy passed. The final focused suite passed twenty-one tests.
 Four infrastructure tests were ignored in that invocation; the mTLS test ran
 separately and passed. No deployed UI acceptance is claimed.
+
+### Code receipt to graph-state projection (2026-09-29)
+
+Rechecked the current SDK at `a54db410a46bac5e2c3cbc2db46c148a5c3d069c`:
+`elitea_sdk/runtime/tools/function.py::_handle_pyodide_output` maps the adapter's
+`result` to selected output variables, produces assistant messages when requested
+(or when no outputs are selected), and merges named structured results into state.
+
+`src/agents/graph/code_result.rs::project_code_receipt` implements that boundary
+for all four adapters. It accepts only a successful revisioned runner receipt
+containing one revisioned adapter JSON envelope. Diagnostic stderr is never state.
+Ordinary destinations receive the result value; structured objects and JSON object
+strings supply named updates. The existing `CodeStateBoundary` validates every
+selected destination and every value before returning any update. Reserved
+control fields, message injection, malformed output, and type mismatches fail
+atomically. Assistant roles are constructed by trusted Rust code.
+
+Legacy structured list output maps to `result`; the new graph declares this
+built-in channel as a string, so this projection writes its JSON text explicitly.
+Arbitrary structured objects cannot write that reserved channel. Output fan-out
+is bounded before cloning result values. This module is not yet reachable from
+a production Code node; admission, execution binding, deployment, and browser
+acceptance remain required. Focused verification results are recorded below.
+
+All 23 focused Code definition/state/result tests passed, including oversized
+fan-out rejection before cloning. The initial test fixture incorrectly declared
+the reserved `result` field; it was corrected to exercise trusted built-in
+projection separately from user state. No production gate was relaxed.
+
+The dedicated supervisor container target built successfully from `0b3cca1cb`
+(before the worker-only result projection changes), tagged locally
+`elitea-sandbox-supervisor:gate5`, image manifest list
+`sha256:d280dc971ada74b4ac5218eb655259447f64d6549bd1aa1e24901dcc6b3cf858`.
+An isolated, network-disabled/read-only startup smoke test verified UID/GID
+10001 and the expected missing-configuration failure. This proves executable
+packaging only; it does not prove configured service startup or deployment.
+Default-worker Clippy (`--lib -- -D warnings`) passed after the projection change.

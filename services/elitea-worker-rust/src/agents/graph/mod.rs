@@ -9,6 +9,7 @@ mod application;
 #[cfg(test)]
 mod application_tests;
 mod code;
+mod code_result;
 #[cfg(test)]
 mod code_tests;
 mod code_state;
