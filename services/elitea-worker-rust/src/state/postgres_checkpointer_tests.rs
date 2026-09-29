@@ -902,6 +902,57 @@ async fn sandbox_supervisor_recovers_dispatched_job_and_persists_before_cleanup(
         }
     ));
     assert!(ledger.renew(&lease, 60).await.is_err());
+    // Crash after the database dispatch commit but before the Docker signal.
+    // Recovery must execute the prepared runtime, not wait until its deadline.
+    let unsignaled =
+        JobScope::new(format!("supervisor-test-{unique}"), 2, [11; 32], [12; 32]).unwrap();
+    let unsignaled_identity = unsignaled.runtime_identity().unwrap();
+    ledger.reserve(&unsignaled).await.unwrap();
+    let unsignaled_lease = ledger
+        .claim(&unsignaled, "before-signal".into(), 60)
+        .await
+        .unwrap()
+        .unwrap();
+    runtime
+        .provision_code_job(
+            &unsignaled_identity,
+            &Manifest::new(vec![ManifestEntry::File {
+                path: ".elitea-job.json".into(),
+                content: serde_json::to_vec(&request).unwrap(),
+            }]),
+        )
+        .await
+        .unwrap();
+    ledger.mark_dispatched(&unsignaled_lease).await.unwrap();
+    sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET lease_until=clock_timestamp()-interval '1 second' WHERE phase='dispatched'")
+        .execute(&isolated.pool).await.unwrap();
+    let recovered = tokio::time::timeout(
+        Duration::from_secs(20),
+        supervisor.reconcile_dispatched(&unsignaled),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let Reconciliation::Terminal {
+        record,
+        cleanup_pending,
+    } = recovered
+    else {
+        panic!("expected recovered dispatch receipt")
+    };
+    assert_eq!(record.phase, Phase::Completed);
+    assert!(!cleanup_pending);
+    let receipt: serde_json::Value =
+        serde_json::from_str(record.result_json.as_deref().unwrap()).unwrap();
+    assert_eq!(receipt["stdout"], "durable-result\n");
+    assert!(
+        runtime
+            .observe_code_job(&unsignaled_identity)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(ledger.renew(&unsignaled_lease, 60).await.is_err());
     // Lost dispatch acknowledgement must not reset the outer job deadline.
     let abandoned =
         JobScope::new(format!("supervisor-test-{unique}"), 2, [9; 32], [10; 32]).unwrap();

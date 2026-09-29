@@ -1079,3 +1079,25 @@ jobs; user workspaces and installed untrusted dependencies must not be reused
 between jobs. Kubernetes execution, production language adapters, live service
 mTLS admission, cancellation, graph integration and browser acceptance remain
 open. These checks do not claim service-process crash or live-cluster proof.
+
+
+### Recovery of a committed dispatch without its signal (2026-09-29)
+
+`src/sandbox/docker_supervisor.rs::run_owned` now reconciles the boundary where
+the ledger dispatch commit succeeded but the supervisor stopped before sending
+the Docker signal. After checking for a terminal receipt and the original job
+deadline, the new lease owner renews its lease and signals the same immutable
+container. The existing ADK `dispatch_code_job` contract consumes the signal
+once through container PID 1; it does not restart or create a container. A stopped
+container is read for its receipt, and an expired job is terminated before any
+recovery signal. This supersedes the earlier limitation that an unsignaled
+committed dispatch could only wait until its deadline.
+
+The live disposable PostgreSQL/Docker recovery test passed for both an already
+signaled job and a prepared job with committed dispatch but no signal. It also
+verified persisted deadline failure and cleanup for an expired job, and rejection
+of the previous owner's lease. Worker-library Clippy passed after extracting the
+shared receipt persistence operation. This tests replacement ownership at the
+specific crash boundary, not a killed production supervisor service or Kubernetes
+execution. No current-platform remote-sandbox replay behavior was copied; its
+lack of durable job receipts is the business/runtime gap this boundary closes.

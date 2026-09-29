@@ -1,4 +1,4 @@
-//! Reconcile dispatched jobs without executing their code again.
+//! Submit and reconcile durable jobs without restarting their containers.
 use super::request::PreparedJob;
 use crate::protocol::sandbox_grant::AuthorizedJob;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -220,6 +220,7 @@ impl DockerSupervisor {
                     .await
                     .map_err(SupervisorError::Runtime)?;
             }
+            let mut recover_signal = lease.observed_phase == Phase::Dispatched;
             loop {
                 if let Some(bytes) = self
                     .runtime
@@ -227,14 +228,7 @@ impl DockerSupervisor {
                     .await
                     .map_err(SupervisorError::Runtime)?
                 {
-                    let (phase, failure) = classify_receipt(&bytes)?;
-                    let result = if phase == Phase::Completed {
-                        Some(std::str::from_utf8(&bytes).map_err(|_| SupervisorError::Receipt)?)
-                    } else {
-                        None
-                    };
-                    self.ledger.finish(lease, phase, result, failure).await?;
-                    return self.terminal(scope, self.ledger.read(scope).await?).await;
+                    return self.persist_receipt(scope, lease, &bytes).await;
                 }
                 // Database time keeps the deadline stable across supervisor restarts.
                 if self.ledger.age_seconds(scope).await? >= MAX_JOB_AGE_SECONDS {
@@ -253,6 +247,17 @@ impl DockerSupervisor {
                         .await?;
                     return self.terminal(scope, self.ledger.read(scope).await?).await;
                 }
+                if recover_signal {
+                    // The lease and durable dispatch authorize the existing
+                    // runtime. PID 1 consumes its signal once; this never starts
+                    // or recreates a container. Check receipt/deadline first.
+                    self.ledger.renew(lease, LEASE_SECONDS).await?;
+                    self.runtime
+                        .dispatch_code_job(&identity)
+                        .await
+                        .map_err(SupervisorError::Runtime)?;
+                    recover_signal = false;
+                }
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
         };
@@ -266,6 +271,22 @@ impl DockerSupervisor {
                 _ = heartbeat.tick() => self.ledger.renew(lease, LEASE_SECONDS).await?,
             }
         }
+    }
+
+    async fn persist_receipt(
+        &self,
+        scope: &JobScope,
+        lease: &JobLease,
+        bytes: &[u8],
+    ) -> Result<Reconciliation, SupervisorError> {
+        let (phase, failure) = classify_receipt(bytes)?;
+        let result = if phase == Phase::Completed {
+            Some(std::str::from_utf8(bytes).map_err(|_| SupervisorError::Receipt)?)
+        } else {
+            None
+        };
+        self.ledger.finish(lease, phase, result, failure).await?;
+        self.terminal(scope, self.ledger.read(scope).await?).await
     }
 
     async fn terminal(
