@@ -1910,3 +1910,27 @@ The real-container recovery test passes persisted stop before and after dispatch
 The authenticated cancellation transport and worker stop-delivery integration remain pending.
 Do not enable stop delivery until the migration and all supervisor owners support this field.
 Do not call this foundation a passing UI cancellation fix.
+
+## Purpose-bound cancellation transport — 2026-09-29
+
+`sandbox.proto` adds `CancelSandboxJob` with signed identity only; cancellation sends no code or state.
+Main's grant request adds `cancel_only` outside reserved field numbers.
+Stop grants use revision 2 and bind their purpose inside the signed claims.
+Revision 1 submission grants retain their existing behavior.
+
+Main accepts a stop-grant request under a valid Running or Cancelled execution fence.
+It still checks the verified workload, signed command, tenant, project, capability, and configured supervisor audience.
+A stale fence cannot authorize cancellation.
+The Rust verifier creates a separate `AuthorizedCancellation` type.
+Submission rejects stop grants, and cancellation rejects submission grants.
+Expiry and exact mTLS peer checks apply to both operations.
+
+The supervisor records stop intent before checking dispatch capacity.
+An active owner observes that intent; an unavailable owner leaves it for lease recovery.
+The response reports Pending until runtime termination is confirmed.
+This contract does not yet wire the worker's Stop lifecycle or durable delivery after worker loss.
+Generated Go and Python contracts use the repository's pinned generator.
+
+Focused Main grant tests and three Rust grant tests pass.
+These tests cover purpose separation, cancelled executions, stale fences, peer binding, expiry, and signature validation.
+Live cancellation RPC and UI acceptance remain required.

@@ -1,6 +1,6 @@
 //! Submit and reconcile durable jobs without restarting their containers.
 use super::request::{Language, PreparedJob};
-use crate::protocol::sandbox_grant::AuthorizedJob;
+use crate::protocol::sandbox_grant::{AuthorizedCancellation, AuthorizedJob};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use adk_sandbox::workspace::docker::DockerClient;
@@ -148,6 +148,26 @@ impl DockerSupervisor {
             return Ok(Reconciliation::OwnedElsewhere);
         };
         self.run_owned(scope, &lease, Some(request)).await
+    }
+
+    /// Persist stop intent independently of dispatch capacity, then reconcile.
+    /// # Errors
+    /// Returns an expired grant, persistence, or runtime error.
+    pub async fn cancel_authorized(
+        &self,
+        authorization: &AuthorizedCancellation,
+    ) -> Result<Reconciliation, SupervisorError> {
+        if !authorization.valid_at(chrono::Utc::now().timestamp_millis()) {
+            return Err(SupervisorError::Invalid);
+        }
+        self.ledger
+            .request_cancellation(authorization.scope())
+            .await?;
+        // An active owner observes the durable intent. Capacity does not erase it.
+        match self.reconcile_dispatched(authorization.scope()).await {
+            Err(SupervisorError::Busy) => Ok(Reconciliation::OwnedElsewhere),
+            result => result,
+        }
     }
 
     /// Bounded admission prevents unbounded tasks waiting on the Docker daemon.

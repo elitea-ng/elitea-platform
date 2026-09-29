@@ -20,6 +20,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	SandboxSupervisorService_SubmitSandboxJob_FullMethodName = "/elitea.runtime.v1.SandboxSupervisorService/SubmitSandboxJob"
+	SandboxSupervisorService_CancelSandboxJob_FullMethodName = "/elitea.runtime.v1.SandboxSupervisorService/CancelSandboxJob"
 )
 
 // SandboxSupervisorServiceClient is the client API for SandboxSupervisorService service.
@@ -30,6 +31,7 @@ const (
 // prepared request. It reconciles the existing activation; it never restarts it.
 type SandboxSupervisorServiceClient interface {
 	SubmitSandboxJob(ctx context.Context, in *SubmitSandboxJobRequestV1, opts ...grpc.CallOption) (*SubmitSandboxJobResponseV1, error)
+	CancelSandboxJob(ctx context.Context, in *CancelSandboxJobRequestV1, opts ...grpc.CallOption) (*CancelSandboxJobResponseV1, error)
 }
 
 type sandboxSupervisorServiceClient struct {
@@ -50,6 +52,16 @@ func (c *sandboxSupervisorServiceClient) SubmitSandboxJob(ctx context.Context, i
 	return out, nil
 }
 
+func (c *sandboxSupervisorServiceClient) CancelSandboxJob(ctx context.Context, in *CancelSandboxJobRequestV1, opts ...grpc.CallOption) (*CancelSandboxJobResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CancelSandboxJobResponseV1)
+	err := c.cc.Invoke(ctx, SandboxSupervisorService_CancelSandboxJob_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SandboxSupervisorServiceServer is the server API for SandboxSupervisorService service.
 // All implementations must embed UnimplementedSandboxSupervisorServiceServer
 // for forward compatibility.
@@ -58,6 +70,7 @@ func (c *sandboxSupervisorServiceClient) SubmitSandboxJob(ctx context.Context, i
 // prepared request. It reconciles the existing activation; it never restarts it.
 type SandboxSupervisorServiceServer interface {
 	SubmitSandboxJob(context.Context, *SubmitSandboxJobRequestV1) (*SubmitSandboxJobResponseV1, error)
+	CancelSandboxJob(context.Context, *CancelSandboxJobRequestV1) (*CancelSandboxJobResponseV1, error)
 	mustEmbedUnimplementedSandboxSupervisorServiceServer()
 }
 
@@ -70,6 +83,9 @@ type UnimplementedSandboxSupervisorServiceServer struct{}
 
 func (UnimplementedSandboxSupervisorServiceServer) SubmitSandboxJob(context.Context, *SubmitSandboxJobRequestV1) (*SubmitSandboxJobResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SubmitSandboxJob not implemented")
+}
+func (UnimplementedSandboxSupervisorServiceServer) CancelSandboxJob(context.Context, *CancelSandboxJobRequestV1) (*CancelSandboxJobResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CancelSandboxJob not implemented")
 }
 func (UnimplementedSandboxSupervisorServiceServer) mustEmbedUnimplementedSandboxSupervisorServiceServer() {
 }
@@ -111,6 +127,24 @@ func _SandboxSupervisorService_SubmitSandboxJob_Handler(srv interface{}, ctx con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SandboxSupervisorService_CancelSandboxJob_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CancelSandboxJobRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxSupervisorServiceServer).CancelSandboxJob(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SandboxSupervisorService_CancelSandboxJob_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxSupervisorServiceServer).CancelSandboxJob(ctx, req.(*CancelSandboxJobRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SandboxSupervisorService_ServiceDesc is the grpc.ServiceDesc for SandboxSupervisorService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -121,6 +155,10 @@ var SandboxSupervisorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SubmitSandboxJob",
 			Handler:    _SandboxSupervisorService_SubmitSandboxJob_Handler,
+		},
+		{
+			MethodName: "CancelSandboxJob",
+			Handler:    _SandboxSupervisorService_CancelSandboxJob_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -20,11 +20,13 @@ pub struct GrantVerifier<R> {
 pub struct AuthorizedJob {
     scope: JobScope,
     fingerprint: [u8; 32],
+    cancel_only: bool,
     expires_at_unix_millis: i64,
 }
 impl AuthorizedJob {
     pub(crate) fn permits(&self, request: &PreparedJob, now_unix_millis: i64) -> bool {
-        now_unix_millis < self.expires_at_unix_millis
+        !self.cancel_only
+            && now_unix_millis < self.expires_at_unix_millis
             && request
                 .fingerprint()
                 .is_ok_and(|digest| digest == self.fingerprint)
@@ -32,6 +34,17 @@ impl AuthorizedJob {
     #[must_use]
     pub fn scope(&self) -> &JobScope {
         &self.scope
+    }
+}
+
+/// Stop authority cannot be passed to submission.
+pub struct AuthorizedCancellation(AuthorizedJob);
+impl AuthorizedCancellation {
+    pub(crate) fn scope(&self) -> &JobScope {
+        self.0.scope()
+    }
+    pub(crate) fn valid_at(&self, now: i64) -> bool {
+        self.0.cancel_only && now < self.0.expires_at_unix_millis
     }
 }
 
@@ -67,6 +80,30 @@ impl<R: Ed25519PublicKeyResolver> GrantVerifier<R> {
         job: &PreparedJob,
         now_unix_millis: i64,
     ) -> Result<AuthorizedJob, GrantRejected> {
+        self.verify_operation(grant, peer, Some(job), now_unix_millis, false)
+    }
+
+    /// Verify a stop-only grant without receiving code or state.
+    /// # Errors
+    /// Returns `GrantRejected` for an invalid scope, signature, purpose, or lifetime.
+    pub fn verify_cancellation(
+        &self,
+        grant: &SignedSandboxJobGrantV1,
+        peer: &str,
+        now_unix_millis: i64,
+    ) -> Result<AuthorizedCancellation, GrantRejected> {
+        self.verify_operation(grant, peer, None, now_unix_millis, true)
+            .map(AuthorizedCancellation)
+    }
+
+    fn verify_operation(
+        &self,
+        grant: &SignedSandboxJobGrantV1,
+        peer: &str,
+        job: Option<&PreparedJob>,
+        now_unix_millis: i64,
+        cancel_only: bool,
+    ) -> Result<AuthorizedJob, GrantRejected> {
         if !identity(&grant.key_id)
             || !identity(peer)
             || grant.signature.len() != 64
@@ -93,8 +130,13 @@ impl<R: Ed25519PublicKeyResolver> GrantVerifier<R> {
             .expires_at_unix_millis
             .checked_sub(claims.issued_at_unix_millis)
             .ok_or(GrantRejected)?;
-        let fingerprint = job.fingerprint().map_err(|_| GrantRejected)?;
-        if claims.revision != 1
+        let fingerprint: [u8; 32] = claims
+            .request_digest
+            .as_slice()
+            .try_into()
+            .map_err(|_| GrantRejected)?;
+        if claims.cancel_only != cancel_only
+            || claims.revision != if cancel_only { 2 } else { 1 }
             || claims.generation == 0
             || !identity(&claims.tenant_id)
             || claims.project_id <= 0
@@ -105,7 +147,10 @@ impl<R: Ed25519PublicKeyResolver> GrantVerifier<R> {
             || !(1..=30_000).contains(&lifetime)
             || claims.issued_at_unix_millis > now_unix_millis
             || claims.expires_at_unix_millis <= now_unix_millis
-            || claims.request_digest.as_slice() != fingerprint
+            || job.is_some_and(|job| {
+                job.fingerprint()
+                    .map_or(true, |actual| actual != fingerprint)
+            })
         {
             return Err(GrantRejected);
         }
@@ -124,6 +169,7 @@ impl<R: Ed25519PublicKeyResolver> GrantVerifier<R> {
         Ok(AuthorizedJob {
             scope,
             fingerprint,
+            cancel_only,
             expires_at_unix_millis: claims.expires_at_unix_millis,
         })
     }
@@ -176,6 +222,7 @@ mod tests {
         let job = job("print(42)");
         let claims = SandboxJobGrantClaimsV1 {
             revision: 1,
+            cancel_only: false,
             tenant_id: "tenant".into(),
             project_id: 2,
             execution_id: "execution-1".into(),
@@ -189,6 +236,43 @@ mod tests {
         };
         (key, verifier, job, claims)
     }
+    #[test]
+    fn cancellation_grant_cannot_submit_and_submission_grant_cannot_cancel() {
+        let (key, verifier, job, mut claims) = fixture();
+        let submit = sign(&key, claims.encode_to_vec());
+        assert!(
+            verifier
+                .verify_cancellation(&submit, "worker-1", 1000)
+                .is_err()
+        );
+        claims.revision = 2;
+        claims.cancel_only = true;
+        let stop = sign(&key, claims.encode_to_vec());
+        assert!(verifier.verify(&stop, "worker-1", &job, 1000).is_err());
+        assert!(
+            verifier
+                .verify_cancellation(&stop, "worker-1", 1000)
+                .unwrap()
+                .valid_at(1000)
+        );
+        assert!(
+            verifier
+                .verify_cancellation(&stop, "worker-2", 1000)
+                .is_err()
+        );
+        assert!(
+            verifier
+                .verify_cancellation(&stop, "worker-1", 31000)
+                .is_err()
+        );
+        claims.revision = 1;
+        assert!(
+            verifier
+                .verify_cancellation(&sign(&key, claims.encode_to_vec()), "worker-1", 1000)
+                .is_err()
+        );
+    }
+
     #[test]
     fn grant_requires_exact_peer_request_audience_and_lifetime() {
         let (key, verifier, request, mut claims) = fixture();

@@ -15,7 +15,8 @@ use super::{
 use crate::protocol::{
     command::Ed25519PublicKeyResolver,
     elitea::runtime::v1::{
-        SandboxJobStatusV1, SubmitSandboxJobRequestV1, SubmitSandboxJobResponseV1,
+        CancelSandboxJobRequestV1, CancelSandboxJobResponseV1, SandboxJobStatusV1,
+        SubmitSandboxJobRequestV1, SubmitSandboxJobResponseV1,
         sandbox_supervisor_service_server::{
             SandboxSupervisorService, SandboxSupervisorServiceServer,
         },
@@ -80,6 +81,35 @@ impl<R: Ed25519PublicKeyResolver + 'static> SupervisorService<R> {
 
 #[tonic::async_trait]
 impl<R: Ed25519PublicKeyResolver + 'static> SandboxSupervisorService for SupervisorService<R> {
+    async fn cancel_sandbox_job(
+        &self,
+        request: Request<CancelSandboxJobRequestV1>,
+    ) -> Result<Response<CancelSandboxJobResponseV1>, Status> {
+        let peer = authenticated_peer(&request)?;
+        let grant = request
+            .into_inner()
+            .grant
+            .ok_or_else(|| Status::unauthenticated("A current sandbox stop grant is required."))?;
+        let authorization = self
+            .verifier
+            .verify_cancellation(&grant, &peer, chrono::Utc::now().timestamp_millis())
+            .map_err(|_| {
+                Status::permission_denied(
+                    "The sandbox stop grant is expired or does not authorize this request.",
+                )
+            })?;
+        let outcome = self
+            .supervisor
+            .cancel_authorized(&authorization)
+            .await
+            .map_err(|error| service_error(&error))?;
+        let receipt = response(outcome)?;
+        Ok(Response::new(CancelSandboxJobResponseV1 {
+            status: receipt.status,
+            cleanup_pending: receipt.cleanup_pending,
+        }))
+    }
+
     async fn submit_sandbox_job(
         &self,
         request: Request<SubmitSandboxJobRequestV1>,

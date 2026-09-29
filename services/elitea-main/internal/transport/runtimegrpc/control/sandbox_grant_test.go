@@ -30,7 +30,7 @@ func TestSandboxGrantBindsVerifiedScopePeerAudienceAndRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"valid", "scope", "audience", "stale-fence", "cancelled", "signature", "capability", "disabled"} {
+	for _, name := range []string{"valid", "cancel-running", "cancel-stopped", "cancel-stale", "scope", "audience", "stale-fence", "cancelled", "signature", "capability", "disabled"} {
 		t.Run(name, func(t *testing.T) {
 			calls := []string{}
 			lease := validLease()
@@ -44,6 +44,14 @@ func TestSandboxGrantBindsVerifiedScopePeerAudienceAndRequest(t *testing.T) {
 			config.SandboxGrants = issuer
 			expected := codes.PermissionDenied
 			switch name {
+			case "cancel-running":
+				request.CancelOnly = true
+			case "cancel-stopped":
+				request.CancelOnly = true
+				lease.DesiredState = "CANCELLED"
+			case "cancel-stale":
+				request.CancelOnly = true
+				request.Fence.LeaseEpoch++
 			case "scope":
 				request.Identity.TenantId = "other"
 			case "audience":
@@ -65,7 +73,7 @@ func TestSandboxGrantBindsVerifiedScopePeerAudienceAndRequest(t *testing.T) {
 				t.Fatal(err)
 			}
 			response, err := server.AuthorizeSandboxJob(context.Background(), request)
-			if name != "valid" {
+			if name != "valid" && name != "cancel-running" && name != "cancel-stopped" {
 				if status.Code(err) != expected {
 					t.Fatalf("got %v; expected %v", err, expected)
 				}
@@ -87,6 +95,13 @@ func TestSandboxGrantBindsVerifiedScopePeerAudienceAndRequest(t *testing.T) {
 			claims := &runtimev1.SandboxJobGrantClaimsV1{}
 			if err := proto.Unmarshal(grant.ClaimsBytes, claims); err != nil {
 				t.Fatal(err)
+			}
+			revision := uint32(1)
+			if request.CancelOnly {
+				revision = 2
+			}
+			if claims.CancelOnly != request.CancelOnly || claims.Revision != revision {
+				t.Fatal("incorrect grant purpose")
 			}
 			if claims.TenantId != "tenant" || claims.ProjectId != 2 || claims.SubmitterWorkloadIdentity != lease.Fence.WorkloadIdentity || claims.Audience != "sandbox-prod" || claims.ExpiresAtUnixMillis-claims.IssuedAtUnixMillis != 30000 || !bytes.Equal(claims.RequestDigest, request.RequestDigest) {
 				t.Fatal("incorrect grant bindings")

@@ -86,6 +86,7 @@ impl ClaimBoundSandboxAuthority {
             signed_command: Some(self.signed_command.clone()),
             request_digest: Vec::new(),
             audience: String::new(),
+            cancel_only: false,
         }
     }
 }

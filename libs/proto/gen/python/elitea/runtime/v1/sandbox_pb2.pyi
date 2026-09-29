@@ -25,23 +25,25 @@ SANDBOX_JOB_STATUS_V1_CANCELLED: SandboxJobStatusV1
 SANDBOX_JOB_STATUS_V1_UNCERTAIN: SandboxJobStatusV1
 
 class AuthorizeSandboxJobRequestV1(_message.Message):
-    __slots__ = ("identity", "fence", "activation_id", "request_digest", "audience", "signed_command")
+    __slots__ = ("identity", "fence", "activation_id", "request_digest", "audience", "signed_command", "cancel_only")
     IDENTITY_FIELD_NUMBER: _ClassVar[int]
     FENCE_FIELD_NUMBER: _ClassVar[int]
     ACTIVATION_ID_FIELD_NUMBER: _ClassVar[int]
     REQUEST_DIGEST_FIELD_NUMBER: _ClassVar[int]
     AUDIENCE_FIELD_NUMBER: _ClassVar[int]
     SIGNED_COMMAND_FIELD_NUMBER: _ClassVar[int]
+    CANCEL_ONLY_FIELD_NUMBER: _ClassVar[int]
     identity: _common_pb2.ExecutionIdentityV1
     fence: _common_pb2.ExecutionFenceV1
     activation_id: str
     request_digest: bytes
     audience: str
     signed_command: _envelope_pb2.SignedWorkerCommandEnvelopeV1
-    def __init__(self, identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ..., activation_id: _Optional[str] = ..., request_digest: _Optional[bytes] = ..., audience: _Optional[str] = ..., signed_command: _Optional[_Union[_envelope_pb2.SignedWorkerCommandEnvelopeV1, _Mapping]] = ...) -> None: ...
+    cancel_only: bool
+    def __init__(self, identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ..., activation_id: _Optional[str] = ..., request_digest: _Optional[bytes] = ..., audience: _Optional[str] = ..., signed_command: _Optional[_Union[_envelope_pb2.SignedWorkerCommandEnvelopeV1, _Mapping]] = ..., cancel_only: bool = ...) -> None: ...
 
 class SandboxJobGrantClaimsV1(_message.Message):
-    __slots__ = ("revision", "tenant_id", "project_id", "execution_id", "activation_id", "request_digest", "submitter_workload_identity", "audience", "issued_at_unix_millis", "expires_at_unix_millis", "generation")
+    __slots__ = ("revision", "tenant_id", "project_id", "execution_id", "activation_id", "request_digest", "submitter_workload_identity", "audience", "issued_at_unix_millis", "expires_at_unix_millis", "generation", "cancel_only")
     REVISION_FIELD_NUMBER: _ClassVar[int]
     TENANT_ID_FIELD_NUMBER: _ClassVar[int]
     PROJECT_ID_FIELD_NUMBER: _ClassVar[int]
@@ -53,6 +55,7 @@ class SandboxJobGrantClaimsV1(_message.Message):
     ISSUED_AT_UNIX_MILLIS_FIELD_NUMBER: _ClassVar[int]
     EXPIRES_AT_UNIX_MILLIS_FIELD_NUMBER: _ClassVar[int]
     GENERATION_FIELD_NUMBER: _ClassVar[int]
+    CANCEL_ONLY_FIELD_NUMBER: _ClassVar[int]
     revision: int
     tenant_id: str
     project_id: int
@@ -64,7 +67,8 @@ class SandboxJobGrantClaimsV1(_message.Message):
     issued_at_unix_millis: int
     expires_at_unix_millis: int
     generation: int
-    def __init__(self, revision: _Optional[int] = ..., tenant_id: _Optional[str] = ..., project_id: _Optional[int] = ..., execution_id: _Optional[str] = ..., activation_id: _Optional[str] = ..., request_digest: _Optional[bytes] = ..., submitter_workload_identity: _Optional[str] = ..., audience: _Optional[str] = ..., issued_at_unix_millis: _Optional[int] = ..., expires_at_unix_millis: _Optional[int] = ..., generation: _Optional[int] = ...) -> None: ...
+    cancel_only: bool
+    def __init__(self, revision: _Optional[int] = ..., tenant_id: _Optional[str] = ..., project_id: _Optional[int] = ..., execution_id: _Optional[str] = ..., activation_id: _Optional[str] = ..., request_digest: _Optional[bytes] = ..., submitter_workload_identity: _Optional[str] = ..., audience: _Optional[str] = ..., issued_at_unix_millis: _Optional[int] = ..., expires_at_unix_millis: _Optional[int] = ..., generation: _Optional[int] = ..., cancel_only: bool = ...) -> None: ...
 
 class SignedSandboxJobGrantV1(_message.Message):
     __slots__ = ("key_id", "claims_bytes", "signature")
@@ -103,3 +107,17 @@ class SubmitSandboxJobResponseV1(_message.Message):
     failure_code: str
     cleanup_pending: bool
     def __init__(self, status: _Optional[_Union[SandboxJobStatusV1, str]] = ..., result_json: _Optional[bytes] = ..., failure_code: _Optional[str] = ..., cleanup_pending: bool = ...) -> None: ...
+
+class CancelSandboxJobRequestV1(_message.Message):
+    __slots__ = ("grant",)
+    GRANT_FIELD_NUMBER: _ClassVar[int]
+    grant: SignedSandboxJobGrantV1
+    def __init__(self, grant: _Optional[_Union[SignedSandboxJobGrantV1, _Mapping]] = ...) -> None: ...
+
+class CancelSandboxJobResponseV1(_message.Message):
+    __slots__ = ("status", "cleanup_pending")
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    CLEANUP_PENDING_FIELD_NUMBER: _ClassVar[int]
+    status: SandboxJobStatusV1
+    cleanup_pending: bool
+    def __init__(self, status: _Optional[_Union[SandboxJobStatusV1, str]] = ..., cleanup_pending: bool = ...) -> None: ...

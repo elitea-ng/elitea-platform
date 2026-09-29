@@ -27,7 +27,7 @@ from elitea.runtime.v1 import errors_pb2 as elitea_dot_runtime_dot_v1_dot_errors
 from elitea.runtime.v1 import envelope_pb2 as elitea_dot_runtime_dot_v1_dot_envelope__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1f\x65litea/runtime/v1/sandbox.proto\x12\x11\x65litea.runtime.v1\x1a\x1e\x65litea/runtime/v1/common.proto\x1a\x1e\x65litea/runtime/v1/errors.proto\x1a elitea/runtime/v1/envelope.proto\"\x9d\x02\n\x1c\x41uthorizeSandboxJobRequestV1\x12\x38\n\x08identity\x18\x01 \x01(\x0b\x32&.elitea.runtime.v1.ExecutionIdentityV1\x12\x32\n\x05\x66\x65nce\x18\x02 \x01(\x0b\x32#.elitea.runtime.v1.ExecutionFenceV1\x12\x15\n\ractivation_id\x18\x03 \x01(\t\x12\x16\n\x0erequest_digest\x18\x04 \x01(\x0c\x12\x10\n\x08\x61udience\x18\x05 \x01(\t\x12H\n\x0esigned_command\x18\x06 \x01(\x0b\x32\x30.elitea.runtime.v1.SignedWorkerCommandEnvelopeV1J\x04\x08\x07\x10\x10\"\xa7\x02\n\x17SandboxJobGrantClaimsV1\x12\x10\n\x08revision\x18\x01 \x01(\r\x12\x11\n\ttenant_id\x18\x02 \x01(\t\x12\x12\n\nproject_id\x18\x03 \x01(\x05\x12\x14\n\x0c\x65xecution_id\x18\x04 \x01(\t\x12\x15\n\ractivation_id\x18\x05 \x01(\t\x12\x16\n\x0erequest_digest\x18\x06 \x01(\x0c\x12#\n\x1bsubmitter_workload_identity\x18\x07 \x01(\t\x12\x10\n\x08\x61udience\x18\x08 \x01(\t\x12\x1d\n\x15issued_at_unix_millis\x18\t \x01(\x03\x12\x1e\n\x16\x65xpires_at_unix_millis\x18\n \x01(\x03\x12\x12\n\ngeneration\x18\x0b \x01(\x04J\x04\x08\x0c\x10 \"X\n\x17SignedSandboxJobGrantV1\x12\x0e\n\x06key_id\x18\x01 \x01(\t\x12\x14\n\x0c\x63laims_bytes\x18\x02 \x01(\x0c\x12\x11\n\tsignature\x18\x03 \x01(\x0cJ\x04\x08\x04\x10\x10\"\x96\x01\n\x1d\x41uthorizeSandboxJobResponseV1\x12\x39\n\x05grant\x18\x01 \x01(\x0b\x32*.elitea.runtime.v1.SignedSandboxJobGrantV1\x12\x34\n\trejection\x18\x02 \x01(\x0b\x32!.elitea.runtime.v1.RuntimeErrorV1J\x04\x08\x03\x10\x10\"w\n\x19SubmitSandboxJobRequestV1\x12\x39\n\x05grant\x18\x01 \x01(\x0b\x32*.elitea.runtime.v1.SignedSandboxJobGrantV1\x12\x19\n\x11prepared_job_json\x18\x02 \x01(\x0cJ\x04\x08\x03\x10\x10\"\x9d\x01\n\x1aSubmitSandboxJobResponseV1\x12\x35\n\x06status\x18\x01 \x01(\x0e\x32%.elitea.runtime.v1.SandboxJobStatusV1\x12\x13\n\x0bresult_json\x18\x02 \x01(\x0c\x12\x14\n\x0c\x66\x61ilure_code\x18\x03 \x01(\t\x12\x17\n\x0f\x63leanup_pending\x18\x04 \x01(\x08J\x04\x08\x05\x10\x10*\xef\x01\n\x12SandboxJobStatusV1\x12%\n!SANDBOX_JOB_STATUS_V1_UNSPECIFIED\x10\x00\x12!\n\x1dSANDBOX_JOB_STATUS_V1_PENDING\x10\x01\x12#\n\x1fSANDBOX_JOB_STATUS_V1_COMPLETED\x10\x02\x12 \n\x1cSANDBOX_JOB_STATUS_V1_FAILED\x10\x03\x12#\n\x1fSANDBOX_JOB_STATUS_V1_CANCELLED\x10\x04\x12#\n\x1fSANDBOX_JOB_STATUS_V1_UNCERTAIN\x10\x05\x32\x8b\x01\n\x18SandboxSupervisorService\x12o\n\x10SubmitSandboxJob\x12,.elitea.runtime.v1.SubmitSandboxJobRequestV1\x1a-.elitea.runtime.v1.SubmitSandboxJobResponseV1BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1f\x65litea/runtime/v1/sandbox.proto\x12\x11\x65litea.runtime.v1\x1a\x1e\x65litea/runtime/v1/common.proto\x1a\x1e\x65litea/runtime/v1/errors.proto\x1a elitea/runtime/v1/envelope.proto\"\xb2\x02\n\x1c\x41uthorizeSandboxJobRequestV1\x12\x38\n\x08identity\x18\x01 \x01(\x0b\x32&.elitea.runtime.v1.ExecutionIdentityV1\x12\x32\n\x05\x66\x65nce\x18\x02 \x01(\x0b\x32#.elitea.runtime.v1.ExecutionFenceV1\x12\x15\n\ractivation_id\x18\x03 \x01(\t\x12\x16\n\x0erequest_digest\x18\x04 \x01(\x0c\x12\x10\n\x08\x61udience\x18\x05 \x01(\t\x12H\n\x0esigned_command\x18\x06 \x01(\x0b\x32\x30.elitea.runtime.v1.SignedWorkerCommandEnvelopeV1\x12\x13\n\x0b\x63\x61ncel_only\x18\x10 \x01(\x08J\x04\x08\x07\x10\x10\"\xbc\x02\n\x17SandboxJobGrantClaimsV1\x12\x10\n\x08revision\x18\x01 \x01(\r\x12\x11\n\ttenant_id\x18\x02 \x01(\t\x12\x12\n\nproject_id\x18\x03 \x01(\x05\x12\x14\n\x0c\x65xecution_id\x18\x04 \x01(\t\x12\x15\n\ractivation_id\x18\x05 \x01(\t\x12\x16\n\x0erequest_digest\x18\x06 \x01(\x0c\x12#\n\x1bsubmitter_workload_identity\x18\x07 \x01(\t\x12\x10\n\x08\x61udience\x18\x08 \x01(\t\x12\x1d\n\x15issued_at_unix_millis\x18\t \x01(\x03\x12\x1e\n\x16\x65xpires_at_unix_millis\x18\n \x01(\x03\x12\x12\n\ngeneration\x18\x0b \x01(\x04\x12\x13\n\x0b\x63\x61ncel_only\x18  \x01(\x08J\x04\x08\x0c\x10 \"X\n\x17SignedSandboxJobGrantV1\x12\x0e\n\x06key_id\x18\x01 \x01(\t\x12\x14\n\x0c\x63laims_bytes\x18\x02 \x01(\x0c\x12\x11\n\tsignature\x18\x03 \x01(\x0cJ\x04\x08\x04\x10\x10\"\x96\x01\n\x1d\x41uthorizeSandboxJobResponseV1\x12\x39\n\x05grant\x18\x01 \x01(\x0b\x32*.elitea.runtime.v1.SignedSandboxJobGrantV1\x12\x34\n\trejection\x18\x02 \x01(\x0b\x32!.elitea.runtime.v1.RuntimeErrorV1J\x04\x08\x03\x10\x10\"w\n\x19SubmitSandboxJobRequestV1\x12\x39\n\x05grant\x18\x01 \x01(\x0b\x32*.elitea.runtime.v1.SignedSandboxJobGrantV1\x12\x19\n\x11prepared_job_json\x18\x02 \x01(\x0cJ\x04\x08\x03\x10\x10\"\x9d\x01\n\x1aSubmitSandboxJobResponseV1\x12\x35\n\x06status\x18\x01 \x01(\x0e\x32%.elitea.runtime.v1.SandboxJobStatusV1\x12\x13\n\x0bresult_json\x18\x02 \x01(\x0c\x12\x14\n\x0c\x66\x61ilure_code\x18\x03 \x01(\t\x12\x17\n\x0f\x63leanup_pending\x18\x04 \x01(\x08J\x04\x08\x05\x10\x10\"\\\n\x19\x43\x61ncelSandboxJobRequestV1\x12\x39\n\x05grant\x18\x01 \x01(\x0b\x32*.elitea.runtime.v1.SignedSandboxJobGrantV1J\x04\x08\x02\x10\x10\"r\n\x1a\x43\x61ncelSandboxJobResponseV1\x12\x35\n\x06status\x18\x01 \x01(\x0e\x32%.elitea.runtime.v1.SandboxJobStatusV1\x12\x17\n\x0f\x63leanup_pending\x18\x02 \x01(\x08J\x04\x08\x03\x10\x10*\xef\x01\n\x12SandboxJobStatusV1\x12%\n!SANDBOX_JOB_STATUS_V1_UNSPECIFIED\x10\x00\x12!\n\x1dSANDBOX_JOB_STATUS_V1_PENDING\x10\x01\x12#\n\x1fSANDBOX_JOB_STATUS_V1_COMPLETED\x10\x02\x12 \n\x1cSANDBOX_JOB_STATUS_V1_FAILED\x10\x03\x12#\n\x1fSANDBOX_JOB_STATUS_V1_CANCELLED\x10\x04\x12#\n\x1fSANDBOX_JOB_STATUS_V1_UNCERTAIN\x10\x05\x32\xfc\x01\n\x18SandboxSupervisorService\x12o\n\x10SubmitSandboxJob\x12,.elitea.runtime.v1.SubmitSandboxJobRequestV1\x1a-.elitea.runtime.v1.SubmitSandboxJobResponseV1\x12o\n\x10\x43\x61ncelSandboxJob\x12,.elitea.runtime.v1.CancelSandboxJobRequestV1\x1a-.elitea.runtime.v1.CancelSandboxJobResponseV1BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -35,20 +35,24 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'elitea.runtime.v1.sandbox_p
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'ZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1'
-  _globals['_SANDBOXJOBSTATUSV1']._serialized_start=1263
-  _globals['_SANDBOXJOBSTATUSV1']._serialized_end=1502
+  _globals['_SANDBOXJOBSTATUSV1']._serialized_start=1515
+  _globals['_SANDBOXJOBSTATUSV1']._serialized_end=1754
   _globals['_AUTHORIZESANDBOXJOBREQUESTV1']._serialized_start=153
-  _globals['_AUTHORIZESANDBOXJOBREQUESTV1']._serialized_end=438
-  _globals['_SANDBOXJOBGRANTCLAIMSV1']._serialized_start=441
-  _globals['_SANDBOXJOBGRANTCLAIMSV1']._serialized_end=736
-  _globals['_SIGNEDSANDBOXJOBGRANTV1']._serialized_start=738
-  _globals['_SIGNEDSANDBOXJOBGRANTV1']._serialized_end=826
-  _globals['_AUTHORIZESANDBOXJOBRESPONSEV1']._serialized_start=829
-  _globals['_AUTHORIZESANDBOXJOBRESPONSEV1']._serialized_end=979
-  _globals['_SUBMITSANDBOXJOBREQUESTV1']._serialized_start=981
-  _globals['_SUBMITSANDBOXJOBREQUESTV1']._serialized_end=1100
-  _globals['_SUBMITSANDBOXJOBRESPONSEV1']._serialized_start=1103
-  _globals['_SUBMITSANDBOXJOBRESPONSEV1']._serialized_end=1260
-  _globals['_SANDBOXSUPERVISORSERVICE']._serialized_start=1505
-  _globals['_SANDBOXSUPERVISORSERVICE']._serialized_end=1644
+  _globals['_AUTHORIZESANDBOXJOBREQUESTV1']._serialized_end=459
+  _globals['_SANDBOXJOBGRANTCLAIMSV1']._serialized_start=462
+  _globals['_SANDBOXJOBGRANTCLAIMSV1']._serialized_end=778
+  _globals['_SIGNEDSANDBOXJOBGRANTV1']._serialized_start=780
+  _globals['_SIGNEDSANDBOXJOBGRANTV1']._serialized_end=868
+  _globals['_AUTHORIZESANDBOXJOBRESPONSEV1']._serialized_start=871
+  _globals['_AUTHORIZESANDBOXJOBRESPONSEV1']._serialized_end=1021
+  _globals['_SUBMITSANDBOXJOBREQUESTV1']._serialized_start=1023
+  _globals['_SUBMITSANDBOXJOBREQUESTV1']._serialized_end=1142
+  _globals['_SUBMITSANDBOXJOBRESPONSEV1']._serialized_start=1145
+  _globals['_SUBMITSANDBOXJOBRESPONSEV1']._serialized_end=1302
+  _globals['_CANCELSANDBOXJOBREQUESTV1']._serialized_start=1304
+  _globals['_CANCELSANDBOXJOBREQUESTV1']._serialized_end=1396
+  _globals['_CANCELSANDBOXJOBRESPONSEV1']._serialized_start=1398
+  _globals['_CANCELSANDBOXJOBRESPONSEV1']._serialized_end=1512
+  _globals['_SANDBOXSUPERVISORSERVICE']._serialized_start=1757
+  _globals['_SANDBOXSUPERVISORSERVICE']._serialized_end=2009
 # @@protoc_insertion_point(module_scope)

@@ -9,6 +9,17 @@ struct PendingSupervisor(Arc<Notify>);
 
 #[tonic::async_trait]
 impl SandboxSupervisorService for PendingSupervisor {
+    async fn cancel_sandbox_job(
+        &self,
+        _: Request<crate::protocol::elitea::runtime::v1::CancelSandboxJobRequestV1>,
+    ) -> Result<
+        tonic::Response<crate::protocol::elitea::runtime::v1::CancelSandboxJobResponseV1>,
+        tonic::Status,
+    > {
+        Err(tonic::Status::unimplemented(
+            "not part of the submission fixture",
+        ))
+    }
     async fn submit_sandbox_job(
         &self,
         _: Request<SubmitSandboxJobRequestV1>,

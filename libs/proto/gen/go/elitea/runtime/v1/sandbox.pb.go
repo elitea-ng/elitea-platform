@@ -91,6 +91,8 @@ type AuthorizeSandboxJobRequestV1 struct {
 	Audience      string                 `protobuf:"bytes,5,opt,name=audience,proto3" json:"audience,omitempty"`
 	// Signed Main command is the authority for tenant and resource project.
 	SignedCommand *SignedWorkerCommandEnvelopeV1 `protobuf:"bytes,6,opt,name=signed_command,json=signedCommand,proto3" json:"signed_command,omitempty"`
+	// Stop authority cannot authorize submission. It can be issued after Stop.
+	CancelOnly    bool `protobuf:"varint,16,opt,name=cancel_only,json=cancelOnly,proto3" json:"cancel_only,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -167,6 +169,13 @@ func (x *AuthorizeSandboxJobRequestV1) GetSignedCommand() *SignedWorkerCommandEn
 	return nil
 }
 
+func (x *AuthorizeSandboxJobRequestV1) GetCancelOnly() bool {
+	if x != nil {
+		return x.CancelOnly
+	}
+	return false
+}
+
 // No fence token, credential, source code or state enters the signed claims.
 // Lifetime is at most 30 seconds. The submitter must also match the verified
 // mTLS peer at the supervisor. A signature is not authority to replay a job.
@@ -183,8 +192,10 @@ type SandboxJobGrantClaimsV1 struct {
 	IssuedAtUnixMillis        int64                  `protobuf:"varint,9,opt,name=issued_at_unix_millis,json=issuedAtUnixMillis,proto3" json:"issued_at_unix_millis,omitempty"`
 	ExpiresAtUnixMillis       int64                  `protobuf:"varint,10,opt,name=expires_at_unix_millis,json=expiresAtUnixMillis,proto3" json:"expires_at_unix_millis,omitempty"`
 	Generation                uint64                 `protobuf:"varint,11,opt,name=generation,proto3" json:"generation,omitempty"`
-	unknownFields             protoimpl.UnknownFields
-	sizeCache                 protoimpl.SizeCache
+	// Revision 2 stop grants are valid only for CancelSandboxJob.
+	CancelOnly    bool `protobuf:"varint,32,opt,name=cancel_only,json=cancelOnly,proto3" json:"cancel_only,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SandboxJobGrantClaimsV1) Reset() {
@@ -292,6 +303,13 @@ func (x *SandboxJobGrantClaimsV1) GetGeneration() uint64 {
 		return x.Generation
 	}
 	return 0
+}
+
+func (x *SandboxJobGrantClaimsV1) GetCancelOnly() bool {
+	if x != nil {
+		return x.CancelOnly
+	}
+	return false
 }
 
 // Ed25519 signs domain "elitea.sandbox.job-grant.ed25519.v1\x00", followed by
@@ -532,18 +550,118 @@ func (x *SubmitSandboxJobResponseV1) GetCleanupPending() bool {
 	return false
 }
 
+// Cancellation carries identity only; source and state are not required.
+type CancelSandboxJobRequestV1 struct {
+	state         protoimpl.MessageState   `protogen:"open.v1"`
+	Grant         *SignedSandboxJobGrantV1 `protobuf:"bytes,1,opt,name=grant,proto3" json:"grant,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CancelSandboxJobRequestV1) Reset() {
+	*x = CancelSandboxJobRequestV1{}
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CancelSandboxJobRequestV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CancelSandboxJobRequestV1) ProtoMessage() {}
+
+func (x *CancelSandboxJobRequestV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CancelSandboxJobRequestV1.ProtoReflect.Descriptor instead.
+func (*CancelSandboxJobRequestV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_sandbox_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *CancelSandboxJobRequestV1) GetGrant() *SignedSandboxJobGrantV1 {
+	if x != nil {
+		return x.Grant
+	}
+	return nil
+}
+
+// Pending means the stop intent is durable, but termination is not confirmed.
+type CancelSandboxJobResponseV1 struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Status         SandboxJobStatusV1     `protobuf:"varint,1,opt,name=status,proto3,enum=elitea.runtime.v1.SandboxJobStatusV1" json:"status,omitempty"`
+	CleanupPending bool                   `protobuf:"varint,2,opt,name=cleanup_pending,json=cleanupPending,proto3" json:"cleanup_pending,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *CancelSandboxJobResponseV1) Reset() {
+	*x = CancelSandboxJobResponseV1{}
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CancelSandboxJobResponseV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CancelSandboxJobResponseV1) ProtoMessage() {}
+
+func (x *CancelSandboxJobResponseV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CancelSandboxJobResponseV1.ProtoReflect.Descriptor instead.
+func (*CancelSandboxJobResponseV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_sandbox_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *CancelSandboxJobResponseV1) GetStatus() SandboxJobStatusV1 {
+	if x != nil {
+		return x.Status
+	}
+	return SandboxJobStatusV1_SANDBOX_JOB_STATUS_V1_UNSPECIFIED
+}
+
+func (x *CancelSandboxJobResponseV1) GetCleanupPending() bool {
+	if x != nil {
+		return x.CleanupPending
+	}
+	return false
+}
+
 var File_elitea_runtime_v1_sandbox_proto protoreflect.FileDescriptor
 
 const file_elitea_runtime_v1_sandbox_proto_rawDesc = "" +
 	"\n" +
-	"\x1felitea/runtime/v1/sandbox.proto\x12\x11elitea.runtime.v1\x1a\x1eelitea/runtime/v1/common.proto\x1a\x1eelitea/runtime/v1/errors.proto\x1a elitea/runtime/v1/envelope.proto\"\xe4\x02\n" +
+	"\x1felitea/runtime/v1/sandbox.proto\x12\x11elitea.runtime.v1\x1a\x1eelitea/runtime/v1/common.proto\x1a\x1eelitea/runtime/v1/errors.proto\x1a elitea/runtime/v1/envelope.proto\"\x85\x03\n" +
 	"\x1cAuthorizeSandboxJobRequestV1\x12B\n" +
 	"\bidentity\x18\x01 \x01(\v2&.elitea.runtime.v1.ExecutionIdentityV1R\bidentity\x129\n" +
 	"\x05fence\x18\x02 \x01(\v2#.elitea.runtime.v1.ExecutionFenceV1R\x05fence\x12#\n" +
 	"\ractivation_id\x18\x03 \x01(\tR\factivationId\x12%\n" +
 	"\x0erequest_digest\x18\x04 \x01(\fR\rrequestDigest\x12\x1a\n" +
 	"\baudience\x18\x05 \x01(\tR\baudience\x12W\n" +
-	"\x0esigned_command\x18\x06 \x01(\v20.elitea.runtime.v1.SignedWorkerCommandEnvelopeV1R\rsignedCommandJ\x04\b\a\x10\x10\"\xca\x03\n" +
+	"\x0esigned_command\x18\x06 \x01(\v20.elitea.runtime.v1.SignedWorkerCommandEnvelopeV1R\rsignedCommand\x12\x1f\n" +
+	"\vcancel_only\x18\x10 \x01(\bR\n" +
+	"cancelOnlyJ\x04\b\a\x10\x10\"\xeb\x03\n" +
 	"\x17SandboxJobGrantClaimsV1\x12\x1a\n" +
 	"\brevision\x18\x01 \x01(\rR\brevision\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x1d\n" +
@@ -559,7 +677,9 @@ const file_elitea_runtime_v1_sandbox_proto_rawDesc = "" +
 	" \x01(\x03R\x13expiresAtUnixMillis\x12\x1e\n" +
 	"\n" +
 	"generation\x18\v \x01(\x04R\n" +
-	"generationJ\x04\b\f\x10 \"w\n" +
+	"generation\x12\x1f\n" +
+	"\vcancel_only\x18  \x01(\bR\n" +
+	"cancelOnlyJ\x04\b\f\x10 \"w\n" +
 	"\x17SignedSandboxJobGrantV1\x12\x15\n" +
 	"\x06key_id\x18\x01 \x01(\tR\x05keyId\x12!\n" +
 	"\fclaims_bytes\x18\x02 \x01(\fR\vclaimsBytes\x12\x1c\n" +
@@ -575,16 +695,22 @@ const file_elitea_runtime_v1_sandbox_proto_rawDesc = "" +
 	"\vresult_json\x18\x02 \x01(\fR\n" +
 	"resultJson\x12!\n" +
 	"\ffailure_code\x18\x03 \x01(\tR\vfailureCode\x12'\n" +
-	"\x0fcleanup_pending\x18\x04 \x01(\bR\x0ecleanupPendingJ\x04\b\x05\x10\x10*\xef\x01\n" +
+	"\x0fcleanup_pending\x18\x04 \x01(\bR\x0ecleanupPendingJ\x04\b\x05\x10\x10\"c\n" +
+	"\x19CancelSandboxJobRequestV1\x12@\n" +
+	"\x05grant\x18\x01 \x01(\v2*.elitea.runtime.v1.SignedSandboxJobGrantV1R\x05grantJ\x04\b\x02\x10\x10\"\x8a\x01\n" +
+	"\x1aCancelSandboxJobResponseV1\x12=\n" +
+	"\x06status\x18\x01 \x01(\x0e2%.elitea.runtime.v1.SandboxJobStatusV1R\x06status\x12'\n" +
+	"\x0fcleanup_pending\x18\x02 \x01(\bR\x0ecleanupPendingJ\x04\b\x03\x10\x10*\xef\x01\n" +
 	"\x12SandboxJobStatusV1\x12%\n" +
 	"!SANDBOX_JOB_STATUS_V1_UNSPECIFIED\x10\x00\x12!\n" +
 	"\x1dSANDBOX_JOB_STATUS_V1_PENDING\x10\x01\x12#\n" +
 	"\x1fSANDBOX_JOB_STATUS_V1_COMPLETED\x10\x02\x12 \n" +
 	"\x1cSANDBOX_JOB_STATUS_V1_FAILED\x10\x03\x12#\n" +
 	"\x1fSANDBOX_JOB_STATUS_V1_CANCELLED\x10\x04\x12#\n" +
-	"\x1fSANDBOX_JOB_STATUS_V1_UNCERTAIN\x10\x052\x8b\x01\n" +
+	"\x1fSANDBOX_JOB_STATUS_V1_UNCERTAIN\x10\x052\xfc\x01\n" +
 	"\x18SandboxSupervisorService\x12o\n" +
-	"\x10SubmitSandboxJob\x12,.elitea.runtime.v1.SubmitSandboxJobRequestV1\x1a-.elitea.runtime.v1.SubmitSandboxJobResponseV1BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"\x10SubmitSandboxJob\x12,.elitea.runtime.v1.SubmitSandboxJobRequestV1\x1a-.elitea.runtime.v1.SubmitSandboxJobResponseV1\x12o\n" +
+	"\x10CancelSandboxJob\x12,.elitea.runtime.v1.CancelSandboxJobRequestV1\x1a-.elitea.runtime.v1.CancelSandboxJobResponseV1BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_sandbox_proto_rawDescOnce sync.Once
@@ -599,7 +725,7 @@ func file_elitea_runtime_v1_sandbox_proto_rawDescGZIP() []byte {
 }
 
 var file_elitea_runtime_v1_sandbox_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_elitea_runtime_v1_sandbox_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_elitea_runtime_v1_sandbox_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_elitea_runtime_v1_sandbox_proto_goTypes = []any{
 	(SandboxJobStatusV1)(0),               // 0: elitea.runtime.v1.SandboxJobStatusV1
 	(*AuthorizeSandboxJobRequestV1)(nil),  // 1: elitea.runtime.v1.AuthorizeSandboxJobRequestV1
@@ -608,26 +734,32 @@ var file_elitea_runtime_v1_sandbox_proto_goTypes = []any{
 	(*AuthorizeSandboxJobResponseV1)(nil), // 4: elitea.runtime.v1.AuthorizeSandboxJobResponseV1
 	(*SubmitSandboxJobRequestV1)(nil),     // 5: elitea.runtime.v1.SubmitSandboxJobRequestV1
 	(*SubmitSandboxJobResponseV1)(nil),    // 6: elitea.runtime.v1.SubmitSandboxJobResponseV1
-	(*ExecutionIdentityV1)(nil),           // 7: elitea.runtime.v1.ExecutionIdentityV1
-	(*ExecutionFenceV1)(nil),              // 8: elitea.runtime.v1.ExecutionFenceV1
-	(*SignedWorkerCommandEnvelopeV1)(nil), // 9: elitea.runtime.v1.SignedWorkerCommandEnvelopeV1
-	(*RuntimeErrorV1)(nil),                // 10: elitea.runtime.v1.RuntimeErrorV1
+	(*CancelSandboxJobRequestV1)(nil),     // 7: elitea.runtime.v1.CancelSandboxJobRequestV1
+	(*CancelSandboxJobResponseV1)(nil),    // 8: elitea.runtime.v1.CancelSandboxJobResponseV1
+	(*ExecutionIdentityV1)(nil),           // 9: elitea.runtime.v1.ExecutionIdentityV1
+	(*ExecutionFenceV1)(nil),              // 10: elitea.runtime.v1.ExecutionFenceV1
+	(*SignedWorkerCommandEnvelopeV1)(nil), // 11: elitea.runtime.v1.SignedWorkerCommandEnvelopeV1
+	(*RuntimeErrorV1)(nil),                // 12: elitea.runtime.v1.RuntimeErrorV1
 }
 var file_elitea_runtime_v1_sandbox_proto_depIdxs = []int32{
-	7,  // 0: elitea.runtime.v1.AuthorizeSandboxJobRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
-	8,  // 1: elitea.runtime.v1.AuthorizeSandboxJobRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
-	9,  // 2: elitea.runtime.v1.AuthorizeSandboxJobRequestV1.signed_command:type_name -> elitea.runtime.v1.SignedWorkerCommandEnvelopeV1
+	9,  // 0: elitea.runtime.v1.AuthorizeSandboxJobRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
+	10, // 1: elitea.runtime.v1.AuthorizeSandboxJobRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
+	11, // 2: elitea.runtime.v1.AuthorizeSandboxJobRequestV1.signed_command:type_name -> elitea.runtime.v1.SignedWorkerCommandEnvelopeV1
 	3,  // 3: elitea.runtime.v1.AuthorizeSandboxJobResponseV1.grant:type_name -> elitea.runtime.v1.SignedSandboxJobGrantV1
-	10, // 4: elitea.runtime.v1.AuthorizeSandboxJobResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	12, // 4: elitea.runtime.v1.AuthorizeSandboxJobResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
 	3,  // 5: elitea.runtime.v1.SubmitSandboxJobRequestV1.grant:type_name -> elitea.runtime.v1.SignedSandboxJobGrantV1
 	0,  // 6: elitea.runtime.v1.SubmitSandboxJobResponseV1.status:type_name -> elitea.runtime.v1.SandboxJobStatusV1
-	5,  // 7: elitea.runtime.v1.SandboxSupervisorService.SubmitSandboxJob:input_type -> elitea.runtime.v1.SubmitSandboxJobRequestV1
-	6,  // 8: elitea.runtime.v1.SandboxSupervisorService.SubmitSandboxJob:output_type -> elitea.runtime.v1.SubmitSandboxJobResponseV1
-	8,  // [8:9] is the sub-list for method output_type
-	7,  // [7:8] is the sub-list for method input_type
-	7,  // [7:7] is the sub-list for extension type_name
-	7,  // [7:7] is the sub-list for extension extendee
-	0,  // [0:7] is the sub-list for field type_name
+	3,  // 7: elitea.runtime.v1.CancelSandboxJobRequestV1.grant:type_name -> elitea.runtime.v1.SignedSandboxJobGrantV1
+	0,  // 8: elitea.runtime.v1.CancelSandboxJobResponseV1.status:type_name -> elitea.runtime.v1.SandboxJobStatusV1
+	5,  // 9: elitea.runtime.v1.SandboxSupervisorService.SubmitSandboxJob:input_type -> elitea.runtime.v1.SubmitSandboxJobRequestV1
+	7,  // 10: elitea.runtime.v1.SandboxSupervisorService.CancelSandboxJob:input_type -> elitea.runtime.v1.CancelSandboxJobRequestV1
+	6,  // 11: elitea.runtime.v1.SandboxSupervisorService.SubmitSandboxJob:output_type -> elitea.runtime.v1.SubmitSandboxJobResponseV1
+	8,  // 12: elitea.runtime.v1.SandboxSupervisorService.CancelSandboxJob:output_type -> elitea.runtime.v1.CancelSandboxJobResponseV1
+	11, // [11:13] is the sub-list for method output_type
+	9,  // [9:11] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_elitea_runtime_v1_sandbox_proto_init() }
@@ -644,7 +776,7 @@ func file_elitea_runtime_v1_sandbox_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_elitea_runtime_v1_sandbox_proto_rawDesc), len(file_elitea_runtime_v1_sandbox_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   6,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

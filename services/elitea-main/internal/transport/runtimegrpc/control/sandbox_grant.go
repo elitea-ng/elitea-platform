@@ -65,7 +65,7 @@ func (s *Server) AuthorizeSandboxJob(ctx context.Context, request *runtimev1.Aut
 		return nil, status.Error(codes.InvalidArgument, "The execution fence is malformed.")
 	}
 	desired, err := s.claims.ObserveDesiredState(ctx, fence)
-	if err != nil || desired != runtimedomain.DesiredRunning {
+	if err != nil || (desired != runtimedomain.DesiredRunning && !(request.GetCancelOnly() && desired == runtimedomain.DesiredCancelled)) {
 		return nil, status.Error(codes.PermissionDenied, "The execution is no longer authorized to start sandbox work.")
 	}
 	command, err := s.verifier.Verify(ctx, request.GetSignedCommand())
@@ -79,9 +79,13 @@ func (s *Server) AuthorizeSandboxJob(ctx context.Context, request *runtimev1.Aut
 	if err != nil || project <= 0 || !sandboxIdentity(command.GetTenantId()) || !sandboxIdentity(fence.ExecutionID) {
 		return nil, status.Error(codes.PermissionDenied, "The sandbox execution scope is invalid.")
 	}
+	revision := uint32(1)
+	if request.GetCancelOnly() {
+		revision = 2
+	}
 	now := issuer.now().UTC()
 	claims := &runtimev1.SandboxJobGrantClaimsV1{
-		Revision: 1, TenantId: command.GetTenantId(), ProjectId: int32(project), ExecutionId: fence.ExecutionID,
+		Revision: revision, CancelOnly: request.GetCancelOnly(), TenantId: command.GetTenantId(), ProjectId: int32(project), ExecutionId: fence.ExecutionID,
 		ActivationId: request.GetActivationId(), RequestDigest: append([]byte(nil), request.GetRequestDigest()...),
 		SubmitterWorkloadIdentity: peer, Audience: request.GetAudience(), IssuedAtUnixMillis: now.UnixMilli(),
 		ExpiresAtUnixMillis: now.Add(30 * time.Second).UnixMilli(), Generation: fence.Generation,

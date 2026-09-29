@@ -1251,6 +1251,7 @@ async fn sandbox_submission(over_tls: bool) {
     public.copy_from_slice(key.public_key().as_ref());
     let claims = SandboxJobGrantClaimsV1 {
         revision: 1,
+        cancel_only: false,
         tenant_id: "fixture-tenant".into(),
         project_id: 2,
         execution_id: format!("fixture-execution-{now}"),

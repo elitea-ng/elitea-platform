@@ -207,7 +207,7 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
     match schema {
         #[cfg(feature = "sandbox-supervisor")]
         Schema::SandboxGrant => match field {
-            1 | 3 | 9..=11 => Some(varint()),
+            1 | 3 | 9..=11 | 32 => Some(varint()),
             2 | 4..=8 => Some(length()),
             _ => None,
         },

@@ -41,6 +41,11 @@ class SandboxSupervisorServiceStub(object):
                 request_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.SubmitSandboxJobRequestV1.SerializeToString,
                 response_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.SubmitSandboxJobResponseV1.FromString,
                 _registered_method=True)
+        self.CancelSandboxJob = channel.unary_unary(
+                '/elitea.runtime.v1.SandboxSupervisorService/CancelSandboxJob',
+                request_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CancelSandboxJobRequestV1.SerializeToString,
+                response_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CancelSandboxJobResponseV1.FromString,
+                _registered_method=True)
 
 
 class SandboxSupervisorServiceServicer(object):
@@ -54,6 +59,12 @@ class SandboxSupervisorServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def CancelSandboxJob(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_SandboxSupervisorServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -61,6 +72,11 @@ def add_SandboxSupervisorServiceServicer_to_server(servicer, server):
                     servicer.SubmitSandboxJob,
                     request_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.SubmitSandboxJobRequestV1.FromString,
                     response_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.SubmitSandboxJobResponseV1.SerializeToString,
+            ),
+            'CancelSandboxJob': grpc.unary_unary_rpc_method_handler(
+                    servicer.CancelSandboxJob,
+                    request_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CancelSandboxJobRequestV1.FromString,
+                    response_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CancelSandboxJobResponseV1.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -92,6 +108,33 @@ class SandboxSupervisorService(object):
             '/elitea.runtime.v1.SandboxSupervisorService/SubmitSandboxJob',
             elitea_dot_runtime_dot_v1_dot_sandbox__pb2.SubmitSandboxJobRequestV1.SerializeToString,
             elitea_dot_runtime_dot_v1_dot_sandbox__pb2.SubmitSandboxJobResponseV1.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def CancelSandboxJob(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/elitea.runtime.v1.SandboxSupervisorService/CancelSandboxJob',
+            elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CancelSandboxJobRequestV1.SerializeToString,
+            elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CancelSandboxJobResponseV1.FromString,
             options,
             channel_credentials,
             insecure,

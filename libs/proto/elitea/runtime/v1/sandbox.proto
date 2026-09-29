@@ -20,6 +20,8 @@ message AuthorizeSandboxJobRequestV1 {
   // Signed Main command is the authority for tenant and resource project.
   SignedWorkerCommandEnvelopeV1 signed_command = 6;
   reserved 7 to 15;
+  // Stop authority cannot authorize submission. It can be issued after Stop.
+  bool cancel_only = 16;
 }
 
 // No fence token, credential, source code or state enters the signed claims.
@@ -38,6 +40,8 @@ message SandboxJobGrantClaimsV1 {
   int64 expires_at_unix_millis = 10;
   uint64 generation = 11;
   reserved 12 to 31;
+  // Revision 2 stop grants are valid only for CancelSandboxJob.
+  bool cancel_only = 32;
 }
 
 // Ed25519 signs domain "elitea.sandbox.job-grant.ed25519.v1\x00", followed by
@@ -60,6 +64,7 @@ message AuthorizeSandboxJobResponseV1 {
 // prepared request. It reconciles the existing activation; it never restarts it.
 service SandboxSupervisorService {
   rpc SubmitSandboxJob(SubmitSandboxJobRequestV1) returns (SubmitSandboxJobResponseV1);
+  rpc CancelSandboxJob(CancelSandboxJobRequestV1) returns (CancelSandboxJobResponseV1);
 }
 
 message SubmitSandboxJobRequestV1 {
@@ -86,4 +91,17 @@ message SubmitSandboxJobResponseV1 {
   string failure_code = 3;
   bool cleanup_pending = 4;
   reserved 5 to 15;
+}
+
+// Cancellation carries identity only; source and state are not required.
+message CancelSandboxJobRequestV1 {
+  SignedSandboxJobGrantV1 grant = 1;
+  reserved 2 to 15;
+}
+
+// Pending means the stop intent is durable, but termination is not confirmed.
+message CancelSandboxJobResponseV1 {
+  SandboxJobStatusV1 status = 1;
+  bool cleanup_pending = 2;
+  reserved 3 to 15;
 }
