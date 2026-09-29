@@ -8,12 +8,29 @@ COPY src ./src
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/target \
     CARGO_TARGET_DIR=/target cargo auditable build --locked --release -j 2 && \
-    cp /target/release/elitea-code-runner /usr/local/bin/elitea-code-runner
+    cp /target/release/elitea-code-runner /usr/local/bin/elitea-code-runner && \
+    cp /target/release/elitea-code-execute /usr/local/bin/elitea-code-execute
 
-# Initial verification runtime; Python compatibility through Deno/Pyodide
-# and JS/Rust language images remain separate integration work.
-FROM python:3.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c
+# Minimal runner verification target. The Deno language target extends it below.
+FROM python:3.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c AS verification
 COPY --from=builder /usr/local/bin/elitea-code-runner /usr/local/bin/elitea-code-runner
 WORKDIR /workspace
 USER 10001:10001
 CMD ["/usr/local/bin/elitea-code-runner"]
+
+
+FROM denoland/deno:bin-2.5.4@sha256:1245e9856180be858aebeefdff2c3b98dc01e8ea667b48f4fb64647dc56bb61d AS deno
+FROM verification AS deno-runtime
+USER root
+COPY --from=deno /deno /usr/local/bin/deno
+COPY --from=builder /usr/local/bin/elitea-code-execute /usr/local/bin/elitea-code-execute
+COPY adapters /opt/elitea-code
+ENV DENO_DIR=/opt/deno-cache
+RUN mkdir -p /opt/elitea-wheels && \
+    deno cache --frozen --lock=/opt/elitea-code/deno.lock /opt/elitea-code/python.mjs /opt/elitea-code/javascript.mjs && \
+    deno run --frozen --lock=/opt/elitea-code/deno.lock --no-prompt \
+      --allow-read=/opt/deno-cache,/opt/elitea-wheels \
+      --allow-write=/opt/elitea-wheels --allow-env=NODE_DEBUG \
+      --allow-net=cdn.jsdelivr.net /opt/elitea-code/preload.mjs && \
+    chmod -R a+rX /opt/deno-cache /opt/elitea-wheels /opt/elitea-code
+USER 10001:10001

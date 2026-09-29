@@ -1040,7 +1040,7 @@ async fn sandbox_supervisor_submits_only_the_authorized_request_once() {
     let image = env::var("ELITEA_CODE_RUNNER_TEST_IMAGE").unwrap();
     let request = PreparedJob::new(
         Language::Python,
-        "import uuid; print('authorized-result-' + str(uuid.uuid4()))".into(),
+        "import uuid\nresult = 'authorized-result-' + str(uuid.uuid4())\nprint(result)\n{'marker': result}".into(),
         Default::default(),
         image.clone(),
         "fixture-v1".into(),
@@ -1095,7 +1095,7 @@ async fn sandbox_supervisor_submits_only_the_authorized_request_once() {
     let runtime = DockerClient::with_image(image.clone())
         .await
         .unwrap()
-        .with_resource_limits(Some(64 * 1024 * 1024), Some(0.25))
+        .with_resource_limits(Some(512 * 1024 * 1024), Some(1.0))
         .with_code_job_policy(Duration::from_secs(15))
         .unwrap();
     let supervisor = DockerSupervisor::new(
@@ -1147,6 +1147,18 @@ async fn sandbox_supervisor_submits_only_the_authorized_request_once() {
     assert!(!cleanup_pending);
     let stored = record.result_json.unwrap();
     assert!(stored.contains("authorized-result-"));
+    if env::var("ELITEA_TEST_REAL_ADAPTER").as_deref() == Ok("1") {
+        let receipt: serde_json::Value = serde_json::from_str(&stored).unwrap();
+        let output: serde_json::Value =
+            serde_json::from_str(receipt["stdout"].as_str().unwrap()).unwrap();
+        assert_eq!(output["revision"], 1);
+        assert!(
+            output["result"]["marker"]
+                .as_str()
+                .unwrap()
+                .starts_with("authorized-result-")
+        );
+    }
     let repeated = supervisor
         .submit_authorized(&authorized, &request)
         .await

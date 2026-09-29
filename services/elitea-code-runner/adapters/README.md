@@ -39,10 +39,10 @@ DENO_DIR=/path/to/deno-cache ELITEA_TEST_WHEEL_CACHE=/path/to/wheels \
   services/elitea-code-runner/adapters/python_test.mjs
 ```
 
-These interpreter tests do not prove Linux isolation or deployment. Image
-assembly, the fixed `elitea-code-execute` launcher, scoped platform-client access,
-the Rust adapter, graph binding and browser acceptance
-remain integration work. Do not enable Code nodes based only on these tests.
+These interpreter tests do not prove Linux isolation or deployment. The
+`deno-runtime` image target supplies the fixed `elitea-code-execute` launcher.
+Scoped platform-client access, the Rust adapter, graph binding and browser
+acceptance remain integration work. Do not enable Code nodes based only on these tests.
 
 
 ## JavaScript and TypeScript
@@ -73,3 +73,24 @@ deno test --no-lock --no-prompt --deny-net \
   --allow-read=/tmp,/private/tmp --allow-write=/tmp,/private/tmp \
   services/elitea-code-runner/adapters/javascript_test.mjs
 ```
+
+
+## Preloaded Linux image
+
+Build `services/elitea-code-runner/Containerfile` with target `deno-runtime` and
+context `services/elitea-code-runner`. Deno 2.5.4 is pinned by its multi-platform
+image digest. The Deno lockfile pins Pyodide and npm dependencies. Build time
+preloads the interpreter and micropip wheel; execution uses cached-only/frozen
+resolution with network, subprocess and FFI permissions denied. The fixed Rust
+launcher clears inherited environment variables and copies immutable base wheels
+into job-local writable storage. Additional package preparation remains subject
+to an explicit future egress/profile policy; this image does not promise arbitrary
+online pip/npm installs.
+
+Use the resulting local immutable image ID with
+`scripts/runtime/probe_code_adapters_container.py --image sha256:...` for Linux
+container checks. These include all three languages, failure reporting, denied
+network/subprocess calls and timeout termination. Tests create only fresh named
+containers with read-only fixture mounts, UID 10001, 512 MiB memory/swap ceiling,
+one CPU, 64 PIDs, read-only root, dropped capabilities and no network. They clean
+up their containers afterward. This does not deploy or enable product Code nodes.

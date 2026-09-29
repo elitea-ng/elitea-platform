@@ -1171,3 +1171,45 @@ transpilation, and explicit failures (missing export, nonfinite/undefined/cyclic
 values, oversized output and thrown exception). Deno lint passed. The tests use
 no network. Runtime-image packaging, imported-package policy, Rust adapter,
 worker binding, Kubernetes and browser acceptance remain open.
+
+
+### Preloaded Deno/Pyodide image and fixed launcher (2026-09-29)
+
+`services/elitea-code-runner/src/execute.rs` now supplies the image-owned
+`elitea-code-execute` entrypoint used by `PreparedJob::manifest`. It accepts only
+the fixed prepared request path, bounds file input, selects a fixed language
+adapter, clears the inherited environment and replaces itself with Deno. Deno
+runs cached-only/frozen with no network, subprocess or FFI permission. The outer
+PID-1 runner continues to own captured output and the overall deadline. Python
+gets its own copy of the image's immutable base wheels; writable package caches
+are never shared between jobs. Unsupported languages fail explicitly.
+
+The Containerfile `deno-runtime` target pins Deno 2.5.4 using multi-platform digest
+`sha256:1245e9856180be858aebeefdff2c3b98dc01e8ea667b48f4fb64647dc56bb61d`.
+The locked npm dependencies and micropip wheel are populated during image build.
+Normal job startup requires no interpreter/wheel download. Additional dependency
+installation still needs the separate approved egress/profile design. Docker
+layer caching and Kubernetes image warming can use this same immutable image.
+The old minimal `verification` target remains available for runner-only tests.
+
+Local Linux image `sha256:f8edde63731d794261528fdd4fc4cb77b6d401ebec665f1f200911bd7e36da57`
+passed all seven `probe_code_adapters_container.py` cases: Python, JavaScript,
+TypeScript, Python exception, denied network, denied subprocess, and timeout.
+Tests configured non-root UID, 512 MiB memory/swap ceiling, one CPU, 64 PIDs,
+read-only root, dropped capabilities and no network. Five runner/launcher tests
+and Clippy also passed. This is actual Linux adapter execution, not the native
+Python fixture used in earlier lifecycle tests.
+
+`test_sandbox_ledger.py --test-filter sandbox_supervisor_submits --adapter-image`
+uses the prebuilt image unchanged with disposable PostgreSQL. The prepared source
+returns a generated marker in its structured result; the test checks persisted
+receipt/result content and byte-identical repeat retrieval after cleanup.
+Production service mTLS wiring, graph projection, cancellation, Rust execution,
+Kubernetes job execution and browser acceptance remain open. No rehearsal
+containers or existing product database were changed.
+
+ADK `process.rs::execute_rust` was inspected for reuse: it writes source, compiles
+with rustc and executes under the same resource enforcer, including compilation.
+Its direct rustc path does not itself provide the requested Cargo dependency and
+Elitea state/result contract. Keep compilation inside the outer sandbox when
+completing that adapter; do not compile user source on the worker host.

@@ -17,3 +17,7 @@ strip = "none"
 lto = "thin"
 codegen-units = 1
 panic = "abort"
+
+[[bin]]
+name = "elitea-code-execute"
+path = "src/execute.rs"

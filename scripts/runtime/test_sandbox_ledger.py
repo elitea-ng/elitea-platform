@@ -9,18 +9,20 @@ import time
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--test-filter", choices=["sandbox_receipts_fence", "sandbox_supervisor_recovers", "sandbox_supervisor_submits"], default="sandbox_receipts_fence")
+parser.add_argument("--adapter-image", action="store_true", help="use the supplied prebuilt language-adapter image instead of creating a test-only adapter")
 args = parser.parse_args()
 
 root = Path(__file__).resolve().parents[2]
 name = "elitea-sandbox-ledger-test-" + secrets.token_hex(5)
 password = secrets.token_hex(24)
 env = os.environ.copy()
+env["ELITEA_TEST_REAL_ADAPTER"] = "1" if args.adapter_image else "0"
 env["POSTGRES_PASSWORD"] = password
 created = False
 fixture_builder = None
 fixture_image = None
 try:
-    if args.test_filter == "sandbox_supervisor_submits":
+    if args.test_filter == "sandbox_supervisor_submits" and not args.adapter_image:
         base_image = env.get("ELITEA_CODE_RUNNER_TEST_IMAGE", "")
         if not base_image.startswith("sha256:"):
             raise RuntimeError("set ELITEA_CODE_RUNNER_TEST_IMAGE to the cached runner image ID")
