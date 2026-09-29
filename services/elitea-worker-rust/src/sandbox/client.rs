@@ -1,4 +1,7 @@
 //! Worker-side transport only. No container runtime or receipt database access.
+#[cfg(all(test, feature = "sandbox-supervisor"))]
+#[path = "client_disconnect_tests.rs"]
+mod disconnect_tests;
 use super::request::PreparedJob;
 use crate::{
     protocol::elitea::runtime::v1::{
@@ -119,11 +122,24 @@ impl SandboxClient {
                     code: Code::DeadlineExceeded,
                 })?
                 .map_err(|status| SandboxCallError::Submission {
-                    code: status.code(),
+                    code: submission_code(&status),
                 })?
                 .into_inner();
         decode(response)
     }
+}
+
+// A wire status has no local transport source. Preserve server rejections;
+// only classify a broken local HTTP connection as unavailable.
+fn submission_code(status: &tonic::Status) -> Code {
+    let mut source = std::error::Error::source(status);
+    while let Some(error) = source {
+        if error.is::<hyper::Error>() {
+            return Code::Unavailable;
+        }
+        source = error.source();
+    }
+    status.code()
 }
 
 fn decode(response: SubmitSandboxJobResponseV1) -> Result<SandboxOutcome, SandboxCallError> {
@@ -178,6 +194,22 @@ fn decode(response: SubmitSandboxJobResponseV1) -> Result<SandboxOutcome, Sandbo
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn supervisor_rejections_keep_their_status() {
+        for code in [
+            Code::Unknown,
+            Code::Internal,
+            Code::Cancelled,
+            Code::Unauthenticated,
+            Code::PermissionDenied,
+            Code::FailedPrecondition,
+            Code::DataLoss,
+            Code::Aborted,
+        ] {
+            assert_eq!(submission_code(&tonic::Status::new(code, "rejected")), code);
+        }
+    }
+
     #[test]
     fn terminal_receipts_cannot_be_confused_with_pending_or_success() {
         let receipt =

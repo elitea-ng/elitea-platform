@@ -150,7 +150,10 @@ impl CodeSandboxRuntime for RemoteCodeRuntime {
                         crate::transport::control_grpc::ControlGrpcError::Unavailable(_),
                     )
                     | SandboxCallError::Submission {
-                        code: tonic::Code::Unavailable | tonic::Code::DeadlineExceeded,
+                        code:
+                            tonic::Code::Unavailable
+                            | tonic::Code::DeadlineExceeded
+                            | tonic::Code::Aborted,
                     },
                 ) => {}
                 Err(error) => return Err(failed(&error.to_string())),

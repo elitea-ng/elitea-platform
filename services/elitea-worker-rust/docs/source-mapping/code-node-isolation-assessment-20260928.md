@@ -1825,3 +1825,21 @@ This is a failed acceptance check, not a successful recovery.
 Inspect the interrupted RPC status before changing retry classification.
 Preserve the original activation and fingerprint during reconciliation; do not rerun code under a replacement identity.
 Retain the completed container and receipt row for diagnosis until reconciliation is verified.
+
+## Interrupted supervisor transport classification — 2026-09-29
+
+A localhost TCP proxy drops the connection after the supervisor receives the submission.
+Tonic reports `Unknown` with a local Hyper error source, rather than `Unavailable`.
+The previous worker retry match treats this transport loss as a terminal graph failure.
+
+`src/sandbox/client.rs` maps local Hyper error chains to `Unavailable`.
+Server rejection statuses retain their original codes. No response message or user payload enters this classification.
+`src/agents/graph/code_remote.rs` also accepts `Aborted` during bounded reconciliation.
+The supervisor uses this status when another lease still owns the same job.
+Each retry keeps the activation and request fingerprint and obtains a fresh Main grant.
+
+`src/sandbox/client_disconnect_tests.rs` verifies connection loss after request receipt through real localhost sockets.
+The regression fails before the change and passes after the change.
+This test proves transport classification, not deployed supervisor recovery.
+Repeat the UI crash test after worker deployment before accepting recovery.
+This recovery behavior extends the legacy Code execution contract; it does not copy a legacy restart mechanism.
