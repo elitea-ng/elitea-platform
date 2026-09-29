@@ -10,6 +10,7 @@ mod application;
 mod application_tests;
 mod code;
 mod code_result;
+mod code_runtime;
 #[cfg(test)]
 mod code_tests;
 mod code_state;

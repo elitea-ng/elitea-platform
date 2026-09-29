@@ -128,7 +128,13 @@ fn valid_code_still_cannot_execute_without_sandbox_admission() {
             .collect::<String>()
     );
     assert!(matches!(
-        PipelineDefinition::from_yaml(&yaml),
+        PipelineDefinition::from_yaml(&yaml)
+            .expect("valid Code definition")
+            .compile(
+                "test",
+                std::sync::Arc::new(adk_rust::graph::MemoryCheckpointer::new()),
+                None
+            ),
         Err(PipelineConfigurationError::Unsupported(_))
     ));
 }

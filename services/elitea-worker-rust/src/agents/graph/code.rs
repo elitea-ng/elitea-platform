@@ -42,6 +42,8 @@ enum CodeSource {
 #[serde(deny_unknown_fields)]
 pub(super) struct CodeNodeDefinition {
     id: String,
+    #[serde(skip)]
+    digest: [u8; 32],
     #[serde(rename = "type")]
     node_type: String,
     #[serde(default)]
@@ -88,11 +90,27 @@ pub(super) struct ResolvedCode<'a> {
 }
 
 impl CodeNodeDefinition {
+    pub(super) fn id(&self) -> &str {
+        &self.id
+    }
+    pub(super) fn input_keys(&self) -> &[String] {
+        &self.input
+    }
+    pub(super) fn output_keys(&self) -> &[String] {
+        &self.output
+    }
+    pub(super) fn transition(&self) -> Option<&str> {
+        self.transition.as_deref()
+    }
+    pub(super) fn structured_output(&self) -> bool {
+        self.structured_output
+    }
+
     pub(super) fn from_yaml(yaml: &str) -> Result<Self, &'static str> {
         if yaml.is_empty() || yaml.len() > MAX_NODE_BYTES {
             return Err("the Code node exceeds its configuration size limit");
         }
-        let node: Self = serde_yaml_ng::from_str(yaml).map_err(
+        let mut node: Self = serde_yaml_ng::from_str(yaml).map_err(
             |_| "the Code node has malformed fields or an unsupported language or source mapping",
         )?;
         if node.node_type != "code" || !valid_graph_id(&node.id) {
@@ -123,7 +141,12 @@ impl CodeNodeDefinition {
                 }
             }
         }
+        node.digest = node.config_digest()?;
         Ok(node)
+    }
+
+    pub(super) fn validated_digest(&self) -> [u8; 32] {
+        self.digest
     }
 
     pub(super) fn language(&self) -> CodeLanguage {

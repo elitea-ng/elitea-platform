@@ -1496,3 +1496,37 @@ An isolated, network-disabled/read-only startup smoke test verified UID/GID
 10001 and the expected missing-configuration failure. This proves executable
 packaging only; it does not prove configured service startup or deployment.
 Default-worker Clippy (`--lib -- -D warnings`) passed after the projection change.
+
+### ADK graph binding for admitted Code runtimes (2026-09-29)
+
+`src/agents/graph/compiler.rs` now parses Code definitions, includes their
+configuration in the pipeline definition digest, and binds their explicit
+transition and terminal output selection. Compilation still fails when its
+invocation-owned `CodeSandboxRuntime` is absent. Production does not yet supply
+this runtime, so parsing a saved Code definition does not enable execution.
+
+`src/agents/graph/code_runtime.rs::CodeNode` implements the existing ADK `Node`
+interface. It selects and validates input before dispatch, preserves fixed versus
+state-variable source provenance, awaits the runtime, validates the complete
+receipt through `project_code_receipt`, and returns one `NodeOutput`. Runtime or
+projection errors return no update and stop graph execution.
+
+The activation digest is domain-separated and length-framed over graph thread,
+node ID, durable graph step, and validated Code configuration. Repeating the same
+visit gives the same identity; another graph thread, loop step, or configuration
+gives a different identity. The sandbox request digest separately binds the actual
+source and input. This identity test does not prove restart recovery: the runtime
+must still request a Main grant and reconcile the supervisor's existing receipt.
+Code is not yet added to the production recovery-frontier allowlist.
+
+Business reference remains SDK `FunctionTool._prepare_pyodide_input` and
+`_handle_pyodide_output` at the revision recorded above. ADK owns node scheduling
+and checkpoint application; Elitea owns admission and typed state projection.
+The compiler/runtime tests use an injected fixture, not a deployed sandbox.
+Production channel composition, dynamic-source admission, debug artifacts,
+cancellation, deployment and mandatory UI/restart acceptance remain open.
+
+Verification: all 108 graph tests passed. After extracting the Code binding helper
+for the compiler lint, all four Code-runtime tests passed again and default-worker
+Clippy passed with warnings denied. These include real ADK graph invocation using
+a fixture runtime, not a live supervisor or a browser test.

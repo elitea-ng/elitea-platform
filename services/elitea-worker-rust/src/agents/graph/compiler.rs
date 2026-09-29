@@ -10,6 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 
+use super::code::CodeNodeDefinition;
+use super::code_runtime::{CodeNode, CodeSandboxRuntime};
 use adk_rust::graph::{
     Channel, Checkpoint, Checkpointer, CompiledGraph, END, GraphAgent, GraphAgentBuilder,
     GraphError, Node, NodeContext, NodeOutput, Reducer, START, State, StateGraph, StateSchema,
@@ -230,9 +232,14 @@ pub(crate) struct PipelineNodeRuntimes {
     llm: Option<Arc<dyn PipelineLlmAgentFactory>>,
     direct_tool: Option<Arc<dyn PipelineDirectToolResolver>>,
     application: Option<Arc<dyn PipelineApplicationResolver>>,
+    code: Option<Arc<dyn CodeSandboxRuntime>>,
 }
 
 impl PipelineNodeRuntimes {
+    pub(super) fn with_code(mut self, runtime: Arc<dyn CodeSandboxRuntime>) -> Self {
+        self.code = Some(runtime);
+        self
+    }
     pub(crate) fn with_events(mut self, events: PipelineNodeEventSender) -> Self {
         self.events = Some(events);
         self
@@ -249,6 +256,7 @@ impl PipelineNodeRuntimes {
             direct_tool,
             application,
             events: None,
+            code: None,
         }
     }
 }
@@ -351,6 +359,7 @@ fn terminal_target<'a>(target: &'a str, terminal: &'a str) -> &'a str {
 
 #[derive(Clone)]
 enum PipelineNodeDefinition {
+    Code(CodeNodeDefinition),
     Application(ApplicationNodeDefinition),
     Decision(DecisionNodeDefinition),
     DirectTool(DirectToolNodeDefinition),
@@ -364,6 +373,7 @@ enum PipelineNodeDefinition {
 impl PipelineNodeDefinition {
     fn id(&self) -> &str {
         match self {
+            Self::Code(node) => node.id(),
             Self::Application(node) => node.id(),
             Self::Decision(node) => node.id(),
             Self::DirectTool(node) => node.id(),
@@ -377,6 +387,7 @@ impl PipelineNodeDefinition {
 
     fn input_keys(&self) -> &[String] {
         match self {
+            Self::Code(node) => node.input_keys(),
             Self::Application(node) => node.input_keys(),
             Self::Decision(node) => node.input_keys(),
             Self::DirectTool(node) => node.input_keys(),
@@ -390,6 +401,7 @@ impl PipelineNodeDefinition {
 
     fn output_keys(&self) -> &[String] {
         match self {
+            Self::Code(node) => node.output_keys(),
             Self::Application(node) => node.output_keys(),
             Self::DirectTool(node) => node.output_keys(),
             Self::Decision(_) | Self::Hitl(_) | Self::Printer(_) | Self::Router(_) => &[],
@@ -400,7 +412,8 @@ impl PipelineNodeDefinition {
 
     fn cleaned_keys(&self) -> &[String] {
         match self {
-            Self::Application(_)
+            Self::Code(_)
+            | Self::Application(_)
             | Self::Decision(_)
             | Self::DirectTool(_)
             | Self::Hitl(_)
@@ -414,7 +427,8 @@ impl PipelineNodeDefinition {
     fn edit_state_key(&self) -> Option<&str> {
         match self {
             Self::Hitl(node) => node.edit_state_key(),
-            Self::Application(_)
+            Self::Code(_)
+            | Self::Application(_)
             | Self::Decision(_)
             | Self::DirectTool(_)
             | Self::Llm(_)
@@ -426,6 +440,7 @@ impl PipelineNodeDefinition {
 
     fn route_targets(&self) -> Vec<&str> {
         match self {
+            Self::Code(node) => node.transition().into_iter().collect(),
             Self::Application(node) => node.transition().into_iter().collect(),
             Self::Decision(node) => node.route_targets().collect(),
             Self::DirectTool(node) => node.transition().into_iter().collect(),
@@ -439,6 +454,7 @@ impl PipelineNodeDefinition {
 
     fn config_digest(&self) -> [u8; 32] {
         match self {
+            Self::Code(node) => node.validated_digest(),
             Self::Application(node) => node.config_digest(),
             Self::Decision(node) => node.config_digest(),
             Self::DirectTool(node) => node.config_digest(),
@@ -584,6 +600,7 @@ impl PipelineDefinition {
                 | PipelineNodeDefinition::Hitl(_)
                 | PipelineNodeDefinition::Printer(_)
                 | PipelineNodeDefinition::Router(_)
+                | PipelineNodeDefinition::Code(_)
                 | PipelineNodeDefinition::StateModifier(_) => {}
             }
         }
@@ -599,6 +616,7 @@ impl PipelineDefinition {
             | PipelineNodeDefinition::Hitl(_)
             | PipelineNodeDefinition::Printer(_)
             | PipelineNodeDefinition::Router(_)
+            | PipelineNodeDefinition::Code(_)
             | PipelineNodeDefinition::StateModifier(_) => &[],
         })
     }
@@ -613,6 +631,7 @@ impl PipelineDefinition {
             | PipelineNodeDefinition::Llm(_)
             | PipelineNodeDefinition::Printer(_)
             | PipelineNodeDefinition::Router(_)
+            | PipelineNodeDefinition::Code(_)
             | PipelineNodeDefinition::StateModifier(_) => None,
         })
     }
@@ -637,6 +656,7 @@ impl PipelineDefinition {
             | PipelineNodeDefinition::Llm(_)
             | PipelineNodeDefinition::Printer(_)
             | PipelineNodeDefinition::Router(_)
+            | PipelineNodeDefinition::Code(_)
             | PipelineNodeDefinition::StateModifier(_) => None,
         })
     }
@@ -886,6 +906,7 @@ impl PipelineDefinition {
         checkpointer: &Arc<dyn Checkpointer>,
     ) -> Result<PipelineGraphBuilder, PipelineConfigurationError> {
         Ok(match node {
+            PipelineNodeDefinition::Code(node) => self.bind_code_node(builder, node, runtimes)?,
             PipelineNodeDefinition::Application(node) => {
                 self.bind_application_node(builder, node, runtimes, checkpointer)?
             }
@@ -973,6 +994,32 @@ impl PipelineDefinition {
                 next
             }
         })
+    }
+
+    fn bind_code_node(
+        &self,
+        builder: PipelineGraphBuilder,
+        node: &CodeNodeDefinition,
+        runtimes: &PipelineNodeRuntimes,
+    ) -> Result<PipelineGraphBuilder, PipelineConfigurationError> {
+        let runtime = runtimes
+            .code
+            .clone()
+            .ok_or(PipelineConfigurationError::Unsupported(
+                "Code execution requires an admitted sandbox backend",
+            ))?;
+        let executable =
+            CodeNode::new(node.clone(), self.state.clone(), runtime).map_err(|_| {
+                PipelineConfigurationError::Invalid("Code state declarations are invalid")
+            })?;
+        let mut next = builder.node(executable);
+        if let Some(transition) = node.transition() {
+            next = next.edge(
+                node.id(),
+                if transition == "END" { END } else { transition },
+            );
+        }
+        Ok(next)
     }
 
     fn bind_application_node(
@@ -1072,6 +1119,7 @@ impl PipelineDefinition {
                 PipelineNodeDefinition::Application(node) => {
                     (node.transition(), node.output_keys())
                 }
+                PipelineNodeDefinition::Code(node) => (node.transition(), node.output_keys()),
                 PipelineNodeDefinition::DirectTool(node) => (node.transition(), node.output_keys()),
                 PipelineNodeDefinition::Llm(node) => (node.transition(), node.output_keys()),
                 PipelineNodeDefinition::StateModifier(node) => {
@@ -1460,13 +1508,9 @@ fn parse_pipeline_node(
     let encoded = serde_yaml_ng::to_string(raw_node)
         .map_err(|source| PipelineConfigurationError::MalformedYaml { source })?;
     match node_type {
-        "code" => {
-            super::code::CodeNodeDefinition::from_yaml(&encoded)
-                .map_err(PipelineConfigurationError::Invalid)?;
-            Err(PipelineConfigurationError::Unsupported(
-                "Code execution requires an admitted sandbox backend",
-            ))
-        }
+        "code" => CodeNodeDefinition::from_yaml(&encoded)
+            .map(PipelineNodeDefinition::Code)
+            .map_err(PipelineConfigurationError::Invalid),
         "decision" => DecisionNodeDefinition::from_yaml(&encoded)
             .map(PipelineNodeDefinition::Decision)
             .map_err(|_| PipelineConfigurationError::Invalid("a Decision node is invalid")),
@@ -1566,6 +1610,7 @@ fn validate_node_state(
         PipelineNodeDefinition::Decision(_)
         | PipelineNodeDefinition::Hitl(_)
         | PipelineNodeDefinition::Router(_)
+        | PipelineNodeDefinition::Code(_)
         | PipelineNodeDefinition::StateModifier(_) => {}
     }
     if node
@@ -1749,6 +1794,7 @@ fn definition_digest(
     for node in nodes {
         digest_field(&mut context, node.id().as_bytes());
         let kind = match node {
+            PipelineNodeDefinition::Code(_) => b"code".as_slice(),
             PipelineNodeDefinition::Application(_) => b"agent".as_slice(),
             PipelineNodeDefinition::Decision(_) => b"decision".as_slice(),
             PipelineNodeDefinition::DirectTool(node) => {
