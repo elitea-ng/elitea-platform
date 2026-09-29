@@ -41,5 +41,35 @@ DENO_DIR=/path/to/deno-cache ELITEA_TEST_WHEEL_CACHE=/path/to/wheels \
 
 These interpreter tests do not prove Linux isolation or deployment. Image
 assembly, the fixed `elitea-code-execute` launcher, scoped platform-client access,
-Rust and JavaScript/TypeScript adapters, graph binding and browser acceptance
+the Rust adapter, graph binding and browser acceptance
 remain integration work. Do not enable Code nodes based only on these tests.
+
+
+## JavaScript and TypeScript
+
+`javascript.mjs` accepts `javascript` or `typescript` and the same prepared-job
+input. The second CLI argument is a job-local writable scratch directory. Deno
+loads a uniquely named module from that directory, transpiling TypeScript.
+Source is a module exporting a default JSON result, promise, or function accepting
+selected state and returning the result. Top-level await and module imports are
+supported by Deno, subject to the image's package cache and deployment permissions.
+For example:
+
+```typescript
+export default async (state: { count: number }) => ({ count: state.count + 1 });
+```
+
+`elitea_state` and `alita_state` are also available as global input values.
+Host input is cloned before exposure. `console.log`/`console.info` diagnostics go
+to stderr; stdout carries the same revisioned result envelope. All output remains
+untrusted: user code can access Deno APIs permitted to that job. Cycles,
+non-finite numbers, undefined/function/symbol/bigint values and oversized results
+fail instead of silently deleting fields. No VM security claim is made.
+
+The local tests need only scratch access, no network or package downloads:
+
+```sh
+deno test --no-lock --no-prompt --deny-net \
+  --allow-read=/tmp,/private/tmp --allow-write=/tmp,/private/tmp \
+  services/elitea-code-runner/adapters/javascript_test.mjs
+```

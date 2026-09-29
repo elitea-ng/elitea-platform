@@ -1152,3 +1152,22 @@ reuse that identity rather than silently checking out a newer branch head.
 Persistent workspace ownership, locking/cleanup, size limits and tenant access
 must be resolved alongside both deployment backends. Image warming remains
 separate from repository preparation and never grants repository access.
+
+
+### JavaScript/TypeScript adapter contract (2026-09-29)
+
+`services/elitea-code-runner/adapters/javascript.mjs` adds the requested languages
+without changing existing Python YAML. Unlike the current Python-only SDK path,
+new JS/TS source is a module with a default exported value or function of selected
+state. Deno supplies TypeScript transpilation, top-level await and module import
+semantics; the container supplies security/resource enforcement. State is cloned
+as data and never interpolated into source. Each call stages a uniquely named
+module in job-local scratch; diagnostics and structured output use separate
+streams. The adapter rejects invalid JSON values and oversized results. Worker
+state projection remains mandatory and is not replaced by these checks.
+
+Three local Deno tests passed for JS state isolation/async execution, TypeScript
+transpilation, and explicit failures (missing export, nonfinite/undefined/cyclic
+values, oversized output and thrown exception). Deno lint passed. The tests use
+no network. Runtime-image packaging, imported-package policy, Rust adapter,
+worker binding, Kubernetes and browser acceptance remain open.
