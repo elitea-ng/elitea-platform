@@ -1247,3 +1247,27 @@ can remain non-executable. Supervisor profile selection for executable workspace
 is still pending; do not globally relax workspace permissions for all languages.
 Five runner/launcher tests and Clippy passed. These are Linux image proofs, not
 service integration, Kubernetes execution or browser acceptance.
+
+
+### Supervisor language/resource profile binding (2026-09-29)
+
+The ADK Docker extension now defaults Code workspace mounts explicitly to
+`noexec`. `with_code_compilation` opts a trusted runtime into executable scratch
+only after finite Code resource policy validation. `/tmp` stays non-executable.
+`DockerSupervisor::with_admission_policy` requires an explicit, nonempty,
+duplicate-free language list. Rust must use a Rust-only list and the compilation
+flag; interpreted lists cannot use executable scratch. Prepared request admission
+matches language, immutable image digest and policy revision before reserving
+work. Signed content fingerprints already include language and policy revision.
+This replaces the previously unbound language selection at this layer.
+
+The real Rust image passed authorized supervisor submission through this profile,
+structured-result persistence, cleanup and exact repeat receipt retrieval using
+disposable PostgreSQL. Ten focused worker tests passed, including incorrect
+language/image/revision rejection; three separately gated live tests are not part
+of that component invocation. Worker-library Clippy passed. Production service
+configuration and worker routing to these profiles remain open. These changes do
+not make a user-supplied runtime flag authoritative or grant filesystem mounts.
+
+The real Pyodide image also passed the same live submission/result-reuse test
+with the explicit default `noexec` workspace policy.

@@ -123,6 +123,7 @@ rebuilt for each job. Cross-job compiled-artifact caching is not implemented.
 
 Rust needs an executable job-local workspace for build scripts and binaries;
 Deno jobs do not. The container probe selects this explicitly with `--runtime
-rust`. Supervisor runtime-profile selection for this permission remains open.
+rust`. The Docker supervisor now requires an explicit Rust-only compilation profile
+for this permission. Service configuration and worker routing to profiles remain open.
 The root filesystem remains read-only, UID remains non-root, network is disabled,
 and CPU/memory/PID/time limits cover both compilation and execution.

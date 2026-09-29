@@ -1038,13 +1038,24 @@ async fn sandbox_supervisor_submits_only_the_authorized_request_once() {
     .await
     .unwrap();
     let image = env::var("ELITEA_CODE_RUNNER_TEST_IMAGE").unwrap();
+    let compiled = env::var("ELITEA_TEST_ADAPTER_LANGUAGE").as_deref() == Ok("rust");
+    let language = if compiled {
+        Language::Rust
+    } else {
+        Language::Python
+    };
+    let source = if compiled {
+        "pub fn run(_: serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>> { Ok(serde_json::json!({\"marker\":format!(\"authorized-result-{}\", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos())})) }"
+    } else {
+        "import uuid\nresult = 'authorized-result-' + str(uuid.uuid4())\nprint(result)\n{'marker': result}"
+    };
     let request = PreparedJob::new(
-        Language::Python,
-        "import uuid\nresult = 'authorized-result-' + str(uuid.uuid4())\nprint(result)\n{'marker': result}".into(),
+        language,
+        source.into(),
         Default::default(),
         image.clone(),
         "fixture-v1".into(),
-        5,
+        15,
     )
     .unwrap();
     let changed = PreparedJob::new(
@@ -1098,6 +1109,11 @@ async fn sandbox_supervisor_submits_only_the_authorized_request_once() {
         .with_resource_limits(Some(512 * 1024 * 1024), Some(1.0))
         .with_code_job_policy(Duration::from_secs(15))
         .unwrap();
+    let runtime = if compiled {
+        runtime.with_code_compilation().unwrap()
+    } else {
+        runtime
+    };
     let supervisor = DockerSupervisor::new(
         JobLedger::new(isolated.pool.clone()),
         runtime,
@@ -1117,7 +1133,7 @@ async fn sandbox_supervisor_submits_only_the_authorized_request_once() {
         Err(LedgerError::Missing)
     ));
     let supervisor = supervisor
-        .with_admission_policy("fixture-v1".into())
+        .with_admission_policy("fixture-v1".into(), vec![language])
         .unwrap();
     assert!(
         supervisor

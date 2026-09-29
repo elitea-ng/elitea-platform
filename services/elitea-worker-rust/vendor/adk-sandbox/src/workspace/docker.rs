@@ -89,6 +89,7 @@ pub struct DockerClient {
     pub cpu_limit: Option<f64>,
     /// Apply Elitea's offline Code-job container policy.
     code_job_policy: bool,
+    code_workspace_execution: bool,
     command_timeout: Duration,
     /// Bollard Docker client for API communication.
     client: Docker,
@@ -126,6 +127,7 @@ impl DockerClient {
             memory_limit_bytes: None,
             cpu_limit: None,
             code_job_policy: false,
+            code_workspace_execution: false,
             command_timeout: DEFAULT_COMMAND_TIMEOUT,
             client: docker,
             sessions: RwLock::new(HashMap::new()),
@@ -167,6 +169,25 @@ impl DockerClient {
         self.validate_code_job_policy()?;
         self.code_job_policy = true;
         Ok(self)
+    }
+
+    /// Enable executable scratch only for a trusted compiled-language profile.
+    /// This must never be selected from untrusted Code source or arguments.
+    /// # Errors
+    /// Returns an error unless a valid finite Code resource policy is configured.
+    pub fn with_code_compilation(mut self) -> Result<Self, SandboxError> {
+        if !self.code_job_policy {
+            return Err(SandboxError::ExecutionFailed(
+                "Code resource policy is required before compilation".into(),
+            ));
+        }
+        self.validate_code_job_policy()?;
+        self.code_workspace_execution = true;
+        Ok(self)
+    }
+
+    pub fn code_compilation_enabled(&self) -> bool {
+        self.code_job_policy && self.code_workspace_execution
     }
 
     fn validate_code_job_policy(&self) -> Result<(), SandboxError> {
@@ -246,7 +267,14 @@ impl DockerClient {
             host_config.tmpfs = Some(HashMap::from([
                 (
                     "/workspace".into(),
-                    "rw,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700".into(),
+                    format!(
+                        "rw,{},nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700",
+                        if self.code_workspace_execution {
+                            "exec"
+                        } else {
+                            "noexec"
+                        }
+                    ),
                 ),
                 (
                     "/tmp".into(),

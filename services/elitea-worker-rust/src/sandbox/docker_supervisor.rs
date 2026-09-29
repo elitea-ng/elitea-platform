@@ -1,5 +1,5 @@
 //! Submit and reconcile durable jobs without restarting their containers.
-use super::request::PreparedJob;
+use super::request::{Language, PreparedJob};
 use crate::protocol::sandbox_grant::AuthorizedJob;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -16,7 +16,7 @@ pub struct DockerSupervisor {
     runtime: DockerClient,
     owner: String,
     capacity: Semaphore,
-    admission_policy: Option<String>,
+    admission_policy: Option<(String, Vec<Language>)>,
 }
 
 /// Receipts contain untrusted code output. Graph state projection remains a
@@ -72,8 +72,24 @@ impl DockerSupervisor {
 
     /// Enable submission for one deployment-selected immutable policy revision.
     /// # Errors
-    /// Returns `Invalid` for a malformed policy revision.
-    pub fn with_admission_policy(mut self, revision: String) -> Result<Self, SupervisorError> {
+    /// Returns `Invalid` for malformed or duplicate languages, a malformed revision,
+    /// or a compilation policy inconsistent with the admitted languages.
+    pub fn with_admission_policy(
+        mut self,
+        revision: String,
+        languages: Vec<Language>,
+    ) -> Result<Self, SupervisorError> {
+        if languages.is_empty()
+            || languages.len() > 4
+            || languages
+                .iter()
+                .enumerate()
+                .any(|(i, language)| languages[..i].contains(language))
+            || (languages.contains(&Language::Rust) && languages != [Language::Rust])
+            || self.runtime.code_compilation_enabled() != (languages == [Language::Rust])
+        {
+            return Err(SupervisorError::Invalid);
+        }
         if revision.is_empty()
             || revision.len() > 128
             || !revision
@@ -82,7 +98,7 @@ impl DockerSupervisor {
         {
             return Err(SupervisorError::Invalid);
         }
-        self.admission_policy = Some(revision);
+        self.admission_policy = Some((revision, languages));
         Ok(self)
     }
 
@@ -106,8 +122,10 @@ impl DockerSupervisor {
         }
         if !self
             .admission_policy
-            .as_deref()
-            .is_some_and(|policy| request.matches_runtime(&self.runtime.base_image, policy))
+            .as_ref()
+            .is_some_and(|(policy, languages)| {
+                request.matches_runtime(&self.runtime.base_image, policy, languages)
+            })
         {
             return Err(SupervisorError::Invalid);
         }

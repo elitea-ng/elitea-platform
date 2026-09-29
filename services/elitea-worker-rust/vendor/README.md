@@ -56,3 +56,11 @@ fingerprint mismatch fails. Failed named preparation retains the container/name
 for reconciliation after termination. Durable terminal receipts and supervisor
 authorization remain required; absence of a container alone never proves that
 execution did not happen.
+
+
+Compiled Code profiles explicitly opt into executable workspace tmpfs through
+`with_code_compilation`, which requires the existing finite resource policy.
+Default Code workspaces now explicitly specify `noexec`; `/tmp` remains `noexec`
+for both profiles. The supervisor binds allowed languages to the image/policy
+and keeps Rust-only compilation profiles separate from interpreted profiles.
+This is deployment-owned configuration, never a flag supplied by user code.

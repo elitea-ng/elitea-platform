@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use super::ledger::{JobScope, LedgerError};
 
-#[derive(Clone, Copy, Serialize)]
+#[derive(Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Language {
     Python,
@@ -81,9 +81,16 @@ impl PreparedJob {
         Ok(job)
     }
 
-    pub(crate) fn matches_runtime(&self, image: &str, policy: &str) -> bool {
+    pub(crate) fn matches_runtime(
+        &self,
+        image: &str,
+        policy: &str,
+        languages: &[Language],
+    ) -> bool {
         let configured_digest = image.rsplit_once('@').map_or(image, |(_, digest)| digest);
-        self.image_digest == configured_digest && self.policy_revision == policy
+        self.image_digest == configured_digest
+            && self.policy_revision == policy
+            && languages.contains(&self.language)
     }
 
     /// The image owns the language adapter; no caller supplies executable argv.
@@ -202,6 +209,16 @@ mod tests {
             .unwrap()
             .runtime_identity()
             .unwrap()
+    }
+
+    #[test]
+    fn runtime_profile_binds_language_image_and_policy() {
+        let request = job();
+        let image = request.image_digest.clone();
+        assert!(request.matches_runtime(&image, "python-v1", &[Language::Python]));
+        assert!(!request.matches_runtime(&image, "python-v1", &[Language::Rust]));
+        assert!(!request.matches_runtime(&image, "python-v2", &[Language::Python]));
+        assert!(!request.matches_runtime("other", "python-v1", &[Language::Python]));
     }
 
     #[test]
