@@ -1738,3 +1738,18 @@ PostgreSQL confirms two TLS 1.3 connections for the dedicated supervisor account
 
 This validates live supervisor startup and receipt-database connectivity.
 Main and worker deployment, authorized Code execution, cancellation, recovery, and browser acceptance remain open.
+
+## Rehearsal Main and worker deployment — 2026-09-29
+
+Both production images build successfully. The worker image retains release line tables and symbols.
+Main receives the two supervisor audiences while retaining its existing environment, mounts, networks, and limits.
+Main reports healthy after replacement.
+The worker receives four language profiles through a dedicated private configuration volume.
+The initial startup fails because a nested toolkit-security mount lacks a mount point in the read-only volume.
+Creating that mount point permits the existing security-file mount without changing its contents.
+The same replacement container then starts successfully and reports `production_startup_admitted` and `production_intake_started`.
+The worker reports zero restarts. No Docker socket is added to the worker.
+
+A fresh Chrome tab completes rehearsal sign-in and opens the Private project.
+This proves navigation after Main replacement, not sandbox execution acceptance.
+Code execution, cancellation, process recovery, and UI result verification remain open.

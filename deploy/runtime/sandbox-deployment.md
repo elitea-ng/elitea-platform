@@ -32,6 +32,8 @@ Apply agentstate migration `0004` before startup. Do not apply it to the product
 Private key and database URL files require owner-only permissions and must be readable by UID 10001.
 Use regular files, not symlinks. On hosts with UID remapping, install material into a dedicated volume with the correct ownership.
 Do not weaken file permissions to work around UID mapping.
+When a private volume replaces `/run/elitea`, create mount points for existing nested file mounts before startup.
+For example, preserve the mount point for `/run/elitea/toolkit-security.json` before mounting the volume read-only.
 
 Set the Deno profile languages to `python`, `javascript`, and `typescript`.
 Set the Rust profile languages to `rust` only.
