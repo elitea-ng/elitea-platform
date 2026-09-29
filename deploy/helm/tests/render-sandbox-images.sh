@@ -13,6 +13,18 @@ warm=(--set sandboxImageWarmup.enabled=true
   --set sandboxImageWarmup.images[0].name=python
   --set-string "sandboxImageWarmup.images[0].image=$image")
 helm template warm "$chart" "${base[@]}" > "$work/default.yaml"
+helm template warm "$chart" "${base[@]}" \
+  --set-string 'main.runtime.sandboxAudiences[0]=dns:sandbox.test' \
+  --set-string 'main.runtime.sandboxAudiences[1]=spiffe://elitea.test/sandbox/rust' > "$work/audiences.yaml"
+python3 - "$work/default.yaml" "$work/audiences.yaml" <<'PYTEST'
+import sys, yaml
+for filename, expected in zip(sys.argv[1:], ["", "dns:sandbox.test,spiffe://elitea.test/sandbox/rust"]):
+    configs = [doc.get("data", {}) for doc in yaml.safe_load_all(open(filename))
+               if doc and doc.get("kind") == "ConfigMap"]
+    values = [config["ELITEA_RUNTIME_SANDBOX_AUDIENCES"] for config in configs
+              if "ELITEA_RUNTIME_SANDBOX_AUDIENCES" in config]
+    assert values == [expected], values
+PYTEST
 if rg -q 'kind: DaemonSet' "$work/default.yaml"; then
   echo "Unexpected default DaemonSet" >&2; exit 1
 fi

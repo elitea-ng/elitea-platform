@@ -1560,6 +1560,9 @@ main:
     # cross-checks the two and refuses to start on a mismatch.
     signingKeyId: ""
 
+    # Exact supervisor grant audiences. Empty disables sandbox grant issuance.
+    sandboxAudiences: []
+
     # Three listeners, three DISTINCT addresses. The agent worker dials all three
     # on this Service, so the server certificates must carry the Service name.
     # The chart opens the ports on the container and the Service when the runtime

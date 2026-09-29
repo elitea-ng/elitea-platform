@@ -1122,6 +1122,7 @@ ELITEA_RUNTIME_REDIS_URL: {{ $redis.url | quote }}
 ELITEA_RUNTIME_REDIS_POOL_SIZE: {{ $redis.poolSize | toString | quote }}
 ELITEA_RUNTIME_REDIS_PASSWORD_FILE: {{ printf "%s/redis-producer-password" $dir | quote }}
 ELITEA_RUNTIME_REDIS_CA_FILE: {{ printf "%s/runtime-ca.crt" $dir | quote }}
+ELITEA_RUNTIME_SANDBOX_AUDIENCES: {{ join "," ($runtime.sandboxAudiences | default list) | quote }}
 ELITEA_RUNTIME_SIGNING_KEY_ID: {{ $runtime.signingKeyId | quote }}
 ELITEA_RUNTIME_SIGNING_KEY_FILE: {{ printf "%s/command-signing-key.pem" $dir | quote }}
 ELITEA_RUNTIME_VERIFICATION_KEYRING_FILE: {{ printf "%s/command-signing-keyring.json" $dir | quote }}

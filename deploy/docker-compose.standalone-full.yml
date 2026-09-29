@@ -1148,6 +1148,8 @@ services:
       # composition.go cross-checks this key id against the keyring entry and
       # refuses to start on a mismatch, so it must equal the id baked into
       # command-signing-keyring.json by gen-runtime-certs.sh.
+      # Empty disables grants until a supervisor audience is configured.
+      ELITEA_RUNTIME_SANDBOX_AUDIENCES: ${ELITEA_RUNTIME_SANDBOX_AUDIENCES:-}
       ELITEA_RUNTIME_SIGNING_KEY_ID: "standalone-runtime-v1"
       ELITEA_RUNTIME_SIGNING_KEY_FILE: /run/elitea-runtime/command-signing-key.pem
       ELITEA_RUNTIME_VERIFICATION_KEYRING_FILE: /run/elitea-runtime/command-signing-keyring.json

@@ -1003,7 +1003,15 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if err != nil {
 		return nil, err
 	}
+	var sandboxGrants *control.SandboxGrantIssuer
+	if len(config.SandboxAudiences) != 0 {
+		sandboxGrants, err = control.NewSandboxGrantIssuer(config.SigningKeyID, privateKey, config.SandboxAudiences, time.Now)
+		if err != nil {
+			return nil, fmt.Errorf("construct sandbox grant issuer: %w", err)
+		}
+	}
 	controlServer, err := control.NewServer(control.ServerConfig{
+		SandboxGrants:         sandboxGrants,
 		MaxInputManifestBytes: maxInputManifestBytes,
 		MaxInputEntries:       maxInputEntries,
 		MaxInputContentBytes:  maxInputContentBytes,

@@ -1367,3 +1367,27 @@ Each run verified caller rejection, real execution, persisted receipt reuse,
 and successful cleanup. Test execution took 2.62 and 2.56 seconds respectively,
 excluding infrastructure setup and compilation. These are local measurements.
 Worker-library Clippy passed with warnings denied. No rehearsal deployment occurred.
+
+### Main production grant issuer composition (2026-09-29)
+
+`services/elitea-main/internal/runtimecomposition/config.go` now accepts
+`ELITEA_RUNTIME_SANDBOX_AUDIENCES`. The comma-separated list contains exact
+supervisor audience identities. Empty configuration disables grant issuance.
+Validation rejects empty entries, duplicates, wildcards, whitespace, oversized
+identities, and lists longer than sixteen entries.
+
+`runtimecomposition/composition.go` creates `SandboxGrantIssuer` with the existing
+validated active signing key and injects it into the control server.
+No new private key store, database table, or product schema is introduced.
+The existing handler still verifies the worker session, active execution fence,
+signed command scope, request fingerprint, and configured audience.
+
+Docker Compose exposes the optional environment setting. Helm exposes
+`main.runtime.sandboxAudiences`, which defaults to an empty list.
+The chart emits exact comma-separated values into Main's configuration.
+This completes issuer startup composition, not worker dispatch or deployment.
+
+Focused runtime configuration and sandbox grant-handler tests passed.
+Helm rendering passed for disabled defaults and two exact configured audiences.
+The standalone supervisor process, worker RPC client, graph integration,
+rehearsal deployment, and browser acceptance remain pending.
