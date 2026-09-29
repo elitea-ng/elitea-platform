@@ -1721,3 +1721,20 @@ No product tables, runtime identities, or service images change in this step.
 The rehearsal agentstate database has a migration ledger but no `sandbox_jobs` table yet.
 Apply the existing agentstate migration through the migration runner before starting supervisors.
 Supervisor startup, full Main grant execution, and browser acceptance remain open.
+
+## Rehearsal supervisor startup — 2026-09-29
+
+The existing Go migration runner applies agentstate migration `0004_sandbox_jobs` successfully.
+The migration ledger records versions 1 through 4. Product tables remain unchanged.
+A dedicated supervisor account receives database connection, schema usage, and receipt-table SELECT, INSERT, and UPDATE permissions.
+The account has no receipt-table DELETE permission or administrative role attributes.
+
+Separate private Docker volumes hold each supervisor's material, owned by UID 10001 with restricted permissions.
+Both supervisors run as UID 10001 with read-only roots, dropped capabilities, and CPU, memory, and process limits.
+Only these trusted supervisors receive the Docker socket. Neither service publishes a host port.
+Cached Deno and Rust images pass startup validation without pulls.
+Both authenticated listeners start and report zero container restarts.
+PostgreSQL confirms two TLS 1.3 connections for the dedicated supervisor account.
+
+This validates live supervisor startup and receipt-database connectivity.
+Main and worker deployment, authorized Code execution, cancellation, recovery, and browser acceptance remain open.
