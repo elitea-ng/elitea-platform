@@ -16,7 +16,7 @@ pub(crate) use toolkit_invocation::{AuthorizedToolkitExecution, ToolkitInvocatio
 
 #[path = "sandbox_authority.rs"]
 mod sandbox_authority;
-pub(crate) use sandbox_authority::ClaimBoundSandboxAuthority;
+pub(crate) use sandbox_authority::{ClaimBoundSandboxAuthority, SandboxStopAuthority};
 
 use std::fmt;
 

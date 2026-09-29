@@ -465,6 +465,14 @@ fn tool_binding_error(error: ToolBindingError) -> NativeAgentAssemblyError {
 impl NativeAgentAssembler for OrdinaryNativeAgentAssembler {
     type Completion = OrdinaryAgentCompletion<BoundModelFacade>;
 
+    fn sandbox_stop_delivery(
+        &self,
+    ) -> Option<Arc<dyn crate::sandbox::dispatch::SandboxStopDelivery>> {
+        self.sandbox.as_ref().map(|factory| {
+            factory.clone() as Arc<dyn crate::sandbox::dispatch::SandboxStopDelivery>
+        })
+    }
+
     async fn inspect_checkpoint(
         &self,
         request: &super::request::AgentExecutionRequest,

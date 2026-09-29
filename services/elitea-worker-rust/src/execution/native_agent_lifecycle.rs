@@ -183,7 +183,7 @@ where
     K: UnixMillisClock,
 {
     tracing::info!(event = "agent_native_lifecycle_started");
-    let run = match run.bind_progress_publisher(connector, max_output_sessions) {
+    let mut run = match run.bind_progress_publisher(connector, max_output_sessions) {
         Ok(run) => {
             tracing::info!(event = "agent_progress_publisher_bound");
             run
@@ -193,6 +193,13 @@ where
             return Box::pin(run.close_no_ack(error.code(), error.retryable())).await;
         }
     };
+
+    if run
+        .bind_sandbox_stop(native_factory.sandbox_stop_delivery())
+        .is_err()
+    {
+        return Box::pin(run.close_no_ack("sandbox.stop_authority_invalid", false)).await;
+    }
 
     match pre_start_boundary(&run, clock.as_ref()) {
         LifecycleBoundary::Continue => {}

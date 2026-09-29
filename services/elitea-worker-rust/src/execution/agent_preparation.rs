@@ -626,6 +626,7 @@ impl AuthorizedAgentRun {
                     runtime_context: Some(runtime_context),
                     session: Some(session),
                     checkpoint,
+                    sandbox_stop: None,
                 })
             }
             Err(failure) => {
@@ -686,6 +687,7 @@ pub(crate) struct CursorBoundAuthorizedAgentRun<C: AgentProgressConnector> {
     runtime_context: Option<ClaimBoundRuntimeContextAuthority>,
     session: Option<ClaimBoundSessionAuthority>,
     checkpoint: Option<crate::protocol::control::CheckpointAssemblyAuthorization>,
+    sandbox_stop: Option<Box<crate::sandbox::dispatch::BoundSandboxStop>>,
 }
 
 /// Closed outcome of the sole post-authorization assembly attempt.
@@ -865,6 +867,24 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
         self.lease.ensure_running()
     }
 
+    pub(crate) fn bind_sandbox_stop(
+        &mut self,
+        delivery: Option<Arc<dyn crate::sandbox::dispatch::SandboxStopDelivery>>,
+    ) -> Result<(), crate::protocol::ProtocolError> {
+        if let Some(delivery) = delivery {
+            let context = self.runtime_context.as_ref().ok_or(
+                crate::protocol::ProtocolError::AuthorizationFailed(
+                    "sandbox stop authority is unavailable",
+                ),
+            )?;
+            self.sandbox_stop = Some(Box::new(crate::sandbox::dispatch::BoundSandboxStop::new(
+                delivery,
+                context.sandbox_stop_authority(&self.verified)?,
+            )));
+        }
+        Ok(())
+    }
+
     pub(crate) async fn check_lease_now(self) -> (Self, Result<(), ClaimLeaseError>) {
         let Self {
             delivery,
@@ -876,6 +896,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
             runtime_context,
             session,
             checkpoint,
+            sandbox_stop,
         } = self;
         let result = lease.check_now().await;
         (
@@ -889,6 +910,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
                 runtime_context,
                 session,
                 checkpoint,
+                sandbox_stop,
             },
             result,
         )
@@ -899,6 +921,10 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
         self.lease.state_probe()
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Keep the single-use authority transfer and all recovery outcomes in one phase"
+    )]
     pub(crate) async fn assemble_native<A: NativeAgentAssembler>(
         self,
         assembler: &A,
@@ -913,6 +939,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
             mut runtime_context,
             mut session,
             mut checkpoint,
+            sandbox_stop,
         } = self;
         let (Some(runtime_context_authority), Some(session_authority)) =
             (runtime_context.take(), session.take())
@@ -928,6 +955,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
                     runtime_context,
                     session,
                     checkpoint,
+                    sandbox_stop,
                 }),
                 error: crate::agents::runtime::NativeAgentAssemblyError::new(
                     crate::agents::runtime::NativeAgentAssemblyErrorCode::InvalidConfiguration,
@@ -949,6 +977,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
                         runtime_context,
                         session,
                         checkpoint,
+                        sandbox_stop,
                     }),
                     error,
                 };
@@ -984,6 +1013,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
             runtime_context,
             session,
             checkpoint,
+            sandbox_stop,
         };
         match assembly_result {
             Ok(Ok(assembled_invocation)) => {
@@ -1026,6 +1056,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
             runtime_context,
             session,
             checkpoint,
+            sandbox_stop,
         } = self;
         let selection_result = lease.run_cancellation_safe_phase(selector.select()).await;
         (
@@ -1039,6 +1070,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
                 runtime_context,
                 session,
                 checkpoint,
+                sandbox_stop,
             },
             selection_result,
         )
@@ -1152,9 +1184,20 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
             runtime_context: _,
             session: _,
             checkpoint: _,
+            sandbox_stop,
         } = self;
         let execution_kind = request.kind;
-        let result = async {
+        let result = Box::pin(async {
+            if matches!(
+                selection,
+                FreshAgentTerminalSelection::Failure(
+                    crate::protocol::output::RuntimeFailureKind::Cancelled
+                )
+            ) && let Some(stop) = &sandbox_stop
+                && !Box::pin(stop.confirmed()).await
+            {
+                return Err(("sandbox.stop_delivery_pending", true));
+            }
             tracing::info!(event = "agent_terminal_output_started");
             let terminal = publisher
                 .finish_terminal(
@@ -1181,7 +1224,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
                 .map_err(|error| (error.code(), error.retryable()))?;
             tracing::info!(event = "agent_redis_retirement_completed");
             Ok::<_, (&'static str, bool)>((sequence, settlement_receipt_id))
-        }
+        })
         .await;
 
         if let Err(error) = lease.close().await {

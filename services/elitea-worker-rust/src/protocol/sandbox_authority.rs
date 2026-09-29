@@ -39,7 +39,74 @@ pub(crate) struct ClaimBoundSandboxAuthority {
     signed_command: SignedWorkerCommandEnvelopeV1,
 }
 
+/// Stop-only authority never enables graph assembly or sandbox submission.
+pub(crate) struct SandboxStopAuthority {
+    identity: ExecutionIdentityV1,
+    fence: ExecutionFenceV1,
+    signed_command: SignedWorkerCommandEnvelopeV1,
+}
+impl Drop for SandboxStopAuthority {
+    fn drop(&mut self) {
+        self.fence.fence_token.zeroize();
+    }
+}
+impl SandboxStopAuthority {
+    pub(crate) fn scope(
+        &self,
+    ) -> Result<crate::sandbox::dispatch::DispatchScope, crate::sandbox::dispatch::DispatchError>
+    {
+        crate::sandbox::dispatch::DispatchScope::from_identity(&self.identity)
+    }
+}
+impl super::AgentOutputRecovery {
+    pub(crate) fn sandbox_stop_authority(
+        &self,
+        verified: &VerifiedAgentCommand,
+    ) -> Result<SandboxStopAuthority, ProtocolError> {
+        if self.binding.identity != identity_from_command(verified)
+            || self.binding.desired_state != super::DesiredExecutionState::Cancelled
+        {
+            return Err(ProtocolError::AuthorizationFailed(
+                "sandbox stop recovery does not match cancelled execution",
+            ));
+        }
+        Ok(SandboxStopAuthority {
+            identity: self.binding.identity.clone(),
+            fence: self.binding.fence.clone(),
+            signed_command: verified.signed().clone(),
+        })
+    }
+}
+
 impl ClaimBoundRuntimeContextAuthority {
+    pub(crate) fn sandbox_stop_authority(
+        &self,
+        verified: &VerifiedAgentCommand,
+    ) -> Result<SandboxStopAuthority, ProtocolError> {
+        let claim = self
+            .sandbox
+            .as_ref()
+            .ok_or(ProtocolError::AuthorizationFailed(
+                "sandbox stop authority is unavailable",
+            ))?;
+        if claim.identity != identity_from_command(verified)
+            || !bool::from(
+                claim
+                    .command_binding
+                    .ct_eq(&verified_command_binding(verified)),
+            )
+        {
+            return Err(ProtocolError::AuthorizationFailed(
+                "sandbox stop authority does not match command",
+            ));
+        }
+        Ok(SandboxStopAuthority {
+            identity: claim.identity.clone(),
+            fence: claim.fence.clone(),
+            signed_command: verified.signed().clone(),
+        })
+    }
+
     /// Extract sandbox request authority without consuming context redemption.
     /// Available only once and only for the exact authenticated command bytes.
     pub(crate) fn take_sandbox_authority(
@@ -99,6 +166,37 @@ impl ClaimBoundSandboxAuthority {
 }
 
 impl<R: ControlRpc> AgentControlClient<R> {
+    pub(crate) async fn stop_sandbox_job(
+        &self,
+        sandbox: &crate::sandbox::client::SandboxClient,
+        authority: &SandboxStopAuthority,
+        activation: &[u8; 32],
+        digest: &[u8; 32],
+    ) -> Result<
+        crate::protocol::elitea::runtime::v1::SandboxJobStatusV1,
+        crate::sandbox::client::SandboxCallError,
+    > {
+        if authority.fence.workload_session_id != self.workload_session_id
+            || authority.fence.producer_id != self.producer_id
+        {
+            return Err(crate::sandbox::client::SandboxCallError::Rejected);
+        }
+        sandbox
+            .cancel_digest(
+                &self.control,
+                AuthorizeSandboxJobRequestV1 {
+                    identity: Some(authority.identity.clone()),
+                    fence: Some(authority.fence.clone()),
+                    activation_id: hex_lower(activation),
+                    signed_command: Some(authority.signed_command.clone()),
+                    cancel_only: true,
+                    ..Default::default()
+                },
+                digest,
+            )
+            .await
+    }
+
     /// Request a fresh Main grant and submit only under the sealed invocation.
     pub(crate) async fn submit_sandbox_job(
         &self,
@@ -188,15 +286,40 @@ mod tests {
     fn changed_claim_identity_or_exact_command_binding_cannot_mint_authority() {
         let mut owner = authority();
         owner.sandbox.as_mut().unwrap().command_binding[0] ^= 1;
+        assert!(owner.sandbox_stop_authority(&verified()).is_err());
         assert!(owner.take_sandbox_authority(&verified()).is_err());
         assert!(owner.sandbox.is_some());
         let mut owner = authority();
         owner.sandbox.as_mut().unwrap().identity.generation += 1;
+        assert!(owner.sandbox_stop_authority(&verified()).is_err());
         assert!(owner.take_sandbox_authority(&verified()).is_err());
+    }
+
+    #[test]
+    fn recovery_stop_requires_cancelled_exact_execution() {
+        let owner = authority();
+        let claim = owner.sandbox.as_ref().unwrap();
+        let mut recovery = super::super::AgentOutputRecovery {
+            kind: super::super::AgentOutputRecoveryKind::Running,
+            binding: super::super::RecoveryClaimBinding {
+                identity: claim.identity.clone(),
+                fence: claim.fence.clone(),
+                lease_expires_at_unix_millis: 1_700_000_060_000,
+                claim_id: "recovery".into(),
+                claim_handoff_watermark: 0,
+                desired_state: super::super::DesiredExecutionState::Running,
+            },
+        };
+        assert!(recovery.sandbox_stop_authority(&verified()).is_err());
+        recovery.binding.desired_state = super::super::DesiredExecutionState::Cancelled;
+        assert!(recovery.sandbox_stop_authority(&verified()).is_ok());
+        recovery.binding.identity.generation += 1;
+        assert!(recovery.sandbox_stop_authority(&verified()).is_err());
     }
 
     #[tokio::test]
     async fn another_worker_cannot_submit_the_sealed_claim() {
+        let stop_authority = authority().sandbox_stop_authority(&verified()).unwrap();
         let authority = authority().take_sandbox_authority(&verified()).unwrap();
         let channel = tonic::transport::Endpoint::from_static("https://127.0.0.1:1").connect_lazy();
         let control = AgentControlClient::from_channel(
@@ -214,6 +337,12 @@ mod tests {
             std::time::Duration::from_secs(1),
         )
         .unwrap();
+        assert!(matches!(
+            control
+                .stop_sandbox_job(&sandbox, &stop_authority, &[7; 32], &[8; 32])
+                .await,
+            Err(crate::sandbox::client::SandboxCallError::Rejected)
+        ));
         let job = crate::sandbox::request::PreparedJob::new(
             crate::sandbox::request::Language::Python,
             "7".into(),

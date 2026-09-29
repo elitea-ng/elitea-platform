@@ -675,6 +675,10 @@ async fn postgres_application_subgraph_threads_are_admitted_fenced_and_durable()
 #[cfg(feature = "sandbox-supervisor")]
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Keep the ordered integration lifecycle and its assertions together"
+)]
 async fn sandbox_receipts_fence_stale_owners_and_preserve_terminal_results() {
     use crate::sandbox::ledger::{JobLedger, JobScope, LedgerError, Phase};
     let database_url = env::var(TEST_DATABASE_URL)
@@ -907,12 +911,79 @@ async fn sandbox_receipts_fence_stale_owners_and_preserve_terminal_results() {
             .await
             .unwrap();
     }
+    // Stop fencing can supersede a live DISPATCHED owner, but not a provision
+    // still in flight under a live RESERVED lease.
+    let force = JobScope::new("sandbox-test".into(), 2, [31; 32], [32; 32]).unwrap();
+    ledger.reserve(&force).await.unwrap();
+    let old = ledger
+        .claim(&force, "old-dispatch".into(), 60)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        ledger
+            .claim_cancellation(&force, "stop-owner", 60)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    ledger.mark_dispatched(&old).await.unwrap();
+    ledger
+        .request_cancellation(&force, "stop-owner")
+        .await
+        .unwrap();
+    let stop = ledger
+        .claim_cancellation(&force, "stop-owner", 60)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        ledger.renew(&old, 60).await,
+        Err(LedgerError::Fenced)
+    ));
+    assert!(matches!(
+        ledger
+            .finish(&old, Phase::Completed, Some(result), None)
+            .await,
+        Err(LedgerError::Fenced)
+    ));
+    ledger
+        .finish(&stop, Phase::Cancelled, None, Some("sandbox.cancelled"))
+        .await
+        .unwrap();
+    let preparing = JobScope::new("sandbox-test".into(), 2, [33; 32], [34; 32]).unwrap();
+    ledger.reserve(&preparing).await.unwrap();
+    let preparation = ledger
+        .claim(&preparing, "preparing".into(), 60)
+        .await
+        .unwrap()
+        .unwrap();
+    ledger
+        .request_cancellation(&preparing, "stop-owner")
+        .await
+        .unwrap();
+    assert!(
+        ledger
+            .claim_cancellation(&preparing, "stop-owner", 60)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    ledger.renew(&preparation, 60).await.unwrap();
+    assert!(matches!(
+        ledger.mark_dispatched(&preparation).await,
+        Err(LedgerError::Fenced)
+    ));
     isolated.pool.close().await;
 }
 
 #[cfg(feature = "sandbox-supervisor")]
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL, Docker, and ELITEA_CODE_RUNNER_TEST_IMAGE"]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Keep the ordered integration lifecycle and its assertions together"
+)]
 async fn sandbox_supervisor_recovers_dispatched_job_and_persists_before_cleanup() {
     use crate::sandbox::{
         docker_supervisor::{DockerSupervisor, Reconciliation},
@@ -1226,6 +1297,10 @@ async fn sandbox_supervisor_mtls_submission() {
 }
 
 #[cfg(feature = "sandbox-supervisor")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Keep the ordered integration lifecycle and its assertions together"
+)]
 async fn sandbox_submission(over_tls: bool) {
     use crate::{
         protocol::{
@@ -1286,7 +1361,7 @@ async fn sandbox_submission(over_tls: bool) {
     let request = PreparedJob::new(
         language,
         source.into(),
-        Default::default(),
+        std::collections::BTreeMap::default(),
         image.clone(),
         "fixture-v1".into(),
         15,
@@ -1295,7 +1370,7 @@ async fn sandbox_submission(over_tls: bool) {
     let changed = PreparedJob::new(
         Language::Python,
         "print('different')".into(),
-        Default::default(),
+        std::collections::BTreeMap::default(),
         image.clone(),
         "fixture-v1".into(),
         5,
@@ -1395,13 +1470,15 @@ async fn sandbox_submission(over_tls: bool) {
         Err(LedgerError::Missing)
     ));
     if over_tls {
-        crate::diagnostics::install_tls_crypto_provider().unwrap();
+        use crate::protocol::elitea::runtime::v1::{CancelSandboxJobRequestV1, SandboxJobStatusV1};
         use crate::protocol::elitea::runtime::v1::{
             SubmitSandboxJobRequestV1,
             sandbox_supervisor_service_client::SandboxSupervisorServiceClient,
         };
+        use crate::sandbox::client::{SandboxClient, SandboxOutcome};
         use crate::sandbox::service::SupervisorService;
         use tonic::transport::{Certificate, ClientTlsConfig, Endpoint, Identity};
+        crate::diagnostics::install_tls_crypto_provider().unwrap();
         let dir = std::path::PathBuf::from(env::var("ELITEA_TEST_TLS_DIR").unwrap());
         let read = |name: &str| std::fs::read(dir.join(name)).unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1496,7 +1573,6 @@ async fn sandbox_submission(over_tls: bool) {
             ledger.read(authorized.scope()).await,
             Err(LedgerError::Missing)
         ));
-        use crate::sandbox::client::{SandboxClient, SandboxOutcome};
         let transport = SandboxClient::from_channel(
             worker_channel,
             "fixture-supervisor".into(),
@@ -1527,7 +1603,6 @@ async fn sandbox_submission(over_tls: bool) {
             panic!("saved receipt expected");
         };
         assert_eq!(repeated, result);
-        use crate::protocol::elitea::runtime::v1::{CancelSandboxJobRequestV1, SandboxJobStatusV1};
         // A submission grant cannot invoke the stop endpoint.
         assert!(matches!(
             transport.cancel_granted(grant.clone()).await,
@@ -1579,6 +1654,96 @@ async fn sandbox_submission(over_tls: bool) {
         })
         .await
         .unwrap();
+        if !compiled {
+            let slow = std::sync::Arc::new(
+                PreparedJob::new(
+                    Language::Python,
+                    "import time\ntime.sleep(12)\n42".into(),
+                    std::collections::BTreeMap::default(),
+                    image.clone(),
+                    "fixture-v1".into(),
+                    15,
+                )
+                .unwrap(),
+            );
+            let sign = |value: &SandboxJobGrantClaimsV1| {
+                let bytes = value.encode_to_vec();
+                let mut input = b"elitea.sandbox.job-grant.ed25519.v1\0".to_vec();
+                input.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+                input.extend_from_slice(&bytes);
+                SignedSandboxJobGrantV1 {
+                    key_id: "fixture-key".into(),
+                    claims_bytes: bytes,
+                    signature: key.sign(&input).as_ref().to_vec(),
+                }
+            };
+            let mut running_claims = claims.clone();
+            running_claims.activation_id = "stop-live-dispatch".into();
+            running_claims.request_digest = slow.fingerprint().unwrap().to_vec();
+            let running_grant = sign(&running_claims);
+            let verifier = GrantVerifier::new(Keys(public), "fixture-supervisor".into()).unwrap();
+            let running_authority = verifier
+                .verify(
+                    &running_grant,
+                    "dns:worker.test",
+                    &slow,
+                    chrono::Utc::now().timestamp_millis(),
+                )
+                .unwrap();
+            let client = transport.clone();
+            let submitted_job = slow.clone();
+            let mut submissions = tokio::task::JoinSet::new();
+            submissions
+                .spawn(async move { client.submit_granted(running_grant, &submitted_job).await });
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if let Ok(row) = ledger.read(running_authority.scope()).await
+                        && row.phase == Phase::Dispatched
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .unwrap();
+            running_claims.revision = 2;
+            running_claims.cancel_only = true;
+            assert_eq!(
+                tokio::time::timeout(
+                    Duration::from_secs(5),
+                    transport.cancel_granted(sign(&running_claims))
+                )
+                .await
+                .unwrap()
+                .unwrap(),
+                SandboxJobStatusV1::Cancelled
+            );
+            assert_eq!(
+                ledger.read(running_authority.scope()).await.unwrap().phase,
+                Phase::Cancelled
+            );
+            let observer = DockerClient::with_image(image.clone()).await.unwrap();
+            assert!(
+                observer
+                    .observe_code_job(&running_authority.scope().runtime_identity().unwrap())
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            let submission = tokio::time::timeout(Duration::from_secs(5), submissions.join_next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert!(matches!(
+                submission,
+                Ok(SandboxOutcome::Cancelled)
+                    | Err(crate::sandbox::client::SandboxCallError::Submission {
+                        code: tonic::Code::Aborted
+                    })
+            ));
+        }
         drop(transport);
         stop.send(()).unwrap();
         drop(client);
@@ -1648,6 +1813,10 @@ async fn sandbox_submission(over_tls: bool) {
 
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL"]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Keep the ordered integration lifecycle and its assertions together"
+)]
 async fn sandbox_dispatch_journal_preserves_exact_pending_identity() {
     use crate::protocol::elitea::runtime::v1::ExecutionIdentityV1;
     use crate::sandbox::dispatch::{DispatchError, DispatchJournal, DispatchScope};

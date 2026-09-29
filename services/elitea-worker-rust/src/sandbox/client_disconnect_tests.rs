@@ -49,8 +49,8 @@ async fn connection_loss_after_submission_is_reconcilable() {
             .await
             .unwrap();
         tokio::select! {
-            _ = entered.notified() => {},
-            _ = tokio::time::sleep(Duration::from_secs(5)) => {},
+            () = entered.notified() => {},
+            () = tokio::time::sleep(Duration::from_secs(5)) => {},
             result = tokio::io::copy_bidirectional(&mut client, &mut upstream) => {
                 panic!("connection closed before submission: {result:?}");
             }
@@ -67,7 +67,7 @@ async fn connection_loss_after_submission_is_reconcilable() {
     let job = PreparedJob::new(
         crate::sandbox::request::Language::Rust,
         "test".into(),
-        Default::default(),
+        std::collections::BTreeMap::default(),
         format!("sha256:{}", "a".repeat(64)),
         "test".into(),
         5,

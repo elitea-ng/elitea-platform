@@ -240,6 +240,13 @@ pub struct OutputRecoveryAgentDelivery {
 }
 
 impl OutputRecoveryAgentDelivery {
+    pub(crate) fn sandbox_stop_authority(
+        &self,
+    ) -> Result<crate::protocol::control::SandboxStopAuthority, crate::protocol::ProtocolError>
+    {
+        self.recovery.sandbox_stop_authority(&self.verified)
+    }
+
     #[must_use]
     pub const fn execution_kind(&self) -> AgentExecutionKind {
         self.verified.kind()

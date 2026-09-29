@@ -698,6 +698,14 @@ impl PipelineNativeAgentAssembler {
 impl NativeAgentAssembler for PipelineNativeAgentAssembler {
     type Completion = PipelineAgentCompletion;
 
+    fn sandbox_stop_delivery(
+        &self,
+    ) -> Option<Arc<dyn crate::sandbox::dispatch::SandboxStopDelivery>> {
+        self.sandbox.as_ref().map(|factory| {
+            factory.clone() as Arc<dyn crate::sandbox::dispatch::SandboxStopDelivery>
+        })
+    }
+
     async fn inspect_checkpoint(
         &self,
         request: &AgentExecutionRequest,

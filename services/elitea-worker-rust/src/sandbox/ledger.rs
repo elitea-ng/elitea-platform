@@ -245,6 +245,36 @@ impl JobLedger {
         .transpose()
     }
 
+    /// A durable, authenticated stop supersedes dispatch authority immediately.
+    /// This lease cannot admit execution: the stop flag is irreversible and both
+    /// dispatch and successful completion reject it. Old lease epochs are fenced.
+    /// A live preparation lease must first drain: a provision RPC may still create
+    /// its container after an early absence observation.
+    pub(crate) async fn claim_cancellation(
+        &self,
+        scope: &JobScope,
+        owner: &str,
+        ttl_seconds: i32,
+    ) -> Result<Option<JobLease>, LedgerError> {
+        validate_ttl(ttl_seconds)?;
+        if owner.is_empty() || owner.len() > 128 || owner.contains('\0') {
+            return Err(LedgerError::Invalid);
+        }
+        self.read(scope).await?;
+        let row = sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET owner_id=$5,lease_epoch=lease_epoch+1,lease_until=clock_timestamp()+make_interval(secs => $6),updated_at=clock_timestamp() WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND cancellation_requested AND phase IN ('reserved','dispatched') AND (phase='dispatched' OR lease_until IS NULL OR lease_until <= clock_timestamp()) RETURNING lease_epoch,phase")
+            .bind(&scope.tenant).bind(scope.project).bind(scope.key.as_slice()).bind(scope.digest.as_slice())
+            .bind(owner).bind(f64::from(ttl_seconds)).fetch_optional(&self.pool).await?;
+        row.map(|row| {
+            Ok(JobLease {
+                scope: scope.clone(),
+                owner: owner.to_owned(),
+                epoch: row.try_get("lease_epoch")?,
+                observed_phase: Phase::parse(row.try_get("phase")?)?,
+            })
+        })
+        .transpose()
+    }
+
     /// # Errors
     /// Returns `Invalid`, `Fenced`, or a database error.
     pub async fn renew(&self, lease: &JobLease, ttl_seconds: i32) -> Result<(), LedgerError> {

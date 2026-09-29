@@ -108,13 +108,20 @@ impl SandboxClient {
     pub async fn cancel<R: ControlRpc>(
         &self,
         control: &ControlGrpcClient<R>,
-        mut authorization: AuthorizeSandboxJobRequestV1,
+        authorization: AuthorizeSandboxJobRequestV1,
         job: &PreparedJob,
     ) -> Result<SandboxJobStatusV1, SandboxCallError> {
-        authorization.request_digest = job
-            .fingerprint()
-            .map_err(|_| SandboxCallError::Invalid)?
-            .to_vec();
+        let digest = job.fingerprint().map_err(|_| SandboxCallError::Invalid)?;
+        self.cancel_digest(control, authorization, &digest).await
+    }
+
+    pub(crate) async fn cancel_digest<R: ControlRpc>(
+        &self,
+        control: &ControlGrpcClient<R>,
+        mut authorization: AuthorizeSandboxJobRequestV1,
+        digest: &[u8; 32],
+    ) -> Result<SandboxJobStatusV1, SandboxCallError> {
+        authorization.request_digest = digest.to_vec();
         authorization.audience.clone_from(&self.audience);
         authorization.cancel_only = true;
         let response = control.authorize_sandbox_job(authorization).await?;

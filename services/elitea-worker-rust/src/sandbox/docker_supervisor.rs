@@ -16,6 +16,7 @@ pub struct DockerSupervisor {
     runtime: DockerClient,
     owner: String,
     capacity: Semaphore,
+    stop_capacity: Semaphore,
     admission_policy: Option<(String, Vec<Language>)>,
 }
 
@@ -66,6 +67,7 @@ impl DockerSupervisor {
             runtime,
             owner,
             capacity: Semaphore::new(concurrency),
+            stop_capacity: Semaphore::new(concurrency.min(16)),
             admission_policy: None,
         })
     }
@@ -160,14 +162,28 @@ impl DockerSupervisor {
         if !authorization.valid_at(chrono::Utc::now().timestamp_millis()) {
             return Err(SupervisorError::Invalid);
         }
-        self.ledger
-            .request_cancellation(authorization.scope(), &self.owner)
-            .await?;
-        // An active owner observes the durable intent. Capacity does not erase it.
-        match self.reconcile_dispatched(authorization.scope()).await {
-            Err(SupervisorError::Busy) => Ok(Reconciliation::OwnedElsewhere),
-            result => result,
+        let scope = authorization.scope();
+        let record = self.ledger.request_cancellation(scope, &self.owner).await?;
+        if !matches!(record.phase, Phase::Reserved | Phase::Dispatched) {
+            return self.terminal(scope, record).await;
         }
+        // Stop admission has bounded capacity separate from occupied execution
+        // slots. An authenticated stop fences dispatch without waiting its lease.
+        let Ok(_permit) = self.stop_capacity.try_acquire() else {
+            return Ok(Reconciliation::OwnedElsewhere);
+        };
+        let Some(lease) = self
+            .ledger
+            .claim_cancellation(scope, &self.owner, LEASE_SECONDS)
+            .await?
+        else {
+            let record = self.ledger.read(scope).await?;
+            if matches!(record.phase, Phase::Reserved | Phase::Dispatched) {
+                return Ok(Reconciliation::OwnedElsewhere);
+            }
+            return self.terminal(scope, record).await;
+        };
+        self.run_owned(scope, &lease, None).await
     }
 
     /// Resume previously authorized stops after process loss, without a client retry.
@@ -216,8 +232,7 @@ impl DockerSupervisor {
             Phase::Reserved if !self.ledger.cancellation_requested(scope).await? => {
                 return Ok(Reconciliation::NeedsDispatch);
             }
-            Phase::Reserved => {}
-            Phase::Dispatched => {}
+            Phase::Reserved | Phase::Dispatched => {}
             _ => return self.terminal(scope, record).await,
         }
         let Some(lease) = self
@@ -274,20 +289,9 @@ impl DockerSupervisor {
                         return Ok(stopped);
                     }
                     if self.ledger.age_seconds(scope).await? >= 60 {
-                        self.ledger.renew(lease, LEASE_SECONDS).await?;
-                        self.runtime
-                            .terminate_code_job(&identity)
-                            .await
-                            .map_err(SupervisorError::Runtime)?;
-                        self.ledger
-                            .finish(
-                                lease,
-                                Phase::Failed,
-                                None,
-                                Some("sandbox.preparation_incomplete"),
-                            )
-                            .await?;
-                        return self.terminal(scope, self.ledger.read(scope).await?).await;
+                        return self
+                            .fail_expired_job(scope, lease, "sandbox.preparation_incomplete")
+                            .await;
                     }
                     tokio::time::sleep(Duration::from_millis(500)).await;
                 }
@@ -314,20 +318,9 @@ impl DockerSupervisor {
                 }
                 // Database time keeps the deadline stable across supervisor restarts.
                 if self.ledger.age_seconds(scope).await? >= MAX_JOB_AGE_SECONDS {
-                    self.ledger.renew(lease, LEASE_SECONDS).await?;
-                    self.runtime
-                        .terminate_code_job(&identity)
-                        .await
-                        .map_err(SupervisorError::Runtime)?;
-                    self.ledger
-                        .finish(
-                            lease,
-                            Phase::Failed,
-                            None,
-                            Some("sandbox.deadline_exceeded"),
-                        )
-                        .await?;
-                    return self.terminal(scope, self.ledger.read(scope).await?).await;
+                    return self
+                        .fail_expired_job(scope, lease, "sandbox.deadline_exceeded")
+                        .await;
                 }
                 if recover_signal {
                     // The lease and durable dispatch authorize the existing
@@ -353,6 +346,23 @@ impl DockerSupervisor {
                 _ = heartbeat.tick() => self.ledger.renew(lease, LEASE_SECONDS).await?,
             }
         }
+    }
+
+    async fn fail_expired_job(
+        &self,
+        scope: &JobScope,
+        lease: &JobLease,
+        code: &'static str,
+    ) -> Result<Reconciliation, SupervisorError> {
+        self.ledger.renew(lease, LEASE_SECONDS).await?;
+        self.runtime
+            .terminate_code_job(&scope.runtime_identity()?)
+            .await
+            .map_err(SupervisorError::Runtime)?;
+        self.ledger
+            .finish(lease, Phase::Failed, None, Some(code))
+            .await?;
+        self.terminal(scope, self.ledger.read(scope).await?).await
     }
 
     async fn stop_if_requested(

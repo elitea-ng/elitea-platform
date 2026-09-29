@@ -55,6 +55,7 @@ use crate::transport::redis_commands::{
 pub(super) struct AgentDeliveryProcessor<R, RC, T, K, D, I> {
     router: AgentDeliveryRouter<R, RC>,
     checkpoint_recovery: bool,
+    sandbox_stop: Option<Arc<dyn crate::sandbox::dispatch::SandboxStopDelivery>>,
     authenticator: Arc<dyn SignedCommandAuthenticator>,
     output: AgentOutputPreflight,
     control: Arc<AgentControlClient<R>>,
@@ -96,6 +97,7 @@ where
         Self {
             router,
             checkpoint_recovery: false,
+            sandbox_stop: None,
             authenticator,
             output,
             control,
@@ -324,6 +326,25 @@ where
                 ));
             }
         };
+        if failure == RuntimeFailureKind::Cancelled
+            && let Some(delivery) = &self.sandbox_stop
+        {
+            let Ok(authority) = recovery.sandbox_stop_authority() else {
+                return Ok(AgentDeliveryProcessOutcome::retained(
+                    "sandbox.stop_authority_invalid",
+                    false,
+                ));
+            };
+            if !crate::sandbox::dispatch::BoundSandboxStop::new(delivery.clone(), authority)
+                .confirmed()
+                .await
+            {
+                return Ok(AgentDeliveryProcessOutcome::retained(
+                    "sandbox.stop_delivery_pending",
+                    true,
+                ));
+            }
+        }
         let Some(recovery) = self
             .output
             .prepare_empty_recovery(recovery)
@@ -583,6 +604,7 @@ where
     K: UnixMillisClock,
     I: AgentInputMaterializer + 'static,
 {
+    let sandbox_stop = assembler.sandbox_stop_delivery();
     let coordinator = native_agent_coordinator(
         admission.clone(),
         assembler,
@@ -593,7 +615,7 @@ where
         max_output_sessions,
         terminal_recovery,
     );
-    AgentDeliveryProcessor::new(
+    let mut processor = AgentDeliveryProcessor::new(
         authenticator,
         output,
         control,
@@ -605,7 +627,9 @@ where
         preparation,
         terminal_recovery,
         coordinator,
-    )
+    );
+    processor.sandbox_stop = sandbox_stop;
+    processor
 }
 
 #[derive(Clone, Copy)]

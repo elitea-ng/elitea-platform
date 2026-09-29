@@ -141,6 +141,14 @@ where
 {
     type Completion = NativeRuntimeCompletion<D::Completion, P::Completion>;
 
+    fn sandbox_stop_delivery(
+        &self,
+    ) -> Option<Arc<dyn crate::sandbox::dispatch::SandboxStopDelivery>> {
+        self.direct
+            .sandbox_stop_delivery()
+            .or_else(|| self.pipeline.sandbox_stop_delivery())
+    }
+
     async fn inspect_checkpoint(
         &self,
         request: &super::request::AgentExecutionRequest,

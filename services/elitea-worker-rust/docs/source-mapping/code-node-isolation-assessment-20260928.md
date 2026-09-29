@@ -1996,3 +1996,48 @@ Verification: `scripts/runtime/test_sandbox_ledger.py --test-filter sandbox_disp
 disposable PostgreSQL. Coverage includes process-instance replacement, idempotent registration, changed digest/target
 rejection, exact resolution, tenant/generation isolation, and racing conflicting registrations.
 The worker Code path and bootstrap compile with the new journal. Deployment and browser Stop verification remain open.
+
+
+### 2026-09-29: Stop delivery gates cancellation settlement
+
+Legacy reference: the SDK local Pyodide timeout path kills/waits for its process. Durable remote Stop and
+replacement-worker delivery are new runtime requirements; local future cancellation cannot provide them.
+
+`SandboxStopAuthority` is a separate sealed protocol type. Fresh invocation authority validates exact signed
+command binding; recovery authority requires the matching cancelled execution and replacement fence.
+`AgentControlClient::stop_sandbox_job` verifies local workload/session ownership before requesting Main's stop-only grant.
+`CodeRuntimeFactory::stop` reads at most 32 pending dispatch identities, routes to the recorded configured supervisor,
+and resolves delivery only for a confirmed Completed/Failed/Cancelled receipt. Missing targets, transport errors,
+pending or uncertain status retain delivery. `BoundSandboxStop` bounds a delivery pass to ten seconds.
+
+`CursorBoundAuthorizedAgentRun::finish_terminal` performs this check before emitting cancellation, settlement,
+or Redis retirement. `AgentDeliveryProcessor::process_output_recovery` applies the same check before cancelled
+running-execution recovery. No runtime connection loss is interpreted as a user stop. This does not retroactively
+repair executions already settled by older worker versions without a dispatch journal.
+
+Supervisor Stop uses separate bounded admission capacity. Once authenticated stop intent is durable,
+`JobLedger::claim_cancellation` can fence a live Dispatched lease; the previous owner cannot publish completion.
+A live Reserved/preparation lease is not preempted because its provision request may still create a container.
+Termination remains confirmed before the Cancelled receipt is persisted.
+
+Five focused `durable_stop_` tests pass on the normal test-thread stack, including confirmed-stop ordering and
+pending-stop suppression of terminal output, settlement, and Redis acknowledgement. During development the added
+unboxed failure-close branch enlarged `execute_owned` enough to overflow the debug stack at terminal binding;
+boxing that phase boundary and keeping the stop binding boxed removes the failure without a stack-size override.
+The PostgreSQL fencing test passes. A stop replaces a live dispatch lease and fences its previous owner.
+A live preparation lease remains protected. A request without durable stop intent cannot claim cancellation.
+
+The authenticated supervisor transport test passes with the real Deno/Pyodide image.
+It starts a sleeping Python job, waits for dispatch, and sends a separately signed stop grant.
+Cancellation completes within the five-second test deadline. The ledger records Cancelled and the execution container is absent.
+The original submit call returns cancellation or a fenced-owner response; it cannot publish success.
+The recovery-authority test also passes: only the exact cancelled execution can receive replacement-worker stop authority.
+
+These checks use a disposable PostgreSQL database and real Docker execution containers.
+Deployment and browser Stop/restart acceptance remain open. Kubernetes execution remains a separate required gate.
+
+All 67 output-delivery tests pass on the normal test-thread stack.
+The broader suite finds a second oversized async phase during terminal-spool reopening.
+Boxing the terminal operation fixes this failure without changing thread limits or output behavior.
+Supervisor-feature Clippy passes across all targets with warnings denied.
+Request preparation and expired-job termination now use small helpers; ordered authority and integration-test lifecycles remain together.

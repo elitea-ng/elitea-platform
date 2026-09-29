@@ -107,24 +107,7 @@ impl CodeSandboxRuntime for RemoteCodeRuntime {
                 "Multiple sandbox runtimes are configured for this Code language.",
             ));
         }
-        let language = match invocation.language {
-            CodeLanguage::Python => Language::Python,
-            CodeLanguage::JavaScript => Language::JavaScript,
-            CodeLanguage::TypeScript => Language::TypeScript,
-            CodeLanguage::Rust => Language::Rust,
-        };
-        let job = PreparedJob::new(
-            language,
-            invocation.source.to_owned(),
-            serde_json::from_slice(&invocation.input_json)
-                .map_err(|_| failed("Code input is invalid."))?,
-            profile.image_digest.clone(),
-            profile.policy_revision.clone(),
-            profile.timeout_seconds,
-        )
-        .map_err(|_| {
-            failed("Code input or sandbox runtime configuration exceeds its supported limits.")
-        })?;
+        let job = prepare_job(&invocation, profile)?;
         let scope = self
             .authority
             .dispatch_scope()
@@ -218,4 +201,72 @@ fn uncertain() -> GraphError {
     failed(
         "Sandbox completion could not be confirmed. The job was not restarted; reconcile its durable status before retrying the pipeline.",
     )
+}
+
+#[async_trait]
+impl crate::sandbox::dispatch::SandboxStopDelivery for CodeRuntimeFactory {
+    async fn stop(
+        &self,
+        authority: &crate::protocol::control::SandboxStopAuthority,
+    ) -> Result<bool, crate::sandbox::dispatch::DispatchError> {
+        use crate::protocol::elitea::runtime::v1::SandboxJobStatusV1;
+        use crate::sandbox::dispatch::DispatchError;
+        let scope = authority.scope()?;
+        for pending in self.journal.pending(&scope).await? {
+            let profile = self
+                .profiles
+                .iter()
+                .find(|profile| profile.client.audience() == pending.audience)
+                .ok_or(DispatchError::TargetUnavailable)?;
+            let status = self
+                .control
+                .stop_sandbox_job(
+                    &profile.client,
+                    authority,
+                    &pending.activation,
+                    &pending.digest,
+                )
+                .await?;
+            match status {
+                SandboxJobStatusV1::Completed
+                | SandboxJobStatusV1::Failed
+                | SandboxJobStatusV1::Cancelled => {
+                    self.journal
+                        .resolve(
+                            &scope,
+                            &pending.activation,
+                            &pending.digest,
+                            &pending.audience,
+                        )
+                        .await?;
+                }
+                _ => return Ok(false),
+            }
+        }
+        Ok(self.journal.pending(&scope).await?.is_empty())
+    }
+}
+
+fn prepare_job(
+    invocation: &CodeInvocation<'_>,
+    profile: &CodeRuntimeProfile,
+) -> Result<PreparedJob, GraphError> {
+    let language = match invocation.language {
+        CodeLanguage::Python => Language::Python,
+        CodeLanguage::JavaScript => Language::JavaScript,
+        CodeLanguage::TypeScript => Language::TypeScript,
+        CodeLanguage::Rust => Language::Rust,
+    };
+    PreparedJob::new(
+        language,
+        invocation.source.to_owned(),
+        serde_json::from_slice(&invocation.input_json)
+            .map_err(|_| failed("Code input is invalid."))?,
+        profile.image_digest.clone(),
+        profile.policy_revision.clone(),
+        profile.timeout_seconds,
+    )
+    .map_err(|_| {
+        failed("Code input or sandbox runtime configuration exceeds its supported limits.")
+    })
 }

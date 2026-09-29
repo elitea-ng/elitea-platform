@@ -283,7 +283,7 @@ mod tests {
         }
         let duplicate = String::from_utf8(original)
             .unwrap()
-            .replacen("{", "{\"revision\":1,", 1);
+            .replacen('{', "{\"revision\":1,", 1);
         assert!(PreparedJob::from_transport(duplicate.as_bytes()).is_err());
         assert!(PreparedJob::from_transport(&vec![b' '; 1024 * 1024 + 1]).is_err());
     }

@@ -3528,13 +3528,55 @@ async fn sensitive_interrupt_is_the_acked_paused_hitl_terminal_and_skips_complet
     drop(temporary);
 }
 
+struct SandboxStopFixture {
+    trace: Arc<Mutex<Vec<&'static str>>>,
+    complete: bool,
+}
+#[async_trait]
+impl crate::sandbox::dispatch::SandboxStopDelivery for SandboxStopFixture {
+    async fn stop(
+        &self,
+        _: &crate::protocol::control::SandboxStopAuthority,
+    ) -> Result<bool, crate::sandbox::dispatch::DispatchError> {
+        self.trace.lock().unwrap().push("sandbox_stop");
+        Ok(self.complete)
+    }
+}
+struct StopAwareAssembler {
+    inner: TestNativeAssembler,
+    stop: Option<Arc<dyn crate::sandbox::dispatch::SandboxStopDelivery>>,
+}
+#[async_trait]
+impl NativeAgentAssembler for StopAwareAssembler {
+    type Completion = FixedCompletion;
+    fn sandbox_stop_delivery(
+        &self,
+    ) -> Option<Arc<dyn crate::sandbox::dispatch::SandboxStopDelivery>> {
+        self.stop.clone()
+    }
+    async fn assemble(
+        &self,
+        assembly: AuthorizedNativeAssembly<'_>,
+    ) -> Result<AssembledNativeAgentInvocation<Self::Completion>, NativeAgentAssemblyError> {
+        Box::pin(self.inner.assemble(assembly)).await
+    }
+}
+#[tokio::test(start_paused = true)]
+async fn durable_stop_waits_for_confirmed_sandbox_termination() {
+    Box::pin(run_durable_stop_case(Some(true))).await;
+}
+#[tokio::test(start_paused = true)]
+async fn durable_stop_retains_delivery_when_sandbox_stop_is_pending() {
+    Box::pin(run_durable_stop_case(Some(false))).await;
+}
+
 #[tokio::test(start_paused = true)]
 async fn durable_stop_interrupts_only_the_owned_run_then_settles_cancelled() {
-    Box::pin(run_durable_stop_case()).await;
+    Box::pin(run_durable_stop_case(None)).await;
 }
 
 #[allow(clippy::too_many_lines)] // Keep the Stop ownership trace in one fixture.
-async fn run_durable_stop_case() {
+async fn run_durable_stop_case(sandbox_complete: Option<bool>) {
     let trace = Arc::new(Mutex::new(Vec::new()));
     let (temporary, output_root) = root();
     let outcome = preflight(output_root, "worker-1")
@@ -3585,13 +3627,21 @@ async fn run_durable_stop_case() {
     let started = Arc::new(Notify::new());
     let release = Arc::new(Semaphore::new(0));
     let lifecycle = Arc::new(NativeAuthorizedAgentLifecycle::new(
-        Arc::new(TestNativeAssembler {
-            trace: Arc::clone(&trace),
-            agent: Arc::new(GatedTextAgent {
-                started: Arc::clone(&started),
-                release: Arc::clone(&release),
+        Arc::new(StopAwareAssembler {
+            inner: TestNativeAssembler {
+                trace: Arc::clone(&trace),
+                agent: Arc::new(GatedTextAgent {
+                    started: Arc::clone(&started),
+                    release: Arc::clone(&release),
+                }),
+                sensitive: false,
+            },
+            stop: sandbox_complete.map(|complete| {
+                Arc::new(SandboxStopFixture {
+                    trace: trace.clone(),
+                    complete,
+                }) as Arc<dyn crate::sandbox::dispatch::SandboxStopDelivery>
             }),
-            sensitive: false,
         }),
         connector.clone(),
         Arc::clone(&control),
@@ -3623,6 +3673,34 @@ async fn run_durable_stop_case() {
     };
     supervisor.close().await.expect("Stop lifecycle drain");
 
+    if sandbox_complete == Some(false) {
+        assert!(matches!(
+            completion.disposition(),
+            AgentAuthorizedLifecycleDisposition::RecoveryRequiredNoAck {
+                code: "sandbox.stop_delivery_pending",
+                retryable: true
+            }
+        ));
+        let observed = trace.lock().unwrap();
+        assert!(observed.contains(&"sandbox_stop"));
+        assert!(!observed.contains(&"settlement"));
+        assert!(!observed.contains(&"redis"));
+        assert_eq!(progress_state.frames.lock().unwrap().len(), 1);
+        return;
+    }
+    if sandbox_complete == Some(true) {
+        let observed = trace.lock().unwrap();
+        assert!(
+            observed
+                .iter()
+                .position(|event| *event == "sandbox_stop")
+                .unwrap()
+                < observed
+                    .iter()
+                    .position(|event| *event == "settlement")
+                    .unwrap()
+        );
+    }
     assert!(matches!(
         completion.disposition(),
         AgentAuthorizedLifecycleDisposition::ExecutedSettledAcked { sequence: 6, .. }

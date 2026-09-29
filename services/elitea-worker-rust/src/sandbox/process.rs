@@ -280,7 +280,7 @@ mod tests {
             61,
         )
         .unwrap();
-        assert!(!job.within_timeout(Duration::from_secs(60)));
+        assert!(!job.within_timeout(Duration::from_mins(1)));
         assert!(job.within_timeout(Duration::from_secs(61)));
     }
 }

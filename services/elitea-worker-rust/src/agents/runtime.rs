@@ -752,6 +752,12 @@ fn tool_snapshot_error(
 pub(crate) trait NativeAgentAssembler: Send + Sync + 'static {
     type Completion: NativeAgentCompletionSelector;
 
+    fn sandbox_stop_delivery(
+        &self,
+    ) -> Option<Arc<dyn crate::sandbox::dispatch::SandboxStopDelivery>> {
+        None
+    }
+
     async fn inspect_checkpoint(
         &self,
         _request: &AgentExecutionRequest,

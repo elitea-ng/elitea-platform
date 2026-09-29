@@ -43,8 +43,27 @@ pub(crate) enum DispatchError {
     Invalid,
     #[error("sandbox activation conflicts with its persisted request or supervisor")]
     Conflict,
+    #[error("sandbox stop could not be delivered: {0}")]
+    Stop(#[from] super::client::SandboxCallError),
+    #[error("the original sandbox supervisor is not configured; stop remains pending")]
+    TargetUnavailable,
     #[error("sandbox dispatch identity could not be persisted")]
     Database(#[from] sqlx::Error),
+}
+
+#[async_trait::async_trait]
+pub(crate) trait SandboxStopDelivery: Send + Sync {
+    /// True only when every registered runtime has a confirmed terminal receipt.
+    async fn stop(
+        &self,
+        authority: &crate::protocol::control::SandboxStopAuthority,
+    ) -> Result<bool, DispatchError>;
+}
+
+pub(crate) struct PendingDispatch {
+    pub(crate) activation: [u8; 32],
+    pub(crate) digest: [u8; 32],
+    pub(crate) audience: String,
 }
 
 pub(crate) struct DispatchJournal {
@@ -52,6 +71,25 @@ pub(crate) struct DispatchJournal {
 }
 
 impl DispatchJournal {
+    pub(crate) async fn pending(
+        &self,
+        scope: &DispatchScope,
+    ) -> Result<Vec<PendingDispatch>, DispatchError> {
+        let rows = sqlx::query("SELECT activation_id,request_digest,audience FROM elitea_runtime.sandbox_dispatches WHERE tenant_id=$1 AND project_id=$2 AND execution_id=$3 AND generation=$4 AND NOT resolved ORDER BY activation_id LIMIT 32")
+            .bind(&scope.tenant).bind(scope.project).bind(&scope.execution).bind(scope.generation).fetch_all(&self.pool).await?;
+        rows.into_iter()
+            .map(|row| {
+                let activation: Vec<u8> = row.try_get("activation_id")?;
+                let digest: Vec<u8> = row.try_get("request_digest")?;
+                Ok(PendingDispatch {
+                    activation: activation.try_into().map_err(|_| DispatchError::Invalid)?,
+                    digest: digest.try_into().map_err(|_| DispatchError::Invalid)?,
+                    audience: row.try_get("audience")?,
+                })
+            })
+            .collect()
+    }
+
     pub(crate) fn new(pool: PgPool) -> Self {
         Self { pool }
     }
@@ -104,5 +142,41 @@ impl DispatchJournal {
             return Err(DispatchError::Conflict);
         }
         Ok(())
+    }
+}
+
+pub(crate) struct BoundSandboxStop {
+    delivery: std::sync::Arc<dyn SandboxStopDelivery>,
+    authority: crate::protocol::control::SandboxStopAuthority,
+}
+impl BoundSandboxStop {
+    pub(crate) fn new(
+        delivery: std::sync::Arc<dyn SandboxStopDelivery>,
+        authority: crate::protocol::control::SandboxStopAuthority,
+    ) -> Self {
+        Self {
+            delivery,
+            authority,
+        }
+    }
+    pub(crate) async fn confirmed(&self) -> bool {
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            self.delivery.stop(&self.authority),
+        )
+        .await
+        {
+            Ok(Ok(complete)) => complete,
+            Ok(Err(error)) => {
+                tracing::error!(error = %error, "sandbox stop delivery failed; execution cancellation remains pending");
+                false
+            }
+            Err(_) => {
+                tracing::warn!(
+                    "sandbox stop delivery timed out; execution cancellation remains pending"
+                );
+                false
+            }
+        }
     }
 }
