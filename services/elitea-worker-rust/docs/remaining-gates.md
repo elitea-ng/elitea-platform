@@ -70,7 +70,8 @@ Initial supervisor crash acceptance exposes an interrupted-transport classificat
 Commit `a78fe82a7` fixes the classification and passes three focused client tests.
 The deployed UI retest passes: the same job completes under lease epoch 2 after supervisor restart.
 The open persistent chat receives its result without a reload.
-Gate 5 also remains open for cancellation, Kubernetes execution, and the remaining pipeline requirements.
+The UI Stop test fails: chat stops while its container continues and its receipt remains dispatched.
+Gate 5 remains open for explicit durable cancellation, Kubernetes execution, and the remaining pipeline requirements.
 Package/workspace authorization and compilation-cache performance remain tracked in the assessment.
 Gate 7a reuses this execution foundation for agent tools, with separate module admission and browser acceptance.
 

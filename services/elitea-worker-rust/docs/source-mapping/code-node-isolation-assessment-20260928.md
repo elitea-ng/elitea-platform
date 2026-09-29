@@ -1860,3 +1860,34 @@ The open chat displays `GATE5_WORKER_RECOVERY_20260929` without a reload.
 This verifies supervisor process recovery with the same durable job identity through the deployed UI.
 It does not verify Kubernetes, cancellation, host loss, or simultaneous worker and supervisor loss.
 The earlier failed run remains historical evidence; its receipt is not silently changed by this test.
+
+## Stop cancellation acceptance failure — 2026-09-29
+
+Persistent chat 755 starts the 35-second Rust fixture and clicks Stop after confirmed dispatch.
+Execution `0c492324152d99d3b4e66a7ae58a1f58` settles at terminal sequence 2 at 18:20:11 UTC.
+Container `065c905b1b7b` remains running after Stop and exits normally at 18:20:29 UTC.
+Job `78cdbe5c2fbdef093be8f6fc6281321bcdb071210299b2dade0e61e6aa644e45` remains dispatched under lease epoch 1.
+This is a failed cancellation acceptance check. Chat cancellation does not yet stop the external sandbox.
+
+### Source evidence and required ownership
+
+`src/execution/native_agent_lifecycle.rs::drive_native_stream` converts authoritative claim cancellation into `native.request_stop()`.
+`src/agents/graph/code_runtime.rs::CodeSandboxRuntime` currently exposes execution only.
+`src/sandbox/client.rs` has no cancellation operation, and `sandbox.proto` exposes submission only.
+`src/sandbox/docker_supervisor.rs::run_owned` intentionally preserves containers when its future drops.
+That behavior permits crash recovery and must not become implicit cancellation.
+
+The current SDK reference is `elitea_sdk/runtime/langchain/pyodide_sandbox.py::PyodideSandbox.execute` in `projects/elitea-sdk`.
+Its timeout handler kills and waits for the subprocess, but its `CancelledError` handler only passes.
+The remote implementation posts an execution request in `elitea_sdk/runtime/langchain/remote_sandbox.py`.
+These references define execution behavior, not proof of durable remote cancellation.
+
+Implement an explicit authenticated stop operation with durable intent before terminating a runtime.
+Keep stop authority separate from submit authority. Main currently authorizes submission only while desired state is Running.
+Do not permit a cancellation grant to dispatch code or bypass project and workload scope.
+Do not report sandbox cancellation complete before the runtime stops.
+Preserve completed receipts when completion wins the race with cancellation.
+Make stop delivery recoverable when either worker or supervisor fails during cancellation.
+Cover cancellation before dispatch, during execution, after completion, and after restart.
+Use the same contract for Docker and Kubernetes; keep graph checkpoint ownership in the worker.
+No product database schema change is justified by this defect.
