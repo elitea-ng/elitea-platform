@@ -59,6 +59,7 @@ use sqlx::PgPool;
 /// bounded by invocation admission. Invocation credentials, provider state,
 /// session state and completion capture remain one-use values.
 pub(crate) struct OrdinaryNativeAgentAssembler {
+    sandbox: Option<Arc<super::graph::CodeRuntimeFactory>>,
     platform: Arc<PlatformClient>,
     model_facade: Arc<ModelFacade>,
     tool_policy: Arc<ToolAdmissionPolicy>,
@@ -77,6 +78,14 @@ struct OrdinaryRunnerInputs {
 }
 
 impl OrdinaryNativeAgentAssembler {
+    pub(crate) fn with_sandbox(
+        mut self,
+        sandbox: Option<Arc<super::graph::CodeRuntimeFactory>>,
+    ) -> Self {
+        self.sandbox = sandbox;
+        self
+    }
+
     #[must_use]
     pub(crate) fn new(
         platform: Arc<PlatformClient>,
@@ -84,6 +93,7 @@ impl OrdinaryNativeAgentAssembler {
         tool_policy: Arc<ToolAdmissionPolicy>,
     ) -> Self {
         Self {
+            sandbox: None,
             platform,
             model_facade,
             tool_policy,
@@ -186,6 +196,7 @@ impl OrdinaryNativeAgentAssembler {
         checkpoint_recovery: bool,
     ) -> Result<OrdinaryRunnerInputs, NativeAgentAssemblyError> {
         let RedeemedOrdinaryNativeAssembly {
+            sandbox_authority,
             profile,
             plan,
             toolsets: tool_snapshot,
@@ -218,6 +229,10 @@ impl OrdinaryNativeAgentAssembler {
                 &tool_policy,
                 model_scopes,
                 plan.thread_id().to_owned(),
+                self.sandbox
+                    .as_ref()
+                    .zip(sandbox_authority)
+                    .map(|(factory, authority)| factory.bind(authority)),
             )
             .await?;
         let output_continuation = matches!(&start, AdmittedNativeStart::OutputContinuation);
@@ -261,6 +276,7 @@ impl OrdinaryNativeAgentAssembler {
         tool_policy: &Arc<ToolAdmissionPolicy>,
         model_scopes: super::model_scope::ModelScopeSessions,
         conversation_thread_id: String,
+        code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
     ) -> Result<(OrdinaryRuntimeBindings, NativeToolExecutionMode), NativeAgentAssemblyError> {
         let tool_reference_count = tool_snapshot.iter().count();
         let nested_application_count = tool_snapshot
@@ -316,7 +332,8 @@ impl OrdinaryNativeAgentAssembler {
                 mcp_tokens,
             )
             .with_model_scopes(model_scopes)
-            .with_conversation_thread(conversation_thread_id),
+            .with_conversation_thread(conversation_thread_id)
+            .with_code(code),
         )
         .await?;
         // #990 review 4: named whether or not a single child survived — an

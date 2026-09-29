@@ -1599,3 +1599,26 @@ Those gates remain open. The product database schema does not change.
 
 Verification: default-library compilation passes. Seven configuration tests and 108 graph tests pass.
 Default-library Clippy passes with warnings denied. These checks do not prove live supervisor execution.
+
+
+## Saved child pipeline sandbox binding — 2026-09-29
+
+The current SDK code tool executes within the calling graph's selected state.
+The Rust implementation keeps that behavior through the existing saved-child admission path.
+
+`runtime.rs` now preserves sandbox authority through ordinary admission and runtime-context redemption.
+`ordinary.rs` binds one invocation-scoped Code runtime after admission.
+`application_tools.rs` carries that runtime to the saved pipeline tool materializer.
+`pipeline.rs` supplies it to both ordinary-parent and pipeline-parent saved children.
+`code_remote.rs` shares deployment profiles but binds the authority separately for each invocation.
+
+The existing child project, frozen-version, toolkit-policy, and depth checks still run before binding.
+Code activation identity includes the child graph thread, node, step, and definition digest.
+Sharing the runtime does not replace those child identities with the parent's graph identity.
+The existing one-level saved-pipeline depth restriction remains. This change does not claim arbitrary recursive pipeline support.
+
+The agent library suite passes: 523 tests, zero failures.
+These tests provide regression evidence, not live nested sandbox acceptance.
+Live Main grants, nested execution, cancellation, crash recovery, and browser acceptance still require deployed verification.
+
+Default-library Clippy also passes with warnings denied.

@@ -973,6 +973,7 @@ fn application_replay_state(
 }
 
 pub(crate) struct ApplicationToolDependencies<'a> {
+    code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
     pub(crate) model_facade: Arc<ModelFacade>,
     pub(crate) policy: Arc<ToolAdmissionPolicy>,
     pub(crate) mcp_connector: Arc<dyn McpConnector>,
@@ -996,6 +997,7 @@ impl<'a> ApplicationToolDependencies<'a> {
         mcp_tokens: &'a Map<String, Value>,
     ) -> Self {
         Self {
+            code: None,
             model_facade,
             policy,
             mcp_connector,
@@ -1005,6 +1007,14 @@ impl<'a> ApplicationToolDependencies<'a> {
             model_scopes: None,
             conversation_thread_id: None,
         }
+    }
+
+    pub(super) fn with_code(
+        mut self,
+        code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
+    ) -> Self {
+        self.code = code;
+        self
     }
 
     pub(super) fn with_model_scopes(mut self, scopes: ModelScopeSessions) -> Self {
@@ -1237,6 +1247,7 @@ async fn materialize_pipeline_children(
                 .model_scopes
                 .clone()
                 .ok_or_else(invalid_configuration)?,
+            dependencies.code.clone(),
         )
         .await;
         let (definition, runtimes) = match built {

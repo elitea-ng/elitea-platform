@@ -11,7 +11,7 @@ use super::code_result::project_code_receipt;
 use super::code_state::CodeStateBoundary;
 
 /// No Debug: source and selected state can contain user data.
-pub(super) struct CodeInvocation<'a> {
+pub(in crate::agents) struct CodeInvocation<'a> {
     pub(super) activation: [u8; 32],
     pub(super) language: CodeLanguage,
     pub(super) source: &'a str,
@@ -20,7 +20,7 @@ pub(super) struct CodeInvocation<'a> {
 }
 
 #[async_trait]
-pub(super) trait CodeSandboxRuntime: Send + Sync {
+pub(in crate::agents) trait CodeSandboxRuntime: Send + Sync {
     /// Return the terminal receipt for this exact activation. Implementations
     /// must authorize each submission and reconcile pending jobs without minting
     /// a replacement identity. Failure/cancellation must return an error.

@@ -328,6 +328,7 @@ impl<'a> AuthorizedNativeAssembly<'a> {
             .map_err(tool_snapshot_error)?
             .apply_policy(policy);
         Ok(AdmittedOrdinaryNativeAssembly {
+            sandbox_authority: self.sandbox,
             request: self.request,
             runtime_context: self.runtime_context,
             session: self.session,
@@ -536,6 +537,7 @@ impl AdmittedNativeStart {
 
 /// Strict ordinary/no-tool profile admitted before ephemeral PAT redemption.
 pub(crate) struct AdmittedOrdinaryNativeAssembly<'a> {
+    sandbox_authority: Option<Arc<crate::protocol::control::ClaimBoundSandboxAuthority>>,
     request: &'a AgentExecutionRequest,
     runtime_context: ClaimBoundRuntimeContextAuthority,
     session: ClaimBoundSessionAuthority,
@@ -573,6 +575,7 @@ impl<'a> AdmittedOrdinaryNativeAssembly<'a> {
         client: &PlatformClient,
     ) -> Result<RedeemedOrdinaryNativeAssembly<'a>, RuntimeContextError> {
         let Self {
+            sandbox_authority,
             runtime_context,
             session,
             state_writer_lease,
@@ -585,6 +588,7 @@ impl<'a> AdmittedOrdinaryNativeAssembly<'a> {
         } = self;
         let context = client.redeem_elitea_context(&runtime_context).await?;
         Ok(RedeemedOrdinaryNativeAssembly {
+            sandbox_authority,
             profile,
             plan,
             toolsets,
@@ -600,6 +604,7 @@ impl<'a> AdmittedOrdinaryNativeAssembly<'a> {
 
 /// Admitted ordinary assembly after its sole claim-scoped PAT redemption.
 pub(crate) struct RedeemedOrdinaryNativeAssembly<'a> {
+    pub(super) sandbox_authority: Option<Arc<crate::protocol::control::ClaimBoundSandboxAuthority>>,
     pub(super) profile: OrdinaryNoToolProfile,
     pub(super) plan: OrdinaryNativeAgentPlan,
     pub(super) toolsets: AdmittedToolSnapshot<'a>,

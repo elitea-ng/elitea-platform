@@ -9,15 +9,15 @@ mod application;
 #[cfg(test)]
 mod application_tests;
 mod code;
+mod code_remote;
 mod code_result;
 mod code_runtime;
-mod code_remote;
 pub(crate) use code_remote::CodeRuntimeFactory;
-#[cfg(test)]
-mod code_tests;
 mod code_state;
 #[cfg(test)]
 mod code_state_tests;
+#[cfg(test)]
+mod code_tests;
 pub(crate) mod compiler;
 #[cfg(test)]
 mod compiler_tests;
@@ -81,3 +81,5 @@ pub(crate) use parallel::{
     ParallelActivation, ParallelChildCheckpoint, ParallelChildCheckpointerFactory,
 };
 pub(crate) use printer::{PRINTER_PAUSE_METADATA_KEY, PrinterPauseCatalog, PrinterPauseMetadata};
+
+pub(super) use code_runtime::CodeSandboxRuntime;

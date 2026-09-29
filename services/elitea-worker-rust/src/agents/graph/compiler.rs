@@ -236,7 +236,7 @@ pub(crate) struct PipelineNodeRuntimes {
 }
 
 impl PipelineNodeRuntimes {
-    pub(super) fn with_code(mut self, runtime: Arc<dyn CodeSandboxRuntime>) -> Self {
+    pub(in crate::agents) fn with_code(mut self, runtime: Arc<dyn CodeSandboxRuntime>) -> Self {
         self.code = Some(runtime);
         self
     }

@@ -76,6 +76,7 @@ struct SavedPipelineParticipantReference<'a> {
 }
 
 struct PipelineApplicationRuntime<'a> {
+    code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
     context: Arc<ClaimScopedEliteaContext>,
     model_facade: Arc<ModelFacade>,
     node_events: PipelineNodeEventSender,
@@ -415,7 +416,7 @@ impl PipelineNativeAgentAssembler {
         self
     }
 
-    #[allow(clippy::too_many_lines)] // Keep node authority handoff in one auditable sequence.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // Keep distinct authority owners explicit at node binding.
     async fn bind_node_runtimes(
         &self,
         profile: &PipelineExecutionProfile,
@@ -424,6 +425,7 @@ impl PipelineNativeAgentAssembler {
         runtime_context: &ClaimBoundRuntimeContextAuthority,
         tool_policy: &Arc<ToolAdmissionPolicy>,
         model_scopes: ModelScopeSessions,
+        code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
     ) -> Result<PipelineRuntimeBindings, NativeAgentAssemblyError> {
         let has_llm_nodes = profile.definition().has_llm_nodes();
         let has_direct_tool_nodes = profile.definition().has_direct_tool_nodes();
@@ -501,6 +503,7 @@ impl PipelineNativeAgentAssembler {
                 .clone()
                 .zip(model_facade.clone())
                 .map(|(context, model_facade)| PipelineApplicationRuntime {
+                    code,
                     context,
                     model_facade,
                     node_events: node_event_sender.clone(),
@@ -584,7 +587,8 @@ impl PipelineNativeAgentAssembler {
                 Arc::clone(&self.mcp_connector),
                 runtime.mcp_tokens,
             )
-            .with_model_scopes(runtime.model_scopes.clone()),
+            .with_model_scopes(runtime.model_scopes.clone())
+            .with_code(runtime.code.clone()),
             Some(&direct_aliases),
         )
         .await?;
@@ -812,6 +816,10 @@ impl PipelineNativeAgentAssembler {
                     &runtime_context,
                     &tool_policy,
                     state.model_scopes.clone(),
+                    self.sandbox
+                        .as_ref()
+                        .zip(sandbox_authority.clone())
+                        .map(|(factory, authority)| factory.bind(authority)),
                 )
                 .await?;
             if let (Some(factory), Some(authority)) = (&self.sandbox, sandbox_authority) {
@@ -1235,8 +1243,10 @@ pub(super) async fn materialize_saved_pipeline_tool(
     identity: (u64, u64),
     project_id: Option<u64>,
     model_scopes: ModelScopeSessions,
+    code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
 ) -> Result<(PipelineDefinition, PipelineNodeRuntimes), NativeAgentAssemblyError> {
     let runtime = PipelineApplicationRuntime {
+        code,
         context,
         model_facade,
         node_events,
@@ -1407,9 +1417,13 @@ async fn bind_saved_pipeline_runtimes(
             model_scopes: runtime.model_scopes.clone(),
         }) as Arc<dyn PipelineLlmAgentFactory>
     });
+    let mut runtimes = PipelineNodeRuntimes::new(llm_factory, direct_tool_resolver, None)
+        .with_events(runtime.node_events.clone());
+    if let Some(code) = &runtime.code {
+        runtimes = runtimes.with_code(code.clone());
+    }
     Ok(BoundSavedPipeline {
-        runtimes: PipelineNodeRuntimes::new(llm_factory, direct_tool_resolver, None)
-            .with_events(runtime.node_events.clone()),
+        runtimes,
         guarded_interrupt_kinds,
     })
 }

@@ -95,6 +95,7 @@ impl NativeRuntimeAssembler<OrdinaryNativeAgentAssembler, PipelineNativeAgentAss
         mut self,
         sandbox: Option<Arc<super::graph::CodeRuntimeFactory>>,
     ) -> Self {
+        self.direct = self.direct.with_sandbox(sandbox.clone());
         self.pipeline = self.pipeline.with_sandbox(sandbox);
         self
     }

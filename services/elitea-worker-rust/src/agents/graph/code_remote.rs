@@ -62,11 +62,18 @@ impl CodeRuntimeFactory {
         nodes: super::compiler::PipelineNodeRuntimes,
         authority: Arc<ClaimBoundSandboxAuthority>,
     ) -> super::compiler::PipelineNodeRuntimes {
-        nodes.with_code(Arc::new(RemoteCodeRuntime {
+        nodes.with_code(self.bind(authority))
+    }
+
+    pub(in crate::agents) fn bind(
+        &self,
+        authority: Arc<ClaimBoundSandboxAuthority>,
+    ) -> Arc<dyn CodeSandboxRuntime> {
+        Arc::new(RemoteCodeRuntime {
             control: self.control.clone(),
             authority,
             profiles: self.profiles.clone(),
-        }))
+        })
     }
 }
 
