@@ -66,9 +66,10 @@ Rust also passes persistent-chat execution, history reload, and worker-restart r
 Each invocation starts a separate bounded container from a cached runtime image.
 The long-running supervisors own container dispatch and receipts; the worker owns graph checkpoints.
 
-Supervisor crash acceptance exposes an interrupted-transport classification defect.
+Initial supervisor crash acceptance exposes an interrupted-transport classification defect.
 Commit `a78fe82a7` fixes the classification and passes three focused client tests.
-Deployed supervisor crash recovery remains unverified until the UI test passes.
+The deployed UI retest passes: the same job completes under lease epoch 2 after supervisor restart.
+The open persistent chat receives its result without a reload.
 Gate 5 also remains open for cancellation, Kubernetes execution, and the remaining pipeline requirements.
 Package/workspace authorization and compilation-cache performance remain tracked in the assessment.
 Gate 7a reuses this execution foundation for agent tools, with separate module admission and browser acceptance.

@@ -1843,3 +1843,20 @@ The regression fails before the change and passes after the change.
 This test proves transport classification, not deployed supervisor recovery.
 Repeat the UI crash test after worker deployment before accepting recovery.
 This recovery behavior extends the legacy Code execution contract; it does not copy a legacy restart mechanism.
+
+## Deployed supervisor crash recovery — 2026-09-29
+
+Worker image `elitea-worker-rust:sandbox-gate5-a78fe82a7` includes the transport classification fix.
+Its release build passes the shipped debug-line and symbol-table checks.
+The deployment preserves the worker's environment, five mounts, networks, and resource limits.
+
+Persistent chat 755 starts the slow Rust Code fixture through the browser.
+The receipt confirms dispatch before `SIGKILL` stops the Rust supervisor.
+The supervisor restarts. The worker keeps waiting instead of publishing a terminal error.
+Job `0e435fbaa8ad3096fd63038996d837ca54b2d078cd5e3ee3fe25f4d93c821855` completes under lease epoch 2 at 18:17:43 UTC.
+Execution `31108c22032b0e407a60540373080c64` settles with terminal sequence 9.
+The open chat displays `GATE5_WORKER_RECOVERY_20260929` without a reload.
+
+This verifies supervisor process recovery with the same durable job identity through the deployed UI.
+It does not verify Kubernetes, cancellation, host loss, or simultaneous worker and supervisor loss.
+The earlier failed run remains historical evidence; its receipt is not silently changed by this test.
