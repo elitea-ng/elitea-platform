@@ -1,5 +1,5 @@
 //! Authenticated supervisor RPC composition. No plaintext listener is provided.
-use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
+use std::{future::Future, sync::Arc, time::Duration};
 
 use tonic::{
     Request, Response, Status,
@@ -23,6 +23,14 @@ use crate::protocol::{
     sandbox_grant::GrantVerifier,
 };
 
+#[derive(Debug, thiserror::Error)]
+pub enum SupervisorServeError {
+    #[error("sandbox TLS crypto provider initialization failed")]
+    Crypto(#[from] crate::diagnostics::DiagnosticInitError),
+    #[error("sandbox TLS listener failed")]
+    Transport(#[from] tonic::transport::Error),
+}
+
 pub struct SupervisorService<R> {
     verifier: GrantVerifier<R>,
     supervisor: Arc<DockerSupervisor>,
@@ -39,14 +47,15 @@ impl<R: Ed25519PublicKeyResolver + 'static> SupervisorService<R> {
 
     /// Require a verified client certificate before dispatching any RPC.
     /// # Errors
-    /// Returns a transport error for TLS configuration, binding, or serving failure.
+    /// Returns a typed error for crypto initialization, TLS configuration, or serving failure.
     pub async fn serve(
         self,
-        address: SocketAddr,
+        listener: tokio::net::TcpListener,
         identity: Identity,
         client_ca: Certificate,
         shutdown: impl Future<Output = ()> + Send + 'static,
-    ) -> Result<(), tonic::transport::Error> {
+    ) -> Result<(), SupervisorServeError> {
+        crate::diagnostics::install_tls_crypto_provider()?;
         let service = SandboxSupervisorServiceServer::new(self)
             .max_decoding_message_size(1024 * 1024 + 8192)
             .max_encoding_message_size(512 * 1024 + 8192);
@@ -54,13 +63,18 @@ impl<R: Ed25519PublicKeyResolver + 'static> SupervisorService<R> {
             .tls_config(
                 ServerTlsConfig::new()
                     .identity(identity)
-                    .client_ca_root(client_ca),
+                    .client_ca_root(client_ca)
+                    .timeout(Duration::from_secs(10)),
             )?
             .concurrency_limit_per_connection(32)
             .timeout(Duration::from_secs(3665))
             .add_service(service)
-            .serve_with_shutdown(address, shutdown)
-            .await
+            .serve_with_incoming_shutdown(
+                tokio_stream::wrappers::TcpListenerStream::new(listener),
+                shutdown,
+            )
+            .await?;
+        Ok(())
     }
 }
 

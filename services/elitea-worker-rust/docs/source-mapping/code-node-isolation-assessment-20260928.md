@@ -1340,3 +1340,30 @@ after the Clippy ownership correction. Worker-library Clippy passed with warning
 Protocol generation, Buf lint, and Buf compatibility against the preceding commit passed.
 The generated Go runtime package compiled; it contains no tests.
 These checks do not establish a live TLS handshake or deployed job submission.
+
+### Live supervisor transport verification (2026-09-29)
+
+The supervisor now serves from a bound Tokio listener. Tests reserve an ephemeral
+port without a bind/release race. The TLS handshake has a ten-second timeout.
+The service calls the existing worker TLS provider initializer before construction.
+The first live test exposed a panic from ambiguous Rustls provider features.
+Reusing `diagnostics::install_tls_crypto_provider` removes that startup failure.
+Initialization and transport failures return typed errors.
+
+`scripts/runtime/test_sandbox_ledger.py --test-filter sandbox_supervisor_mtls
+--adapter-image` creates temporary CA/client/server certificates and disposable
+PostgreSQL. It uses an existing cached adapter image. It never reads deployment
+credentials. Temporary certificate keys and database resources are removed afterward.
+
+The test sends gRPC requests over TLS to the real service. It checks missing
+client credentials, a trusted but incorrect workload identity, and modified job inputs.
+It then executes code through the Docker supervisor and compares repeated receipts.
+This verifies supervisor transport and execution together. Main issues no grant in
+this fixture; the test signs its own grant. Production issuer composition, worker
+routing, deployment, and mandatory browser acceptance remain required.
+
+The live mTLS test passed with both cached images: Pyodide and compiled Rust.
+Each run verified caller rejection, real execution, persisted receipt reuse,
+and successful cleanup. Test execution took 2.62 and 2.56 seconds respectively,
+excluding infrastructure setup and compilation. These are local measurements.
+Worker-library Clippy passed with warnings denied. No rehearsal deployment occurred.

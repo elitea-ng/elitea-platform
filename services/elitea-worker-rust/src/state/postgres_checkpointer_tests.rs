@@ -1005,6 +1005,18 @@ async fn sandbox_supervisor_recovers_dispatched_job_and_persists_before_cleanup(
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL, Docker and the test-only adapter image"]
 async fn sandbox_supervisor_submits_only_the_authorized_request_once() {
+    sandbox_submission(false).await;
+}
+
+#[cfg(feature = "sandbox-supervisor")]
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL, Docker, TLS fixtures and a cached adapter image"]
+async fn sandbox_supervisor_mtls_submission() {
+    sandbox_submission(true).await;
+}
+
+#[cfg(feature = "sandbox-supervisor")]
+async fn sandbox_submission(over_tls: bool) {
     use crate::{
         protocol::{
             command::Ed25519PublicKeyResolver,
@@ -1084,7 +1096,12 @@ async fn sandbox_supervisor_submits_only_the_authorized_request_once() {
         execution_id: format!("fixture-execution-{now}"),
         activation_id: "node-1".into(),
         request_digest: request.fingerprint().unwrap().to_vec(),
-        submitter_workload_identity: "fixture-worker".into(),
+        submitter_workload_identity: if over_tls {
+            "dns:worker.test"
+        } else {
+            "fixture-worker"
+        }
+        .into(),
         audience: "fixture-supervisor".into(),
         issued_at_unix_millis: now,
         expires_at_unix_millis: now + 30000,
@@ -1101,7 +1118,16 @@ async fn sandbox_supervisor_submits_only_the_authorized_request_once() {
     };
     let authorized = GrantVerifier::new(Keys(public), "fixture-supervisor".into())
         .unwrap()
-        .verify(&grant, "fixture-worker", &request, now)
+        .verify(
+            &grant,
+            if over_tls {
+                "dns:worker.test"
+            } else {
+                "fixture-worker"
+            },
+            &request,
+            now,
+        )
         .unwrap();
     let runtime = DockerClient::with_image(image.clone())
         .await
@@ -1145,6 +1171,125 @@ async fn sandbox_supervisor_submits_only_the_authorized_request_once() {
         ledger.read(authorized.scope()).await,
         Err(LedgerError::Missing)
     ));
+    if over_tls {
+        crate::diagnostics::install_tls_crypto_provider().unwrap();
+        use crate::protocol::elitea::runtime::v1::{
+            SandboxJobStatusV1, SubmitSandboxJobRequestV1,
+            sandbox_supervisor_service_client::SandboxSupervisorServiceClient,
+        };
+        use crate::sandbox::service::SupervisorService;
+        use tonic::transport::{Certificate, ClientTlsConfig, Endpoint, Identity};
+        let dir = std::path::PathBuf::from(env::var("ELITEA_TEST_TLS_DIR").unwrap());
+        let read = |name: &str| std::fs::read(dir.join(name)).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let service = SupervisorService::new(
+            GrantVerifier::new(Keys(public), "fixture-supervisor".into()).unwrap(),
+            std::sync::Arc::new(supervisor),
+        );
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let mut tasks = tokio::task::JoinSet::new();
+        tasks.spawn(service.serve(
+            listener,
+            Identity::from_pem(read("server.pem"), read("server.key")),
+            Certificate::from_pem(read("ca.pem")),
+            async {
+                let _ = stopped.await;
+            },
+        ));
+        let endpoint = Endpoint::from_shared(format!("https://{address}"))
+            .unwrap()
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(25));
+        let wire = SubmitSandboxJobRequestV1 {
+            grant: Some(grant.clone()),
+            prepared_job_json: request.to_transport().unwrap(),
+        };
+        // A trusted CA alone does not authenticate the caller.
+        let anonymous = endpoint
+            .clone()
+            .tls_config(
+                ClientTlsConfig::new()
+                    .ca_certificate(Certificate::from_pem(read("ca.pem")))
+                    .domain_name("supervisor.test"),
+            )
+            .unwrap()
+            .connect()
+            .await;
+        if let Ok(channel) = anonymous {
+            assert!(
+                SandboxSupervisorServiceClient::new(channel)
+                    .submit_sandbox_job(wire.clone())
+                    .await
+                    .is_err()
+            );
+        }
+        let connect = |name: &str| {
+            endpoint
+                .clone()
+                .tls_config(
+                    ClientTlsConfig::new()
+                        .ca_certificate(Certificate::from_pem(read("ca.pem")))
+                        .domain_name("supervisor.test")
+                        .identity(Identity::from_pem(
+                            read(&format!("{name}.pem")),
+                            read(&format!("{name}.key")),
+                        )),
+                )
+                .unwrap()
+        };
+        let mut wrong =
+            SandboxSupervisorServiceClient::new(connect("other").connect().await.unwrap());
+        assert_eq!(
+            wrong
+                .submit_sandbox_job(wire.clone())
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::PermissionDenied
+        );
+        let mut client =
+            SandboxSupervisorServiceClient::new(connect("worker").connect().await.unwrap());
+        let mut altered = wire.clone();
+        altered.prepared_job_json = changed.to_transport().unwrap();
+        assert_eq!(
+            client.submit_sandbox_job(altered).await.unwrap_err().code(),
+            tonic::Code::PermissionDenied
+        );
+        assert!(matches!(
+            ledger.read(authorized.scope()).await,
+            Err(LedgerError::Missing)
+        ));
+        let result = client
+            .submit_sandbox_job(wire.clone())
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(result.status, SandboxJobStatusV1::Completed as i32);
+        let receipt: serde_json::Value = serde_json::from_slice(&result.result_json).unwrap();
+        let output: serde_json::Value =
+            serde_json::from_str(receipt["stdout"].as_str().unwrap()).unwrap();
+        assert!(
+            output["result"]["marker"]
+                .as_str()
+                .unwrap()
+                .starts_with("authorized-result-")
+        );
+        let repeated = client.submit_sandbox_job(wire).await.unwrap().into_inner();
+        assert_eq!(repeated.result_json, result.result_json);
+        assert!(!result.cleanup_pending);
+        stop.send(()).unwrap();
+        drop(client);
+        drop(wrong);
+        tokio::time::timeout(Duration::from_secs(5), tasks.join_next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        isolated.pool.close().await;
+        return;
+    }
     let result = tokio::time::timeout(
         Duration::from_secs(20),
         supervisor.submit_authorized(&authorized, &request),

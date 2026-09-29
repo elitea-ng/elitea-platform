@@ -6,14 +6,18 @@ from pathlib import Path
 import secrets
 import subprocess
 import time
+import tempfile
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--test-filter", choices=["sandbox_receipts_fence", "sandbox_supervisor_recovers", "sandbox_supervisor_submits"], default="sandbox_receipts_fence")
+parser.add_argument("--test-filter", choices=["sandbox_receipts_fence", "sandbox_supervisor_recovers", "sandbox_supervisor_submits", "sandbox_supervisor_mtls"], default="sandbox_receipts_fence")
 parser.add_argument("--adapter-image", action="store_true", help="use the supplied prebuilt language-adapter image instead of creating a test-only adapter")
 parser.add_argument("--language", choices=["python", "rust"], default="python")
 args = parser.parse_args()
 if args.language == "rust" and not args.adapter_image:
     parser.error("Rust verification requires --adapter-image")
+
+if args.test_filter == "sandbox_supervisor_mtls" and not args.adapter_image:
+    parser.error("mTLS verification requires --adapter-image")
 
 root = Path(__file__).resolve().parents[2]
 name = "elitea-sandbox-ledger-test-" + secrets.token_hex(5)
@@ -22,10 +26,30 @@ env = os.environ.copy()
 env["ELITEA_TEST_ADAPTER_LANGUAGE"] = args.language
 env["ELITEA_TEST_REAL_ADAPTER"] = "1" if args.adapter_image else "0"
 env["POSTGRES_PASSWORD"] = password
+tls_dir = tempfile.TemporaryDirectory(prefix="elitea-sandbox-tls-")
 created = False
 fixture_builder = None
 fixture_image = None
 try:
+    if args.test_filter == "sandbox_supervisor_mtls":
+        certs = Path(tls_dir.name)
+        def openssl(*arguments):
+            subprocess.run(["openssl", *arguments], cwd=certs, check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+        openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key",
+                "-out", "ca.pem", "-days", "1", "-subj", "/CN=Disposable sandbox CA",
+                "-addext", "basicConstraints=critical,CA:TRUE")
+        for name, dns, usage in [("server", "supervisor.test", "serverAuth"),
+                                 ("worker", "worker.test", "clientAuth"),
+                                 ("other", "other.test", "clientAuth")]:
+            openssl("req", "-new", "-newkey", "rsa:2048", "-nodes", "-keyout", name+".key",
+                    "-out", name+".csr", "-subj", "/CN="+dns)
+            (certs / (name+".ext")).write_text(
+                "subjectAltName=DNS:"+dns+"\nbasicConstraints=critical,CA:FALSE\n"
+                "keyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage="+usage+"\n")
+            openssl("x509", "-req", "-in", name+".csr", "-CA", "ca.pem", "-CAkey", "ca.key",
+                    "-CAcreateserial", "-out", name+".pem", "-days", "1", "-extfile", name+".ext")
+        env["ELITEA_TEST_TLS_DIR"] = str(certs)
     if args.test_filter == "sandbox_supervisor_submits" and not args.adapter_image:
         base_image = env.get("ELITEA_CODE_RUNNER_TEST_IMAGE", "")
         if not base_image.startswith("sha256:"):
@@ -78,6 +102,7 @@ try:
     )
     raise SystemExit(result.returncode)
 finally:
+    tls_dir.cleanup()
     if created:
         subprocess.run(
             ["docker", "rm", "-f", "-v", name],
