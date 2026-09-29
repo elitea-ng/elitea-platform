@@ -1976,3 +1976,23 @@ Commands: `test_sandbox_ledger.py --test-filter sandbox_receipts_fence`,
 `--test-filter sandbox_supervisor_recovers`, and `--test-filter sandbox_supervisor_mtls --adapter-image`.
 All use disposable PostgreSQL; the latter two use cached test/runtime images.
 This is not deployed UI Stop acceptance and does not close Kubernetes execution.
+
+
+### 2026-09-29: Worker dispatch identities survive process loss
+
+`graph/code_remote.rs::RemoteCodeRuntime::execute` now commits an execution-scoped dispatch identity before
+requesting a Main grant. The scope comes from `ClaimBoundSandboxAuthority`, not YAML or model input.
+`sandbox/dispatch.rs::DispatchJournal` stores tenant/project, execution/generation, activation, request digest,
+and configured supervisor audience. It does not store source, input state, credentials, grants, or outputs.
+Agentstate migration `0007_sandbox_dispatch_journal.sql` owns this worker delivery metadata; supervisor job receipts
+remain authoritative for execution results and graph checkpoints remain worker-owned.
+
+A repeated activation must match both content and supervisor identity. Confirmed Completed/Failed/Cancelled
+receipts resolve the delivery. Transport loss, timeout, and uncertain completion retain the original identity.
+Re-registration cannot reopen resolved delivery. This provides the missing durable lookup needed before root
+cancellation settlement, including replacement-worker recovery. It does not itself deliver Stop yet.
+
+Verification: `scripts/runtime/test_sandbox_ledger.py --test-filter sandbox_dispatch_journal` passes against
+disposable PostgreSQL. Coverage includes process-instance replacement, idempotent registration, changed digest/target
+rejection, exact resolution, tenant/generation isolation, and racing conflicting registrations.
+The worker Code path and bootstrap compile with the new journal. Deployment and browser Stop verification remain open.

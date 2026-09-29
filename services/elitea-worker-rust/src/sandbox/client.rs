@@ -47,6 +47,10 @@ pub struct SandboxClient {
 }
 
 impl SandboxClient {
+    pub(crate) fn audience(&self) -> &str {
+        &self.audience
+    }
+
     /// The channel must use deployment-verified mTLS, as with the control client.
     /// # Errors
     /// Returns `Invalid` for an invalid audience or unbounded deadline.

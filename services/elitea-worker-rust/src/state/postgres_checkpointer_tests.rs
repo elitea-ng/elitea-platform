@@ -1645,3 +1645,111 @@ async fn sandbox_submission(over_tls: bool) {
     );
     isolated.pool.close().await;
 }
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn sandbox_dispatch_journal_preserves_exact_pending_identity() {
+    use crate::protocol::elitea::runtime::v1::ExecutionIdentityV1;
+    use crate::sandbox::dispatch::{DispatchError, DispatchJournal, DispatchScope};
+    let database_url = env::var(TEST_DATABASE_URL).expect("ELITEA_TEST_DATABASE_URL is required");
+    let isolated = IsolatedPostgres::create(&database_url).await;
+    sqlx::raw_sql("CREATE SCHEMA elitea_runtime")
+        .execute(&isolated.pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../elitea-main/migrations/agentstate/0007_sandbox_dispatch_journal.sql"
+    ))
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
+    let identity = ExecutionIdentityV1 {
+        tenant_id: "dispatch-test".into(),
+        resource_project_id: "2".into(),
+        execution_id: "execution-a".into(),
+        generation: 1,
+        ..Default::default()
+    };
+    let scope = DispatchScope::from_identity(&identity).unwrap();
+    let journal = DispatchJournal::new(isolated.pool.clone());
+    journal
+        .register(&scope, &[1; 32], &[2; 32], "dns:sandbox-a")
+        .await
+        .unwrap();
+    // A fresh worker uses the exact same identity; retries do not duplicate it.
+    let replacement = DispatchJournal::new(isolated.pool.clone());
+    replacement
+        .register(&scope, &[1; 32], &[2; 32], "dns:sandbox-a")
+        .await
+        .unwrap();
+    assert!(matches!(
+        replacement
+            .register(&scope, &[1; 32], &[3; 32], "dns:sandbox-a")
+            .await,
+        Err(DispatchError::Conflict)
+    ));
+    assert!(matches!(
+        replacement
+            .register(&scope, &[1; 32], &[2; 32], "dns:sandbox-b")
+            .await,
+        Err(DispatchError::Conflict)
+    ));
+    assert!(matches!(
+        replacement
+            .resolve(&scope, &[1; 32], &[3; 32], "dns:sandbox-a")
+            .await,
+        Err(DispatchError::Conflict)
+    ));
+    let pending: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM elitea_runtime.sandbox_dispatches WHERE NOT resolved",
+    )
+    .fetch_one(&isolated.pool)
+    .await
+    .unwrap();
+    assert_eq!(pending, 1);
+    replacement
+        .resolve(&scope, &[1; 32], &[2; 32], "dns:sandbox-a")
+        .await
+        .unwrap();
+    // Replay registration must not reactivate an already resolved delivery.
+    journal
+        .register(&scope, &[1; 32], &[2; 32], "dns:sandbox-a")
+        .await
+        .unwrap();
+    let pending: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM elitea_runtime.sandbox_dispatches WHERE NOT resolved",
+    )
+    .fetch_one(&isolated.pool)
+    .await
+    .unwrap();
+    assert_eq!(pending, 0);
+    let changed = DispatchScope::from_identity(&ExecutionIdentityV1 {
+        generation: 2,
+        ..identity.clone()
+    })
+    .unwrap();
+    journal
+        .register(&changed, &[1; 32], &[3; 32], "dns:sandbox-b")
+        .await
+        .unwrap();
+    let foreign = DispatchScope::from_identity(&ExecutionIdentityV1 {
+        tenant_id: "other-tenant".into(),
+        ..identity
+    })
+    .unwrap();
+    assert!(matches!(
+        journal
+            .resolve(&foreign, &[1; 32], &[2; 32], "dns:sandbox-a")
+            .await,
+        Err(DispatchError::Conflict)
+    ));
+    let (one, two) = tokio::join!(
+        journal.register(&scope, &[4; 32], &[5; 32], "dns:sandbox-a"),
+        replacement.register(&scope, &[4; 32], &[6; 32], "dns:sandbox-a"),
+    );
+    assert!(matches!(
+        (&one, &two),
+        (Ok(()), Err(DispatchError::Conflict)) | (Err(DispatchError::Conflict), Ok(()))
+    ));
+    isolated.pool.close().await;
+}

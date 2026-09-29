@@ -9,7 +9,7 @@ import time
 import tempfile
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--test-filter", choices=["sandbox_receipts_fence", "sandbox_supervisor_recovers", "sandbox_supervisor_submits", "sandbox_supervisor_mtls"], default="sandbox_receipts_fence")
+parser.add_argument("--test-filter", choices=["sandbox_dispatch_journal", "sandbox_receipts_fence", "sandbox_supervisor_recovers", "sandbox_supervisor_submits", "sandbox_supervisor_mtls"], default="sandbox_receipts_fence")
 parser.add_argument("--adapter-image", action="store_true", help="use the supplied prebuilt language-adapter image instead of creating a test-only adapter")
 parser.add_argument("--language", choices=["python", "rust"], default="python")
 args = parser.parse_args()

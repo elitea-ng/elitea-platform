@@ -77,6 +77,13 @@ impl ClaimBoundRuntimeContextAuthority {
 }
 
 impl ClaimBoundSandboxAuthority {
+    pub(crate) fn dispatch_scope(
+        &self,
+    ) -> Result<crate::sandbox::dispatch::DispatchScope, crate::sandbox::dispatch::DispatchError>
+    {
+        crate::sandbox::dispatch::DispatchScope::from_identity(&self.claim.identity)
+    }
+
     /// Actual content digest and supervisor audience are filled by `SandboxClient`.
     pub(crate) fn request(&self, activation: &[u8; 32]) -> AuthorizeSandboxJobRequestV1 {
         AuthorizeSandboxJobRequestV1 {

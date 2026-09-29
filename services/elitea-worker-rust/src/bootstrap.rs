@@ -196,6 +196,7 @@ impl ProductionTransportBundle {
             Arc::new(crate::agents::graph::CodeRuntimeFactory::new(
                 control.clone(),
                 sandbox_profiles,
+                agentstate.clone(),
             ))
         });
         let platform = Arc::new(PlatformClient::new(Arc::new(runtime_context)));

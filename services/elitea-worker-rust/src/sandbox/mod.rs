@@ -1,4 +1,5 @@
 //! Code execution transport; runtime access is exclusive to the supervisor feature.
+pub(crate) mod dispatch;
 pub mod request;
 pub mod client;
 #[cfg(feature = "sandbox-supervisor")]

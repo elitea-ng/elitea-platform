@@ -34,6 +34,8 @@ Provision a TLS database connection for the agentstate receipt ledger.
 Apply agentstate migrations `0004` through `0006` before starting the cancellation-capable supervisor.
 Migration `0005` persists cancellation intent; `0006` assigns its stable reconciliation owner.
 The new supervisor requires both fields.
+Apply `0007` before starting the worker with durable sandbox dispatch journaling.
+The worker writes activation/digest/audience metadata before requesting a dispatch grant.
 Do not apply these migrations to the product database.
 Private key and database URL files require owner-only permissions and must be readable by UID 10001.
 Use regular files, not symlinks. On hosts with UID remapping, install material into a dedicated volume with the correct ownership.

@@ -28,16 +28,19 @@ pub(super) struct RemoteCodeRuntime {
     pub(super) control: Arc<AgentControlClient<TonicControlRpc>>,
     pub(super) authority: Arc<ClaimBoundSandboxAuthority>,
     pub(super) profiles: Arc<[CodeRuntimeProfile]>,
+    journal: Arc<crate::sandbox::dispatch::DispatchJournal>,
 }
 
 pub(crate) struct CodeRuntimeFactory {
     control: Arc<AgentControlClient<TonicControlRpc>>,
     profiles: Arc<[CodeRuntimeProfile]>,
+    journal: Arc<crate::sandbox::dispatch::DispatchJournal>,
 }
 impl CodeRuntimeFactory {
     pub(crate) fn new(
         control: Arc<AgentControlClient<TonicControlRpc>>,
         profiles: Vec<(crate::config::SandboxRuntimeConfig, SandboxClient)>,
+        state: sqlx::PgPool,
     ) -> Self {
         let profiles = profiles
             .into_iter()
@@ -55,7 +58,11 @@ impl CodeRuntimeFactory {
             })
             .collect::<Vec<_>>()
             .into();
-        Self { control, profiles }
+        Self {
+            control,
+            profiles,
+            journal: Arc::new(crate::sandbox::dispatch::DispatchJournal::new(state)),
+        }
     }
     pub(crate) fn attach(
         &self,
@@ -73,6 +80,7 @@ impl CodeRuntimeFactory {
             control: self.control.clone(),
             authority,
             profiles: self.profiles.clone(),
+            journal: self.journal.clone(),
         })
     }
 }
@@ -117,6 +125,22 @@ impl CodeSandboxRuntime for RemoteCodeRuntime {
         .map_err(|_| {
             failed("Code input or sandbox runtime configuration exceeds its supported limits.")
         })?;
+        let scope = self
+            .authority
+            .dispatch_scope()
+            .map_err(|error| failed(&error.to_string()))?;
+        let digest = job
+            .fingerprint()
+            .map_err(|_| failed("Sandbox request identity is invalid."))?;
+        self.journal
+            .register(
+                &scope,
+                &invocation.activation,
+                &digest,
+                profile.client.audience(),
+            )
+            .await
+            .map_err(|error| failed(&error.to_string()))?;
         // Leave room for the supervisor's existing lease to expire during
         // recovery. This does not extend the sandbox's execution deadline.
         let deadline = tokio::time::Instant::now()
@@ -131,6 +155,22 @@ impl CodeSandboxRuntime for RemoteCodeRuntime {
             let outcome = tokio::time::timeout_at(deadline, attempt)
                 .await
                 .map_err(|_| uncertain())?;
+            if matches!(
+                &outcome,
+                Ok(SandboxOutcome::Completed(_)
+                    | SandboxOutcome::Failed { .. }
+                    | SandboxOutcome::Cancelled)
+            ) {
+                self.journal
+                    .resolve(
+                        &scope,
+                        &invocation.activation,
+                        &digest,
+                        profile.client.audience(),
+                    )
+                    .await
+                    .map_err(|error| failed(&error.to_string()))?;
+            }
             match outcome {
                 Ok(SandboxOutcome::Completed(receipt)) => return Ok(receipt),
                 Ok(SandboxOutcome::Failed { code }) => {
