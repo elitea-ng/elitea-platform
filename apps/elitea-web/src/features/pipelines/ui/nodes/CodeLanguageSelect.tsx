@@ -9,6 +9,7 @@ import { updateYamlNode } from '../../lib/flow-editor/helpers/flowEditor.helpers
 const LANGUAGES = [
   { value: 'python', label: 'Python' },
   { value: 'javascript', label: 'JavaScript' },
+  { value: 'typescript', label: 'TypeScript' },
   { value: 'rust', label: 'Rust' },
 ];
 

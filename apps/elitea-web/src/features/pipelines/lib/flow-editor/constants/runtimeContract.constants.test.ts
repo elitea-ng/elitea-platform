@@ -40,14 +40,14 @@ describe('NODE_ID_PATTERN mirrors valid_graph_id (worker yaml.rs:362)', () => {
 });
 
 describe('CompilerAdmittedNodeTypes mirrors parse_pipeline_node (worker compiler.rs:1236)', () => {
-  it('holds exactly the nine types the compiler has an arm for', () => {
+  it('holds exactly the ten types the compiler has an arm for', () => {
     expect([...CompilerAdmittedNodeTypes].sort()).toEqual(
-      ['agent', 'decision', 'hitl', 'llm', 'mcp', 'printer', 'router', 'state_modifier', 'toolkit'].sort(),
+      ['agent', 'code', 'decision', 'hitl', 'llm', 'mcp', 'printer', 'router', 'state_modifier', 'toolkit'].sort(),
     );
   });
 
-  it('excludes `code` and `custom` — the compiler has no arm for either', () => {
-    expect(isCompilerAdmittedNodeType(PipelineNodeTypes.Code)).toBe(false);
+  it('admits sandbox Code nodes and excludes unsupported custom nodes', () => {
+    expect(isCompilerAdmittedNodeType(PipelineNodeTypes.Code)).toBe(true);
     expect(isCompilerAdmittedNodeType(PipelineNodeTypes.Custom)).toBe(false);
   });
 

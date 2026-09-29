@@ -70,7 +70,7 @@ describe('CodeNode', () => {
     expect(setYamlJsonObject).not.toHaveBeenCalled();
   });
 
-  it.each(['JavaScript', 'Rust'])('changes language to %s without rewriting the node', async language => {
+  it.each(['JavaScript', 'TypeScript', 'Rust'])('changes language to %s without rewriting the node', async language => {
     const user = userEvent.setup();
     const setYamlJsonObject = vi.fn();
     const node = {

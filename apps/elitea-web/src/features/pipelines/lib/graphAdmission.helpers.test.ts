@@ -148,11 +148,19 @@ describe('state rules', () => {
 
 describe('node rules', () => {
   it('node.type: refuses a type with no `parse_pipeline_node` arm (compiler.rs:1267)', () => {
-    const issues = issuesForNode(collectGraphAdmissionIssues(withNode({ type: 'code' })), 'LLM_1');
+    const issues = issuesForNode(collectGraphAdmissionIssues(withNode({ type: 'custom' })), 'LLM_1');
 
     expect(issues[0]?.rule).toBe('node.type');
-    expect(issues[0]?.subject).toBe('code');
+    expect(issues[0]?.subject).toBe('custom');
     expect(issues[0]?.citation).toBe('compiler.rs:1267');
+  });
+
+  it('admits a saved Python Code node with a message output', () => {
+    const document = baseDocument({
+      entry_point: 'execute',
+      nodes: [{ id: 'execute', type: 'code', language: 'python', code: { type: 'fixed', value: 'result = 42' }, output: ['messages'], transition: 'END' }],
+    });
+    expect(collectGraphAdmissionIssues(document)).toEqual([]);
   });
 
   it('node.id: refuses a space in a node id (yaml.rs:362)', () => {

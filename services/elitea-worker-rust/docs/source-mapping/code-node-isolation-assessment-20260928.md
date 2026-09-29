@@ -1753,3 +1753,18 @@ The worker reports zero restarts. No Docker socket is added to the worker.
 A fresh Chrome tab completes rehearsal sign-in and opens the Private project.
 This proves navigation after Main replacement, not sandbox execution acceptance.
 Code execution, cancellation, process recovery, and UI result verification remain open.
+
+## Code authoring contract correction — 2026-09-29
+
+Fresh Chrome acceptance creates an isolated Python Code pipeline through the standard creation form.
+The saved editor rejects its Code node because `CompilerAdmittedNodeTypes` still excludes `code`.
+Rust `agents/graph/compiler.rs::parse_pipeline_node` now admits this type through `CodeNodeDefinition`.
+The editor allow-list now includes Code. Unsupported custom nodes remain excluded.
+The existing `CodeLanguageSelect` gains TypeScript alongside Python, JavaScript, and Rust.
+The legacy Python default and existing YAML fields remain unchanged.
+
+The UI source mapping is `features/pipelines/lib/flow-editor/constants/runtimeContract.constants.ts` to the Rust compiler admission arm.
+Language selection maps `features/pipelines/ui/nodes/CodeLanguageSelect.tsx` to `CodeLanguage` in `agents/graph/code.rs`.
+Three focused UI suites report 68 passing tests and one pre-existing expected failure.
+The expected failure tracks the missing Debug artifact-capture toggle, issue 5203; it is not a passing feature check.
+The acceptance fixture is saved as pipeline 131. Execution remains unverified while the updated UI image builds.
