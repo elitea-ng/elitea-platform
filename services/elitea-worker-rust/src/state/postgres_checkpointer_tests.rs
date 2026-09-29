@@ -695,6 +695,12 @@ async fn sandbox_receipts_fence_stale_owners_and_preserve_terminal_results() {
     .await
     .unwrap();
     sqlx::raw_sql(include_str!(
+        "../../../elitea-main/migrations/agentstate/0008_sandbox_runtime_binding.sql"
+    ))
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
         "../../../elitea-main/migrations/agentstate/0005_sandbox_cancellation.sql"
     ))
     .execute(&isolated.pool)
@@ -733,7 +739,33 @@ async fn sandbox_receipts_fence_stale_owners_and_preserve_terminal_results() {
         Err(LedgerError::Fenced)
     ));
     ledger.renew(&old, 30).await.unwrap();
+    ledger
+        .bind_runtime(&old, "kubernetes/cluster/namespace/original-pod")
+        .await
+        .unwrap();
+    ledger
+        .bind_runtime(&old, "kubernetes/cluster/namespace/original-pod")
+        .await
+        .unwrap();
+    assert!(matches!(
+        ledger
+            .bind_runtime(&old, "kubernetes/cluster/namespace/replacement-pod")
+            .await,
+        Err(LedgerError::Fenced)
+    ));
+    assert!(matches!(
+        ledger.bind_runtime(&old, "invalid runtime").await,
+        Err(LedgerError::Invalid)
+    ));
     ledger.mark_dispatched(&old).await.unwrap();
+    assert!(matches!(
+        ledger.bind_runtime(&old, "replacement").await,
+        Err(LedgerError::Fenced)
+    ));
+    assert_eq!(
+        ledger.read(&scope).await.unwrap().runtime_id.as_deref(),
+        Some("kubernetes/cluster/namespace/original-pod")
+    );
     assert!(matches!(
         ledger.mark_dispatched(&old).await,
         Err(LedgerError::Fenced)
@@ -997,6 +1029,12 @@ async fn sandbox_supervisor_recovers_dispatched_job_and_persists_before_cleanup(
         .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../elitea-main/migrations/agentstate/0004_sandbox_jobs.sql"
+    ))
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../elitea-main/migrations/agentstate/0008_sandbox_runtime_binding.sql"
     ))
     .execute(&isolated.pool)
     .await
@@ -1330,6 +1368,12 @@ async fn sandbox_submission(over_tls: bool) {
         .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../elitea-main/migrations/agentstate/0004_sandbox_jobs.sql"
+    ))
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../elitea-main/migrations/agentstate/0008_sandbox_runtime_binding.sql"
     ))
     .execute(&isolated.pool)
     .await

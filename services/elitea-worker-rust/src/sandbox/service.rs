@@ -225,6 +225,7 @@ mod tests {
                 phase: Phase::Completed,
                 result_json: Some("{\"result\":42}".into()),
                 failure_code: None,
+                runtime_id: None,
             },
             cleanup_pending: true,
         })

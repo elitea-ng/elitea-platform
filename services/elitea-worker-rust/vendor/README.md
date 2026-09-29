@@ -68,3 +68,7 @@ This is deployment-owned configuration, never a flag supplied by user code.
 The Docker extension exposes its configured Code timeout through
 `code_job_timeout`. Supervisor admission rejects prepared requests that exceed
 this deployment bound before ledger reservation or runtime creation.
+
+The Code job identity also supports an immutable persisted runtime binding.
+Docker observations reject a replacement container ID, even when its name and labels match.
+The supervisor stores this binding before dispatch in agentstate migration 0008.

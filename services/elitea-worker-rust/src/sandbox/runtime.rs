@@ -11,6 +11,8 @@ pub trait CodeJobRuntime: Send + Sync {
     fn image_digest(&self) -> &str;
     fn code_compilation_enabled(&self) -> bool;
     fn code_job_timeout(&self) -> Duration;
+    /// Return the exact runtime instance for persistence before dispatch.
+    async fn instance(&self, identity: &CodeJobIdentity) -> Result<Option<String>, SandboxError>;
     /// Observe the exact fingerprint; reject a conflicting workload.
     async fn exists(&self, identity: &CodeJobIdentity) -> Result<bool, SandboxError>;
     /// Provision once without executing code. Never overwrite an existing job.
@@ -41,6 +43,12 @@ impl CodeJobRuntime for DockerClient {
     fn code_job_timeout(&self) -> Duration {
         self.code_job_timeout()
     }
+    async fn instance(&self, identity: &CodeJobIdentity) -> Result<Option<String>, SandboxError> {
+        Ok(self
+            .observe_code_job(identity)
+            .await?
+            .map(|job| job.container_id))
+    }
     async fn exists(&self, identity: &CodeJobIdentity) -> Result<bool, SandboxError> {
         Ok(self.observe_code_job(identity).await?.is_some())
     }
@@ -67,5 +75,36 @@ impl CodeJobRuntime for DockerClient {
     }
     async fn cleanup(&self, identity: &CodeJobIdentity) -> Result<(), SandboxError> {
         self.remove_code_job(identity).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn runtime_binding_is_immutable_and_rejects_invalid_identifiers() {
+        let identity = CodeJobIdentity::new("a".repeat(64), "b".repeat(64)).unwrap();
+        assert!(identity.clone().with_runtime_id(String::new()).is_err());
+        assert!(
+            identity
+                .clone()
+                .with_runtime_id("space separated".into())
+                .is_err()
+        );
+        let bound = identity
+            .with_runtime_id("original-container".into())
+            .unwrap();
+        assert_eq!(bound.runtime_id(), Some("original-container"));
+        assert!(
+            bound
+                .clone()
+                .with_runtime_id("original-container".into())
+                .is_ok()
+        );
+        assert!(
+            bound
+                .with_runtime_id("replacement-container".into())
+                .is_err()
+        );
     }
 }

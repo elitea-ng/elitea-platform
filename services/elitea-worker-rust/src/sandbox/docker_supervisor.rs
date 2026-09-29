@@ -257,7 +257,7 @@ impl DockerSupervisor {
         lease: &JobLease,
         request: Option<&PreparedJob>,
     ) -> Result<Reconciliation, SupervisorError> {
-        let identity = scope.runtime_identity()?;
+        let identity = self.bound_identity(scope).await?;
         let observe = async {
             if let Some(stopped) = self.stop_if_requested(scope, lease).await? {
                 return Ok(stopped);
@@ -270,12 +270,25 @@ impl DockerSupervisor {
                     .await
                     .map_err(SupervisorError::Runtime)?
                 {
+                    if identity.runtime_id().is_some() {
+                        return Err(SupervisorError::Receipt);
+                    }
                     let manifest = request.manifest().map_err(|_| SupervisorError::Invalid)?;
                     self.runtime
                         .prepare(&identity, &manifest)
                         .await
                         .map_err(SupervisorError::Runtime)?;
                 }
+                let runtime_id = self
+                    .runtime
+                    .instance(&identity)
+                    .await
+                    .map_err(SupervisorError::Runtime)?
+                    .ok_or(SupervisorError::Receipt)?;
+                self.ledger.bind_runtime(lease, &runtime_id).await?;
+                let identity = identity
+                    .with_runtime_id(runtime_id)
+                    .map_err(SupervisorError::Runtime)?;
                 // Do not overwrite a partial workspace: an earlier preparation
                 // request may still be completing remotely after loss of its owner.
                 while !self
@@ -302,6 +315,7 @@ impl DockerSupervisor {
                     .await
                     .map_err(SupervisorError::Runtime)?;
             }
+            let identity = self.bound_identity(scope).await?;
             let mut recover_signal = lease.observed_phase == Phase::Dispatched;
             loop {
                 if let Some(stopped) = self.stop_if_requested(scope, lease).await? {
@@ -355,7 +369,7 @@ impl DockerSupervisor {
     ) -> Result<Reconciliation, SupervisorError> {
         self.ledger.renew(lease, LEASE_SECONDS).await?;
         self.runtime
-            .terminate(&scope.runtime_identity()?)
+            .terminate(&self.bound_identity(scope).await?)
             .await
             .map_err(SupervisorError::Runtime)?;
         self.ledger
@@ -376,7 +390,7 @@ impl DockerSupervisor {
         // A crash at either boundary leaves the same job eligible for recovery.
         self.ledger.renew(lease, LEASE_SECONDS).await?;
         self.runtime
-            .terminate(&scope.runtime_identity()?)
+            .terminate(&self.bound_identity(scope).await?)
             .await
             .map_err(SupervisorError::Runtime)?;
         self.ledger
@@ -403,6 +417,19 @@ impl DockerSupervisor {
         self.terminal(scope, self.ledger.read(scope).await?).await
     }
 
+    async fn bound_identity(
+        &self,
+        scope: &JobScope,
+    ) -> Result<adk_sandbox::workspace::docker::CodeJobIdentity, SupervisorError> {
+        let identity = scope.runtime_identity()?;
+        match self.ledger.read(scope).await?.runtime_id {
+            Some(runtime_id) => identity
+                .with_runtime_id(runtime_id)
+                .map_err(SupervisorError::Runtime),
+            None => Ok(identity), // Compatibility for already dispatched Docker receipts.
+        }
+    }
+
     async fn terminal(
         &self,
         scope: &JobScope,
@@ -410,7 +437,7 @@ impl DockerSupervisor {
     ) -> Result<Reconciliation, SupervisorError> {
         // A durable receipt is sufficient for recovery even when cleanup fails.
         // Never force-remove a live workload or discard the persisted result.
-        let identity = scope.runtime_identity()?;
+        let identity = self.bound_identity(scope).await?;
         let cleanup_pending = self.runtime.cleanup(&identity).await.is_err();
         if cleanup_pending {
             tracing::warn!(

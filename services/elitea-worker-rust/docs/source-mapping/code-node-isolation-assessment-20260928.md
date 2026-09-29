@@ -2120,3 +2120,23 @@ Kubernetes references:
 Validation: all 22 focused sandbox tests pass. The local minikube profile reports all control-plane components stopped.
 The first restricted test run cannot bind its loopback listener. The authorized rerun passes without ignored tests.
 Library Clippy passes with warnings denied. These checks do not prove Kubernetes execution or deployment.
+
+### Persisted runtime identity (2026-09-29)
+
+Agentstate migration `0008_sandbox_runtime_binding.sql` adds a bounded runtime identity to the existing supervisor receipt row.
+No product schema changes occur. An additive column is required because a workload name can identify a replacement instance.
+`JobLedger::bind_runtime` binds once under the current preparation lease. Repeating the same binding succeeds; replacement identities fail.
+The binding survives lease takeover and supervisor replacement. Terminal receipt immutability remains unchanged.
+
+The supervisor saves the binding before dispatch and restores it for receipt reads, cancellation, and cleanup.
+A missing bound workload does not authorize provisioning another workload.
+The ADK `CodeJobIdentity` extension carries the binding. Docker observation compares it with the immutable container ID.
+Existing dispatched Docker receipts without bindings remain readable during upgrade. New preparations always save a binding.
+The supervisor startup check requires migration 0008 before accepting work.
+
+Kubernetes will store its cluster, namespace, and Pod UID in this binding.
+Its adapter and deployment integration remain open. Minikube platform deployment follows implementation readiness, as requested.
+
+Validation: 23 focused sandbox tests pass. The isolated PostgreSQL binding test passes without skips.
+The real Docker/Rust supervisor submission regression passes, including receipt reuse and cancellation checks.
+All-target Clippy passes with warnings denied. No rehearsal migration or supervisor rollout occurs in this step.

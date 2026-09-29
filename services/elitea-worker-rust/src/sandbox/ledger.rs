@@ -79,6 +79,7 @@ pub struct JobRecord {
     pub phase: Phase,
     pub result_json: Option<String>,
     pub failure_code: Option<String>,
+    pub runtime_id: Option<String>,
 }
 
 pub struct JobLease {
@@ -130,7 +131,7 @@ impl JobLedger {
     /// # Errors
     /// Returns `Missing`, `Conflict`, or a database/record decoding error.
     pub async fn read(&self, scope: &JobScope) -> Result<JobRecord, LedgerError> {
-        let row = sqlx::query("SELECT request_digest,phase,result_json,failure_code FROM elitea_runtime.sandbox_jobs WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3")
+        let row = sqlx::query("SELECT request_digest,phase,result_json,failure_code,runtime_id FROM elitea_runtime.sandbox_jobs WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3")
             .bind(&scope.tenant).bind(scope.project).bind(scope.key.as_slice())
             .fetch_optional(&self.pool).await?.ok_or(LedgerError::Missing)?;
         let digest: Vec<u8> = row.try_get("request_digest")?;
@@ -141,6 +142,7 @@ impl JobLedger {
             phase: Phase::parse(row.try_get("phase")?)?,
             result_json: row.try_get("result_json")?,
             failure_code: row.try_get("failure_code")?,
+            runtime_id: row.try_get("runtime_id")?,
         })
     }
 
@@ -282,6 +284,29 @@ impl JobLedger {
         let count = sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET lease_until=clock_timestamp()+make_interval(secs => $7),updated_at=clock_timestamp() WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND lease_epoch=$6 AND lease_until > clock_timestamp() AND phase IN ('reserved','dispatched')")
             .bind(&lease.scope.tenant).bind(lease.scope.project).bind(lease.scope.key.as_slice()).bind(lease.scope.digest.as_slice())
             .bind(&lease.owner).bind(lease.epoch).bind(f64::from(ttl_seconds)).execute(&self.pool).await?.rows_affected();
+        changed(count)
+    }
+
+    /// Bind once before dispatch. Repeating the same binding is idempotent;
+    /// changing it or using an expired lease is rejected.
+    /// # Errors
+    /// Returns `Invalid`, `Fenced`, or a database error.
+    pub async fn bind_runtime(
+        &self,
+        lease: &JobLease,
+        runtime_id: &str,
+    ) -> Result<(), LedgerError> {
+        if runtime_id.is_empty()
+            || runtime_id.len() > 512
+            || runtime_id
+                .chars()
+                .any(|c| c.is_whitespace() || c.is_control())
+        {
+            return Err(LedgerError::Invalid);
+        }
+        let count = sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET runtime_id=$7,updated_at=clock_timestamp() WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND lease_epoch=$6 AND lease_until > clock_timestamp() AND phase='reserved' AND (runtime_id IS NULL OR runtime_id=$7)")
+            .bind(&lease.scope.tenant).bind(lease.scope.project).bind(lease.scope.key.as_slice()).bind(lease.scope.digest.as_slice())
+            .bind(&lease.owner).bind(lease.epoch).bind(runtime_id).execute(&self.pool).await?.rows_affected();
         changed(count)
     }
 

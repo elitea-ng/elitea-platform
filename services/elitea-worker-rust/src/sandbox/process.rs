@@ -228,6 +228,10 @@ async fn connect_receipts(config: &Config) -> Result<sqlx::PgPool, StartupError>
     if table.is_none() {
         return Err(StartupError("find the migrated receipt schema"));
     }
+    sqlx::query("SELECT runtime_id FROM elitea_runtime.sandbox_jobs LIMIT 0")
+        .execute(&pool)
+        .await
+        .map_err(|_| StartupError("find the migrated runtime binding column"))?;
     Ok(pool)
 }
 

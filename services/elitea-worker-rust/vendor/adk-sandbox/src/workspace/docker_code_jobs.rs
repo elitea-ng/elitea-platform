@@ -6,6 +6,7 @@ use super::*;
 pub struct CodeJobIdentity {
     pub(super) job_key: String,
     pub(super) request_digest: String,
+    runtime_id: Option<String>,
 }
 
 impl CodeJobIdentity {
@@ -26,7 +27,44 @@ impl CodeJobIdentity {
         Ok(Self {
             job_key,
             request_digest,
+            runtime_id: None,
         })
+    }
+
+    /// Bind a persisted runtime instance. Labels alone do not make a replacement
+    /// container equivalent to the original execution.
+    pub fn with_runtime_id(mut self, runtime_id: String) -> Result<Self, SandboxError> {
+        if runtime_id.is_empty()
+            || runtime_id.len() > 512
+            || runtime_id
+                .chars()
+                .any(|c| c.is_whitespace() || c.is_control())
+        {
+            return Err(SandboxError::ExecutionFailed(
+                "invalid Code runtime identity".into(),
+            ));
+        }
+        if self
+            .runtime_id
+            .as_ref()
+            .is_some_and(|bound| bound != &runtime_id)
+        {
+            return Err(SandboxError::ExecutionFailed(
+                "Code runtime identity is already bound".into(),
+            ));
+        }
+        self.runtime_id = Some(runtime_id);
+        Ok(self)
+    }
+
+    pub fn runtime_id(&self) -> Option<&str> {
+        self.runtime_id.as_deref()
+    }
+    pub fn job_key(&self) -> &str {
+        &self.job_key
+    }
+    pub fn request_digest(&self) -> &str {
+        &self.request_digest
     }
 
     pub(super) fn container_name(&self) -> String {
@@ -121,6 +159,14 @@ impl DockerClient {
         let container_id = info.id.ok_or_else(|| {
             SandboxError::ExecutionFailed("Code job observation has no runtime identity".into())
         })?;
+        if identity
+            .runtime_id()
+            .is_some_and(|expected| expected != container_id)
+        {
+            return Err(SandboxError::ExecutionFailed(
+                "Code job runtime instance conflicts with its durable binding".into(),
+            ));
+        }
         let running = info.state.and_then(|state| state.running).ok_or_else(|| {
             SandboxError::ExecutionFailed("Code job runtime state is unknown".into())
         })?;
