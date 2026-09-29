@@ -72,3 +72,20 @@ COPY --from=builder \
 
 USER 10001:10001
 ENTRYPOINT ["/usr/local/bin/elitea-worker-rust"]
+
+# Dedicated supervisor artifact. The default worker retains no Docker feature.
+FROM builder AS supervisor-builder
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/cargo-target \
+    CARGO_TARGET_DIR=/cargo-target cargo auditable build --locked --release \
+      --features sandbox-supervisor --bin elitea-sandbox-supervisor && \
+    cp /cargo-target/release/elitea-sandbox-supervisor /usr/local/bin/elitea-sandbox-supervisor
+
+FROM gcr.io/distroless/cc-debian12:nonroot AS supervisor
+COPY --from=supervisor-builder /usr/local/bin/elitea-sandbox-supervisor /usr/local/bin/elitea-sandbox-supervisor
+USER 10001:10001
+ENTRYPOINT ["/usr/local/bin/elitea-sandbox-supervisor"]
+
+# Preserve the existing default image target.
+FROM runtime AS default

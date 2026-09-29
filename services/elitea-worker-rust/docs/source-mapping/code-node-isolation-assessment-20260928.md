@@ -1391,3 +1391,39 @@ Focused runtime configuration and sandbox grant-handler tests passed.
 Helm rendering passed for disabled defaults and two exact configured audiences.
 The standalone supervisor process, worker RPC client, graph integration,
 rehearsal deployment, and browser acceptance remain pending.
+
+### Dedicated supervisor process and image target (2026-09-29)
+
+The optional `elitea-sandbox-supervisor` binary now composes the verified service.
+`src/sandbox/process.rs` reads a bounded configuration and file-backed secrets.
+It reuses the worker secure-file reader, TLS identity validation, public keyring
+loader, crypto initialization, and telemetry setup. No worker signing secret or
+graph checkpoint ownership moves into this process.
+
+The receipt pool requires certificate-verified PostgreSQL TLS and bounded connections.
+Startup checks the receipt table and cached immutable runtime image.
+Deployment owns migrations. Startup performs no schema writes or image pulls.
+The configured language set selects interpreted or Rust-only compilation policy.
+Admission also checks the request timeout against the deployment timeout.
+This closes a gap where the prepared request could exceed that profile bound.
+
+The process handles SIGINT and SIGTERM. It drains RPCs for fifteen seconds,
+then drops unfinished handlers. Durable leases and runtime identities remain
+available for reconciliation. This implementation is not a process-kill recovery proof.
+
+`deploy/runtime/sandbox-supervisor.example.json` documents the required settings.
+Replace its illustrative digest and replica identity before deployment.
+Private material must satisfy the existing regular-file permission policy.
+Copy projected Kubernetes secrets into suitable regular files when required.
+
+The worker Containerfile has a `supervisor` target with the optional feature.
+The default target still builds the ordinary worker without Docker access.
+The supervisor image needs deployment-owned access to its Docker backend.
+Code containers and worker containers must never receive that access.
+The Kubernetes execution backend remains separate pending work.
+
+Binary checking and worker-library/binary Clippy passed. Two configuration tests
+passed, including invalid resource profiles and the deployment timeout boundary.
+The new image target has not been built or deployed in this step.
+Worker dispatch wiring and mandatory deployed UI verification remain open.
+The final focused sandbox suite passed all sixteen tests after composition refactoring.

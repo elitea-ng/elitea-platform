@@ -117,7 +117,9 @@ impl DockerSupervisor {
             .ok()
             .and_then(|time| i64::try_from(time.as_millis()).ok())
             .ok_or(SupervisorError::Invalid)?;
-        if !authorization.permits(request, now) {
+        if !authorization.permits(request, now)
+            || !request.within_timeout(self.runtime.code_job_timeout())
+        {
             return Err(SupervisorError::Invalid);
         }
         if !self

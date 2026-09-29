@@ -206,6 +206,11 @@ impl DockerClient {
         Ok(())
     }
 
+    /// Return the deployment timeout bound for Code execution.
+    pub fn code_job_timeout(&self) -> Duration {
+        self.command_timeout
+    }
+
     /// Check the local image cache without registry access or an implicit pull.
     /// A deployment preparation step must preload the pinned image first.
     /// Call this for readiness and again at provisioning, since images can be evicted.

@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
 publish = false
+default-run = "elitea-worker-rust"
+
+[[bin]]
+name = "elitea-sandbox-supervisor"
+path = "src/sandbox_main.rs"
+required-features = ["sandbox-supervisor"]
 
 [features]
 # Container access belongs to the dedicated supervisor, never the default worker.

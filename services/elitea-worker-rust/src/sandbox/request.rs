@@ -120,6 +120,10 @@ impl PreparedJob {
         self.bytes()
     }
 
+    pub(crate) fn within_timeout(&self, maximum: std::time::Duration) -> bool {
+        std::time::Duration::from_secs(self.timeout_seconds.into()) <= maximum
+    }
+
     pub(crate) fn matches_runtime(
         &self,
         image: &str,

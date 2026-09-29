@@ -64,3 +64,7 @@ Default Code workspaces now explicitly specify `noexec`; `/tmp` remains `noexec`
 for both profiles. The supervisor binds allowed languages to the image/policy
 and keeps Rust-only compilation profiles separate from interpreted profiles.
 This is deployment-owned configuration, never a flag supplied by user code.
+
+The Docker extension exposes its configured Code timeout through
+`code_job_timeout`. Supervisor admission rejects prepared requests that exceed
+this deployment bound before ledger reservation or runtime creation.
