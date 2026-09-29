@@ -2041,3 +2041,37 @@ The broader suite finds a second oversized async phase during terminal-spool reo
 Boxing the terminal operation fixes this failure without changing thread limits or output behavior.
 Supervisor-feature Clippy passes across all targets with warnings denied.
 Request preparation and expired-job termination now use small helpers; ordered authority and integration-test lifecycles remain together.
+
+### 2026-09-29: deployed Stop and replacement-worker acceptance
+
+Deploy commit `b9a31a4d0` to Main, the worker, and both supervisors.
+Apply agentstate migrations 0005 through 0007 with the migration runner. The product database schema remains unchanged.
+Preserve supervisor material volumes, stable owners, cached runtime images, nonroot users, limits, and network aliases.
+The old supervisor containers remain stopped as rollback artifacts.
+
+| Component | Verified image digest |
+| --- | --- |
+| Main | `sha256:15d1b08e6fef2ca5f193064ceb82afacdec680be6c61938ad0e5ce0ff6360efb` |
+| Worker | `sha256:e7804c16da6e629015e3d2be8757701e0832920b85833ba8f5b65d7f19b4954d` |
+| Both supervisors | `sha256:eb6884198dbe3741617235e4874dd1e3fc5a18c0a9c59b13e7a68b0cf6552bb9` |
+
+Persistent chat 755 starts saved pipeline 131 with its slow Rust Code node.
+The browser Stop creates cancellation for execution `b78d2a0f5f05f53f64a4bafda63dadb1`.
+Job `644fcbdd55e3b3adcd8f692b01bc21a26b7104b1c4d36d07af294ca10dc84df3` becomes Cancelled at 19:24:21.165783 UTC.
+The container is absent and the original dispatch resolves.
+Terminal output starts at 19:24:21.212915; settlement and Redis retirement follow. Termination therefore precedes terminal publication.
+
+The second browser run tests execution `c9267dc50e69375701d8a25afa1cd557`.
+Pause the Rust supervisor after dispatch, request Stop through chat, restart the worker, then resume the supervisor.
+The stopped worker does not publish a terminal event before replacement.
+The replacement claim uses lease epoch 2 and the original dispatch journal.
+Job `f8279a4e5f5f8e078f99a568294de73ba64e5938821d5f61ae25c287af7fe282` becomes Cancelled at 19:27:05.658881 UTC.
+The terminal event follows at 19:27:05.717552; settlement and Redis retirement follow again.
+The journal resolves and the original container is absent. No replacement Code execution starts.
+This proves pending-stop recovery; it does not prove that execution stops while the supervisor is unavailable.
+
+Browser acceptance exposes a separate presentation gap.
+`apps/elitea-web/src/features/chat-messages/model/useChatStreamTransport.ts::stop` detaches before confirming the server outcome.
+It settles the local message and ignores Stop request errors. The stopped turn disappears from chat history after reload.
+The local screenshot `elitea-sandbox-stop-recovery-20260929.png` records the empty assistant entry.
+Keep cancellation-status rendering, retained observation, and durable history verification open. Kubernetes execution also remains open.
