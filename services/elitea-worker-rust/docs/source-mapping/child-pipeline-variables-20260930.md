@@ -147,3 +147,30 @@ Main now admits only the exact child-input message under `PIPELINE_INPUT_INVALID
 the old direct-tool message. Arbitrary details and the same text under another code remain
 rejected. The output transport package tests pass. Coordinated deployment and recovery of the
 rejected terminal remain pending. This registration requires no schema migration.
+
+Main image `elitea-main:child-input-20260930` deploys with the allowlist correction.
+The retained execution `64332add9ef92b3dbc9e6a3e03dd0838` settles from its existing terminal
+checkpoint (`agent_delivery.checkpoint_terminal_retired`) after the update. It does not
+rerun the child. Chat 763 displays the actionable message after reload. Operator ERROR logs
+identify `delegate`, input `count`, and expected `int` without publishing its value.
+The Main rehearsal binary preserves the pre-existing working-tree fixes already used by the
+rehearsal; those unrelated edits are not included in this commit.
+
+## Typed output browser acceptance
+
+Persistent chat 764 runs saved parent 136/version 143 with child 135. The parent
+explicitly projects `answer`, integer `count`, and list `items`, then a downstream
+State Modifier evaluates integer addition and list length. The visible result is
+`4|2|3|for orders|2|True`, proving the child fields remain typed rather than becoming
+the child's final response string. Reload retains exactly one result. This fixture
+has no LLM node; the selected model is not used and this is not model-generation proof.
+
+The check uses the deployed worker digest above and Main's registered-message fix.
+The earlier invalid-input fixture is restored to valid inputs for this test. Fresh
+streaming of the invalid-input error and typed-output ephemeral chat acceptance are
+not claimed by this check. Ordinary Agent per-call variable binding and richer mapping
+controls remain open; Gate 5 is not complete.
+
+Deployment simplification for Docker Compose and Kubernetes follows functional
+development. Docker remains the primary development target; hybrid Kubernetes evidence
+does not replace later full Kubernetes deployment acceptance.
