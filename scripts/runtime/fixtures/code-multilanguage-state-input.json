@@ -1,0 +1,27 @@
+[
+  {
+    "id": "a",
+    "category": "fruit",
+    "amount": 9
+  },
+  {
+    "id": "b",
+    "category": "veg",
+    "amount": 3
+  },
+  {
+    "id": "c",
+    "category": "fruit",
+    "amount": 15
+  },
+  {
+    "id": "d",
+    "category": "veg",
+    "amount": 6
+  },
+  {
+    "id": "e",
+    "category": "veg",
+    "amount": -2
+  }
+]

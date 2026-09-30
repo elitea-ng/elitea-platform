@@ -32,6 +32,7 @@ pub(super) struct CodeNode {
     types: BTreeMap<String, String>,
     boundary: CodeStateBoundary,
     runtime: Arc<dyn CodeSandboxRuntime>,
+    events: Option<super::node_events::PipelineNodeEventSender>,
 }
 
 impl CodeNode {
@@ -46,7 +47,15 @@ impl CodeNode {
             types,
             boundary,
             runtime,
+            events: None,
         })
+    }
+    pub(super) fn with_events(
+        mut self,
+        events: Option<super::node_events::PipelineNodeEventSender>,
+    ) -> Self {
+        self.events = events;
+        self
     }
 }
 
@@ -57,6 +66,22 @@ impl Node for CodeNode {
     }
 
     async fn execute(&self, context: &NodeContext) -> Result<NodeOutput, GraphError> {
+        let result = self.execute_code(context).await;
+        if let Err(error) = &result {
+            tracing::error!(node_id = self.definition.id(), error_code = "pipeline.code_failed", failure_reason = %error, "pipeline Code node failed");
+            if let Some(events) = &self.events {
+                events
+                    .send_execution_failure("pipeline.code_failed")
+                    .await
+                    .map_err(|_| code_error("The pipeline failure channel closed."))?;
+            }
+        }
+        result
+    }
+}
+
+impl CodeNode {
+    async fn execute_code(&self, context: &NodeContext) -> Result<NodeOutput, GraphError> {
         let activation = activation(&self.definition, context)?;
         let source = self
             .definition
@@ -200,6 +225,74 @@ mod tests {
         assert!(node.execute(&context("", 0)).await.is_err());
         assert!(runtime.visits.lock().unwrap().is_empty());
         assert!(node.execute(&context("root", 0)).await.is_err());
+        assert_eq!(runtime.visits.lock().unwrap().len(), 1);
+    }
+    #[tokio::test]
+    async fn sandbox_failure_reaches_runner_with_safe_code() {
+        use super::super::{
+            EliteaGraphAgent,
+            node_events::{PipelineNodeEventStreamingAgent, pipeline_node_event_channel},
+        };
+        use crate::agents::runtime::NativeAgentInvocation;
+        use adk_rust::runner::Runner;
+        use adk_rust::session::{CreateRequest, InMemorySessionService, SessionService};
+        use adk_rust::{Content, SessionId, UserId};
+        let definition = PipelineDefinition::from_yaml("state:\n  count: {type: int, value: 2}\nentry_point: run\nnodes:\n  - id: run\n    type: code\n    code: '7'\n    input: [count]\n    output: [count]\n    transition: END\n").unwrap();
+        let runtime = Arc::new(Runtime {
+            fail: true,
+            ..Default::default()
+        });
+        let (sender, receiver) = pipeline_node_event_channel();
+        let graph = definition
+            .compile_with_runtime(
+                "code-failure",
+                Arc::new(MemoryCheckpointer::new()),
+                None,
+                &PipelineNodeRuntimes::default()
+                    .with_code(runtime.clone())
+                    .with_events(sender),
+            )
+            .unwrap();
+        let sessions = Arc::new(InMemorySessionService::new());
+        sessions
+            .create(CreateRequest {
+                app_name: "elitea".into(),
+                user_id: "user-1".into(),
+                session_id: Some("code-failure-thread".into()),
+                state: std::collections::HashMap::default(),
+            })
+            .await
+            .unwrap();
+        let agent =
+            PipelineNodeEventStreamingAgent::new(Arc::new(EliteaGraphAgent::new(graph)), receiver);
+        let runner = Runner::builder()
+            .app_name("elitea")
+            .agent(Arc::new(agent))
+            .session_service(sessions)
+            .build()
+            .unwrap();
+        let mut running = NativeAgentInvocation::new(
+            runner,
+            UserId::new("user-1").unwrap(),
+            SessionId::new("code-failure-thread").unwrap(),
+            Content::new("user").with_text("run"),
+        )
+        .start()
+        .unwrap();
+        let error = loop {
+            match running.next_event().await {
+                Err(error) => break error,
+                Ok(Some(_)) => {}
+                Ok(None) => panic!("failed code cannot complete"),
+            }
+        };
+        assert_eq!(error.upstream_code(), Some("pipeline.code_failed"));
+        let kind = crate::protocol::output::model_failure(error.upstream_code());
+        assert_eq!(
+            kind,
+            crate::protocol::output::RuntimeFailureKind::PipelineCodeFailed
+        );
+        assert!(kind.safe_message().contains("Code node"));
         assert_eq!(runtime.visits.lock().unwrap().len(), 1);
     }
     #[test]

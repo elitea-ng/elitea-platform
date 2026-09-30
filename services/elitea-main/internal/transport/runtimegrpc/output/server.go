@@ -1092,6 +1092,8 @@ func runtimeFailurePolicyFor(code runtimev1.RuntimeErrorCodeV1) (runtimeFailureP
 		return runtimeFailurePolicy{Code: "PIPELINE_TOOL_FAILED", SafeMessage: "A pipeline tool call failed. Later nodes did not run. Review the support reference and completed actions before retrying; the tool may have started work."}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_RESULT_INVALID:
 		return runtimeFailurePolicy{Code: "PIPELINE_RESULT_INVALID", SafeMessage: "The pipeline stopped because a tool result does not match the node output mapping. Check the required fields and their types. Later nodes did not run."}, true
+	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_CODE_FAILED:
+		return runtimeFailurePolicy{Code: "PIPELINE_CODE_FAILED", SafeMessage: "The pipeline stopped at a Code node. Check its source, selected input, and sandbox limits. Later nodes did not run. Share the support reference with your administrator before retrying."}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_RESULT_LIMIT:
 		return runtimeFailurePolicy{Code: "PIPELINE_RESULT_LIMIT", SafeMessage: "The pipeline stopped because a tool result exceeds the node state size limit. Use smaller batches or reduce the returned data. Later nodes did not run."}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_OUTPUT_DELIVERY_LIMIT:

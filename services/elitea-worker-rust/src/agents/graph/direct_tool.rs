@@ -740,7 +740,7 @@ impl Node for DirectToolNode {
                 });
                 if let Some(events) = &self.events {
                     events
-                        .send_direct_tool_failure(failure.public_code())
+                        .send_execution_failure(failure.public_code())
                         .await
                         .map_err(|_| GraphError::NodeExecutionFailed {
                             node: self.name().to_owned(),

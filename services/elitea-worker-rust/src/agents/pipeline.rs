@@ -430,14 +430,14 @@ impl PipelineNativeAgentAssembler {
         let has_llm_nodes = profile.definition().has_llm_nodes();
         let has_direct_tool_nodes = profile.definition().has_direct_tool_nodes();
         let has_application_nodes = profile.definition().has_application_nodes();
+        let (node_event_sender, node_events) = pipeline_node_event_channel();
         if !has_llm_nodes && !has_direct_tool_nodes && !has_application_nodes {
             return Ok(PipelineRuntimeBindings {
-                nodes: PipelineNodeRuntimes::default(),
+                nodes: PipelineNodeRuntimes::default().with_events(node_event_sender),
                 applications: ApplicationRuntimeProjection::default(),
-                node_events: None,
+                node_events: Some(node_events),
             });
         }
-        let (node_event_sender, node_events) = pipeline_node_event_channel();
         let (context, model_facade) = if has_llm_nodes || has_application_nodes {
             let platform = self
                 .platform

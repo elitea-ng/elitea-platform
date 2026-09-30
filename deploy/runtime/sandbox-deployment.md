@@ -1,7 +1,7 @@
 # Docker sandbox deployment
 
 Apply `docker-compose.sandbox.yml` after the full standalone and Rust-agent overlays.
-This adds separate Deno and Rust supervisor instances. Each instance admits one fixed runtime image and policy.
+This adds one supervisor process with Deno and Rust runtime profiles. Each profile admits one fixed runtime image and policy.
 The worker never mounts the Docker socket. Sandbox containers receive neither the socket nor supervisor trust material.
 
 Set these deployment inputs:
@@ -21,12 +21,16 @@ It does not install certificates or change PostgreSQL settings. Install material
 
 Use `sandbox-supervisor.example.json` as the configuration schema example.
 Store each supervisor configuration as `config.json` in its material directory.
-Set a distinct stable owner for each instance. Preserve that owner and Docker daemon across process replacement.
+Set a distinct stable owner for each runtime profile. Preserve that owner and Docker daemon across process replacement.
 Do not share an owner between concurrent replicas. Pending stops are partitioned by this owner.
 The listener checks at most 32 unleased or expired stop records every two seconds and resumes termination.
 A disconnected worker is not a stop request; only an authenticated, persisted stop enables this cleanup.
 Set audiences to `dns:elitea-sandbox-deno` and `dns:elitea-sandbox-rust`, respectively.
-Use server certificates with the corresponding Compose service DNS name.
+Use server certificates with the corresponding Compose network alias.
+Set Deno to port 9446 and Rust to port 9447. Both listeners run in the same supervisor container.
+Use `/run/elitea-sandbox/deno/` paths in the Deno configuration.
+Use `/run/elitea-sandbox/rust/` paths in the Rust configuration.
+The process accepts up to four `--config` arguments. It rejects duplicate owners or listener ports before startup.
 The worker CA must verify these certificates; the supervisor CA must verify the worker certificate.
 Copy the current Main signing verification keyring. Never give the supervisor Main's private signing key.
 
@@ -54,7 +58,7 @@ Use the same image digest, policy revision, and supported timeout in worker and 
 Add four `sandbox_runtimes` entries to a private copy of the current worker runtime configuration.
 Each entry contains `language`, `target`, `audience`, `image_digest`, `policy_revision`, and `timeout_seconds`.
 Use `elitea-sandbox-deno:9446` for Python, JavaScript, and TypeScript.
-Use `elitea-sandbox-rust:9446` for Rust. Preserve the existing worker identity and trust paths.
+Use `elitea-sandbox-rust:9447` for Rust. Preserve the existing worker identity and trust paths.
 Do not replace deployment secrets or regenerate unrelated runtime material.
 
 The overlay publishes no supervisor port to the host.

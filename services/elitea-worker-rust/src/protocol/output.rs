@@ -47,6 +47,7 @@ pub enum RuntimeFailureKind {
     PipelineToolFailed,
     PipelineResultInvalid,
     PipelineResultLimit,
+    PipelineCodeFailed,
 
     DependencyUnavailable,
     DeadlineExceeded,
@@ -610,6 +611,7 @@ pub(crate) fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
         Some("pipeline.tool_failed") => RuntimeFailureKind::PipelineToolFailed,
         Some("pipeline.result_invalid") => RuntimeFailureKind::PipelineResultInvalid,
         Some("pipeline.result_limit") => RuntimeFailureKind::PipelineResultLimit,
+        Some("pipeline.code_failed") => RuntimeFailureKind::PipelineCodeFailed,
 
         Some("model.output_continuation_failed") => RuntimeFailureKind::OutputContinuationExhausted,
         Some(
@@ -724,6 +726,11 @@ pub(crate) fn runtime_error_policy(
         RuntimeFailureKind::PipelineResultInvalid => (
             RuntimeErrorCodeV1::PipelineResultInvalid,
             "The pipeline stopped because a tool result does not match the node output mapping. Check the required fields and their types. Later nodes did not run.",
+            false,
+        ),
+        RuntimeFailureKind::PipelineCodeFailed => (
+            RuntimeErrorCodeV1::PipelineCodeFailed,
+            "The pipeline stopped at a Code node. Check its source, selected input, and sandbox limits. Later nodes did not run. Share the support reference with your administrator before retrying.",
             false,
         ),
         RuntimeFailureKind::PipelineResultLimit => (
@@ -846,6 +853,7 @@ fn canonical_runtime_failure(error: &RuntimeErrorV1) -> Option<RuntimeFailureKin
         RuntimeFailureKind::PipelineToolFailed,
         RuntimeFailureKind::PipelineResultInvalid,
         RuntimeFailureKind::PipelineResultLimit,
+        RuntimeFailureKind::PipelineCodeFailed,
         RuntimeFailureKind::DependencyUnavailable,
         RuntimeFailureKind::DeadlineExceeded,
         RuntimeFailureKind::AuthorizationFailed,

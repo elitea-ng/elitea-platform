@@ -2140,3 +2140,91 @@ Its adapter and deployment integration remain open. Minikube platform deployment
 Validation: 23 focused sandbox tests pass. The isolated PostgreSQL binding test passes without skips.
 The real Docker/Rust supervisor submission regression passes, including receipt reuse and cancellation checks.
 All-target Clippy passes with warnings denied. No rehearsal migration or supervisor rollout occurs in this step.
+
+## Docker sorting and state acceptance, 2026-09-29
+
+The supervisor image now includes immutable runtime binding from `e9e4b1de8`.
+Its image ID is `sha256:b8da3f02bc8098a792f067d69533918d4a7910c39a84a7dfc13c86f3763e4891`.
+Both deployed supervisors retain their private volumes, verified trust, nonroot UID, and resource limits.
+The worker has no Docker socket. The committed Compose overlay passes its render and isolation checks.
+
+Migration 0008 is applied only to rehearsal agentstate.
+The SQL is applied directly; its SHA-256 and version are then recorded in the existing migration ledger.
+The deployment checks the previous head before recording version 8. Product tables remain unchanged.
+Use the normal migration runner for subsequent deployments.
+
+The browser creates pipeline 132 with four sequential Code nodes.
+The exact instructions are saved in `scripts/runtime/fixtures/code-multilanguage-state.yaml`.
+The adjacent input and expected JSON files make this acceptance case reproducible.
+
+| Stage | Actual operation | State boundary |
+| --- | --- | --- |
+| Python | Parse input and sort records by amount and ID | Write `sorted_data` |
+| JavaScript | Group category totals and preserve sorted records | Read `sorted_data`; write `grouped_data` |
+| TypeScript | Check sorting and reconcile independent totals | Read `grouped_data`; write `checked_data` |
+| Rust | Compile, verify IDs and total, return the final report | Read `checked_data`; write `messages` |
+
+The test includes a negative amount and non-sorted input.
+Expected IDs are `e,b,d,a,c`; the total is 31, with fruit 24 and veg 7.
+Both the pipeline test chat and persistent chat 757 return this exact report.
+Persistent chat retains one final report after reload.
+These runs execute actual code without model-generated results or browser response mocks.
+The model picker value is not used because this pipeline contains no model node.
+
+The first run creates four completed receipts between 20:06:31 and 20:06:37 UTC.
+The persistent run creates four completed receipts between 20:06:58 and 20:07:04 UTC.
+Every receipt contains its original runtime ID.
+These timings describe one local fixture, not a concurrency or production throughput benchmark.
+
+Input `[]` fails the Python assertion at 20:08:00 UTC.
+Only one failed receipt is created: `e71919ba3cb43d2f67f55a5983fb8c25014badbc09cbee5b2e174467337e3827`.
+No downstream language dispatch occurs. The UI initially shows an unhelpful generic runtime error.
+
+### Code failure mapping correction
+
+`agents/graph/code_runtime.rs` now sends failures through the invocation-owned pipeline event channel.
+`agents/graph/compiler.rs` supplies that channel when binding Code nodes.
+`agents/graph/node_events.rs` shares execution-failure delivery with direct toolkit nodes.
+This preserves graph failure and does not convert failure into a successful state update.
+
+`libs/proto/elitea/runtime/v1/errors.proto` adds error code 32, `PIPELINE_CODE_FAILED`.
+Rust `protocol/output.rs` and Main `internal/transport/runtimegrpc/output/server.go` register the same safe message.
+The message identifies the Code node, suggests source/input/limit checks, and states that later nodes did not run.
+Detailed causes remain in protected diagnostics. User source and state do not enter the public error message.
+The worker logs the node identity and safe sandbox cause at ERROR severity.
+
+The legacy Code state and sandbox references remain those mapped earlier in this assessment.
+This change corrects new-platform failure delivery; it does not change the legacy YAML or product schema.
+
+## One supervisor process, 2026-09-30
+
+The Docker overlay now defines one supervisor container with two bounded runtime profiles.
+`src/sandbox_main.rs` accepts repeated configuration paths.
+`src/sandbox/process.rs::run_profiles` validates distinct owners and listener ports before startup.
+Each profile retains its authenticated audience, runtime image, resource limits, and durable recovery owner.
+Both listeners share the process lifecycle. A profile failure terminates that process; durable receipts remain available after restart.
+The Deno listener uses port 9446. The Rust listener uses port 9447.
+Network aliases preserve certificate hostnames and grant audiences.
+This change does not combine execution containers or expose supervisor material to user code.
+The legacy reference remains the remote sandbox execution boundary described above.
+Compose rendering, three profile configuration tests, and all-target Clippy pass.
+The consolidated supervisor image is 23,293,166 bytes. It excludes language runtimes and compilers.
+Main was rebuilt without cached layers. The rebuilt image starts and passes its healthcheck.
+Runtime Redis consumer groups were absent after the crash. The existing idempotent bootstrap recreated them from `0-0`.
+The worker now consumes commands.
+Browser chat 757 passes all four Code stages through the consolidated supervisor.
+Four completed receipts retain immutable container identities. Docker inspection confirms all four execution containers are removed.
+A failed Python assertion also retains its receipt and removes its container.
+The browser retest exposed an event-channel bypass for Code-only pipelines in `agents/pipeline.rs::bind_node_runtimes`.
+The correction retains the node-event channel without requiring an LLM runtime.
+The deployed error-message acceptance passes in chat 757, including after reload.
+Support details show `PIPELINE_CODE_FAILED` and message reference `fcbdbc26-4aef-5c89-8b56-e0cca83c98e2`.
+The worker image is `sha256:cb21aaf32eee933739ef2796566c2361b234ead9ae12d0ec67810a6ee6828cc6`.
+The supervisor image is `sha256:68c90b27e166eaab80077a257e4e50db5a94c62917cc281924b1185184b7663d`.
+All 51 pipeline tests and all-target Clippy pass after the assembly correction.
+
+The rehearsal host exhausted disk space on September 29. Docker then stopped multiple dependencies.
+The local direct-tool regression passed after disposable incremental compiler cache removal.
+The worker image rebuild passed and was deployed on September 30.
+The previous Main image exited with code 139 without deployment configuration. Its uncached replacement passes startup.
+Existing product and agentstate volumes remain unchanged. No database restore was required.

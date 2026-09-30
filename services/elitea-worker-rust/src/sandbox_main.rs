@@ -17,8 +17,17 @@ async fn main() -> ExitCode {
         }
     };
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    let exit = if args.len() == 2 && args[0] == "--config" {
-        match process::run(&PathBuf::from(&args[1])).await {
+    let exit = if !args.is_empty()
+        && args.len() <= 8
+        && args
+            .chunks(2)
+            .all(|pair| pair.len() == 2 && pair[0] == "--config")
+    {
+        let paths: Vec<_> = args
+            .chunks_exact(2)
+            .map(|pair| PathBuf::from(&pair[1]))
+            .collect();
+        match process::run_profiles(&paths).await {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 tracing::error!(event="sandbox_supervisor_exit", reason=%error);
@@ -26,7 +35,9 @@ async fn main() -> ExitCode {
             }
         }
     } else {
-        eprintln!("usage: elitea-sandbox-supervisor --config <absolute-path>");
+        eprintln!(
+            "usage: elitea-sandbox-supervisor --config <absolute-path> [--config <absolute-path> ...]"
+        );
         ExitCode::FAILURE
     };
     if tracing.shutdown().is_err() {

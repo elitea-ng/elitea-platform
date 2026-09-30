@@ -75,7 +75,11 @@ Commit `b9a31a4d0` fixes worker Stop delivery and settlement ordering. Deployed 
 A second browser run verifies pending Stop recovery across worker replacement, with the original dispatch identity and no new execution container.
 The UI observer correction keeps the stream attached until terminal confirmation and reports failed Stop requests. All 44 focused tests and typechecking pass. Deployed browser acceptance passes in chat 755. Main deliberately removes empty cancelled turns on reload; this is a separate existing history policy.
 The Kubernetes runtime boundary and isolated Pod policy are implemented with focused tests.
-Immutable runtime binding is implemented and tested with PostgreSQL and the Docker supervisor.
+Immutable runtime binding is deployed and tested with PostgreSQL and both Docker supervisors.
+Pipeline 132 passes real Python, JavaScript, TypeScript, and Rust sorting/state transfer in test chat and persistent chat 757.
+Persistent reload preserves the exact report. Invalid input stops at Python without dispatching downstream nodes.
+The negative case now shows `PIPELINE_CODE_FAILED` and actionable guidance in chat 757, including after reload.
+One 23.3 MB supervisor process manages both runtime profiles. Real four-stage execution and terminal-container cleanup pass.
 The Kubernetes API adapter, deployment permissions, and live acceptance remain open.
 Deploy the platform to minikube after the implementation and deployment configuration are ready.
 Gate 5 remains open for Kubernetes execution and the remaining pipeline requirements.

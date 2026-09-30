@@ -92,6 +92,49 @@ impl Config {
     }
 }
 
+/// Run bounded runtime profiles in one supervisor process.
+/// Each profile retains its listener, authenticated audience, and durable owner.
+/// # Errors
+/// Rejects conflicting profiles before starting listeners. A profile failure
+/// stops the process; existing sandbox jobs remain recoverable after restart.
+pub async fn run_profiles(paths: &[PathBuf]) -> Result<(), StartupError> {
+    if paths.is_empty() || paths.len() > 4 {
+        return Err(StartupError("validate runtime profile count"));
+    }
+    let mut configs = Vec::with_capacity(paths.len());
+    for path in paths {
+        let raw = read_regular_file(path, 64 * 1024, false, "sandbox configuration")
+            .map_err(|_| StartupError("read configuration"))?;
+        let config: Config =
+            serde_json::from_slice(&raw).map_err(|_| StartupError("parse configuration"))?;
+        config.validate()?;
+        configs.push(config);
+    }
+    validate_profiles(&configs)?;
+    let mut tasks = tokio::task::JoinSet::new();
+    for config in configs {
+        tasks.spawn(run_config(config));
+    }
+    while let Some(result) = tasks.join_next().await {
+        result.map_err(|_| StartupError("join runtime profile"))??;
+    }
+    Ok(())
+}
+
+fn validate_profiles(configs: &[Config]) -> Result<(), StartupError> {
+    for (index, config) in configs.iter().enumerate() {
+        if configs[..index].iter().any(|prior| {
+            prior.owner == config.owner
+                || prior.listen_address.port() == config.listen_address.port()
+        }) {
+            return Err(StartupError(
+                "validate distinct runtime owners and listener ports",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Run the dedicated supervisor with file-backed secrets and mandatory TLS.
 /// # Errors
 /// Returns a redacted operation error. Secrets and user code never enter errors.
@@ -101,6 +144,10 @@ pub async fn run(path: &Path) -> Result<(), StartupError> {
     let config: Config =
         serde_json::from_slice(&raw).map_err(|_| StartupError("parse configuration"))?;
     config.validate()?;
+    run_config(config).await
+}
+
+async fn run_config(config: Config) -> Result<(), StartupError> {
     let read = |path: &Path, limit, private, label| {
         read_regular_file(path, limit, private, label)
             .map_err(|_| StartupError("read required trust material"))
@@ -270,6 +317,24 @@ mod tests {
             let config: Config = serde_json::from_value(input).unwrap();
             assert!(config.validate().is_err(), "{field}");
         }
+    }
+
+    #[test]
+    fn profiles_preserve_distinct_recovery_owners_and_listener_ports() {
+        let first: Config = serde_json::from_str(EXAMPLE).unwrap();
+        let mut second: Config = serde_json::from_str(EXAMPLE).unwrap();
+        second.owner = "rust-runtime".into();
+        second
+            .listen_address
+            .set_port(first.listen_address.port() + 1);
+        let mut profiles = vec![first, second];
+        assert!(validate_profiles(&profiles).is_ok());
+        let duplicate_owner = profiles[0].owner.clone();
+        profiles[1].owner = duplicate_owner;
+        assert!(validate_profiles(&profiles).is_err());
+        profiles[1].owner = "rust-runtime".into();
+        profiles[1].listen_address = profiles[0].listen_address;
+        assert!(validate_profiles(&profiles).is_err());
     }
 
     #[test]

@@ -19,7 +19,8 @@ command = ["docker", "compose", "-f", "deploy/docker-compose.sandbox.yml",
 result = subprocess.run(command, cwd=ROOT, env={**os.environ, **VALUES},
                         capture_output=True, text=True, check=True)
 services = json.loads(result.stdout)["services"]
-for name in ("elitea-sandbox-deno", "elitea-sandbox-rust"):
+assert "elitea-sandbox-deno" not in services and "elitea-sandbox-rust" not in services
+for name in ("elitea-sandbox",):
     service = services[name]
     assert service["user"] == "10001:10001"
     assert service["read_only"] and not service.get("ports")
@@ -28,7 +29,9 @@ for name in ("elitea-sandbox-deno", "elitea-sandbox-rust"):
     assert service["pids_limit"] == 256
     assert service["build"]["target"] == "supervisor"
     mounts = {volume["target"]: volume for volume in service["volumes"]}
-    assert mounts["/run/elitea-sandbox"]["read_only"]
+    assert mounts["/run/elitea-sandbox/deno"]["read_only"]
+    assert mounts["/run/elitea-sandbox/rust"]["read_only"]
+    assert service["command"].count("--config") == 2
     assert "/var/run/docker.sock" in mounts
     assert all(not volume["bind"]["create_host_path"] for volume in mounts.values())
 assert all(volume["target"] != "/var/run/docker.sock"

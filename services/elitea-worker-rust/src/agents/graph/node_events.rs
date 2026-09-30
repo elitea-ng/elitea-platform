@@ -39,7 +39,7 @@ const MAX_EVENT_SCOPE_IDENTITY_BYTES: usize = 480;
 
 enum PipelineNodeEventSignal {
     Event(PipelineNodeEventData),
-    DirectToolFailed {
+    ExecutionFailed {
         code: &'static str,
     },
     ModelFailed {
@@ -149,12 +149,9 @@ pub(crate) fn pipeline_node_event_channel() -> (PipelineNodeEventSender, Pipelin
 }
 
 impl PipelineNodeEventSender {
-    pub(crate) async fn send_direct_tool_failure(
-        &self,
-        code: &'static str,
-    ) -> adk_rust::Result<()> {
+    pub(crate) async fn send_execution_failure(&self, code: &'static str) -> adk_rust::Result<()> {
         self.inner
-            .send(PipelineNodeEventSignal::DirectToolFailed { code })
+            .send(PipelineNodeEventSignal::ExecutionFailed { code })
             .await
             .map_err(|_| pipeline_node_event_channel_error())
     }
@@ -446,12 +443,12 @@ fn pipeline_node_signal_event(
 ) -> adk_rust::Result<Event> {
     let signal = match signal {
         PipelineNodeEventSignal::Event(signal) => signal,
-        PipelineNodeEventSignal::DirectToolFailed { code } => {
+        PipelineNodeEventSignal::ExecutionFailed { code } => {
             return Err(AdkError::new(
                 ErrorComponent::Tool,
                 ErrorCategory::Internal,
                 code,
-                "The pipeline direct-tool node failed.",
+                "The pipeline execution node failed.",
             ));
         }
         PipelineNodeEventSignal::ModelFailed { code, continuation } => {

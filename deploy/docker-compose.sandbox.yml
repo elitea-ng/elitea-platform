@@ -17,7 +17,7 @@ x-sandbox: &sandbox
   cpus: 1.0
   restart: unless-stopped
   stop_grace_period: 20s
-  command: ["--config", "/run/elitea-sandbox/config.json"]
+  command: ["--config", "/run/elitea-sandbox/deno/config.json", "--config", "/run/elitea-sandbox/rust/config.json"]
   depends_on:
     elitea-agentstate-migrate:
       condition: service_completed_successfully
@@ -36,32 +36,24 @@ services:
         bind:
           create_host_path: false
     depends_on:
-      elitea-sandbox-deno:
-        condition: service_started
-      elitea-sandbox-rust:
+      elitea-sandbox:
         condition: service_started
 
-  elitea-sandbox-deno:
+  elitea-sandbox:
     <<: *sandbox
+    networks:
+      default:
+        aliases: [elitea-sandbox-deno, elitea-sandbox-rust]
     volumes:
       - type: bind
         source: ${ELITEA_SANDBOX_DENO_MATERIAL:?Set the Deno supervisor material directory}
-        target: /run/elitea-sandbox
+        target: /run/elitea-sandbox/deno
         read_only: true
         bind:
           create_host_path: false
       - type: bind
-        source: ${ELITEA_SANDBOX_DOCKER_SOCKET:?Set the Docker socket path}
-        target: /var/run/docker.sock
-        bind:
-          create_host_path: false
-
-  elitea-sandbox-rust:
-    <<: *sandbox
-    volumes:
-      - type: bind
         source: ${ELITEA_SANDBOX_RUST_MATERIAL:?Set the Rust supervisor material directory}
-        target: /run/elitea-sandbox
+        target: /run/elitea-sandbox/rust
         read_only: true
         bind:
           create_host_path: false

@@ -1019,7 +1019,7 @@ impl PipelineDefinition {
             CodeNode::new(node.clone(), self.state.clone(), runtime).map_err(|_| {
                 PipelineConfigurationError::Invalid("Code state declarations are invalid")
             })?;
-        let mut next = builder.node(executable);
+        let mut next = builder.node(executable.with_events(runtimes.events.clone()));
         if let Some(transition) = node.transition() {
             next = next.edge(
                 node.id(),
