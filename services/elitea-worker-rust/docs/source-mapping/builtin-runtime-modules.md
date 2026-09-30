@@ -12,6 +12,19 @@ Main `internal/application/agentexecution/tools.go` freezes selections and `inte
 Rust `src/agents/internal_tools.rs::InternalToolCatalog` currently serves `ask_user` and records unavailable module flags.
 A successful chat with an unavailable-module notice does not prove the module executes.
 
+## Ask User editor control, 2026-09-30
+
+The current UI declares `ask_user` in `src/[fsd]/shared/lib/constants/internalTools.constants.js`.
+The new UI omitted this entry from `features/agents/lib/internalTools.ts`.
+This prevented users from selecting the existing Rust clarification tool in the Agent editor.
+The restored entry uses the existing module selection, persistence, and runtime-capability paths.
+No worker tool, database field, or approval contract changes.
+
+The rehearsal UI image `elitea-web:ask-user-20260930` includes this correction.
+Agent 137/version 144 displays Ask User, accepts its selection, and retains the checked switch after browser reload.
+All 38 focused module-list and Agent-mapping tests pass. Typechecking and the application build pass.
+This proves editor selection and persistence. Live child clarification and worker-replacement testing remain separate requirements.
+
 | Module | Current reference and native boundary | Required outcome |
 | --- | --- | --- |
 | Attachments | Core attachment delivery and SDK file tools; gate 7 artifact authority | Use the actor's authorized attachments and persist valid artifact references across replacement. |
