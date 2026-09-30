@@ -419,7 +419,15 @@ fn nested_agent_call_response() -> Response<Body> {
 }
 
 fn saved_agent_call_response(call_id: &str, tool_name: &str, task: &str) -> Response<Body> {
-    let arguments = serde_json::json!({"task": task}).to_string();
+    saved_agent_call_response_with_arguments(call_id, tool_name, &serde_json::json!({"task": task}))
+}
+
+fn saved_agent_call_response_with_arguments(
+    call_id: &str,
+    tool_name: &str,
+    arguments: &serde_json::Value,
+) -> Response<Body> {
+    let arguments = arguments.to_string();
     let chunk = serde_json::json!({
         "choices": [{
             "delta": {
@@ -3989,4 +3997,83 @@ async fn an_attached_pipeline_leaves_the_agent_children_beside_it_bound() {
         "both the sub-agent and the pipeline must reach the model: {}",
         body["tools"]
     );
+}
+
+#[tokio::test]
+async fn nested_agent_variable_overrides_reach_provider_without_leaking_to_next_call() {
+    let mut request = ordinary_request(AgentExecutionKind::Application);
+    attach_nested_agent(&mut request);
+    let mut child = nested_agent_version(
+        "Audience={{audience}}; tone={{tone}}",
+        "child-model",
+        23,
+        vec![],
+    );
+    child["variables"] = serde_json::json!([
+        {"name":"audience", "value":"users"}, {"name":"tone", "value":"formal"}
+    ]);
+    let runtime_context = runtime_context_client_from(
+        VecDeque::from([
+            runtime_context_response(
+                &serde_json::json!({"schema_version":"elitea.runtime.elitea-client-token.v1","project_id":17,"token":TOKEN}),
+            ),
+            application_version_response(31, 41, child),
+        ]),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(Mutex::new(Vec::new())),
+    );
+    let (gateway, captured) = test_model_gateway_client(
+        vec![
+            TestModelGatewayOutcome::Response(saved_agent_call_response_with_arguments(
+                "first",
+                "elitea_agent_31_v_41",
+                &serde_json::json!({"task":"First", "audience":"operators", "tone":"brief"}),
+            )),
+            TestModelGatewayOutcome::Response(text_response("First result.")),
+            TestModelGatewayOutcome::Response(saved_agent_call_response_with_arguments(
+                "second",
+                "elitea_agent_31_v_41",
+                &serde_json::json!({"task":"Second", "tone":null}),
+            )),
+            TestModelGatewayOutcome::Response(text_response("Second result.")),
+            TestModelGatewayOutcome::Response(text_response("Parent done.")),
+        ],
+        test_model_gateway_config(),
+    )
+    .unwrap();
+    let assembler = OrdinaryNativeAgentAssembler::new(
+        platform_client(runtime_context),
+        Arc::new(ModelFacade::from_gateway(gateway)),
+        empty_tool_policy(),
+    );
+    let mut invocation = assembler
+        .assemble(AuthorizedNativeAssembly::new(
+            &request,
+            test_runtime_context_authority(),
+            AuthorizedNativeCommandBinding::fixture(),
+        ))
+        .await
+        .unwrap();
+    invocation.project_start(chrono::Utc::now()).unwrap();
+    let (mut native, mut projector, completion) = invocation.start().unwrap();
+    while let Some(event) = native.next_event().await.unwrap() {
+        projector.project(&event).unwrap();
+    }
+    completion.select().await.unwrap();
+    let requests = captured.lock().unwrap();
+    assert_eq!(requests.len(), 5);
+    let first: serde_json::Value = serde_json::from_slice(&requests[1].body).unwrap();
+    let second: serde_json::Value = serde_json::from_slice(&requests[3].body).unwrap();
+    let system = |request: &serde_json::Value| {
+        request["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|message| message["role"] == "system")
+            .map(|message| message["content"].as_str().unwrap())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert!(system(&first).contains("Audience=operators; tone=brief"));
+    assert!(system(&second).contains("Audience=users; tone=formal"));
 }

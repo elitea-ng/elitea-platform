@@ -321,14 +321,9 @@ impl OrdinaryNoToolProfile {
         let internal_tools = internal_tools_from_version(version)?;
         validate_feature_array(version.get("skills"), false)?;
         validate_application_meta(version.get("meta"))?;
-        // A nested agent renders its OWN declared variables: the SDK reaches
-        // one through `client.application()` too (`runtime/tools/
-        // application.py:396`), which builds a fresh `LangChainAssistant` over
-        // the child's version and resolves the child's instructions there. The
-        // per-CALL overrides that path also passes — the arguments the model
-        // supplies for a variable-shaped agent tool — are a separate feature
-        // (a tool argument schema derived from the variable list) and stay
-        // unimplemented; only the child's stored values are served here.
+        // Render stored defaults for the frozen base profile. ApplicationAgentTool
+        // re-renders the original template with declared per-call overrides on a
+        // local profile clone, including when rebuilding an interrupted child.
         let variables = AgentVariables::admit(version, None)?;
         let instructions = version
             .get("instructions")
@@ -424,6 +419,14 @@ impl OrdinaryNoToolProfile {
     #[must_use]
     pub(crate) fn instructions(&self) -> &str {
         &self.instructions
+    }
+
+    /// Replace only the invocation-local rendered prompt; all frozen capabilities stay intact.
+    pub(super) fn with_instructions(&self, instructions: String) -> Self {
+        Self {
+            instructions,
+            ..self.clone()
+        }
     }
 
     #[must_use]

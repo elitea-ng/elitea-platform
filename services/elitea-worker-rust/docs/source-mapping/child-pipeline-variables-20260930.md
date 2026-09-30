@@ -174,3 +174,50 @@ controls remain open; Gate 5 is not complete.
 Deployment simplification for Docker Compose and Kubernetes follows functional
 development. Docker remains the primary development target; hybrid Kubernetes evidence
 does not replace later full Kubernetes deployment acceptance.
+
+## Ordinary Agent call variables
+
+Current SDK `elitea_sdk/runtime/tools/application.py:354-412` keeps the rebuilt
+runnable local to one invocation, merges stored defaults with non-null keyword
+arguments, and passes the resulting variables to `client.application`. The new
+worker follows this ownership contract without rebuilding toolsets or refetching
+saved versions on every call.
+
+`variables.rs::AgentCallVariables` freezes declared names (including empty default
+placeholders) and stored defaults. The saved-agent tool advertises optional string
+or null properties for those names. Unknown names and non-string values are
+rejected, null keeps the default, and an explicit empty string replaces it. The
+string contract matches the platform's authored VersionVariable fields; pipeline
+state mappings themselves continue to support typed JSON for pipeline children.
+Names reserved for `task` and `chat_history` cannot replace invocation controls.
+
+`ApplicationAgentTool::invoke_child` renders the original template on a local
+`LazyNestedAgent`/profile clone. The shared saved agent, model settings, toolsets,
+skill/project-context authority, and context-management policy are unchanged.
+Both fresh execution and `prepare_resume` use that local agent. Existing durable
+call arguments retain overrides and are compared exactly during resume; no new
+checkpoint owner, database field, or schema migration is introduced. The complete
+call arguments are bounded at 240 KiB before rendering.
+
+`graph/application.rs` admits additional Agent-node mappings only when the selected
+saved tool declares those properties and sends the evaluated values with `task`.
+This exposes the same contract to graph calls and model tool loops. Additional
+mapping authoring still uses YAML; richer controls remain a UI gap.
+
+Focused variable tests cover empty declarations, override precedence, null/default
+behavior, explicit empty strings, invalid values and independent sibling bindings.
+Live model/UI acceptance and a disruption test with overridden variables remain
+required before claiming this Agent extension accepted.
+
+The application-focused suite passes 63 tests and variable-rendering suite passes
+16 tests. A gateway-fixture integration test also observes two actual outgoing
+provider requests from consecutive calls to the same saved Agent: the first uses
+`Audience=operators; tone=brief`, while the second uses the stored
+`Audience=users; tone=formal`. It proves prompt binding and no cross-call leakage
+at the provider boundary, not a live external-model or crash-recovery result.
+Task-only invocations retain the existing shared immutable base-agent fast path.
+
+The broader agent unit/component suite passes all 541 tests after integration.
+These tests use their configured local doubles and do not establish live deployment
+acceptance. The existing `task` fixed/f-string/variable semantics are unchanged;
+this extension addresses additional declared child-Agent instruction variables.

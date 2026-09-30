@@ -381,8 +381,21 @@ impl ApplicationNode {
                         return Err(ApplicationExecutionError::InvalidTask);
                     }
                 }
-                ResolvedApplicationParticipant::Agent(_) => {
-                    return Err(ApplicationExecutionError::Unavailable);
+                ResolvedApplicationParticipant::Agent(tool) => {
+                    let schema = tool
+                        .parameters_schema()
+                        .ok_or(ApplicationExecutionError::InvalidTask)?;
+                    let properties = schema
+                        .get("properties")
+                        .and_then(Value::as_object)
+                        .ok_or(ApplicationExecutionError::InvalidTask)?;
+                    if definition
+                        .variables
+                        .keys()
+                        .any(|key| !properties.contains_key(key))
+                    {
+                        return Err(ApplicationExecutionError::InvalidTask);
+                    }
                 }
             }
         }
@@ -666,8 +679,25 @@ impl Node for ApplicationNode {
             match &self.participant {
                 ResolvedApplicationParticipant::Agent(tool) => {
                     let tool_context = pipeline_tool_context(context, self.name(), tool.name());
+                    let mut arguments =
+                        serde_json::Map::from_iter([("task".to_owned(), json!(task))]);
+                    for (key, mapping) in &self.definition.variables {
+                        let value = match mapping {
+                            ApplicationInputMapping::Fixed(value) => value.clone(),
+                            ApplicationInputMapping::Variable(source) => context
+                                .state
+                                .get(source)
+                                .cloned()
+                                .ok_or_else(|| node_failure(self.name()))?,
+                            ApplicationInputMapping::Template(template) => Value::String(
+                                render_fstring(template, &context.state)
+                                    .map_err(|_| node_failure(self.name()))?,
+                            ),
+                        };
+                        arguments.insert(key.clone(), value);
+                    }
                     let result = tool
-                        .execute(Arc::clone(&tool_context), json!({"task": task}))
+                        .execute(Arc::clone(&tool_context), Value::Object(arguments))
                         .await
                         .map_err(|_| node_failure(self.name()))?;
                     if let Some(interrupt_ids) = nested_application_interrupt_ids(&result) {

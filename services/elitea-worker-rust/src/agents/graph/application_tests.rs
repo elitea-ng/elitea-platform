@@ -45,6 +45,12 @@ impl Tool for FixtureApplicationTool {
         "saved Application fixture"
     }
 
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(
+            json!({"type":"object", "properties": {"task":{"type":"string"}, "audience":{"type":"string"}}}),
+        )
+    }
+
     async fn execute(
         &self,
         context: Arc<dyn ToolContext>,
@@ -1211,4 +1217,49 @@ async fn child_output_type_mismatch_does_not_apply_partial_parent_updates() {
         .unwrap()
         .unwrap();
     assert_eq!(child.state["count"], json!(3));
+}
+
+#[tokio::test]
+async fn saved_agent_receives_declared_per_call_variable_mapping() {
+    let definition = PipelineDefinition::from_yaml(
+        r#"
+state:
+  topic: str
+  answer: str
+entry_point: delegate
+nodes:
+  - id: delegate
+    type: agent
+    tool: Research Agent
+    input_mapping:
+      task: {type: fixed, value: Investigate}
+      audience: {type: fstring, value: "team {topic}"}
+    input: [topic]
+    output: [answer]
+    transition: END
+"#,
+    )
+    .unwrap();
+    let (resolver, capture) = fixture_resolver(json!({"response":"done"}));
+    let graph = definition
+        .compile_with_runtime(
+            "parent",
+            Arc::new(MemoryCheckpointer::new()),
+            None,
+            &PipelineNodeRuntimes::new(None, None, Some(resolver)),
+        )
+        .unwrap();
+    let state = graph
+        .invoke(
+            State::from([("topic".into(), json!("ops"))]),
+            ExecutionConfig::new("agent-variables"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(state["answer"], "done");
+    assert_eq!(
+        capture.lock().unwrap().arguments,
+        json!({"task":"Investigate", "audience":"team ops"})
+    );
+    assert!(!state.contains_key("audience"));
 }

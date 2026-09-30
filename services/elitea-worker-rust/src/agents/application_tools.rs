@@ -499,7 +499,7 @@ fn insert_resume_decision(
         let child_catalog = current_catalog
             .child_tools(&hop.tool_name)
             .ok_or_else(invalid_configuration)?;
-        let task = application_task(&hop.arguments)?;
+        let task = application_task_with_variables(&hop.arguments)?;
         let mut history = vec![Content::new("user").with_text(task)];
         history.extend(events.iter().filter_map(|event| {
             (event.invocation_id == hop.owned_invocation_id)
@@ -633,6 +633,23 @@ pub(super) fn application_task(arguments: &Value) -> Result<&str, NativeAgentAss
         .filter(|task| {
             !task.is_empty() && task.len() <= MAX_APPLICATION_TASK_BYTES && !task.contains('\0')
         })
+        .ok_or_else(invalid_configuration)
+}
+
+fn application_task_with_variables(arguments: &Value) -> Result<&str, NativeAgentAssemblyError> {
+    let object = arguments.as_object().ok_or_else(invalid_configuration)?;
+    if object.len() > 257
+        || serde_json::to_vec(arguments)
+            .map_err(|_| invalid_configuration())?
+            .len()
+            > MAX_APPLICATION_TASK_BYTES
+    {
+        return Err(invalid_configuration());
+    }
+    object
+        .get("task")
+        .and_then(Value::as_str)
+        .filter(|task| !task.is_empty() && !task.contains('\0'))
         .ok_or_else(invalid_configuration)
 }
 
@@ -1044,6 +1061,8 @@ pub(crate) struct MaterializedApplicationTool {
 }
 
 struct BuiltApplication {
+    instruction_template: String,
+    variables: super::variables::AgentCallVariables,
     agent: Arc<LazyNestedAgent>,
     model_name: String,
     child_tools: ApplicationToolPresentationCatalog,
@@ -1524,6 +1543,12 @@ impl ApplicationAssemblyState<'_> {
                 .map(|scopes| scopes.with_application_tools(child_tools.agent_tool_names())),
         });
         Ok(Arc::new(BuiltApplication {
+            instruction_template: version
+                .get("instructions")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid_configuration)?
+                .to_owned(),
+            variables: super::variables::AgentCallVariables::admit(&version)?,
             agent,
             model_name,
             child_tools,
@@ -1854,6 +1879,7 @@ fn push_bounded(target: &mut String, separator: &str, value: &str) {
     target.push_str(&value[..boundary]);
 }
 
+#[derive(Clone)]
 struct LazyNestedAgent {
     name: String,
     description: String,
@@ -2126,7 +2152,7 @@ impl Tool for ApplicationAgentTool {
     }
 
     fn parameters_schema(&self) -> Option<Value> {
-        Some(json!({
+        let mut schema = json!({
             "type": "object",
             "properties": {
                 "task": {
@@ -2138,7 +2164,11 @@ impl Tool for ApplicationAgentTool {
             },
             "required": ["task"],
             "additionalProperties": false
-        }))
+        });
+        if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
+            properties.extend(self.application.variables.schema_properties());
+        }
+        Some(schema)
     }
 
     fn response_schema(&self) -> Option<Value> {
@@ -2210,7 +2240,21 @@ impl ApplicationAgentTool {
         ctx: Arc<dyn ToolContext>,
         arguments: Value,
     ) -> adk_rust::Result<Value> {
-        let task = application_task(&arguments).map_err(|_| tool_input_error())?;
+        let task = application_task_with_variables(&arguments).map_err(|_| tool_input_error())?;
+        let local_agent = if arguments.as_object().is_some_and(|args| args.len() == 1) {
+            self.application.agent.clone()
+        } else {
+            let values = self
+                .application
+                .variables
+                .bind(arguments.as_object().ok_or_else(tool_input_error)?)
+                .map_err(|_| tool_input_error())?;
+            let mut agent = self.application.agent.as_ref().clone();
+            agent.profile = agent
+                .profile
+                .with_instructions(values.render(&self.application.instruction_template));
+            Arc::new(agent)
+        };
         let pipeline_container = pipeline_application_container(ctx.as_ref(), self.name())?;
         if pipeline_container {
             self.send_container_call(ctx.as_ref(), &arguments).await?;
@@ -2225,10 +2269,8 @@ impl ApplicationAgentTool {
         };
         let (agent, content, run_config, history, children) = match resume {
             Some(resume) if resume.tool_name == self.name() && resume.arguments == arguments => {
-                let prepared = self
-                    .application
-                    .agent
-                    .prepare_resume(resume.action, &self.application.sensitive_tools)?;
+                let prepared =
+                    local_agent.prepare_resume(resume.action, &self.application.sensitive_tools)?;
                 (
                     prepared.agent,
                     prepared.user_content,
@@ -2239,7 +2281,7 @@ impl ApplicationAgentTool {
             }
             Some(_) => return Err(tool_input_error()),
             None => (
-                self.application.agent.clone() as Arc<dyn Agent>,
+                local_agent as Arc<dyn Agent>,
                 Content::new("user").with_text(task),
                 application_run_config(),
                 Vec::new(),
@@ -3462,6 +3504,20 @@ fn resource_exhausted() -> NativeAgentAssemblyError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn child_resume_task_accepts_bounded_variable_arguments_but_pipeline_api_stays_task_only() {
+        let args = json!({"task":"continue", "audience":"operators"});
+        assert_eq!(application_task_with_variables(&args).unwrap(), "continue");
+        assert!(application_task(&args).is_err());
+        assert!(application_task_with_variables(&json!({"task":""})).is_err());
+        assert!(
+            application_task_with_variables(
+                &json!({"task":"work", "audience":"x".repeat(MAX_APPLICATION_TASK_BYTES)})
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn child_fatal_channel_preserves_incomplete_continuation() {

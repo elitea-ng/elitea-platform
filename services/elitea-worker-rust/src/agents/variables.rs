@@ -204,6 +204,85 @@ impl AgentVariables {
     }
 }
 
+/// Frozen declared variables for one saved Agent's invocation-local bindings.
+/// Empty defaults still declare a variable. Call values never introduce names.
+#[derive(Clone, Debug)]
+pub(super) struct AgentCallVariables {
+    defaults: AgentVariables,
+    names: std::collections::BTreeSet<String>,
+}
+
+impl AgentCallVariables {
+    pub(super) fn admit(version: &Map<String, Value>) -> Result<Self, NativeAgentAssemblyError> {
+        let defaults = AgentVariables::admit(version, None)?;
+        let mut names = std::collections::BTreeSet::new();
+        for collection in [
+            version.get("variables"),
+            meta_variables(version.get("meta"))?,
+        ] {
+            match collection {
+                Some(Value::Array(rows)) => {
+                    for row in rows {
+                        if let Some(name) = row
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .filter(|name| bounded_variable_name(name))
+                        {
+                            names.insert(name.to_owned());
+                        }
+                    }
+                }
+                Some(Value::Object(rows)) => {
+                    names.extend(
+                        rows.keys()
+                            .filter(|name| bounded_variable_name(name))
+                            .cloned(),
+                    );
+                }
+                _ => {}
+            }
+        }
+        if names.len() > MAX_VARIABLES {
+            return Err(resource_exhausted_profile());
+        }
+        // These are invocation controls, never variable overrides.
+        names.retain(|name| !matches!(name.as_str(), "task" | "chat_history"));
+        Ok(Self { defaults, names })
+    }
+
+    pub(super) fn schema_properties(&self) -> Map<String, Value> {
+        self.names.iter().map(|name| (name.clone(), serde_json::json!({
+            "type": ["string", "null"], "maxLength": MAX_VARIABLE_VALUE_BYTES,
+            "description": "Optional saved-agent variable override. Null keeps the stored default."
+        }))).collect()
+    }
+
+    pub(super) fn bind(
+        &self,
+        arguments: &Map<String, Value>,
+    ) -> Result<AgentVariables, NativeAgentAssemblyError> {
+        let mut bound = self.defaults.clone();
+        for (name, value) in arguments {
+            if name == "task" {
+                continue;
+            }
+            if !self.names.contains(name) {
+                return Err(invalid_profile());
+            }
+            match value {
+                Value::Null => {}
+                Value::String(value)
+                    if value.len() <= MAX_VARIABLE_VALUE_BYTES && !value.contains('\0') =>
+                {
+                    bound.values.insert(name.clone(), value.clone());
+                }
+                _ => return Err(invalid_profile()),
+            }
+        }
+        Ok(bound)
+    }
+}
+
 /// Admit one stored variable collection without capturing it.
 ///
 /// The shapes are Main's, not this runtime's invention: the CREATE path folds
@@ -353,6 +432,65 @@ mod tests {
     use super::{AgentVariables, MAX_VARIABLES, capture_variables, validate_variables};
     use crate::agents::runtime::NativeAgentAssemblyErrorCode;
     use serde_json::{Map, Value, json};
+
+    #[test]
+    fn child_calls_override_empty_and_stored_defaults_without_cross_call_mutation() {
+        let version = version(
+            json!([{ "name": "audience", "value": "" }]),
+            json!([{ "name": "tone", "value": "formal" }]),
+        );
+        let variables = super::AgentCallVariables::admit(&version).expect("declared variables");
+        let first = variables
+            .bind(
+                json!({"task":"write", "audience":"operators", "tone":"brief"})
+                    .as_object()
+                    .unwrap(),
+            )
+            .unwrap();
+        let second = variables
+            .bind(
+                json!({"task":"write", "audience":"users", "tone":null})
+                    .as_object()
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            first.render_with_date("{{audience}}|{{tone}}", DATE),
+            "operators|brief"
+        );
+        assert_eq!(
+            second.render_with_date("{{audience}}|{{tone}}", DATE),
+            "users|formal"
+        );
+        assert_eq!(
+            variables
+                .defaults
+                .render_with_date("{{audience}}|{{tone}}", DATE),
+            "{{ audience }}|formal"
+        );
+        assert!(variables.schema_properties().contains_key("audience"));
+    }
+
+    #[test]
+    fn child_call_variables_reject_unknown_and_non_string_values() {
+        let variables =
+            super::AgentCallVariables::admit(&version(json!({"audience":"users"}), json!([])))
+                .unwrap();
+        for args in [
+            json!({"unknown":"x"}),
+            json!({"audience":3}),
+            json!({"audience":"bad\u{0000}value"}),
+        ] {
+            assert!(variables.bind(args.as_object().unwrap()).is_err());
+        }
+        assert_eq!(
+            variables
+                .bind(json!({"audience":""}).as_object().unwrap())
+                .unwrap()
+                .render_with_date("{{audience}}", DATE),
+            ""
+        );
+    }
 
     const DATE: &str = "2026-08-29";
 
