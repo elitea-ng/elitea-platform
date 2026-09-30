@@ -22,7 +22,7 @@ data:
   runtime.json: |
     {{- $r := .Values.worker.runtime }}
     {{- $material := "/run/elitea-runtime" }}
-    {{ toJson (dict
+    {{- $config := dict
       "schema_version" "elitea.runtime-deploy.v1"
       "limits_revision" "elitea.runtime.limits.conformance.v2"
       "workload_session_id" $r.workloadSessionId
@@ -44,7 +44,19 @@ data:
       "spool_key_path" (printf "%s/worker-output-spool-key" $material)
       "agent_checkpoint_connection_path" (printf "%s/agent-checkpoint-connection" $material)
       "limits" $r.limits
-    ) }}
+    }}
+    {{- if or $r.agentModelCheckpointRecovery (gt (len $r.sandboxRuntimes) 0) }}
+    {{- if ne (include "elitea-worker.isRust" .) "true" }}
+    {{- fail "worker.runtime checkpoint recovery and sandbox profiles require the Rust worker" }}
+    {{- end }}
+    {{- end }}
+    {{- if $r.agentModelCheckpointRecovery }}
+    {{- $_ := set $config "agent_model_checkpoint_recovery" true }}
+    {{- end }}
+    {{- if gt (len $r.sandboxRuntimes) 0 }}
+    {{- $_ := set $config "sandbox_runtimes" $r.sandboxRuntimes }}
+    {{- end }}
+    {{ toJson $config }}
   {{- if eq (include "elitea-worker.isRust" .) "true" }}
   # The Rust worker's second mandatory file. It carries the rule the Python
   # worker reads from ELITEA_SENSITIVE_TOOLS, so `sensitiveTools` stays the one

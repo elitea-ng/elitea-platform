@@ -168,3 +168,12 @@ It verifies peer rejection, original execution identity, durable receipt recover
 It removes the disposable deployment and Secret after success. Failed test resources remain for diagnosis.
 This procedure requires Python gRPC, Protobuf, and cryptography packages.
 It uses a fixture signer and does not prove Main grant issuance or browser execution.
+
+### Connect the Helm Rust worker
+
+Set `worker.implementation=rust` and populate `worker.runtime.sandboxRuntimes` for each enabled language.
+Each entry uses `language`, `target`, `audience`, `image_digest`, `policy_revision`, and `timeout_seconds`.
+Match image digests, policy revisions, and supported languages to the selected supervisor profile.
+Use a target hostname present in the supervisor certificate. A Service name alone does not establish TLS identity.
+Set `worker.runtime.agentModelCheckpointRecovery=true` for the verified checkpoint recovery deployment.
+The chart rejects these Rust-only options when the Python worker is selected.

@@ -2389,3 +2389,20 @@ The fixture signer is separate from Main. This proves supervisor authorization e
 The first harness attempt stopped before submission because it expected a DNS certificate instead of SPIFFE.
 No production behavior change was needed for that harness correction.
 Full Kubernetes worker/application deployment and browser acceptance remain open.
+
+## Helm worker backend configuration, 2026-09-30
+
+The Kubernetes application preparation exposed a deployment configuration gap.
+`templates/worker/configmap-runtime.yaml` omitted `sandbox_runtimes` and `agent_model_checkpoint_recovery` from the Rust configuration.
+The Docker rehearsal already supplies these fields through its private runtime configuration.
+Without the Helm fields, Code nodes have no configured backend and model-checkpoint recovery retains its disabled default.
+
+`worker.runtime.sandboxRuntimes` now maps exactly to `config.rs::SandboxRuntimeConfig` entries.
+`worker.runtime.agentModelCheckpointRecovery` maps to the existing recovery flag.
+Both options are Rust-only. Helm rejects their use with the Python worker.
+Empty profiles and disabled recovery preserve the existing default configuration for both implementations.
+The target hostname must match the supervisor TLS certificate. Runtime image digests and policies must match the supervisor profile.
+
+The new `render-worker-sandbox.sh` verifies field preservation and Python rejection.
+The existing eight worker rendering checks still pass. The Helm workflow now runs both checks.
+This closes configuration delivery, not live worker startup or UI acceptance.

@@ -3320,6 +3320,13 @@ worker:
     platformOrigin: "https://elitea-platform-edge"
     spoolRoot: /var/lib/elitea-worker/output-spool
     spoolSizeLimit: 2Gi
+    # Rust-only. Enable checkpoint recovery after verifying the deployment contract.
+    agentModelCheckpointRecovery: false
+    # Rust-only deployment-selected Code backends. These are never YAML node inputs.
+    # Entries use SandboxRuntimeConfig fields: language, target, audience,
+    # image_digest, policy_revision, and timeout_seconds.
+    # The target hostname must match the supervisor certificate SAN.
+    sandboxRuntimes: []
     # Broader than the current `artifact.delete_file` rule, so metadata drift
     # cannot bypass approval.
     sensitiveTools: '{"*":["delete_file"]}'
