@@ -2593,3 +2593,15 @@ No application schema or runtime policy changes are required for this verificati
 
 Clippy passes for test targets with warnings denied. The test helpers keep bounded cgroup reads separate from lifecycle assertions.
 The final helper refactor also passes live verification in 10.23 seconds. Its observed throttled count increases from zero to three.
+
+## Kubernetes output capture boundary, 2026-09-30
+
+`live_output_flood_has_bounded_terminal_receipt` writes two MiB of JavaScript diagnostics inside the existing isolated Kubernetes runtime.
+The runner stops capture at its combined 512 KiB limit and returns `output_limit`.
+The live test passes in 3.98 seconds, with zero stdout bytes and 516,159 stderr bytes.
+Repeated receipt reads are identical. Cleanup removes the execution Pod.
+The test prints byte counts instead of the captured body.
+
+This extends the current Pyodide subprocess mapping and the new bounded runner boundary documented above.
+It verifies the live adapter and runner. It does not prove the browser message for output exhaustion.
+The worker and runner resource policies remain unchanged.

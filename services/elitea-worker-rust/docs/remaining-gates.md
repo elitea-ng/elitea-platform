@@ -96,7 +96,8 @@ The live Kubernetes memory test exposes and verifies a fix for missing receipts 
 The rebuilt supervisor passes persistent-chat memory-failure verification in chat 759, including reload and downstream suppression.
 Live adapter memory and deadline tests verify terminal receipts and Pod cleanup.
 A live CPU test verifies the 250m cgroup quota, increasing throttling counters, successful completion, and Pod cleanup.
-Gate 5 remains open for those checks and the remaining pipeline requirements.
+A live output-flood test verifies bounded capture, identical repeated failure receipts, and Pod cleanup.
+Gate 5 remains open for the remaining pipeline, isolation, and capacity requirements.
 Package/workspace authorization and compilation-cache performance remain tracked in the assessment.
 Gate 7a reuses this execution foundation for agent tools, with separate module admission and browser acceptance.
 

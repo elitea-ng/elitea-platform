@@ -171,6 +171,17 @@ async fn live_deadline_exhaustion_has_terminal_receipt() {
     .await;
 }
 
+#[tokio::test]
+#[ignore = "requires an isolated Kubernetes context, cached Deno image, and sandbox boundary resources"]
+async fn live_output_flood_has_bounded_terminal_receipt() {
+    live_failure_receipt(
+        "export default () => { const chunk = 'x'.repeat(8192); for (let i = 0; i < 256; i++) console.error(chunk); return {unexpected: true}; };",
+        30,
+        "output_limit",
+    )
+    .await;
+}
+
 async fn live_failure_receipt(source: &str, timeout_seconds: u32, expected: &str) {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let context = std::env::var("ELITEA_TEST_KUBE_CONTEXT").expect("explicit context required");
@@ -234,7 +245,12 @@ async fn live_failure_receipt(source: &str, timeout_seconds: u32, expected: &str
     let envelope: Value = serde_json::from_slice(&receipt).unwrap();
     assert_eq!(envelope["status"], expected, "{envelope}");
     assert_eq!(runtime.receipt(&bound).await.unwrap().unwrap(), receipt);
-    eprintln!("resource exhaustion receipt: {envelope}");
+    let stdout_bytes = envelope["stdout"].as_str().unwrap().len();
+    let stderr_bytes = envelope["stderr"].as_str().unwrap().len();
+    assert!(stdout_bytes + stderr_bytes <= 512 * 1024);
+    eprintln!(
+        "resource exhaustion receipt: {expected}, stdout={stdout_bytes}, stderr={stderr_bytes}"
+    );
     runtime.cleanup(&bound).await.unwrap();
     tokio::time::timeout(Duration::from_secs(20), async {
         while runtime.exists(&bound).await.unwrap() {
