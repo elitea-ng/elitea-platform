@@ -2355,3 +2355,18 @@ The first test attempt stopped before dispatch because its TLS provider was not 
 The corrected harness selects the same ring provider used by supervisor startup.
 This is runtime-adapter evidence only. It does not prove ledger durability, authenticated supervisor admission, or browser execution.
 Supervisor restart, worker recovery, cancellation races, and full Kubernetes UI acceptance remain open.
+
+## Kubernetes supervisor startup, 2026-09-30
+
+The Helm supervisor deployment is running in the isolated rehearsal cluster.
+One non-root Pod serves the Deno and Rust profiles on separate authenticated listeners.
+The projected-Secret init container completes successfully with the deployed image.
+Both profiles connect to the retained rehearsal receipt database through verified PostgreSQL TLS.
+The Kubernetes owners differ from the running Docker owners, so they do not reclaim Docker work.
+A namespace-local Service and EndpointSlice route the original database hostname to the retained rehearsal database.
+No application database schema or stored data changes are required.
+
+The deployed supervisor manifest digest is `sha256:0a31cec3ef1876569ef4124b05ca464322783d5e566f6b682c9383b67520f7ff`.
+Both authenticated listeners report startup. The deployment has one Ready replica with no restarts.
+This proves supervisor startup and private configuration preparation, not authenticated job submission or restart recovery.
+The application and worker still run in Docker. Full Kubernetes application deployment and UI verification remain open.
