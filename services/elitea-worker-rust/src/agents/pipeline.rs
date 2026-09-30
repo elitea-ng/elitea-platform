@@ -35,6 +35,7 @@ use super::graph::{
 };
 use super::internal_tools::{ASK_USER_TOOL_NAME, ASK_USER_TOOLSET_NAME};
 use super::model_scope::ModelScopeSessions;
+use super::ordinary::{mcp_materialization_error, tool_materialization_error};
 use super::request::AgentExecutionRequest;
 use super::runtime::{
     AssembledNativeAgentInvocation, AuthorizedNativeAssembly, NativeAgentAssembler,
@@ -466,7 +467,7 @@ impl PipelineNativeAgentAssembler {
                 mcp_tokens,
             )
             .await
-            .map_err(|_| unsupported_pipeline_runtime())?;
+            .map_err(tool_materialization_error)?;
         let (mut mcp, mcp_delegated_authorization) =
             materialize_mcp_toolsets_with_tokens_and_authorization(
                 &selected_snapshot,
@@ -475,7 +476,7 @@ impl PipelineNativeAgentAssembler {
                 mcp_tokens,
             )
             .await
-            .map_err(|_| unsupported_pipeline_runtime())?;
+            .map_err(|error| mcp_materialization_error(&error))?;
         delegated_authorization
             .merge(mcp_delegated_authorization)
             .map_err(|()| unsupported_pipeline_runtime())?;
@@ -1384,7 +1385,7 @@ async fn bind_saved_pipeline_runtimes(
             runtime.mcp_tokens,
         )
         .await
-        .map_err(|_| unsupported_pipeline_runtime())?;
+        .map_err(tool_materialization_error)?;
     let (mut mcp, mcp_delegated_authorization) =
         materialize_mcp_toolsets_with_tokens_and_authorization(
             &selected,
@@ -1393,7 +1394,7 @@ async fn bind_saved_pipeline_runtimes(
             runtime.mcp_tokens,
         )
         .await
-        .map_err(|_| unsupported_pipeline_runtime())?;
+        .map_err(|error| mcp_materialization_error(&error))?;
     delegated_authorization
         .merge(mcp_delegated_authorization)
         .map_err(|()| unsupported_pipeline_runtime())?;

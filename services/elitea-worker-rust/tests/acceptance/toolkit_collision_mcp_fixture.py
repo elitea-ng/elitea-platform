@@ -31,7 +31,7 @@ def respond(path, body):
         result = {}
     elif method == "tools/call":
         params = body.get("params", {})
-        if not isinstance(params, dict) or params.get("name") != TOOL["name"] or params.get("arguments") != ({} if path == "/empty" else {"probe": "identity"}):
+        if not isinstance(params, dict) or params.get("name") != TOOL["name"] or params.get("arguments", {}) != ({} if path == "/empty" else {"probe": "identity"}):
             return {"jsonrpc": "2.0", "id": body["id"], "error": {"code": -32602, "message": "Invalid tool request"}}
         result = {"content": [{"type": "text", "text": json.dumps({"source": path[1:], "marker": SOURCES[path]})}], "isError": False}
     else:

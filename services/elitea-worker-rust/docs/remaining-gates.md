@@ -438,7 +438,9 @@ Audit omitted versus explicit empty `input_mapping` for direct Toolkit/MCP nodes
 The earlier Rust default inserts `messages`, which a strict zero-argument MCP schema rejects (collision setup chats 689/690).
 The [empty-mapping correction](source-mapping/direct-tool-empty-mapping-20260930.md) preserves the current SDK distinction.
 Explicit empty mappings now send no arguments; omitted mappings retain the legacy message default.
-All 16 focused direct-tool tests pass. Deployment and browser acceptance remain open.
+All 16 focused direct-tool tests pass. Kubernetes persistent chat 760 passes the strict MCP call and reload checks.
+The test fixture accepts protocol-valid omitted arguments and rejects injected message state.
+The separate assembly-error classification correction passes local regression tests; its deployment remains open.
 
 ## Luna Full-window rehearsal configuration (2026-09-28)
 

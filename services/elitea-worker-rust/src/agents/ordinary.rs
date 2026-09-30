@@ -700,7 +700,9 @@ fn model_binding_error(error: ModelFacadeError) -> NativeAgentAssemblyError {
     NativeAgentAssemblyError::new(code, "the ordinary native model could not be bound")
 }
 
-fn tool_materialization_error(error: ToolsetMaterializationError) -> NativeAgentAssemblyError {
+pub(super) fn tool_materialization_error(
+    error: ToolsetMaterializationError,
+) -> NativeAgentAssemblyError {
     let code = match error.code() {
         ToolsetMaterializationErrorCode::InvalidConfiguration => {
             NativeAgentAssemblyErrorCode::InvalidConfiguration
@@ -718,7 +720,9 @@ fn tool_materialization_error(error: ToolsetMaterializationError) -> NativeAgent
     NativeAgentAssemblyError::new(code, "the native agent toolsets could not be materialized")
 }
 
-fn mcp_materialization_error(error: &McpMaterializationError) -> NativeAgentAssemblyError {
+pub(super) fn mcp_materialization_error(
+    error: &McpMaterializationError,
+) -> NativeAgentAssemblyError {
     let code = match error.code() {
         McpMaterializationErrorCode::InvalidConfiguration => {
             NativeAgentAssemblyErrorCode::InvalidConfiguration

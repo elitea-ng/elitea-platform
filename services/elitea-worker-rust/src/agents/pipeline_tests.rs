@@ -4636,3 +4636,38 @@ fn a_nested_pipeline_with_ask_user_declares_its_clarifying_pause() {
         vec!["clarifying questions"],
     );
 }
+
+#[tokio::test]
+async fn direct_mcp_setup_failure_preserves_configuration_category_without_model() {
+    let connections = Arc::new(AtomicUsize::new(0));
+    let assembler = PipelineNativeAgentAssembler::with_state(
+        Arc::new(InMemorySessionService::new()),
+        Arc::new(MemoryCheckpointer::new()),
+    )
+    .with_mcp_connector(Arc::new(PipelineMcpConnector {
+        connections: Arc::clone(&connections),
+        tool_calls: Arc::new(AtomicUsize::new(0)),
+        read_only: true,
+    }));
+    let mut request = mcp_pipeline_request(
+        "release intelligence",
+        &["lookup_release"],
+        "lookup_release",
+    );
+    request.payload.application["version_details"]["tools"][0]["settings"]["timeout"] = json!(0);
+    let error = assembler
+        .assemble(authorized(&request))
+        .await
+        .err()
+        .expect("invalid MCP timeout must fail assembly");
+    assert_eq!(
+        error.code(),
+        NativeAgentAssemblyErrorCode::InvalidConfiguration
+    );
+    assert_eq!(
+        error.to_string(),
+        "the native MCP toolsets could not be materialized"
+    );
+    assert!(!error.retryable());
+    assert_eq!(connections.load(Ordering::Acquire), 0);
+}
