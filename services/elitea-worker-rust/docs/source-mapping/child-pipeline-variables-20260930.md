@@ -112,3 +112,24 @@ message remain pending; the earlier browser failure proves only the stopping beh
 Verification: 59 focused child tests pass. After extracting the validation helper, both
 new error-channel/restoration tests pass again. Clippy with tests and warnings denied,
 formatting, and diff checks pass.
+
+## Typed child output projection
+
+Current SDK `elitea_sdk/runtime/tools/function.py`, in its FunctionTool output projection,
+preserves a child pipeline's computed declared output fields and falls back to final text
+when a field is absent or null. An ordinary Agent uses its final response instead of
+propagating stale parent fields. This behavior is the reference, not its broad state copying.
+
+The Rust `ApplicationNode::pipeline_subgraph` now uses ADK's isolated, explicit output
+mapping for parent-declared fields present in the child schema. `project_response` validates
+every resulting value against the parent's declared types before returning any updates.
+Undeclared child fields do not escape. Missing/null fields retain the text fallback, and
+ordinary Agent behavior remains unchanged. Output-size bounds still apply to the complete
+projected update. A rejected projection sends the existing `pipeline.result_invalid` event
+and applies no partial parent update; the child itself may already have completed.
+
+All 15 focused application graph tests pass, including typed integer/list outputs, stale
+parent-value replacement, undeclared-field isolation, text fallback, and incompatible parent
+output types. The negative checkpoint test confirms the child completed while the failed
+first parent node wrote no partial parent checkpoint. Clippy with tests and warnings denied
+passes. Typed output deployment/browser acceptance remains open.

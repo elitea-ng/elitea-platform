@@ -304,6 +304,7 @@ impl ApplicationNodeDefinition {
         &self,
         response: &str,
         state_types: &BTreeMap<String, String>,
+        child_values: &State,
     ) -> Result<BTreeMap<String, Value>, ApplicationExecutionError> {
         if response.len() > MAX_RESULT_BYTES || response.contains('\0') {
             return Err(ApplicationExecutionError::InvalidResult);
@@ -313,7 +314,11 @@ impl ApplicationNodeDefinition {
             json!([{"role": "assistant", "content": response}]),
         )]);
         for key in self.output.iter().filter(|key| key.as_str() != "messages") {
-            let value = Value::String(response.to_owned());
+            let value = child_values
+                .get(key)
+                .filter(|value| !value.is_null())
+                .cloned()
+                .unwrap_or_else(|| Value::String(response.to_owned()));
             ensure_state_type(key, &value, state_types)
                 .map_err(|_| ApplicationExecutionError::InvalidResult)?;
             updates.insert(key.clone(), value);
@@ -395,6 +400,16 @@ impl ApplicationNode {
             .with_input(APPLICATION_TASK_STATE_KEY, "input")
             .with_input(APPLICATION_MESSAGES_STATE_KEY, "messages")
             .with_output("elitea_response", APPLICATION_RESULT_STATE_KEY);
+        if let ResolvedApplicationParticipant::Pipeline { variable_types, .. } = &self.participant {
+            for key in self
+                .definition
+                .output
+                .iter()
+                .filter(|key| variable_types.contains_key(*key))
+            {
+                node = node.with_output(key, key);
+            }
+        }
         for key in self.definition.variables.keys() {
             node = node.with_input(self.definition.variable_channel(key), key);
         }
@@ -500,21 +515,50 @@ impl ApplicationNode {
         if output.goto.is_some() || output.goto_parent.is_some() || !output.events.is_empty() {
             return Err(node_failure(self.name()));
         }
+        self.finish_pipeline_output(output, events, display_name, &call_id)
+            .await
+    }
+
+    async fn finish_pipeline_output(
+        &self,
+        mut output: NodeOutput,
+        events: Option<&PipelineNodeEventSender>,
+        display_name: &str,
+        call_id: &str,
+    ) -> Result<NodeOutput, GraphError> {
         let response = output
             .updates
             .remove(APPLICATION_RESULT_STATE_KEY)
             .and_then(|value| value.as_str().map(str::to_owned))
             .ok_or_else(|| node_failure(self.name()))?;
-        if !output.updates.is_empty() {
+        if output
+            .updates
+            .keys()
+            .any(|key| !self.definition.output.contains(key))
+        {
             return Err(node_failure(self.name()));
         }
         if let Some(events) = events {
             events
-                .send_application_end(display_name, &call_id)
+                .send_application_end(display_name, call_id)
                 .await
                 .map_err(|_| node_failure(self.name()))?;
         }
-        self.projected_output(&response)
+        let projected = self.projected_output_with_values(&response, &output.updates);
+        if projected.is_err() {
+            tracing::error!(
+                node_id = self.name(),
+                error_code = "pipeline.result_invalid",
+                "Child pipeline result does not match the parent output mapping; no parent updates applied"
+            );
+            if let Some(events) = events {
+                events
+                    .send_execution_failure("pipeline.result_invalid")
+                    .await
+                    .map_err(|_| node_failure(self.name()))?;
+            }
+        }
+        projected
     }
 
     async fn bind_child_checkpoint(
@@ -568,9 +612,17 @@ impl ApplicationNode {
     }
 
     fn projected_output(&self, response: &str) -> Result<NodeOutput, GraphError> {
+        self.projected_output_with_values(response, &State::new())
+    }
+
+    fn projected_output_with_values(
+        &self,
+        response: &str,
+        child_values: &State,
+    ) -> Result<NodeOutput, GraphError> {
         let updates = self
             .definition
-            .project_response(response, &self.state_types)
+            .project_response(response, &self.state_types, child_values)
             .map_err(|_| node_failure(self.name()))?;
         let mut output = NodeOutput::new();
         for (key, value) in updates {

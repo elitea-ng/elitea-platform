@@ -1121,3 +1121,94 @@ fn child_variable_names_must_exist_in_the_saved_child_schema() {
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn saved_child_outputs_keep_types_and_exclude_undeclared_fields() {
+    let checkpointer = Arc::new(MemoryCheckpointer::new());
+    let yaml = PARENT_VARIABLE_PIPELINE
+        .replace(
+            "  answer: str",
+            "  answer: str\n  count: int\n  items: list\n  fallback: str",
+        )
+        .replace(
+            "output: [answer]",
+            "output: [answer, count, items, fallback]",
+        );
+    let graph = PipelineDefinition::from_yaml(&yaml)
+        .unwrap()
+        .compile_with_runtime(
+            "parent",
+            checkpointer.clone(),
+            None,
+            &PipelineNodeRuntimes::new(None, None, Some(child_variable_resolver(checkpointer))),
+        )
+        .unwrap();
+    let state = graph
+        .invoke(
+            State::from([
+                ("topic".into(), json!("orders")),
+                ("rows".into(), json!([1, 2])),
+                ("count".into(), json!(999)),
+                ("items".into(), json!(["stale"])),
+            ]),
+            ExecutionConfig::new("typed-child-outputs"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(state["count"], json!(3));
+    assert_eq!(state["items"], json!([1, 2]));
+    assert_eq!(state["answer"], json!("3|for orders|2|True"));
+    assert_eq!(state["fallback"], state["answer"]);
+    assert!(!state.contains_key("enabled"));
+    assert!(!state.contains_key("label"));
+}
+
+#[tokio::test]
+async fn child_output_type_mismatch_does_not_apply_partial_parent_updates() {
+    let checkpointer = Arc::new(MemoryCheckpointer::new());
+    let yaml = PARENT_VARIABLE_PIPELINE
+        .replace("  answer: str", "  answer: str\n  count: str")
+        .replace("output: [answer]", "output: [answer, count]");
+    let graph = PipelineDefinition::from_yaml(&yaml)
+        .unwrap()
+        .compile_with_runtime(
+            "parent",
+            checkpointer.clone(),
+            None,
+            &PipelineNodeRuntimes::new(
+                None,
+                None,
+                Some(child_variable_resolver(checkpointer.clone())),
+            ),
+        )
+        .unwrap();
+    assert!(
+        graph
+            .invoke(
+                State::from([
+                    ("topic".into(), json!("orders")),
+                    ("rows".into(), json!([1, 2])),
+                    ("count".into(), json!("original")),
+                    ("answer".into(), json!("original-answer")),
+                ]),
+                ExecutionConfig::new("typed-child-output-error")
+            )
+            .await
+            .is_err()
+    );
+    // The failing first parent node must not publish a checkpoint containing partial updates.
+    assert!(
+        checkpointer
+            .load("typed-child-output-error")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    // The child did complete; this is an output-contract failure, not an input rejection.
+    let child = checkpointer
+        .load("typed-child-output-error/delegate")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(child.state["count"], json!(3));
+}
