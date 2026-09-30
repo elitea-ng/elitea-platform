@@ -2370,3 +2370,22 @@ The deployed supervisor manifest digest is `sha256:0a31cec3ef1876569ef4124b05ca4
 Both authenticated listeners report startup. The deployment has one Ready replica with no restarts.
 This proves supervisor startup and private configuration preparation, not authenticated job submission or restart recovery.
 The application and worker still run in Docker. Full Kubernetes application deployment and UI verification remain open.
+
+## Live Kubernetes supervisor recovery, 2026-09-30
+
+A disposable supervisor runs the production image with a separate owner and fixture verification key.
+The client uses the existing worker SPIFFE certificate over verified mTLS.
+A valid signature bound to another peer is rejected with `PERMISSION_DENIED`.
+The admitted JavaScript code generates a unique marker and waits 45 seconds before returning it.
+After the dispatch marker appears, the test replaces the supervisor Pod with a one-second termination grace period.
+The execution Pod retains its original UID and continues running.
+After lease expiry, the replacement supervisor reconciles the same activation and persists its completed receipt.
+A fresh signed retry returns identical result bytes. No replacement execution Pod is created.
+The execution Pod is removed after durable completion. The disposable supervisor and fixture Secret are then removed.
+The normal supervisor remains Ready with zero restarts.
+
+`scripts/runtime/test_kubernetes_supervisor_recovery.py` retains the verification procedure with explicit cluster, namespace, and certificate-directory arguments.
+The fixture signer is separate from Main. This proves supervisor authorization enforcement and receipt recovery, not Main grant issuance.
+The first harness attempt stopped before submission because it expected a DNS certificate instead of SPIFFE.
+No production behavior change was needed for that harness correction.
+Full Kubernetes worker/application deployment and browser acceptance remain open.

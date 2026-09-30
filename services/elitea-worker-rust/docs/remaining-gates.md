@@ -84,9 +84,12 @@ The kube-rs client now provides typed Pod observation, creation, and identity-bo
 Helm defines a dedicated execution namespace, limited RBAC, network isolation, and a Pod-count quota.
 The kube-rs adapter implements preparation, dispatch, bounded receipt reads, and finalizer cleanup.
 The same supervisor selects Docker or Kubernetes from each runtime profile.
-Kubernetes deployment material, image rebuilds, and live acceptance remain open.
-Deploy the platform to minikube after the implementation and deployment configuration are ready.
-Gate 5 remains open for Kubernetes execution and the remaining pipeline requirements.
+Kubernetes deployment material and runtime images are built and deployed to an isolated Minikube cluster.
+The four-language state fixture passes through the live Kubernetes adapter, including repeated receipt reads and Pod cleanup.
+The deployed supervisor passes mTLS peer rejection and mid-execution restart recovery with an isolated fixture signer.
+Recovery retains the original execution Pod UID and returns an identical persisted receipt after retry.
+Main-issued authorization and full Kubernetes application/UI acceptance remain open.
+Gate 5 remains open for those checks and the remaining pipeline requirements.
 Package/workspace authorization and compilation-cache performance remain tracked in the assessment.
 Gate 7a reuses this execution foundation for agent tools, with separate module admission and browser acceptance.
 

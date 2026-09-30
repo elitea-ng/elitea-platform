@@ -157,3 +157,14 @@ cargo test --manifest-path services/elitea-worker-rust/Cargo.toml \
 
 This checks the adapter and four language runtimes. It does not replace supervisor durability or browser acceptance tests.
 Failed workloads remain available for diagnosis. Delete them only after confirming termination and preserving required evidence.
+
+### Verify supervisor recovery
+
+Deploy the supervisor chart and its private material first.
+Run `scripts/runtime/test_kubernetes_supervisor_recovery.py` with `--context`, `--namespace`, and `--worker-material`.
+Use an isolated rehearsal namespace. The certificate directory must contain the worker client certificate, key, and runtime CA.
+The test creates a disposable supervisor and signing key, then replaces that supervisor during execution.
+It verifies peer rejection, original execution identity, durable receipt recovery, retry consistency, and terminal cleanup.
+It removes the disposable deployment and Secret after success. Failed test resources remain for diagnosis.
+This procedure requires Python gRPC, Protobuf, and cryptography packages.
+It uses a fixture signer and does not prove Main grant issuance or browser execution.
