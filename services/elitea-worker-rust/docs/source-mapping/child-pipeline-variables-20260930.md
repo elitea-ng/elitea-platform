@@ -243,3 +243,17 @@ The pipeline editor's ephemeral Test chat also completes both real Haiku calls a
 shows the same override/default headers. No ephemeral reload persistence is claimed.
 Clippy with tests and warnings denied passes. A worker-disruption/resume check with
 variable overrides remains open; these successful runs do not establish recovery.
+
+## Parallel clarification resume regression
+
+`ordinary_tests.rs::parallel_child_variables_survive_clarification_resume_independently`
+checks two calls to the same saved Agent with different `audience` overrides.
+Both children pause for clarification. A partial decision set cannot resume either child.
+The complete decision set resumes each exact child without replanning its call.
+Captured provider requests retain each child's override before and after resume.
+Neither child uses the saved default or the other child's override.
+
+All 21 tests selected by `cargo test --lib parallel_ --jobs 2` pass.
+These tests use local provider fixtures and the same process.
+They do not prove worker replacement, live clarification controls, or database recovery.
+The existing task-only clarification test also passes.

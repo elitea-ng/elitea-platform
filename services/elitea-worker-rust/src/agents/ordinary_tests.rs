@@ -217,7 +217,9 @@ fn runtime_context_with_sensitive_child() -> (RuntimeContextClient, Arc<AtomicUs
     (client, calls)
 }
 
-fn runtime_context_with_ask_user_child() -> (RuntimeContextClient, Arc<AtomicUsize>) {
+fn runtime_context_with_ask_user_child(
+    with_variables: bool,
+) -> (RuntimeContextClient, Arc<AtomicUsize>) {
     let calls = Arc::new(AtomicUsize::new(0));
     let paths = Arc::new(Mutex::new(Vec::new()));
     let responses = (0..3)
@@ -229,6 +231,11 @@ fn runtime_context_with_ask_user_child() -> (RuntimeContextClient, Arc<AtomicUsi
                 vec![],
             );
             child["meta"] = serde_json::json!({"internal_tools": ["ask_user"]});
+            if with_variables {
+                child["instructions"] =
+                    serde_json::json!("Resolve only the delegated name. Audience={{audience}}");
+                child["variables"] = serde_json::json!([{ "name":"audience", "value":"default" }]);
+            }
             [
                 runtime_context_response(&serde_json::json!({
                     "schema_version": "elitea.runtime.elitea-client-token.v1",
@@ -454,6 +461,29 @@ fn parallel_nested_agent_call_response() -> Response<Body> {
         "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\n",
         "data: [DONE]\n\n",
     );
+    test_model_gateway_response(Body::new(Full::<Bytes>::from(raw)))
+}
+
+fn parallel_variable_agent_call_response() -> Response<Body> {
+    let calls = [
+        ("call_olivia", "Resolve Olivia Lovelace", "olivia-team"),
+        ("call_sasha", "Resolve Sasha Grey", "sasha-team"),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, (id, task, audience))| {
+        serde_json::json!({
+            "index":index, "id":id, "type":"function", "function": {
+                "name":"elitea_agent_31_v_41",
+                "arguments":serde_json::json!({"task":task,"audience":audience}).to_string()
+            }
+        })
+    })
+    .collect::<Vec<_>>();
+    let chunk =
+        serde_json::json!({"choices":[{"delta":{"tool_calls":calls},"finish_reason":null}]});
+    let stop = serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]});
+    let raw = format!("data: {chunk}\n\ndata: {stop}\n\ndata: [DONE]\n\n");
     test_model_gateway_response(Body::new(Full::<Bytes>::from(raw)))
 }
 
@@ -2228,14 +2258,27 @@ async fn parallel_nested_sensitive_calls_persist_distinct_hierarchical_interrupt
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[allow(clippy::too_many_lines)] // Initial parallel pause and atomic exact-child resume are one proof.
 async fn parallel_nested_ask_user_resumes_each_exact_child_without_replanning() {
+    parallel_nested_ask_user_resume_proof(false).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn parallel_child_variables_survive_clarification_resume_independently() {
+    parallel_nested_ask_user_resume_proof(true).await;
+}
+
+#[allow(clippy::too_many_lines)] // Initial parallel pause and atomic exact-child resume are one proof.
+async fn parallel_nested_ask_user_resume_proof(with_variables: bool) {
     let mut request = ordinary_request(AgentExecutionKind::Application);
     attach_nested_agent(&mut request);
-    let (runtime_context, context_calls) = runtime_context_with_ask_user_child();
+    let (runtime_context, context_calls) = runtime_context_with_ask_user_child(with_variables);
     let (model_gateway, captured) = test_model_gateway_client(
         vec![
-            TestModelGatewayOutcome::Response(parallel_nested_agent_call_response()),
+            TestModelGatewayOutcome::Response(if with_variables {
+                parallel_variable_agent_call_response()
+            } else {
+                parallel_nested_agent_call_response()
+            }),
             TestModelGatewayOutcome::Response(ask_user_tool_call_response()),
             TestModelGatewayOutcome::Response(ask_user_tool_call_response()),
             TestModelGatewayOutcome::Response(text_response("resolved clarified child")),
@@ -2369,6 +2412,40 @@ async fn parallel_nested_ask_user_resumes_each_exact_child_without_replanning() 
 
     let captured = captured.lock().expect("captured model requests");
     assert_eq!(captured.len(), 6, "resume must not replan child calls");
+    if with_variables {
+        for indices in [[1, 2], [3, 4]] {
+            let systems = indices
+                .into_iter()
+                .map(|index| {
+                    let request: serde_json::Value =
+                        serde_json::from_slice(&captured[index].body).unwrap();
+                    request["messages"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .filter(|m| m["role"] == "system")
+                        .map(|m| m["content"].as_str().unwrap())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                systems
+                    .iter()
+                    .filter(|s| s.contains("Audience=olivia-team"))
+                    .count(),
+                1
+            );
+            assert_eq!(
+                systems
+                    .iter()
+                    .filter(|s| s.contains("Audience=sasha-team"))
+                    .count(),
+                1
+            );
+            assert!(systems.iter().all(|s| !s.contains("Audience=default")));
+        }
+    }
     let tool_results = captured
         .iter()
         .filter_map(|request| serde_json::from_slice::<serde_json::Value>(&request.body).ok())
