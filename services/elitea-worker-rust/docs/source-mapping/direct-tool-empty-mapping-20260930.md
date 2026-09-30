@@ -52,7 +52,14 @@ They preserve configuration, dependency, capacity, and authorization categories,
 No endpoint, credential, response body, or tool arguments enter the error message.
 `direct_mcp_setup_failure_preserves_configuration_category_without_model` verifies failure before connection.
 Five direct-MCP identity and legacy-name regression tests pass. Clippy with tests and denied warnings passes.
-This diagnostic correction is tested locally but is not yet deployed.
+The diagnostic correction is deployed from source `dbd2629b3`.
+The cached worker manifest is `sha256:ada4f119a21b321c8b80d69b180f80cb86f5f90f931294ee71489c3af271c8c1`.
+Chat 760 verifies failure after confirmed removal of the disposable MCP fixture Pod.
+Execution `c59ff95712fbc6117f023330fa3c5503` reports `native_agent.dependency_unavailable` with the MCP assembly reason.
+The UI shows `DEPENDENCY_UNAVAILABLE`, an operator-only support reference, and the same failure after reload.
+An earlier attempt completes before fixture shutdown and is not negative-test evidence.
+The fixture is restored after the check. A new browser turn returns `EMPTY-ARGUMENTS-731` with no argument keys.
+Assembly failures still log at WARN. Aligning terminal assembly severity with the ERROR policy remains open.
 The current SDK remains the functional reference for mapping behavior described above.
 No current-platform error wording is copied.
 
