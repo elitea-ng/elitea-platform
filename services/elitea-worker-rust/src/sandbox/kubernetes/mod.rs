@@ -1,6 +1,7 @@
 //! Kubernetes workload contract. The API adapter must preserve this identity
 //! and must not treat Pod disappearance as proof that execution stopped.
 pub mod client;
+pub mod runtime;
 
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -123,6 +124,10 @@ impl PodPolicy {
                     "name":"code", "image":self.image, "imagePullPolicy":"Never",
                     "command":["/bin/sh","-c","while [ ! -f /workspace/.elitea-dispatch ]; do sleep 0.1; done; exec /usr/local/bin/elitea-code-runner"],
                     "resources":{"requests":resources,"limits":resources},
+                    "env":[
+                        {"name":"ELITEA_SANDBOX_POD_UID","valueFrom":{"fieldRef":{"fieldPath":"metadata.uid"}}},
+                        {"name":"ELITEA_SANDBOX_REQUEST","valueFrom":{"fieldRef":{"fieldPath":"metadata.annotations['sandbox.elitea.ai/request']"}}}
+                    ],
                     "securityContext":{"allowPrivilegeEscalation":false,"readOnlyRootFilesystem":true,"capabilities":{"drop":["ALL"]}},
                     "volumeMounts":[{"name":"workspace","mountPath":"/workspace"},{"name":"tmp","mountPath":"/tmp"}]
                 }],

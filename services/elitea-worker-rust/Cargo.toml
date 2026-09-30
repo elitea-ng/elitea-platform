@@ -13,7 +13,7 @@ required-features = ["sandbox-supervisor"]
 
 [features]
 # Container access belongs to the dedicated supervisor, never the default worker.
-sandbox-supervisor = ["dep:adk-sandbox", "dep:x509-parser", "dep:kube", "dep:k8s-openapi"]
+sandbox-supervisor = ["dep:adk-sandbox", "dep:x509-parser", "dep:kube", "dep:k8s-openapi", "dep:futures-util"]
 
 [dependencies]
 adk-anthropic = "=2.2.0"
@@ -25,6 +25,7 @@ async-trait = "=0.1.92"
 base64 = "=0.23.1"
 bytes = "=1.12.1"
 chrono = { version = "=0.4.45", default-features = false, features = ["clock", "serde"] }
+futures-util = { version = "=0.3.34", optional = true, default-features = false, features = ["io"] }
 http = "=1.5.0"
 http-body-util = "=0.1.5"
 hmac = "=0.13.0"

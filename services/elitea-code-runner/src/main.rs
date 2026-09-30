@@ -2,6 +2,8 @@
 //! Outer CPU/memory/PID/network/filesystem isolation remains mandatory.
 #![forbid(unsafe_code)]
 
+mod lifecycle;
+
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::process::Stdio;
@@ -129,6 +131,10 @@ async fn execute(request: Request) -> Receipt {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(command) = std::env::args().nth(1) {
+        lifecycle::run(&command)?;
+        return Ok(());
+    }
     // The supervisor writes this file before signaling container dispatch.
     // It must never place credentials or host runtime endpoints in it.
     let mut bytes = Vec::new();

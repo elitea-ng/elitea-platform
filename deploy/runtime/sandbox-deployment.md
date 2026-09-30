@@ -107,3 +107,11 @@ Pod creation remains a privileged capability within this namespace. Do not store
 Helm retains the namespace, network policy, and Pod quota after uninstall.
 Drain supervisor receipts and confirm workload termination before removing these retained resources.
 This configuration only prepares the boundary. Runtime wiring and live Kubernetes acceptance remain incomplete.
+
+The supervisor now accepts the backend object shown in `sandbox-supervisor.kubernetes.example.json`.
+Omit `backend` for the existing Docker behavior.
+Kubernetes profiles use in-cluster service account credentials; they do not load an operator's local kubeconfig.
+Keep the cluster identifier stable across restarts. Its value becomes part of each durable Pod binding.
+Build both execution images with the new runner lifecycle helper before activation.
+Copy projected Secrets into canonical, owner-private files before starting the supervisor.
+Direct Secret mounts use symlinks and do not satisfy the existing private-file checks.

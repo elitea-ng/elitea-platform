@@ -82,7 +82,9 @@ The negative case now shows `PIPELINE_CODE_FAILED` and actionable guidance in ch
 One 23.3 MB supervisor process manages both runtime profiles. Real four-stage execution and terminal-container cleanup pass.
 The kube-rs client now provides typed Pod observation, creation, and identity-bound stop requests.
 Helm defines a dedicated execution namespace, limited RBAC, network isolation, and a Pod-count quota.
-Preparation, dispatch, receipt handling, process wiring, and live Kubernetes acceptance remain open.
+The kube-rs adapter implements preparation, dispatch, bounded receipt reads, and finalizer cleanup.
+The same supervisor selects Docker or Kubernetes from each runtime profile.
+Kubernetes deployment material, image rebuilds, and live acceptance remain open.
 Deploy the platform to minikube after the implementation and deployment configuration are ready.
 Gate 5 remains open for Kubernetes execution and the remaining pipeline requirements.
 Package/workspace authorization and compilation-cache performance remain tracked in the assessment.

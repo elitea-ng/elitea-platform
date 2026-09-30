@@ -2269,3 +2269,42 @@ Supervisor library/test Clippy and Rust formatting checks pass.
 Helm lint, boundary rendering, and existing image-warmup rendering checks pass.
 The default worker dependency tree excludes `kube` and `k8s-openapi`.
 These checks do not prove cluster enforcement, workload recovery, or browser execution.
+
+## Kubernetes lifecycle adapter, 2026-09-30
+
+`src/sandbox/kubernetes/runtime.rs` implements the existing `CodeJobRuntime` interface.
+`src/sandbox/process.rs` selects Docker by default. An explicit Kubernetes backend uses in-cluster credentials and the same receipt lifecycle.
+`deploy/runtime/sandbox-supervisor.kubernetes.example.json` documents the backend configuration.
+The configured registry digest must match the signed job image digest.
+The runtime binding includes cluster identity, namespace, and Pod UID.
+The worker still owns graph checkpoints. No product table or checkpoint ownership changes.
+
+`services/elitea-code-runner/src/lifecycle.rs` supplies inert preparation, readiness, and dispatch commands.
+The Kubernetes downward API supplies the Pod UID and request fingerprint.
+The helper compares both values before writing input or signaling execution.
+This check protects the interval between supervisor observation and Kubernetes exec, which addresses Pods by name.
+The input travels through exec stdin. Command arguments and Pod metadata do not contain code or user input.
+Only two fixed input files are accepted. The helper writes readiness last.
+A readiness marker prevents retries from rewriting prepared input. Dispatch uses one persistent marker consumed by PID 1.
+The existing Docker runner entry point remains unchanged when no lifecycle command is supplied.
+
+Exec input, stdout, stderr, duration, and receipt reads have explicit bounds.
+A dropped attachment aborts its transport task. It does not prove that a remote operation failed.
+The adapter reads receipts only after the original container reports termination.
+Receipt validation requires the runner envelope and a zero exit code for successful completion.
+Cleanup first requests graceful deletion while the receipt finalizer retains the Pod.
+It then removes only Elitea's finalizer with UID and resource-version conditions.
+Other finalizers remain. Missing bound Pods do not prove termination.
+
+The legacy business references remain the Code sandbox and state mappings above.
+Kubernetes placement and receipt retention are new runtime concerns, not a Python port.
+The adapter requires rebuilt execution images containing the lifecycle helper.
+The deployed Docker rehearsal still uses the previously verified images.
+Projected Kubernetes Secrets need an owner-private material copy before supervisor startup.
+Kubernetes deployment, network enforcement, cancellation races, restart recovery, and browser acceptance remain open gates.
+
+Validation: all 32 sandbox tests pass with localhost sockets enabled for disconnect testing.
+The ten Kubernetes tests include conditional cleanup and preservation of unrelated finalizers.
+All six runner tests pass, including preparation, repeated dispatch, UID rejection, output bounds, and timeout handling.
+Worker supervisor library/test Clippy, runner all-target Clippy, and formatting checks pass.
+No new runtime images or Kubernetes workloads are deployed in this checkpoint.

@@ -54,6 +54,18 @@ impl DockerSupervisor {
         owner: String,
         concurrency: usize,
     ) -> Result<Self, SupervisorError> {
+        Self::with_runtime(ledger, Box::new(runtime), owner, concurrency)
+    }
+
+    /// Select a deployment backend while retaining the same durable lifecycle.
+    /// # Errors
+    /// Returns `Invalid` for an invalid owner or concurrency bound.
+    pub fn with_runtime(
+        ledger: JobLedger,
+        runtime: Box<dyn CodeJobRuntime>,
+        owner: String,
+        concurrency: usize,
+    ) -> Result<Self, SupervisorError> {
         if concurrency == 0
             || concurrency > 1024
             || owner.is_empty()
@@ -64,7 +76,7 @@ impl DockerSupervisor {
         }
         Ok(Self {
             ledger,
-            runtime: Box::new(runtime),
+            runtime,
             owner,
             capacity: Semaphore::new(concurrency),
             stop_capacity: Semaphore::new(concurrency.min(16)),

@@ -1,4 +1,4 @@
-//! Dedicated Docker supervisor process composition. No graph checkpoint ownership.
+//! Dedicated sandbox supervisor process composition. No graph checkpoint ownership.
 use super::{
     docker_supervisor::DockerSupervisor,
     ledger::JobLedger,
@@ -29,6 +29,8 @@ use zeroize::Zeroizing;
 #[serde(deny_unknown_fields)]
 struct Config {
     revision: u32,
+    #[serde(default)]
+    backend: Backend,
     listen_address: SocketAddr,
     owner: String,
     audience: String,
@@ -46,6 +48,20 @@ struct Config {
     memory_bytes: u64,
     cpu_limit: f64,
     timeout_seconds: u32,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+enum Backend {
+    #[default]
+    Docker,
+    Kubernetes {
+        cluster: String,
+        namespace: String,
+        image: String,
+        runtime_class: String,
+        node_selector: std::collections::BTreeMap<String, String>,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -79,6 +95,17 @@ impl Config {
         {
             return Err(StartupError("validate bounded configuration"));
         }
+        if let Backend::Kubernetes { cluster, image, .. } = &self.backend {
+            if cluster.is_empty()
+                || image.rsplit_once('@').map(|(_, digest)| digest)
+                    != Some(self.image_digest.as_str())
+            {
+                return Err(StartupError("validate Kubernetes runtime image binding"));
+            }
+            self.kubernetes_policy()?
+                .workload(&super::kubernetes::PodIdentity::new(&[0; 32], &[0; 32]))
+                .map_err(|_| StartupError("validate Kubernetes isolation policy"))?;
+        }
         PreparedJob::new(
             self.languages[0],
             "validate".into(),
@@ -89,6 +116,30 @@ impl Config {
         )
         .map_err(|_| StartupError("validate runtime profile"))?;
         Ok(())
+    }
+    fn kubernetes_policy(&self) -> Result<super::kubernetes::PodPolicy, StartupError> {
+        let Backend::Kubernetes {
+            namespace,
+            image,
+            runtime_class,
+            node_selector,
+            ..
+        } = &self.backend
+        else {
+            return Err(StartupError("select Kubernetes policy"));
+        };
+        // validate() bounds this finite positive value to at most 256 CPUs.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let cpu_millis = (self.cpu_limit * 1000.0).ceil() as u32;
+        Ok(super::kubernetes::PodPolicy {
+            namespace: namespace.clone(),
+            image: image.clone(),
+            runtime_class: runtime_class.clone(),
+            node_selector: node_selector.clone(),
+            memory_bytes: self.memory_bytes,
+            cpu_millis,
+            timeout_seconds: self.timeout_seconds,
+        })
     }
 }
 
@@ -170,26 +221,10 @@ async fn run_config(config: Config) -> Result<(), StartupError> {
     let keys = load_ed25519_keyring_file(&config.verification_keyring_path)
         .map_err(|_| StartupError("load signing keyring"))?;
     let pool = connect_receipts(&config).await?;
-    let verifier = GrantVerifier::new(keys, config.audience)
+    let verifier = GrantVerifier::new(keys, config.audience.clone())
         .map_err(|_| StartupError("validate grant audience"))?;
-    let runtime = DockerClient::with_image(config.image_digest)
-        .await
-        .map_err(|_| StartupError("connect to Docker"))?
-        .with_resource_limits(Some(config.memory_bytes), Some(config.cpu_limit))
-        .with_code_job_policy(Duration::from_secs(config.timeout_seconds.into()))
-        .map_err(|_| StartupError("apply sandbox resource limits"))?;
-    let runtime = if config.languages == [Language::Rust] {
-        runtime
-            .with_code_compilation()
-            .map_err(|_| StartupError("enable Rust compilation"))?
-    } else {
-        runtime
-    };
-    runtime
-        .check_code_image_ready()
-        .await
-        .map_err(|_| StartupError("find the preloaded runtime image"))?;
-    let supervisor = DockerSupervisor::new(
+    let runtime = connect_runtime(&config).await?;
+    let supervisor = DockerSupervisor::with_runtime(
         JobLedger::new(pool.clone()),
         runtime,
         config.owner,
@@ -233,6 +268,49 @@ async fn run_config(config: Config) -> Result<(), StartupError> {
     };
     pool.close().await;
     result
+}
+
+async fn connect_runtime(
+    config: &Config,
+) -> Result<Box<dyn super::runtime::CodeJobRuntime>, StartupError> {
+    let runtime: Box<dyn super::runtime::CodeJobRuntime> = match &config.backend {
+        Backend::Docker => {
+            let runtime = DockerClient::with_image(config.image_digest.clone())
+                .await
+                .map_err(|_| StartupError("connect to Docker"))?
+                .with_resource_limits(Some(config.memory_bytes), Some(config.cpu_limit))
+                .with_code_job_policy(Duration::from_secs(config.timeout_seconds.into()))
+                .map_err(|_| StartupError("apply sandbox resource limits"))?;
+            let runtime = if config.languages == [Language::Rust] {
+                runtime
+                    .with_code_compilation()
+                    .map_err(|_| StartupError("enable Rust compilation"))?
+            } else {
+                runtime
+            };
+            runtime
+                .check_code_image_ready()
+                .await
+                .map_err(|_| StartupError("find the preloaded runtime image"))?;
+            Box::new(runtime)
+        }
+        Backend::Kubernetes { cluster, .. } => {
+            let cluster_config = kube::Config::incluster()
+                .map_err(|_| StartupError("load in-cluster Kubernetes identity"))?;
+            let client = kube::Client::try_from(cluster_config)
+                .map_err(|_| StartupError("construct Kubernetes TLS client"))?;
+            Box::new(
+                super::kubernetes::runtime::KubernetesRuntime::new(
+                    client,
+                    config.kubernetes_policy()?,
+                    cluster.clone(),
+                    config.languages == [Language::Rust],
+                )
+                .map_err(|_| StartupError("construct Kubernetes runtime"))?,
+            )
+        }
+    };
+    Ok(runtime)
 }
 
 async fn connect_receipts(config: &Config) -> Result<sqlx::PgPool, StartupError> {
@@ -317,6 +395,23 @@ mod tests {
             let config: Config = serde_json::from_value(input).unwrap();
             assert!(config.validate().is_err(), "{field}");
         }
+    }
+
+    #[test]
+    fn kubernetes_profile_binds_image_and_validates_isolation() {
+        let mut input: serde_json::Value = serde_json::from_str(EXAMPLE).unwrap();
+        let digest = input["image_digest"].as_str().unwrap().to_owned();
+        input["backend"] = serde_json::json!({
+            "kind":"kubernetes", "cluster":"rehearsal", "namespace":"code-execution",
+            "image":format!("registry.example/code@{digest}"), "runtime_class":"sandbox",
+            "node_selector":{"sandbox":"true"}
+        });
+        let config: Config = serde_json::from_value(input.clone()).unwrap();
+        config.validate().unwrap();
+        assert_eq!(config.kubernetes_policy().unwrap().cpu_millis, 1000);
+        input["backend"]["image"] = serde_json::json!("registry.example/code:latest");
+        let config: Config = serde_json::from_value(input).unwrap();
+        assert!(config.validate().is_err());
     }
 
     #[test]
