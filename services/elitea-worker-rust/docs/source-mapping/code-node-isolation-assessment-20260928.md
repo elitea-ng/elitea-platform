@@ -2628,3 +2628,26 @@ Docker already sets `pids_limit=128` per execution container.
 `deploy/runtime/sandbox-deployment.md` now documents the node provisioning prerequisite.
 Helm cannot set this host kubelet policy through ordinary Pod resources.
 Live Kubernetes process-exhaustion verification remains open. Configuration read-back does not prove runtime enforcement.
+
+## Process-count enforcement, 2026-09-30
+
+The new live tests execute Rust source through the existing compiled-language runtime adapter.
+The source attempts at most 160 child processes, then kills and waits for every successfully started child.
+This bounded probe does not depend on an unlimited fork loop.
+The Linux PID controller denies further creation with `EAGAIN` before 128 children exist.
+The job still returns a structured result through the ordinary runner envelope.
+
+`src/sandbox/kubernetes/live_tests.rs` verifies Docker and Kubernetes using the shared `CodeJobRuntime` contract.
+The current-platform reference remains the subprocess timeout boundary in `runtime/langchain/pyodide_sandbox.py`.
+The new container policy covers descendant process creation in addition to the existing timeout requirement.
+
+The initial Docker test exposes an incorrect test assumption about repeated terminal dispatch.
+Docker rejects dispatch after container exit. Kubernetes accepts the existing dispatch marker.
+Both behaviors satisfy the contract when no code executes again and the terminal receipt remains unchanged.
+The shared test now checks this invariant and requires workload cleanup.
+
+The corrected live tests both pass in 9.17 seconds after compilation.
+Docker permits 125 child processes; Kubernetes permits 124. Runtime processes consume the remaining PID slots.
+Both return `errno: 11`, retain identical receipts, and remove their execution workloads.
+Formatting, diff checks, and Clippy with warnings denied pass.
+This closes the earlier live process-exhaustion item for the tested policies, not general load or browser acceptance.

@@ -100,7 +100,7 @@ async fn live_four_language_state_chain() {
     assert_eq!(state["messages"], expected);
 }
 
-async fn execute(runtime: &KubernetesRuntime, job: &PreparedJob) -> Value {
+async fn execute(runtime: &dyn CodeJobRuntime, job: &PreparedJob) -> Value {
     let mut activation = [0; 32];
     SystemRandom::new().fill(&mut activation).unwrap();
     let identity = job
@@ -135,8 +135,11 @@ async fn execute(runtime: &KubernetesRuntime, job: &PreparedJob) -> Value {
     assert_eq!(envelope["status"], "completed", "{envelope}");
     let output: Value = serde_json::from_str(envelope["stdout"].as_str().unwrap()).unwrap();
     assert_eq!(output["revision"], 1);
-    // Repeated terminal dispatch must return the same receipt, never run again.
-    runtime.dispatch(&bound).await.unwrap();
+    // Docker rejects dispatch after exit; Kubernetes accepts the existing marker.
+    // Both must retain the same terminal receipt without executing again.
+    if let Err(error) = runtime.dispatch(&bound).await {
+        eprintln!("terminal dispatch rejected: {error}");
+    }
     assert_eq!(runtime.receipt(&bound).await.unwrap().unwrap(), receipt);
     runtime.cleanup(&bound).await.unwrap();
     tokio::time::timeout(Duration::from_secs(20), async {
@@ -460,4 +463,91 @@ fn parse_cpu_quota(text: &str) -> u64 {
         .unwrap()
         .parse()
         .unwrap()
+}
+
+// Bounded attempts prevent an absent PID policy from becoming a fork bomb.
+const PROCESS_EXHAUSTION: &str = r#"
+pub fn run(_: serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let mut children = Vec::new();
+    let mut errno = None;
+    for _ in 0..160 {
+        match std::process::Command::new("/bin/sleep").arg("30").spawn() {
+            Ok(child) => children.push(child),
+            Err(error) => { errno = error.raw_os_error(); break; }
+        }
+    }
+    let count = children.len();
+    for child in &mut children { let _ = child.kill(); }
+    for child in &mut children { child.wait()?; }
+    Ok(serde_json::json!({"children":count,"errno":errno}))
+}
+"#;
+
+async fn verify_process_limit(runtime: &dyn CodeJobRuntime) {
+    let job = PreparedJob::new(
+        Language::Rust,
+        PROCESS_EXHAUSTION.into(),
+        BTreeMap::new(),
+        runtime.image_digest().into(),
+        "live-pids-v1".into(),
+        120,
+    )
+    .unwrap();
+    let output = execute(runtime, &job).await;
+    assert_eq!(
+        output["errno"], 11,
+        "Linux must deny process creation with EAGAIN"
+    );
+    let count = output["children"].as_u64().unwrap();
+    assert!(count > 0 && count < 128, "unexpected child count: {count}");
+    eprintln!("PID ceiling enforced after {count} child processes; completed and cleaned");
+}
+
+#[tokio::test]
+#[ignore = "requires isolated Kubernetes with podPidsLimit=128 and cached Rust image"]
+async fn live_kubernetes_process_limit() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let context = std::env::var("ELITEA_TEST_KUBE_CONTEXT").expect("explicit context required");
+    let namespace =
+        std::env::var("ELITEA_TEST_KUBE_NAMESPACE").expect("explicit namespace required");
+    let image = std::env::var("ELITEA_TEST_KUBE_RUST_IMAGE").expect("pinned Rust image required");
+    let config = kube::Config::from_kubeconfig(&kube::config::KubeConfigOptions {
+        context: Some(context),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let runtime = KubernetesRuntime::new(
+        kube::Client::try_from(config).unwrap(),
+        PodPolicy {
+            namespace,
+            image,
+            runtime_class: "elitea-code".into(),
+            node_selector: BTreeMap::from([("elitea.ai/sandbox".into(), "true".into())]),
+            memory_bytes: 1024 * 1024 * 1024,
+            cpu_millis: 1000,
+            timeout_seconds: 120,
+        },
+        "live-test".into(),
+        true,
+    )
+    .unwrap();
+    verify_process_limit(&runtime).await;
+}
+
+#[tokio::test]
+#[ignore = "requires local Docker and cached immutable Rust image"]
+async fn live_docker_process_limit() {
+    let image =
+        std::env::var("ELITEA_TEST_DOCKER_RUST_IMAGE").expect("explicit cached image required");
+    assert!(image.starts_with("sha256:") || image.contains("@sha256:"));
+    let runtime = adk_sandbox::workspace::DockerClient::with_image(image)
+        .await
+        .unwrap()
+        .with_resource_limits(Some(1024 * 1024 * 1024), Some(1.0))
+        .with_code_job_policy(Duration::from_mins(2))
+        .unwrap()
+        .with_code_compilation()
+        .unwrap();
+    verify_process_limit(&runtime).await;
 }
