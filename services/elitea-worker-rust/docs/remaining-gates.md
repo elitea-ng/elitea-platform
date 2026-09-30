@@ -97,6 +97,8 @@ The rebuilt supervisor passes persistent-chat memory-failure verification in cha
 Live adapter memory and deadline tests verify terminal receipts and Pod cleanup.
 A live CPU test verifies the 250m cgroup quota, increasing throttling counters, successful completion, and Pod cleanup.
 A live output-flood test verifies bounded capture, identical repeated failure receipts, and Pod cleanup.
+Docker and Kubernetes workspace-exhaustion tests verify failure receipts and cleanup with a full 256 MiB workspace.
+Kubernetes node PID limits are now explicit; live process-exhaustion verification remains open.
 Gate 5 remains open for the remaining pipeline, isolation, and capacity requirements.
 Package/workspace authorization and compilation-cache performance remain tracked in the assessment.
 Gate 7a reuses this execution foundation for agent tools, with separate module admission and browser acceptance.

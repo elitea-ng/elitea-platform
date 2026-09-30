@@ -103,6 +103,15 @@ Use a CNI that enforces NetworkPolicy. Verify blocked egress before enabling Cod
 The policy denies all workload ingress and egress, including DNS.
 Image loading uses the node runtime. It does not require workload egress.
 
+Set `podPidsLimit: 128` in the kubelet configuration of each eligible sandbox node.
+Kubernetes Pod resource limits do not configure this process ceiling.
+An unset or negative limit does not provide this boundary.
+Verify the effective kubelet configuration before enabling Code execution.
+For an isolated Minikube profile, provision it with `--extra-config=kubelet.podPidsLimit=128`.
+The chart does not modify host kubelet configuration.
+Keep this setting in node provisioning when replacing or upgrading nodes.
+Docker Code containers configure their own equivalent `pids_limit=128`.
+
 The supervisor account receives namespace-scoped Pod, exec, and log access.
 Execution Pods use `elitea-code`, without automatic service account token mounting.
 The supervisor cannot read Secrets or change RBAC through this Role.

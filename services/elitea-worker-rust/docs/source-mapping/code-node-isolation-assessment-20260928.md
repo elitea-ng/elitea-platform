@@ -2605,3 +2605,26 @@ The test prints byte counts instead of the captured body.
 This extends the current Pyodide subprocess mapping and the new bounded runner boundary documented above.
 It verifies the live adapter and runner. It does not prove the browser message for output exhaustion.
 The worker and runner resource policies remain unchanged.
+
+## Writable workspace exhaustion, 2026-09-30
+
+The current-platform reference remains `elitea-sdk/runtime/langchain/pyodide_sandbox.py` and its bounded subprocess execution.
+The new container boundary additionally limits writable workspace storage.
+Docker configures a 256 MiB workspace tmpfs through `vendor/adk-sandbox/src/workspace/docker.rs::build_host_config`.
+Kubernetes configures the same ceiling through `src/sandbox/kubernetes/mod.rs::PodPolicy::workload`.
+
+Two live tests in `src/sandbox/kubernetes/live_tests.rs` run the same JavaScript through the actual runtime adapters.
+The code attempts 300 MiB of writes with a 512 MiB memory ceiling.
+It leaves the full file in place, so receipt delivery cannot depend on available workspace storage.
+Both executions fail with `No space left on device` and return terminal runner receipts.
+Both receipts contain zero stdout bytes and 466 stderr bytes.
+Repeated receipt reads return identical bytes. Cleanup removes each test workload.
+The two tests pass in 5.30 seconds after compilation.
+These are live runtime checks, not browser acceptance or capacity measurements.
+
+The isolated Kubernetes kubelet initially reports `podPidsLimit: -1` through its effective configuration endpoint.
+The rehearsal now sets `podPidsLimit: 128`; read-back confirms the effective value after kubelet restart.
+Docker already sets `pids_limit=128` per execution container.
+`deploy/runtime/sandbox-deployment.md` now documents the node provisioning prerequisite.
+Helm cannot set this host kubelet policy through ordinary Pod resources.
+Live Kubernetes process-exhaustion verification remains open. Configuration read-back does not prove runtime enforcement.

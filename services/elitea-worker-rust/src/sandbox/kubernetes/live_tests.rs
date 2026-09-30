@@ -182,7 +182,55 @@ async fn live_output_flood_has_bounded_terminal_receipt() {
     .await;
 }
 
+const WORKSPACE_EXHAUSTION: &str = "export default async () => { const file = await Deno.open('/workspace/fill', {write:true, createNew:true}); const chunk = new Uint8Array(1024 * 1024).fill(1); try { for (let i = 0; i < 300; i++) { let offset = 0; while (offset < chunk.length) offset += await file.write(chunk.subarray(offset)); } } finally { file.close(); } return {unexpected:true}; };";
+
+#[tokio::test]
+#[ignore = "requires an isolated Kubernetes context and cached Deno image"]
+async fn live_workspace_exhaustion_has_terminal_receipt() {
+    // Exceed the 256 MiB workspace while remaining below the memory ceiling.
+    // Leave the file full: receipt delivery must not require writable workspace space.
+    let envelope =
+        live_failure_receipt_with_memory(WORKSPACE_EXHAUSTION, 30, "failed", 512 * 1024 * 1024)
+            .await;
+    assert!(
+        envelope["stderr"]
+            .as_str()
+            .unwrap()
+            .contains("No space left on device")
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires local Docker and a cached immutable Deno image"]
+async fn live_docker_workspace_exhaustion_has_terminal_receipt() {
+    let image =
+        std::env::var("ELITEA_TEST_DOCKER_DENO_IMAGE").expect("explicit cached image required");
+    assert!(image.starts_with("sha256:") || image.contains("@sha256:"));
+    let runtime = adk_sandbox::workspace::DockerClient::with_image(image)
+        .await
+        .unwrap()
+        .with_resource_limits(Some(512 * 1024 * 1024), Some(0.5))
+        .with_code_job_policy(Duration::from_secs(30))
+        .unwrap();
+    let envelope = verify_failure_receipt(&runtime, WORKSPACE_EXHAUSTION, 30, "failed").await;
+    assert!(
+        envelope["stderr"]
+            .as_str()
+            .unwrap()
+            .contains("No space left on device")
+    );
+}
+
 async fn live_failure_receipt(source: &str, timeout_seconds: u32, expected: &str) {
+    live_failure_receipt_with_memory(source, timeout_seconds, expected, 256 * 1024 * 1024).await;
+}
+
+async fn live_failure_receipt_with_memory(
+    source: &str,
+    timeout_seconds: u32,
+    expected: &str,
+    memory_bytes: u64,
+) -> Value {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let context = std::env::var("ELITEA_TEST_KUBE_CONTEXT").expect("explicit context required");
     let namespace =
@@ -201,7 +249,7 @@ async fn live_failure_receipt(source: &str, timeout_seconds: u32, expected: &str
             image,
             runtime_class: "elitea-code".into(),
             node_selector: BTreeMap::from([("elitea.ai/sandbox".into(), "true".into())]),
-            memory_bytes: 256 * 1024 * 1024,
+            memory_bytes,
             cpu_millis: 500,
             timeout_seconds: 30,
         },
@@ -209,6 +257,15 @@ async fn live_failure_receipt(source: &str, timeout_seconds: u32, expected: &str
         false,
     )
     .unwrap();
+    verify_failure_receipt(&runtime, source, timeout_seconds, expected).await
+}
+
+async fn verify_failure_receipt(
+    runtime: &dyn CodeJobRuntime,
+    source: &str,
+    timeout_seconds: u32,
+    expected: &str,
+) -> Value {
     let job = PreparedJob::new(
         Language::JavaScript,
         source.into(),
@@ -259,6 +316,7 @@ async fn live_failure_receipt(source: &str, timeout_seconds: u32, expected: &str
     })
     .await
     .expect("resource fixture cleanup deadline");
+    envelope
 }
 
 #[tokio::test]
