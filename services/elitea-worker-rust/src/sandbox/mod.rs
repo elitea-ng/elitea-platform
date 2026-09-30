@@ -8,6 +8,8 @@ pub mod kubernetes;
 #[cfg(feature = "sandbox-supervisor")]
 pub mod ledger;
 #[cfg(feature = "sandbox-supervisor")]
+pub mod material;
+#[cfg(feature = "sandbox-supervisor")]
 pub mod peer_identity;
 #[cfg(feature = "sandbox-supervisor")]
 pub mod process;

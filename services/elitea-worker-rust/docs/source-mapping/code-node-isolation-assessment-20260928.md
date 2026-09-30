@@ -2308,3 +2308,50 @@ The ten Kubernetes tests include conditional cleanup and preservation of unrelat
 All six runner tests pass, including preparation, repeated dispatch, UID rejection, output bounds, and timeout handling.
 Worker supervisor library/test Clippy, runner all-target Clippy, and formatting checks pass.
 No new runtime images or Kubernetes workloads are deployed in this checkpoint.
+
+## Kubernetes supervisor deployment material, 2026-09-30
+
+`src/sandbox/material.rs` copies one projected Secret revision into canonical owner-private files.
+The init mode reads at most 32 files, one MiB each, and eight MiB total.
+It rejects nested symlinks, escaped projection directories, and invalid filenames.
+Private buffers use zeroizing storage. Temporary destination files use mode `0600`.
+`src/sandbox_main.rs --prepare-material` runs this operation before the supervisor starts.
+This preserves `config.rs::read_regular_file` checks instead of relaxing them for Kubernetes symlinks.
+
+`deploy/helm/elitea/templates/sandbox/supervisor.yaml` defines one non-root supervisor and one init container using the same image.
+The init container mounts the projected Secret. The supervisor mounts only the private memory-backed copy, read-only.
+The Pod has no Docker socket or host filesystem mount.
+One internal Service exposes the configured runtime profile ports.
+Images require registry digests. Configuration filenames and ports must be unique and bounded.
+The supervisor remains optional and requires the separate execution namespace boundary.
+
+Two material-copy tests and all-target supervisor Clippy pass.
+The expanded Helm checks validate the deployment, permissions, mounts, service, and invalid configurations.
+Live image and cluster verification are pending.
+A separate `elitea-sandbox-rehearsal` Minikube profile uses Calico for network-policy tests.
+The existing stopped `minikube` profile remains unchanged.
+
+The isolated Minikube node is Ready and Calico is running.
+Live RBAC checks allow supervisor Pod, exec, and log operations only in the execution namespace.
+They deny Secret reads, platform-namespace Pod deletion, and execution-account Pod creation.
+An HTTP baseline succeeds from the platform namespace. The same request times out from the execution namespace.
+All three disposable network probes are deleted after this check.
+These checks prove the tested RBAC and Pod-to-Pod network boundary, not complete runtime acceptance.
+Material-copy retries remove files absent from the selected Secret revision.
+The supervisor build stage now branches before the worker binary build to avoid an unrelated release compilation.
+
+## Live Kubernetes language fixture, 2026-09-30
+
+`src/sandbox/kubernetes/live_tests.rs` exercises the production runtime adapter against an explicit isolated Kubernetes context.
+It reuses `scripts/runtime/fixtures/code-multilanguage-state.yaml` and its input and expected-result fixtures.
+Python sorts five records. JavaScript aggregates categories. TypeScript checks totals. Rust verifies the final state.
+Each language runs in a separate Pod with an immutable image reference and resource limits.
+The test verifies original Pod identity, preparation, dispatch, terminal receipt, repeated terminal dispatch, and cleanup.
+All four nodes pass. The full fixture takes 20.22 seconds in local Minikube.
+All four execution Pods are removed after receipt inspection.
+The native `runc` RuntimeClass is used; this check does not establish VM isolation.
+
+The first test attempt stopped before dispatch because its TLS provider was not initialized.
+The corrected harness selects the same ring provider used by supervisor startup.
+This is runtime-adapter evidence only. It does not prove ledger durability, authenticated supervisor admission, or browser execution.
+Supervisor restart, worker recovery, cancellation races, and full Kubernetes UI acceptance remain open.

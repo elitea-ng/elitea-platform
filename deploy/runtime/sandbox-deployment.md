@@ -115,3 +115,45 @@ Keep the cluster identifier stable across restarts. Its value becomes part of ea
 Build both execution images with the new runner lifecycle helper before activation.
 Copy projected Secrets into canonical, owner-private files before starting the supervisor.
 Direct Secret mounts use symlinks and do not satisfy the existing private-file checks.
+
+Enable the optional supervisor after preparing its Secret:
+
+```yaml
+sandboxKubernetes:
+  enabled: true
+  executionNamespace: elitea-code-execution
+  supervisor:
+    enabled: true
+    image: registry.example/supervisor@sha256:<actual-registry-digest>
+    materialSecret: sandbox-material
+    profiles:
+      - file: deno.json
+        port: 9446
+      - file: rust.json
+        port: 9447
+```
+
+Store configuration and trust files as flat keys in the existing Secret.
+Use absolute configuration paths under `/run/elitea-sandbox`.
+Give each profile a distinct durable owner and listener port.
+Use the internal Service hostname in certificate identities and Main grant audiences.
+The init container copies a single Secret revision into memory-backed private files.
+Restart the supervisor Pod after changing the Secret. Existing copies do not hot-reload.
+The same supervisor image supplies both init and serving modes. No shell image is required.
+The default worker does not receive this Secret or Kubernetes service account permissions.
+
+### Run the Kubernetes language fixture
+
+Prepare the execution namespace, RBAC, network policy, node label, and `elitea-code` RuntimeClass first.
+Cache both runtime images under immutable registry digest references.
+Set `ELITEA_TEST_KUBE_CONTEXT`, `ELITEA_TEST_KUBE_NAMESPACE`, `ELITEA_TEST_KUBE_DENO_IMAGE`, and `ELITEA_TEST_KUBE_RUST_IMAGE` explicitly.
+The context must select an isolated test cluster. The test creates and deletes execution Pods.
+
+```sh
+cargo test --manifest-path services/elitea-worker-rust/Cargo.toml \
+  --features sandbox-supervisor --lib live_four_language_state_chain \
+  -- --ignored --nocapture
+```
+
+This checks the adapter and four language runtimes. It does not replace supervisor durability or browser acceptance tests.
+Failed workloads remain available for diagnosis. Delete them only after confirming termination and preserving required evidence.

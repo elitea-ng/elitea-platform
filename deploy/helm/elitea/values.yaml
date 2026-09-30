@@ -3594,3 +3594,20 @@ sandboxKubernetes:
   supervisorServiceAccount: elitea-sandbox-supervisor
   # This cap includes running Pods and completed Pods awaiting receipt cleanup.
   maxPods: 128
+  supervisor:
+    enabled: false
+    image: ""
+    # Existing Secret: flat configuration, certificate, keyring, and database files.
+    materialSecret: ""
+    profiles:
+      - file: deno.json
+        port: 9446
+      - file: rust.json
+        port: 9447
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi

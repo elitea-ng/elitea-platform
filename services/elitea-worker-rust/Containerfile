@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM rust:1.97.1-bookworm AS builder
+FROM rust:1.97.1-bookworm AS builder-base
 
 WORKDIR /src
 
@@ -41,6 +41,8 @@ COPY services/elitea-worker-rust ./services/elitea-worker-rust
 
 WORKDIR /src/services/elitea-worker-rust
 
+FROM builder-base AS builder
+
 # The dependency build lives in the THREE CACHE MOUNTS below, not in a layer,
 # and that is deliberate: a cargo-chef style `target/` inside the image would
 # be a multi-gigabyte builder layer in the `elitea-worker-rust-linux-amd64`
@@ -74,7 +76,7 @@ USER 10001:10001
 ENTRYPOINT ["/usr/local/bin/elitea-worker-rust"]
 
 # Dedicated supervisor artifact. The default worker retains no Docker feature.
-FROM builder AS supervisor-builder
+FROM builder-base AS supervisor-builder
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cargo-target \

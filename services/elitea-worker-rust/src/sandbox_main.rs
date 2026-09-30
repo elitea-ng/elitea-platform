@@ -17,7 +17,18 @@ async fn main() -> ExitCode {
         }
     };
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    let exit = if !args.is_empty()
+    let exit = if args.len() == 3 && args[0] == "--prepare-material" {
+        match elitea_worker_rust::sandbox::material::prepare(
+            &PathBuf::from(&args[1]),
+            &PathBuf::from(&args[2]),
+        ) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                tracing::error!(event="sandbox_material_failed", reason=%error);
+                ExitCode::FAILURE
+            }
+        }
+    } else if !args.is_empty()
         && args.len() <= 8
         && args
             .chunks(2)
