@@ -2574,3 +2574,22 @@ The fixture is `scripts/runtime/fixtures/code-memory-limit.yaml`.
 The live adapter checks are in `src/sandbox/kubernetes/live_tests.rs`.
 These checks extend the current-to-new mapping above. They do not prove production load capacity.
 The existing disconnected sidebar indicator remains a separate UI issue.
+
+## Kubernetes CPU quota evidence, 2026-09-30
+
+`live_cpu_quota_throttles_execution` uses the existing typed Kubernetes runtime and immutable Deno image.
+It runs a six-second JavaScript workload under a 250m CPU quota and a 256 MiB memory limit.
+The infrastructure test reads cgroup v2 counters through the operator Kubernetes client.
+Untrusted source receives no additional cgroup access or Deno permissions.
+
+The test verifies the quota-to-period ratio in `cpu.max`.
+It records increasing `nr_throttled` counters after dispatch, then verifies successful execution and Pod removal.
+The live test passes in 10.41 seconds. Throttled periods increase from zero to one during the observation.
+This proves CPU enforcement for one bounded execution. It does not prove production throughput or latency under concurrent load.
+
+The current-platform reference remains the Pyodide subprocess boundary documented above.
+The new runtime adds container CPU quotas alongside existing wall-time and memory enforcement.
+No application schema or runtime policy changes are required for this verification.
+
+Clippy passes for test targets with warnings denied. The test helpers keep bounded cgroup reads separate from lifecycle assertions.
+The final helper refactor also passes live verification in 10.23 seconds. Its observed throttled count increases from zero to three.

@@ -244,3 +244,146 @@ async fn live_failure_receipt(source: &str, timeout_seconds: u32, expected: &str
     .await
     .expect("resource fixture cleanup deadline");
 }
+
+#[tokio::test]
+#[ignore = "requires an isolated Kubernetes context, cached Deno image, and cgroup v2"]
+async fn live_cpu_quota_throttles_execution() {
+    use k8s_openapi::api::core::v1::Pod;
+    use kube::Api;
+
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let context = std::env::var("ELITEA_TEST_KUBE_CONTEXT").expect("explicit context required");
+    let namespace =
+        std::env::var("ELITEA_TEST_KUBE_NAMESPACE").expect("explicit namespace required");
+    let image = std::env::var("ELITEA_TEST_KUBE_DENO_IMAGE").expect("pinned image required");
+    let config = kube::Config::from_kubeconfig(&kube::config::KubeConfigOptions {
+        context: Some(context),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let client = kube::Client::try_from(config).unwrap();
+    let pods: Api<Pod> = Api::namespaced(client.clone(), &namespace);
+    let runtime = KubernetesRuntime::new(
+        client,
+        PodPolicy {
+            namespace,
+            image,
+            runtime_class: "elitea-code".into(),
+            node_selector: BTreeMap::from([("elitea.ai/sandbox".into(), "true".into())]),
+            memory_bytes: 256 * 1024 * 1024,
+            cpu_millis: 250,
+            timeout_seconds: 30,
+        },
+        "live-test".into(),
+        false,
+    )
+    .unwrap();
+    let job = PreparedJob::new(Language::JavaScript,
+        "export default () => { const end = Date.now() + 6000; let n = 0; while (Date.now() < end) { n++; } return {iterations: n}; };".into(),
+        BTreeMap::new(), runtime.image_digest().into(), "live-cpu-v1".into(), 20).unwrap();
+    let mut activation = [0; 32];
+    SystemRandom::new().fill(&mut activation).unwrap();
+    let identity = job
+        .scope("live-test".into(), 1, activation)
+        .unwrap()
+        .runtime_identity()
+        .unwrap();
+    runtime
+        .prepare(&identity, &job.manifest().unwrap())
+        .await
+        .unwrap();
+    let original = runtime.instance(&identity).await.unwrap().unwrap();
+    let bound = identity.with_runtime_id(original).unwrap();
+    let name = format!("elitea-code-{}", &bound.job_key()[..48]);
+    let before = parse_cpu_quota(
+        &tokio::time::timeout(Duration::from_secs(10), read_cpu_cgroup(&pods, &name))
+            .await
+            .unwrap(),
+    );
+    runtime.dispatch(&bound).await.unwrap();
+    let after = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let current = parse_cpu_quota(&read_cpu_cgroup(&pods, &name).await);
+            if current > before {
+                break current;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    })
+    .await
+    .expect("CPU quota must throttle the busy workload");
+    let receipt = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if let Some(receipt) = runtime.receipt(&bound).await.unwrap() {
+                break receipt;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let envelope: Value = serde_json::from_slice(&receipt).unwrap();
+    assert_eq!(envelope["status"], "completed", "{envelope}");
+    let output: Value = serde_json::from_str(envelope["stdout"].as_str().unwrap()).unwrap();
+    assert!(output["result"]["iterations"].as_u64().unwrap() > 0);
+    runtime.cleanup(&bound).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while runtime.exists(&bound).await.unwrap() {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    })
+    .await
+    .unwrap();
+    eprintln!(
+        "CPU quota 250m; throttled periods increased from {before} to {after}; completed and cleaned"
+    );
+}
+
+// Operator-side observation does not give untrusted source access to cgroups.
+async fn read_cpu_cgroup(pods: &kube::Api<k8s_openapi::api::core::v1::Pod>, name: &str) -> String {
+    use kube::api::AttachParams;
+    use tokio::io::AsyncReadExt;
+    let mut process = pods
+        .exec(
+            name,
+            [
+                "/bin/sh",
+                "-c",
+                "cat /sys/fs/cgroup/cpu.max; cat /sys/fs/cgroup/cpu.stat",
+            ],
+            &AttachParams::default()
+                .container("code")
+                .stdout(true)
+                .stderr(false),
+        )
+        .await
+        .unwrap();
+    let status = process.take_status().unwrap();
+    let mut bytes = Vec::new();
+    process
+        .stdout()
+        .unwrap()
+        .take(4097)
+        .read_to_end(&mut bytes)
+        .await
+        .unwrap();
+    assert!(bytes.len() <= 4096);
+    assert_eq!(status.await.unwrap().status.as_deref(), Some("Success"));
+    String::from_utf8(bytes).unwrap()
+}
+
+fn parse_cpu_quota(text: &str) -> u64 {
+    let mut lines = text.lines();
+    let quota: Vec<_> = lines.next().unwrap().split_whitespace().collect();
+    assert_eq!(quota.len(), 2);
+    assert_eq!(
+        quota[0].parse::<u64>().unwrap() * 4,
+        quota[1].parse::<u64>().unwrap()
+    );
+    lines
+        .find_map(|line| line.strip_prefix("nr_throttled "))
+        .unwrap()
+        .parse()
+        .unwrap()
+}
