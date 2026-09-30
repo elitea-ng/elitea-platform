@@ -81,3 +81,29 @@ Use one Pod per durable job with `restartPolicy: Never`. Do not add a controller
 Keep the receipt finalizer until the terminal receipt is durable.
 Confirm the original Pod UID and terminated container status before completing cancellation.
 A missing Pod or deletion acknowledgement does not prove that an unreachable node stopped executing code.
+
+### Kubernetes boundary preparation
+
+The chart can prepare the execution namespace before Kubernetes runtime activation:
+
+```yaml
+sandboxKubernetes:
+  enabled: true
+  executionNamespace: elitea-code-execution
+  supervisorServiceAccount: elitea-sandbox-supervisor
+  maxPods: 128
+```
+
+Keep the execution namespace separate from the platform namespace.
+Use a CNI that enforces NetworkPolicy. Verify blocked egress before enabling Code execution.
+The policy denies all workload ingress and egress, including DNS.
+Image loading uses the node runtime. It does not require workload egress.
+
+The supervisor account receives namespace-scoped Pod, exec, and log access.
+Execution Pods use `elitea-code`, without automatic service account token mounting.
+The supervisor cannot read Secrets or change RBAC through this Role.
+Pod creation remains a privileged capability within this namespace. Do not store application secrets or unrelated workloads there.
+
+Helm retains the namespace, network policy, and Pod quota after uninstall.
+Drain supervisor receipts and confirm workload termination before removing these retained resources.
+This configuration only prepares the boundary. Runtime wiring and live Kubernetes acceptance remain incomplete.

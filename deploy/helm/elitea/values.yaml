@@ -3585,3 +3585,12 @@ sandboxImageWarmup:
   nodeSelector: {}
   tolerations: []
   imagePullSecrets: []
+
+# Kubernetes execution boundary only. The supervisor API adapter is not enabled here.
+# Use a dedicated namespace with a NetworkPolicy-capable CNI.
+sandboxKubernetes:
+  enabled: false
+  executionNamespace: ""
+  supervisorServiceAccount: elitea-sandbox-supervisor
+  # This cap includes running Pods and completed Pods awaiting receipt cleanup.
+  maxPods: 128

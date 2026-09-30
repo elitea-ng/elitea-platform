@@ -2228,3 +2228,44 @@ The local direct-tool regression passed after disposable incremental compiler ca
 The worker image rebuild passed and was deployed on September 30.
 The previous Main image exited with code 139 without deployment configuration. Its uncached replacement passes startup.
 Existing product and agentstate volumes remain unchanged. No database restore was required.
+
+## Kubernetes client and namespace boundary, 2026-09-30
+
+The supervisor uses `kube` 4.2.0 and `k8s-openapi` 0.28.0 behind its existing Cargo feature.
+The default worker does not enable these dependencies. The client enables TLS, ring, and WebSocket support.
+It does not enable the operator runtime or CRD generation.
+The existing receipt ledger owns reconciliation. Kubernetes controllers must not retry Code execution automatically.
+
+`src/sandbox/kubernetes/client.rs` provides typed Pod creation, observation, and graceful stop requests.
+Observation checks namespace, Pod UID, job fingerprint, and request fingerprint.
+Only Kubernetes `NotFound` means absence. Authorization failures and server errors do not permit recreation.
+Creation conflicts require observation of the original name.
+Delete requests include UID and resource-version preconditions.
+A deletion response does not prove termination. The original Pod must report a terminated container.
+API operations have a 15-second timeout. An expired mutation requires reconciliation because its outcome is unknown.
+
+`deploy/helm/elitea/templates/sandbox/kubernetes-boundary.yaml` defines the optional execution namespace boundary.
+The namespace must differ from the platform namespace and built-in namespaces.
+Restricted Pod Security Admission applies. A namespace-wide NetworkPolicy denies ingress and egress.
+The supervisor service account has Pod, exec, and log permissions only in the execution namespace.
+Execution Pods use a separate service account without automatic credential mounting.
+A Pod-count quota bounds workloads, including terminal Pods awaiting receipt cleanup.
+The namespace, network policy, and quota remain after Helm uninstall to protect retained workloads.
+Operators must drain receipts and confirm termination before they remove these retained resources.
+Network isolation requires an enforcing CNI. No rendered manifest proves that the cluster enforces this policy.
+
+Legacy references remain the local and remote Code sandbox paths mapped above.
+These paths supply Code input, output, and state behavior. They do not supply Kubernetes lifecycle semantics.
+The new client extends `src/sandbox/runtime.rs`; graph checkpoints remain worker-owned.
+Pod preparation, dispatch, receipt reads, finalizer cleanup, and process selection remain to be connected.
+Kubernetes deployment and browser acceptance remain open. This boundary does not enable execution by itself.
+
+References: [kube feature contract](https://docs.rs/crate/kube/4.2.0/features),
+[Kubernetes NetworkPolicy](https://kubernetes.io/docs/concepts/services-networking/network-policies/),
+and [Pod Security Admission](https://kubernetes.io/docs/concepts/security/pod-security-admission/).
+
+Validation: six Kubernetes component tests pass, including mocked HTTP status and conditional-delete checks.
+Supervisor library/test Clippy and Rust formatting checks pass.
+Helm lint, boundary rendering, and existing image-warmup rendering checks pass.
+The default worker dependency tree excludes `kube` and `k8s-openapi`.
+These checks do not prove cluster enforcement, workload recovery, or browser execution.

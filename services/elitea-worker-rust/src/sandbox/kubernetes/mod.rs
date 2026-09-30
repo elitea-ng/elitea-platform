@@ -1,5 +1,7 @@
 //! Kubernetes workload contract. The API adapter must preserve this identity
 //! and must not treat Pod disappearance as proof that execution stopped.
+pub mod client;
+
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -110,6 +112,7 @@ impl PodPolicy {
             },
             "spec": {
                 "restartPolicy":"Never", "automountServiceAccountToken":false,
+                "serviceAccountName":"elitea-code",
                 "enableServiceLinks":false, "hostNetwork":false, "hostPID":false, "hostIPC":false,
                 "runtimeClassName":self.runtime_class, "nodeSelector":self.node_selector,
                 "terminationGracePeriodSeconds":5,
@@ -189,6 +192,7 @@ mod tests {
         assert_eq!(pod["kind"], "Pod");
         assert_eq!(pod["spec"]["restartPolicy"], "Never");
         assert_eq!(pod["spec"]["automountServiceAccountToken"], false);
+        assert_eq!(pod["spec"]["serviceAccountName"], "elitea-code");
         assert_eq!(pod["spec"]["containers"][0]["imagePullPolicy"], "Never");
         assert_eq!(
             pod["spec"]["containers"][0]["resources"]["limits"]["cpu"],

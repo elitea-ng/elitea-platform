@@ -80,7 +80,9 @@ Pipeline 132 passes real Python, JavaScript, TypeScript, and Rust sorting/state 
 Persistent reload preserves the exact report. Invalid input stops at Python without dispatching downstream nodes.
 The negative case now shows `PIPELINE_CODE_FAILED` and actionable guidance in chat 757, including after reload.
 One 23.3 MB supervisor process manages both runtime profiles. Real four-stage execution and terminal-container cleanup pass.
-The Kubernetes API adapter, deployment permissions, and live acceptance remain open.
+The kube-rs client now provides typed Pod observation, creation, and identity-bound stop requests.
+Helm defines a dedicated execution namespace, limited RBAC, network isolation, and a Pod-count quota.
+Preparation, dispatch, receipt handling, process wiring, and live Kubernetes acceptance remain open.
 Deploy the platform to minikube after the implementation and deployment configuration are ready.
 Gate 5 remains open for Kubernetes execution and the remaining pipeline requirements.
 Package/workspace authorization and compilation-cache performance remain tracked in the assessment.

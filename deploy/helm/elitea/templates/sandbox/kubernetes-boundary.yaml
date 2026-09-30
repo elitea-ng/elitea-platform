@@ -1,0 +1,93 @@
+{{- if .Values.sandboxKubernetes.enabled }}
+{{- $s := .Values.sandboxKubernetes }}
+{{- if not (regexMatch "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$" $s.executionNamespace) }}
+{{- fail "sandboxKubernetes.executionNamespace must be an explicit DNS label" }}
+{{- end }}
+{{- if or (eq $s.executionNamespace .Release.Namespace) (hasPrefix "kube-" $s.executionNamespace) (eq $s.executionNamespace "default") }}
+{{- fail "sandboxKubernetes.executionNamespace must be dedicated to Code execution" }}
+{{- end }}
+{{- if not (regexMatch "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$" $s.supervisorServiceAccount) }}
+{{- fail "sandboxKubernetes.supervisorServiceAccount must be a DNS label" }}
+{{- end }}
+{{- if or (not (regexMatch "^[0-9]+$" (toString $s.maxPods))) (lt (int $s.maxPods) 1) (gt (int $s.maxPods) 4096) }}
+{{- fail "sandboxKubernetes.maxPods must be an integer between 1 and 4096" }}
+{{- end }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $s.executionNamespace }}
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: elitea-code-deny-network
+  namespace: {{ $s.executionNamespace }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress: []
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: elitea-code-capacity
+  namespace: {{ $s.executionNamespace }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  hard:
+    count/pods: {{ $s.maxPods | quote }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: elitea-code
+  namespace: {{ $s.executionNamespace }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $s.supervisorServiceAccount }}
+  namespace: {{ .Release.Namespace }}
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: elitea-code-supervisor
+  namespace: {{ $s.executionNamespace }}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [create, get, patch, delete]
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [create, get]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: elitea-code-supervisor
+  namespace: {{ $s.executionNamespace }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $s.supervisorServiceAccount }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: elitea-code-supervisor
+{{- end }}
