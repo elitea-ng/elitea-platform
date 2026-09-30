@@ -102,6 +102,8 @@ Kubernetes node PID limits are now explicit. Live Rust probes verify process-cou
 Both return structured results, retain unchanged receipts, and clean up after rejecting additional child processes.
 Gate 5 remains open for the remaining pipeline, isolation, and capacity requirements.
 Package/workspace authorization and compilation-cache performance remain tracked in the assessment.
+The [Code functional audit](source-mapping/code-functional-parity-20260930.md) maps package imports, state, platform-client access, debug artifacts, and variable-source admission.
+These functional gaps remain open; isolation tests do not close them.
 Gate 7a reuses this execution foundation for agent tools, with separate module admission and browser acceptance.
 
 ### Deployment acceptance order

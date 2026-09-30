@@ -228,12 +228,6 @@ where
         AgentNativeAssemblyOutcome::Failed { run, error } => {
             let mut run = *run;
             let failure = assembly_failure(&error);
-            tracing::warn!(
-                event = "agent_native_assembly_failed",
-                error_code = error.code().as_str(),
-                failure_reason = %error,
-                "native agent assembly failed after invocation authorization"
-            );
             // #982: a remote MCP server that answers the assembly dial with a
             // `401` is not an anonymous runtime failure. The sanitized
             // requirement names the connection, so the turn ANSWERS with that
@@ -251,6 +245,11 @@ where
                 .await
                 .unwrap_or(false)
             {
+                tracing::info!(
+                    event = "agent_native_assembly_authorization_required",
+                    error_code = error.code().as_str(),
+                    "native agent requires connection authorization; user notice published"
+                );
                 return Box::pin(finish_after_stream(
                     run,
                     None,
@@ -262,6 +261,12 @@ where
                 ))
                 .await;
             }
+            tracing::error!(
+                event = "agent_native_assembly_failed",
+                error_code = error.code().as_str(),
+                failure_reason = %error,
+                "native agent assembly failed; execution cannot start"
+            );
             return Box::pin(finalize(
                 run,
                 failure,

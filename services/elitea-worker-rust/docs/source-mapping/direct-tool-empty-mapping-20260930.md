@@ -66,3 +66,13 @@ No current-platform error wording is copied.
 The worker release target now accepts the same optional `CARGO_BUILD_JOBS` setting as the supervisor target.
 This bounds build concurrency without changing runtime limits.
 The isolated rehearsal stops during the release build because the shared Docker VM previously exhausted memory.
+
+## Terminal assembly log severity
+
+`src/execution/native_agent_lifecycle.rs` now logs terminal assembly failures at ERROR after authorization-notice handling.
+A successfully published connection-authorization notice emits a separate INFO event.
+The change preserves existing error categories, user messages, and terminal selection.
+It does not log the authorization payload or add raw provider details.
+Deployment verification of the severity change remains pending.
+All five lifecycle error-taxonomy tests pass. Formatting and Clippy with warnings denied pass.
+These checks preserve error selection; they do not replace deployed log verification.
