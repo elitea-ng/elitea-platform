@@ -221,3 +221,25 @@ The broader agent unit/component suite passes all 541 tests after integration.
 These tests use their configured local doubles and do not establish live deployment
 acceptance. The existing `task` fixed/f-string/variable semantics are unchanged;
 this extension addresses additional declared child-Agent instruction variables.
+
+## Ordinary Agent deployed browser evidence
+
+Commit `d9245333a` deploys as worker manifest
+`sha256:467e12bee3a0612a751aa5e89881352933a276de5f3f4cab836a8b67a98d9918`;
+Ready pod image identity is read back. Saved Agent 137/version 144 uses the real
+`eu.anthropic.claude-haiku` model, instruction placeholders `audience` and `tone`,
+and defaults `users`/`formal`. Parent pipeline 138/version 145 invokes it twice:
+first with a variable mapping for `audience=operators` and fixed `tone=brief`,
+then with no overrides and an f-string task. A State Modifier combines the outputs.
+
+Persistent chat 765 displays two generated jokes with the exact headers
+`Audience=operators; tone=brief` and `Audience=users; tone=formal`. Reload preserves
+one combined answer. Execution `a946824a3bbfeab69c27bf8469774f88` completes both
+Agent nodes and retires normally. The parent UI still shows its unused fixture
+model; the child owns the explicitly configured real Haiku model. This is live
+provider/UI proof of the variable override/default contract, not disruption proof.
+
+The pipeline editor's ephemeral Test chat also completes both real Haiku calls and
+shows the same override/default headers. No ephemeral reload persistence is claimed.
+Clippy with tests and warnings denied passes. A worker-disruption/resume check with
+variable overrides remains open; these successful runs do not establish recovery.
