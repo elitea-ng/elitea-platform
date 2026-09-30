@@ -21,7 +21,7 @@ pub enum ControlError {
     Running,
     #[error("Kubernetes sandbox helper failed or exceeded its output bound")]
     Helper,
-    #[error("Kubernetes sandbox receipt exceeded its size limit")]
+    #[error("Kubernetes sandbox receipt is malformed or exceeds its size limit")]
     Receipt,
 }
 
@@ -218,8 +218,19 @@ impl KubernetesClient {
         uid: &str,
     ) -> Result<Option<Vec<u8>>, ControlError> {
         use futures_util::io::AsyncReadExt;
-        if !self.terminated(identity, uid).await? {
+        let pod = self
+            .observe(identity, Some(uid))
+            .await?
+            .ok_or(ControlError::Identity)?;
+        let value = serde_json::to_value(&pod).map_err(|_| ControlError::Identity)?;
+        if !confirmed_terminated(&value, identity, uid)? {
             return Ok(None);
+        }
+        // The kernel can kill PID 1 before it writes a receipt. Only the original,
+        // identity-checked terminal Pod can establish this failure; never infer it
+        // from a transport error, a missing Pod, or untrusted code output.
+        if let Some(receipt) = termination_receipt(&pod)? {
+            return Ok(Some(receipt));
         }
         let read = async {
             let params = LogParams {
@@ -311,6 +322,37 @@ impl KubernetesClient {
     }
 }
 
+fn termination_receipt(pod: &Pod) -> Result<Option<Vec<u8>>, ControlError> {
+    let terminated = pod
+        .status
+        .as_ref()
+        .and_then(|status| status.container_statuses.as_ref())
+        .and_then(|states| states.iter().find(|state| state.name == "code"))
+        .and_then(|state| state.state.as_ref())
+        .and_then(|state| state.terminated.as_ref())
+        .ok_or(ControlError::Running)?;
+    let status = if terminated.reason.as_deref() == Some("OOMKilled") {
+        "memory_limit"
+    } else if pod
+        .status
+        .as_ref()
+        .and_then(|status| status.reason.as_deref())
+        == Some("DeadlineExceeded")
+    {
+        "timeout"
+    } else if terminated.exit_code != 0 {
+        "failed"
+    } else {
+        return Ok(None);
+    };
+    serde_json::to_vec(&serde_json::json!({
+        "revision": 1, "status": status, "exit_code": terminated.exit_code,
+        "stdout": "", "stderr": ""
+    }))
+    .map(Some)
+    .map_err(|_| ControlError::Receipt)
+}
+
 fn validate_receipt(bytes: &[u8]) -> Result<(), ControlError> {
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -328,6 +370,7 @@ fn validate_receipt(bytes: &[u8]) -> Result<(), ControlError> {
             receipt.status.as_str(),
             "completed"
                 | "failed"
+                | "memory_limit"
                 | "timeout"
                 | "output_limit"
                 | "capture_failed"
@@ -367,6 +410,41 @@ fn validate(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn killed_original_pod_returns_failure_without_runner_logs() {
+        for (reason, exit, expected) in [("OOMKilled", 137, "memory_limit"), ("Error", 1, "failed")]
+        {
+            let identity = PodIdentity::new(&[1; 32], &[2; 32]);
+            let pod = json!({"apiVersion":"v1", "kind":"Pod", "metadata": {
+                "name":identity.name,"namespace":"execution","uid":"original",
+                "annotations":{"sandbox.elitea.ai/job":identity.job,"sandbox.elitea.ai/request":identity.request}
+            }, "status":{"containerStatuses":[{"name":"code","image":"test","imageID":"test","ready":false,"restartCount":0,
+                "state":{"terminated":{"exitCode":exit,"reason":reason}}}]}});
+            let client = Client::new(
+                tower::service_fn(move |request: http::Request<kube::client::Body>| {
+                    assert!(!request.uri().path().ends_with("/log"));
+                    let pod = pod.clone();
+                    async move { Ok::<_, std::convert::Infallible>(response(200, &pod)) }
+                }),
+                "execution",
+            );
+            let control = KubernetesClient::new(client, "execution".into());
+            let receipt = control
+                .receipt(&identity, "original")
+                .await
+                .unwrap()
+                .unwrap();
+            validate_receipt(&receipt).unwrap();
+            let envelope: serde_json::Value = serde_json::from_slice(&receipt).unwrap();
+            assert_eq!(envelope["status"], expected);
+            assert_eq!(envelope["exit_code"], exit);
+            assert!(matches!(
+                control.receipt(&identity, "replacement").await,
+                Err(ControlError::Identity)
+            ));
+        }
+    }
 
     #[test]
     fn receipt_requires_a_complete_runner_envelope_and_successful_exit() {

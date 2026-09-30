@@ -2504,3 +2504,29 @@ Ephemeral chat survival across browser reload is not part of this check.
 These checks use the existing `sandbox/dispatch.rs`, `sandbox/ledger.rs`, and `sandbox/kubernetes/runtime.rs` mappings.
 They add deployment evidence without changing application schemas or execution contracts.
 Resource exhaustion, package/workspace authorization, and performance acceptance remain open.
+
+
+## Kubernetes memory-kill receipt correction, 2026-09-30
+
+The live resource test allocates and touches up to 512 MiB inside a 256 MiB sandbox.
+Kubernetes terminates the original container with `OOMKilled` and exit code 137.
+Before this correction, the adapter reads empty runner logs and reports a receipt validation error.
+That error cannot establish a durable terminal receipt for the supervisor.
+
+`sandbox/kubernetes/client.rs` now checks the identity-bound terminal container status before reading runner logs.
+An `OOMKilled` status produces a bounded `memory_limit` receipt.
+A Pod deadline produces a timeout receipt. Other nonzero container exits produce failed receipts.
+A successful container exit still requires the complete, validated runner envelope.
+Missing Pods, replacement UIDs, and API failures do not authorize this fallback.
+`sandbox/docker_supervisor.rs` maps the memory receipt to failed phase and `sandbox.memory_limit`.
+The existing ledger persists that failure before runtime cleanup.
+
+The current-platform reference remains `elitea-sdk/runtime/langchain/pyodide_sandbox.py` for bounded subprocess execution.
+The new adapter handles a container-wide kernel termination that prevents the subprocess runner from writing its envelope.
+This correction extends the existing sandbox mapping without application-schema changes.
+
+The original live test fails on the missing receipt. The corrected live test passes in 1.91 seconds.
+It receives exit code 137 and `memory_limit`, verifies an identical repeated receipt, and requests cleanup.
+Six Kubernetes client tests and two supervisor classification tests pass. Clippy passes with warnings denied.
+This is live adapter evidence. Deployment and browser acceptance for this memory failure remain pending.
+CPU throttling, deadline exhaustion, and performance acceptance retain their separate gates.

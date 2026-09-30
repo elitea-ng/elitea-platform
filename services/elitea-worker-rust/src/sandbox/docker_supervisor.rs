@@ -478,6 +478,7 @@ fn classify_receipt(bytes: &[u8]) -> Result<(Phase, Option<&'static str>), Super
     Ok(match status {
         "completed" => (Phase::Completed, None),
         "failed" => (Phase::Failed, Some("sandbox.code_failed")),
+        "memory_limit" => (Phase::Failed, Some("sandbox.memory_limit")),
         "timeout" => (Phase::Failed, Some("sandbox.deadline_exceeded")),
         "output_limit" => (Phase::Failed, Some("sandbox.output_limit")),
         "capture_failed" => (Phase::Failed, Some("sandbox.capture_failed")),
@@ -504,6 +505,10 @@ mod tests {
         assert_eq!(
             classify_receipt(br#"{"status":"output_limit"}"#).unwrap(),
             (Phase::Failed, Some("sandbox.output_limit"))
+        );
+        assert_eq!(
+            classify_receipt(br#"{"status":"memory_limit"}"#).unwrap(),
+            (Phase::Failed, Some("sandbox.memory_limit"))
         );
         assert!(classify_receipt(br#"{"status":"unknown"}"#).is_err());
         assert!(classify_receipt(b"not-json").is_err());

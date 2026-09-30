@@ -148,3 +148,67 @@ async fn execute(runtime: &KubernetesRuntime, job: &PreparedJob) -> Value {
     .expect("cleanup deadline");
     output["result"].clone()
 }
+
+#[tokio::test]
+#[ignore = "requires an isolated Kubernetes context, cached Deno image, and sandbox boundary resources"]
+async fn live_memory_exhaustion_has_terminal_receipt() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let context = std::env::var("ELITEA_TEST_KUBE_CONTEXT").expect("explicit context required");
+    let namespace =
+        std::env::var("ELITEA_TEST_KUBE_NAMESPACE").expect("explicit namespace required");
+    let image = std::env::var("ELITEA_TEST_KUBE_DENO_IMAGE").expect("pinned Deno image required");
+    let config = kube::Config::from_kubeconfig(&kube::config::KubeConfigOptions {
+        context: Some(context),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let runtime = KubernetesRuntime::new(
+        kube::Client::try_from(config).unwrap(),
+        PodPolicy {
+            namespace,
+            image,
+            runtime_class: "elitea-code".into(),
+            node_selector: BTreeMap::from([("elitea.ai/sandbox".into(), "true".into())]),
+            memory_bytes: 256 * 1024 * 1024,
+            cpu_millis: 500,
+            timeout_seconds: 30,
+        },
+        "live-test".into(),
+        false,
+    )
+    .unwrap();
+    // Touch bounded pages so this exercises the cgroup, not lazy virtual allocation.
+    let job = PreparedJob::new(Language::JavaScript,
+        "export default () => { const pages = []; for (let i = 0; i < 64; i++) { const page = new Uint8Array(8 * 1024 * 1024); page.fill(1); pages.push(page); } return pages.length; };".into(),
+        BTreeMap::new(), runtime.image_digest().into(), "live-memory-v1".into(), 30).unwrap();
+    let mut activation = [0; 32];
+    SystemRandom::new().fill(&mut activation).unwrap();
+    let identity = job
+        .scope("live-test".into(), 1, activation)
+        .unwrap()
+        .runtime_identity()
+        .unwrap();
+    runtime
+        .prepare(&identity, &job.manifest().unwrap())
+        .await
+        .unwrap();
+    let original = runtime.instance(&identity).await.unwrap().unwrap();
+    let bound = identity.with_runtime_id(original).unwrap();
+    runtime.dispatch(&bound).await.unwrap();
+    let receipt = tokio::time::timeout(Duration::from_secs(45), async {
+        loop {
+            if let Some(receipt) = runtime.receipt(&bound).await.unwrap() {
+                break receipt;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    })
+    .await
+    .expect("memory failure must terminate");
+    let envelope: Value = serde_json::from_slice(&receipt).unwrap();
+    assert_eq!(envelope["status"], "memory_limit", "{envelope}");
+    assert_eq!(runtime.receipt(&bound).await.unwrap().unwrap(), receipt);
+    eprintln!("memory exhaustion receipt: {envelope}");
+    runtime.cleanup(&bound).await.unwrap();
+}

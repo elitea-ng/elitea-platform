@@ -92,7 +92,8 @@ Main-issued authorization and persistent-chat Kubernetes execution pass on 2026-
 Chat 757 verifies the four-language state result, reload, a failed Python node, and terminal Pod cleanup.
 Kubernetes Stop, worker-loss UI recovery, and four-language ephemeral-editor execution pass on 2026-09-30.
 The recovery receipt retains the original Pod UID. All test Pods are removed after settlement.
-Kubernetes resource-exhaustion behavior remains open.
+The live Kubernetes memory test exposes and verifies a fix for missing receipts after `OOMKilled`.
+The rebuilt supervisor and browser memory-failure check remain pending. Other resource-exhaustion checks remain open.
 Gate 5 remains open for those checks and the remaining pipeline requirements.
 Package/workspace authorization and compilation-cache performance remain tracked in the assessment.
 Gate 7a reuses this execution foundation for agent tools, with separate module admission and browser acceptance.
