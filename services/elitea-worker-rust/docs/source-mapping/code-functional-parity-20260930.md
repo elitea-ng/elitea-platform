@@ -53,3 +53,30 @@ Gate 7a must reuse these boundaries for the ordinary-agent Code tool.
 - Verify these behaviors on both runtime backends and in the UI where applicable.
 
 No database schema change or runtime permission expansion is made by this audit.
+
+## Variable-source approval integration
+
+`CodeNodeDefinition::resolve_source` preserves fixed-source versus state-variable provenance.
+`code_remote.rs::RemoteCodeRuntime::execute` currently refuses every state-variable invocation before sandbox dispatch.
+This is an admission policy restriction, not a language-runtime limitation.
+
+The existing direct-tool approval path provides the following reusable contracts:
+
+- `direct_tool.rs::SensitiveResumeDecision::parse` checks configuration, call, and argument digests before accepting a decision.
+- `direct_tool.rs::sensitive_decision` creates the existing `elitea.graph.tool-confirmation.v1` interrupt.
+- `resume.rs::PipelineToolDecision::resolve` binds browser decisions to the latest durable checkpoint and pending node.
+- `events.rs::project_pipeline_tool_confirmation` publishes the existing approval controls.
+- Direct-tool rejection sets the blocked pipeline state and stops downstream execution.
+
+Reusing this path requires binding the exact source, selected input, language, and execution policy.
+Approval of a variable name alone cannot authorize subsequently changed source.
+Preserve activation identity across resume and recovery, including repeated visits to a looped Code node.
+Never move approval into the supervisor as a substitute for graph checkpoint ownership.
+
+The existing confirmation argument limit is 40 KiB, while Code source can reach 256 KiB.
+Do not silently truncate source review or reduce the supported Code source limit to fit that event.
+Large-source review requires an explicit bounded presentation contract before activation.
+
+The user is asked whether state-variable source needs separate approval or follows saved-pipeline authorization.
+Keep the current refusal until that policy is settled and the selected execution contract is implemented.
+Fixed-source execution remains unchanged.
