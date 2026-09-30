@@ -82,9 +82,9 @@ const createDirectToolNodeData = () => ({
  * is why a freshly added Agent node used to make the whole document
  * unparseable.
  *
- * `input_mapping` must hold EXACTLY one entry, keyed `task`
- * (`application.rs:146`) — anything else is "the Agent node requires exactly
- * one task input mapping". `{ type: 'fixed', value: '' }` parses
+ * `input_mapping` requires `task`; saved pipeline children can also receive
+ * declared variables (`application.rs::from_raw`). The default seeds only
+ * the required task. `{ type: 'fixed', value: '' }` parses
  * (`parse_task_mapping`, `application.rs:566`) and is refused only at run
  * time when the rendered task is empty (`map_task`, `application.rs:243`),
  * i.e. it is genuinely "empty and required", not a rejected seed.

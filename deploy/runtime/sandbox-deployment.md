@@ -107,7 +107,9 @@ Set `podPidsLimit: 128` in the kubelet configuration of each eligible sandbox no
 Kubernetes Pod resource limits do not configure this process ceiling.
 An unset or negative limit does not provide this boundary.
 Verify the effective kubelet configuration before enabling Code execution.
-For an isolated Minikube profile, provision it with `--extra-config=kubelet.podPidsLimit=128`.
+For an isolated Minikube profile, provision it with `--extra-config=kubelet.pod-max-pids=128`.
+Minikube passes this setting as a kubelet flag. The config-file key `podPidsLimit` is not a valid flag.
+Prefer `podPidsLimit: 128` in the kubelet configuration for managed node provisioning.
 The chart does not modify host kubelet configuration.
 Keep this setting in node provisioning when replacing or upgrading nodes.
 Docker Code containers configure their own equivalent `pids_limit=128`.

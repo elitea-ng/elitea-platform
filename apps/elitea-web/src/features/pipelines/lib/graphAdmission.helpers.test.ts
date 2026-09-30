@@ -194,7 +194,7 @@ describe('node rules', () => {
     expect(issues[0]?.citation).toBe('application.rs:124');
   });
 
-  it('node.required-field: an Agent `input_mapping` holds exactly one `task` entry (application.rs:146)', () => {
+  it('node.required-field: an Agent `input_mapping` requires a `task` entry (application.rs:146)', () => {
     const agent: YamlPipelineNode = { id: 'Agent_1', type: 'agent', tool: 'writer', input_mapping: { query: { type: 'fixed', value: 'x' } }, transition: 'END' };
     const issues = issuesForNode(collectGraphAdmissionIssues(baseDocument({ nodes: [agent], entry_point: 'Agent_1' })), 'Agent_1');
 
@@ -397,5 +397,39 @@ describe('collection surface', () => {
     expect(issuesForNode(issues, 'LLM_1').map((issue) => issue.subject)).toEqual(['nowhere']);
     expect(issuesForNode(issues, 'LLM_2').map((issue) => issue.subject)).toEqual(['elsewhere']);
     expect(documentLevelIssues(issues)).toEqual([]);
+  });
+});
+
+
+describe('saved child pipeline input mappings', () => {
+  const child: YamlPipelineNode = {
+    id: 'child', type: 'agent', tool: 'Saved pipeline', transition: 'END',
+    input_mapping: {
+      task: { type: 'fixed', value: 'Compute the report' },
+      count: { type: 'fixed', value: 3 },
+      label: { type: 'fstring', value: 'for {input}' },
+      items: { type: 'variable', value: 'input' },
+    },
+  };
+  it('admits additional fixed, template and declared variable mappings', () => {
+    expect(collectGraphAdmissionIssues(baseDocument({ nodes: [child], entry_point: 'child' }))).toEqual([]);
+  });
+  it('validates state references in additional mappings', () => {
+    const node = { ...child, input_mapping: { ...child.input_mapping, items: { type: 'variable', value: 'missing' } } };
+    expect(collectGraphAdmissionIssues(baseDocument({ nodes: [node], entry_point: 'child' })))
+      .toContainEqual(expect.objectContaining({ rule: 'node.state-reference', field: 'input_mapping.items' }));
+  });
+  it('rejects more than 64 mappings', () => {
+    const input_mapping = { task: { type: 'fixed', value: 'task' }, ...Object.fromEntries(
+      Array.from({ length: 64 }, (_, index) => [`item${String(index)}`, { type: 'fixed', value: index }]),
+    ) };
+    const node = { ...child, input_mapping };
+    expect(collectGraphAdmissionIssues(baseDocument({ nodes: [node], entry_point: 'child' })))
+      .toContainEqual(expect.objectContaining({ rule: 'node.required-field', field: 'input_mapping' }));
+  });
+  it.each(['input', 'messages', 'session_id', '__elitea_application_variable_5_child_count'])('rejects reserved target %s', (key) => {
+    const node = { ...child, input_mapping: { ...child.input_mapping, [key]: { type: 'fixed', value: 'x' } } };
+    expect(collectGraphAdmissionIssues(baseDocument({ nodes: [node], entry_point: 'child' })))
+      .toContainEqual(expect.objectContaining({ rule: 'node.required-field', field: `input_mapping.${key}` }));
   });
 });

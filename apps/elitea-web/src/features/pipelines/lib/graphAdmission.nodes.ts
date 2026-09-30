@@ -96,7 +96,7 @@ function requiredFieldIssues(node: AdmissionNode): readonly GraphAdmissionIssue[
   return [];
 }
 
-/** `application.rs:53` (`tool` required), `:124` (`valid_application_alias`), `:146` (exactly one `task` mapping). */
+/** `application.rs:53` (`tool` required), `:124` (`valid_application_alias`), `from_raw` (required task and bounded child mappings). */
 function agentRequiredFields(node: AdmissionNode): readonly GraphAdmissionIssue[] {
   const issues: GraphAdmissionIssue[] = [];
   if (!isValidToolIdentity(node.raw.tool)) {
@@ -105,7 +105,7 @@ function agentRequiredFields(node: AdmissionNode): readonly GraphAdmissionIssue[
     );
   }
   const mappingKeys = Object.keys(node.raw.input_mapping ?? {});
-  if (mappingKeys.length !== 1 || mappingKeys[0] !== 'task') {
+  if (mappingKeys.length > 64 || !mappingKeys.includes('task')) {
     issues.push(
       admissionIssue(
         'node.required-field',
@@ -113,9 +113,15 @@ function agentRequiredFields(node: AdmissionNode): readonly GraphAdmissionIssue[
         node.id,
         'input_mapping',
         mappingKeys.join(', '),
-        `input_mapping: an Agent node needs exactly one entry, keyed "task" — found ${mappingKeys.length === 0 ? 'none' : `[${mappingKeys.join(', ')}]`}.`,
+        `input_mapping: an Agent node needs an entry keyed "task" and at most 64 mappings — found ${mappingKeys.length === 0 ? 'none' : `[${mappingKeys.join(', ')}]`}.`,
       ),
     );
+  }
+  for (const key of mappingKeys.filter((key) => key !== 'task')) {
+    if (!isValidOutputKey(key) || RuntimeContractConstants.isReservedStateKey(key) || key === 'input' || key === 'messages') {
+      issues.push(admissionIssue('node.required-field', 'application.rs::from_raw', node.id, `input_mapping.${key}`, key,
+        `input_mapping: "${key}" is not an allowed child variable name.`));
+    }
   }
   return issues;
 }

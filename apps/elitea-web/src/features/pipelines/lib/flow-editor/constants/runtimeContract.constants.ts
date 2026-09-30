@@ -147,4 +147,4 @@ export const ReservedStateKeys: readonly ReservedStateKey[] = [
 const reservedStateKeySet: ReadonlySet<string> = new Set(ReservedStateKeys.map(entry => entry.key));
 
 /** Mirrors `compiler.rs:1456`'s `reserved_user_state_key` — true when the compiler refuses `key` in a user `state:` block. */
-export const isReservedStateKey = (key: string): boolean => reservedStateKeySet.has(key);
+export const isReservedStateKey = (key: string): boolean => reservedStateKeySet.has(key) || key.startsWith('__elitea_application_variable_');
