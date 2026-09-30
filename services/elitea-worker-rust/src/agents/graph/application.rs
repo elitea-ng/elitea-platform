@@ -451,8 +451,7 @@ impl ApplicationNode {
                             .map_err(|_| node_failure(self.name()))?,
                     ),
                 };
-                ensure_state_type(key, &value, variable_types)
-                    .map_err(|_| node_failure(self.name()))?;
+                validate_child_input(self.name(), key, &value, variable_types, events).await?;
                 mapped.insert(self.definition.variable_channel(key), value);
             }
             if serde_json::to_vec(&mapped)
@@ -723,6 +722,37 @@ fn valid_application_alias(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= MAX_APPLICATION_ALIAS_BYTES
         && !value.bytes().any(|byte| matches!(byte, 0 | b'\r' | b'\n'))
+}
+
+async fn validate_child_input(
+    node: &str,
+    key: &str,
+    value: &Value,
+    variable_types: &BTreeMap<String, String>,
+    events: Option<&PipelineNodeEventSender>,
+) -> Result<(), GraphError> {
+    if ensure_state_type(key, value, variable_types).is_ok() {
+        return Ok(());
+    }
+    tracing::error!(
+        node_id = node,
+        input_key = key,
+        expected_type = variable_types.get(key).map_or("unknown", String::as_str),
+        error_code = "pipeline.child_input_type_invalid",
+        "Saved child pipeline input does not match its declared state type; the child did not start"
+    );
+    if let Some(events) = events {
+        events
+            .send_execution_failure("pipeline.child_input_type_invalid")
+            .await
+            .map_err(|_| node_failure(node))?;
+    }
+    Err(GraphError::NodeExecutionFailed {
+        node: node.to_owned(),
+        message: format!(
+            "Child pipeline input '{key}' does not match its declared type; the child did not start."
+        ),
+    })
 }
 
 fn node_failure(node: &str) -> GraphError {

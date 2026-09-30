@@ -974,24 +974,105 @@ async fn child_variable_type_failure_stops_before_child_execution() {
             ),
         )
         .unwrap();
-    assert!(
-        graph
-            .invoke(
-                State::from([
-                    ("topic".into(), json!("orders")),
-                    ("rows".into(), json!([1, 2])),
-                ]),
-                ExecutionConfig::new("invalid-variables")
-            )
-            .await
-            .is_err()
-    );
+    let error = graph
+        .invoke(
+            State::from([
+                ("topic".into(), json!("orders")),
+                ("rows".into(), json!([1, 2])),
+            ]),
+            ExecutionConfig::new("invalid-variables"),
+        )
+        .await
+        .expect_err("wrong child input type must fail");
+    assert!(error.to_string().contains("Child pipeline input 'count'"));
+    assert!(error.to_string().contains("the child did not start"));
     assert!(
         checkpointer
             .load("invalid-variables/delegate")
             .await
             .unwrap()
             .is_none()
+    );
+}
+
+#[tokio::test]
+async fn child_input_type_failure_keeps_public_reason_through_event_stream() {
+    use super::node_events::{PipelineNodeEventStreamingAgent, pipeline_node_event_channel};
+    let checkpointer = Arc::new(MemoryCheckpointer::new());
+    let (sender, receiver) = pipeline_node_event_channel();
+    let child = PipelineDefinition::from_yaml(CHILD_VARIABLE_PIPELINE).unwrap();
+    let resolver = Arc::new(FixtureApplicationResolver {
+        alias: "Research Agent".into(),
+        participant: ResolvedApplicationParticipant::Pipeline {
+            variable_types: child.declared_variable_types(),
+            graph: Arc::new(
+                child
+                    .compile_subgraph_with_runtime(
+                        checkpointer.clone(),
+                        &PipelineNodeRuntimes::default(),
+                    )
+                    .unwrap(),
+            ),
+            events: Some(sender.clone()),
+            display_name: "Research Agent".into(),
+        },
+    });
+    let graph = PipelineDefinition::from_yaml(
+        &PARENT_VARIABLE_PIPELINE.replace("value: 3", "value: wrong"),
+    )
+    .unwrap()
+    .compile_with_runtime(
+        "parent",
+        checkpointer.clone(),
+        None,
+        &PipelineNodeRuntimes::new(None, None, Some(resolver)).with_events(sender),
+    )
+    .unwrap();
+    let sessions = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: "elitea".into(),
+            user_id: "user-1".into(),
+            session_id: Some("child-type-error".into()),
+            state: HashMap::new(),
+        })
+        .await
+        .unwrap();
+    let agent =
+        PipelineNodeEventStreamingAgent::new(Arc::new(EliteaGraphAgent::new(graph)), receiver);
+    let runner = Runner::builder()
+        .app_name("elitea")
+        .agent(Arc::new(agent))
+        .session_service(sessions)
+        .build()
+        .unwrap();
+    let mut running = NativeAgentInvocation::new(
+        runner,
+        UserId::new("user-1").unwrap(),
+        SessionId::new("child-type-error").unwrap(),
+        Content::new("user").with_text("run"),
+    )
+    .start()
+    .unwrap();
+    let error = loop {
+        match running.next_event().await {
+            Err(error) => break error,
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("wrong child input must not complete"),
+        }
+    };
+    assert_eq!(
+        error.upstream_code(),
+        Some("pipeline.child_input_type_invalid")
+    );
+    let kind = crate::protocol::output::model_failure(error.upstream_code());
+    assert_eq!(
+        kind,
+        crate::protocol::output::RuntimeFailureKind::PipelineChildInputTypeInvalid
+    );
+    assert!(
+        kind.safe_message()
+            .contains("child and later nodes did not run")
     );
 }
 

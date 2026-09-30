@@ -42,6 +42,7 @@ pub enum RuntimeFailureKind {
     ExecutionInputFieldLimit(super::InputLimitField),
     OutputProjectionLimit,
     PipelineInputInvalid,
+    PipelineChildInputTypeInvalid,
     PipelineInputLimit,
     PipelineToolUnavailable,
     PipelineToolFailed,
@@ -605,6 +606,9 @@ pub(crate) fn build_toolkit_execute_read_terminal_output_frame(
 
 pub(crate) fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
     match upstream_code {
+        Some("pipeline.child_input_type_invalid") => {
+            RuntimeFailureKind::PipelineChildInputTypeInvalid
+        }
         Some("pipeline.input_invalid") => RuntimeFailureKind::PipelineInputInvalid,
         Some("pipeline.input_limit") => RuntimeFailureKind::PipelineInputLimit,
         Some("pipeline.tool_unavailable") => RuntimeFailureKind::PipelineToolUnavailable,
@@ -701,6 +705,11 @@ pub(crate) fn runtime_error_policy(
         RuntimeFailureKind::ResourceExhausted => (
             RuntimeErrorCodeV1::ResourceExhausted,
             "The execution exceeded an approved resource limit.",
+            false,
+        ),
+        RuntimeFailureKind::PipelineChildInputTypeInvalid => (
+            RuntimeErrorCodeV1::PipelineInputInvalid,
+            "The pipeline stopped because a mapped child input has the wrong type. Compare the Agent node's input mapping with the child pipeline's state types. The child and later nodes did not run. Review earlier completed actions before restarting.",
             false,
         ),
         RuntimeFailureKind::PipelineInputInvalid => (
@@ -848,6 +857,7 @@ fn canonical_runtime_failure(error: &RuntimeErrorV1) -> Option<RuntimeFailureKin
         RuntimeFailureKind::ExecutionInputFieldLimit(super::InputLimitField::ToolConfiguration),
         RuntimeFailureKind::OutputProjectionLimit,
         RuntimeFailureKind::PipelineInputInvalid,
+        RuntimeFailureKind::PipelineChildInputTypeInvalid,
         RuntimeFailureKind::PipelineInputLimit,
         RuntimeFailureKind::PipelineToolUnavailable,
         RuntimeFailureKind::PipelineToolFailed,
@@ -1270,5 +1280,14 @@ mod continuation_failure_tests {
         let mut injected = error;
         injected.safe_message = "untrusted provider detail".into();
         assert_eq!(canonical_runtime_failure(&injected), None);
+    }
+    #[test]
+    fn child_input_type_failure_restores_its_actionable_message() {
+        let kind = model_failure(Some("pipeline.child_input_type_invalid"));
+        let error = runtime_error(kind);
+        assert_eq!(error.code, RuntimeErrorCodeV1::PipelineInputInvalid as i32);
+        assert!(!error.retryable);
+        assert!(error.safe_message.contains("wrong type"));
+        assert_eq!(canonical_runtime_failure(&error), Some(kind));
     }
 }

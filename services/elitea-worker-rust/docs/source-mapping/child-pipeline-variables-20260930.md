@@ -91,3 +91,24 @@ The association picker leaves the selected child visible after successful attach
 Closing it reveals the attached child card; this is a separate UI polish issue, not a
 failed relation write. The flow editor currently exposes only task mapping controls;
 additional child mappings are authored through YAML.
+
+## Child-input diagnostic correction
+
+The new worker now preserves `pipeline.child_input_type_invalid` through the existing
+`PipelineNodeEventSender` failure channel instead of reducing it to `agent.legacy`.
+The public policy reuses the existing `PIPELINE_INPUT_INVALID` wire code with a
+specific, registered message explaining the wrong type, the mapping to inspect,
+and the fact that the child and later nodes did not run. Error restoration recognizes
+this exact policy, including after persistence. No protocol or database migration is needed.
+An ERROR log records the node, input key, and expected type, without recording the value.
+
+This follows the existing direct-tool failure-channel pattern in `graph/direct_tool.rs`.
+The current-platform behavioral source remains the application input mapping described above;
+the typed public failure and its durability are replatform implementation details.
+Tests cover graph rejection before child execution, event-stream reason propagation, and
+canonical persisted error restoration. Deployment and browser verification of the improved
+message remain pending; the earlier browser failure proves only the stopping behavior.
+
+Verification: 59 focused child tests pass. After extracting the validation helper, both
+new error-channel/restoration tests pass again. Clippy with tests and warnings denied,
+formatting, and diff checks pass.
