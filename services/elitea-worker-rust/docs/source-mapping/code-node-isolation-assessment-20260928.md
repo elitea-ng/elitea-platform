@@ -2474,6 +2474,33 @@ Existing source mappings remain authoritative: `sandbox/dispatch.rs` owns durabl
 Main owns grant issuance, while the worker owns graph checkpoints and result propagation.
 The Kubernetes paths reuse the Docker Code-node graph and UI contracts rather than a second implementation.
 
-Kubernetes UI cancellation, worker-loss recovery, resource exhaustion, and ephemeral-editor testing remain open.
+Kubernetes resource exhaustion remains open. The following section records cancellation, worker recovery, and ephemeral-editor acceptance.
 The browser connection badge remains disconnected while the execution-event stream delivers the result; that indicator needs separate investigation.
 No load, soak, external provider, or package-installation claim follows from these Code-only tests.
+
+
+## Kubernetes Stop, worker recovery, and editor acceptance, 2026-09-30
+
+Persistent chat 755 starts the slow Rust Code fixture through the normal Main grant issuer.
+The browser Stop action requests cancellation after sandbox dispatch.
+Execution `f4b7aee45aca971221c5a59ba206aa29` reaches `CANCELLED`.
+The supervisor persists the cancelled receipt before Main settles the execution.
+The browser shows the cancellation message and releases the composer. The execution Pod is removed.
+
+A second request starts the same fixture. The test removes the worker Pod after sandbox dispatch.
+The replacement worker resumes execution `06cca078a5a84e4ecce27cf26570bbe4`, which reaches `SUCCEEDED`.
+The completed receipt retains sandbox Pod UID `ba8eb44a-87ac-47b0-9ae9-34f91191f13d`.
+The browser receives `GATE5_WORKER_RECOVERY_20260929` without resubmission.
+The execution Pod is removed after completion.
+This verifies worker recovery with a replacement Pod and the original sandbox runtime identity.
+It does not prove exactly-once effects against external systems.
+
+The pipeline 132 editor test chat executes the four-language state fixture.
+Its displayed result has status `PASS`, count 5, total 31, fruit 24, and veg 7.
+The ledger records four completed receipts. No execution Pods remain.
+The editor shows a completed run and releases its controls.
+Ephemeral chat survival across browser reload is not part of this check.
+
+These checks use the existing `sandbox/dispatch.rs`, `sandbox/ledger.rs`, and `sandbox/kubernetes/runtime.rs` mappings.
+They add deployment evidence without changing application schemas or execution contracts.
+Resource exhaustion, package/workspace authorization, and performance acceptance remain open.

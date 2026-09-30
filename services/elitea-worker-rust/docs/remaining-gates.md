@@ -90,7 +90,9 @@ The deployed supervisor passes mTLS peer rejection and mid-execution restart rec
 Recovery retains the original execution Pod UID and returns an identical persisted receipt after retry.
 Main-issued authorization and persistent-chat Kubernetes execution pass on 2026-09-30.
 Chat 757 verifies the four-language state result, reload, a failed Python node, and terminal Pod cleanup.
-Kubernetes cancellation, worker-loss UI recovery, resource-exhaustion behavior, and ephemeral-editor acceptance remain open.
+Kubernetes Stop, worker-loss UI recovery, and four-language ephemeral-editor execution pass on 2026-09-30.
+The recovery receipt retains the original Pod UID. All test Pods are removed after settlement.
+Kubernetes resource-exhaustion behavior remains open.
 Gate 5 remains open for those checks and the remaining pipeline requirements.
 Package/workspace authorization and compilation-cache performance remain tracked in the assessment.
 Gate 7a reuses this execution foundation for agent tools, with separate module admission and browser acceptance.
