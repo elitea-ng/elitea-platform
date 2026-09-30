@@ -177,3 +177,9 @@ Match image digests, policy revisions, and supported languages to the selected s
 Use a target hostname present in the supervisor certificate. A Service name alone does not establish TLS identity.
 Set `worker.runtime.agentModelCheckpointRecovery=true` for the verified checkpoint recovery deployment.
 The chart rejects these Rust-only options when the Python worker is selected.
+
+For Minikube, set `runtimeRedis.persistence.storageClassName=standard` when deploying the isolated runtime Redis.
+The chart default uses `ceph-rbd`, which requires a separate Ceph provisioner.
+Keep persistent storage enabled and complete the authenticated Redis bootstrap Job before starting workers.
+A separate Redis does not inherit existing browser sessions or queued commands.
+Drain active executions and verify dispatch state before changing application ownership.

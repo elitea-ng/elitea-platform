@@ -2406,3 +2406,18 @@ The target hostname must match the supervisor TLS certificate. Runtime image dig
 The new `render-worker-sandbox.sh` verifies field preservation and Python rejection.
 The existing eight worker rendering checks still pass. The Helm workflow now runs both checks.
 This closes configuration delivery, not live worker startup or UI acceptance.
+
+## Isolated Kubernetes application dependencies, 2026-09-30
+
+Application preparation uses dedicated Kubernetes services instead of joining the retained Docker network.
+The network attachment proposal was rejected by automatic approval review. No Docker network membership changed.
+The existing TLS database endpoint remains the only configured retained data-service route.
+
+The chart deploys a separate runtime Redis with its own persistent volume and the existing authenticated TLS configuration.
+The default `ceph-rbd` storage class is unavailable in Minikube.
+The initial claim remained Pending without a bound volume or stored data.
+Only that empty claim was replaced with a `standard` claim; the final claim is Bound with eight GiB capacity.
+Redis starts with TLS on port 6380 and AOF enabled. Its authenticated readiness probe passes.
+The chart bootstrap Job completes and creates the isolated consumer groups.
+The retained Docker Redis and application are unchanged.
+Main, worker, and UI images are cached in Minikube, but application ownership has not switched.
