@@ -101,6 +101,18 @@ Gate 5 remains open for the remaining pipeline, isolation, and capacity requirem
 Package/workspace authorization and compilation-cache performance remain tracked in the assessment.
 Gate 7a reuses this execution foundation for agent tools, with separate module admission and browser acceptance.
 
+### Deployment acceptance order
+
+The user confirms this order on 2026-09-30.
+Docker Compose remains the primary development rehearsal.
+The hybrid Kubernetes rehearsal is sufficient for current Kubernetes sandbox verification.
+Its application services run in Kubernetes, while PostgreSQL, the model gateway, OIDC, and telemetry retain Docker dependencies.
+This does not prove a complete Kubernetes application deployment.
+Both sandbox backends require real execution, resource enforcement, cancellation, and durable recovery evidence.
+Complete Kubernetes application acceptance follows later.
+Simplify Docker Compose and Helm deployment after the current development work.
+A native Kubernetes operator remains deferred until development is complete.
+
 ## Customer workflow migration track
 
 The customer requests eight capabilities for migration from n8n.
